@@ -44,6 +44,7 @@ type WorkspacePanelProps = {
   attachments?: SessionAttachmentRecord[];
   loadingWorkspace?: boolean;
   loadingSession?: boolean;
+  sending?: boolean;
   onSelectSession?: (sessionId: string) => void;
 };
 
@@ -55,6 +56,7 @@ export function WorkspacePanel({
   attachments: _attachments,
   loadingWorkspace = false,
   loadingSession = false,
+  sending = false,
   onSelectSession,
 }: WorkspacePanelProps) {
   const selectedSession = sessions.find((s) => s.id === selectedSessionId) ?? null;
@@ -94,7 +96,7 @@ export function WorkspacePanel({
           ) : sessions.length > 0 ? (
             sessions.map((session) => {
               const selected = session.id === selectedSessionId;
-              const isActive = session.active && session.status !== "error";
+              const isActive = (selected && sending) || (session.active && session.status !== "error");
               return (
                 <button
                   key={session.id}
@@ -197,7 +199,7 @@ function ConductorAssistantMessage() {
     <MessagePrimitive.Root className="min-w-0 max-w-full space-y-1">
       <MessagePrimitive.Content
         components={{
-          Text: AssistantTextOrChildren,
+          Text: AssistantText,
           Reasoning: AssistantReasoning,
           tools: {
             Fallback: AssistantToolCall,
@@ -229,61 +231,6 @@ function ConductorSystemMessage() {
 
 function UserText({ text }: { text: string }) {
   return <p className="whitespace-pre-wrap break-words">{text}</p>;
-}
-
-function AssistantTextOrChildren({ text }: { text: string }) {
-  if (text.startsWith("__children__")) {
-    try {
-      const data = JSON.parse(text.slice("__children__".length)) as {
-        parts: Array<{ type: string; toolName?: string; toolCallId?: string; args?: Record<string, unknown>; argsText?: string; result?: unknown; text?: string }>;
-        summary: string;
-      };
-      return (
-        <details className="group/children ml-5 border-l border-app-border/30 pl-3">
-          <summary className="cursor-pointer py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
-            <span className="inline-flex items-center gap-1.5">
-              <svg className="size-2.5 shrink-0 transition-transform group-open/children:rotate-90" viewBox="0 0 12 12" fill="none">
-                <path d="M4.5 2.5L8.5 6L4.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              <span>{data.summary || "Sub-agent"}</span>
-              <span className="text-app-muted/40">{data.parts.length} steps</span>
-            </span>
-          </summary>
-          <div className="space-y-0.5 pt-1">
-            {data.parts.map((part, idx) => {
-              if (part.type === "tool-call") {
-                return (
-                  <AssistantToolCall
-                    key={idx}
-                    toolName={part.toolName ?? "unknown"}
-                    args={part.args ?? {}}
-                    argsText={part.argsText ?? ""}
-                    result={part.result}
-                    status={null}
-                    addResult={null}
-                  />
-                );
-              }
-              if (part.type === "text" && part.text) {
-                return (
-                  <div key={idx} className="text-[13px] leading-6 text-app-foreground-soft">
-                    {part.text.slice(0, 300)}{part.text.length > 300 ? "…" : ""}
-                  </div>
-                );
-              }
-              if (part.type === "reasoning" && part.text) {
-                return <AssistantReasoning key={idx} text={part.text} />;
-              }
-              return null;
-            })}
-          </div>
-        </details>
-      );
-    } catch {
-      return null;
-    }
-  }
-  return <AssistantText />;
 }
 
 function AssistantText() {
@@ -323,39 +270,95 @@ function AssistantToolCall({
   addResult: unknown;
 }) {
   const info = getToolInfo(toolName, args);
-  const resultText = result != null
-    ? typeof result === "string" ? result : JSON.stringify(result, null, 2)
-    : null;
   const isEdit = toolName === "Edit";
   const oldStr = isEdit && typeof args.old_string === "string" ? args.old_string : null;
   const newStr = isEdit && typeof args.new_string === "string" ? args.new_string : null;
   const hasDiff = oldStr != null || newStr != null;
 
+  // Detect __children__ encoded in result (sub-agent steps)
+  const resultStr = result != null ? (typeof result === "string" ? result : JSON.stringify(result, null, 2)) : null;
+  const isChildrenResult = resultStr?.startsWith("__children__") ?? false;
+  const childrenData = isChildrenResult
+    ? (() => { try { return JSON.parse(resultStr!.slice("__children__".length)) as { parts: Array<Record<string, unknown>> }; } catch { return null; } })()
+    : null;
+  const resultText = isChildrenResult ? null : resultStr;
   const hasOutput = resultText != null && resultText.length > 5;
 
+  const toolLine = (
+    <>
+      <span className="shrink-0">{info.icon}</span>
+      <span className="font-medium">{info.action}</span>
+      {info.file ? (
+        hasDiff ? (
+          <EditDiffTrigger file={info.file} diffAdd={info.diffAdd} diffDel={info.diffDel} oldStr={oldStr} newStr={newStr} />
+        ) : (
+          <span className="truncate text-app-foreground-soft">{info.file}</span>
+        )
+      ) : null}
+      {!hasDiff && (info.diffAdd != null || info.diffDel != null) ? (
+        <span className="flex items-center gap-1 text-[11px]">
+          {info.diffAdd != null ? <span className="text-emerald-400">+{info.diffAdd}</span> : null}
+          {info.diffDel != null ? <span className="text-red-400">-{info.diffDel}</span> : null}
+        </span>
+      ) : null}
+      {info.command ? (
+        <code className="truncate rounded bg-app-foreground/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-app-foreground-soft">{info.command}</code>
+      ) : info.detail ? (
+        <span className="truncate text-app-muted/60">{info.detail}</span>
+      ) : null}
+    </>
+  );
+
+  // Sub-agent children: render step count inline, expanded children below
+  if (childrenData) {
+    return (
+      <details className="group/children">
+        <summary className="flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
+          {toolLine}
+          <span className="shrink-0 cursor-pointer text-[11px] text-app-muted/40 hover:text-app-muted">
+            <svg className="size-2 transition-transform group-open/children:rotate-90" viewBox="0 0 12 12" fill="none">
+              <path d="M4.5 2.5L8.5 6L4.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+          <span className="shrink-0 text-[11px] text-app-muted/40">{childrenData.parts.length} steps</span>
+        </summary>
+        <div className="ml-5 space-y-0.5 border-l border-app-border/30 pl-3 pt-1">
+          {childrenData.parts.map((part, idx) => {
+            if (part.type === "tool-call") {
+              return (
+                <AssistantToolCall
+                  key={idx}
+                  toolName={(part.toolName as string) ?? "unknown"}
+                  args={(part.args as Record<string, unknown>) ?? {}}
+                  argsText={(part.argsText as string) ?? ""}
+                  result={part.result}
+                  status={null}
+                  addResult={null}
+                />
+              );
+            }
+            if (part.type === "text" && part.text) {
+              return (
+                <div key={idx} className="text-[13px] leading-6 text-app-foreground-soft">
+                  {(part.text as string).slice(0, 300)}{(part.text as string).length > 300 ? "…" : ""}
+                </div>
+              );
+            }
+            if (part.type === "reasoning" && part.text) {
+              return <AssistantReasoning key={idx} text={part.text as string} />;
+            }
+            return null;
+          })}
+        </div>
+      </details>
+    );
+  }
+
+  // Normal tool call with optional output
   return (
     <details className="group/out" open={false}>
       <summary className="flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
-        <span className="shrink-0">{info.icon}</span>
-        <span className="font-medium">{info.action}</span>
-        {info.file ? (
-          hasDiff ? (
-            <EditDiffTrigger file={info.file} diffAdd={info.diffAdd} diffDel={info.diffDel} oldStr={oldStr} newStr={newStr} />
-          ) : (
-            <span className="truncate text-app-foreground-soft">{info.file}</span>
-          )
-        ) : null}
-        {!hasDiff && (info.diffAdd != null || info.diffDel != null) ? (
-          <span className="flex items-center gap-1 text-[11px]">
-            {info.diffAdd != null ? <span className="text-emerald-400">+{info.diffAdd}</span> : null}
-            {info.diffDel != null ? <span className="text-red-400">-{info.diffDel}</span> : null}
-          </span>
-        ) : null}
-        {info.command ? (
-          <code className="truncate rounded bg-app-foreground/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-app-foreground-soft">{info.command}</code>
-        ) : info.detail ? (
-          <span className="truncate text-app-muted/60">{info.detail}</span>
-        ) : null}
+        {toolLine}
         {hasOutput ? (
           <span className="shrink-0 cursor-pointer text-app-muted/40 hover:text-app-muted">
             <svg className="size-2.5 transition-transform group-open/out:rotate-90" viewBox="0 0 12 12" fill="none">
@@ -365,9 +368,17 @@ function AssistantToolCall({
         ) : null}
       </summary>
       {hasOutput ? (
-        <pre className="mt-1 max-h-[12rem] overflow-auto whitespace-pre-wrap break-words rounded-md bg-app-foreground/[0.02] p-2 text-[11px] leading-5 text-app-muted/70">
-          {resultText!.slice(0, 2000)}{resultText!.length > 2000 ? "…" : ""}
-        </pre>
+        <div className="mt-1 max-h-[16rem] overflow-auto rounded-md bg-app-foreground/[0.02] text-[11px] leading-5">
+          {info.fullCommand ? (
+            <div className="border-b border-app-border/20 px-2 py-1.5">
+              <span className="mr-1.5 text-cyan-400/50">$</span>
+              <code className="font-mono text-app-foreground-soft">{info.fullCommand}</code>
+            </div>
+          ) : null}
+          <pre className="whitespace-pre-wrap break-words p-2 text-app-muted/70">
+            {resultText!.slice(0, 2000)}{resultText!.length > 2000 ? "…" : ""}
+          </pre>
+        </div>
       ) : null}
     </details>
   );
@@ -417,22 +428,26 @@ function EditDiffTrigger({
   newStr: string | null;
 }) {
   const triggerRef = useRef<HTMLSpanElement>(null);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
 
   const show = useCallback(() => {
+    if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null; }
     if (triggerRef.current) {
       const r = triggerRef.current.getBoundingClientRect();
-      setPos({ x: r.left, y: r.bottom + 6 });
+      setPos({ x: r.left, y: r.bottom + 4 });
     }
   }, []);
-  const hide = useCallback(() => setPos(null), []);
+  const hideDelayed = useCallback(() => {
+    hideTimer.current = setTimeout(() => setPos(null), 120);
+  }, []);
 
   return (
     <>
       <span
         ref={triggerRef}
         onMouseEnter={show}
-        onMouseLeave={hide}
+        onMouseLeave={hideDelayed}
         className="inline-flex cursor-default items-center gap-1.5 rounded border border-app-border/60 px-1.5 py-0.5 transition-colors hover:border-app-foreground-soft/40 hover:bg-app-foreground/[0.03]"
       >
         <span className="truncate text-app-foreground-soft">{file}</span>
@@ -447,7 +462,7 @@ function EditDiffTrigger({
         ? createPortal(
             <div
               onMouseEnter={show}
-              onMouseLeave={hide}
+              onMouseLeave={hideDelayed}
               className="fixed z-[100] w-[min(40rem,90vw)] rounded-lg border border-app-border bg-app-sidebar shadow-xl"
               style={{ left: pos.x, top: pos.y }}
             >
@@ -496,6 +511,7 @@ type ToolInfo = {
   file?: string;
   detail?: string;
   command?: string;
+  fullCommand?: string;
   icon: React.ReactNode;
   diffAdd?: number;
   diffDel?: number;
@@ -545,6 +561,7 @@ function getToolInfo(name: string, input: Record<string, unknown> | null): ToolI
       action: "Run",
       icon: <SquareTerminal className="size-3.5 text-app-foreground-soft" strokeWidth={1.8} />,
       command: cmd ? truncate(cmd, 80) : undefined,
+      fullCommand: cmd ?? undefined,
     };
   }
 

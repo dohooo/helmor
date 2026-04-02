@@ -327,7 +327,6 @@ function groupChildMessages(msgs: ThreadMessageLike[]): ThreadMessageLike[] {
   for (let i = 0; i < msgs.length; i++) {
     const m = msgs[i];
     if (m.id?.startsWith("child:")) {
-      // Attach to previous non-child assistant
       const parent = out[out.length - 1];
       if (parent?.role === "assistant") {
         // Collect all consecutive child parts
@@ -337,17 +336,17 @@ function groupChildMessages(msgs: ThreadMessageLike[]): ThreadMessageLike[] {
           childParts.push(...parts);
           i++;
         }
-        i--; // step back for outer loop increment
+        i--;
 
-        // Encode children as a special text part the component will detect
-        const summary = childParts
-          .filter((p): p is ToolCallPart => p.type === "tool-call")
-          .map((p) => p.toolName)
-          .join(", ");
-        (parent.content as AnyPart[]).push({
-          type: "text",
-          text: `__children__${JSON.stringify({ parts: childParts, summary })}`,
-        });
+        // Find the last Agent/Task tool-call in the parent and attach children to its result
+        const parentParts = parent.content as AnyPart[];
+        const agentTc = [...parentParts].reverse().find(
+          (p): p is ToolCallPart =>
+            p.type === "tool-call" && (p.toolName === "Agent" || p.toolName === "Task"),
+        );
+        if (agentTc) {
+          agentTc.result = `__children__${JSON.stringify({ parts: childParts })}`;
+        }
       }
       continue;
     }

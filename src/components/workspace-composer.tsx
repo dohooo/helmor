@@ -189,17 +189,6 @@ export function WorkspaceComposer({
 
         <div className="flex items-center gap-1">
           <ComposerButton
-            aria-label="Activity"
-            className="justify-center p-1"
-            disabled
-          >
-            <LoaderCircle
-              className={cn("size-[15px]", sending ? "animate-spin" : undefined)}
-              strokeWidth={1.8}
-            />
-          </ComposerButton>
-
-          <ComposerButton
             aria-label="Add attachment"
             className="justify-center p-1"
             disabled

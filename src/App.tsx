@@ -590,6 +590,7 @@ function App() {
               attachments={sessionAttachments}
               loadingWorkspace={loadingWorkspace}
               loadingSession={loadingSession}
+              sending={isSending}
               onSelectSession={setSelectedSessionId}
             />
 
