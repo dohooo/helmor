@@ -10,13 +10,13 @@ import {
   Sparkles,
   TerminalSquare,
 } from "lucide-react";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 import type {
   SessionAttachmentRecord,
   SessionMessageRecord,
   WorkspaceDetail,
   WorkspaceSessionSummary,
-} from "../lib/conductor";
+} from "@/lib/conductor";
 
 type WorkspacePanelProps = {
   workspace: WorkspaceDetail | null;
