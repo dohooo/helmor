@@ -158,7 +158,7 @@ function ConductorThread({ messages, sending }: { messages: SessionMessageRecord
 
   const runtime = useExternalStoreRuntime({
     messages: threadMessages,
-    isRunning: false,
+    isRunning: sending,
     convertMessage: (m) => m,
     onNew: async () => {
       // Read-only viewer — no sending
@@ -250,14 +250,14 @@ function AssistantText() {
 
 function AssistantReasoning({ text }: { text: string }) {
   return (
-    <details className="group rounded-md bg-app-foreground/[0.02]">
-      <summary className="flex cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
+    <details className="group">
+      <summary className="flex cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-app-muted hover:text-app-foreground-soft [&::-webkit-details-marker]:hidden">
         <svg className="size-2.5 shrink-0 transition-transform group-open:rotate-90" viewBox="0 0 12 12" fill="none">
           <path d="M4.5 2.5L8.5 6L4.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         Thinking
       </summary>
-      <pre className="max-h-[20rem] overflow-auto whitespace-pre-wrap break-words px-2.5 pb-2 font-sans text-[12px] leading-5 text-app-muted/70">
+      <pre className="mt-1.5 max-h-[20rem] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-app-foreground/[0.03] px-3 py-2.5 font-sans text-[12px] leading-5 text-app-muted/70">
         {text}
       </pre>
     </details>
