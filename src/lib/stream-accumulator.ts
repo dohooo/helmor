@@ -51,8 +51,19 @@ export class StreamAccumulator {
         return;
       }
 
+      // Result message — store so the adapter can render duration/cost
+      if (type === "result") {
+        this.collectedMessages.push(this.jsonToMessage(line, value, "assistant"));
+        return;
+      }
+
+      // Error message — store so the adapter can render error label
+      if (type === "error") {
+        this.collectedMessages.push(this.jsonToMessage(line, value, "error"));
+        return;
+      }
+
       // System messages (task_started etc.) — skip, adapter filters them anyway
-      // Result messages — skip, the done event handles this
     } catch {
       // ignore non-JSON lines
     }

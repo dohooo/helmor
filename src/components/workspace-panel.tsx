@@ -147,6 +147,7 @@ export function WorkspacePanel({
 function ConductorThread({ messages, sending }: { messages: SessionMessageRecord[]; sending: boolean }) {
   const threadMessages = useMemo(() => convertConductorMessages(messages), [messages]);
   const [sendStart, setSendStart] = useState<number | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (sending) {
@@ -156,9 +157,16 @@ function ConductorThread({ messages, sending }: { messages: SessionMessageRecord
     }
   }, [sending]);
 
+  // Auto-scroll to bottom when messages change during sending
+  useEffect(() => {
+    if (sending) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }, [messages, sending]);
+
   const runtime = useExternalStoreRuntime({
     messages: threadMessages,
-    isRunning: sending,
+    isRunning: false,
     convertMessage: (m) => m,
     onNew: async () => {
       // Read-only viewer — no sending
@@ -177,6 +185,7 @@ function ConductorThread({ messages, sending }: { messages: SessionMessageRecord
             }}
           />
           {sending ? <SendingIndicator startTime={sendStart} /> : null}
+          <div ref={bottomRef} />
         </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>
     </AssistantRuntimeProvider>
@@ -393,6 +402,7 @@ function AssistantToolCall({
 
 function SendingIndicator({ startTime }: { startTime: number | null }) {
   const [elapsed, setElapsed] = useState(0);
+  const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!startTime) return;
@@ -403,12 +413,17 @@ function SendingIndicator({ startTime }: { startTime: number | null }) {
     return () => clearInterval(interval);
   }, [startTime]);
 
+  // Scroll into view on mount and when elapsed updates (new content may push it down)
+  useEffect(() => {
+    ref.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  });
+
   const timeLabel = elapsed >= 60
     ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
     : `${elapsed}s`;
 
   return (
-    <div className="flex items-center gap-2 py-1 text-[11px] text-app-muted">
+    <div ref={ref} className="flex items-center gap-2 py-1 text-[11px] text-app-muted">
       <span className="relative flex size-3.5 shrink-0 items-center justify-center">
         <span className="absolute inset-0 animate-spin rounded-full border border-transparent border-t-app-progress" />
         <span className="size-1.5 rounded-full bg-app-progress" />
