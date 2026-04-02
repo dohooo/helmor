@@ -382,24 +382,35 @@ function App() {
           [contextKey]: [],
         }));
       } else {
-        setLiveMessagesByContext((current) =>
-          appendLiveMessage(
-            current,
-            contextKey,
-            createLiveMessage({
+        const hasThinking = !!response.thinkingText;
+        const liveAssistantMessage = hasThinking
+          ? createStructuredAssistantMessage({
+              id: `${contextKey}:assistant:${Date.now()}`,
+              sessionId: selectedSessionId ?? contextKey,
+              createdAt: new Date().toISOString(),
+              model: response.resolvedModel,
+              assistantText: response.assistantText,
+              thinkingText: response.thinkingText!,
+            })
+          : createLiveMessage({
               id: `${contextKey}:assistant:${Date.now()}`,
               sessionId: selectedSessionId ?? contextKey,
               role: "assistant",
               content: response.assistantText,
               createdAt: new Date().toISOString(),
               model: response.resolvedModel,
-            }),
-          ),
+            });
+        setLiveMessagesByContext((current) =>
+          appendLiveMessage(current, contextKey, liveAssistantMessage),
         );
       }
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Unable to send message.";
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : "Unable to send message.";
       setSendErrorsByContext((current) => ({ ...current, [contextKey]: message }));
       setComposerValue(prompt);
       setLiveMessagesByContext((current) => ({
@@ -641,6 +652,53 @@ function createLiveMessage({
     role,
     content,
     contentIsJson: false,
+    createdAt,
+    sentAt: createdAt,
+    cancelledAt: null,
+    model,
+    sdkMessageId: null,
+    lastAssistantMessageId: null,
+    turnId: null,
+    isResumableMessage: null,
+    attachmentCount: 0,
+  };
+}
+
+function createStructuredAssistantMessage({
+  id,
+  sessionId,
+  createdAt,
+  model,
+  assistantText,
+  thinkingText,
+}: {
+  id: string;
+  sessionId: string;
+  createdAt: string;
+  model: string;
+  assistantText: string;
+  thinkingText: string;
+}): SessionMessageRecord {
+  const contentBlocks: unknown[] = [
+    { type: "thinking", thinking: thinkingText },
+    { type: "text", text: assistantText },
+  ];
+  const parsed = {
+    type: "assistant",
+    message: {
+      model,
+      type: "message",
+      role: "assistant",
+      content: contentBlocks,
+    },
+  };
+  return {
+    id,
+    sessionId,
+    role: "assistant",
+    content: JSON.stringify(parsed),
+    contentIsJson: true,
+    parsedContent: parsed,
     createdAt,
     sentAt: createdAt,
     cancelledAt: null,

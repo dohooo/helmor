@@ -70,6 +70,7 @@ export type AgentSendResponse = {
   resolvedModel: string;
   sessionId?: string | null;
   assistantText: string;
+  thinkingText?: string | null;
   workingDirectory: string;
   inputTokens?: number | null;
   outputTokens?: number | null;
@@ -522,6 +523,7 @@ export async function sendAgentMessage(
       sessionId: request.sessionId ?? null,
       assistantText:
         "Live agent sending is only available in the Tauri desktop runtime.",
+      thinkingText: null,
       workingDirectory: request.workingDirectory ?? "",
       inputTokens: null,
       outputTokens: null,

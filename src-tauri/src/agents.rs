@@ -47,6 +47,7 @@ pub struct AgentSendResponse {
     pub resolved_model: String,
     pub session_id: Option<String>,
     pub assistant_text: String,
+    pub thinking_text: Option<String>,
     pub working_directory: String,
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
@@ -178,7 +179,7 @@ fn send_agent_message_blocking(request: AgentSendRequest) -> Result<AgentSendRes
 
     let working_directory = resolve_working_directory(request.working_directory.as_deref())?;
 
-    let (assistant_text, session_id, resolved_model, usage) = match model.provider {
+    let (assistant_text, thinking_text, session_id, resolved_model, usage) = match model.provider {
         "claude" => send_with_claude(model, prompt, request.session_id.as_deref(), &working_directory)?,
         "codex" => send_with_codex(model, prompt, request.session_id.as_deref(), &working_directory)?,
         provider => return Err(format!("Unsupported provider: {provider}")),
@@ -192,6 +193,7 @@ fn send_agent_message_blocking(request: AgentSendRequest) -> Result<AgentSendRes
             model,
             &resolved_model,
             &assistant_text,
+            thinking_text.as_deref(),
             session_id.as_deref(),
             &usage,
         )?;
@@ -206,6 +208,7 @@ fn send_agent_message_blocking(request: AgentSendRequest) -> Result<AgentSendRes
         resolved_model,
         session_id,
         assistant_text,
+        thinking_text,
         working_directory: working_directory.display().to_string(),
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
@@ -218,12 +221,13 @@ fn send_with_claude(
     prompt: &str,
     session_id: Option<&str>,
     working_directory: &Path,
-) -> Result<(String, Option<String>, String, AgentUsage), String> {
+) -> Result<(String, Option<String>, Option<String>, String, AgentUsage), String> {
     let binary = resolve_binary_path("claude")?;
     let mut command = Command::new(binary);
     command
         .current_dir(working_directory)
         .arg("-p")
+        .arg("--verbose")
         .arg("--output-format")
         .arg("stream-json")
         .arg("--include-partial-messages")
@@ -254,7 +258,7 @@ fn send_with_codex(
     prompt: &str,
     session_id: Option<&str>,
     working_directory: &Path,
-) -> Result<(String, Option<String>, String, AgentUsage), String> {
+) -> Result<(String, Option<String>, Option<String>, String, AgentUsage), String> {
     let binary = resolve_binary_path("codex")?;
     let mut command = Command::new(binary);
     command.current_dir(working_directory);
@@ -296,9 +300,11 @@ fn parse_claude_output(
     stdout: &str,
     fallback_session_id: Option<&str>,
     fallback_model: &str,
-) -> Result<(String, Option<String>, String, AgentUsage), String> {
+) -> Result<(String, Option<String>, Option<String>, String, AgentUsage), String> {
     let mut assistant_text = String::new();
+    let mut thinking_text = String::new();
     let mut saw_text_delta = false;
+    let mut saw_thinking_delta = false;
     let mut session_id = fallback_session_id.map(str::to_string);
     let mut resolved_model = fallback_model.to_string();
     let mut usage = AgentUsage {
@@ -321,19 +327,36 @@ fn parse_claude_output(
 
         match value.get("type").and_then(Value::as_str) {
             Some("stream_event") => {
-                if let Some(delta_text) = value
+                let delta = value
                     .get("event")
-                    .and_then(|event| event.get("delta"))
-                    .and_then(|delta| delta.get("text"))
+                    .and_then(|event| event.get("delta"));
+
+                if let Some(delta_text) = delta
+                    .and_then(|d| d.get("text"))
                     .and_then(Value::as_str)
                 {
                     assistant_text.push_str(delta_text);
                     saw_text_delta = true;
                 }
+
+                if let Some(delta_thinking) = delta
+                    .and_then(|d| d.get("thinking"))
+                    .and_then(Value::as_str)
+                {
+                    thinking_text.push_str(delta_thinking);
+                    saw_thinking_delta = true;
+                }
             }
-            Some("assistant") if !saw_text_delta => {
-                if let Some(text) = extract_claude_assistant_text(&value) {
-                    assistant_text.push_str(&text);
+            Some("assistant") => {
+                if !saw_text_delta {
+                    if let Some(text) = extract_claude_assistant_text(&value) {
+                        assistant_text.push_str(&text);
+                    }
+                }
+                if !saw_thinking_delta {
+                    if let Some(thinking) = extract_claude_thinking_text(&value) {
+                        thinking_text.push_str(&thinking);
+                    }
                 }
             }
             Some("result") => {
@@ -356,14 +379,17 @@ fn parse_claude_output(
         return Err("Claude returned no assistant text.".to_string());
     }
 
-    Ok((assistant_text, session_id, resolved_model, usage))
+    let thinking_text = thinking_text.trim().to_string();
+    let thinking_text = if thinking_text.is_empty() { None } else { Some(thinking_text) };
+
+    Ok((assistant_text, thinking_text, session_id, resolved_model, usage))
 }
 
 fn parse_codex_output(
     stdout: &str,
     fallback_session_id: Option<&str>,
     fallback_model: &str,
-) -> Result<(String, Option<String>, String, AgentUsage), String> {
+) -> Result<(String, Option<String>, Option<String>, String, AgentUsage), String> {
     let mut session_id = fallback_session_id.map(str::to_string);
     let mut assistant_chunks = Vec::new();
     let mut usage = AgentUsage {
@@ -410,7 +436,7 @@ fn parse_codex_output(
         return Err("Codex returned no assistant text.".to_string());
     }
 
-    Ok((assistant_text, session_id, fallback_model.to_string(), usage))
+    Ok((assistant_text, None, session_id, fallback_model.to_string(), usage))
 }
 
 fn extract_claude_model_name(value: &Value) -> Option<String> {
@@ -435,6 +461,28 @@ fn extract_claude_model_name(value: &Value) -> Option<String> {
     }
 
     None
+}
+
+fn extract_claude_thinking_text(value: &Value) -> Option<String> {
+    let content = value
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_array)?;
+
+    let text = content
+        .iter()
+        .filter_map(|block| {
+            let is_thinking = block.get("type").and_then(Value::as_str) == Some("thinking");
+            if !is_thinking {
+                return None;
+            }
+
+            block.get("thinking").and_then(Value::as_str)
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    (!text.trim().is_empty()).then_some(text)
 }
 
 fn extract_claude_assistant_text(value: &Value) -> Option<String> {
@@ -476,6 +524,7 @@ fn persist_exchange_to_fixture(
     model: &AgentModelDefinition,
     resolved_model: &str,
     assistant_text: &str,
+    thinking_text: Option<&str>,
     provider_session_id: Option<&str>,
     usage: &AgentUsage,
 ) -> Result<(), String> {
@@ -497,6 +546,17 @@ fn persist_exchange_to_fixture(
         }
     })
     .to_string();
+    let mut content_blocks: Vec<Value> = Vec::new();
+    if let Some(thinking) = thinking_text {
+        content_blocks.push(serde_json::json!({
+            "type": "thinking",
+            "thinking": thinking,
+        }));
+    }
+    content_blocks.push(serde_json::json!({
+        "type": "text",
+        "text": assistant_text,
+    }));
     let assistant_payload = serde_json::json!({
         "type": "assistant",
         "message": {
@@ -504,12 +564,7 @@ fn persist_exchange_to_fixture(
             "id": assistant_sdk_message_id,
             "type": "message",
             "role": "assistant",
-            "content": [
-                {
-                    "type": "text",
-                    "text": assistant_text,
-                }
-            ]
+            "content": content_blocks,
         },
         "session_id": provider_session_id,
     })
