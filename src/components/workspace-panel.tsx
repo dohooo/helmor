@@ -35,6 +35,7 @@ import type {
   WorkspaceSessionSummary,
 } from "@/lib/conductor";
 import { convertConductorMessages } from "@/lib/message-adapter";
+import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
 
 type WorkspacePanelProps = {
   workspace: WorkspaceDetail | null;
@@ -246,6 +247,24 @@ function ConductorSystemMessage() {
 // ---------------------------------------------------------------------------
 
 function UserText({ text }: { text: string }) {
+  const images = extractImagePaths(text);
+  if (images.length > 0) {
+    // Remove image paths from text, show as badges
+    let remaining = text;
+    for (const p of images) {
+      remaining = remaining.replace(p, "").trim();
+    }
+    return (
+      <div className="space-y-2">
+        {remaining ? <p className="whitespace-pre-wrap break-words">{remaining}</p> : null}
+        <div className="flex flex-wrap gap-1.5">
+          {images.map((p) => (
+            <ImagePreviewBadge key={p} path={p} />
+          ))}
+        </div>
+      </div>
+    );
+  }
   return <p className="whitespace-pre-wrap break-words">{text}</p>;
 }
 

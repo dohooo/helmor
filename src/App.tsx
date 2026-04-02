@@ -342,8 +342,8 @@ function App() {
     }));
   };
 
-  const handleComposerSubmit = async () => {
-    const prompt = composerValue.trim();
+  const handleComposerSubmit = async (submittedPrompt: string, _imagePaths: string[]) => {
+    const prompt = submittedPrompt.trim();
     if (!prompt || !selectedModel) {
       return;
     }
@@ -654,8 +654,8 @@ function App() {
               <WorkspaceComposer
                 value={composerValue}
                 onValueChange={setComposerValue}
-                onSubmit={() => {
-                  void handleComposerSubmit();
+                onSubmit={(prompt, imagePaths) => {
+                  void handleComposerSubmit(prompt, imagePaths);
                 }}
                 sending={isSending}
                 selectedModelId={selectedModelId}

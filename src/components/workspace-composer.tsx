@@ -1,4 +1,5 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { useCallback, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
 import {
   ArrowUp,
   BookOpen,
@@ -24,7 +25,7 @@ import {
 type WorkspaceComposerProps = {
   value: string;
   onValueChange: (value: string) => void;
-  onSubmit: () => void;
+  onSubmit: (prompt: string, imagePaths: string[]) => void;
   sending?: boolean;
   selectedModelId: string | null;
   modelSections: AgentModelSection[];
@@ -70,7 +71,37 @@ export function WorkspaceComposer({
     modelSections
       .flatMap((section) => section.options)
       .find((option) => option.id === selectedModelId) ?? null;
-  const sendDisabled = sending || !selectedModel || value.trim().length === 0;
+  const [attachedImages, setAttachedImages] = useState<string[]>([]);
+  const hasContent = value.trim().length > 0 || attachedImages.length > 0;
+  const sendDisabled = sending || !selectedModel || !hasContent;
+
+  // Intercept value changes to extract image paths
+  const handleValueChange = useCallback(
+    (newValue: string) => {
+      const found = extractImagePaths(newValue);
+      if (found.length > 0) {
+        let cleaned = newValue;
+        for (const p of found) cleaned = cleaned.replace(p, "");
+        cleaned = cleaned.replace(/\n{2,}/g, "\n").trim();
+        setAttachedImages((prev) => [...new Set([...prev, ...found])]);
+        onValueChange(cleaned);
+      } else {
+        onValueChange(newValue);
+      }
+    },
+    [onValueChange],
+  );
+
+  const handleRemoveImage = useCallback((path: string) => {
+    setAttachedImages((prev) => prev.filter((p) => p !== path));
+  }, []);
+
+  const handleSubmit = useCallback(() => {
+    const imageRefs = attachedImages.map((p) => `@${p}`);
+    const prompt = [value.trim(), ...imageRefs].filter(Boolean).join("\n");
+    onSubmit(prompt, attachedImages);
+    setAttachedImages([]);
+  }, [value, attachedImages, onSubmit]);
 
   return (
     <div
@@ -81,18 +112,26 @@ export function WorkspaceComposer({
         Workspace input
       </label>
 
+      {attachedImages.length > 0 ? (
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {attachedImages.map((p) => (
+            <ImagePreviewBadge key={p} path={p} onRemove={() => handleRemoveImage(p)} />
+          ))}
+        </div>
+      ) : null}
+
       <textarea
         id="workspace-input"
         aria-label="Workspace input"
         value={value}
         onChange={(event) => {
-          onValueChange(event.currentTarget.value);
+          handleValueChange(event.currentTarget.value);
         }}
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
             if (!sendDisabled) {
-              onSubmit();
+              handleSubmit();
             }
           }
         }}
@@ -199,7 +238,7 @@ export function WorkspaceComposer({
           <button
             type="button"
             aria-label="Send"
-            onClick={onSubmit}
+            onClick={handleSubmit}
             disabled={sendDisabled}
             className={cn(
               "flex size-8 items-center justify-center rounded-[9px] border border-app-border-strong bg-app-sidebar-strong text-app-foreground transition-transform focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong",
