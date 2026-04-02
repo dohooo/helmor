@@ -1,30 +1,24 @@
 import "./App.css";
 import {
-  type ButtonHTMLAttributes,
   type KeyboardEvent,
   type MouseEvent,
-  type ReactNode,
   useEffect,
   useMemo,
   useState,
 } from "react";
 import {
-  ArrowUp,
-  BookOpen,
-  BrainCircuit,
-  LoaderCircle,
-  Plus,
-  Sparkles,
-  Zap,
-} from "lucide-react";
-import {
+  DEFAULT_AGENT_MODEL_SECTIONS,
   DEFAULT_WORKSPACE_GROUPS,
+  loadAgentModelSections,
   loadArchivedWorkspaces,
   loadSessionAttachments,
   loadSessionMessages,
   loadWorkspaceDetail,
   loadWorkspaceGroups,
   loadWorkspaceSessions,
+  sendAgentMessage,
+  type AgentModelOption,
+  type AgentModelSection,
   type SessionAttachmentRecord,
   type SessionMessageRecord,
   type WorkspaceDetail,
@@ -33,9 +27,9 @@ import {
   type WorkspaceSessionSummary,
   type WorkspaceSummary,
 } from "./lib/conductor";
-import { cn } from "./lib/utils";
 import { WorkspacesSidebar } from "./components/workspaces-sidebar";
 import { WorkspacePanel } from "./components/workspace-panel";
+import { WorkspaceComposer } from "./components/workspace-composer";
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "helmor.workspaceSidebarWidth";
 const DEFAULT_SIDEBAR_WIDTH = 288;
@@ -43,6 +37,8 @@ const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 520;
 const SIDEBAR_RESIZE_STEP = 16;
 const SIDEBAR_RESIZE_HIT_AREA = 20;
+const DEFAULT_CLAUDE_MODEL_ID = "opus-1m";
+const DEFAULT_CODEX_MODEL_ID = "gpt-5.4";
 
 function clampSidebarWidth(width: number) {
   return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width));
@@ -70,108 +66,6 @@ function getInitialSidebarWidth() {
   }
 }
 
-type ComposerButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  children: ReactNode;
-  className?: string;
-};
-
-function ComposerButton({
-  children,
-  className,
-  ...props
-}: ComposerButtonProps) {
-  return (
-    <button
-      {...props}
-      type="button"
-      className={cn(
-        "flex items-center gap-1.5 rounded-lg text-app-foreground-soft transition-colors hover:text-app-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong",
-        className,
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function WorkspaceComposer() {
-  return (
-    <div
-      aria-label="Workspace composer"
-      className="flex min-h-[132px] flex-col rounded-[14px] border border-app-border-strong bg-app-sidebar px-4 pb-3 pt-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
-    >
-      <label htmlFor="workspace-input" className="sr-only">
-        Workspace input
-      </label>
-
-      <textarea
-        id="workspace-input"
-        aria-label="Workspace input"
-        placeholder="Ask to make changes, @mention files, run /commands"
-        className="min-h-[64px] flex-1 resize-none bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-app-foreground outline-none placeholder:text-app-muted"
-      />
-
-      <div className="mt-2.5 flex items-end justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-1">
-          <ComposerButton
-            aria-label="Model selector"
-            className="gap-1.5 px-1 py-0.5 text-[13px] font-medium"
-          >
-            <Sparkles className="size-[14px]" strokeWidth={1.8} />
-            <span>Opus 4.6</span>
-          </ComposerButton>
-
-          <ComposerButton
-            aria-label="Quick command"
-            className="justify-center p-1"
-          >
-            <Zap className="size-[15px]" strokeWidth={1.9} />
-          </ComposerButton>
-
-          <ComposerButton
-            aria-label="Reasoning mode"
-            className="gap-1.5 rounded-md bg-app-sidebar-strong px-2.5 py-1 text-[13px] font-medium text-app-foreground-soft hover:text-app-foreground"
-          >
-            <BrainCircuit className="size-[14px]" strokeWidth={1.8} />
-            <span>Thinking</span>
-          </ComposerButton>
-
-          <ComposerButton
-            aria-label="References"
-            className="justify-center p-1"
-          >
-            <BookOpen className="size-[15px]" strokeWidth={1.8} />
-          </ComposerButton>
-        </div>
-
-        <div className="flex items-center gap-1">
-          <ComposerButton
-            aria-label="Activity"
-            className="justify-center p-1"
-          >
-            <LoaderCircle className="size-[15px]" strokeWidth={1.8} />
-          </ComposerButton>
-
-          <ComposerButton
-            aria-label="Add attachment"
-            className="justify-center p-1"
-          >
-            <Plus className="size-4" strokeWidth={1.8} />
-          </ComposerButton>
-
-          <button
-            type="button"
-            aria-label="Send"
-            className="flex size-8 items-center justify-center rounded-[9px] border border-app-border-strong bg-app-sidebar-strong text-app-foreground transition-transform hover:-translate-y-px focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong"
-          >
-            <ArrowUp className="size-[15px]" strokeWidth={2.2} />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function App() {
   const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
   const [resizeState, setResizeState] = useState<{
@@ -188,6 +82,23 @@ function App() {
   const [workspaceSessions, setWorkspaceSessions] = useState<WorkspaceSessionSummary[]>([]);
   const [sessionMessages, setSessionMessages] = useState<SessionMessageRecord[]>([]);
   const [sessionAttachments, setSessionAttachments] = useState<SessionAttachmentRecord[]>([]);
+  const [agentModelSections, setAgentModelSections] = useState<AgentModelSection[]>(
+    DEFAULT_AGENT_MODEL_SECTIONS,
+  );
+  const [composerValue, setComposerValue] = useState("");
+  const [composerModelSelections, setComposerModelSelections] = useState<
+    Record<string, string>
+  >({});
+  const [liveMessagesByContext, setLiveMessagesByContext] = useState<
+    Record<string, SessionMessageRecord[]>
+  >({});
+  const [liveSessionsByContext, setLiveSessionsByContext] = useState<
+    Record<string, { provider: string; sessionId?: string | null }>
+  >({});
+  const [sendErrorsByContext, setSendErrorsByContext] = useState<
+    Record<string, string | null>
+  >({});
+  const [sendingContextKey, setSendingContextKey] = useState<string | null>(null);
   const [loadingWorkspace, setLoadingWorkspace] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
   const isResizing = resizeState !== null;
@@ -196,6 +107,23 @@ function App() {
     () => archivedSummaries.map(summaryToArchivedRow),
     [archivedSummaries],
   );
+  const selectedSession =
+    workspaceSessions.find((session) => session.id === selectedSessionId) ?? null;
+  const composerContextKey = getComposerContextKey(
+    selectedWorkspaceId,
+    selectedSessionId,
+  );
+  const selectedModelId =
+    composerModelSelections[composerContextKey] ??
+    inferDefaultModelId(selectedSession, agentModelSections);
+  const selectedModel = findModelOption(agentModelSections, selectedModelId);
+  const liveMessages = liveMessagesByContext[composerContextKey] ?? [];
+  const mergedMessages = useMemo(
+    () => [...sessionMessages, ...liveMessages],
+    [sessionMessages, liveMessages],
+  );
+  const activeSendError = sendErrorsByContext[composerContextKey] ?? null;
+  const isSending = sendingContextKey === composerContextKey;
 
   useEffect(() => {
     try {
@@ -243,14 +171,18 @@ function App() {
   useEffect(() => {
     let disposed = false;
 
-    void Promise.all([loadWorkspaceGroups(), loadArchivedWorkspaces()]).then(
-      ([loadedGroups, loadedArchived]) => {
+    void Promise.all([
+      loadWorkspaceGroups(),
+      loadArchivedWorkspaces(),
+      loadAgentModelSections(),
+    ]).then(([loadedGroups, loadedArchived, loadedModelSections]) => {
         if (disposed) {
           return;
         }
 
         setGroups(loadedGroups);
         setArchivedSummaries(loadedArchived);
+        setAgentModelSections(loadedModelSections);
         setSelectedWorkspaceId((current) => {
           if (current && hasWorkspaceId(current, loadedGroups, loadedArchived)) {
             return current;
@@ -363,6 +295,74 @@ function App() {
     }
   };
 
+  const handleComposerSubmit = async () => {
+    const prompt = composerValue.trim();
+    if (!prompt || !selectedModel) {
+      return;
+    }
+
+    const contextKey = composerContextKey;
+    const now = new Date().toISOString();
+    const optimisticUserMessage = createLiveMessage({
+      id: `${contextKey}:user:${Date.now()}`,
+      sessionId: selectedSessionId ?? contextKey,
+      role: "user",
+      content: prompt,
+      createdAt: now,
+      model: selectedModel.id,
+    });
+    const previousLiveSession = liveSessionsByContext[contextKey];
+    const sessionId =
+      previousLiveSession?.provider === selectedModel.provider
+        ? previousLiveSession.sessionId ?? undefined
+        : undefined;
+
+    setLiveMessagesByContext((current) =>
+      appendLiveMessage(current, contextKey, optimisticUserMessage),
+    );
+    setComposerValue("");
+    setSendErrorsByContext((current) => ({ ...current, [contextKey]: null }));
+    setSendingContextKey(contextKey);
+
+    try {
+      const response = await sendAgentMessage({
+        provider: selectedModel.provider,
+        modelId: selectedModel.id,
+        prompt,
+        sessionId,
+        workingDirectory: workspaceDetail?.rootPath ?? null,
+      });
+
+      setLiveSessionsByContext((current) => ({
+        ...current,
+        [contextKey]: {
+          provider: response.provider,
+          sessionId: response.sessionId ?? current[contextKey]?.sessionId ?? null,
+        },
+      }));
+      setLiveMessagesByContext((current) =>
+        appendLiveMessage(
+          current,
+          contextKey,
+          createLiveMessage({
+            id: `${contextKey}:assistant:${Date.now()}`,
+            sessionId: selectedSessionId ?? contextKey,
+            role: "assistant",
+            content: response.assistantText,
+            createdAt: new Date().toISOString(),
+            model: response.resolvedModel,
+          }),
+        ),
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to send message.";
+      setSendErrorsByContext((current) => ({ ...current, [contextKey]: message }));
+    } finally {
+      setSendingContextKey((current) => (current === contextKey ? null : current));
+    }
+  };
+
   return (
     <main
       aria-label="Application shell"
@@ -429,7 +429,7 @@ function App() {
               workspace={workspaceDetail}
               sessions={workspaceSessions}
               selectedSessionId={selectedSessionId}
-              messages={sessionMessages}
+              messages={mergedMessages}
               attachments={sessionAttachments}
               loadingWorkspace={loadingWorkspace}
               loadingSession={loadingSession}
@@ -437,7 +437,23 @@ function App() {
             />
 
             <div className="mt-auto border-t border-app-border px-3 pb-3 pt-3">
-              <WorkspaceComposer />
+              <WorkspaceComposer
+                value={composerValue}
+                onValueChange={setComposerValue}
+                onSubmit={() => {
+                  void handleComposerSubmit();
+                }}
+                sending={isSending}
+                selectedModelId={selectedModelId}
+                modelSections={agentModelSections}
+                onSelectModel={(modelId) => {
+                  setComposerModelSelections((current) => ({
+                    ...current,
+                    [composerContextKey]: modelId,
+                  }));
+                }}
+                sendError={activeSendError}
+              />
             </div>
           </div>
         </section>
@@ -497,6 +513,94 @@ function summaryToArchivedRow(summary: WorkspaceSummary): WorkspaceRow {
     sessionCount: summary.sessionCount,
     messageCount: summary.messageCount,
     attachmentCount: summary.attachmentCount,
+  };
+}
+
+function getComposerContextKey(
+  workspaceId: string | null,
+  sessionId: string | null,
+): string {
+  if (sessionId) {
+    return `session:${sessionId}`;
+  }
+
+  if (workspaceId) {
+    return `workspace:${workspaceId}`;
+  }
+
+  return "global";
+}
+
+function inferDefaultModelId(
+  session: WorkspaceSessionSummary | null,
+  modelSections: AgentModelSection[],
+): string {
+  const preferredModelId = session?.model ?? null;
+  if (preferredModelId && findModelOption(modelSections, preferredModelId)) {
+    return preferredModelId;
+  }
+
+  return session?.agentType === "codex"
+    ? DEFAULT_CODEX_MODEL_ID
+    : DEFAULT_CLAUDE_MODEL_ID;
+}
+
+function findModelOption(
+  modelSections: AgentModelSection[],
+  modelId: string | null,
+): AgentModelOption | null {
+  if (!modelId) {
+    return null;
+  }
+
+  return (
+    modelSections
+      .flatMap((section) => section.options)
+      .find((option) => option.id === modelId) ?? null
+  );
+}
+
+function createLiveMessage({
+  id,
+  sessionId,
+  role,
+  content,
+  createdAt,
+  model,
+}: {
+  id: string;
+  sessionId: string;
+  role: string;
+  content: string;
+  createdAt: string;
+  model: string;
+}): SessionMessageRecord {
+  return {
+    id,
+    sessionId,
+    role,
+    content,
+    contentIsJson: false,
+    createdAt,
+    sentAt: createdAt,
+    cancelledAt: null,
+    model,
+    sdkMessageId: null,
+    lastAssistantMessageId: null,
+    turnId: null,
+    isResumableMessage: null,
+    attachmentCount: 0,
+  };
+}
+
+function appendLiveMessage(
+  current: Record<string, SessionMessageRecord[]>,
+  contextKey: string,
+  message: SessionMessageRecord,
+) {
+  return {
+    ...current,
+    [contextKey]: [...(current[contextKey] ?? []), message],
   };
 }
 

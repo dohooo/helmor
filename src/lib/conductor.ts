@@ -35,6 +35,39 @@ export type ConductorFixtureInfo = {
   archiveRoot: string;
 };
 
+export type AgentProvider = "claude" | "codex";
+
+export type AgentModelOption = {
+  id: string;
+  provider: AgentProvider;
+  label: string;
+  cliModel: string;
+  badge?: string | null;
+};
+
+export type AgentModelSection = {
+  id: AgentProvider;
+  label: string;
+  options: AgentModelOption[];
+};
+
+export type AgentSendRequest = {
+  provider: AgentProvider;
+  modelId: string;
+  prompt: string;
+  sessionId?: string | null;
+  workingDirectory?: string | null;
+};
+
+export type AgentSendResponse = {
+  provider: AgentProvider;
+  modelId: string;
+  resolvedModel: string;
+  sessionId?: string | null;
+  assistantText: string;
+  workingDirectory: string;
+};
+
 export type WorkspaceSummary = {
   id: string;
   title: string;
@@ -263,6 +296,71 @@ const DEFAULT_ARCHIVED_WORKSPACES: WorkspaceSummary[] = [
   },
 ];
 
+const DEFAULT_AGENT_MODEL_SECTIONS: AgentModelSection[] = [
+  {
+    id: "claude",
+    label: "Claude Code",
+    options: [
+      {
+        id: "opus-1m",
+        provider: "claude",
+        label: "Opus 4.6 1M",
+        cliModel: "opus[1m]",
+        badge: "NEW",
+      },
+      {
+        id: "opus",
+        provider: "claude",
+        label: "Opus 4.6",
+        cliModel: "opus",
+      },
+      {
+        id: "sonnet",
+        provider: "claude",
+        label: "Sonnet 4.6",
+        cliModel: "sonnet",
+      },
+      {
+        id: "haiku",
+        provider: "claude",
+        label: "Haiku 4.5",
+        cliModel: "haiku",
+      },
+    ],
+  },
+  {
+    id: "codex",
+    label: "Codex",
+    options: [
+      {
+        id: "gpt-5.4",
+        provider: "codex",
+        label: "GPT-5.4",
+        cliModel: "gpt-5.4",
+        badge: "NEW",
+      },
+      {
+        id: "gpt-5.3-codex-spark",
+        provider: "codex",
+        label: "GPT-5.3-Codex-Spark",
+        cliModel: "gpt-5.3-codex-spark",
+      },
+      {
+        id: "gpt-5.3-codex",
+        provider: "codex",
+        label: "GPT-5.3-Codex",
+        cliModel: "gpt-5.3-codex",
+      },
+      {
+        id: "gpt-5.2-codex",
+        provider: "codex",
+        label: "GPT-5.2-Codex",
+        cliModel: "gpt-5.2-codex",
+      },
+    ],
+  },
+];
+
 type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 async function getTauriInvoke(): Promise<TauriInvoke | null> {
@@ -313,6 +411,20 @@ export async function loadArchivedWorkspaces(): Promise<WorkspaceSummary[]> {
     return await invoke<WorkspaceSummary[]>("list_archived_workspaces");
   } catch {
     return DEFAULT_ARCHIVED_WORKSPACES;
+  }
+}
+
+export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    return DEFAULT_AGENT_MODEL_SECTIONS;
+  }
+
+  try {
+    return await invoke<AgentModelSection[]>("list_agent_model_sections");
+  } catch {
+    return DEFAULT_AGENT_MODEL_SECTIONS;
   }
 }
 
@@ -386,4 +498,24 @@ export async function loadSessionAttachments(
   }
 }
 
-export { DEFAULT_WORKSPACE_GROUPS };
+export async function sendAgentMessage(
+  request: AgentSendRequest,
+): Promise<AgentSendResponse> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    return {
+      provider: request.provider,
+      modelId: request.modelId,
+      resolvedModel: request.modelId,
+      sessionId: request.sessionId ?? null,
+      assistantText:
+        "Live agent sending is only available in the Tauri desktop runtime.",
+      workingDirectory: request.workingDirectory ?? "",
+    };
+  }
+
+  return invoke<AgentSendResponse>("send_agent_message", { request });
+}
+
+export { DEFAULT_AGENT_MODEL_SECTIONS, DEFAULT_WORKSPACE_GROUPS };

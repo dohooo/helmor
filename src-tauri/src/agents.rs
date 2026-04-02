@@ -1,0 +1,498 @@
+use std::{
+    env,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentModelOption {
+    pub id: String,
+    pub provider: String,
+    pub label: String,
+    pub cli_model: String,
+    pub badge: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentModelSection {
+    pub id: String,
+    pub label: String,
+    pub options: Vec<AgentModelOption>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSendRequest {
+    pub provider: String,
+    pub model_id: String,
+    pub prompt: String,
+    pub session_id: Option<String>,
+    pub working_directory: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSendResponse {
+    pub provider: String,
+    pub model_id: String,
+    pub resolved_model: String,
+    pub session_id: Option<String>,
+    pub assistant_text: String,
+    pub working_directory: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AgentModelDefinition {
+    id: &'static str,
+    provider: &'static str,
+    label: &'static str,
+    cli_model: &'static str,
+    badge: Option<&'static str>,
+}
+
+const CLAUDE_MODEL_DEFINITIONS: &[AgentModelDefinition] = &[
+    AgentModelDefinition {
+        id: "opus-1m",
+        provider: "claude",
+        label: "Opus 4.6 1M",
+        cli_model: "opus[1m]",
+        badge: Some("NEW"),
+    },
+    AgentModelDefinition {
+        id: "opus",
+        provider: "claude",
+        label: "Opus 4.6",
+        cli_model: "opus",
+        badge: None,
+    },
+    AgentModelDefinition {
+        id: "sonnet",
+        provider: "claude",
+        label: "Sonnet 4.6",
+        cli_model: "sonnet",
+        badge: None,
+    },
+    AgentModelDefinition {
+        id: "haiku",
+        provider: "claude",
+        label: "Haiku 4.5",
+        cli_model: "haiku",
+        badge: None,
+    },
+];
+
+const CODEX_MODEL_DEFINITIONS: &[AgentModelDefinition] = &[
+    AgentModelDefinition {
+        id: "gpt-5.4",
+        provider: "codex",
+        label: "GPT-5.4",
+        cli_model: "gpt-5.4",
+        badge: Some("NEW"),
+    },
+    AgentModelDefinition {
+        id: "gpt-5.3-codex-spark",
+        provider: "codex",
+        label: "GPT-5.3-Codex-Spark",
+        cli_model: "gpt-5.3-codex-spark",
+        badge: None,
+    },
+    AgentModelDefinition {
+        id: "gpt-5.3-codex",
+        provider: "codex",
+        label: "GPT-5.3-Codex",
+        cli_model: "gpt-5.3-codex",
+        badge: None,
+    },
+    AgentModelDefinition {
+        id: "gpt-5.2-codex",
+        provider: "codex",
+        label: "GPT-5.2-Codex",
+        cli_model: "gpt-5.2-codex",
+        badge: None,
+    },
+];
+
+#[tauri::command]
+pub fn list_agent_model_sections() -> Vec<AgentModelSection> {
+    vec![
+        AgentModelSection {
+            id: "claude".to_string(),
+            label: "Claude Code".to_string(),
+            options: CLAUDE_MODEL_DEFINITIONS
+                .iter()
+                .map(model_definition_to_option)
+                .collect(),
+        },
+        AgentModelSection {
+            id: "codex".to_string(),
+            label: "Codex".to_string(),
+            options: CODEX_MODEL_DEFINITIONS
+                .iter()
+                .map(model_definition_to_option)
+                .collect(),
+        },
+    ]
+}
+
+#[tauri::command]
+pub async fn send_agent_message(request: AgentSendRequest) -> Result<AgentSendResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || send_agent_message_blocking(request))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn send_agent_message_blocking(request: AgentSendRequest) -> Result<AgentSendResponse, String> {
+    let prompt = request.prompt.trim();
+    if prompt.is_empty() {
+        return Err("Prompt cannot be empty.".to_string());
+    }
+
+    let model = find_model_definition(&request.model_id)
+        .ok_or_else(|| format!("Unknown model id: {}", request.model_id))?;
+
+    if request.provider != model.provider {
+        return Err(format!(
+            "Model {} does not belong to provider {}.",
+            request.model_id, request.provider
+        ));
+    }
+
+    let working_directory = resolve_working_directory(request.working_directory.as_deref())?;
+
+    let (assistant_text, session_id, resolved_model) = match model.provider {
+        "claude" => send_with_claude(model, prompt, request.session_id.as_deref(), &working_directory)?,
+        "codex" => send_with_codex(model, prompt, request.session_id.as_deref(), &working_directory)?,
+        provider => return Err(format!("Unsupported provider: {provider}")),
+    };
+
+    Ok(AgentSendResponse {
+        provider: model.provider.to_string(),
+        model_id: model.id.to_string(),
+        resolved_model,
+        session_id,
+        assistant_text,
+        working_directory: working_directory.display().to_string(),
+    })
+}
+
+fn send_with_claude(
+    model: &AgentModelDefinition,
+    prompt: &str,
+    session_id: Option<&str>,
+    working_directory: &Path,
+) -> Result<(String, Option<String>, String), String> {
+    let binary = resolve_binary_path("claude")?;
+    let mut command = Command::new(binary);
+    command
+        .current_dir(working_directory)
+        .arg("-p")
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--include-partial-messages")
+        .arg("--model")
+        .arg(model.cli_model);
+
+    if let Some(existing_session_id) = non_empty(session_id) {
+        command.arg("--resume").arg(existing_session_id);
+    }
+
+    command.arg(prompt);
+
+    let output = command.output().map_err(|error| error.to_string())?;
+
+    if !output.status.success() {
+        return Err(format_process_failure("Claude", &output.stderr, output.status.code()));
+    }
+
+    parse_claude_output(
+        &String::from_utf8_lossy(&output.stdout),
+        session_id,
+        model.cli_model,
+    )
+}
+
+fn send_with_codex(
+    model: &AgentModelDefinition,
+    prompt: &str,
+    session_id: Option<&str>,
+    working_directory: &Path,
+) -> Result<(String, Option<String>, String), String> {
+    let binary = resolve_binary_path("codex")?;
+    let mut command = Command::new(binary);
+    command.current_dir(working_directory);
+
+    if let Some(existing_session_id) = non_empty(session_id) {
+        command
+            .arg("exec")
+            .arg("resume")
+            .arg("--json")
+            .arg("--skip-git-repo-check")
+            .arg("-m")
+            .arg(model.cli_model)
+            .arg(existing_session_id)
+            .arg(prompt);
+    } else {
+        command
+            .arg("exec")
+            .arg("--json")
+            .arg("--skip-git-repo-check")
+            .arg("-m")
+            .arg(model.cli_model)
+            .arg(prompt);
+    }
+
+    let output = command.output().map_err(|error| error.to_string())?;
+
+    if !output.status.success() {
+        return Err(format_process_failure("Codex", &output.stderr, output.status.code()));
+    }
+
+    parse_codex_output(
+        &String::from_utf8_lossy(&output.stdout),
+        session_id,
+        model.cli_model,
+    )
+}
+
+fn parse_claude_output(
+    stdout: &str,
+    fallback_session_id: Option<&str>,
+    fallback_model: &str,
+) -> Result<(String, Option<String>, String), String> {
+    let mut assistant_text = String::new();
+    let mut saw_text_delta = false;
+    let mut session_id = fallback_session_id.map(str::to_string);
+    let mut resolved_model = fallback_model.to_string();
+
+    for line in stdout.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+
+        if let Some(found_session_id) = value.get("session_id").and_then(Value::as_str) {
+            session_id = Some(found_session_id.to_string());
+        }
+
+        if let Some(found_model) = extract_claude_model_name(&value) {
+            resolved_model = found_model;
+        }
+
+        match value.get("type").and_then(Value::as_str) {
+            Some("stream_event") => {
+                if let Some(delta_text) = value
+                    .get("event")
+                    .and_then(|event| event.get("delta"))
+                    .and_then(|delta| delta.get("text"))
+                    .and_then(Value::as_str)
+                {
+                    assistant_text.push_str(delta_text);
+                    saw_text_delta = true;
+                }
+            }
+            Some("assistant") if !saw_text_delta => {
+                if let Some(text) = extract_claude_assistant_text(&value) {
+                    assistant_text.push_str(&text);
+                }
+            }
+            Some("result") if assistant_text.trim().is_empty() => {
+                if let Some(text) = value.get("result").and_then(Value::as_str) {
+                    assistant_text.push_str(text);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let assistant_text = assistant_text.trim().to_string();
+    if assistant_text.is_empty() {
+        return Err("Claude returned no assistant text.".to_string());
+    }
+
+    Ok((assistant_text, session_id, resolved_model))
+}
+
+fn parse_codex_output(
+    stdout: &str,
+    fallback_session_id: Option<&str>,
+    fallback_model: &str,
+) -> Result<(String, Option<String>, String), String> {
+    let mut session_id = fallback_session_id.map(str::to_string);
+    let mut assistant_chunks = Vec::new();
+
+    for line in stdout.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+
+        if let Some(thread_id) = value.get("thread_id").and_then(Value::as_str) {
+            session_id = Some(thread_id.to_string());
+        }
+
+        match value.get("type").and_then(Value::as_str) {
+            Some("item.completed") => {
+                if let Some(item) = value.get("item") {
+                    if item.get("type").and_then(Value::as_str) == Some("agent_message") {
+                        if let Some(text) = item.get("text").and_then(Value::as_str) {
+                            assistant_chunks.push(text.to_string());
+                        }
+                    }
+                }
+            }
+            Some("thread.started") | Some("thread.resumed") => {
+                if let Some(thread_id) = value.get("thread_id").and_then(Value::as_str) {
+                    session_id = Some(thread_id.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let assistant_text = assistant_chunks.join("\n\n").trim().to_string();
+    if assistant_text.is_empty() {
+        return Err("Codex returned no assistant text.".to_string());
+    }
+
+    Ok((assistant_text, session_id, fallback_model.to_string()))
+}
+
+fn extract_claude_model_name(value: &Value) -> Option<String> {
+    if let Some(model) = value.get("model").and_then(Value::as_str) {
+        return Some(model.to_string());
+    }
+
+    if let Some(model) = value
+        .get("message")
+        .and_then(|message| message.get("model"))
+        .and_then(Value::as_str)
+    {
+        return Some(model.to_string());
+    }
+
+    if let Some(model) = value
+        .get("model")
+        .and_then(|model| model.get("display_name"))
+        .and_then(Value::as_str)
+    {
+        return Some(model.to_string());
+    }
+
+    None
+}
+
+fn extract_claude_assistant_text(value: &Value) -> Option<String> {
+    let content = value
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_array)?;
+
+    let text = content
+        .iter()
+        .filter_map(|block| {
+            let is_text = block.get("type").and_then(Value::as_str) == Some("text");
+            if !is_text {
+                return None;
+            }
+
+            block.get("text").and_then(Value::as_str)
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    (!text.trim().is_empty()).then_some(text)
+}
+
+fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf, String> {
+    if let Some(path) = non_empty(provided) {
+        let directory = PathBuf::from(path);
+        if directory.is_dir() {
+            return Ok(directory);
+        }
+    }
+
+    env::current_dir().map_err(|error| error.to_string())
+}
+
+fn resolve_binary_path(binary_name: &str) -> Result<PathBuf, String> {
+    let env_key = match binary_name {
+        "claude" => "HELMOR_CLAUDE_BIN",
+        "codex" => "HELMOR_CODEX_BIN",
+        _ => return Err(format!("Unsupported binary: {binary_name}")),
+    };
+
+    if let Some(explicit_path) = env::var_os(env_key)
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+    {
+        return Ok(explicit_path);
+    }
+
+    if let Some(path_candidate) = search_path(binary_name) {
+        return Ok(path_candidate);
+    }
+
+    let home_dir = env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("Unable to resolve HOME while locating {binary_name}."))?;
+
+    let fallback_candidates = match binary_name {
+        "claude" => vec![home_dir.join(".local/bin/claude")],
+        "codex" => vec![home_dir.join("Library/pnpm/codex")],
+        _ => Vec::new(),
+    };
+
+    fallback_candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| {
+            format!(
+                "Unable to locate {binary_name}. Set {env_key} or add it to PATH before sending."
+            )
+        })
+}
+
+fn search_path(binary_name: &str) -> Option<PathBuf> {
+    let paths = env::var_os("PATH")?;
+
+    env::split_paths(&paths)
+        .map(|directory| directory.join(binary_name))
+        .find(|candidate| candidate.is_file())
+}
+
+fn find_model_definition(model_id: &str) -> Option<&'static AgentModelDefinition> {
+    CLAUDE_MODEL_DEFINITIONS
+        .iter()
+        .chain(CODEX_MODEL_DEFINITIONS.iter())
+        .find(|model| model.id == model_id)
+}
+
+fn model_definition_to_option(model: &AgentModelDefinition) -> AgentModelOption {
+    AgentModelOption {
+        id: model.id.to_string(),
+        provider: model.provider.to_string(),
+        label: model.label.to_string(),
+        cli_model: model.cli_model.to_string(),
+        badge: model.badge.map(str::to_string),
+    }
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.filter(|inner| !inner.trim().is_empty())
+}
+
+fn format_process_failure(name: &str, stderr: &[u8], exit_code: Option<i32>) -> String {
+    let stderr_text = String::from_utf8_lossy(stderr).trim().to_string();
+
+    if stderr_text.is_empty() {
+        match exit_code {
+            Some(code) => format!("{name} exited with status {code}."),
+            None => format!("{name} exited unsuccessfully."),
+        }
+    } else {
+        format!("{name} failed: {stderr_text}")
+    }
+}
