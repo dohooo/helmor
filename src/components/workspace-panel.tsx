@@ -1,17 +1,17 @@
-import { useState } from "react";
+import { useMemo } from "react";
+import {
+  useExternalStoreRuntime,
+  AssistantRuntimeProvider,
+  ThreadPrimitive,
+  MessagePrimitive,
+} from "@assistant-ui/react";
 import {
   AlertCircle,
-  BrainCircuit,
-  ChevronDown,
   Clock3,
-  FileText,
   FolderKanban,
   GitBranch,
-  Image as ImageIcon,
-  Info,
   MessageSquareText,
   Sparkles,
-  TerminalSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type {
@@ -20,56 +20,34 @@ import type {
   WorkspaceDetail,
   WorkspaceSessionSummary,
 } from "@/lib/conductor";
+import { convertConductorMessages } from "@/lib/message-adapter";
 
 type WorkspacePanelProps = {
   workspace: WorkspaceDetail | null;
   sessions: WorkspaceSessionSummary[];
   selectedSessionId: string | null;
   messages: SessionMessageRecord[];
-  attachments: SessionAttachmentRecord[];
+  attachments?: SessionAttachmentRecord[];
   loadingWorkspace?: boolean;
   loadingSession?: boolean;
   onSelectSession?: (sessionId: string) => void;
 };
-
-type TimelineBlock =
-  | { id: string; kind: "thinking"; text: string }
-  | { id: string; kind: "text"; text: string }
-  | { id: string; kind: "tool"; label: string; input?: string }
-  | { id: string; kind: "tool-result"; label: string; output?: string }
-  | { id: string; kind: "result"; text: string }
-  | { id: string; kind: "system"; label: string; details?: string };
 
 export function WorkspacePanel({
   workspace,
   sessions,
   selectedSessionId,
   messages,
-  attachments,
+  attachments: _attachments,
   loadingWorkspace = false,
   loadingSession = false,
   onSelectSession,
 }: WorkspacePanelProps) {
-  const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? null;
-  const attachmentIndex = new Map(
-    attachments.map((attachment) => [attachment.id, attachment]),
-  );
-  const attachmentsByMessage = new Map<string, SessionAttachmentRecord[]>();
-
-  for (const attachment of attachments) {
-    if (!attachment.sessionMessageId) {
-      continue;
-    }
-
-    const current = attachmentsByMessage.get(attachment.sessionMessageId) ?? [];
-    current.push(attachment);
-    attachmentsByMessage.set(attachment.sessionMessageId, current);
-  }
-
-  const visibleMessages = messages.slice(-24);
+  const selectedSession = sessions.find((s) => s.id === selectedSessionId) ?? null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-app-elevated">
+      {/* --- Header --- */}
       <header className="relative z-20 border-b border-app-border">
         <div
           aria-label="Workspace header"
@@ -81,22 +59,18 @@ export function WorkspacePanel({
               <FolderKanban className="size-3.5 text-app-project" strokeWidth={1.9} />
               <span className="truncate">{workspace?.repoName ?? "Workspace"}</span>
             </span>
-
             <span className="text-app-muted">/</span>
-
             <span className="inline-flex items-center gap-1 px-1 py-0.5 font-medium text-app-foreground">
               <GitBranch className="size-3.5 text-app-warm" strokeWidth={1.9} />
               <span className="truncate">{workspace?.branch ?? "No branch"}</span>
             </span>
-
             {workspace?.state === "archived" ? (
-              <span className="px-1 py-0.5 font-medium text-app-muted">
-                Archived
-              </span>
+              <span className="px-1 py-0.5 font-medium text-app-muted">Archived</span>
             ) : null}
           </div>
         </div>
 
+        {/* --- Session tabs --- */}
         <div className="flex h-[1.85rem] items-stretch overflow-x-auto px-2 [scrollbar-width:none]">
           {loadingWorkspace ? (
             <div className="flex items-center gap-1.5 px-2 text-[12px] text-app-muted">
@@ -111,9 +85,7 @@ export function WorkspacePanel({
                 <button
                   key={session.id}
                   type="button"
-                  onClick={() => {
-                    onSelectSession?.(session.id);
-                  }}
+                  onClick={() => onSelectSession?.(session.id)}
                   className={cn(
                     "group relative flex w-[8rem] items-center gap-1.5 rounded-t-sm px-2.5 text-left text-[12px] transition-colors",
                     selected
@@ -138,651 +110,357 @@ export function WorkspacePanel({
         </div>
       </header>
 
+      {/* --- Timeline --- */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div
-          aria-label="Workspace timeline"
-          className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-5"
-        >
-          {loadingSession ? (
-            <div className="flex items-center gap-2 rounded-2xl border border-app-border bg-app-sidebar px-4 py-3 text-sm text-app-muted">
-              <Clock3 className="size-4 animate-pulse" strokeWidth={1.8} />
-              Loading session timeline
-            </div>
-          ) : visibleMessages.length > 0 ? (
-            <div className="space-y-4">
-              {visibleMessages.map((message) => (
-                <TimelineMessage
-                  key={message.id}
-                  message={message}
-                  attachments={attachmentsByMessage.get(message.id) ?? []}
-                  attachmentIndex={attachmentIndex}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="m-auto max-w-md rounded-[22px] border border-app-border bg-app-sidebar px-5 py-6 text-center">
-              <div className="mx-auto flex size-12 items-center justify-center rounded-2xl border border-app-border-strong bg-app-sidebar text-app-foreground-soft">
-                <MessageSquareText className="size-5" strokeWidth={1.8} />
-              </div>
-              <h3 className="mt-4 text-[15px] font-semibold text-app-foreground">
-                {selectedSession ? "This session is quiet for now" : "No session selected"}
-              </h3>
-              <p className="mt-2 text-[13px] leading-6 text-app-muted">
-                {selectedSession
-                  ? "The selected session does not have stored timeline events in this fixture yet."
-                  : "Pick a session tab to inspect its stored Conductor data."}
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TimelineMessage({
-  message,
-  attachments,
-  attachmentIndex,
-}: {
-  message: SessionMessageRecord;
-  attachments: SessionAttachmentRecord[];
-  attachmentIndex: Map<string, SessionAttachmentRecord>;
-}) {
-  const blocks = getTimelineBlocks(message, attachmentIndex);
-  const isUser = message.role === "user";
-
-  if (blocks.length === 0) {
-    return null;
-  }
-
-  return (
-    <div className={cn("flex min-w-0", isUser ? "justify-end" : "justify-start")}>
-      <div className={cn("min-w-0 max-w-[52rem] space-y-2", isUser ? "items-end" : "items-start")}>
-        {blocks.map((block) => (
-          <TimelineBlockView key={block.id} block={block} align={isUser ? "right" : "left"} />
-        ))}
-
-        {attachments.length > 0 ? (
-          <div className="flex flex-wrap gap-2">
-            {attachments.map((attachment) => (
-              <span
-                key={attachment.id}
-                className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-sidebar px-2 py-1 text-[11px] text-app-foreground-soft"
-              >
-                {attachment.attachmentType === "image" ? (
-                  <ImageIcon className="size-3.5 text-app-project" strokeWidth={1.8} />
-                ) : (
-                  <FileText className="size-3.5 text-app-project" strokeWidth={1.8} />
-                )}
-                {attachment.originalName ?? "Attachment"}
-              </span>
-            ))}
+        {loadingSession ? (
+          <div className="flex items-center gap-2 px-4 py-5 text-sm text-app-muted">
+            <Clock3 className="size-4 animate-pulse" strokeWidth={1.8} />
+            Loading session timeline
           </div>
-        ) : null}
+        ) : messages.length > 0 ? (
+          <ConductorThread messages={messages} />
+        ) : (
+          <EmptyState hasSession={!!selectedSession} />
+        )}
       </div>
     </div>
   );
 }
 
-function TimelineBlockView({
-  block,
-  align,
+// ---------------------------------------------------------------------------
+// assistant-ui powered thread
+// ---------------------------------------------------------------------------
+
+function ConductorThread({ messages }: { messages: SessionMessageRecord[] }) {
+  const threadMessages = useMemo(() => convertConductorMessages(messages), [messages]);
+
+  const runtime = useExternalStoreRuntime({
+    messages: threadMessages,
+    isRunning: false,
+    convertMessage: (m) => m,
+    onNew: async () => {
+      // Read-only viewer — no sending
+    },
+  });
+
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col">
+        <ThreadPrimitive.Viewport className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-5">
+          <ThreadPrimitive.Messages
+            components={{
+              UserMessage: ConductorUserMessage,
+              AssistantMessage: ConductorAssistantMessage,
+              SystemMessage: ConductorSystemMessage,
+            }}
+          />
+        </ThreadPrimitive.Viewport>
+      </ThreadPrimitive.Root>
+    </AssistantRuntimeProvider>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Message components
+// ---------------------------------------------------------------------------
+
+function ConductorUserMessage() {
+  return (
+    <MessagePrimitive.Root className="flex min-w-0 justify-end">
+      <div className="max-w-[75%] overflow-hidden rounded-lg bg-app-foreground/[0.04] px-3.5 py-2.5 text-[14px] leading-7 text-app-foreground">
+        <MessagePrimitive.Content
+          components={{
+            Text: UserText,
+          }}
+        />
+      </div>
+    </MessagePrimitive.Root>
+  );
+}
+
+function ConductorAssistantMessage() {
+  return (
+    <MessagePrimitive.Root className="min-w-0 max-w-full space-y-3">
+      <MessagePrimitive.Content
+        components={{
+          Text: AssistantText,
+          Reasoning: AssistantReasoning,
+          tools: {
+            Fallback: AssistantToolCall,
+          },
+        }}
+      />
+    </MessagePrimitive.Root>
+  );
+}
+
+function ConductorSystemMessage() {
+  return (
+    <MessagePrimitive.Root className="flex min-w-0 justify-center">
+      <div className="rounded-lg px-3 py-1.5 text-[11px] text-app-muted">
+        <MessagePrimitive.Content
+          components={{
+            Text: SystemText,
+          }}
+        />
+      </div>
+    </MessagePrimitive.Root>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Content part components
+// ---------------------------------------------------------------------------
+
+function UserText({ text }: { text: string }) {
+  return <p className="whitespace-pre-wrap break-words">{text}</p>;
+}
+
+function AssistantText({ text }: { text: string }) {
+  return (
+    <div className="prose prose-sm prose-invert max-w-none break-words text-[14px] leading-7 text-app-foreground-soft prose-headings:text-app-foreground prose-strong:text-app-foreground prose-code:rounded prose-code:bg-app-sidebar-strong prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:text-app-foreground prose-pre:bg-app-sidebar prose-pre:text-[13px] prose-a:text-app-project">
+      <MarkdownContent text={text} />
+    </div>
+  );
+}
+
+function AssistantReasoning({ text }: { text: string }) {
+  return (
+    <details className="group rounded-lg border border-app-border bg-app-sidebar">
+      <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-[12px] font-medium text-app-foreground-soft [&::-webkit-details-marker]:hidden">
+        <svg className="size-3 shrink-0 text-app-accent transition-transform group-open:rotate-90" viewBox="0 0 12 12" fill="none">
+          <path d="M4.5 2.5L8.5 6L4.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        Thinking
+      </summary>
+      <pre className="max-h-[20rem] overflow-auto whitespace-pre-wrap break-words border-t border-app-border px-3 py-2.5 font-sans text-[13px] leading-6 text-app-muted">
+        {text}
+      </pre>
+    </details>
+  );
+}
+
+function AssistantToolCall({
+  toolName,
+  args,
+  result,
 }: {
-  block: TimelineBlock;
-  align: "left" | "right";
+  toolName: string;
+  argsText: string;
+  args: Record<string, unknown>;
+  result?: unknown;
+  status: unknown;
+  addResult: unknown;
 }) {
-  if (block.kind === "system") {
-    return <SystemBlock label={block.label} details={block.details} />;
-  }
-
-  if (block.kind === "tool") {
-    return (
-      <div className="min-w-0 space-y-1 overflow-hidden">
-        <div className="inline-flex max-w-full items-center gap-2 overflow-hidden rounded-xl border border-app-border bg-app-sidebar px-3 py-2 text-[12px] text-app-foreground-soft">
-          <TerminalSquare className="size-3.5 shrink-0 text-app-project" strokeWidth={1.8} />
-          <span className="truncate">{block.label}</span>
-        </div>
-        {block.input ? (
-          <CollapsibleCode label="Input" content={block.input} />
-        ) : null}
-      </div>
-    );
-  }
-
-  if (block.kind === "tool-result") {
-    return (
-      <div className="min-w-0 space-y-1 overflow-hidden">
-        <div className="inline-flex max-w-full items-center gap-2 overflow-hidden rounded-xl border border-app-border bg-app-sidebar px-3 py-2 text-[12px] text-app-foreground-soft">
-          <Sparkles className="size-3.5 shrink-0 text-app-project" strokeWidth={1.8} />
-          <span className="truncate">{block.label}</span>
-        </div>
-        {block.output ? (
-          <CollapsibleCode label="Output" content={block.output} />
-        ) : null}
-      </div>
-    );
-  }
-
-  if (block.kind === "thinking") {
-    return <ThinkingBlock text={block.text} />;
-  }
-
-  if (block.kind === "result") {
-    return (
-      <div className="inline-flex items-center gap-2 rounded-xl border border-app-border bg-app-base px-3 py-2 text-[11px] text-app-muted">
-        <Sparkles className="size-3.5 text-app-project" strokeWidth={1.8} />
-        <span>{block.text}</span>
-      </div>
-    );
-  }
+  const label = describeToolCall(toolName, args);
+  const resultText = result != null
+    ? typeof result === "string" ? result : JSON.stringify(result, null, 2)
+    : null;
 
   return (
-    <div
-      className={cn(
-        "overflow-hidden text-[14px] leading-7",
-        align === "right"
-          ? "rounded-lg bg-app-foreground/[0.04] px-3.5 py-2.5 text-app-foreground"
-          : "rounded-2xl border border-app-border bg-app-sidebar px-4 py-3 text-app-foreground-soft",
-      )}
-    >
-      <pre className="whitespace-pre-wrap break-words font-sans">{block.text}</pre>
-    </div>
-  );
-}
-
-function ThinkingBlock({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
-  const preview = text.length > 120 ? `${text.slice(0, 120)}…` : text;
-
-  return (
-    <div className="rounded-2xl border border-app-border bg-app-sidebar px-4 py-3">
-      <button
-        type="button"
-        onClick={() => { setOpen((o) => !o); }}
-        className="flex w-full items-center gap-2 text-[12px] font-medium text-app-foreground-soft"
-      >
-        <BrainCircuit className="size-3.5 text-app-accent" strokeWidth={1.8} />
-        <span>Thinking</span>
-        <ChevronDown className={cn("ml-auto size-3.5 transition-transform", open && "rotate-180")} strokeWidth={1.8} />
-      </button>
-      {open ? (
-        <pre className="mt-2 max-h-[20rem] overflow-y-auto whitespace-pre-wrap font-sans text-[13px] leading-6 text-app-foreground-soft">
-          {text}
-        </pre>
-      ) : (
-        <p className="mt-1.5 truncate text-[12px] text-app-muted">{preview}</p>
-      )}
-    </div>
-  );
-}
-
-function SystemBlock({ label, details }: { label: string; details?: string }) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <div className="w-full">
-      <button
-        type="button"
-        onClick={() => { setOpen((o) => !o); }}
-        className="inline-flex items-center gap-2 rounded-lg border border-app-border bg-app-sidebar px-3 py-1.5 text-[11px] text-app-muted transition-colors hover:text-app-foreground-soft"
-      >
-        <Info className="size-3" strokeWidth={1.8} />
-        <span>{label}</span>
-        {details ? (
-          <ChevronDown className={cn("size-3 transition-transform", open && "rotate-180")} strokeWidth={1.8} />
-        ) : null}
-      </button>
-      {open && details ? (
-        <pre className="mt-2 max-h-[12rem] overflow-auto rounded-lg border border-app-border bg-app-base p-3 text-[11px] leading-5 text-app-muted">
-          {details}
-        </pre>
+    <div className="space-y-1">
+      <div className="inline-flex max-w-full items-center gap-2 overflow-hidden rounded-lg border border-app-border bg-app-sidebar px-3 py-1.5 text-[12px] text-app-foreground-soft">
+        <span className="size-1.5 shrink-0 rounded-full bg-app-project" />
+        <span className="truncate">{label}</span>
+      </div>
+      {resultText && resultText.length > 5 ? (
+        <details className="group">
+          <summary className="flex cursor-pointer items-center gap-1.5 pl-1 text-[11px] text-app-muted hover:text-app-foreground-soft [&::-webkit-details-marker]:hidden">
+            <svg className="size-2.5 shrink-0 transition-transform group-open:rotate-90" viewBox="0 0 12 12" fill="none">
+              <path d="M4.5 2.5L8.5 6L4.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Output
+          </summary>
+          <pre className="mt-1 max-h-[12rem] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-app-border bg-app-base p-2.5 text-[11px] leading-5 text-app-muted">
+            {resultText.slice(0, 2000)}{resultText.length > 2000 ? "…" : ""}
+          </pre>
+        </details>
       ) : null}
     </div>
   );
 }
 
-function CollapsibleCode({ label, content }: { label: string; content: string }) {
-  const [open, setOpen] = useState(false);
-  const preview = content.length > 80 ? `${content.slice(0, 80)}…` : content;
+function SystemText({ text }: { text: string }) {
+  return <span>{text}</span>;
+}
 
+// ---------------------------------------------------------------------------
+// Markdown rendering (simple but effective)
+// ---------------------------------------------------------------------------
+
+function MarkdownContent({ text }: { text: string }) {
+  // Split by code blocks first, then render inline markdown for non-code parts
+  const parts = text.split(/(```[\s\S]*?```)/g);
   return (
-    <div className="min-w-0 overflow-hidden">
-      <button
-        type="button"
-        onClick={() => { setOpen((o) => !o); }}
-        className="flex max-w-full items-center gap-1 overflow-hidden pl-3 text-[11px] text-app-muted hover:text-app-foreground-soft"
-      >
-        <ChevronDown className={cn("size-3 shrink-0 transition-transform", open ? "rotate-0" : "-rotate-90")} strokeWidth={1.8} />
-        <span className="shrink-0">{label}</span>
-        {!open ? <span className="ml-1 truncate opacity-50">{preview}</span> : null}
-      </button>
-      {open ? (
-        <pre className="mt-1 max-h-[16rem] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-app-border bg-app-base p-3 text-[11px] leading-5 text-app-muted">
-          {content}
-        </pre>
-      ) : null}
-    </div>
+    <>
+      {parts.map((part, i) => {
+        if (part.startsWith("```")) {
+          const match = part.match(/^```(\w*)\n?([\s\S]*?)```$/);
+          const lang = match?.[1] ?? "";
+          const code = match?.[2] ?? part.slice(3, -3);
+          return (
+            <pre key={i} className="overflow-auto rounded-lg border border-app-border bg-app-sidebar p-3 text-[13px] leading-6">
+              {lang ? <div className="mb-2 text-[11px] text-app-muted">{lang}</div> : null}
+              <code>{code}</code>
+            </pre>
+          );
+        }
+        return <InlineMarkdown key={i} text={part} />;
+      })}
+    </>
   );
 }
 
+function InlineMarkdown({ text }: { text: string }) {
+  const lines = text.split("\n");
+  const elements: React.ReactNode[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Headings
+    const headingMatch = line.match(/^(#{1,4})\s+(.+)/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const content = renderInline(headingMatch[2]);
+      if (level === 1) elements.push(<h1 key={i}>{content}</h1>);
+      else if (level === 2) elements.push(<h2 key={i}>{content}</h2>);
+      else if (level === 3) elements.push(<h3 key={i}>{content}</h3>);
+      else elements.push(<h4 key={i}>{content}</h4>);
+      i++;
+      continue;
+    }
+
+    // Unordered list items
+    if (line.match(/^[-*]\s/)) {
+      const items: React.ReactNode[] = [];
+      while (i < lines.length && lines[i].match(/^[-*]\s/)) {
+        items.push(<li key={i}>{renderInline(lines[i].replace(/^[-*]\s/, ""))}</li>);
+        i++;
+      }
+      elements.push(<ul key={`ul-${i}`}>{items}</ul>);
+      continue;
+    }
+
+    // Ordered list items
+    if (line.match(/^\d+\.\s/)) {
+      const items: React.ReactNode[] = [];
+      while (i < lines.length && lines[i].match(/^\d+\.\s/)) {
+        items.push(<li key={i}>{renderInline(lines[i].replace(/^\d+\.\s/, ""))}</li>);
+        i++;
+      }
+      elements.push(<ol key={`ol-${i}`}>{items}</ol>);
+      continue;
+    }
+
+    // Empty line
+    if (!line.trim()) {
+      i++;
+      continue;
+    }
+
+    // Regular paragraph
+    elements.push(<p key={i}>{renderInline(line)}</p>);
+    i++;
+  }
+
+  return <>{elements}</>;
+}
+
+function renderInline(text: string): React.ReactNode {
+  // Bold, italic, inline code, links
+  const parts: React.ReactNode[] = [];
+  const regex = /(\*\*.*?\*\*)|(`[^`]+`)|(\[([^\]]+)\]\(([^)]+)\))/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    if (match[1]) {
+      // Bold
+      parts.push(<strong key={match.index}>{match[1].slice(2, -2)}</strong>);
+    } else if (match[2]) {
+      // Inline code
+      parts.push(<code key={match.index}>{match[2].slice(1, -1)}</code>);
+    } else if (match[3]) {
+      // Link
+      parts.push(
+        <a key={match.index} href={match[5]} target="_blank" rel="noopener noreferrer">
+          {match[4]}
+        </a>,
+      );
+    }
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return parts.length === 1 ? parts[0] : <>{parts}</>;
+}
+
 // ---------------------------------------------------------------------------
-// Data parsing
+// Utilities
 // ---------------------------------------------------------------------------
 
-function getTimelineBlocks(
-  message: SessionMessageRecord,
-  attachmentIndex: Map<string, SessionAttachmentRecord>,
-): TimelineBlock[] {
-  if (!message.contentIsJson || !isRecord(message.parsedContent)) {
-    return [
-      {
-        id: `${message.id}:raw`,
-        kind: "text",
-        text: message.content,
-      },
-    ];
+function describeToolCall(name: string, input: Record<string, unknown> | null): string {
+  if (!input) return name;
+
+  if (name === "Read") {
+    const fp = str(input.file_path);
+    return fp ? `Read ${basename(fp)}` : "Read file";
   }
-
-  const parsed = message.parsedContent;
-  const parsedType = typeof parsed.type === "string" ? parsed.type : null;
-
-  // --- assistant message (text, thinking, tool_use blocks) ---
-  if (parsedType === "assistant") {
-    return parseAssistantMessage(message.id, parsed);
+  if (name === "Write") {
+    const fp = str(input.file_path);
+    return fp ? `Write ${basename(fp)}` : "Write file";
   }
-
-  // --- result message (token usage summary) ---
-  if (parsedType === "result") {
-    return parseResultMessage(message.id, parsed);
+  if (name === "Edit") {
+    const fp = str(input.file_path);
+    return fp ? `Edit ${basename(fp)}` : "Edit file";
   }
-
-  // --- user message (text, tool_result, images) ---
-  if (parsedType === "user") {
-    return parseUserMessage(message.id, parsed, attachmentIndex);
+  if (name === "Bash") {
+    const cmd = str(input.command);
+    return cmd ? `Run ${cmd.length > 50 ? `${cmd.slice(0, 50)}…` : cmd}` : "Run command";
   }
-
-  // --- system message (session init, config) ---
-  if (parsedType === "system") {
-    return parseSystemMessage(message.id, parsed);
+  if (name === "Grep" || name === "Glob") {
+    const p = str(input.pattern);
+    return p ? `${name} ${p}` : name;
   }
-
-  // --- unknown JSON type — show as collapsed system info instead of raw dump ---
-  return [
-    {
-      id: `${message.id}:unknown`,
-      kind: "system",
-      label: parsedType ? `${parsedType} event` : "Event",
-      details: formatJson(parsed),
-    },
-  ];
-}
-
-function parseAssistantMessage(
-  messageId: string,
-  parsed: Record<string, unknown>,
-): TimelineBlock[] {
-  const assistantMessage = isRecord(parsed.message) ? parsed.message : null;
-  const content = Array.isArray(assistantMessage?.content)
-    ? assistantMessage?.content
-    : [];
-  const blocks = content.flatMap((block, index) =>
-    parseAssistantContentBlock(messageId, block, index),
-  );
-
-  if (blocks.length > 0) {
-    return blocks;
+  if (name === "Agent" || name === "Task") {
+    const d = str(input.description) ?? str(input.prompt);
+    return d ? `${name}: ${d.length > 40 ? `${d.slice(0, 40)}…` : d}` : name;
   }
-
-  // Fallback: try to find any text in the message
-  const fallbackText = extractDeepText(parsed);
-  return fallbackText
-    ? [{ id: `${messageId}:assistant-fallback`, kind: "text", text: fallbackText }]
-    : [{ id: `${messageId}:assistant-empty`, kind: "system", label: "Assistant response (empty)" }];
-}
-
-function parseResultMessage(
-  messageId: string,
-  parsed: Record<string, unknown>,
-): TimelineBlock[] {
-  const usage = isRecord(parsed.usage) ? parsed.usage : null;
-  const inputTokens = asNumber(usage?.input_tokens);
-  const outputTokens = asNumber(usage?.output_tokens);
-  const bits = [
-    inputTokens ? `in ${inputTokens.toLocaleString()}` : null,
-    outputTokens ? `out ${outputTokens.toLocaleString()}` : null,
-  ].filter(Boolean);
-
-  return [
-    {
-      id: `${messageId}:result`,
-      kind: "result",
-      text: bits.length > 0 ? `Session result • ${bits.join(" • ")}` : "Session result",
-    },
-  ];
-}
-
-function parseUserMessage(
-  messageId: string,
-  parsed: Record<string, unknown>,
-  attachmentIndex: Map<string, SessionAttachmentRecord>,
-): TimelineBlock[] {
-  const userMessage = isRecord(parsed.message) ? parsed.message : null;
-  const content = Array.isArray(userMessage?.content) ? userMessage?.content : [];
-
-  const blocks: TimelineBlock[] = [];
-  const textParts: string[] = [];
-
-  for (const [index, block] of content.entries()) {
-    if (!isRecord(block)) continue;
-
-    if (block.type === "text" && typeof block.text === "string") {
-      textParts.push(block.text);
-      continue;
-    }
-
-    // tool_result — can contain text string, array of content blocks, or nested structures
-    if (block.type === "tool_result") {
-      // Flush accumulated text first
-      if (textParts.length > 0) {
-        blocks.push({
-          id: `${messageId}:user-text:${index}`,
-          kind: "text",
-          text: textParts.join("\n\n").trim(),
-        });
-        textParts.length = 0;
-      }
-
-      const toolName = typeof block.tool_use_id === "string"
-        ? `Tool result`
-        : "Tool result";
-
-      if (typeof block.content === "string") {
-        blocks.push({
-          id: `${messageId}:tool-result:${index}`,
-          kind: "tool-result",
-          label: toolName,
-          output: block.content.length > 200 ? block.content : undefined,
-        });
-        if (block.content.length <= 200) {
-          blocks.push({
-            id: `${messageId}:tool-result-text:${index}`,
-            kind: "text",
-            text: block.content,
-          });
-        }
-      } else if (Array.isArray(block.content)) {
-        const resultText = extractTextFromContentArray(block.content, attachmentIndex);
-        if (resultText) {
-          blocks.push({
-            id: `${messageId}:tool-result:${index}`,
-            kind: "tool-result",
-            label: toolName,
-            output: resultText.length > 200 ? resultText : undefined,
-          });
-          if (resultText.length <= 200) {
-            blocks.push({
-              id: `${messageId}:tool-result-text:${index}`,
-              kind: "text",
-              text: resultText,
-            });
-          }
-        } else {
-          blocks.push({
-            id: `${messageId}:tool-result:${index}`,
-            kind: "tool-result",
-            label: toolName,
-          });
-        }
-      } else {
-        blocks.push({
-          id: `${messageId}:tool-result:${index}`,
-          kind: "tool-result",
-          label: toolName,
-        });
-      }
-      continue;
-    }
-
-    // tool_use inside user message (forwarded)
-    if (block.type === "tool_use") {
-      if (textParts.length > 0) {
-        blocks.push({
-          id: `${messageId}:user-text:${index}`,
-          kind: "text",
-          text: textParts.join("\n\n").trim(),
-        });
-        textParts.length = 0;
-      }
-      blocks.push({
-        id: `${messageId}:tool:${index}`,
-        kind: "tool",
-        label: describeToolUse(block),
-        input: isRecord(block.input) ? formatJson(block.input) : undefined,
-      });
-      continue;
-    }
-
-    // image / file reference
-    if (block.type === "image" || block.type === "file") {
-      const attachmentId =
-        maybeString(block.attachment_id) ?? maybeString(block.id) ?? maybeString(block.file_id);
-      const attachment = attachmentId ? attachmentIndex.get(attachmentId) : null;
-      const name = attachment?.originalName ?? (block.type === "image" ? "Image" : "File");
-      textParts.push(`[${name}]`);
-      continue;
-    }
-  }
-
-  // Flush remaining text
-  if (textParts.length > 0) {
-    blocks.push({
-      id: `${messageId}:user-text-final`,
-      kind: "text",
-      text: textParts.join("\n\n").trim(),
-    });
-  }
-
-  if (blocks.length === 0) {
-    // Fallback — try to get anything readable
-    const fallback = extractDeepText(parsed);
-    if (fallback) {
-      return [{ id: `${messageId}:user-fallback`, kind: "text", text: fallback }];
-    }
-    return [{ id: `${messageId}:user-empty`, kind: "system", label: "User message" }];
-  }
-
-  return blocks;
-}
-
-function parseSystemMessage(
-  messageId: string,
-  parsed: Record<string, unknown>,
-): TimelineBlock[] {
-  const subtype = maybeString(parsed.subtype as string);
-  const model = maybeString(parsed.model as string);
-  const sessionId = maybeString(parsed.session_id as string);
-
-  let label = "System";
-  if (subtype === "init") {
-    label = model ? `Session initialized • ${model}` : "Session initialized";
-  } else if (subtype) {
-    label = `System: ${subtype}`;
-  }
-
-  // Build a summary of interesting fields
-  const summaryParts: string[] = [];
-  if (sessionId) summaryParts.push(`Session: ${sessionId.slice(0, 8)}…`);
-  if (model) summaryParts.push(`Model: ${model}`);
-  const permMode = maybeString(parsed.permissionMode as string);
-  if (permMode) summaryParts.push(`Mode: ${permMode}`);
-  const tools = parsed.tools;
-  if (Array.isArray(tools)) summaryParts.push(`Tools: ${tools.length} available`);
-
-  return [
-    {
-      id: `${messageId}:system`,
-      kind: "system",
-      label,
-      details: summaryParts.length > 0 ? summaryParts.join("\n") : formatJson(parsed),
-    },
-  ];
-}
-
-function parseAssistantContentBlock(
-  messageId: string,
-  block: unknown,
-  index: number,
-): TimelineBlock[] {
-  if (!isRecord(block)) {
-    return [];
-  }
-
-  if (block.type === "thinking" && typeof block.thinking === "string") {
-    return [
-      {
-        id: `${messageId}:thinking:${index}`,
-        kind: "thinking",
-        text: block.thinking,
-      },
-    ];
-  }
-
-  if (block.type === "text" && typeof block.text === "string") {
-    return [
-      {
-        id: `${messageId}:text:${index}`,
-        kind: "text",
-        text: block.text,
-      },
-    ];
-  }
-
-  if (block.type === "tool_use") {
-    return [
-      {
-        id: `${messageId}:tool:${index}`,
-        kind: "tool",
-        label: describeToolUse(block),
-        input: isRecord(block.input) ? formatJson(block.input) : undefined,
-      },
-    ];
-  }
-
-  if (block.type === "tool_result") {
-    const content = typeof block.content === "string"
-      ? block.content
-      : Array.isArray(block.content)
-        ? block.content.map((b) => (isRecord(b) && typeof b.text === "string" ? b.text : "")).filter(Boolean).join("\n")
-        : undefined;
-    return [
-      {
-        id: `${messageId}:tool-result:${index}`,
-        kind: "tool-result",
-        label: "Tool result",
-        output: content,
-      },
-    ];
-  }
-
-  return [];
-}
-
-function describeToolUse(block: Record<string, unknown>): string {
-  const name = typeof block.name === "string" ? block.name : "Tool";
-  const input = isRecord(block.input) ? block.input : null;
-
-  if (name === "Read" && input) {
-    const filePath = maybeString(input.file_path);
-    const offset = asNumber(input.offset);
-    const limit = asNumber(input.limit);
-    const fileName = filePath ? basename(filePath) : "file";
-    const lineText = limit ? `Read ${limit} lines` : "Read file";
-    const offsetText = offset ? ` from line ${offset}` : "";
-    return `${lineText} ${fileName}${offsetText}`;
-  }
-
-  if (name === "Write" && input) {
-    const filePath = maybeString(input.file_path);
-    return `Write ${filePath ? basename(filePath) : "file"}`;
-  }
-
-  if (name === "Edit" && input) {
-    const filePath = maybeString(input.file_path);
-    return `Edit ${filePath ? basename(filePath) : "file"}`;
-  }
-
-  if (name === "Bash" && input) {
-    const command = maybeString(input.command);
-    if (command) {
-      const short = command.length > 60 ? `${command.slice(0, 60)}…` : command;
-      return `Run ${short}`;
-    }
-    return "Run shell command";
-  }
-
-  if ((name === "Grep" || name === "Glob") && input) {
-    const pattern = maybeString(input.pattern);
-    return pattern ? `${name} ${pattern}` : name;
-  }
-
-  if ((name === "Task" || name === "Agent") && input) {
-    const description = maybeString(input.description);
-    const prompt = maybeString(input.prompt);
-    const text = description ?? prompt;
-    if (text) {
-      const short = text.length > 50 ? `${text.slice(0, 50)}…` : text;
-      return `${name}: ${short}`;
-    }
-    return name;
-  }
-
   return name;
 }
 
-function extractTextFromContentArray(
-  content: unknown[],
-  attachmentIndex: Map<string, SessionAttachmentRecord>,
-): string | null {
-  const parts: string[] = [];
-  for (const item of content) {
-    if (!isRecord(item)) continue;
-    if (item.type === "text" && typeof item.text === "string") {
-      parts.push(item.text);
-    } else if (item.type === "image") {
-      const attachmentId = maybeString(item.attachment_id) ?? maybeString(item.id);
-      const attachment = attachmentId ? attachmentIndex.get(attachmentId) : null;
-      parts.push(`[${attachment?.originalName ?? "Image"}]`);
-    }
-  }
-  return parts.length > 0 ? parts.join("\n") : null;
+function str(v: unknown): string | null {
+  return typeof v === "string" && v.trim() ? v : null;
 }
 
-function extractDeepText(obj: Record<string, unknown>): string | null {
-  // Try to find text content in nested structures
-  if (typeof obj.text === "string" && obj.text.trim()) return obj.text;
-  if (typeof obj.content === "string" && obj.content.trim()) return obj.content;
-
-  const message = isRecord(obj.message) ? obj.message : null;
-  if (message) {
-    if (typeof message.content === "string" && message.content.trim()) return message.content;
-    if (Array.isArray(message.content)) {
-      const texts = message.content
-        .map((b) => (isRecord(b) && typeof b.text === "string" ? b.text : null))
-        .filter(Boolean);
-      if (texts.length > 0) return texts.join("\n\n");
-    }
-  }
-
-  return null;
+function basename(path: string): string {
+  return path.replace(/\\/g, "/").split("/").pop() ?? path;
 }
 
-function formatJson(obj: unknown): string {
-  try {
-    return JSON.stringify(obj, null, 2);
-  } catch {
-    return String(obj);
-  }
+function EmptyState({ hasSession }: { hasSession: boolean }) {
+  return (
+    <div className="m-auto max-w-md rounded-[22px] border border-app-border bg-app-sidebar px-5 py-6 text-center">
+      <div className="mx-auto flex size-12 items-center justify-center rounded-2xl border border-app-border-strong bg-app-sidebar text-app-foreground-soft">
+        <MessageSquareText className="size-5" strokeWidth={1.8} />
+      </div>
+      <h3 className="mt-4 text-[15px] font-semibold text-app-foreground">
+        {hasSession ? "This session is quiet for now" : "No session selected"}
+      </h3>
+      <p className="mt-2 text-[13px] leading-6 text-app-muted">
+        {hasSession
+          ? "The selected session does not have stored timeline events in this fixture yet."
+          : "Pick a session tab to inspect its stored Conductor data."}
+      </p>
+    </div>
+  );
 }
 
 function SessionProviderIcon({
@@ -792,8 +470,6 @@ function SessionProviderIcon({
   agentType?: string | null;
   active: boolean;
 }) {
-  const isCodex = agentType === "codex";
-
   if (active) {
     return (
       <span className="relative flex size-3.5 shrink-0 items-center justify-center">
@@ -802,12 +478,11 @@ function SessionProviderIcon({
       </span>
     );
   }
-
   return (
     <Sparkles
       className={cn(
         "size-3 shrink-0",
-        isCodex ? "text-app-project" : "text-app-foreground-soft",
+        agentType === "codex" ? "text-app-project" : "text-app-foreground-soft",
       )}
       strokeWidth={1.8}
     />
@@ -815,27 +490,6 @@ function SessionProviderIcon({
 }
 
 function displaySessionTitle(session: WorkspaceSessionSummary): string {
-  if (session.title && session.title !== "Untitled") {
-    return session.title;
-  }
-
+  if (session.title && session.title !== "Untitled") return session.title;
   return session.agentType === "codex" ? "Codex session" : "Claude session";
-}
-
-function basename(value: string): string {
-  const normalized = value.replace(/\\/g, "/");
-  const parts = normalized.split("/");
-  return parts[parts.length - 1] || value;
-}
-
-function maybeString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value : null;
-}
-
-function asNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
