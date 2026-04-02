@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type GroupTone = "done" | "review" | "progress" | "backlog" | "canceled";
 
@@ -552,6 +553,46 @@ export async function sendAgentMessage(
   }
 
   return invoke<AgentSendResponse>("send_agent_message", { request });
+}
+
+// ---------------------------------------------------------------------------
+// Streaming agent API
+// ---------------------------------------------------------------------------
+
+export type AgentStreamStartResponse = {
+  streamId: string;
+};
+
+export type AgentStreamEvent =
+  | { kind: "line"; line: string }
+  | {
+      kind: "done";
+      provider: AgentProvider;
+      modelId: string;
+      resolvedModel: string;
+      sessionId?: string | null;
+      workingDirectory: string;
+      persistedToFixture: boolean;
+    }
+  | { kind: "error"; message: string };
+
+export async function startAgentMessageStream(
+  request: AgentSendRequest,
+): Promise<AgentStreamStartResponse> {
+  const inv = await getTauriInvoke();
+  if (!inv) {
+    throw new Error("Streaming is only available in the Tauri desktop runtime.");
+  }
+  return inv<AgentStreamStartResponse>("send_agent_message_stream", { request });
+}
+
+export async function listenAgentStream(
+  streamId: string,
+  callback: (event: AgentStreamEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<AgentStreamEvent>(`agent-stream:${streamId}`, (tauriEvent) => {
+    callback(tauriEvent.payload);
+  });
 }
 
 export { DEFAULT_AGENT_MODEL_SECTIONS, DEFAULT_WORKSPACE_GROUPS };

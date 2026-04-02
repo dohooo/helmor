@@ -5,9 +5,13 @@ mod conductor;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .manage(agents::RunningAgentProcesses {
+            map: std::sync::Mutex::new(std::collections::HashMap::new()),
+        })
         .invoke_handler(tauri::generate_handler![
             agents::list_agent_model_sections,
             agents::send_agent_message,
+            agents::send_agent_message_stream,
             conductor::get_conductor_fixture_info,
             conductor::get_workspace,
             conductor::list_archived_workspaces,

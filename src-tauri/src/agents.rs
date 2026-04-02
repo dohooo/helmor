@@ -1,14 +1,47 @@
 use crate::conductor::resolve_fixture_db_path;
 use std::{
+    collections::HashMap,
     env,
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
+    sync::Mutex,
 };
 
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
+
+// ---------------------------------------------------------------------------
+// Streaming event types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum AgentStreamEvent {
+    Line { line: String },
+    Done {
+        provider: String,
+        model_id: String,
+        resolved_model: String,
+        session_id: Option<String>,
+        working_directory: String,
+        persisted_to_fixture: bool,
+    },
+    Error { message: String },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentStreamStartResponse {
+    pub stream_id: String,
+}
+
+pub struct RunningAgentProcesses {
+    pub map: Mutex<HashMap<String, u32>>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -180,6 +213,144 @@ pub async fn send_agent_message(request: AgentSendRequest) -> Result<AgentSendRe
         .map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+pub async fn send_agent_message_stream(
+    app: AppHandle,
+    state: tauri::State<'_, RunningAgentProcesses>,
+    request: AgentSendRequest,
+) -> Result<AgentStreamStartResponse, String> {
+    let prompt = request.prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err("Prompt cannot be empty.".to_string());
+    }
+
+    let model = find_model_definition(&request.model_id)
+        .ok_or_else(|| format!("Unknown model id: {}", request.model_id))?;
+
+    if request.provider != model.provider {
+        return Err(format!(
+            "Model {} does not belong to provider {}.",
+            request.model_id, request.provider
+        ));
+    }
+
+    let working_directory = resolve_working_directory(request.working_directory.as_deref())?;
+    let mut command = build_cli_command(model, &prompt, request.session_id.as_deref(), &working_directory)?;
+
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let mut child = command.spawn().map_err(|e| e.to_string())?;
+    let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
+    let stream_id = Uuid::new_v4().to_string();
+
+    // Store PID for potential cancellation
+    if let Ok(mut map) = state.map.lock() {
+        map.insert(stream_id.clone(), child.id());
+    }
+
+    let event_name = format!("agent-stream:{stream_id}");
+    let cleanup_id = stream_id.clone();
+    let provider = model.provider.to_string();
+    let model_id = model.id.to_string();
+    let cli_model = model.cli_model.to_string();
+    let conductor_session_id = request.conductor_session_id.clone();
+    let fallback_session_id = request.session_id.clone();
+    let working_dir_str = working_directory.display().to_string();
+    let model_copy = *model;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let reader = BufReader::new(stdout);
+        let mut all_lines = Vec::new();
+
+        for line_result in reader.lines() {
+            match line_result {
+                Ok(line) => {
+                    let trimmed = line.trim().to_string();
+                    if !trimmed.is_empty() {
+                        let _ = app.emit(&event_name, AgentStreamEvent::Line { line: trimmed.clone() });
+                        all_lines.push(trimmed);
+                    }
+                }
+                Err(e) => {
+                    let _ = app.emit(&event_name, AgentStreamEvent::Error { message: e.to_string() });
+                    return;
+                }
+            }
+        }
+
+        // Wait for process to exit
+        let status = child.wait();
+        let (exit_ok, exit_code) = match &status {
+            Ok(s) => (s.success(), s.code()),
+            Err(_) => (false, None),
+        };
+
+        if !exit_ok {
+            let stderr_text = child.stderr.take().map(|mut se| {
+                let mut buf = String::new();
+                let _ = std::io::Read::read_to_string(&mut se, &mut buf);
+                buf
+            }).unwrap_or_default();
+            let _ = app.emit(&event_name, AgentStreamEvent::Error {
+                message: format_process_failure(if provider == "claude" { "Claude" } else { "Codex" }, stderr_text.as_bytes(), exit_code),
+            });
+            return;
+        }
+
+        // Parse and persist using existing logic
+        let full_stdout = all_lines.join("\n");
+        let parse_result = if provider == "claude" {
+            parse_claude_output(&full_stdout, fallback_session_id.as_deref(), &cli_model)
+        } else {
+            parse_codex_output(&full_stdout, fallback_session_id.as_deref(), &cli_model)
+        };
+
+        match parse_result {
+            Ok(output) => {
+                let mut persisted = false;
+                if let Some(csid) = non_empty(conductor_session_id.as_deref()) {
+                    if persist_exchange_to_fixture(
+                        csid,
+                        &prompt,
+                        &model_copy,
+                        &output.resolved_model,
+                        &output.assistant_text,
+                        output.thinking_text.as_deref(),
+                        output.session_id.as_deref(),
+                        &output.usage,
+                        &output.turns,
+                        output.result_json.as_deref(),
+                    ).is_ok() {
+                        persisted = true;
+                    }
+                }
+
+                let _ = app.emit(&event_name, AgentStreamEvent::Done {
+                    provider,
+                    model_id,
+                    resolved_model: output.resolved_model,
+                    session_id: output.session_id,
+                    working_directory: working_dir_str,
+                    persisted_to_fixture: persisted,
+                });
+            }
+            Err(e) => {
+                let _ = app.emit(&event_name, AgentStreamEvent::Error { message: e });
+            }
+        }
+
+        // Cleanup PID
+        {
+            let processes: tauri::State<'_, RunningAgentProcesses> = app.state();
+            let mut map = processes.map.lock().unwrap_or_else(|e| e.into_inner());
+            map.remove(&cleanup_id);
+            drop(map);
+        }
+    });
+
+    Ok(AgentStreamStartResponse { stream_id })
+}
+
 fn send_agent_message_blocking(request: AgentSendRequest) -> Result<AgentSendResponse, String> {
     let prompt = request.prompt.trim();
     if prompt.is_empty() {
@@ -235,6 +406,59 @@ fn send_agent_message_blocking(request: AgentSendRequest) -> Result<AgentSendRes
         output_tokens: output.usage.output_tokens,
         persisted_to_fixture,
     })
+}
+
+fn build_cli_command(
+    model: &AgentModelDefinition,
+    prompt: &str,
+    session_id: Option<&str>,
+    working_directory: &Path,
+) -> Result<Command, String> {
+    let binary = resolve_binary_path(model.provider)?;
+    let mut command = Command::new(binary);
+
+    if model.provider == "claude" {
+        command
+            .current_dir(working_directory)
+            .arg("-p")
+            .arg("--verbose")
+            .arg("--output-format")
+            .arg("stream-json")
+            .arg("--include-partial-messages")
+            .arg("--model")
+            .arg(model.cli_model);
+
+        if let Some(existing_session_id) = non_empty(session_id) {
+            command.arg("--resume").arg(existing_session_id);
+        }
+
+        command.arg(prompt);
+    } else {
+        // codex
+        command.current_dir(working_directory);
+
+        if let Some(existing_session_id) = non_empty(session_id) {
+            command
+                .arg("exec")
+                .arg("resume")
+                .arg("--json")
+                .arg("--skip-git-repo-check")
+                .arg("-m")
+                .arg(model.cli_model)
+                .arg(existing_session_id)
+                .arg(prompt);
+        } else {
+            command
+                .arg("exec")
+                .arg("--json")
+                .arg("--skip-git-repo-check")
+                .arg("-m")
+                .arg(model.cli_model)
+                .arg(prompt);
+        }
+    }
+
+    Ok(command)
 }
 
 fn send_with_claude(

@@ -18,8 +18,10 @@ import {
   loadWorkspaceDetail,
   loadWorkspaceGroups,
   loadWorkspaceSessions,
+  listenAgentStream,
   restoreWorkspace,
   sendAgentMessage,
+  startAgentMessageStream,
   type AgentModelOption,
   type AgentModelSection,
   type SessionAttachmentRecord,
@@ -30,6 +32,7 @@ import {
   type WorkspaceSessionSummary,
   type WorkspaceSummary,
 } from "./lib/conductor";
+import { StreamAccumulator } from "./lib/stream-accumulator";
 import { WorkspacesSidebar } from "./components/workspaces-sidebar";
 import { WorkspacePanel } from "./components/workspace-panel";
 import { WorkspaceComposer } from "./components/workspace-composer";
@@ -316,6 +319,29 @@ function App() {
     }
   };
 
+  const reloadAfterPersist = async (ctxKey: string, sessId: string, wsId: string | null) => {
+    const [messages, detail, sessions, loadedGroups, loadedArchived] =
+      await Promise.all([
+        loadSessionMessages(sessId),
+        wsId ? loadWorkspaceDetail(wsId) : null,
+        wsId ? loadWorkspaceSessions(wsId) : [],
+        loadWorkspaceGroups(),
+        loadArchivedWorkspaces(),
+      ]);
+
+    setSessionMessages(messages);
+    if (wsId) {
+      setWorkspaceDetail(detail);
+      setWorkspaceSessions(sessions);
+    }
+    setGroups(loadedGroups);
+    setArchivedSummaries(loadedArchived);
+    setLiveMessagesByContext((current) => ({
+      ...current,
+      [ctxKey]: [],
+    }));
+  };
+
   const handleComposerSubmit = async () => {
     const prompt = composerValue.trim();
     if (!prompt || !selectedModel) {
@@ -346,7 +372,8 @@ function App() {
     setSendingContextKey(contextKey);
 
     try {
-      const response = await sendAgentMessage({
+      // Try streaming first, fall back to blocking
+      const { streamId } = await startAgentMessageStream({
         provider: selectedModel.provider,
         modelId: selectedModel.id,
         prompt,
@@ -355,73 +382,97 @@ function App() {
         workingDirectory: workspaceDetail?.rootPath ?? null,
       });
 
-      setLiveSessionsByContext((current) => ({
-        ...current,
-        [contextKey]: {
-          provider: response.provider,
-          sessionId: response.sessionId ?? current[contextKey]?.sessionId ?? null,
-        },
-      }));
+      const accumulator = new StreamAccumulator();
 
-      if (response.persistedToFixture && selectedSessionId) {
-        const [messages, detail, sessions, loadedGroups, loadedArchived] =
-          await Promise.all([
-            loadSessionMessages(selectedSessionId),
-            selectedWorkspaceId ? loadWorkspaceDetail(selectedWorkspaceId) : null,
-            selectedWorkspaceId ? loadWorkspaceSessions(selectedWorkspaceId) : [],
-            loadWorkspaceGroups(),
-            loadArchivedWorkspaces(),
-          ]);
-
-        setSessionMessages(messages);
-        if (selectedWorkspaceId) {
-          setWorkspaceDetail(detail);
-          setWorkspaceSessions(sessions);
+      const unlisten = await listenAgentStream(streamId, (event) => {
+        if (event.kind === "line") {
+          accumulator.addLine(event.line);
+          const partial = accumulator.toPartialMessage(
+            contextKey,
+            selectedSessionId ?? contextKey,
+          );
+          setLiveMessagesByContext((current) => ({
+            ...current,
+            [contextKey]: [optimisticUserMessage, partial],
+          }));
+          return;
         }
-        setGroups(loadedGroups);
-        setArchivedSummaries(loadedArchived);
+
+        if (event.kind === "done") {
+          void unlisten();
+
+          setLiveSessionsByContext((current) => ({
+            ...current,
+            [contextKey]: {
+              provider: event.provider,
+              sessionId: event.sessionId ?? current[contextKey]?.sessionId ?? null,
+            },
+          }));
+
+          if (event.persistedToFixture && selectedSessionId) {
+            void reloadAfterPersist(contextKey, selectedSessionId, selectedWorkspaceId);
+          }
+
+          setSendingContextKey((current) => (current === contextKey ? null : current));
+          return;
+        }
+
+        if (event.kind === "error") {
+          void unlisten();
+          setSendErrorsByContext((current) => ({ ...current, [contextKey]: event.message }));
+          setComposerValue(prompt);
+          setLiveMessagesByContext((current) => ({
+            ...current,
+            [contextKey]: (current[contextKey] ?? []).filter(
+              (m) => m.id !== optimisticUserMessage.id,
+            ),
+          }));
+          setSendingContextKey((current) => (current === contextKey ? null : current));
+        }
+      });
+    } catch (error) {
+      // Fallback to blocking sendAgentMessage if streaming unavailable
+      try {
+        const response = await sendAgentMessage({
+          provider: selectedModel.provider,
+          modelId: selectedModel.id,
+          prompt,
+          sessionId,
+          conductorSessionId: selectedSessionId,
+          workingDirectory: workspaceDetail?.rootPath ?? null,
+        });
+
+        if (response.persistedToFixture && selectedSessionId) {
+          await reloadAfterPersist(contextKey, selectedSessionId, selectedWorkspaceId);
+        } else {
+          const liveMsg = createLiveMessage({
+            id: `${contextKey}:assistant:${Date.now()}`,
+            sessionId: selectedSessionId ?? contextKey,
+            role: "assistant",
+            content: response.assistantText,
+            createdAt: new Date().toISOString(),
+            model: response.resolvedModel,
+          });
+          setLiveMessagesByContext((current) =>
+            appendLiveMessage(current, contextKey, liveMsg),
+          );
+        }
+      } catch (fallbackError) {
+        const message =
+          fallbackError instanceof Error
+            ? fallbackError.message
+            : typeof fallbackError === "string"
+              ? fallbackError
+              : "Unable to send message.";
+        setSendErrorsByContext((current) => ({ ...current, [contextKey]: message }));
+        setComposerValue(prompt);
         setLiveMessagesByContext((current) => ({
           ...current,
-          [contextKey]: [],
+          [contextKey]: (current[contextKey] ?? []).filter(
+            (m) => m.id !== optimisticUserMessage.id,
+          ),
         }));
-      } else {
-        const hasThinking = !!response.thinkingText;
-        const liveAssistantMessage = hasThinking
-          ? createStructuredAssistantMessage({
-              id: `${contextKey}:assistant:${Date.now()}`,
-              sessionId: selectedSessionId ?? contextKey,
-              createdAt: new Date().toISOString(),
-              model: response.resolvedModel,
-              assistantText: response.assistantText,
-              thinkingText: response.thinkingText!,
-            })
-          : createLiveMessage({
-              id: `${contextKey}:assistant:${Date.now()}`,
-              sessionId: selectedSessionId ?? contextKey,
-              role: "assistant",
-              content: response.assistantText,
-              createdAt: new Date().toISOString(),
-              model: response.resolvedModel,
-            });
-        setLiveMessagesByContext((current) =>
-          appendLiveMessage(current, contextKey, liveAssistantMessage),
-        );
       }
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : typeof error === "string"
-            ? error
-            : "Unable to send message.";
-      setSendErrorsByContext((current) => ({ ...current, [contextKey]: message }));
-      setComposerValue(prompt);
-      setLiveMessagesByContext((current) => ({
-        ...current,
-        [contextKey]: (current[contextKey] ?? []).filter(
-          (message) => message.id !== optimisticUserMessage.id,
-        ),
-      }));
     } finally {
       setSendingContextKey((current) => (current === contextKey ? null : current));
     }
@@ -737,53 +788,6 @@ function createLiveMessage({
     role,
     content,
     contentIsJson: false,
-    createdAt,
-    sentAt: createdAt,
-    cancelledAt: null,
-    model,
-    sdkMessageId: null,
-    lastAssistantMessageId: null,
-    turnId: null,
-    isResumableMessage: null,
-    attachmentCount: 0,
-  };
-}
-
-function createStructuredAssistantMessage({
-  id,
-  sessionId,
-  createdAt,
-  model,
-  assistantText,
-  thinkingText,
-}: {
-  id: string;
-  sessionId: string;
-  createdAt: string;
-  model: string;
-  assistantText: string;
-  thinkingText: string;
-}): SessionMessageRecord {
-  const contentBlocks: unknown[] = [
-    { type: "thinking", thinking: thinkingText },
-    { type: "text", text: assistantText },
-  ];
-  const parsed = {
-    type: "assistant",
-    message: {
-      model,
-      type: "message",
-      role: "assistant",
-      content: contentBlocks,
-    },
-  };
-  return {
-    id,
-    sessionId,
-    role: "assistant",
-    content: JSON.stringify(parsed),
-    contentIsJson: true,
-    parsedContent: parsed,
     createdAt,
     sentAt: createdAt,
     cancelledAt: null,
