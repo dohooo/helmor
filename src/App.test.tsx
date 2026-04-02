@@ -153,4 +153,59 @@ describe("App", () => {
 
     expect(screen.getByText("HC")).toBeInTheDocument();
   });
+
+  it("calls restore for archived workspaces and shows restore errors", async () => {
+    const user = userEvent.setup();
+    const onRestoreWorkspace = vi.fn();
+
+    render(
+      <WorkspacesSidebar
+        groups={[]}
+        archivedRows={[
+          {
+            id: "archived-workspace",
+            title: "Archived workspace",
+            state: "archived",
+            repoName: "helmor-core",
+          },
+        ]}
+        onRestoreWorkspace={onRestoreWorkspace}
+        restoreError="Restore failed."
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Archived" }));
+    await user.click(screen.getByRole("button", { name: "Restore workspace" }));
+
+    expect(onRestoreWorkspace).toHaveBeenCalledWith("archived-workspace");
+    expect(screen.getByText("Restore failed.")).toBeInTheDocument();
+  });
+
+  it("disables restore while a workspace is being restored", async () => {
+    const user = userEvent.setup();
+    const onRestoreWorkspace = vi.fn();
+
+    render(
+      <WorkspacesSidebar
+        groups={[]}
+        archivedRows={[
+          {
+            id: "archived-workspace",
+            title: "Archived workspace",
+            state: "archived",
+            repoName: "helmor-core",
+          },
+        ]}
+        onRestoreWorkspace={onRestoreWorkspace}
+        restoringWorkspaceId="archived-workspace"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Archived" }));
+    const restoreButton = screen.getByRole("button", { name: "Restore workspace" });
+
+    expect(restoreButton).toBeDisabled();
+    await user.click(restoreButton);
+    expect(onRestoreWorkspace).not.toHaveBeenCalled();
+  });
 });

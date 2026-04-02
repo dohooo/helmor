@@ -14,7 +14,8 @@ pub fn run() {
             conductor::list_session_attachments,
             conductor::list_session_messages,
             conductor::list_workspace_groups,
-            conductor::list_workspace_sessions
+            conductor::list_workspace_sessions,
+            conductor::restore_fixture_workspace
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -18,6 +18,7 @@ import {
   loadWorkspaceDetail,
   loadWorkspaceGroups,
   loadWorkspaceSessions,
+  restoreWorkspace,
   sendAgentMessage,
   type AgentModelOption,
   type AgentModelSection,
@@ -101,6 +102,8 @@ function App() {
     Record<string, string | null>
   >({});
   const [sendingContextKey, setSendingContextKey] = useState<string | null>(null);
+  const [restoringWorkspaceId, setRestoringWorkspaceId] = useState<string | null>(null);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
   const [loadingWorkspace, setLoadingWorkspace] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">(() => {
@@ -424,6 +427,82 @@ function App() {
     }
   };
 
+  const handleRestoreWorkspace = useCallback(async (workspaceId: string) => {
+    if (restoringWorkspaceId) {
+      return;
+    }
+
+    setRestoreError(null);
+    setRestoringWorkspaceId(workspaceId);
+
+    try {
+      const response = await restoreWorkspace(workspaceId);
+      const [loadedGroups, loadedArchived] = await Promise.all([
+        loadWorkspaceGroups(),
+        loadArchivedWorkspaces(),
+      ]);
+      const nextWorkspaceId = hasWorkspaceId(
+        response.selectedWorkspaceId,
+        loadedGroups,
+        loadedArchived,
+      )
+        ? response.selectedWorkspaceId
+        : findInitialWorkspaceId(loadedGroups) ?? loadedArchived[0]?.id ?? null;
+
+      setGroups(loadedGroups);
+      setArchivedSummaries(loadedArchived);
+      setSelectedWorkspaceId(nextWorkspaceId);
+
+      if (!nextWorkspaceId) {
+        setWorkspaceDetail(null);
+        setWorkspaceSessions([]);
+        setSelectedSessionId(null);
+        setSessionMessages([]);
+        setSessionAttachments([]);
+        return;
+      }
+
+      setLoadingWorkspace(true);
+      const [detail, sessions] = await Promise.all([
+        loadWorkspaceDetail(nextWorkspaceId),
+        loadWorkspaceSessions(nextWorkspaceId),
+      ]);
+      const nextSessionId =
+        detail?.activeSessionId ??
+        sessions.find((session) => session.active)?.id ??
+        sessions[0]?.id ??
+        null;
+
+      setWorkspaceDetail(detail);
+      setWorkspaceSessions(sessions);
+      setSelectedSessionId(nextSessionId);
+      setLoadingWorkspace(false);
+
+      if (!nextSessionId) {
+        setSessionMessages([]);
+        setSessionAttachments([]);
+        return;
+      }
+
+      setLoadingSession(true);
+      const [messages, attachments] = await Promise.all([
+        loadSessionMessages(nextSessionId),
+        loadSessionAttachments(nextSessionId),
+      ]);
+      setSessionMessages(messages);
+      setSessionAttachments(attachments);
+      setLoadingSession(false);
+    } catch (error) {
+      setRestoreError(
+        error instanceof Error ? error.message : "Unable to restore workspace.",
+      );
+    } finally {
+      setRestoringWorkspaceId(null);
+      setLoadingWorkspace(false);
+      setLoadingSession(false);
+    }
+  }, [restoringWorkspaceId]);
+
   return (
     <main
       aria-label="Application shell"
@@ -442,6 +521,11 @@ function App() {
             onSelectWorkspace={(workspaceId) => {
               setSelectedWorkspaceId(workspaceId);
             }}
+            onRestoreWorkspace={(workspaceId) => {
+              void handleRestoreWorkspace(workspaceId);
+            }}
+            restoringWorkspaceId={restoringWorkspaceId}
+            restoreError={restoreError}
           />
         </aside>
 

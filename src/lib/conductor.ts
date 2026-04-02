@@ -156,6 +156,12 @@ export type WorkspaceSessionSummary = {
   active: boolean;
 };
 
+export type RestoreWorkspaceResponse = {
+  restoredWorkspaceId: string;
+  restoredState: string;
+  selectedWorkspaceId: string;
+};
+
 export type SessionMessageRecord = {
   id: string;
   sessionId: string;
@@ -508,6 +514,20 @@ export async function loadSessionAttachments(
   } catch {
     return [];
   }
+}
+
+export async function restoreWorkspace(
+  workspaceId: string,
+): Promise<RestoreWorkspaceResponse> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    throw new Error("Workspace restore is only available in the Tauri desktop runtime.");
+  }
+
+  return invoke<RestoreWorkspaceResponse>("restore_fixture_workspace", {
+    workspaceId,
+  });
 }
 
 export async function sendAgentMessage(

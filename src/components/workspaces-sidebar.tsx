@@ -34,7 +34,7 @@ const rowVariants = cva(
     variants: {
       active: {
         true: "bg-app-row-selected text-app-foreground",
-        false: "text-app-foreground-soft hover:bg-app-row-hover",
+        false: "text-app-foreground-soft/70 hover:bg-app-row-hover",
       },
     },
     defaultVariants: {
@@ -212,16 +212,27 @@ function WorkspaceRowItem({
   row,
   selected,
   onSelect,
+  onRestoreWorkspace,
+  restoringWorkspaceId,
+  restoreActionsDisabled,
 }: {
   row: WorkspaceRow;
   selected: boolean;
   onSelect?: (workspaceId: string) => void;
+  onRestoreWorkspace?: (workspaceId: string) => void;
+  restoringWorkspaceId?: string | null;
+  restoreActionsDisabled?: boolean;
 }) {
   const actionLabel =
     row.state === "archived" ? "Restore workspace" : "Archive workspace";
+  const isRestoring = restoringWorkspaceId === row.id;
+  const isRestoreAction = row.state === "archived";
   const actionIcon =
-    row.state === "archived" ? (
-      <RotateCcw className="size-3.5" strokeWidth={2.1} />
+    isRestoreAction ? (
+      <RotateCcw
+        className={cn("size-3.5", isRestoring ? "animate-spin" : undefined)}
+        strokeWidth={2.1}
+      />
     ) : (
       <Archive className="size-3.5" strokeWidth={1.9} />
     );
@@ -257,7 +268,7 @@ function WorkspaceRowItem({
         <span
           className={cn(
             "truncate leading-none",
-            row.active ? "font-semibold text-app-foreground" : "font-medium",
+            row.active ? "font-semibold text-app-foreground" : "font-medium text-app-foreground-soft/70",
           )}
         >
           {row.title}
@@ -271,10 +282,19 @@ function WorkspaceRowItem({
         <button
           type="button"
           aria-label={actionLabel}
+          disabled={Boolean(restoreActionsDisabled) || !isRestoreAction}
           onClick={(event) => {
             event.stopPropagation();
+            if (isRestoreAction && !restoreActionsDisabled) {
+              onRestoreWorkspace?.(row.id);
+            }
           }}
-          className="invisible flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-app-muted hover:bg-app-toolbar-hover hover:text-app-foreground group-hover:visible"
+          className={cn(
+            "invisible flex size-6 shrink-0 items-center justify-center rounded-md text-app-muted group-hover:visible",
+            isRestoreAction && !restoreActionsDisabled
+              ? "cursor-pointer hover:bg-app-toolbar-hover hover:text-app-foreground"
+              : "cursor-not-allowed opacity-60",
+          )}
         >
           {actionIcon}
         </button>
@@ -288,11 +308,17 @@ export function WorkspacesSidebar({
   archivedRows,
   selectedWorkspaceId,
   onSelectWorkspace,
+  onRestoreWorkspace,
+  restoringWorkspaceId,
+  restoreError,
 }: {
   groups: WorkspaceGroup[];
   archivedRows: WorkspaceRow[];
   selectedWorkspaceId?: string | null;
   onSelectWorkspace?: (workspaceId: string) => void;
+  onRestoreWorkspace?: (workspaceId: string) => void;
+  restoringWorkspaceId?: string | null;
+  restoreError?: string | null;
 }) {
   return (
     <TooltipProvider>
@@ -392,18 +418,27 @@ export function WorkspacesSidebar({
               </CollapsibleTrigger>
 
               {archivedRows.length > 0 ? (
-                <CollapsibleContent>
-                  <div className="space-y-0.5">
-                    {archivedRows.map((row) => (
-                      <WorkspaceRowItem
-                        key={row.id}
-                        row={row}
-                        selected={selectedWorkspaceId === row.id}
-                        onSelect={onSelectWorkspace}
-                      />
-                    ))}
-                  </div>
-                </CollapsibleContent>
+              <CollapsibleContent>
+                <div className="space-y-0.5">
+                  {archivedRows.map((row) => (
+                    <WorkspaceRowItem
+                      key={row.id}
+                      row={row}
+                      selected={selectedWorkspaceId === row.id}
+                      onSelect={onSelectWorkspace}
+                      onRestoreWorkspace={onRestoreWorkspace}
+                      restoringWorkspaceId={restoringWorkspaceId}
+                      restoreActionsDisabled={Boolean(restoringWorkspaceId)}
+                    />
+                  ))}
+                </div>
+              </CollapsibleContent>
+            ) : null}
+
+              {restoreError ? (
+                <p className="px-1 pt-1 text-[12px] leading-snug text-app-canceled">
+                  {restoreError}
+                </p>
               ) : null}
             </section>
           </Collapsible>
