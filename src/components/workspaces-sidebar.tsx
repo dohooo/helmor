@@ -4,11 +4,7 @@ import {
   IssueDraftIcon,
   XCircleFillIcon,
 } from "@primer/octicons-react";
-import {
-  type ButtonHTMLAttributes,
-  type ReactNode,
-  useState,
-} from "react";
+import type { ReactNode } from "react";
 import {
   Archive,
   ChevronDown,
@@ -20,10 +16,15 @@ import {
   type GroupTone,
   type WorkspaceGroup,
   type WorkspaceRow,
-} from "../lib/conductor";
-import { cn } from "../lib/utils";
+} from "@/lib/conductor";
+import { cn } from "@/lib/utils";
 import { TooltipProvider } from "./ui/tooltip";
 import { BaseTooltip } from "./ui/base-tooltip";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "./ui/collapsible";
 
 const rowVariants = cva(
   "group relative flex h-9 select-none items-center gap-2 rounded-md px-3 text-[13px] cursor-pointer",
@@ -48,13 +49,15 @@ const groupToneClasses: Record<GroupTone, string> = {
   canceled: "text-app-canceled",
 };
 
-type ToolbarButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+function ToolbarButton({
+  label,
+  className,
+  children,
+  ...props
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
   label: string;
-  className?: string;
   children: ReactNode;
-};
-
-function ToolbarButton({ label, className, children, ...props }: ToolbarButtonProps) {
+}) {
   return (
     <button
       {...props}
@@ -215,15 +218,6 @@ export function WorkspacesSidebar({
   selectedWorkspaceId?: string | null;
   onSelectWorkspace?: (workspaceId: string) => void;
 }) {
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
-    done: true,
-    review: true,
-    progress: true,
-    backlog: true,
-    canceled: true,
-    archived: false,
-  });
-
   return (
     <TooltipProvider>
       <div className="flex h-full min-h-0 flex-col overflow-hidden pb-4">
@@ -232,7 +226,6 @@ export function WorkspacesSidebar({
           className="flex h-11 shrink-0 items-center pr-3"
         >
           <div data-tauri-drag-region className="h-full w-[94px] shrink-0" />
-
           <div data-tauri-drag-region className="h-full flex-1" />
         </div>
 
@@ -242,19 +235,13 @@ export function WorkspacesSidebar({
           </h2>
 
           <div className="flex items-center gap-1 text-app-foreground-soft/80">
-            <BaseTooltip
-              side="top"
-              content={<span>Add repository</span>}
-            >
+            <BaseTooltip side="top" content={<span>Add repository</span>}>
               <ToolbarButton label="Add repository" className="text-app-foreground-soft/78">
                 <BookMarked className="size-3.5" strokeWidth={2} />
               </ToolbarButton>
             </BaseTooltip>
 
-            <BaseTooltip
-              side="top"
-              content={<span>Add workspace</span>}
-            >
+            <BaseTooltip side="top" content={<span>Add workspace</span>}>
               <ToolbarButton label="New workspace">
                 <Plus className="size-3.5" strokeWidth={2.4} />
               </ToolbarButton>
@@ -267,45 +254,71 @@ export function WorkspacesSidebar({
           className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-2 pb-3 pr-2.5 [scrollbar-gutter:stable]"
         >
           {groups.map((group) => {
-            const isOpen = openGroups[group.id];
             const canCollapse = group.rows.length > 0;
 
             return (
-              <section key={group.id} aria-label={group.label} className="space-y-1.5">
-                <button
-                  type="button"
-                  aria-label={group.label}
-                  onClick={() => {
-                    if (!canCollapse) return;
-                    setOpenGroups((current) => ({
-                      ...current,
-                      [group.id]: !current[group.id],
-                    }));
-                  }}
-                  className={cn(
-                    "group flex w-full select-none items-center justify-between rounded-xl px-1 py-1 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70",
-                    canCollapse ? "cursor-pointer" : "cursor-default",
-                  )}
-                >
-                  <span className="flex items-center gap-2">
-                    <GroupIcon tone={group.tone} />
-                    <span>{group.label}</span>
-                  </span>
+              <Collapsible key={group.id} defaultOpen>
+                <section aria-label={group.label} className="space-y-1.5">
+                  <CollapsibleTrigger
+                    className={cn(
+                      "group/trigger flex w-full select-none items-center justify-between rounded-xl px-1 py-1 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70",
+                      canCollapse ? "cursor-pointer" : "cursor-default",
+                    )}
+                    disabled={!canCollapse}
+                  >
+                    <span className="flex items-center gap-2">
+                      <GroupIcon tone={group.tone} />
+                      <span>{group.label}</span>
+                    </span>
 
-                  {canCollapse ? (
-                    <ChevronDown
-                      className={cn(
-                        "size-4 shrink-0 text-app-foreground-soft transition-transform",
-                        !isOpen && "-rotate-90",
-                      )}
-                      strokeWidth={2}
-                    />
+                    {canCollapse ? (
+                      <ChevronDown
+                        className="size-4 shrink-0 text-app-foreground-soft transition-transform group-data-[panel-open]/trigger:-rotate-0 group-data-[panel-closed]/trigger:-rotate-90"
+                        strokeWidth={2}
+                      />
+                    ) : null}
+                  </CollapsibleTrigger>
+
+                  {group.rows.length > 0 ? (
+                    <CollapsibleContent>
+                      <div className="space-y-0.5">
+                        {group.rows.map((row) => (
+                          <WorkspaceRowItem
+                            key={row.id}
+                            row={row}
+                            selected={selectedWorkspaceId === row.id}
+                            onSelect={onSelectWorkspace}
+                          />
+                        ))}
+                      </div>
+                    </CollapsibleContent>
                   ) : null}
-                </button>
+                </section>
+              </Collapsible>
+            );
+          })}
 
-                {isOpen && group.rows.length > 0 ? (
+          <Collapsible defaultOpen={false}>
+            <section aria-label="Archived" className="space-y-1.5">
+              <CollapsibleTrigger className="group/trigger flex w-full cursor-pointer select-none items-center justify-between rounded-xl px-1 py-1 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70">
+                <span className="flex items-center gap-2">
+                  <Archive
+                    className="size-[14px] shrink-0 text-app-backlog"
+                    strokeWidth={1.9}
+                  />
+                  <span>Archived</span>
+                </span>
+
+                <ChevronDown
+                  className="size-4 shrink-0 text-app-foreground-soft transition-transform group-data-[panel-open]/trigger:-rotate-0 group-data-[panel-closed]/trigger:-rotate-90"
+                  strokeWidth={2}
+                />
+              </CollapsibleTrigger>
+
+              {archivedRows.length > 0 ? (
+                <CollapsibleContent>
                   <div className="space-y-0.5">
-                    {group.rows.map((row) => (
+                    {archivedRows.map((row) => (
                       <WorkspaceRowItem
                         key={row.id}
                         row={row}
@@ -314,53 +327,10 @@ export function WorkspacesSidebar({
                       />
                     ))}
                   </div>
-                ) : null}
-              </section>
-            );
-          })}
-
-          <section aria-label="Archived" className="space-y-1.5">
-            <button
-              type="button"
-              aria-label="Archived"
-              onClick={() => {
-                setOpenGroups((current) => ({
-                  ...current,
-                  archived: !current.archived,
-                }));
-              }}
-              className="group flex w-full cursor-pointer select-none items-center justify-between rounded-xl px-1 py-1 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70"
-            >
-              <span className="flex items-center gap-2">
-                <Archive
-                  className="size-[14px] shrink-0 text-app-backlog"
-                  strokeWidth={1.9}
-                />
-                <span>Archived</span>
-              </span>
-
-              <ChevronDown
-                className={cn(
-                  "size-4 shrink-0 text-app-foreground-soft transition-transform",
-                  !openGroups.archived && "-rotate-90",
-                )}
-                strokeWidth={2}
-              />
-            </button>
-
-            {openGroups.archived && archivedRows.length > 0 ? (
-              <div className="space-y-0.5">
-                {archivedRows.map((row) => (
-                  <WorkspaceRowItem
-                    key={row.id}
-                    row={row}
-                    selected={selectedWorkspaceId === row.id}
-                    onSelect={onSelectWorkspace}
-                  />
-                ))}
-              </div>
-            ) : null}
-          </section>
+                </CollapsibleContent>
+              ) : null}
+            </section>
+          </Collapsible>
         </div>
       </div>
     </TooltipProvider>

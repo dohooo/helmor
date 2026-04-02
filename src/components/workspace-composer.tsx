@@ -1,11 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ButtonHTMLAttributes,
-  type ReactNode,
-} from "react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
 import {
   ArrowUp,
   BookOpen,
@@ -16,8 +9,17 @@ import {
   Sparkles,
   Zap,
 } from "lucide-react";
-import type { AgentModelSection } from "../lib/conductor";
-import { cn } from "../lib/utils";
+import type { AgentModelSection } from "@/lib/conductor";
+import { cn } from "@/lib/utils";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 
 type WorkspaceComposerProps = {
   value: string;
@@ -35,6 +37,25 @@ type ComposerButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   className?: string;
 };
 
+function ComposerButton({
+  children,
+  className,
+  ...props
+}: ComposerButtonProps) {
+  return (
+    <button
+      {...props}
+      type="button"
+      className={cn(
+        "flex items-center gap-1.5 rounded-lg text-app-foreground-soft transition-colors hover:text-app-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong disabled:cursor-not-allowed disabled:opacity-45",
+        className,
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
 export function WorkspaceComposer({
   value,
   onValueChange,
@@ -45,34 +66,11 @@ export function WorkspaceComposer({
   onSelectModel,
   sendError,
 }: WorkspaceComposerProps) {
-  const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-  const selectedModel = useMemo(
-    () =>
-      modelSections
-        .flatMap((section) => section.options)
-        .find((option) => option.id === selectedModelId) ?? null,
-    [modelSections, selectedModelId],
-  );
+  const selectedModel =
+    modelSections
+      .flatMap((section) => section.options)
+      .find((option) => option.id === selectedModelId) ?? null;
   const sendDisabled = sending || !selectedModel || value.trim().length === 0;
-
-  useEffect(() => {
-    if (!isModelMenuOpen) {
-      return;
-    }
-
-    const handlePointerDown = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) {
-        setIsModelMenuOpen(false);
-      }
-    };
-
-    window.addEventListener("pointerdown", handlePointerDown);
-
-    return () => {
-      window.removeEventListener("pointerdown", handlePointerDown);
-    };
-  }, [isModelMenuOpen]);
 
   return (
     <div
@@ -110,70 +108,9 @@ export function WorkspaceComposer({
 
       <div className="mt-2.5 flex items-end justify-between gap-3">
         <div className="flex flex-wrap items-center gap-1">
-          <div ref={menuRef} className="relative">
-            {isModelMenuOpen ? (
-              <div className="absolute bottom-full left-0 z-30 mb-2 min-w-[17rem] overflow-hidden rounded-2xl border border-app-border-strong bg-[#2B2726] shadow-[0_18px_48px_rgba(0,0,0,0.45)]">
-                {modelSections.map((section, index) => (
-                  <div
-                    key={section.id}
-                    className={cn(
-                      "px-2 py-2",
-                      index > 0 ? "border-t border-app-border" : undefined,
-                    )}
-                  >
-                    <div className="px-3 py-2 text-[12px] font-medium text-app-muted">
-                      {section.label}
-                    </div>
-
-                    <div className="space-y-1">
-                      {section.options.map((option) => {
-                        const selected = option.id === selectedModelId;
-                        return (
-                          <button
-                            key={option.id}
-                            type="button"
-                            onClick={() => {
-                              onSelectModel(option.id);
-                              setIsModelMenuOpen(false);
-                            }}
-                            className={cn(
-                              "flex w-full items-center justify-between gap-3 rounded-xl px-3 py-3 text-left text-[13px] transition-colors",
-                              selected
-                                ? "bg-white/[0.06] text-app-foreground"
-                                : "text-app-foreground-soft hover:bg-white/[0.04] hover:text-app-foreground",
-                            )}
-                          >
-                            <div className="flex items-center gap-3">
-                              <span className="text-app-foreground-soft">
-                                {option.provider === "claude" ? (
-                                  <Sparkles className="size-4" strokeWidth={1.9} />
-                                ) : (
-                                  <Bot className="size-4" strokeWidth={1.8} />
-                                )}
-                              </span>
-                              <span className="font-medium">{option.label}</span>
-                            </div>
-
-                            {option.badge ? (
-                              <span className="rounded-md border border-[#8C6E68] bg-[#5A433E] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-[#F4D9D4]">
-                                {option.badge}
-                              </span>
-                            ) : null}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-
-            <ComposerButton
-              aria-label="Model selector"
-              className="gap-1.5 px-1 py-0.5 text-[13px] font-medium"
-              onClick={() => {
-                setIsModelMenuOpen((current) => !current);
-              }}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              className="flex items-center gap-1.5 rounded-lg px-1 py-0.5 text-[13px] font-medium text-app-foreground-soft transition-colors hover:text-app-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong"
             >
               {selectedModel?.provider === "codex" ? (
                 <Bot className="size-[14px]" strokeWidth={1.8} />
@@ -181,8 +118,48 @@ export function WorkspaceComposer({
                 <Sparkles className="size-[14px]" strokeWidth={1.8} />
               )}
               <span>{selectedModel?.label ?? "Select model"}</span>
-            </ComposerButton>
-          </div>
+            </DropdownMenuTrigger>
+
+            <DropdownMenuContent
+              side="top"
+              align="start"
+              sideOffset={8}
+              className="min-w-[17rem]"
+            >
+              {modelSections.map((section, index) => (
+                <DropdownMenuGroup key={section.id}>
+                  {index > 0 ? <DropdownMenuSeparator /> : null}
+                  <DropdownMenuLabel>{section.label}</DropdownMenuLabel>
+                  {section.options.map((option) => (
+                    <DropdownMenuItem
+                      key={option.id}
+                      onSelect={() => {
+                        onSelectModel(option.id);
+                      }}
+                      className="flex items-center justify-between gap-3"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-app-foreground-soft">
+                          {option.provider === "claude" ? (
+                            <Sparkles className="size-4" strokeWidth={1.9} />
+                          ) : (
+                            <Bot className="size-4" strokeWidth={1.8} />
+                          )}
+                        </span>
+                        <span className="font-medium">{option.label}</span>
+                      </div>
+
+                      {option.badge ? (
+                        <span className="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-primary">
+                          {option.badge}
+                        </span>
+                      ) : null}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuGroup>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           <ComposerButton
             aria-label="Quick command"
@@ -251,24 +228,5 @@ export function WorkspaceComposer({
         </div>
       </div>
     </div>
-  );
-}
-
-function ComposerButton({
-  children,
-  className,
-  ...props
-}: ComposerButtonProps) {
-  return (
-    <button
-      {...props}
-      type="button"
-      className={cn(
-        "flex items-center gap-1.5 rounded-lg text-app-foreground-soft transition-colors hover:text-app-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong disabled:cursor-not-allowed disabled:opacity-45",
-        className,
-      )}
-    >
-      {children}
-    </button>
   );
 }
