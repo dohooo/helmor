@@ -2,7 +2,6 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   useExternalStoreRuntime,
-  useMessage,
   AssistantRuntimeProvider,
   ThreadPrimitive,
   MessagePrimitive,
@@ -194,14 +193,11 @@ function ConductorUserMessage() {
 }
 
 function ConductorAssistantMessage() {
-  const id = useMessage((s) => s.id);
-  const isChild = id?.startsWith("child:");
-
   return (
-    <MessagePrimitive.Root className={cn("min-w-0 max-w-full space-y-1", isChild && "ml-5 border-l border-app-border/30 pl-3")}>
+    <MessagePrimitive.Root className="min-w-0 max-w-full space-y-1">
       <MessagePrimitive.Content
         components={{
-          Text: AssistantText,
+          Text: AssistantTextOrChildren,
           Reasoning: AssistantReasoning,
           tools: {
             Fallback: AssistantToolCall,
@@ -233,6 +229,61 @@ function ConductorSystemMessage() {
 
 function UserText({ text }: { text: string }) {
   return <p className="whitespace-pre-wrap break-words">{text}</p>;
+}
+
+function AssistantTextOrChildren({ text }: { text: string }) {
+  if (text.startsWith("__children__")) {
+    try {
+      const data = JSON.parse(text.slice("__children__".length)) as {
+        parts: Array<{ type: string; toolName?: string; toolCallId?: string; args?: Record<string, unknown>; argsText?: string; result?: unknown; text?: string }>;
+        summary: string;
+      };
+      return (
+        <details className="group/children ml-5 border-l border-app-border/30 pl-3">
+          <summary className="cursor-pointer py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
+            <span className="inline-flex items-center gap-1.5">
+              <svg className="size-2.5 shrink-0 transition-transform group-open/children:rotate-90" viewBox="0 0 12 12" fill="none">
+                <path d="M4.5 2.5L8.5 6L4.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span>{data.summary || "Sub-agent"}</span>
+              <span className="text-app-muted/40">{data.parts.length} steps</span>
+            </span>
+          </summary>
+          <div className="space-y-0.5 pt-1">
+            {data.parts.map((part, idx) => {
+              if (part.type === "tool-call") {
+                return (
+                  <AssistantToolCall
+                    key={idx}
+                    toolName={part.toolName ?? "unknown"}
+                    args={part.args ?? {}}
+                    argsText={part.argsText ?? ""}
+                    result={part.result}
+                    status={null}
+                    addResult={null}
+                  />
+                );
+              }
+              if (part.type === "text" && part.text) {
+                return (
+                  <div key={idx} className="text-[13px] leading-6 text-app-foreground-soft">
+                    {part.text.slice(0, 300)}{part.text.length > 300 ? "…" : ""}
+                  </div>
+                );
+              }
+              if (part.type === "reasoning" && part.text) {
+                return <AssistantReasoning key={idx} text={part.text} />;
+              }
+              return null;
+            })}
+          </div>
+        </details>
+      );
+    } catch {
+      return null;
+    }
+  }
+  return <AssistantText />;
 }
 
 function AssistantText() {
@@ -306,7 +357,7 @@ function AssistantToolCall({
           <span className="truncate text-app-muted/60">{info.detail}</span>
         ) : null}
         {hasOutput ? (
-          <span className="ml-auto shrink-0 cursor-pointer text-[11px] text-app-muted/40 hover:text-app-muted">
+          <span className="shrink-0 cursor-pointer text-app-muted/40 hover:text-app-muted">
             <svg className="size-2.5 transition-transform group-open/out:rotate-90" viewBox="0 0 12 12" fill="none">
               <path d="M4.5 2.5L8.5 6L4.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>

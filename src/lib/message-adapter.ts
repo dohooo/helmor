@@ -19,6 +19,12 @@ type AnyPart = TextPart | ReasoningPart | ToolCallPart;
 export function convertConductorMessages(
   messages: SessionMessageRecord[],
 ): ThreadMessageLike[] {
+  return groupChildMessages(convertMessagesFlat(messages));
+}
+
+function convertMessagesFlat(
+  messages: SessionMessageRecord[],
+): ThreadMessageLike[] {
   const result: ThreadMessageLike[] = [];
 
   for (let i = 0; i < messages.length; i++) {
@@ -306,6 +312,49 @@ function extractFallback(msg: SessionMessageRecord): string {
     if (texts.length > 0) return texts.join("\n\n");
   }
   return msg.content.slice(0, 200);
+}
+
+/**
+ * Group consecutive child messages (sub-agent) into a single collapsible
+ * "children" text part on the preceding parent assistant message.
+ *
+ * The component detects the `__children__` prefix in text parts and renders
+ * them as a collapsible details section.
+ */
+function groupChildMessages(msgs: ThreadMessageLike[]): ThreadMessageLike[] {
+  const out: ThreadMessageLike[] = [];
+
+  for (let i = 0; i < msgs.length; i++) {
+    const m = msgs[i];
+    if (m.id?.startsWith("child:")) {
+      // Attach to previous non-child assistant
+      const parent = out[out.length - 1];
+      if (parent?.role === "assistant") {
+        // Collect all consecutive child parts
+        const childParts: AnyPart[] = [];
+        while (i < msgs.length && msgs[i].id?.startsWith("child:")) {
+          const parts = msgs[i].content as AnyPart[];
+          childParts.push(...parts);
+          i++;
+        }
+        i--; // step back for outer loop increment
+
+        // Encode children as a special text part the component will detect
+        const summary = childParts
+          .filter((p): p is ToolCallPart => p.type === "tool-call")
+          .map((p) => p.toolName)
+          .join(", ");
+        (parent.content as AnyPart[]).push({
+          type: "text",
+          text: `__children__${JSON.stringify({ parts: childParts, summary })}`,
+        });
+      }
+      continue;
+    }
+    out.push(m);
+  }
+
+  return out;
 }
 
 function isObj(v: unknown): v is Record<string, unknown> {
