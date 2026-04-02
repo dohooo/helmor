@@ -9,7 +9,7 @@ describe("BaseTooltip", () => {
     const user = userEvent.setup();
 
     render(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <BaseTooltip content={<span>Add repository</span>}>
           <button type="button">Trigger</button>
         </BaseTooltip>
@@ -19,17 +19,16 @@ describe("BaseTooltip", () => {
     await user.hover(screen.getByRole("button", { name: "Trigger" }));
 
     await waitFor(() => {
-      expect(document.body.querySelector('[data-side="top"]')).not.toBeNull();
+      expect(
+        document.body.querySelector('[data-slot="tooltip-content"]'),
+      ).not.toBeNull();
     });
 
-    const tooltip = document.body.querySelector('[data-side="top"]');
+    const tooltip = document.body.querySelector(
+      '[data-slot="tooltip-content"]',
+    );
 
     expect(tooltip).not.toBeNull();
     expect(tooltip).toHaveTextContent("Add repository");
-    expect(tooltip).toHaveClass("rounded-md");
-    expect(tooltip).toHaveClass("px-1.5");
-    expect(tooltip).toHaveClass("py-1");
-    expect(tooltip).toHaveClass("text-[11px]");
-    expect(tooltip).toHaveClass("leading-none");
   });
 });

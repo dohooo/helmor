@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./tooltip";
 
 type BaseTooltipProps = {
@@ -21,12 +21,11 @@ export function BaseTooltip({
 }: BaseTooltipProps) {
   return (
     <Tooltip>
-      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipTrigger render={children} />
       <TooltipContent
         side={side}
         sideOffset={sideOffset}
         align={align}
-        avoidCollisions={false}
         className={cn(
           "flex items-center rounded-md px-1.5 py-1 text-[11px] leading-none",
           className,
