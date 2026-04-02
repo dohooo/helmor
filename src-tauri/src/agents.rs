@@ -1,11 +1,14 @@
+use crate::conductor::resolve_fixture_db_path;
 use std::{
     env,
     path::{Path, PathBuf},
     process::Command,
 };
 
+use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +35,7 @@ pub struct AgentSendRequest {
     pub model_id: String,
     pub prompt: String,
     pub session_id: Option<String>,
+    pub conductor_session_id: Option<String>,
     pub working_directory: Option<String>,
 }
 
@@ -44,6 +48,16 @@ pub struct AgentSendResponse {
     pub session_id: Option<String>,
     pub assistant_text: String,
     pub working_directory: String,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub persisted_to_fixture: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentUsage {
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -164,10 +178,26 @@ fn send_agent_message_blocking(request: AgentSendRequest) -> Result<AgentSendRes
 
     let working_directory = resolve_working_directory(request.working_directory.as_deref())?;
 
-    let (assistant_text, session_id, resolved_model) = match model.provider {
+    let (assistant_text, session_id, resolved_model, usage) = match model.provider {
         "claude" => send_with_claude(model, prompt, request.session_id.as_deref(), &working_directory)?,
         "codex" => send_with_codex(model, prompt, request.session_id.as_deref(), &working_directory)?,
         provider => return Err(format!("Unsupported provider: {provider}")),
+    };
+    let persisted_to_fixture = if let Some(conductor_session_id) =
+        non_empty(request.conductor_session_id.as_deref())
+    {
+        persist_exchange_to_fixture(
+            conductor_session_id,
+            prompt,
+            model,
+            &resolved_model,
+            &assistant_text,
+            session_id.as_deref(),
+            &usage,
+        )?;
+        true
+    } else {
+        false
     };
 
     Ok(AgentSendResponse {
@@ -177,6 +207,9 @@ fn send_agent_message_blocking(request: AgentSendRequest) -> Result<AgentSendRes
         session_id,
         assistant_text,
         working_directory: working_directory.display().to_string(),
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        persisted_to_fixture,
     })
 }
 
@@ -185,7 +218,7 @@ fn send_with_claude(
     prompt: &str,
     session_id: Option<&str>,
     working_directory: &Path,
-) -> Result<(String, Option<String>, String), String> {
+) -> Result<(String, Option<String>, String, AgentUsage), String> {
     let binary = resolve_binary_path("claude")?;
     let mut command = Command::new(binary);
     command
@@ -221,7 +254,7 @@ fn send_with_codex(
     prompt: &str,
     session_id: Option<&str>,
     working_directory: &Path,
-) -> Result<(String, Option<String>, String), String> {
+) -> Result<(String, Option<String>, String, AgentUsage), String> {
     let binary = resolve_binary_path("codex")?;
     let mut command = Command::new(binary);
     command.current_dir(working_directory);
@@ -263,11 +296,15 @@ fn parse_claude_output(
     stdout: &str,
     fallback_session_id: Option<&str>,
     fallback_model: &str,
-) -> Result<(String, Option<String>, String), String> {
+) -> Result<(String, Option<String>, String, AgentUsage), String> {
     let mut assistant_text = String::new();
     let mut saw_text_delta = false;
     let mut session_id = fallback_session_id.map(str::to_string);
     let mut resolved_model = fallback_model.to_string();
+    let mut usage = AgentUsage {
+        input_tokens: None,
+        output_tokens: None,
+    };
 
     for line in stdout.lines().map(str::trim).filter(|line| !line.is_empty()) {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
@@ -299,9 +336,15 @@ fn parse_claude_output(
                     assistant_text.push_str(&text);
                 }
             }
-            Some("result") if assistant_text.trim().is_empty() => {
-                if let Some(text) = value.get("result").and_then(Value::as_str) {
-                    assistant_text.push_str(text);
+            Some("result") => {
+                if assistant_text.trim().is_empty() {
+                    if let Some(text) = value.get("result").and_then(Value::as_str) {
+                        assistant_text.push_str(text);
+                    }
+                }
+                if let Some(parsed_usage) = value.get("usage") {
+                    usage.input_tokens = parsed_usage.get("input_tokens").and_then(Value::as_i64);
+                    usage.output_tokens = parsed_usage.get("output_tokens").and_then(Value::as_i64);
                 }
             }
             _ => {}
@@ -313,16 +356,20 @@ fn parse_claude_output(
         return Err("Claude returned no assistant text.".to_string());
     }
 
-    Ok((assistant_text, session_id, resolved_model))
+    Ok((assistant_text, session_id, resolved_model, usage))
 }
 
 fn parse_codex_output(
     stdout: &str,
     fallback_session_id: Option<&str>,
     fallback_model: &str,
-) -> Result<(String, Option<String>, String), String> {
+) -> Result<(String, Option<String>, String, AgentUsage), String> {
     let mut session_id = fallback_session_id.map(str::to_string);
     let mut assistant_chunks = Vec::new();
+    let mut usage = AgentUsage {
+        input_tokens: None,
+        output_tokens: None,
+    };
 
     for line in stdout.lines().map(str::trim).filter(|line| !line.is_empty()) {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
@@ -348,6 +395,12 @@ fn parse_codex_output(
                     session_id = Some(thread_id.to_string());
                 }
             }
+            Some("turn.completed") => {
+                if let Some(parsed_usage) = value.get("usage") {
+                    usage.input_tokens = parsed_usage.get("input_tokens").and_then(Value::as_i64);
+                    usage.output_tokens = parsed_usage.get("output_tokens").and_then(Value::as_i64);
+                }
+            }
             _ => {}
         }
     }
@@ -357,7 +410,7 @@ fn parse_codex_output(
         return Err("Codex returned no assistant text.".to_string());
     }
 
-    Ok((assistant_text, session_id, fallback_model.to_string()))
+    Ok((assistant_text, session_id, fallback_model.to_string(), usage))
 }
 
 fn extract_claude_model_name(value: &Value) -> Option<String> {
@@ -415,6 +468,205 @@ fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf, String> 
     }
 
     env::current_dir().map_err(|error| error.to_string())
+}
+
+fn persist_exchange_to_fixture(
+    conductor_session_id: &str,
+    prompt: &str,
+    model: &AgentModelDefinition,
+    resolved_model: &str,
+    assistant_text: &str,
+    provider_session_id: Option<&str>,
+    usage: &AgentUsage,
+) -> Result<(), String> {
+    let connection = open_fixture_write_connection()?;
+    let now = current_timestamp_string()?;
+    let turn_id = Uuid::new_v4().to_string();
+    let user_message_id = Uuid::new_v4().to_string();
+    let assistant_message_id = Uuid::new_v4().to_string();
+    let result_message_id = Uuid::new_v4().to_string();
+    let assistant_sdk_message_id = format!("helmor-assistant-{}", Uuid::new_v4());
+    let result_payload = serde_json::json!({
+        "type": "result",
+        "subtype": "success",
+        "result": assistant_text,
+        "session_id": provider_session_id,
+        "usage": {
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+        }
+    })
+    .to_string();
+    let assistant_payload = serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "model": resolved_model,
+            "id": assistant_sdk_message_id,
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": assistant_text,
+                }
+            ]
+        },
+        "session_id": provider_session_id,
+    })
+    .to_string();
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+
+    transaction
+        .execute(
+            r#"
+            INSERT INTO session_messages (
+              id,
+              session_id,
+              role,
+              content,
+              created_at,
+              sent_at,
+              full_message,
+              model,
+              last_assistant_message_id,
+              turn_id,
+              is_resumable_message
+            ) VALUES (?1, ?2, 'user', ?3, ?4, ?4, ?3, ?5, ?6, ?7, 0)
+            "#,
+            params![
+                user_message_id,
+                conductor_session_id,
+                prompt,
+                now,
+                model.id,
+                assistant_sdk_message_id,
+                turn_id
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+
+    transaction
+        .execute(
+            r#"
+            INSERT INTO session_messages (
+              id,
+              session_id,
+              role,
+              content,
+              created_at,
+              sent_at,
+              full_message,
+              model,
+              sdk_message_id,
+              turn_id,
+              is_resumable_message
+            ) VALUES (?1, ?2, 'assistant', ?3, ?4, ?4, ?3, ?5, ?6, ?7, 0)
+            "#,
+            params![
+                assistant_message_id,
+                conductor_session_id,
+                assistant_payload,
+                now,
+                resolved_model,
+                assistant_sdk_message_id,
+                turn_id
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+
+    transaction
+        .execute(
+            r#"
+            INSERT INTO session_messages (
+              id,
+              session_id,
+              role,
+              content,
+              created_at,
+              sent_at,
+              full_message,
+              model,
+              sdk_message_id,
+              turn_id,
+              is_resumable_message
+            ) VALUES (?1, ?2, 'assistant', ?3, ?4, ?4, ?3, ?5, ?6, ?7, 0)
+            "#,
+            params![
+                result_message_id,
+                conductor_session_id,
+                result_payload,
+                now,
+                resolved_model,
+                assistant_sdk_message_id,
+                turn_id
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+
+    transaction
+        .execute(
+            r#"
+            UPDATE sessions
+            SET
+              status = 'idle',
+              model = ?2,
+              last_user_message_at = ?3,
+              claude_session_id = CASE
+                WHEN ?4 = 'claude' AND ?5 IS NOT NULL THEN ?5
+                ELSE claude_session_id
+              END
+            WHERE id = ?1
+            "#,
+            params![
+                conductor_session_id,
+                model.id,
+                now,
+                model.provider,
+                provider_session_id
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+
+    transaction
+        .execute(
+            r#"
+            UPDATE workspaces
+            SET
+              active_session_id = ?2,
+              unread = 0
+            WHERE id = (SELECT workspace_id FROM sessions WHERE id = ?1)
+            "#,
+            params![conductor_session_id, conductor_session_id],
+        )
+        .map_err(|error| error.to_string())?;
+
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+fn open_fixture_write_connection() -> Result<Connection, String> {
+    let db_path = resolve_fixture_db_path()?;
+    let connection = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| error.to_string())?;
+
+    connection
+        .busy_timeout(std::time::Duration::from_secs(3))
+        .map_err(|error| error.to_string())?;
+
+    Ok(connection)
+}
+
+fn current_timestamp_string() -> Result<String, String> {
+    let connection = Connection::open_in_memory().map_err(|error| error.to_string())?;
+    connection
+        .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| error.to_string())
 }
 
 fn resolve_binary_path(binary_name: &str) -> Result<PathBuf, String> {

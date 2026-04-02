@@ -348,6 +348,7 @@ function App() {
         modelId: selectedModel.id,
         prompt,
         sessionId,
+        conductorSessionId: selectedSessionId,
         workingDirectory: workspaceDetail?.rootPath ?? null,
       });
 
@@ -358,24 +359,55 @@ function App() {
           sessionId: response.sessionId ?? current[contextKey]?.sessionId ?? null,
         },
       }));
-      setLiveMessagesByContext((current) =>
-        appendLiveMessage(
-          current,
-          contextKey,
-          createLiveMessage({
-            id: `${contextKey}:assistant:${Date.now()}`,
-            sessionId: selectedSessionId ?? contextKey,
-            role: "assistant",
-            content: response.assistantText,
-            createdAt: new Date().toISOString(),
-            model: response.resolvedModel,
-          }),
-        ),
-      );
+
+      if (response.persistedToFixture && selectedSessionId) {
+        const [messages, detail, sessions, loadedGroups, loadedArchived] =
+          await Promise.all([
+            loadSessionMessages(selectedSessionId),
+            selectedWorkspaceId ? loadWorkspaceDetail(selectedWorkspaceId) : null,
+            selectedWorkspaceId ? loadWorkspaceSessions(selectedWorkspaceId) : [],
+            loadWorkspaceGroups(),
+            loadArchivedWorkspaces(),
+          ]);
+
+        setSessionMessages(messages);
+        if (selectedWorkspaceId) {
+          setWorkspaceDetail(detail);
+          setWorkspaceSessions(sessions);
+        }
+        setGroups(loadedGroups);
+        setArchivedSummaries(loadedArchived);
+        setLiveMessagesByContext((current) => ({
+          ...current,
+          [contextKey]: [],
+        }));
+      } else {
+        setLiveMessagesByContext((current) =>
+          appendLiveMessage(
+            current,
+            contextKey,
+            createLiveMessage({
+              id: `${contextKey}:assistant:${Date.now()}`,
+              sessionId: selectedSessionId ?? contextKey,
+              role: "assistant",
+              content: response.assistantText,
+              createdAt: new Date().toISOString(),
+              model: response.resolvedModel,
+            }),
+          ),
+        );
+      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Unable to send message.";
       setSendErrorsByContext((current) => ({ ...current, [contextKey]: message }));
+      setComposerValue(prompt);
+      setLiveMessagesByContext((current) => ({
+        ...current,
+        [contextKey]: (current[contextKey] ?? []).filter(
+          (message) => message.id !== optimisticUserMessage.id,
+        ),
+      }));
     } finally {
       setSendingContextKey((current) => (current === contextKey ? null : current));
     }
@@ -524,13 +556,11 @@ function summaryToArchivedRow(summary: WorkspaceSummary): WorkspaceRow {
   return {
     id: summary.id,
     title: summary.title,
-    avatar:
-      Array.from(summary.title).find((character) =>
-        /[A-Za-z0-9]/.test(character),
-      )?.toUpperCase() ?? "A",
     active: false,
     directoryName: summary.directoryName,
     repoName: summary.repoName,
+    repoIconSrc: summary.repoIconSrc ?? null,
+    repoInitials: summary.repoInitials ?? null,
     state: summary.state,
     derivedStatus: summary.derivedStatus,
     manualStatus: summary.manualStatus ?? null,

@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -28,6 +29,8 @@ pub struct WorkspaceSidebarRow {
     pub active: bool,
     pub directory_name: String,
     pub repo_name: String,
+    pub repo_icon_src: Option<String>,
+    pub repo_initials: String,
     pub state: String,
     pub derived_status: String,
     pub manual_status: Option<String>,
@@ -58,6 +61,8 @@ pub struct WorkspaceSummary {
     pub title: String,
     pub directory_name: String,
     pub repo_name: String,
+    pub repo_icon_src: Option<String>,
+    pub repo_initials: String,
     pub state: String,
     pub derived_status: String,
     pub manual_status: Option<String>,
@@ -80,6 +85,8 @@ pub struct WorkspaceDetail {
     pub title: String,
     pub repo_id: String,
     pub repo_name: String,
+    pub repo_icon_src: Option<String>,
+    pub repo_initials: String,
     pub remote_url: Option<String>,
     pub default_branch: Option<String>,
     pub root_path: Option<String>,
@@ -315,14 +322,17 @@ pub fn list_session_attachments(
 
 fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
     let title = display_title(&record);
+    let repo_initials = repo_initials_for_name(&record.repo_name);
 
     WorkspaceSidebarRow {
-        avatar: avatar_for_title(&title),
+        avatar: repo_initials.clone(),
         active: record.state == "ready",
         title,
         id: record.id,
         directory_name: record.directory_name,
         repo_name: record.repo_name,
+        repo_icon_src: repo_icon_src_for_root_path(record.root_path.as_deref()),
+        repo_initials,
         state: record.state,
         derived_status: record.derived_status,
         manual_status: record.manual_status,
@@ -339,12 +349,16 @@ fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
 }
 
 fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
+    let repo_initials = repo_initials_for_name(&record.repo_name);
+
     WorkspaceSummary {
         active: record.state == "ready",
         title: display_title(&record),
         id: record.id,
         directory_name: record.directory_name,
         repo_name: record.repo_name,
+        repo_icon_src: repo_icon_src_for_root_path(record.root_path.as_deref()),
+        repo_initials,
         state: record.state,
         derived_status: record.derived_status,
         manual_status: record.manual_status,
@@ -361,12 +375,16 @@ fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
 }
 
 fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
+    let repo_initials = repo_initials_for_name(&record.repo_name);
+
     WorkspaceDetail {
         active: record.state == "ready",
         title: display_title(&record),
         id: record.id,
         repo_id: record.repo_id,
         repo_name: record.repo_name,
+        repo_icon_src: repo_icon_src_for_root_path(record.root_path.as_deref()),
+        repo_initials,
         remote_url: record.remote_url,
         default_branch: record.default_branch,
         root_path: record.root_path,
@@ -406,12 +424,101 @@ fn display_title(record: &WorkspaceRecord) -> String {
     humanize_directory_name(&record.directory_name)
 }
 
-fn avatar_for_title(title: &str) -> String {
-    title
-        .chars()
-        .find(|character| character.is_ascii_alphanumeric())
-        .map(|character| character.to_ascii_uppercase().to_string())
-        .unwrap_or_else(|| "W".to_string())
+const REPO_ICON_CANDIDATES: &[&str] = &[
+    "public/apple-touch-icon.png",
+    "apple-touch-icon.png",
+    "public/favicon.svg",
+    "favicon.svg",
+    "public/favicon.png",
+    "public/icon.png",
+    "public/logo.png",
+    "favicon.png",
+    "app/icon.png",
+    "src/app/icon.png",
+    "public/favicon.ico",
+    "favicon.ico",
+    "app/favicon.ico",
+    "static/favicon.ico",
+    "src-tauri/icons/icon.png",
+    "assets/icon.png",
+    "src/assets/icon.png",
+];
+
+fn repo_icon_path_for_root_path(root_path: Option<&str>) -> Option<String> {
+    let root_path = root_path?.trim();
+
+    if root_path.is_empty() {
+        return None;
+    }
+
+    let root = Path::new(root_path);
+
+    for candidate in REPO_ICON_CANDIDATES {
+        let path = root.join(candidate);
+
+        if path.is_file() {
+            return Some(path.display().to_string());
+        }
+    }
+
+    None
+}
+
+fn repo_icon_src_for_root_path(root_path: Option<&str>) -> Option<String> {
+    let icon_path = repo_icon_path_for_root_path(root_path)?;
+    let mime_type = repo_icon_mime_type(Path::new(&icon_path));
+    let bytes = fs::read(icon_path).ok()?;
+
+    Some(format!(
+        "data:{mime_type};base64,{}",
+        BASE64_STANDARD.encode(bytes)
+    ))
+}
+
+fn repo_icon_mime_type(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/x-icon",
+        _ => "image/png",
+    }
+}
+
+fn repo_initials_for_name(repo_name: &str) -> String {
+    let segments = repo_name
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+
+    let mut initials = String::new();
+
+    if segments.len() >= 2 {
+        for segment in segments.iter().take(2) {
+            if let Some(character) = segment.chars().next() {
+                initials.push(character.to_ascii_uppercase());
+            }
+        }
+    }
+
+    if initials.is_empty() {
+        for character in repo_name.chars().filter(|character| character.is_ascii_alphanumeric()) {
+            initials.push(character.to_ascii_uppercase());
+
+            if initials.len() == 2 {
+                break;
+            }
+        }
+    }
+
+    if initials.is_empty() {
+        "WS".to_string()
+    } else {
+        initials
+    }
 }
 
 fn group_id_from_status(manual_status: &Option<String>, derived_status: &str) -> &'static str {
@@ -607,7 +714,9 @@ fn load_session_messages_by_session_id(
               ) AS attachment_count
             FROM session_messages sm
             WHERE sm.session_id = ?1
-            ORDER BY datetime(sm.created_at) ASC, sm.id ASC
+            ORDER BY
+              COALESCE(julianday(sm.sent_at), julianday(sm.created_at)) ASC,
+              sm.rowid ASC
             "#,
         )
         .map_err(|error| error.to_string())?;
@@ -770,7 +879,7 @@ const WORKSPACE_RECORD_SQL: &str = r#"
 "#;
 
 fn open_fixture_connection() -> Result<Connection, String> {
-    let db_path = resolve_fixture_root()?.join("com.conductor.app/conductor.db");
+    let db_path = resolve_fixture_db_path()?;
 
     Connection::open_with_flags(
         db_path,
@@ -779,7 +888,11 @@ fn open_fixture_connection() -> Result<Connection, String> {
     .map_err(|error| error.to_string())
 }
 
-fn resolve_fixture_root() -> Result<PathBuf, String> {
+pub(crate) fn resolve_fixture_db_path() -> Result<PathBuf, String> {
+    Ok(resolve_fixture_root()?.join("com.conductor.app/conductor.db"))
+}
+
+pub(crate) fn resolve_fixture_root() -> Result<PathBuf, String> {
     if let Ok(root) = std::env::var("HELMOR_CONDUCTOR_FIXTURE_ROOT") {
         let path = PathBuf::from(root);
         validate_fixture_root(&path)?;

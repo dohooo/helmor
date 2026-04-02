@@ -1,12 +1,16 @@
+import { invoke } from "@tauri-apps/api/core";
+
 export type GroupTone = "done" | "review" | "progress" | "backlog" | "canceled";
 
 export type WorkspaceRow = {
   id: string;
   title: string;
-  avatar: string;
+  avatar?: string;
   active?: boolean;
   directoryName?: string;
   repoName?: string;
+  repoIconSrc?: string | null;
+  repoInitials?: string | null;
   state?: string;
   derivedStatus?: string;
   manualStatus?: string | null;
@@ -56,6 +60,7 @@ export type AgentSendRequest = {
   modelId: string;
   prompt: string;
   sessionId?: string | null;
+  conductorSessionId?: string | null;
   workingDirectory?: string | null;
 };
 
@@ -66,6 +71,9 @@ export type AgentSendResponse = {
   sessionId?: string | null;
   assistantText: string;
   workingDirectory: string;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  persistedToFixture: boolean;
 };
 
 export type WorkspaceSummary = {
@@ -73,6 +81,8 @@ export type WorkspaceSummary = {
   title: string;
   directoryName: string;
   repoName: string;
+  repoIconSrc?: string | null;
+  repoInitials?: string | null;
   state: string;
   derivedStatus: string;
   manualStatus?: string | null;
@@ -93,6 +103,8 @@ export type WorkspaceDetail = {
   title: string;
   repoId: string;
   repoName: string;
+  repoIconSrc?: string | null;
+  repoInitials?: string | null;
   remoteUrl?: string | null;
   defaultBranch?: string | null;
   rootPath?: string | null;
@@ -183,7 +195,7 @@ const DEFAULT_WORKSPACE_GROUPS: WorkspaceGroup[] = [
       {
         id: "task-detail",
         title: "feat: task detail window with e...",
-        avatar: "F",
+        repoInitials: "F",
       },
     ],
   },
@@ -195,17 +207,17 @@ const DEFAULT_WORKSPACE_GROUPS: WorkspaceGroup[] = [
       {
         id: "coda-publish",
         title: "feat: add Coda publish function...",
-        avatar: "F",
+        repoInitials: "F",
       },
       {
         id: "marketing-site",
         title: "Implement new marketing site ...",
-        avatar: "I",
+        repoInitials: "I",
       },
       {
         id: "gitlab-publish",
         title: "feat: add GitLab publish suppor...",
-        avatar: "F",
+        repoInitials: "F",
       },
     ],
   },
@@ -217,38 +229,38 @@ const DEFAULT_WORKSPACE_GROUPS: WorkspaceGroup[] = [
       {
         id: "cambridge",
         title: "Cambridge",
-        avatar: "C",
+        repoInitials: "C",
       },
       {
         id: "project-paths",
         title: "Show project paths",
-        avatar: "S",
+        repoInitials: "S",
         active: true,
       },
       {
         id: "mermaid",
         title: "Investigate mermaid confluence",
-        avatar: "I",
+        repoInitials: "I",
       },
       {
         id: "seo",
         title: "Feat seo optimization",
-        avatar: "F",
+        repoInitials: "F",
       },
       {
         id: "autoresearch",
         title: "Explore autoresearch",
-        avatar: "E",
+        repoInitials: "E",
       },
       {
         id: "chat-list",
         title: "Fix chat list pending",
-        avatar: "F",
+        repoInitials: "F",
       },
       {
         id: "doc-sync",
         title: "Investigate doc sync",
-        avatar: "I",
+        repoInitials: "I",
       },
     ],
   },
@@ -364,12 +376,11 @@ const DEFAULT_AGENT_MODEL_SECTIONS: AgentModelSection[] = [
 type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 async function getTauriInvoke(): Promise<TauriInvoke | null> {
-  try {
-    const api = await import("@tauri-apps/api/core");
-    return api.invoke as TauriInvoke;
-  } catch {
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
     return null;
   }
+
+  return invoke as TauriInvoke;
 }
 
 export async function loadWorkspaceGroups(): Promise<WorkspaceGroup[]> {
@@ -512,6 +523,9 @@ export async function sendAgentMessage(
       assistantText:
         "Live agent sending is only available in the Tauri desktop runtime.",
       workingDirectory: request.workingDirectory ?? "",
+      inputTokens: null,
+      outputTokens: null,
+      persistedToFixture: false,
     };
   }
 
