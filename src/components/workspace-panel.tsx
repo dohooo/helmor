@@ -5,6 +5,9 @@ import {
   ThreadPrimitive,
   MessagePrimitive,
 } from "@assistant-ui/react";
+import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
+import remarkGfm from "remark-gfm";
+import "@assistant-ui/react-markdown/styles/dot.css";
 import {
   AlertCircle,
   Clock3,
@@ -216,10 +219,10 @@ function UserText({ text }: { text: string }) {
   return <p className="whitespace-pre-wrap break-words">{text}</p>;
 }
 
-function AssistantText({ text }: { text: string }) {
+function AssistantText() {
   return (
-    <div className="prose prose-sm prose-invert max-w-none break-words text-[14px] leading-7 text-app-foreground-soft prose-headings:text-app-foreground prose-strong:text-app-foreground prose-code:rounded prose-code:bg-app-sidebar-strong prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:text-app-foreground prose-pre:bg-app-sidebar prose-pre:text-[13px] prose-a:text-app-project">
-      <MarkdownContent text={text} />
+    <div className="prose prose-sm max-w-none break-words text-[14px] leading-7 text-app-foreground-soft prose-headings:text-app-foreground prose-strong:text-app-foreground prose-code:rounded prose-code:bg-app-sidebar-strong prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:text-app-foreground prose-pre:bg-app-sidebar prose-pre:text-[13px] prose-a:text-app-project prose-th:border-app-border prose-td:border-app-border prose-table:text-[13px]">
+      <MarkdownTextPrimitive remarkPlugins={[remarkGfm]} className="aui-md" />
     </div>
   );
 }
@@ -282,125 +285,6 @@ function AssistantToolCall({
 
 function SystemText({ text }: { text: string }) {
   return <span>{text}</span>;
-}
-
-// ---------------------------------------------------------------------------
-// Markdown rendering (simple but effective)
-// ---------------------------------------------------------------------------
-
-function MarkdownContent({ text }: { text: string }) {
-  // Split by code blocks first, then render inline markdown for non-code parts
-  const parts = text.split(/(```[\s\S]*?```)/g);
-  return (
-    <>
-      {parts.map((part, i) => {
-        if (part.startsWith("```")) {
-          const match = part.match(/^```(\w*)\n?([\s\S]*?)```$/);
-          const lang = match?.[1] ?? "";
-          const code = match?.[2] ?? part.slice(3, -3);
-          return (
-            <pre key={i} className="overflow-auto rounded-lg border border-app-border bg-app-sidebar p-3 text-[13px] leading-6">
-              {lang ? <div className="mb-2 text-[11px] text-app-muted">{lang}</div> : null}
-              <code>{code}</code>
-            </pre>
-          );
-        }
-        return <InlineMarkdown key={i} text={part} />;
-      })}
-    </>
-  );
-}
-
-function InlineMarkdown({ text }: { text: string }) {
-  const lines = text.split("\n");
-  const elements: React.ReactNode[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // Headings
-    const headingMatch = line.match(/^(#{1,4})\s+(.+)/);
-    if (headingMatch) {
-      const level = headingMatch[1].length;
-      const content = renderInline(headingMatch[2]);
-      if (level === 1) elements.push(<h1 key={i}>{content}</h1>);
-      else if (level === 2) elements.push(<h2 key={i}>{content}</h2>);
-      else if (level === 3) elements.push(<h3 key={i}>{content}</h3>);
-      else elements.push(<h4 key={i}>{content}</h4>);
-      i++;
-      continue;
-    }
-
-    // Unordered list items
-    if (line.match(/^[-*]\s/)) {
-      const items: React.ReactNode[] = [];
-      while (i < lines.length && lines[i].match(/^[-*]\s/)) {
-        items.push(<li key={i}>{renderInline(lines[i].replace(/^[-*]\s/, ""))}</li>);
-        i++;
-      }
-      elements.push(<ul key={`ul-${i}`}>{items}</ul>);
-      continue;
-    }
-
-    // Ordered list items
-    if (line.match(/^\d+\.\s/)) {
-      const items: React.ReactNode[] = [];
-      while (i < lines.length && lines[i].match(/^\d+\.\s/)) {
-        items.push(<li key={i}>{renderInline(lines[i].replace(/^\d+\.\s/, ""))}</li>);
-        i++;
-      }
-      elements.push(<ol key={`ol-${i}`}>{items}</ol>);
-      continue;
-    }
-
-    // Empty line
-    if (!line.trim()) {
-      i++;
-      continue;
-    }
-
-    // Regular paragraph
-    elements.push(<p key={i}>{renderInline(line)}</p>);
-    i++;
-  }
-
-  return <>{elements}</>;
-}
-
-function renderInline(text: string): React.ReactNode {
-  // Bold, italic, inline code, links
-  const parts: React.ReactNode[] = [];
-  const regex = /(\*\*.*?\*\*)|(`[^`]+`)|(\[([^\]]+)\]\(([^)]+)\))/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(text.slice(lastIndex, match.index));
-    }
-    if (match[1]) {
-      // Bold
-      parts.push(<strong key={match.index}>{match[1].slice(2, -2)}</strong>);
-    } else if (match[2]) {
-      // Inline code
-      parts.push(<code key={match.index}>{match[2].slice(1, -1)}</code>);
-    } else if (match[3]) {
-      // Link
-      parts.push(
-        <a key={match.index} href={match[5]} target="_blank" rel="noopener noreferrer">
-          {match[4]}
-        </a>,
-      );
-    }
-    lastIndex = match.index + match[0].length;
-  }
-
-  if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex));
-  }
-
-  return parts.length === 1 ? parts[0] : <>{parts}</>;
 }
 
 // ---------------------------------------------------------------------------
