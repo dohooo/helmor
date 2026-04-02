@@ -197,8 +197,8 @@ function TimelineMessage({
   }
 
   return (
-    <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
-      <div className={cn("max-w-[52rem] space-y-2", isUser ? "items-end" : "items-start")}>
+    <div className={cn("flex min-w-0", isUser ? "justify-end" : "justify-start")}>
+      <div className={cn("min-w-0 max-w-[52rem] space-y-2", isUser ? "items-end" : "items-start")}>
         {blocks.map((block) => (
           <TimelineBlockView key={block.id} block={block} align={isUser ? "right" : "left"} />
         ))}
@@ -238,10 +238,10 @@ function TimelineBlockView({
 
   if (block.kind === "tool") {
     return (
-      <div className="space-y-1">
-        <div className="inline-flex items-center gap-2 rounded-xl border border-app-border bg-app-sidebar px-3 py-2 text-[12px] text-app-foreground-soft">
-          <TerminalSquare className="size-3.5 text-app-project" strokeWidth={1.8} />
-          <span>{block.label}</span>
+      <div className="min-w-0 space-y-1 overflow-hidden">
+        <div className="inline-flex max-w-full items-center gap-2 overflow-hidden rounded-xl border border-app-border bg-app-sidebar px-3 py-2 text-[12px] text-app-foreground-soft">
+          <TerminalSquare className="size-3.5 shrink-0 text-app-project" strokeWidth={1.8} />
+          <span className="truncate">{block.label}</span>
         </div>
         {block.input ? (
           <CollapsibleCode label="Input" content={block.input} />
@@ -252,10 +252,10 @@ function TimelineBlockView({
 
   if (block.kind === "tool-result") {
     return (
-      <div className="space-y-1">
-        <div className="inline-flex items-center gap-2 rounded-xl border border-app-border bg-app-sidebar px-3 py-2 text-[12px] text-app-foreground-soft">
-          <Sparkles className="size-3.5 text-app-project" strokeWidth={1.8} />
-          <span>{block.label}</span>
+      <div className="min-w-0 space-y-1 overflow-hidden">
+        <div className="inline-flex max-w-full items-center gap-2 overflow-hidden rounded-xl border border-app-border bg-app-sidebar px-3 py-2 text-[12px] text-app-foreground-soft">
+          <Sparkles className="size-3.5 shrink-0 text-app-project" strokeWidth={1.8} />
+          <span className="truncate">{block.label}</span>
         </div>
         {block.output ? (
           <CollapsibleCode label="Output" content={block.output} />
@@ -280,13 +280,13 @@ function TimelineBlockView({
   return (
     <div
       className={cn(
-        "rounded-2xl border px-4 py-3 text-[14px] leading-7",
+        "overflow-hidden text-[14px] leading-7",
         align === "right"
-          ? "border-app-border bg-app-sidebar-strong text-app-foreground"
-          : "border-app-border bg-app-sidebar text-app-foreground-soft",
+          ? "rounded-lg bg-app-foreground/[0.04] px-3.5 py-2.5 text-app-foreground"
+          : "rounded-2xl border border-app-border bg-app-sidebar px-4 py-3 text-app-foreground-soft",
       )}
     >
-      <pre className="whitespace-pre-wrap font-sans">{block.text}</pre>
+      <pre className="whitespace-pre-wrap break-words font-sans">{block.text}</pre>
     </div>
   );
 }
@@ -347,18 +347,18 @@ function CollapsibleCode({ label, content }: { label: string; content: string })
   const preview = content.length > 80 ? `${content.slice(0, 80)}…` : content;
 
   return (
-    <div>
+    <div className="min-w-0 overflow-hidden">
       <button
         type="button"
         onClick={() => { setOpen((o) => !o); }}
-        className="flex items-center gap-1 pl-3 text-[11px] text-app-muted hover:text-app-foreground-soft"
+        className="flex max-w-full items-center gap-1 overflow-hidden pl-3 text-[11px] text-app-muted hover:text-app-foreground-soft"
       >
-        <ChevronDown className={cn("size-3 transition-transform", open ? "rotate-0" : "-rotate-90")} strokeWidth={1.8} />
-        <span>{label}</span>
+        <ChevronDown className={cn("size-3 shrink-0 transition-transform", open ? "rotate-0" : "-rotate-90")} strokeWidth={1.8} />
+        <span className="shrink-0">{label}</span>
         {!open ? <span className="ml-1 truncate opacity-50">{preview}</span> : null}
       </button>
       {open ? (
-        <pre className="mt-1 max-h-[16rem] overflow-auto rounded-lg border border-app-border bg-app-base p-3 text-[11px] leading-5 text-app-muted">
+        <pre className="mt-1 max-h-[16rem] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-app-border bg-app-base p-3 text-[11px] leading-5 text-app-muted">
           {content}
         </pre>
       ) : null}
