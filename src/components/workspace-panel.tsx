@@ -1,6 +1,5 @@
 import {
   AlertCircle,
-  Bot,
   BrainCircuit,
   Clock3,
   FileText,
@@ -69,49 +68,40 @@ export function WorkspacePanel({
       <header className="relative z-20 border-b border-app-border bg-[linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0))]">
         <div
           aria-label="Workspace header"
-          className="flex h-[2.4rem] items-center justify-between gap-3 px-4"
+          className="flex h-[2.4rem] items-center gap-3 px-4"
           data-tauri-drag-region
         >
-          <div className="flex min-w-0 items-center gap-2 text-[12px]">
-            <span className="inline-flex items-center gap-1 rounded-md border border-app-border-strong bg-app-sidebar px-2 py-1 font-medium text-app-foreground-soft">
+          <div className="flex min-w-0 items-center gap-2 text-[13px]">
+            <span className="inline-flex items-center gap-1 px-1 py-0.5 font-medium text-app-foreground-soft">
               <FolderKanban className="size-3.5 text-app-project" strokeWidth={1.9} />
               <span className="truncate">{workspace?.repoName ?? "Workspace"}</span>
             </span>
 
             <span className="text-app-muted">/</span>
 
-            <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-base/70 px-2 py-1 font-medium text-app-foreground">
+            <span className="inline-flex items-center gap-1 px-1 py-0.5 font-medium text-app-foreground">
               <GitBranch className="size-3.5 text-app-warm" strokeWidth={1.9} />
               <span className="truncate">{workspace?.branch ?? "No branch"}</span>
             </span>
 
             {workspace?.state === "archived" ? (
-              <span className="rounded-md border border-app-border bg-app-sidebar px-2 py-1 font-medium text-app-muted">
+              <span className="px-1 py-0.5 font-medium text-app-muted">
                 Archived
               </span>
             ) : null}
           </div>
-
-          <div className="flex items-center gap-2 text-[11px] text-app-muted">
-            {workspace ? (
-              <>
-                <span>{workspace.sessionCount} sessions</span>
-                <span>{workspace.messageCount} events</span>
-                <span>{workspace.attachmentCount} attachments</span>
-              </>
-            ) : null}
-          </div>
         </div>
 
-        <div className="flex h-[2.7rem] items-end gap-1 overflow-x-auto px-2 pb-1 [scrollbar-width:none]">
+        <div className="flex h-[1.85rem] items-stretch overflow-x-auto px-2 [scrollbar-width:none]">
           {loadingWorkspace ? (
-            <div className="flex items-center gap-2 px-3 text-[12px] text-app-muted">
-              <Clock3 className="size-3.5 animate-pulse" strokeWidth={1.8} />
-              Loading sessions
+            <div className="flex items-center gap-1.5 px-2 text-[12px] text-app-muted">
+              <Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
+              Loading
             </div>
           ) : sessions.length > 0 ? (
             sessions.map((session) => {
               const selected = session.id === selectedSessionId;
+              const isActive = session.active && session.status !== "error";
               return (
                 <button
                   key={session.id}
@@ -120,55 +110,23 @@ export function WorkspacePanel({
                     onSelectSession?.(session.id);
                   }}
                   className={cn(
-                    "group relative flex h-full min-w-[9rem] max-w-[14rem] items-center gap-2 rounded-t-xl border border-b-0 px-3 text-left transition-colors",
+                    "group relative flex w-[8rem] items-center gap-1.5 rounded-t-sm px-2.5 text-left text-[12px] transition-colors",
                     selected
-                      ? "border-app-border-strong bg-app-base text-app-foreground"
-                      : "border-transparent bg-transparent text-app-foreground-soft hover:bg-app-toolbar-hover/70 hover:text-app-foreground",
+                      ? "bg-app-base text-app-foreground"
+                      : "text-app-foreground-soft hover:bg-app-toolbar-hover/50 hover:text-app-foreground",
                   )}
                 >
-                  <span
-                    className={cn(
-                      "flex size-5 shrink-0 items-center justify-center rounded-md border text-[10px] font-semibold uppercase",
-                      session.agentType === "codex"
-                        ? "border-app-border-strong bg-app-project/15 text-app-project"
-                        : "border-app-border-strong bg-app-sidebar text-app-foreground-soft",
-                    )}
-                  >
-                    {session.agentType === "codex" ? "C" : "A"}
-                  </span>
-
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[12px] font-medium">
-                      {displaySessionTitle(session)}
-                    </div>
-                    <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-app-muted">
-                      <span
-                        className={cn(
-                          "inline-block size-1.5 rounded-full",
-                          session.status === "error"
-                            ? "bg-app-canceled"
-                            : session.active
-                              ? "bg-app-progress"
-                              : "bg-app-review",
-                        )}
-                      />
-                      <span className="truncate">
-                        {session.agentType === "codex" ? "Codex" : "Claude"}
-                      </span>
-                      <span className="text-app-border-strong">•</span>
-                      <span className="truncate">{session.model ?? "default model"}</span>
-                    </div>
-                  </div>
-
+                  <SessionProviderIcon agentType={session.agentType} active={isActive} />
+                  <span className="truncate font-medium">{displaySessionTitle(session)}</span>
                   {selected ? (
-                    <span className="absolute inset-x-3 bottom-0 h-px bg-app-project" />
+                    <span className="absolute inset-x-1 bottom-0 h-[1.5px] rounded-full bg-app-project" />
                   ) : null}
                 </button>
               );
             })
           ) : (
-            <div className="flex items-center gap-2 px-3 text-[12px] text-app-muted">
-              <AlertCircle className="size-3.5" strokeWidth={1.8} />
+            <div className="flex items-center gap-1.5 px-2 text-[12px] text-app-muted">
+              <AlertCircle className="size-3" strokeWidth={1.8} />
               No sessions
             </div>
           )}
@@ -176,66 +134,6 @@ export function WorkspacePanel({
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className="border-b border-app-border px-4 py-3">
-          {workspace ? (
-            <div className="space-y-2.5">
-              <div className="flex flex-wrap items-center gap-2 text-[12px]">
-                <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-sidebar px-2 py-1 font-medium text-app-foreground-soft">
-                  <Sparkles className="size-3.5 text-app-accent" strokeWidth={1.8} />
-                  {workspace.title}
-                </span>
-
-                {workspace.prTitle ? (
-                  <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-base px-2 py-1 text-app-foreground-soft">
-                    <MessageSquareText className="size-3.5 text-app-review" strokeWidth={1.8} />
-                    {workspace.prTitle}
-                  </span>
-                ) : null}
-
-                {selectedSession ? (
-                  <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-base px-2 py-1 text-app-muted">
-                    <Bot className="size-3.5" strokeWidth={1.8} />
-                    {displaySessionTitle(selectedSession)}
-                  </span>
-                ) : null}
-              </div>
-
-              {selectedSession ? (
-                <div className="flex flex-wrap items-center gap-2 text-[11px] text-app-muted">
-                  <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-sidebar px-2 py-1">
-                    <Bot className="size-3.5 text-app-foreground-soft" strokeWidth={1.8} />
-                    {selectedSession.agentType === "codex" ? "Codex" : "Claude"}
-                  </span>
-                  <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-base px-2 py-1">
-                    <Sparkles className="size-3.5 text-app-project" strokeWidth={1.8} />
-                    {selectedSession.model ?? "default model"}
-                  </span>
-                  <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-base px-2 py-1">
-                    <Clock3 className="size-3.5 text-app-review" strokeWidth={1.8} />
-                    Updated {formatTimestamp(selectedSession.updatedAt)}
-                  </span>
-                  <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-base px-2 py-1">
-                    <TerminalSquare className="size-3.5 text-app-warm" strokeWidth={1.8} />
-                    {humanizeStatus(selectedSession.status)}
-                  </span>
-                  <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-base px-2 py-1">
-                    <BrainCircuit className="size-3.5 text-app-accent" strokeWidth={1.8} />
-                    {selectedSession.thinkingEnabled ? "Thinking on" : "Thinking off"}
-                  </span>
-                  {typeof selectedSession.contextUsedPercent === "number" ? (
-                    <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-base px-2 py-1">
-                      <FileText className="size-3.5 text-app-project" strokeWidth={1.8} />
-                      Context {Math.round(selectedSession.contextUsedPercent)}%
-                    </span>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            <div className="text-[12px] text-app-muted">Select a workspace</div>
-          )}
-        </div>
-
         <div
           aria-label="Workspace timeline"
           className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-5"
@@ -558,39 +456,41 @@ function extractUserBlockText(
   return null;
 }
 
+function SessionProviderIcon({
+  agentType,
+  active,
+}: {
+  agentType?: string | null;
+  active: boolean;
+}) {
+  const isCodex = agentType === "codex";
+
+  if (active) {
+    return (
+      <span className="relative flex size-3.5 shrink-0 items-center justify-center">
+        <span className="absolute inset-0 animate-spin rounded-full border border-transparent border-t-app-progress" />
+        <span className="size-1.5 rounded-full bg-app-progress" />
+      </span>
+    );
+  }
+
+  return (
+    <Sparkles
+      className={cn(
+        "size-3 shrink-0",
+        isCodex ? "text-app-project" : "text-app-foreground-soft",
+      )}
+      strokeWidth={1.8}
+    />
+  );
+}
+
 function displaySessionTitle(session: WorkspaceSessionSummary): string {
   if (session.title && session.title !== "Untitled") {
     return session.title;
   }
 
   return session.agentType === "codex" ? "Codex session" : "Claude session";
-}
-
-function humanizeStatus(status: string): string {
-  if (!status) {
-    return "Unknown";
-  }
-
-  return status
-    .split(/[-_]/g)
-    .filter(Boolean)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-}
-
-function formatTimestamp(value: string): string {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date);
 }
 
 function basename(value: string): string {
