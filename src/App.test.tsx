@@ -8,6 +8,8 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import { WorkspacesSidebar } from "./components/workspaces-sidebar";
+import type { WorkspaceGroup } from "./lib/conductor";
 
 vi.mock("./App.css", () => ({}));
 
@@ -130,5 +132,26 @@ describe("App", () => {
     expect(
       screen.getByRole("separator", { name: "Resize sidebar" }),
     ).toHaveAttribute("aria-valuenow", "404");
+  });
+
+  it("falls back to repo-name initials when a workspace has no icon", () => {
+    const groups: WorkspaceGroup[] = [
+      {
+        id: "progress",
+        label: "In progress",
+        tone: "progress",
+        rows: [
+          {
+            id: "repo-avatar",
+            title: "Investigate repo avatar fallback",
+            repoName: "helmor-core",
+          },
+        ],
+      },
+    ];
+
+    render(<WorkspacesSidebar groups={groups} archivedRows={[]} />);
+
+    expect(screen.getByText("HC")).toBeInTheDocument();
   });
 });

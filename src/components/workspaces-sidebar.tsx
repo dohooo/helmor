@@ -24,6 +24,7 @@ import {
 import { cn } from "../lib/utils";
 import { TooltipProvider } from "./ui/tooltip";
 import { BaseTooltip } from "./ui/base-tooltip";
+import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 
 const rowVariants = cva(
   "group relative flex h-9 select-none items-center gap-2 rounded-md px-3 text-[13px] cursor-pointer",
@@ -128,15 +129,61 @@ function GroupIcon({ tone }: { tone: GroupTone }) {
   }
 }
 
-function WorkspaceAvatar({ letter }: { letter: string }) {
+function initialsFromLabel(label?: string | null) {
+  if (!label) {
+    return "WS";
+  }
+
+  const parts = label
+    .split(/[^A-Za-z0-9]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length >= 2) {
+    return parts
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() ?? "")
+      .join("");
+  }
+
+  const alphanumeric = Array.from(label).filter((character) =>
+    /[A-Za-z0-9]/.test(character),
+  );
+
+  return alphanumeric.slice(0, 2).join("").toUpperCase() || "WS";
+}
+
+function getWorkspaceAvatarSrc(repoIconSrc?: string | null) {
+  return repoIconSrc?.trim() ? repoIconSrc : null;
+}
+
+function WorkspaceAvatar({
+  repoIconSrc,
+  repoInitials,
+  repoName,
+  title,
+}: {
+  repoIconSrc?: string | null;
+  repoInitials?: string | null;
+  repoName?: string | null;
+  title: string;
+}) {
+  const fallback = (repoInitials?.trim() || initialsFromLabel(repoName || title))
+    .slice(0, 2)
+    .toUpperCase();
+  const src = getWorkspaceAvatarSrc(repoIconSrc);
+
   return (
-    <span
+    <Avatar
       aria-hidden="true"
       data-slot="workspace-avatar"
-      className="flex size-4 shrink-0 items-center justify-center rounded-[5px] border border-app-border-strong bg-app-sidebar-strong text-[9px] font-semibold uppercase tracking-[0.02em] text-app-foreground-soft"
+      className="size-4 rounded-[5px] border border-app-border-strong bg-app-sidebar-strong"
     >
-      {letter}
-    </span>
+      {src ? <AvatarImage src={src} alt={`${repoName ?? title} icon`} /> : null}
+      <AvatarFallback className="bg-app-sidebar-strong text-[8px] font-semibold uppercase tracking-[0.02em] text-app-foreground-soft">
+        {fallback}
+      </AvatarFallback>
+    </Avatar>
   );
 }
 
@@ -173,7 +220,12 @@ function WorkspaceRowItem({
       )}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
-        <WorkspaceAvatar letter={row.avatar} />
+        <WorkspaceAvatar
+          repoIconSrc={row.repoIconSrc}
+          repoInitials={row.repoInitials ?? row.avatar ?? null}
+          repoName={row.repoName}
+          title={row.title}
+        />
         <GitBranch className="size-[13px] shrink-0 text-app-warm" strokeWidth={1.9} />
         <span
           className={cn(

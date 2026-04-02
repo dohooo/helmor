@@ -526,13 +526,11 @@ function summaryToArchivedRow(summary: WorkspaceSummary): WorkspaceRow {
   return {
     id: summary.id,
     title: summary.title,
-    avatar:
-      Array.from(summary.title).find((character) =>
-        /[A-Za-z0-9]/.test(character),
-      )?.toUpperCase() ?? "A",
     active: false,
     directoryName: summary.directoryName,
     repoName: summary.repoName,
+    repoIconSrc: summary.repoIconSrc ?? null,
+    repoInitials: summary.repoInitials ?? null,
     state: summary.state,
     derivedStatus: summary.derivedStatus,
     manualStatus: summary.manualStatus ?? null,
