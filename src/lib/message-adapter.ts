@@ -37,7 +37,7 @@ function convertMessagesFlat(
     // system — skip noise subtypes
     if (msgType === "system") {
       const sub = parsed!.subtype as string | undefined;
-      if (sub === "init" || sub === "task_progress" || sub === "task_started" || sub === "task_completed") continue;
+      if (sub === "init" || sub === "task_progress" || sub === "task_started" || sub === "task_completed" || sub === "task_notification") continue;
       result.push(makeSystem(msg, buildSystemLabel(parsed!)));
       continue;
     }

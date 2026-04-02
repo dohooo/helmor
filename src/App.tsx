@@ -561,7 +561,7 @@ function App() {
         >
           <div
             aria-label="Workspace panel drag region"
-            className="absolute inset-x-0 top-0 z-10 h-[2.4rem] bg-transparent"
+            className="absolute inset-x-0 top-0 z-10 h-[2.6rem] bg-transparent"
             data-tauri-drag-region
           />
 
@@ -569,7 +569,7 @@ function App() {
             type="button"
             aria-label="Toggle theme"
             onClick={toggleTheme}
-            className="absolute right-2.5 top-[0.45rem] z-30 flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
+            className="absolute right-4 top-[0.55rem] z-30 flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
           >
             {theme === "dark" ? (
               <Sun className="size-3.5" strokeWidth={1.8} />

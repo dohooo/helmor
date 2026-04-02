@@ -4,9 +4,9 @@ import {
   BookOpen,
   Bot,
   BrainCircuit,
-  LoaderCircle,
   Plus,
   Sparkles,
+  Square,
   Zap,
 } from "lucide-react";
 import type { AgentModelSection } from "@/lib/conductor";
@@ -209,7 +209,7 @@ export function WorkspaceComposer({
             )}
           >
             {sending ? (
-              <LoaderCircle className="size-[15px] animate-spin" strokeWidth={2.1} />
+              <Square className="size-3 fill-current" strokeWidth={0} />
             ) : (
               <ArrowUp className="size-[15px]" strokeWidth={2.2} />
             )}

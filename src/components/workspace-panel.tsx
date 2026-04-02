@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   useExternalStoreRuntime,
@@ -64,10 +64,10 @@ export function WorkspacePanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-app-elevated">
       {/* --- Header --- */}
-      <header className="relative z-20 border-b border-app-border">
+      <header className="relative z-20">
         <div
           aria-label="Workspace header"
-          className="flex h-[2.4rem] items-center gap-3 px-4"
+          className="flex h-[2.6rem] items-center gap-3 px-5"
           data-tauri-drag-region
         >
           <div className="flex min-w-0 items-center gap-2 text-[13px]">
@@ -87,7 +87,7 @@ export function WorkspacePanel({
         </div>
 
         {/* --- Session tabs --- */}
-        <div className="flex h-[1.85rem] items-stretch overflow-x-auto px-2 [scrollbar-width:none]">
+        <div className="mt-0.5 flex h-[1.85rem] items-stretch overflow-x-auto px-0 [scrollbar-width:none]">
           {loadingWorkspace ? (
             <div className="flex items-center gap-1.5 px-2 text-[12px] text-app-muted">
               <Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
@@ -96,24 +96,21 @@ export function WorkspacePanel({
           ) : sessions.length > 0 ? (
             sessions.map((session) => {
               const selected = session.id === selectedSessionId;
-              const isActive = (selected && sending) || (session.active && session.status !== "error");
+              const isActive = selected && sending;
               return (
                 <button
                   key={session.id}
                   type="button"
                   onClick={() => onSelectSession?.(session.id)}
                   className={cn(
-                    "group relative flex w-[8rem] items-center gap-1.5 rounded-t-sm px-2.5 text-left text-[12px] transition-colors",
+                    "group relative flex w-[8rem] items-center gap-1.5 px-2.5 text-left text-[12px] transition-colors",
                     selected
-                      ? "bg-app-base text-app-foreground"
-                      : "text-app-foreground-soft hover:bg-app-toolbar-hover/50 hover:text-app-foreground",
+                      ? "bg-app-foreground/[0.06] text-app-foreground"
+                      : "text-app-foreground-soft hover:bg-app-foreground/[0.04] hover:text-app-foreground",
                   )}
                 >
                   <SessionProviderIcon agentType={session.agentType} active={isActive} />
                   <span className="truncate font-medium">{displaySessionTitle(session)}</span>
-                  {selected ? (
-                    <span className="absolute inset-x-1 bottom-0 h-[1.5px] rounded-full bg-app-project" />
-                  ) : null}
                 </button>
               );
             })
@@ -134,7 +131,7 @@ export function WorkspacePanel({
             Loading session timeline
           </div>
         ) : messages.length > 0 ? (
-          <ConductorThread messages={messages} />
+          <ConductorThread messages={messages} sending={sending} />
         ) : (
           <EmptyState hasSession={!!selectedSession} />
         )}
@@ -147,8 +144,17 @@ export function WorkspacePanel({
 // assistant-ui powered thread
 // ---------------------------------------------------------------------------
 
-function ConductorThread({ messages }: { messages: SessionMessageRecord[] }) {
+function ConductorThread({ messages, sending }: { messages: SessionMessageRecord[]; sending: boolean }) {
   const threadMessages = useMemo(() => convertConductorMessages(messages), [messages]);
+  const [sendStart, setSendStart] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (sending) {
+      setSendStart(Date.now());
+    } else {
+      setSendStart(null);
+    }
+  }, [sending]);
 
   const runtime = useExternalStoreRuntime({
     messages: threadMessages,
@@ -170,6 +176,7 @@ function ConductorThread({ messages }: { messages: SessionMessageRecord[] }) {
               SystemMessage: ConductorSystemMessage,
             }}
           />
+          {sending ? <SendingIndicator startTime={sendStart} /> : null}
         </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>
     </AssistantRuntimeProvider>
@@ -384,6 +391,33 @@ function AssistantToolCall({
   );
 }
 
+function SendingIndicator({ startTime }: { startTime: number | null }) {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (!startTime) return;
+    setElapsed(0);
+    const interval = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [startTime]);
+
+  const timeLabel = elapsed >= 60
+    ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
+    : `${elapsed}s`;
+
+  return (
+    <div className="flex items-center gap-2 py-1 text-[11px] text-app-muted">
+      <span className="relative flex size-3.5 shrink-0 items-center justify-center">
+        <span className="absolute inset-0 animate-spin rounded-full border border-transparent border-t-app-progress" />
+        <span className="size-1.5 rounded-full bg-app-progress" />
+      </span>
+      <span>{timeLabel}</span>
+    </div>
+  );
+}
+
 function CopyMessageButton() {
   const [copied, setCopied] = useState(false);
   const ref = useRef<HTMLButtonElement>(null);
@@ -499,6 +533,14 @@ function EditDiffTrigger({
 }
 
 function SystemText({ text }: { text: string }) {
+  if (text.startsWith("Error:")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-red-400/80">
+        <AlertCircle className="size-3 shrink-0" strokeWidth={1.8} />
+        {text.slice(7)}
+      </span>
+    );
+  }
   return <span>{text}</span>;
 }
 
