@@ -56,6 +56,7 @@ export type AgentSendRequest = {
   modelId: string;
   prompt: string;
   sessionId?: string | null;
+  conductorSessionId?: string | null;
   workingDirectory?: string | null;
 };
 
@@ -66,6 +67,9 @@ export type AgentSendResponse = {
   sessionId?: string | null;
   assistantText: string;
   workingDirectory: string;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  persistedToFixture: boolean;
 };
 
 export type WorkspaceSummary = {
@@ -512,6 +516,9 @@ export async function sendAgentMessage(
       assistantText:
         "Live agent sending is only available in the Tauri desktop runtime.",
       workingDirectory: request.workingDirectory ?? "",
+      inputTokens: null,
+      outputTokens: null,
+      persistedToFixture: false,
     };
   }
 

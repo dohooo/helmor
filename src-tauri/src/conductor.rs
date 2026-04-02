@@ -607,7 +607,9 @@ fn load_session_messages_by_session_id(
               ) AS attachment_count
             FROM session_messages sm
             WHERE sm.session_id = ?1
-            ORDER BY datetime(sm.created_at) ASC, sm.id ASC
+            ORDER BY
+              COALESCE(julianday(sm.sent_at), julianday(sm.created_at)) ASC,
+              sm.rowid ASC
             "#,
         )
         .map_err(|error| error.to_string())?;
@@ -770,7 +772,7 @@ const WORKSPACE_RECORD_SQL: &str = r#"
 "#;
 
 fn open_fixture_connection() -> Result<Connection, String> {
-    let db_path = resolve_fixture_root()?.join("com.conductor.app/conductor.db");
+    let db_path = resolve_fixture_db_path()?;
 
     Connection::open_with_flags(
         db_path,
@@ -779,7 +781,11 @@ fn open_fixture_connection() -> Result<Connection, String> {
     .map_err(|error| error.to_string())
 }
 
-fn resolve_fixture_root() -> Result<PathBuf, String> {
+pub(crate) fn resolve_fixture_db_path() -> Result<PathBuf, String> {
+    Ok(resolve_fixture_root()?.join("com.conductor.app/conductor.db"))
+}
+
+pub(crate) fn resolve_fixture_root() -> Result<PathBuf, String> {
     if let Ok(root) = std::env::var("HELMOR_CONDUCTOR_FIXTURE_ROOT") {
         let path = PathBuf::from(root);
         validate_fixture_root(&path)?;
