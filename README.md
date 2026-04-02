@@ -5,10 +5,11 @@ Vitest.
 
 ## Scripts
 
-- `npm run tauri dev` starts the desktop app in development mode.
-- `npm run build` builds the frontend bundle.
-- `npm run test` runs the current regression test suite.
-- `npm run test:watch` starts Vitest in watch mode.
+- `pnpm install` installs dependencies.
+- `pnpm run tauri dev` starts the desktop app in development mode.
+- `pnpm run build` builds the frontend bundle.
+- `pnpm run test` runs the current regression test suite.
+- `pnpm run test:watch` starts Vitest in watch mode.
 
 ## Current Scope
 
