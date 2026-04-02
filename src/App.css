@@ -95,44 +95,45 @@
   --color-neutral-900: oklch(21% 0.006 285.885);
   --color-neutral-950: oklch(14.1% 0.005 285.823);
 
-  /* App semantic mapping on top of Volta palette */
-  --color-app-base: var(--color-neutral-950);
-  --color-app-canvas: var(--color-neutral-950);
-  --color-app-elevated: var(--color-neutral-900);
-  --color-app-sidebar: oklch(19.5% 0.005 285.84);
-  --color-app-sidebar-strong: oklch(23.5% 0.006 285.9);
-  --color-app-overlay: oklch(14.1% 0.005 285.823 / 0.5);
-  --color-app-row-hover: oklch(98.5% 0 0 / 0.035);
-  --color-app-row-selected: oklch(98.5% 0 0 / 0.06);
-  --color-app-toolbar-hover: oklch(98.5% 0 0 / 0.05);
-  --color-app-border: oklch(98.5% 0 0 / 0.08);
-  --color-app-border-strong: oklch(98.5% 0 0 / 0.12);
-  --color-app-foreground: var(--color-neutral-100);
-  --color-app-foreground-soft: var(--color-neutral-300);
-  --color-app-muted: var(--color-neutral-500);
-  --color-app-tooltip: var(--color-neutral-800);
-  --color-app-done: oklch(76% 0.05 72);
-  --color-app-review: var(--color-success-400);
-  --color-app-progress: var(--color-warning-400);
-  --color-app-backlog: var(--color-neutral-500);
-  --color-app-canceled: var(--color-neutral-500);
-  --color-app-project: var(--color-primary-400);
-  --color-app-accent: var(--color-important-500);
-  --color-app-accent-strong: var(--color-important-600);
-  --color-app-accent-cyan: var(--color-info-400);
-  --color-app-accent-pink: var(--color-important-400);
-  --color-app-warm: var(--color-warning-500);
-  --color-app-scrollbar-thumb: oklch(78% 0.01 286 / 0.28);
-  --color-app-scrollbar-thumb-hover: oklch(84% 0.012 286 / 0.42);
 }
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
+
+  /* Light mode app colors */
+  --app-base: oklch(98.5% 0 0);
+  --app-canvas: oklch(98.5% 0 0);
+  --app-elevated: oklch(100% 0 0);
+  --app-sidebar: oklch(96% 0.002 286);
+  --app-sidebar-strong: oklch(93% 0.004 286);
+  --app-overlay: oklch(14.1% 0.005 285.823 / 0.3);
+  --app-row-hover: oklch(0% 0 0 / 0.03);
+  --app-row-selected: oklch(0% 0 0 / 0.06);
+  --app-toolbar-hover: oklch(0% 0 0 / 0.05);
+  --app-border: oklch(0% 0 0 / 0.08);
+  --app-border-strong: oklch(0% 0 0 / 0.14);
+  --app-foreground: oklch(21% 0.006 285.885);
+  --app-foreground-soft: oklch(37% 0.013 285.805);
+  --app-muted: oklch(55.2% 0.016 285.938);
+  --app-tooltip: oklch(27.4% 0.006 286.033);
+  --app-done: oklch(62% 0.05 72);
+  --app-review: oklch(59.6% 0.145 163.225);
+  --app-progress: oklch(66.6% 0.179 58.318);
+  --app-backlog: oklch(55.2% 0.016 285.938);
+  --app-canceled: oklch(55.2% 0.016 285.938);
+  --app-project: oklch(54.6% 0.245 262.881);
+  --app-accent: oklch(51.1% 0.262 276.966);
+  --app-accent-strong: oklch(45.7% 0.24 277.023);
+  --app-accent-cyan: oklch(60.9% 0.126 221.723);
+  --app-accent-pink: oklch(58.5% 0.233 277.117);
+  --app-warm: oklch(66.6% 0.179 58.318);
+  --app-scrollbar-thumb: oklch(55% 0.01 286 / 0.2);
+  --app-scrollbar-thumb-hover: oklch(45% 0.01 286 / 0.35);
   --background:
     oklch(1 0 0);
   --foreground:
@@ -325,9 +326,40 @@ body {
     calc(var(--radius) * 2.2);
   --radius-4xl:
     calc(var(--radius) * 2.6);
+
+  /* App semantic colors — dynamic via :root / .dark */
+  --color-app-base: var(--app-base);
+  --color-app-canvas: var(--app-canvas);
+  --color-app-elevated: var(--app-elevated);
+  --color-app-sidebar: var(--app-sidebar);
+  --color-app-sidebar-strong: var(--app-sidebar-strong);
+  --color-app-overlay: var(--app-overlay);
+  --color-app-row-hover: var(--app-row-hover);
+  --color-app-row-selected: var(--app-row-selected);
+  --color-app-toolbar-hover: var(--app-toolbar-hover);
+  --color-app-border: var(--app-border);
+  --color-app-border-strong: var(--app-border-strong);
+  --color-app-foreground: var(--app-foreground);
+  --color-app-foreground-soft: var(--app-foreground-soft);
+  --color-app-muted: var(--app-muted);
+  --color-app-tooltip: var(--app-tooltip);
+  --color-app-done: var(--app-done);
+  --color-app-review: var(--app-review);
+  --color-app-progress: var(--app-progress);
+  --color-app-backlog: var(--app-backlog);
+  --color-app-canceled: var(--app-canceled);
+  --color-app-project: var(--app-project);
+  --color-app-accent: var(--app-accent);
+  --color-app-accent-strong: var(--app-accent-strong);
+  --color-app-accent-cyan: var(--app-accent-cyan);
+  --color-app-accent-pink: var(--app-accent-pink);
+  --color-app-warm: var(--app-warm);
+  --color-app-scrollbar-thumb: var(--app-scrollbar-thumb);
+  --color-app-scrollbar-thumb-hover: var(--app-scrollbar-thumb-hover);
 }
 
 .dark {
+  color-scheme: dark;
   --background: oklch(14.1% 0.005 285.823);
   --foreground: oklch(96.7% 0.001 286.375);
   --card: oklch(21% 0.006 285.885);
@@ -359,6 +391,36 @@ body {
   --sidebar-accent-foreground: oklch(87.1% 0.006 286.286);
   --sidebar-border: oklch(98.5% 0 0 / 8%);
   --sidebar-ring: oklch(70.7% 0.165 254.624);
+
+  /* Dark mode app colors */
+  --app-base: oklch(14.1% 0.005 285.823);
+  --app-canvas: oklch(14.1% 0.005 285.823);
+  --app-elevated: oklch(21% 0.006 285.885);
+  --app-sidebar: oklch(19.5% 0.005 285.84);
+  --app-sidebar-strong: oklch(23.5% 0.006 285.9);
+  --app-overlay: oklch(14.1% 0.005 285.823 / 0.5);
+  --app-row-hover: oklch(98.5% 0 0 / 0.035);
+  --app-row-selected: oklch(98.5% 0 0 / 0.06);
+  --app-toolbar-hover: oklch(98.5% 0 0 / 0.05);
+  --app-border: oklch(98.5% 0 0 / 0.08);
+  --app-border-strong: oklch(98.5% 0 0 / 0.12);
+  --app-foreground: oklch(96.7% 0.001 286.375);
+  --app-foreground-soft: oklch(87.1% 0.006 286.286);
+  --app-muted: oklch(55.2% 0.016 285.938);
+  --app-tooltip: oklch(27.4% 0.006 286.033);
+  --app-done: oklch(76% 0.05 72);
+  --app-review: oklch(76.5% 0.177 163.223);
+  --app-progress: oklch(82.8% 0.189 84.429);
+  --app-backlog: oklch(55.2% 0.016 285.938);
+  --app-canceled: oklch(55.2% 0.016 285.938);
+  --app-project: oklch(70.7% 0.165 254.624);
+  --app-accent: oklch(58.5% 0.233 277.117);
+  --app-accent-strong: oklch(51.1% 0.262 276.966);
+  --app-accent-cyan: oklch(78.9% 0.154 211.53);
+  --app-accent-pink: oklch(67.3% 0.182 276.935);
+  --app-warm: oklch(76.9% 0.188 70.08);
+  --app-scrollbar-thumb: oklch(78% 0.01 286 / 0.28);
+  --app-scrollbar-thumb-hover: oklch(84% 0.012 286 / 0.42);
 }
 
 @layer base {

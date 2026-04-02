@@ -65,7 +65,7 @@ export function WorkspacePanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-app-elevated">
-      <header className="relative z-20 border-b border-app-border bg-[linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0))]">
+      <header className="relative z-20 border-b border-app-border">
         <div
           aria-label="Workspace header"
           className="flex h-[2.4rem] items-center gap-3 px-4"
@@ -155,7 +155,7 @@ export function WorkspacePanel({
               ))}
             </div>
           ) : (
-            <div className="m-auto max-w-md rounded-[22px] border border-app-border bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.01))] px-5 py-6 text-center">
+            <div className="m-auto max-w-md rounded-[22px] border border-app-border bg-app-sidebar px-5 py-6 text-center">
               <div className="mx-auto flex size-12 items-center justify-center rounded-2xl border border-app-border-strong bg-app-sidebar text-app-foreground-soft">
                 <MessageSquareText className="size-5" strokeWidth={1.8} />
               </div>
