@@ -1,11 +1,14 @@
+import { useState } from "react";
 import {
   AlertCircle,
   BrainCircuit,
+  ChevronDown,
   Clock3,
   FileText,
   FolderKanban,
   GitBranch,
   Image as ImageIcon,
+  Info,
   MessageSquareText,
   Sparkles,
   TerminalSquare,
@@ -32,8 +35,10 @@ type WorkspacePanelProps = {
 type TimelineBlock =
   | { id: string; kind: "thinking"; text: string }
   | { id: string; kind: "text"; text: string }
-  | { id: string; kind: "tool"; label: string }
-  | { id: string; kind: "result"; text: string };
+  | { id: string; kind: "tool"; label: string; input?: string }
+  | { id: string; kind: "tool-result"; label: string; output?: string }
+  | { id: string; kind: "result"; text: string }
+  | { id: string; kind: "system"; label: string; details?: string };
 
 export function WorkspacePanel({
   workspace,
@@ -187,6 +192,10 @@ function TimelineMessage({
   const blocks = getTimelineBlocks(message, attachmentIndex);
   const isUser = message.role === "user";
 
+  if (blocks.length === 0) {
+    return null;
+  }
+
   return (
     <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
       <div className={cn("max-w-[52rem] space-y-2", isUser ? "items-end" : "items-start")}>
@@ -223,27 +232,40 @@ function TimelineBlockView({
   block: TimelineBlock;
   align: "left" | "right";
 }) {
+  if (block.kind === "system") {
+    return <SystemBlock label={block.label} details={block.details} />;
+  }
+
   if (block.kind === "tool") {
     return (
-      <div className="inline-flex items-center gap-2 rounded-xl border border-app-border bg-app-sidebar px-3 py-2 text-[12px] text-app-foreground-soft">
-        <TerminalSquare className="size-3.5 text-app-project" strokeWidth={1.8} />
-        <span>{block.label}</span>
+      <div className="space-y-1">
+        <div className="inline-flex items-center gap-2 rounded-xl border border-app-border bg-app-sidebar px-3 py-2 text-[12px] text-app-foreground-soft">
+          <TerminalSquare className="size-3.5 text-app-project" strokeWidth={1.8} />
+          <span>{block.label}</span>
+        </div>
+        {block.input ? (
+          <CollapsibleCode label="Input" content={block.input} />
+        ) : null}
+      </div>
+    );
+  }
+
+  if (block.kind === "tool-result") {
+    return (
+      <div className="space-y-1">
+        <div className="inline-flex items-center gap-2 rounded-xl border border-app-border bg-app-sidebar px-3 py-2 text-[12px] text-app-foreground-soft">
+          <Sparkles className="size-3.5 text-app-project" strokeWidth={1.8} />
+          <span>{block.label}</span>
+        </div>
+        {block.output ? (
+          <CollapsibleCode label="Output" content={block.output} />
+        ) : null}
       </div>
     );
   }
 
   if (block.kind === "thinking") {
-    return (
-      <div className="rounded-2xl border border-app-border bg-app-sidebar px-4 py-3">
-        <div className="mb-2 flex items-center gap-2 text-[12px] font-medium text-app-foreground-soft">
-          <BrainCircuit className="size-3.5 text-app-accent" strokeWidth={1.8} />
-          Thinking
-        </div>
-        <pre className="whitespace-pre-wrap font-sans text-[13px] leading-6 text-app-foreground-soft">
-          {block.text}
-        </pre>
-      </div>
-    );
+    return <ThinkingBlock text={block.text} />;
   }
 
   if (block.kind === "result") {
@@ -260,14 +282,93 @@ function TimelineBlockView({
       className={cn(
         "rounded-2xl border px-4 py-3 text-[14px] leading-7",
         align === "right"
-          ? "border-app-border bg-[linear-gradient(180deg,rgba(103,162,255,0.12),rgba(103,162,255,0.04))] text-app-foreground"
+          ? "border-app-border bg-app-sidebar-strong text-app-foreground"
           : "border-app-border bg-app-sidebar text-app-foreground-soft",
       )}
     >
-      {block.text}
+      <pre className="whitespace-pre-wrap font-sans">{block.text}</pre>
     </div>
   );
 }
+
+function ThinkingBlock({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const preview = text.length > 120 ? `${text.slice(0, 120)}…` : text;
+
+  return (
+    <div className="rounded-2xl border border-app-border bg-app-sidebar px-4 py-3">
+      <button
+        type="button"
+        onClick={() => { setOpen((o) => !o); }}
+        className="flex w-full items-center gap-2 text-[12px] font-medium text-app-foreground-soft"
+      >
+        <BrainCircuit className="size-3.5 text-app-accent" strokeWidth={1.8} />
+        <span>Thinking</span>
+        <ChevronDown className={cn("ml-auto size-3.5 transition-transform", open && "rotate-180")} strokeWidth={1.8} />
+      </button>
+      {open ? (
+        <pre className="mt-2 max-h-[20rem] overflow-y-auto whitespace-pre-wrap font-sans text-[13px] leading-6 text-app-foreground-soft">
+          {text}
+        </pre>
+      ) : (
+        <p className="mt-1.5 truncate text-[12px] text-app-muted">{preview}</p>
+      )}
+    </div>
+  );
+}
+
+function SystemBlock({ label, details }: { label: string; details?: string }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="w-full">
+      <button
+        type="button"
+        onClick={() => { setOpen((o) => !o); }}
+        className="inline-flex items-center gap-2 rounded-lg border border-app-border bg-app-sidebar px-3 py-1.5 text-[11px] text-app-muted transition-colors hover:text-app-foreground-soft"
+      >
+        <Info className="size-3" strokeWidth={1.8} />
+        <span>{label}</span>
+        {details ? (
+          <ChevronDown className={cn("size-3 transition-transform", open && "rotate-180")} strokeWidth={1.8} />
+        ) : null}
+      </button>
+      {open && details ? (
+        <pre className="mt-2 max-h-[12rem] overflow-auto rounded-lg border border-app-border bg-app-base p-3 text-[11px] leading-5 text-app-muted">
+          {details}
+        </pre>
+      ) : null}
+    </div>
+  );
+}
+
+function CollapsibleCode({ label, content }: { label: string; content: string }) {
+  const [open, setOpen] = useState(false);
+  const preview = content.length > 80 ? `${content.slice(0, 80)}…` : content;
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => { setOpen((o) => !o); }}
+        className="flex items-center gap-1 pl-3 text-[11px] text-app-muted hover:text-app-foreground-soft"
+      >
+        <ChevronDown className={cn("size-3 transition-transform", open ? "rotate-0" : "-rotate-90")} strokeWidth={1.8} />
+        <span>{label}</span>
+        {!open ? <span className="ml-1 truncate opacity-50">{preview}</span> : null}
+      </button>
+      {open ? (
+        <pre className="mt-1 max-h-[16rem] overflow-auto rounded-lg border border-app-border bg-app-base p-3 text-[11px] leading-5 text-app-muted">
+          {content}
+        </pre>
+      ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Data parsing
+// ---------------------------------------------------------------------------
 
 function getTimelineBlocks(
   message: SessionMessageRecord,
@@ -286,67 +387,244 @@ function getTimelineBlocks(
   const parsed = message.parsedContent;
   const parsedType = typeof parsed.type === "string" ? parsed.type : null;
 
+  // --- assistant message (text, thinking, tool_use blocks) ---
   if (parsedType === "assistant") {
-    const assistantMessage = isRecord(parsed.message) ? parsed.message : null;
-    const content = Array.isArray(assistantMessage?.content)
-      ? assistantMessage?.content
-      : [];
-    const blocks = content.flatMap((block, index) =>
-      parseAssistantContentBlock(message.id, block, index),
-    );
-
-    return blocks.length > 0
-      ? blocks
-      : [
-          {
-            id: `${message.id}:assistant-fallback`,
-            kind: "text",
-            text: message.content,
-          },
-        ];
+    return parseAssistantMessage(message.id, parsed);
   }
 
+  // --- result message (token usage summary) ---
   if (parsedType === "result") {
-    const usage = isRecord(parsed.usage) ? parsed.usage : null;
-    const inputTokens = asNumber(usage?.input_tokens);
-    const outputTokens = asNumber(usage?.output_tokens);
-    const bits = [
-      inputTokens ? `in ${inputTokens.toLocaleString()}` : null,
-      outputTokens ? `out ${outputTokens.toLocaleString()}` : null,
-    ].filter(Boolean);
-
-    return [
-      {
-        id: `${message.id}:result`,
-        kind: "result",
-        text: bits.length > 0 ? `Session result • ${bits.join(" • ")}` : "Session result",
-      },
-    ];
+    return parseResultMessage(message.id, parsed);
   }
 
+  // --- user message (text, tool_result, images) ---
   if (parsedType === "user") {
-    const userMessage = isRecord(parsed.message) ? parsed.message : null;
-    const content = Array.isArray(userMessage?.content) ? userMessage?.content : [];
-    const text = content
-      .map((block) => extractUserBlockText(block, attachmentIndex))
-      .filter(Boolean)
-      .join("\n\n")
-      .trim();
-
-    return [
-      {
-        id: `${message.id}:user`,
-        kind: "text",
-        text: text || message.content,
-      },
-    ];
+    return parseUserMessage(message.id, parsed, attachmentIndex);
   }
+
+  // --- system message (session init, config) ---
+  if (parsedType === "system") {
+    return parseSystemMessage(message.id, parsed);
+  }
+
+  // --- unknown JSON type — show as collapsed system info instead of raw dump ---
+  return [
+    {
+      id: `${message.id}:unknown`,
+      kind: "system",
+      label: parsedType ? `${parsedType} event` : "Event",
+      details: formatJson(parsed),
+    },
+  ];
+}
+
+function parseAssistantMessage(
+  messageId: string,
+  parsed: Record<string, unknown>,
+): TimelineBlock[] {
+  const assistantMessage = isRecord(parsed.message) ? parsed.message : null;
+  const content = Array.isArray(assistantMessage?.content)
+    ? assistantMessage?.content
+    : [];
+  const blocks = content.flatMap((block, index) =>
+    parseAssistantContentBlock(messageId, block, index),
+  );
+
+  if (blocks.length > 0) {
+    return blocks;
+  }
+
+  // Fallback: try to find any text in the message
+  const fallbackText = extractDeepText(parsed);
+  return fallbackText
+    ? [{ id: `${messageId}:assistant-fallback`, kind: "text", text: fallbackText }]
+    : [{ id: `${messageId}:assistant-empty`, kind: "system", label: "Assistant response (empty)" }];
+}
+
+function parseResultMessage(
+  messageId: string,
+  parsed: Record<string, unknown>,
+): TimelineBlock[] {
+  const usage = isRecord(parsed.usage) ? parsed.usage : null;
+  const inputTokens = asNumber(usage?.input_tokens);
+  const outputTokens = asNumber(usage?.output_tokens);
+  const bits = [
+    inputTokens ? `in ${inputTokens.toLocaleString()}` : null,
+    outputTokens ? `out ${outputTokens.toLocaleString()}` : null,
+  ].filter(Boolean);
 
   return [
     {
-      id: `${message.id}:generic`,
+      id: `${messageId}:result`,
+      kind: "result",
+      text: bits.length > 0 ? `Session result • ${bits.join(" • ")}` : "Session result",
+    },
+  ];
+}
+
+function parseUserMessage(
+  messageId: string,
+  parsed: Record<string, unknown>,
+  attachmentIndex: Map<string, SessionAttachmentRecord>,
+): TimelineBlock[] {
+  const userMessage = isRecord(parsed.message) ? parsed.message : null;
+  const content = Array.isArray(userMessage?.content) ? userMessage?.content : [];
+
+  const blocks: TimelineBlock[] = [];
+  const textParts: string[] = [];
+
+  for (const [index, block] of content.entries()) {
+    if (!isRecord(block)) continue;
+
+    if (block.type === "text" && typeof block.text === "string") {
+      textParts.push(block.text);
+      continue;
+    }
+
+    // tool_result — can contain text string, array of content blocks, or nested structures
+    if (block.type === "tool_result") {
+      // Flush accumulated text first
+      if (textParts.length > 0) {
+        blocks.push({
+          id: `${messageId}:user-text:${index}`,
+          kind: "text",
+          text: textParts.join("\n\n").trim(),
+        });
+        textParts.length = 0;
+      }
+
+      const toolName = typeof block.tool_use_id === "string"
+        ? `Tool result`
+        : "Tool result";
+
+      if (typeof block.content === "string") {
+        blocks.push({
+          id: `${messageId}:tool-result:${index}`,
+          kind: "tool-result",
+          label: toolName,
+          output: block.content.length > 200 ? block.content : undefined,
+        });
+        if (block.content.length <= 200) {
+          blocks.push({
+            id: `${messageId}:tool-result-text:${index}`,
+            kind: "text",
+            text: block.content,
+          });
+        }
+      } else if (Array.isArray(block.content)) {
+        const resultText = extractTextFromContentArray(block.content, attachmentIndex);
+        if (resultText) {
+          blocks.push({
+            id: `${messageId}:tool-result:${index}`,
+            kind: "tool-result",
+            label: toolName,
+            output: resultText.length > 200 ? resultText : undefined,
+          });
+          if (resultText.length <= 200) {
+            blocks.push({
+              id: `${messageId}:tool-result-text:${index}`,
+              kind: "text",
+              text: resultText,
+            });
+          }
+        } else {
+          blocks.push({
+            id: `${messageId}:tool-result:${index}`,
+            kind: "tool-result",
+            label: toolName,
+          });
+        }
+      } else {
+        blocks.push({
+          id: `${messageId}:tool-result:${index}`,
+          kind: "tool-result",
+          label: toolName,
+        });
+      }
+      continue;
+    }
+
+    // tool_use inside user message (forwarded)
+    if (block.type === "tool_use") {
+      if (textParts.length > 0) {
+        blocks.push({
+          id: `${messageId}:user-text:${index}`,
+          kind: "text",
+          text: textParts.join("\n\n").trim(),
+        });
+        textParts.length = 0;
+      }
+      blocks.push({
+        id: `${messageId}:tool:${index}`,
+        kind: "tool",
+        label: describeToolUse(block),
+        input: isRecord(block.input) ? formatJson(block.input) : undefined,
+      });
+      continue;
+    }
+
+    // image / file reference
+    if (block.type === "image" || block.type === "file") {
+      const attachmentId =
+        maybeString(block.attachment_id) ?? maybeString(block.id) ?? maybeString(block.file_id);
+      const attachment = attachmentId ? attachmentIndex.get(attachmentId) : null;
+      const name = attachment?.originalName ?? (block.type === "image" ? "Image" : "File");
+      textParts.push(`[${name}]`);
+      continue;
+    }
+  }
+
+  // Flush remaining text
+  if (textParts.length > 0) {
+    blocks.push({
+      id: `${messageId}:user-text-final`,
       kind: "text",
-      text: message.content,
+      text: textParts.join("\n\n").trim(),
+    });
+  }
+
+  if (blocks.length === 0) {
+    // Fallback — try to get anything readable
+    const fallback = extractDeepText(parsed);
+    if (fallback) {
+      return [{ id: `${messageId}:user-fallback`, kind: "text", text: fallback }];
+    }
+    return [{ id: `${messageId}:user-empty`, kind: "system", label: "User message" }];
+  }
+
+  return blocks;
+}
+
+function parseSystemMessage(
+  messageId: string,
+  parsed: Record<string, unknown>,
+): TimelineBlock[] {
+  const subtype = maybeString(parsed.subtype as string);
+  const model = maybeString(parsed.model as string);
+  const sessionId = maybeString(parsed.session_id as string);
+
+  let label = "System";
+  if (subtype === "init") {
+    label = model ? `Session initialized • ${model}` : "Session initialized";
+  } else if (subtype) {
+    label = `System: ${subtype}`;
+  }
+
+  // Build a summary of interesting fields
+  const summaryParts: string[] = [];
+  if (sessionId) summaryParts.push(`Session: ${sessionId.slice(0, 8)}…`);
+  if (model) summaryParts.push(`Model: ${model}`);
+  const permMode = maybeString(parsed.permissionMode as string);
+  if (permMode) summaryParts.push(`Mode: ${permMode}`);
+  const tools = parsed.tools;
+  if (Array.isArray(tools)) summaryParts.push(`Tools: ${tools.length} available`);
+
+  return [
+    {
+      id: `${messageId}:system`,
+      kind: "system",
+      label,
+      details: summaryParts.length > 0 ? summaryParts.join("\n") : formatJson(parsed),
     },
   ];
 }
@@ -386,6 +664,23 @@ function parseAssistantContentBlock(
         id: `${messageId}:tool:${index}`,
         kind: "tool",
         label: describeToolUse(block),
+        input: isRecord(block.input) ? formatJson(block.input) : undefined,
+      },
+    ];
+  }
+
+  if (block.type === "tool_result") {
+    const content = typeof block.content === "string"
+      ? block.content
+      : Array.isArray(block.content)
+        ? block.content.map((b) => (isRecord(b) && typeof b.text === "string" ? b.text : "")).filter(Boolean).join("\n")
+        : undefined;
+    return [
+      {
+        id: `${messageId}:tool-result:${index}`,
+        kind: "tool-result",
+        label: "Tool result",
+        output: content,
       },
     ];
   }
@@ -407,6 +702,11 @@ function describeToolUse(block: Record<string, unknown>): string {
     return `${lineText} ${fileName}${offsetText}`;
   }
 
+  if (name === "Write" && input) {
+    const filePath = maybeString(input.file_path);
+    return `Write ${filePath ? basename(filePath) : "file"}`;
+  }
+
   if (name === "Edit" && input) {
     const filePath = maybeString(input.file_path);
     return `Edit ${filePath ? basename(filePath) : "file"}`;
@@ -414,46 +714,75 @@ function describeToolUse(block: Record<string, unknown>): string {
 
   if (name === "Bash" && input) {
     const command = maybeString(input.command);
-    return command ? `Run ${command}` : "Run shell command";
+    if (command) {
+      const short = command.length > 60 ? `${command.slice(0, 60)}…` : command;
+      return `Run ${short}`;
+    }
+    return "Run shell command";
   }
 
-  if (name === "Task" && input) {
+  if ((name === "Grep" || name === "Glob") && input) {
+    const pattern = maybeString(input.pattern);
+    return pattern ? `${name} ${pattern}` : name;
+  }
+
+  if ((name === "Task" || name === "Agent") && input) {
     const description = maybeString(input.description);
     const prompt = maybeString(input.prompt);
-    return description ?? prompt ?? "Spawn task";
+    const text = description ?? prompt;
+    if (text) {
+      const short = text.length > 50 ? `${text.slice(0, 50)}…` : text;
+      return `${name}: ${short}`;
+    }
+    return name;
   }
 
   return name;
 }
 
-function extractUserBlockText(
-  block: unknown,
+function extractTextFromContentArray(
+  content: unknown[],
   attachmentIndex: Map<string, SessionAttachmentRecord>,
 ): string | null {
-  if (!isRecord(block)) {
-    return null;
+  const parts: string[] = [];
+  for (const item of content) {
+    if (!isRecord(item)) continue;
+    if (item.type === "text" && typeof item.text === "string") {
+      parts.push(item.text);
+    } else if (item.type === "image") {
+      const attachmentId = maybeString(item.attachment_id) ?? maybeString(item.id);
+      const attachment = attachmentId ? attachmentIndex.get(attachmentId) : null;
+      parts.push(`[${attachment?.originalName ?? "Image"}]`);
+    }
   }
+  return parts.length > 0 ? parts.join("\n") : null;
+}
 
-  if (block.type === "text" && typeof block.text === "string") {
-    return block.text;
-  }
+function extractDeepText(obj: Record<string, unknown>): string | null {
+  // Try to find text content in nested structures
+  if (typeof obj.text === "string" && obj.text.trim()) return obj.text;
+  if (typeof obj.content === "string" && obj.content.trim()) return obj.content;
 
-  if (block.type === "tool_result" && typeof block.content === "string") {
-    return block.content;
-  }
-
-  if (block.type === "tool_use" && typeof block.name === "string") {
-    return describeToolUse(block);
-  }
-
-  if (block.type === "image" || block.type === "file") {
-    const attachmentId =
-      maybeString(block.attachment_id) ?? maybeString(block.id) ?? maybeString(block.file_id);
-    const attachment = attachmentId ? attachmentIndex.get(attachmentId) : null;
-    return attachment?.originalName ?? null;
+  const message = isRecord(obj.message) ? obj.message : null;
+  if (message) {
+    if (typeof message.content === "string" && message.content.trim()) return message.content;
+    if (Array.isArray(message.content)) {
+      const texts = message.content
+        .map((b) => (isRecord(b) && typeof b.text === "string" ? b.text : null))
+        .filter(Boolean);
+      if (texts.length > 0) return texts.join("\n\n");
+    }
   }
 
   return null;
+}
+
+function formatJson(obj: unknown): string {
+  try {
+    return JSON.stringify(obj, null, 2);
+  } catch {
+    return String(obj);
+  }
 }
 
 function SessionProviderIcon({
