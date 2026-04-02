@@ -15,6 +15,7 @@ import {
   ChevronDown,
   BookMarked,
   GitBranch,
+  RotateCcw,
   Plus,
 } from "lucide-react";
 import {
@@ -218,6 +219,12 @@ function WorkspaceRowItem({
 }) {
   const actionLabel =
     row.state === "archived" ? "Restore workspace" : "Archive workspace";
+  const actionIcon =
+    row.state === "archived" ? (
+      <RotateCcw className="size-3.5" strokeWidth={2.1} />
+    ) : (
+      <Archive className="size-3.5" strokeWidth={1.9} />
+    );
 
   return (
     <div
@@ -269,7 +276,7 @@ function WorkspaceRowItem({
           }}
           className="invisible flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-app-muted hover:bg-app-toolbar-hover hover:text-app-foreground group-hover:visible"
         >
-          <Archive className="size-3.5" strokeWidth={1.9} />
+          {actionIcon}
         </button>
       </BaseTooltip>
     </div>
