@@ -4,7 +4,12 @@ import {
   IssueDraftIcon,
   XCircleFillIcon,
 } from "@primer/octicons-react";
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import {
+  type ButtonHTMLAttributes,
+  type ReactNode,
+  useEffect,
+  useState,
+} from "react";
 import {
   Archive,
   ChevronDown,
@@ -20,7 +25,6 @@ import {
 import { cn } from "@/lib/utils";
 import { TooltipProvider } from "./ui/tooltip";
 import { BaseTooltip } from "./ui/base-tooltip";
-import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
 
 const rowVariants = cva(
@@ -169,18 +173,37 @@ function WorkspaceAvatar({
     .slice(0, 2)
     .toUpperCase();
   const src = getWorkspaceAvatarSrc(repoIconSrc);
+  const [hasImage, setHasImage] = useState(Boolean(src));
+
+  useEffect(() => {
+    setHasImage(Boolean(src));
+  }, [src]);
 
   return (
-    <Avatar
+    <span
       aria-hidden="true"
       data-slot="workspace-avatar"
-      className="size-4 rounded-[5px] border border-app-border-strong bg-app-sidebar-strong"
+      className="relative flex size-[16px] shrink-0 items-center justify-center overflow-hidden rounded-[5px] border-0 bg-transparent outline-none"
     >
-      {src ? <AvatarImage src={src} alt={`${repoName ?? title} icon`} /> : null}
-      <AvatarFallback className="bg-app-sidebar-strong text-[8px] font-semibold uppercase tracking-[0.02em] text-app-foreground-soft">
-        {fallback}
-      </AvatarFallback>
-    </Avatar>
+      {src ? (
+        <img
+          src={src}
+          alt={`${repoName ?? title} icon`}
+          className="size-full object-cover"
+          onError={() => {
+            setHasImage(false);
+          }}
+          onLoad={() => {
+            setHasImage(true);
+          }}
+        />
+      ) : null}
+      {!hasImage ? (
+          <span className="absolute inset-0 flex items-center justify-center bg-app-sidebar-strong text-[7px] font-semibold uppercase tracking-[0.02em] text-app-foreground-soft">
+          {fallback}
+        </span>
+      ) : null}
+    </span>
   );
 }
 
