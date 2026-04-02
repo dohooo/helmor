@@ -50,7 +50,6 @@ describe("App", () => {
       '[data-slot="workspace-groups-scroll"]',
     );
 
-    expect(shell).toHaveAttribute("data-theme", "volta-dark");
     expect(shell).toHaveClass("bg-app-base");
     expect(shell).toHaveClass("h-screen");
     expect(shell).toHaveClass("overflow-hidden");

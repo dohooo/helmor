@@ -5,7 +5,9 @@ import {
   useEffect,
   useMemo,
   useState,
+  useCallback,
 } from "react";
+import { Moon, Sun } from "lucide-react";
 import {
   DEFAULT_AGENT_MODEL_SECTIONS,
   DEFAULT_WORKSPACE_GROUPS,
@@ -101,7 +103,23 @@ function App() {
   const [sendingContextKey, setSendingContextKey] = useState<string | null>(null);
   const [loadingWorkspace, setLoadingWorkspace] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    if (typeof window === "undefined") return "dark";
+    return (localStorage.getItem("helmor.theme") as "light" | "dark") ?? "dark";
+  });
   const isResizing = resizeState !== null;
+
+  const toggleTheme = useCallback(() => {
+    setTheme((t) => {
+      const next = t === "dark" ? "light" : "dark";
+      localStorage.setItem("helmor.theme", next);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", theme === "dark");
+  }, [theme]);
 
   const archivedRows = useMemo(
     () => archivedSummaries.map(summaryToArchivedRow),
@@ -367,7 +385,6 @@ function App() {
     <main
       aria-label="Application shell"
       className="relative h-screen overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
-      data-theme="volta-dark"
     >
       <div className="relative flex h-full min-h-0 bg-app-base">
         <aside
@@ -417,9 +434,22 @@ function App() {
         >
           <div
             aria-label="Workspace panel drag region"
-            className="absolute inset-x-0 top-0 z-10 h-[2.4rem] bg-transparent"
+            className="absolute inset-x-0 top-0 z-10 flex h-[2.4rem] items-center justify-end bg-transparent px-2"
             data-tauri-drag-region
-          />
+          >
+            <button
+              type="button"
+              aria-label="Toggle theme"
+              onClick={toggleTheme}
+              className="flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:text-app-foreground"
+            >
+              {theme === "dark" ? (
+                <Sun className="size-3.5" strokeWidth={1.8} />
+              ) : (
+                <Moon className="size-3.5" strokeWidth={1.8} />
+              )}
+            </button>
+          </div>
 
           <div
             aria-label="Workspace viewport"
