@@ -61,6 +61,25 @@ pub struct AgentUsage {
     pub output_tokens: Option<i64>,
 }
 
+/// A single intermediate message collected from the CLI stream output.
+#[derive(Debug, Clone)]
+struct CollectedTurn {
+    role: String,
+    content_json: String,
+}
+
+/// Full parsed output from a CLI invocation.
+#[derive(Debug)]
+struct ParsedAgentOutput {
+    assistant_text: String,
+    thinking_text: Option<String>,
+    session_id: Option<String>,
+    resolved_model: String,
+    usage: AgentUsage,
+    turns: Vec<CollectedTurn>,
+    result_json: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct AgentModelDefinition {
     id: &'static str,
@@ -179,7 +198,7 @@ fn send_agent_message_blocking(request: AgentSendRequest) -> Result<AgentSendRes
 
     let working_directory = resolve_working_directory(request.working_directory.as_deref())?;
 
-    let (assistant_text, thinking_text, session_id, resolved_model, usage) = match model.provider {
+    let output = match model.provider {
         "claude" => send_with_claude(model, prompt, request.session_id.as_deref(), &working_directory)?,
         "codex" => send_with_codex(model, prompt, request.session_id.as_deref(), &working_directory)?,
         provider => return Err(format!("Unsupported provider: {provider}")),
@@ -191,11 +210,13 @@ fn send_agent_message_blocking(request: AgentSendRequest) -> Result<AgentSendRes
             conductor_session_id,
             prompt,
             model,
-            &resolved_model,
-            &assistant_text,
-            thinking_text.as_deref(),
-            session_id.as_deref(),
-            &usage,
+            &output.resolved_model,
+            &output.assistant_text,
+            output.thinking_text.as_deref(),
+            output.session_id.as_deref(),
+            &output.usage,
+            &output.turns,
+            output.result_json.as_deref(),
         )?;
         true
     } else {
@@ -205,13 +226,13 @@ fn send_agent_message_blocking(request: AgentSendRequest) -> Result<AgentSendRes
     Ok(AgentSendResponse {
         provider: model.provider.to_string(),
         model_id: model.id.to_string(),
-        resolved_model,
-        session_id,
-        assistant_text,
-        thinking_text,
+        resolved_model: output.resolved_model,
+        session_id: output.session_id,
+        assistant_text: output.assistant_text,
+        thinking_text: output.thinking_text,
         working_directory: working_directory.display().to_string(),
-        input_tokens: usage.input_tokens,
-        output_tokens: usage.output_tokens,
+        input_tokens: output.usage.input_tokens,
+        output_tokens: output.usage.output_tokens,
         persisted_to_fixture,
     })
 }
@@ -221,7 +242,7 @@ fn send_with_claude(
     prompt: &str,
     session_id: Option<&str>,
     working_directory: &Path,
-) -> Result<(String, Option<String>, Option<String>, String, AgentUsage), String> {
+) -> Result<ParsedAgentOutput, String> {
     let binary = resolve_binary_path("claude")?;
     let mut command = Command::new(binary);
     command
@@ -258,7 +279,7 @@ fn send_with_codex(
     prompt: &str,
     session_id: Option<&str>,
     working_directory: &Path,
-) -> Result<(String, Option<String>, Option<String>, String, AgentUsage), String> {
+) -> Result<ParsedAgentOutput, String> {
     let binary = resolve_binary_path("codex")?;
     let mut command = Command::new(binary);
     command.current_dir(working_directory);
@@ -300,7 +321,7 @@ fn parse_claude_output(
     stdout: &str,
     fallback_session_id: Option<&str>,
     fallback_model: &str,
-) -> Result<(String, Option<String>, Option<String>, String, AgentUsage), String> {
+) -> Result<ParsedAgentOutput, String> {
     let mut assistant_text = String::new();
     let mut thinking_text = String::new();
     let mut saw_text_delta = false;
@@ -310,6 +331,32 @@ fn parse_claude_output(
     let mut usage = AgentUsage {
         input_tokens: None,
         output_tokens: None,
+    };
+
+    // Collect intermediate turns: merge partial assistant messages by message ID.
+    let mut turns: Vec<CollectedTurn> = Vec::new();
+    let mut cur_asst_id: Option<String> = None;
+    let mut cur_asst_blocks: Vec<Value> = Vec::new();
+    let mut cur_asst_template: Option<Value> = None;
+    let mut result_json: Option<String> = None;
+
+    let flush_assistant = |turns: &mut Vec<CollectedTurn>,
+                           cur_id: &mut Option<String>,
+                           blocks: &mut Vec<Value>,
+                           template: &mut Option<Value>| {
+        if blocks.is_empty() {
+            return;
+        }
+        if let Some(mut tmpl) = template.take() {
+            if let Some(msg) = tmpl.get_mut("message") {
+                msg["content"] = Value::Array(blocks.drain(..).collect());
+            }
+            turns.push(CollectedTurn {
+                role: "assistant".to_string(),
+                content_json: tmpl.to_string(),
+            });
+        }
+        *cur_id = None;
     };
 
     for line in stdout.lines().map(str::trim).filter(|line| !line.is_empty()) {
@@ -348,6 +395,7 @@ fn parse_claude_output(
                 }
             }
             Some("assistant") => {
+                // Extract text/thinking for the response.
                 if !saw_text_delta {
                     if let Some(text) = extract_claude_assistant_text(&value) {
                         assistant_text.push_str(&text);
@@ -358,6 +406,50 @@ fn parse_claude_output(
                         thinking_text.push_str(&thinking);
                     }
                 }
+
+                // Collect intermediate turn: merge partial messages by ID.
+                let msg_id = value
+                    .get("message")
+                    .and_then(|m| m.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+
+                if cur_asst_id.is_some() && cur_asst_id != msg_id {
+                    flush_assistant(
+                        &mut turns,
+                        &mut cur_asst_id,
+                        &mut cur_asst_blocks,
+                        &mut cur_asst_template,
+                    );
+                }
+
+                if cur_asst_id.is_none() {
+                    cur_asst_id = msg_id;
+                    cur_asst_template = Some(value.clone());
+                }
+
+                if let Some(blocks) = value
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(Value::as_array)
+                {
+                    for block in blocks {
+                        cur_asst_blocks.push(block.clone());
+                    }
+                }
+            }
+            Some("user") => {
+                // Flush any pending assistant turn.
+                flush_assistant(
+                    &mut turns,
+                    &mut cur_asst_id,
+                    &mut cur_asst_blocks,
+                    &mut cur_asst_template,
+                );
+                turns.push(CollectedTurn {
+                    role: "user".to_string(),
+                    content_json: value.to_string(),
+                });
             }
             Some("result") => {
                 if assistant_text.trim().is_empty() {
@@ -369,10 +461,19 @@ fn parse_claude_output(
                     usage.input_tokens = parsed_usage.get("input_tokens").and_then(Value::as_i64);
                     usage.output_tokens = parsed_usage.get("output_tokens").and_then(Value::as_i64);
                 }
+                result_json = Some(value.to_string());
             }
             _ => {}
         }
     }
+
+    // Flush final pending assistant turn.
+    flush_assistant(
+        &mut turns,
+        &mut cur_asst_id,
+        &mut cur_asst_blocks,
+        &mut cur_asst_template,
+    );
 
     let assistant_text = assistant_text.trim().to_string();
     if assistant_text.is_empty() {
@@ -382,14 +483,22 @@ fn parse_claude_output(
     let thinking_text = thinking_text.trim().to_string();
     let thinking_text = if thinking_text.is_empty() { None } else { Some(thinking_text) };
 
-    Ok((assistant_text, thinking_text, session_id, resolved_model, usage))
+    Ok(ParsedAgentOutput {
+        assistant_text,
+        thinking_text,
+        session_id,
+        resolved_model,
+        usage,
+        turns,
+        result_json,
+    })
 }
 
 fn parse_codex_output(
     stdout: &str,
     fallback_session_id: Option<&str>,
     fallback_model: &str,
-) -> Result<(String, Option<String>, Option<String>, String, AgentUsage), String> {
+) -> Result<ParsedAgentOutput, String> {
     let mut session_id = fallback_session_id.map(str::to_string);
     let mut assistant_chunks = Vec::new();
     let mut usage = AgentUsage {
@@ -436,7 +545,15 @@ fn parse_codex_output(
         return Err("Codex returned no assistant text.".to_string());
     }
 
-    Ok((assistant_text, None, session_id, fallback_model.to_string(), usage))
+    Ok(ParsedAgentOutput {
+        assistant_text,
+        thinking_text: None,
+        session_id,
+        resolved_model: fallback_model.to_string(),
+        usage,
+        turns: Vec::new(),
+        result_json: None,
+    })
 }
 
 fn extract_claude_model_name(value: &Value) -> Option<String> {
@@ -524,69 +641,46 @@ fn persist_exchange_to_fixture(
     model: &AgentModelDefinition,
     resolved_model: &str,
     assistant_text: &str,
-    thinking_text: Option<&str>,
+    _thinking_text: Option<&str>,
     provider_session_id: Option<&str>,
     usage: &AgentUsage,
+    turns: &[CollectedTurn],
+    raw_result_json: Option<&str>,
 ) -> Result<(), String> {
     let connection = open_fixture_write_connection()?;
     let now = current_timestamp_string()?;
     let turn_id = Uuid::new_v4().to_string();
     let user_message_id = Uuid::new_v4().to_string();
-    let assistant_message_id = Uuid::new_v4().to_string();
     let result_message_id = Uuid::new_v4().to_string();
     let assistant_sdk_message_id = format!("helmor-assistant-{}", Uuid::new_v4());
-    let result_payload = serde_json::json!({
-        "type": "result",
-        "subtype": "success",
-        "result": assistant_text,
-        "session_id": provider_session_id,
-        "usage": {
-            "input_tokens": usage.input_tokens,
-            "output_tokens": usage.output_tokens,
-        }
-    })
-    .to_string();
-    let mut content_blocks: Vec<Value> = Vec::new();
-    if let Some(thinking) = thinking_text {
-        content_blocks.push(serde_json::json!({
-            "type": "thinking",
-            "thinking": thinking,
-        }));
-    }
-    content_blocks.push(serde_json::json!({
-        "type": "text",
-        "text": assistant_text,
-    }));
-    let assistant_payload = serde_json::json!({
-        "type": "assistant",
-        "message": {
-            "model": resolved_model,
-            "id": assistant_sdk_message_id,
-            "type": "message",
-            "role": "assistant",
-            "content": content_blocks,
-        },
-        "session_id": provider_session_id,
-    })
-    .to_string();
+
+    let result_payload = raw_result_json
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "type": "result",
+                "subtype": "success",
+                "result": assistant_text,
+                "session_id": provider_session_id,
+                "usage": {
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                }
+            })
+            .to_string()
+        });
+
     let transaction = connection
         .unchecked_transaction()
         .map_err(|error| error.to_string())?;
 
+    // 1. Insert the original user prompt.
     transaction
         .execute(
             r#"
             INSERT INTO session_messages (
-              id,
-              session_id,
-              role,
-              content,
-              created_at,
-              sent_at,
-              full_message,
-              model,
-              last_assistant_message_id,
-              turn_id,
+              id, session_id, role, content, created_at, sent_at,
+              full_message, model, last_assistant_message_id, turn_id,
               is_resumable_message
             ) VALUES (?1, ?2, 'user', ?3, ?4, ?4, ?3, ?5, ?6, ?7, 0)
             "#,
@@ -602,49 +696,39 @@ fn persist_exchange_to_fixture(
         )
         .map_err(|error| error.to_string())?;
 
-    transaction
-        .execute(
-            r#"
-            INSERT INTO session_messages (
-              id,
-              session_id,
-              role,
-              content,
-              created_at,
-              sent_at,
-              full_message,
-              model,
-              sdk_message_id,
-              turn_id,
-              is_resumable_message
-            ) VALUES (?1, ?2, 'assistant', ?3, ?4, ?4, ?3, ?5, ?6, ?7, 0)
-            "#,
-            params![
-                assistant_message_id,
-                conductor_session_id,
-                assistant_payload,
-                now,
-                resolved_model,
-                assistant_sdk_message_id,
-                turn_id
-            ],
-        )
-        .map_err(|error| error.to_string())?;
+    // 2. Insert all intermediate turns (assistant tool calls, user tool results, etc.).
+    if !turns.is_empty() {
+        for collected_turn in turns {
+            let msg_id = Uuid::new_v4().to_string();
+            transaction
+                .execute(
+                    r#"
+                    INSERT INTO session_messages (
+                      id, session_id, role, content, created_at, sent_at,
+                      full_message, model, turn_id, is_resumable_message
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?4, ?6, ?7, 0)
+                    "#,
+                    params![
+                        msg_id,
+                        conductor_session_id,
+                        collected_turn.role,
+                        collected_turn.content_json,
+                        now,
+                        resolved_model,
+                        turn_id
+                    ],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+    }
 
+    // 3. Insert result summary.
     transaction
         .execute(
             r#"
             INSERT INTO session_messages (
-              id,
-              session_id,
-              role,
-              content,
-              created_at,
-              sent_at,
-              full_message,
-              model,
-              sdk_message_id,
-              turn_id,
+              id, session_id, role, content, created_at, sent_at,
+              full_message, model, sdk_message_id, turn_id,
               is_resumable_message
             ) VALUES (?1, ?2, 'assistant', ?3, ?4, ?4, ?3, ?5, ?6, ?7, 0)
             "#,
@@ -660,6 +744,7 @@ fn persist_exchange_to_fixture(
         )
         .map_err(|error| error.to_string())?;
 
+    // 4. Update session and workspace metadata.
     transaction
         .execute(
             r#"

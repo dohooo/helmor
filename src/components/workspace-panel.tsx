@@ -1,6 +1,8 @@
-import { useMemo } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   useExternalStoreRuntime,
+  useMessage,
   AssistantRuntimeProvider,
   ThreadPrimitive,
   MessagePrimitive,
@@ -10,11 +12,21 @@ import remarkGfm from "remark-gfm";
 import "@assistant-ui/react-markdown/styles/dot.css";
 import {
   AlertCircle,
+  Bot,
+  Check,
   Clock3,
+  Copy,
+  FileText,
+  FilePlus,
   FolderKanban,
+  FolderSearch,
   GitBranch,
+  Globe,
   MessageSquareText,
+  Pencil,
+  Search,
   Sparkles,
+  SquareTerminal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type {
@@ -149,7 +161,7 @@ function ConductorThread({ messages }: { messages: SessionMessageRecord[] }) {
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col">
-        <ThreadPrimitive.Viewport className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-5">
+        <ThreadPrimitive.Viewport className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-7 py-6">
           <ThreadPrimitive.Messages
             components={{
               UserMessage: ConductorUserMessage,
@@ -170,7 +182,7 @@ function ConductorThread({ messages }: { messages: SessionMessageRecord[] }) {
 function ConductorUserMessage() {
   return (
     <MessagePrimitive.Root className="flex min-w-0 justify-end">
-      <div className="max-w-[75%] overflow-hidden rounded-lg bg-app-foreground/[0.04] px-3.5 py-2.5 text-[14px] leading-7 text-app-foreground">
+      <div className="max-w-[75%] overflow-hidden rounded-md bg-app-foreground/[0.03] px-3 py-2 text-[14px] leading-7 text-app-foreground">
         <MessagePrimitive.Content
           components={{
             Text: UserText,
@@ -182,8 +194,11 @@ function ConductorUserMessage() {
 }
 
 function ConductorAssistantMessage() {
+  const id = useMessage((s) => s.id);
+  const isChild = id?.startsWith("child:");
+
   return (
-    <MessagePrimitive.Root className="min-w-0 max-w-full space-y-3">
+    <MessagePrimitive.Root className={cn("min-w-0 max-w-full space-y-1", isChild && "ml-5 border-l border-app-border/30 pl-3")}>
       <MessagePrimitive.Content
         components={{
           Text: AssistantText,
@@ -199,14 +214,15 @@ function ConductorAssistantMessage() {
 
 function ConductorSystemMessage() {
   return (
-    <MessagePrimitive.Root className="flex min-w-0 justify-center">
-      <div className="rounded-lg px-3 py-1.5 text-[11px] text-app-muted">
+    <MessagePrimitive.Root className="group/sys flex min-w-0 items-center gap-1.5">
+      <div className="py-1 text-[11px] text-app-muted">
         <MessagePrimitive.Content
           components={{
             Text: SystemText,
           }}
         />
       </div>
+      <CopyMessageButton />
     </MessagePrimitive.Root>
   );
 }
@@ -221,7 +237,7 @@ function UserText({ text }: { text: string }) {
 
 function AssistantText() {
   return (
-    <div className="prose prose-sm max-w-none break-words text-[14px] leading-7 text-app-foreground-soft prose-headings:text-app-foreground prose-strong:text-app-foreground prose-code:rounded prose-code:bg-app-sidebar-strong prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:text-app-foreground prose-pre:bg-app-sidebar prose-pre:text-[13px] prose-a:text-app-project prose-th:border-app-border prose-td:border-app-border prose-table:text-[13px]">
+    <div className="aui-md-table prose prose-sm max-w-none break-words text-[14px] leading-7 text-app-foreground-soft prose-headings:text-app-foreground prose-strong:text-app-foreground prose-code:rounded prose-code:bg-app-sidebar-strong prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:text-app-foreground prose-pre:bg-app-sidebar prose-pre:text-[13px] prose-a:text-app-project prose-table:text-[13px]">
       <MarkdownTextPrimitive remarkPlugins={[remarkGfm]} className="aui-md" />
     </div>
   );
@@ -229,14 +245,14 @@ function AssistantText() {
 
 function AssistantReasoning({ text }: { text: string }) {
   return (
-    <details className="group rounded-lg border border-app-border bg-app-sidebar">
-      <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-[12px] font-medium text-app-foreground-soft [&::-webkit-details-marker]:hidden">
-        <svg className="size-3 shrink-0 text-app-accent transition-transform group-open:rotate-90" viewBox="0 0 12 12" fill="none">
+    <details className="group rounded-md bg-app-foreground/[0.02]">
+      <summary className="flex cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
+        <svg className="size-2.5 shrink-0 transition-transform group-open:rotate-90" viewBox="0 0 12 12" fill="none">
           <path d="M4.5 2.5L8.5 6L4.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         Thinking
       </summary>
-      <pre className="max-h-[20rem] overflow-auto whitespace-pre-wrap break-words border-t border-app-border px-3 py-2.5 font-sans text-[13px] leading-6 text-app-muted">
+      <pre className="max-h-[20rem] overflow-auto whitespace-pre-wrap break-words px-2.5 pb-2 font-sans text-[12px] leading-5 text-app-muted/70">
         {text}
       </pre>
     </details>
@@ -255,31 +271,164 @@ function AssistantToolCall({
   status: unknown;
   addResult: unknown;
 }) {
-  const label = describeToolCall(toolName, args);
+  const info = getToolInfo(toolName, args);
   const resultText = result != null
     ? typeof result === "string" ? result : JSON.stringify(result, null, 2)
     : null;
+  const isEdit = toolName === "Edit";
+  const oldStr = isEdit && typeof args.old_string === "string" ? args.old_string : null;
+  const newStr = isEdit && typeof args.new_string === "string" ? args.new_string : null;
+  const hasDiff = oldStr != null || newStr != null;
+
+  const hasOutput = resultText != null && resultText.length > 5;
 
   return (
-    <div className="space-y-1">
-      <div className="inline-flex max-w-full items-center gap-2 overflow-hidden rounded-lg border border-app-border bg-app-sidebar px-3 py-1.5 text-[12px] text-app-foreground-soft">
-        <span className="size-1.5 shrink-0 rounded-full bg-app-project" />
-        <span className="truncate">{label}</span>
-      </div>
-      {resultText && resultText.length > 5 ? (
-        <details className="group">
-          <summary className="flex cursor-pointer items-center gap-1.5 pl-1 text-[11px] text-app-muted hover:text-app-foreground-soft [&::-webkit-details-marker]:hidden">
-            <svg className="size-2.5 shrink-0 transition-transform group-open:rotate-90" viewBox="0 0 12 12" fill="none">
+    <details className="group/out" open={false}>
+      <summary className="flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
+        <span className="shrink-0">{info.icon}</span>
+        <span className="font-medium">{info.action}</span>
+        {info.file ? (
+          hasDiff ? (
+            <EditDiffTrigger file={info.file} diffAdd={info.diffAdd} diffDel={info.diffDel} oldStr={oldStr} newStr={newStr} />
+          ) : (
+            <span className="truncate text-app-foreground-soft">{info.file}</span>
+          )
+        ) : null}
+        {!hasDiff && (info.diffAdd != null || info.diffDel != null) ? (
+          <span className="flex items-center gap-1 text-[11px]">
+            {info.diffAdd != null ? <span className="text-emerald-400">+{info.diffAdd}</span> : null}
+            {info.diffDel != null ? <span className="text-red-400">-{info.diffDel}</span> : null}
+          </span>
+        ) : null}
+        {info.command ? (
+          <code className="truncate rounded bg-app-foreground/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-app-foreground-soft">{info.command}</code>
+        ) : info.detail ? (
+          <span className="truncate text-app-muted/60">{info.detail}</span>
+        ) : null}
+        {hasOutput ? (
+          <span className="ml-auto shrink-0 cursor-pointer text-[11px] text-app-muted/40 hover:text-app-muted">
+            <svg className="size-2.5 transition-transform group-open/out:rotate-90" viewBox="0 0 12 12" fill="none">
               <path d="M4.5 2.5L8.5 6L4.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-            Output
-          </summary>
-          <pre className="mt-1 max-h-[12rem] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-app-border bg-app-base p-2.5 text-[11px] leading-5 text-app-muted">
-            {resultText.slice(0, 2000)}{resultText.length > 2000 ? "…" : ""}
-          </pre>
-        </details>
+          </span>
+        ) : null}
+      </summary>
+      {hasOutput ? (
+        <pre className="mt-1 max-h-[12rem] overflow-auto whitespace-pre-wrap break-words rounded-md bg-app-foreground/[0.02] p-2 text-[11px] leading-5 text-app-muted/70">
+          {resultText!.slice(0, 2000)}{resultText!.length > 2000 ? "…" : ""}
+        </pre>
       ) : null}
-    </div>
+    </details>
+  );
+}
+
+function CopyMessageButton() {
+  const [copied, setCopied] = useState(false);
+  const ref = useRef<HTMLButtonElement>(null);
+
+  const handleCopy = useCallback(() => {
+    const root = ref.current?.closest("[data-message-role]") ?? ref.current?.parentElement;
+    if (!root) return;
+    const text = root.textContent ?? "";
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }, []);
+
+  return (
+    <button
+      ref={ref}
+      type="button"
+      onClick={handleCopy}
+      className="flex size-5 shrink-0 items-center justify-center rounded text-app-muted/30 opacity-0 transition-all hover:text-app-muted group-hover/sys:opacity-100"
+    >
+      {copied ? (
+        <Check className="size-3" strokeWidth={2} />
+      ) : (
+        <Copy className="size-3" strokeWidth={1.8} />
+      )}
+    </button>
+  );
+}
+
+function EditDiffTrigger({
+  file,
+  diffAdd,
+  diffDel,
+  oldStr,
+  newStr,
+}: {
+  file: string;
+  diffAdd?: number;
+  diffDel?: number;
+  oldStr: string | null;
+  newStr: string | null;
+}) {
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+
+  const show = useCallback(() => {
+    if (triggerRef.current) {
+      const r = triggerRef.current.getBoundingClientRect();
+      setPos({ x: r.left, y: r.bottom + 6 });
+    }
+  }, []);
+  const hide = useCallback(() => setPos(null), []);
+
+  return (
+    <>
+      <span
+        ref={triggerRef}
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        className="inline-flex cursor-default items-center gap-1.5 rounded border border-app-border/60 px-1.5 py-0.5 transition-colors hover:border-app-foreground-soft/40 hover:bg-app-foreground/[0.03]"
+      >
+        <span className="truncate text-app-foreground-soft">{file}</span>
+        {diffAdd != null || diffDel != null ? (
+          <span className="flex items-center gap-1 text-[11px]">
+            {diffAdd != null ? <span className="text-emerald-400">+{diffAdd}</span> : null}
+            {diffDel != null ? <span className="text-red-400">-{diffDel}</span> : null}
+          </span>
+        ) : null}
+      </span>
+      {pos
+        ? createPortal(
+            <div
+              onMouseEnter={show}
+              onMouseLeave={hide}
+              className="fixed z-[100] w-[min(40rem,90vw)] rounded-lg border border-app-border bg-app-sidebar shadow-xl"
+              style={{ left: pos.x, top: pos.y }}
+            >
+              <div className="border-b border-app-border/50 px-3 py-1.5 text-[11px] text-app-muted">
+                {file}
+              </div>
+              <div className="max-h-[24rem] overflow-auto font-mono text-[11px] leading-5">
+                {oldStr
+                  ? oldStr.split("\n").map((line, i) => (
+                      <div key={`d${i}`} className="flex whitespace-pre-wrap bg-red-400/[0.04]">
+                        <span className="w-8 shrink-0 select-none border-r border-app-border/20 pr-1 text-right text-red-400/30">{i + 1}</span>
+                        <span className="w-4 shrink-0 select-none text-center text-red-400/50">-</span>
+                        <span className="min-w-0 text-red-400/70">{line}</span>
+                      </div>
+                    ))
+                  : null}
+                {oldStr && newStr ? <div className="border-t border-app-border/30" /> : null}
+                {newStr
+                  ? newStr.split("\n").map((line, i) => (
+                      <div key={`a${i}`} className="flex whitespace-pre-wrap bg-emerald-400/[0.04]">
+                        <span className="w-8 shrink-0 select-none border-r border-app-border/20 pr-1 text-right text-emerald-400/30">{i + 1}</span>
+                        <span className="w-4 shrink-0 select-none text-center text-emerald-400/50">+</span>
+                        <span className="min-w-0 text-emerald-400/70">{line}</span>
+                      </div>
+                    ))
+                  : null}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
   );
 }
 
@@ -291,38 +440,102 @@ function SystemText({ text }: { text: string }) {
 // Utilities
 // ---------------------------------------------------------------------------
 
-function describeToolCall(name: string, input: Record<string, unknown> | null): string {
-  if (!input) return name;
+type ToolInfo = {
+  action: string;
+  file?: string;
+  detail?: string;
+  command?: string;
+  icon: React.ReactNode;
+  diffAdd?: number;
+  diffDel?: number;
+};
+
+function getToolInfo(name: string, input: Record<string, unknown> | null): ToolInfo {
+  const fallbackIcon = <span className="size-3.5 rounded-full bg-app-foreground/15" />;
+  if (!input) return { action: name, icon: fallbackIcon };
+
+  if (name === "Edit") {
+    const fp = str(input.file_path);
+    const oldStr = typeof input.old_string === "string" ? input.old_string : "";
+    const newStr = typeof input.new_string === "string" ? input.new_string : "";
+    const del = oldStr ? oldStr.split("\n").length : 0;
+    const add = newStr ? newStr.split("\n").length : 0;
+    return {
+      action: "Edit",
+      file: fp ? basename(fp) : undefined,
+      icon: <Pencil className="size-3.5 text-amber-400" strokeWidth={1.8} />,
+      diffAdd: add,
+      diffDel: del,
+    };
+  }
 
   if (name === "Read") {
     const fp = str(input.file_path);
-    return fp ? `Read ${basename(fp)}` : "Read file";
+    const limit = typeof input.limit === "number" ? input.limit : null;
+    return {
+      action: limit ? `Read ${limit} lines` : "Read",
+      file: fp ? basename(fp) : undefined,
+      icon: <FileText className="size-3.5 text-sky-400" strokeWidth={1.8} />,
+    };
   }
+
   if (name === "Write") {
     const fp = str(input.file_path);
-    return fp ? `Write ${basename(fp)}` : "Write file";
+    return {
+      action: "Write",
+      file: fp ? basename(fp) : undefined,
+      icon: <FilePlus className="size-3.5 text-emerald-400" strokeWidth={1.8} />,
+    };
   }
-  if (name === "Edit") {
-    const fp = str(input.file_path);
-    return fp ? `Edit ${basename(fp)}` : "Edit file";
-  }
+
   if (name === "Bash") {
     const cmd = str(input.command);
-    return cmd ? `Run ${cmd.length > 50 ? `${cmd.slice(0, 50)}…` : cmd}` : "Run command";
+    return {
+      action: "Run",
+      icon: <SquareTerminal className="size-3.5 text-app-foreground-soft" strokeWidth={1.8} />,
+      command: cmd ? truncate(cmd, 80) : undefined,
+    };
   }
-  if (name === "Grep" || name === "Glob") {
+
+  if (name === "Grep") {
     const p = str(input.pattern);
-    return p ? `${name} ${p}` : name;
+    return { action: "Grep", icon: <Search className="size-3.5 text-violet-400" strokeWidth={1.8} />, detail: p ?? undefined };
   }
+
+  if (name === "Glob") {
+    const p = str(input.pattern);
+    return { action: "Glob", icon: <FolderSearch className="size-3.5 text-violet-400" strokeWidth={1.8} />, detail: p ?? undefined };
+  }
+
+  if (name === "WebFetch") {
+    const url = str(input.url);
+    return { action: "WebFetch", icon: <Globe className="size-3.5 text-teal-400" strokeWidth={1.8} />, detail: url ? truncate(url, 60) : undefined };
+  }
+
+  if (name === "WebSearch") {
+    const q = str(input.query);
+    return { action: "WebSearch", icon: <Globe className="size-3.5 text-teal-400" strokeWidth={1.8} />, detail: q ? truncate(q, 50) : undefined };
+  }
+
+  if (name === "ToolSearch") {
+    const q = str(input.query);
+    return { action: "ToolSearch", icon: <Search className="size-3.5 text-violet-400" strokeWidth={1.8} />, detail: q ? truncate(q, 50) : undefined };
+  }
+
   if (name === "Agent" || name === "Task") {
     const d = str(input.description) ?? str(input.prompt);
-    return d ? `${name}: ${d.length > 40 ? `${d.slice(0, 40)}…` : d}` : name;
+    return { action: name, icon: <Bot className="size-3.5 text-indigo-400" strokeWidth={1.8} />, detail: d ? truncate(d, 50) : undefined };
   }
-  return name;
+
+  return { action: name, icon: fallbackIcon };
 }
 
 function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v : null;
+}
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n)}…` : s;
 }
 
 function basename(path: string): string {

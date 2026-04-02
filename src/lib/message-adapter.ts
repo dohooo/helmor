@@ -28,8 +28,10 @@ export function convertConductorMessages(
       : undefined;
     const msgType = parsed?.type as string | undefined;
 
-    // system
+    // system — skip noise subtypes
     if (msgType === "system") {
+      const sub = parsed!.subtype as string | undefined;
+      if (sub === "init" || sub === "task_progress" || sub === "task_started" || sub === "task_completed") continue;
       result.push(makeSystem(msg, buildSystemLabel(parsed!)));
       continue;
     }
@@ -42,21 +44,23 @@ export function convertConductorMessages(
 
     // error
     if (msgType === "error" || msg.role === "error") {
-      result.push(makeSystem(msg, `Error: ${extractFallback(msg)}`));
+      result.push(makeSystem(msg, buildErrorLabel(msg, parsed)));
       continue;
     }
 
     // assistant
-    if (msgType === "assistant" || msg.role === "assistant") {
+    if (msgType === "assistant") {
       const parts = parseAssistantParts(parsed);
+      const isChild = parsed != null && typeof parsed.parent_tool_use_id === "string";
 
-      // Look ahead: merge following user messages that are pure tool_result
+      // Look ahead: merge following user/tool_result messages
       while (i + 1 < messages.length) {
         const next = messages[i + 1];
         const np = next.contentIsJson
           ? (next.parsedContent as Record<string, unknown> | undefined)
           : undefined;
-        if ((np?.type ?? next.role) !== "user") break;
+        const nextType = np?.type as string | undefined;
+        if (nextType !== "user") break;
         const merged = mergeToolResults(np, parts);
         if (!merged) break;
         i++;
@@ -69,7 +73,7 @@ export function convertConductorMessages(
 
       result.push({
         role: "assistant",
-        id: msg.id,
+        id: isChild ? `child:${msg.id}` : msg.id,
         createdAt: new Date(msg.createdAt),
         content: parts as ThreadMessageLike["content"],
         status: { type: "complete", reason: "stop" },
@@ -77,15 +81,23 @@ export function convertConductorMessages(
       continue;
     }
 
-    // user
-    if (msgType === "user" || msg.role === "user") {
-      // Try to merge pure tool_result into previous assistant
+    // user — tool_result messages: merge into previous assistant or skip entirely
+    if (msgType === "user") {
       const prev = result[result.length - 1];
       if (prev?.role === "assistant" && parsed) {
-        const merged = mergeToolResults(parsed, prev.content as AnyPart[]);
-        if (merged) continue;
+        mergeToolResults(parsed, prev.content as AnyPart[]);
       }
+      // Never render user tool_result messages as standalone — they are always
+      // paired with a tool-call and should be merged or silently skipped.
+      // Only show real user text messages (non-JSON or with actual text content).
+      if (parsed) continue;
       result.push(convertUserMessage(msg, parsed));
+      continue;
+    }
+
+    // user by role (plain text, non-JSON)
+    if (msg.role === "user" && !parsed) {
+      result.push(convertUserMessage(msg, undefined));
       continue;
     }
 
@@ -112,9 +124,11 @@ function parseAssistantParts(
     if (!isObj(b)) continue;
     if (b.type === "thinking" && typeof b.thinking === "string") {
       parts.push({ type: "reasoning", text: b.thinking });
+    } else if (b.type === "redacted_thinking") {
+      parts.push({ type: "reasoning", text: "[Thinking redacted]" });
     } else if (b.type === "text" && typeof b.text === "string") {
       parts.push({ type: "text", text: b.text });
-    } else if (b.type === "tool_use") {
+    } else if (b.type === "tool_use" || b.type === "server_tool_use") {
       const args = isObj(b.input) ? (b.input as Record<string, unknown>) : {};
       parts.push({
         type: "tool-call",
@@ -231,17 +245,50 @@ function buildSystemLabel(p: Record<string, unknown>): string {
 }
 
 function buildResultLabel(p: Record<string, unknown>): string {
-  const u = isObj(p.usage) ? p.usage : null;
-  const inp = typeof u?.input_tokens === "number" ? u.input_tokens : null;
-  const out = typeof u?.output_tokens === "number" ? u.output_tokens : null;
   const cost = typeof p.total_cost_usd === "number" ? p.total_cost_usd : null;
+  const durationMs = typeof p.duration_ms === "number" ? p.duration_ms : null;
   const bits: string[] = [];
-  if (inp) bits.push(`in ${(inp as number).toLocaleString()}`);
-  if (out) bits.push(`out ${(out as number).toLocaleString()}`);
-  if (cost) bits.push(`$${(cost as number).toFixed(4)}`);
-  const summary = bits.length > 0 ? `Session complete • ${bits.join(" • ")}` : "Session complete";
-  const resultText = typeof p.result === "string" ? p.result : null;
-  return resultText ? `${summary}\n\n${resultText}` : summary;
+  if (durationMs) {
+    const totalSecs = durationMs / 1000;
+    if (totalSecs >= 60) {
+      const mins = Math.floor(totalSecs / 60);
+      const secs = Math.round(totalSecs % 60);
+      bits.push(secs > 0 ? `${mins}m ${secs}s` : `${mins}m`);
+    } else {
+      bits.push(`${totalSecs.toFixed(1)}s`);
+    }
+  }
+  if (cost) bits.push(`$${cost.toFixed(4)}`);
+  return bits.join(" • ") || "Done";
+}
+
+function buildErrorLabel(
+  msg: SessionMessageRecord,
+  parsed: Record<string, unknown> | undefined,
+): string {
+  // Try to extract a clean error message from structured content
+  if (parsed) {
+    const content = parsed.content as string | undefined;
+    if (typeof content === "string" && content.trim()) return `Error: ${content}`;
+    const message = parsed.message as string | undefined;
+    if (typeof message === "string" && message.trim()) return `Error: ${message}`;
+  }
+  // If the raw content is JSON, try parsing it
+  if (msg.contentIsJson && msg.parsedContent) {
+    const p = msg.parsedContent as Record<string, unknown>;
+    if (typeof p.content === "string") return `Error: ${p.content}`;
+    if (typeof p.message === "string") return `Error: ${p.message}`;
+  }
+  const fb = extractFallback(msg);
+  // Don't show raw JSON as error text
+  if (fb.startsWith("{")) {
+    try {
+      const obj = JSON.parse(fb) as Record<string, unknown>;
+      if (typeof obj.content === "string") return `Error: ${obj.content}`;
+      if (typeof obj.message === "string") return `Error: ${obj.message}`;
+    } catch { /* ignore */ }
+  }
+  return `Error: ${fb}`;
 }
 
 function extractFallback(msg: SessionMessageRecord): string {

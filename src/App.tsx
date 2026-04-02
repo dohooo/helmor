@@ -593,7 +593,7 @@ function App() {
               onSelectSession={setSelectedSessionId}
             />
 
-            <div className="mt-auto border-t border-app-border px-3 pb-3 pt-3">
+            <div className="mt-auto px-4 pb-4 pt-2">
               <WorkspaceComposer
                 value={composerValue}
                 onValueChange={setComposerValue}

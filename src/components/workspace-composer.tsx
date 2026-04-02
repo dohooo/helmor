@@ -75,7 +75,7 @@ export function WorkspaceComposer({
   return (
     <div
       aria-label="Workspace composer"
-      className="flex min-h-[132px] flex-col rounded-[14px] border border-app-border-strong bg-app-sidebar px-4 pb-3 pt-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+      className="flex min-h-[132px] flex-col rounded-2xl border border-app-border/40 bg-app-sidebar px-4 pb-3 pt-3 shadow-[0_-4px_24px_rgba(0,0,0,0.12),0_0_0_1px_rgba(255,255,255,0.03)]"
     >
       <label htmlFor="workspace-input" className="sr-only">
         Workspace input

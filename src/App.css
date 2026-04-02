@@ -434,3 +434,42 @@ body {
     @apply font-sans;
   }
 }
+
+/* GFM table styles for assistant markdown */
+.aui-md-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0.75em 0;
+  border: 1px solid var(--color-app-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.aui-md-table thead th {
+  padding: 8px 14px;
+  text-align: left;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--color-app-foreground);
+  background: color-mix(in oklch, var(--color-app-foreground) 5%, transparent);
+  border-bottom: 1px solid var(--color-app-border);
+}
+
+.aui-md-table thead th:not(:last-child) {
+  border-right: 1px solid color-mix(in oklch, var(--color-app-border) 60%, transparent);
+}
+
+.aui-md-table tbody td {
+  padding: 7px 14px;
+  border-bottom: 1px solid color-mix(in oklch, var(--color-app-border) 40%, transparent);
+}
+
+.aui-md-table tbody td:not(:last-child) {
+  border-right: 1px solid color-mix(in oklch, var(--color-app-border) 30%, transparent);
+}
+
+.aui-md-table tbody tr:last-child td {
+  border-bottom: none;
+}
