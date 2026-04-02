@@ -54,8 +54,8 @@ function convertMessagesFlat(
       continue;
     }
 
-    // assistant
-    if (msgType === "assistant") {
+    // assistant (by JSON type or by role for plain-text live messages)
+    if (msgType === "assistant" || (!parsed && msg.role === "assistant")) {
       const parts = parseAssistantParts(parsed);
       const isChild = parsed != null && typeof parsed.parent_tool_use_id === "string";
 

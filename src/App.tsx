@@ -383,23 +383,28 @@ function App() {
       });
 
       const accumulator = new StreamAccumulator();
+      let unlistenFn: (() => void) | null = null;
 
-      const unlisten = await listenAgentStream(streamId, (event) => {
+      const cleanup = () => {
+        if (unlistenFn) { unlistenFn(); unlistenFn = null; }
+      };
+
+      unlistenFn = await listenAgentStream(streamId, (event) => {
         if (event.kind === "line") {
           accumulator.addLine(event.line);
-          const partial = accumulator.toPartialMessage(
+          const streamMessages = accumulator.toMessages(
             contextKey,
             selectedSessionId ?? contextKey,
           );
           setLiveMessagesByContext((current) => ({
             ...current,
-            [contextKey]: [optimisticUserMessage, partial],
+            [contextKey]: [optimisticUserMessage, ...streamMessages],
           }));
           return;
         }
 
         if (event.kind === "done") {
-          void unlisten();
+          cleanup();
 
           setLiveSessionsByContext((current) => ({
             ...current,
@@ -418,7 +423,7 @@ function App() {
         }
 
         if (event.kind === "error") {
-          void unlisten();
+          cleanup();
           setSendErrorsByContext((current) => ({ ...current, [contextKey]: event.message }));
           setComposerValue(prompt);
           setLiveMessagesByContext((current) => ({
@@ -457,6 +462,7 @@ function App() {
             appendLiveMessage(current, contextKey, liveMsg),
           );
         }
+        setSendingContextKey((current) => (current === contextKey ? null : current));
       } catch (fallbackError) {
         const message =
           fallbackError instanceof Error
@@ -472,9 +478,8 @@ function App() {
             (m) => m.id !== optimisticUserMessage.id,
           ),
         }));
+        setSendingContextKey((current) => (current === contextKey ? null : current));
       }
-    } finally {
-      setSendingContextKey((current) => (current === contextKey ? null : current));
     }
   };
 
