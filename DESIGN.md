@@ -185,6 +185,7 @@ Warp's elevation system is remarkably flat — almost zero shadow usage on the m
 - Keep buttons restrained and muted — dark fill (#353534) with muted text (#afaeac), no bright CTAs
 - Apply Matter Regular (weight 400) for nearly everything — even headlines. Reserve Medium (500) for emphasis only
 - Use uppercase labels with wide letter-spacing (1.4px–2.4px) for categorization
+- Prefer clean, standalone icons in the app UI — only wrap an icon in a bordered container, chip, or button when the container itself communicates interaction or state
 - Interleave nature photography with product screenshots — this is core to the brand identity
 - Maintain the almost monochromatic warm gray palette — no bold accent colors
 - Use semi-transparent borders (`rgba(226, 226, 226, 0.35)`) for card containment instead of shadows
@@ -194,6 +195,7 @@ Warp's elevation system is remarkably flat — almost zero shadow usage on the m
 - Use pure white (#ffffff) for text — it's always warm parchment (#faf9f6)
 - Add bold accent colors (blue, red, green) — the system is deliberately monochromatic warm grays
 - Apply bold weight (700+) to any text — Warp never goes above Medium (500)
+- Don't add decorative icon frames by default — avoid bordered icon containers, extra pills, or faux buttons around non-interactive icons
 - Use heavy drop shadows — depth comes from borders, photography, and opacity shifts
 - Create cold or blue-tinted dark backgrounds — the warmth is essential
 - Add decorative gradients or glow effects — the photography provides all visual interest

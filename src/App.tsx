@@ -754,7 +754,7 @@ function App() {
 
           <div
             aria-label="Workspace viewport"
-            className="flex min-h-0 flex-1 flex-col bg-app-elevated"
+            className="flex min-h-0 flex-1 flex-col bg-white dark:bg-app-elevated"
           >
             <WorkspacePanel
               workspace={workspaceDetail}

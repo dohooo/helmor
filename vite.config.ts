@@ -5,6 +5,15 @@ import tailwindcss from "@tailwindcss/vite";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+const WATCH_IGNORED = [
+  "**/src-tauri/**",
+  "**/.local/**",
+  "**/.local-data/**",
+  "**/.local-docs/**",
+  "**/.vscode/**",
+  "**/dist/**",
+  "**/*.log",
+];
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
@@ -32,8 +41,8 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. ignore app-internal local data/docs, Rust backend, editor metadata, logs, and build artifacts
+      ignored: WATCH_IGNORED,
     },
   },
   test: {

@@ -1,0 +1,187 @@
+/*
+  Content-area palette adapted from GitHub markdown/content colors:
+  https://github.com/sindresorhus/github-markdown-css
+*/
+
+:root {
+  --content-fg-default: #1f2328;
+  --content-fg-muted: #59636e;
+  --content-fg-accent: #0969da;
+  --content-fg-danger: #d1242f;
+  --content-fg-success: #1a7f37;
+  --content-fg-attention: #9a6700;
+  --content-fg-done: #8250df;
+  --content-bg-subtle: #ffffff;
+  --content-bg-muted: #f6f8fa;
+  --content-bg-neutral: rgb(129 139 152 / 0.12);
+  --content-border-default: #d1d9e0;
+  --content-border-muted: rgb(209 217 224 / 0.7);
+  --content-diff-remove-bg: #ffebe9;
+  --content-diff-remove-fg: #82071e;
+  --content-diff-add-bg: #dafbe1;
+  --content-diff-add-fg: #116329;
+}
+
+.dark {
+  --content-fg-default: #f0f6fc;
+  --content-fg-muted: #9198a1;
+  --content-fg-accent: #4493f8;
+  --content-fg-danger: #f85149;
+  --content-fg-success: #3fb950;
+  --content-fg-attention: #d29922;
+  --content-fg-done: #ab7df8;
+  --content-bg-subtle: #0d1117;
+  --content-bg-muted: #151b23;
+  --content-bg-neutral: rgb(101 108 118 / 0.2);
+  --content-border-default: #3d444d;
+  --content-border-muted: rgb(61 68 77 / 0.7);
+  --content-diff-remove-bg: #67060c;
+  --content-diff-remove-fg: #ffdcd7;
+  --content-diff-add-bg: #033a16;
+  --content-diff-add-fg: #aff5b4;
+}
+
+.conversation-markdown,
+.conversation-streamdown,
+.conversation-content,
+.conversation-diff-popover,
+.aui-md-table {
+  color: var(--content-fg-default);
+}
+
+.conversation-markdown :where(p, li, ul, ol, blockquote, table, strong, em) {
+  color: inherit;
+}
+
+.conversation-markdown :where(a) {
+  color: var(--content-fg-accent);
+}
+
+.conversation-markdown :where(code):not(pre code) {
+  color: var(--content-fg-default);
+  background: var(--content-bg-muted);
+  border-color: var(--content-border-muted);
+}
+
+.conversation-markdown :where(pre) {
+  color: var(--content-fg-default);
+  background: var(--content-bg-muted);
+  border-color: var(--content-border-default);
+}
+
+.conversation-markdown :where(pre code) {
+  background: transparent;
+  border-color: transparent;
+}
+
+.conversation-markdown :where(blockquote) {
+  color: var(--content-fg-muted);
+  border-left-color: var(--content-border-default);
+}
+
+.conversation-streamdown :where(.shiki, pre) {
+  background: var(--content-bg-muted) !important;
+  color: var(--content-fg-default) !important;
+  border-color: var(--content-border-default);
+}
+
+.conversation-streamdown :where(.shiki code, pre code, .line) {
+  color: inherit !important;
+}
+
+.conversation-workflow-summary {
+  color: var(--content-fg-muted);
+}
+
+.conversation-workflow-summary:hover {
+  color: var(--content-fg-default);
+}
+
+.conversation-workflow-surface {
+  background: var(--content-bg-muted);
+  color: var(--content-fg-default);
+}
+
+.conversation-workflow-inline-code {
+  background: var(--content-bg-muted);
+  color: var(--content-fg-muted);
+}
+
+.conversation-workflow-detail {
+  color: var(--content-fg-muted);
+}
+
+.conversation-workflow-tree {
+  border-left-color: var(--content-border-muted);
+}
+
+.conversation-diff-trigger {
+  border-color: var(--content-border-default);
+}
+
+.conversation-diff-trigger:hover {
+  border-color: var(--content-border-muted);
+  background: var(--content-bg-muted);
+}
+
+.conversation-diff-popover {
+  background: var(--content-bg-subtle);
+  border-color: var(--content-border-default);
+}
+
+.conversation-diff-popover-header {
+  color: var(--content-fg-muted);
+  border-bottom-color: var(--content-border-muted);
+}
+
+.conversation-diff-divider {
+  border-top-color: var(--content-border-muted);
+}
+
+.conversation-diff-remove-row {
+  background: var(--content-diff-remove-bg);
+}
+
+.conversation-diff-remove-fg {
+  color: var(--content-diff-remove-fg);
+}
+
+.conversation-diff-add-row {
+  background: var(--content-diff-add-bg);
+}
+
+.conversation-diff-add-fg {
+  color: var(--content-diff-add-fg);
+}
+
+.conversation-diff-gutter {
+  border-right-color: var(--content-border-muted);
+}
+
+.conversation-system-error {
+  color: var(--content-fg-danger);
+}
+
+.aui-md-table table {
+  border-color: var(--content-border-default);
+  background: var(--content-bg-subtle);
+}
+
+.aui-md-table thead th {
+  color: var(--content-fg-default);
+  background: var(--content-bg-muted);
+  border-bottom-color: var(--content-border-default);
+}
+
+.aui-md-table thead th:not(:last-child) {
+  border-right-color: var(--content-border-muted);
+}
+
+.aui-md-table tbody td {
+  color: var(--content-fg-default);
+  border-bottom-color: var(--content-border-muted);
+}
+
+.aui-md-table tbody td:not(:last-child) {
+  border-right-color: var(--content-border-muted);
+}

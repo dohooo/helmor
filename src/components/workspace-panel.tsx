@@ -41,6 +41,7 @@ import {
   type ConductorMessagePart,
 } from "@/lib/message-adapter";
 import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
+import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 import { ScrollBar } from "./ui/scroll-area";
 
 type WorkspacePanelProps = {
@@ -64,6 +65,7 @@ const LazyStreamdown = lazy(async () => {
 });
 
 let hasPreloadedStreamdown = false;
+const GITHUB_SHIKI_THEME: [string, string] = ["github-light", "github-dark"];
 
 function preloadStreamdown() {
   if (hasPreloadedStreamdown) return;
@@ -105,12 +107,12 @@ export const WorkspacePanel = memo(function WorkspacePanel({
   }, []);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-app-elevated">
+    <div className="flex min-h-0 flex-1 flex-col bg-transparent">
       {/* --- Header --- */}
       <header className="relative z-20">
         <div
           aria-label="Workspace header"
-          className="flex h-[2.6rem] items-center gap-3 px-5"
+          className="flex h-[2.4rem] items-center gap-3 px-5"
           data-tauri-drag-region
         >
           <div className="flex min-w-0 items-center gap-2 text-[13px]">
@@ -130,35 +132,43 @@ export const WorkspacePanel = memo(function WorkspacePanel({
         </div>
 
         {/* --- Session tabs --- */}
-        <div className="mt-0.5 flex h-[1.85rem] items-stretch overflow-x-auto px-0 [scrollbar-width:none]">
+        <div className="overflow-x-auto px-4 pb-1 [scrollbar-width:none]">
           {loadingWorkspace ? (
-            <div className="flex items-center gap-1.5 px-2 text-[12px] text-app-muted">
+            <div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-app-muted">
               <Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
               Loading
             </div>
           ) : sessions.length > 0 ? (
-            sessions.map((session) => {
-              const selected = session.id === selectedSessionId;
-              const isActive = selected && sending;
-              return (
-                <button
-                  key={session.id}
-                  type="button"
-                  onClick={() => onSelectSession?.(session.id)}
-                  className={cn(
-                    "group relative flex w-[8rem] items-center gap-1.5 px-2.5 text-left text-[12px] transition-colors",
-                    selected
-                      ? "bg-app-foreground/[0.06] text-app-foreground"
-                      : "text-app-foreground-soft hover:bg-app-foreground/[0.04] hover:text-app-foreground",
-                  )}
-                >
-                  <SessionProviderIcon agentType={session.agentType} active={isActive} />
-                  <span className="truncate font-medium">{displaySessionTitle(session)}</span>
-                </button>
-              );
-            })
+            <Tabs
+              value={selectedSessionId ?? sessions[0]?.id}
+              onValueChange={(value) => {
+                onSelectSession?.(value);
+              }}
+              className="min-w-max gap-0"
+            >
+              <TabsList
+                aria-label="Sessions"
+                className="min-w-max justify-start rounded-xl"
+              >
+                {sessions.map((session) => {
+                  const selected = session.id === selectedSessionId;
+                  const isActive = selected && sending;
+
+                  return (
+                    <TabsTrigger
+                      key={session.id}
+                      value={session.id}
+                      className="gap-1.5 rounded-[10px] px-3.5 text-[13px] text-app-foreground-soft data-[state=active]:text-app-foreground"
+                    >
+                      <SessionProviderIcon agentType={session.agentType} active={isActive} />
+                      <span className="truncate font-medium">{displaySessionTitle(session)}</span>
+                    </TabsTrigger>
+                  );
+                })}
+              </TabsList>
+            </Tabs>
           ) : (
-            <div className="flex items-center gap-1.5 px-2 text-[12px] text-app-muted">
+            <div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-app-muted">
               <AlertCircle className="size-3" strokeWidth={1.8} />
               No sessions
             </div>
@@ -464,7 +474,7 @@ function ConductorUserMessage({ message }: { message: RenderedMessage }) {
       data-message-role="user"
       className="flex min-w-0 justify-end"
     >
-      <div className="max-w-[75%] overflow-hidden rounded-md bg-app-foreground/[0.03] px-3 py-2 text-[14px] leading-7 text-app-foreground">
+      <div className="max-w-[75%] overflow-hidden rounded-md bg-[var(--content-bg-neutral)] px-3 py-2 text-[14px] leading-7 text-[var(--content-fg-default)]">
         {parts.map((part, idx) => (
           isTextPart(part)
             ? <UserText key={idx} text={part.text} />
@@ -488,7 +498,7 @@ function ConductorAssistantMessage({
     <div
       data-message-id={message.id}
       data-message-role="assistant"
-      className="min-w-0 max-w-full space-y-1"
+      className="conversation-content min-w-0 max-w-full space-y-1"
     >
       {parts.map((part, idx) => {
         if (isTextPart(part)) {
@@ -520,9 +530,9 @@ function ConductorSystemMessage({ message }: { message: RenderedMessage }) {
     <div
       data-message-id={message.id}
       data-message-role="system"
-      className="group/sys flex min-w-0 items-center gap-1.5"
+      className="conversation-content group/sys flex min-w-0 items-center gap-1.5"
     >
-      <div className="py-1 text-[11px] text-app-muted">
+      <div className="py-1 text-[11px] text-[var(--content-fg-muted)]">
         {parts.map((part, idx) => (
           isTextPart(part)
             ? <SystemText key={idx} text={part.text} />
@@ -571,7 +581,7 @@ function AssistantText({
 
   return (
     <div
-      className="conversation-markdown prose prose-sm max-w-none break-words text-[14px] leading-7 text-app-foreground-soft prose-headings:my-0 prose-headings:text-app-foreground prose-p:my-0 prose-li:my-0 prose-pre:my-0 prose-ul:my-0 prose-ol:my-0 prose-blockquote:my-0 prose-table:my-0 prose-strong:text-app-foreground prose-code:rounded prose-code:bg-app-sidebar-strong prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:text-app-foreground prose-pre:bg-app-sidebar prose-pre:text-[13px] prose-a:text-app-project prose-table:text-[13px]"
+      className="conversation-markdown prose prose-sm max-w-none break-words text-[14px] leading-7 prose-headings:my-0 prose-p:my-0 prose-li:my-0 prose-pre:my-0 prose-ul:my-0 prose-ol:my-0 prose-blockquote:my-0 prose-table:my-0 prose-code:rounded prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-pre:text-[13px] prose-table:text-[13px]"
     >
       <Suspense fallback={<AssistantTextFallback text={text} streaming={streaming} />}>
         <LazyStreamdown
@@ -579,6 +589,7 @@ function AssistantText({
           className="conversation-streamdown"
           isAnimating={streaming}
           mode={mode}
+          shikiTheme={GITHUB_SHIKI_THEME}
         >
           {text}
         </LazyStreamdown>
@@ -609,13 +620,13 @@ function AssistantTextFallback({
 function AssistantReasoning({ text }: { text: string }) {
   return (
     <details className="group">
-      <summary className="flex cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-app-muted hover:text-app-foreground-soft [&::-webkit-details-marker]:hidden">
+      <summary className="conversation-workflow-summary flex cursor-pointer items-center gap-1.5 py-0.5 text-[12px] [&::-webkit-details-marker]:hidden">
         <svg className="size-2.5 shrink-0 transition-transform group-open:rotate-90" viewBox="0 0 12 12" fill="none">
           <path d="M4.5 2.5L8.5 6L4.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         Thinking
       </summary>
-      <pre className="mt-1.5 max-h-[20rem] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-app-foreground/[0.03] px-3 py-2.5 font-sans text-[12px] leading-5 text-app-muted/70">
+      <pre className="conversation-workflow-surface mt-1.5 max-h-[20rem] overflow-auto whitespace-pre-wrap break-words rounded-lg px-3 py-2.5 font-sans text-[12px] leading-5">
         {text}
       </pre>
     </details>
@@ -654,19 +665,19 @@ function AssistantToolCall({
         hasDiff ? (
           <EditDiffTrigger file={info.file} diffAdd={info.diffAdd} diffDel={info.diffDel} oldStr={oldStr} newStr={newStr} />
         ) : (
-          <span className="truncate text-app-foreground-soft">{info.file}</span>
+          <span className="truncate text-[var(--content-fg-default)]">{info.file}</span>
         )
       ) : null}
       {!hasDiff && (info.diffAdd != null || info.diffDel != null) ? (
         <span className="flex items-center gap-1 text-[11px]">
-          {info.diffAdd != null ? <span className="text-app-positive">+{info.diffAdd}</span> : null}
-          {info.diffDel != null ? <span className="text-app-negative">-{info.diffDel}</span> : null}
+          {info.diffAdd != null ? <span className="conversation-diff-add-fg">+{info.diffAdd}</span> : null}
+          {info.diffDel != null ? <span className="conversation-diff-remove-fg">-{info.diffDel}</span> : null}
         </span>
       ) : null}
       {info.command ? (
-        <code className="truncate rounded bg-app-foreground/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-app-foreground-soft">{info.command}</code>
+        <code className="conversation-workflow-inline-code truncate rounded px-1.5 py-0.5 font-mono text-[11px]">{info.command}</code>
       ) : info.detail ? (
-        <span className="truncate text-app-muted/60">{info.detail}</span>
+        <span className="conversation-workflow-detail truncate">{info.detail}</span>
       ) : null}
     </>
   );
@@ -675,16 +686,16 @@ function AssistantToolCall({
   if (childrenData) {
     return (
       <details className="group/children">
-        <summary className="flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
+        <summary className="conversation-workflow-summary flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] [&::-webkit-details-marker]:hidden">
           {toolLine}
-          <span className="shrink-0 cursor-pointer text-[11px] text-app-muted/40 hover:text-app-muted">
+          <span className="shrink-0 cursor-pointer text-[11px] text-[var(--content-fg-muted)] hover:text-[var(--content-fg-default)]">
             <svg className="size-2 transition-transform group-open/children:rotate-90" viewBox="0 0 12 12" fill="none">
               <path d="M4.5 2.5L8.5 6L4.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </span>
-          <span className="shrink-0 text-[11px] text-app-muted/40">{childrenData.parts.length} steps</span>
+          <span className="shrink-0 text-[11px] text-[var(--content-fg-muted)]">{childrenData.parts.length} steps</span>
         </summary>
-        <div className="ml-5 space-y-0.5 border-l border-app-border/30 pl-3 pt-1">
+        <div className="conversation-workflow-tree ml-5 space-y-0.5 border-l pl-3 pt-1">
           {childrenData.parts.map((part, idx) => {
             if (part.type === "tool-call") {
               return (
@@ -698,7 +709,7 @@ function AssistantToolCall({
             }
             if (part.type === "text" && part.text) {
               return (
-                <div key={idx} className="text-[13px] leading-6 text-app-foreground-soft">
+                <div key={idx} className="text-[13px] leading-6 text-[var(--content-fg-muted)]">
                   {(part.text as string).slice(0, 300)}{(part.text as string).length > 300 ? "…" : ""}
                 </div>
               );
@@ -716,10 +727,10 @@ function AssistantToolCall({
   // Normal tool call with optional output
   return (
     <details className="group/out" open={false}>
-      <summary className="flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
+      <summary className="conversation-workflow-summary flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] [&::-webkit-details-marker]:hidden">
         {toolLine}
         {hasOutput ? (
-          <span className="shrink-0 cursor-pointer text-app-muted/40 hover:text-app-muted">
+          <span className="shrink-0 cursor-pointer text-[var(--content-fg-muted)] hover:text-[var(--content-fg-default)]">
             <svg className="size-2.5 transition-transform group-open/out:rotate-90" viewBox="0 0 12 12" fill="none">
               <path d="M4.5 2.5L8.5 6L4.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
@@ -727,14 +738,14 @@ function AssistantToolCall({
         ) : null}
       </summary>
       {hasOutput ? (
-        <div className="mt-1 max-h-[16rem] overflow-auto rounded-md bg-app-foreground/[0.02] text-[11px] leading-5">
+        <div className="conversation-workflow-surface mt-1 max-h-[16rem] overflow-auto rounded-md text-[11px] leading-5">
           {info.fullCommand ? (
-            <div className="border-b border-app-border/20 px-2 py-1.5">
-              <span className="mr-1.5 text-app-project/60">$</span>
-              <code className="font-mono text-app-foreground-soft">{info.fullCommand}</code>
+            <div className="border-b border-[var(--content-border-muted)] px-2 py-1.5">
+              <span className="mr-1.5 text-[var(--content-fg-accent)]">$</span>
+              <code className="font-mono text-[var(--content-fg-default)]">{info.fullCommand}</code>
             </div>
           ) : null}
-          <pre className="whitespace-pre-wrap break-words p-1.5 text-app-muted/70">
+          <pre className="whitespace-pre-wrap break-words p-1.5 text-[var(--content-fg-muted)]">
             {resultText!.slice(0, 2000)}{resultText!.length > 2000 ? "…" : ""}
           </pre>
         </div>
@@ -762,7 +773,7 @@ function CopyMessageButton() {
       ref={ref}
       type="button"
       onClick={handleCopy}
-      className="flex size-5 shrink-0 items-center justify-center rounded text-app-muted/30 opacity-0 transition-all hover:text-app-muted group-hover/sys:opacity-100"
+      className="flex size-5 shrink-0 items-center justify-center rounded text-[var(--content-fg-muted)] opacity-0 transition-all hover:text-[var(--content-fg-default)] group-hover/sys:opacity-100"
     >
       {copied ? (
         <Check className="size-3" strokeWidth={2} />
@@ -807,13 +818,13 @@ function EditDiffTrigger({
         ref={triggerRef}
         onMouseEnter={show}
         onMouseLeave={hideDelayed}
-        className="inline-flex cursor-default items-center gap-1.5 rounded border border-app-border/60 px-1.5 py-0.5 transition-colors hover:border-app-foreground-soft/40 hover:bg-app-foreground/[0.03]"
+        className="conversation-diff-trigger inline-flex cursor-default items-center gap-1.5 rounded border px-1.5 py-0.5 transition-colors"
       >
-        <span className="truncate text-app-foreground-soft">{file}</span>
+        <span className="truncate text-[var(--content-fg-default)]">{file}</span>
         {diffAdd != null || diffDel != null ? (
           <span className="flex items-center gap-1 text-[11px]">
-            {diffAdd != null ? <span className="text-app-positive">+{diffAdd}</span> : null}
-            {diffDel != null ? <span className="text-app-negative">-{diffDel}</span> : null}
+            {diffAdd != null ? <span className="conversation-diff-add-fg">+{diffAdd}</span> : null}
+            {diffDel != null ? <span className="conversation-diff-remove-fg">-{diffDel}</span> : null}
           </span>
         ) : null}
       </span>
@@ -822,29 +833,29 @@ function EditDiffTrigger({
             <div
               onMouseEnter={show}
               onMouseLeave={hideDelayed}
-              className="fixed z-[100] w-[min(40rem,90vw)] rounded-lg border border-app-border bg-app-tooltip shadow-xl"
+              className="conversation-diff-popover fixed z-[100] w-[min(40rem,90vw)] rounded-lg border shadow-xl"
               style={{ left: pos.x, top: pos.y }}
             >
-              <div className="border-b border-app-border/50 px-3 py-1.5 text-[11px] text-app-muted">
+              <div className="conversation-diff-popover-header border-b px-3 py-1.5 text-[11px]">
                 {file}
               </div>
               <div className="max-h-[24rem] overflow-auto font-mono text-[11px] leading-5">
                 {oldStr
                   ? oldStr.split("\n").map((line, i) => (
-                      <div key={`d${i}`} className="flex whitespace-pre-wrap bg-app-negative/10">
-                        <span className="w-8 shrink-0 select-none border-r border-app-border/20 pr-1 text-right text-app-negative/40">{i + 1}</span>
-                        <span className="w-4 shrink-0 select-none text-center text-app-negative/60">-</span>
-                        <span className="min-w-0 text-app-negative/80">{line}</span>
+                      <div key={`d${i}`} className="conversation-diff-remove-row flex whitespace-pre-wrap">
+                        <span className="conversation-diff-gutter conversation-diff-remove-fg w-8 shrink-0 select-none border-r pr-1 text-right">{i + 1}</span>
+                        <span className="conversation-diff-remove-fg w-4 shrink-0 select-none text-center">-</span>
+                        <span className="conversation-diff-remove-fg min-w-0">{line}</span>
                       </div>
                     ))
                   : null}
-                {oldStr && newStr ? <div className="border-t border-app-border/30" /> : null}
+                {oldStr && newStr ? <div className="conversation-diff-divider border-t" /> : null}
                 {newStr
                   ? newStr.split("\n").map((line, i) => (
-                      <div key={`a${i}`} className="flex whitespace-pre-wrap bg-app-positive/10">
-                        <span className="w-8 shrink-0 select-none border-r border-app-border/20 pr-1 text-right text-app-positive/40">{i + 1}</span>
-                        <span className="w-4 shrink-0 select-none text-center text-app-positive/60">+</span>
-                        <span className="min-w-0 text-app-positive/80">{line}</span>
+                      <div key={`a${i}`} className="conversation-diff-add-row flex whitespace-pre-wrap">
+                        <span className="conversation-diff-gutter conversation-diff-add-fg w-8 shrink-0 select-none border-r pr-1 text-right">{i + 1}</span>
+                        <span className="conversation-diff-add-fg w-4 shrink-0 select-none text-center">+</span>
+                        <span className="conversation-diff-add-fg min-w-0">{line}</span>
                       </div>
                     ))
                   : null}
@@ -877,7 +888,7 @@ function isToolCallPart(part: unknown): part is Extract<ConductorMessagePart, { 
 function SystemText({ text }: { text: string }) {
   if (text.startsWith("Error:")) {
     return (
-      <span className="inline-flex items-center gap-1 text-app-negative">
+      <span className="conversation-system-error inline-flex items-center gap-1">
         <AlertCircle className="size-3 shrink-0" strokeWidth={1.8} />
         {text.slice(7)}
       </span>
@@ -902,7 +913,7 @@ type ToolInfo = {
 };
 
 function getToolInfo(name: string, input: Record<string, unknown> | null): ToolInfo {
-  const fallbackIcon = <span className="size-3.5 rounded-full bg-app-foreground/15" />;
+  const fallbackIcon = <span className="size-3.5 rounded-full bg-[var(--content-bg-neutral)]" />;
   if (!input) return { action: name, icon: fallbackIcon };
 
   if (name === "Edit") {
@@ -914,7 +925,7 @@ function getToolInfo(name: string, input: Record<string, unknown> | null): ToolI
     return {
       action: "Edit",
       file: fp ? basename(fp) : undefined,
-      icon: <Pencil className="size-3.5 text-app-warning" strokeWidth={1.8} />,
+      icon: <Pencil className="size-3.5 text-[var(--content-fg-attention)]" strokeWidth={1.8} />,
       diffAdd: add,
       diffDel: del,
     };
@@ -926,7 +937,7 @@ function getToolInfo(name: string, input: Record<string, unknown> | null): ToolI
     return {
       action: limit ? `Read ${limit} lines` : "Read",
       file: fp ? basename(fp) : undefined,
-      icon: <FileText className="size-3.5 text-app-info" strokeWidth={1.8} />,
+      icon: <FileText className="size-3.5 text-[var(--content-fg-accent)]" strokeWidth={1.8} />,
     };
   }
 
@@ -935,7 +946,7 @@ function getToolInfo(name: string, input: Record<string, unknown> | null): ToolI
     return {
       action: "Write",
       file: fp ? basename(fp) : undefined,
-      icon: <FilePlus className="size-3.5 text-app-positive" strokeWidth={1.8} />,
+      icon: <FilePlus className="size-3.5 text-[var(--content-fg-success)]" strokeWidth={1.8} />,
     };
   }
 
@@ -943,7 +954,7 @@ function getToolInfo(name: string, input: Record<string, unknown> | null): ToolI
     const cmd = str(input.command);
     return {
       action: "Run",
-      icon: <SquareTerminal className="size-3.5 text-app-foreground-soft" strokeWidth={1.8} />,
+      icon: <SquareTerminal className="size-3.5 text-[var(--content-fg-muted)]" strokeWidth={1.8} />,
       command: cmd ? truncate(cmd, 80) : undefined,
       fullCommand: cmd ?? undefined,
     };
@@ -951,32 +962,32 @@ function getToolInfo(name: string, input: Record<string, unknown> | null): ToolI
 
   if (name === "Grep") {
     const p = str(input.pattern);
-    return { action: "Grep", icon: <Search className="size-3.5 text-app-info" strokeWidth={1.8} />, detail: p ?? undefined };
+    return { action: "Grep", icon: <Search className="size-3.5 text-[var(--content-fg-accent)]" strokeWidth={1.8} />, detail: p ?? undefined };
   }
 
   if (name === "Glob") {
     const p = str(input.pattern);
-    return { action: "Glob", icon: <FolderSearch className="size-3.5 text-app-info" strokeWidth={1.8} />, detail: p ?? undefined };
+    return { action: "Glob", icon: <FolderSearch className="size-3.5 text-[var(--content-fg-accent)]" strokeWidth={1.8} />, detail: p ?? undefined };
   }
 
   if (name === "WebFetch") {
     const url = str(input.url);
-    return { action: "WebFetch", icon: <Globe className="size-3.5 text-app-project" strokeWidth={1.8} />, detail: url ? truncate(url, 60) : undefined };
+    return { action: "WebFetch", icon: <Globe className="size-3.5 text-[var(--content-fg-accent)]" strokeWidth={1.8} />, detail: url ? truncate(url, 60) : undefined };
   }
 
   if (name === "WebSearch") {
     const q = str(input.query);
-    return { action: "WebSearch", icon: <Globe className="size-3.5 text-app-project" strokeWidth={1.8} />, detail: q ? truncate(q, 50) : undefined };
+    return { action: "WebSearch", icon: <Globe className="size-3.5 text-[var(--content-fg-accent)]" strokeWidth={1.8} />, detail: q ? truncate(q, 50) : undefined };
   }
 
   if (name === "ToolSearch") {
     const q = str(input.query);
-    return { action: "ToolSearch", icon: <Search className="size-3.5 text-app-info" strokeWidth={1.8} />, detail: q ? truncate(q, 50) : undefined };
+    return { action: "ToolSearch", icon: <Search className="size-3.5 text-[var(--content-fg-accent)]" strokeWidth={1.8} />, detail: q ? truncate(q, 50) : undefined };
   }
 
   if (name === "Agent" || name === "Task") {
     const d = str(input.description) ?? str(input.prompt);
-    return { action: name, icon: <Bot className="size-3.5 text-app-info" strokeWidth={1.8} />, detail: d ? truncate(d, 50) : undefined };
+    return { action: name, icon: <Bot className="size-3.5 text-[var(--content-fg-done)]" strokeWidth={1.8} />, detail: d ? truncate(d, 50) : undefined };
   }
 
   return { action: name, icon: fallbackIcon };
@@ -1000,17 +1011,15 @@ function isObj(v: unknown): v is Record<string, unknown> {
 
 function EmptyState({ hasSession }: { hasSession: boolean }) {
   return (
-    <div className="m-auto max-w-md rounded-[22px] border border-app-border bg-app-sidebar px-5 py-6 text-center">
-      <div className="mx-auto flex size-12 items-center justify-center rounded-2xl border border-app-border-strong bg-app-sidebar text-app-foreground-soft">
-        <MessageSquareText className="size-5" strokeWidth={1.8} />
-      </div>
-      <h3 className="mt-4 text-[15px] font-semibold text-app-foreground">
-        {hasSession ? "This session is quiet for now" : "No session selected"}
-      </h3>
-      <p className="mt-2 text-[13px] leading-6 text-app-muted">
+    <div className="m-auto flex max-w-sm flex-col items-center px-8 text-center">
+      <MessageSquareText className="size-7 text-app-muted/80" strokeWidth={1.7} />
+      <p className="mt-5 text-[15px] font-medium tracking-[-0.01em] text-app-foreground">
+        {hasSession ? "Nothing here yet" : "No session selected"}
+      </p>
+      <p className="mt-2 max-w-[30rem] text-[13px] leading-6 text-app-muted">
         {hasSession
-          ? "The selected session does not have stored timeline events in this fixture yet."
-          : "Pick a session tab to inspect its stored Conductor data."}
+          ? "This session does not have stored timeline events in the current fixture."
+          : "Choose a session from the header to inspect its timeline."}
       </p>
     </div>
   );

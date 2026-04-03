@@ -18,6 +18,7 @@
     "@primer/octicons-react": "^19.23.1",
     "@radix-ui/react-avatar": "^1.1.11",
     "@radix-ui/react-scroll-area": "^1.2.10",
+    "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-tooltip": "1.2.8",
     "@tauri-apps/api": "2.10.1",
     "@tauri-apps/plugin-opener": "2.5.3",

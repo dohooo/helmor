@@ -61,7 +61,8 @@ describe("App", () => {
     expect(panel).toHaveClass("relative");
     expect(panel).toHaveClass("bg-app-elevated");
     expect(dragRegion).toHaveAttribute("data-tauri-drag-region");
-    expect(viewport).toHaveClass("bg-app-elevated");
+    expect(viewport).toHaveClass("bg-white");
+    expect(viewport).toHaveClass("dark:bg-app-elevated");
     expect(composer).toBeInTheDocument();
     expect(input).toHaveAttribute(
       "placeholder",
