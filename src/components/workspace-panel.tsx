@@ -1,12 +1,14 @@
-import { Suspense, lazy, memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Suspense, forwardRef, lazy, memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  type ScrollerProps as VirtuosoScrollerProps,
   Virtuoso,
   type Components as VirtuosoComponents,
   type ItemProps as VirtuosoItemProps,
   type ScrollSeekPlaceholderProps,
   type VirtuosoHandle,
 } from "react-virtuoso";
+import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area";
 import {
   AlertCircle,
   ArrowDown,
@@ -38,6 +40,7 @@ import {
   type ConductorMessagePart,
 } from "@/lib/message-adapter";
 import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
+import { ScrollBar } from "./ui/scroll-area";
 
 type WorkspacePanelProps = {
   workspace: WorkspaceDetail | null;
@@ -297,6 +300,7 @@ function ConductorThread({ messages, sending }: { messages: SessionMessageRecord
       <ConversationFooterSpacer sending={sending} startTime={sendStart} />
     ),
     Item: ConversationItem,
+    Scroller: ConversationScroller,
     ScrollSeekPlaceholder: ConversationScrollSeekPlaceholder,
   }), [sending, sendStart]);
 
@@ -374,7 +378,6 @@ function ConversationViewport({
         alignToBottom
         atBottomStateChange={onAtBottomStateChange}
         atBottomThreshold={48}
-        className="conversation-scroll"
         components={components}
         computeItemKey={(index, message) => message.id ?? `${message.role}:${index}`}
         data={data}
@@ -394,6 +397,30 @@ function ConversationViewport({
     </div>
   );
 }
+
+const ConversationScroller = memo(forwardRef<HTMLDivElement, VirtuosoScrollerProps>(
+  function ConversationScroller({ children, style, tabIndex, ...props }, ref) {
+    return (
+      <ScrollAreaPrimitive.Root
+        className="relative h-full w-full overflow-hidden"
+        scrollHideDelay={700}
+        type="scroll"
+      >
+        <ScrollAreaPrimitive.Viewport
+          ref={ref}
+          className="conversation-scroll h-full w-full rounded-[inherit]"
+          style={style}
+          tabIndex={tabIndex}
+          data-testid={props["data-testid"]}
+          data-virtuoso-scroller={props["data-virtuoso-scroller"]}
+        >
+          {children}
+        </ScrollAreaPrimitive.Viewport>
+        <ScrollBar orientation="vertical" />
+      </ScrollAreaPrimitive.Root>
+    );
+  },
+));
 
 const ConversationItem = memo(function ConversationItem({
   children,

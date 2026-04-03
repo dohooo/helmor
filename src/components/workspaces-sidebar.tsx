@@ -1,5 +1,4 @@
 import { cva } from "class-variance-authority";
-import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area";
 import {
   IssueClosedIcon,
   IssueDraftIcon,
@@ -29,6 +28,7 @@ import { cn } from "@/lib/utils";
 import { TooltipProvider } from "./ui/tooltip";
 import { BaseTooltip } from "./ui/base-tooltip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
+import { ScrollArea } from "./ui/scroll-area";
 
 const rowVariants = cva(
   "group relative flex h-9 select-none items-center gap-2 rounded-md px-3 text-[13px] cursor-pointer",
@@ -378,13 +378,11 @@ export function WorkspacesSidebar({
           </div>
         </div>
 
-        <ScrollAreaPrimitive.Root
+        <ScrollArea
           data-slot="workspace-groups-scroll"
-          type="scroll"
-          scrollHideDelay={700}
           className="relative mt-4 min-h-0 flex-1 overflow-hidden"
+          viewportClassName="h-full min-w-0 w-full rounded-[inherit] px-2 pr-3"
         >
-          <ScrollAreaPrimitive.Viewport className="h-full min-w-0 w-full rounded-[inherit] px-2 pr-3">
             <div className="flex min-h-full flex-col gap-4 pb-3">
               {groups.map((group) => {
                 const canCollapse = group.rows.length > 0;
@@ -484,14 +482,7 @@ export function WorkspacesSidebar({
                 </section>
               </Collapsible>
             </div>
-          </ScrollAreaPrimitive.Viewport>
-          <ScrollAreaPrimitive.Scrollbar
-            orientation="vertical"
-            className="flex w-2 touch-none select-none p-[2px] transition-opacity data-[state=hidden]:opacity-0 data-[state=visible]:opacity-100"
-          >
-            <ScrollAreaPrimitive.Thumb className="relative flex-1 rounded-full bg-app-scrollbar-thumb hover:bg-app-scrollbar-thumb-hover" />
-          </ScrollAreaPrimitive.Scrollbar>
-        </ScrollAreaPrimitive.Root>
+        </ScrollArea>
       </div>
     </TooltipProvider>
   );
