@@ -1,4 +1,4 @@
-import { useCallback, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
 import {
   ArrowUp,
@@ -23,14 +23,16 @@ import {
 } from "./ui/dropdown-menu";
 
 type WorkspaceComposerProps = {
-  value: string;
-  onValueChange: (value: string) => void;
+  contextKey: string;
   onSubmit: (prompt: string, imagePaths: string[]) => void;
   sending?: boolean;
   selectedModelId: string | null;
   modelSections: AgentModelSection[];
   onSelectModel: (modelId: string) => void;
   sendError?: string | null;
+  restoreDraft?: string | null;
+  restoreImages?: string[];
+  restoreNonce?: number;
 };
 
 type ComposerButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -57,23 +59,37 @@ function ComposerButton({
   );
 }
 
-export function WorkspaceComposer({
-  value,
-  onValueChange,
+export const WorkspaceComposer = memo(function WorkspaceComposer({
+  contextKey,
   onSubmit,
   sending = false,
   selectedModelId,
   modelSections,
   onSelectModel,
   sendError,
+  restoreDraft,
+  restoreImages = [],
+  restoreNonce = 0,
 }: WorkspaceComposerProps) {
+  const [draftValue, setDraftValue] = useState(restoreDraft ?? "");
   const selectedModel =
     modelSections
       .flatMap((section) => section.options)
       .find((option) => option.id === selectedModelId) ?? null;
-  const [attachedImages, setAttachedImages] = useState<string[]>([]);
-  const hasContent = value.trim().length > 0 || attachedImages.length > 0;
+  const [attachedImages, setAttachedImages] = useState<string[]>(restoreImages);
+  const hasContent = draftValue.trim().length > 0 || attachedImages.length > 0;
   const sendDisabled = sending || !selectedModel || !hasContent;
+
+  useEffect(() => {
+    setDraftValue(restoreDraft ?? "");
+    setAttachedImages(restoreImages);
+  }, [contextKey, restoreDraft, restoreImages]);
+
+  useEffect(() => {
+    if (!restoreDraft && restoreImages.length === 0) return;
+    setDraftValue(restoreDraft ?? "");
+    setAttachedImages(restoreImages);
+  }, [restoreDraft, restoreImages, restoreNonce]);
 
   // Intercept value changes to extract image paths
   const handleValueChange = useCallback(
@@ -84,12 +100,12 @@ export function WorkspaceComposer({
         for (const p of found) cleaned = cleaned.replace(p, "");
         cleaned = cleaned.replace(/\n{2,}/g, "\n").trim();
         setAttachedImages((prev) => [...new Set([...prev, ...found])]);
-        onValueChange(cleaned);
+        setDraftValue(cleaned);
       } else {
-        onValueChange(newValue);
+        setDraftValue(newValue);
       }
     },
-    [onValueChange],
+    [],
   );
 
   const handleRemoveImage = useCallback((path: string) => {
@@ -98,10 +114,11 @@ export function WorkspaceComposer({
 
   const handleSubmit = useCallback(() => {
     const imageRefs = attachedImages.map((p) => `@${p}`);
-    const prompt = [value.trim(), ...imageRefs].filter(Boolean).join("\n");
+    const prompt = [draftValue.trim(), ...imageRefs].filter(Boolean).join("\n");
     onSubmit(prompt, attachedImages);
+    setDraftValue("");
     setAttachedImages([]);
-  }, [value, attachedImages, onSubmit]);
+  }, [draftValue, attachedImages, onSubmit]);
 
   return (
     <div
@@ -123,7 +140,7 @@ export function WorkspaceComposer({
       <textarea
         id="workspace-input"
         aria-label="Workspace input"
-        value={value}
+        value={draftValue}
         onChange={(event) => {
           handleValueChange(event.currentTarget.value);
         }}
@@ -257,4 +274,4 @@ export function WorkspaceComposer({
       </div>
     </div>
   );
-}
+});

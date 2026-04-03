@@ -1,5 +1,6 @@
 import "./App.css";
 import {
+  startTransition,
   type KeyboardEvent,
   type MouseEvent,
   useEffect,
@@ -92,10 +93,15 @@ function App() {
   const [agentModelSections, setAgentModelSections] = useState<AgentModelSection[]>(
     DEFAULT_AGENT_MODEL_SECTIONS,
   );
-  const [composerValue, setComposerValue] = useState("");
   const [composerModelSelections, setComposerModelSelections] = useState<
     Record<string, string>
   >({});
+  const [composerRestoreState, setComposerRestoreState] = useState<{
+    contextKey: string;
+    draft: string;
+    images: string[];
+    nonce: number;
+  } | null>(null);
   const [liveMessagesByContext, setLiveMessagesByContext] = useState<
     Record<string, SessionMessageRecord[]>
   >({});
@@ -344,7 +350,7 @@ function App() {
     }));
   };
 
-  const handleComposerSubmit = async (submittedPrompt: string, _imagePaths: string[]) => {
+  const handleComposerSubmit = async (submittedPrompt: string, imagePaths: string[]) => {
     const prompt = submittedPrompt.trim();
     if (!prompt || !selectedModel) {
       return;
@@ -369,7 +375,7 @@ function App() {
     setLiveMessagesByContext((current) =>
       appendLiveMessage(current, contextKey, optimisticUserMessage),
     );
-    setComposerValue("");
+    setComposerRestoreState(null);
     setSendErrorsByContext((current) => ({ ...current, [contextKey]: null }));
     setSendingContextKey(contextKey);
 
@@ -386,26 +392,54 @@ function App() {
 
       const accumulator = new StreamAccumulator();
       let unlistenFn: (() => void) | null = null;
+      let frameId: number | null = null;
 
       const cleanup = () => {
+        if (frameId !== null) {
+          window.cancelAnimationFrame(frameId);
+          frameId = null;
+        }
         if (unlistenFn) { unlistenFn(); unlistenFn = null; }
+      };
+
+      const flushStreamMessages = () => {
+        frameId = null;
+        const streamMessages = accumulator.toMessages(
+          contextKey,
+          selectedSessionId ?? contextKey,
+        );
+        const nextMessages = [optimisticUserMessage, ...streamMessages];
+        startTransition(() => {
+          setLiveMessagesByContext((current) => {
+            if (haveSameLiveMessages(current[contextKey], nextMessages)) {
+              return current;
+            }
+            return {
+              ...current,
+              [contextKey]: nextMessages,
+            };
+          });
+        });
+      };
+
+      const scheduleFlush = () => {
+        if (frameId !== null) return;
+        frameId = window.requestAnimationFrame(flushStreamMessages);
       };
 
       unlistenFn = await listenAgentStream(streamId, (event) => {
         if (event.kind === "line") {
           accumulator.addLine(event.line);
-          const streamMessages = accumulator.toMessages(
-            contextKey,
-            selectedSessionId ?? contextKey,
-          );
-          setLiveMessagesByContext((current) => ({
-            ...current,
-            [contextKey]: [optimisticUserMessage, ...streamMessages],
-          }));
+          scheduleFlush();
           return;
         }
 
         if (event.kind === "done") {
+          if (frameId !== null) {
+            window.cancelAnimationFrame(frameId);
+            frameId = null;
+          }
+          flushStreamMessages();
           cleanup();
 
           setLiveSessionsByContext((current) => ({
@@ -427,7 +461,12 @@ function App() {
         if (event.kind === "error") {
           cleanup();
           setSendErrorsByContext((current) => ({ ...current, [contextKey]: event.message }));
-          setComposerValue(prompt);
+          setComposerRestoreState({
+            contextKey,
+            draft: prompt,
+            images: imagePaths,
+            nonce: Date.now(),
+          });
           setLiveMessagesByContext((current) => ({
             ...current,
             [contextKey]: (current[contextKey] ?? []).filter(
@@ -468,7 +507,12 @@ function App() {
       } catch (fallbackError) {
         const message = describeUnknownError(fallbackError, "Unable to send message.");
         setSendErrorsByContext((current) => ({ ...current, [contextKey]: message }));
-        setComposerValue(prompt);
+        setComposerRestoreState({
+          contextKey,
+          draft: prompt,
+          images: imagePaths,
+          nonce: Date.now(),
+        });
         setLiveMessagesByContext((current) => ({
           ...current,
           [contextKey]: (current[contextKey] ?? []).filter(
@@ -724,8 +768,8 @@ function App() {
 
             <div className="mt-auto px-4 pb-4 pt-2">
               <WorkspaceComposer
-                value={composerValue}
-                onValueChange={setComposerValue}
+                key={composerContextKey}
+                contextKey={composerContextKey}
                 onSubmit={(prompt, imagePaths) => {
                   void handleComposerSubmit(prompt, imagePaths);
                 }}
@@ -739,6 +783,15 @@ function App() {
                   }));
                 }}
                 sendError={activeSendError}
+                restoreDraft={composerRestoreState?.contextKey === composerContextKey
+                  ? composerRestoreState.draft
+                  : null}
+                restoreImages={composerRestoreState?.contextKey === composerContextKey
+                  ? composerRestoreState.images
+                  : []}
+                restoreNonce={composerRestoreState?.contextKey === composerContextKey
+                  ? composerRestoreState.nonce
+                  : 0}
               />
             </div>
           </div>
@@ -917,6 +970,24 @@ function appendLiveMessage(
     ...current,
     [contextKey]: [...(current[contextKey] ?? []), message],
   };
+}
+
+function haveSameLiveMessages(
+  current: SessionMessageRecord[] | undefined,
+  next: SessionMessageRecord[],
+) {
+  if (!current || current.length !== next.length) return false;
+
+  return current.every((message, index) => {
+    const nextMessage = next[index];
+    return (
+      message.id === nextMessage.id
+      && message.role === nextMessage.role
+      && message.content === nextMessage.content
+      && message.contentIsJson === nextMessage.contentIsJson
+      && message.createdAt === nextMessage.createdAt
+    );
+  });
 }
 
 export default App;

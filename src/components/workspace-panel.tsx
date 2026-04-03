@@ -1,16 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  useExternalStoreRuntime,
-  AssistantRuntimeProvider,
-  ThreadPrimitive,
-  MessagePrimitive,
-} from "@assistant-ui/react";
-import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
-import remarkGfm from "remark-gfm";
-import "@assistant-ui/react-markdown/styles/dot.css";
+  Virtuoso,
+  type Components as VirtuosoComponents,
+  type ItemProps as VirtuosoItemProps,
+  type ScrollSeekPlaceholderProps,
+  type VirtuosoHandle,
+} from "react-virtuoso";
 import {
   AlertCircle,
+  ArrowDown,
   Bot,
   Check,
   Clock3,
@@ -34,7 +33,10 @@ import type {
   WorkspaceDetail,
   WorkspaceSessionSummary,
 } from "@/lib/conductor";
-import { convertConductorMessages } from "@/lib/message-adapter";
+import {
+  convertConductorMessages,
+  type ConductorMessagePart,
+} from "@/lib/message-adapter";
 import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
 
 type WorkspacePanelProps = {
@@ -49,7 +51,29 @@ type WorkspacePanelProps = {
   onSelectSession?: (sessionId: string) => void;
 };
 
-export function WorkspacePanel({
+type RenderedMessage = ReturnType<typeof convertConductorMessages>[number];
+
+const STREAMDOWN_ANIMATION = {
+  animation: "fadeIn",
+  duration: 160,
+  stagger: 6,
+  sep: "char",
+} as const;
+
+const LazyStreamdown = lazy(async () => {
+  const mod = await import("streamdown");
+  return { default: mod.Streamdown };
+});
+
+let hasPreloadedStreamdown = false;
+
+function preloadStreamdown() {
+  if (hasPreloadedStreamdown) return;
+  hasPreloadedStreamdown = true;
+  void import("streamdown");
+}
+
+export const WorkspacePanel = memo(function WorkspacePanel({
   workspace,
   sessions,
   selectedSessionId,
@@ -61,6 +85,26 @@ export function WorkspacePanel({
   onSelectSession,
 }: WorkspacePanelProps) {
   const selectedSession = sessions.find((s) => s.id === selectedSessionId) ?? null;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const idleCallbackId = "requestIdleCallback" in window
+      ? window.requestIdleCallback(() => preloadStreamdown(), { timeout: 1200 })
+      : null;
+    const timeoutId = idleCallbackId === null
+      ? window.setTimeout(() => preloadStreamdown(), 180)
+      : null;
+
+    return () => {
+      if (idleCallbackId !== null && "cancelIdleCallback" in window) {
+        window.cancelIdleCallback(idleCallbackId);
+      }
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, []);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-app-elevated">
@@ -132,60 +176,166 @@ export function WorkspacePanel({
             Loading session timeline
           </div>
         ) : messages.length > 0 ? (
-          <ConductorThread messages={messages} sending={sending} />
+          <ConductorThread
+            key={selectedSessionId ?? "live-thread"}
+            messages={messages}
+            sending={sending}
+          />
         ) : (
           <EmptyState hasSession={!!selectedSession} />
         )}
       </div>
     </div>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
-// assistant-ui powered thread
+// Stick-to-bottom powered thread
 // ---------------------------------------------------------------------------
 
 function ConductorThread({ messages, sending }: { messages: SessionMessageRecord[]; sending: boolean }) {
   const threadMessages = useMemo(() => convertConductorMessages(messages), [messages]);
   const [sendStart, setSendStart] = useState<number | null>(null);
+  const virtuosoRef = useRef<VirtuosoHandle | null>(null);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [isPositioning, setIsPositioning] = useState(true);
+  const [pendingAutoScroll, setPendingAutoScroll] = useState(false);
+  const previousSendingRef = useRef(sending);
+  const sendingJustStarted = sending && !previousSendingRef.current;
+  const streamingMessageId = useMemo(() => {
+    if (!sending) return null;
+
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      const isStreamingAssistant =
+        message.role === "assistant"
+        && (
+          message.id.startsWith("stream:")
+          || message.id.endsWith(":stream-partial")
+        );
+
+      if (!isStreamingAssistant) continue;
+
+      const parsed = message.contentIsJson
+        ? (message.parsedContent as Record<string, unknown> | undefined)
+        : undefined;
+      const isChild = parsed != null && typeof parsed.parent_tool_use_id === "string";
+
+      return isChild ? `child:${message.id}` : message.id;
+    }
+
+    return null;
+  }, [messages, sending]);
 
   useEffect(() => {
     if (sending) {
-      setSendStart(Date.now());
+      setSendStart((current) => current ?? Date.now());
     } else {
       setSendStart(null);
     }
   }, [sending]);
 
-  const runtime = useExternalStoreRuntime({
-    messages: threadMessages,
-    isRunning: false,
-    convertMessage: (m) => m,
-    onNew: async () => {
-      // Read-only viewer — no sending
-    },
-  });
+  useEffect(() => {
+    previousSendingRef.current = sending;
+  }, [sending]);
+
+  useEffect(() => {
+    if (sendingJustStarted) {
+      setPendingAutoScroll(true);
+    } else if (!sending) {
+      setPendingAutoScroll(false);
+    }
+  }, [sendingJustStarted, sending]);
+
+  const scrollThreadToBottom = useCallback(() => {
+    const virtuoso = virtuosoRef.current;
+    if (!virtuoso) return;
+
+    // Jump to the last item first, then settle to the actual scroll extent so footer space is included.
+    virtuoso.scrollToIndex({
+      index: "LAST",
+      align: "end",
+      behavior: "auto",
+    });
+    virtuoso.autoscrollToBottom();
+  }, []);
+
+  useEffect(() => {
+    if (!sending || !isAtBottom) return;
+    scrollThreadToBottom();
+  }, [threadMessages, sending, isAtBottom, scrollThreadToBottom]);
+
+  useLayoutEffect(() => {
+    if (threadMessages.length === 0) return;
+    if (!isPositioning && (!sending || !(sendingJustStarted || pendingAutoScroll))) return;
+    scrollThreadToBottom();
+  }, [
+    threadMessages,
+    sending,
+    sendingJustStarted,
+    pendingAutoScroll,
+    isPositioning,
+    scrollThreadToBottom,
+  ]);
+
+  useEffect(() => {
+    if (isAtBottom && pendingAutoScroll) {
+      setPendingAutoScroll(false);
+    }
+  }, [isAtBottom, pendingAutoScroll]);
+
+  const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
+    setIsAtBottom(atBottom);
+    if (atBottom) {
+      setIsPositioning(false);
+    }
+  }, []);
+
+  const virtuosoComponents = useMemo<VirtuosoComponents<RenderedMessage>>(() => ({
+    Header: ConversationHeaderSpacer,
+    Footer: () => (
+      <ConversationFooterSpacer sending={sending} startTime={sendStart} />
+    ),
+    Item: ConversationItem,
+    ScrollSeekPlaceholder: ConversationScrollSeekPlaceholder,
+  }), [sending, sendStart]);
+
+  const itemContent = useCallback((index: number, message: RenderedMessage) => (
+    <MemoConversationMessage
+      message={message}
+      streaming={message.id === streamingMessageId}
+      itemIndex={index}
+    />
+  ), [streamingMessageId]);
 
   return (
-    <AssistantRuntimeProvider runtime={runtime}>
-      <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col">
-        <ThreadPrimitive.Viewport
-          autoScroll
-          scrollToBottomOnInitialize
-          scrollToBottomOnThreadSwitch
-          className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-7 py-6"
+    <ConversationViewport
+      components={virtuosoComponents}
+      data={threadMessages}
+      followOutput={(atBottom) => (
+        sending && (atBottom || pendingAutoScroll || sendingJustStarted)
+          ? "auto"
+          : false
+      )}
+      isPositioning={isPositioning}
+      itemContent={itemContent}
+      onAtBottomStateChange={handleAtBottomStateChange}
+      virtuosoRef={virtuosoRef}
+    >
+      {!isAtBottom && !pendingAutoScroll && !sendingJustStarted ? (
+        <button
+          type="button"
+          onClick={() => {
+            scrollThreadToBottom();
+          }}
+          className="conversation-scroll-button"
+          aria-label="Scroll to latest message"
         >
-          <ThreadPrimitive.Messages
-            components={{
-              UserMessage: ConductorUserMessage,
-              AssistantMessage: ConductorAssistantMessage,
-              SystemMessage: ConductorSystemMessage,
-            }}
-          />
-          {sending ? <SendingIndicator startTime={sendStart} /> : null}
-        </ThreadPrimitive.Viewport>
-      </ThreadPrimitive.Root>
-    </AssistantRuntimeProvider>
+          <ArrowDown className="size-3.5" strokeWidth={1.9} />
+          Latest
+        </button>
+      ) : null}
+    </ConversationViewport>
   );
 }
 
@@ -193,48 +343,214 @@ function ConductorThread({ messages, sending }: { messages: SessionMessageRecord
 // Message components
 // ---------------------------------------------------------------------------
 
-function ConductorUserMessage() {
+function ConversationViewport({
+  children,
+  components,
+  data,
+  followOutput,
+  isPositioning,
+  itemContent,
+  onAtBottomStateChange,
+  virtuosoRef,
+}: {
+  children?: ReactNode;
+  components: VirtuosoComponents<RenderedMessage>;
+  data: RenderedMessage[];
+  followOutput: "auto" | false | ((isAtBottom: boolean) => "auto" | false);
+  isPositioning: boolean;
+  itemContent: (index: number, message: RenderedMessage) => ReactNode;
+  onAtBottomStateChange: (atBottom: boolean) => void;
+  virtuosoRef: React.RefObject<VirtuosoHandle | null>;
+}) {
   return (
-    <MessagePrimitive.Root className="flex min-w-0 justify-end">
-      <div className="max-w-[75%] overflow-hidden rounded-md bg-app-foreground/[0.03] px-3 py-2 text-[14px] leading-7 text-app-foreground">
-        <MessagePrimitive.Content
-          components={{
-            Text: UserText,
-          }}
+    <div
+      className={cn(
+        "relative flex min-h-0 flex-1 overflow-hidden",
+        isPositioning ? "opacity-0" : "opacity-100",
+      )}
+    >
+      <Virtuoso
+        ref={virtuosoRef}
+        alignToBottom
+        atBottomStateChange={onAtBottomStateChange}
+        atBottomThreshold={48}
+        className="conversation-scroll"
+        components={components}
+        computeItemKey={(index, message) => message.id ?? `${message.role}:${index}`}
+        data={data}
+        defaultItemHeight={92}
+        followOutput={followOutput}
+        initialTopMostItemIndex={{ index: "LAST", align: "end" }}
+        increaseViewportBy={{ bottom: 720, top: 360 }}
+        itemContent={itemContent}
+        overscan={{ main: 600, reverse: 300 }}
+        scrollSeekConfiguration={{
+          enter: (velocity) => Math.abs(velocity) > 2200,
+          exit: (velocity) => Math.abs(velocity) < 180,
+        }}
+        style={{ height: "100%", width: "100%" }}
+      />
+      {children}
+    </div>
+  );
+}
+
+const ConversationItem = memo(function ConversationItem({
+  children,
+  style,
+  item: _item,
+  ...props
+}: VirtuosoItemProps<RenderedMessage>) {
+  return (
+    <div {...props} style={style} className="flow-root px-7 pb-1.5">
+      {children}
+    </div>
+  );
+});
+
+function ConversationScrollSeekPlaceholder({
+  height,
+  index,
+}: ScrollSeekPlaceholderProps) {
+  const isUserLike = index % 3 === 1;
+  const widthClass = index % 5 === 0 ? "w-[44%]" : index % 2 === 0 ? "w-[62%]" : "w-[52%]";
+
+  return (
+    <div className="px-7 pb-1.5" style={{ height }}>
+      <div className={cn("flex h-full min-h-10 items-center", isUserLike ? "justify-end" : "justify-start")}>
+        <div
+          className={cn(
+            "h-8 rounded-md border border-app-border bg-app-sidebar/70 motion-safe:animate-pulse",
+            isUserLike ? "w-[36%]" : widthClass,
+          )}
         />
       </div>
-    </MessagePrimitive.Root>
+    </div>
   );
 }
 
-function ConductorAssistantMessage() {
+function ConversationHeaderSpacer() {
+  return <div className="h-6 shrink-0" />;
+}
+
+function ConversationFooterSpacer({
+  sending,
+  startTime,
+}: {
+  sending: boolean;
+  startTime: number | null;
+}) {
   return (
-    <MessagePrimitive.Root className="min-w-0 max-w-full space-y-1">
-      <MessagePrimitive.Content
-        components={{
-          Text: AssistantText,
-          Reasoning: AssistantReasoning,
-          tools: {
-            Fallback: AssistantToolCall,
-          },
-        }}
-      />
-    </MessagePrimitive.Root>
+    <div className="px-7 pb-6 pt-1.5">
+      {sending ? <SendingIndicator startTime={startTime} /> : null}
+    </div>
   );
 }
 
-function ConductorSystemMessage() {
+function ConversationMessage({
+  message,
+  streaming,
+  itemIndex: _itemIndex,
+}: {
+  message: RenderedMessage;
+  streaming: boolean;
+  itemIndex: number;
+}) {
+  if (message.role === "user") {
+    return <ConductorUserMessage message={message} />;
+  }
+
+  if (message.role === "assistant") {
+    return <ConductorAssistantMessage message={message} streaming={streaming} />;
+  }
+
+  return <ConductorSystemMessage message={message} />;
+}
+
+const MemoConversationMessage = memo(ConversationMessage, (prev, next) => {
   return (
-    <MessagePrimitive.Root className="group/sys flex min-w-0 items-center gap-1.5">
+    prev.message === next.message
+    && prev.streaming === next.streaming
+    && prev.itemIndex === next.itemIndex
+  );
+});
+
+function ConductorUserMessage({ message }: { message: RenderedMessage }) {
+  const parts = message.content as ConductorMessagePart[];
+
+  return (
+    <div
+      data-message-id={message.id}
+      data-message-role="user"
+      className="flex min-w-0 justify-end"
+    >
+      <div className="max-w-[75%] overflow-hidden rounded-md bg-app-foreground/[0.03] px-3 py-2 text-[14px] leading-7 text-app-foreground">
+        {parts.map((part, idx) => (
+          isTextPart(part)
+            ? <UserText key={idx} text={part.text} />
+            : null
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ConductorAssistantMessage({
+  message,
+  streaming,
+}: {
+  message: RenderedMessage;
+  streaming: boolean;
+}) {
+  const parts = message.content as ConductorMessagePart[];
+
+  return (
+    <div
+      data-message-id={message.id}
+      data-message-role="assistant"
+      className="min-w-0 max-w-full space-y-1"
+    >
+      {parts.map((part, idx) => {
+        if (isTextPart(part)) {
+          return <AssistantText key={idx} text={part.text} streaming={streaming} />;
+        }
+        if (isReasoningPart(part)) {
+          return <AssistantReasoning key={idx} text={part.text} />;
+        }
+        if (isToolCallPart(part)) {
+          return (
+            <AssistantToolCall
+              key={part.toolCallId ?? `${part.toolName}:${idx}`}
+              toolName={part.toolName}
+              args={part.args}
+              result={part.result}
+            />
+          );
+        }
+        return null;
+      })}
+    </div>
+  );
+}
+
+function ConductorSystemMessage({ message }: { message: RenderedMessage }) {
+  const parts = message.content as ConductorMessagePart[];
+
+  return (
+    <div
+      data-message-id={message.id}
+      data-message-role="system"
+      className="group/sys flex min-w-0 items-center gap-1.5"
+    >
       <div className="py-1 text-[11px] text-app-muted">
-        <MessagePrimitive.Content
-          components={{
-            Text: SystemText,
-          }}
-        />
+        {parts.map((part, idx) => (
+          isTextPart(part)
+            ? <SystemText key={idx} text={part.text} />
+            : null
+        ))}
       </div>
       <CopyMessageButton />
-    </MessagePrimitive.Root>
+    </div>
   );
 }
 
@@ -264,10 +580,50 @@ function UserText({ text }: { text: string }) {
   return <p className="whitespace-pre-wrap break-words">{text}</p>;
 }
 
-function AssistantText() {
+function AssistantText({
+  text,
+  streaming,
+}: {
+  text: string;
+  streaming: boolean;
+}) {
   return (
-    <div className="aui-md-table prose prose-sm max-w-none break-words text-[14px] leading-7 text-app-foreground-soft prose-headings:text-app-foreground prose-strong:text-app-foreground prose-code:rounded prose-code:bg-app-sidebar-strong prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:text-app-foreground prose-pre:bg-app-sidebar prose-pre:text-[13px] prose-a:text-app-project prose-table:text-[13px]">
-      <MarkdownTextPrimitive remarkPlugins={[remarkGfm]} className="aui-md" />
+    <div
+      className={cn(
+        "conversation-markdown prose prose-sm max-w-none break-words text-[14px] leading-7 text-app-foreground-soft prose-headings:my-0 prose-headings:text-app-foreground prose-p:my-0 prose-li:my-0 prose-pre:my-0 prose-ul:my-0 prose-ol:my-0 prose-blockquote:my-0 prose-table:my-0 prose-strong:text-app-foreground prose-code:rounded prose-code:bg-app-sidebar-strong prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:text-app-foreground prose-pre:bg-app-sidebar prose-pre:text-[13px] prose-a:text-app-project prose-table:text-[13px]",
+        streaming ? "conversation-markdown-streaming" : null,
+      )}
+    >
+      <Suspense fallback={<AssistantTextFallback text={text} streaming={streaming} />}>
+        <LazyStreamdown
+          animated={streaming ? STREAMDOWN_ANIMATION : false}
+          className="conversation-streamdown"
+          isAnimating={streaming}
+          mode={streaming ? "streaming" : "static"}
+          parseIncompleteMarkdown
+        >
+          {text}
+        </LazyStreamdown>
+      </Suspense>
+    </div>
+  );
+}
+
+function AssistantTextFallback({
+  text,
+  streaming,
+}: {
+  text: string;
+  streaming: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "conversation-streamdown whitespace-pre-wrap break-words",
+        streaming ? "conversation-streamdown-fallback-streaming" : null,
+      )}
+    >
+      {text}
     </div>
   );
 }
@@ -294,11 +650,8 @@ function AssistantToolCall({
   result,
 }: {
   toolName: string;
-  argsText: string;
   args: Record<string, unknown>;
   result?: unknown;
-  status: unknown;
-  addResult: unknown;
 }) {
   const info = getToolInfo(toolName, args);
   const isEdit = toolName === "Edit";
@@ -361,10 +714,7 @@ function AssistantToolCall({
                   key={idx}
                   toolName={(part.toolName as string) ?? "unknown"}
                   args={(part.args as Record<string, unknown>) ?? {}}
-                  argsText={(part.argsText as string) ?? ""}
                   result={part.result}
-                  status={null}
-                  addResult={null}
                 />
               );
             }
@@ -556,6 +906,23 @@ function EditDiffTrigger({
   );
 }
 
+function isTextPart(part: unknown): part is Extract<ConductorMessagePart, { type: "text" }> {
+  return isObj(part) && part.type === "text" && typeof part.text === "string";
+}
+
+function isReasoningPart(part: unknown): part is Extract<ConductorMessagePart, { type: "reasoning" }> {
+  return isObj(part) && part.type === "reasoning" && typeof part.text === "string";
+}
+
+function isToolCallPart(part: unknown): part is Extract<ConductorMessagePart, { type: "tool-call" }> {
+  return (
+    isObj(part)
+    && part.type === "tool-call"
+    && typeof part.toolName === "string"
+    && isObj(part.args)
+  );
+}
+
 function SystemText({ text }: { text: string }) {
   if (text.startsWith("Error:")) {
     return (
@@ -674,6 +1041,10 @@ function truncate(s: string, n: number): string {
 
 function basename(path: string): string {
   return path.replace(/\\/g, "/").split("/").pop() ?? path;
+}
+
+function isObj(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 function EmptyState({ hasSession }: { hasSession: boolean }) {

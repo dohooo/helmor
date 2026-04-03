@@ -1,12 +1,11 @@
 /**
- * Adapter: Conductor SessionMessageRecord[] → assistant-ui ThreadMessageLike[]
+ * Adapter: Conductor SessionMessageRecord[] → UI thread messages
  */
-import type { ThreadMessageLike } from "@assistant-ui/react";
 import type { SessionMessageRecord } from "./conductor";
 
-type TextPart = { type: "text"; text: string };
-type ReasoningPart = { type: "reasoning"; text: string };
-type ToolCallPart = {
+export type TextPart = { type: "text"; text: string };
+export type ReasoningPart = { type: "reasoning"; text: string };
+export type ToolCallPart = {
   type: "tool-call";
   toolCallId: string;
   toolName: string;
@@ -14,7 +13,17 @@ type ToolCallPart = {
   argsText: string;
   result?: unknown;
 };
-type AnyPart = TextPart | ReasoningPart | ToolCallPart;
+export type ConductorMessagePart = TextPart | ReasoningPart | ToolCallPart;
+export type ThreadMessageLike = {
+  role: "assistant" | "system" | "user";
+  id?: string;
+  createdAt?: Date;
+  content: ConductorMessagePart[];
+  status?: {
+    type: string;
+    reason?: string;
+  };
+};
 
 export function convertConductorMessages(
   messages: SessionMessageRecord[],
@@ -81,7 +90,7 @@ function convertMessagesFlat(
         role: "assistant",
         id: isChild ? `child:${msg.id}` : msg.id,
         createdAt: new Date(msg.createdAt),
-        content: parts as ThreadMessageLike["content"],
+        content: parts,
         status: { type: "complete", reason: "stop" },
       });
       continue;
@@ -91,7 +100,7 @@ function convertMessagesFlat(
     if (msgType === "user") {
       const prev = result[result.length - 1];
       if (prev?.role === "assistant" && parsed) {
-        mergeToolResults(parsed, prev.content as AnyPart[]);
+        mergeToolResults(parsed, prev.content as ConductorMessagePart[]);
       }
       // Never render user tool_result messages as standalone — they are always
       // paired with a tool-call and should be merged or silently skipped.
@@ -120,11 +129,11 @@ function convertMessagesFlat(
 
 function parseAssistantParts(
   parsed: Record<string, unknown> | undefined,
-): AnyPart[] {
+): ConductorMessagePart[] {
   if (!parsed) return [];
   const msg = isObj(parsed.message) ? parsed.message : null;
   const blocks = Array.isArray(msg?.content) ? msg!.content : [];
-  const parts: AnyPart[] = [];
+  const parts: ConductorMessagePart[] = [];
 
   for (const b of blocks) {
     if (!isObj(b)) continue;
@@ -154,7 +163,7 @@ function parseAssistantParts(
 
 function mergeToolResults(
   parsed: Record<string, unknown> | undefined,
-  targetParts: AnyPart[],
+  targetParts: ConductorMessagePart[],
 ): boolean {
   if (!parsed) return false;
   const msg = isObj(parsed.message) ? parsed.message : null;
@@ -330,16 +339,16 @@ function groupChildMessages(msgs: ThreadMessageLike[]): ThreadMessageLike[] {
       const parent = out[out.length - 1];
       if (parent?.role === "assistant") {
         // Collect all consecutive child parts
-        const childParts: AnyPart[] = [];
+        const childParts: ConductorMessagePart[] = [];
         while (i < msgs.length && msgs[i].id?.startsWith("child:")) {
-          const parts = msgs[i].content as AnyPart[];
+          const parts = msgs[i].content as ConductorMessagePart[];
           childParts.push(...parts);
           i++;
         }
         i--;
 
         // Find the last Agent/Task tool-call in the parent and attach children to its result
-        const parentParts = parent.content as AnyPart[];
+        const parentParts = parent.content as ConductorMessagePart[];
         const agentTc = [...parentParts].reverse().find(
           (p): p is ToolCallPart =>
             p.type === "tool-call" && (p.toolName === "Agent" || p.toolName === "Task"),

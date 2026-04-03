@@ -2,6 +2,9 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "streamdown/styles.css";
+
+@source "../node_modules/streamdown/dist/*.js";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -212,6 +215,78 @@ body,
 body {
   min-height: 100vh;
   background-color: var(--color-app-base);
+}
+
+.conversation-scroll {
+  overscroll-behavior: contain;
+}
+
+.conversation-scroll-button {
+  position: absolute;
+  left: 50%;
+  bottom: 1.5rem;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  transform: translateX(-50%);
+  border: 1px solid color-mix(in oklch, var(--color-app-border-strong) 70%, transparent);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklch, var(--color-app-elevated) 96%, white 4%),
+      color-mix(in oklch, var(--color-app-sidebar) 94%, black 6%)
+    );
+  color: var(--color-app-foreground-soft);
+  box-shadow: 0 10px 30px oklch(0% 0 0 / 0.12);
+  border-radius: 999px;
+  padding: 0.45rem 0.8rem;
+  font-size: 12px;
+  font-weight: 600;
+  transition:
+    transform 160ms ease,
+    color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.conversation-scroll-button:hover {
+  transform: translateX(-50%) translateY(-1px);
+  color: var(--color-app-foreground);
+  border-color: color-mix(in oklch, var(--color-app-project) 35%, var(--color-app-border-strong));
+  box-shadow: 0 14px 32px oklch(0% 0 0 / 0.16);
+}
+
+.conversation-markdown-streaming {
+  position: relative;
+}
+
+.conversation-markdown-streaming::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: -0.15rem;
+  height: 3.2lh;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      180deg,
+      oklch(100% 0 0 / 0),
+      color-mix(in oklch, var(--color-app-elevated) 8%, transparent 92%) 45%,
+      color-mix(in oklch, var(--color-app-elevated) 18%, transparent 82%)
+    );
+  opacity: 0.7;
+  animation: conversation-tail-fade 1.1s ease-out infinite alternate;
+}
+
+@keyframes conversation-tail-fade {
+  from {
+    opacity: 0.28;
+  }
+
+  to {
+    opacity: 0.72;
+  }
 }
 
 * {
