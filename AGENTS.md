@@ -86,3 +86,4 @@ scripts/conductor/export-repo-fixture.sh --repo <repo-name>
 - **Fixture data**: `.local-data/conductor/` contains exported Conductor database + workspace context directories. Gitignored. Created via `scripts/conductor/export-repo-fixture.sh`.
 - **macOS window chrome**: Overlay title bar with traffic lights at (16, 24). Drag region via `data-tauri-drag-region`.
 - **Serde convention**: Rust structs use `#[serde(rename_all = "camelCase")]` so JSON fields match TypeScript types directly.
+- **Rust clippy**: All Rust code must pass `cargo clippy -- -D warnings` with zero warnings. Run clippy before committing any Rust changes.
