@@ -1,5 +1,6 @@
 import { Suspense, forwardRef, lazy, memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import Skeleton, { SkeletonTheme } from "react-loading-skeleton";
 import {
   type ScrollerProps as VirtuosoScrollerProps,
   Virtuoso,
@@ -440,17 +441,30 @@ function ConversationScrollSeekPlaceholder({
   index,
 }: ScrollSeekPlaceholderProps) {
   const isUserLike = index % 3 === 1;
-  const widthClass = index % 5 === 0 ? "w-[44%]" : index % 2 === 0 ? "w-[62%]" : "w-[52%]";
+  const width = isUserLike
+    ? "36%"
+    : index % 5 === 0
+      ? "44%"
+      : index % 2 === 0
+        ? "62%"
+        : "52%";
 
   return (
     <div className="px-7 pb-1.5" style={{ height }}>
       <div className={cn("flex h-full min-h-10 items-center", isUserLike ? "justify-end" : "justify-start")}>
-        <div
-          className={cn(
-            "h-8 rounded-md border border-app-border bg-app-sidebar/70 motion-safe:animate-pulse",
-            isUserLike ? "w-[36%]" : widthClass,
-          )}
-        />
+        <div style={{ width }}>
+          <SkeletonTheme
+            baseColor="color-mix(in oklch, var(--color-app-foreground) 10%, var(--color-app-base))"
+            highlightColor="color-mix(in oklch, var(--color-app-foreground) 18%, var(--color-app-base))"
+            duration={1.15}
+          >
+            <Skeleton
+              height={32}
+              borderRadius={10}
+              containerClassName="block leading-none"
+            />
+          </SkeletonTheme>
+        </div>
       </div>
     </div>
   );
