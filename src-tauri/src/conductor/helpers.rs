@@ -1,0 +1,466 @@
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+use rusqlite::Row;
+
+use super::workspaces::WorkspaceRecord;
+
+// ---- Display / naming helpers ----
+
+pub fn display_title(record: &WorkspaceRecord) -> String {
+    if let Some(pr_title) = non_empty(&record.pr_title) {
+        return pr_title.to_string();
+    }
+
+    if let Some(session_title) = non_empty(&record.active_session_title) {
+        if session_title != "Untitled" {
+            return session_title.to_string();
+        }
+    }
+
+    humanize_directory_name(&record.directory_name)
+}
+
+pub fn humanize_directory_name(directory_name: &str) -> String {
+    directory_name
+        .split(['-', '_'])
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let mut characters = segment.chars();
+            match characters.next() {
+                Some(first) if first.is_ascii_alphabetic() => {
+                    let mut label = String::new();
+                    label.push(first.to_ascii_uppercase());
+                    label.push_str(characters.as_str());
+                    label
+                }
+                Some(first) => {
+                    let mut label = String::new();
+                    label.push(first);
+                    label.push_str(characters.as_str());
+                    label
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub fn non_empty(value: &Option<String>) -> Option<&str> {
+    value.as_deref().filter(|inner| !inner.trim().is_empty())
+}
+
+// ---- Sidebar sorting helpers ----
+
+pub fn group_id_from_status(manual_status: &Option<String>, derived_status: &str) -> &'static str {
+    let status = non_empty(manual_status)
+        .unwrap_or(derived_status)
+        .trim()
+        .to_ascii_lowercase();
+
+    match status.as_str() {
+        "done" => "done",
+        "review" | "in-review" => "review",
+        "backlog" => "backlog",
+        "cancelled" | "canceled" => "canceled",
+        _ => "progress",
+    }
+}
+
+pub fn sort_sidebar_rows(rows: &mut [super::workspaces::WorkspaceSidebarRow]) {
+    rows.sort_by(|left, right| left.title.to_lowercase().cmp(&right.title.to_lowercase()));
+}
+
+pub fn sidebar_sort_rank(record: &WorkspaceRecord) -> usize {
+    match group_id_from_status(&record.manual_status, &record.derived_status) {
+        "done" => 0,
+        "review" => 1,
+        "progress" => 2,
+        "backlog" => 3,
+        "canceled" => 4,
+        _ => 5,
+    }
+}
+
+// ---- Repo icon helpers ----
+
+const REPO_ICON_CANDIDATES: &[&str] = &[
+    "public/apple-touch-icon.png",
+    "apple-touch-icon.png",
+    "public/favicon.svg",
+    "favicon.svg",
+    "public/favicon.png",
+    "public/icon.png",
+    "public/logo.png",
+    "favicon.png",
+    "app/icon.png",
+    "src/app/icon.png",
+    "public/favicon.ico",
+    "favicon.ico",
+    "app/favicon.ico",
+    "static/favicon.ico",
+    "src-tauri/icons/icon.png",
+    "assets/icon.png",
+    "src/assets/icon.png",
+];
+
+pub fn repo_icon_path_for_root_path(root_path: Option<&str>) -> Option<String> {
+    let root_path = root_path?.trim();
+
+    if root_path.is_empty() {
+        return None;
+    }
+
+    let root = Path::new(root_path);
+
+    for candidate in REPO_ICON_CANDIDATES {
+        let path = root.join(candidate);
+
+        if path.is_file() {
+            return Some(path.display().to_string());
+        }
+    }
+
+    None
+}
+
+pub fn repo_icon_src_for_root_path(root_path: Option<&str>) -> Option<String> {
+    let icon_path = repo_icon_path_for_root_path(root_path)?;
+    let mime_type = repo_icon_mime_type(Path::new(&icon_path));
+    let bytes = fs::read(icon_path).ok()?;
+
+    Some(format!(
+        "data:{mime_type};base64,{}",
+        BASE64_STANDARD.encode(bytes)
+    ))
+}
+
+pub fn repo_icon_mime_type(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/x-icon",
+        _ => "image/png",
+    }
+}
+
+pub fn repo_initials_for_name(repo_name: &str) -> String {
+    let segments = repo_name
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+
+    let mut initials = String::new();
+
+    if segments.len() >= 2 {
+        for segment in segments.iter().take(2) {
+            if let Some(character) = segment.chars().next() {
+                initials.push(character.to_ascii_uppercase());
+            }
+        }
+    }
+
+    if initials.is_empty() {
+        for character in repo_name.chars().filter(|character| character.is_ascii_alphanumeric()) {
+            initials.push(character.to_ascii_uppercase());
+
+            if initials.len() == 2 {
+                break;
+            }
+        }
+    }
+
+    if initials.is_empty() {
+        "WS".to_string()
+    } else {
+        initials
+    }
+}
+
+// ---- File system helpers ----
+
+pub fn copy_dir_contents(source: &Path, destination: &Path) -> Result<(), String> {
+    if !source.exists() {
+        fs::create_dir_all(destination).map_err(|error| {
+            format!(
+                "Failed to create directory {}: {error}",
+                destination.display()
+            )
+        })?;
+        return Ok(());
+    }
+
+    if !source.is_dir() {
+        return Err(format!("Expected directory at {}", source.display()));
+    }
+
+    fs::create_dir_all(destination).map_err(|error| {
+        format!(
+            "Failed to create directory {}: {error}",
+            destination.display()
+        )
+    })?;
+
+    let entries = fs::read_dir(source)
+        .map_err(|error| format!("Failed to read directory {}: {error}", source.display()))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("Failed to read directory entry: {error}"))?;
+        let entry_source = entry.path();
+        let entry_destination = destination.join(entry.file_name());
+        copy_dir_all(&entry_source, &entry_destination)?;
+    }
+
+    Ok(())
+}
+
+pub fn copy_dir_all(source: &Path, destination: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(source)
+        .map_err(|error| format!("Failed to read {}: {error}", source.display()))?;
+
+    if metadata.file_type().is_symlink() {
+        return copy_symlink(source, destination);
+    }
+
+    if metadata.is_file() {
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "Failed to create parent directory for {}: {error}",
+                    destination.display()
+                )
+            })?;
+        }
+        fs::copy(source, destination).map_err(|error| {
+            format!(
+                "Failed to copy {} to {}: {error}",
+                source.display(),
+                destination.display()
+            )
+        })?;
+        return Ok(());
+    }
+
+    fs::create_dir_all(destination).map_err(|error| {
+        format!(
+            "Failed to create directory {}: {error}",
+            destination.display()
+        )
+    })?;
+
+    let entries = fs::read_dir(source)
+        .map_err(|error| format!("Failed to read directory {}: {error}", source.display()))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("Failed to read directory entry: {error}"))?;
+        let entry_source = entry.path();
+        let entry_destination = destination.join(entry.file_name());
+        copy_dir_all(&entry_source, &entry_destination)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+pub fn copy_symlink(source: &Path, destination: &Path) -> Result<(), String> {
+    use std::os::unix::fs::symlink;
+
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Failed to create parent directory for symlink {}: {error}",
+                destination.display()
+            )
+        })?;
+    }
+
+    let link_target = fs::read_link(source)
+        .map_err(|error| format!("Failed to read symlink {}: {error}", source.display()))?;
+    symlink(&link_target, destination).map_err(|error| {
+        format!(
+            "Failed to copy symlink {} to {}: {error}",
+            source.display(),
+            destination.display()
+        )
+    })
+}
+
+#[cfg(not(unix))]
+pub fn copy_symlink(source: &Path, destination: &Path) -> Result<(), String> {
+    let target = fs::read_link(source)
+        .map_err(|error| format!("Failed to read symlink {}: {error}", source.display()))?;
+    let resolved = source
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join(target);
+    copy_dir_all(&resolved, destination)
+}
+
+// ---- Workspace scaffolding helpers ----
+
+pub fn write_file_if_missing(path: &Path, contents: &str) -> Result<(), String> {
+    if path.exists() {
+        return Ok(());
+    }
+
+    fs::write(path, contents)
+        .map_err(|error| format!("Failed to write scaffold file {}: {error}", path.display()))
+}
+
+pub fn create_workspace_context_scaffold(workspace_dir: &Path) -> Result<(), String> {
+    let context_dir = workspace_dir.join(".context");
+    let attachments_dir = context_dir.join("attachments");
+    fs::create_dir_all(&attachments_dir).map_err(|error| {
+        format!(
+            "Failed to create workspace context scaffold under {}: {error}",
+            context_dir.display()
+        )
+    })?;
+
+    write_file_if_missing(&context_dir.join("notes.md"), "# Notes\n")?;
+    write_file_if_missing(&context_dir.join("todos.md"), "# Todos\n")?;
+
+    Ok(())
+}
+
+// ---- Branch / directory name helpers ----
+
+pub const STAR_PROPER_NAMES: &[&str] = &[
+    "acamar", "achernar", "acrux", "adhafera", "adhara", "ain", "albali", "albireo",
+    "alkaid", "alkalurops", "alkaphrah", "alpheratz", "alrakis", "altair", "alya",
+    "ancha", "ankaa", "antares", "aran", "arcturus", "aspidiske", "atik", "atria",
+    "avior", "bellatrix", "betelgeuse", "canopus", "capella", "castor", "cebalrai",
+    "deneb", "denebola", "diadem", "diphda", "electra", "elnath", "enif", "etamin",
+    "fomalhaut", "furud", "gacrux", "gienah", "hamal", "hassaleh", "hydrobius",
+    "izar", "jabbah", "kaus", "kochab", "lesath", "maia", "markab", "meissa",
+    "menkalinan", "merak", "miaplacidus", "mimosa", "mintaka", "mirach", "mirfak",
+    "mizar", "naos", "nashira", "nunki", "peacock", "phact", "phecda", "pleione",
+    "polaris", "pollux", "procyon", "propus", "regulus", "rigel", "rotanev",
+    "sabik", "sadr", "saiph", "scheat", "schedar", "secunda", "sham", "sheliak",
+    "sirius", "spica", "sualocin", "suhail", "tarazed", "tejat", "thuban",
+    "unukalhai", "vega", "wezen", "yildun", "zaniah", "zaurak", "zubenelgenubi",
+];
+
+pub fn branch_name_for_directory(
+    directory_name: &str,
+    settings: &super::settings::BranchPrefixSettings,
+) -> String {
+    let prefix = match settings
+        .branch_prefix_type
+        .as_deref()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("custom") => settings
+            .branch_prefix_custom
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(""),
+        _ => "",
+    };
+
+    format!("{prefix}{directory_name}")
+}
+
+pub fn allocate_directory_name_for_repo(repo_id: &str) -> Result<String, String> {
+    let connection = super::db::open_connection(false)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT directory_name FROM workspaces WHERE repository_id = ?1 AND directory_name IS NOT NULL",
+        )
+        .map_err(|error| format!("Failed to prepare workspace name query: {error}"))?;
+
+    let names = statement
+        .query_map([repo_id], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("Failed to query existing workspace names: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to read existing workspace names: {error}"))?;
+
+    let used = names
+        .into_iter()
+        .map(|value| value.to_ascii_lowercase())
+        .collect::<std::collections::HashSet<_>>();
+
+    for star_name in STAR_PROPER_NAMES {
+        if !used.contains(*star_name) {
+            return Ok((*star_name).to_string());
+        }
+    }
+
+    for version in 2..=999 {
+        for star_name in STAR_PROPER_NAMES {
+            let candidate = format!("{star_name}-v{version}");
+            if !used.contains(candidate.as_str()) {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    Err("Unable to allocate a workspace name from the vendored star list".to_string())
+}
+
+// ---- Archive helpers ----
+
+pub fn staged_archive_context_dir(archived_context_dir: &Path) -> PathBuf {
+    archived_context_dir.with_file_name(format!(
+        ".{}-restore-staged-{}",
+        archived_context_dir
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("workspace"),
+        uuid::Uuid::new_v4()
+    ))
+}
+
+pub fn attachment_prefix(path: &Path) -> String {
+    let mut prefix = path.display().to_string();
+    if !prefix.ends_with('/') {
+        prefix.push('/');
+    }
+    prefix
+}
+
+// ---- Row mapper ----
+
+pub fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord> {
+    Ok(WorkspaceRecord {
+        id: row.get(0)?,
+        repo_id: row.get(1)?,
+        repo_name: row.get(2)?,
+        remote_url: row.get(3)?,
+        default_branch: row.get(4)?,
+        root_path: row.get(5)?,
+        directory_name: row.get(6)?,
+        state: row.get(7)?,
+        has_unread: row.get::<_, i64>(8)? != 0,
+        workspace_unread: row.get(9)?,
+        session_unread_total: row.get(10)?,
+        unread_session_count: row.get(11)?,
+        derived_status: row.get(12)?,
+        manual_status: row.get(13)?,
+        branch: row.get(14)?,
+        initialization_parent_branch: row.get(15)?,
+        intended_target_branch: row.get(16)?,
+        notes: row.get(17)?,
+        pinned_at: row.get(18)?,
+        active_session_id: row.get(19)?,
+        active_session_title: row.get(20)?,
+        active_session_agent_type: row.get(21)?,
+        active_session_status: row.get(22)?,
+        pr_title: row.get(23)?,
+        pr_description: row.get(24)?,
+        archive_commit: row.get(25)?,
+        session_count: row.get(26)?,
+        message_count: row.get(27)?,
+        attachment_count: row.get(28)?,
+    })
+}

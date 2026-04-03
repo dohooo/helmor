@@ -1,4 +1,4 @@
-use crate::conductor::{mark_session_read_in_transaction, resolve_fixture_db_path};
+use crate::conductor::sessions::mark_session_read_in_transaction;
 use std::{
     collections::HashMap,
     env,
@@ -8,7 +8,7 @@ use std::{
     sync::Mutex,
 };
 
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
@@ -872,7 +872,7 @@ fn persist_exchange_to_fixture(
     turns: &[CollectedTurn],
     raw_result_json: Option<&str>,
 ) -> Result<(), String> {
-    let connection = open_fixture_write_connection()?;
+    let connection = open_write_connection()?;
     let now = current_timestamp_string()?;
     let turn_id = Uuid::new_v4().to_string();
     let user_message_id = Uuid::new_v4().to_string();
@@ -1011,19 +1011,8 @@ fn persist_exchange_to_fixture(
     transaction.commit().map_err(|error| error.to_string())
 }
 
-fn open_fixture_write_connection() -> Result<Connection, String> {
-    let db_path = resolve_fixture_db_path()?;
-    let connection = Connection::open_with_flags(
-        db_path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|error| error.to_string())?;
-
-    connection
-        .busy_timeout(std::time::Duration::from_secs(3))
-        .map_err(|error| error.to_string())?;
-
-    Ok(connection)
+fn open_write_connection() -> Result<Connection, String> {
+    crate::conductor::db::open_connection(true)
 }
 
 fn current_timestamp_string() -> Result<String, String> {

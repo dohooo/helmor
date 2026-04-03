@@ -36,22 +36,22 @@ pub fn run() {
             agents::list_agent_model_sections,
             agents::send_agent_message,
             agents::send_agent_message_stream,
-            conductor::archive_fixture_workspace,
-            conductor::create_fixture_workspace_from_repo,
-            conductor::get_fixture_add_repository_defaults,
-            conductor::get_conductor_fixture_info,
+            conductor::archive_workspace,
+            conductor::create_workspace_from_repo,
+            conductor::get_add_repository_defaults,
+            conductor::get_data_info,
             conductor::get_workspace,
-            conductor::add_fixture_repository_from_local_path,
+            conductor::add_repository_from_local_path,
             conductor::list_archived_workspaces,
-            conductor::list_fixture_repositories,
+            conductor::list_repositories,
             conductor::list_session_attachments,
             conductor::list_session_messages,
             conductor::list_workspace_groups,
             conductor::list_workspace_sessions,
-            conductor::mark_fixture_session_read,
-            conductor::mark_fixture_workspace_read,
-            conductor::mark_fixture_workspace_unread,
-            conductor::restore_fixture_workspace
+            conductor::mark_session_read,
+            conductor::mark_workspace_read,
+            conductor::mark_workspace_unread,
+            conductor::restore_workspace
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
