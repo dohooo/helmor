@@ -21,6 +21,7 @@
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-tooltip": "1.2.8",
     "@tauri-apps/api": "2.10.1",
+    "@tauri-apps/plugin-dialog": "2.6.0",
     "@tauri-apps/plugin-opener": "2.5.3",
     "@testing-library/user-event": "14.6.1",
     "class-variance-authority": "^0.7.1",

@@ -10,9 +10,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { WorkspacesSidebar } from "./components/workspaces-sidebar";
 import { WorkspacePanel } from "./components/workspace-panel";
-import type { WorkspaceGroup } from "./lib/conductor";
+import type { RepositoryCreateOption, WorkspaceGroup } from "./lib/conductor";
 
 vi.mock("./App.css", () => ({}));
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(),
+}));
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "helmor.workspaceSidebarWidth";
 
@@ -212,6 +215,45 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Archive workspace" }));
 
     expect(onArchiveWorkspace).toHaveBeenCalledWith("ready-workspace");
+  });
+
+  it("opens the repo picker and creates a workspace from a selected repository", async () => {
+    const user = userEvent.setup();
+    const onCreateWorkspace = vi.fn();
+    const repositories: RepositoryCreateOption[] = [
+      {
+        id: "repo-1",
+        name: "dosu-cli",
+        defaultBranch: "main",
+        repoInitials: "DC",
+      },
+      {
+        id: "repo-2",
+        name: "helmor",
+        defaultBranch: "main",
+        repoInitials: "H",
+      },
+    ];
+
+    render(
+      <WorkspacesSidebar
+        groups={[]}
+        archivedRows={[]}
+        availableRepositories={repositories}
+        onCreateWorkspace={onCreateWorkspace}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "New workspace" }));
+
+    expect(
+      screen.getByRole("dialog", { name: "Create workspace from repository" }),
+    ).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Search repositories"), "dosu");
+    await user.click(screen.getByText("dosu-cli"));
+
+    expect(onCreateWorkspace).toHaveBeenCalledWith("repo-1");
   });
 
   it("opens a workspace context menu and calls mark as unread", async () => {

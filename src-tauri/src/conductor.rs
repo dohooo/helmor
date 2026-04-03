@@ -1,5 +1,6 @@
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use std::{
+    collections::HashSet,
     ffi::OsStr,
     fs,
     process::Command,
@@ -37,6 +38,42 @@ pub struct RestoreWorkspaceResponse {
 pub struct ArchiveWorkspaceResponse {
     pub archived_workspace_id: String,
     pub archived_state: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryCreateOption {
+    pub id: String,
+    pub name: String,
+    pub default_branch: Option<String>,
+    pub repo_icon_src: Option<String>,
+    pub repo_initials: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddRepositoryDefaults {
+    pub last_clone_directory: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddRepositoryResponse {
+    pub repository_id: String,
+    pub created_repository: bool,
+    pub selected_workspace_id: String,
+    pub created_workspace_id: Option<String>,
+    pub created_workspace_state: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateWorkspaceResponse {
+    pub created_workspace_id: String,
+    pub selected_workspace_id: String,
+    pub created_state: String,
+    pub directory_name: String,
+    pub branch: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -235,6 +272,30 @@ struct WorkspaceRecord {
     attachment_count: i64,
 }
 
+#[derive(Debug, Clone)]
+struct FixtureRepositoryRecord {
+    id: String,
+    name: String,
+    default_branch: Option<String>,
+    root_path: String,
+    setup_script: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct BranchPrefixSettings {
+    branch_prefix_type: Option<String>,
+    branch_prefix_custom: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedRepositoryInput {
+    name: String,
+    normalized_root_path: String,
+    remote: Option<String>,
+    remote_url: Option<String>,
+    default_branch: String,
+}
+
 #[tauri::command]
 pub fn get_conductor_fixture_info() -> Result<ConductorFixtureInfo, String> {
     let fixture_root = resolve_fixture_root()?;
@@ -247,6 +308,42 @@ pub fn get_conductor_fixture_info() -> Result<ConductorFixtureInfo, String> {
         db_path: db_path.display().to_string(),
         archive_root: archive_root.display().to_string(),
     })
+}
+
+#[tauri::command]
+pub fn list_fixture_repositories() -> Result<Vec<RepositoryCreateOption>, String> {
+    let fixture_root = resolve_fixture_root()?;
+    list_fixture_repositories_at(&fixture_root)
+}
+
+#[tauri::command]
+pub fn get_fixture_add_repository_defaults() -> Result<AddRepositoryDefaults, String> {
+    let fixture_root = resolve_fixture_root()?;
+    get_fixture_add_repository_defaults_at(&fixture_root)
+}
+
+#[tauri::command]
+pub fn add_fixture_repository_from_local_path(
+    folder_path: String,
+) -> Result<AddRepositoryResponse, String> {
+    let _lock = WORKSPACE_MUTATION_LOCK
+        .lock()
+        .map_err(|_| "Workspace mutation lock poisoned".to_string())?;
+    let fixture_root = resolve_fixture_root()?;
+
+    add_fixture_repository_from_local_path_at(&fixture_root, &folder_path)
+}
+
+#[tauri::command]
+pub fn create_fixture_workspace_from_repo(
+    repo_id: String,
+) -> Result<CreateWorkspaceResponse, String> {
+    let _lock = WORKSPACE_MUTATION_LOCK
+        .lock()
+        .map_err(|_| "Workspace mutation lock poisoned".to_string())?;
+    let fixture_root = resolve_fixture_root()?;
+
+    create_fixture_workspace_from_repo_at(&fixture_root, &repo_id)
 }
 
 #[tauri::command]
@@ -400,6 +497,271 @@ pub fn archive_fixture_workspace(workspace_id: String) -> Result<ArchiveWorkspac
     let fixture_root = resolve_fixture_root()?;
 
     archive_fixture_workspace_at(&fixture_root, &workspace_id)
+}
+
+fn list_fixture_repositories_at(
+    fixture_root: &Path,
+) -> Result<Vec<RepositoryCreateOption>, String> {
+    let connection = open_fixture_connection_at(fixture_root, false)?;
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT
+              id,
+              name,
+              default_branch,
+              root_path
+            FROM repos
+            WHERE COALESCE(hidden, 0) = 0
+            ORDER BY COALESCE(display_order, 0) ASC, LOWER(name) ASC
+            "#,
+        )
+        .map_err(|error| format!("Failed to prepare fixture repository list query: {error}"))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            let name: String = row.get(1)?;
+            let root_path: Option<String> = row.get(3)?;
+
+            Ok(RepositoryCreateOption {
+                id: row.get(0)?,
+                name: name.clone(),
+                default_branch: row.get(2)?,
+                repo_icon_src: repo_icon_src_for_root_path(root_path.as_deref()),
+                repo_initials: repo_initials_for_name(&name),
+            })
+        })
+        .map_err(|error| format!("Failed to load fixture repositories: {error}"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to deserialize fixture repositories: {error}"))
+}
+
+fn get_fixture_add_repository_defaults_at(
+    fixture_root: &Path,
+) -> Result<AddRepositoryDefaults, String> {
+    Ok(AddRepositoryDefaults {
+        last_clone_directory: load_setting_value_at(fixture_root, "last_clone_directory")?,
+    })
+}
+
+fn add_fixture_repository_from_local_path_at(
+    fixture_root: &Path,
+    folder_path: &str,
+) -> Result<AddRepositoryResponse, String> {
+    let resolved_repository = resolve_repository_from_local_path(folder_path)?;
+    let last_clone_directory = Path::new(&resolved_repository.normalized_root_path)
+        .parent()
+        .map(|parent| parent.display().to_string());
+
+    let existing_repository = load_fixture_repository_by_root_path_from_fixture(
+        fixture_root,
+        &resolved_repository.normalized_root_path,
+    )?;
+
+    if let Some(last_clone_directory) = last_clone_directory.as_deref() {
+        upsert_setting_value_at(fixture_root, "last_clone_directory", last_clone_directory)?;
+    }
+
+    if let Some(repository) = existing_repository {
+        if let Some((selected_workspace_id, selected_workspace_state)) =
+            select_visible_workspace_for_repo_at(fixture_root, &repository.id)?
+        {
+            return Ok(AddRepositoryResponse {
+                repository_id: repository.id,
+                created_repository: false,
+                selected_workspace_id,
+                created_workspace_id: None,
+                created_workspace_state: selected_workspace_state,
+            });
+        }
+
+        let create_response =
+            create_fixture_workspace_from_repo_at(fixture_root, &repository.id).map_err(|error| {
+                format!("Repository already exists, but workspace create failed: {error}")
+            })?;
+
+        return Ok(AddRepositoryResponse {
+            repository_id: repository.id,
+            created_repository: false,
+            selected_workspace_id: create_response.selected_workspace_id.clone(),
+            created_workspace_id: Some(create_response.created_workspace_id),
+            created_workspace_state: create_response.created_state,
+        });
+    }
+
+    let repository_id =
+        insert_fixture_repository_at(fixture_root, &resolved_repository).map_err(|error| {
+            format!("Failed to persist repository {}: {error}", resolved_repository.name)
+        })?;
+    let create_result = create_fixture_workspace_from_repo_at(fixture_root, &repository_id);
+
+    match create_result {
+        Ok(create_response) => Ok(AddRepositoryResponse {
+            repository_id,
+            created_repository: true,
+            selected_workspace_id: create_response.selected_workspace_id.clone(),
+            created_workspace_id: Some(create_response.created_workspace_id),
+            created_workspace_state: create_response.created_state,
+        }),
+        Err(error) => {
+            let _ = delete_fixture_repository_at(fixture_root, &repository_id);
+            Err(format!("First workspace create failed: {error}"))
+        }
+    }
+}
+
+fn create_fixture_workspace_from_repo_at(
+    fixture_root: &Path,
+    repo_id: &str,
+) -> Result<CreateWorkspaceResponse, String> {
+    let repository = load_fixture_repository_by_id_from_fixture(fixture_root, repo_id)?
+        .ok_or_else(|| format!("Repository not found: {repo_id}"))?;
+    let repo_root = PathBuf::from(repository.root_path.trim());
+    ensure_git_repository(&repo_root)?;
+
+    let directory_name = allocate_directory_name_for_repo(fixture_root, repo_id)?;
+    let branch_settings = load_branch_prefix_settings_at(fixture_root)?;
+    let branch = branch_name_for_directory(&directory_name, &branch_settings);
+    let default_branch = repository
+        .default_branch
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "main".to_string());
+    let workspace_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let workspace_dir = fixture_workspace_dir(fixture_root, &repository.name, &directory_name);
+    let mirror_dir = fixture_repo_mirror_dir(fixture_root, &repository.name);
+    let setup_root_dir = fixture_repo_setup_root_dir(fixture_root, &repository.name);
+    let logs_dir = fixture_workspace_logs_dir(fixture_root, &workspace_id);
+    let initialization_log_path = logs_dir.join("initialization.log");
+    let setup_log_path = logs_dir.join("setup.log");
+    let timestamp = current_fixture_timestamp(fixture_root)?;
+    let mut created_worktree = false;
+    let mut created_setup_root = false;
+
+    fs::create_dir_all(&logs_dir).map_err(|error| {
+        format!(
+            "Failed to create workspace log directory {}: {error}",
+            logs_dir.display()
+        )
+    })?;
+
+    insert_initializing_workspace_and_session(
+        fixture_root,
+        &repository,
+        &workspace_id,
+        &session_id,
+        &directory_name,
+        &branch,
+        &default_branch,
+        &timestamp,
+        &initialization_log_path,
+        &setup_log_path,
+    )?;
+
+    let create_result = (|| -> Result<CreateWorkspaceResponse, String> {
+        if workspace_dir.exists() {
+            let error = format!(
+                "Workspace target already exists at {}",
+                workspace_dir.display()
+            );
+            let _ = write_log_file(&initialization_log_path, &error);
+            return Err(error);
+        }
+
+        ensure_fixture_repo_mirror(&repo_root, &mirror_dir)?;
+        let tracked_start_ref = remote_tracking_branch_ref(&default_branch);
+        verify_commitish_exists_in_mirror(&mirror_dir, &tracked_start_ref, &format!(
+            "Default branch is missing in source repo: {default_branch}"
+        ))?;
+        let init_log = match create_fixture_worktree_from_start_point(
+            &mirror_dir,
+            &workspace_dir,
+            &branch,
+            &tracked_start_ref,
+        ) {
+            Ok(output) => {
+                created_worktree = true;
+                output
+            }
+            Err(error) => {
+                let _ = write_log_file(&initialization_log_path, &error);
+                return Err(error);
+            }
+        };
+        write_log_file(
+            &initialization_log_path,
+            &format!(
+                "Repository: {}\nWorkspace: {}\nBranch: {}\nStart point: {}\n\n{}",
+                repository.name,
+                workspace_dir.display(),
+                branch,
+                tracked_start_ref,
+                init_log
+            ),
+        )?;
+
+        create_workspace_context_scaffold(&workspace_dir)?;
+        let initialization_files_copied = tracked_file_count(&workspace_dir)?;
+
+        update_workspace_initialization_metadata(
+            fixture_root,
+            &workspace_id,
+            initialization_files_copied,
+            &timestamp,
+        )?;
+        update_workspace_state(fixture_root, &workspace_id, "setting_up", &timestamp)?;
+
+        refresh_fixture_repo_setup_root(&mirror_dir, &setup_root_dir, &tracked_start_ref)?;
+        created_setup_root = true;
+
+        let setup_hook = match resolve_setup_hook(&repository, &workspace_dir, &setup_root_dir) {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = write_log_file(&setup_log_path, &error);
+                return Err(error);
+            }
+        };
+        run_setup_hook(
+            setup_hook.as_deref(),
+            &workspace_dir,
+            &setup_root_dir,
+            &setup_log_path,
+        )?;
+        update_workspace_state(fixture_root, &workspace_id, "ready", &timestamp)?;
+
+        Ok(CreateWorkspaceResponse {
+            created_workspace_id: workspace_id.clone(),
+            selected_workspace_id: workspace_id.clone(),
+            created_state: "ready".to_string(),
+            directory_name,
+            branch: branch.clone(),
+        })
+    })();
+
+    let result = match create_result {
+        Ok(response) => Ok(response),
+        Err(error) => {
+            cleanup_failed_created_workspace(
+                fixture_root,
+                &workspace_id,
+                &session_id,
+                &mirror_dir,
+                &workspace_dir,
+                &branch,
+                created_worktree,
+            );
+            Err(error)
+        }
+    };
+
+    if created_setup_root {
+        let _ = remove_fixture_worktree(&mirror_dir, &setup_root_dir);
+        let _ = fs::remove_dir_all(&setup_root_dir);
+    }
+
+    result
 }
 
 fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
@@ -661,8 +1023,1043 @@ fn non_empty(value: &Option<String>) -> Option<&str> {
     value.as_deref().filter(|inner| !inner.trim().is_empty())
 }
 
+const STAR_PROPER_NAMES: &[&str] = &[
+    "acamar", "achernar", "acrux", "adhafera", "adhara", "ain", "albali", "albireo",
+    "alkaid", "alkalurops", "alkaphrah", "alpheratz", "alrakis", "altair", "alya",
+    "ancha", "ankaa", "antares", "aran", "arcturus", "aspidiske", "atik", "atria",
+    "avior", "bellatrix", "betelgeuse", "canopus", "capella", "castor", "cebalrai",
+    "deneb", "denebola", "diadem", "diphda", "electra", "elnath", "enif", "etamin",
+    "fomalhaut", "furud", "gacrux", "gienah", "hamal", "hassaleh", "hydrobius",
+    "izar", "jabbah", "kaus", "kochab", "lesath", "maia", "markab", "meissa",
+    "menkalinan", "merak", "miaplacidus", "mimosa", "mintaka", "mirach", "mirfak",
+    "mizar", "naos", "nashira", "nunki", "peacock", "phact", "phecda", "pleione",
+    "polaris", "pollux", "procyon", "propus", "regulus", "rigel", "rotanev",
+    "sabik", "sadr", "saiph", "scheat", "schedar", "secunda", "sham", "sheliak",
+    "sirius", "spica", "sualocin", "suhail", "tarazed", "tejat", "thuban",
+    "unukalhai", "vega", "wezen", "yildun", "zaniah", "zaurak", "zubenelgenubi",
+];
+
+fn resolve_repository_from_local_path(folder_path: &str) -> Result<ResolvedRepositoryInput, String> {
+    let selected_path = PathBuf::from(folder_path.trim());
+
+    if folder_path.trim().is_empty() {
+        return Err("No repository folder was selected.".to_string());
+    }
+
+    if !selected_path.exists() {
+        return Err(format!(
+            "Selected path does not exist: {}",
+            selected_path.display()
+        ));
+    }
+
+    if !selected_path.is_dir() {
+        return Err(format!(
+            "Selected path is not a directory: {}",
+            selected_path.display()
+        ));
+    }
+
+    let selected_path_arg = selected_path.display().to_string();
+    let inside_work_tree = run_git(
+        [
+            "-C",
+            selected_path_arg.as_str(),
+            "rev-parse",
+            "--is-inside-work-tree",
+        ],
+        None,
+    )
+    .map_err(|error| format!("Selected directory is not a Git working tree: {error}"))?;
+
+    if inside_work_tree.trim() != "true" {
+        return Err(format!(
+            "Selected directory is not a Git working tree: {}",
+            selected_path.display()
+        ));
+    }
+
+    let normalized_root_path = run_git(
+        [
+            "-C",
+            selected_path_arg.as_str(),
+            "rev-parse",
+            "--show-toplevel",
+        ],
+        None,
+    )
+    .map_err(|error| format!("Failed to resolve Git repository root: {error}"))?;
+    let normalized_root_path = normalized_root_path.trim().to_string();
+    let normalized_root = Path::new(&normalized_root_path);
+    let name = normalized_root
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(ToOwned::to_owned)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            format!(
+                "Failed to derive repository name from {}",
+                normalized_root.display()
+            )
+        })?;
+
+    let remote = resolve_repository_remote(normalized_root)?;
+    let remote_url = match remote.as_deref() {
+        Some(remote_name) => Some(resolve_repository_remote_url(normalized_root, remote_name)?),
+        None => None,
+    };
+    let default_branch =
+        resolve_repository_default_branch(normalized_root, remote.as_deref()).ok_or_else(|| {
+            format!(
+                "Unable to resolve a default branch for repository {}",
+                normalized_root.display()
+            )
+        })?;
+
+    Ok(ResolvedRepositoryInput {
+        name,
+        normalized_root_path,
+        remote,
+        remote_url,
+        default_branch,
+    })
+}
+
+fn resolve_repository_remote(repo_root: &Path) -> Result<Option<String>, String> {
+    let repo_root_arg = repo_root.display().to_string();
+    let output = run_git(["-C", repo_root_arg.as_str(), "remote"], None)
+        .map_err(|error| format!("Failed to read repository remotes: {error}"))?;
+    let remotes = output
+        .lines()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+
+    if remotes.iter().any(|remote| remote == "origin") {
+        return Ok(Some("origin".to_string()));
+    }
+
+    if remotes.len() == 1 {
+        return Ok(remotes.first().cloned());
+    }
+
+    Ok(None)
+}
+
+fn resolve_repository_remote_url(repo_root: &Path, remote: &str) -> Result<String, String> {
+    let repo_root_arg = repo_root.display().to_string();
+    run_git(
+        ["-C", repo_root_arg.as_str(), "remote", "get-url", remote],
+        None,
+    )
+    .map(|value| value.trim().to_string())
+    .map_err(|error| format!("Failed to resolve remote URL for {remote}: {error}"))
+}
+
+fn resolve_repository_default_branch(repo_root: &Path, remote: Option<&str>) -> Option<String> {
+    if let Some(remote) = remote {
+        if let Ok(symbolic_ref) = resolve_default_branch_from_remote_head(repo_root, remote) {
+            return Some(symbolic_ref);
+        }
+    }
+
+    resolve_current_branch(repo_root)
+}
+
+fn resolve_default_branch_from_remote_head(repo_root: &Path, remote: &str) -> Result<String, String> {
+    let repo_root_arg = repo_root.display().to_string();
+    let output = run_git(
+        [
+            "-C",
+            repo_root_arg.as_str(),
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            &format!("refs/remotes/{remote}/HEAD"),
+        ],
+        None,
+    )
+    .map_err(|error| format!("Failed to resolve remote HEAD for {remote}: {error}"))?;
+
+    let prefix = format!("{remote}/");
+    output
+        .trim()
+        .strip_prefix(prefix.as_str())
+        .map(ToOwned::to_owned)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("Remote HEAD for {remote} did not include a branch name"))
+}
+
+fn resolve_current_branch(repo_root: &Path) -> Option<String> {
+    let repo_root_arg = repo_root.display().to_string();
+    let branch = run_git(["-C", repo_root_arg.as_str(), "branch", "--show-current"], None).ok()?;
+    let branch = branch.trim();
+
+    if branch.is_empty() || branch == "HEAD" {
+        None
+    } else {
+        Some(branch.to_string())
+    }
+}
+
+fn load_fixture_repository_by_id_from_fixture(
+    fixture_root: &Path,
+    repo_id: &str,
+) -> Result<Option<FixtureRepositoryRecord>, String> {
+    let connection = open_fixture_connection_at(fixture_root, false)?;
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT id, name, default_branch, root_path, setup_script
+            FROM repos
+            WHERE id = ?1
+            "#,
+        )
+        .map_err(|error| format!("Failed to prepare repository lookup for {repo_id}: {error}"))?;
+
+    let mut rows = statement
+        .query_map([repo_id], |row| {
+            Ok(FixtureRepositoryRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                default_branch: row.get(2)?,
+                root_path: row.get(3)?,
+                setup_script: row.get(4)?,
+            })
+        })
+        .map_err(|error| format!("Failed to query repository {repo_id}: {error}"))?;
+
+    match rows.next() {
+        Some(result) => result
+            .map(Some)
+            .map_err(|error| format!("Failed to deserialize repository {repo_id}: {error}")),
+        None => Ok(None),
+    }
+}
+
+fn load_fixture_repository_by_root_path_from_fixture(
+    fixture_root: &Path,
+    root_path: &str,
+) -> Result<Option<FixtureRepositoryRecord>, String> {
+    let connection = open_fixture_connection_at(fixture_root, false)?;
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT id, name, default_branch, root_path, setup_script
+            FROM repos
+            ORDER BY created_at ASC
+            "#,
+        )
+        .map_err(|error| format!("Failed to prepare repository root lookup: {error}"))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(FixtureRepositoryRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                default_branch: row.get(2)?,
+                root_path: row.get(3)?,
+                setup_script: row.get(4)?,
+            })
+        })
+        .map_err(|error| format!("Failed to query repository rows for {root_path}: {error}"))?;
+
+    let rows = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to deserialize repository for {root_path}: {error}"))?;
+    let normalized_requested_root =
+        normalize_filesystem_path(Path::new(root_path)).unwrap_or_else(|| root_path.to_string());
+
+    for repository in rows {
+        if repository.root_path == root_path {
+            return Ok(Some(repository));
+        }
+
+        let normalized_repository_root = normalize_filesystem_path(Path::new(&repository.root_path))
+            .unwrap_or_else(|| repository.root_path.clone());
+
+        if normalized_repository_root == normalized_requested_root {
+            return Ok(Some(repository));
+        }
+    }
+
+    Ok(None)
+}
+
+fn normalize_filesystem_path(path: &Path) -> Option<String> {
+    fs::canonicalize(path)
+        .ok()
+        .map(|canonicalized| canonicalized.display().to_string())
+}
+
+fn load_setting_value_at(fixture_root: &Path, key: &str) -> Result<Option<String>, String> {
+    let connection = open_fixture_connection_at(fixture_root, false)?;
+    let mut statement = connection
+        .prepare("SELECT value FROM settings WHERE key = ?1")
+        .map_err(|error| format!("Failed to prepare settings lookup for {key}: {error}"))?;
+    let mut rows = statement
+        .query_map([key], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("Failed to query settings value for {key}: {error}"))?;
+
+    match rows.next() {
+        Some(result) => result
+            .map(Some)
+            .map_err(|error| format!("Failed to deserialize settings value for {key}: {error}")),
+        None => Ok(None),
+    }
+}
+
+fn upsert_setting_value_at(fixture_root: &Path, key: &str, value: &str) -> Result<(), String> {
+    let connection = open_fixture_connection_at(fixture_root, true)?;
+    connection
+        .execute(
+            r#"
+            INSERT INTO settings (key, value, created_at, updated_at)
+            VALUES (?1, ?2, datetime('now'), datetime('now'))
+            ON CONFLICT(key) DO UPDATE SET
+              value = excluded.value,
+              updated_at = datetime('now')
+            "#,
+            (key, value),
+        )
+        .map_err(|error| format!("Failed to store setting {key}: {error}"))?;
+
+    Ok(())
+}
+
+fn insert_fixture_repository_at(
+    fixture_root: &Path,
+    repository: &ResolvedRepositoryInput,
+) -> Result<String, String> {
+    let connection = open_fixture_connection_at(fixture_root, true)?;
+    let next_display_order: i64 = connection
+        .query_row(
+            "SELECT COALESCE(MAX(display_order), 0) + 1 FROM repos",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to resolve next repository display order: {error}"))?;
+    let repo_id = uuid::Uuid::new_v4().to_string();
+
+    connection
+        .execute(
+            r#"
+            INSERT INTO repos (
+              id,
+              name,
+              root_path,
+              remote,
+              remote_url,
+              default_branch,
+              display_order,
+              hidden,
+              setup_script,
+              run_script,
+              archive_script,
+              conductor_config,
+              icon,
+              created_at,
+              updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, NULL, NULL, NULL, NULL, NULL, datetime('now'), datetime('now'))
+            "#,
+            (
+                repo_id.as_str(),
+                repository.name.as_str(),
+                repository.normalized_root_path.as_str(),
+                repository.remote.as_deref(),
+                repository.remote_url.as_deref(),
+                repository.default_branch.as_str(),
+                next_display_order,
+            ),
+        )
+        .map_err(|error| format!("Failed to insert repository {}: {error}", repository.name))?;
+
+    Ok(repo_id)
+}
+
+fn delete_fixture_repository_at(fixture_root: &Path, repo_id: &str) -> Result<(), String> {
+    let connection = open_fixture_connection_at(fixture_root, true)?;
+    let deleted_rows = connection
+        .execute("DELETE FROM repos WHERE id = ?1", [repo_id])
+        .map_err(|error| format!("Failed to delete repository {repo_id}: {error}"))?;
+
+    if deleted_rows != 1 {
+        return Err(format!(
+            "Repository delete affected {deleted_rows} rows for {repo_id}"
+        ));
+    }
+
+    Ok(())
+}
+
+fn select_visible_workspace_for_repo_at(
+    fixture_root: &Path,
+    repo_id: &str,
+) -> Result<Option<(String, String)>, String> {
+    let mut visible_records = load_workspace_records_at(fixture_root)?
+        .into_iter()
+        .filter(|record| record.repo_id == repo_id && record.state != "archived")
+        .collect::<Vec<_>>();
+
+    visible_records.sort_by(|left, right| {
+        sidebar_sort_rank(left)
+            .cmp(&sidebar_sort_rank(right))
+            .then_with(|| display_title(left).to_lowercase().cmp(&display_title(right).to_lowercase()))
+    });
+
+    Ok(visible_records
+        .into_iter()
+        .next()
+        .map(|record| (record.id, record.state)))
+}
+
+fn sidebar_sort_rank(record: &WorkspaceRecord) -> usize {
+    match group_id_from_status(&record.manual_status, &record.derived_status) {
+        "done" => 0,
+        "review" => 1,
+        "progress" => 2,
+        "backlog" => 3,
+        "canceled" => 4,
+        _ => 5,
+    }
+}
+
+fn load_branch_prefix_settings_at(fixture_root: &Path) -> Result<BranchPrefixSettings, String> {
+    let connection = open_fixture_connection_at(fixture_root, false)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT key, value FROM settings WHERE key IN ('branch_prefix_type', 'branch_prefix_custom')",
+        )
+        .map_err(|error| format!("Failed to prepare branch settings query: {error}"))?;
+
+    let rows = statement
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .map_err(|error| format!("Failed to query branch settings: {error}"))?;
+
+    let mut settings = BranchPrefixSettings {
+        branch_prefix_type: None,
+        branch_prefix_custom: None,
+    };
+
+    for row in rows {
+        let (key, value) = row.map_err(|error| format!("Failed to read branch settings row: {error}"))?;
+        match key.as_str() {
+            "branch_prefix_type" => settings.branch_prefix_type = Some(value),
+            "branch_prefix_custom" => settings.branch_prefix_custom = Some(value),
+            _ => {}
+        }
+    }
+
+    Ok(settings)
+}
+
+fn branch_name_for_directory(
+    directory_name: &str,
+    settings: &BranchPrefixSettings,
+) -> String {
+    let prefix = match settings
+        .branch_prefix_type
+        .as_deref()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("custom") => settings
+            .branch_prefix_custom
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(""),
+        _ => "",
+    };
+
+    format!("{prefix}{directory_name}")
+}
+
+fn allocate_directory_name_for_repo(
+    fixture_root: &Path,
+    repo_id: &str,
+) -> Result<String, String> {
+    let connection = open_fixture_connection_at(fixture_root, false)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT directory_name FROM workspaces WHERE repository_id = ?1 AND directory_name IS NOT NULL",
+        )
+        .map_err(|error| format!("Failed to prepare workspace name query: {error}"))?;
+
+    let names = statement
+        .query_map([repo_id], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("Failed to query existing workspace names: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to read existing workspace names: {error}"))?;
+
+    let used = names
+        .into_iter()
+        .map(|value| value.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+
+    for star_name in STAR_PROPER_NAMES {
+        if !used.contains(*star_name) {
+            return Ok((*star_name).to_string());
+        }
+    }
+
+    for version in 2..=999 {
+        for star_name in STAR_PROPER_NAMES {
+            let candidate = format!("{star_name}-v{version}");
+            if !used.contains(candidate.as_str()) {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    Err("Unable to allocate a workspace name from the vendored star list".to_string())
+}
+
+fn current_fixture_timestamp(fixture_root: &Path) -> Result<String, String> {
+    let connection = open_fixture_connection_at(fixture_root, false)?;
+    connection
+        .query_row("SELECT datetime('now')", [], |row| row.get(0))
+        .map_err(|error| format!("Failed to resolve fixture timestamp: {error}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_initializing_workspace_and_session(
+    fixture_root: &Path,
+    repository: &FixtureRepositoryRecord,
+    workspace_id: &str,
+    session_id: &str,
+    directory_name: &str,
+    branch: &str,
+    default_branch: &str,
+    timestamp: &str,
+    initialization_log_path: &Path,
+    setup_log_path: &Path,
+) -> Result<(), String> {
+    let mut connection = open_fixture_connection_at(fixture_root, true)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Failed to start create-workspace transaction: {error}"))?;
+
+    transaction
+        .execute(
+            r#"
+            INSERT INTO workspaces (
+              id,
+              repository_id,
+              directory_name,
+              active_session_id,
+              branch,
+              placeholder_branch_name,
+              state,
+              initialization_parent_branch,
+              intended_target_branch,
+              derived_status,
+              unread,
+              setup_log_path,
+              initialization_log_path,
+              initialization_files_copied,
+              created_at,
+              updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'initializing', ?7, ?8, 'in-progress', 0, ?9, ?10, 0, ?11, ?11)
+            "#,
+            (
+                workspace_id,
+                repository.id.as_str(),
+                directory_name,
+                session_id,
+                branch,
+                branch,
+                default_branch,
+                default_branch,
+                initialization_log_path.display().to_string(),
+                setup_log_path.display().to_string(),
+                timestamp,
+            ),
+        )
+        .map_err(|error| format!("Failed to insert initializing workspace: {error}"))?;
+
+    transaction
+        .execute(
+            r#"
+            INSERT INTO sessions (
+              id,
+              workspace_id,
+              title,
+              agent_type,
+              status,
+              model,
+              permission_mode,
+              claude_session_id,
+              unread_count,
+              context_token_count,
+              context_used_percent,
+              thinking_enabled,
+              codex_thinking_level,
+              fast_mode,
+              agent_personality,
+              created_at,
+              updated_at,
+              last_user_message_at,
+              resume_session_at,
+              is_hidden,
+              is_compacting
+            ) VALUES (?1, ?2, 'Untitled', 'claude', 'idle', 'opus', 'default', NULL, 0, 0, NULL, 1, NULL, 0, NULL, ?3, ?3, NULL, NULL, 0, 0)
+            "#,
+            (session_id, workspace_id, timestamp),
+        )
+        .map_err(|error| format!("Failed to insert initial session: {error}"))?;
+
+    transaction
+        .commit()
+        .map_err(|error| format!("Failed to commit create-workspace transaction: {error}"))
+}
+
+fn update_workspace_initialization_metadata(
+    fixture_root: &Path,
+    workspace_id: &str,
+    initialization_files_copied: i64,
+    timestamp: &str,
+) -> Result<(), String> {
+    let connection = open_fixture_connection_at(fixture_root, true)?;
+    let updated_rows = connection
+        .execute(
+            r#"
+            UPDATE workspaces
+            SET initialization_files_copied = ?2,
+                updated_at = ?3
+            WHERE id = ?1
+            "#,
+            (workspace_id, initialization_files_copied, timestamp),
+        )
+        .map_err(|error| format!("Failed to update workspace initialization metadata: {error}"))?;
+
+    if updated_rows != 1 {
+        return Err(format!(
+            "Workspace initialization metadata update affected {updated_rows} rows for {workspace_id}"
+        ));
+    }
+
+    Ok(())
+}
+
+fn update_workspace_state(
+    fixture_root: &Path,
+    workspace_id: &str,
+    state: &str,
+    timestamp: &str,
+) -> Result<(), String> {
+    let connection = open_fixture_connection_at(fixture_root, true)?;
+    let updated_rows = connection
+        .execute(
+            "UPDATE workspaces SET state = ?2, updated_at = ?3 WHERE id = ?1",
+            (workspace_id, state, timestamp),
+        )
+        .map_err(|error| format!("Failed to update workspace state to {state}: {error}"))?;
+
+    if updated_rows != 1 {
+        return Err(format!(
+            "Workspace state update affected {updated_rows} rows for {workspace_id}"
+        ));
+    }
+
+    Ok(())
+}
+
+fn delete_workspace_and_session_rows(
+    fixture_root: &Path,
+    workspace_id: &str,
+    session_id: &str,
+) -> Result<(), String> {
+    let mut connection = open_fixture_connection_at(fixture_root, true)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Failed to start create cleanup transaction: {error}"))?;
+
+    transaction
+        .execute("DELETE FROM attachments WHERE session_id = ?1", [session_id])
+        .map_err(|error| format!("Failed to delete create-flow attachments: {error}"))?;
+    transaction
+        .execute("DELETE FROM session_messages WHERE session_id = ?1", [session_id])
+        .map_err(|error| format!("Failed to delete create-flow session messages: {error}"))?;
+    transaction
+        .execute("DELETE FROM sessions WHERE id = ?1", [session_id])
+        .map_err(|error| format!("Failed to delete create-flow session: {error}"))?;
+    transaction
+        .execute("DELETE FROM workspaces WHERE id = ?1", [workspace_id])
+        .map_err(|error| format!("Failed to delete create-flow workspace: {error}"))?;
+
+    transaction
+        .commit()
+        .map_err(|error| format!("Failed to commit create cleanup transaction: {error}"))
+}
+
+fn fixture_workspace_logs_dir(fixture_root: &Path, workspace_id: &str) -> PathBuf {
+    fixture_root
+        .join("helmor/logs/workspaces")
+        .join(workspace_id)
+}
+
+fn remote_tracking_branch_ref(default_branch: &str) -> String {
+    format!("refs/remotes/origin/{default_branch}")
+}
+
+fn verify_commitish_exists_in_mirror(
+    mirror_dir: &Path,
+    commitish: &str,
+    error_message: &str,
+) -> Result<(), String> {
+    let mirror_dir = mirror_dir.display().to_string();
+    let verify_ref = format!("{commitish}^{{commit}}");
+    run_git(
+        [
+            "--git-dir",
+            mirror_dir.as_str(),
+            "rev-parse",
+            "--verify",
+            verify_ref.as_str(),
+        ],
+        None,
+    )
+    .map(|_| ())
+    .map_err(|_| error_message.to_string())
+}
+
+fn create_fixture_worktree_from_start_point(
+    mirror_dir: &Path,
+    workspace_dir: &Path,
+    branch: &str,
+    start_point: &str,
+) -> Result<String, String> {
+    let mirror_dir = mirror_dir.display().to_string();
+    let workspace_dir_arg = workspace_dir.display().to_string();
+    run_git(
+        [
+            "--git-dir",
+            mirror_dir.as_str(),
+            "worktree",
+            "add",
+            "-b",
+            branch,
+            workspace_dir_arg.as_str(),
+            start_point,
+        ],
+        None,
+    )
+    .map_err(|error| {
+        format!(
+            "Failed to create fixture worktree at {} for branch {} from {}: {error}",
+            workspace_dir.display(),
+            branch,
+            start_point
+        )
+    })
+}
+
+fn refresh_fixture_repo_setup_root(
+    mirror_dir: &Path,
+    setup_root_dir: &Path,
+    start_point: &str,
+) -> Result<(), String> {
+    if setup_root_dir.exists() {
+        let _ = remove_fixture_worktree(mirror_dir, setup_root_dir);
+        let _ = fs::remove_dir_all(setup_root_dir);
+    }
+
+    fs::create_dir_all(
+        setup_root_dir
+            .parent()
+            .ok_or_else(|| format!("Setup root path has no parent: {}", setup_root_dir.display()))?,
+    )
+    .map_err(|error| {
+        format!(
+            "Failed to create setup root parent for {}: {error}",
+            setup_root_dir.display()
+        )
+    })?;
+
+    let mirror_dir = mirror_dir.display().to_string();
+    let setup_root_dir_arg = setup_root_dir.display().to_string();
+    run_git(
+        [
+            "--git-dir",
+            mirror_dir.as_str(),
+            "worktree",
+            "add",
+            "--detach",
+            setup_root_dir_arg.as_str(),
+            start_point,
+        ],
+        None,
+    )
+    .map(|_| ())
+    .map_err(|error| {
+        format!(
+            "Failed to materialize setup root at {} from {}: {error}",
+            setup_root_dir.display(),
+            start_point
+        )
+    })
+}
+
+fn remove_fixture_branch(mirror_dir: &Path, branch: &str) -> Result<(), String> {
+    let mirror_dir = mirror_dir.display().to_string();
+    let branch_ref = format!("refs/heads/{branch}");
+    run_git(
+        [
+            "--git-dir",
+            mirror_dir.as_str(),
+            "update-ref",
+            "-d",
+            branch_ref.as_str(),
+        ],
+        None,
+    )
+    .map(|_| ())
+    .or_else(|error| {
+        if error.contains("cannot lock ref") || error.contains("does not exist") {
+            Ok(())
+        } else {
+            Err(format!("Failed to remove fixture branch {branch}: {error}"))
+        }
+    })
+}
+
+fn create_workspace_context_scaffold(workspace_dir: &Path) -> Result<(), String> {
+    let context_dir = workspace_dir.join(".context");
+    let attachments_dir = context_dir.join("attachments");
+    fs::create_dir_all(&attachments_dir).map_err(|error| {
+        format!(
+            "Failed to create workspace context scaffold under {}: {error}",
+            context_dir.display()
+        )
+    })?;
+
+    write_file_if_missing(&context_dir.join("notes.md"), "# Notes\n")?;
+    write_file_if_missing(&context_dir.join("todos.md"), "# Todos\n")?;
+
+    Ok(())
+}
+
+fn write_file_if_missing(path: &Path, contents: &str) -> Result<(), String> {
+    if path.exists() {
+        return Ok(());
+    }
+
+    fs::write(path, contents)
+        .map_err(|error| format!("Failed to write scaffold file {}: {error}", path.display()))
+}
+
+fn tracked_file_count(workspace_dir: &Path) -> Result<i64, String> {
+    let workspace_dir = workspace_dir.display().to_string();
+    let output = run_git(["-C", workspace_dir.as_str(), "ls-files"], None).map_err(|error| {
+        format!(
+            "Failed to count tracked files for workspace {}: {error}",
+            workspace_dir
+        )
+    })?;
+
+    Ok(output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count() as i64)
+}
+
+fn resolve_setup_hook(
+    repository: &FixtureRepositoryRecord,
+    workspace_dir: &Path,
+    mirror_dir: &Path,
+) -> Result<Option<PathBuf>, String> {
+    let raw_setup_script = if let Some(script) = repository
+        .setup_script
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        Some(script.to_string())
+    } else {
+        load_setup_script_from_conductor_json(workspace_dir)?
+    };
+
+    let Some(raw_setup_script) = raw_setup_script else {
+        return Ok(None);
+    };
+
+    let resolved_path = expand_hook_path(&raw_setup_script, workspace_dir, mirror_dir);
+    if !resolved_path.exists() {
+        return Err(format!(
+            "Configured setup script is missing at {}",
+            resolved_path.display()
+        ));
+    }
+
+    Ok(Some(resolved_path))
+}
+
+fn load_setup_script_from_conductor_json(workspace_dir: &Path) -> Result<Option<String>, String> {
+    let conductor_json_path = workspace_dir.join("conductor.json");
+    if !conductor_json_path.is_file() {
+        return Ok(None);
+    }
+
+    let contents = fs::read_to_string(&conductor_json_path).map_err(|error| {
+        format!(
+            "Failed to read conductor.json at {}: {error}",
+            conductor_json_path.display()
+        )
+    })?;
+    let json: Value = serde_json::from_str(&contents).map_err(|error| {
+        format!(
+            "Failed to parse conductor.json at {}: {error}",
+            conductor_json_path.display()
+        )
+    })?;
+
+    Ok(json
+        .get("scripts")
+        .and_then(|value| value.get("setup"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned))
+}
+
+fn expand_hook_path(raw_value: &str, workspace_dir: &Path, mirror_dir: &Path) -> PathBuf {
+    let mirror_root = mirror_dir.display().to_string();
+    let expanded = raw_value
+        .replace("$CONDUCTOR_ROOT_PATH", &mirror_root)
+        .replace("$CONDUCTOR_WORKSPACE_PATH", &workspace_dir.display().to_string());
+    let expanded_path = PathBuf::from(expanded);
+
+    if expanded_path.is_absolute() {
+        expanded_path
+    } else {
+        workspace_dir.join(expanded_path)
+    }
+}
+
+fn run_setup_hook(
+    setup_script: Option<&Path>,
+    workspace_dir: &Path,
+    mirror_dir: &Path,
+    log_path: &Path,
+) -> Result<(), String> {
+    let Some(setup_script) = setup_script else {
+        write_log_file(log_path, "No setup script configured.\n")?;
+        return Ok(());
+    };
+
+    let (program, args) = command_for_script(setup_script)?;
+    let mirror_root = mirror_dir.display().to_string();
+    let workspace_path = workspace_dir.display().to_string();
+
+    let output = Command::new(&program)
+        .args(&args)
+        .arg(setup_script)
+        .current_dir(workspace_dir)
+        .env("CONDUCTOR_ROOT_PATH", &mirror_root)
+        .env("CONDUCTOR_WORKSPACE_PATH", &workspace_path)
+        .output()
+        .map_err(|error| {
+            let _ = write_log_file(
+                log_path,
+                &format!(
+                    "Failed to spawn setup script\nProgram: {}\nScript: {}\nError: {}\n",
+                    program,
+                    setup_script.display(),
+                    error
+                ),
+            );
+            format!("Failed to execute setup script {}: {error}", setup_script.display())
+        })?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    write_log_file(
+        log_path,
+        &format!(
+            "Program: {}\nScript: {}\nWorkspace: {}\nCONDUCTOR_ROOT_PATH={}\nCONDUCTOR_WORKSPACE_PATH={}\nExit status: {}\n\n[stdout]\n{}\n\n[stderr]\n{}\n",
+            program,
+            setup_script.display(),
+            workspace_dir.display(),
+            mirror_root,
+            workspace_path,
+            output.status,
+            stdout,
+            stderr
+        ),
+    )?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let detail = if !stderr.trim().is_empty() {
+            stderr.trim().to_string()
+        } else if !stdout.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            format!("exit status {}", output.status)
+        };
+        Err(format!("Setup script failed for {}: {detail}", setup_script.display()))
+    }
+}
+
+fn command_for_script(script_path: &Path) -> Result<(String, Vec<String>), String> {
+    let contents = fs::read_to_string(script_path).map_err(|error| {
+        format!(
+            "Failed to inspect setup script {}: {error}",
+            script_path.display()
+        )
+    })?;
+    let first_line = contents.lines().next().unwrap_or_default();
+
+    if let Some(interpreter) = first_line.strip_prefix("#!") {
+        let tokens = interpreter
+            .split_whitespace()
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        if let Some((program, args)) = tokens.split_first() {
+            return Ok((program.clone(), args.to_vec()));
+        }
+    }
+
+    Ok(("/bin/sh".to_string(), Vec::new()))
+}
+
+fn write_log_file(path: &Path, contents: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!("Failed to create log directory {}: {error}", parent.display())
+        })?;
+    }
+
+    fs::write(path, contents)
+        .map_err(|error| format!("Failed to write log file {}: {error}", path.display()))
+}
+
+fn cleanup_failed_created_workspace(
+    fixture_root: &Path,
+    workspace_id: &str,
+    session_id: &str,
+    mirror_dir: &Path,
+    workspace_dir: &Path,
+    branch: &str,
+    created_worktree: bool,
+) {
+    if created_worktree && workspace_dir.exists() {
+        let _ = remove_fixture_worktree(mirror_dir, workspace_dir);
+        let _ = fs::remove_dir_all(workspace_dir);
+    }
+
+    let _ = remove_fixture_branch(mirror_dir, branch);
+    let _ = delete_workspace_and_session_rows(fixture_root, workspace_id, session_id);
+}
+
 fn load_workspace_records() -> Result<Vec<WorkspaceRecord>, String> {
-    let connection = open_fixture_connection()?;
+    let fixture_root = resolve_fixture_root()?;
+    load_workspace_records_at(&fixture_root)
+}
+
+fn load_workspace_records_at(fixture_root: &Path) -> Result<Vec<WorkspaceRecord>, String> {
+    let connection = open_fixture_connection_at(fixture_root, false)?;
     let mut statement = connection
         .prepare(WORKSPACE_RECORD_SQL)
         .map_err(|error| error.to_string())?;
@@ -1405,6 +2802,10 @@ fn fixture_workspace_dir(fixture_root: &Path, repo_name: &str, directory_name: &
 
 fn fixture_repo_mirror_dir(fixture_root: &Path, repo_name: &str) -> PathBuf {
     fixture_root.join("helmor/repos").join(repo_name)
+}
+
+fn fixture_repo_setup_root_dir(fixture_root: &Path, repo_name: &str) -> PathBuf {
+    fixture_root.join("helmor/repo-roots").join(repo_name)
 }
 
 fn staged_archive_context_dir(archived_context_dir: &Path) -> PathBuf {
@@ -2244,6 +3645,160 @@ mod tests {
         }
     }
 
+    struct CreateTestHarness {
+        root: PathBuf,
+        fixture_root: PathBuf,
+        source_repo_root: PathBuf,
+        repo_id: String,
+        repo_name: String,
+    }
+
+    impl CreateTestHarness {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "helmor-create-test-{}",
+                uuid::Uuid::new_v4()
+            ));
+            let fixture_root = root.join("fixture");
+            let source_repo_root = root.join("source-repo");
+            let repo_id = "repo-create".to_string();
+            let repo_name = "demo-repo".to_string();
+
+            fs::create_dir_all(&source_repo_root).unwrap();
+            init_create_git_repo(&source_repo_root);
+
+            fs::create_dir_all(fixture_root.join("com.conductor.app")).unwrap();
+            fs::create_dir_all(fixture_root.join("helmor/archived-contexts")).unwrap();
+            fs::create_dir_all(fixture_root.join("helmor/workspaces")).unwrap();
+            fs::create_dir_all(fixture_root.join("helmor/repos")).unwrap();
+            fs::create_dir_all(fixture_root.join("helmor/logs/workspaces")).unwrap();
+
+            create_workspace_fixture_db(
+                &fixture_root.join("com.conductor.app/conductor.db"),
+                &source_repo_root,
+                &repo_id,
+                &repo_name,
+            );
+
+            Self {
+                root,
+                fixture_root,
+                source_repo_root,
+                repo_id,
+                repo_name,
+            }
+        }
+
+        fn db_path(&self) -> PathBuf {
+            self.fixture_root.join("com.conductor.app/conductor.db")
+        }
+
+        fn workspace_dir(&self, directory_name: &str) -> PathBuf {
+            fixture_workspace_dir(&self.fixture_root, &self.repo_name, directory_name)
+        }
+
+        fn set_repo_setup_script(&self, script: Option<&str>) {
+            let connection = Connection::open(self.db_path()).unwrap();
+            connection
+                .execute(
+                    "UPDATE repos SET setup_script = ?2 WHERE id = ?1",
+                    (&self.repo_id, script),
+                )
+                .unwrap();
+        }
+
+        fn insert_workspace_name(&self, directory_name: &str) {
+            let connection = Connection::open(self.db_path()).unwrap();
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO workspaces (
+                      id, repository_id, directory_name, active_session_id, branch,
+                      placeholder_branch_name, state, initialization_parent_branch,
+                      intended_target_branch, derived_status, unread, created_at, updated_at
+                    ) VALUES (?1, ?2, ?3, NULL, ?4, ?4, 'ready', 'main', 'main', 'in-progress', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    "#,
+                    (
+                        format!("workspace-{directory_name}"),
+                        &self.repo_id,
+                        directory_name,
+                        format!("caspian/{directory_name}"),
+                    ),
+                )
+                .unwrap();
+        }
+
+        fn insert_repo(
+            &self,
+            repo_id: &str,
+            repo_name: &str,
+            display_order: i64,
+            hidden: i64,
+        ) {
+            let connection = Connection::open(self.db_path()).unwrap();
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO repos (
+                      id, remote_url, name, default_branch, root_path, setup_script, created_at,
+                      updated_at, display_order, hidden
+                    ) VALUES (?1, NULL, ?2, 'main', ?3, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?4, ?5)
+                    "#,
+                    (
+                        repo_id,
+                        repo_name,
+                        self.source_repo_root.to_str().unwrap(),
+                        display_order,
+                        hidden,
+                    ),
+                )
+                .unwrap();
+        }
+
+        fn commit_repo_files(&self, files: &[(&str, &str)]) {
+            for (relative_path, contents) in files {
+                let path = self.source_repo_root.join(relative_path);
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).unwrap();
+                }
+                fs::write(&path, contents).unwrap();
+                make_executable_if_script(&path);
+                run_git(
+                    [
+                        "-C",
+                        self.source_repo_root.to_str().unwrap(),
+                        "add",
+                        relative_path,
+                    ],
+                    None,
+                )
+                .unwrap();
+            }
+
+            run_git(
+                [
+                    "-C",
+                    self.source_repo_root.to_str().unwrap(),
+                    "-c",
+                    "user.name=Helmor",
+                    "-c",
+                    "user.email=helmor@example.com",
+                    "commit",
+                    "-m",
+                    &format!("add {}", files[0].0),
+                ],
+                None,
+            )
+            .unwrap();
+        }
+    }
+
+    impl Drop for CreateTestHarness {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
     #[test]
     fn restore_fixture_workspace_recreates_worktree_and_context() {
         let _guard = TEST_FIXTURE_LOCK
@@ -2656,6 +4211,587 @@ mod tests {
         verify_branch_exists_in_mirror(&mirror_dir, "feature/second-restore-target").unwrap();
     }
 
+    #[test]
+    fn list_fixture_repositories_filters_hidden_and_sorts_by_display_order() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = CreateTestHarness::new();
+        harness.insert_repo("repo-hidden", "hidden-repo", 0, 1);
+        harness.insert_repo("repo-alpha", "alpha-repo", 0, 0);
+
+        let repositories = list_fixture_repositories_at(&harness.fixture_root).unwrap();
+        let repository_names = repositories
+            .iter()
+            .map(|repository| repository.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(repository_names, vec!["alpha-repo", "demo-repo"]);
+    }
+
+    #[test]
+    fn create_fixture_workspace_from_repo_creates_ready_workspace_and_initial_session() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = CreateTestHarness::new();
+
+        harness.commit_repo_files(&[
+            (
+                "conductor.json",
+                r#"{"scripts":{"setup":"$CONDUCTOR_ROOT_PATH/conductor-setup.sh"}}"#,
+            ),
+            (
+                "conductor-setup.sh",
+                "#!/bin/sh\nset -e\nprintf '%s' \"$CONDUCTOR_ROOT_PATH\" > \"$CONDUCTOR_WORKSPACE_PATH/.context/setup-root.txt\"\nprintf 'json' > \"$CONDUCTOR_WORKSPACE_PATH/setup-from-json.txt\"\n",
+            ),
+        ]);
+
+        let response =
+            create_fixture_workspace_from_repo_at(&harness.fixture_root, &harness.repo_id).unwrap();
+
+        assert_eq!(response.created_state, "ready");
+        assert_eq!(response.directory_name, "acamar");
+        assert_eq!(response.branch, "caspian/acamar");
+
+        let workspace_dir = harness.workspace_dir("acamar");
+        assert!(workspace_dir.join(".git").exists());
+        assert!(workspace_dir.join(".context/notes.md").exists());
+        assert!(workspace_dir.join(".context/todos.md").exists());
+        assert!(workspace_dir.join(".context/attachments").is_dir());
+        assert!(workspace_dir.join(".context/setup-root.txt").exists());
+        assert!(workspace_dir.join("setup-from-json.txt").exists());
+
+        let connection = Connection::open(harness.db_path()).unwrap();
+        let (
+            state,
+            branch,
+            placeholder_branch_name,
+            initialization_parent_branch,
+            intended_target_branch,
+            initialization_files_copied,
+            setup_log_path,
+            initialization_log_path,
+            active_session_id,
+        ): (
+            String,
+            String,
+            String,
+            String,
+            String,
+            i64,
+            String,
+            String,
+            String,
+        ) = connection
+            .query_row(
+                r#"
+                SELECT
+                  state,
+                  branch,
+                  placeholder_branch_name,
+                  initialization_parent_branch,
+                  intended_target_branch,
+                  initialization_files_copied,
+                  setup_log_path,
+                  initialization_log_path,
+                  active_session_id
+                FROM workspaces
+                WHERE id = ?1
+                "#,
+                [&response.created_workspace_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                    ))
+                },
+            )
+            .unwrap();
+        let (session_title, session_model, session_permission_mode, thinking_enabled): (
+            String,
+            String,
+            String,
+            i64,
+        ) = connection
+            .query_row(
+                "SELECT title, model, permission_mode, thinking_enabled FROM sessions WHERE id = ?1",
+                [&active_session_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+
+        assert_eq!(state, "ready");
+        assert_eq!(branch, "caspian/acamar");
+        assert_eq!(placeholder_branch_name, "caspian/acamar");
+        assert_eq!(initialization_parent_branch, "main");
+        assert_eq!(intended_target_branch, "main");
+        assert!(initialization_files_copied > 0);
+        assert!(Path::new(&setup_log_path).is_file());
+        assert!(Path::new(&initialization_log_path).is_file());
+        assert_eq!(session_title, "Untitled");
+        assert_eq!(session_model, "opus");
+        assert_eq!(session_permission_mode, "default");
+        assert_eq!(thinking_enabled, 1);
+    }
+
+    #[test]
+    fn create_fixture_workspace_from_repo_prefers_repo_setup_script_over_conductor_json() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = CreateTestHarness::new();
+        harness.set_repo_setup_script(Some("$CONDUCTOR_ROOT_PATH/repo-settings-setup.sh"));
+        harness.commit_repo_files(&[
+            (
+                "conductor.json",
+                r#"{"scripts":{"setup":"$CONDUCTOR_ROOT_PATH/conductor-setup.sh"}}"#,
+            ),
+            (
+                "conductor-setup.sh",
+                "#!/bin/sh\nset -e\nprintf 'json' > \"$CONDUCTOR_WORKSPACE_PATH/json-setup.txt\"\n",
+            ),
+            (
+                "repo-settings-setup.sh",
+                "#!/bin/sh\nset -e\nprintf 'repo' > \"$CONDUCTOR_WORKSPACE_PATH/repo-setup.txt\"\n",
+            ),
+        ]);
+
+        let response =
+            create_fixture_workspace_from_repo_at(&harness.fixture_root, &harness.repo_id).unwrap();
+        let workspace_dir = harness.workspace_dir(&response.directory_name);
+
+        assert!(workspace_dir.join("repo-setup.txt").exists());
+        assert!(!workspace_dir.join("json-setup.txt").exists());
+    }
+
+    #[test]
+    fn create_fixture_workspace_from_repo_uses_v2_suffix_after_star_list_is_exhausted() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = CreateTestHarness::new();
+
+        for star_name in STAR_PROPER_NAMES {
+            harness.insert_workspace_name(star_name);
+        }
+
+        let response =
+            create_fixture_workspace_from_repo_at(&harness.fixture_root, &harness.repo_id).unwrap();
+
+        assert_eq!(response.directory_name, "acamar-v2");
+        assert_eq!(response.branch, "caspian/acamar-v2");
+    }
+
+    #[test]
+    fn create_fixture_workspace_from_repo_cleans_up_after_worktree_failure() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = CreateTestHarness::new();
+        let conflicting_workspace_dir = harness.workspace_dir("acamar");
+
+        fs::create_dir_all(&conflicting_workspace_dir).unwrap();
+        fs::write(conflicting_workspace_dir.join("keep.txt"), "keep").unwrap();
+
+        let error =
+            create_fixture_workspace_from_repo_at(&harness.fixture_root, &harness.repo_id).unwrap_err();
+
+        assert!(error.contains("already exists"));
+        assert!(conflicting_workspace_dir.join("keep.txt").exists());
+
+        let connection = Connection::open(harness.db_path()).unwrap();
+        let (workspace_count, session_count): (i64, i64) = connection
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM workspaces), (SELECT COUNT(*) FROM sessions)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(workspace_count, 0);
+        assert_eq!(session_count, 0);
+    }
+
+    #[test]
+    fn create_fixture_workspace_from_repo_cleans_up_after_setup_failure_and_keeps_logs() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = CreateTestHarness::new();
+
+        harness.commit_repo_files(&[
+            (
+                "conductor.json",
+                r#"{"scripts":{"setup":"$CONDUCTOR_ROOT_PATH/conductor-setup.sh"}}"#,
+            ),
+            (
+                "conductor-setup.sh",
+                "#!/bin/sh\nset -e\necho 'failing setup'\nexit 7\n",
+            ),
+        ]);
+
+        let error =
+            create_fixture_workspace_from_repo_at(&harness.fixture_root, &harness.repo_id).unwrap_err();
+
+        assert!(error.contains("Setup script failed"));
+        assert!(!harness.workspace_dir("acamar").exists());
+
+        let connection = Connection::open(harness.db_path()).unwrap();
+        let (workspace_count, session_count): (i64, i64) = connection
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM workspaces), (SELECT COUNT(*) FROM sessions)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(workspace_count, 0);
+        assert_eq!(session_count, 0);
+
+        let log_root = harness.fixture_root.join("helmor/logs/workspaces");
+        let mut log_files = fs::read_dir(&log_root)
+            .unwrap()
+            .flat_map(Result::ok)
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        log_files.sort();
+
+        assert!(!log_files.is_empty());
+        let setup_log = log_files[0].join("setup.log");
+        assert!(setup_log.is_file());
+        let setup_log_contents = fs::read_to_string(setup_log).unwrap();
+        assert!(setup_log_contents.contains("failing setup"));
+    }
+
+    #[test]
+    fn add_fixture_repository_from_local_path_adds_repo_and_first_workspace() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = CreateTestHarness::new();
+        let added_repo_root = harness.root.join("added-repo");
+
+        fs::create_dir_all(&added_repo_root).unwrap();
+        init_create_git_repo(&added_repo_root);
+        let normalized_repo_root = normalize_filesystem_path(&added_repo_root).unwrap();
+
+        let response = add_fixture_repository_from_local_path_at(
+            &harness.fixture_root,
+            added_repo_root.to_str().unwrap(),
+        )
+        .unwrap();
+        let connection = Connection::open(harness.db_path()).unwrap();
+        let (repo_count, workspace_count, session_count): (i64, i64, i64) = connection
+            .query_row(
+                r#"
+                SELECT
+                  (SELECT COUNT(*) FROM repos WHERE root_path = ?1),
+                  (SELECT COUNT(*) FROM workspaces WHERE repository_id = ?2),
+                  (SELECT COUNT(*) FROM sessions WHERE workspace_id = ?3)
+                "#,
+                (
+                    normalized_repo_root.as_str(),
+                    &response.repository_id,
+                    response.created_workspace_id.as_deref().unwrap(),
+                ),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        let (remote, remote_url, default_branch): (Option<String>, Option<String>, String) =
+            connection
+                .query_row(
+                    "SELECT remote, remote_url, default_branch FROM repos WHERE id = ?1",
+                    [&response.repository_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+        let created_workspace_state: String = connection
+            .query_row(
+                "SELECT state FROM workspaces WHERE id = ?1",
+                [response.selected_workspace_id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert!(response.created_repository);
+        assert_eq!(repo_count, 1);
+        assert_eq!(workspace_count, 1);
+        assert_eq!(session_count, 1);
+        assert_eq!(response.created_workspace_state, "ready");
+        assert_eq!(created_workspace_state, "ready");
+        assert_eq!(default_branch, "main");
+        assert_eq!(remote, None);
+        assert_eq!(remote_url, None);
+    }
+
+    #[test]
+    fn add_fixture_repository_from_local_path_normalizes_subdirectory_selection() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = CreateTestHarness::new();
+        let added_repo_root = harness.root.join("normalized-repo");
+        let nested_dir = added_repo_root.join("packages/app");
+
+        fs::create_dir_all(&added_repo_root).unwrap();
+        init_create_git_repo(&added_repo_root);
+        fs::create_dir_all(&nested_dir).unwrap();
+        let normalized_repo_root = normalize_filesystem_path(&added_repo_root).unwrap();
+
+        let response = add_fixture_repository_from_local_path_at(
+            &harness.fixture_root,
+            nested_dir.to_str().unwrap(),
+        )
+        .unwrap();
+        let connection = Connection::open(harness.db_path()).unwrap();
+        let (stored_name, stored_root): (String, String) = connection
+            .query_row(
+                "SELECT name, root_path FROM repos WHERE id = ?1",
+                [&response.repository_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(stored_name, "normalized-repo");
+        assert_eq!(stored_root, normalized_repo_root);
+    }
+
+    #[test]
+    fn add_fixture_repository_from_local_path_accepts_repo_without_remote() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = CreateTestHarness::new();
+        let added_repo_root = harness.root.join("no-remote-repo");
+
+        fs::create_dir_all(&added_repo_root).unwrap();
+        init_create_git_repo(&added_repo_root);
+
+        let response = add_fixture_repository_from_local_path_at(
+            &harness.fixture_root,
+            added_repo_root.to_str().unwrap(),
+        )
+        .unwrap();
+        let connection = Connection::open(harness.db_path()).unwrap();
+        let (remote, remote_url, default_branch): (Option<String>, Option<String>, String) =
+            connection
+                .query_row(
+                    "SELECT remote, remote_url, default_branch FROM repos WHERE id = ?1",
+                    [&response.repository_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+
+        assert_eq!(remote, None);
+        assert_eq!(remote_url, None);
+        assert_eq!(default_branch, "main");
+    }
+
+    #[test]
+    fn add_fixture_repository_from_local_path_focuses_existing_workspace_for_duplicate_repo() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = CreateTestHarness::new();
+        let created = create_fixture_workspace_from_repo_at(&harness.fixture_root, &harness.repo_id).unwrap();
+
+        let response = add_fixture_repository_from_local_path_at(
+            &harness.fixture_root,
+            harness.source_repo_root.to_str().unwrap(),
+        )
+        .unwrap();
+        let connection = Connection::open(harness.db_path()).unwrap();
+        let (repo_count, workspace_count): (i64, i64) = connection
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM repos), (SELECT COUNT(*) FROM workspaces)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert!(!response.created_repository);
+        assert_eq!(response.created_workspace_id, None);
+        assert_eq!(response.selected_workspace_id, created.created_workspace_id);
+        assert_eq!(response.created_workspace_state, "ready");
+        assert_eq!(repo_count, 1);
+        assert_eq!(workspace_count, 1);
+    }
+
+    #[test]
+    fn add_fixture_repository_from_local_path_creates_first_workspace_for_duplicate_repo_without_workspace() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = CreateTestHarness::new();
+
+        let response = add_fixture_repository_from_local_path_at(
+            &harness.fixture_root,
+            harness.source_repo_root.to_str().unwrap(),
+        )
+        .unwrap();
+        let connection = Connection::open(harness.db_path()).unwrap();
+        let (repo_count, workspace_count): (i64, i64) = connection
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM repos), (SELECT COUNT(*) FROM workspaces)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert!(!response.created_repository);
+        assert!(response.created_workspace_id.is_some());
+        assert_eq!(repo_count, 1);
+        assert_eq!(workspace_count, 1);
+    }
+
+    #[test]
+    fn add_fixture_repository_from_local_path_rejects_non_git_directory_without_side_effects() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = CreateTestHarness::new();
+        let plain_dir = harness.root.join("not-a-repo");
+
+        fs::create_dir_all(&plain_dir).unwrap();
+
+        let error = add_fixture_repository_from_local_path_at(
+            &harness.fixture_root,
+            plain_dir.to_str().unwrap(),
+        )
+        .unwrap_err();
+        let connection = Connection::open(harness.db_path()).unwrap();
+        let (repo_count, workspace_count): (i64, i64) = connection
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM repos), (SELECT COUNT(*) FROM workspaces)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert!(error.contains("Git working tree"));
+        assert_eq!(repo_count, 1);
+        assert_eq!(workspace_count, 0);
+    }
+
+    #[test]
+    fn add_fixture_repository_from_local_path_rolls_back_new_repo_when_first_workspace_create_fails() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = CreateTestHarness::new();
+        let added_repo_root = harness.root.join("rollback-repo");
+
+        fs::create_dir_all(&added_repo_root).unwrap();
+        init_create_git_repo(&added_repo_root);
+
+        let conflicting_workspace_dir =
+            fixture_workspace_dir(&harness.fixture_root, "rollback-repo", "acamar");
+        fs::create_dir_all(&conflicting_workspace_dir).unwrap();
+        fs::write(conflicting_workspace_dir.join("keep.txt"), "keep").unwrap();
+
+        let error = add_fixture_repository_from_local_path_at(
+            &harness.fixture_root,
+            added_repo_root.to_str().unwrap(),
+        )
+        .unwrap_err();
+        let connection = Connection::open(harness.db_path()).unwrap();
+        let (repo_count, workspace_count): (i64, i64) = connection
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM repos WHERE root_path = ?1), (SELECT COUNT(*) FROM workspaces)",
+                [added_repo_root.to_str().unwrap()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert!(error.contains("First workspace create failed"));
+        assert_eq!(repo_count, 0);
+        assert_eq!(workspace_count, 0);
+        assert!(conflicting_workspace_dir.join("keep.txt").exists());
+    }
+
+    #[test]
+    fn add_fixture_repository_from_local_path_updates_last_clone_directory() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = CreateTestHarness::new();
+        let added_repo_root = harness.root.join("last-clone-repo");
+
+        fs::create_dir_all(&added_repo_root).unwrap();
+        init_create_git_repo(&added_repo_root);
+        let normalized_repo_root = normalize_filesystem_path(&added_repo_root).unwrap();
+
+        add_fixture_repository_from_local_path_at(
+            &harness.fixture_root,
+            added_repo_root.to_str().unwrap(),
+        )
+        .unwrap();
+        let connection = Connection::open(harness.db_path()).unwrap();
+        let stored_last_clone_directory: String = connection
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'last_clone_directory'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(
+            stored_last_clone_directory,
+            Path::new(&normalized_repo_root)
+                .parent()
+                .unwrap()
+                .display()
+                .to_string()
+        );
+    }
+
+    fn init_create_git_repo(repo_root: &Path) {
+        run_git(["init", "-b", "main", repo_root.to_str().unwrap()], None).unwrap();
+        fs::write(repo_root.join("tracked.txt"), "main").unwrap();
+        run_git(
+            ["-C", repo_root.to_str().unwrap(), "add", "tracked.txt"],
+            None,
+        )
+        .unwrap();
+        run_git(
+            [
+                "-C",
+                repo_root.to_str().unwrap(),
+                "-c",
+                "user.name=Helmor",
+                "-c",
+                "user.email=helmor@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+            None,
+        )
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    fn make_executable_if_script(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        if path.extension().and_then(|value| value.to_str()) == Some("sh") {
+            let metadata = fs::metadata(path).unwrap();
+            let mut permissions = metadata.permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(path, permissions).unwrap();
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn make_executable_if_script(_path: &Path) {}
+
     fn init_git_repo(repo_root: &Path) {
         run_git(["init", "-b", "main", repo_root.to_str().unwrap()], None).unwrap();
         fs::write(repo_root.join("tracked.txt"), "main").unwrap();
@@ -2711,6 +4847,41 @@ mod tests {
             None,
         )
         .unwrap();
+    }
+
+    fn create_workspace_fixture_db(
+        db_path: &Path,
+        source_repo_root: &Path,
+        repo_id: &str,
+        repo_name: &str,
+    ) {
+        let connection = Connection::open(db_path).unwrap();
+        connection
+            .execute_batch(&fixture_schema_sql(true))
+            .unwrap();
+        connection
+            .execute(
+                r#"
+                INSERT INTO repos (
+                  id, remote_url, name, default_branch, root_path, setup_script, created_at,
+                  updated_at, display_order, hidden
+                ) VALUES (?1, NULL, ?2, 'main', ?3, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1, 0)
+                "#,
+                (repo_id, repo_name, source_repo_root.to_str().unwrap()),
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO settings (key, value, created_at, updated_at) VALUES ('branch_prefix_type', 'custom', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO settings (key, value, created_at, updated_at) VALUES ('branch_prefix_custom', 'caspian/', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                [],
+            )
+            .unwrap();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2892,7 +5063,7 @@ mod tests {
     }
 
     fn fixture_schema_sql(include_updated_at: bool) -> String {
-        let updated_at_column = if include_updated_at {
+        let workspaces_updated_at_column = if include_updated_at {
             ",\n              updated_at TEXT DEFAULT CURRENT_TIMESTAMP"
         } else {
             ""
@@ -2902,55 +5073,92 @@ mod tests {
             r#"
             CREATE TABLE repos (
               id TEXT PRIMARY KEY,
-              name TEXT NOT NULL,
               remote_url TEXT,
-              default_branch TEXT,
-              root_path TEXT NOT NULL
+              name TEXT NOT NULL,
+              default_branch TEXT DEFAULT 'main',
+              root_path TEXT NOT NULL,
+              setup_script TEXT,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              storage_version INTEGER DEFAULT 1,
+              archive_script TEXT,
+              display_order INTEGER DEFAULT 0,
+              run_script TEXT,
+              run_script_mode TEXT DEFAULT 'concurrent',
+              remote TEXT,
+              custom_prompt_code_review TEXT,
+              custom_prompt_create_pr TEXT,
+              custom_prompt_rename_branch TEXT,
+              conductor_config TEXT,
+              custom_prompt_general TEXT,
+              icon TEXT,
+              hidden INTEGER DEFAULT 0,
+              custom_prompt_fix_errors TEXT,
+              custom_prompt_resolve_merge_conflicts TEXT
+            );
+
+            CREATE TABLE settings (
+              key TEXT PRIMARY KEY,
+              value TEXT NOT NULL,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
 
             CREATE TABLE workspaces (
               id TEXT PRIMARY KEY,
               repository_id TEXT NOT NULL,
+              DEPRECATED_city_name TEXT,
               directory_name TEXT,
+              DEPRECATED_archived INTEGER DEFAULT 0,
+              active_session_id TEXT,
+              branch TEXT,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP,
               state TEXT,
               derived_status TEXT,
               manual_status TEXT,
               unread INTEGER DEFAULT 0,
-              branch TEXT,
+              placeholder_branch_name TEXT,
               initialization_parent_branch TEXT,
-              intended_target_branch TEXT,
-              notes TEXT,
+              big_terminal_mode INTEGER DEFAULT 0,
+              setup_log_path TEXT,
+              initialization_log_path TEXT,
+              initialization_files_copied INTEGER,
               pinned_at TEXT,
-              active_session_id TEXT,
+              linked_workspace_ids TEXT,
+              notes TEXT,
+              intended_target_branch TEXT,
               pr_title TEXT,
               pr_description TEXT,
               archive_commit TEXT,
-              created_at TEXT DEFAULT CURRENT_TIMESTAMP
-              {updated_at_column}
+              secondary_directory_name TEXT,
+              linked_directory_paths TEXT
+              {workspaces_updated_at_column}
             );
 
             CREATE TABLE sessions (
               id TEXT PRIMARY KEY,
-              workspace_id TEXT NOT NULL,
-              title TEXT,
-              agent_type TEXT,
               status TEXT,
-              model TEXT,
-              permission_mode TEXT,
               claude_session_id TEXT,
               unread_count INTEGER DEFAULT 0,
+              freshly_compacted INTEGER DEFAULT 0,
               context_token_count INTEGER DEFAULT 0,
-              context_used_percent REAL,
-              thinking_enabled INTEGER DEFAULT 0,
-              codex_thinking_level TEXT,
-              fast_mode INTEGER DEFAULT 0,
-              agent_personality TEXT,
               created_at TEXT DEFAULT CURRENT_TIMESTAMP,
               updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              is_compacting INTEGER DEFAULT 0,
+              model TEXT,
+              permission_mode TEXT,
+              DEPRECATED_thinking_level TEXT DEFAULT 'NONE',
               last_user_message_at TEXT,
               resume_session_at TEXT,
+              workspace_id TEXT NOT NULL,
               is_hidden INTEGER DEFAULT 0,
-              is_compacting INTEGER DEFAULT 0
+              agent_type TEXT,
+              title TEXT DEFAULT 'Untitled',
+              context_used_percent REAL,
+              thinking_enabled INTEGER DEFAULT 1,
+              codex_thinking_level TEXT,
+              fast_mode INTEGER DEFAULT 0,
+              agent_personality TEXT
             );
 
             CREATE TABLE session_messages (

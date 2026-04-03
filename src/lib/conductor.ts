@@ -106,6 +106,26 @@ export type WorkspaceSummary = {
   attachmentCount?: number;
 };
 
+export type RepositoryCreateOption = {
+  id: string;
+  name: string;
+  defaultBranch?: string | null;
+  repoIconSrc?: string | null;
+  repoInitials?: string | null;
+};
+
+export type AddRepositoryDefaults = {
+  lastCloneDirectory?: string | null;
+};
+
+export type AddRepositoryResponse = {
+  repositoryId: string;
+  createdRepository: boolean;
+  selectedWorkspaceId: string;
+  createdWorkspaceId?: string | null;
+  createdWorkspaceState: string;
+};
+
 export type WorkspaceDetail = {
   id: string;
   title: string;
@@ -175,6 +195,14 @@ export type RestoreWorkspaceResponse = {
 export type ArchiveWorkspaceResponse = {
   archivedWorkspaceId: string;
   archivedState: string;
+};
+
+export type CreateWorkspaceResponse = {
+  createdWorkspaceId: string;
+  selectedWorkspaceId: string;
+  createdState: string;
+  directoryName: string;
+  branch: string;
 };
 
 export type MarkWorkspaceReadResponse = void;
@@ -301,6 +329,11 @@ const DEFAULT_WORKSPACE_GROUPS: WorkspaceGroup[] = [
     rows: [],
   },
 ];
+
+const DEFAULT_FIXTURE_REPOSITORIES: RepositoryCreateOption[] = [];
+const DEFAULT_ADD_REPOSITORY_DEFAULTS: AddRepositoryDefaults = {
+  lastCloneDirectory: null,
+};
 
 const DEFAULT_ARCHIVED_WORKSPACES: WorkspaceSummary[] = [
   {
@@ -458,6 +491,34 @@ export async function loadArchivedWorkspaces(): Promise<WorkspaceSummary[]> {
   }
 }
 
+export async function listFixtureRepositories(): Promise<RepositoryCreateOption[]> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    return DEFAULT_FIXTURE_REPOSITORIES;
+  }
+
+  try {
+    return await invoke<RepositoryCreateOption[]>("list_fixture_repositories");
+  } catch {
+    return DEFAULT_FIXTURE_REPOSITORIES;
+  }
+}
+
+export async function loadAddRepositoryDefaults(): Promise<AddRepositoryDefaults> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    return DEFAULT_ADD_REPOSITORY_DEFAULTS;
+  }
+
+  try {
+    return await invoke<AddRepositoryDefaults>("get_fixture_add_repository_defaults");
+  } catch {
+    return DEFAULT_ADD_REPOSITORY_DEFAULTS;
+  }
+}
+
 export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
   const invoke = await getTauriInvoke();
 
@@ -567,6 +628,34 @@ export async function archiveWorkspace(
 
   return invoke<ArchiveWorkspaceResponse>("archive_fixture_workspace", {
     workspaceId,
+  });
+}
+
+export async function createWorkspaceFromRepo(
+  repoId: string,
+): Promise<CreateWorkspaceResponse> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    throw new Error("Workspace creation is only available in the Tauri desktop runtime.");
+  }
+
+  return invoke<CreateWorkspaceResponse>("create_fixture_workspace_from_repo", {
+    repoId,
+  });
+}
+
+export async function addRepositoryFromLocalPath(
+  folderPath: string,
+): Promise<AddRepositoryResponse> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    throw new Error("Repository add is only available in the Tauri desktop runtime.");
+  }
+
+  return invoke<AddRepositoryResponse>("add_fixture_repository_from_local_path", {
+    folderPath,
   });
 }
 

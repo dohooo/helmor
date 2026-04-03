@@ -1,4 +1,5 @@
 import "./App.css";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   startTransition,
   type KeyboardEvent,
@@ -13,9 +14,13 @@ import { Moon, Sun } from "lucide-react";
 import {
   DEFAULT_AGENT_MODEL_SECTIONS,
   DEFAULT_WORKSPACE_GROUPS,
+  addRepositoryFromLocalPath,
   archiveWorkspace,
+  createWorkspaceFromRepo,
   loadAgentModelSections,
+  loadAddRepositoryDefaults,
   loadArchivedWorkspaces,
+  listFixtureRepositories,
   loadSessionAttachments,
   loadSessionMessages,
   loadWorkspaceDetail,
@@ -29,6 +34,7 @@ import {
   startAgentMessageStream,
   type AgentModelOption,
   type AgentModelSection,
+  type RepositoryCreateOption,
   type SessionAttachmentRecord,
   type SessionMessageRecord,
   type WorkspaceDetail,
@@ -86,6 +92,7 @@ function App() {
   } | null>(null);
   const [groups, setGroups] = useState<WorkspaceGroup[]>(DEFAULT_WORKSPACE_GROUPS);
   const [archivedSummaries, setArchivedSummaries] = useState<WorkspaceSummary[]>([]);
+  const [fixtureRepositories, setFixtureRepositories] = useState<RepositoryCreateOption[]>([]);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
     findInitialWorkspaceId(DEFAULT_WORKSPACE_GROUPS),
   );
@@ -121,6 +128,8 @@ function App() {
   const [deferredWorkspaceReadClearId, setDeferredWorkspaceReadClearId] = useState<string | null>(null);
   const [archivingWorkspaceId, setArchivingWorkspaceId] = useState<string | null>(null);
   const [restoringWorkspaceId, setRestoringWorkspaceId] = useState<string | null>(null);
+  const [addingRepository, setAddingRepository] = useState(false);
+  const [creatingWorkspaceRepoId, setCreatingWorkspaceRepoId] = useState<string | null>(null);
   const [workspaceActionError, setWorkspaceActionError] = useState<string | null>(null);
   const [loadingWorkspace, setLoadingWorkspace] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
@@ -214,7 +223,8 @@ function App() {
       loadWorkspaceGroups(),
       loadArchivedWorkspaces(),
       loadAgentModelSections(),
-    ]).then(([loadedGroups, loadedArchived, loadedModelSections]) => {
+      listFixtureRepositories(),
+    ]).then(([loadedGroups, loadedArchived, loadedModelSections, loadedRepositories]) => {
         if (disposed) {
           return;
         }
@@ -222,6 +232,7 @@ function App() {
         setGroups(loadedGroups);
         setArchivedSummaries(loadedArchived);
         setAgentModelSections(loadedModelSections);
+        setFixtureRepositories(loadedRepositories);
         setSelectedWorkspaceId((current) => {
           if (current && hasWorkspaceId(current, loadedGroups, loadedArchived)) {
             return current;
@@ -337,6 +348,68 @@ function App() {
     [],
   );
 
+  const refreshWorkspaceNavigation = useCallback(async () => {
+    const [loadedGroups, loadedArchived, loadedRepositories] = await Promise.all([
+      loadWorkspaceGroups(),
+      loadArchivedWorkspaces(),
+      listFixtureRepositories(),
+    ]);
+
+    setGroups(loadedGroups);
+    setArchivedSummaries(loadedArchived);
+    setFixtureRepositories(loadedRepositories);
+
+    return {
+      loadedGroups,
+      loadedArchived,
+      loadedRepositories,
+    };
+  }, []);
+
+  const hydrateWorkspaceSelection = useCallback(async (workspaceId: string | null) => {
+    setSelectedWorkspaceId(workspaceId);
+
+    if (!workspaceId) {
+      setWorkspaceDetail(null);
+      setWorkspaceSessions([]);
+      setSelectedSessionId(null);
+      setSessionMessages([]);
+      setSessionAttachments([]);
+      return;
+    }
+
+    setLoadingWorkspace(true);
+    const [detail, sessions] = await Promise.all([
+      loadWorkspaceDetail(workspaceId),
+      loadWorkspaceSessions(workspaceId),
+    ]);
+    const nextSessionId =
+      detail?.activeSessionId ??
+      sessions.find((session) => session.active)?.id ??
+      sessions[0]?.id ??
+      null;
+
+    setWorkspaceDetail(detail);
+    setWorkspaceSessions(sessions);
+    setSelectedSessionId(nextSessionId);
+    setLoadingWorkspace(false);
+
+    if (!nextSessionId) {
+      setSessionMessages([]);
+      setSessionAttachments([]);
+      return;
+    }
+
+    setLoadingSession(true);
+    const [messages, attachments] = await Promise.all([
+      loadSessionMessages(nextSessionId),
+      loadSessionAttachments(nextSessionId),
+    ]);
+    setSessionMessages(messages);
+    setSessionAttachments(attachments);
+    setLoadingSession(false);
+  }, []);
+
   useEffect(() => {
     if (!selectedWorkspaceId || loadingWorkspace || loadingSession) {
       return;
@@ -444,6 +517,104 @@ function App() {
       [ctxKey]: [],
     }));
   };
+
+  const handleCreateWorkspaceFromRepo = useCallback(async (repoId: string) => {
+    if (
+      addingRepository ||
+      creatingWorkspaceRepoId ||
+      archivingWorkspaceId ||
+      restoringWorkspaceId ||
+      markingUnreadWorkspaceId
+    ) {
+      return;
+    }
+
+    setWorkspaceActionError(null);
+    setCreatingWorkspaceRepoId(repoId);
+
+    try {
+      const response = await createWorkspaceFromRepo(repoId);
+      const { loadedGroups, loadedArchived } = await refreshWorkspaceNavigation();
+      const nextWorkspaceId = hasWorkspaceId(
+        response.selectedWorkspaceId,
+        loadedGroups,
+        loadedArchived,
+      )
+        ? response.selectedWorkspaceId
+        : findInitialWorkspaceId(loadedGroups) ?? loadedArchived[0]?.id ?? null;
+
+      await hydrateWorkspaceSelection(nextWorkspaceId);
+    } catch (error) {
+      setWorkspaceActionError(describeUnknownError(error, "Unable to create workspace."));
+    } finally {
+      setCreatingWorkspaceRepoId(null);
+      setLoadingWorkspace(false);
+      setLoadingSession(false);
+    }
+  }, [
+    addingRepository,
+    archivingWorkspaceId,
+    creatingWorkspaceRepoId,
+    hydrateWorkspaceSelection,
+    markingUnreadWorkspaceId,
+    refreshWorkspaceNavigation,
+    restoringWorkspaceId,
+  ]);
+
+  const handleAddRepository = useCallback(async () => {
+    if (
+      addingRepository ||
+      creatingWorkspaceRepoId ||
+      archivingWorkspaceId ||
+      restoringWorkspaceId ||
+      markingUnreadWorkspaceId
+    ) {
+      return;
+    }
+
+    setWorkspaceActionError(null);
+    setAddingRepository(true);
+
+    try {
+      const defaults = await loadAddRepositoryDefaults();
+      const selection = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: defaults.lastCloneDirectory ?? undefined,
+      });
+      const selectedPath = Array.isArray(selection) ? selection[0] : selection;
+
+      if (!selectedPath) {
+        return;
+      }
+
+      const response = await addRepositoryFromLocalPath(selectedPath);
+      const { loadedGroups, loadedArchived } = await refreshWorkspaceNavigation();
+      const nextWorkspaceId = hasWorkspaceId(
+        response.selectedWorkspaceId,
+        loadedGroups,
+        loadedArchived,
+      )
+        ? response.selectedWorkspaceId
+        : findInitialWorkspaceId(loadedGroups) ?? loadedArchived[0]?.id ?? null;
+
+      await hydrateWorkspaceSelection(nextWorkspaceId);
+    } catch (error) {
+      setWorkspaceActionError(describeUnknownError(error, "Unable to add repository."));
+    } finally {
+      setAddingRepository(false);
+      setLoadingWorkspace(false);
+      setLoadingSession(false);
+    }
+  }, [
+    addingRepository,
+    archivingWorkspaceId,
+    creatingWorkspaceRepoId,
+    hydrateWorkspaceSelection,
+    markingUnreadWorkspaceId,
+    refreshWorkspaceNavigation,
+    restoringWorkspaceId,
+  ]);
 
   const handleComposerSubmit = async (submittedPrompt: string, imagePaths: string[]) => {
     const prompt = submittedPrompt.trim();
@@ -620,7 +791,7 @@ function App() {
   };
 
   const handleArchiveWorkspace = useCallback(async (workspaceId: string) => {
-    if (archivingWorkspaceId || restoringWorkspaceId) {
+    if (addingRepository || archivingWorkspaceId || restoringWorkspaceId) {
       return;
     }
 
@@ -629,10 +800,7 @@ function App() {
 
     try {
       await archiveWorkspace(workspaceId);
-      const [loadedGroups, loadedArchived] = await Promise.all([
-        loadWorkspaceGroups(),
-        loadArchivedWorkspaces(),
-      ]);
+      const { loadedGroups, loadedArchived } = await refreshWorkspaceNavigation();
       const nextWorkspaceId =
         selectedWorkspaceId && selectedWorkspaceId !== workspaceId
           ? hasWorkspaceId(selectedWorkspaceId, loadedGroups, loadedArchived)
@@ -640,49 +808,7 @@ function App() {
             : findInitialWorkspaceId(loadedGroups) ?? loadedArchived[0]?.id ?? null
           : findInitialWorkspaceId(loadedGroups) ?? loadedArchived[0]?.id ?? null;
 
-      setGroups(loadedGroups);
-      setArchivedSummaries(loadedArchived);
-      setSelectedWorkspaceId(nextWorkspaceId);
-
-      if (!nextWorkspaceId) {
-        setWorkspaceDetail(null);
-        setWorkspaceSessions([]);
-        setSelectedSessionId(null);
-        setSessionMessages([]);
-        setSessionAttachments([]);
-        return;
-      }
-
-      setLoadingWorkspace(true);
-      const [detail, sessions] = await Promise.all([
-        loadWorkspaceDetail(nextWorkspaceId),
-        loadWorkspaceSessions(nextWorkspaceId),
-      ]);
-      const nextSessionId =
-        detail?.activeSessionId ??
-        sessions.find((session) => session.active)?.id ??
-        sessions[0]?.id ??
-        null;
-
-      setWorkspaceDetail(detail);
-      setWorkspaceSessions(sessions);
-      setSelectedSessionId(nextSessionId);
-      setLoadingWorkspace(false);
-
-      if (!nextSessionId) {
-        setSessionMessages([]);
-        setSessionAttachments([]);
-        return;
-      }
-
-      setLoadingSession(true);
-      const [messages, attachments] = await Promise.all([
-        loadSessionMessages(nextSessionId),
-        loadSessionAttachments(nextSessionId),
-      ]);
-      setSessionMessages(messages);
-      setSessionAttachments(attachments);
-      setLoadingSession(false);
+      await hydrateWorkspaceSelection(nextWorkspaceId);
     } catch (error) {
       setWorkspaceActionError(describeUnknownError(error, "Unable to archive workspace."));
     } finally {
@@ -690,10 +816,22 @@ function App() {
       setLoadingWorkspace(false);
       setLoadingSession(false);
     }
-  }, [archivingWorkspaceId, restoringWorkspaceId, selectedWorkspaceId]);
+  }, [
+    addingRepository,
+    archivingWorkspaceId,
+    hydrateWorkspaceSelection,
+    refreshWorkspaceNavigation,
+    restoringWorkspaceId,
+    selectedWorkspaceId,
+  ]);
 
   const handleMarkWorkspaceUnread = useCallback(async (workspaceId: string) => {
-    if (archivingWorkspaceId || restoringWorkspaceId || markingUnreadWorkspaceId) {
+    if (
+      addingRepository ||
+      archivingWorkspaceId ||
+      restoringWorkspaceId ||
+      markingUnreadWorkspaceId
+    ) {
       return;
     }
 
@@ -707,13 +845,7 @@ function App() {
         setDeferredWorkspaceReadClearId(workspaceId);
       }
 
-      const [loadedGroups, loadedArchived] = await Promise.all([
-        loadWorkspaceGroups(),
-        loadArchivedWorkspaces(),
-      ]);
-
-      setGroups(loadedGroups);
-      setArchivedSummaries(loadedArchived);
+      await refreshWorkspaceNavigation();
 
       if (selectedWorkspaceId === workspaceId) {
         const [detail, sessions] = await Promise.all([
@@ -729,7 +861,14 @@ function App() {
     } finally {
       setMarkingUnreadWorkspaceId(null);
     }
-  }, [archivingWorkspaceId, markingUnreadWorkspaceId, restoringWorkspaceId, selectedWorkspaceId]);
+  }, [
+    addingRepository,
+    archivingWorkspaceId,
+    markingUnreadWorkspaceId,
+    refreshWorkspaceNavigation,
+    restoringWorkspaceId,
+    selectedWorkspaceId,
+  ]);
 
   const handleSelectWorkspace = useCallback((workspaceId: string) => {
     setSelectedWorkspaceId(workspaceId);
@@ -785,7 +924,7 @@ function App() {
   ]);
 
   const handleRestoreWorkspace = useCallback(async (workspaceId: string) => {
-    if (archivingWorkspaceId || restoringWorkspaceId) {
+    if (addingRepository || archivingWorkspaceId || restoringWorkspaceId) {
       return;
     }
 
@@ -794,10 +933,7 @@ function App() {
 
     try {
       const response = await restoreWorkspace(workspaceId);
-      const [loadedGroups, loadedArchived] = await Promise.all([
-        loadWorkspaceGroups(),
-        loadArchivedWorkspaces(),
-      ]);
+      const { loadedGroups, loadedArchived } = await refreshWorkspaceNavigation();
       const nextWorkspaceId = hasWorkspaceId(
         response.selectedWorkspaceId,
         loadedGroups,
@@ -806,49 +942,7 @@ function App() {
         ? response.selectedWorkspaceId
         : findInitialWorkspaceId(loadedGroups) ?? loadedArchived[0]?.id ?? null;
 
-      setGroups(loadedGroups);
-      setArchivedSummaries(loadedArchived);
-      setSelectedWorkspaceId(nextWorkspaceId);
-
-      if (!nextWorkspaceId) {
-        setWorkspaceDetail(null);
-        setWorkspaceSessions([]);
-        setSelectedSessionId(null);
-        setSessionMessages([]);
-        setSessionAttachments([]);
-        return;
-      }
-
-      setLoadingWorkspace(true);
-      const [detail, sessions] = await Promise.all([
-        loadWorkspaceDetail(nextWorkspaceId),
-        loadWorkspaceSessions(nextWorkspaceId),
-      ]);
-      const nextSessionId =
-        detail?.activeSessionId ??
-        sessions.find((session) => session.active)?.id ??
-        sessions[0]?.id ??
-        null;
-
-      setWorkspaceDetail(detail);
-      setWorkspaceSessions(sessions);
-      setSelectedSessionId(nextSessionId);
-      setLoadingWorkspace(false);
-
-      if (!nextSessionId) {
-        setSessionMessages([]);
-        setSessionAttachments([]);
-        return;
-      }
-
-      setLoadingSession(true);
-      const [messages, attachments] = await Promise.all([
-        loadSessionMessages(nextSessionId),
-        loadSessionAttachments(nextSessionId),
-      ]);
-      setSessionMessages(messages);
-      setSessionAttachments(attachments);
-      setLoadingSession(false);
+      await hydrateWorkspaceSelection(nextWorkspaceId);
     } catch (error) {
       setWorkspaceActionError(describeUnknownError(error, "Unable to restore workspace."));
     } finally {
@@ -856,7 +950,13 @@ function App() {
       setLoadingWorkspace(false);
       setLoadingSession(false);
     }
-  }, [archivingWorkspaceId, restoringWorkspaceId]);
+  }, [
+    addingRepository,
+    archivingWorkspaceId,
+    hydrateWorkspaceSelection,
+    refreshWorkspaceNavigation,
+    restoringWorkspaceId,
+  ]);
 
   return (
     <main
@@ -872,8 +972,17 @@ function App() {
           <WorkspacesSidebar
             groups={groups}
             archivedRows={archivedRows}
+            availableRepositories={fixtureRepositories}
+            addingRepository={addingRepository}
             selectedWorkspaceId={selectedWorkspaceId}
+            creatingWorkspaceRepoId={creatingWorkspaceRepoId}
+            onAddRepository={() => {
+              void handleAddRepository();
+            }}
             onSelectWorkspace={handleSelectWorkspace}
+            onCreateWorkspace={(repoId) => {
+              void handleCreateWorkspaceFromRepo(repoId);
+            }}
             onArchiveWorkspace={(workspaceId) => {
               void handleArchiveWorkspace(workspaceId);
             }}

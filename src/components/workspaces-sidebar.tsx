@@ -8,6 +8,8 @@ import {
   type ButtonHTMLAttributes,
   type ReactNode,
   useEffect,
+  useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -18,9 +20,11 @@ import {
   LoaderCircle,
   RotateCcw,
   Plus,
+  Search,
 } from "lucide-react";
 import {
   type GroupTone,
+  type RepositoryCreateOption,
   type WorkspaceGroup,
   type WorkspaceRow,
 } from "@/lib/conductor";
@@ -372,8 +376,13 @@ function WorkspaceRowItem({
 export function WorkspacesSidebar({
   groups,
   archivedRows,
+  availableRepositories,
+  addingRepository,
   selectedWorkspaceId,
+  creatingWorkspaceRepoId,
+  onAddRepository,
   onSelectWorkspace,
+  onCreateWorkspace,
   onArchiveWorkspace,
   onMarkWorkspaceUnread,
   onRestoreWorkspace,
@@ -384,8 +393,13 @@ export function WorkspacesSidebar({
 }: {
   groups: WorkspaceGroup[];
   archivedRows: WorkspaceRow[];
+  availableRepositories?: RepositoryCreateOption[];
+  addingRepository?: boolean;
   selectedWorkspaceId?: string | null;
+  creatingWorkspaceRepoId?: string | null;
+  onAddRepository?: () => void;
   onSelectWorkspace?: (workspaceId: string) => void;
+  onCreateWorkspace?: (repoId: string) => void;
   onArchiveWorkspace?: (workspaceId: string) => void;
   onMarkWorkspaceUnread?: (workspaceId: string) => void;
   onRestoreWorkspace?: (workspaceId: string) => void;
@@ -394,6 +408,69 @@ export function WorkspacesSidebar({
   restoringWorkspaceId?: string | null;
   workspaceActionError?: string | null;
 }) {
+  const [isRepoPickerOpen, setIsRepoPickerOpen] = useState(false);
+  const [repoSearchQuery, setRepoSearchQuery] = useState("");
+  const repoPickerRef = useRef<HTMLDivElement | null>(null);
+  const repoSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const workspaceActionsBusy = Boolean(
+    addingRepository || archivingWorkspaceId || markingUnreadWorkspaceId || restoringWorkspaceId,
+  );
+  const createBusy = Boolean(creatingWorkspaceRepoId);
+  const addRepositoryBusy = Boolean(addingRepository);
+  const filteredRepositories = useMemo(() => {
+    const normalizedQuery = repoSearchQuery.trim().toLowerCase();
+
+    if (!normalizedQuery) {
+      return availableRepositories ?? [];
+    }
+
+    return (availableRepositories ?? []).filter((repository) => {
+      const haystack = `${repository.name} ${repository.defaultBranch ?? ""}`.toLowerCase();
+      return haystack.includes(normalizedQuery);
+    });
+  }, [availableRepositories, repoSearchQuery]);
+
+  useEffect(() => {
+    if (!isRepoPickerOpen) {
+      setRepoSearchQuery("");
+      return;
+    }
+
+    repoSearchInputRef.current?.focus();
+  }, [isRepoPickerOpen]);
+
+  useEffect(() => {
+    if (!isRepoPickerOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+
+      if (
+        target instanceof Node &&
+        repoPickerRef.current &&
+        !repoPickerRef.current.contains(target)
+      ) {
+        setIsRepoPickerOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsRepoPickerOpen(false);
+      }
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isRepoPickerOpen]);
+
   return (
     <TooltipProvider>
       <div className="flex h-full min-h-0 flex-col overflow-hidden pb-4">
@@ -410,18 +487,129 @@ export function WorkspacesSidebar({
             Workspaces
           </h2>
 
-          <div className="flex items-center gap-1 text-app-foreground-soft/80">
+          <div
+            ref={repoPickerRef}
+            className="relative flex items-center gap-1 text-app-foreground-soft/80"
+          >
             <BaseTooltip side="top" content={<span>Add repository</span>}>
-              <ToolbarButton label="Add repository" className="text-app-foreground-soft/78">
-                <BookMarked className="size-3.5" strokeWidth={2} />
+              <ToolbarButton
+                label="Add repository"
+                disabled={addRepositoryBusy || createBusy || workspaceActionsBusy}
+                className={cn(
+                  "text-app-foreground-soft/78",
+                  addRepositoryBusy || createBusy || workspaceActionsBusy
+                    ? "cursor-not-allowed opacity-60"
+                    : undefined,
+                )}
+                onClick={() => {
+                  if (addRepositoryBusy || createBusy || workspaceActionsBusy) {
+                    return;
+                  }
+
+                  setIsRepoPickerOpen(false);
+                  onAddRepository?.();
+                }}
+              >
+                {addRepositoryBusy ? (
+                  <LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.1} />
+                ) : (
+                  <BookMarked className="size-3.5" strokeWidth={2} />
+                )}
               </ToolbarButton>
             </BaseTooltip>
 
             <BaseTooltip side="top" content={<span>Add workspace</span>}>
-              <ToolbarButton label="New workspace">
-                <Plus className="size-3.5" strokeWidth={2.4} />
+              <ToolbarButton
+                label="New workspace"
+                disabled={addRepositoryBusy || createBusy || workspaceActionsBusy}
+                aria-expanded={isRepoPickerOpen}
+                aria-haspopup="dialog"
+                className={cn(
+                  addRepositoryBusy || createBusy || workspaceActionsBusy
+                    ? "cursor-not-allowed opacity-60"
+                    : undefined,
+                )}
+                onClick={() => {
+                  if (addRepositoryBusy || createBusy || workspaceActionsBusy) {
+                    return;
+                  }
+
+                  setIsRepoPickerOpen((current) => !current);
+                }}
+              >
+                {createBusy ? (
+                  <LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.1} />
+                ) : (
+                  <Plus className="size-3.5" strokeWidth={2.4} />
+                )}
               </ToolbarButton>
             </BaseTooltip>
+
+            {isRepoPickerOpen ? (
+              <div
+                role="dialog"
+                aria-label="Create workspace from repository"
+                className="absolute right-0 top-full z-40 mt-2 w-[18.5rem] rounded-[14px] border border-app-border bg-app-sidebar px-2 py-2 shadow-[0_18px_48px_rgba(0,0,0,0.38)]"
+              >
+                <div className="relative">
+                  <Search
+                    className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-app-foreground-soft/60"
+                    strokeWidth={1.9}
+                  />
+                  <input
+                    ref={repoSearchInputRef}
+                    type="text"
+                    value={repoSearchQuery}
+                    aria-label="Search repositories"
+                    placeholder="Search repositories"
+                    onChange={(event) => {
+                      setRepoSearchQuery(event.target.value);
+                    }}
+                    onKeyDown={(event) => {
+                      event.stopPropagation();
+                    }}
+                    className="h-9 w-full rounded-full border border-app-border bg-app-toolbar px-9 text-[13px] font-medium text-app-foreground outline-none placeholder:text-app-foreground-soft/56 focus:border-app-border-strong"
+                  />
+                </div>
+
+                <div className="mt-2 max-h-72 space-y-1 overflow-y-auto pr-1">
+                  {filteredRepositories.length > 0 ? (
+                    filteredRepositories.map((repository) => (
+                      <button
+                        key={repository.id}
+                        type="button"
+                        className="flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition-colors hover:bg-app-row-hover"
+                        onClick={() => {
+                          setIsRepoPickerOpen(false);
+                          onCreateWorkspace?.(repository.id);
+                        }}
+                      >
+                        <WorkspaceAvatar
+                          repoIconSrc={repository.repoIconSrc}
+                          repoInitials={repository.repoInitials}
+                          repoName={repository.name}
+                          title={repository.name}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] font-medium text-app-foreground">
+                            {repository.name}
+                          </span>
+                          {repository.defaultBranch ? (
+                            <span className="block truncate text-[11px] uppercase tracking-[0.14em] text-app-foreground-soft/52">
+                              {repository.defaultBranch}
+                            </span>
+                          ) : null}
+                        </span>
+                      </button>
+                    ))
+                  ) : (
+                    <p className="px-2 py-3 text-[12px] leading-snug text-app-foreground-soft/60">
+                      No repositories found.
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -472,7 +660,10 @@ export function WorkspacesSidebar({
                             markingUnreadWorkspaceId={markingUnreadWorkspaceId}
                             restoringWorkspaceId={restoringWorkspaceId}
                             workspaceActionsDisabled={Boolean(
-                              archivingWorkspaceId || markingUnreadWorkspaceId || restoringWorkspaceId,
+                              creatingWorkspaceRepoId ||
+                                archivingWorkspaceId ||
+                                markingUnreadWorkspaceId ||
+                                restoringWorkspaceId,
                             )}
                           />
                         ))}
@@ -517,7 +708,10 @@ export function WorkspacesSidebar({
                       markingUnreadWorkspaceId={markingUnreadWorkspaceId}
                       restoringWorkspaceId={restoringWorkspaceId}
                       workspaceActionsDisabled={Boolean(
-                        archivingWorkspaceId || markingUnreadWorkspaceId || restoringWorkspaceId,
+                        creatingWorkspaceRepoId ||
+                          archivingWorkspaceId ||
+                          markingUnreadWorkspaceId ||
+                          restoringWorkspaceId,
                       )}
                     />
                   ))}
