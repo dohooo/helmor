@@ -1,4 +1,4 @@
-import { Suspense, forwardRef, lazy, memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Suspense, forwardRef, lazy, memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Skeleton, { SkeletonTheme } from "react-loading-skeleton";
 import {
@@ -56,13 +56,7 @@ type WorkspacePanelProps = {
 };
 
 type RenderedMessage = ReturnType<typeof convertConductorMessages>[number];
-
-const STREAMDOWN_ANIMATION = {
-  animation: "fadeIn",
-  duration: 160,
-  stagger: 6,
-  sep: "char",
-} as const;
+type StreamdownMode = "static" | "streaming";
 
 const LazyStreamdown = lazy(async () => {
   const mod = await import("streamdown");
@@ -199,11 +193,9 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 
 function ConductorThread({ messages, sending }: { messages: SessionMessageRecord[]; sending: boolean }) {
   const threadMessages = useMemo(() => convertConductorMessages(messages), [messages]);
-  const [sendStart, setSendStart] = useState<number | null>(null);
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [isPositioning, setIsPositioning] = useState(true);
-  const [pendingAutoScroll, setPendingAutoScroll] = useState(false);
   const previousSendingRef = useRef(sending);
   const sendingJustStarted = sending && !previousSendingRef.current;
   const streamingMessageId = useMemo(() => {
@@ -232,61 +224,25 @@ function ConductorThread({ messages, sending }: { messages: SessionMessageRecord
   }, [messages, sending]);
 
   useEffect(() => {
-    if (sending) {
-      setSendStart((current) => current ?? Date.now());
-    } else {
-      setSendStart(null);
-    }
-  }, [sending]);
-
-  useEffect(() => {
     previousSendingRef.current = sending;
   }, [sending]);
 
-  useEffect(() => {
-    if (sendingJustStarted) {
-      setPendingAutoScroll(true);
-    } else if (!sending) {
-      setPendingAutoScroll(false);
-    }
-  }, [sendingJustStarted, sending]);
-
-  const scrollThreadToBottom = useCallback(() => {
+  const scrollThreadToBottom = useCallback((behavior: "auto" | "smooth" = "auto") => {
     const virtuoso = virtuosoRef.current;
     if (!virtuoso) return;
 
-    // Jump to the last item first, then settle to the actual scroll extent so footer space is included.
     virtuoso.scrollToIndex({
       index: "LAST",
       align: "end",
-      behavior: "auto",
+      behavior,
     });
-    virtuoso.autoscrollToBottom();
   }, []);
 
   useEffect(() => {
-    if (!sending || !isAtBottom) return;
-    scrollThreadToBottom();
-  }, [threadMessages, sending, isAtBottom, scrollThreadToBottom]);
-
-  useLayoutEffect(() => {
-    if (threadMessages.length === 0) return;
-    if (!isPositioning && (!sending || !(sendingJustStarted || pendingAutoScroll))) return;
-    scrollThreadToBottom();
-  }, [
-    threadMessages,
-    sending,
-    sendingJustStarted,
-    pendingAutoScroll,
-    isPositioning,
-    scrollThreadToBottom,
-  ]);
-
-  useEffect(() => {
-    if (isAtBottom && pendingAutoScroll) {
-      setPendingAutoScroll(false);
+    if (sendingJustStarted) {
+      scrollThreadToBottom("smooth");
     }
-  }, [isAtBottom, pendingAutoScroll]);
+  }, [sendingJustStarted, scrollThreadToBottom]);
 
   const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
     setIsAtBottom(atBottom);
@@ -297,13 +253,10 @@ function ConductorThread({ messages, sending }: { messages: SessionMessageRecord
 
   const virtuosoComponents = useMemo<VirtuosoComponents<RenderedMessage>>(() => ({
     Header: ConversationHeaderSpacer,
-    Footer: () => (
-      <ConversationFooterSpacer sending={sending} startTime={sendStart} />
-    ),
     Item: ConversationItem,
     Scroller: ConversationScroller,
     ScrollSeekPlaceholder: ConversationScrollSeekPlaceholder,
-  }), [sending, sendStart]);
+  }), []);
 
   const itemContent = useCallback((index: number, message: RenderedMessage) => (
     <MemoConversationMessage
@@ -318,7 +271,7 @@ function ConductorThread({ messages, sending }: { messages: SessionMessageRecord
       components={virtuosoComponents}
       data={threadMessages}
       followOutput={(atBottom) => (
-        sending && (atBottom || pendingAutoScroll || sendingJustStarted)
+        sending && atBottom
           ? "auto"
           : false
       )}
@@ -327,11 +280,11 @@ function ConductorThread({ messages, sending }: { messages: SessionMessageRecord
       onAtBottomStateChange={handleAtBottomStateChange}
       virtuosoRef={virtuosoRef}
     >
-      {!isAtBottom && !pendingAutoScroll && !sendingJustStarted ? (
+      {!isAtBottom && !sendingJustStarted ? (
         <button
           type="button"
           onClick={() => {
-            scrollThreadToBottom();
+            scrollThreadToBottom("smooth");
           }}
           className="conversation-scroll-button"
           aria-label="Scroll to latest message"
@@ -430,7 +383,7 @@ const ConversationItem = memo(function ConversationItem({
   ...props
 }: VirtuosoItemProps<RenderedMessage>) {
   return (
-    <div {...props} style={style} className="flow-root px-7 pb-1.5">
+    <div {...props} style={style} className="flow-root px-5 pb-1.5">
       {children}
     </div>
   );
@@ -450,7 +403,7 @@ function ConversationScrollSeekPlaceholder({
         : "52%";
 
   return (
-    <div className="px-7 pb-1.5" style={{ height }}>
+    <div className="px-5 pb-1.5" style={{ height }}>
       <div className={cn("flex h-full min-h-10 items-center", isUserLike ? "justify-end" : "justify-start")}>
         <div style={{ width }}>
           <SkeletonTheme
@@ -472,20 +425,6 @@ function ConversationScrollSeekPlaceholder({
 
 function ConversationHeaderSpacer() {
   return <div className="h-6 shrink-0" />;
-}
-
-function ConversationFooterSpacer({
-  sending,
-  startTime,
-}: {
-  sending: boolean;
-  startTime: number | null;
-}) {
-  return (
-    <div className="px-7 pb-6 pt-1.5">
-      {sending ? <SendingIndicator startTime={startTime} /> : null}
-    </div>
-  );
 }
 
 function ConversationMessage({
@@ -628,20 +567,18 @@ function AssistantText({
   text: string;
   streaming: boolean;
 }) {
+  const mode: StreamdownMode = streaming ? "streaming" : "static";
+
   return (
     <div
-      className={cn(
-        "conversation-markdown prose prose-sm max-w-none break-words text-[14px] leading-7 text-app-foreground-soft prose-headings:my-0 prose-headings:text-app-foreground prose-p:my-0 prose-li:my-0 prose-pre:my-0 prose-ul:my-0 prose-ol:my-0 prose-blockquote:my-0 prose-table:my-0 prose-strong:text-app-foreground prose-code:rounded prose-code:bg-app-sidebar-strong prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:text-app-foreground prose-pre:bg-app-sidebar prose-pre:text-[13px] prose-a:text-app-project prose-table:text-[13px]",
-        streaming ? "conversation-markdown-streaming" : null,
-      )}
+      className="conversation-markdown prose prose-sm max-w-none break-words text-[14px] leading-7 text-app-foreground-soft prose-headings:my-0 prose-headings:text-app-foreground prose-p:my-0 prose-li:my-0 prose-pre:my-0 prose-ul:my-0 prose-ol:my-0 prose-blockquote:my-0 prose-table:my-0 prose-strong:text-app-foreground prose-code:rounded prose-code:bg-app-sidebar-strong prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:text-app-foreground prose-pre:bg-app-sidebar prose-pre:text-[13px] prose-a:text-app-project prose-table:text-[13px]"
     >
       <Suspense fallback={<AssistantTextFallback text={text} streaming={streaming} />}>
         <LazyStreamdown
-          animated={streaming ? STREAMDOWN_ANIMATION : false}
+          animated={streaming}
           className="conversation-streamdown"
           isAnimating={streaming}
-          mode={streaming ? "streaming" : "static"}
-          parseIncompleteMarkdown
+          mode={mode}
         >
           {text}
         </LazyStreamdown>
@@ -661,7 +598,7 @@ function AssistantTextFallback({
     <div
       className={cn(
         "conversation-streamdown whitespace-pre-wrap break-words",
-        streaming ? "conversation-streamdown-fallback-streaming" : null,
+        streaming ? "animate-in fade-in-0 duration-150" : null,
       )}
     >
       {text}
@@ -797,39 +734,12 @@ function AssistantToolCall({
               <code className="font-mono text-app-foreground-soft">{info.fullCommand}</code>
             </div>
           ) : null}
-          <pre className="whitespace-pre-wrap break-words p-2 text-app-muted/70">
+          <pre className="whitespace-pre-wrap break-words p-1.5 text-app-muted/70">
             {resultText!.slice(0, 2000)}{resultText!.length > 2000 ? "…" : ""}
           </pre>
         </div>
       ) : null}
     </details>
-  );
-}
-
-function SendingIndicator({ startTime }: { startTime: number | null }) {
-  const [elapsed, setElapsed] = useState(0);
-
-  useEffect(() => {
-    if (!startTime) return;
-    setElapsed(0);
-    const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startTime) / 1000));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [startTime]);
-
-  const timeLabel = elapsed >= 60
-    ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
-    : `${elapsed}s`;
-
-  return (
-    <div className="flex items-center gap-2 py-1 text-[11px] text-app-muted">
-      <span className="relative flex size-3.5 shrink-0 items-center justify-center">
-        <span className="absolute inset-0 animate-spin rounded-full border border-transparent border-t-app-progress" />
-        <span className="size-1.5 rounded-full bg-app-progress" />
-      </span>
-      <span>{timeLabel}</span>
-    </div>
   );
 }
 

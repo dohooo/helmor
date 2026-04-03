@@ -60,7 +60,7 @@ function ComposerButton({
 }
 
 export const WorkspaceComposer = memo(function WorkspaceComposer({
-  contextKey,
+  contextKey: _contextKey,
   onSubmit,
   sending = false,
   selectedModelId,
@@ -81,15 +81,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
   const sendDisabled = sending || !selectedModel || !hasContent;
 
   useEffect(() => {
-    setDraftValue(restoreDraft ?? "");
-    setAttachedImages(restoreImages);
-  }, [contextKey, restoreDraft, restoreImages]);
-
-  useEffect(() => {
     if (!restoreDraft && restoreImages.length === 0) return;
     setDraftValue(restoreDraft ?? "");
     setAttachedImages(restoreImages);
-  }, [restoreDraft, restoreImages, restoreNonce]);
+  }, [restoreNonce]);
 
   // Intercept value changes to extract image paths
   const handleValueChange = useCallback(

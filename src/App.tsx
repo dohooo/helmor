@@ -3,6 +3,7 @@ import {
   startTransition,
   type KeyboardEvent,
   type MouseEvent,
+  memo,
   useEffect,
   useMemo,
   useState,
@@ -38,6 +39,7 @@ import { StreamAccumulator } from "./lib/stream-accumulator";
 import { WorkspacesSidebar } from "./components/workspaces-sidebar";
 import { WorkspacePanel } from "./components/workspace-panel";
 import { WorkspaceComposer } from "./components/workspace-composer";
+import { ShimmerText } from "./components/ui/shimmer-text";
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "helmor.workspaceSidebarWidth";
 const DEFAULT_SIDEBAR_WIDTH = 336;
@@ -766,33 +768,36 @@ function App() {
               onSelectSession={setSelectedSessionId}
             />
 
-            <div className="mt-auto px-4 pb-4 pt-2">
-              <WorkspaceComposer
-                key={composerContextKey}
-                contextKey={composerContextKey}
-                onSubmit={(prompt, imagePaths) => {
-                  void handleComposerSubmit(prompt, imagePaths);
-                }}
-                sending={isSending}
-                selectedModelId={selectedModelId}
-                modelSections={agentModelSections}
-                onSelectModel={(modelId) => {
-                  setComposerModelSelections((current) => ({
-                    ...current,
-                    [composerContextKey]: modelId,
-                  }));
-                }}
-                sendError={activeSendError}
-                restoreDraft={composerRestoreState?.contextKey === composerContextKey
-                  ? composerRestoreState.draft
-                  : null}
-                restoreImages={composerRestoreState?.contextKey === composerContextKey
-                  ? composerRestoreState.images
-                  : []}
-                restoreNonce={composerRestoreState?.contextKey === composerContextKey
-                  ? composerRestoreState.nonce
-                  : 0}
-              />
+            <div className="mt-auto px-4 pb-4 pt-0">
+              <SendingStatusBar active={isSending} />
+              <div>
+                <WorkspaceComposer
+                  key={composerContextKey}
+                  contextKey={composerContextKey}
+                  onSubmit={(prompt, imagePaths) => {
+                    void handleComposerSubmit(prompt, imagePaths);
+                  }}
+                  sending={isSending}
+                  selectedModelId={selectedModelId}
+                  modelSections={agentModelSections}
+                  onSelectModel={(modelId) => {
+                    setComposerModelSelections((current) => ({
+                      ...current,
+                      [composerContextKey]: modelId,
+                    }));
+                  }}
+                  sendError={activeSendError}
+                  restoreDraft={composerRestoreState?.contextKey === composerContextKey
+                    ? composerRestoreState.draft
+                    : null}
+                  restoreImages={composerRestoreState?.contextKey === composerContextKey
+                    ? composerRestoreState.images
+                    : []}
+                  restoreNonce={composerRestoreState?.contextKey === composerContextKey
+                    ? composerRestoreState.nonce
+                    : 0}
+                />
+              </div>
             </div>
           </div>
         </section>
@@ -800,6 +805,23 @@ function App() {
     </main>
   );
 }
+
+const SendingStatusBar = memo(function SendingStatusBar({
+  active,
+}: {
+  active: boolean;
+}) {
+  return (
+    <div
+      aria-hidden={!active}
+      className={`overflow-hidden px-1 transition-none ${active ? "h-6 pb-1" : "h-0 pb-0"}`}
+    >
+      <div className="flex items-center py-1 text-[11px] font-medium">
+        <ShimmerText className="text-[12px] text-app-muted">Thinking</ShimmerText>
+      </div>
+    </div>
+  );
+});
 
 function findInitialWorkspaceId(groups: WorkspaceGroup[]): string | null {
   for (const group of groups) {

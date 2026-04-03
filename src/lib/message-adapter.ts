@@ -262,8 +262,21 @@ function buildSystemLabel(p: Record<string, unknown>): string {
 function buildResultLabel(p: Record<string, unknown>): string {
   const cost = typeof p.total_cost_usd === "number" ? p.total_cost_usd : null;
   const durationMs = typeof p.duration_ms === "number" ? p.duration_ms : null;
+  const usage = isObj(p.usage) ? p.usage : null;
+  const inputTokens =
+    typeof usage?.input_tokens === "number"
+      ? usage.input_tokens
+      : typeof p.input_tokens === "number"
+        ? p.input_tokens
+        : null;
+  const outputTokens =
+    typeof usage?.output_tokens === "number"
+      ? usage.output_tokens
+      : typeof p.output_tokens === "number"
+        ? p.output_tokens
+        : null;
   const bits: string[] = [];
-  if (durationMs) {
+  if (durationMs !== null) {
     const totalSecs = durationMs / 1000;
     if (totalSecs >= 60) {
       const mins = Math.floor(totalSecs / 60);
@@ -273,7 +286,9 @@ function buildResultLabel(p: Record<string, unknown>): string {
       bits.push(`${totalSecs.toFixed(1)}s`);
     }
   }
-  if (cost) bits.push(`$${cost.toFixed(4)}`);
+  if (inputTokens !== null) bits.push(`in ${formatCount(inputTokens)}`);
+  if (outputTokens !== null) bits.push(`out ${formatCount(outputTokens)}`);
+  if (cost !== null) bits.push(`$${cost.toFixed(4)}`);
   return bits.join(" • ") || "Done";
 }
 
@@ -367,4 +382,8 @@ function groupChildMessages(msgs: ThreadMessageLike[]): ThreadMessageLike[] {
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function formatCount(value: number): string {
+  return new Intl.NumberFormat("en-US").format(value);
 }
