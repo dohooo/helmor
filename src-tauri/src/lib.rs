@@ -1,5 +1,7 @@
 mod agents;
 mod conductor;
+pub mod data_dir;
+mod schema;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -8,6 +10,27 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(agents::RunningAgentProcesses {
             map: std::sync::Mutex::new(std::collections::HashMap::new()),
+        })
+        .setup(|_app| {
+            // Ensure data directory structure exists
+            data_dir::ensure_directory_structure()
+                .expect("Failed to create Helmor data directory");
+
+            // Initialize database schema
+            let db_path = data_dir::db_path()
+                .expect("Failed to resolve database path");
+            let connection = rusqlite::Connection::open(&db_path)
+                .expect("Failed to open database");
+            schema::ensure_schema(&connection)
+                .expect("Failed to initialize database schema");
+
+            eprintln!(
+                "Helmor {} — data: {}",
+                data_dir::data_mode_label(),
+                db_path.display()
+            );
+
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             agents::list_agent_model_sections,

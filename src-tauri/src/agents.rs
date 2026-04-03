@@ -573,7 +573,7 @@ fn parse_claude_output(
         }
         if let Some(mut tmpl) = template.take() {
             if let Some(msg) = tmpl.get_mut("message") {
-                msg["content"] = Value::Array(blocks.drain(..).collect());
+                msg["content"] = Value::Array(std::mem::take(blocks));
             }
             turns.push(CollectedTurn {
                 role: "assistant".to_string(),
@@ -859,6 +859,7 @@ fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf, String> 
     env::current_dir().map_err(|error| error.to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn persist_exchange_to_fixture(
     conductor_session_id: &str,
     prompt: &str,
