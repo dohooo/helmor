@@ -829,6 +829,7 @@ fn ensure_fixture_repo_mirror(source_repo_root: &Path, mirror_dir: &Path) -> Res
         )?;
     }
 
+    let source_repo_root = source_repo_root.display().to_string();
     let mirror_dir = mirror_dir.display().to_string();
     run_git(
         [
@@ -836,8 +837,8 @@ fn ensure_fixture_repo_mirror(source_repo_root: &Path, mirror_dir: &Path) -> Res
             mirror_dir.as_str(),
             "fetch",
             "--prune",
-            "origin",
-            "+refs/*:refs/*",
+            source_repo_root.as_str(),
+            "+refs/heads/*:refs/remotes/origin/*",
         ],
         None,
     )?;
@@ -857,7 +858,7 @@ fn ensure_git_repository(repo_root: &Path) -> Result<(), String> {
 
 fn verify_branch_exists_in_mirror(mirror_dir: &Path, branch: &str) -> Result<(), String> {
     let mirror_dir = mirror_dir.display().to_string();
-    let branch_ref = format!("refs/heads/{branch}");
+    let branch_ref = format!("refs/remotes/origin/{branch}");
     run_git(
         [
             "--git-dir",
@@ -1738,6 +1739,77 @@ mod tests {
         assert!(error.contains("update workspace restore state"));
         assert!(!harness.workspace_dir().exists());
         assert!(harness.archived_context_dir().exists());
+    }
+
+    #[test]
+    fn ensure_fixture_repo_mirror_refreshes_with_existing_checked_out_worktree() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = RestoreTestHarness::new(true);
+        let mirror_dir = harness.mirror_dir();
+        let first_workspace_dir = harness.workspace_dir();
+
+        run_git(
+            [
+                "-C",
+                harness.source_repo_root.to_str().unwrap(),
+                "checkout",
+                "main",
+            ],
+            None,
+        )
+        .unwrap();
+        run_git(
+            [
+                "-C",
+                harness.source_repo_root.to_str().unwrap(),
+                "checkout",
+                "-b",
+                "feature/second-restore-target",
+            ],
+            None,
+        )
+        .unwrap();
+        fs::write(harness.source_repo_root.join("second.txt"), "second branch").unwrap();
+        run_git(
+            ["-C", harness.source_repo_root.to_str().unwrap(), "add", "second.txt"],
+            None,
+        )
+        .unwrap();
+        run_git(
+            [
+                "-C",
+                harness.source_repo_root.to_str().unwrap(),
+                "-c",
+                "user.name=Helmor",
+                "-c",
+                "user.email=helmor@example.com",
+                "commit",
+                "-m",
+                "second restore target",
+            ],
+            None,
+        )
+        .unwrap();
+        let second_commit = run_git(
+            [
+                "-C",
+                harness.source_repo_root.to_str().unwrap(),
+                "rev-parse",
+                "HEAD",
+            ],
+            None,
+        )
+        .unwrap();
+
+        ensure_fixture_repo_mirror(&harness.source_repo_root, &mirror_dir).unwrap();
+        verify_branch_exists_in_mirror(&mirror_dir, &harness.branch).unwrap();
+        point_branch_to_archive_commit(&mirror_dir, &harness.branch, second_commit.as_str()).unwrap();
+        create_fixture_worktree(&mirror_dir, &first_workspace_dir, &harness.branch).unwrap();
+
+        ensure_fixture_repo_mirror(&harness.source_repo_root, &mirror_dir).unwrap();
+        verify_branch_exists_in_mirror(&mirror_dir, "feature/second-restore-target").unwrap();
     }
 
     fn init_git_repo(repo_root: &Path) {

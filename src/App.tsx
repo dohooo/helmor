@@ -464,12 +464,7 @@ function App() {
         }
         setSendingContextKey((current) => (current === contextKey ? null : current));
       } catch (fallbackError) {
-        const message =
-          fallbackError instanceof Error
-            ? fallbackError.message
-            : typeof fallbackError === "string"
-              ? fallbackError
-              : "Unable to send message.";
+        const message = describeUnknownError(fallbackError, "Unable to send message.");
         setSendErrorsByContext((current) => ({ ...current, [contextKey]: message }));
         setComposerValue(prompt);
         setLiveMessagesByContext((current) => ({
@@ -549,9 +544,7 @@ function App() {
       setSessionAttachments(attachments);
       setLoadingSession(false);
     } catch (error) {
-      setRestoreError(
-        error instanceof Error ? error.message : "Unable to restore workspace.",
-      );
+      setRestoreError(describeUnknownError(error, "Unable to restore workspace."));
     } finally {
       setRestoringWorkspaceId(null);
       setLoadingWorkspace(false);
@@ -755,6 +748,37 @@ function inferDefaultModelId(
   return session?.agentType === "codex"
     ? DEFAULT_CODEX_MODEL_ID
     : DEFAULT_CLAUDE_MODEL_ID;
+}
+
+function describeUnknownError(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string" &&
+    error.message.trim()
+  ) {
+    return error.message;
+  }
+
+  try {
+    const serialized = JSON.stringify(error);
+    if (serialized && serialized !== "{}") {
+      return serialized;
+    }
+  } catch {
+    // Ignore serialization failures and fall through.
+  }
+
+  return fallback;
 }
 
 function findModelOption(
