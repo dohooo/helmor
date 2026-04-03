@@ -389,7 +389,6 @@ export function WorkspacesSidebar({
   archivingWorkspaceId,
   markingUnreadWorkspaceId,
   restoringWorkspaceId,
-  workspaceActionError,
 }: {
   groups: WorkspaceGroup[];
   archivedRows: WorkspaceRow[];
@@ -406,7 +405,6 @@ export function WorkspacesSidebar({
   archivingWorkspaceId?: string | null;
   markingUnreadWorkspaceId?: string | null;
   restoringWorkspaceId?: string | null;
-  workspaceActionError?: string | null;
 }) {
   const [isRepoPickerOpen, setIsRepoPickerOpen] = useState(false);
   const [repoSearchQuery, setRepoSearchQuery] = useState("");
@@ -719,11 +717,6 @@ export function WorkspacesSidebar({
               </CollapsibleContent>
             ) : null}
 
-              {workspaceActionError ? (
-                <p className="px-1 pt-1 text-[12px] leading-snug text-app-canceled">
-                  {workspaceActionError}
-                </p>
-              ) : null}
                 </section>
               </Collapsible>
             </div>

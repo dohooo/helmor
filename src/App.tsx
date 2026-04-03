@@ -48,6 +48,14 @@ import { WorkspacesSidebar } from "./components/workspaces-sidebar";
 import { WorkspacePanel } from "./components/workspace-panel";
 import { WorkspaceComposer } from "./components/workspace-composer";
 import { ShimmerText } from "./components/ui/shimmer-text";
+import {
+  Toast,
+  ToastClose,
+  ToastDescription,
+  ToastProvider,
+  ToastTitle,
+  ToastViewport,
+} from "./components/ui/toast";
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "helmor.workspaceSidebarWidth";
 const DEFAULT_SIDEBAR_WIDTH = 336;
@@ -57,6 +65,12 @@ const SIDEBAR_RESIZE_STEP = 16;
 const SIDEBAR_RESIZE_HIT_AREA = 20;
 const DEFAULT_CLAUDE_MODEL_ID = "opus-1m";
 const DEFAULT_CODEX_MODEL_ID = "gpt-5.4";
+
+type WorkspaceToast = {
+  id: string;
+  title: string;
+  description: string;
+};
 
 function clampSidebarWidth(width: number) {
   return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width));
@@ -130,7 +144,7 @@ function App() {
   const [restoringWorkspaceId, setRestoringWorkspaceId] = useState<string | null>(null);
   const [addingRepository, setAddingRepository] = useState(false);
   const [creatingWorkspaceRepoId, setCreatingWorkspaceRepoId] = useState<string | null>(null);
-  const [workspaceActionError, setWorkspaceActionError] = useState<string | null>(null);
+  const [workspaceToasts, setWorkspaceToasts] = useState<WorkspaceToast[]>([]);
   const [loadingWorkspace, setLoadingWorkspace] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">(() => {
@@ -145,6 +159,21 @@ function App() {
       localStorage.setItem("helmor.theme", next);
       return next;
     });
+  }, []);
+
+  const pushWorkspaceToast = useCallback((description: string, title = "Action failed") => {
+    setWorkspaceToasts((current) => [
+      ...current,
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        title,
+        description,
+      },
+    ]);
+  }, []);
+
+  const dismissWorkspaceToast = useCallback((toastId: string) => {
+    setWorkspaceToasts((current) => current.filter((toast) => toast.id !== toastId));
   }, []);
 
   useEffect(() => {
@@ -529,7 +558,6 @@ function App() {
       return;
     }
 
-    setWorkspaceActionError(null);
     setCreatingWorkspaceRepoId(repoId);
 
     try {
@@ -545,7 +573,7 @@ function App() {
 
       await hydrateWorkspaceSelection(nextWorkspaceId);
     } catch (error) {
-      setWorkspaceActionError(describeUnknownError(error, "Unable to create workspace."));
+      pushWorkspaceToast(describeUnknownError(error, "Unable to create workspace."));
     } finally {
       setCreatingWorkspaceRepoId(null);
       setLoadingWorkspace(false);
@@ -557,6 +585,7 @@ function App() {
     creatingWorkspaceRepoId,
     hydrateWorkspaceSelection,
     markingUnreadWorkspaceId,
+    pushWorkspaceToast,
     refreshWorkspaceNavigation,
     restoringWorkspaceId,
   ]);
@@ -572,7 +601,6 @@ function App() {
       return;
     }
 
-    setWorkspaceActionError(null);
     setAddingRepository(true);
 
     try {
@@ -600,7 +628,7 @@ function App() {
 
       await hydrateWorkspaceSelection(nextWorkspaceId);
     } catch (error) {
-      setWorkspaceActionError(describeUnknownError(error, "Unable to add repository."));
+      pushWorkspaceToast(describeUnknownError(error, "Unable to add repository."));
     } finally {
       setAddingRepository(false);
       setLoadingWorkspace(false);
@@ -612,6 +640,7 @@ function App() {
     creatingWorkspaceRepoId,
     hydrateWorkspaceSelection,
     markingUnreadWorkspaceId,
+    pushWorkspaceToast,
     refreshWorkspaceNavigation,
     restoringWorkspaceId,
   ]);
@@ -795,7 +824,6 @@ function App() {
       return;
     }
 
-    setWorkspaceActionError(null);
     setArchivingWorkspaceId(workspaceId);
 
     try {
@@ -810,7 +838,7 @@ function App() {
 
       await hydrateWorkspaceSelection(nextWorkspaceId);
     } catch (error) {
-      setWorkspaceActionError(describeUnknownError(error, "Unable to archive workspace."));
+      pushWorkspaceToast(describeUnknownError(error, "Unable to archive workspace."));
     } finally {
       setArchivingWorkspaceId(null);
       setLoadingWorkspace(false);
@@ -820,6 +848,7 @@ function App() {
     addingRepository,
     archivingWorkspaceId,
     hydrateWorkspaceSelection,
+    pushWorkspaceToast,
     refreshWorkspaceNavigation,
     restoringWorkspaceId,
     selectedWorkspaceId,
@@ -835,7 +864,6 @@ function App() {
       return;
     }
 
-    setWorkspaceActionError(null);
     setMarkingUnreadWorkspaceId(workspaceId);
 
     try {
@@ -857,7 +885,7 @@ function App() {
         setWorkspaceSessions(sessions);
       }
     } catch (error) {
-      setWorkspaceActionError(describeUnknownError(error, "Unable to mark workspace as unread."));
+      pushWorkspaceToast(describeUnknownError(error, "Unable to mark workspace as unread."));
     } finally {
       setMarkingUnreadWorkspaceId(null);
     }
@@ -865,6 +893,7 @@ function App() {
     addingRepository,
     archivingWorkspaceId,
     markingUnreadWorkspaceId,
+    pushWorkspaceToast,
     refreshWorkspaceNavigation,
     restoringWorkspaceId,
     selectedWorkspaceId,
@@ -904,7 +933,7 @@ function App() {
         await markWorkspaceRead(workspaceId);
         await refreshSelectedWorkspaceCollections(workspaceId, null);
       } catch (error) {
-        setWorkspaceActionError(describeUnknownError(error, "Unable to mark workspace as read."));
+        pushWorkspaceToast(describeUnknownError(error, "Unable to mark workspace as read."));
         const [loadedGroups, loadedArchived] = await Promise.all([
           loadWorkspaceGroups(),
           loadArchivedWorkspaces(),
@@ -920,6 +949,7 @@ function App() {
     deferredWorkspaceReadClearId,
     groups,
     markingReadWorkspaceId,
+    pushWorkspaceToast,
     refreshSelectedWorkspaceCollections,
   ]);
 
@@ -928,7 +958,6 @@ function App() {
       return;
     }
 
-    setWorkspaceActionError(null);
     setRestoringWorkspaceId(workspaceId);
 
     try {
@@ -944,7 +973,7 @@ function App() {
 
       await hydrateWorkspaceSelection(nextWorkspaceId);
     } catch (error) {
-      setWorkspaceActionError(describeUnknownError(error, "Unable to restore workspace."));
+      pushWorkspaceToast(describeUnknownError(error, "Unable to restore workspace."));
     } finally {
       setRestoringWorkspaceId(null);
       setLoadingWorkspace(false);
@@ -954,16 +983,18 @@ function App() {
     addingRepository,
     archivingWorkspaceId,
     hydrateWorkspaceSelection,
+    pushWorkspaceToast,
     refreshWorkspaceNavigation,
     restoringWorkspaceId,
   ]);
 
   return (
-    <main
-      aria-label="Application shell"
-      className="relative h-screen overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
-    >
-      <div className="relative flex h-full min-h-0 bg-app-base">
+    <ToastProvider swipeDirection="right">
+      <main
+        aria-label="Application shell"
+        className="relative h-screen overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
+      >
+        <div className="relative flex h-full min-h-0 bg-app-base">
         <aside
           aria-label="Workspace sidebar"
           className="relative h-full shrink-0 overflow-hidden bg-app-sidebar"
@@ -995,7 +1026,6 @@ function App() {
             archivingWorkspaceId={archivingWorkspaceId}
             markingUnreadWorkspaceId={markingUnreadWorkspaceId}
             restoringWorkspaceId={restoringWorkspaceId}
-            workspaceActionError={workspaceActionError}
           />
         </aside>
 
@@ -1097,8 +1127,29 @@ function App() {
             </div>
           </div>
         </section>
-      </div>
-    </main>
+        </div>
+        <ToastViewport />
+        {workspaceToasts.map((toast) => (
+          <Toast
+            key={toast.id}
+            open
+            variant="destructive"
+            duration={4200}
+            onOpenChange={(open: boolean) => {
+              if (!open) {
+                dismissWorkspaceToast(toast.id);
+              }
+            }}
+          >
+            <div className="grid gap-1">
+              <ToastTitle>{toast.title}</ToastTitle>
+              <ToastDescription>{toast.description}</ToastDescription>
+            </div>
+            <ToastClose aria-label="Dismiss notification" />
+          </Toast>
+        ))}
+      </main>
+    </ToastProvider>
   );
 }
 

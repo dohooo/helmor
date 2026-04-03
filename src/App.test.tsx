@@ -175,7 +175,6 @@ describe("App", () => {
           },
         ]}
         onRestoreWorkspace={onRestoreWorkspace}
-        workspaceActionError="Restore failed."
       />,
     );
 
@@ -183,7 +182,6 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Restore workspace" }));
 
     expect(onRestoreWorkspace).toHaveBeenCalledWith("archived-workspace");
-    expect(screen.getByText("Restore failed.")).toBeInTheDocument();
   });
 
   it("calls archive for ready workspaces", async () => {
