@@ -70,3 +70,75 @@ pub fn load_branch_prefix_settings() -> Result<BranchPrefixSettings, String> {
 
     Ok(settings)
 }
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::Connection;
+
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::ensure_schema(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn settings_crud() {
+        let conn = test_db();
+
+        // Missing key returns no rows
+        let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1").unwrap();
+        let result: Option<String> = stmt
+            .query_map(["nonexistent"], |row| row.get(0))
+            .unwrap()
+            .filter_map(Result::ok)
+            .next();
+        assert!(result.is_none());
+
+        // Insert
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('test_key', 'test_value')",
+            [],
+        ).unwrap();
+        let value: String = conn
+            .query_row("SELECT value FROM settings WHERE key = 'test_key'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(value, "test_value");
+    }
+
+    #[test]
+    fn settings_upsert_overwrites() {
+        let conn = test_db();
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('k', 'v1')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('k', 'v2') ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        ).unwrap();
+        let value: String = conn
+            .query_row("SELECT value FROM settings WHERE key = 'k'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(value, "v2");
+    }
+
+    #[test]
+    fn branch_prefix_settings_query() {
+        let conn = test_db();
+        conn.execute("INSERT INTO settings (key, value) VALUES ('branch_prefix_type', 'custom')", []).unwrap();
+        conn.execute("INSERT INTO settings (key, value) VALUES ('branch_prefix_custom', 'feat/')", []).unwrap();
+
+        let mut stmt = conn.prepare(
+            "SELECT key, value FROM settings WHERE key IN ('branch_prefix_type', 'branch_prefix_custom')"
+        ).unwrap();
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|(k, v)| k == "branch_prefix_type" && v == "custom"));
+        assert!(rows.iter().any(|(k, v)| k == "branch_prefix_custom" && v == "feat/"));
+    }
+}

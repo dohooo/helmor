@@ -464,3 +464,80 @@ pub fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRec
         attachment_count: row.get(28)?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn humanize_directory_name_capitalizes_segments() {
+        assert_eq!(humanize_directory_name("hello-world"), "Hello World");
+        assert_eq!(humanize_directory_name("fix_chat_list"), "Fix Chat List");
+        assert_eq!(humanize_directory_name("cambridge"), "Cambridge");
+    }
+
+    #[test]
+    fn humanize_directory_name_handles_empty_and_numbers() {
+        assert_eq!(humanize_directory_name("a--b"), "A B");
+        assert_eq!(humanize_directory_name(""), "");
+        assert_eq!(humanize_directory_name("v2-release"), "V2 Release");
+    }
+
+    #[test]
+    fn non_empty_filters_blank_strings() {
+        assert!(non_empty(&None).is_none());
+        assert!(non_empty(&Some(String::new())).is_none());
+        assert!(non_empty(&Some("   ".to_string())).is_none());
+        assert_eq!(non_empty(&Some("hello".to_string())), Some("hello"));
+    }
+
+    #[test]
+    fn group_id_maps_statuses_correctly() {
+        assert_eq!(group_id_from_status(&None, "done"), "done");
+        assert_eq!(group_id_from_status(&None, "review"), "review");
+        assert_eq!(group_id_from_status(&None, "in-review"), "review");
+        assert_eq!(group_id_from_status(&None, "in-progress"), "progress");
+        assert_eq!(group_id_from_status(&None, "backlog"), "backlog");
+        assert_eq!(group_id_from_status(&None, "canceled"), "canceled");
+        assert_eq!(group_id_from_status(&None, "cancelled"), "canceled");
+        assert_eq!(group_id_from_status(&None, "unknown"), "progress");
+    }
+
+    #[test]
+    fn group_id_prefers_manual_status() {
+        let manual = Some("done".to_string());
+        assert_eq!(group_id_from_status(&manual, "in-progress"), "done");
+    }
+
+    #[test]
+    fn repo_initials_two_segments() {
+        assert_eq!(repo_initials_for_name("my-project"), "MP");
+        assert_eq!(repo_initials_for_name("hello_world"), "HW");
+    }
+
+    #[test]
+    fn repo_initials_single_word() {
+        assert_eq!(repo_initials_for_name("helmor"), "HE");
+    }
+
+    #[test]
+    fn repo_initials_fallback() {
+        assert_eq!(repo_initials_for_name("---"), "WS");
+        assert_eq!(repo_initials_for_name(""), "WS");
+    }
+
+    #[test]
+    fn repo_icon_mime_type_detection() {
+        assert_eq!(repo_icon_mime_type(Path::new("icon.svg")), "image/svg+xml");
+        assert_eq!(repo_icon_mime_type(Path::new("icon.ico")), "image/x-icon");
+        assert_eq!(repo_icon_mime_type(Path::new("icon.png")), "image/png");
+        assert_eq!(repo_icon_mime_type(Path::new("icon.jpg")), "image/png");
+    }
+
+    #[test]
+    fn repo_icon_path_returns_none_for_empty() {
+        assert!(repo_icon_path_for_root_path(None).is_none());
+        assert!(repo_icon_path_for_root_path(Some("")).is_none());
+        assert!(repo_icon_path_for_root_path(Some("   ")).is_none());
+    }
+}

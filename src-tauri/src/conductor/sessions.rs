@@ -392,3 +392,100 @@ pub(crate) fn sync_workspace_unread_in_transaction(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::Connection;
+
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::ensure_schema(&conn).unwrap();
+        conn
+    }
+
+    fn seed(conn: &Connection) {
+        conn.execute("INSERT INTO repos (id, name) VALUES ('r1', 'test-repo')", []).unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, derived_status) VALUES ('w1', 'r1', 'test-dir', 'active', 'in-progress')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('s1', 'w1', 'idle', 'Test Session')",
+            [],
+        ).unwrap();
+    }
+
+    #[test]
+    fn session_row_exists_after_insert() {
+        let conn = test_db();
+        seed(&conn);
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM sessions WHERE workspace_id = 'w1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let title: String = conn
+            .query_row("SELECT title FROM sessions WHERE id = 's1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(title, "Test Session");
+    }
+
+    #[test]
+    fn message_json_detection() {
+        let conn = test_db();
+        seed(&conn);
+        conn.execute(
+            "INSERT INTO session_messages (id, session_id, role, content) VALUES ('m1', 's1', 'assistant', ?1)",
+            [r#"{"type":"assistant","message":{"content":[]}}"#],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO session_messages (id, session_id, role, content) VALUES ('m2', 's1', 'user', 'plain text')",
+            [],
+        ).unwrap();
+
+        let content: String = conn
+            .query_row("SELECT content FROM session_messages WHERE id = 'm1'", [], |r| r.get(0))
+            .unwrap();
+        let parsed: Result<serde_json::Value, _> = serde_json::from_str(&content);
+        assert!(parsed.is_ok());
+
+        let content2: String = conn
+            .query_row("SELECT content FROM session_messages WHERE id = 'm2'", [], |r| r.get(0))
+            .unwrap();
+        let parsed2: Result<serde_json::Value, _> = serde_json::from_str(&content2);
+        assert!(parsed2.is_err());
+    }
+
+    #[test]
+    fn attachment_table_empty_by_default() {
+        let conn = test_db();
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM attachments", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn messages_ordered_by_created_at() {
+        let conn = test_db();
+        seed(&conn);
+        conn.execute(
+            "INSERT INTO session_messages (id, session_id, role, content, created_at) VALUES ('m1', 's1', 'user', 'first', '2026-01-01T00:00:00')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO session_messages (id, session_id, role, content, created_at) VALUES ('m2', 's1', 'assistant', 'second', '2026-01-01T00:01:00')",
+            [],
+        ).unwrap();
+
+        let mut stmt = conn.prepare(
+            "SELECT role FROM session_messages WHERE session_id = 's1' ORDER BY created_at ASC"
+        ).unwrap();
+        let roles: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        assert_eq!(roles, vec!["user", "assistant"]);
+    }
+}

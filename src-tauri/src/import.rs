@@ -180,3 +180,73 @@ fn count_rows(connection: &Connection, table: &str) -> Result<i64, String> {
 pub fn conductor_available() -> bool {
     crate::data_dir::conductor_source_db_path().is_some()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filter_to_repo_deletes_unrelated_data() {
+        let source = Connection::open_in_memory().unwrap();
+        crate::schema::ensure_schema(&source).unwrap();
+
+        // Insert two repos
+        source.execute("INSERT INTO repos (id, name) VALUES ('r1', 'keep-me')", []).unwrap();
+        source.execute("INSERT INTO repos (id, name) VALUES ('r2', 'delete-me')", []).unwrap();
+        source.execute("INSERT INTO workspaces (id, repository_id, directory_name) VALUES ('w1', 'r1', 'd1')", []).unwrap();
+        source.execute("INSERT INTO workspaces (id, repository_id, directory_name) VALUES ('w2', 'r2', 'd2')", []).unwrap();
+        source.execute("INSERT INTO sessions (id, workspace_id) VALUES ('s1', 'w1')", []).unwrap();
+        source.execute("INSERT INTO sessions (id, workspace_id) VALUES ('s2', 'w2')", []).unwrap();
+        source.execute("INSERT INTO session_messages (id, session_id, role, content) VALUES ('m1', 's1', 'user', 'hi')", []).unwrap();
+        source.execute("INSERT INTO session_messages (id, session_id, role, content) VALUES ('m2', 's2', 'user', 'bye')", []).unwrap();
+
+        filter_to_repo(&source, "keep-me").unwrap();
+
+        let repo_count: i64 = source.query_row("SELECT count(*) FROM repos", [], |r| r.get(0)).unwrap();
+        let ws_count: i64 = source.query_row("SELECT count(*) FROM workspaces", [], |r| r.get(0)).unwrap();
+        let sess_count: i64 = source.query_row("SELECT count(*) FROM sessions", [], |r| r.get(0)).unwrap();
+        let msg_count: i64 = source.query_row("SELECT count(*) FROM session_messages", [], |r| r.get(0)).unwrap();
+
+        assert_eq!(repo_count, 1);
+        assert_eq!(ws_count, 1);
+        assert_eq!(sess_count, 1);
+        assert_eq!(msg_count, 1);
+    }
+
+    #[test]
+    fn filter_to_repo_errors_on_unknown_repo() {
+        let source = Connection::open_in_memory().unwrap();
+        crate::schema::ensure_schema(&source).unwrap();
+
+        let result = filter_to_repo(&source, "nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn redact_sensitive_settings_removes_tokens() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::ensure_schema(&conn).unwrap();
+
+        conn.execute("INSERT INTO settings (key, value) VALUES ('api_token', 'secret123')", []).unwrap();
+        conn.execute("INSERT INTO settings (key, value) VALUES ('username', 'john')", []).unwrap();
+
+        redact_sensitive_settings(&conn).unwrap();
+
+        let token: String = conn.query_row("SELECT value FROM settings WHERE key = 'api_token'", [], |r| r.get(0)).unwrap();
+        let username: String = conn.query_row("SELECT value FROM settings WHERE key = 'username'", [], |r| r.get(0)).unwrap();
+
+        assert_eq!(token, "[REDACTED]");
+        assert_eq!(username, "john");
+    }
+
+    #[test]
+    fn count_rows_works() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::ensure_schema(&conn).unwrap();
+
+        assert_eq!(count_rows(&conn, "repos").unwrap(), 0);
+
+        conn.execute("INSERT INTO repos (id, name) VALUES ('r1', 'test')", []).unwrap();
+        assert_eq!(count_rows(&conn, "repos").unwrap(), 1);
+    }
+}
