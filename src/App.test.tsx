@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { WorkspacesSidebar } from "./components/workspaces-sidebar";
+import { WorkspacePanel } from "./components/workspace-panel";
 import type { WorkspaceGroup } from "./lib/conductor";
 
 vi.mock("./App.css", () => ({}));
@@ -213,6 +214,112 @@ describe("App", () => {
     expect(onArchiveWorkspace).toHaveBeenCalledWith("ready-workspace");
   });
 
+  it("opens a workspace context menu and calls mark as unread", async () => {
+    const user = userEvent.setup();
+    const onMarkWorkspaceUnread = vi.fn();
+
+    render(
+      <WorkspacesSidebar
+        groups={[
+          {
+            id: "progress",
+            label: "In progress",
+            tone: "progress",
+            rows: [
+              {
+                id: "ready-workspace",
+                title: "Ready workspace",
+                state: "ready",
+                repoName: "helmor-core",
+                hasUnread: false,
+              },
+            ],
+          },
+        ]}
+        archivedRows={[]}
+        onMarkWorkspaceUnread={onMarkWorkspaceUnread}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Ready workspace" }));
+    await user.click(screen.getByText("Mark as unread"));
+
+    expect(onMarkWorkspaceUnread).toHaveBeenCalledWith("ready-workspace");
+  });
+
+  it("allows marking the selected workspace as unread", async () => {
+    const user = userEvent.setup();
+    const onMarkWorkspaceUnread = vi.fn();
+
+    render(
+      <WorkspacesSidebar
+        groups={[
+          {
+            id: "progress",
+            label: "In progress",
+            tone: "progress",
+            rows: [
+              {
+                id: "selected-workspace",
+                title: "Selected workspace",
+                state: "ready",
+                repoName: "helmor-core",
+                hasUnread: false,
+              },
+            ],
+          },
+        ]}
+        archivedRows={[]}
+        selectedWorkspaceId="selected-workspace"
+        onMarkWorkspaceUnread={onMarkWorkspaceUnread}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Selected workspace" }));
+    await user.click(screen.getByText("Mark as unread"));
+
+    expect(onMarkWorkspaceUnread).toHaveBeenCalledWith("selected-workspace");
+  });
+
+  it("uses unread emphasis without treating ready rows as selected", () => {
+    render(
+      <WorkspacesSidebar
+        groups={[
+          {
+            id: "progress",
+            label: "In progress",
+            tone: "progress",
+            rows: [
+              {
+                id: "selected-read",
+                title: "Selected read",
+                state: "ready",
+                repoName: "helmor-core",
+                hasUnread: false,
+              },
+              {
+                id: "unselected-unread",
+                title: "Unselected unread",
+                state: "ready",
+                repoName: "helmor-core",
+                hasUnread: true,
+              },
+            ],
+          },
+        ]}
+        archivedRows={[]}
+        selectedWorkspaceId="selected-read"
+      />,
+    );
+
+    const selectedReadLabel = screen.getByText("Selected read");
+    const unreadLabel = screen.getByText("Unselected unread");
+
+    expect(selectedReadLabel.className).toContain("font-medium");
+    expect(selectedReadLabel.className).not.toContain("font-semibold");
+    expect(unreadLabel.className).toContain("font-semibold");
+  });
+
   it("disables restore while a workspace is being restored", async () => {
     const user = userEvent.setup();
     const onRestoreWorkspace = vi.fn();
@@ -273,5 +380,36 @@ describe("App", () => {
     expect(archiveButton).toBeDisabled();
     await user.click(archiveButton);
     expect(onArchiveWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("shows unread indicators in session tabs", () => {
+    render(
+      <WorkspacePanel
+        workspace={null}
+        sessions={[
+          {
+            id: "session-1",
+            workspaceId: "workspace-1",
+            title: "Unread session",
+            agentType: "claude",
+            status: "idle",
+            permissionMode: "default",
+            unreadCount: 1,
+            contextTokenCount: 0,
+            thinkingEnabled: false,
+            fastMode: false,
+            createdAt: "2026-04-03T00:00:00Z",
+            updatedAt: "2026-04-03T00:00:00Z",
+            isHidden: false,
+            isCompacting: false,
+            active: false,
+          },
+        ]}
+        selectedSessionId="session-1"
+        messages={[]}
+      />,
+    );
+
+    expect(screen.getByLabelText("Unread session")).toBeInTheDocument();
   });
 });

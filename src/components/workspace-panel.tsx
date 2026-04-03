@@ -152,6 +152,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
                 {sessions.map((session) => {
                   const selected = session.id === selectedSessionId;
                   const isActive = selected && sending;
+                  const hasUnread = session.unreadCount > 0;
 
                   return (
                     <TabsTrigger
@@ -160,7 +161,20 @@ export const WorkspacePanel = memo(function WorkspacePanel({
                       className="gap-1.5 rounded-[10px] px-3.5 text-[13px] text-app-foreground-soft data-[state=active]:text-app-foreground"
                     >
                       <SessionProviderIcon agentType={session.agentType} active={isActive} />
-                      <span className="truncate font-medium">{displaySessionTitle(session)}</span>
+                      <span
+                        className={cn(
+                          "truncate font-medium",
+                          hasUnread && !selected ? "text-app-foreground" : undefined,
+                        )}
+                      >
+                        {displaySessionTitle(session)}
+                      </span>
+                      {hasUnread ? (
+                        <span
+                          aria-label="Unread session"
+                          className="size-1.5 shrink-0 rounded-full bg-app-progress"
+                        />
+                      ) : null}
                     </TabsTrigger>
                   );
                 })}

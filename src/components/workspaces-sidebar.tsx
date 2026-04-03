@@ -28,6 +28,12 @@ import { cn } from "@/lib/utils";
 import { TooltipProvider } from "./ui/tooltip";
 import { BaseTooltip } from "./ui/base-tooltip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "./ui/context-menu";
 import { ScrollArea } from "./ui/scroll-area";
 
 const rowVariants = cva(
@@ -215,8 +221,10 @@ function WorkspaceRowItem({
   selected,
   onSelect,
   onArchiveWorkspace,
+  onMarkWorkspaceUnread,
   onRestoreWorkspace,
   archivingWorkspaceId,
+  markingUnreadWorkspaceId,
   restoringWorkspaceId,
   workspaceActionsDisabled,
 }: {
@@ -224,20 +232,28 @@ function WorkspaceRowItem({
   selected: boolean;
   onSelect?: (workspaceId: string) => void;
   onArchiveWorkspace?: (workspaceId: string) => void;
+  onMarkWorkspaceUnread?: (workspaceId: string) => void;
   onRestoreWorkspace?: (workspaceId: string) => void;
   archivingWorkspaceId?: string | null;
+  markingUnreadWorkspaceId?: string | null;
   restoringWorkspaceId?: string | null;
   workspaceActionsDisabled?: boolean;
 }) {
   const actionLabel =
     row.state === "archived" ? "Restore workspace" : "Archive workspace";
   const isArchiving = archivingWorkspaceId === row.id;
+  const isMarkingUnread = markingUnreadWorkspaceId === row.id;
   const isRestoring = restoringWorkspaceId === row.id;
   const isRestoreAction = row.state === "archived";
-  const isBusy = isArchiving || isRestoring;
+  const isBusy = isArchiving || isMarkingUnread || isRestoring;
   const hasActionHandler = isRestoreAction
     ? Boolean(onRestoreWorkspace)
     : Boolean(onArchiveWorkspace);
+  const canMarkAsUnread =
+    Boolean(onMarkWorkspaceUnread) &&
+    !row.hasUnread &&
+    !workspaceActionsDisabled &&
+    !isBusy;
   const actionIcon =
     isBusy ? (
       <LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.1} />
@@ -250,12 +266,12 @@ function WorkspaceRowItem({
       <Archive className="size-3.5" strokeWidth={1.9} />
     );
 
-  return (
+  const rowBody = (
     <div
       role="button"
       tabIndex={0}
       aria-label={row.title}
-      data-active={row.active ? "true" : "false"}
+      data-has-unread={row.hasUnread ? "true" : "false"}
       onClick={() => {
         onSelect?.(row.id);
       }}
@@ -281,7 +297,13 @@ function WorkspaceRowItem({
         <span
           className={cn(
             "truncate leading-none",
-            row.active ? "font-semibold text-app-foreground" : "font-medium text-app-foreground-soft/70",
+            selected
+              ? row.hasUnread
+                ? "font-semibold text-app-foreground"
+                : "font-medium text-app-foreground"
+              : row.hasUnread
+                ? "font-semibold text-app-foreground"
+                : "font-medium text-app-foreground-soft/70",
           )}
         >
           {row.title}
@@ -324,6 +346,27 @@ function WorkspaceRowItem({
       ) : null}
     </div>
   );
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger className="block">
+        {rowBody}
+      </ContextMenuTrigger>
+      <ContextMenuContent className="min-w-40">
+        <ContextMenuItem
+          disabled={!canMarkAsUnread}
+          onClick={() => {
+            if (canMarkAsUnread) {
+              onMarkWorkspaceUnread?.(row.id);
+            }
+          }}
+        >
+          <span className="size-2 shrink-0 rounded-full bg-app-progress" />
+          <span>Mark as unread</span>
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
 }
 
 export function WorkspacesSidebar({
@@ -332,8 +375,10 @@ export function WorkspacesSidebar({
   selectedWorkspaceId,
   onSelectWorkspace,
   onArchiveWorkspace,
+  onMarkWorkspaceUnread,
   onRestoreWorkspace,
   archivingWorkspaceId,
+  markingUnreadWorkspaceId,
   restoringWorkspaceId,
   workspaceActionError,
 }: {
@@ -342,8 +387,10 @@ export function WorkspacesSidebar({
   selectedWorkspaceId?: string | null;
   onSelectWorkspace?: (workspaceId: string) => void;
   onArchiveWorkspace?: (workspaceId: string) => void;
+  onMarkWorkspaceUnread?: (workspaceId: string) => void;
   onRestoreWorkspace?: (workspaceId: string) => void;
   archivingWorkspaceId?: string | null;
+  markingUnreadWorkspaceId?: string | null;
   restoringWorkspaceId?: string | null;
   workspaceActionError?: string | null;
 }) {
@@ -420,10 +467,12 @@ export function WorkspacesSidebar({
                             selected={selectedWorkspaceId === row.id}
                             onSelect={onSelectWorkspace}
                             onArchiveWorkspace={onArchiveWorkspace}
+                            onMarkWorkspaceUnread={onMarkWorkspaceUnread}
                             archivingWorkspaceId={archivingWorkspaceId}
+                            markingUnreadWorkspaceId={markingUnreadWorkspaceId}
                             restoringWorkspaceId={restoringWorkspaceId}
                             workspaceActionsDisabled={Boolean(
-                              archivingWorkspaceId || restoringWorkspaceId,
+                              archivingWorkspaceId || markingUnreadWorkspaceId || restoringWorkspaceId,
                             )}
                           />
                         ))}
@@ -462,11 +511,13 @@ export function WorkspacesSidebar({
                       selected={selectedWorkspaceId === row.id}
                       onSelect={onSelectWorkspace}
                       onArchiveWorkspace={onArchiveWorkspace}
+                      onMarkWorkspaceUnread={onMarkWorkspaceUnread}
                       onRestoreWorkspace={onRestoreWorkspace}
                       archivingWorkspaceId={archivingWorkspaceId}
+                      markingUnreadWorkspaceId={markingUnreadWorkspaceId}
                       restoringWorkspaceId={restoringWorkspaceId}
                       workspaceActionsDisabled={Boolean(
-                        archivingWorkspaceId || restoringWorkspaceId,
+                        archivingWorkspaceId || markingUnreadWorkspaceId || restoringWorkspaceId,
                       )}
                     />
                   ))}

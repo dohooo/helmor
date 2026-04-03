@@ -20,6 +20,9 @@ pub fn run() {
             conductor::list_session_messages,
             conductor::list_workspace_groups,
             conductor::list_workspace_sessions,
+            conductor::mark_fixture_session_read,
+            conductor::mark_fixture_workspace_read,
+            conductor::mark_fixture_workspace_unread,
             conductor::restore_fixture_workspace
         ])
         .run(tauri::generate_context!())

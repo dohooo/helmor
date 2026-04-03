@@ -1,4 +1,4 @@
-use crate::conductor::resolve_fixture_db_path;
+use crate::conductor::{mark_session_read_in_transaction, resolve_fixture_db_path};
 use std::{
     collections::HashMap,
     env,
@@ -998,13 +998,14 @@ fn persist_exchange_to_fixture(
             r#"
             UPDATE workspaces
             SET
-              active_session_id = ?2,
-              unread = 0
+              active_session_id = ?2
             WHERE id = (SELECT workspace_id FROM sessions WHERE id = ?1)
             "#,
             params![conductor_session_id, conductor_session_id],
         )
         .map_err(|error| error.to_string())?;
+
+    mark_session_read_in_transaction(&transaction, conductor_session_id)?;
 
     transaction.commit().map_err(|error| error.to_string())
 }

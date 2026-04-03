@@ -8,7 +8,7 @@ use std::{
     time::SystemTime,
 };
 
-use rusqlite::{Connection, OpenFlags, Row};
+use rusqlite::{Connection, OpenFlags, Row, Transaction};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -45,12 +45,15 @@ pub struct WorkspaceSidebarRow {
     pub id: String,
     pub title: String,
     pub avatar: String,
-    pub active: bool,
     pub directory_name: String,
     pub repo_name: String,
     pub repo_icon_src: Option<String>,
     pub repo_initials: String,
     pub state: String,
+    pub has_unread: bool,
+    pub workspace_unread: i64,
+    pub session_unread_total: i64,
+    pub unread_session_count: i64,
     pub derived_status: String,
     pub manual_status: Option<String>,
     pub branch: Option<String>,
@@ -83,9 +86,12 @@ pub struct WorkspaceSummary {
     pub repo_icon_src: Option<String>,
     pub repo_initials: String,
     pub state: String,
+    pub has_unread: bool,
+    pub workspace_unread: i64,
+    pub session_unread_total: i64,
+    pub unread_session_count: i64,
     pub derived_status: String,
     pub manual_status: Option<String>,
-    pub active: bool,
     pub branch: Option<String>,
     pub active_session_id: Option<String>,
     pub active_session_title: Option<String>,
@@ -111,9 +117,12 @@ pub struct WorkspaceDetail {
     pub root_path: Option<String>,
     pub directory_name: String,
     pub state: String,
+    pub has_unread: bool,
+    pub workspace_unread: i64,
+    pub session_unread_total: i64,
+    pub unread_session_count: i64,
     pub derived_status: String,
     pub manual_status: Option<String>,
-    pub active: bool,
     pub active_session_id: Option<String>,
     pub active_session_title: Option<String>,
     pub active_session_agent_type: Option<String>,
@@ -203,6 +212,10 @@ struct WorkspaceRecord {
     root_path: Option<String>,
     directory_name: String,
     state: String,
+    has_unread: bool,
+    workspace_unread: i64,
+    session_unread_total: i64,
+    unread_session_count: i64,
     derived_status: String,
     manual_status: Option<String>,
     branch: Option<String>,
@@ -340,6 +353,36 @@ pub fn list_session_attachments(
 }
 
 #[tauri::command]
+pub fn mark_fixture_session_read(session_id: String) -> Result<(), String> {
+    let _lock = WORKSPACE_MUTATION_LOCK
+        .lock()
+        .map_err(|_| "Workspace mutation lock poisoned".to_string())?;
+    let fixture_root = resolve_fixture_root()?;
+
+    mark_fixture_session_read_at(&fixture_root, &session_id)
+}
+
+#[tauri::command]
+pub fn mark_fixture_workspace_read(workspace_id: String) -> Result<(), String> {
+    let _lock = WORKSPACE_MUTATION_LOCK
+        .lock()
+        .map_err(|_| "Workspace mutation lock poisoned".to_string())?;
+    let fixture_root = resolve_fixture_root()?;
+
+    mark_fixture_workspace_read_at(&fixture_root, &workspace_id)
+}
+
+#[tauri::command]
+pub fn mark_fixture_workspace_unread(workspace_id: String) -> Result<(), String> {
+    let _lock = WORKSPACE_MUTATION_LOCK
+        .lock()
+        .map_err(|_| "Workspace mutation lock poisoned".to_string())?;
+    let fixture_root = resolve_fixture_root()?;
+
+    mark_fixture_workspace_unread_at(&fixture_root, &workspace_id)
+}
+
+#[tauri::command]
 pub fn restore_fixture_workspace(workspace_id: String) -> Result<RestoreWorkspaceResponse, String> {
     let _lock = WORKSPACE_MUTATION_LOCK
         .lock()
@@ -365,7 +408,6 @@ fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
 
     WorkspaceSidebarRow {
         avatar: repo_initials.clone(),
-        active: record.state == "ready",
         title,
         id: record.id,
         directory_name: record.directory_name,
@@ -373,6 +415,10 @@ fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         repo_icon_src: repo_icon_src_for_root_path(record.root_path.as_deref()),
         repo_initials,
         state: record.state,
+        has_unread: record.has_unread,
+        workspace_unread: record.workspace_unread,
+        session_unread_total: record.session_unread_total,
+        unread_session_count: record.unread_session_count,
         derived_status: record.derived_status,
         manual_status: record.manual_status,
         branch: record.branch,
@@ -391,7 +437,6 @@ fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
     let repo_initials = repo_initials_for_name(&record.repo_name);
 
     WorkspaceSummary {
-        active: record.state == "ready",
         title: display_title(&record),
         id: record.id,
         directory_name: record.directory_name,
@@ -399,6 +444,10 @@ fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
         repo_icon_src: repo_icon_src_for_root_path(record.root_path.as_deref()),
         repo_initials,
         state: record.state,
+        has_unread: record.has_unread,
+        workspace_unread: record.workspace_unread,
+        session_unread_total: record.session_unread_total,
+        unread_session_count: record.unread_session_count,
         derived_status: record.derived_status,
         manual_status: record.manual_status,
         branch: record.branch,
@@ -417,7 +466,6 @@ fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
     let repo_initials = repo_initials_for_name(&record.repo_name);
 
     WorkspaceDetail {
-        active: record.state == "ready",
         title: display_title(&record),
         id: record.id,
         repo_id: record.repo_id,
@@ -429,6 +477,10 @@ fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         root_path: record.root_path,
         directory_name: record.directory_name,
         state: record.state,
+        has_unread: record.has_unread,
+        workspace_unread: record.workspace_unread,
+        session_unread_total: record.session_unread_total,
+        unread_session_count: record.unread_session_count,
         derived_status: record.derived_status,
         manual_status: record.manual_status,
         active_session_id: record.active_session_id,
@@ -576,12 +628,7 @@ fn group_id_from_status(manual_status: &Option<String>, derived_status: &str) ->
 }
 
 fn sort_sidebar_rows(rows: &mut [WorkspaceSidebarRow]) {
-    rows.sort_by(|left, right| {
-        right
-            .active
-            .cmp(&left.active)
-            .then_with(|| left.title.to_lowercase().cmp(&right.title.to_lowercase()))
-    });
+    rows.sort_by(|left, right| left.title.to_lowercase().cmp(&right.title.to_lowercase()));
 }
 
 fn humanize_directory_name(directory_name: &str) -> String {
@@ -650,6 +697,152 @@ fn load_workspace_record_by_id_from_fixture(
         Some(result) => result.map(Some).map_err(|error| error.to_string()),
         None => Ok(None),
     }
+}
+
+fn mark_fixture_session_read_at(fixture_root: &Path, session_id: &str) -> Result<(), String> {
+    let mut connection = open_fixture_connection_at(fixture_root, true)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Failed to start mark-read transaction: {error}"))?;
+
+    mark_session_read_in_transaction(&transaction, session_id)?;
+
+    transaction
+        .commit()
+        .map_err(|error| format!("Failed to commit session read transaction: {error}"))
+}
+
+fn mark_fixture_workspace_read_at(fixture_root: &Path, workspace_id: &str) -> Result<(), String> {
+    let mut connection = open_fixture_connection_at(fixture_root, true)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Failed to start workspace-read transaction: {error}"))?;
+
+    mark_workspace_read_in_transaction(&transaction, workspace_id)?;
+
+    transaction
+        .commit()
+        .map_err(|error| format!("Failed to commit workspace read transaction: {error}"))
+}
+
+fn mark_fixture_workspace_unread_at(fixture_root: &Path, workspace_id: &str) -> Result<(), String> {
+    let mut connection = open_fixture_connection_at(fixture_root, true)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Failed to start workspace-unread transaction: {error}"))?;
+
+    mark_workspace_unread_in_transaction(&transaction, workspace_id)?;
+
+    transaction
+        .commit()
+        .map_err(|error| format!("Failed to commit workspace unread transaction: {error}"))
+}
+
+pub(crate) fn mark_session_read_in_transaction(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+) -> Result<(), String> {
+    let workspace_id: String = transaction
+        .query_row(
+            "SELECT workspace_id FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to resolve workspace for session {session_id}: {error}"))?;
+
+    let updated_rows = transaction
+        .execute(
+            "UPDATE sessions SET unread_count = 0 WHERE id = ?1",
+            [session_id],
+        )
+        .map_err(|error| format!("Failed to mark session {session_id} as read: {error}"))?;
+
+    if updated_rows != 1 {
+        return Err(format!(
+            "Session read update affected {updated_rows} rows for session {session_id}"
+        ));
+    }
+
+    sync_workspace_unread_in_transaction(transaction, &workspace_id)
+}
+
+pub(crate) fn mark_workspace_read_in_transaction(
+    transaction: &Transaction<'_>,
+    workspace_id: &str,
+) -> Result<(), String> {
+    transaction
+        .execute(
+            "UPDATE sessions SET unread_count = 0 WHERE workspace_id = ?1",
+            [workspace_id],
+        )
+        .map_err(|error| format!("Failed to clear unread sessions for workspace {workspace_id}: {error}"))?;
+
+    let updated_rows = transaction
+        .execute(
+            "UPDATE workspaces SET unread = 0 WHERE id = ?1",
+            [workspace_id],
+        )
+        .map_err(|error| format!("Failed to mark workspace {workspace_id} as read: {error}"))?;
+
+    if updated_rows != 1 {
+        return Err(format!(
+            "Workspace read update affected {updated_rows} rows for workspace {workspace_id}"
+        ));
+    }
+
+    Ok(())
+}
+
+pub(crate) fn mark_workspace_unread_in_transaction(
+    transaction: &Transaction<'_>,
+    workspace_id: &str,
+) -> Result<(), String> {
+    let updated_rows = transaction
+        .execute(
+            "UPDATE workspaces SET unread = 1 WHERE id = ?1",
+            [workspace_id],
+        )
+        .map_err(|error| format!("Failed to mark workspace {workspace_id} as unread: {error}"))?;
+
+    if updated_rows != 1 {
+        return Err(format!(
+            "Workspace unread update affected {updated_rows} rows for workspace {workspace_id}"
+        ));
+    }
+
+    Ok(())
+}
+
+pub(crate) fn sync_workspace_unread_in_transaction(
+    transaction: &Transaction<'_>,
+    workspace_id: &str,
+) -> Result<(), String> {
+    let updated_rows = transaction
+        .execute(
+            r#"
+            UPDATE workspaces
+            SET unread = CASE
+              WHEN EXISTS (
+                SELECT 1
+                FROM sessions
+                WHERE workspace_id = ?1
+                  AND COALESCE(unread_count, 0) > 0
+              ) THEN 1
+              ELSE 0
+            END
+            WHERE id = ?1
+            "#,
+            [workspace_id],
+        )
+        .map_err(|error| format!("Failed to sync unread state for workspace {workspace_id}: {error}"))?;
+
+    if updated_rows != 1 {
+        return Err(format!(
+            "Unread sync affected {updated_rows} rows for workspace {workspace_id}"
+        ));
+    }
+
+    Ok(())
 }
 
 fn archive_fixture_workspace_at(
@@ -1634,23 +1827,27 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         root_path: row.get(5)?,
         directory_name: row.get(6)?,
         state: row.get(7)?,
-        derived_status: row.get(8)?,
-        manual_status: row.get(9)?,
-        branch: row.get(10)?,
-        initialization_parent_branch: row.get(11)?,
-        intended_target_branch: row.get(12)?,
-        notes: row.get(13)?,
-        pinned_at: row.get(14)?,
-        active_session_id: row.get(15)?,
-        active_session_title: row.get(16)?,
-        active_session_agent_type: row.get(17)?,
-        active_session_status: row.get(18)?,
-        pr_title: row.get(19)?,
-        pr_description: row.get(20)?,
-        archive_commit: row.get(21)?,
-        session_count: row.get(22)?,
-        message_count: row.get(23)?,
-        attachment_count: row.get(24)?,
+        has_unread: row.get::<_, i64>(8)? != 0,
+        workspace_unread: row.get(9)?,
+        session_unread_total: row.get(10)?,
+        unread_session_count: row.get(11)?,
+        derived_status: row.get(12)?,
+        manual_status: row.get(13)?,
+        branch: row.get(14)?,
+        initialization_parent_branch: row.get(15)?,
+        intended_target_branch: row.get(16)?,
+        notes: row.get(17)?,
+        pinned_at: row.get(18)?,
+        active_session_id: row.get(19)?,
+        active_session_title: row.get(20)?,
+        active_session_agent_type: row.get(21)?,
+        active_session_status: row.get(22)?,
+        pr_title: row.get(23)?,
+        pr_description: row.get(24)?,
+        archive_commit: row.get(25)?,
+        session_count: row.get(26)?,
+        message_count: row.get(27)?,
+        attachment_count: row.get(28)?,
     })
 }
 
@@ -1664,6 +1861,26 @@ const WORKSPACE_RECORD_SQL: &str = r#"
       r.root_path,
       w.directory_name,
       w.state,
+      CASE
+        WHEN COALESCE(w.unread, 0) > 0 OR COALESCE((
+          SELECT SUM(ws.unread_count)
+          FROM sessions ws
+          WHERE ws.workspace_id = w.id
+        ), 0) > 0 THEN 1
+        ELSE 0
+      END AS has_unread,
+      COALESCE(w.unread, 0) AS workspace_unread,
+      COALESCE((
+        SELECT SUM(ws.unread_count)
+        FROM sessions ws
+        WHERE ws.workspace_id = w.id
+      ), 0) AS session_unread_total,
+      COALESCE((
+        SELECT COUNT(*)
+        FROM sessions ws
+        WHERE ws.workspace_id = w.id
+          AND COALESCE(ws.unread_count, 0) > 0
+      ), 0) AS unread_session_count,
       COALESCE(w.derived_status, 'in-progress') AS derived_status,
       w.manual_status,
       w.branch,
@@ -1713,7 +1930,15 @@ fn open_fixture_connection_at(fixture_root: &Path, writable: bool) -> Result<Con
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX
     };
 
-    Connection::open_with_flags(db_path, flags).map_err(|error| error.to_string())
+    let connection = Connection::open_with_flags(db_path, flags).map_err(|error| error.to_string())?;
+
+    if writable {
+        connection
+            .busy_timeout(std::time::Duration::from_secs(3))
+            .map_err(|error| error.to_string())?;
+    }
+
+    Ok(connection)
 }
 
 pub(crate) fn resolve_fixture_db_path() -> Result<PathBuf, String> {
@@ -2205,6 +2430,162 @@ mod tests {
     }
 
     #[test]
+    fn workspace_record_marks_unread_when_session_has_unread_even_if_workspace_flag_is_clear() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = ArchiveTestHarness::new(true);
+        let connection =
+            Connection::open(harness.fixture_root.join("com.conductor.app/conductor.db")).unwrap();
+
+        connection
+            .execute("UPDATE sessions SET unread_count = 1 WHERE id = ?1", [&harness.session_id])
+            .unwrap();
+        connection
+            .execute("UPDATE workspaces SET unread = 0 WHERE id = ?1", [&harness.workspace_id])
+            .unwrap();
+
+        let record = load_workspace_record_by_id_from_fixture(&harness.fixture_root, &harness.workspace_id)
+            .unwrap()
+            .unwrap();
+
+        assert!(record.has_unread);
+        assert_eq!(record.workspace_unread, 0);
+        assert_eq!(record.session_unread_total, 1);
+        assert_eq!(record.unread_session_count, 1);
+    }
+
+    #[test]
+    fn archived_workspace_summary_reports_unread_state() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = RestoreTestHarness::new(true);
+        let connection =
+            Connection::open(harness.fixture_root.join("com.conductor.app/conductor.db")).unwrap();
+
+        connection
+            .execute("UPDATE sessions SET unread_count = 1 WHERE id = ?1", [&harness.session_id])
+            .unwrap();
+        connection
+            .execute("UPDATE workspaces SET unread = 0 WHERE id = ?1", [&harness.workspace_id])
+            .unwrap();
+
+        let record = load_workspace_record_by_id_from_fixture(&harness.fixture_root, &harness.workspace_id)
+            .unwrap()
+            .unwrap();
+        let summary = record_to_summary(record);
+
+        assert!(summary.has_unread);
+        assert_eq!(summary.session_unread_total, 1);
+        assert_eq!(summary.unread_session_count, 1);
+    }
+
+    #[test]
+    fn mark_fixture_session_read_clears_session_and_workspace_unread() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = ArchiveTestHarness::new(true);
+        let connection =
+            Connection::open(harness.fixture_root.join("com.conductor.app/conductor.db")).unwrap();
+
+        connection
+            .execute("UPDATE sessions SET unread_count = 1 WHERE id = ?1", [&harness.session_id])
+            .unwrap();
+        connection
+            .execute("UPDATE workspaces SET unread = 1 WHERE id = ?1", [&harness.workspace_id])
+            .unwrap();
+
+        mark_fixture_session_read_at(&harness.fixture_root, &harness.session_id).unwrap();
+
+        let (session_unread, workspace_unread): (i64, i64) = connection
+            .query_row(
+                "SELECT (SELECT unread_count FROM sessions WHERE id = ?1), (SELECT unread FROM workspaces WHERE id = ?2)",
+                (&harness.session_id, &harness.workspace_id),
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(session_unread, 0);
+        assert_eq!(workspace_unread, 0);
+    }
+
+    #[test]
+    fn mark_fixture_workspace_read_clears_all_workspace_sessions() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = ArchiveTestHarness::new(true);
+        let connection =
+            Connection::open(harness.fixture_root.join("com.conductor.app/conductor.db")).unwrap();
+
+        connection
+            .execute("UPDATE sessions SET unread_count = 1 WHERE id = ?1", [&harness.session_id])
+            .unwrap();
+        connection
+            .execute(
+                r#"
+                INSERT INTO sessions (
+                  id, workspace_id, title, agent_type, status, model, permission_mode,
+                  claude_session_id, unread_count, context_token_count, context_used_percent,
+                  thinking_enabled, codex_thinking_level, fast_mode, agent_personality,
+                  created_at, updated_at, last_user_message_at, resume_session_at,
+                  is_hidden, is_compacting
+                ) VALUES ('session-archive-2', ?1, 'Second session', 'claude', 'idle', 'opus', 'default', NULL, 2, 0, NULL, 0, NULL, 0, 'none', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL, 0, 0)
+                "#,
+                [&harness.workspace_id],
+            )
+            .unwrap();
+        connection
+            .execute("UPDATE workspaces SET unread = 1 WHERE id = ?1", [&harness.workspace_id])
+            .unwrap();
+
+        mark_fixture_workspace_read_at(&harness.fixture_root, &harness.workspace_id).unwrap();
+
+        let (session_unread_total, workspace_unread): (i64, i64) = connection
+            .query_row(
+                "SELECT (SELECT COALESCE(SUM(unread_count), 0) FROM sessions WHERE workspace_id = ?1), (SELECT unread FROM workspaces WHERE id = ?1)",
+                [&harness.workspace_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(session_unread_total, 0);
+        assert_eq!(workspace_unread, 0);
+    }
+
+    #[test]
+    fn mark_fixture_workspace_unread_sets_workspace_flag_without_touching_sessions() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = ArchiveTestHarness::new(true);
+        let connection =
+            Connection::open(harness.fixture_root.join("com.conductor.app/conductor.db")).unwrap();
+
+        connection
+            .execute("UPDATE sessions SET unread_count = 0 WHERE id = ?1", [&harness.session_id])
+            .unwrap();
+        connection
+            .execute("UPDATE workspaces SET unread = 0 WHERE id = ?1", [&harness.workspace_id])
+            .unwrap();
+
+        mark_fixture_workspace_unread_at(&harness.fixture_root, &harness.workspace_id).unwrap();
+
+        let (session_unread_total, workspace_unread): (i64, i64) = connection
+            .query_row(
+                "SELECT (SELECT COALESCE(SUM(unread_count), 0) FROM sessions WHERE workspace_id = ?1), (SELECT unread FROM workspaces WHERE id = ?1)",
+                [&harness.workspace_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(session_unread_total, 0);
+        assert_eq!(workspace_unread, 1);
+    }
+
+    #[test]
     fn ensure_fixture_repo_mirror_refreshes_with_existing_checked_out_worktree() {
         let _guard = TEST_FIXTURE_LOCK
             .lock()
@@ -2361,10 +2742,10 @@ mod tests {
                     r#"
                     INSERT INTO workspaces (
                       id, repository_id, directory_name, state, derived_status, manual_status,
-                      branch, initialization_parent_branch, intended_target_branch, notes,
+                      unread, branch, initialization_parent_branch, intended_target_branch, notes,
                       pinned_at, active_session_id, pr_title, pr_description, archive_commit,
                       created_at, updated_at
-                    ) VALUES (?1, 'repo-1', ?2, 'archived', 'in-progress', NULL, ?3, NULL, NULL, NULL, NULL, ?4, NULL, NULL, ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ) VALUES (?1, 'repo-1', ?2, 'archived', 'in-progress', NULL, 0, ?3, NULL, NULL, NULL, NULL, ?4, NULL, NULL, ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     "#,
                     [workspace_id, directory_name, branch, session_id, archive_commit],
                 )
@@ -2375,10 +2756,10 @@ mod tests {
                     r#"
                     INSERT INTO workspaces (
                       id, repository_id, directory_name, state, derived_status, manual_status,
-                      branch, initialization_parent_branch, intended_target_branch, notes,
+                      unread, branch, initialization_parent_branch, intended_target_branch, notes,
                       pinned_at, active_session_id, pr_title, pr_description, archive_commit,
                       created_at
-                    ) VALUES (?1, 'repo-1', ?2, 'archived', 'in-progress', NULL, ?3, NULL, NULL, NULL, NULL, ?4, NULL, NULL, ?5, CURRENT_TIMESTAMP)
+                    ) VALUES (?1, 'repo-1', ?2, 'archived', 'in-progress', NULL, 0, ?3, NULL, NULL, NULL, NULL, ?4, NULL, NULL, ?5, CURRENT_TIMESTAMP)
                     "#,
                     [workspace_id, directory_name, branch, session_id, archive_commit],
                 )
@@ -2450,10 +2831,10 @@ mod tests {
                     r#"
                     INSERT INTO workspaces (
                       id, repository_id, directory_name, state, derived_status, manual_status,
-                      branch, initialization_parent_branch, intended_target_branch, notes,
+                      unread, branch, initialization_parent_branch, intended_target_branch, notes,
                       pinned_at, active_session_id, pr_title, pr_description, archive_commit,
                       created_at, updated_at
-                    ) VALUES (?1, 'repo-1', ?2, 'ready', 'in-progress', NULL, ?3, NULL, NULL, NULL, NULL, ?4, NULL, NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ) VALUES (?1, 'repo-1', ?2, 'ready', 'in-progress', NULL, 0, ?3, NULL, NULL, NULL, NULL, ?4, NULL, NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     "#,
                     (workspace_id, directory_name, branch, session_id),
                 )
@@ -2464,10 +2845,10 @@ mod tests {
                     r#"
                     INSERT INTO workspaces (
                       id, repository_id, directory_name, state, derived_status, manual_status,
-                      branch, initialization_parent_branch, intended_target_branch, notes,
+                      unread, branch, initialization_parent_branch, intended_target_branch, notes,
                       pinned_at, active_session_id, pr_title, pr_description, archive_commit,
                       created_at
-                    ) VALUES (?1, 'repo-1', ?2, 'ready', 'in-progress', NULL, ?3, NULL, NULL, NULL, NULL, ?4, NULL, NULL, NULL, CURRENT_TIMESTAMP)
+                    ) VALUES (?1, 'repo-1', ?2, 'ready', 'in-progress', NULL, 0, ?3, NULL, NULL, NULL, NULL, ?4, NULL, NULL, NULL, CURRENT_TIMESTAMP)
                     "#,
                     (workspace_id, directory_name, branch, session_id),
                 )
@@ -2534,6 +2915,7 @@ mod tests {
               state TEXT,
               derived_status TEXT,
               manual_status TEXT,
+              unread INTEGER DEFAULT 0,
               branch TEXT,
               initialization_parent_branch TEXT,
               intended_target_branch TEXT,

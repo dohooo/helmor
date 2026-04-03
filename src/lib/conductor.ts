@@ -7,12 +7,15 @@ export type WorkspaceRow = {
   id: string;
   title: string;
   avatar?: string;
-  active?: boolean;
   directoryName?: string;
   repoName?: string;
   repoIconSrc?: string | null;
   repoInitials?: string | null;
   state?: string;
+  hasUnread?: boolean;
+  workspaceUnread?: number;
+  sessionUnreadTotal?: number;
+  unreadSessionCount?: number;
   derivedStatus?: string;
   manualStatus?: string | null;
   branch?: string | null;
@@ -86,9 +89,12 @@ export type WorkspaceSummary = {
   repoIconSrc?: string | null;
   repoInitials?: string | null;
   state: string;
+  hasUnread: boolean;
+  workspaceUnread: number;
+  sessionUnreadTotal: number;
+  unreadSessionCount: number;
   derivedStatus: string;
   manualStatus?: string | null;
-  active: boolean;
   branch?: string | null;
   activeSessionId?: string | null;
   activeSessionTitle?: string | null;
@@ -112,9 +118,12 @@ export type WorkspaceDetail = {
   rootPath?: string | null;
   directoryName: string;
   state: string;
+  hasUnread: boolean;
+  workspaceUnread: number;
+  sessionUnreadTotal: number;
+  unreadSessionCount: number;
   derivedStatus: string;
   manualStatus?: string | null;
-  active: boolean;
   activeSessionId?: string | null;
   activeSessionTitle?: string | null;
   activeSessionAgentType?: string | null;
@@ -167,6 +176,8 @@ export type ArchiveWorkspaceResponse = {
   archivedWorkspaceId: string;
   archivedState: string;
 };
+
+export type MarkWorkspaceReadResponse = void;
 
 export type SessionMessageRecord = {
   id: string;
@@ -248,7 +259,7 @@ const DEFAULT_WORKSPACE_GROUPS: WorkspaceGroup[] = [
         id: "project-paths",
         title: "Show project paths",
         repoInitials: "S",
-        active: true,
+        hasUnread: true,
       },
       {
         id: "mermaid",
@@ -298,8 +309,11 @@ const DEFAULT_ARCHIVED_WORKSPACES: WorkspaceSummary[] = [
     directoryName: "coda-publish",
     repoName: "sample",
     state: "archived",
+    hasUnread: false,
+    workspaceUnread: 0,
+    sessionUnreadTotal: 0,
+    unreadSessionCount: 0,
     derivedStatus: "done",
-    active: false,
   },
   {
     id: "archived-marketing-site",
@@ -307,8 +321,11 @@ const DEFAULT_ARCHIVED_WORKSPACES: WorkspaceSummary[] = [
     directoryName: "marketing-site",
     repoName: "sample",
     state: "archived",
+    hasUnread: false,
+    workspaceUnread: 0,
+    sessionUnreadTotal: 0,
+    unreadSessionCount: 0,
     derivedStatus: "review",
-    active: false,
   },
   {
     id: "archived-gitlab-publish",
@@ -316,8 +333,11 @@ const DEFAULT_ARCHIVED_WORKSPACES: WorkspaceSummary[] = [
     directoryName: "gitlab-publish",
     repoName: "sample",
     state: "archived",
+    hasUnread: false,
+    workspaceUnread: 0,
+    sessionUnreadTotal: 0,
+    unreadSessionCount: 0,
     derivedStatus: "review",
-    active: false,
   },
 ];
 
@@ -546,6 +566,44 @@ export async function archiveWorkspace(
   }
 
   return invoke<ArchiveWorkspaceResponse>("archive_fixture_workspace", {
+    workspaceId,
+  });
+}
+
+export async function markSessionRead(sessionId: string): Promise<MarkWorkspaceReadResponse> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    throw new Error("Session read tracking is only available in the Tauri desktop runtime.");
+  }
+
+  return invoke<MarkWorkspaceReadResponse>("mark_fixture_session_read", {
+    sessionId,
+  });
+}
+
+export async function markWorkspaceRead(workspaceId: string): Promise<MarkWorkspaceReadResponse> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    throw new Error("Workspace read tracking is only available in the Tauri desktop runtime.");
+  }
+
+  return invoke<MarkWorkspaceReadResponse>("mark_fixture_workspace_read", {
+    workspaceId,
+  });
+}
+
+export async function markWorkspaceUnread(
+  workspaceId: string,
+): Promise<MarkWorkspaceReadResponse> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    throw new Error("Workspace unread tracking is only available in the Tauri desktop runtime.");
+  }
+
+  return invoke<MarkWorkspaceReadResponse>("mark_fixture_workspace_unread", {
     workspaceId,
   });
 }

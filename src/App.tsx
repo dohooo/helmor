@@ -22,6 +22,8 @@ import {
   loadWorkspaceGroups,
   loadWorkspaceSessions,
   listenAgentStream,
+  markWorkspaceRead,
+  markWorkspaceUnread,
   restoreWorkspace,
   sendAgentMessage,
   startAgentMessageStream,
@@ -114,6 +116,9 @@ function App() {
     Record<string, string | null>
   >({});
   const [sendingContextKey, setSendingContextKey] = useState<string | null>(null);
+  const [markingReadWorkspaceId, setMarkingReadWorkspaceId] = useState<string | null>(null);
+  const [markingUnreadWorkspaceId, setMarkingUnreadWorkspaceId] = useState<string | null>(null);
+  const [deferredWorkspaceReadClearId, setDeferredWorkspaceReadClearId] = useState<string | null>(null);
   const [archivingWorkspaceId, setArchivingWorkspaceId] = useState<string | null>(null);
   const [restoringWorkspaceId, setRestoringWorkspaceId] = useState<string | null>(null);
   const [workspaceActionError, setWorkspaceActionError] = useState<string | null>(null);
@@ -304,6 +309,94 @@ function App() {
       disposed = true;
     };
   }, [selectedSessionId]);
+
+  const refreshSelectedWorkspaceCollections = useCallback(
+    async (workspaceId: string, preferredSessionId: string | null) => {
+      const [detail, sessions, loadedGroups, loadedArchived] = await Promise.all([
+        loadWorkspaceDetail(workspaceId),
+        loadWorkspaceSessions(workspaceId),
+        loadWorkspaceGroups(),
+        loadArchivedWorkspaces(),
+      ]);
+
+      setWorkspaceDetail(detail);
+      setWorkspaceSessions(sessions);
+      setGroups(loadedGroups);
+      setArchivedSummaries(loadedArchived);
+
+      const resolvedSessionId =
+        preferredSessionId && sessions.some((session) => session.id === preferredSessionId)
+          ? preferredSessionId
+          : detail?.activeSessionId ??
+            sessions.find((session) => session.active)?.id ??
+            sessions[0]?.id ??
+            null;
+
+      setSelectedSessionId(resolvedSessionId);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!selectedWorkspaceId || loadingWorkspace || loadingSession) {
+      return;
+    }
+
+    let disposed = false;
+
+    const syncUnreadState = async () => {
+      if (
+        (
+          (workspaceDetail?.workspaceUnread ?? 0) > 0 ||
+          (workspaceDetail?.sessionUnreadTotal ?? 0) > 0
+        ) &&
+        deferredWorkspaceReadClearId !== selectedWorkspaceId &&
+        markingReadWorkspaceId !== selectedWorkspaceId
+      ) {
+        setMarkingReadWorkspaceId(selectedWorkspaceId);
+
+        try {
+          await markWorkspaceRead(selectedWorkspaceId);
+
+          if (!disposed) {
+            await refreshSelectedWorkspaceCollections(selectedWorkspaceId, null);
+          }
+        } catch (error) {
+          console.error("Failed to mark workspace as read", error);
+        } finally {
+          if (!disposed) {
+            setMarkingReadWorkspaceId((current) =>
+              current === selectedWorkspaceId ? null : current,
+            );
+          }
+        }
+      }
+    };
+
+    void syncUnreadState();
+
+    return () => {
+      disposed = true;
+    };
+  }, [
+    loadingSession,
+    loadingWorkspace,
+    markingReadWorkspaceId,
+    deferredWorkspaceReadClearId,
+    refreshSelectedWorkspaceCollections,
+    selectedWorkspaceId,
+    workspaceDetail?.sessionUnreadTotal,
+    workspaceDetail?.workspaceUnread,
+  ]);
+
+  useEffect(() => {
+    if (
+      deferredWorkspaceReadClearId &&
+      selectedWorkspaceId !== deferredWorkspaceReadClearId
+    ) {
+      setDeferredWorkspaceReadClearId(null);
+    }
+  }, [deferredWorkspaceReadClearId, selectedWorkspaceId]);
 
   const handleResizeStart = (event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -599,6 +692,98 @@ function App() {
     }
   }, [archivingWorkspaceId, restoringWorkspaceId, selectedWorkspaceId]);
 
+  const handleMarkWorkspaceUnread = useCallback(async (workspaceId: string) => {
+    if (archivingWorkspaceId || restoringWorkspaceId || markingUnreadWorkspaceId) {
+      return;
+    }
+
+    setWorkspaceActionError(null);
+    setMarkingUnreadWorkspaceId(workspaceId);
+
+    try {
+      await markWorkspaceUnread(workspaceId);
+
+      if (selectedWorkspaceId === workspaceId) {
+        setDeferredWorkspaceReadClearId(workspaceId);
+      }
+
+      const [loadedGroups, loadedArchived] = await Promise.all([
+        loadWorkspaceGroups(),
+        loadArchivedWorkspaces(),
+      ]);
+
+      setGroups(loadedGroups);
+      setArchivedSummaries(loadedArchived);
+
+      if (selectedWorkspaceId === workspaceId) {
+        const [detail, sessions] = await Promise.all([
+          loadWorkspaceDetail(workspaceId),
+          loadWorkspaceSessions(workspaceId),
+        ]);
+
+        setWorkspaceDetail(detail);
+        setWorkspaceSessions(sessions);
+      }
+    } catch (error) {
+      setWorkspaceActionError(describeUnknownError(error, "Unable to mark workspace as unread."));
+    } finally {
+      setMarkingUnreadWorkspaceId(null);
+    }
+  }, [archivingWorkspaceId, markingUnreadWorkspaceId, restoringWorkspaceId, selectedWorkspaceId]);
+
+  const handleSelectWorkspace = useCallback((workspaceId: string) => {
+    setSelectedWorkspaceId(workspaceId);
+
+    const selectedRow = findWorkspaceRowById(workspaceId, groups, archivedRows);
+
+    if (
+      !selectedRow?.hasUnread ||
+      deferredWorkspaceReadClearId === workspaceId ||
+      markingReadWorkspaceId === workspaceId
+    ) {
+      return;
+    }
+
+    setGroups((current) => clearWorkspaceUnreadFromGroups(current, workspaceId));
+    setArchivedSummaries((current) => clearWorkspaceUnreadFromSummaries(current, workspaceId));
+    setWorkspaceDetail((current) =>
+      current?.id === workspaceId
+        ? {
+            ...current,
+            hasUnread: false,
+            workspaceUnread: 0,
+            sessionUnreadTotal: 0,
+            unreadSessionCount: 0,
+          }
+        : current,
+    );
+
+    setMarkingReadWorkspaceId(workspaceId);
+
+    void (async () => {
+      try {
+        await markWorkspaceRead(workspaceId);
+        await refreshSelectedWorkspaceCollections(workspaceId, null);
+      } catch (error) {
+        setWorkspaceActionError(describeUnknownError(error, "Unable to mark workspace as read."));
+        const [loadedGroups, loadedArchived] = await Promise.all([
+          loadWorkspaceGroups(),
+          loadArchivedWorkspaces(),
+        ]);
+        setGroups(loadedGroups);
+        setArchivedSummaries(loadedArchived);
+      } finally {
+        setMarkingReadWorkspaceId((current) => (current === workspaceId ? null : current));
+      }
+    })();
+  }, [
+    archivedRows,
+    deferredWorkspaceReadClearId,
+    groups,
+    markingReadWorkspaceId,
+    refreshSelectedWorkspaceCollections,
+  ]);
+
   const handleRestoreWorkspace = useCallback(async (workspaceId: string) => {
     if (archivingWorkspaceId || restoringWorkspaceId) {
       return;
@@ -688,16 +873,18 @@ function App() {
             groups={groups}
             archivedRows={archivedRows}
             selectedWorkspaceId={selectedWorkspaceId}
-            onSelectWorkspace={(workspaceId) => {
-              setSelectedWorkspaceId(workspaceId);
-            }}
+            onSelectWorkspace={handleSelectWorkspace}
             onArchiveWorkspace={(workspaceId) => {
               void handleArchiveWorkspace(workspaceId);
+            }}
+            onMarkWorkspaceUnread={(workspaceId) => {
+              void handleMarkWorkspaceUnread(workspaceId);
             }}
             onRestoreWorkspace={(workspaceId) => {
               void handleRestoreWorkspace(workspaceId);
             }}
             archivingWorkspaceId={archivingWorkspaceId}
+            markingUnreadWorkspaceId={markingUnreadWorkspaceId}
             restoringWorkspaceId={restoringWorkspaceId}
             workspaceActionError={workspaceActionError}
           />
@@ -825,13 +1012,6 @@ const SendingStatusBar = memo(function SendingStatusBar({
 
 function findInitialWorkspaceId(groups: WorkspaceGroup[]): string | null {
   for (const group of groups) {
-    const activeRow = group.rows.find((row) => row.active);
-    if (activeRow) {
-      return activeRow.id;
-    }
-  }
-
-  for (const group of groups) {
     if (group.rows.length > 0) {
       return group.rows[0].id;
     }
@@ -851,16 +1031,74 @@ function hasWorkspaceId(
   );
 }
 
+function findWorkspaceRowById(
+  workspaceId: string,
+  groups: WorkspaceGroup[],
+  archivedRows: WorkspaceRow[],
+) {
+  for (const group of groups) {
+    const match = group.rows.find((row) => row.id === workspaceId);
+
+    if (match) {
+      return match;
+    }
+  }
+
+  return archivedRows.find((row) => row.id === workspaceId) ?? null;
+}
+
+function clearWorkspaceUnreadFromRow(row: WorkspaceRow): WorkspaceRow {
+  return {
+    ...row,
+    hasUnread: false,
+    workspaceUnread: 0,
+    sessionUnreadTotal: 0,
+    unreadSessionCount: 0,
+  };
+}
+
+function clearWorkspaceUnreadFromGroups(
+  groups: WorkspaceGroup[],
+  workspaceId: string,
+): WorkspaceGroup[] {
+  return groups.map((group) => ({
+    ...group,
+    rows: group.rows.map((row) =>
+      row.id === workspaceId ? clearWorkspaceUnreadFromRow(row) : row,
+    ),
+  }));
+}
+
+function clearWorkspaceUnreadFromSummaries(
+  summaries: WorkspaceSummary[],
+  workspaceId: string,
+): WorkspaceSummary[] {
+  return summaries.map((summary) =>
+    summary.id === workspaceId
+      ? {
+          ...summary,
+          hasUnread: false,
+          workspaceUnread: 0,
+          sessionUnreadTotal: 0,
+          unreadSessionCount: 0,
+        }
+      : summary,
+  );
+}
+
 function summaryToArchivedRow(summary: WorkspaceSummary): WorkspaceRow {
   return {
     id: summary.id,
     title: summary.title,
-    active: false,
     directoryName: summary.directoryName,
     repoName: summary.repoName,
     repoIconSrc: summary.repoIconSrc ?? null,
     repoInitials: summary.repoInitials ?? null,
     state: summary.state,
+    hasUnread: summary.hasUnread,
+    workspaceUnread: summary.workspaceUnread,
+    sessionUnreadTotal: summary.sessionUnreadTotal,
+    unreadSessionCount: summary.unreadSessionCount,
     derivedStatus: summary.derivedStatus,
     manualStatus: summary.manualStatus ?? null,
     branch: summary.branch ?? null,
