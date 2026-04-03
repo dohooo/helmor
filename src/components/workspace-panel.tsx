@@ -659,8 +659,8 @@ function AssistantToolCall({
       ) : null}
       {!hasDiff && (info.diffAdd != null || info.diffDel != null) ? (
         <span className="flex items-center gap-1 text-[11px]">
-          {info.diffAdd != null ? <span className="text-emerald-400">+{info.diffAdd}</span> : null}
-          {info.diffDel != null ? <span className="text-red-400">-{info.diffDel}</span> : null}
+          {info.diffAdd != null ? <span className="text-app-positive">+{info.diffAdd}</span> : null}
+          {info.diffDel != null ? <span className="text-app-negative">-{info.diffDel}</span> : null}
         </span>
       ) : null}
       {info.command ? (
@@ -730,7 +730,7 @@ function AssistantToolCall({
         <div className="mt-1 max-h-[16rem] overflow-auto rounded-md bg-app-foreground/[0.02] text-[11px] leading-5">
           {info.fullCommand ? (
             <div className="border-b border-app-border/20 px-2 py-1.5">
-              <span className="mr-1.5 text-cyan-400/50">$</span>
+              <span className="mr-1.5 text-app-project/60">$</span>
               <code className="font-mono text-app-foreground-soft">{info.fullCommand}</code>
             </div>
           ) : null}
@@ -812,8 +812,8 @@ function EditDiffTrigger({
         <span className="truncate text-app-foreground-soft">{file}</span>
         {diffAdd != null || diffDel != null ? (
           <span className="flex items-center gap-1 text-[11px]">
-            {diffAdd != null ? <span className="text-emerald-400">+{diffAdd}</span> : null}
-            {diffDel != null ? <span className="text-red-400">-{diffDel}</span> : null}
+            {diffAdd != null ? <span className="text-app-positive">+{diffAdd}</span> : null}
+            {diffDel != null ? <span className="text-app-negative">-{diffDel}</span> : null}
           </span>
         ) : null}
       </span>
@@ -822,7 +822,7 @@ function EditDiffTrigger({
             <div
               onMouseEnter={show}
               onMouseLeave={hideDelayed}
-              className="fixed z-[100] w-[min(40rem,90vw)] rounded-lg border border-app-border bg-app-sidebar shadow-xl"
+              className="fixed z-[100] w-[min(40rem,90vw)] rounded-lg border border-app-border bg-app-tooltip shadow-xl"
               style={{ left: pos.x, top: pos.y }}
             >
               <div className="border-b border-app-border/50 px-3 py-1.5 text-[11px] text-app-muted">
@@ -831,20 +831,20 @@ function EditDiffTrigger({
               <div className="max-h-[24rem] overflow-auto font-mono text-[11px] leading-5">
                 {oldStr
                   ? oldStr.split("\n").map((line, i) => (
-                      <div key={`d${i}`} className="flex whitespace-pre-wrap bg-red-400/[0.04]">
-                        <span className="w-8 shrink-0 select-none border-r border-app-border/20 pr-1 text-right text-red-400/30">{i + 1}</span>
-                        <span className="w-4 shrink-0 select-none text-center text-red-400/50">-</span>
-                        <span className="min-w-0 text-red-400/70">{line}</span>
+                      <div key={`d${i}`} className="flex whitespace-pre-wrap bg-app-negative/10">
+                        <span className="w-8 shrink-0 select-none border-r border-app-border/20 pr-1 text-right text-app-negative/40">{i + 1}</span>
+                        <span className="w-4 shrink-0 select-none text-center text-app-negative/60">-</span>
+                        <span className="min-w-0 text-app-negative/80">{line}</span>
                       </div>
                     ))
                   : null}
                 {oldStr && newStr ? <div className="border-t border-app-border/30" /> : null}
                 {newStr
                   ? newStr.split("\n").map((line, i) => (
-                      <div key={`a${i}`} className="flex whitespace-pre-wrap bg-emerald-400/[0.04]">
-                        <span className="w-8 shrink-0 select-none border-r border-app-border/20 pr-1 text-right text-emerald-400/30">{i + 1}</span>
-                        <span className="w-4 shrink-0 select-none text-center text-emerald-400/50">+</span>
-                        <span className="min-w-0 text-emerald-400/70">{line}</span>
+                      <div key={`a${i}`} className="flex whitespace-pre-wrap bg-app-positive/10">
+                        <span className="w-8 shrink-0 select-none border-r border-app-border/20 pr-1 text-right text-app-positive/40">{i + 1}</span>
+                        <span className="w-4 shrink-0 select-none text-center text-app-positive/60">+</span>
+                        <span className="min-w-0 text-app-positive/80">{line}</span>
                       </div>
                     ))
                   : null}
@@ -877,7 +877,7 @@ function isToolCallPart(part: unknown): part is Extract<ConductorMessagePart, { 
 function SystemText({ text }: { text: string }) {
   if (text.startsWith("Error:")) {
     return (
-      <span className="inline-flex items-center gap-1 text-red-400/80">
+      <span className="inline-flex items-center gap-1 text-app-negative">
         <AlertCircle className="size-3 shrink-0" strokeWidth={1.8} />
         {text.slice(7)}
       </span>
@@ -914,7 +914,7 @@ function getToolInfo(name: string, input: Record<string, unknown> | null): ToolI
     return {
       action: "Edit",
       file: fp ? basename(fp) : undefined,
-      icon: <Pencil className="size-3.5 text-amber-400" strokeWidth={1.8} />,
+      icon: <Pencil className="size-3.5 text-app-warning" strokeWidth={1.8} />,
       diffAdd: add,
       diffDel: del,
     };
@@ -926,7 +926,7 @@ function getToolInfo(name: string, input: Record<string, unknown> | null): ToolI
     return {
       action: limit ? `Read ${limit} lines` : "Read",
       file: fp ? basename(fp) : undefined,
-      icon: <FileText className="size-3.5 text-sky-400" strokeWidth={1.8} />,
+      icon: <FileText className="size-3.5 text-app-info" strokeWidth={1.8} />,
     };
   }
 
@@ -935,7 +935,7 @@ function getToolInfo(name: string, input: Record<string, unknown> | null): ToolI
     return {
       action: "Write",
       file: fp ? basename(fp) : undefined,
-      icon: <FilePlus className="size-3.5 text-emerald-400" strokeWidth={1.8} />,
+      icon: <FilePlus className="size-3.5 text-app-positive" strokeWidth={1.8} />,
     };
   }
 
@@ -951,32 +951,32 @@ function getToolInfo(name: string, input: Record<string, unknown> | null): ToolI
 
   if (name === "Grep") {
     const p = str(input.pattern);
-    return { action: "Grep", icon: <Search className="size-3.5 text-violet-400" strokeWidth={1.8} />, detail: p ?? undefined };
+    return { action: "Grep", icon: <Search className="size-3.5 text-app-info" strokeWidth={1.8} />, detail: p ?? undefined };
   }
 
   if (name === "Glob") {
     const p = str(input.pattern);
-    return { action: "Glob", icon: <FolderSearch className="size-3.5 text-violet-400" strokeWidth={1.8} />, detail: p ?? undefined };
+    return { action: "Glob", icon: <FolderSearch className="size-3.5 text-app-info" strokeWidth={1.8} />, detail: p ?? undefined };
   }
 
   if (name === "WebFetch") {
     const url = str(input.url);
-    return { action: "WebFetch", icon: <Globe className="size-3.5 text-teal-400" strokeWidth={1.8} />, detail: url ? truncate(url, 60) : undefined };
+    return { action: "WebFetch", icon: <Globe className="size-3.5 text-app-project" strokeWidth={1.8} />, detail: url ? truncate(url, 60) : undefined };
   }
 
   if (name === "WebSearch") {
     const q = str(input.query);
-    return { action: "WebSearch", icon: <Globe className="size-3.5 text-teal-400" strokeWidth={1.8} />, detail: q ? truncate(q, 50) : undefined };
+    return { action: "WebSearch", icon: <Globe className="size-3.5 text-app-project" strokeWidth={1.8} />, detail: q ? truncate(q, 50) : undefined };
   }
 
   if (name === "ToolSearch") {
     const q = str(input.query);
-    return { action: "ToolSearch", icon: <Search className="size-3.5 text-violet-400" strokeWidth={1.8} />, detail: q ? truncate(q, 50) : undefined };
+    return { action: "ToolSearch", icon: <Search className="size-3.5 text-app-info" strokeWidth={1.8} />, detail: q ? truncate(q, 50) : undefined };
   }
 
   if (name === "Agent" || name === "Task") {
     const d = str(input.description) ?? str(input.prompt);
-    return { action: name, icon: <Bot className="size-3.5 text-indigo-400" strokeWidth={1.8} />, detail: d ? truncate(d, 50) : undefined };
+    return { action: name, icon: <Bot className="size-3.5 text-app-info" strokeWidth={1.8} />, detail: d ? truncate(d, 50) : undefined };
   }
 
   return { action: name, icon: fallbackIcon };

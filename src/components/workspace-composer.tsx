@@ -201,7 +201,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
                       </div>
 
                       {option.badge ? (
-                        <span className="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-primary">
+                        <span className="rounded-md border border-app-border-strong/70 bg-app-foreground/[0.06] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-app-foreground-soft">
                           {option.badge}
                         </span>
                       ) : null}

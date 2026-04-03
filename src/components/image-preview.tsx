@@ -57,11 +57,11 @@ export function ImagePreviewBadge({ path, onRemove }: { path: string; onRemove?:
       {open
         ? createPortal(
             <div
-              className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+              className="fixed inset-0 z-[200] flex items-center justify-center bg-app-overlay backdrop-blur-sm"
               onClick={handleClose}
             >
               <div
-                className="relative max-h-[85vh] max-w-[85vw] overflow-hidden rounded-xl border border-app-border bg-app-sidebar shadow-2xl"
+                className="relative max-h-[85vh] max-w-[85vw] overflow-hidden rounded-xl border border-app-border bg-app-tooltip shadow-2xl"
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="flex items-center justify-between border-b border-app-border/30 px-3 py-2">
