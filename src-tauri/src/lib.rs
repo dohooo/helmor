@@ -1,6 +1,7 @@
 mod agents;
 mod conductor;
 pub mod data_dir;
+mod import;
 mod schema;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -51,7 +52,9 @@ pub fn run() {
             conductor::mark_session_read,
             conductor::mark_workspace_read,
             conductor::mark_workspace_unread,
-            conductor::restore_workspace
+            conductor::restore_workspace,
+            conductor::import_conductor,
+            conductor::conductor_import_available
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

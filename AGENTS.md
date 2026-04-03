@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is Helmor
 
-Helmor is a local-first desktop app built with **Tauri v2** (Rust backend) + **React 19** + **Vite** + **TypeScript**. It provides a workspace management UI that connects to a local [Conductor](https://conductor.app) SQLite database, letting users browse workspaces/sessions/messages and send prompts to AI agents (Claude Code CLI, OpenAI Codex CLI) via streaming or blocking IPC.
+Helmor is a local-first desktop app built with **Tauri v2** (Rust backend) + **React 19** + **Vite** + **TypeScript**. It provides a workspace management UI with its own SQLite database (`~/.helmor/` in release, `~/.helmor.dev/` in debug), letting users browse workspaces/sessions/messages and send prompts to AI agents (Claude Code CLI, OpenAI Codex CLI) via streaming or blocking IPC. Data can be optionally imported from a local [Conductor](https://conductor.app) installation.
 
 ## UI Design Source of Truth
 
@@ -36,17 +36,12 @@ cargo build                  # Build Tauri backend
 cargo check                  # Type-check without building
 ```
 
-Export a Conductor fixture for local development:
-```bash
-scripts/conductor/export-repo-fixture.sh --repo <repo-name>
-```
-
 ## Architecture
 
 ### Two-process model (Tauri)
 
 - **Frontend** (`src/`): React SPA rendered in a Tauri webview. All state lives in `App.tsx` via `useState`. No router, no external state manager.
-- **Backend** (`src-tauri/src/`): Rust process exposing Tauri commands via `invoke()`. Reads/writes a Conductor-format SQLite database. Spawns CLI subprocesses for agent communication.
+- **Backend** (`src-tauri/src/`): Rust process exposing Tauri commands via `invoke()`. Reads/writes Helmor's own SQLite database (`~/.helmor/helmor.db` or `~/.helmor.dev/helmor.db`). Spawns CLI subprocesses for agent communication.
 
 ### Frontend structure
 
@@ -66,8 +61,18 @@ scripts/conductor/export-repo-fixture.sh --repo <repo-name>
 
 | File | Role |
 |---|---|
-| `lib.rs` | Tauri app builder. Registers all commands and manages `RunningAgentProcesses` state. |
-| `conductor.rs` | SQLite queries against the Conductor database. All workspace/session/message CRUD. Fixture data lives in `.local-data/conductor/`. Uses `rusqlite` with bundled SQLite. |
+| `lib.rs` | Tauri app builder. Registers all commands, manages `RunningAgentProcesses` state, runs setup hook (directory + schema init). |
+| `data_dir.rs` | Resolves the Helmor data directory (`~/.helmor` or `~/.helmor.dev`). Supports `HELMOR_DATA_DIR` env var override. |
+| `schema.rs` | Database schema initialization — creates all tables/indexes/triggers if not present. |
+| `import.rs` | Optional import of Conductor data via SQLite backup API. |
+| `conductor/mod.rs` | Tauri command handlers — thin wrappers calling sub-modules. |
+| `conductor/db.rs` | Database connection opening via `data_dir::db_path()`. |
+| `conductor/repos.rs` | Repos table CRUD + git repository resolution. |
+| `conductor/workspaces.rs` | Workspaces table CRUD + archive/restore + workspace creation. |
+| `conductor/sessions.rs` | Sessions/messages/attachments queries + read/unread marking. |
+| `conductor/settings.rs` | Settings key-value store. |
+| `conductor/git_ops.rs` | Git mirror, worktree, and branch management. |
+| `conductor/helpers.rs` | Display helpers, naming, filesystem copy, icon resolution. |
 | `agents.rs` | Spawns Claude Code / Codex CLI subprocesses, streams stdout line-by-line back to the frontend via Tauri events (`agent-stream:{streamId}`). Manages running process PIDs. |
 
 ### Data flow
@@ -83,7 +88,7 @@ scripts/conductor/export-repo-fixture.sh --repo <repo-name>
 - **Styling**: Tailwind CSS v4 with semantic color tokens (`bg-app-base`, `bg-app-sidebar`, `bg-app-elevated`, `text-app-foreground`, etc.) defined in `App.css` using oklch
 - **UI components**: shadcn/ui (base-nova style, `components.json` configured, no RSC)
 - **Testing**: Vitest + jsdom + @testing-library/react. Setup in `src/test/setup.ts`. Tests co-located with source (e.g., `App.test.tsx`).
-- **Fixture data**: `.local-data/conductor/` contains exported Conductor database + workspace context directories. Gitignored. Created via `scripts/conductor/export-repo-fixture.sh`.
+- **Data directory**: `~/.helmor/` (release) or `~/.helmor.dev/` (debug). Override with `HELMOR_DATA_DIR` env var. Database auto-created on first startup.
 - **macOS window chrome**: Overlay title bar with traffic lights at (16, 24). Drag region via `data-tauri-drag-region`.
 - **Serde convention**: Rust structs use `#[serde(rename_all = "camelCase")]` so JSON fields match TypeScript types directly.
 - **Rust clippy**: All Rust code must pass `cargo clippy -- -D warnings` with zero warnings. Run clippy before committing any Rust changes.
