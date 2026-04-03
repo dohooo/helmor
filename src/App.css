@@ -5,7 +5,6 @@
 @import "react-loading-skeleton/dist/skeleton.css";
 @import "streamdown/styles.css";
 @import "./styles/color-theme.css";
-@import "./styles/markdown-theme.css";
 
 @source "../node_modules/streamdown/dist/*.js";
 
@@ -273,16 +272,65 @@ body {
   }
 }
 
-/* GFM table layout for assistant markdown */
+.conversation-markdown {
+  color: var(--color-app-foreground);
+}
+
+.conversation-markdown :where(p, li, ul, ol, blockquote, table, strong, em) {
+  color: inherit;
+}
+
+.conversation-markdown :where(a) {
+  color: var(--color-app-project);
+}
+
+.conversation-markdown :where(code):not(pre code) {
+  color: var(--color-app-foreground-soft);
+  background: color-mix(in oklch, var(--color-app-sidebar) 94%, transparent);
+  border: 1px solid color-mix(in oklch, var(--color-app-border) 88%, transparent);
+}
+
+.conversation-markdown :where(pre) {
+  color: var(--color-app-foreground);
+  background: var(--color-app-sidebar);
+  border: 1px solid color-mix(in oklch, var(--color-app-border) 92%, transparent);
+}
+
+.conversation-markdown :where(pre code) {
+  background: transparent;
+  border: 0;
+}
+
+.conversation-markdown :where(blockquote) {
+  color: var(--color-app-muted);
+  border-left: 0.25rem solid color-mix(in oklch, var(--color-app-border) 90%, transparent);
+}
+
+.conversation-streamdown :where(.shiki, pre) {
+  background: var(--color-app-sidebar) !important;
+  color: var(--color-app-foreground) !important;
+  border: 1px solid color-mix(in oklch, var(--color-app-border) 92%, transparent);
+}
+
+.conversation-streamdown :where(.shiki code, pre code) {
+  color: inherit !important;
+}
+
+.conversation-streamdown :where(.line) {
+  color: inherit;
+}
+
+/* Table layout for assistant markdown */
 .aui-md-table table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
   line-height: 1.6;
   margin: 0.75em 0;
-  border: 1px solid var(--content-border-default);
+  border: 1px solid color-mix(in oklch, var(--color-app-border) 92%, transparent);
   border-radius: 6px;
   overflow: hidden;
+  background: transparent;
 }
 
 .aui-md-table thead th {
@@ -290,20 +338,23 @@ body {
   text-align: left;
   font-weight: 600;
   white-space: nowrap;
-  border-bottom: 1px solid var(--content-border-default);
+  color: var(--color-app-foreground);
+  background: var(--color-app-sidebar);
+  border-bottom: 1px solid color-mix(in oklch, var(--color-app-border) 92%, transparent);
 }
 
 .aui-md-table thead th:not(:last-child) {
-  border-right: 1px solid var(--content-border-muted);
+  border-right: 1px solid color-mix(in oklch, var(--color-app-border) 72%, transparent);
 }
 
 .aui-md-table tbody td {
   padding: 7px 14px;
-  border-bottom: 1px solid var(--content-border-muted);
+  color: var(--color-app-foreground);
+  border-bottom: 1px solid color-mix(in oklch, var(--color-app-border) 72%, transparent);
 }
 
 .aui-md-table tbody td:not(:last-child) {
-  border-right: 1px solid var(--content-border-muted);
+  border-right: 1px solid color-mix(in oklch, var(--color-app-border) 72%, transparent);
 }
 
 .aui-md-table tbody tr:last-child td {
