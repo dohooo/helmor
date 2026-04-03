@@ -311,11 +311,11 @@ function WorkspaceRowItem({
               }
             }}
             className={cn(
-              "flex size-6 shrink-0 items-center justify-center rounded-md text-app-muted",
+              "flex shrink-0 items-center justify-center text-app-muted",
               isBusy ? "visible" : "invisible group-hover:visible",
               workspaceActionsDisabled
                 ? "cursor-not-allowed opacity-60"
-                : "cursor-pointer hover:bg-app-toolbar-hover hover:text-app-foreground",
+                : "cursor-pointer hover:text-app-foreground",
             )}
           >
             {actionIcon}
@@ -384,7 +384,7 @@ export function WorkspacesSidebar({
           scrollHideDelay={700}
           className="relative mt-4 min-h-0 flex-1 overflow-hidden"
         >
-          <ScrollAreaPrimitive.Viewport className="h-full min-w-0 w-full rounded-[inherit] px-2 pr-4">
+          <ScrollAreaPrimitive.Viewport className="h-full min-w-0 w-full rounded-[inherit] px-2 pr-3">
             <div className="flex min-h-full flex-col gap-4 pb-3">
               {groups.map((group) => {
                 const canCollapse = group.rows.length > 0;
@@ -487,7 +487,7 @@ export function WorkspacesSidebar({
           </ScrollAreaPrimitive.Viewport>
           <ScrollAreaPrimitive.Scrollbar
             orientation="vertical"
-            className="flex w-2.5 touch-none select-none p-[2px] transition-opacity data-[state=hidden]:opacity-0 data-[state=visible]:opacity-100"
+            className="flex w-2 touch-none select-none p-[2px] transition-opacity data-[state=hidden]:opacity-0 data-[state=visible]:opacity-100"
           >
             <ScrollAreaPrimitive.Thumb className="relative flex-1 rounded-full bg-app-scrollbar-thumb hover:bg-app-scrollbar-thumb-hover" />
           </ScrollAreaPrimitive.Scrollbar>
