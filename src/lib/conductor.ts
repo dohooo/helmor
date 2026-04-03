@@ -163,6 +163,11 @@ export type RestoreWorkspaceResponse = {
   selectedWorkspaceId: string;
 };
 
+export type ArchiveWorkspaceResponse = {
+  archivedWorkspaceId: string;
+  archivedState: string;
+};
+
 export type SessionMessageRecord = {
   id: string;
   sessionId: string;
@@ -527,6 +532,20 @@ export async function restoreWorkspace(
   }
 
   return invoke<RestoreWorkspaceResponse>("restore_fixture_workspace", {
+    workspaceId,
+  });
+}
+
+export async function archiveWorkspace(
+  workspaceId: string,
+): Promise<ArchiveWorkspaceResponse> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    throw new Error("Workspace archive is only available in the Tauri desktop runtime.");
+  }
+
+  return invoke<ArchiveWorkspaceResponse>("archive_fixture_workspace", {
     workspaceId,
   });
 }

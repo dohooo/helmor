@@ -13,7 +13,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 const FIXTURE_BASE_DIR: &str = ".local-data/conductor";
-static RESTORE_WORKSPACE_LOCK: Mutex<()> = Mutex::new(());
+static WORKSPACE_MUTATION_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +30,13 @@ pub struct RestoreWorkspaceResponse {
     pub restored_workspace_id: String,
     pub restored_state: String,
     pub selected_workspace_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveWorkspaceResponse {
+    pub archived_workspace_id: String,
+    pub archived_state: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -334,12 +341,22 @@ pub fn list_session_attachments(
 
 #[tauri::command]
 pub fn restore_fixture_workspace(workspace_id: String) -> Result<RestoreWorkspaceResponse, String> {
-    let _lock = RESTORE_WORKSPACE_LOCK
+    let _lock = WORKSPACE_MUTATION_LOCK
         .lock()
         .map_err(|_| "Restore lock poisoned".to_string())?;
     let fixture_root = resolve_fixture_root()?;
 
     restore_fixture_workspace_at(&fixture_root, &workspace_id)
+}
+
+#[tauri::command]
+pub fn archive_fixture_workspace(workspace_id: String) -> Result<ArchiveWorkspaceResponse, String> {
+    let _lock = WORKSPACE_MUTATION_LOCK
+        .lock()
+        .map_err(|_| "Workspace mutation lock poisoned".to_string())?;
+    let fixture_root = resolve_fixture_root()?;
+
+    archive_fixture_workspace_at(&fixture_root, &workspace_id)
 }
 
 fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
@@ -635,6 +652,108 @@ fn load_workspace_record_by_id_from_fixture(
     }
 }
 
+fn archive_fixture_workspace_at(
+    fixture_root: &Path,
+    workspace_id: &str,
+) -> Result<ArchiveWorkspaceResponse, String> {
+    let record = load_workspace_record_by_id_from_fixture(fixture_root, workspace_id)?
+        .ok_or_else(|| format!("Workspace not found: {workspace_id}"))?;
+
+    if record.state != "ready" {
+        return Err(format!("Workspace is not ready: {workspace_id}"));
+    }
+
+    let repo_root = non_empty(&record.root_path)
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("Workspace {workspace_id} is missing repo root_path"))?;
+    let branch = non_empty(&record.branch)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| format!("Workspace {workspace_id} is missing branch"))?;
+
+    let workspace_dir = fixture_workspace_dir(fixture_root, &record.repo_name, &record.directory_name);
+    if !workspace_dir.is_dir() {
+        return Err(format!(
+            "Archive source workspace is missing from fixture at {}",
+            workspace_dir.display()
+        ));
+    }
+
+    let archived_context_dir =
+        fixture_archived_context_dir(fixture_root, &record.repo_name, &record.directory_name);
+    if archived_context_dir.exists() {
+        return Err(format!(
+            "Archived context target already exists at {}",
+            archived_context_dir.display()
+        ));
+    }
+
+    fs::create_dir_all(
+        archived_context_dir.parent().ok_or_else(|| {
+            format!(
+                "Archived context target has no parent: {}",
+                archived_context_dir.display()
+            )
+        })?,
+    )
+    .map_err(|error| {
+        format!(
+            "Failed to create archived context parent directory for {}: {error}",
+            archived_context_dir.display()
+        )
+    })?;
+
+    let mirror_dir = fixture_repo_mirror_dir(fixture_root, &record.repo_name);
+    ensure_fixture_repo_mirror(&repo_root, &mirror_dir)?;
+
+    let archive_commit = current_workspace_head_commit(&workspace_dir)?;
+    verify_commit_exists_in_mirror(&mirror_dir, &archive_commit)?;
+
+    let workspace_context_dir = workspace_dir.join(".context");
+    let staged_archive_dir = staged_archive_context_dir(&archived_context_dir);
+    create_staged_archive_context(&workspace_context_dir, &staged_archive_dir)?;
+
+    if let Err(error) = remove_fixture_worktree(&mirror_dir, &workspace_dir) {
+        let _ = fs::remove_dir_all(&staged_archive_dir);
+        return Err(error);
+    }
+
+    if let Err(error) = fs::rename(&staged_archive_dir, &archived_context_dir) {
+        cleanup_failed_archive(
+            &mirror_dir,
+            &workspace_dir,
+            &workspace_context_dir,
+            &branch,
+            &archive_commit,
+            &staged_archive_dir,
+            &archived_context_dir,
+        );
+        return Err(format!(
+            "Failed to move archived context into {}: {error}",
+            archived_context_dir.display()
+        ));
+    }
+
+    if let Err(error) =
+        update_archived_workspace_state(fixture_root, workspace_id, &archive_commit)
+    {
+        cleanup_failed_archive(
+            &mirror_dir,
+            &workspace_dir,
+            &workspace_context_dir,
+            &branch,
+            &archive_commit,
+            &staged_archive_dir,
+            &archived_context_dir,
+        );
+        return Err(error);
+    }
+
+    Ok(ArchiveWorkspaceResponse {
+        archived_workspace_id: workspace_id.to_string(),
+        archived_state: "archived".to_string(),
+    })
+}
+
 fn restore_fixture_workspace_at(
     fixture_root: &Path,
     workspace_id: &str,
@@ -794,6 +913,40 @@ fn update_restored_workspace_state(
         .map_err(|error| format!("Failed to commit restore transaction: {error}"))
 }
 
+fn update_archived_workspace_state(
+    fixture_root: &Path,
+    workspace_id: &str,
+    archive_commit: &str,
+) -> Result<(), String> {
+    let mut connection = open_fixture_connection_at(fixture_root, true)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Failed to start archive transaction: {error}"))?;
+
+    let updated_rows = transaction
+        .execute(
+            r#"
+            UPDATE workspaces
+            SET state = 'archived',
+                archive_commit = ?2,
+                updated_at = datetime('now')
+            WHERE id = ?1 AND state = 'ready'
+            "#,
+            (workspace_id, archive_commit),
+        )
+        .map_err(|error| format!("Failed to update workspace archive state: {error}"))?;
+
+    if updated_rows != 1 {
+        return Err(format!(
+            "Archive state update affected {updated_rows} rows for workspace {workspace_id}"
+        ));
+    }
+
+    transaction
+        .commit()
+        .map_err(|error| format!("Failed to commit archive transaction: {error}"))
+}
+
 fn ensure_fixture_repo_mirror(source_repo_root: &Path, mirror_dir: &Path) -> Result<(), String> {
     ensure_git_repository(source_repo_root)?;
     fs::create_dir_all(
@@ -911,6 +1064,26 @@ fn point_branch_to_archive_commit(
     .map_err(|error| format!("Failed to point fixture branch {branch} at {archive_commit}: {error}"))
 }
 
+fn current_workspace_head_commit(workspace_dir: &Path) -> Result<String, String> {
+    let workspace_dir = workspace_dir.display().to_string();
+    let commit = run_git(["-C", workspace_dir.as_str(), "rev-parse", "HEAD"], None)
+        .map_err(|error| {
+            format!(
+                "Failed to resolve archive commit from fixture workspace {}: {error}",
+                workspace_dir
+            )
+        })?;
+
+    if commit.trim().is_empty() {
+        return Err(format!(
+            "Resolved empty archive commit for fixture workspace {}",
+            workspace_dir
+        ));
+    }
+
+    Ok(commit)
+}
+
 fn create_fixture_worktree(
     mirror_dir: &Path,
     workspace_dir: &Path,
@@ -935,6 +1108,29 @@ fn create_fixture_worktree(
             "Failed to create fixture worktree at {} for branch {}: {error}",
             workspace_dir.display(),
             branch
+        )
+    })
+}
+
+fn remove_fixture_worktree(mirror_dir: &Path, workspace_dir: &Path) -> Result<(), String> {
+    let mirror_dir = mirror_dir.display().to_string();
+    let workspace_dir_arg = workspace_dir.display().to_string();
+    run_git(
+        [
+            "--git-dir",
+            mirror_dir.as_str(),
+            "worktree",
+            "remove",
+            "--force",
+            workspace_dir_arg.as_str(),
+        ],
+        None,
+    )
+    .map(|_| ())
+    .map_err(|error| {
+        format!(
+            "Failed to remove fixture worktree at {}: {error}",
+            workspace_dir.display()
         )
     })
 }
@@ -967,6 +1163,32 @@ fn cleanup_failed_restore(
 
     if staged_archive_dir.exists() && !archived_context_dir.exists() {
         let _ = fs::rename(staged_archive_dir, archived_context_dir);
+    }
+}
+
+fn cleanup_failed_archive(
+    mirror_dir: &Path,
+    workspace_dir: &Path,
+    workspace_context_dir: &Path,
+    branch: &str,
+    archive_commit: &str,
+    staged_archive_dir: &Path,
+    archived_context_dir: &Path,
+) {
+    if archived_context_dir.exists() && !staged_archive_dir.exists() {
+        let _ = fs::rename(archived_context_dir, staged_archive_dir);
+    }
+
+    let _ = point_branch_to_archive_commit(mirror_dir, branch, archive_commit);
+
+    if !workspace_dir.exists() {
+        let _ = create_fixture_worktree(mirror_dir, workspace_dir, branch);
+    }
+
+    if staged_archive_dir.exists() {
+        let _ = fs::remove_dir_all(workspace_context_dir);
+        let _ = copy_dir_contents(staged_archive_dir, workspace_context_dir);
+        let _ = fs::remove_dir_all(staged_archive_dir);
     }
 }
 
@@ -1009,6 +1231,75 @@ fn attachment_prefix(path: &Path) -> String {
         prefix.push('/');
     }
     prefix
+}
+
+fn create_staged_archive_context(
+    workspace_context_dir: &Path,
+    staged_archive_dir: &Path,
+) -> Result<(), String> {
+    if staged_archive_dir.exists() {
+        return Err(format!(
+            "Archive staging directory already exists at {}",
+            staged_archive_dir.display()
+        ));
+    }
+
+    fs::create_dir_all(staged_archive_dir).map_err(|error| {
+        format!(
+            "Failed to create archive staging directory {}: {error}",
+            staged_archive_dir.display()
+        )
+    })?;
+
+    if workspace_context_dir.is_dir() {
+        if let Err(error) = copy_dir_contents(workspace_context_dir, staged_archive_dir) {
+            let _ = fs::remove_dir_all(staged_archive_dir);
+            return Err(error);
+        }
+    } else if workspace_context_dir.exists() {
+        let _ = fs::remove_dir_all(staged_archive_dir);
+        return Err(format!(
+            "Fixture workspace context path is not a directory: {}",
+            workspace_context_dir.display()
+        ));
+    }
+
+    Ok(())
+}
+
+fn copy_dir_contents(source: &Path, destination: &Path) -> Result<(), String> {
+    if !source.exists() {
+        fs::create_dir_all(destination).map_err(|error| {
+            format!(
+                "Failed to create directory {}: {error}",
+                destination.display()
+            )
+        })?;
+        return Ok(());
+    }
+
+    if !source.is_dir() {
+        return Err(format!("Expected directory at {}", source.display()));
+    }
+
+    fs::create_dir_all(destination).map_err(|error| {
+        format!(
+            "Failed to create directory {}: {error}",
+            destination.display()
+        )
+    })?;
+
+    let entries = fs::read_dir(source)
+        .map_err(|error| format!("Failed to read directory {}: {error}", source.display()))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("Failed to read directory entry: {error}"))?;
+        let entry_source = entry.path();
+        let entry_destination = destination.join(entry.file_name());
+        copy_dir_all(&entry_source, &entry_destination)?;
+    }
+
+    Ok(())
 }
 
 fn copy_dir_all(source: &Path, destination: &Path) -> Result<(), String> {
@@ -1633,6 +1924,101 @@ mod tests {
         }
     }
 
+    struct ArchiveTestHarness {
+        root: PathBuf,
+        fixture_root: PathBuf,
+        workspace_id: String,
+        session_id: String,
+        repo_name: String,
+        directory_name: String,
+        head_commit: String,
+    }
+
+    impl ArchiveTestHarness {
+        fn new(include_updated_at: bool) -> Self {
+            let root = std::env::temp_dir().join(format!("helmor-archive-test-{}", uuid::Uuid::new_v4()));
+            let fixture_root = root.join("fixture");
+            let source_repo_root = root.join("source-repo");
+
+            fs::create_dir_all(&source_repo_root).unwrap();
+            init_git_repo(&source_repo_root);
+
+            let repo_name = "demo-repo".to_string();
+            let directory_name = "ready-city".to_string();
+            let workspace_id = "workspace-archive".to_string();
+            let session_id = "session-archive".to_string();
+            let branch = "feature/restore-target".to_string();
+            let head_commit = run_git(
+                ["-C", source_repo_root.to_str().unwrap(), "rev-parse", "HEAD"],
+                None,
+            )
+            .unwrap();
+
+            fs::create_dir_all(fixture_root.join("com.conductor.app")).unwrap();
+            fs::create_dir_all(fixture_root.join("helmor/archived-contexts").join(&repo_name)).unwrap();
+            fs::create_dir_all(fixture_root.join("helmor/workspaces").join(&repo_name)).unwrap();
+
+            create_ready_fixture_db(
+                &fixture_root.join("com.conductor.app/conductor.db"),
+                &source_repo_root,
+                &repo_name,
+                &directory_name,
+                &workspace_id,
+                &session_id,
+                &branch,
+                include_updated_at,
+            );
+
+            let mirror_dir = fixture_repo_mirror_dir(&fixture_root, &repo_name);
+            let workspace_dir = fixture_workspace_dir(&fixture_root, &repo_name, &directory_name);
+            ensure_fixture_repo_mirror(&source_repo_root, &mirror_dir).unwrap();
+            point_branch_to_archive_commit(&mirror_dir, &branch, &head_commit).unwrap();
+            create_fixture_worktree(&mirror_dir, &workspace_dir, &branch).unwrap();
+            fs::create_dir_all(workspace_dir.join(".context/attachments")).unwrap();
+            fs::write(workspace_dir.join(".context/notes.md"), "ready notes").unwrap();
+            fs::write(
+                workspace_dir.join(".context/attachments/evidence.txt"),
+                "ready evidence",
+            )
+            .unwrap();
+
+            Self {
+                root,
+                fixture_root,
+                workspace_id,
+                session_id,
+                repo_name,
+                directory_name,
+                head_commit,
+            }
+        }
+
+        fn archived_context_dir(&self) -> PathBuf {
+            fixture_archived_context_dir(&self.fixture_root, &self.repo_name, &self.directory_name)
+        }
+
+        fn workspace_dir(&self) -> PathBuf {
+            fixture_workspace_dir(&self.fixture_root, &self.repo_name, &self.directory_name)
+        }
+
+        fn mirror_dir(&self) -> PathBuf {
+            fixture_repo_mirror_dir(&self.fixture_root, &self.repo_name)
+        }
+
+        fn attachment_path(&self) -> String {
+            self.workspace_dir()
+                .join(".context/attachments/evidence.txt")
+                .display()
+                .to_string()
+        }
+    }
+
+    impl Drop for ArchiveTestHarness {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
     #[test]
     fn restore_fixture_workspace_recreates_worktree_and_context() {
         let _guard = TEST_FIXTURE_LOCK
@@ -1671,6 +2057,52 @@ mod tests {
             .unwrap();
 
         assert_eq!(state, "ready");
+        assert_eq!(attachment_path, harness.attachment_path());
+    }
+
+    #[test]
+    fn archive_fixture_workspace_moves_context_and_removes_worktree() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = ArchiveTestHarness::new(true);
+
+        let response =
+            archive_fixture_workspace_at(&harness.fixture_root, &harness.workspace_id).unwrap();
+
+        assert_eq!(response.archived_workspace_id, harness.workspace_id);
+        assert_eq!(response.archived_state, "archived");
+        assert!(!harness.workspace_dir().exists());
+        assert!(harness.archived_context_dir().join("notes.md").exists());
+        assert!(harness
+            .archived_context_dir()
+            .join("attachments/evidence.txt")
+            .exists());
+
+        let worktree_list = run_git(
+            [
+                "--git-dir",
+                harness.mirror_dir().to_str().unwrap(),
+                "worktree",
+                "list",
+            ],
+            None,
+        )
+        .unwrap();
+        assert!(!worktree_list.contains(harness.workspace_dir().to_str().unwrap()));
+
+        let connection =
+            Connection::open(harness.fixture_root.join("com.conductor.app/conductor.db")).unwrap();
+        let (state, archive_commit, attachment_path): (String, String, String) = connection
+            .query_row(
+                "SELECT state, archive_commit, (SELECT path FROM attachments WHERE session_id = ?2) FROM workspaces WHERE id = ?1",
+                (&harness.workspace_id, &harness.session_id),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+
+        assert_eq!(state, "archived");
+        assert_eq!(archive_commit, harness.head_commit);
         assert_eq!(attachment_path, harness.attachment_path());
     }
 
@@ -1739,6 +2171,37 @@ mod tests {
         assert!(error.contains("update workspace restore state"));
         assert!(!harness.workspace_dir().exists());
         assert!(harness.archived_context_dir().exists());
+    }
+
+    #[test]
+    fn archive_fixture_workspace_cleans_up_when_db_update_fails() {
+        let _guard = TEST_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = ArchiveTestHarness::new(false);
+
+        let error =
+            archive_fixture_workspace_at(&harness.fixture_root, &harness.workspace_id).unwrap_err();
+
+        assert!(error.contains("update workspace archive state"));
+        assert!(harness.workspace_dir().exists());
+        assert!(harness.workspace_dir().join(".context/notes.md").exists());
+        assert!(harness
+            .workspace_dir()
+            .join(".context/attachments/evidence.txt")
+            .exists());
+        assert!(!harness.archived_context_dir().exists());
+
+        let connection =
+            Connection::open(harness.fixture_root.join("com.conductor.app/conductor.db")).unwrap();
+        let state: String = connection
+            .query_row(
+                "SELECT state FROM workspaces WHERE id = ?1",
+                [&harness.workspace_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "ready");
     }
 
     #[test]
@@ -1954,6 +2417,95 @@ mod tests {
             .execute(
                 "INSERT INTO attachments (id, session_id, session_message_id, type, original_name, path, is_loading, is_draft, created_at) VALUES ('attachment-1', ?1, NULL, 'text', 'evidence.txt', ?2, 0, 0, CURRENT_TIMESTAMP)",
                 [session_id, archived_attachment_path.as_str()],
+            )
+            .unwrap();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_ready_fixture_db(
+        db_path: &Path,
+        source_repo_root: &Path,
+        repo_name: &str,
+        directory_name: &str,
+        workspace_id: &str,
+        session_id: &str,
+        branch: &str,
+        include_updated_at: bool,
+    ) {
+        let connection = Connection::open(db_path).unwrap();
+        connection
+            .execute_batch(&fixture_schema_sql(include_updated_at))
+            .unwrap();
+
+        connection
+            .execute(
+                "INSERT INTO repos (id, name, remote_url, default_branch, root_path) VALUES (?1, ?2, NULL, 'main', ?3)",
+                ["repo-1", repo_name, source_repo_root.to_str().unwrap()],
+            )
+            .unwrap();
+
+        if include_updated_at {
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO workspaces (
+                      id, repository_id, directory_name, state, derived_status, manual_status,
+                      branch, initialization_parent_branch, intended_target_branch, notes,
+                      pinned_at, active_session_id, pr_title, pr_description, archive_commit,
+                      created_at, updated_at
+                    ) VALUES (?1, 'repo-1', ?2, 'ready', 'in-progress', NULL, ?3, NULL, NULL, NULL, NULL, ?4, NULL, NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    "#,
+                    (workspace_id, directory_name, branch, session_id),
+                )
+                .unwrap();
+        } else {
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO workspaces (
+                      id, repository_id, directory_name, state, derived_status, manual_status,
+                      branch, initialization_parent_branch, intended_target_branch, notes,
+                      pinned_at, active_session_id, pr_title, pr_description, archive_commit,
+                      created_at
+                    ) VALUES (?1, 'repo-1', ?2, 'ready', 'in-progress', NULL, ?3, NULL, NULL, NULL, NULL, ?4, NULL, NULL, NULL, CURRENT_TIMESTAMP)
+                    "#,
+                    (workspace_id, directory_name, branch, session_id),
+                )
+                .unwrap();
+        }
+
+        connection
+            .execute(
+                r#"
+                INSERT INTO sessions (
+                  id, workspace_id, title, agent_type, status, model, permission_mode,
+                  claude_session_id, unread_count, context_token_count, context_used_percent,
+                  thinking_enabled, codex_thinking_level, fast_mode, agent_personality,
+                  created_at, updated_at, last_user_message_at, resume_session_at,
+                  is_hidden, is_compacting
+                ) VALUES (?1, ?2, 'Ready session', 'claude', 'idle', 'opus', 'default', NULL, 0, 0, NULL, 0, NULL, 0, 'none', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL, 0, 0)
+                "#,
+                [session_id, workspace_id],
+            )
+            .unwrap();
+
+        let workspace_attachment_path = fixture_workspace_dir(
+            db_path
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap(),
+            repo_name,
+            directory_name,
+        )
+        .join(".context/attachments/evidence.txt")
+        .display()
+        .to_string();
+
+        connection
+            .execute(
+                "INSERT INTO attachments (id, session_id, session_message_id, type, original_name, path, is_loading, is_draft, created_at) VALUES ('attachment-1', ?1, NULL, 'text', 'evidence.txt', ?2, 0, 0, CURRENT_TIMESTAMP)",
+                [session_id, workspace_attachment_path.as_str()],
             )
             .unwrap();
     }

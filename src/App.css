@@ -245,6 +245,13 @@ body {
   background: transparent;
 }
 
+[data-slot="workspace-groups-scroll"] [data-radix-scroll-area-viewport] > div {
+  display: block !important;
+  min-width: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
 @theme inline {
   --font-heading:
     var(--font-sans);

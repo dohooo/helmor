@@ -57,7 +57,7 @@ describe("App", () => {
     expect(shell).toHaveClass("overflow-hidden");
     expect(sidebar).toHaveClass("bg-app-sidebar");
     expect(sidebar).toHaveClass("overflow-hidden");
-    expect(sidebar).toHaveStyle({ width: "288px" });
+    expect(sidebar).toHaveStyle({ width: "336px" });
     expect(panel).toHaveClass("relative");
     expect(panel).toHaveClass("bg-app-elevated");
     expect(dragRegion).toHaveAttribute("data-tauri-drag-region");
@@ -67,10 +67,10 @@ describe("App", () => {
       "placeholder",
       "Ask to make changes, @mention files, run /commands",
     );
-    expect(resizeHandle).toHaveAttribute("aria-valuenow", "288");
+    expect(resizeHandle).toHaveAttribute("aria-valuenow", "336");
     expect(safeAreas).toHaveLength(1);
     expect(avatars).toHaveLength(11);
-    expect(groupsScrollRegion).toHaveClass("overflow-y-auto");
+    expect(groupsScrollRegion).toHaveClass("overflow-hidden");
     expect(groupsScrollRegion).toHaveClass("flex-1");
     expect(screen.getByText("Workspaces")).toBeInTheDocument();
     expect(doneGroup).toBeInTheDocument();
@@ -98,7 +98,7 @@ describe("App", () => {
       name: "Resize sidebar",
     });
 
-    fireEvent.mouseDown(resizeHandle, { clientX: 288 });
+    fireEvent.mouseDown(resizeHandle, { clientX: 336 });
 
     await waitFor(() => {
       expect(document.body.style.cursor).toBe("ew-resize");
@@ -170,7 +170,7 @@ describe("App", () => {
           },
         ]}
         onRestoreWorkspace={onRestoreWorkspace}
-        restoreError="Restore failed."
+        workspaceActionError="Restore failed."
       />,
     );
 
@@ -179,6 +179,37 @@ describe("App", () => {
 
     expect(onRestoreWorkspace).toHaveBeenCalledWith("archived-workspace");
     expect(screen.getByText("Restore failed.")).toBeInTheDocument();
+  });
+
+  it("calls archive for ready workspaces", async () => {
+    const user = userEvent.setup();
+    const onArchiveWorkspace = vi.fn();
+
+    render(
+      <WorkspacesSidebar
+        groups={[
+          {
+            id: "progress",
+            label: "In progress",
+            tone: "progress",
+            rows: [
+              {
+                id: "ready-workspace",
+                title: "Ready workspace",
+                state: "ready",
+                repoName: "helmor-core",
+              },
+            ],
+          },
+        ]}
+        archivedRows={[]}
+        onArchiveWorkspace={onArchiveWorkspace}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Archive workspace" }));
+
+    expect(onArchiveWorkspace).toHaveBeenCalledWith("ready-workspace");
   });
 
   it("disables restore while a workspace is being restored", async () => {
@@ -207,5 +238,39 @@ describe("App", () => {
     expect(restoreButton).toBeDisabled();
     await user.click(restoreButton);
     expect(onRestoreWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("disables archive while another workspace mutation is running", async () => {
+    const user = userEvent.setup();
+    const onArchiveWorkspace = vi.fn();
+
+    render(
+      <WorkspacesSidebar
+        groups={[
+          {
+            id: "progress",
+            label: "In progress",
+            tone: "progress",
+            rows: [
+              {
+                id: "ready-workspace",
+                title: "Ready workspace",
+                state: "ready",
+                repoName: "helmor-core",
+              },
+            ],
+          },
+        ]}
+        archivedRows={[]}
+        onArchiveWorkspace={onArchiveWorkspace}
+        archivingWorkspaceId="ready-workspace"
+      />,
+    );
+
+    const archiveButton = screen.getByRole("button", { name: "Archive workspace" });
+
+    expect(archiveButton).toBeDisabled();
+    await user.click(archiveButton);
+    expect(onArchiveWorkspace).not.toHaveBeenCalled();
   });
 });

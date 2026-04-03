@@ -11,6 +11,7 @@ import { Moon, Sun } from "lucide-react";
 import {
   DEFAULT_AGENT_MODEL_SECTIONS,
   DEFAULT_WORKSPACE_GROUPS,
+  archiveWorkspace,
   loadAgentModelSections,
   loadArchivedWorkspaces,
   loadSessionAttachments,
@@ -38,7 +39,7 @@ import { WorkspacePanel } from "./components/workspace-panel";
 import { WorkspaceComposer } from "./components/workspace-composer";
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "helmor.workspaceSidebarWidth";
-const DEFAULT_SIDEBAR_WIDTH = 288;
+const DEFAULT_SIDEBAR_WIDTH = 336;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 520;
 const SIDEBAR_RESIZE_STEP = 16;
@@ -105,8 +106,9 @@ function App() {
     Record<string, string | null>
   >({});
   const [sendingContextKey, setSendingContextKey] = useState<string | null>(null);
+  const [archivingWorkspaceId, setArchivingWorkspaceId] = useState<string | null>(null);
   const [restoringWorkspaceId, setRestoringWorkspaceId] = useState<string | null>(null);
-  const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [workspaceActionError, setWorkspaceActionError] = useState<string | null>(null);
   const [loadingWorkspace, setLoadingWorkspace] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">(() => {
@@ -478,12 +480,85 @@ function App() {
     }
   };
 
-  const handleRestoreWorkspace = useCallback(async (workspaceId: string) => {
-    if (restoringWorkspaceId) {
+  const handleArchiveWorkspace = useCallback(async (workspaceId: string) => {
+    if (archivingWorkspaceId || restoringWorkspaceId) {
       return;
     }
 
-    setRestoreError(null);
+    setWorkspaceActionError(null);
+    setArchivingWorkspaceId(workspaceId);
+
+    try {
+      await archiveWorkspace(workspaceId);
+      const [loadedGroups, loadedArchived] = await Promise.all([
+        loadWorkspaceGroups(),
+        loadArchivedWorkspaces(),
+      ]);
+      const nextWorkspaceId =
+        selectedWorkspaceId && selectedWorkspaceId !== workspaceId
+          ? hasWorkspaceId(selectedWorkspaceId, loadedGroups, loadedArchived)
+            ? selectedWorkspaceId
+            : findInitialWorkspaceId(loadedGroups) ?? loadedArchived[0]?.id ?? null
+          : findInitialWorkspaceId(loadedGroups) ?? loadedArchived[0]?.id ?? null;
+
+      setGroups(loadedGroups);
+      setArchivedSummaries(loadedArchived);
+      setSelectedWorkspaceId(nextWorkspaceId);
+
+      if (!nextWorkspaceId) {
+        setWorkspaceDetail(null);
+        setWorkspaceSessions([]);
+        setSelectedSessionId(null);
+        setSessionMessages([]);
+        setSessionAttachments([]);
+        return;
+      }
+
+      setLoadingWorkspace(true);
+      const [detail, sessions] = await Promise.all([
+        loadWorkspaceDetail(nextWorkspaceId),
+        loadWorkspaceSessions(nextWorkspaceId),
+      ]);
+      const nextSessionId =
+        detail?.activeSessionId ??
+        sessions.find((session) => session.active)?.id ??
+        sessions[0]?.id ??
+        null;
+
+      setWorkspaceDetail(detail);
+      setWorkspaceSessions(sessions);
+      setSelectedSessionId(nextSessionId);
+      setLoadingWorkspace(false);
+
+      if (!nextSessionId) {
+        setSessionMessages([]);
+        setSessionAttachments([]);
+        return;
+      }
+
+      setLoadingSession(true);
+      const [messages, attachments] = await Promise.all([
+        loadSessionMessages(nextSessionId),
+        loadSessionAttachments(nextSessionId),
+      ]);
+      setSessionMessages(messages);
+      setSessionAttachments(attachments);
+      setLoadingSession(false);
+    } catch (error) {
+      setWorkspaceActionError(describeUnknownError(error, "Unable to archive workspace."));
+    } finally {
+      setArchivingWorkspaceId(null);
+      setLoadingWorkspace(false);
+      setLoadingSession(false);
+    }
+  }, [archivingWorkspaceId, restoringWorkspaceId, selectedWorkspaceId]);
+
+  const handleRestoreWorkspace = useCallback(async (workspaceId: string) => {
+    if (archivingWorkspaceId || restoringWorkspaceId) {
+      return;
+    }
+
+    setWorkspaceActionError(null);
     setRestoringWorkspaceId(workspaceId);
 
     try {
@@ -544,13 +619,13 @@ function App() {
       setSessionAttachments(attachments);
       setLoadingSession(false);
     } catch (error) {
-      setRestoreError(describeUnknownError(error, "Unable to restore workspace."));
+      setWorkspaceActionError(describeUnknownError(error, "Unable to restore workspace."));
     } finally {
       setRestoringWorkspaceId(null);
       setLoadingWorkspace(false);
       setLoadingSession(false);
     }
-  }, [restoringWorkspaceId]);
+  }, [archivingWorkspaceId, restoringWorkspaceId]);
 
   return (
     <main
@@ -570,11 +645,15 @@ function App() {
             onSelectWorkspace={(workspaceId) => {
               setSelectedWorkspaceId(workspaceId);
             }}
+            onArchiveWorkspace={(workspaceId) => {
+              void handleArchiveWorkspace(workspaceId);
+            }}
             onRestoreWorkspace={(workspaceId) => {
               void handleRestoreWorkspace(workspaceId);
             }}
+            archivingWorkspaceId={archivingWorkspaceId}
             restoringWorkspaceId={restoringWorkspaceId}
-            restoreError={restoreError}
+            workspaceActionError={workspaceActionError}
           />
         </aside>
 

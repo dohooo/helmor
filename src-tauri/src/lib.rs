@@ -12,6 +12,7 @@ pub fn run() {
             agents::list_agent_model_sections,
             agents::send_agent_message,
             agents::send_agent_message_stream,
+            conductor::archive_fixture_workspace,
             conductor::get_conductor_fixture_info,
             conductor::get_workspace,
             conductor::list_archived_workspaces,

@@ -1,4 +1,5 @@
 import { cva } from "class-variance-authority";
+import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area";
 import {
   IssueClosedIcon,
   IssueDraftIcon,
@@ -15,6 +16,7 @@ import {
   ChevronDown,
   BookMarked,
   GitBranch,
+  LoaderCircle,
   RotateCcw,
   Plus,
 } from "lucide-react";
@@ -212,25 +214,36 @@ function WorkspaceRowItem({
   row,
   selected,
   onSelect,
+  onArchiveWorkspace,
   onRestoreWorkspace,
+  archivingWorkspaceId,
   restoringWorkspaceId,
-  restoreActionsDisabled,
+  workspaceActionsDisabled,
 }: {
   row: WorkspaceRow;
   selected: boolean;
   onSelect?: (workspaceId: string) => void;
+  onArchiveWorkspace?: (workspaceId: string) => void;
   onRestoreWorkspace?: (workspaceId: string) => void;
+  archivingWorkspaceId?: string | null;
   restoringWorkspaceId?: string | null;
-  restoreActionsDisabled?: boolean;
+  workspaceActionsDisabled?: boolean;
 }) {
   const actionLabel =
     row.state === "archived" ? "Restore workspace" : "Archive workspace";
+  const isArchiving = archivingWorkspaceId === row.id;
   const isRestoring = restoringWorkspaceId === row.id;
   const isRestoreAction = row.state === "archived";
+  const isBusy = isArchiving || isRestoring;
+  const hasActionHandler = isRestoreAction
+    ? Boolean(onRestoreWorkspace)
+    : Boolean(onArchiveWorkspace);
   const actionIcon =
-    isRestoreAction ? (
+    isBusy ? (
+      <LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.1} />
+    ) : isRestoreAction ? (
       <RotateCcw
-        className={cn("size-3.5", isRestoring ? "animate-spin" : undefined)}
+        className="size-3.5"
         strokeWidth={2.1}
       />
     ) : (
@@ -275,30 +288,40 @@ function WorkspaceRowItem({
         </span>
       </div>
 
-      <BaseTooltip
-        side="top"
-        content={<span>{actionLabel}</span>}
-      >
-        <button
-          type="button"
-          aria-label={actionLabel}
-          disabled={Boolean(restoreActionsDisabled) || !isRestoreAction}
-          onClick={(event) => {
-            event.stopPropagation();
-            if (isRestoreAction && !restoreActionsDisabled) {
-              onRestoreWorkspace?.(row.id);
-            }
-          }}
-          className={cn(
-            "invisible flex size-6 shrink-0 items-center justify-center rounded-md text-app-muted group-hover:visible",
-            isRestoreAction && !restoreActionsDisabled
-              ? "cursor-pointer hover:bg-app-toolbar-hover hover:text-app-foreground"
-              : "cursor-not-allowed opacity-60",
-          )}
+      {hasActionHandler ? (
+        <BaseTooltip
+          side="top"
+          content={<span>{actionLabel}</span>}
         >
-          {actionIcon}
-        </button>
-      </BaseTooltip>
+          <button
+            type="button"
+            aria-label={actionLabel}
+            disabled={Boolean(workspaceActionsDisabled)}
+            onClick={(event) => {
+              event.stopPropagation();
+
+              if (workspaceActionsDisabled) {
+                return;
+              }
+
+              if (isRestoreAction) {
+                onRestoreWorkspace?.(row.id);
+              } else {
+                onArchiveWorkspace?.(row.id);
+              }
+            }}
+            className={cn(
+              "flex size-6 shrink-0 items-center justify-center rounded-md text-app-muted",
+              isBusy ? "visible" : "invisible group-hover:visible",
+              workspaceActionsDisabled
+                ? "cursor-not-allowed opacity-60"
+                : "cursor-pointer hover:bg-app-toolbar-hover hover:text-app-foreground",
+            )}
+          >
+            {actionIcon}
+          </button>
+        </BaseTooltip>
+      ) : null}
     </div>
   );
 }
@@ -308,17 +331,21 @@ export function WorkspacesSidebar({
   archivedRows,
   selectedWorkspaceId,
   onSelectWorkspace,
+  onArchiveWorkspace,
   onRestoreWorkspace,
+  archivingWorkspaceId,
   restoringWorkspaceId,
-  restoreError,
+  workspaceActionError,
 }: {
   groups: WorkspaceGroup[];
   archivedRows: WorkspaceRow[];
   selectedWorkspaceId?: string | null;
   onSelectWorkspace?: (workspaceId: string) => void;
+  onArchiveWorkspace?: (workspaceId: string) => void;
   onRestoreWorkspace?: (workspaceId: string) => void;
+  archivingWorkspaceId?: string | null;
   restoringWorkspaceId?: string | null;
-  restoreError?: string | null;
+  workspaceActionError?: string | null;
 }) {
   return (
     <TooltipProvider>
@@ -351,98 +378,120 @@ export function WorkspacesSidebar({
           </div>
         </div>
 
-        <div
+        <ScrollAreaPrimitive.Root
           data-slot="workspace-groups-scroll"
-          className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-2 pb-3 pr-2.5 [scrollbar-gutter:stable]"
+          type="scroll"
+          scrollHideDelay={700}
+          className="relative mt-4 min-h-0 flex-1 overflow-hidden"
         >
-          {groups.map((group) => {
-            const canCollapse = group.rows.length > 0;
+          <ScrollAreaPrimitive.Viewport className="h-full min-w-0 w-full rounded-[inherit] px-2 pr-4">
+            <div className="flex min-h-full flex-col gap-4 pb-3">
+              {groups.map((group) => {
+                const canCollapse = group.rows.length > 0;
 
-            return (
-              <Collapsible key={group.id} defaultOpen>
-                <section aria-label={group.label} className="space-y-1.5">
-                  <CollapsibleTrigger
-                    className={cn(
-                      "group/trigger flex w-full select-none items-center justify-between rounded-xl px-1 py-1 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70",
-                      canCollapse ? "cursor-pointer" : "cursor-default",
-                    )}
-                    disabled={!canCollapse}
-                  >
-                    <span className="flex items-center gap-2">
-                      <GroupIcon tone={group.tone} />
-                      <span>{group.label}</span>
-                    </span>
+                return (
+                  <Collapsible key={group.id} defaultOpen>
+                    <section aria-label={group.label} className="space-y-1.5">
+                      <CollapsibleTrigger
+                        className={cn(
+                          "group/trigger flex w-full select-none items-center justify-between rounded-xl px-1 py-1 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70",
+                          canCollapse ? "cursor-pointer" : "cursor-default",
+                        )}
+                        disabled={!canCollapse}
+                      >
+                        <span className="flex items-center gap-2">
+                          <GroupIcon tone={group.tone} />
+                          <span>{group.label}</span>
+                        </span>
 
-                    {canCollapse ? (
-                      <ChevronDown
-                        className="size-4 shrink-0 text-app-foreground-soft transition-transform group-data-[panel-open]/trigger:-rotate-0 group-data-[panel-closed]/trigger:-rotate-90"
-                        strokeWidth={2}
-                      />
-                    ) : null}
-                  </CollapsibleTrigger>
+                        {canCollapse ? (
+                          <ChevronDown
+                            className="size-4 shrink-0 text-app-foreground-soft transition-transform group-data-[panel-open]/trigger:-rotate-0 group-data-[panel-closed]/trigger:-rotate-90"
+                            strokeWidth={2}
+                          />
+                        ) : null}
+                      </CollapsibleTrigger>
 
-                  {group.rows.length > 0 ? (
-                    <CollapsibleContent>
-                      <div className="space-y-0.5">
+                      {group.rows.length > 0 ? (
+                        <CollapsibleContent>
+                          <div className="space-y-0.5">
                         {group.rows.map((row) => (
                           <WorkspaceRowItem
                             key={row.id}
                             row={row}
                             selected={selectedWorkspaceId === row.id}
                             onSelect={onSelectWorkspace}
+                            onArchiveWorkspace={onArchiveWorkspace}
+                            archivingWorkspaceId={archivingWorkspaceId}
+                            restoringWorkspaceId={restoringWorkspaceId}
+                            workspaceActionsDisabled={Boolean(
+                              archivingWorkspaceId || restoringWorkspaceId,
+                            )}
                           />
                         ))}
-                      </div>
-                    </CollapsibleContent>
-                  ) : null}
-                </section>
-              </Collapsible>
-            );
-          })}
+                          </div>
+                        </CollapsibleContent>
+                      ) : null}
+                    </section>
+                  </Collapsible>
+                );
+              })}
 
-          <Collapsible defaultOpen={false}>
-            <section aria-label="Archived" className="space-y-1.5">
-              <CollapsibleTrigger className="group/trigger flex w-full cursor-pointer select-none items-center justify-between rounded-xl px-1 py-1 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70">
-                <span className="flex items-center gap-2">
-                  <Archive
-                    className="size-[14px] shrink-0 text-app-backlog"
-                    strokeWidth={1.9}
-                  />
-                  <span>Archived</span>
-                </span>
+              <Collapsible defaultOpen={false}>
+                <section aria-label="Archived" className="space-y-1.5">
+                  <CollapsibleTrigger className="group/trigger flex w-full cursor-pointer select-none items-center justify-between rounded-xl px-1 py-1 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70">
+                    <span className="flex items-center gap-2">
+                      <Archive
+                        className="size-[14px] shrink-0 text-app-backlog"
+                        strokeWidth={1.9}
+                      />
+                      <span>Archived</span>
+                    </span>
 
-                <ChevronDown
-                  className="size-4 shrink-0 text-app-foreground-soft transition-transform group-data-[panel-open]/trigger:-rotate-0 group-data-[panel-closed]/trigger:-rotate-90"
-                  strokeWidth={2}
-                />
-              </CollapsibleTrigger>
+                    <ChevronDown
+                      className="size-4 shrink-0 text-app-foreground-soft transition-transform group-data-[panel-open]/trigger:-rotate-0 group-data-[panel-closed]/trigger:-rotate-90"
+                      strokeWidth={2}
+                    />
+                  </CollapsibleTrigger>
 
-              {archivedRows.length > 0 ? (
-              <CollapsibleContent>
-                <div className="space-y-0.5">
-                  {archivedRows.map((row) => (
+                  {archivedRows.length > 0 ? (
+                    <CollapsibleContent>
+                      <div className="space-y-0.5">
+                        {archivedRows.map((row) => (
                     <WorkspaceRowItem
                       key={row.id}
                       row={row}
                       selected={selectedWorkspaceId === row.id}
                       onSelect={onSelectWorkspace}
+                      onArchiveWorkspace={onArchiveWorkspace}
                       onRestoreWorkspace={onRestoreWorkspace}
+                      archivingWorkspaceId={archivingWorkspaceId}
                       restoringWorkspaceId={restoringWorkspaceId}
-                      restoreActionsDisabled={Boolean(restoringWorkspaceId)}
+                      workspaceActionsDisabled={Boolean(
+                        archivingWorkspaceId || restoringWorkspaceId,
+                      )}
                     />
                   ))}
                 </div>
               </CollapsibleContent>
             ) : null}
 
-              {restoreError ? (
+              {workspaceActionError ? (
                 <p className="px-1 pt-1 text-[12px] leading-snug text-app-canceled">
-                  {restoreError}
+                  {workspaceActionError}
                 </p>
               ) : null}
-            </section>
-          </Collapsible>
-        </div>
+                </section>
+              </Collapsible>
+            </div>
+          </ScrollAreaPrimitive.Viewport>
+          <ScrollAreaPrimitive.Scrollbar
+            orientation="vertical"
+            className="flex w-2.5 touch-none select-none p-[2px] transition-opacity data-[state=hidden]:opacity-0 data-[state=visible]:opacity-100"
+          >
+            <ScrollAreaPrimitive.Thumb className="relative flex-1 rounded-full bg-app-scrollbar-thumb hover:bg-app-scrollbar-thumb-hover" />
+          </ScrollAreaPrimitive.Scrollbar>
+        </ScrollAreaPrimitive.Root>
       </div>
     </TooltipProvider>
   );
