@@ -105,45 +105,54 @@ fn filter_to_repo(connection: &Connection, repo_name: &str) -> Result<(), String
         .execute_batch("PRAGMA foreign_keys = OFF;")
         .map_err(|error| error.to_string())?;
 
-    let repo_id: Option<String> = connection
+    let repo_id: String = connection
         .query_row(
             "SELECT id FROM repos WHERE name = ?1 LIMIT 1",
             [repo_name],
             |row| row.get(0),
         )
-        .map_err(|error| format!("Repo '{repo_name}' not found: {error}"))?;
+        .map_err(|_| format!("Repo '{repo_name}' not found in source database"))?;
 
-    let repo_id = repo_id.ok_or_else(|| format!("Repo '{repo_name}' not found in source database"))?;
+    let params: &[&dyn rusqlite::types::ToSql] = &[&repo_id];
 
-    let statements = [
-        format!(
+    connection
+        .execute(
             "DELETE FROM attachments WHERE session_id NOT IN (
                 SELECT s.id FROM sessions s
                 JOIN workspaces w ON w.id = s.workspace_id
-                WHERE w.repository_id = '{repo_id}'
-            )"
-        ),
-        format!(
+                WHERE w.repository_id = ?1
+            )",
+            params,
+        )
+        .map_err(|error| format!("Filter attachments failed: {error}"))?;
+
+    connection
+        .execute(
             "DELETE FROM session_messages WHERE session_id NOT IN (
                 SELECT s.id FROM sessions s
                 JOIN workspaces w ON w.id = s.workspace_id
-                WHERE w.repository_id = '{repo_id}'
-            )"
-        ),
-        format!(
-            "DELETE FROM sessions WHERE workspace_id NOT IN (
-                SELECT id FROM workspaces WHERE repository_id = '{repo_id}'
-            )"
-        ),
-        format!("DELETE FROM workspaces WHERE repository_id != '{repo_id}'"),
-        format!("DELETE FROM repos WHERE id != '{repo_id}'"),
-    ];
+                WHERE w.repository_id = ?1
+            )",
+            params,
+        )
+        .map_err(|error| format!("Filter messages failed: {error}"))?;
 
-    for sql in &statements {
-        connection
-            .execute(sql, [])
-            .map_err(|error| format!("Filter query failed: {error}"))?;
-    }
+    connection
+        .execute(
+            "DELETE FROM sessions WHERE workspace_id NOT IN (
+                SELECT id FROM workspaces WHERE repository_id = ?1
+            )",
+            params,
+        )
+        .map_err(|error| format!("Filter sessions failed: {error}"))?;
+
+    connection
+        .execute("DELETE FROM workspaces WHERE repository_id != ?1", params)
+        .map_err(|error| format!("Filter workspaces failed: {error}"))?;
+
+    connection
+        .execute("DELETE FROM repos WHERE id != ?1", params)
+        .map_err(|error| format!("Filter repos failed: {error}"))?;
 
     Ok(())
 }

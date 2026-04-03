@@ -271,17 +271,16 @@ pub fn load_workspace_record_by_id(
 // ---- Sidebar groups ----
 
 pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>, String> {
-    let records = load_workspace_records()?
-        .into_iter()
-        .filter(|record| record.state != "archived")
-        .collect::<Vec<_>>();
     let mut done = Vec::new();
     let mut review = Vec::new();
     let mut progress = Vec::new();
     let mut backlog = Vec::new();
     let mut canceled = Vec::new();
 
-    for record in records {
+    for record in load_workspace_records()? {
+        if record.state == "archived" {
+            continue;
+        }
         let row = record_to_sidebar_row(record);
         match helpers::group_id_from_status(&row.manual_status, &row.derived_status) {
             "done" => done.push(row),

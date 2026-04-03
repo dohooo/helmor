@@ -10,26 +10,19 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let args = args
-        .into_iter()
-        .map(|value| value.as_ref().to_owned())
-        .collect::<Vec<_>>();
     let mut command = Command::new("git");
-    command.args(&args);
+
+    for arg in args {
+        command.arg(arg.as_ref());
+    }
 
     if let Some(current_dir) = current_dir {
         command.current_dir(current_dir);
     }
 
-    let output = command.output().map_err(|error| {
-        format!(
-            "Failed to run git {}: {error}",
-            args.iter()
-                .map(|arg| arg.to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join(" ")
-        )
-    })?;
+    let output = command
+        .output()
+        .map_err(|error| format!("Failed to run git: {error}"))?;
 
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());

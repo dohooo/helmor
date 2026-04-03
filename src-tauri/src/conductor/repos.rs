@@ -72,13 +72,15 @@ pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>, String> {
         .query_map([], |row| {
             let name: String = row.get(1)?;
             let root_path: Option<String> = row.get(3)?;
+            let initials = helpers::repo_initials_for_name(&name);
+            let icon_src = helpers::repo_icon_src_for_root_path(root_path.as_deref());
 
             Ok(RepositoryCreateOption {
                 id: row.get(0)?,
-                name: name.clone(),
+                name,
                 default_branch: row.get(2)?,
-                repo_icon_src: helpers::repo_icon_src_for_root_path(root_path.as_deref()),
-                repo_initials: helpers::repo_initials_for_name(&name),
+                repo_icon_src: icon_src,
+                repo_initials: initials,
             })
         })
         .map_err(|error| format!("Failed to load repositories: {error}"))?;
