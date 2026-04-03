@@ -1,15 +1,14 @@
-import { Suspense, forwardRef, lazy, memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Skeleton, { SkeletonTheme } from "react-loading-skeleton";
 import {
-  type ScrollerProps as VirtuosoScrollerProps,
   Virtuoso,
   type Components as VirtuosoComponents,
   type ItemProps as VirtuosoItemProps,
   type ScrollSeekPlaceholderProps,
+  type StateSnapshot,
   type VirtuosoHandle,
 } from "react-virtuoso";
-import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area";
 import {
   AlertCircle,
   ArrowDown,
@@ -42,7 +41,6 @@ import {
 } from "@/lib/message-adapter";
 import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
-import { ScrollBar } from "./ui/scroll-area";
 
 type WorkspacePanelProps = {
   workspace: WorkspaceDetail | null;
@@ -65,6 +63,7 @@ const LazyStreamdown = lazy(async () => {
 });
 
 let hasPreloadedStreamdown = false;
+const sessionViewportStateBySession = new Map<string, StateSnapshot>();
 
 function preloadStreamdown() {
   if (hasPreloadedStreamdown) return;
@@ -200,6 +199,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
           <ConductorThread
             key={selectedSessionId ?? "live-thread"}
             messages={messages}
+            sessionId={selectedSessionId ?? "live-thread"}
             sending={sending}
           />
         ) : (
@@ -214,11 +214,23 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 // Stick-to-bottom powered thread
 // ---------------------------------------------------------------------------
 
-function ConductorThread({ messages, sending }: { messages: SessionMessageRecord[]; sending: boolean }) {
+function ConductorThread({
+  messages,
+  sessionId,
+  sending,
+}: {
+  messages: SessionMessageRecord[];
+  sessionId: string;
+  sending: boolean;
+}) {
   const threadMessages = useMemo(() => convertConductorMessages(messages), [messages]);
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [isPositioning, setIsPositioning] = useState(true);
+  const restoredViewportState = useMemo(
+    () => sessionViewportStateBySession.get(sessionId),
+    [sessionId],
+  );
   const previousSendingRef = useRef(sending);
   const sendingJustStarted = sending && !previousSendingRef.current;
   const streamingMessageId = useMemo(() => {
@@ -250,22 +262,37 @@ function ConductorThread({ messages, sending }: { messages: SessionMessageRecord
     previousSendingRef.current = sending;
   }, [sending]);
 
-  const scrollThreadToBottom = useCallback((behavior: "auto" | "smooth" = "auto") => {
+  useEffect(() => {
+    return () => {
+      const virtuoso = virtuosoRef.current;
+      if (!virtuoso) return;
+      virtuoso.getState((snapshot) => {
+        sessionViewportStateBySession.set(sessionId, snapshot);
+      });
+    };
+  }, [sessionId]);
+
+  const scrollThreadToBottom = useCallback(() => {
     const virtuoso = virtuosoRef.current;
     if (!virtuoso) return;
 
     virtuoso.scrollToIndex({
       index: "LAST",
       align: "end",
-      behavior,
+      behavior: "auto",
     });
   }, []);
 
   useEffect(() => {
     if (sendingJustStarted) {
-      scrollThreadToBottom("smooth");
+      scrollThreadToBottom();
     }
   }, [sendingJustStarted, scrollThreadToBottom]);
+
+  useEffect(() => {
+    if (!restoredViewportState) return;
+    scrollThreadToBottom();
+  }, [restoredViewportState, scrollThreadToBottom]);
 
   const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
     setIsAtBottom(atBottom);
@@ -277,7 +304,6 @@ function ConductorThread({ messages, sending }: { messages: SessionMessageRecord
   const virtuosoComponents = useMemo<VirtuosoComponents<RenderedMessage>>(() => ({
     Header: ConversationHeaderSpacer,
     Item: ConversationItem,
-    Scroller: ConversationScroller,
     ScrollSeekPlaceholder: ConversationScrollSeekPlaceholder,
   }), []);
 
@@ -301,13 +327,14 @@ function ConductorThread({ messages, sending }: { messages: SessionMessageRecord
       isPositioning={isPositioning}
       itemContent={itemContent}
       onAtBottomStateChange={handleAtBottomStateChange}
+      restoredViewportState={restoredViewportState}
       virtuosoRef={virtuosoRef}
     >
       {!isAtBottom && !sendingJustStarted ? (
         <button
           type="button"
           onClick={() => {
-            scrollThreadToBottom("smooth");
+            scrollThreadToBottom();
           }}
           className="conversation-scroll-button"
           aria-label="Scroll to latest message"
@@ -332,6 +359,7 @@ function ConversationViewport({
   isPositioning,
   itemContent,
   onAtBottomStateChange,
+  restoredViewportState,
   virtuosoRef,
 }: {
   children?: ReactNode;
@@ -341,6 +369,7 @@ function ConversationViewport({
   isPositioning: boolean;
   itemContent: (index: number, message: RenderedMessage) => ReactNode;
   onAtBottomStateChange: (atBottom: boolean) => void;
+  restoredViewportState?: StateSnapshot;
   virtuosoRef: React.RefObject<VirtuosoHandle | null>;
 }) {
   return (
@@ -355,49 +384,29 @@ function ConversationViewport({
         alignToBottom
         atBottomStateChange={onAtBottomStateChange}
         atBottomThreshold={48}
+        className="conversation-scroll"
         components={components}
         computeItemKey={(index, message) => message.id ?? `${message.role}:${index}`}
         data={data}
         defaultItemHeight={92}
         followOutput={followOutput}
-        initialTopMostItemIndex={{ index: "LAST", align: "end" }}
+        initialTopMostItemIndex={restoredViewportState ? undefined : { index: "LAST", align: "end" }}
         increaseViewportBy={{ bottom: 720, top: 360 }}
         itemContent={itemContent}
+        minOverscanItemCount={{ top: 8, bottom: 4 }}
         overscan={{ main: 600, reverse: 300 }}
+        restoreStateFrom={restoredViewportState}
         scrollSeekConfiguration={{
           enter: (velocity) => Math.abs(velocity) > 2200,
           exit: (velocity) => Math.abs(velocity) < 180,
         }}
+        skipAnimationFrameInResizeObserver
         style={{ height: "100%", width: "100%" }}
       />
       {children}
     </div>
   );
 }
-
-const ConversationScroller = memo(forwardRef<HTMLDivElement, VirtuosoScrollerProps>(
-  function ConversationScroller({ children, style, tabIndex, ...props }, ref) {
-    return (
-      <ScrollAreaPrimitive.Root
-        className="relative h-full w-full overflow-hidden"
-        scrollHideDelay={700}
-        type="scroll"
-      >
-        <ScrollAreaPrimitive.Viewport
-          ref={ref}
-          className="conversation-scroll h-full w-full rounded-[inherit]"
-          style={style}
-          tabIndex={tabIndex}
-          data-testid={props["data-testid"]}
-          data-virtuoso-scroller={props["data-virtuoso-scroller"]}
-        >
-          {children}
-        </ScrollAreaPrimitive.Viewport>
-        <ScrollBar orientation="vertical" />
-      </ScrollAreaPrimitive.Root>
-    );
-  },
-));
 
 const ConversationItem = memo(function ConversationItem({
   children,
@@ -426,8 +435,8 @@ function ConversationScrollSeekPlaceholder({
         : "52%";
 
   return (
-    <div className="px-5 pb-1.5" style={{ height }}>
-      <div className={cn("flex h-full min-h-10 items-center", isUserLike ? "justify-end" : "justify-start")}>
+    <div className="box-border h-full px-5 pb-1.5" style={{ height }}>
+      <div className={cn("flex h-full items-center", isUserLike ? "justify-end" : "justify-start")}>
         <div style={{ width }}>
           <SkeletonTheme
             baseColor="color-mix(in oklch, var(--color-app-foreground) 10%, var(--color-app-base))"
@@ -435,9 +444,9 @@ function ConversationScrollSeekPlaceholder({
             duration={1.15}
           >
             <Skeleton
-              height={32}
+              height="100%"
               borderRadius={10}
-              containerClassName="block leading-none"
+              containerClassName="block h-full leading-none"
             />
           </SkeletonTheme>
         </div>
@@ -511,7 +520,7 @@ function ConductorAssistantMessage({
     <div
       data-message-id={message.id}
       data-message-role="assistant"
-      className="min-w-0 max-w-full space-y-1"
+      className="flex min-w-0 max-w-full flex-col gap-1"
     >
       {parts.map((part, idx) => {
         if (isTextPart(part)) {
@@ -570,7 +579,7 @@ function UserText({ text }: { text: string }) {
       remaining = remaining.replace(p, "").trim();
     }
     return (
-      <div className="space-y-2">
+      <div className="flex flex-col gap-2">
         {remaining ? <p className="whitespace-pre-wrap break-words">{remaining}</p> : null}
         <div className="flex flex-wrap gap-1.5">
           {images.map((p) => (
@@ -594,7 +603,7 @@ function AssistantText({
 
   return (
     <div
-      className="conversation-markdown prose prose-sm max-w-none break-words text-[14px] leading-7 text-app-foreground prose-headings:my-0 prose-headings:text-app-foreground prose-p:my-0 prose-p:text-app-foreground prose-li:my-0 prose-li:text-app-foreground prose-strong:text-app-foreground prose-em:text-app-foreground prose-pre:my-0 prose-pre:border prose-pre:border-app-border prose-pre:bg-app-sidebar prose-pre:text-[13px] prose-pre:text-app-foreground prose-ul:my-0 prose-ol:my-0 prose-blockquote:my-0 prose-blockquote:border-app-border prose-blockquote:text-app-muted prose-table:my-0 prose-table:text-[13px] prose-table:text-app-foreground prose-th:border-app-border prose-th:text-app-foreground prose-td:border-app-border prose-td:text-app-foreground prose-tr:border-app-border prose-a:text-app-project prose-a:underline prose-a:decoration-app-project/30 prose-code:rounded prose-code:border prose-code:border-app-border/50 prose-code:bg-app-sidebar prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:text-app-foreground-soft"
+      className="conversation-markdown prose prose-sm max-w-none break-words text-[12px] leading-6 text-app-foreground prose-headings:my-0 prose-headings:text-app-foreground prose-p:my-0 prose-p:text-app-foreground prose-li:my-0 prose-li:text-app-foreground prose-strong:text-app-foreground prose-em:text-app-foreground prose-pre:my-0 prose-pre:border prose-pre:border-app-border prose-pre:bg-app-sidebar prose-pre:text-[12px] prose-pre:text-app-foreground prose-ul:my-0 prose-ol:my-0 prose-blockquote:my-0 prose-blockquote:border-app-border prose-blockquote:text-app-muted prose-table:my-0 prose-table:text-[11px] prose-table:text-app-foreground prose-th:border-app-border prose-th:text-app-foreground prose-td:border-app-border prose-td:text-app-foreground prose-tr:border-app-border prose-a:text-app-project prose-a:underline prose-a:decoration-app-project/30 prose-code:rounded prose-code:border prose-code:border-app-border/50 prose-code:bg-app-sidebar prose-code:px-1 prose-code:py-px prose-code:text-[12px] prose-code:text-app-foreground-soft"
     >
       <Suspense fallback={<AssistantTextFallback text={text} streaming={streaming} />}>
         <LazyStreamdown
@@ -631,16 +640,18 @@ function AssistantTextFallback({
 
 function AssistantReasoning({ text }: { text: string }) {
   return (
-    <details className="group">
+    <details className="group flex flex-col">
       <summary className="flex cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-app-muted hover:text-app-foreground-soft [&::-webkit-details-marker]:hidden">
         <svg className="size-2.5 shrink-0 transition-transform group-open:rotate-90" viewBox="0 0 12 12" fill="none">
           <path d="M4.5 2.5L8.5 6L4.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         Thinking
       </summary>
-      <pre className="mt-1.5 max-h-[20rem] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-app-foreground/[0.03] px-3 py-2.5 font-sans text-[12px] leading-5 text-app-muted/70">
-        {text}
-      </pre>
+      <div className="pt-1.5">
+        <pre className="max-h-[20rem] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-app-foreground/[0.03] px-3 py-2.5 font-sans text-[12px] leading-5 text-app-muted/70">
+          {text}
+        </pre>
+      </div>
     </details>
   );
 }
@@ -697,7 +708,7 @@ function AssistantToolCall({
   // Sub-agent children: render step count inline, expanded children below
   if (childrenData) {
     return (
-      <details className="group/children">
+      <details className="group/children flex flex-col">
         <summary className="flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
           {toolLine}
           <span className="shrink-0 cursor-pointer text-[11px] text-app-muted/40 hover:text-app-muted">
@@ -707,7 +718,7 @@ function AssistantToolCall({
           </span>
           <span className="shrink-0 text-[11px] text-app-muted/40">{childrenData.parts.length} steps</span>
         </summary>
-        <div className="ml-5 space-y-0.5 border-l border-app-border/30 pl-3 pt-1">
+        <div className="ml-5 flex flex-col gap-0.5 border-l border-app-border/30 pl-3 pt-1">
           {childrenData.parts.map((part, idx) => {
             if (part.type === "tool-call") {
               return (
@@ -738,7 +749,7 @@ function AssistantToolCall({
 
   // Normal tool call with optional output
   return (
-    <details className="group/out" open={false}>
+    <details className="group/out flex flex-col" open={false}>
       <summary className="flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
         {toolLine}
         {hasOutput ? (
@@ -750,7 +761,7 @@ function AssistantToolCall({
         ) : null}
       </summary>
       {hasOutput ? (
-        <div className="mt-1 max-h-[16rem] overflow-auto rounded-md bg-app-foreground/[0.02] text-[11px] leading-5">
+        <div className="max-h-[16rem] overflow-auto rounded-md bg-app-foreground/[0.02] text-[11px] leading-5">
           {info.fullCommand ? (
             <div className="border-b border-app-border/20 px-2 py-1.5">
               <span className="mr-1.5 text-app-project/60">$</span>

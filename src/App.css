@@ -41,7 +41,9 @@ body {
 }
 
 .conversation-scroll {
-  overscroll-behavior: contain;
+  overscroll-behavior: none;
+  overflow-anchor: none;
+  scrollbar-gutter: stable;
 }
 
 .conversation-scroll-button {
@@ -312,6 +314,20 @@ body {
   border: 1px solid color-mix(in oklch, var(--color-app-border) 92%, transparent);
 }
 
+.conversation-streamdown :where([data-streamdown="code-block-body"]) {
+  font-size: inherit !important;
+  line-height: inherit;
+}
+
+.conversation-streamdown :where([data-streamdown="code-block-body"] pre, [data-streamdown="code-block-body"] code) {
+  font-size: inherit !important;
+  line-height: inherit;
+}
+
+.conversation-streamdown :where([data-streamdown="code-block-body"] span)::before {
+  font-size: inherit;
+}
+
 .conversation-streamdown :where(.shiki code, pre code) {
   color: inherit !important;
 }
@@ -324,7 +340,7 @@ body {
 .aui-md-table table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 11px;
   line-height: 1.6;
   margin: 0.75em 0;
   border: 1px solid color-mix(in oklch, var(--color-app-border) 92%, transparent);
