@@ -33,6 +33,7 @@ import {
   sendAgentMessage,
   startAgentMessageStream,
   mergeFromConductor,
+  isConductorAvailable,
   type AgentModelOption,
   type AgentModelSection,
   type RepositoryCreateOption,
@@ -148,6 +149,7 @@ function App() {
   const [workspaceToasts, setWorkspaceToasts] = useState<WorkspaceToast[]>([]);
   const [loadingWorkspace, setLoadingWorkspace] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
+  const [dataVersion, setDataVersion] = useState(0);
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     if (typeof window === "undefined") return "dark";
     return (localStorage.getItem("helmor.theme") as "light" | "dark") ?? "dark";
@@ -291,6 +293,21 @@ function App() {
       setGroups(loadedGroups);
       setArchivedSummaries(loadedArchived);
       setFixtureRepositories(loadedRepositories);
+
+      // Auto-select first workspace if none is currently selected
+      setSelectedWorkspaceId((current) => {
+        if (current && hasWorkspaceId(current, loadedGroups, loadedArchived)) {
+          return current;
+        }
+        return (
+          findInitialWorkspaceId(loadedGroups) ??
+          loadedArchived[0]?.id ??
+          null
+        );
+      });
+
+      // Bump dataVersion to force workspace detail + session useEffects to re-run
+      setDataVersion((v) => v + 1);
     });
   }, []);
 
@@ -333,7 +350,7 @@ function App() {
     return () => {
       disposed = true;
     };
-  }, [selectedWorkspaceId]);
+  }, [selectedWorkspaceId, dataVersion]);
 
   useEffect(() => {
     if (!selectedSessionId) {
@@ -361,7 +378,7 @@ function App() {
     return () => {
       disposed = true;
     };
-  }, [selectedSessionId]);
+  }, [selectedSessionId, dataVersion]);
 
   const refreshSelectedWorkspaceCollections = useCallback(
     async (workspaceId: string, preferredSessionId: string | null) => {
@@ -1428,6 +1445,11 @@ function haveSameLiveMessages(
 
 function SyncConductorButton({ onSynced }: { onSynced: () => void }) {
   const [syncing, setSyncing] = useState(false);
+  const [available, setAvailable] = useState(false);
+
+  useEffect(() => {
+    void isConductorAvailable().then(setAvailable);
+  }, []);
 
   const handleSync = useCallback(async () => {
     if (syncing) return;
@@ -1437,12 +1459,14 @@ function SyncConductorButton({ onSynced }: { onSynced: () => void }) {
       if (result.success) {
         onSynced();
       }
-    } catch (error) {
-      console.error("Conductor sync failed:", error);
+    } catch {
+      // Sync failed — no user-visible action needed beyond stopping the spinner
     } finally {
       setSyncing(false);
     }
   }, [syncing, onSynced]);
+
+  if (!available) return null;
 
   return (
     <button

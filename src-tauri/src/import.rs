@@ -82,33 +82,29 @@ pub fn import_from_conductor(repo_filter: Option<&str>) -> Result<ImportResult, 
     // Drop source — no longer needed
     drop(source);
 
-    // If a repo filter is specified, delete data for other repos.
-    // On failure, restore from backup automatically.
-    if let Some(repo_name) = repo_filter {
-        if let Err(error) = filter_to_repo(&dest, repo_name) {
-            drop(dest); // close connection before file ops
-            restore_backup(&dest_path, &backup_path);
-            return Err(error);
+    // All post-backup operations: on ANY failure, restore from .bak
+    let post_backup_result = (|| -> Result<(), String> {
+        if let Some(repo_name) = repo_filter {
+            filter_to_repo(&dest, repo_name)?;
         }
-    }
+        redact_sensitive_settings(&dest)?;
+        Ok(())
+    })();
 
-    // Redact sensitive settings (tokens, keys).
-    // On failure, restore from backup automatically.
-    if let Err(error) = redact_sensitive_settings(&dest) {
+    if let Err(error) = post_backup_result {
         drop(dest);
         restore_backup(&dest_path, &backup_path);
         return Err(error);
     }
 
-    // Vacuum to reclaim space
-    dest.execute_batch("VACUUM;")
-        .map_err(|error| format!("VACUUM failed: {error}"))?;
+    // VACUUM is non-fatal — data is already correct
+    let _ = dest.execute_batch("VACUUM;");
 
-    // Collect stats
-    let repos_count = count_rows(&dest, "repos")?;
-    let workspaces_count = count_rows(&dest, "workspaces")?;
-    let sessions_count = count_rows(&dest, "sessions")?;
-    let messages_count = count_rows(&dest, "session_messages")?;
+    // Stats collection is non-fatal
+    let repos_count = count_rows(&dest, "repos").unwrap_or(0);
+    let workspaces_count = count_rows(&dest, "workspaces").unwrap_or(0);
+    let sessions_count = count_rows(&dest, "sessions").unwrap_or(0);
+    let messages_count = count_rows(&dest, "session_messages").unwrap_or(0);
 
     Ok(ImportResult {
         success: true,
@@ -239,42 +235,57 @@ pub fn merge_from_conductor() -> Result<ImportResult, String> {
         )
         .map_err(|error| format!("Failed to attach Conductor database: {error}"))?;
 
-    // Merge each table — INSERT OR IGNORE keeps existing Helmor data untouched
-    let tables = [
-        "repos",
-        "workspaces",
-        "sessions",
-        "session_messages",
-        "attachments",
-        "diff_comments",
-    ];
+    // All merges inside a single transaction for atomicity
+    connection
+        .execute_batch("BEGIN IMMEDIATE")
+        .map_err(|error| format!("Failed to start transaction: {error}"))?;
 
-    for table in &tables {
-        // Get column names from the main table to build the INSERT
-        let columns = get_table_columns(&connection, table)?;
-        let col_list = columns.join(", ");
+    let merge_result = (|| -> Result<(), String> {
+        let tables = [
+            "repos",
+            "workspaces",
+            "sessions",
+            "session_messages",
+            "attachments",
+            "diff_comments",
+            "settings",
+        ];
 
-        let sql = format!(
-            "INSERT OR IGNORE INTO main.{table} ({col_list}) SELECT {col_list} FROM conductor.{table}"
-        );
+        for table in &tables {
+            let columns = get_table_columns(&connection, table)?;
+            let col_list = columns.join(", ");
 
-        connection
-            .execute(&sql, [])
-            .map_err(|error| format!("Failed to merge {table}: {error}"))?;
+            // For settings: redact tokens in the SELECT so we never write
+            // sensitive values into Helmor. Existing Helmor settings are
+            // untouched because of INSERT OR IGNORE.
+            let select = if *table == "settings" {
+                format!(
+                    "SELECT {col_list} FROM (
+                        SELECT *, CASE WHEN lower(key) LIKE '%token%' THEN '[REDACTED]' ELSE value END AS value
+                        FROM conductor.{table}
+                    )"
+                )
+            } else {
+                format!("SELECT {col_list} FROM conductor.{table}")
+            };
+
+            connection
+                .execute(&format!("INSERT OR IGNORE INTO main.{table} ({col_list}) {select}"), [])
+                .map_err(|error| format!("Failed to merge {table}: {error}"))?;
+        }
+
+        Ok(())
+    })();
+
+    if let Err(error) = merge_result {
+        let _ = connection.execute_batch("ROLLBACK");
+        let _ = connection.execute("DETACH DATABASE conductor", []);
+        return Err(error);
     }
 
-    // Merge settings with INSERT OR IGNORE (keep Helmor's settings)
-    let settings_cols = get_table_columns(&connection, "settings")?;
-    let settings_col_list = settings_cols.join(", ");
     connection
-        .execute(
-            &format!("INSERT OR IGNORE INTO main.settings ({settings_col_list}) SELECT {settings_col_list} FROM conductor.settings"),
-            [],
-        )
-        .map_err(|error| format!("Failed to merge settings: {error}"))?;
-
-    // Redact imported tokens
-    redact_sensitive_settings(&connection)?;
+        .execute_batch("COMMIT")
+        .map_err(|error| format!("Failed to commit: {error}"))?;
 
     connection
         .execute("DETACH DATABASE conductor", [])
