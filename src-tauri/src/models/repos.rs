@@ -122,9 +122,7 @@ pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRe
     }
 }
 
-pub(crate) fn load_repository_by_root_path(
-    root_path: &str,
-) -> Result<Option<RepositoryRecord>> {
+pub(crate) fn load_repository_by_root_path(root_path: &str) -> Result<Option<RepositoryRecord>> {
     let connection = db::open_connection(false)?;
     let mut statement = connection
         .prepare(
@@ -159,8 +157,9 @@ pub(crate) fn load_repository_by_root_path(
             return Ok(Some(repository));
         }
 
-        let normalized_repository_root = normalize_filesystem_path(Path::new(&repository.root_path))
-            .unwrap_or_else(|| repository.root_path.clone());
+        let normalized_repository_root =
+            normalize_filesystem_path(Path::new(&repository.root_path))
+                .unwrap_or_else(|| repository.root_path.clone());
 
         if normalized_repository_root == normalized_requested_root {
             return Ok(Some(repository));
@@ -230,9 +229,7 @@ pub(crate) fn delete_repository(repo_id: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn resolve_repository_from_local_path(
-    folder_path: &str,
-) -> Result<ResolvedRepositoryInput> {
+pub fn resolve_repository_from_local_path(folder_path: &str) -> Result<ResolvedRepositoryInput> {
     let selected_path = PathBuf::from(folder_path.trim());
 
     if folder_path.trim().is_empty() {
@@ -240,10 +237,7 @@ pub fn resolve_repository_from_local_path(
     }
 
     if !selected_path.exists() {
-        bail!(
-            "Selected path does not exist: {}",
-            selected_path.display()
-        );
+        bail!("Selected path does not exist: {}", selected_path.display());
     }
 
     if !selected_path.is_dir() {
@@ -301,8 +295,8 @@ pub fn resolve_repository_from_local_path(
         Some(remote_name) => Some(resolve_repository_remote_url(normalized_root, remote_name)?),
         None => None,
     };
-    let default_branch =
-        resolve_repository_default_branch(normalized_root, remote.as_deref()).with_context(|| {
+    let default_branch = resolve_repository_default_branch(normalized_root, remote.as_deref())
+        .with_context(|| {
             format!(
                 "Unable to resolve a default branch for repository {}",
                 normalized_root.display()
@@ -318,9 +312,7 @@ pub fn resolve_repository_from_local_path(
     })
 }
 
-pub fn add_repository_from_local_path(
-    folder_path: &str,
-) -> Result<AddRepositoryResponse> {
+pub fn add_repository_from_local_path(folder_path: &str) -> Result<AddRepositoryResponse> {
     let resolved_repository = resolve_repository_from_local_path(folder_path)?;
     let last_clone_directory = Path::new(&resolved_repository.normalized_root_path)
         .parent()
@@ -348,9 +340,10 @@ pub fn add_repository_from_local_path(
             });
         }
 
-        let create_response =
-            super::workspaces::create_workspace_from_repo_impl(&repository.id)
-                .map_err(|error| anyhow::anyhow!("Repository already exists, but workspace create failed: {error}"))?;
+        let create_response = super::workspaces::create_workspace_from_repo_impl(&repository.id)
+            .map_err(|error| {
+                anyhow::anyhow!("Repository already exists, but workspace create failed: {error}")
+            })?;
 
         return Ok(AddRepositoryResponse {
             repository_id: repository.id,
@@ -414,10 +407,7 @@ fn resolve_repository_remote_url(repo_root: &Path, remote: &str) -> Result<Strin
     .map_err(|error| anyhow::anyhow!("Failed to resolve remote URL for {remote}: {error}"))
 }
 
-fn resolve_repository_default_branch(
-    repo_root: &Path,
-    remote: Option<&str>,
-) -> Option<String> {
+fn resolve_repository_default_branch(repo_root: &Path, remote: Option<&str>) -> Option<String> {
     if let Some(remote) = remote {
         if let Ok(symbolic_ref) = resolve_default_branch_from_remote_head(repo_root, remote) {
             return Some(symbolic_ref);
@@ -427,10 +417,7 @@ fn resolve_repository_default_branch(
     resolve_current_branch(repo_root)
 }
 
-fn resolve_default_branch_from_remote_head(
-    repo_root: &Path,
-    remote: &str,
-) -> Result<String> {
+fn resolve_default_branch_from_remote_head(repo_root: &Path, remote: &str) -> Result<String> {
     let repo_root_arg = repo_root.display().to_string();
     let output = git_ops::run_git(
         [
@@ -456,8 +443,11 @@ fn resolve_default_branch_from_remote_head(
 
 fn resolve_current_branch(repo_root: &Path) -> Option<String> {
     let repo_root_arg = repo_root.display().to_string();
-    let branch =
-        git_ops::run_git(["-C", repo_root_arg.as_str(), "branch", "--show-current"], None).ok()?;
+    let branch = git_ops::run_git(
+        ["-C", repo_root_arg.as_str(), "branch", "--show-current"],
+        None,
+    )
+    .ok()?;
     let branch = branch.trim();
 
     if branch.is_empty() || branch == "HEAD" {

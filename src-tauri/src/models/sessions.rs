@@ -69,20 +69,16 @@ pub struct SessionAttachmentRecord {
     pub created_at: String,
 }
 
-pub fn list_workspace_sessions(
-    workspace_id: &str,
-) -> Result<Vec<WorkspaceSessionSummary>> {
+pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSummary>> {
     let connection = db::open_connection(false)?;
-    let active_session_id: Option<String> = connection
-        .query_row(
-            "SELECT active_session_id FROM workspaces WHERE id = ?1",
-            [workspace_id],
-            |row| row.get(0),
-        )?;
+    let active_session_id: Option<String> = connection.query_row(
+        "SELECT active_session_id FROM workspaces WHERE id = ?1",
+        [workspace_id],
+        |row| row.get(0),
+    )?;
 
-    let mut statement = connection
-        .prepare(
-            r#"
+    let mut statement = connection.prepare(
+        r#"
             SELECT
               s.id,
               s.workspace_id,
@@ -112,46 +108,44 @@ pub fn list_workspace_sessions(
               datetime(s.updated_at) DESC,
               datetime(s.created_at) DESC
             "#,
-        )?;
+    )?;
 
-    let rows = statement
-        .query_map((workspace_id, active_session_id.as_deref()), |row| {
-            let id: String = row.get(0)?;
+    let rows = statement.query_map((workspace_id, active_session_id.as_deref()), |row| {
+        let id: String = row.get(0)?;
 
-            Ok(WorkspaceSessionSummary {
-                active: active_session_id.as_deref() == Some(id.as_str()),
-                id,
-                workspace_id: row.get(1)?,
-                title: row.get(2)?,
-                agent_type: row.get(3)?,
-                status: row.get(4)?,
-                model: row.get(5)?,
-                permission_mode: row.get(6)?,
-                claude_session_id: row.get(7)?,
-                unread_count: row.get(8)?,
-                context_token_count: row.get(9)?,
-                context_used_percent: row.get(10)?,
-                thinking_enabled: row.get::<_, i64>(11)? != 0,
-                codex_thinking_level: row.get(12)?,
-                fast_mode: row.get::<_, i64>(13)? != 0,
-                agent_personality: row.get(14)?,
-                created_at: row.get(15)?,
-                updated_at: row.get(16)?,
-                last_user_message_at: row.get(17)?,
-                resume_session_at: row.get(18)?,
-                is_hidden: row.get::<_, i64>(19)? != 0,
-                is_compacting: row.get::<_, i64>(20)? != 0,
-            })
-        })?;
+        Ok(WorkspaceSessionSummary {
+            active: active_session_id.as_deref() == Some(id.as_str()),
+            id,
+            workspace_id: row.get(1)?,
+            title: row.get(2)?,
+            agent_type: row.get(3)?,
+            status: row.get(4)?,
+            model: row.get(5)?,
+            permission_mode: row.get(6)?,
+            claude_session_id: row.get(7)?,
+            unread_count: row.get(8)?,
+            context_token_count: row.get(9)?,
+            context_used_percent: row.get(10)?,
+            thinking_enabled: row.get::<_, i64>(11)? != 0,
+            codex_thinking_level: row.get(12)?,
+            fast_mode: row.get::<_, i64>(13)? != 0,
+            agent_personality: row.get(14)?,
+            created_at: row.get(15)?,
+            updated_at: row.get(16)?,
+            last_user_message_at: row.get(17)?,
+            resume_session_at: row.get(18)?,
+            is_hidden: row.get::<_, i64>(19)? != 0,
+            is_compacting: row.get::<_, i64>(20)? != 0,
+        })
+    })?;
 
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
 pub fn list_session_messages(session_id: &str) -> Result<Vec<SessionMessageRecord>> {
     let connection = db::open_connection(false)?;
-    let mut statement = connection
-        .prepare(
-            r#"
+    let mut statement = connection.prepare(
+        r#"
             SELECT
               sm.id,
               sm.session_id,
@@ -176,41 +170,39 @@ pub fn list_session_messages(session_id: &str) -> Result<Vec<SessionMessageRecor
               COALESCE(julianday(sm.sent_at), julianday(sm.created_at)) ASC,
               sm.rowid ASC
             "#,
-        )?;
+    )?;
 
-    let rows = statement
-        .query_map([session_id], |row| {
-            let content: String = row.get(3)?;
-            let parsed_content = serde_json::from_str::<Value>(&content).ok();
-            let is_resumable_message = row.get::<_, Option<i64>>(11)?.map(|value| value != 0);
+    let rows = statement.query_map([session_id], |row| {
+        let content: String = row.get(3)?;
+        let parsed_content = serde_json::from_str::<Value>(&content).ok();
+        let is_resumable_message = row.get::<_, Option<i64>>(11)?.map(|value| value != 0);
 
-            Ok(SessionMessageRecord {
-                id: row.get(0)?,
-                session_id: row.get(1)?,
-                role: row.get(2)?,
-                content_is_json: parsed_content.is_some(),
-                parsed_content,
-                content,
-                created_at: row.get(4)?,
-                sent_at: row.get(5)?,
-                cancelled_at: row.get(6)?,
-                model: row.get(7)?,
-                sdk_message_id: row.get(8)?,
-                last_assistant_message_id: row.get(9)?,
-                turn_id: row.get(10)?,
-                is_resumable_message,
-                attachment_count: row.get(12)?,
-            })
-        })?;
+        Ok(SessionMessageRecord {
+            id: row.get(0)?,
+            session_id: row.get(1)?,
+            role: row.get(2)?,
+            content_is_json: parsed_content.is_some(),
+            parsed_content,
+            content,
+            created_at: row.get(4)?,
+            sent_at: row.get(5)?,
+            cancelled_at: row.get(6)?,
+            model: row.get(7)?,
+            sdk_message_id: row.get(8)?,
+            last_assistant_message_id: row.get(9)?,
+            turn_id: row.get(10)?,
+            is_resumable_message,
+            attachment_count: row.get(12)?,
+        })
+    })?;
 
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
 pub fn list_session_attachments(session_id: &str) -> Result<Vec<SessionAttachmentRecord>> {
     let connection = db::open_connection(false)?;
-    let mut statement = connection
-        .prepare(
-            r#"
+    let mut statement = connection.prepare(
+        r#"
             SELECT
               a.id,
               a.session_id,
@@ -225,29 +217,28 @@ pub fn list_session_attachments(session_id: &str) -> Result<Vec<SessionAttachmen
             WHERE a.session_id = ?1
             ORDER BY datetime(a.created_at) ASC, a.id ASC
             "#,
-        )?;
+    )?;
 
-    let rows = statement
-        .query_map([session_id], |row| {
-            let path: Option<String> = row.get(5)?;
-            let path_exists = path
-                .as_deref()
-                .map(|path| Path::new(path).exists())
-                .unwrap_or(false);
+    let rows = statement.query_map([session_id], |row| {
+        let path: Option<String> = row.get(5)?;
+        let path_exists = path
+            .as_deref()
+            .map(|path| Path::new(path).exists())
+            .unwrap_or(false);
 
-            Ok(SessionAttachmentRecord {
-                id: row.get(0)?,
-                session_id: row.get(1)?,
-                session_message_id: row.get(2)?,
-                attachment_type: row.get(3)?,
-                original_name: row.get(4)?,
-                path,
-                path_exists,
-                is_loading: row.get::<_, i64>(6)? != 0,
-                is_draft: row.get::<_, i64>(7)? != 0,
-                created_at: row.get(8)?,
-            })
-        })?;
+        Ok(SessionAttachmentRecord {
+            id: row.get(0)?,
+            session_id: row.get(1)?,
+            session_message_id: row.get(2)?,
+            attachment_type: row.get(3)?,
+            original_name: row.get(4)?,
+            path,
+            path_exists,
+            is_loading: row.get::<_, i64>(6)? != 0,
+            is_draft: row.get::<_, i64>(7)? != 0,
+            created_at: row.get(8)?,
+        })
+    })?;
 
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
@@ -287,9 +278,7 @@ pub(crate) fn mark_session_read_in_transaction(
         .with_context(|| format!("Failed to mark session {session_id} as read"))?;
 
     if updated_rows != 1 {
-        bail!(
-            "Session read update affected {updated_rows} rows for session {session_id}"
-        );
+        bail!("Session read update affected {updated_rows} rows for session {session_id}");
     }
 
     sync_workspace_unread_in_transaction(transaction, &workspace_id)
@@ -304,23 +293,17 @@ pub(crate) fn mark_workspace_read_in_transaction(
             "UPDATE sessions SET unread_count = 0 WHERE workspace_id = ?1",
             [workspace_id],
         )
-        .with_context(|| {
-            format!("Failed to clear unread sessions for workspace {workspace_id}")
-        })?;
+        .with_context(|| format!("Failed to clear unread sessions for workspace {workspace_id}"))?;
 
     let updated_rows = transaction
         .execute(
             "UPDATE workspaces SET unread = 0 WHERE id = ?1",
             [workspace_id],
         )
-        .with_context(|| {
-            format!("Failed to mark workspace {workspace_id} as read")
-        })?;
+        .with_context(|| format!("Failed to mark workspace {workspace_id} as read"))?;
 
     if updated_rows != 1 {
-        bail!(
-            "Workspace read update affected {updated_rows} rows for workspace {workspace_id}"
-        );
+        bail!("Workspace read update affected {updated_rows} rows for workspace {workspace_id}");
     }
 
     Ok(())
@@ -335,14 +318,10 @@ pub(crate) fn mark_workspace_unread_in_transaction(
             "UPDATE workspaces SET unread = 1 WHERE id = ?1",
             [workspace_id],
         )
-        .with_context(|| {
-            format!("Failed to mark workspace {workspace_id} as unread")
-        })?;
+        .with_context(|| format!("Failed to mark workspace {workspace_id} as unread"))?;
 
     if updated_rows != 1 {
-        bail!(
-            "Workspace unread update affected {updated_rows} rows for workspace {workspace_id}"
-        );
+        bail!("Workspace unread update affected {updated_rows} rows for workspace {workspace_id}");
     }
 
     Ok(())
@@ -369,14 +348,10 @@ pub(crate) fn sync_workspace_unread_in_transaction(
             "#,
             [workspace_id],
         )
-        .with_context(|| {
-            format!("Failed to sync unread state for workspace {workspace_id}")
-        })?;
+        .with_context(|| format!("Failed to sync unread state for workspace {workspace_id}"))?;
 
     if updated_rows != 1 {
-        bail!(
-            "Unread sync affected {updated_rows} rows for workspace {workspace_id}"
-        );
+        bail!("Unread sync affected {updated_rows} rows for workspace {workspace_id}");
     }
 
     Ok(())
@@ -429,9 +404,7 @@ pub fn create_session(workspace_id: &str) -> Result<CreateSessionResponse> {
         .context("Failed to set active session")?;
 
     if updated_rows != 1 {
-        bail!(
-            "Active session update affected {updated_rows} rows for workspace {workspace_id}"
-        );
+        bail!("Active session update affected {updated_rows} rows for workspace {workspace_id}");
     }
 
     transaction
@@ -502,15 +475,17 @@ pub fn hide_session(session_id: &str) -> Result<()> {
 pub fn unhide_session(session_id: &str) -> Result<()> {
     let connection = db::open_connection(true)?;
     connection
-        .execute("UPDATE sessions SET is_hidden = 0 WHERE id = ?1", [session_id])
+        .execute(
+            "UPDATE sessions SET is_hidden = 0 WHERE id = ?1",
+            [session_id],
+        )
         .with_context(|| format!("Failed to unhide session {session_id}"))?;
     Ok(())
 }
 
 pub fn delete_session(session_id: &str) -> Result<()> {
     let mut connection = db::open_connection(true)?;
-    let transaction = connection
-        .transaction()?;
+    let transaction = connection.transaction()?;
 
     // Resolve workspace before deleting, so we can fix active_session_id
     let workspace_id: Option<String> = transaction
@@ -522,7 +497,10 @@ pub fn delete_session(session_id: &str) -> Result<()> {
         .ok();
 
     transaction
-        .execute("DELETE FROM attachments WHERE session_id = ?1", [session_id])
+        .execute(
+            "DELETE FROM attachments WHERE session_id = ?1",
+            [session_id],
+        )
         .context("Failed to delete attachments")?;
     transaction
         .execute(
@@ -614,7 +592,11 @@ mod tests {
     }
 
     fn seed(conn: &Connection) {
-        conn.execute("INSERT INTO repos (id, name) VALUES ('r1', 'test-repo')", []).unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name) VALUES ('r1', 'test-repo')",
+            [],
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO workspaces (id, repository_id, directory_name, state, derived_status) VALUES ('w1', 'r1', 'test-dir', 'active', 'in-progress')",
             [],
@@ -630,12 +612,18 @@ mod tests {
         let conn = test_db();
         seed(&conn);
         let count: i64 = conn
-            .query_row("SELECT count(*) FROM sessions WHERE workspace_id = 'w1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT count(*) FROM sessions WHERE workspace_id = 'w1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(count, 1);
 
         let title: String = conn
-            .query_row("SELECT title FROM sessions WHERE id = 's1'", [], |r| r.get(0))
+            .query_row("SELECT title FROM sessions WHERE id = 's1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(title, "Test Session");
     }
@@ -654,13 +642,21 @@ mod tests {
         ).unwrap();
 
         let content: String = conn
-            .query_row("SELECT content FROM session_messages WHERE id = 'm1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT content FROM session_messages WHERE id = 'm1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         let parsed: Result<serde_json::Value, _> = serde_json::from_str(&content);
         assert!(parsed.is_ok());
 
         let content2: String = conn
-            .query_row("SELECT content FROM session_messages WHERE id = 'm2'", [], |r| r.get(0))
+            .query_row(
+                "SELECT content FROM session_messages WHERE id = 'm2'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         let parsed2: Result<serde_json::Value, _> = serde_json::from_str(&content2);
         assert!(parsed2.is_err());
@@ -880,9 +876,11 @@ mod tests {
             [],
         ).unwrap();
 
-        let mut stmt = conn.prepare(
-            "SELECT role FROM session_messages WHERE session_id = 's1' ORDER BY created_at ASC"
-        ).unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT role FROM session_messages WHERE session_id = 's1' ORDER BY created_at ASC",
+            )
+            .unwrap();
         let roles: Vec<String> = stmt
             .query_map([], |row| row.get(0))
             .unwrap()

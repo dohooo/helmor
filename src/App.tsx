@@ -1,5 +1,7 @@
 import "./App.css";
+import { MarkGithubIcon } from "@primer/octicons-react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   startTransition,
   type KeyboardEvent,
@@ -7,20 +9,25 @@ import {
   memo,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useCallback,
 } from "react";
-import { Download, Moon, Sun } from "lucide-react";
+import { Download, Moon, RefreshCw, Sun } from "lucide-react";
 import {
   DEFAULT_AGENT_MODEL_SECTIONS,
   DEFAULT_WORKSPACE_GROUPS,
   addRepositoryFromLocalPath,
+  hasTauriRuntime,
   archiveWorkspace,
+  cancelGithubIdentityConnect,
   createWorkspaceFromRepo,
+  disconnectGithubIdentity,
+  loadGithubIdentitySession,
   loadAgentModelSections,
+  listenGithubIdentityChanged,
   loadAddRepositoryDefaults,
   loadArchivedWorkspaces,
-  listRepositories,
   loadSessionAttachments,
   loadSessionMessages,
   loadWorkspaceDetail,
@@ -33,8 +40,12 @@ import {
   sendAgentMessage,
   startAgentMessageStream,
   isConductorAvailable,
+  listRepositories,
+  startGithubIdentityConnect,
   type AgentModelOption,
   type AgentModelSection,
+  type GithubIdentityDeviceFlowStart,
+  type GithubIdentitySnapshot,
   type RepositoryCreateOption,
   type SessionAttachmentRecord,
   type SessionMessageRecord,
@@ -49,6 +60,13 @@ import { WorkspacesSidebar } from "./components/workspaces-sidebar";
 import { ConductorImportDialog } from "./components/conductor-import-dialog";
 import { WorkspacePanel } from "./components/workspace-panel";
 import { WorkspaceComposer } from "./components/workspace-composer";
+import { Avatar, AvatarFallback, AvatarImage } from "./components/ui/avatar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./components/ui/dropdown-menu";
 import { ShimmerText } from "./components/ui/shimmer-text";
 import {
   Toast,
@@ -72,7 +90,24 @@ type WorkspaceToast = {
   id: string;
   title: string;
   description: string;
+  variant?: "default" | "destructive";
 };
+
+type GithubIdentityState =
+  | { status: "checking" }
+  | { status: "pending"; flow: GithubIdentityDeviceFlowStart }
+  | GithubIdentitySnapshot;
+
+const BROWSER_DEV_GITHUB_IDENTITY_SESSION = {
+  provider: "browser-dev",
+  githubUserId: 0,
+  login: "browser-dev",
+  name: "Browser Dev",
+  avatarUrl: null,
+  primaryEmail: null,
+  tokenExpiresAt: null,
+  refreshTokenExpiresAt: null,
+} as const;
 
 function clampSidebarWidth(width: number) {
   return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width));
@@ -100,7 +135,18 @@ function getInitialSidebarWidth() {
   }
 }
 
+function getInitialGithubIdentityState(): GithubIdentityState {
+  if (!hasTauriRuntime()) {
+    return { status: "connected", session: BROWSER_DEV_GITHUB_IDENTITY_SESSION };
+  }
+
+  return { status: "checking" };
+}
+
 function App() {
+  const [githubIdentityState, setGithubIdentityState] = useState<GithubIdentityState>(
+    getInitialGithubIdentityState,
+  );
   const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
   const [resizeState, setResizeState] = useState<{
     pointerX: number;
@@ -147,6 +193,7 @@ function App() {
   const [addingRepository, setAddingRepository] = useState(false);
   const [creatingWorkspaceRepoId, setCreatingWorkspaceRepoId] = useState<string | null>(null);
   const [workspaceToasts, setWorkspaceToasts] = useState<WorkspaceToast[]>([]);
+  const openedGithubDeviceCodesRef = useRef<Set<string>>(new Set());
   const [loadingWorkspace, setLoadingWorkspace] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
   const [dataVersion, setDataVersion] = useState(0);
@@ -157,6 +204,7 @@ function App() {
   const [conductorAvailable, setConductorAvailable] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const isResizing = resizeState !== null;
+  const isIdentityConnected = githubIdentityState.status === "connected";
 
   useEffect(() => {
     void isConductorAvailable().then(setConductorAvailable);
@@ -170,13 +218,18 @@ function App() {
     });
   }, []);
 
-  const pushWorkspaceToast = useCallback((description: string, title = "Action failed") => {
+  const pushWorkspaceToast = useCallback((
+    description: string,
+    title = "Action failed",
+    variant: "default" | "destructive" = "destructive",
+  ) => {
     setWorkspaceToasts((current) => [
       ...current,
       {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         title,
         description,
+        variant,
       },
     ]);
   }, []);
@@ -185,9 +238,90 @@ function App() {
     setWorkspaceToasts((current) => current.filter((toast) => toast.id !== toastId));
   }, []);
 
+  const clearWorkspaceRuntimeState = useCallback(() => {
+    setSelectedWorkspaceId(null);
+    setSelectedSessionId(null);
+    setWorkspaceDetail(null);
+    setWorkspaceSessions([]);
+    setSessionMessages([]);
+    setSessionAttachments([]);
+    setFixtureRepositories([]);
+    setLiveMessagesByContext({});
+    setLiveSessionsByContext({});
+    setSendErrorsByContext({});
+    setSendingContextKey(null);
+    setLoadingWorkspace(false);
+    setLoadingSession(false);
+    setDataVersion(0);
+  }, []);
+
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
+
+  useEffect(() => {
+    if (githubIdentityState.status !== "pending") {
+      return;
+    }
+
+    const { deviceCode, verificationUri, verificationUriComplete } = githubIdentityState.flow;
+
+    if (openedGithubDeviceCodesRef.current.has(deviceCode)) {
+      return;
+    }
+
+    openedGithubDeviceCodesRef.current.add(deviceCode);
+    void (async () => {
+      try {
+        await openUrl(verificationUriComplete ?? verificationUri);
+      } catch {
+        // Keep the pending state visible even if the browser cannot be opened.
+      }
+    })();
+  }, [githubIdentityState]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlistenIdentity: (() => void) | undefined;
+
+    void loadGithubIdentitySession().then((snapshot) => {
+      if (!disposed) {
+        setGithubIdentityState(snapshot);
+      }
+    });
+
+    if (hasTauriRuntime()) {
+      void listenGithubIdentityChanged((snapshot) => {
+        if (!disposed) {
+          setGithubIdentityState(snapshot);
+        }
+      }).then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+
+        unlistenIdentity = unlisten;
+      });
+
+      return () => {
+        disposed = true;
+        unlistenIdentity?.();
+      };
+    }
+
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (githubIdentityState.status === "connected" || githubIdentityState.status === "checking") {
+      return;
+    }
+
+    clearWorkspaceRuntimeState();
+  }, [clearWorkspaceRuntimeState, githubIdentityState.status]);
 
   const archivedRows = useMemo(
     () => archivedSummaries.map(summaryToArchivedRow),
@@ -255,6 +389,10 @@ function App() {
   }, [resizeState]);
 
   useEffect(() => {
+    if (!isIdentityConnected) {
+      return;
+    }
+
     let disposed = false;
 
     void Promise.all([
@@ -288,9 +426,13 @@ function App() {
     return () => {
       disposed = true;
     };
-  }, []);
+  }, [isIdentityConnected]);
 
   const refreshAllData = useCallback(() => {
+    if (!isIdentityConnected) {
+      return;
+    }
+
     void Promise.all([
       loadWorkspaceGroups(),
       loadArchivedWorkspaces(),
@@ -315,9 +457,13 @@ function App() {
       // Bump dataVersion to force workspace detail + session useEffects to re-run
       setDataVersion((v) => v + 1);
     });
-  }, []);
+  }, [isIdentityConnected]);
 
   useEffect(() => {
+    if (!isIdentityConnected) {
+      return;
+    }
+
     if (!selectedWorkspaceId) {
       setWorkspaceDetail(null);
       setWorkspaceSessions([]);
@@ -356,9 +502,13 @@ function App() {
     return () => {
       disposed = true;
     };
-  }, [selectedWorkspaceId, dataVersion]);
+  }, [dataVersion, isIdentityConnected, selectedWorkspaceId]);
 
   useEffect(() => {
+    if (!isIdentityConnected) {
+      return;
+    }
+
     if (!selectedSessionId) {
       setSessionMessages([]);
       setSessionAttachments([]);
@@ -384,7 +534,7 @@ function App() {
     return () => {
       disposed = true;
     };
-  }, [selectedSessionId, dataVersion]);
+  }, [dataVersion, isIdentityConnected, selectedSessionId]);
 
   const refreshSelectedWorkspaceCollections = useCallback(
     async (workspaceId: string, preferredSessionId: string | null) => {
@@ -476,6 +626,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!isIdentityConnected) {
+      return;
+    }
+
     if (!selectedWorkspaceId || loadingWorkspace || loadingSession) {
       return;
     }
@@ -525,6 +679,7 @@ function App() {
     selectedWorkspaceId,
     workspaceDetail?.sessionUnreadTotal,
     workspaceDetail?.workspaceUnread,
+    isIdentityConnected,
   ]);
 
   useEffect(() => {
@@ -535,6 +690,81 @@ function App() {
       setDeferredWorkspaceReadClearId(null);
     }
   }, [deferredWorkspaceReadClearId, selectedWorkspaceId]);
+
+  const handleStartGithubIdentityConnect = useCallback(async () => {
+    try {
+      const flow = await startGithubIdentityConnect();
+      setGithubIdentityState({
+        status: "pending",
+        flow,
+      });
+    } catch (error) {
+      setGithubIdentityState({
+        status: "error",
+        message: describeUnknownError(
+          error,
+          "Unable to start GitHub account connection.",
+        ),
+      });
+    }
+  }, []);
+
+  const handleCopyGithubDeviceCode = useCallback(async (userCode: string) => {
+    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+      pushWorkspaceToast(
+        "Unable to copy the one-time code on this device.",
+        "Copy failed",
+      );
+      return false;
+    }
+
+    try {
+      await navigator.clipboard.writeText(userCode);
+      pushWorkspaceToast(
+        "The GitHub one-time code has been copied to your clipboard.",
+        "Code copied",
+        "default",
+      );
+      return true;
+    } catch {
+      pushWorkspaceToast(
+        "Unable to copy the one-time code.",
+        "Copy failed",
+      );
+      return false;
+    }
+  }, [pushWorkspaceToast]);
+
+  const handleCancelGithubIdentityConnect = useCallback(() => {
+    void cancelGithubIdentityConnect()
+      .then(() => {
+        setGithubIdentityState({ status: "disconnected" });
+      })
+      .catch((error) => {
+        setGithubIdentityState({
+          status: "error",
+          message: describeUnknownError(
+            error,
+            "Unable to cancel GitHub account connection.",
+          ),
+        });
+      });
+  }, []);
+
+  const handleDisconnectGithubIdentity = useCallback(async () => {
+    try {
+      await disconnectGithubIdentity();
+      setGithubIdentityState({ status: "disconnected" });
+    } catch (error) {
+      setGithubIdentityState({
+        status: "error",
+        message: describeUnknownError(
+          error,
+          "Unable to disconnect the GitHub account.",
+        ),
+      });
+    }
+  }, []);
 
   const handleResizeStart = (event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -1026,11 +1256,21 @@ function App() {
 
   return (
     <ToastProvider swipeDirection="right">
-      <main
-        aria-label="Application shell"
-        className="relative h-screen overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
-      >
-        <div className="relative flex h-full min-h-0 bg-app-base">
+      {!isIdentityConnected ? (
+        <GithubIdentityGate
+          identityState={githubIdentityState}
+          onConnectGithub={() => {
+            void handleStartGithubIdentityConnect();
+          }}
+          onCopyGithubCode={(userCode) => handleCopyGithubDeviceCode(userCode)}
+          onCancelGithubConnect={handleCancelGithubIdentityConnect}
+        />
+      ) : (
+        <main
+          aria-label="Application shell"
+          className="relative h-screen overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
+        >
+          <div className="relative flex h-full min-h-0 bg-app-base">
         <aside
           aria-label="Workspace sidebar"
           className="relative h-full shrink-0 overflow-hidden bg-app-sidebar"
@@ -1125,6 +1365,12 @@ function App() {
                 <Moon className="size-3.5" strokeWidth={1.8} />
               )}
             </button>
+            <GithubStatusMenu
+              identityState={githubIdentityState}
+              onDisconnectGithub={() => {
+                void handleDisconnectGithubIdentity();
+              }}
+            />
           </div>
 
           <div
@@ -1144,7 +1390,10 @@ function App() {
               onSessionsChanged={() => setDataVersion((v) => v + 1)}
               onWorkspaceChanged={() => {
                 if (selectedWorkspaceId) {
-                  void refreshSelectedWorkspaceCollections(selectedWorkspaceId, selectedSessionId);
+                  void refreshSelectedWorkspaceCollections(
+                    selectedWorkspaceId,
+                    selectedSessionId,
+                  );
                 }
               }}
             />
@@ -1182,33 +1431,34 @@ function App() {
             </div>
           </div>
         </section>
-        </div>
-        <ToastViewport />
-        {workspaceToasts.map((toast) => (
-          <Toast
-            key={toast.id}
-            open
-            variant="destructive"
-            duration={4200}
-            onOpenChange={(open: boolean) => {
-              if (!open) {
-                dismissWorkspaceToast(toast.id);
-              }
-            }}
-          >
-            <div className="grid gap-1">
-              <ToastTitle>{toast.title}</ToastTitle>
-              <ToastDescription>{toast.description}</ToastDescription>
-            </div>
-            <ToastClose aria-label="Dismiss notification" />
-          </Toast>
-        ))}
+          </div>
+        </main>
+      )}
+      <ToastViewport />
+      {workspaceToasts.map((toast) => (
+        <Toast
+          key={toast.id}
+          open
+          variant={toast.variant ?? "destructive"}
+          duration={4200}
+          onOpenChange={(open: boolean) => {
+            if (!open) {
+              dismissWorkspaceToast(toast.id);
+            }
+          }}
+        >
+          <div className="grid gap-1">
+            <ToastTitle>{toast.title}</ToastTitle>
+            <ToastDescription>{toast.description}</ToastDescription>
+          </div>
+          <ToastClose aria-label="Dismiss notification" />
+        </Toast>
+      ))}
       <ConductorImportDialog
         open={importDialogOpen}
         onClose={() => setImportDialogOpen(false)}
         onImported={refreshAllData}
       />
-      </main>
     </ToastProvider>
   );
 }
@@ -1468,6 +1718,176 @@ function haveSameLiveMessages(
       && message.createdAt === nextMessage.createdAt
     );
   });
+}
+
+function GithubIdentityGate({
+  identityState,
+  onConnectGithub,
+  onCopyGithubCode,
+  onCancelGithubConnect,
+}: {
+  identityState: GithubIdentityState;
+  onConnectGithub: () => void;
+  onCopyGithubCode: (userCode: string) => Promise<boolean>;
+  onCancelGithubConnect: () => void;
+}) {
+  const title =
+    identityState.status === "checking"
+      ? "Checking GitHub connection"
+      : identityState.status === "pending"
+        ? "Finish sign-in on GitHub"
+        : identityState.status === "unconfigured"
+          ? "GitHub account connection is not configured"
+          : identityState.status === "error"
+            ? "GitHub connection failed"
+            : "Sign in with GitHub";
+  const description =
+    identityState.status === "checking"
+      ? "Helmor is restoring your last GitHub account session."
+      : identityState.status === "pending"
+        ? "A browser window should open for authorization. If it does not, complete GitHub device sign-in with the code below."
+        : identityState.status === "unconfigured"
+          ? identityState.message
+          : identityState.status === "error"
+            ? identityState.message
+            : "GitHub account connection is required before Helmor loads your workspaces.";
+
+  const handleCopyCode = useCallback(async () => {
+    if (identityState.status !== "pending") {
+      return;
+    }
+
+    const copied = await onCopyGithubCode(identityState.flow.userCode);
+
+    if (!copied) {
+      return;
+    }
+  }, [identityState, onCopyGithubCode]);
+
+  return (
+    <main
+      aria-label="GitHub identity gate"
+      className="relative h-screen overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
+    >
+      <div
+        aria-label="GitHub identity gate drag region"
+        className="absolute inset-x-0 top-0 z-10 flex h-11 items-center"
+      >
+        <div data-tauri-drag-region className="h-full w-[94px] shrink-0" />
+        <div data-tauri-drag-region className="h-full flex-1" />
+      </div>
+
+      <div className="relative flex h-full items-center justify-center px-6">
+        <div className="w-full max-w-[31rem]">
+          <h1 className="text-center text-[40px] leading-[1.04] tracking-[-0.04em] text-app-foreground">
+            {title}
+          </h1>
+          <p className="mx-auto mt-4 max-w-[31rem] text-center text-[16px] leading-7 text-app-foreground-soft/72">
+            {description}
+          </p>
+
+          {identityState.status === "pending" ? (
+            <div className="mt-8 flex flex-col items-center gap-5">
+              <button
+                type="button"
+                onClick={() => {
+                  void handleCopyCode();
+                }}
+                className="rounded-2xl px-3 py-2 transition-colors hover:bg-app-toolbar-hover/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong"
+                aria-label="Copy one-time code"
+                title="Copy one-time code"
+              >
+                <span className="font-mono text-[30px] tracking-[0.18em] text-app-foreground">
+                  {identityState.flow.userCode}
+                </span>
+              </button>
+              <div className="flex flex-wrap items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={onCancelGithubConnect}
+                  className="inline-flex items-center justify-center rounded-full px-4 py-2 text-[14px] font-medium text-app-foreground-soft/78 transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : identityState.status === "unconfigured" ? (
+            <div className="mt-8 flex justify-center">
+              <button
+                type="button"
+                disabled
+                className="inline-flex items-center gap-2 rounded-full bg-[#353534] px-4 py-2 text-[14px] font-medium text-app-foreground/55 opacity-70"
+              >
+                <MarkGithubIcon size={16} />
+                Continue with GitHub
+              </button>
+            </div>
+          ) : identityState.status === "checking" ? (
+            <div className="mt-8 inline-flex w-full items-center justify-center gap-2 text-[14px] text-app-foreground-soft/76">
+              <RefreshCw className="size-4 animate-spin" strokeWidth={1.8} />
+              Restoring your last session
+            </div>
+          ) : (
+            <div className="mt-8 flex justify-center">
+              <button
+                type="button"
+                onClick={onConnectGithub}
+                className="inline-flex items-center gap-2 rounded-full bg-[#353534] px-4 py-2 text-[14px] font-medium text-app-foreground transition-colors hover:bg-[#424240]"
+              >
+                <MarkGithubIcon size={16} />
+                {identityState.status === "error" ? "Retry with GitHub" : "Continue with GitHub"}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </main>
+  );
+}
+
+function GithubStatusMenu({
+  identityState,
+  onDisconnectGithub,
+}: {
+  identityState: Extract<GithubIdentityState, { status: "connected" }>;
+  onDisconnectGithub: () => void;
+}) {
+  const identitySession = identityState.session;
+  const triggerLabel = identitySession.login;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        aria-label="GitHub account menu"
+        className="inline-flex h-6 items-center gap-1.5 rounded-md px-1.5 text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
+      >
+        <Avatar size="sm" className="size-4">
+          {identitySession?.avatarUrl ? (
+            <AvatarImage src={identitySession.avatarUrl} alt={identitySession.login} />
+          ) : null}
+          <AvatarFallback className="bg-app-toolbar text-[9px] font-medium text-app-foreground-soft">
+            {identitySession?.login.slice(0, 2).toUpperCase() ?? "GH"}
+          </AvatarFallback>
+        </Avatar>
+        <span className="text-[12px] font-medium text-app-foreground-soft/74">
+          {triggerLabel}
+        </span>
+      </DropdownMenuTrigger>
+
+      <DropdownMenuContent
+        align="end"
+        sideOffset={8}
+        className="w-44 rounded-[14px] border border-app-border bg-app-sidebar p-1.5 text-app-foreground shadow-[0_18px_48px_rgba(0,0,0,0.38)]"
+      >
+        <DropdownMenuItem
+          className="rounded-[10px] px-2 py-2 text-app-foreground-soft hover:bg-app-row-hover focus:bg-app-row-hover"
+          onClick={onDisconnectGithub}
+        >
+          Log out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 export default App;

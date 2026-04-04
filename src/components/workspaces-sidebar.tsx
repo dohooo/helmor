@@ -5,6 +5,7 @@ import {
   XCircleFillIcon,
 } from "@primer/octicons-react";
 import {
+  memo,
   type ButtonHTMLAttributes,
   type ReactNode,
   useCallback,
@@ -377,7 +378,7 @@ function WorkspaceRowItem({
   );
 }
 
-export function WorkspacesSidebar({
+export const WorkspacesSidebar = memo(function WorkspacesSidebar({
   groups,
   archivedRows,
   availableRepositories,
@@ -748,4 +749,4 @@ export function WorkspacesSidebar({
       </div>
     </TooltipProvider>
   );
-}
+});

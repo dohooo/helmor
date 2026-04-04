@@ -26,7 +26,9 @@ type CmdResult<T> = std::result::Result<T, CommandError>;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum AgentStreamEvent {
-    Line { line: String },
+    Line {
+        line: String,
+    },
     Done {
         provider: String,
         model_id: String,
@@ -35,7 +37,9 @@ pub enum AgentStreamEvent {
         working_directory: String,
         persisted_to_fixture: bool,
     },
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -213,9 +217,11 @@ pub fn list_agent_model_sections() -> Vec<AgentModelSection> {
 
 #[tauri::command]
 pub async fn send_agent_message(request: AgentSendRequest) -> CmdResult<AgentSendResponse> {
-    Ok(tauri::async_runtime::spawn_blocking(move || send_agent_message_blocking(request))
-        .await
-        .context("agent task panicked")??)
+    Ok(
+        tauri::async_runtime::spawn_blocking(move || send_agent_message_blocking(request))
+            .await
+            .context("agent task panicked")??,
+    )
 }
 
 #[tauri::command]
@@ -235,12 +241,19 @@ pub async fn send_agent_message_stream(
     if request.provider != model.provider {
         return Err(anyhow::anyhow!(
             "Model {} does not belong to provider {}.",
-            request.model_id, request.provider
-        ).into());
+            request.model_id,
+            request.provider
+        )
+        .into());
     }
 
     let working_directory = resolve_working_directory(request.working_directory.as_deref())?;
-    let mut command = build_cli_command(model, &prompt, request.session_id.as_deref(), &working_directory)?;
+    let mut command = build_cli_command(
+        model,
+        &prompt,
+        request.session_id.as_deref(),
+        &working_directory,
+    )?;
 
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
@@ -272,12 +285,22 @@ pub async fn send_agent_message_stream(
                 Ok(line) => {
                     let trimmed = line.trim().to_string();
                     if !trimmed.is_empty() {
-                        let _ = app.emit(&event_name, AgentStreamEvent::Line { line: trimmed.clone() });
+                        let _ = app.emit(
+                            &event_name,
+                            AgentStreamEvent::Line {
+                                line: trimmed.clone(),
+                            },
+                        );
                         all_lines.push(trimmed);
                     }
                 }
                 Err(e) => {
-                    let _ = app.emit(&event_name, AgentStreamEvent::Error { message: e.to_string() });
+                    let _ = app.emit(
+                        &event_name,
+                        AgentStreamEvent::Error {
+                            message: e.to_string(),
+                        },
+                    );
                     return;
                 }
             }
@@ -291,14 +314,29 @@ pub async fn send_agent_message_stream(
         };
 
         if !exit_ok {
-            let stderr_text = child.stderr.take().map(|mut se| {
-                let mut buf = String::new();
-                let _ = std::io::Read::read_to_string(&mut se, &mut buf);
-                buf
-            }).unwrap_or_default();
-            let _ = app.emit(&event_name, AgentStreamEvent::Error {
-                message: format_process_failure(if provider == "claude" { "Claude" } else { "Codex" }, stderr_text.as_bytes(), exit_code),
-            });
+            let stderr_text = child
+                .stderr
+                .take()
+                .map(|mut se| {
+                    let mut buf = String::new();
+                    let _ = std::io::Read::read_to_string(&mut se, &mut buf);
+                    buf
+                })
+                .unwrap_or_default();
+            let _ = app.emit(
+                &event_name,
+                AgentStreamEvent::Error {
+                    message: format_process_failure(
+                        if provider == "claude" {
+                            "Claude"
+                        } else {
+                            "Codex"
+                        },
+                        stderr_text.as_bytes(),
+                        exit_code,
+                    ),
+                },
+            );
             return;
         }
 
@@ -325,22 +363,32 @@ pub async fn send_agent_message_stream(
                         &output.usage,
                         &output.turns,
                         output.result_json.as_deref(),
-                    ).is_ok() {
+                    )
+                    .is_ok()
+                    {
                         persisted = true;
                     }
                 }
 
-                let _ = app.emit(&event_name, AgentStreamEvent::Done {
-                    provider,
-                    model_id,
-                    resolved_model: output.resolved_model,
-                    session_id: output.session_id,
-                    working_directory: working_dir_str,
-                    persisted_to_fixture: persisted,
-                });
+                let _ = app.emit(
+                    &event_name,
+                    AgentStreamEvent::Done {
+                        provider,
+                        model_id,
+                        resolved_model: output.resolved_model,
+                        session_id: output.session_id,
+                        working_directory: working_dir_str,
+                        persisted_to_fixture: persisted,
+                    },
+                );
             }
             Err(e) => {
-                let _ = app.emit(&event_name, AgentStreamEvent::Error { message: format!("{e:#}") });
+                let _ = app.emit(
+                    &event_name,
+                    AgentStreamEvent::Error {
+                        message: format!("{e:#}"),
+                    },
+                );
             }
         }
 
@@ -368,36 +416,46 @@ fn send_agent_message_blocking(request: AgentSendRequest) -> Result<AgentSendRes
     if request.provider != model.provider {
         bail!(
             "Model {} does not belong to provider {}.",
-            request.model_id, request.provider
+            request.model_id,
+            request.provider
         );
     }
 
     let working_directory = resolve_working_directory(request.working_directory.as_deref())?;
 
     let output = match model.provider {
-        "claude" => send_with_claude(model, prompt, request.session_id.as_deref(), &working_directory)?,
-        "codex" => send_with_codex(model, prompt, request.session_id.as_deref(), &working_directory)?,
+        "claude" => send_with_claude(
+            model,
+            prompt,
+            request.session_id.as_deref(),
+            &working_directory,
+        )?,
+        "codex" => send_with_codex(
+            model,
+            prompt,
+            request.session_id.as_deref(),
+            &working_directory,
+        )?,
         provider => bail!("Unsupported provider: {provider}"),
     };
-    let persisted_to_fixture = if let Some(conductor_session_id) =
-        non_empty(request.conductor_session_id.as_deref())
-    {
-        persist_exchange_to_fixture(
-            conductor_session_id,
-            prompt,
-            model,
-            &output.resolved_model,
-            &output.assistant_text,
-            output.thinking_text.as_deref(),
-            output.session_id.as_deref(),
-            &output.usage,
-            &output.turns,
-            output.result_json.as_deref(),
-        )?;
-        true
-    } else {
-        false
-    };
+    let persisted_to_fixture =
+        if let Some(conductor_session_id) = non_empty(request.conductor_session_id.as_deref()) {
+            persist_exchange_to_fixture(
+                conductor_session_id,
+                prompt,
+                model,
+                &output.resolved_model,
+                &output.assistant_text,
+                output.thinking_text.as_deref(),
+                output.session_id.as_deref(),
+                &output.usage,
+                &output.turns,
+                output.result_json.as_deref(),
+            )?;
+            true
+        } else {
+            false
+        };
 
     Ok(AgentSendResponse {
         provider: model.provider.to_string(),
@@ -493,7 +551,10 @@ fn send_with_claude(
     let output = command.output().context("Failed to run Claude CLI")?;
 
     if !output.status.success() {
-        bail!("{}", format_process_failure("Claude", &output.stderr, output.status.code()));
+        bail!(
+            "{}",
+            format_process_failure("Claude", &output.stderr, output.status.code())
+        );
     }
 
     parse_claude_output(
@@ -536,7 +597,10 @@ fn send_with_codex(
     let output = command.output().context("Failed to run Codex CLI")?;
 
     if !output.status.success() {
-        bail!("{}", format_process_failure("Codex", &output.stderr, output.status.code()));
+        bail!(
+            "{}",
+            format_process_failure("Codex", &output.stderr, output.status.code())
+        );
     }
 
     parse_codex_output(
@@ -588,7 +652,11 @@ fn parse_claude_output(
         *cur_id = None;
     };
 
-    for line in stdout.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for line in stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
@@ -603,13 +671,9 @@ fn parse_claude_output(
 
         match value.get("type").and_then(Value::as_str) {
             Some("stream_event") => {
-                let delta = value
-                    .get("event")
-                    .and_then(|event| event.get("delta"));
+                let delta = value.get("event").and_then(|event| event.get("delta"));
 
-                if let Some(delta_text) = delta
-                    .and_then(|d| d.get("text"))
-                    .and_then(Value::as_str)
+                if let Some(delta_text) = delta.and_then(|d| d.get("text")).and_then(Value::as_str)
                 {
                     assistant_text.push_str(delta_text);
                     saw_text_delta = true;
@@ -710,7 +774,11 @@ fn parse_claude_output(
     }
 
     let thinking_text = thinking_text.trim().to_string();
-    let thinking_text = if thinking_text.is_empty() { None } else { Some(thinking_text) };
+    let thinking_text = if thinking_text.is_empty() {
+        None
+    } else {
+        Some(thinking_text)
+    };
 
     Ok(ParsedAgentOutput {
         assistant_text,
@@ -735,7 +803,11 @@ fn parse_codex_output(
         output_tokens: None,
     };
 
-    for line in stdout.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for line in stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
@@ -884,96 +956,89 @@ fn persist_exchange_to_fixture(
     let result_message_id = Uuid::new_v4().to_string();
     let assistant_sdk_message_id = format!("helmor-assistant-{}", Uuid::new_v4());
 
-    let result_payload = raw_result_json
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            serde_json::json!({
-                "type": "result",
-                "subtype": "success",
-                "result": assistant_text,
-                "session_id": provider_session_id,
-                "usage": {
-                    "input_tokens": usage.input_tokens,
-                    "output_tokens": usage.output_tokens,
-                }
-            })
-            .to_string()
-        });
+    let result_payload = raw_result_json.map(str::to_string).unwrap_or_else(|| {
+        serde_json::json!({
+            "type": "result",
+            "subtype": "success",
+            "result": assistant_text,
+            "session_id": provider_session_id,
+            "usage": {
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+            }
+        })
+        .to_string()
+    });
 
-    let transaction = connection
-        .unchecked_transaction()?;
+    let transaction = connection.unchecked_transaction()?;
 
     // 1. Insert the original user prompt.
-    transaction
-        .execute(
-            r#"
+    transaction.execute(
+        r#"
             INSERT INTO session_messages (
               id, session_id, role, content, created_at, sent_at,
               full_message, model, last_assistant_message_id, turn_id,
               is_resumable_message
             ) VALUES (?1, ?2, 'user', ?3, ?4, ?4, ?3, ?5, ?6, ?7, 0)
             "#,
-            params![
-                user_message_id,
-                conductor_session_id,
-                prompt,
-                now,
-                model.id,
-                assistant_sdk_message_id,
-                turn_id
-            ],
-        )?;
+        params![
+            user_message_id,
+            conductor_session_id,
+            prompt,
+            now,
+            model.id,
+            assistant_sdk_message_id,
+            turn_id
+        ],
+    )?;
 
     // 2. Insert all intermediate turns (assistant tool calls, user tool results, etc.).
     if !turns.is_empty() {
         for collected_turn in turns {
             let msg_id = Uuid::new_v4().to_string();
-            transaction
-                .execute(
-                    r#"
+            transaction.execute(
+                r#"
                     INSERT INTO session_messages (
                       id, session_id, role, content, created_at, sent_at,
                       full_message, model, turn_id, is_resumable_message
                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?4, ?6, ?7, 0)
                     "#,
-                    params![
-                        msg_id,
-                        conductor_session_id,
-                        collected_turn.role,
-                        collected_turn.content_json,
-                        now,
-                        resolved_model,
-                        turn_id
-                    ],
-                )?;
+                params![
+                    msg_id,
+                    conductor_session_id,
+                    collected_turn.role,
+                    collected_turn.content_json,
+                    now,
+                    resolved_model,
+                    turn_id
+                ],
+            )?;
         }
     }
 
     // 3. Insert result summary.
-    transaction
-        .execute(
-            r#"
+    transaction.execute(
+        r#"
             INSERT INTO session_messages (
               id, session_id, role, content, created_at, sent_at,
               full_message, model, sdk_message_id, turn_id,
               is_resumable_message
             ) VALUES (?1, ?2, 'assistant', ?3, ?4, ?4, ?3, ?5, ?6, ?7, 0)
             "#,
-            params![
-                result_message_id,
-                conductor_session_id,
-                result_payload,
-                now,
-                resolved_model,
-                assistant_sdk_message_id,
-                turn_id
-            ],
-        )?;
+        params![
+            result_message_id,
+            conductor_session_id,
+            result_payload,
+            now,
+            resolved_model,
+            assistant_sdk_message_id,
+            turn_id
+        ],
+    )?;
 
     // 4. Update session and workspace metadata.
-    transaction
-        .execute(
-            r#"
+    transaction.execute(
+        r#"
             UPDATE sessions
             SET
               status = 'idle',
@@ -985,29 +1050,30 @@ fn persist_exchange_to_fixture(
               END
             WHERE id = ?1
             "#,
-            params![
-                conductor_session_id,
-                model.id,
-                now,
-                model.provider,
-                provider_session_id
-            ],
-        )?;
+        params![
+            conductor_session_id,
+            model.id,
+            now,
+            model.provider,
+            provider_session_id
+        ],
+    )?;
 
-    transaction
-        .execute(
-            r#"
+    transaction.execute(
+        r#"
             UPDATE workspaces
             SET
               active_session_id = ?2
             WHERE id = (SELECT workspace_id FROM sessions WHERE id = ?1)
             "#,
-            params![conductor_session_id, conductor_session_id],
-        )?;
+        params![conductor_session_id, conductor_session_id],
+    )?;
 
     mark_session_read_in_transaction(&transaction, conductor_session_id)?;
 
-    transaction.commit().context("Failed to commit persist exchange transaction")
+    transaction
+        .commit()
+        .context("Failed to commit persist exchange transaction")
 }
 
 fn open_write_connection() -> Result<Connection> {

@@ -1,5 +1,7 @@
+pub mod auth;
 pub mod db;
 pub mod git_ops;
+pub mod github_cli;
 pub mod helpers;
 pub mod repos;
 pub mod sessions;
@@ -7,6 +9,7 @@ pub mod settings;
 pub mod workspaces;
 
 use serde::Serialize;
+use tauri::{AppHandle, State};
 
 use crate::error::CommandError;
 
@@ -39,6 +42,60 @@ pub fn get_data_info() -> CmdResult<DataInfo> {
 #[tauri::command]
 pub fn conductor_source_available() -> bool {
     crate::import::conductor_source_available()
+}
+
+#[tauri::command]
+pub fn get_github_identity_session() -> CmdResult<auth::GithubIdentitySnapshot> {
+    Ok(auth::get_github_identity_session()?)
+}
+
+#[tauri::command]
+pub fn start_github_identity_connect(
+    app: AppHandle,
+    runtime: State<'_, auth::GithubIdentityFlowRuntime>,
+) -> CmdResult<auth::GithubIdentityDeviceFlowStart> {
+    Ok(auth::start_github_identity_connect(
+        app,
+        runtime.inner().clone(),
+    )?)
+}
+
+#[tauri::command]
+pub fn cancel_github_identity_connect(
+    app: AppHandle,
+    runtime: State<'_, auth::GithubIdentityFlowRuntime>,
+) -> CmdResult<()> {
+    Ok(auth::cancel_github_identity_connect(
+        app,
+        runtime.inner().clone(),
+    )?)
+}
+
+#[tauri::command]
+pub fn disconnect_github_identity(
+    app: AppHandle,
+    runtime: State<'_, auth::GithubIdentityFlowRuntime>,
+) -> CmdResult<()> {
+    Ok(auth::disconnect_github_identity(
+        app,
+        runtime.inner().clone(),
+    )?)
+}
+
+#[tauri::command]
+pub fn get_github_cli_status() -> CmdResult<github_cli::GithubCliStatus> {
+    Ok(github_cli::get_github_cli_status()?)
+}
+
+#[tauri::command]
+pub fn get_github_cli_user() -> CmdResult<Option<github_cli::GithubCliUser>> {
+    Ok(github_cli::get_github_cli_user()?)
+}
+
+#[tauri::command]
+pub fn list_github_accessible_repositories(
+) -> CmdResult<Vec<github_cli::GithubRepositorySummary>> {
+    Ok(github_cli::list_github_accessible_repositories()?)
 }
 
 #[tauri::command]
@@ -227,12 +284,10 @@ pub fn archive_workspace(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data_dir::TEST_ENV_LOCK as TEST_LOCK;
     use rusqlite::Connection;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::sync::Mutex;
-
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// Helper: set HELMOR_DATA_DIR to a temp dir for tests that hit the DB.
     struct TestDataDir {
@@ -574,6 +629,8 @@ mod tests {
                 [
                     "-C",
                     self.source_repo_root.to_str().unwrap(),
+                    "-c",
+                    "commit.gpgsign=false",
                     "-c",
                     "user.name=Helmor",
                     "-c",
@@ -978,9 +1035,17 @@ mod tests {
         .unwrap();
         git_ops::run_git(
             [
-                "-C", source.to_str().unwrap(),
-                "-c", "user.name=Helmor", "-c", "user.email=helmor@example.com",
-                "commit", "-m", "second restore target",
+                "-C",
+                source.to_str().unwrap(),
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Helmor",
+                "-c",
+                "user.email=helmor@example.com",
+                "commit",
+                "-m",
+                "second restore target",
             ],
             None,
         )
@@ -1289,7 +1354,19 @@ mod tests {
         fs::write(repo_root.join("tracked.txt"), "main").unwrap();
         git_ops::run_git(["-C", repo_root.to_str().unwrap(), "add", "tracked.txt"], None).unwrap();
         git_ops::run_git(
-            ["-C", repo_root.to_str().unwrap(), "-c", "user.name=Helmor", "-c", "user.email=helmor@example.com", "commit", "-m", "initial"],
+            [
+                "-C",
+                repo_root.to_str().unwrap(),
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Helmor",
+                "-c",
+                "user.email=helmor@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
             None,
         )
         .unwrap();
@@ -1314,7 +1391,19 @@ mod tests {
         fs::write(repo_root.join("tracked.txt"), "main").unwrap();
         git_ops::run_git(["-C", repo_root.to_str().unwrap(), "add", "tracked.txt"], None).unwrap();
         git_ops::run_git(
-            ["-C", repo_root.to_str().unwrap(), "-c", "user.name=Helmor", "-c", "user.email=helmor@example.com", "commit", "-m", "initial"],
+            [
+                "-C",
+                repo_root.to_str().unwrap(),
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Helmor",
+                "-c",
+                "user.email=helmor@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
             None,
         )
         .unwrap();
@@ -1322,7 +1411,19 @@ mod tests {
         fs::write(repo_root.join("tracked.txt"), "archived snapshot").unwrap();
         git_ops::run_git(["-C", repo_root.to_str().unwrap(), "add", "tracked.txt"], None).unwrap();
         git_ops::run_git(
-            ["-C", repo_root.to_str().unwrap(), "-c", "user.name=Helmor", "-c", "user.email=helmor@example.com", "commit", "-m", "archived snapshot"],
+            [
+                "-C",
+                repo_root.to_str().unwrap(),
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Helmor",
+                "-c",
+                "user.email=helmor@example.com",
+                "commit",
+                "-m",
+                "archived snapshot",
+            ],
             None,
         )
         .unwrap();

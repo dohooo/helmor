@@ -118,6 +118,68 @@ export type AddRepositoryDefaults = {
   lastCloneDirectory?: string | null;
 };
 
+export type GithubIdentitySession = {
+  provider: string;
+  githubUserId: number;
+  login: string;
+  name?: string | null;
+  avatarUrl?: string | null;
+  primaryEmail?: string | null;
+  tokenExpiresAt?: string | null;
+  refreshTokenExpiresAt?: string | null;
+};
+
+export type GithubIdentitySnapshot =
+  | { status: "connected"; session: GithubIdentitySession }
+  | { status: "disconnected" }
+  | { status: "unconfigured"; message: string }
+  | { status: "error"; message: string };
+
+export type GithubIdentityDeviceFlowStart = {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete?: string | null;
+  expiresAt: string;
+  intervalSeconds: number;
+};
+
+export type GithubCliStatus =
+  | { status: "ready"; host: string; login: string; version: string; message: string }
+  | {
+      status: "unauthenticated";
+      host: string;
+      version?: string | null;
+      message: string;
+    }
+  | { status: "unavailable"; host: string; message: string }
+  | {
+      status: "error";
+      host: string;
+      version?: string | null;
+      message: string;
+    };
+
+export type GithubCliUser = {
+  login: string;
+  id: number;
+  name?: string | null;
+  avatarUrl?: string | null;
+  email?: string | null;
+};
+
+export type GithubRepositorySummary = {
+  id: number;
+  name: string;
+  fullName: string;
+  ownerLogin: string;
+  private: boolean;
+  defaultBranch?: string | null;
+  htmlUrl: string;
+  updatedAt?: string | null;
+  pushedAt?: string | null;
+};
+
 export type AddRepositoryResponse = {
   repositoryId: string;
   createdRepository: boolean;
@@ -441,8 +503,42 @@ const DEFAULT_AGENT_MODEL_SECTIONS: AgentModelSection[] = [
 
 type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
+const BROWSER_FALLBACK_GITHUB_IDENTITY: GithubIdentitySnapshot = {
+  status: "connected",
+  session: {
+    provider: "browser-dev",
+    githubUserId: 0,
+    login: "browser-dev",
+    name: "Browser Dev",
+    avatarUrl: null,
+    primaryEmail: null,
+    tokenExpiresAt: null,
+    refreshTokenExpiresAt: null,
+  },
+};
+
+const BROWSER_FALLBACK_GITHUB_CLI_STATUS: GithubCliStatus = {
+  status: "ready",
+  host: "github.com",
+  login: "browser-dev",
+  version: "browser-dev",
+  message: "Browser development mode",
+};
+
+const BROWSER_FALLBACK_GITHUB_CLI_USER: GithubCliUser = {
+  login: "browser-dev",
+  id: 0,
+  name: "Browser Dev",
+  avatarUrl: null,
+  email: null,
+};
+
+export function hasTauriRuntime(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
 async function getTauriInvoke(): Promise<TauriInvoke | null> {
-  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
+  if (!hasTauriRuntime()) {
     return null;
   }
 
@@ -460,6 +556,107 @@ export async function loadWorkspaceGroups(): Promise<WorkspaceGroup[]> {
     return await invoke<WorkspaceGroup[]>("list_workspace_groups");
   } catch {
     return DEFAULT_WORKSPACE_GROUPS;
+  }
+}
+
+export async function loadGithubIdentitySession(): Promise<GithubIdentitySnapshot> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    return BROWSER_FALLBACK_GITHUB_IDENTITY;
+  }
+
+  try {
+    return await invoke<GithubIdentitySnapshot>("get_github_identity_session");
+  } catch (error) {
+    return {
+      status: "error",
+      message: describeInvokeError(error, "Unable to load GitHub account state."),
+    };
+  }
+}
+
+export async function startGithubIdentityConnect(): Promise<GithubIdentityDeviceFlowStart> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    throw new Error("GitHub account connection is only available in the Tauri desktop runtime.");
+  }
+
+  return invoke<GithubIdentityDeviceFlowStart>("start_github_identity_connect");
+}
+
+export async function cancelGithubIdentityConnect(): Promise<void> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    return;
+  }
+
+  await invoke("cancel_github_identity_connect");
+}
+
+export async function disconnectGithubIdentity(): Promise<void> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    return;
+  }
+
+  await invoke("disconnect_github_identity");
+}
+
+export async function listenGithubIdentityChanged(
+  callback: (snapshot: GithubIdentitySnapshot) => void,
+): Promise<UnlistenFn> {
+  return listen<GithubIdentitySnapshot>("github-identity-changed", (tauriEvent) => {
+    callback(tauriEvent.payload);
+  });
+}
+
+export async function loadGithubCliStatus(): Promise<GithubCliStatus> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    return BROWSER_FALLBACK_GITHUB_CLI_STATUS;
+  }
+
+  try {
+    return await invoke<GithubCliStatus>("get_github_cli_status");
+  } catch (error) {
+    return {
+      status: "error",
+      host: "github.com",
+      message: describeInvokeError(error, "Unable to load GitHub CLI state."),
+    };
+  }
+}
+
+export async function loadGithubCliUser(): Promise<GithubCliUser | null> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    return BROWSER_FALLBACK_GITHUB_CLI_USER;
+  }
+
+  try {
+    return await invoke<GithubCliUser | null>("get_github_cli_user");
+  } catch {
+    return null;
+  }
+}
+
+export async function listGithubAccessibleRepositories(): Promise<GithubRepositorySummary[]> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    return [];
+  }
+
+  try {
+    return await invoke<GithubRepositorySummary[]>("list_github_accessible_repositories");
+  } catch {
+    return [];
   }
 }
 
@@ -897,3 +1094,25 @@ export async function loadHiddenSessions(workspaceId: string): Promise<Workspace
 }
 
 export { DEFAULT_AGENT_MODEL_SECTIONS, DEFAULT_WORKSPACE_GROUPS };
+
+function describeInvokeError(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string" &&
+    error.message.trim()
+  ) {
+    return error.message;
+  }
+
+  return fallback;
+}
