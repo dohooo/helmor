@@ -7,11 +7,14 @@ import {
 import {
   type ButtonHTMLAttributes,
   type ReactNode,
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   Archive,
   ChevronDown,
@@ -69,10 +72,11 @@ type ToolbarButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   children: ReactNode;
 };
 
-function ToolbarButton({ label, className, children, ...props }: ToolbarButtonProps) {
+function ToolbarButton({ label, className, children, ref, ...props }: ToolbarButtonProps & { ref?: React.Ref<HTMLButtonElement> }) {
   return (
     <button
       {...props}
+      ref={ref}
       type="button"
       aria-label={label}
       className={cn(
@@ -409,7 +413,24 @@ export function WorkspacesSidebar({
   const [isRepoPickerOpen, setIsRepoPickerOpen] = useState(false);
   const [repoSearchQuery, setRepoSearchQuery] = useState("");
   const repoPickerRef = useRef<HTMLDivElement | null>(null);
+  const repoPickerAnchorRef = useRef<HTMLButtonElement | null>(null);
   const repoSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const [pickerPos, setPickerPos] = useState<{ top: number; left: number } | null>(null);
+
+  const updatePickerPosition = useCallback(() => {
+    const anchor = repoPickerAnchorRef.current;
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    const popoverWidth = 296; // 18.5rem
+    let left = rect.right - popoverWidth;
+    if (left < 4) left = 4;
+    setPickerPos({ top: rect.bottom + 8, left });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!isRepoPickerOpen) return;
+    updatePickerPosition();
+  }, [isRepoPickerOpen, updatePickerPosition]);
   const workspaceActionsBusy = Boolean(
     addingRepository || archivingWorkspaceId || markingUnreadWorkspaceId || restoringWorkspaceId,
   );
@@ -447,8 +468,8 @@ export function WorkspacesSidebar({
 
       if (
         target instanceof Node &&
-        repoPickerRef.current &&
-        !repoPickerRef.current.contains(target)
+        !(repoPickerRef.current?.contains(target)) &&
+        !(repoPickerAnchorRef.current?.contains(target))
       ) {
         setIsRepoPickerOpen(false);
       }
@@ -486,7 +507,6 @@ export function WorkspacesSidebar({
           </h2>
 
           <div
-            ref={repoPickerRef}
             className="relative flex items-center gap-1 text-app-foreground-soft/80"
           >
             <BaseTooltip side="top" content={<span>Add repository</span>}>
@@ -518,6 +538,7 @@ export function WorkspacesSidebar({
 
             <BaseTooltip side="top" content={<span>Add workspace</span>}>
               <ToolbarButton
+                ref={repoPickerAnchorRef}
                 label="New workspace"
                 disabled={addRepositoryBusy || createBusy || workspaceActionsBusy}
                 aria-expanded={isRepoPickerOpen}
@@ -543,11 +564,13 @@ export function WorkspacesSidebar({
               </ToolbarButton>
             </BaseTooltip>
 
-            {isRepoPickerOpen ? (
+            {isRepoPickerOpen && pickerPos ? createPortal(
               <div
+                ref={repoPickerRef}
                 role="dialog"
                 aria-label="Create workspace from repository"
-                className="absolute right-0 top-full z-40 mt-2 w-[18.5rem] rounded-[14px] border border-app-border bg-app-sidebar px-2 py-2 shadow-[0_18px_48px_rgba(0,0,0,0.38)]"
+                className="fixed z-[9999] w-[18.5rem] rounded-[14px] border border-app-border bg-app-sidebar px-2 py-2 shadow-[0_18px_48px_rgba(0,0,0,0.38)]"
+                style={{ top: pickerPos.top, left: pickerPos.left }}
               >
                 <div className="relative">
                   <Search
@@ -606,7 +629,8 @@ export function WorkspacesSidebar({
                     </p>
                   )}
                 </div>
-              </div>
+              </div>,
+              document.body,
             ) : null}
           </div>
         </div>
