@@ -230,7 +230,7 @@ pub fn merge_from_conductor() -> Result<ImportResult, String> {
     // Attach the Conductor DB as a read-only source
     connection
         .execute(
-            "ATTACH DATABASE ?1 AS conductor",
+            "ATTACH DATABASE ?1 AS source",
             [source_path.to_string_lossy().as_ref()],
         )
         .map_err(|error| format!("Failed to attach Conductor database: {error}"))?;
@@ -262,11 +262,11 @@ pub fn merge_from_conductor() -> Result<ImportResult, String> {
                 format!(
                     "SELECT {col_list} FROM (
                         SELECT *, CASE WHEN lower(key) LIKE '%token%' THEN '[REDACTED]' ELSE value END AS value
-                        FROM conductor.{table}
+                        FROM source.{table}
                     )"
                 )
             } else {
-                format!("SELECT {col_list} FROM conductor.{table}")
+                format!("SELECT {col_list} FROM source.{table}")
             };
 
             connection
@@ -279,7 +279,7 @@ pub fn merge_from_conductor() -> Result<ImportResult, String> {
 
     if let Err(error) = merge_result {
         let _ = connection.execute_batch("ROLLBACK");
-        let _ = connection.execute("DETACH DATABASE conductor", []);
+        let _ = connection.execute("DETACH DATABASE source", []);
         return Err(error);
     }
 
@@ -288,7 +288,7 @@ pub fn merge_from_conductor() -> Result<ImportResult, String> {
         .map_err(|error| format!("Failed to commit: {error}"))?;
 
     connection
-        .execute("DETACH DATABASE conductor", [])
+        .execute("DETACH DATABASE source", [])
         .map_err(|error| format!("Failed to detach: {error}"))?;
 
     let repos_count = count_rows(&connection, "repos")?;
