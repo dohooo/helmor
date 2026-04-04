@@ -4,6 +4,7 @@ pub mod error;
 mod import;
 mod models;
 mod schema;
+pub mod sidecar;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -14,6 +15,7 @@ pub fn run() {
             map: std::sync::Mutex::new(std::collections::HashMap::new()),
         })
         .manage(models::auth::GithubIdentityFlowRuntime::default())
+        .manage(sidecar::ManagedSidecar::new())
         .setup(|_app| {
             // Ensure data directory structure exists
             data_dir::ensure_directory_structure().expect("Failed to create Helmor data directory");

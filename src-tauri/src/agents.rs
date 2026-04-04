@@ -228,6 +228,7 @@ pub async fn send_agent_message(request: AgentSendRequest) -> CmdResult<AgentSen
 pub async fn send_agent_message_stream(
     app: AppHandle,
     state: tauri::State<'_, RunningAgentProcesses>,
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
     request: AgentSendRequest,
 ) -> CmdResult<AgentStreamStartResponse> {
     let prompt = request.prompt.trim().to_string();
@@ -248,26 +249,223 @@ pub async fn send_agent_message_stream(
     }
 
     let working_directory = resolve_working_directory(request.working_directory.as_deref())?;
-    let mut command = build_cli_command(
+    let stream_id = Uuid::new_v4().to_string();
+
+    if model.provider == "claude" {
+        // --- Claude: use sidecar (SDK) ---
+        return stream_via_sidecar(
+            app,
+            &sidecar,
+            &stream_id,
+            model,
+            &prompt,
+            &request,
+            &working_directory,
+        );
+    }
+
+    // --- Codex: keep existing CLI approach ---
+    stream_via_cli(
+        app,
+        &state,
+        &stream_id,
         model,
         &prompt,
-        request.session_id.as_deref(),
+        &request,
         &working_directory,
+    )
+}
+
+fn stream_via_sidecar(
+    app: AppHandle,
+    sidecar: &crate::sidecar::ManagedSidecar,
+    stream_id: &str,
+    model: &AgentModelDefinition,
+    prompt: &str,
+    request: &AgentSendRequest,
+    working_directory: &Path,
+) -> CmdResult<AgentStreamStartResponse> {
+    let request_id = stream_id.to_string();
+
+    // Resolve session ID for resume from DB if not provided by frontend
+    let resume_session_id = request
+        .session_id
+        .clone()
+        .or_else(|| {
+            request.conductor_session_id.as_deref().and_then(|csid| {
+                let conn = open_write_connection().ok()?;
+                conn.query_row(
+                    "SELECT claude_session_id FROM sessions WHERE id = ?1",
+                    [csid],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .ok()
+                .flatten()
+            })
+        });
+
+    let conductor_session_id = request
+        .conductor_session_id
+        .clone()
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
+    // Send request to sidecar
+    let sidecar_req = crate::sidecar::SidecarRequest {
+        id: request_id.clone(),
+        method: "sendMessage".to_string(),
+        params: serde_json::json!({
+            "sessionId": conductor_session_id,
+            "prompt": prompt,
+            "model": model.cli_model,
+            "cwd": working_directory.display().to_string(),
+            "resume": resume_session_id,
+        }),
+    };
+
+    if let Err(e) = sidecar.send(&sidecar_req) {
+        return Err(anyhow::anyhow!("Sidecar send failed: {e}").into());
+    }
+
+    // Read events in background and forward to frontend
+    let event_name = format!("agent-stream:{request_id}");
+    let model_id = model.id.to_string();
+    let provider = model.provider.to_string();
+    let model_copy = *model;
+    let prompt_copy = prompt.to_string();
+    let working_dir_str = working_directory.display().to_string();
+    let csid_copy = conductor_session_id.clone();
+    let rid = request_id.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
+        let mut resolved_session_id: Option<String> = None;
+        let mut all_lines: Vec<String> = Vec::new();
+
+        loop {
+            let event = match sidecar_state.read_event() {
+                Ok(Some(event)) => event,
+                Ok(None) => break,
+                Err(e) => {
+                    let _ = app.emit(&event_name, AgentStreamEvent::Error {
+                        message: format!("Sidecar read error: {e}"),
+                    });
+                    break;
+                }
+            };
+
+            // Only process events for our request
+            if event.id.as_deref() != Some(rid.as_str()) {
+                continue;
+            }
+
+            // Capture session ID
+            if let Some(ref sid) = event.session_id {
+                resolved_session_id = Some(sid.clone());
+            }
+
+            match event.event_type.as_str() {
+                "end" => {
+                    // Persist the exchange to the DB
+                    let mut persisted = false;
+                    if !all_lines.is_empty() {
+                        let full_stdout = all_lines.join("\n");
+                        if let Ok(output) = parse_claude_output(
+                            &full_stdout,
+                            resolved_session_id.as_deref(),
+                            model_copy.cli_model,
+                        ) {
+                            if persist_exchange_to_fixture(
+                                &csid_copy,
+                                &prompt_copy,
+                                &model_copy,
+                                &output.resolved_model,
+                                &output.assistant_text,
+                                output.thinking_text.as_deref(),
+                                output.session_id.as_deref(),
+                                &output.usage,
+                                &output.turns,
+                                output.result_json.as_deref(),
+                            )
+                            .is_ok()
+                            {
+                                persisted = true;
+                            }
+                        }
+                    }
+
+                    let _ = app.emit(
+                        &event_name,
+                        AgentStreamEvent::Done {
+                            provider: provider.clone(),
+                            model_id: model_id.clone(),
+                            resolved_model: model_copy.cli_model.to_string(),
+                            session_id: resolved_session_id.clone(),
+                            working_directory: working_dir_str.clone(),
+                            persisted_to_fixture: persisted,
+                        },
+                    );
+                    break;
+                }
+                "error" => {
+                    let msg = event
+                        .extra
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Unknown sidecar error")
+                        .to_string();
+                    let _ = app.emit(
+                        &event_name,
+                        AgentStreamEvent::Error { message: msg },
+                    );
+                    break;
+                }
+                _ => {
+                    // Forward SDK message as a JSON line (same format the frontend expects)
+                    let line = serde_json::to_string(&event.extra).unwrap_or_default();
+                    if !line.is_empty() && line != "{}" {
+                        let _ = app.emit(
+                            &event_name,
+                            AgentStreamEvent::Line { line: line.clone() },
+                        );
+                        all_lines.push(line);
+                    }
+                }
+            }
+        }
+    });
+
+    Ok(AgentStreamStartResponse {
+        stream_id: request_id,
+    })
+}
+
+fn stream_via_cli(
+    app: AppHandle,
+    state: &tauri::State<'_, RunningAgentProcesses>,
+    stream_id: &str,
+    model: &AgentModelDefinition,
+    prompt: &str,
+    request: &AgentSendRequest,
+    working_directory: &Path,
+) -> CmdResult<AgentStreamStartResponse> {
+    let mut command = build_cli_command(
+        model,
+        prompt,
+        request.session_id.as_deref(),
+        working_directory,
     )?;
 
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = command.spawn().context("Failed to spawn CLI process")?;
     let stdout = child.stdout.take().context("Failed to capture stdout")?;
-    let stream_id = Uuid::new_v4().to_string();
 
-    // Store PID for potential cancellation
     if let Ok(mut map) = state.map.lock() {
-        map.insert(stream_id.clone(), child.id());
+        map.insert(stream_id.to_string(), child.id());
     }
 
     let event_name = format!("agent-stream:{stream_id}");
-    let cleanup_id = stream_id.clone();
+    let cleanup_id = stream_id.to_string();
     let provider = model.provider.to_string();
     let model_id = model.id.to_string();
     let cli_model = model.cli_model.to_string();
@@ -275,6 +473,7 @@ pub async fn send_agent_message_stream(
     let fallback_session_id = request.session_id.clone();
     let working_dir_str = working_directory.display().to_string();
     let model_copy = *model;
+    let prompt_copy = prompt.to_string();
 
     tauri::async_runtime::spawn_blocking(move || {
         let reader = BufReader::new(stdout);
@@ -306,7 +505,6 @@ pub async fn send_agent_message_stream(
             }
         }
 
-        // Wait for process to exit
         let status = child.wait();
         let (exit_ok, exit_code) = match &status {
             Ok(s) => (s.success(), s.code()),
@@ -326,27 +524,15 @@ pub async fn send_agent_message_stream(
             let _ = app.emit(
                 &event_name,
                 AgentStreamEvent::Error {
-                    message: format_process_failure(
-                        if provider == "claude" {
-                            "Claude"
-                        } else {
-                            "Codex"
-                        },
-                        stderr_text.as_bytes(),
-                        exit_code,
-                    ),
+                    message: format_process_failure("Codex", stderr_text.as_bytes(), exit_code),
                 },
             );
             return;
         }
 
-        // Parse and persist using existing logic
         let full_stdout = all_lines.join("\n");
-        let parse_result = if provider == "claude" {
-            parse_claude_output(&full_stdout, fallback_session_id.as_deref(), &cli_model)
-        } else {
-            parse_codex_output(&full_stdout, fallback_session_id.as_deref(), &cli_model)
-        };
+        let parse_result =
+            parse_codex_output(&full_stdout, fallback_session_id.as_deref(), &cli_model);
 
         match parse_result {
             Ok(output) => {
@@ -354,7 +540,7 @@ pub async fn send_agent_message_stream(
                 if let Some(csid) = non_empty(conductor_session_id.as_deref()) {
                     if persist_exchange_to_fixture(
                         csid,
-                        &prompt,
+                        &prompt_copy,
                         &model_copy,
                         &output.resolved_model,
                         &output.assistant_text,
@@ -392,7 +578,6 @@ pub async fn send_agent_message_stream(
             }
         }
 
-        // Cleanup PID
         {
             let processes: tauri::State<'_, RunningAgentProcesses> = app.state();
             let mut map = processes.map.lock().unwrap_or_else(|e| e.into_inner());
@@ -401,7 +586,9 @@ pub async fn send_agent_message_stream(
         }
     });
 
-    Ok(AgentStreamStartResponse { stream_id })
+    Ok(AgentStreamStartResponse {
+        stream_id: stream_id.to_string(),
+    })
 }
 
 fn send_agent_message_blocking(request: AgentSendRequest) -> Result<AgentSendResponse> {

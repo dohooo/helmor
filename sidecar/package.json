@@ -1,0 +1,13 @@
+{
+  "name": "@helmor/sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/index.ts --target=node --outfile=dist/sidecar.js",
+    "dev": "bun run src/index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.92"
+  }
+}
