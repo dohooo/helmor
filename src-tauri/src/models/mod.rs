@@ -345,8 +345,8 @@ mod tests {
             crate::data_dir::workspace_dir(&self.repo_name, &self.directory_name).unwrap()
         }
 
-        fn mirror_dir(&self) -> PathBuf {
-            crate::data_dir::repo_mirror_dir(&self.repo_name).unwrap()
+        fn source_repo_root(&self) -> PathBuf {
+            self.root.join("source-repo")
         }
 
         fn attachment_path(&self) -> String {
@@ -407,11 +407,9 @@ mod tests {
                 include_updated_at,
             );
 
-            let mirror_dir = crate::data_dir::repo_mirror_dir(&repo_name).unwrap();
             let workspace_dir = crate::data_dir::workspace_dir(&repo_name, &directory_name).unwrap();
-            git_ops::ensure_repo_mirror(&source_repo_root, &mirror_dir).unwrap();
-            git_ops::point_branch_to_archive_commit(&mirror_dir, &branch, &head_commit).unwrap();
-            git_ops::create_worktree(&mirror_dir, &workspace_dir, &branch).unwrap();
+            git_ops::point_branch_to_commit(&source_repo_root, &branch, &head_commit).unwrap();
+            git_ops::create_worktree(&source_repo_root, &workspace_dir, &branch).unwrap();
             fs::create_dir_all(workspace_dir.join(".context/attachments")).unwrap();
             fs::write(workspace_dir.join(".context/notes.md"), "ready notes").unwrap();
             fs::write(
@@ -439,8 +437,8 @@ mod tests {
             crate::data_dir::workspace_dir(&self.repo_name, &self.directory_name).unwrap()
         }
 
-        fn mirror_dir(&self) -> PathBuf {
-            crate::data_dir::repo_mirror_dir(&self.repo_name).unwrap()
+        fn source_repo_root(&self) -> PathBuf {
+            self.root.join("source-repo")
         }
 
         fn attachment_path(&self) -> String {
@@ -604,7 +602,7 @@ mod tests {
         assert_eq!(response.restored_workspace_id, harness.workspace_id);
         assert_eq!(response.restored_state, "ready");
         assert_eq!(response.selected_workspace_id, harness.workspace_id);
-        assert!(harness.mirror_dir().exists());
+        assert!(harness.source_repo_root().exists());
         assert!(harness.workspace_dir().join(".git").exists());
         assert!(harness.workspace_dir().join("tracked.txt").exists());
         assert!(harness.workspace_dir().join(".context/notes.md").exists());
@@ -654,8 +652,8 @@ mod tests {
 
         let worktree_list = git_ops::run_git(
             [
-                "--git-dir",
-                harness.mirror_dir().to_str().unwrap(),
+                "-C",
+                harness.source_repo_root().to_str().unwrap(),
                 "worktree",
                 "list",
             ],
@@ -722,7 +720,7 @@ mod tests {
 
         let error = workspaces::restore_workspace_impl(&harness.workspace_id).unwrap_err();
 
-        assert!(error.to_string().contains("branch no longer exists"));
+        assert!(error.to_string().contains("Branch does not exist"));
         assert!(!harness.workspace_dir().exists());
         assert!(harness.archived_context_dir().exists());
     }
@@ -952,55 +950,45 @@ mod tests {
     }
 
     #[test]
-    fn ensure_repo_mirror_refreshes_with_existing_checked_out_worktree() {
+    fn source_repo_branches_accessible_for_worktree_creation() {
         let _guard = TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let harness = RestoreTestHarness::new(true);
-        let mirror_dir = harness.mirror_dir();
-        let first_workspace_dir = harness.workspace_dir();
+        let source = &harness.source_repo_root;
 
         git_ops::run_git(
-            ["-C", harness.source_repo_root.to_str().unwrap(), "checkout", "main"],
+            ["-C", source.to_str().unwrap(), "checkout", "main"],
             None,
         )
         .unwrap();
         git_ops::run_git(
             [
-                "-C", harness.source_repo_root.to_str().unwrap(),
+                "-C", source.to_str().unwrap(),
                 "checkout", "-b", "feature/second-restore-target",
             ],
             None,
         )
         .unwrap();
-        fs::write(harness.source_repo_root.join("second.txt"), "second branch").unwrap();
+        fs::write(source.join("second.txt"), "second branch").unwrap();
         git_ops::run_git(
-            ["-C", harness.source_repo_root.to_str().unwrap(), "add", "second.txt"],
+            ["-C", source.to_str().unwrap(), "add", "second.txt"],
             None,
         )
         .unwrap();
         git_ops::run_git(
             [
-                "-C", harness.source_repo_root.to_str().unwrap(),
+                "-C", source.to_str().unwrap(),
                 "-c", "user.name=Helmor", "-c", "user.email=helmor@example.com",
                 "commit", "-m", "second restore target",
             ],
             None,
         )
         .unwrap();
-        let second_commit = git_ops::run_git(
-            ["-C", harness.source_repo_root.to_str().unwrap(), "rev-parse", "HEAD"],
-            None,
-        )
-        .unwrap();
 
-        git_ops::ensure_repo_mirror(&harness.source_repo_root, &mirror_dir).unwrap();
-        git_ops::verify_branch_exists_in_mirror(&mirror_dir, &harness.branch).unwrap();
-        git_ops::point_branch_to_archive_commit(&mirror_dir, &harness.branch, second_commit.as_str()).unwrap();
-        git_ops::create_worktree(&mirror_dir, &first_workspace_dir, &harness.branch).unwrap();
-
-        git_ops::ensure_repo_mirror(&harness.source_repo_root, &mirror_dir).unwrap();
-        git_ops::verify_branch_exists_in_mirror(&mirror_dir, "feature/second-restore-target").unwrap();
+        // Branch should be directly visible in the source repo
+        git_ops::verify_branch_exists(source, "feature/second-restore-target").unwrap();
+        git_ops::verify_branch_exists(source, &harness.branch).unwrap();
     }
 
     #[test]
@@ -1338,6 +1326,8 @@ mod tests {
             None,
         )
         .unwrap();
+        // Switch back to main so feature/restore-target is free for worktree checkout
+        git_ops::run_git(["-C", repo_root.to_str().unwrap(), "checkout", "main"], None).unwrap();
     }
 
     fn create_workspace_fixture_db(db_path: &Path, source_repo_root: &Path, repo_id: &str, repo_name: &str) {

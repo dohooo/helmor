@@ -52,68 +52,24 @@ pub fn ensure_git_repository(repo_root: &Path) -> Result<()> {
     .context("Repository source is invalid")
 }
 
-pub fn ensure_repo_mirror(source_repo_root: &Path, mirror_dir: &Path) -> Result<()> {
-    ensure_git_repository(source_repo_root)?;
-    fs::create_dir_all(
-        mirror_dir
-            .parent()
-            .with_context(|| format!("Mirror path has no parent: {}", mirror_dir.display()))?,
-    )
-    .with_context(|| {
-        format!(
-            "Failed to create repo mirror parent for {}",
-            mirror_dir.display()
-        )
-    })?;
-
-    if mirror_dir.exists() {
-        let mirror_dir = mirror_dir.display().to_string();
-        run_git(
-            ["--git-dir", mirror_dir.as_str(), "rev-parse", "--git-dir"],
-            None,
-        )?;
-    } else {
-        let source_repo_root = source_repo_root.display().to_string();
-        let mirror_dir = mirror_dir.display().to_string();
-        run_git(
-            [
-                "clone",
-                "--mirror",
-                "--no-local",
-                source_repo_root.as_str(),
-                mirror_dir.as_str(),
-            ],
-            None,
-        )?;
-    }
-
-    fetch_mirror_from_source(source_repo_root, mirror_dir)
-}
-
-pub fn fetch_mirror_from_source(source_root: &Path, mirror_dir: &Path) -> Result<()> {
-    let source_root = source_root.display().to_string();
-    let mirror_dir = mirror_dir.display().to_string();
+/// Fetch latest refs from the remote into the source repo.
+pub fn fetch_remote(repo_root: &Path) -> Result<()> {
+    let repo_root = repo_root.display().to_string();
     run_git(
-        [
-            "--git-dir",
-            mirror_dir.as_str(),
-            "fetch",
-            "--prune",
-            source_root.as_str(),
-            "+refs/heads/*:refs/remotes/origin/*",
-        ],
+        ["-C", repo_root.as_str(), "fetch", "--prune"],
         None,
     )
     .map(|_| ())
-    .context("Failed to fetch into mirror")
+    .context("Failed to fetch from remote")
 }
 
-pub fn list_remote_branches(mirror_dir: &Path) -> Result<Vec<String>> {
-    let mirror_dir = mirror_dir.display().to_string();
+/// List remote-tracking branches in the source repo.
+pub fn list_remote_branches(repo_root: &Path) -> Result<Vec<String>> {
+    let repo_root = repo_root.display().to_string();
     let output = run_git(
         [
-            "--git-dir",
-            mirror_dir.as_str(),
+            "-C",
+            repo_root.as_str(),
             "for-each-ref",
             "--format=%(refname:short)",
             "refs/remotes/origin/",
@@ -134,17 +90,18 @@ pub fn list_remote_branches(mirror_dir: &Path) -> Result<Vec<String>> {
     Ok(sorted)
 }
 
+/// Create a worktree that checks out an existing branch.
 pub fn create_worktree(
-    mirror_dir: &Path,
+    repo_root: &Path,
     workspace_dir: &Path,
     branch: &str,
 ) -> Result<()> {
-    let mirror_dir = mirror_dir.display().to_string();
+    let repo_root = repo_root.display().to_string();
     let workspace_dir_arg = workspace_dir.display().to_string();
     run_git(
         [
-            "--git-dir",
-            mirror_dir.as_str(),
+            "-C",
+            repo_root.as_str(),
             "worktree",
             "add",
             workspace_dir_arg.as_str(),
@@ -162,18 +119,19 @@ pub fn create_worktree(
     })
 }
 
+/// Create a worktree with a new branch based on a start point.
 pub fn create_worktree_from_start_point(
-    mirror_dir: &Path,
+    repo_root: &Path,
     workspace_dir: &Path,
     branch: &str,
     start_point: &str,
 ) -> Result<String> {
-    let mirror_dir = mirror_dir.display().to_string();
+    let repo_root = repo_root.display().to_string();
     let workspace_dir_arg = workspace_dir.display().to_string();
     run_git(
         [
-            "--git-dir",
-            mirror_dir.as_str(),
+            "-C",
+            repo_root.as_str(),
             "worktree",
             "add",
             "-b",
@@ -193,13 +151,13 @@ pub fn create_worktree_from_start_point(
     })
 }
 
-pub fn remove_worktree(mirror_dir: &Path, workspace_dir: &Path) -> Result<()> {
-    let mirror_dir = mirror_dir.display().to_string();
+pub fn remove_worktree(repo_root: &Path, workspace_dir: &Path) -> Result<()> {
+    let repo_root = repo_root.display().to_string();
     let workspace_dir_arg = workspace_dir.display().to_string();
     run_git(
         [
-            "--git-dir",
-            mirror_dir.as_str(),
+            "-C",
+            repo_root.as_str(),
             "worktree",
             "remove",
             "--force",
@@ -216,13 +174,13 @@ pub fn remove_worktree(mirror_dir: &Path, workspace_dir: &Path) -> Result<()> {
     })
 }
 
-pub fn remove_branch(mirror_dir: &Path, branch: &str) -> Result<()> {
-    let mirror_dir = mirror_dir.display().to_string();
+pub fn remove_branch(repo_root: &Path, branch: &str) -> Result<()> {
+    let repo_root = repo_root.display().to_string();
     let branch_ref = format!("refs/heads/{branch}");
     run_git(
         [
-            "--git-dir",
-            mirror_dir.as_str(),
+            "-C",
+            repo_root.as_str(),
             "update-ref",
             "-d",
             branch_ref.as_str(),
@@ -240,13 +198,14 @@ pub fn remove_branch(mirror_dir: &Path, branch: &str) -> Result<()> {
     })
 }
 
+/// Create a detached worktree for setup script execution.
 pub fn refresh_repo_setup_root(
-    mirror_dir: &Path,
+    repo_root: &Path,
     setup_root_dir: &Path,
     start_point: &str,
 ) -> Result<()> {
     if setup_root_dir.exists() {
-        let _ = remove_worktree(mirror_dir, setup_root_dir);
+        let _ = remove_worktree(repo_root, setup_root_dir);
         let _ = fs::remove_dir_all(setup_root_dir);
     }
 
@@ -262,12 +221,12 @@ pub fn refresh_repo_setup_root(
         )
     })?;
 
-    let mirror_dir = mirror_dir.display().to_string();
+    let repo_root = repo_root.display().to_string();
     let setup_root_dir_arg = setup_root_dir.display().to_string();
     run_git(
         [
-            "--git-dir",
-            mirror_dir.as_str(),
+            "-C",
+            repo_root.as_str(),
             "worktree",
             "add",
             "--detach",
@@ -286,13 +245,14 @@ pub fn refresh_repo_setup_root(
     })
 }
 
-pub fn verify_branch_exists_in_mirror(mirror_dir: &Path, branch: &str) -> Result<()> {
-    let mirror_dir = mirror_dir.display().to_string();
-    let branch_ref = format!("refs/remotes/origin/{branch}");
+/// Verify a local branch exists in the repo.
+pub fn verify_branch_exists(repo_root: &Path, branch: &str) -> Result<()> {
+    let repo_root = repo_root.display().to_string();
+    let branch_ref = format!("refs/heads/{branch}");
     run_git(
         [
-            "--git-dir",
-            mirror_dir.as_str(),
+            "-C",
+            repo_root.as_str(),
             "rev-parse",
             "--verify",
             branch_ref.as_str(),
@@ -300,19 +260,17 @@ pub fn verify_branch_exists_in_mirror(mirror_dir: &Path, branch: &str) -> Result
         None,
     )
     .map(|_| ())
-    .with_context(|| format!("Archived workspace branch no longer exists in source repo: {branch}"))
+    .with_context(|| format!("Branch does not exist: {branch}"))
 }
 
-pub fn verify_commit_exists_in_mirror(
-    mirror_dir: &Path,
-    archive_commit: &str,
-) -> Result<()> {
-    let mirror_dir = mirror_dir.display().to_string();
-    let commit_ref = format!("{archive_commit}^{{commit}}");
+/// Verify a commit exists in the repo.
+pub fn verify_commit_exists(repo_root: &Path, commit: &str) -> Result<()> {
+    let repo_root = repo_root.display().to_string();
+    let commit_ref = format!("{commit}^{{commit}}");
     run_git(
         [
-            "--git-dir",
-            mirror_dir.as_str(),
+            "-C",
+            repo_root.as_str(),
             "rev-parse",
             "--verify",
             commit_ref.as_str(),
@@ -320,20 +278,21 @@ pub fn verify_commit_exists_in_mirror(
         None,
     )
     .map(|_| ())
-    .with_context(|| format!("Archived workspace commit is missing in source repo: {archive_commit}"))
+    .with_context(|| format!("Commit not found: {commit}"))
 }
 
-pub fn verify_commitish_exists_in_mirror(
-    mirror_dir: &Path,
+/// Verify an arbitrary ref/commitish exists in the repo.
+pub fn verify_commitish_exists(
+    repo_root: &Path,
     commitish: &str,
     error_message: &str,
 ) -> Result<()> {
-    let mirror_dir = mirror_dir.display().to_string();
+    let repo_root = repo_root.display().to_string();
     let verify_ref = format!("{commitish}^{{commit}}");
     run_git(
         [
-            "--git-dir",
-            mirror_dir.as_str(),
+            "-C",
+            repo_root.as_str(),
             "rev-parse",
             "--verify",
             verify_ref.as_str(),
@@ -344,26 +303,27 @@ pub fn verify_commitish_exists_in_mirror(
     .context(error_message.to_string())
 }
 
-pub fn point_branch_to_archive_commit(
-    mirror_dir: &Path,
+/// Point a branch ref at a specific commit.
+pub fn point_branch_to_commit(
+    repo_root: &Path,
     branch: &str,
-    archive_commit: &str,
+    commit: &str,
 ) -> Result<()> {
-    let mirror_dir = mirror_dir.display().to_string();
+    let repo_root = repo_root.display().to_string();
     let branch_ref = format!("refs/heads/{branch}");
     run_git(
         [
-            "--git-dir",
-            mirror_dir.as_str(),
+            "-C",
+            repo_root.as_str(),
             "update-ref",
             branch_ref.as_str(),
-            archive_commit,
+            commit,
         ],
         None,
     )
     .map(|_| ())
     .with_context(|| {
-        format!("Failed to point branch {branch} at {archive_commit}")
+        format!("Failed to point branch {branch} at {commit}")
     })
 }
 
@@ -387,8 +347,8 @@ pub fn current_workspace_head_commit(workspace_dir: &Path) -> Result<String> {
     Ok(commit)
 }
 
-pub fn remote_tracking_branch_ref(default_branch: &str) -> String {
-    format!("refs/remotes/origin/{default_branch}")
+pub fn default_branch_ref(default_branch: &str) -> String {
+    format!("refs/heads/{default_branch}")
 }
 
 pub fn tracked_file_count(workspace_dir: &Path) -> Result<i64> {

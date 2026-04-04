@@ -354,10 +354,9 @@ pub fn list_remote_branches(workspace_id: &str) -> Result<Vec<String>> {
         .map(PathBuf::from)
         .with_context(|| format!("Workspace {workspace_id} is missing repo root_path"))?;
 
-    let mirror_dir = crate::data_dir::repo_mirror_dir(&record.repo_name)?;
-    git_ops::ensure_repo_mirror(&repo_root, &mirror_dir)?;
-    git_ops::fetch_mirror_from_source(&repo_root, &mirror_dir)?;
-    git_ops::list_remote_branches(&mirror_dir)
+    git_ops::ensure_git_repository(&repo_root)?;
+    git_ops::fetch_remote(&repo_root)?;
+    git_ops::list_remote_branches(&repo_root)
 }
 
 // ---- Update intended target branch ----
@@ -453,7 +452,6 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
     let workspace_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let workspace_dir = crate::data_dir::workspace_dir(&repository.name, &directory_name)?;
-    let mirror_dir = crate::data_dir::repo_mirror_dir(&repository.name)?;
     let setup_root_dir = crate::data_dir::data_dir()?
         .join("repo-roots")
         .join(&repository.name);
@@ -493,18 +491,18 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
             bail!("{error}");
         }
 
-        git_ops::ensure_repo_mirror(&repo_root, &mirror_dir)?;
-        let tracked_start_ref = git_ops::remote_tracking_branch_ref(&default_branch);
-        git_ops::verify_commitish_exists_in_mirror(
-            &mirror_dir,
-            &tracked_start_ref,
+        git_ops::ensure_git_repository(&repo_root)?;
+        let start_ref = git_ops::default_branch_ref(&default_branch);
+        git_ops::verify_commitish_exists(
+            &repo_root,
+            &start_ref,
             &format!("Default branch is missing in source repo: {default_branch}"),
         )?;
         let init_log = match git_ops::create_worktree_from_start_point(
-            &mirror_dir,
+            &repo_root,
             &workspace_dir,
             &branch,
-            &tracked_start_ref,
+            &start_ref,
         ) {
             Ok(output) => {
                 created_worktree = true;
@@ -522,7 +520,7 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
                 repository.name,
                 workspace_dir.display(),
                 branch,
-                tracked_start_ref,
+                start_ref,
                 init_log
             ),
         )?;
@@ -537,7 +535,7 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
         )?;
         update_workspace_state(&workspace_id, "setting_up", &timestamp)?;
 
-        git_ops::refresh_repo_setup_root(&mirror_dir, &setup_root_dir, &tracked_start_ref)?;
+        git_ops::refresh_repo_setup_root(&repo_root, &setup_root_dir, &start_ref)?;
         created_setup_root = true;
 
         let setup_hook = match resolve_setup_hook(&repository, &workspace_dir, &setup_root_dir) {
@@ -570,7 +568,7 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
             cleanup_failed_created_workspace(
                 &workspace_id,
                 &session_id,
-                &mirror_dir,
+                &repo_root,
                 &workspace_dir,
                 &branch,
                 created_worktree,
@@ -580,7 +578,7 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
     };
 
     if created_setup_root {
-        let _ = git_ops::remove_worktree(&mirror_dir, &setup_root_dir);
+        let _ = git_ops::remove_worktree(&repo_root, &setup_root_dir);
         let _ = fs::remove_dir_all(&setup_root_dir);
     }
 
@@ -637,24 +635,21 @@ pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResp
         )
     })?;
 
-    let mirror_dir = crate::data_dir::repo_mirror_dir(&record.repo_name)?;
-    git_ops::ensure_repo_mirror(&repo_root, &mirror_dir)?;
-
     let archive_commit = git_ops::current_workspace_head_commit(&workspace_dir)?;
-    git_ops::verify_commit_exists_in_mirror(&mirror_dir, &archive_commit)?;
+    git_ops::verify_commit_exists(&repo_root, &archive_commit)?;
 
     let workspace_context_dir = workspace_dir.join(".context");
     let staged_archive_dir = helpers::staged_archive_context_dir(&archived_context_dir);
     create_staged_archive_context(&workspace_context_dir, &staged_archive_dir)?;
 
-    if let Err(error) = git_ops::remove_worktree(&mirror_dir, &workspace_dir) {
+    if let Err(error) = git_ops::remove_worktree(&repo_root, &workspace_dir) {
         let _ = fs::remove_dir_all(&staged_archive_dir);
         return Err(error);
     }
 
     if let Err(error) = fs::rename(&staged_archive_dir, &archived_context_dir) {
         cleanup_failed_archive(
-            &mirror_dir,
+            &repo_root,
             &workspace_dir,
             &workspace_context_dir,
             &branch,
@@ -670,7 +665,7 @@ pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResp
 
     if let Err(error) = update_archived_workspace_state(workspace_id, &archive_commit) {
         cleanup_failed_archive(
-            &mirror_dir,
+            &repo_root,
             &workspace_dir,
             &workspace_context_dir,
             &branch,
@@ -740,17 +735,16 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
         )
     })?;
 
-    let mirror_dir = crate::data_dir::repo_mirror_dir(&record.repo_name)?;
-    git_ops::ensure_repo_mirror(&repo_root, &mirror_dir)?;
-    git_ops::verify_branch_exists_in_mirror(&mirror_dir, &branch)?;
-    git_ops::verify_commit_exists_in_mirror(&mirror_dir, &archive_commit)?;
-    git_ops::point_branch_to_archive_commit(&mirror_dir, &branch, &archive_commit)?;
-    git_ops::create_worktree(&mirror_dir, &workspace_dir, &branch)?;
+    git_ops::ensure_git_repository(&repo_root)?;
+    git_ops::verify_branch_exists(&repo_root, &branch)?;
+    git_ops::verify_commit_exists(&repo_root, &archive_commit)?;
+    git_ops::point_branch_to_commit(&repo_root, &branch, &archive_commit)?;
+    git_ops::create_worktree(&repo_root, &workspace_dir, &branch)?;
 
     let staged_archive_dir = helpers::staged_archive_context_dir(&archived_context_dir);
     fs::rename(&archived_context_dir, &staged_archive_dir).map_err(|error| {
         cleanup_failed_restore(
-            &mirror_dir,
+            &repo_root,
             &workspace_dir,
             None,
             &staged_archive_dir,
@@ -765,7 +759,7 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
     let workspace_context_dir = workspace_dir.join(".context");
     if let Err(error) = helpers::copy_dir_all(&staged_archive_dir, &workspace_context_dir) {
         cleanup_failed_restore(
-            &mirror_dir,
+            &repo_root,
             &workspace_dir,
             Some(&workspace_context_dir),
             &staged_archive_dir,
@@ -780,7 +774,7 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
         &workspace_context_dir,
     ) {
         cleanup_failed_restore(
-            &mirror_dir,
+            &repo_root,
             &workspace_dir,
             Some(&workspace_context_dir),
             &staged_archive_dir,
@@ -1169,22 +1163,22 @@ fn update_restored_workspace_state(
 fn cleanup_failed_created_workspace(
     workspace_id: &str,
     session_id: &str,
-    mirror_dir: &Path,
+    repo_root: &Path,
     workspace_dir: &Path,
     branch: &str,
     created_worktree: bool,
 ) {
     if created_worktree && workspace_dir.exists() {
-        let _ = git_ops::remove_worktree(mirror_dir, workspace_dir);
+        let _ = git_ops::remove_worktree(repo_root, workspace_dir);
         let _ = fs::remove_dir_all(workspace_dir);
     }
 
-    let _ = git_ops::remove_branch(mirror_dir, branch);
+    let _ = git_ops::remove_branch(repo_root, branch);
     let _ = delete_workspace_and_session_rows(workspace_id, session_id);
 }
 
 fn cleanup_failed_restore(
-    mirror_dir: &Path,
+    repo_root: &Path,
     workspace_dir: &Path,
     workspace_context_dir: Option<&Path>,
     staged_archive_dir: &Path,
@@ -1194,19 +1188,7 @@ fn cleanup_failed_restore(
         let _ = fs::remove_dir_all(context_dir);
     }
 
-    let mirror_dir_str = mirror_dir.display().to_string();
-    let workspace_dir_arg = workspace_dir.display().to_string();
-    let _ = git_ops::run_git(
-        [
-            "--git-dir",
-            mirror_dir_str.as_str(),
-            "worktree",
-            "remove",
-            "--force",
-            workspace_dir_arg.as_str(),
-        ],
-        None,
-    );
+    let _ = git_ops::remove_worktree(repo_root, workspace_dir);
     let _ = fs::remove_dir_all(workspace_dir);
 
     if staged_archive_dir.exists() && !archived_context_dir.exists() {
@@ -1215,7 +1197,7 @@ fn cleanup_failed_restore(
 }
 
 fn cleanup_failed_archive(
-    mirror_dir: &Path,
+    repo_root: &Path,
     workspace_dir: &Path,
     workspace_context_dir: &Path,
     branch: &str,
@@ -1227,10 +1209,10 @@ fn cleanup_failed_archive(
         let _ = fs::rename(archived_context_dir, staged_archive_dir);
     }
 
-    let _ = git_ops::point_branch_to_archive_commit(mirror_dir, branch, archive_commit);
+    let _ = git_ops::point_branch_to_commit(repo_root, branch, archive_commit);
 
     if !workspace_dir.exists() {
-        let _ = git_ops::create_worktree(mirror_dir, workspace_dir, branch);
+        let _ = git_ops::create_worktree(repo_root, workspace_dir, branch);
     }
 
     if staged_archive_dir.exists() {
@@ -1281,7 +1263,7 @@ fn create_staged_archive_context(
 fn resolve_setup_hook(
     repository: &repos::RepositoryRecord,
     workspace_dir: &Path,
-    mirror_dir: &Path,
+    setup_root_dir: &Path,
 ) -> Result<Option<PathBuf>> {
     let raw_setup_script = if let Some(script) = repository
         .setup_script
@@ -1298,7 +1280,7 @@ fn resolve_setup_hook(
         return Ok(None);
     };
 
-    let resolved_path = expand_hook_path(&raw_setup_script, workspace_dir, mirror_dir);
+    let resolved_path = expand_hook_path(&raw_setup_script, workspace_dir, setup_root_dir);
     if !resolved_path.exists() {
         bail!(
             "Configured setup script is missing at {}",
@@ -1335,10 +1317,10 @@ fn load_setup_script_from_conductor_json(workspace_dir: &Path) -> Result<Option<
         .map(ToOwned::to_owned))
 }
 
-fn expand_hook_path(raw_value: &str, workspace_dir: &Path, mirror_dir: &Path) -> PathBuf {
-    let mirror_root = mirror_dir.display().to_string();
+fn expand_hook_path(raw_value: &str, workspace_dir: &Path, setup_root_dir: &Path) -> PathBuf {
+    let setup_root = setup_root_dir.display().to_string();
     let expanded = raw_value
-        .replace("$CONDUCTOR_ROOT_PATH", &mirror_root)
+        .replace("$CONDUCTOR_ROOT_PATH", &setup_root)
         .replace(
             "$CONDUCTOR_WORKSPACE_PATH",
             &workspace_dir.display().to_string(),
@@ -1355,7 +1337,7 @@ fn expand_hook_path(raw_value: &str, workspace_dir: &Path, mirror_dir: &Path) ->
 fn run_setup_hook(
     setup_script: Option<&Path>,
     workspace_dir: &Path,
-    mirror_dir: &Path,
+    setup_root_dir: &Path,
     log_path: &Path,
 ) -> Result<()> {
     let Some(setup_script) = setup_script else {
@@ -1364,14 +1346,14 @@ fn run_setup_hook(
     };
 
     let (program, args) = command_for_script(setup_script)?;
-    let mirror_root = mirror_dir.display().to_string();
+    let setup_root = setup_root_dir.display().to_string();
     let workspace_path = workspace_dir.display().to_string();
 
     let output = Command::new(&program)
         .args(&args)
         .arg(setup_script)
         .current_dir(workspace_dir)
-        .env("CONDUCTOR_ROOT_PATH", &mirror_root)
+        .env("CONDUCTOR_ROOT_PATH", &setup_root)
         .env("CONDUCTOR_WORKSPACE_PATH", &workspace_path)
         .output()
         .map_err(|error| {
@@ -1399,7 +1381,7 @@ fn run_setup_hook(
             program,
             setup_script.display(),
             workspace_dir.display(),
-            mirror_root,
+            setup_root,
             workspace_path,
             output.status,
             stdout,

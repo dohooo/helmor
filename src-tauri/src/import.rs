@@ -220,37 +220,16 @@ pub fn import_conductor_workspaces(workspace_ids: &[String]) -> Result<ImportWor
         .execute("DETACH DATABASE source", [])
         .ok();
 
-    // Phase 2: Git mirror, worktree, and filesystem copy (best-effort).
+    // Phase 2: Git worktree and filesystem copy (best-effort).
     // DB records are already committed — failures here are logged but non-fatal.
-    let mut mirrors_created: std::collections::HashSet<String> = std::collections::HashSet::new();
-
     for meta in &imported_workspaces {
-        // Ensure bare mirror (once per repo)
-        if !mirrors_created.contains(&meta.repo_name) {
-            let mirror_dir = match crate::data_dir::repo_mirror_dir(&meta.repo_name) {
-                Ok(d) => d,
-                Err(e) => {
-                    errors.push(format!("{}: mirror dir: {e}", meta.workspace_id));
-                    continue;
-                }
-            };
-
-            if let Some(ref root) = meta.repo_root {
-                if root.is_dir() {
-                    if let Err(e) = git_ops::ensure_repo_mirror(root, &mirror_dir) {
-                        errors.push(format!("mirror {}: {e}", meta.repo_name));
-                    }
-                }
-            }
-            mirrors_created.insert(meta.repo_name.clone());
-        }
-
         if let Err(e) = setup_workspace_filesystem(
             &meta.workspace_id,
             &meta.repo_name,
             &meta.directory_name,
             &meta.state,
             meta.branch.as_deref(),
+            meta.repo_root.as_deref(),
             conductor_root.as_deref(),
             &helmor_data_dir,
         ) {
@@ -411,30 +390,26 @@ fn import_workspace_db_records(
 
 /// Phase 2: Set up filesystem for an imported workspace (git worktree + context files).
 /// Best-effort — failures are reported but don't affect the committed DB records.
+#[allow(clippy::too_many_arguments)]
 fn setup_workspace_filesystem(
     workspace_id: &str,
     repo_name: &str,
     directory_name: &str,
     state: &str,
     branch: Option<&str>,
+    repo_root: Option<&Path>,
     conductor_root: Option<&Path>,
     helmor_data_dir: &Path,
 ) -> Result<()> {
-    let mirror_dir = crate::data_dir::repo_mirror_dir(repo_name)?;
-
     if state != "archived" {
         // Active workspace: create git worktree, then copy .context/
         let workspace_dir = crate::data_dir::workspace_dir(repo_name, directory_name)?;
 
         if !workspace_dir.exists() {
-            if let Some(branch_name) = branch {
-                if mirror_dir.exists() {
-                    // The DB branch may be stale (Conductor can rename/switch
-                    // branches without updating the DB).  If the DB branch
-                    // doesn't exist in the mirror, detect the actual branch
-                    // from the live Conductor worktree.
+            if let (Some(branch_name), Some(root)) = (branch, repo_root) {
+                if root.is_dir() {
                     let source_branch = resolve_source_branch(
-                        &mirror_dir,
+                        root,
                         branch_name,
                         conductor_root,
                         repo_name,
@@ -444,7 +419,7 @@ fn setup_workspace_filesystem(
                     if let Some(ref src) = source_branch {
                         let import_branch = format!("{src}-import");
                         if let Err(e) = setup_imported_worktree(
-                            &mirror_dir,
+                            root,
                             &workspace_dir,
                             &import_branch,
                             src,
@@ -513,18 +488,17 @@ fn setup_workspace_filesystem(
 ///
 /// The DB branch (e.g. `lgq/ottawa`) may be stale — Conductor can switch
 /// branches without updating the workspace record.  If the DB branch
-/// doesn't exist in the mirror, we read the actual HEAD of the Conductor
-/// worktree on disk to find the real branch.
+/// doesn't exist in the source repo, we read the actual HEAD of the
+/// Conductor worktree on disk to find the real branch.
 fn resolve_source_branch(
-    mirror_dir: &Path,
+    repo_root: &Path,
     db_branch: &str,
     conductor_root: Option<&Path>,
     repo_name: &str,
     directory_name: &str,
 ) -> Option<String> {
-    // Check if the DB branch exists in the mirror
-    let tracking_ref = format!("refs/remotes/origin/{db_branch}");
-    if git_ops::verify_commitish_exists_in_mirror(mirror_dir, &tracking_ref, "").is_ok() {
+    // Check if the DB branch exists as a local branch in the source repo
+    if git_ops::verify_branch_exists(repo_root, db_branch).is_ok() {
         return Some(db_branch.to_string());
     }
 
@@ -541,15 +515,15 @@ fn resolve_source_branch(
                 .output()
             {
                 let actual = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !actual.is_empty() && actual != "HEAD" {
-                    let actual_ref = format!("refs/remotes/origin/{actual}");
-                    if git_ops::verify_commitish_exists_in_mirror(mirror_dir, &actual_ref, "").is_ok() {
-                        eprintln!(
-                            "[import] Branch mismatch for {directory_name}: DB has '{db_branch}', \
-                             actual is '{actual}' — using actual"
-                        );
-                        return Some(actual);
-                    }
+                if !actual.is_empty()
+                    && actual != "HEAD"
+                    && git_ops::verify_branch_exists(repo_root, &actual).is_ok()
+                {
+                    eprintln!(
+                        "[import] Branch mismatch for {directory_name}: DB has '{db_branch}', \
+                         actual is '{actual}' — using actual"
+                    );
+                    return Some(actual);
                 }
             }
         }
@@ -562,11 +536,10 @@ fn resolve_source_branch(
 /// Create a git worktree for an imported active workspace.
 ///
 /// Creates `new_branch` (e.g. `foo-import`) based on the commit that
-/// `source_branch` points to in the mirror.  The source branch itself
-/// is likely still checked out in a Conductor worktree, so we never
-/// try to use it directly.
+/// `source_branch` points to.  The source branch itself is likely still
+/// checked out in a Conductor worktree, so we create a new branch.
 fn setup_imported_worktree(
-    mirror_dir: &Path,
+    repo_root: &Path,
     workspace_dir: &Path,
     new_branch: &str,
     source_branch: &str,
@@ -576,17 +549,17 @@ fn setup_imported_worktree(
             .with_context(|| format!("Failed to create {}", parent.display()))?;
     }
 
-    // The source branch exists as refs/remotes/origin/{source_branch} in the mirror
-    let tracking_ref = format!("refs/remotes/origin/{source_branch}");
+    // Create new branch based on the source branch (a local ref)
+    let start_ref = format!("refs/heads/{source_branch}");
     git_ops::create_worktree_from_start_point(
-        mirror_dir,
+        repo_root,
         workspace_dir,
         new_branch,
-        &tracking_ref,
+        &start_ref,
     )
     .with_context(|| {
         format!(
-            "Failed to create worktree for {new_branch} from {tracking_ref}"
+            "Failed to create worktree for {new_branch} from {start_ref}"
         )
     })?;
 

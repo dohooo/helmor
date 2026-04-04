@@ -49,14 +49,6 @@ pub fn archived_contexts_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// Returns the repos mirror directory inside the data dir.
-pub fn repos_dir() -> Result<PathBuf> {
-    let dir = data_dir()?.join("repos");
-    if !dir.exists() {
-        fs::create_dir_all(&dir).context("Failed to create repos directory")?;
-    }
-    Ok(dir)
-}
 
 /// Returns the logs directory inside the data dir.
 pub fn logs_dir() -> Result<PathBuf> {
@@ -143,7 +135,6 @@ pub fn ensure_directory_structure() -> Result<()> {
     data_dir()?;
     workspaces_dir()?;
     archived_contexts_dir()?;
-    repos_dir()?;
     logs_dir()?;
     Ok(())
 }
@@ -156,11 +147,6 @@ pub fn workspace_dir(repo_name: &str, directory_name: &str) -> Result<PathBuf> {
 /// Returns the archived context directory for a given repo + workspace.
 pub fn archived_context_dir(repo_name: &str, directory_name: &str) -> Result<PathBuf> {
     Ok(archived_contexts_dir()?.join(repo_name).join(directory_name))
-}
-
-/// Returns the repo mirror directory.
-pub fn repo_mirror_dir(repo_name: &str) -> Result<PathBuf> {
-    Ok(repos_dir()?.join(repo_name))
 }
 
 /// Returns the workspace logs directory.
