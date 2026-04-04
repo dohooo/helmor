@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use anyhow::{bail, Context, Result};
 use serde::Serialize;
 
 use super::{db, git_ops, helpers};
@@ -51,7 +52,7 @@ pub(crate) struct RepositoryRecord {
     pub setup_script: Option<String>,
 }
 
-pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>, String> {
+pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>> {
     let connection = db::open_connection(false)?;
     let mut statement = connection
         .prepare(
@@ -66,7 +67,7 @@ pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>, String> {
             ORDER BY COALESCE(display_order, 0) ASC, LOWER(name) ASC
             "#,
         )
-        .map_err(|error| format!("Failed to prepare repository list query: {error}"))?;
+        .context("Failed to prepare repository list query")?;
 
     let rows = statement
         .query_map([], |row| {
@@ -83,13 +84,13 @@ pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>, String> {
                 repo_initials: initials,
             })
         })
-        .map_err(|error| format!("Failed to load repositories: {error}"))?;
+        .context("Failed to load repositories")?;
 
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("Failed to deserialize repositories: {error}"))
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .context("Failed to deserialize repositories")
 }
 
-pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRecord>, String> {
+pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRecord>> {
     let connection = db::open_connection(false)?;
     let mut statement = connection
         .prepare(
@@ -99,7 +100,7 @@ pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRe
             WHERE id = ?1
             "#,
         )
-        .map_err(|error| format!("Failed to prepare repository lookup for {repo_id}: {error}"))?;
+        .with_context(|| format!("Failed to prepare repository lookup for {repo_id}"))?;
 
     let mut rows = statement
         .query_map([repo_id], |row| {
@@ -111,19 +112,19 @@ pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRe
                 setup_script: row.get(4)?,
             })
         })
-        .map_err(|error| format!("Failed to query repository {repo_id}: {error}"))?;
+        .with_context(|| format!("Failed to query repository {repo_id}"))?;
 
     match rows.next() {
         Some(result) => result
             .map(Some)
-            .map_err(|error| format!("Failed to deserialize repository {repo_id}: {error}")),
+            .with_context(|| format!("Failed to deserialize repository {repo_id}")),
         None => Ok(None),
     }
 }
 
 pub(crate) fn load_repository_by_root_path(
     root_path: &str,
-) -> Result<Option<RepositoryRecord>, String> {
+) -> Result<Option<RepositoryRecord>> {
     let connection = db::open_connection(false)?;
     let mut statement = connection
         .prepare(
@@ -133,7 +134,7 @@ pub(crate) fn load_repository_by_root_path(
             ORDER BY created_at ASC
             "#,
         )
-        .map_err(|error| format!("Failed to prepare repository root lookup: {error}"))?;
+        .context("Failed to prepare repository root lookup")?;
 
     let rows = statement
         .query_map([], |row| {
@@ -145,11 +146,11 @@ pub(crate) fn load_repository_by_root_path(
                 setup_script: row.get(4)?,
             })
         })
-        .map_err(|error| format!("Failed to query repository rows for {root_path}: {error}"))?;
+        .with_context(|| format!("Failed to query repository rows for {root_path}"))?;
 
     let rows = rows
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("Failed to deserialize repository for {root_path}: {error}"))?;
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .with_context(|| format!("Failed to deserialize repository for {root_path}"))?;
     let normalized_requested_root =
         normalize_filesystem_path(Path::new(root_path)).unwrap_or_else(|| root_path.to_string());
 
@@ -169,7 +170,7 @@ pub(crate) fn load_repository_by_root_path(
     Ok(None)
 }
 
-pub(crate) fn insert_repository(repository: &ResolvedRepositoryInput) -> Result<String, String> {
+pub(crate) fn insert_repository(repository: &ResolvedRepositoryInput) -> Result<String> {
     let connection = db::open_connection(true)?;
     let next_display_order: i64 = connection
         .query_row(
@@ -177,7 +178,7 @@ pub(crate) fn insert_repository(repository: &ResolvedRepositoryInput) -> Result<
             [],
             |row| row.get(0),
         )
-        .map_err(|error| format!("Failed to resolve next repository display order: {error}"))?;
+        .context("Failed to resolve next repository display order")?;
     let repo_id = uuid::Uuid::new_v4().to_string();
 
     connection
@@ -211,21 +212,19 @@ pub(crate) fn insert_repository(repository: &ResolvedRepositoryInput) -> Result<
                 next_display_order,
             ),
         )
-        .map_err(|error| format!("Failed to insert repository {}: {error}", repository.name))?;
+        .with_context(|| format!("Failed to insert repository {}", repository.name))?;
 
     Ok(repo_id)
 }
 
-pub(crate) fn delete_repository(repo_id: &str) -> Result<(), String> {
+pub(crate) fn delete_repository(repo_id: &str) -> Result<()> {
     let connection = db::open_connection(true)?;
     let deleted_rows = connection
         .execute("DELETE FROM repos WHERE id = ?1", [repo_id])
-        .map_err(|error| format!("Failed to delete repository {repo_id}: {error}"))?;
+        .with_context(|| format!("Failed to delete repository {repo_id}"))?;
 
     if deleted_rows != 1 {
-        return Err(format!(
-            "Repository delete affected {deleted_rows} rows for {repo_id}"
-        ));
+        bail!("Repository delete affected {deleted_rows} rows for {repo_id}");
     }
 
     Ok(())
@@ -233,25 +232,25 @@ pub(crate) fn delete_repository(repo_id: &str) -> Result<(), String> {
 
 pub fn resolve_repository_from_local_path(
     folder_path: &str,
-) -> Result<ResolvedRepositoryInput, String> {
+) -> Result<ResolvedRepositoryInput> {
     let selected_path = PathBuf::from(folder_path.trim());
 
     if folder_path.trim().is_empty() {
-        return Err("No repository folder was selected.".to_string());
+        bail!("No repository folder was selected.");
     }
 
     if !selected_path.exists() {
-        return Err(format!(
+        bail!(
             "Selected path does not exist: {}",
             selected_path.display()
-        ));
+        );
     }
 
     if !selected_path.is_dir() {
-        return Err(format!(
+        bail!(
             "Selected path is not a directory: {}",
             selected_path.display()
-        ));
+        );
     }
 
     let selected_path_arg = selected_path.display().to_string();
@@ -264,13 +263,13 @@ pub fn resolve_repository_from_local_path(
         ],
         None,
     )
-    .map_err(|error| format!("Selected directory is not a Git working tree: {error}"))?;
+    .map_err(|error| anyhow::anyhow!("Selected directory is not a Git working tree: {error}"))?;
 
     if inside_work_tree.trim() != "true" {
-        return Err(format!(
+        bail!(
             "Selected directory is not a Git working tree: {}",
             selected_path.display()
-        ));
+        );
     }
 
     let normalized_root_path = git_ops::run_git(
@@ -282,7 +281,7 @@ pub fn resolve_repository_from_local_path(
         ],
         None,
     )
-    .map_err(|error| format!("Failed to resolve Git repository root: {error}"))?;
+    .map_err(|error| anyhow::anyhow!("Failed to resolve Git repository root: {error}"))?;
     let normalized_root_path = normalized_root_path.trim().to_string();
     let normalized_root = Path::new(&normalized_root_path);
     let name = normalized_root
@@ -290,7 +289,7 @@ pub fn resolve_repository_from_local_path(
         .and_then(|value| value.to_str())
         .map(ToOwned::to_owned)
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
+        .with_context(|| {
             format!(
                 "Failed to derive repository name from {}",
                 normalized_root.display()
@@ -303,7 +302,7 @@ pub fn resolve_repository_from_local_path(
         None => None,
     };
     let default_branch =
-        resolve_repository_default_branch(normalized_root, remote.as_deref()).ok_or_else(|| {
+        resolve_repository_default_branch(normalized_root, remote.as_deref()).with_context(|| {
             format!(
                 "Unable to resolve a default branch for repository {}",
                 normalized_root.display()
@@ -321,7 +320,7 @@ pub fn resolve_repository_from_local_path(
 
 pub fn add_repository_from_local_path(
     folder_path: &str,
-) -> Result<AddRepositoryResponse, String> {
+) -> Result<AddRepositoryResponse> {
     let resolved_repository = resolve_repository_from_local_path(folder_path)?;
     let last_clone_directory = Path::new(&resolved_repository.normalized_root_path)
         .parent()
@@ -331,12 +330,14 @@ pub fn add_repository_from_local_path(
         load_repository_by_root_path(&resolved_repository.normalized_root_path)?;
 
     if let Some(last_clone_directory) = last_clone_directory.as_deref() {
-        super::settings::upsert_setting_value("last_clone_directory", last_clone_directory)?;
+        super::settings::upsert_setting_value("last_clone_directory", last_clone_directory)
+            .map_err(|e| anyhow::anyhow!(e))?;
     }
 
     if let Some(repository) = existing_repository {
         if let Some((selected_workspace_id, selected_workspace_state)) =
-            super::workspaces::select_visible_workspace_for_repo(&repository.id)?
+            super::workspaces::select_visible_workspace_for_repo(&repository.id)
+                .map_err(|e| anyhow::anyhow!(e))?
         {
             return Ok(AddRepositoryResponse {
                 repository_id: repository.id,
@@ -348,9 +349,8 @@ pub fn add_repository_from_local_path(
         }
 
         let create_response =
-            super::workspaces::create_workspace_from_repo_impl(&repository.id).map_err(|error| {
-                format!("Repository already exists, but workspace create failed: {error}")
-            })?;
+            super::workspaces::create_workspace_from_repo_impl(&repository.id)
+                .map_err(|error| anyhow::anyhow!("Repository already exists, but workspace create failed: {error}"))?;
 
         return Ok(AddRepositoryResponse {
             repository_id: repository.id,
@@ -361,12 +361,8 @@ pub fn add_repository_from_local_path(
         });
     }
 
-    let repository_id = insert_repository(&resolved_repository).map_err(|error| {
-        format!(
-            "Failed to persist repository {}: {error}",
-            resolved_repository.name
-        )
-    })?;
+    let repository_id = insert_repository(&resolved_repository)
+        .with_context(|| format!("Failed to persist repository {}", resolved_repository.name))?;
     let create_result = super::workspaces::create_workspace_from_repo_impl(&repository_id);
 
     match create_result {
@@ -379,17 +375,17 @@ pub fn add_repository_from_local_path(
         }),
         Err(error) => {
             let _ = delete_repository(&repository_id);
-            Err(format!("First workspace create failed: {error}"))
+            bail!("First workspace create failed: {error}");
         }
     }
 }
 
 // ---- Git remote / branch resolution helpers ----
 
-fn resolve_repository_remote(repo_root: &Path) -> Result<Option<String>, String> {
+fn resolve_repository_remote(repo_root: &Path) -> Result<Option<String>> {
     let repo_root_arg = repo_root.display().to_string();
     let output = git_ops::run_git(["-C", repo_root_arg.as_str(), "remote"], None)
-        .map_err(|error| format!("Failed to read repository remotes: {error}"))?;
+        .map_err(|error| anyhow::anyhow!("Failed to read repository remotes: {error}"))?;
     let remotes = output
         .lines()
         .map(str::trim)
@@ -408,14 +404,14 @@ fn resolve_repository_remote(repo_root: &Path) -> Result<Option<String>, String>
     Ok(None)
 }
 
-fn resolve_repository_remote_url(repo_root: &Path, remote: &str) -> Result<String, String> {
+fn resolve_repository_remote_url(repo_root: &Path, remote: &str) -> Result<String> {
     let repo_root_arg = repo_root.display().to_string();
     git_ops::run_git(
         ["-C", repo_root_arg.as_str(), "remote", "get-url", remote],
         None,
     )
     .map(|value| value.trim().to_string())
-    .map_err(|error| format!("Failed to resolve remote URL for {remote}: {error}"))
+    .map_err(|error| anyhow::anyhow!("Failed to resolve remote URL for {remote}: {error}"))
 }
 
 fn resolve_repository_default_branch(
@@ -434,7 +430,7 @@ fn resolve_repository_default_branch(
 fn resolve_default_branch_from_remote_head(
     repo_root: &Path,
     remote: &str,
-) -> Result<String, String> {
+) -> Result<String> {
     let repo_root_arg = repo_root.display().to_string();
     let output = git_ops::run_git(
         [
@@ -447,7 +443,7 @@ fn resolve_default_branch_from_remote_head(
         ],
         None,
     )
-    .map_err(|error| format!("Failed to resolve remote HEAD for {remote}: {error}"))?;
+    .map_err(|error| anyhow::anyhow!("Failed to resolve remote HEAD for {remote}: {error}"))?;
 
     let prefix = format!("{remote}/");
     output
@@ -455,7 +451,7 @@ fn resolve_default_branch_from_remote_head(
         .strip_prefix(prefix.as_str())
         .map(ToOwned::to_owned)
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| format!("Remote HEAD for {remote} did not include a branch name"))
+        .with_context(|| format!("Remote HEAD for {remote} did not include a branch name"))
 }
 
 fn resolve_current_branch(repo_root: &Path) -> Option<String> {

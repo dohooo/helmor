@@ -1,3 +1,4 @@
+use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use std::{
     fs,
@@ -187,11 +188,11 @@ pub fn repo_initials_for_name(repo_name: &str) -> String {
 
 // ---- File system helpers ----
 
-pub fn copy_dir_contents(source: &Path, destination: &Path) -> Result<(), String> {
+pub fn copy_dir_contents(source: &Path, destination: &Path) -> Result<()> {
     if !source.exists() {
-        fs::create_dir_all(destination).map_err(|error| {
+        fs::create_dir_all(destination).with_context(|| {
             format!(
-                "Failed to create directory {}: {error}",
+                "Failed to create directory {}",
                 destination.display()
             )
         })?;
@@ -199,21 +200,21 @@ pub fn copy_dir_contents(source: &Path, destination: &Path) -> Result<(), String
     }
 
     if !source.is_dir() {
-        return Err(format!("Expected directory at {}", source.display()));
+        bail!("Expected directory at {}", source.display());
     }
 
-    fs::create_dir_all(destination).map_err(|error| {
+    fs::create_dir_all(destination).with_context(|| {
         format!(
-            "Failed to create directory {}: {error}",
+            "Failed to create directory {}",
             destination.display()
         )
     })?;
 
     let entries = fs::read_dir(source)
-        .map_err(|error| format!("Failed to read directory {}: {error}", source.display()))?;
+        .with_context(|| format!("Failed to read directory {}", source.display()))?;
 
     for entry in entries {
-        let entry = entry.map_err(|error| format!("Failed to read directory entry: {error}"))?;
+        let entry = entry.context("Failed to read directory entry")?;
         let entry_source = entry.path();
         let entry_destination = destination.join(entry.file_name());
         copy_dir_all(&entry_source, &entry_destination)?;
@@ -222,9 +223,9 @@ pub fn copy_dir_contents(source: &Path, destination: &Path) -> Result<(), String
     Ok(())
 }
 
-pub fn copy_dir_all(source: &Path, destination: &Path) -> Result<(), String> {
+pub fn copy_dir_all(source: &Path, destination: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(source)
-        .map_err(|error| format!("Failed to read {}: {error}", source.display()))?;
+        .with_context(|| format!("Failed to read {}", source.display()))?;
 
     if metadata.file_type().is_symlink() {
         return copy_symlink(source, destination);
@@ -232,16 +233,16 @@ pub fn copy_dir_all(source: &Path, destination: &Path) -> Result<(), String> {
 
     if metadata.is_file() {
         if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
+            fs::create_dir_all(parent).with_context(|| {
                 format!(
-                    "Failed to create parent directory for {}: {error}",
+                    "Failed to create parent directory for {}",
                     destination.display()
                 )
             })?;
         }
-        fs::copy(source, destination).map_err(|error| {
+        fs::copy(source, destination).with_context(|| {
             format!(
-                "Failed to copy {} to {}: {error}",
+                "Failed to copy {} to {}",
                 source.display(),
                 destination.display()
             )
@@ -249,18 +250,18 @@ pub fn copy_dir_all(source: &Path, destination: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    fs::create_dir_all(destination).map_err(|error| {
+    fs::create_dir_all(destination).with_context(|| {
         format!(
-            "Failed to create directory {}: {error}",
+            "Failed to create directory {}",
             destination.display()
         )
     })?;
 
     let entries = fs::read_dir(source)
-        .map_err(|error| format!("Failed to read directory {}: {error}", source.display()))?;
+        .with_context(|| format!("Failed to read directory {}", source.display()))?;
 
     for entry in entries {
-        let entry = entry.map_err(|error| format!("Failed to read directory entry: {error}"))?;
+        let entry = entry.context("Failed to read directory entry")?;
         let entry_source = entry.path();
         let entry_destination = destination.join(entry.file_name());
         copy_dir_all(&entry_source, &entry_destination)?;
@@ -270,23 +271,23 @@ pub fn copy_dir_all(source: &Path, destination: &Path) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-pub fn copy_symlink(source: &Path, destination: &Path) -> Result<(), String> {
+pub fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
     use std::os::unix::fs::symlink;
 
     if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
+        fs::create_dir_all(parent).with_context(|| {
             format!(
-                "Failed to create parent directory for symlink {}: {error}",
+                "Failed to create parent directory for symlink {}",
                 destination.display()
             )
         })?;
     }
 
     let link_target = fs::read_link(source)
-        .map_err(|error| format!("Failed to read symlink {}: {error}", source.display()))?;
-    symlink(&link_target, destination).map_err(|error| {
+        .with_context(|| format!("Failed to read symlink {}", source.display()))?;
+    symlink(&link_target, destination).with_context(|| {
         format!(
-            "Failed to copy symlink {} to {}: {error}",
+            "Failed to copy symlink {} to {}",
             source.display(),
             destination.display()
         )
@@ -294,9 +295,9 @@ pub fn copy_symlink(source: &Path, destination: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-pub fn copy_symlink(source: &Path, destination: &Path) -> Result<(), String> {
+pub fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
     let target = fs::read_link(source)
-        .map_err(|error| format!("Failed to read symlink {}: {error}", source.display()))?;
+        .with_context(|| format!("Failed to read symlink {}", source.display()))?;
     let resolved = source
         .parent()
         .unwrap_or_else(|| Path::new(""))
@@ -306,21 +307,21 @@ pub fn copy_symlink(source: &Path, destination: &Path) -> Result<(), String> {
 
 // ---- Workspace scaffolding helpers ----
 
-pub fn write_file_if_missing(path: &Path, contents: &str) -> Result<(), String> {
+pub fn write_file_if_missing(path: &Path, contents: &str) -> Result<()> {
     if path.exists() {
         return Ok(());
     }
 
     fs::write(path, contents)
-        .map_err(|error| format!("Failed to write scaffold file {}: {error}", path.display()))
+        .with_context(|| format!("Failed to write scaffold file {}", path.display()))
 }
 
-pub fn create_workspace_context_scaffold(workspace_dir: &Path) -> Result<(), String> {
+pub fn create_workspace_context_scaffold(workspace_dir: &Path) -> Result<()> {
     let context_dir = workspace_dir.join(".context");
     let attachments_dir = context_dir.join("attachments");
-    fs::create_dir_all(&attachments_dir).map_err(|error| {
+    fs::create_dir_all(&attachments_dir).with_context(|| {
         format!(
-            "Failed to create workspace context scaffold under {}: {error}",
+            "Failed to create workspace context scaffold under {}",
             context_dir.display()
         )
     })?;
@@ -371,19 +372,19 @@ pub fn branch_name_for_directory(
     format!("{prefix}{directory_name}")
 }
 
-pub fn allocate_directory_name_for_repo(repo_id: &str) -> Result<String, String> {
+pub fn allocate_directory_name_for_repo(repo_id: &str) -> Result<String> {
     let connection = super::db::open_connection(false)?;
     let mut statement = connection
         .prepare(
             "SELECT directory_name FROM workspaces WHERE repository_id = ?1 AND directory_name IS NOT NULL",
         )
-        .map_err(|error| format!("Failed to prepare workspace name query: {error}"))?;
+        .context("Failed to prepare workspace name query")?;
 
     let names = statement
         .query_map([repo_id], |row| row.get::<_, String>(0))
-        .map_err(|error| format!("Failed to query existing workspace names: {error}"))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("Failed to read existing workspace names: {error}"))?;
+        .context("Failed to query existing workspace names")?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("Failed to read existing workspace names")?;
 
     let used = names
         .into_iter()
@@ -405,7 +406,7 @@ pub fn allocate_directory_name_for_repo(repo_id: &str) -> Result<String, String>
         }
     }
 
-    Err("Unable to allocate a workspace name from the vendored star list".to_string())
+    bail!("Unable to allocate a workspace name from the vendored star list")
 }
 
 // ---- Archive helpers ----

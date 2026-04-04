@@ -26,11 +26,13 @@ pnpm run test:watch          # vitest in watch mode
 ```
 
 Run a single test file:
+
 ```bash
 pnpm vitest run src/App.test.tsx
 ```
 
 Rust backend (from `src-tauri/`):
+
 ```bash
 cargo build                  # Build Tauri backend
 cargo check                  # Type-check without building
@@ -45,35 +47,36 @@ cargo check                  # Type-check without building
 
 ### Frontend structure
 
-| Path | Role |
-|---|---|
-| `src/App.tsx` | Root component. Owns all application state (workspaces, sessions, messages, sidebar width, theme, sending state). Orchestrates data loading and agent message flow. |
-| `src/lib/api.ts` | **IPC bridge**. Every Tauri `invoke()` call is here. Exports typed async functions (`loadWorkspaceGroups`, `sendAgentMessage`, `startAgentMessageStream`, `mergeFromConductor`, etc.) and all shared TypeScript types. Falls back to hardcoded defaults when Tauri runtime is absent (pure browser dev). |
-| `src/lib/stream-accumulator.ts` | Accumulates Claude CLI JSON stream lines into renderable `SessionMessageRecord[]` snapshots for real-time UI updates during streaming. |
-| `src/lib/message-adapter.ts` | Converts `SessionMessageRecord[]` into chat-renderable message structures for the workspace panel. Handles JSON-encoded messages (tool calls, thinking, results, errors) and plain text. |
-| `src/lib/utils.ts` | `cn()` helper (clsx + tailwind-merge). |
-| `src/components/workspace-panel.tsx` | Chat/message display area with session tabs. Uses `@assistant-ui/react` for message rendering with `@assistant-ui/react-markdown` for markdown. |
-| `src/components/workspace-composer.tsx` | Message input with model selector and image attachment support. |
-| `src/components/workspaces-sidebar.tsx` | Sidebar listing workspace groups (done/review/progress/backlog/canceled) with collapsible sections, archive/restore actions. |
-| `src/components/ui/` | shadcn/ui primitives (base-nova style, Tailwind v4 CSS variables). |
+| Path                                    | Role                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/App.tsx`                           | Root component. Owns all application state (workspaces, sessions, messages, sidebar width, theme, sending state). Orchestrates data loading and agent message flow.                                                                                                                                      |
+| `src/lib/api.ts`                        | **IPC bridge**. Every Tauri `invoke()` call is here. Exports typed async functions (`loadWorkspaceGroups`, `sendAgentMessage`, `startAgentMessageStream`, `mergeFromConductor`, etc.) and all shared TypeScript types. Falls back to hardcoded defaults when Tauri runtime is absent (pure browser dev). |
+| `src/lib/stream-accumulator.ts`         | Accumulates Claude CLI JSON stream lines into renderable `SessionMessageRecord[]` snapshots for real-time UI updates during streaming.                                                                                                                                                                   |
+| `src/lib/message-adapter.ts`            | Converts `SessionMessageRecord[]` into chat-renderable message structures for the workspace panel. Handles JSON-encoded messages (tool calls, thinking, results, errors) and plain text.                                                                                                                 |
+| `src/lib/utils.ts`                      | `cn()` helper (clsx + tailwind-merge).                                                                                                                                                                                                                                                                   |
+| `src/components/workspace-panel.tsx`    | Chat/message display area with session tabs. Uses `@assistant-ui/react` for message rendering with `@assistant-ui/react-markdown` for markdown.                                                                                                                                                          |
+| `src/components/workspace-composer.tsx` | Message input with model selector and image attachment support.                                                                                                                                                                                                                                          |
+| `src/components/workspaces-sidebar.tsx` | Sidebar listing workspace groups (done/review/progress/backlog/canceled) with collapsible sections, archive/restore actions.                                                                                                                                                                             |
+| `src/components/ui/`                    | shadcn/ui primitives (base-nova style, Tailwind v4 CSS variables).                                                                                                                                                                                                                                       |
 
 ### Backend structure (`src-tauri/src/`)
 
-| File | Role |
-|---|---|
-| `lib.rs` | Tauri app builder. Registers all commands, manages `RunningAgentProcesses` state, runs setup hook (directory + schema init). |
-| `data_dir.rs` | Resolves the Helmor data directory (`~/.helmor` or `~/.helmor.dev`). Supports `HELMOR_DATA_DIR` env var override. |
-| `schema.rs` | Database schema initialization — creates all tables/indexes/triggers if not present. |
-| `import.rs` | Optional merge-import of data from a local Conductor installation via SQLite `ATTACH DATABASE` + `INSERT OR IGNORE`. Atomic (transaction-wrapped), non-destructive (existing Helmor data preserved). |
-| `models/mod.rs` | Tauri command handlers — thin wrappers calling sub-modules. |
-| `models/db.rs` | Database connection opening via `data_dir::db_path()`. |
-| `models/repos.rs` | Repos table CRUD + git repository resolution. |
-| `models/workspaces.rs` | Workspaces table CRUD + archive/restore + workspace creation. |
-| `models/sessions.rs` | Sessions/messages/attachments queries + read/unread marking. |
-| `models/settings.rs` | Settings key-value store. |
-| `models/git_ops.rs` | Git mirror, worktree, and branch management. |
-| `models/helpers.rs` | Display helpers, naming, filesystem copy, icon resolution. |
-| `agents.rs` | Spawns Claude Code / Codex CLI subprocesses, streams stdout line-by-line back to the frontend via Tauri events (`agent-stream:{streamId}`). Manages running process PIDs. |
+| File                   | Role                                                                                                                                                                                                 |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lib.rs`               | Tauri app builder. Registers all commands, manages `RunningAgentProcesses` state, runs setup hook (directory + schema init).                                                                         |
+| `data_dir.rs`          | Resolves the Helmor data directory (`~/.helmor` or `~/.helmor.dev`). Supports `HELMOR_DATA_DIR` env var override.                                                                                    |
+| `schema.rs`            | Database schema initialization — creates all tables/indexes/triggers if not present.                                                                                                                 |
+| `import.rs`            | Optional merge-import of data from a local Conductor installation via SQLite `ATTACH DATABASE` + `INSERT OR IGNORE`. Atomic (transaction-wrapped), non-destructive (existing Helmor data preserved). |
+| `error.rs`             | `CommandError` wrapper — bridges `anyhow::Error` to Tauri-serializable errors for IPC.                                                                                                               |
+| `models/mod.rs`        | Tauri command handlers — thin wrappers calling sub-modules.                                                                                                                                          |
+| `models/db.rs`         | Database connection opening via `data_dir::db_path()`.                                                                                                                                               |
+| `models/repos.rs`      | Repos table CRUD + git repository resolution.                                                                                                                                                        |
+| `models/workspaces.rs` | Workspaces table CRUD + archive/restore + workspace creation.                                                                                                                                        |
+| `models/sessions.rs`   | Sessions/messages/attachments queries + read/unread marking.                                                                                                                                         |
+| `models/settings.rs`   | Settings key-value store.                                                                                                                                                                            |
+| `models/git_ops.rs`    | Git mirror, worktree, and branch management.                                                                                                                                                         |
+| `models/helpers.rs`    | Display helpers, naming, filesystem copy, icon resolution.                                                                                                                                           |
+| `agents.rs`            | Spawns Claude Code / Codex CLI subprocesses, streams stdout line-by-line back to the frontend via Tauri events (`agent-stream:{streamId}`). Manages running process PIDs.                            |
 
 ### Data flow
 

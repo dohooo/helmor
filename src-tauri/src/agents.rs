@@ -8,11 +8,16 @@ use std::{
     sync::Mutex,
 };
 
+use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
+
+use crate::error::CommandError;
+
+type CmdResult<T> = std::result::Result<T, CommandError>;
 
 // ---------------------------------------------------------------------------
 // Streaming event types
@@ -207,10 +212,10 @@ pub fn list_agent_model_sections() -> Vec<AgentModelSection> {
 }
 
 #[tauri::command]
-pub async fn send_agent_message(request: AgentSendRequest) -> Result<AgentSendResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || send_agent_message_blocking(request))
+pub async fn send_agent_message(request: AgentSendRequest) -> CmdResult<AgentSendResponse> {
+    Ok(tauri::async_runtime::spawn_blocking(move || send_agent_message_blocking(request))
         .await
-        .map_err(|error| error.to_string())?
+        .context("agent task panicked")??)
 }
 
 #[tauri::command]
@@ -218,20 +223,20 @@ pub async fn send_agent_message_stream(
     app: AppHandle,
     state: tauri::State<'_, RunningAgentProcesses>,
     request: AgentSendRequest,
-) -> Result<AgentStreamStartResponse, String> {
+) -> CmdResult<AgentStreamStartResponse> {
     let prompt = request.prompt.trim().to_string();
     if prompt.is_empty() {
-        return Err("Prompt cannot be empty.".to_string());
+        return Err(anyhow::anyhow!("Prompt cannot be empty.").into());
     }
 
     let model = find_model_definition(&request.model_id)
-        .ok_or_else(|| format!("Unknown model id: {}", request.model_id))?;
+        .ok_or_else(|| anyhow::anyhow!("Unknown model id: {}", request.model_id))?;
 
     if request.provider != model.provider {
-        return Err(format!(
+        return Err(anyhow::anyhow!(
             "Model {} does not belong to provider {}.",
             request.model_id, request.provider
-        ));
+        ).into());
     }
 
     let working_directory = resolve_working_directory(request.working_directory.as_deref())?;
@@ -239,8 +244,8 @@ pub async fn send_agent_message_stream(
 
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-    let mut child = command.spawn().map_err(|e| e.to_string())?;
-    let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
+    let mut child = command.spawn().context("Failed to spawn CLI process")?;
+    let stdout = child.stdout.take().context("Failed to capture stdout")?;
     let stream_id = Uuid::new_v4().to_string();
 
     // Store PID for potential cancellation
@@ -335,7 +340,7 @@ pub async fn send_agent_message_stream(
                 });
             }
             Err(e) => {
-                let _ = app.emit(&event_name, AgentStreamEvent::Error { message: e });
+                let _ = app.emit(&event_name, AgentStreamEvent::Error { message: format!("{e:#}") });
             }
         }
 
@@ -351,20 +356,20 @@ pub async fn send_agent_message_stream(
     Ok(AgentStreamStartResponse { stream_id })
 }
 
-fn send_agent_message_blocking(request: AgentSendRequest) -> Result<AgentSendResponse, String> {
+fn send_agent_message_blocking(request: AgentSendRequest) -> Result<AgentSendResponse> {
     let prompt = request.prompt.trim();
     if prompt.is_empty() {
-        return Err("Prompt cannot be empty.".to_string());
+        bail!("Prompt cannot be empty.");
     }
 
     let model = find_model_definition(&request.model_id)
-        .ok_or_else(|| format!("Unknown model id: {}", request.model_id))?;
+        .with_context(|| format!("Unknown model id: {}", request.model_id))?;
 
     if request.provider != model.provider {
-        return Err(format!(
+        bail!(
             "Model {} does not belong to provider {}.",
             request.model_id, request.provider
-        ));
+        );
     }
 
     let working_directory = resolve_working_directory(request.working_directory.as_deref())?;
@@ -372,7 +377,7 @@ fn send_agent_message_blocking(request: AgentSendRequest) -> Result<AgentSendRes
     let output = match model.provider {
         "claude" => send_with_claude(model, prompt, request.session_id.as_deref(), &working_directory)?,
         "codex" => send_with_codex(model, prompt, request.session_id.as_deref(), &working_directory)?,
-        provider => return Err(format!("Unsupported provider: {provider}")),
+        provider => bail!("Unsupported provider: {provider}"),
     };
     let persisted_to_fixture = if let Some(conductor_session_id) =
         non_empty(request.conductor_session_id.as_deref())
@@ -413,7 +418,7 @@ fn build_cli_command(
     prompt: &str,
     session_id: Option<&str>,
     working_directory: &Path,
-) -> Result<Command, String> {
+) -> Result<Command> {
     let binary = resolve_binary_path(model.provider)?;
     let mut command = Command::new(binary);
 
@@ -466,7 +471,7 @@ fn send_with_claude(
     prompt: &str,
     session_id: Option<&str>,
     working_directory: &Path,
-) -> Result<ParsedAgentOutput, String> {
+) -> Result<ParsedAgentOutput> {
     let binary = resolve_binary_path("claude")?;
     let mut command = Command::new(binary);
     command
@@ -485,10 +490,10 @@ fn send_with_claude(
 
     command.arg(prompt);
 
-    let output = command.output().map_err(|error| error.to_string())?;
+    let output = command.output().context("Failed to run Claude CLI")?;
 
     if !output.status.success() {
-        return Err(format_process_failure("Claude", &output.stderr, output.status.code()));
+        bail!("{}", format_process_failure("Claude", &output.stderr, output.status.code()));
     }
 
     parse_claude_output(
@@ -503,7 +508,7 @@ fn send_with_codex(
     prompt: &str,
     session_id: Option<&str>,
     working_directory: &Path,
-) -> Result<ParsedAgentOutput, String> {
+) -> Result<ParsedAgentOutput> {
     let binary = resolve_binary_path("codex")?;
     let mut command = Command::new(binary);
     command.current_dir(working_directory);
@@ -528,10 +533,10 @@ fn send_with_codex(
             .arg(prompt);
     }
 
-    let output = command.output().map_err(|error| error.to_string())?;
+    let output = command.output().context("Failed to run Codex CLI")?;
 
     if !output.status.success() {
-        return Err(format_process_failure("Codex", &output.stderr, output.status.code()));
+        bail!("{}", format_process_failure("Codex", &output.stderr, output.status.code()));
     }
 
     parse_codex_output(
@@ -545,7 +550,7 @@ fn parse_claude_output(
     stdout: &str,
     fallback_session_id: Option<&str>,
     fallback_model: &str,
-) -> Result<ParsedAgentOutput, String> {
+) -> Result<ParsedAgentOutput> {
     let mut assistant_text = String::new();
     let mut thinking_text = String::new();
     let mut saw_text_delta = false;
@@ -701,7 +706,7 @@ fn parse_claude_output(
 
     let assistant_text = assistant_text.trim().to_string();
     if assistant_text.is_empty() {
-        return Err("Claude returned no assistant text.".to_string());
+        bail!("Claude returned no assistant text.");
     }
 
     let thinking_text = thinking_text.trim().to_string();
@@ -722,7 +727,7 @@ fn parse_codex_output(
     stdout: &str,
     fallback_session_id: Option<&str>,
     fallback_model: &str,
-) -> Result<ParsedAgentOutput, String> {
+) -> Result<ParsedAgentOutput> {
     let mut session_id = fallback_session_id.map(str::to_string);
     let mut assistant_chunks = Vec::new();
     let mut usage = AgentUsage {
@@ -766,7 +771,7 @@ fn parse_codex_output(
 
     let assistant_text = assistant_chunks.join("\n\n").trim().to_string();
     if assistant_text.is_empty() {
-        return Err("Codex returned no assistant text.".to_string());
+        bail!("Codex returned no assistant text.");
     }
 
     Ok(ParsedAgentOutput {
@@ -848,7 +853,7 @@ fn extract_claude_assistant_text(value: &Value) -> Option<String> {
     (!text.trim().is_empty()).then_some(text)
 }
 
-fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf, String> {
+fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf> {
     if let Some(path) = non_empty(provided) {
         let directory = PathBuf::from(path);
         if directory.is_dir() {
@@ -856,7 +861,7 @@ fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf, String> 
         }
     }
 
-    env::current_dir().map_err(|error| error.to_string())
+    env::current_dir().context("Failed to resolve working directory")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -871,7 +876,7 @@ fn persist_exchange_to_fixture(
     usage: &AgentUsage,
     turns: &[CollectedTurn],
     raw_result_json: Option<&str>,
-) -> Result<(), String> {
+) -> Result<()> {
     let connection = open_write_connection()?;
     let now = current_timestamp_string()?;
     let turn_id = Uuid::new_v4().to_string();
@@ -896,8 +901,7 @@ fn persist_exchange_to_fixture(
         });
 
     let transaction = connection
-        .unchecked_transaction()
-        .map_err(|error| error.to_string())?;
+        .unchecked_transaction()?;
 
     // 1. Insert the original user prompt.
     transaction
@@ -918,8 +922,7 @@ fn persist_exchange_to_fixture(
                 assistant_sdk_message_id,
                 turn_id
             ],
-        )
-        .map_err(|error| error.to_string())?;
+        )?;
 
     // 2. Insert all intermediate turns (assistant tool calls, user tool results, etc.).
     if !turns.is_empty() {
@@ -942,8 +945,7 @@ fn persist_exchange_to_fixture(
                         resolved_model,
                         turn_id
                     ],
-                )
-                .map_err(|error| error.to_string())?;
+                )?;
         }
     }
 
@@ -966,8 +968,7 @@ fn persist_exchange_to_fixture(
                 assistant_sdk_message_id,
                 turn_id
             ],
-        )
-        .map_err(|error| error.to_string())?;
+        )?;
 
     // 4. Update session and workspace metadata.
     transaction
@@ -991,8 +992,7 @@ fn persist_exchange_to_fixture(
                 model.provider,
                 provider_session_id
             ],
-        )
-        .map_err(|error| error.to_string())?;
+        )?;
 
     transaction
         .execute(
@@ -1003,32 +1003,31 @@ fn persist_exchange_to_fixture(
             WHERE id = (SELECT workspace_id FROM sessions WHERE id = ?1)
             "#,
             params![conductor_session_id, conductor_session_id],
-        )
-        .map_err(|error| error.to_string())?;
+        )?;
 
     mark_session_read_in_transaction(&transaction, conductor_session_id)?;
 
-    transaction.commit().map_err(|error| error.to_string())
+    transaction.commit().context("Failed to commit persist exchange transaction")
 }
 
-fn open_write_connection() -> Result<Connection, String> {
+fn open_write_connection() -> Result<Connection> {
     crate::models::db::open_connection(true)
 }
 
-fn current_timestamp_string() -> Result<String, String> {
-    let connection = Connection::open_in_memory().map_err(|error| error.to_string())?;
+fn current_timestamp_string() -> Result<String> {
+    let connection = Connection::open_in_memory()?;
     connection
         .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |row| {
             row.get::<_, String>(0)
         })
-        .map_err(|error| error.to_string())
+        .context("Failed to resolve current timestamp")
 }
 
-fn resolve_binary_path(binary_name: &str) -> Result<PathBuf, String> {
+fn resolve_binary_path(binary_name: &str) -> Result<PathBuf> {
     let env_key = match binary_name {
         "claude" => "HELMOR_CLAUDE_BIN",
         "codex" => "HELMOR_CODEX_BIN",
-        _ => return Err(format!("Unsupported binary: {binary_name}")),
+        _ => bail!("Unsupported binary: {binary_name}"),
     };
 
     if let Some(explicit_path) = env::var_os(env_key)
@@ -1044,7 +1043,7 @@ fn resolve_binary_path(binary_name: &str) -> Result<PathBuf, String> {
 
     let home_dir = env::var_os("HOME")
         .map(PathBuf::from)
-        .ok_or_else(|| format!("Unable to resolve HOME while locating {binary_name}."))?;
+        .with_context(|| format!("Unable to resolve HOME while locating {binary_name}."))?;
 
     let fallback_candidates = match binary_name {
         "claude" => vec![home_dir.join(".local/bin/claude")],
@@ -1055,7 +1054,7 @@ fn resolve_binary_path(binary_name: &str) -> Result<PathBuf, String> {
     fallback_candidates
         .into_iter()
         .find(|path| path.is_file())
-        .ok_or_else(|| {
+        .with_context(|| {
             format!(
                 "Unable to locate {binary_name}. Set {env_key} or add it to PATH before sending."
             )

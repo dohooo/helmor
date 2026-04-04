@@ -3,14 +3,15 @@
 //! Creates all required tables if they don't exist, matching the Conductor
 //! schema for data compatibility.
 
+use anyhow::{Context, Result};
 use rusqlite::Connection;
 
 /// Ensure the database has all required tables and indexes.
 /// Safe to call on every startup — uses IF NOT EXISTS.
-pub fn ensure_schema(connection: &Connection) -> Result<(), String> {
+pub fn ensure_schema(connection: &Connection) -> Result<()> {
     connection
         .execute_batch(SCHEMA_SQL)
-        .map_err(|error| format!("Failed to initialize database schema: {error}"))
+        .context("Failed to initialize database schema")
 }
 
 const SCHEMA_SQL: &str = r#"

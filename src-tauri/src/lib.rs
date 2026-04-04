@@ -1,5 +1,6 @@
 mod agents;
 pub mod data_dir;
+pub mod error;
 mod import;
 mod models;
 mod schema;

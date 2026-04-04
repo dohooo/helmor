@@ -8,6 +8,10 @@ pub mod workspaces;
 
 use serde::Serialize;
 
+use crate::error::CommandError;
+
+type CmdResult<T> = Result<T, CommandError>;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DataInfo {
@@ -21,7 +25,7 @@ pub struct DataInfo {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub fn get_data_info() -> Result<DataInfo, String> {
+pub fn get_data_info() -> CmdResult<DataInfo> {
     let data_dir = crate::data_dir::data_dir()?;
     let db_path = crate::data_dir::db_path()?;
 
@@ -33,13 +37,13 @@ pub fn get_data_info() -> Result<DataInfo, String> {
 }
 
 #[tauri::command]
-pub fn import_from_conductor(repo_filter: Option<String>) -> Result<crate::import::ImportResult, String> {
-    crate::import::import_from_conductor(repo_filter.as_deref())
+pub fn import_from_conductor(repo_filter: Option<String>) -> CmdResult<crate::import::ImportResult> {
+    Ok(crate::import::import_from_conductor(repo_filter.as_deref())?)
 }
 
 #[tauri::command]
-pub fn merge_from_conductor() -> Result<crate::import::ImportResult, String> {
-    crate::import::merge_from_conductor()
+pub fn merge_from_conductor() -> CmdResult<crate::import::ImportResult> {
+    Ok(crate::import::merge_from_conductor()?)
 }
 
 #[tauri::command]
@@ -48,12 +52,12 @@ pub fn conductor_source_available() -> bool {
 }
 
 #[tauri::command]
-pub fn list_repositories() -> Result<Vec<repos::RepositoryCreateOption>, String> {
-    repos::list_repositories()
+pub fn list_repositories() -> CmdResult<Vec<repos::RepositoryCreateOption>> {
+    Ok(repos::list_repositories()?)
 }
 
 #[tauri::command]
-pub fn get_add_repository_defaults() -> Result<repos::AddRepositoryDefaults, String> {
+pub fn get_add_repository_defaults() -> CmdResult<repos::AddRepositoryDefaults> {
     Ok(repos::AddRepositoryDefaults {
         last_clone_directory: settings::load_setting_value("last_clone_directory")?,
     })
@@ -62,133 +66,133 @@ pub fn get_add_repository_defaults() -> Result<repos::AddRepositoryDefaults, Str
 #[tauri::command]
 pub fn add_repository_from_local_path(
     folder_path: String,
-) -> Result<repos::AddRepositoryResponse, String> {
+) -> CmdResult<repos::AddRepositoryResponse> {
     let _lock = db::WORKSPACE_MUTATION_LOCK
         .lock()
-        .map_err(|_| "Workspace mutation lock poisoned".to_string())?;
+        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
 
-    repos::add_repository_from_local_path(&folder_path)
+    Ok(repos::add_repository_from_local_path(&folder_path)?)
 }
 
 #[tauri::command]
 pub fn create_workspace_from_repo(
     repo_id: String,
-) -> Result<workspaces::CreateWorkspaceResponse, String> {
+) -> CmdResult<workspaces::CreateWorkspaceResponse> {
     let _lock = db::WORKSPACE_MUTATION_LOCK
         .lock()
-        .map_err(|_| "Workspace mutation lock poisoned".to_string())?;
+        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
 
-    workspaces::create_workspace_from_repo_impl(&repo_id)
+    Ok(workspaces::create_workspace_from_repo_impl(&repo_id)?)
 }
 
 #[tauri::command]
-pub fn list_workspace_groups() -> Result<Vec<workspaces::WorkspaceSidebarGroup>, String> {
-    workspaces::list_workspace_groups()
+pub fn list_workspace_groups() -> CmdResult<Vec<workspaces::WorkspaceSidebarGroup>> {
+    Ok(workspaces::list_workspace_groups()?)
 }
 
 #[tauri::command]
-pub fn list_archived_workspaces() -> Result<Vec<workspaces::WorkspaceSummary>, String> {
-    workspaces::list_archived_workspaces()
+pub fn list_archived_workspaces() -> CmdResult<Vec<workspaces::WorkspaceSummary>> {
+    Ok(workspaces::list_archived_workspaces()?)
 }
 
 #[tauri::command]
-pub fn get_workspace(workspace_id: String) -> Result<workspaces::WorkspaceDetail, String> {
-    workspaces::get_workspace(&workspace_id)
+pub fn get_workspace(workspace_id: String) -> CmdResult<workspaces::WorkspaceDetail> {
+    Ok(workspaces::get_workspace(&workspace_id)?)
 }
 
 #[tauri::command]
 pub fn list_workspace_sessions(
     workspace_id: String,
-) -> Result<Vec<sessions::WorkspaceSessionSummary>, String> {
-    sessions::list_workspace_sessions(&workspace_id)
+) -> CmdResult<Vec<sessions::WorkspaceSessionSummary>> {
+    Ok(sessions::list_workspace_sessions(&workspace_id)?)
 }
 
 #[tauri::command]
 pub fn list_session_messages(
     session_id: String,
-) -> Result<Vec<sessions::SessionMessageRecord>, String> {
-    sessions::list_session_messages(&session_id)
+) -> CmdResult<Vec<sessions::SessionMessageRecord>> {
+    Ok(sessions::list_session_messages(&session_id)?)
 }
 
 #[tauri::command]
 pub fn list_session_attachments(
     session_id: String,
-) -> Result<Vec<sessions::SessionAttachmentRecord>, String> {
-    sessions::list_session_attachments(&session_id)
+) -> CmdResult<Vec<sessions::SessionAttachmentRecord>> {
+    Ok(sessions::list_session_attachments(&session_id)?)
 }
 
 #[tauri::command]
-pub fn create_session(workspace_id: String) -> Result<sessions::CreateSessionResponse, String> {
-    sessions::create_session(&workspace_id)
+pub fn create_session(workspace_id: String) -> CmdResult<sessions::CreateSessionResponse> {
+    Ok(sessions::create_session(&workspace_id)?)
 }
 
 #[tauri::command]
-pub fn hide_session(session_id: String) -> Result<(), String> {
-    sessions::hide_session(&session_id)
+pub fn hide_session(session_id: String) -> CmdResult<()> {
+    Ok(sessions::hide_session(&session_id)?)
 }
 
 #[tauri::command]
-pub fn unhide_session(session_id: String) -> Result<(), String> {
-    sessions::unhide_session(&session_id)
+pub fn unhide_session(session_id: String) -> CmdResult<()> {
+    Ok(sessions::unhide_session(&session_id)?)
 }
 
 #[tauri::command]
-pub fn delete_session(session_id: String) -> Result<(), String> {
-    sessions::delete_session(&session_id)
+pub fn delete_session(session_id: String) -> CmdResult<()> {
+    Ok(sessions::delete_session(&session_id)?)
 }
 
 #[tauri::command]
-pub fn list_hidden_sessions(workspace_id: String) -> Result<Vec<sessions::WorkspaceSessionSummary>, String> {
-    sessions::list_hidden_sessions(&workspace_id)
+pub fn list_hidden_sessions(workspace_id: String) -> CmdResult<Vec<sessions::WorkspaceSessionSummary>> {
+    Ok(sessions::list_hidden_sessions(&workspace_id)?)
 }
 
 #[tauri::command]
-pub fn mark_session_read(session_id: String) -> Result<(), String> {
+pub fn mark_session_read(session_id: String) -> CmdResult<()> {
     let _lock = db::WORKSPACE_MUTATION_LOCK
         .lock()
-        .map_err(|_| "Workspace mutation lock poisoned".to_string())?;
+        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
 
-    sessions::mark_session_read(&session_id)
+    Ok(sessions::mark_session_read(&session_id)?)
 }
 
 #[tauri::command]
-pub fn mark_workspace_read(workspace_id: String) -> Result<(), String> {
+pub fn mark_workspace_read(workspace_id: String) -> CmdResult<()> {
     let _lock = db::WORKSPACE_MUTATION_LOCK
         .lock()
-        .map_err(|_| "Workspace mutation lock poisoned".to_string())?;
+        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
 
-    workspaces::mark_workspace_read(&workspace_id)
+    Ok(workspaces::mark_workspace_read(&workspace_id)?)
 }
 
 #[tauri::command]
-pub fn mark_workspace_unread(workspace_id: String) -> Result<(), String> {
+pub fn mark_workspace_unread(workspace_id: String) -> CmdResult<()> {
     let _lock = db::WORKSPACE_MUTATION_LOCK
         .lock()
-        .map_err(|_| "Workspace mutation lock poisoned".to_string())?;
+        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
 
-    workspaces::mark_workspace_unread(&workspace_id)
+    Ok(workspaces::mark_workspace_unread(&workspace_id)?)
 }
 
 #[tauri::command]
 pub fn restore_workspace(
     workspace_id: String,
-) -> Result<workspaces::RestoreWorkspaceResponse, String> {
+) -> CmdResult<workspaces::RestoreWorkspaceResponse> {
     let _lock = db::WORKSPACE_MUTATION_LOCK
         .lock()
-        .map_err(|_| "Restore lock poisoned".to_string())?;
+        .map_err(|_| anyhow::anyhow!("Restore lock poisoned"))?;
 
-    workspaces::restore_workspace_impl(&workspace_id)
+    Ok(workspaces::restore_workspace_impl(&workspace_id)?)
 }
 
 #[tauri::command]
 pub fn archive_workspace(
     workspace_id: String,
-) -> Result<workspaces::ArchiveWorkspaceResponse, String> {
+) -> CmdResult<workspaces::ArchiveWorkspaceResponse> {
     let _lock = db::WORKSPACE_MUTATION_LOCK
         .lock()
-        .map_err(|_| "Workspace mutation lock poisoned".to_string())?;
+        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
 
-    workspaces::archive_workspace_impl(&workspace_id)
+    Ok(workspaces::archive_workspace_impl(&workspace_id)?)
 }
 
 // ---------------------------------------------------------------------------
@@ -659,7 +663,7 @@ mod tests {
 
         let error = workspaces::restore_workspace_impl(&harness.workspace_id).unwrap_err();
 
-        assert!(error.contains("already exists"));
+        assert!(error.to_string().contains("already exists"));
         assert!(harness.archived_context_dir().exists());
 
         let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
@@ -693,7 +697,7 @@ mod tests {
 
         let error = workspaces::restore_workspace_impl(&harness.workspace_id).unwrap_err();
 
-        assert!(error.contains("branch no longer exists"));
+        assert!(error.to_string().contains("branch no longer exists"));
         assert!(!harness.workspace_dir().exists());
         assert!(harness.archived_context_dir().exists());
     }
@@ -707,7 +711,7 @@ mod tests {
 
         let error = workspaces::restore_workspace_impl(&harness.workspace_id).unwrap_err();
 
-        assert!(error.contains("update workspace restore state"));
+        assert!(error.to_string().contains("update workspace restore state"));
         assert!(!harness.workspace_dir().exists());
         assert!(harness.archived_context_dir().exists());
     }
@@ -721,7 +725,7 @@ mod tests {
 
         let error = workspaces::archive_workspace_impl(&harness.workspace_id).unwrap_err();
 
-        assert!(error.contains("update workspace archive state"));
+        assert!(error.to_string().contains("update workspace archive state"));
         assert!(harness.workspace_dir().exists());
         assert!(harness.workspace_dir().join(".context/notes.md").exists());
         assert!(harness
@@ -1109,7 +1113,7 @@ mod tests {
 
         let error = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap_err();
 
-        assert!(error.contains("already exists"));
+        assert!(error.to_string().contains("already exists"));
         assert!(conflicting_workspace_dir.join("keep.txt").exists());
 
         let connection = Connection::open(harness.db_path()).unwrap();
@@ -1139,7 +1143,7 @@ mod tests {
 
         let error = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap_err();
 
-        assert!(error.contains("Setup script failed"));
+        assert!(error.to_string().contains("Setup script failed"));
         assert!(!harness.workspace_dir("acamar").exists());
 
         let connection = Connection::open(harness.db_path()).unwrap();
@@ -1260,7 +1264,7 @@ mod tests {
             )
             .unwrap();
 
-        assert!(error.contains("Git working tree"));
+        assert!(error.to_string().contains("Git working tree"));
         assert_eq!(repo_count, 1);
         assert_eq!(workspace_count, 0);
     }

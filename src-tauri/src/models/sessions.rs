@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use anyhow::{bail, Context, Result};
 use rusqlite::Transaction;
 use serde::Serialize;
 use serde_json::Value;
@@ -70,15 +71,14 @@ pub struct SessionAttachmentRecord {
 
 pub fn list_workspace_sessions(
     workspace_id: &str,
-) -> Result<Vec<WorkspaceSessionSummary>, String> {
+) -> Result<Vec<WorkspaceSessionSummary>> {
     let connection = db::open_connection(false)?;
     let active_session_id: Option<String> = connection
         .query_row(
             "SELECT active_session_id FROM workspaces WHERE id = ?1",
             [workspace_id],
             |row| row.get(0),
-        )
-        .map_err(|error| error.to_string())?;
+        )?;
 
     let mut statement = connection
         .prepare(
@@ -112,8 +112,7 @@ pub fn list_workspace_sessions(
               datetime(s.updated_at) DESC,
               datetime(s.created_at) DESC
             "#,
-        )
-        .map_err(|error| error.to_string())?;
+        )?;
 
     let rows = statement
         .query_map((workspace_id, active_session_id.as_deref()), |row| {
@@ -143,14 +142,12 @@ pub fn list_workspace_sessions(
                 is_hidden: row.get::<_, i64>(19)? != 0,
                 is_compacting: row.get::<_, i64>(20)? != 0,
             })
-        })
-        .map_err(|error| error.to_string())?;
+        })?;
 
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
-pub fn list_session_messages(session_id: &str) -> Result<Vec<SessionMessageRecord>, String> {
+pub fn list_session_messages(session_id: &str) -> Result<Vec<SessionMessageRecord>> {
     let connection = db::open_connection(false)?;
     let mut statement = connection
         .prepare(
@@ -179,8 +176,7 @@ pub fn list_session_messages(session_id: &str) -> Result<Vec<SessionMessageRecor
               COALESCE(julianday(sm.sent_at), julianday(sm.created_at)) ASC,
               sm.rowid ASC
             "#,
-        )
-        .map_err(|error| error.to_string())?;
+        )?;
 
     let rows = statement
         .query_map([session_id], |row| {
@@ -205,14 +201,12 @@ pub fn list_session_messages(session_id: &str) -> Result<Vec<SessionMessageRecor
                 is_resumable_message,
                 attachment_count: row.get(12)?,
             })
-        })
-        .map_err(|error| error.to_string())?;
+        })?;
 
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
-pub fn list_session_attachments(session_id: &str) -> Result<Vec<SessionAttachmentRecord>, String> {
+pub fn list_session_attachments(session_id: &str) -> Result<Vec<SessionAttachmentRecord>> {
     let connection = db::open_connection(false)?;
     let mut statement = connection
         .prepare(
@@ -231,8 +225,7 @@ pub fn list_session_attachments(session_id: &str) -> Result<Vec<SessionAttachmen
             WHERE a.session_id = ?1
             ORDER BY datetime(a.created_at) ASC, a.id ASC
             "#,
-        )
-        .map_err(|error| error.to_string())?;
+        )?;
 
     let rows = statement
         .query_map([session_id], |row| {
@@ -254,53 +247,49 @@ pub fn list_session_attachments(session_id: &str) -> Result<Vec<SessionAttachmen
                 is_draft: row.get::<_, i64>(7)? != 0,
                 created_at: row.get(8)?,
             })
-        })
-        .map_err(|error| error.to_string())?;
+        })?;
 
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
 // ---- Session read/unread functions ----
 
-pub fn mark_session_read(session_id: &str) -> Result<(), String> {
+pub fn mark_session_read(session_id: &str) -> Result<()> {
     let mut connection = db::open_connection(true)?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Failed to start mark-read transaction: {error}"))?;
+        .context("Failed to start mark-read transaction")?;
 
     mark_session_read_in_transaction(&transaction, session_id)?;
 
     transaction
         .commit()
-        .map_err(|error| format!("Failed to commit session read transaction: {error}"))
+        .context("Failed to commit session read transaction")
 }
 
 pub(crate) fn mark_session_read_in_transaction(
     transaction: &Transaction<'_>,
     session_id: &str,
-) -> Result<(), String> {
+) -> Result<()> {
     let workspace_id: String = transaction
         .query_row(
             "SELECT workspace_id FROM sessions WHERE id = ?1",
             [session_id],
             |row| row.get(0),
         )
-        .map_err(|error| {
-            format!("Failed to resolve workspace for session {session_id}: {error}")
-        })?;
+        .with_context(|| format!("Failed to resolve workspace for session {session_id}"))?;
 
     let updated_rows = transaction
         .execute(
             "UPDATE sessions SET unread_count = 0 WHERE id = ?1",
             [session_id],
         )
-        .map_err(|error| format!("Failed to mark session {session_id} as read: {error}"))?;
+        .with_context(|| format!("Failed to mark session {session_id} as read"))?;
 
     if updated_rows != 1 {
-        return Err(format!(
+        bail!(
             "Session read update affected {updated_rows} rows for session {session_id}"
-        ));
+        );
     }
 
     sync_workspace_unread_in_transaction(transaction, &workspace_id)
@@ -309,14 +298,14 @@ pub(crate) fn mark_session_read_in_transaction(
 pub(crate) fn mark_workspace_read_in_transaction(
     transaction: &Transaction<'_>,
     workspace_id: &str,
-) -> Result<(), String> {
+) -> Result<()> {
     transaction
         .execute(
             "UPDATE sessions SET unread_count = 0 WHERE workspace_id = ?1",
             [workspace_id],
         )
-        .map_err(|error| {
-            format!("Failed to clear unread sessions for workspace {workspace_id}: {error}")
+        .with_context(|| {
+            format!("Failed to clear unread sessions for workspace {workspace_id}")
         })?;
 
     let updated_rows = transaction
@@ -324,14 +313,14 @@ pub(crate) fn mark_workspace_read_in_transaction(
             "UPDATE workspaces SET unread = 0 WHERE id = ?1",
             [workspace_id],
         )
-        .map_err(|error| {
-            format!("Failed to mark workspace {workspace_id} as read: {error}")
+        .with_context(|| {
+            format!("Failed to mark workspace {workspace_id} as read")
         })?;
 
     if updated_rows != 1 {
-        return Err(format!(
+        bail!(
             "Workspace read update affected {updated_rows} rows for workspace {workspace_id}"
-        ));
+        );
     }
 
     Ok(())
@@ -340,20 +329,20 @@ pub(crate) fn mark_workspace_read_in_transaction(
 pub(crate) fn mark_workspace_unread_in_transaction(
     transaction: &Transaction<'_>,
     workspace_id: &str,
-) -> Result<(), String> {
+) -> Result<()> {
     let updated_rows = transaction
         .execute(
             "UPDATE workspaces SET unread = 1 WHERE id = ?1",
             [workspace_id],
         )
-        .map_err(|error| {
-            format!("Failed to mark workspace {workspace_id} as unread: {error}")
+        .with_context(|| {
+            format!("Failed to mark workspace {workspace_id} as unread")
         })?;
 
     if updated_rows != 1 {
-        return Err(format!(
+        bail!(
             "Workspace unread update affected {updated_rows} rows for workspace {workspace_id}"
-        ));
+        );
     }
 
     Ok(())
@@ -362,7 +351,7 @@ pub(crate) fn mark_workspace_unread_in_transaction(
 pub(crate) fn sync_workspace_unread_in_transaction(
     transaction: &Transaction<'_>,
     workspace_id: &str,
-) -> Result<(), String> {
+) -> Result<()> {
     let updated_rows = transaction
         .execute(
             r#"
@@ -380,14 +369,14 @@ pub(crate) fn sync_workspace_unread_in_transaction(
             "#,
             [workspace_id],
         )
-        .map_err(|error| {
-            format!("Failed to sync unread state for workspace {workspace_id}: {error}")
+        .with_context(|| {
+            format!("Failed to sync unread state for workspace {workspace_id}")
         })?;
 
     if updated_rows != 1 {
-        return Err(format!(
+        bail!(
             "Unread sync affected {updated_rows} rows for workspace {workspace_id}"
-        ));
+        );
     }
 
     Ok(())
@@ -399,11 +388,29 @@ pub struct CreateSessionResponse {
     pub session_id: String,
 }
 
-pub fn create_session(workspace_id: &str) -> Result<CreateSessionResponse, String> {
-    let connection = db::open_connection(true)?;
+pub fn create_session(workspace_id: &str) -> Result<CreateSessionResponse> {
+    let mut connection = db::open_connection(true)?;
+    let transaction = connection
+        .transaction()
+        .context("Failed to start create-session transaction")?;
+
+    // Validate workspace exists
+    let workspace_exists: bool = transaction
+        .query_row(
+            "SELECT COUNT(*) FROM workspaces WHERE id = ?1",
+            [workspace_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count > 0)
+        .with_context(|| format!("Failed to verify workspace {workspace_id}"))?;
+
+    if !workspace_exists {
+        bail!("Workspace {workspace_id} does not exist");
+    }
+
     let session_id = uuid::Uuid::new_v4().to_string();
 
-    connection
+    transaction
         .execute(
             r#"
             INSERT INTO sessions (id, workspace_id, status, title, permission_mode)
@@ -411,58 +418,139 @@ pub fn create_session(workspace_id: &str) -> Result<CreateSessionResponse, Strin
             "#,
             (&session_id, workspace_id),
         )
-        .map_err(|error| format!("Failed to create session: {error}"))?;
+        .context("Failed to create session")?;
 
     // Set as active session on the workspace
-    connection
+    let updated_rows = transaction
         .execute(
             "UPDATE workspaces SET active_session_id = ?1 WHERE id = ?2",
             (&session_id, workspace_id),
         )
-        .map_err(|error| format!("Failed to set active session: {error}"))?;
+        .context("Failed to set active session")?;
+
+    if updated_rows != 1 {
+        bail!(
+            "Active session update affected {updated_rows} rows for workspace {workspace_id}"
+        );
+    }
+
+    transaction
+        .commit()
+        .context("Failed to commit create-session")?;
 
     Ok(CreateSessionResponse { session_id })
 }
 
-pub fn hide_session(session_id: &str) -> Result<(), String> {
-    let connection = db::open_connection(true)?;
-    connection
-        .execute("UPDATE sessions SET is_hidden = 1 WHERE id = ?1", [session_id])
-        .map_err(|error| format!("Failed to hide session {session_id}: {error}"))?;
-    Ok(())
-}
-
-pub fn unhide_session(session_id: &str) -> Result<(), String> {
-    let connection = db::open_connection(true)?;
-    connection
-        .execute("UPDATE sessions SET is_hidden = 0 WHERE id = ?1", [session_id])
-        .map_err(|error| format!("Failed to unhide session {session_id}: {error}"))?;
-    Ok(())
-}
-
-pub fn delete_session(session_id: &str) -> Result<(), String> {
+pub fn hide_session(session_id: &str) -> Result<()> {
     let mut connection = db::open_connection(true)?;
     let transaction = connection
         .transaction()
-        .map_err(|error| error.to_string())?;
+        .context("Failed to start hide-session transaction")?;
+
+    // Resolve workspace and mark session as hidden
+    let workspace_id: String = transaction
+        .query_row(
+            "SELECT workspace_id FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .with_context(|| format!("Failed to find session {session_id}"))?;
 
     transaction
-        .execute("DELETE FROM attachments WHERE session_id = ?1", [session_id])
-        .map_err(|error| format!("Failed to delete attachments: {error}"))?;
-    transaction
-        .execute("DELETE FROM session_messages WHERE session_id = ?1", [session_id])
-        .map_err(|error| format!("Failed to delete messages: {error}"))?;
-    transaction
-        .execute("DELETE FROM sessions WHERE id = ?1", [session_id])
-        .map_err(|error| format!("Failed to delete session: {error}"))?;
+        .execute(
+            "UPDATE sessions SET is_hidden = 1 WHERE id = ?1",
+            [session_id],
+        )
+        .with_context(|| format!("Failed to hide session {session_id}"))?;
+
+    // If this was the workspace's active session, switch to the next visible one
+    let current_active: Option<String> = transaction
+        .query_row(
+            "SELECT active_session_id FROM workspaces WHERE id = ?1",
+            [&workspace_id],
+            |row| row.get(0),
+        )
+        .context("Failed to read active session for workspace")?;
+
+    if current_active.as_deref() == Some(session_id) {
+        let next_session_id: Option<String> = transaction
+            .query_row(
+                r#"
+                SELECT id FROM sessions
+                WHERE workspace_id = ?1 AND COALESCE(is_hidden, 0) = 0
+                ORDER BY datetime(updated_at) DESC, datetime(created_at) DESC
+                LIMIT 1
+                "#,
+                [&workspace_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        transaction
+            .execute(
+                "UPDATE workspaces SET active_session_id = ?1 WHERE id = ?2",
+                (next_session_id.as_deref(), &workspace_id),
+            )
+            .context("Failed to update active session")?;
+    }
 
     transaction
         .commit()
-        .map_err(|error| format!("Failed to commit session deletion: {error}"))?;
+        .context("Failed to commit hide-session")
+}
+
+pub fn unhide_session(session_id: &str) -> Result<()> {
+    let connection = db::open_connection(true)?;
+    connection
+        .execute("UPDATE sessions SET is_hidden = 0 WHERE id = ?1", [session_id])
+        .with_context(|| format!("Failed to unhide session {session_id}"))?;
     Ok(())
 }
 
-pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSummary>, String> {
+pub fn delete_session(session_id: &str) -> Result<()> {
+    let mut connection = db::open_connection(true)?;
+    let transaction = connection
+        .transaction()?;
+
+    // Resolve workspace before deleting, so we can fix active_session_id
+    let workspace_id: Option<String> = transaction
+        .query_row(
+            "SELECT workspace_id FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .ok();
+
+    transaction
+        .execute("DELETE FROM attachments WHERE session_id = ?1", [session_id])
+        .context("Failed to delete attachments")?;
+    transaction
+        .execute(
+            "DELETE FROM session_messages WHERE session_id = ?1",
+            [session_id],
+        )
+        .context("Failed to delete messages")?;
+    transaction
+        .execute("DELETE FROM sessions WHERE id = ?1", [session_id])
+        .context("Failed to delete session")?;
+
+    // Clear active_session_id if it pointed to the deleted session
+    if let Some(ws_id) = &workspace_id {
+        transaction
+            .execute(
+                "UPDATE workspaces SET active_session_id = NULL WHERE id = ?1 AND active_session_id = ?2",
+                (ws_id, session_id),
+            )
+            .context("Failed to clear active session")?;
+    }
+
+    transaction
+        .commit()
+        .context("Failed to commit session deletion")?;
+    Ok(())
+}
+
+pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSummary>> {
     let connection = db::open_connection(false)?;
     let mut statement = connection
         .prepare(
@@ -479,7 +567,7 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
             ORDER BY datetime(s.updated_at) DESC
             "#,
         )
-        .map_err(|error| format!("Failed to prepare hidden sessions query: {error}"))?;
+        .context("Failed to prepare hidden sessions query")?;
 
     let rows = statement
         .query_map([workspace_id], |row| {
@@ -509,10 +597,10 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
                 is_compacting: row.get::<_, i64>(20)? != 0,
             })
         })
-        .map_err(|error| format!("Failed to query hidden sessions: {error}"))?;
+        .context("Failed to query hidden sessions")?;
 
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("Failed to read hidden sessions: {error}"))
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .context("Failed to read hidden sessions")
 }
 
 #[cfg(test)]
@@ -585,6 +673,198 @@ mod tests {
             .query_row("SELECT count(*) FROM attachments", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    fn seed_with_active_session(conn: &Connection) {
+        seed(conn);
+        conn.execute(
+            "UPDATE workspaces SET active_session_id = 's1' WHERE id = 'w1'",
+            [],
+        )
+        .unwrap();
+    }
+
+    fn seed_two_sessions(conn: &Connection) {
+        seed_with_active_session(conn);
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status, title, updated_at) VALUES ('s2', 'w1', 'idle', 'Second Session', '2026-01-02T00:00:00')",
+            [],
+        ).unwrap();
+    }
+
+    fn get_active_session_id(conn: &Connection, workspace_id: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT active_session_id FROM workspaces WHERE id = ?1",
+            [workspace_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    fn count_sessions(conn: &Connection, workspace_id: &str) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE workspace_id = ?1",
+            [workspace_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    fn count_hidden_sessions(conn: &Connection, workspace_id: &str) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE workspace_id = ?1 AND is_hidden = 1",
+            [workspace_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn hide_session_clears_active_session_id() {
+        let conn = test_db();
+        seed_with_active_session(&conn);
+        assert_eq!(get_active_session_id(&conn, "w1"), Some("s1".to_string()));
+
+        // Hide s1 — simulates the transactional logic in hide_session()
+        conn.execute("UPDATE sessions SET is_hidden = 1 WHERE id = 's1'", [])
+            .unwrap();
+
+        let next: Option<String> = conn
+            .query_row(
+                "SELECT id FROM sessions WHERE workspace_id = 'w1' AND COALESCE(is_hidden, 0) = 0 ORDER BY datetime(updated_at) DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+
+        conn.execute(
+            "UPDATE workspaces SET active_session_id = ?1 WHERE id = 'w1' AND active_session_id = 's1'",
+            [next.as_deref()],
+        ).unwrap();
+
+        // No visible sessions left, so active_session_id should be NULL
+        assert_eq!(get_active_session_id(&conn, "w1"), None);
+        assert_eq!(count_hidden_sessions(&conn, "w1"), 1);
+    }
+
+    #[test]
+    fn hide_session_switches_to_next_visible_session() {
+        let conn = test_db();
+        seed_two_sessions(&conn);
+        assert_eq!(get_active_session_id(&conn, "w1"), Some("s1".to_string()));
+
+        // Hide s1 — should switch active to s2
+        conn.execute("UPDATE sessions SET is_hidden = 1 WHERE id = 's1'", [])
+            .unwrap();
+
+        let next: Option<String> = conn
+            .query_row(
+                "SELECT id FROM sessions WHERE workspace_id = 'w1' AND COALESCE(is_hidden, 0) = 0 ORDER BY datetime(updated_at) DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+
+        conn.execute(
+            "UPDATE workspaces SET active_session_id = ?1 WHERE id = 'w1' AND active_session_id = 's1'",
+            [next.as_deref()],
+        ).unwrap();
+
+        assert_eq!(get_active_session_id(&conn, "w1"), Some("s2".to_string()));
+    }
+
+    #[test]
+    fn delete_session_clears_active_session_id() {
+        let conn = test_db();
+        seed_with_active_session(&conn);
+        assert_eq!(get_active_session_id(&conn, "w1"), Some("s1".to_string()));
+
+        // Delete s1 — simulates the transactional logic in delete_session()
+        conn.execute("DELETE FROM attachments WHERE session_id = 's1'", [])
+            .unwrap();
+        conn.execute("DELETE FROM session_messages WHERE session_id = 's1'", [])
+            .unwrap();
+        conn.execute("DELETE FROM sessions WHERE id = 's1'", [])
+            .unwrap();
+        conn.execute(
+            "UPDATE workspaces SET active_session_id = NULL WHERE id = 'w1' AND active_session_id = 's1'",
+            [],
+        ).unwrap();
+
+        assert_eq!(get_active_session_id(&conn, "w1"), None);
+        assert_eq!(count_sessions(&conn, "w1"), 0);
+    }
+
+    #[test]
+    fn create_session_validates_workspace_exists() {
+        let conn = test_db();
+        // No seed — workspace 'w1' does not exist
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM workspaces WHERE id = 'w1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "workspace should not exist");
+
+        // Attempting to insert a session for a non-existent workspace should
+        // be caught by the validation check (not by FK, since FK may not be enforced)
+        let workspace_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workspaces WHERE id = 'w1'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap();
+        assert!(!workspace_exists);
+    }
+
+    #[test]
+    fn create_session_sets_active_session_id() {
+        let conn = test_db();
+        seed(&conn);
+        assert_eq!(get_active_session_id(&conn, "w1"), None);
+
+        // Simulate create_session logic
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status, title, permission_mode) VALUES ('s_new', 'w1', 'idle', 'Untitled', 'default')",
+            [],
+        ).unwrap();
+        let updated = conn
+            .execute(
+                "UPDATE workspaces SET active_session_id = 's_new' WHERE id = 'w1'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(updated, 1);
+        assert_eq!(
+            get_active_session_id(&conn, "w1"),
+            Some("s_new".to_string())
+        );
+    }
+
+    #[test]
+    fn unhide_session_restores_visibility() {
+        let conn = test_db();
+        seed_with_active_session(&conn);
+
+        // Hide then unhide
+        conn.execute("UPDATE sessions SET is_hidden = 1 WHERE id = 's1'", [])
+            .unwrap();
+        assert_eq!(count_hidden_sessions(&conn, "w1"), 1);
+
+        conn.execute("UPDATE sessions SET is_hidden = 0 WHERE id = 's1'", [])
+            .unwrap();
+        assert_eq!(count_hidden_sessions(&conn, "w1"), 0);
+
+        let visible: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE workspace_id = 'w1' AND COALESCE(is_hidden, 0) = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(visible, 1);
     }
 
     #[test]

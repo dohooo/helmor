@@ -1,3 +1,4 @@
+use anyhow::{bail, Context, Result};
 use std::{
     ffi::OsStr,
     fs,
@@ -5,7 +6,7 @@ use std::{
     process::Command,
 };
 
-pub fn run_git<I, S>(args: I, current_dir: Option<&Path>) -> Result<String, String>
+pub fn run_git<I, S>(args: I, current_dir: Option<&Path>) -> Result<String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -22,7 +23,7 @@ where
 
     let output = command
         .output()
-        .map_err(|error| format!("Failed to run git: {error}"))?;
+        .context("Failed to run git")?;
 
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
@@ -38,29 +39,29 @@ where
         format!("git exited with status {}", output.status)
     };
 
-    Err(detail)
+    bail!("{detail}")
 }
 
-pub fn ensure_git_repository(repo_root: &Path) -> Result<(), String> {
+pub fn ensure_git_repository(repo_root: &Path) -> Result<()> {
     let repo_root = repo_root.display().to_string();
     run_git(
         ["-C", repo_root.as_str(), "rev-parse", "--show-toplevel"],
         None,
     )
     .map(|_| ())
-    .map_err(|error| format!("Repository source is invalid: {error}"))
+    .context("Repository source is invalid")
 }
 
-pub fn ensure_repo_mirror(source_repo_root: &Path, mirror_dir: &Path) -> Result<(), String> {
+pub fn ensure_repo_mirror(source_repo_root: &Path, mirror_dir: &Path) -> Result<()> {
     ensure_git_repository(source_repo_root)?;
     fs::create_dir_all(
         mirror_dir
             .parent()
-            .ok_or_else(|| format!("Mirror path has no parent: {}", mirror_dir.display()))?,
+            .with_context(|| format!("Mirror path has no parent: {}", mirror_dir.display()))?,
     )
-    .map_err(|error| {
+    .with_context(|| {
         format!(
-            "Failed to create repo mirror parent for {}: {error}",
+            "Failed to create repo mirror parent for {}",
             mirror_dir.display()
         )
     })?;
@@ -107,7 +108,7 @@ pub fn create_worktree(
     mirror_dir: &Path,
     workspace_dir: &Path,
     branch: &str,
-) -> Result<(), String> {
+) -> Result<()> {
     let mirror_dir = mirror_dir.display().to_string();
     let workspace_dir_arg = workspace_dir.display().to_string();
     run_git(
@@ -122,9 +123,9 @@ pub fn create_worktree(
         None,
     )
     .map(|_| ())
-    .map_err(|error| {
+    .with_context(|| {
         format!(
-            "Failed to create worktree at {} for branch {}: {error}",
+            "Failed to create worktree at {} for branch {}",
             workspace_dir.display(),
             branch
         )
@@ -136,7 +137,7 @@ pub fn create_worktree_from_start_point(
     workspace_dir: &Path,
     branch: &str,
     start_point: &str,
-) -> Result<String, String> {
+) -> Result<String> {
     let mirror_dir = mirror_dir.display().to_string();
     let workspace_dir_arg = workspace_dir.display().to_string();
     run_git(
@@ -152,9 +153,9 @@ pub fn create_worktree_from_start_point(
         ],
         None,
     )
-    .map_err(|error| {
+    .with_context(|| {
         format!(
-            "Failed to create worktree at {} for branch {} from {}: {error}",
+            "Failed to create worktree at {} for branch {} from {}",
             workspace_dir.display(),
             branch,
             start_point
@@ -162,7 +163,7 @@ pub fn create_worktree_from_start_point(
     })
 }
 
-pub fn remove_worktree(mirror_dir: &Path, workspace_dir: &Path) -> Result<(), String> {
+pub fn remove_worktree(mirror_dir: &Path, workspace_dir: &Path) -> Result<()> {
     let mirror_dir = mirror_dir.display().to_string();
     let workspace_dir_arg = workspace_dir.display().to_string();
     run_git(
@@ -177,15 +178,15 @@ pub fn remove_worktree(mirror_dir: &Path, workspace_dir: &Path) -> Result<(), St
         None,
     )
     .map(|_| ())
-    .map_err(|error| {
+    .with_context(|| {
         format!(
-            "Failed to remove worktree at {}: {error}",
+            "Failed to remove worktree at {}",
             workspace_dir.display()
         )
     })
 }
 
-pub fn remove_branch(mirror_dir: &Path, branch: &str) -> Result<(), String> {
+pub fn remove_branch(mirror_dir: &Path, branch: &str) -> Result<()> {
     let mirror_dir = mirror_dir.display().to_string();
     let branch_ref = format!("refs/heads/{branch}");
     run_git(
@@ -200,10 +201,11 @@ pub fn remove_branch(mirror_dir: &Path, branch: &str) -> Result<(), String> {
     )
     .map(|_| ())
     .or_else(|error| {
-        if error.contains("cannot lock ref") || error.contains("does not exist") {
+        let msg = error.to_string();
+        if msg.contains("cannot lock ref") || msg.contains("does not exist") {
             Ok(())
         } else {
-            Err(format!("Failed to remove branch {branch}: {error}"))
+            Err(error).with_context(|| format!("Failed to remove branch {branch}"))
         }
     })
 }
@@ -212,7 +214,7 @@ pub fn refresh_repo_setup_root(
     mirror_dir: &Path,
     setup_root_dir: &Path,
     start_point: &str,
-) -> Result<(), String> {
+) -> Result<()> {
     if setup_root_dir.exists() {
         let _ = remove_worktree(mirror_dir, setup_root_dir);
         let _ = fs::remove_dir_all(setup_root_dir);
@@ -221,11 +223,11 @@ pub fn refresh_repo_setup_root(
     fs::create_dir_all(
         setup_root_dir
             .parent()
-            .ok_or_else(|| format!("Setup root path has no parent: {}", setup_root_dir.display()))?,
+            .with_context(|| format!("Setup root path has no parent: {}", setup_root_dir.display()))?,
     )
-    .map_err(|error| {
+    .with_context(|| {
         format!(
-            "Failed to create setup root parent for {}: {error}",
+            "Failed to create setup root parent for {}",
             setup_root_dir.display()
         )
     })?;
@@ -245,16 +247,16 @@ pub fn refresh_repo_setup_root(
         None,
     )
     .map(|_| ())
-    .map_err(|error| {
+    .with_context(|| {
         format!(
-            "Failed to materialize setup root at {} from {}: {error}",
+            "Failed to materialize setup root at {} from {}",
             setup_root_dir.display(),
             start_point
         )
     })
 }
 
-pub fn verify_branch_exists_in_mirror(mirror_dir: &Path, branch: &str) -> Result<(), String> {
+pub fn verify_branch_exists_in_mirror(mirror_dir: &Path, branch: &str) -> Result<()> {
     let mirror_dir = mirror_dir.display().to_string();
     let branch_ref = format!("refs/remotes/origin/{branch}");
     run_git(
@@ -268,13 +270,13 @@ pub fn verify_branch_exists_in_mirror(mirror_dir: &Path, branch: &str) -> Result
         None,
     )
     .map(|_| ())
-    .map_err(|_| format!("Archived workspace branch no longer exists in source repo: {branch}"))
+    .with_context(|| format!("Archived workspace branch no longer exists in source repo: {branch}"))
 }
 
 pub fn verify_commit_exists_in_mirror(
     mirror_dir: &Path,
     archive_commit: &str,
-) -> Result<(), String> {
+) -> Result<()> {
     let mirror_dir = mirror_dir.display().to_string();
     let commit_ref = format!("{archive_commit}^{{commit}}");
     run_git(
@@ -288,14 +290,14 @@ pub fn verify_commit_exists_in_mirror(
         None,
     )
     .map(|_| ())
-    .map_err(|_| format!("Archived workspace commit is missing in source repo: {archive_commit}"))
+    .with_context(|| format!("Archived workspace commit is missing in source repo: {archive_commit}"))
 }
 
 pub fn verify_commitish_exists_in_mirror(
     mirror_dir: &Path,
     commitish: &str,
     error_message: &str,
-) -> Result<(), String> {
+) -> Result<()> {
     let mirror_dir = mirror_dir.display().to_string();
     let verify_ref = format!("{commitish}^{{commit}}");
     run_git(
@@ -309,14 +311,14 @@ pub fn verify_commitish_exists_in_mirror(
         None,
     )
     .map(|_| ())
-    .map_err(|_| error_message.to_string())
+    .context(error_message.to_string())
 }
 
 pub fn point_branch_to_archive_commit(
     mirror_dir: &Path,
     branch: &str,
     archive_commit: &str,
-) -> Result<(), String> {
+) -> Result<()> {
     let mirror_dir = mirror_dir.display().to_string();
     let branch_ref = format!("refs/heads/{branch}");
     run_git(
@@ -330,26 +332,26 @@ pub fn point_branch_to_archive_commit(
         None,
     )
     .map(|_| ())
-    .map_err(|error| {
-        format!("Failed to point branch {branch} at {archive_commit}: {error}")
+    .with_context(|| {
+        format!("Failed to point branch {branch} at {archive_commit}")
     })
 }
 
-pub fn current_workspace_head_commit(workspace_dir: &Path) -> Result<String, String> {
+pub fn current_workspace_head_commit(workspace_dir: &Path) -> Result<String> {
     let workspace_dir = workspace_dir.display().to_string();
     let commit = run_git(["-C", workspace_dir.as_str(), "rev-parse", "HEAD"], None)
-        .map_err(|error| {
+        .with_context(|| {
             format!(
-                "Failed to resolve archive commit from workspace {}: {error}",
+                "Failed to resolve archive commit from workspace {}",
                 workspace_dir
             )
         })?;
 
     if commit.trim().is_empty() {
-        return Err(format!(
+        bail!(
             "Resolved empty archive commit for workspace {}",
             workspace_dir
-        ));
+        );
     }
 
     Ok(commit)
@@ -359,11 +361,11 @@ pub fn remote_tracking_branch_ref(default_branch: &str) -> String {
     format!("refs/remotes/origin/{default_branch}")
 }
 
-pub fn tracked_file_count(workspace_dir: &Path) -> Result<i64, String> {
+pub fn tracked_file_count(workspace_dir: &Path) -> Result<i64> {
     let workspace_dir = workspace_dir.display().to_string();
-    let output = run_git(["-C", workspace_dir.as_str(), "ls-files"], None).map_err(|error| {
+    let output = run_git(["-C", workspace_dir.as_str(), "ls-files"], None).with_context(|| {
         format!(
-            "Failed to count tracked files for workspace {}: {error}",
+            "Failed to count tracked files for workspace {}",
             workspace_dir
         )
     })?;

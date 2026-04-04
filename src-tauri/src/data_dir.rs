@@ -9,70 +9,60 @@
 use std::fs;
 use std::path::PathBuf;
 
+use anyhow::{Context, Result};
+
 /// Name of the database file inside the data directory.
 const DB_FILENAME: &str = "helmor.db";
 
 /// Returns the resolved data directory, creating it if necessary.
-pub fn data_dir() -> Result<PathBuf, String> {
+pub fn data_dir() -> Result<PathBuf> {
     let dir = resolve_data_dir()?;
 
     if !dir.exists() {
-        fs::create_dir_all(&dir).map_err(|error| {
-            format!(
-                "Failed to create Helmor data directory {}: {error}",
-                dir.display()
-            )
-        })?;
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("Failed to create Helmor data directory {}", dir.display()))?;
     }
 
     Ok(dir)
 }
 
 /// Returns the path to the SQLite database file.
-pub fn db_path() -> Result<PathBuf, String> {
+pub fn db_path() -> Result<PathBuf> {
     Ok(data_dir()?.join(DB_FILENAME))
 }
 
 /// Returns the workspaces directory inside the data dir.
-pub fn workspaces_dir() -> Result<PathBuf, String> {
+pub fn workspaces_dir() -> Result<PathBuf> {
     let dir = data_dir()?.join("workspaces");
     if !dir.exists() {
-        fs::create_dir_all(&dir).map_err(|error| {
-            format!("Failed to create workspaces directory: {error}")
-        })?;
+        fs::create_dir_all(&dir).context("Failed to create workspaces directory")?;
     }
     Ok(dir)
 }
 
 /// Returns the archived-contexts directory inside the data dir.
-pub fn archived_contexts_dir() -> Result<PathBuf, String> {
+pub fn archived_contexts_dir() -> Result<PathBuf> {
     let dir = data_dir()?.join("archived-contexts");
     if !dir.exists() {
-        fs::create_dir_all(&dir).map_err(|error| {
-            format!("Failed to create archived-contexts directory: {error}")
-        })?;
+        fs::create_dir_all(&dir).context("Failed to create archived-contexts directory")?;
     }
     Ok(dir)
 }
 
 /// Returns the repos mirror directory inside the data dir.
-pub fn repos_dir() -> Result<PathBuf, String> {
+pub fn repos_dir() -> Result<PathBuf> {
     let dir = data_dir()?.join("repos");
     if !dir.exists() {
-        fs::create_dir_all(&dir).map_err(|error| {
-            format!("Failed to create repos directory: {error}")
-        })?;
+        fs::create_dir_all(&dir).context("Failed to create repos directory")?;
     }
     Ok(dir)
 }
 
 /// Returns the logs directory inside the data dir.
-pub fn logs_dir() -> Result<PathBuf, String> {
+pub fn logs_dir() -> Result<PathBuf> {
     let dir = data_dir()?.join("logs");
     if !dir.exists() {
-        fs::create_dir_all(&dir).map_err(|error| {
-            format!("Failed to create logs directory: {error}")
-        })?;
+        fs::create_dir_all(&dir).context("Failed to create logs directory")?;
     }
     Ok(dir)
 }
@@ -96,14 +86,14 @@ pub fn is_dev() -> bool {
 }
 
 /// Resolve the data directory path without creating it.
-fn resolve_data_dir() -> Result<PathBuf, String> {
+fn resolve_data_dir() -> Result<PathBuf> {
     // 1. Environment variable override
     if let Ok(dir) = std::env::var("HELMOR_DATA_DIR") {
         return Ok(PathBuf::from(dir));
     }
 
     // 2. Build profile based
-    let home = dirs_home().ok_or("Could not determine home directory")?;
+    let home = dirs_home().context("Could not determine home directory")?;
 
     if cfg!(debug_assertions) {
         Ok(home.join(".helmor.dev"))
@@ -117,7 +107,7 @@ fn dirs_home() -> Option<PathBuf> {
 }
 
 /// Ensure all required subdirectories exist.
-pub fn ensure_directory_structure() -> Result<(), String> {
+pub fn ensure_directory_structure() -> Result<()> {
     data_dir()?;
     workspaces_dir()?;
     archived_contexts_dir()?;
@@ -127,22 +117,22 @@ pub fn ensure_directory_structure() -> Result<(), String> {
 }
 
 /// Returns the workspace directory for a given repo + workspace.
-pub fn workspace_dir(repo_name: &str, directory_name: &str) -> Result<PathBuf, String> {
+pub fn workspace_dir(repo_name: &str, directory_name: &str) -> Result<PathBuf> {
     Ok(workspaces_dir()?.join(repo_name).join(directory_name))
 }
 
 /// Returns the archived context directory for a given repo + workspace.
-pub fn archived_context_dir(repo_name: &str, directory_name: &str) -> Result<PathBuf, String> {
+pub fn archived_context_dir(repo_name: &str, directory_name: &str) -> Result<PathBuf> {
     Ok(archived_contexts_dir()?.join(repo_name).join(directory_name))
 }
 
 /// Returns the repo mirror directory.
-pub fn repo_mirror_dir(repo_name: &str) -> Result<PathBuf, String> {
+pub fn repo_mirror_dir(repo_name: &str) -> Result<PathBuf> {
     Ok(repos_dir()?.join(repo_name))
 }
 
 /// Returns the workspace logs directory.
-pub fn workspace_logs_dir(workspace_id: &str) -> Result<PathBuf, String> {
+pub fn workspace_logs_dir(workspace_id: &str) -> Result<PathBuf> {
     Ok(logs_dir()?.join("workspaces").join(workspace_id))
 }
 
@@ -156,7 +146,7 @@ pub fn data_mode_label() -> &'static str {
 }
 
 /// Returns the path to the data directory as resolved (for display/info).
-pub fn data_dir_display() -> Result<String, String> {
+pub fn data_dir_display() -> Result<String> {
     Ok(data_dir()?.display().to_string())
 }
 

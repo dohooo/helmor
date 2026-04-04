@@ -3,6 +3,7 @@
 //! Uses the SQLite backup API to safely copy data from a running or
 //! closed Conductor database without corrupting the source.
 
+use anyhow::{bail, Context, Result};
 use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
 
@@ -25,9 +26,9 @@ pub struct ImportResult {
 /// - Optionally filters to a single repository
 ///
 /// WARNING: This replaces all data in the Helmor database.
-pub fn import_from_conductor(repo_filter: Option<&str>) -> Result<ImportResult, String> {
+pub fn import_from_conductor(repo_filter: Option<&str>) -> Result<ImportResult> {
     let source_path = crate::data_dir::conductor_source_db_path()
-        .ok_or("Conductor database not found at ~/Library/Application Support/com.conductor.app/conductor.db")?;
+        .context("Conductor database not found at ~/Library/Application Support/com.conductor.app/conductor.db")?;
 
     let source_display = source_path.display().to_string();
 
@@ -36,7 +37,7 @@ pub fn import_from_conductor(repo_filter: Option<&str>) -> Result<ImportResult, 
         &source_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
-    .map_err(|error| format!("Failed to open Conductor database: {error}"))?;
+    .context("Failed to open Conductor database")?;
 
     // Fail fast: validate repo exists in source BEFORE touching destination
     if let Some(repo_name) = repo_filter {
@@ -46,7 +47,7 @@ pub fn import_from_conductor(repo_filter: Option<&str>) -> Result<ImportResult, 
                 [repo_name],
                 |row| row.get::<_, String>(0),
             )
-            .map_err(|_| format!("Repo '{repo_name}' not found in source Conductor database"))?;
+            .with_context(|| format!("Repo '{repo_name}' not found in source Conductor database"))?;
     }
 
     let dest_path = crate::data_dir::db_path()?;
@@ -54,9 +55,9 @@ pub fn import_from_conductor(repo_filter: Option<&str>) -> Result<ImportResult, 
 
     // If the destination already has data, back it up first
     if dest_path.is_file() {
-        std::fs::copy(&dest_path, &backup_path).map_err(|error| {
+        std::fs::copy(&dest_path, &backup_path).with_context(|| {
             format!(
-                "Failed to create backup at {}: {error}",
+                "Failed to create backup at {}",
                 backup_path.display()
             )
         })?;
@@ -69,21 +70,21 @@ pub fn import_from_conductor(repo_filter: Option<&str>) -> Result<ImportResult, 
             | OpenFlags::SQLITE_OPEN_CREATE
             | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
-    .map_err(|error| format!("Failed to open Helmor database for import: {error}"))?;
+    .context("Failed to open Helmor database for import")?;
 
     // Use SQLite backup API — copies page by page, safe and atomic
     {
         let backup = rusqlite::backup::Backup::new(&source, &mut dest)
-            .map_err(|error| format!("Failed to start database backup: {error}"))?;
+            .context("Failed to start database backup")?;
         backup
             .run_to_completion(100, std::time::Duration::from_millis(50), None)
-            .map_err(|error| format!("Database backup failed: {error}"))?;
+            .context("Database backup failed")?;
     }
     // Drop source — no longer needed
     drop(source);
 
     // All post-backup operations: on ANY failure, restore from .bak
-    let post_backup_result = (|| -> Result<(), String> {
+    let post_backup_result = (|| -> Result<()> {
         if let Some(repo_name) = repo_filter {
             filter_to_repo(&dest, repo_name)?;
         }
@@ -130,10 +131,10 @@ fn restore_backup(dest_path: &std::path::Path, backup_path: &std::path::Path) {
 }
 
 /// Filter the imported database to only keep data for a specific repo.
-fn filter_to_repo(connection: &Connection, repo_name: &str) -> Result<(), String> {
+fn filter_to_repo(connection: &Connection, repo_name: &str) -> Result<()> {
     connection
         .execute_batch("PRAGMA foreign_keys = OFF;")
-        .map_err(|error| error.to_string())?;
+        .context("Failed to disable foreign keys")?;
 
     let repo_id: String = connection
         .query_row(
@@ -141,7 +142,7 @@ fn filter_to_repo(connection: &Connection, repo_name: &str) -> Result<(), String
             [repo_name],
             |row| row.get(0),
         )
-        .map_err(|_| format!("Repo '{repo_name}' not found in source database"))?;
+        .with_context(|| format!("Repo '{repo_name}' not found in source database"))?;
 
     let params: &[&dyn rusqlite::types::ToSql] = &[&repo_id];
 
@@ -154,7 +155,7 @@ fn filter_to_repo(connection: &Connection, repo_name: &str) -> Result<(), String
             )",
             params,
         )
-        .map_err(|error| format!("Filter attachments failed: {error}"))?;
+        .context("Filter attachments failed")?;
 
     connection
         .execute(
@@ -165,7 +166,7 @@ fn filter_to_repo(connection: &Connection, repo_name: &str) -> Result<(), String
             )",
             params,
         )
-        .map_err(|error| format!("Filter messages failed: {error}"))?;
+        .context("Filter messages failed")?;
 
     connection
         .execute(
@@ -174,36 +175,36 @@ fn filter_to_repo(connection: &Connection, repo_name: &str) -> Result<(), String
             )",
             params,
         )
-        .map_err(|error| format!("Filter sessions failed: {error}"))?;
+        .context("Filter sessions failed")?;
 
     connection
         .execute("DELETE FROM workspaces WHERE repository_id != ?1", params)
-        .map_err(|error| format!("Filter workspaces failed: {error}"))?;
+        .context("Filter workspaces failed")?;
 
     connection
         .execute("DELETE FROM repos WHERE id != ?1", params)
-        .map_err(|error| format!("Filter repos failed: {error}"))?;
+        .context("Filter repos failed")?;
 
     Ok(())
 }
 
 /// Redact token-like settings to avoid leaking secrets.
-fn redact_sensitive_settings(connection: &Connection) -> Result<(), String> {
+fn redact_sensitive_settings(connection: &Connection) -> Result<()> {
     connection
         .execute(
             "UPDATE settings SET value = '[REDACTED]' WHERE lower(key) LIKE '%token%'",
             [],
         )
-        .map_err(|error| format!("Failed to redact settings: {error}"))?;
+        .context("Failed to redact settings")?;
     Ok(())
 }
 
-fn count_rows(connection: &Connection, table: &str) -> Result<i64, String> {
+fn count_rows(connection: &Connection, table: &str) -> Result<i64> {
     connection
         .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
             row.get(0)
         })
-        .map_err(|error| format!("Failed to count {table}: {error}"))
+        .with_context(|| format!("Failed to count {table}"))
 }
 
 /// Merge Conductor data into Helmor without replacing existing records.
@@ -211,9 +212,9 @@ fn count_rows(connection: &Connection, table: &str) -> Result<i64, String> {
 /// Uses ATTACH DATABASE + INSERT OR IGNORE: only adds records that
 /// don't already exist in Helmor (matched by primary key).
 /// Existing Helmor data is never modified or deleted.
-pub fn merge_from_conductor() -> Result<ImportResult, String> {
+pub fn merge_from_conductor() -> Result<ImportResult> {
     let source_path = crate::data_dir::conductor_source_db_path()
-        .ok_or("Conductor database not found")?;
+        .context("Conductor database not found")?;
     let source_display = source_path.display().to_string();
     let dest_path = crate::data_dir::db_path()?;
 
@@ -221,11 +222,11 @@ pub fn merge_from_conductor() -> Result<ImportResult, String> {
         &dest_path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
-    .map_err(|error| format!("Failed to open Helmor database: {error}"))?;
+    .context("Failed to open Helmor database")?;
 
     connection
         .busy_timeout(std::time::Duration::from_secs(5))
-        .map_err(|error| error.to_string())?;
+        .context("Failed to set busy timeout")?;
 
     // Attach the Conductor DB as a read-only source
     connection
@@ -233,14 +234,14 @@ pub fn merge_from_conductor() -> Result<ImportResult, String> {
             "ATTACH DATABASE ?1 AS source",
             [source_path.to_string_lossy().as_ref()],
         )
-        .map_err(|error| format!("Failed to attach Conductor database: {error}"))?;
+        .context("Failed to attach Conductor database")?;
 
     // All merges inside a single transaction for atomicity
     connection
         .execute_batch("BEGIN IMMEDIATE")
-        .map_err(|error| format!("Failed to start transaction: {error}"))?;
+        .context("Failed to start transaction")?;
 
-    let merge_result = (|| -> Result<(), String> {
+    let merge_result = (|| -> Result<()> {
         let tables = [
             "repos",
             "workspaces",
@@ -271,7 +272,7 @@ pub fn merge_from_conductor() -> Result<ImportResult, String> {
 
             connection
                 .execute(&format!("INSERT OR IGNORE INTO main.{table} ({col_list}) {select}"), [])
-                .map_err(|error| format!("Failed to merge {table}: {error}"))?;
+                .with_context(|| format!("Failed to merge {table}"))?;
         }
 
         Ok(())
@@ -285,11 +286,11 @@ pub fn merge_from_conductor() -> Result<ImportResult, String> {
 
     connection
         .execute_batch("COMMIT")
-        .map_err(|error| format!("Failed to commit: {error}"))?;
+        .context("Failed to commit")?;
 
     connection
         .execute("DETACH DATABASE source", [])
-        .map_err(|error| format!("Failed to detach: {error}"))?;
+        .context("Failed to detach")?;
 
     let repos_count = count_rows(&connection, "repos")?;
     let workspaces_count = count_rows(&connection, "workspaces")?;
@@ -307,19 +308,19 @@ pub fn merge_from_conductor() -> Result<ImportResult, String> {
 }
 
 /// Get column names for a table (from the main schema).
-fn get_table_columns(connection: &Connection, table: &str) -> Result<Vec<String>, String> {
+fn get_table_columns(connection: &Connection, table: &str) -> Result<Vec<String>> {
     let mut stmt = connection
         .prepare(&format!("PRAGMA table_info({table})"))
-        .map_err(|error| format!("Failed to get columns for {table}: {error}"))?;
+        .with_context(|| format!("Failed to get columns for {table}"))?;
 
     let columns: Vec<String> = stmt
         .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|error| error.to_string())?
+        .context("Failed to query column info")?
         .filter_map(Result::ok)
         .collect();
 
     if columns.is_empty() {
-        return Err(format!("Table {table} has no columns"));
+        bail!("Table {table} has no columns");
     }
 
     Ok(columns)
