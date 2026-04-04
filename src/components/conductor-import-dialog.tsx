@@ -211,9 +211,13 @@ export function ConductorImportDialog({
       const result = await importConductorWorkspaces(Array.from(selectedIds));
       if (result.importedCount > 0) {
         onImported();
+      }
+      if (result.errors.length > 0) {
+        setImportError(
+          `${result.importedCount} imported, ${result.errors.length} failed: ${result.errors[0]}`,
+        );
+      } else {
         onClose();
-      } else if (result.errors.length > 0) {
-        setImportError(result.errors[0]);
       }
     } catch (e) {
       setImportError(e instanceof Error ? e.message : "Import failed");

@@ -196,13 +196,22 @@ pub fn import_conductor_workspaces(workspace_ids: &[String]) -> Result<ImportWor
     let mut imported_workspaces: Vec<ImportedWorkspaceMeta> = vec![];
 
     for ws_id in workspace_ids {
+        // Savepoint per workspace so a partial failure rolls back only this workspace's rows
+        helmor_conn.execute_batch("SAVEPOINT ws_import").ok();
+
         match import_workspace_db_records(&helmor_conn, ws_id) {
             Ok(ImportDbResult::Imported(meta)) => {
+                helmor_conn.execute_batch("RELEASE SAVEPOINT ws_import").ok();
                 imported_workspaces.push(meta);
                 imported_count += 1;
             }
-            Ok(ImportDbResult::Skipped) => skipped_count += 1,
+            Ok(ImportDbResult::Skipped) => {
+                helmor_conn.execute_batch("RELEASE SAVEPOINT ws_import").ok();
+                skipped_count += 1;
+            }
             Err(error) => {
+                helmor_conn.execute_batch("ROLLBACK TO SAVEPOINT ws_import").ok();
+                helmor_conn.execute_batch("RELEASE SAVEPOINT ws_import").ok();
                 errors.push(format!("{ws_id}: {error}"));
             }
         }
@@ -486,10 +495,9 @@ fn setup_workspace_filesystem(
 
 /// Resolve which branch to use as the source for the imported worktree.
 ///
-/// The DB branch (e.g. `lgq/ottawa`) may be stale — Conductor can switch
-/// branches without updating the workspace record.  If the DB branch
-/// doesn't exist in the source repo, we read the actual HEAD of the
-/// Conductor worktree on disk to find the real branch.
+/// The live Conductor worktree HEAD is the ground truth — the DB branch
+/// can lag behind (Conductor can switch branches without updating the DB).
+/// We prefer the live worktree branch, falling back to the DB branch.
 fn resolve_source_branch(
     repo_root: &Path,
     db_branch: &str,
@@ -497,12 +505,7 @@ fn resolve_source_branch(
     repo_name: &str,
     directory_name: &str,
 ) -> Option<String> {
-    // Check if the DB branch exists as a local branch in the source repo
-    if git_ops::verify_branch_exists(repo_root, db_branch).is_ok() {
-        return Some(db_branch.to_string());
-    }
-
-    // DB branch is stale — try to read the actual branch from the Conductor worktree
+    // Prefer the live Conductor worktree HEAD — it's the ground truth
     if let Some(root) = conductor_root {
         let conductor_ws = root
             .join("workspaces")
@@ -519,14 +522,21 @@ fn resolve_source_branch(
                     && actual != "HEAD"
                     && git_ops::verify_branch_exists(repo_root, &actual).is_ok()
                 {
-                    eprintln!(
-                        "[import] Branch mismatch for {directory_name}: DB has '{db_branch}', \
-                         actual is '{actual}' — using actual"
-                    );
+                    if actual != db_branch {
+                        eprintln!(
+                            "[import] Branch mismatch for {directory_name}: DB has '{db_branch}', \
+                             actual is '{actual}' — using actual"
+                        );
+                    }
                     return Some(actual);
                 }
             }
         }
+    }
+
+    // Fall back to the DB branch if the live worktree is unavailable
+    if git_ops::verify_branch_exists(repo_root, db_branch).is_ok() {
+        return Some(db_branch.to_string());
     }
 
     eprintln!("[import] No valid branch found for {directory_name} (tried '{db_branch}')");

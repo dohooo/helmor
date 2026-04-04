@@ -738,6 +738,14 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
     git_ops::ensure_git_repository(&repo_root)?;
     git_ops::verify_branch_exists(&repo_root, &branch)?;
     git_ops::verify_commit_exists(&repo_root, &archive_commit)?;
+
+    // Save the original branch commit so we can restore it on failure
+    let original_branch_commit = git_ops::run_git(
+        ["-C", &repo_root.display().to_string(), "rev-parse", &format!("refs/heads/{branch}")],
+        None,
+    )
+    .context("Failed to read current branch commit")?;
+
     git_ops::point_branch_to_commit(&repo_root, &branch, &archive_commit)?;
     git_ops::create_worktree(&repo_root, &workspace_dir, &branch)?;
 
@@ -749,6 +757,8 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
             None,
             &staged_archive_dir,
             &archived_context_dir,
+            &branch,
+            &original_branch_commit,
         );
         anyhow::anyhow!(
             "Failed to stage archived context {}: {error}",
@@ -764,6 +774,8 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
             Some(&workspace_context_dir),
             &staged_archive_dir,
             &archived_context_dir,
+            &branch,
+            &original_branch_commit,
         );
         return Err(error);
     }
@@ -779,6 +791,8 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
             Some(&workspace_context_dir),
             &staged_archive_dir,
             &archived_context_dir,
+            &branch,
+            &original_branch_commit,
         );
         return Err(error);
     }
@@ -1183,6 +1197,8 @@ fn cleanup_failed_restore(
     workspace_context_dir: Option<&Path>,
     staged_archive_dir: &Path,
     archived_context_dir: &Path,
+    branch: &str,
+    original_commit: &str,
 ) {
     if let Some(context_dir) = workspace_context_dir {
         let _ = fs::remove_dir_all(context_dir);
@@ -1190,6 +1206,9 @@ fn cleanup_failed_restore(
 
     let _ = git_ops::remove_worktree(repo_root, workspace_dir);
     let _ = fs::remove_dir_all(workspace_dir);
+
+    // Restore the branch ref to its original commit
+    let _ = git_ops::point_branch_to_commit(repo_root, branch, original_commit);
 
     if staged_archive_dir.exists() && !archived_context_dir.exists() {
         let _ = fs::rename(staged_archive_dir, archived_context_dir);
