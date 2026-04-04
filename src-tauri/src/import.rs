@@ -3,11 +3,13 @@
 //! Users browse Conductor repos/workspaces, select individual workspaces,
 //! and import both database records and filesystem context files.
 
+use std::path::{Path, PathBuf};
+
 use anyhow::{bail, Context, Result};
 use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
 
-use crate::models::helpers;
+use crate::models::{git_ops, helpers};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -236,8 +238,8 @@ enum ImportAction {
 fn import_single_workspace(
     conn: &Connection,
     workspace_id: &str,
-    conductor_root: Option<&std::path::Path>,
-    helmor_data_dir: &std::path::Path,
+    conductor_root: Option<&Path>,
+    helmor_data_dir: &Path,
 ) -> Result<ImportAction> {
     // Already imported?
     let exists: bool = conn
@@ -254,20 +256,20 @@ fn import_single_workspace(
     }
 
     // Read workspace info from source
-    let (repo_id, directory_name, state): (String, String, String) = conn
+    let (repo_id, directory_name, state, branch): (String, String, String, Option<String>) = conn
         .query_row(
-            "SELECT repository_id, directory_name, state FROM source.workspaces WHERE id = ?1",
+            "SELECT repository_id, directory_name, state, branch FROM source.workspaces WHERE id = ?1",
             [workspace_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .with_context(|| format!("Workspace {workspace_id} not found in Conductor"))?;
 
-    // Read repo name from source
-    let repo_name: String = conn
+    // Read repo name + root_path from source
+    let (repo_name, root_path): (String, Option<String>) = conn
         .query_row(
-            "SELECT name FROM source.repos WHERE id = ?1",
+            "SELECT name, root_path FROM source.repos WHERE id = ?1",
             [&repo_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .with_context(|| format!("Repo {repo_id} not found in Conductor"))?;
 
@@ -342,67 +344,119 @@ fn import_single_workspace(
     )
     .context("Failed to import diff_comments")?;
 
-    // 7. Filesystem copy + attachment path rewriting
+    // 7. Git repository reconstruction + filesystem copy
+    let mirror_dir = crate::data_dir::repo_mirror_dir(&repo_name)?;
+
+    // Ensure bare mirror exists from the source repo's root_path
+    let repo_root = helpers::non_empty(&root_path).map(PathBuf::from);
+
+    if let Some(ref repo_root) = repo_root {
+        if repo_root.is_dir() {
+            // Mirror creation is non-fatal — we still want DB records even if git fails
+            if let Err(e) = git_ops::ensure_repo_mirror(repo_root, &mirror_dir) {
+                eprintln!("[import] Failed to create mirror for {repo_name}: {e}");
+            }
+        }
+    }
+
+    if state != "archived" {
+        // Active workspace: create git worktree, then copy .context/ into it
+        let workspace_dir =
+            crate::data_dir::workspace_dir(&repo_name, &directory_name)?;
+
+        if !workspace_dir.exists() {
+            if let Some(ref branch_name) = branch {
+                if mirror_dir.exists() {
+                    setup_imported_worktree(
+                        &mirror_dir,
+                        &workspace_dir,
+                        branch_name,
+                    )?;
+                }
+            }
+        }
+
+        // Copy .context/ from Conductor into the workspace (whether or not worktree succeeded)
+        if let Some(root) = conductor_root {
+            let context_src = root
+                .join("workspaces")
+                .join(&repo_name)
+                .join(&directory_name)
+                .join(".context");
+            let context_dst = workspace_dir.join(".context");
+
+            if context_src.is_dir() && !context_dst.exists() {
+                if let Some(parent) = context_dst.parent() {
+                    std::fs::create_dir_all(parent).ok();
+                }
+                helpers::copy_dir_all(&context_src, &context_dst)
+                    .with_context(|| format!("Failed to copy .context from {}", context_src.display()))?;
+            }
+        }
+    } else {
+        // Archived workspace: just copy archived-contexts/
+        if let Some(root) = conductor_root {
+            let archive_src = root
+                .join("archived-contexts")
+                .join(&repo_name)
+                .join(&directory_name);
+            let archive_dst = helmor_data_dir
+                .join("archived-contexts")
+                .join(&repo_name)
+                .join(&directory_name);
+
+            if archive_src.is_dir() && !archive_dst.exists() {
+                if let Some(parent) = archive_dst.parent() {
+                    std::fs::create_dir_all(parent).ok();
+                }
+                helpers::copy_dir_all(&archive_src, &archive_dst)
+                    .with_context(|| format!("Failed to copy archived context from {}", archive_src.display()))?;
+            }
+        }
+    }
+
+    // 8. Attachment path rewriting
     if let Some(root) = conductor_root {
-        copy_workspace_context(root, helmor_data_dir, &repo_name, &directory_name, &state)?;
         rewrite_attachment_paths(conn, workspace_id, root, helmor_data_dir, &repo_name, &directory_name, &state)?;
     }
 
     Ok(ImportAction::Imported)
 }
 
-/// Copy workspace context files from Conductor's filesystem to Helmor's.
-fn copy_workspace_context(
-    conductor_root: &std::path::Path,
-    helmor_data_dir: &std::path::Path,
-    repo_name: &str,
-    directory_name: &str,
-    state: &str,
+/// Create a git worktree for an imported active workspace.
+///
+/// The branch may exist as a local ref or as `refs/remotes/origin/{branch}` in
+/// the mirror. We try the branch name directly first, falling back to the
+/// remote tracking ref.
+fn setup_imported_worktree(
+    mirror_dir: &Path,
+    workspace_dir: &Path,
+    branch: &str,
 ) -> Result<()> {
-    let (source_dir, dest_dir) = if state == "archived" {
-        // Archived: {root}/archived-contexts/{repo}/{ws}/ -> {helmor}/archived-contexts/{repo}/{ws}/
-        let src = conductor_root
-            .join("archived-contexts")
-            .join(repo_name)
-            .join(directory_name);
-        let dst = helmor_data_dir
-            .join("archived-contexts")
-            .join(repo_name)
-            .join(directory_name);
-        (src, dst)
-    } else {
-        // Active: {root}/workspaces/{repo}/{ws}/.context/ -> {helmor}/workspaces/{repo}/{ws}/.context/
-        let src = conductor_root
-            .join("workspaces")
-            .join(repo_name)
-            .join(directory_name)
-            .join(".context");
-        let dst = helmor_data_dir
-            .join("workspaces")
-            .join(repo_name)
-            .join(directory_name)
-            .join(".context");
-        (src, dst)
-    };
-
-    // Skip if source doesn't exist (context files are optional)
-    if !source_dir.is_dir() {
-        return Ok(());
-    }
-
-    // Skip if destination already exists (don't overwrite)
-    if dest_dir.exists() {
-        return Ok(());
-    }
-
-    // Ensure parent directory exists
-    if let Some(parent) = dest_dir.parent() {
+    if let Some(parent) = workspace_dir.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create {}", parent.display()))?;
     }
 
-    helpers::copy_dir_all(&source_dir, &dest_dir)
-        .with_context(|| format!("Failed to copy context from {}", source_dir.display()))?;
+    // Try the branch name directly (works if it exists as a local ref in the mirror)
+    match git_ops::create_worktree(mirror_dir, workspace_dir, branch) {
+        Ok(()) => return Ok(()),
+        Err(_) => {
+            // Clean up any partial directory created by the failed attempt
+            if workspace_dir.exists() {
+                let _ = std::fs::remove_dir_all(workspace_dir);
+            }
+        }
+    }
+
+    // Fall back: the branch likely exists as refs/remotes/origin/{branch}
+    let tracking_ref = format!("refs/remotes/origin/{branch}");
+    git_ops::create_worktree_from_start_point(mirror_dir, workspace_dir, branch, &tracking_ref)
+        .with_context(|| {
+            format!(
+                "Failed to create worktree for branch {branch} (tried direct and tracking ref)"
+            )
+        })?;
 
     Ok(())
 }
@@ -411,8 +465,8 @@ fn copy_workspace_context(
 fn rewrite_attachment_paths(
     conn: &Connection,
     workspace_id: &str,
-    conductor_root: &std::path::Path,
-    helmor_data_dir: &std::path::Path,
+    conductor_root: &Path,
+    helmor_data_dir: &Path,
     repo_name: &str,
     directory_name: &str,
     state: &str,
