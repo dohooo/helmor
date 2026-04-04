@@ -10,7 +10,7 @@ import {
   useState,
   useCallback,
 } from "react";
-import { Moon, Sun } from "lucide-react";
+import { Moon, Sun, RefreshCw } from "lucide-react";
 import {
   DEFAULT_AGENT_MODEL_SECTIONS,
   DEFAULT_WORKSPACE_GROUPS,
@@ -32,6 +32,7 @@ import {
   restoreWorkspace,
   sendAgentMessage,
   startAgentMessageStream,
+  mergeFromConductor,
   type AgentModelOption,
   type AgentModelSection,
   type RepositoryCreateOption,
@@ -279,6 +280,18 @@ function App() {
     return () => {
       disposed = true;
     };
+  }, []);
+
+  const refreshAllData = useCallback(() => {
+    void Promise.all([
+      loadWorkspaceGroups(),
+      loadArchivedWorkspaces(),
+      listRepositories(),
+    ]).then(([loadedGroups, loadedArchived, loadedRepositories]) => {
+      setGroups(loadedGroups);
+      setArchivedSummaries(loadedArchived);
+      setFixtureRepositories(loadedRepositories);
+    });
   }, []);
 
   useEffect(() => {
@@ -1065,18 +1078,21 @@ function App() {
             data-tauri-drag-region
           />
 
-          <button
-            type="button"
-            aria-label="Toggle theme"
-            onClick={toggleTheme}
-            className="absolute right-4 top-[0.55rem] z-30 flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
-          >
-            {theme === "dark" ? (
-              <Sun className="size-3.5" strokeWidth={1.8} />
-            ) : (
-              <Moon className="size-3.5" strokeWidth={1.8} />
-            )}
-          </button>
+          <div className="absolute right-4 top-[0.55rem] z-30 flex items-center gap-1">
+            <SyncConductorButton onSynced={refreshAllData} />
+            <button
+              type="button"
+              aria-label="Toggle theme"
+              onClick={toggleTheme}
+              className="flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
+            >
+              {theme === "dark" ? (
+                <Sun className="size-3.5" strokeWidth={1.8} />
+              ) : (
+                <Moon className="size-3.5" strokeWidth={1.8} />
+              )}
+            </button>
+          </div>
 
           <div
             aria-label="Workspace viewport"
@@ -1408,6 +1424,38 @@ function haveSameLiveMessages(
       && message.createdAt === nextMessage.createdAt
     );
   });
+}
+
+function SyncConductorButton({ onSynced }: { onSynced: () => void }) {
+  const [syncing, setSyncing] = useState(false);
+
+  const handleSync = useCallback(async () => {
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      const result = await mergeFromConductor();
+      if (result.success) {
+        onSynced();
+      }
+    } catch (error) {
+      console.error("Conductor sync failed:", error);
+    } finally {
+      setSyncing(false);
+    }
+  }, [syncing, onSynced]);
+
+  return (
+    <button
+      type="button"
+      aria-label="Sync from Conductor"
+      onClick={handleSync}
+      disabled={syncing}
+      title="Merge data from Conductor"
+      className="flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground disabled:opacity-40"
+    >
+      <RefreshCw className={`size-3.5 ${syncing ? "animate-spin" : ""}`} strokeWidth={1.8} />
+    </button>
+  );
 }
 
 export default App;

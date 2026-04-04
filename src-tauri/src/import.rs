@@ -210,6 +210,110 @@ fn count_rows(connection: &Connection, table: &str) -> Result<i64, String> {
         .map_err(|error| format!("Failed to count {table}: {error}"))
 }
 
+/// Merge Conductor data into Helmor without replacing existing records.
+///
+/// Uses ATTACH DATABASE + INSERT OR IGNORE: only adds records that
+/// don't already exist in Helmor (matched by primary key).
+/// Existing Helmor data is never modified or deleted.
+pub fn merge_from_conductor() -> Result<ImportResult, String> {
+    let source_path = crate::data_dir::conductor_source_db_path()
+        .ok_or("Conductor database not found")?;
+    let source_display = source_path.display().to_string();
+    let dest_path = crate::data_dir::db_path()?;
+
+    let connection = Connection::open_with_flags(
+        &dest_path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| format!("Failed to open Helmor database: {error}"))?;
+
+    connection
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|error| error.to_string())?;
+
+    // Attach the Conductor DB as a read-only source
+    connection
+        .execute(
+            "ATTACH DATABASE ?1 AS conductor",
+            [source_path.to_string_lossy().as_ref()],
+        )
+        .map_err(|error| format!("Failed to attach Conductor database: {error}"))?;
+
+    // Merge each table — INSERT OR IGNORE keeps existing Helmor data untouched
+    let tables = [
+        "repos",
+        "workspaces",
+        "sessions",
+        "session_messages",
+        "attachments",
+        "diff_comments",
+    ];
+
+    for table in &tables {
+        // Get column names from the main table to build the INSERT
+        let columns = get_table_columns(&connection, table)?;
+        let col_list = columns.join(", ");
+
+        let sql = format!(
+            "INSERT OR IGNORE INTO main.{table} ({col_list}) SELECT {col_list} FROM conductor.{table}"
+        );
+
+        connection
+            .execute(&sql, [])
+            .map_err(|error| format!("Failed to merge {table}: {error}"))?;
+    }
+
+    // Merge settings with INSERT OR IGNORE (keep Helmor's settings)
+    let settings_cols = get_table_columns(&connection, "settings")?;
+    let settings_col_list = settings_cols.join(", ");
+    connection
+        .execute(
+            &format!("INSERT OR IGNORE INTO main.settings ({settings_col_list}) SELECT {settings_col_list} FROM conductor.settings"),
+            [],
+        )
+        .map_err(|error| format!("Failed to merge settings: {error}"))?;
+
+    // Redact imported tokens
+    redact_sensitive_settings(&connection)?;
+
+    connection
+        .execute("DETACH DATABASE conductor", [])
+        .map_err(|error| format!("Failed to detach: {error}"))?;
+
+    let repos_count = count_rows(&connection, "repos")?;
+    let workspaces_count = count_rows(&connection, "workspaces")?;
+    let sessions_count = count_rows(&connection, "sessions")?;
+    let messages_count = count_rows(&connection, "session_messages")?;
+
+    Ok(ImportResult {
+        success: true,
+        source_path: source_display,
+        repos_count,
+        workspaces_count,
+        sessions_count,
+        messages_count,
+    })
+}
+
+/// Get column names for a table (from the main schema).
+fn get_table_columns(connection: &Connection, table: &str) -> Result<Vec<String>, String> {
+    let mut stmt = connection
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|error| format!("Failed to get columns for {table}: {error}"))?;
+
+    let columns: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| error.to_string())?
+        .filter_map(Result::ok)
+        .collect();
+
+    if columns.is_empty() {
+        return Err(format!("Table {table} has no columns"));
+    }
+
+    Ok(columns)
+}
+
 /// Check if the Conductor database is available for import.
 pub fn conductor_source_available() -> bool {
     crate::data_dir::conductor_source_db_path().is_some()

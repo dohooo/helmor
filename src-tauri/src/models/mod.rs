@@ -38,6 +38,11 @@ pub fn import_from_conductor(repo_filter: Option<String>) -> Result<crate::impor
 }
 
 #[tauri::command]
+pub fn merge_from_conductor() -> Result<crate::import::ImportResult, String> {
+    crate::import::merge_from_conductor()
+}
+
+#[tauri::command]
 pub fn conductor_source_available() -> bool {
     crate::import::conductor_source_available()
 }

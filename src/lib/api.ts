@@ -761,4 +761,35 @@ export async function listenAgentStream(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Conductor sync (merge)
+// ---------------------------------------------------------------------------
+
+export type ImportResult = {
+  success: boolean;
+  sourcePath: string;
+  reposCount: number;
+  workspacesCount: number;
+  sessionsCount: number;
+  messagesCount: number;
+};
+
+export async function mergeFromConductor(): Promise<ImportResult> {
+  const inv = await getTauriInvoke();
+  if (!inv) {
+    throw new Error("Conductor sync is only available in the Tauri desktop runtime.");
+  }
+  return inv<ImportResult>("merge_from_conductor");
+}
+
+export async function isConductorAvailable(): Promise<boolean> {
+  const inv = await getTauriInvoke();
+  if (!inv) return false;
+  try {
+    return await inv<boolean>("conductor_source_available");
+  } catch {
+    return false;
+  }
+}
+
 export { DEFAULT_AGENT_MODEL_SECTIONS, DEFAULT_WORKSPACE_GROUPS };

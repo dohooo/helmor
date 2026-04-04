@@ -54,6 +54,7 @@ pub fn run() {
             models::mark_workspace_unread,
             models::restore_workspace,
             models::import_from_conductor,
+            models::merge_from_conductor,
             models::conductor_source_available
         ])
         .run(tauri::generate_context!())
