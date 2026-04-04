@@ -429,22 +429,36 @@ fn setup_workspace_filesystem(
         if !workspace_dir.exists() {
             if let Some(branch_name) = branch {
                 if mirror_dir.exists() {
-                    let import_branch = format!("{branch_name}-import");
-                    if let Err(e) = setup_imported_worktree(
+                    // The DB branch may be stale (Conductor can rename/switch
+                    // branches without updating the DB).  If the DB branch
+                    // doesn't exist in the mirror, detect the actual branch
+                    // from the live Conductor worktree.
+                    let source_branch = resolve_source_branch(
                         &mirror_dir,
-                        &workspace_dir,
-                        &import_branch,
                         branch_name,
-                    ) {
-                        eprintln!("[import] Worktree failed for {directory_name}: {e}");
-                        // Non-fatal: we still copy .context/ below
-                    } else {
-                        // Update branch in DB (best-effort, DB is already committed)
-                        if let Ok(conn) = crate::models::db::open_connection(true) {
-                            let _ = conn.execute(
-                                "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
-                                rusqlite::params![import_branch, workspace_id],
-                            );
+                        conductor_root,
+                        repo_name,
+                        directory_name,
+                    );
+
+                    if let Some(ref src) = source_branch {
+                        let import_branch = format!("{src}-import");
+                        if let Err(e) = setup_imported_worktree(
+                            &mirror_dir,
+                            &workspace_dir,
+                            &import_branch,
+                            src,
+                        ) {
+                            eprintln!("[import] Worktree failed for {directory_name}: {e}");
+                            // Non-fatal: we still copy .context/ below
+                        } else {
+                            // Update branch in DB (best-effort, DB is already committed)
+                            if let Ok(conn) = crate::models::db::open_connection(true) {
+                                let _ = conn.execute(
+                                    "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
+                                    rusqlite::params![import_branch, workspace_id],
+                                );
+                            }
                         }
                     }
                 }
@@ -493,6 +507,56 @@ fn setup_workspace_filesystem(
     }
 
     Ok(())
+}
+
+/// Resolve which branch to use as the source for the imported worktree.
+///
+/// The DB branch (e.g. `lgq/ottawa`) may be stale — Conductor can switch
+/// branches without updating the workspace record.  If the DB branch
+/// doesn't exist in the mirror, we read the actual HEAD of the Conductor
+/// worktree on disk to find the real branch.
+fn resolve_source_branch(
+    mirror_dir: &Path,
+    db_branch: &str,
+    conductor_root: Option<&Path>,
+    repo_name: &str,
+    directory_name: &str,
+) -> Option<String> {
+    // Check if the DB branch exists in the mirror
+    let tracking_ref = format!("refs/remotes/origin/{db_branch}");
+    if git_ops::verify_commitish_exists_in_mirror(mirror_dir, &tracking_ref, "").is_ok() {
+        return Some(db_branch.to_string());
+    }
+
+    // DB branch is stale — try to read the actual branch from the Conductor worktree
+    if let Some(root) = conductor_root {
+        let conductor_ws = root
+            .join("workspaces")
+            .join(repo_name)
+            .join(directory_name);
+
+        if conductor_ws.is_dir() {
+            if let Ok(output) = std::process::Command::new("git")
+                .args(["-C", &conductor_ws.display().to_string(), "rev-parse", "--abbrev-ref", "HEAD"])
+                .output()
+            {
+                let actual = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !actual.is_empty() && actual != "HEAD" {
+                    let actual_ref = format!("refs/remotes/origin/{actual}");
+                    if git_ops::verify_commitish_exists_in_mirror(mirror_dir, &actual_ref, "").is_ok() {
+                        eprintln!(
+                            "[import] Branch mismatch for {directory_name}: DB has '{db_branch}', \
+                             actual is '{actual}' — using actual"
+                        );
+                        return Some(actual);
+                    }
+                }
+            }
+        }
+    }
+
+    eprintln!("[import] No valid branch found for {directory_name} (tried '{db_branch}')");
+    None
 }
 
 /// Create a git worktree for an imported active workspace.
