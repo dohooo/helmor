@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const conductorMocks = vi.hoisted(() => ({
+const apiMocks = vi.hoisted(() => ({
   addRepositoryFromLocalPath: vi.fn(),
   loadAddRepositoryDefaults: vi.fn(),
   loadWorkspaceGroups: vi.fn(),
@@ -12,7 +12,7 @@ const conductorMocks = vi.hoisted(() => ({
   loadWorkspaceSessions: vi.fn(),
   loadSessionMessages: vi.fn(),
   loadSessionAttachments: vi.fn(),
-  listFixtureRepositories: vi.fn(),
+  listRepositories: vi.fn(),
 }));
 
 const dialogMocks = vi.hoisted(() => ({
@@ -28,21 +28,21 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: dialogMocks.open,
 }));
 
-vi.mock("./lib/conductor", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./lib/conductor")>();
+vi.mock("./lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./lib/api")>();
 
   return {
     ...actual,
-    addRepositoryFromLocalPath: conductorMocks.addRepositoryFromLocalPath,
-    loadAddRepositoryDefaults: conductorMocks.loadAddRepositoryDefaults,
-    loadWorkspaceGroups: conductorMocks.loadWorkspaceGroups,
-    loadArchivedWorkspaces: conductorMocks.loadArchivedWorkspaces,
-    loadAgentModelSections: conductorMocks.loadAgentModelSections,
-    loadWorkspaceDetail: conductorMocks.loadWorkspaceDetail,
-    loadWorkspaceSessions: conductorMocks.loadWorkspaceSessions,
-    loadSessionMessages: conductorMocks.loadSessionMessages,
-    loadSessionAttachments: conductorMocks.loadSessionAttachments,
-    listFixtureRepositories: conductorMocks.listFixtureRepositories,
+    addRepositoryFromLocalPath: apiMocks.addRepositoryFromLocalPath,
+    loadAddRepositoryDefaults: apiMocks.loadAddRepositoryDefaults,
+    loadWorkspaceGroups: apiMocks.loadWorkspaceGroups,
+    loadArchivedWorkspaces: apiMocks.loadArchivedWorkspaces,
+    loadAgentModelSections: apiMocks.loadAgentModelSections,
+    loadWorkspaceDetail: apiMocks.loadWorkspaceDetail,
+    loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
+    loadSessionMessages: apiMocks.loadSessionMessages,
+    loadSessionAttachments: apiMocks.loadSessionAttachments,
+    listRepositories: apiMocks.listRepositories,
   };
 });
 
@@ -52,23 +52,23 @@ describe("App add repository flow", () => {
   beforeEach(() => {
     addRepoRuntime.added = false;
 
-    conductorMocks.addRepositoryFromLocalPath.mockReset();
-    conductorMocks.loadAddRepositoryDefaults.mockReset();
-    conductorMocks.loadWorkspaceGroups.mockReset();
-    conductorMocks.loadArchivedWorkspaces.mockReset();
-    conductorMocks.loadAgentModelSections.mockReset();
-    conductorMocks.loadWorkspaceDetail.mockReset();
-    conductorMocks.loadWorkspaceSessions.mockReset();
-    conductorMocks.loadSessionMessages.mockReset();
-    conductorMocks.loadSessionAttachments.mockReset();
-    conductorMocks.listFixtureRepositories.mockReset();
+    apiMocks.addRepositoryFromLocalPath.mockReset();
+    apiMocks.loadAddRepositoryDefaults.mockReset();
+    apiMocks.loadWorkspaceGroups.mockReset();
+    apiMocks.loadArchivedWorkspaces.mockReset();
+    apiMocks.loadAgentModelSections.mockReset();
+    apiMocks.loadWorkspaceDetail.mockReset();
+    apiMocks.loadWorkspaceSessions.mockReset();
+    apiMocks.loadSessionMessages.mockReset();
+    apiMocks.loadSessionAttachments.mockReset();
+    apiMocks.listRepositories.mockReset();
     dialogMocks.open.mockReset();
 
-    conductorMocks.loadAddRepositoryDefaults.mockResolvedValue({
+    apiMocks.loadAddRepositoryDefaults.mockResolvedValue({
       lastCloneDirectory: "/Users/caspian/code/github",
     });
     dialogMocks.open.mockResolvedValue("/Users/caspian/code/github/added-repo");
-    conductorMocks.loadWorkspaceGroups.mockImplementation(async () => [
+    apiMocks.loadWorkspaceGroups.mockImplementation(async () => [
       {
         id: "progress",
         label: "In progress",
@@ -99,9 +99,9 @@ describe("App add repository flow", () => {
             ],
       },
     ]);
-    conductorMocks.loadArchivedWorkspaces.mockResolvedValue([]);
-    conductorMocks.loadAgentModelSections.mockResolvedValue([]);
-    conductorMocks.listFixtureRepositories.mockImplementation(async () =>
+    apiMocks.loadArchivedWorkspaces.mockResolvedValue([]);
+    apiMocks.loadAgentModelSections.mockResolvedValue([]);
+    apiMocks.listRepositories.mockImplementation(async () =>
       addRepoRuntime.added
         ? [
             {
@@ -126,7 +126,7 @@ describe("App add repository flow", () => {
             },
           ],
     );
-    conductorMocks.loadWorkspaceDetail.mockImplementation(async (workspaceId: string) => {
+    apiMocks.loadWorkspaceDetail.mockImplementation(async (workspaceId: string) => {
       if (workspaceId === "workspace-added") {
         return {
           id: "workspace-added",
@@ -189,7 +189,7 @@ describe("App add repository flow", () => {
         attachmentCount: 0,
       };
     });
-    conductorMocks.loadWorkspaceSessions.mockImplementation(async (workspaceId: string) => {
+    apiMocks.loadWorkspaceSessions.mockImplementation(async (workspaceId: string) => {
       if (workspaceId === "workspace-added") {
         return [
           {
@@ -246,9 +246,9 @@ describe("App add repository flow", () => {
         },
       ];
     });
-    conductorMocks.loadSessionMessages.mockResolvedValue([]);
-    conductorMocks.loadSessionAttachments.mockResolvedValue([]);
-    conductorMocks.addRepositoryFromLocalPath.mockImplementation(async () => {
+    apiMocks.loadSessionMessages.mockResolvedValue([]);
+    apiMocks.loadSessionAttachments.mockResolvedValue([]);
+    apiMocks.addRepositoryFromLocalPath.mockImplementation(async () => {
       addRepoRuntime.added = true;
 
       return {
@@ -280,15 +280,15 @@ describe("App add repository flow", () => {
       });
     });
     await waitFor(() => {
-      expect(conductorMocks.addRepositoryFromLocalPath).toHaveBeenCalledWith(
+      expect(apiMocks.addRepositoryFromLocalPath).toHaveBeenCalledWith(
         "/Users/caspian/code/github/added-repo",
       );
     });
     await waitFor(() => {
-      expect(conductorMocks.loadWorkspaceDetail).toHaveBeenCalledWith("workspace-added");
+      expect(apiMocks.loadWorkspaceDetail).toHaveBeenCalledWith("workspace-added");
     });
     await waitFor(() => {
-      expect(conductorMocks.loadSessionMessages).toHaveBeenCalledWith("session-added");
+      expect(apiMocks.loadSessionMessages).toHaveBeenCalledWith("session-added");
     });
 
     expect(screen.getByText("Acamar")).toBeInTheDocument();
@@ -305,13 +305,13 @@ describe("App add repository flow", () => {
     await waitFor(() => {
       expect(dialogMocks.open).toHaveBeenCalled();
     });
-    expect(conductorMocks.addRepositoryFromLocalPath).not.toHaveBeenCalled();
+    expect(apiMocks.addRepositoryFromLocalPath).not.toHaveBeenCalled();
     expect(screen.queryByText("Acamar")).not.toBeInTheDocument();
   });
 
   it("focuses the existing workspace when the repository already exists", async () => {
     const user = userEvent.setup();
-    conductorMocks.addRepositoryFromLocalPath.mockResolvedValueOnce({
+    apiMocks.addRepositoryFromLocalPath.mockResolvedValueOnce({
       repositoryId: "repo-existing",
       createdRepository: false,
       selectedWorkspaceId: "workspace-existing",
@@ -324,7 +324,7 @@ describe("App add repository flow", () => {
     await user.click(screen.getByRole("button", { name: "Add repository" }));
 
     await waitFor(() => {
-      expect(conductorMocks.addRepositoryFromLocalPath).toHaveBeenCalledWith(
+      expect(apiMocks.addRepositoryFromLocalPath).toHaveBeenCalledWith(
         "/Users/caspian/code/github/added-repo",
       );
     });
@@ -334,7 +334,7 @@ describe("App add repository flow", () => {
 
   it("shows add-repository failures inline", async () => {
     const user = userEvent.setup();
-    conductorMocks.addRepositoryFromLocalPath.mockRejectedValueOnce(
+    apiMocks.addRepositoryFromLocalPath.mockRejectedValueOnce(
       new Error("Selected directory is not a Git working tree"),
     );
 

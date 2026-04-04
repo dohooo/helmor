@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const conductorMocks = vi.hoisted(() => ({
+const apiMocks = vi.hoisted(() => ({
   loadWorkspaceGroups: vi.fn(),
   loadArchivedWorkspaces: vi.fn(),
   loadAgentModelSections: vi.fn(),
@@ -10,7 +10,7 @@ const conductorMocks = vi.hoisted(() => ({
   loadWorkspaceSessions: vi.fn(),
   loadSessionMessages: vi.fn(),
   loadSessionAttachments: vi.fn(),
-  listFixtureRepositories: vi.fn(),
+  listRepositories: vi.fn(),
   createWorkspaceFromRepo: vi.fn(),
 }));
 
@@ -23,20 +23,20 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
 }));
 
-vi.mock("./lib/conductor", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./lib/conductor")>();
+vi.mock("./lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./lib/api")>();
 
   return {
     ...actual,
-    loadWorkspaceGroups: conductorMocks.loadWorkspaceGroups,
-    loadArchivedWorkspaces: conductorMocks.loadArchivedWorkspaces,
-    loadAgentModelSections: conductorMocks.loadAgentModelSections,
-    loadWorkspaceDetail: conductorMocks.loadWorkspaceDetail,
-    loadWorkspaceSessions: conductorMocks.loadWorkspaceSessions,
-    loadSessionMessages: conductorMocks.loadSessionMessages,
-    loadSessionAttachments: conductorMocks.loadSessionAttachments,
-    listFixtureRepositories: conductorMocks.listFixtureRepositories,
-    createWorkspaceFromRepo: conductorMocks.createWorkspaceFromRepo,
+    loadWorkspaceGroups: apiMocks.loadWorkspaceGroups,
+    loadArchivedWorkspaces: apiMocks.loadArchivedWorkspaces,
+    loadAgentModelSections: apiMocks.loadAgentModelSections,
+    loadWorkspaceDetail: apiMocks.loadWorkspaceDetail,
+    loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
+    loadSessionMessages: apiMocks.loadSessionMessages,
+    loadSessionAttachments: apiMocks.loadSessionAttachments,
+    listRepositories: apiMocks.listRepositories,
+    createWorkspaceFromRepo: apiMocks.createWorkspaceFromRepo,
   };
 });
 
@@ -46,17 +46,17 @@ describe("App create workspace flow", () => {
   beforeEach(() => {
     createRuntime.created = false;
 
-    conductorMocks.loadWorkspaceGroups.mockReset();
-    conductorMocks.loadArchivedWorkspaces.mockReset();
-    conductorMocks.loadAgentModelSections.mockReset();
-    conductorMocks.loadWorkspaceDetail.mockReset();
-    conductorMocks.loadWorkspaceSessions.mockReset();
-    conductorMocks.loadSessionMessages.mockReset();
-    conductorMocks.loadSessionAttachments.mockReset();
-    conductorMocks.listFixtureRepositories.mockReset();
-    conductorMocks.createWorkspaceFromRepo.mockReset();
+    apiMocks.loadWorkspaceGroups.mockReset();
+    apiMocks.loadArchivedWorkspaces.mockReset();
+    apiMocks.loadAgentModelSections.mockReset();
+    apiMocks.loadWorkspaceDetail.mockReset();
+    apiMocks.loadWorkspaceSessions.mockReset();
+    apiMocks.loadSessionMessages.mockReset();
+    apiMocks.loadSessionAttachments.mockReset();
+    apiMocks.listRepositories.mockReset();
+    apiMocks.createWorkspaceFromRepo.mockReset();
 
-    conductorMocks.listFixtureRepositories.mockResolvedValue([
+    apiMocks.listRepositories.mockResolvedValue([
       {
         id: "repo-1",
         name: "dosu-cli",
@@ -64,7 +64,7 @@ describe("App create workspace flow", () => {
         repoInitials: "DC",
       },
     ]);
-    conductorMocks.loadWorkspaceGroups.mockImplementation(async () => [
+    apiMocks.loadWorkspaceGroups.mockImplementation(async () => [
       {
         id: "progress",
         label: "In progress",
@@ -95,9 +95,9 @@ describe("App create workspace flow", () => {
             ],
       },
     ]);
-    conductorMocks.loadArchivedWorkspaces.mockResolvedValue([]);
-    conductorMocks.loadAgentModelSections.mockResolvedValue([]);
-    conductorMocks.loadWorkspaceDetail.mockImplementation(async (workspaceId: string) => {
+    apiMocks.loadArchivedWorkspaces.mockResolvedValue([]);
+    apiMocks.loadAgentModelSections.mockResolvedValue([]);
+    apiMocks.loadWorkspaceDetail.mockImplementation(async (workspaceId: string) => {
       if (workspaceId === "workspace-created") {
         return {
           id: "workspace-created",
@@ -160,7 +160,7 @@ describe("App create workspace flow", () => {
         attachmentCount: 0,
       };
     });
-    conductorMocks.loadWorkspaceSessions.mockImplementation(async (workspaceId: string) => {
+    apiMocks.loadWorkspaceSessions.mockImplementation(async (workspaceId: string) => {
       if (workspaceId === "workspace-created") {
         return [
           {
@@ -217,9 +217,9 @@ describe("App create workspace flow", () => {
         },
       ];
     });
-    conductorMocks.loadSessionMessages.mockResolvedValue([]);
-    conductorMocks.loadSessionAttachments.mockResolvedValue([]);
-    conductorMocks.createWorkspaceFromRepo.mockImplementation(async () => {
+    apiMocks.loadSessionMessages.mockResolvedValue([]);
+    apiMocks.loadSessionAttachments.mockResolvedValue([]);
+    apiMocks.createWorkspaceFromRepo.mockImplementation(async () => {
       createRuntime.created = true;
 
       return {
@@ -245,16 +245,16 @@ describe("App create workspace flow", () => {
     await user.click(screen.getByText("dosu-cli"));
 
     await waitFor(() => {
-      expect(conductorMocks.createWorkspaceFromRepo).toHaveBeenCalledWith("repo-1");
+      expect(apiMocks.createWorkspaceFromRepo).toHaveBeenCalledWith("repo-1");
     });
     await waitFor(() => {
-      expect(conductorMocks.loadWorkspaceDetail).toHaveBeenCalledWith("workspace-created");
+      expect(apiMocks.loadWorkspaceDetail).toHaveBeenCalledWith("workspace-created");
     });
     await waitFor(() => {
-      expect(conductorMocks.loadWorkspaceSessions).toHaveBeenCalledWith("workspace-created");
+      expect(apiMocks.loadWorkspaceSessions).toHaveBeenCalledWith("workspace-created");
     });
     await waitFor(() => {
-      expect(conductorMocks.loadSessionMessages).toHaveBeenCalledWith("session-created");
+      expect(apiMocks.loadSessionMessages).toHaveBeenCalledWith("session-created");
     });
 
     expect(screen.getByText("Acamar")).toBeInTheDocument();

@@ -36,7 +36,7 @@ export type WorkspaceGroup = {
   rows: WorkspaceRow[];
 };
 
-export type ConductorFixtureInfo = {
+export type DataInfo = {
   dataMode: string;
   fixtureRoot: string;
   dbPath: string;
@@ -330,7 +330,7 @@ const DEFAULT_WORKSPACE_GROUPS: WorkspaceGroup[] = [
   },
 ];
 
-const DEFAULT_FIXTURE_REPOSITORIES: RepositoryCreateOption[] = [];
+const DEFAULT_REPOSITORIES: RepositoryCreateOption[] = [];
 const DEFAULT_ADD_REPOSITORY_DEFAULTS: AddRepositoryDefaults = {
   lastCloneDirectory: null,
 };
@@ -463,7 +463,7 @@ export async function loadWorkspaceGroups(): Promise<WorkspaceGroup[]> {
   }
 }
 
-export async function loadFixtureInfo(): Promise<ConductorFixtureInfo | null> {
+export async function loadDataInfo(): Promise<DataInfo | null> {
   const invoke = await getTauriInvoke();
 
   if (!invoke) {
@@ -471,7 +471,7 @@ export async function loadFixtureInfo(): Promise<ConductorFixtureInfo | null> {
   }
 
   try {
-    return await invoke<ConductorFixtureInfo>("get_conductor_fixture_info");
+    return await invoke<DataInfo>("get_data_info");
   } catch {
     return null;
   }
@@ -491,17 +491,17 @@ export async function loadArchivedWorkspaces(): Promise<WorkspaceSummary[]> {
   }
 }
 
-export async function listFixtureRepositories(): Promise<RepositoryCreateOption[]> {
+export async function listRepositories(): Promise<RepositoryCreateOption[]> {
   const invoke = await getTauriInvoke();
 
   if (!invoke) {
-    return DEFAULT_FIXTURE_REPOSITORIES;
+    return DEFAULT_REPOSITORIES;
   }
 
   try {
-    return await invoke<RepositoryCreateOption[]>("list_fixture_repositories");
+    return await invoke<RepositoryCreateOption[]>("list_repositories");
   } catch {
-    return DEFAULT_FIXTURE_REPOSITORIES;
+    return DEFAULT_REPOSITORIES;
   }
 }
 
@@ -513,7 +513,7 @@ export async function loadAddRepositoryDefaults(): Promise<AddRepositoryDefaults
   }
 
   try {
-    return await invoke<AddRepositoryDefaults>("get_fixture_add_repository_defaults");
+    return await invoke<AddRepositoryDefaults>("get_add_repository_defaults");
   } catch {
     return DEFAULT_ADD_REPOSITORY_DEFAULTS;
   }
@@ -612,7 +612,7 @@ export async function restoreWorkspace(
     throw new Error("Workspace restore is only available in the Tauri desktop runtime.");
   }
 
-  return invoke<RestoreWorkspaceResponse>("restore_fixture_workspace", {
+  return invoke<RestoreWorkspaceResponse>("restore_workspace", {
     workspaceId,
   });
 }
@@ -626,7 +626,7 @@ export async function archiveWorkspace(
     throw new Error("Workspace archive is only available in the Tauri desktop runtime.");
   }
 
-  return invoke<ArchiveWorkspaceResponse>("archive_fixture_workspace", {
+  return invoke<ArchiveWorkspaceResponse>("archive_workspace", {
     workspaceId,
   });
 }
@@ -640,7 +640,7 @@ export async function createWorkspaceFromRepo(
     throw new Error("Workspace creation is only available in the Tauri desktop runtime.");
   }
 
-  return invoke<CreateWorkspaceResponse>("create_fixture_workspace_from_repo", {
+  return invoke<CreateWorkspaceResponse>("create_workspace_from_repo", {
     repoId,
   });
 }
@@ -654,7 +654,7 @@ export async function addRepositoryFromLocalPath(
     throw new Error("Repository add is only available in the Tauri desktop runtime.");
   }
 
-  return invoke<AddRepositoryResponse>("add_fixture_repository_from_local_path", {
+  return invoke<AddRepositoryResponse>("add_repository_from_local_path", {
     folderPath,
   });
 }
@@ -666,7 +666,7 @@ export async function markSessionRead(sessionId: string): Promise<MarkWorkspaceR
     throw new Error("Session read tracking is only available in the Tauri desktop runtime.");
   }
 
-  return invoke<MarkWorkspaceReadResponse>("mark_fixture_session_read", {
+  return invoke<MarkWorkspaceReadResponse>("mark_session_read", {
     sessionId,
   });
 }
@@ -678,7 +678,7 @@ export async function markWorkspaceRead(workspaceId: string): Promise<MarkWorksp
     throw new Error("Workspace read tracking is only available in the Tauri desktop runtime.");
   }
 
-  return invoke<MarkWorkspaceReadResponse>("mark_fixture_workspace_read", {
+  return invoke<MarkWorkspaceReadResponse>("mark_workspace_read", {
     workspaceId,
   });
 }
@@ -692,7 +692,7 @@ export async function markWorkspaceUnread(
     throw new Error("Workspace unread tracking is only available in the Tauri desktop runtime.");
   }
 
-  return invoke<MarkWorkspaceReadResponse>("mark_fixture_workspace_unread", {
+  return invoke<MarkWorkspaceReadResponse>("mark_workspace_unread", {
     workspaceId,
   });
 }

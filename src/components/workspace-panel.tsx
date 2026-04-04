@@ -34,10 +34,10 @@ import type {
   SessionMessageRecord,
   WorkspaceDetail,
   WorkspaceSessionSummary,
-} from "@/lib/conductor";
+} from "@/lib/api";
 import {
-  convertConductorMessages,
-  type ConductorMessagePart,
+  convertMessages,
+  type MessagePart,
 } from "@/lib/message-adapter";
 import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
@@ -54,7 +54,7 @@ type WorkspacePanelProps = {
   onSelectSession?: (sessionId: string) => void;
 };
 
-type RenderedMessage = ReturnType<typeof convertConductorMessages>[number];
+type RenderedMessage = ReturnType<typeof convertMessages>[number];
 type StreamdownMode = "static" | "streaming";
 
 const LazyStreamdown = lazy(async () => {
@@ -196,7 +196,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
             Loading session timeline
           </div>
         ) : messages.length > 0 ? (
-          <ConductorThread
+          <ChatThread
             key={selectedSessionId ?? "live-thread"}
             messages={messages}
             sessionId={selectedSessionId ?? "live-thread"}
@@ -214,7 +214,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 // Stick-to-bottom powered thread
 // ---------------------------------------------------------------------------
 
-function ConductorThread({
+function ChatThread({
   messages,
   sessionId,
   sending,
@@ -223,7 +223,7 @@ function ConductorThread({
   sessionId: string;
   sending: boolean;
 }) {
-  const threadMessages = useMemo(() => convertConductorMessages(messages), [messages]);
+  const threadMessages = useMemo(() => convertMessages(messages), [messages]);
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [isPositioning, setIsPositioning] = useState(true);
@@ -469,14 +469,14 @@ function ConversationMessage({
   itemIndex: number;
 }) {
   if (message.role === "user") {
-    return <ConductorUserMessage message={message} />;
+    return <ChatUserMessage message={message} />;
   }
 
   if (message.role === "assistant") {
-    return <ConductorAssistantMessage message={message} streaming={streaming} />;
+    return <ChatAssistantMessage message={message} streaming={streaming} />;
   }
 
-  return <ConductorSystemMessage message={message} />;
+  return <ChatSystemMessage message={message} />;
 }
 
 const MemoConversationMessage = memo(ConversationMessage, (prev, next) => {
@@ -487,8 +487,8 @@ const MemoConversationMessage = memo(ConversationMessage, (prev, next) => {
   );
 });
 
-function ConductorUserMessage({ message }: { message: RenderedMessage }) {
-  const parts = message.content as ConductorMessagePart[];
+function ChatUserMessage({ message }: { message: RenderedMessage }) {
+  const parts = message.content as MessagePart[];
 
   return (
     <div
@@ -507,14 +507,14 @@ function ConductorUserMessage({ message }: { message: RenderedMessage }) {
   );
 }
 
-function ConductorAssistantMessage({
+function ChatAssistantMessage({
   message,
   streaming,
 }: {
   message: RenderedMessage;
   streaming: boolean;
 }) {
-  const parts = message.content as ConductorMessagePart[];
+  const parts = message.content as MessagePart[];
 
   return (
     <div
@@ -545,8 +545,8 @@ function ConductorAssistantMessage({
   );
 }
 
-function ConductorSystemMessage({ message }: { message: RenderedMessage }) {
-  const parts = message.content as ConductorMessagePart[];
+function ChatSystemMessage({ message }: { message: RenderedMessage }) {
+  const parts = message.content as MessagePart[];
 
   return (
     <div
@@ -891,15 +891,15 @@ function EditDiffTrigger({
   );
 }
 
-function isTextPart(part: unknown): part is Extract<ConductorMessagePart, { type: "text" }> {
+function isTextPart(part: unknown): part is Extract<MessagePart, { type: "text" }> {
   return isObj(part) && part.type === "text" && typeof part.text === "string";
 }
 
-function isReasoningPart(part: unknown): part is Extract<ConductorMessagePart, { type: "reasoning" }> {
+function isReasoningPart(part: unknown): part is Extract<MessagePart, { type: "reasoning" }> {
   return isObj(part) && part.type === "reasoning" && typeof part.text === "string";
 }
 
-function isToolCallPart(part: unknown): part is Extract<ConductorMessagePart, { type: "tool-call" }> {
+function isToolCallPart(part: unknown): part is Extract<MessagePart, { type: "tool-call" }> {
   return (
     isObj(part)
     && part.type === "tool-call"

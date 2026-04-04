@@ -1,4 +1,4 @@
-use crate::conductor::sessions::mark_session_read_in_transaction;
+use crate::models::sessions::mark_session_read_in_transaction;
 use std::{
     collections::HashMap,
     env,
@@ -1012,7 +1012,7 @@ fn persist_exchange_to_fixture(
 }
 
 fn open_write_connection() -> Result<Connection, String> {
-    crate::conductor::db::open_connection(true)
+    crate::models::db::open_connection(true)
 }
 
 fn current_timestamp_string() -> Result<String, String> {

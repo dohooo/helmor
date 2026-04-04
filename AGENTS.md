@@ -48,9 +48,9 @@ cargo check                  # Type-check without building
 | Path | Role |
 |---|---|
 | `src/App.tsx` | Root component. Owns all application state (workspaces, sessions, messages, sidebar width, theme, sending state). Orchestrates data loading and agent message flow. |
-| `src/lib/conductor.ts` | **IPC bridge**. Every Tauri `invoke()` call is here. Exports typed async functions (`loadWorkspaceGroups`, `sendAgentMessage`, `startAgentMessageStream`, etc.) and all shared TypeScript types. Falls back to hardcoded defaults when Tauri runtime is absent (pure browser dev). |
+| `src/lib/api.ts` | **IPC bridge**. Every Tauri `invoke()` call is here. Exports typed async functions (`loadWorkspaceGroups`, `sendAgentMessage`, `startAgentMessageStream`, etc.) and all shared TypeScript types. Falls back to hardcoded defaults when Tauri runtime is absent (pure browser dev). |
 | `src/lib/stream-accumulator.ts` | Accumulates Claude CLI JSON stream lines into renderable `SessionMessageRecord[]` snapshots for real-time UI updates during streaming. |
-| `src/lib/message-adapter.ts` | Converts Conductor `SessionMessageRecord[]` into `@assistant-ui/react` `ThreadMessageLike[]` for the chat panel. Handles JSON-encoded messages (tool calls, thinking, results, errors) and plain text. |
+| `src/lib/message-adapter.ts` | Converts `SessionMessageRecord[]` into `@assistant-ui/react` `ThreadMessageLike[]` for the chat panel. Handles JSON-encoded messages (tool calls, thinking, results, errors) and plain text. |
 | `src/lib/utils.ts` | `cn()` helper (clsx + tailwind-merge). |
 | `src/components/workspace-panel.tsx` | Chat/message display area with session tabs. |
 | `src/components/workspace-composer.tsx` | Message input with model selector and image attachment support. |
@@ -65,19 +65,19 @@ cargo check                  # Type-check without building
 | `data_dir.rs` | Resolves the Helmor data directory (`~/.helmor` or `~/.helmor.dev`). Supports `HELMOR_DATA_DIR` env var override. |
 | `schema.rs` | Database schema initialization — creates all tables/indexes/triggers if not present. |
 | `import.rs` | Optional import of Conductor data via SQLite backup API. |
-| `conductor/mod.rs` | Tauri command handlers — thin wrappers calling sub-modules. |
-| `conductor/db.rs` | Database connection opening via `data_dir::db_path()`. |
-| `conductor/repos.rs` | Repos table CRUD + git repository resolution. |
-| `conductor/workspaces.rs` | Workspaces table CRUD + archive/restore + workspace creation. |
-| `conductor/sessions.rs` | Sessions/messages/attachments queries + read/unread marking. |
-| `conductor/settings.rs` | Settings key-value store. |
-| `conductor/git_ops.rs` | Git mirror, worktree, and branch management. |
-| `conductor/helpers.rs` | Display helpers, naming, filesystem copy, icon resolution. |
+| `models/mod.rs` | Tauri command handlers — thin wrappers calling sub-modules. |
+| `models/db.rs` | Database connection opening via `data_dir::db_path()`. |
+| `models/repos.rs` | Repos table CRUD + git repository resolution. |
+| `models/workspaces.rs` | Workspaces table CRUD + archive/restore + workspace creation. |
+| `models/sessions.rs` | Sessions/messages/attachments queries + read/unread marking. |
+| `models/settings.rs` | Settings key-value store. |
+| `models/git_ops.rs` | Git mirror, worktree, and branch management. |
+| `models/helpers.rs` | Display helpers, naming, filesystem copy, icon resolution. |
 | `agents.rs` | Spawns Claude Code / Codex CLI subprocesses, streams stdout line-by-line back to the frontend via Tauri events (`agent-stream:{streamId}`). Manages running process PIDs. |
 
 ### Data flow
 
-1. Frontend calls `conductor.ts` functions (e.g., `loadWorkspaceGroups()`)
+1. Frontend calls `api.ts` functions (e.g., `loadWorkspaceGroups()`)
 2. These call `invoke("list_workspace_groups")` via Tauri IPC
 3. Rust handler queries SQLite and returns serialized JSON
 4. For agent messages: frontend calls `startAgentMessageStream()` → Rust spawns CLI process → emits `AgentStreamEvent`s → frontend listens via `listenAgentStream()` → `StreamAccumulator` builds partial messages → `message-adapter.ts` converts for rendering

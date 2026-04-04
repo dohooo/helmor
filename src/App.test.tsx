@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { WorkspacesSidebar } from "./components/workspaces-sidebar";
 import { WorkspacePanel } from "./components/workspace-panel";
-import type { RepositoryCreateOption, WorkspaceGroup } from "./lib/conductor";
+import type { RepositoryCreateOption, WorkspaceGroup } from "./lib/api";
 
 vi.mock("./App.css", () => ({}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({

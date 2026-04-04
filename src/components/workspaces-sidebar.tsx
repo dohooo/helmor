@@ -27,7 +27,7 @@ import {
   type RepositoryCreateOption,
   type WorkspaceGroup,
   type WorkspaceRow,
-} from "@/lib/conductor";
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TooltipProvider } from "./ui/tooltip";
 import { BaseTooltip } from "./ui/base-tooltip";

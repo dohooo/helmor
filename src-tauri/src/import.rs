@@ -25,7 +25,7 @@ pub struct ImportResult {
 /// - Optionally filters to a single repository
 ///
 /// WARNING: This replaces all data in the Helmor database.
-pub fn import_conductor_data(repo_filter: Option<&str>) -> Result<ImportResult, String> {
+pub fn import_from_conductor(repo_filter: Option<&str>) -> Result<ImportResult, String> {
     let source_path = crate::data_dir::conductor_source_db_path()
         .ok_or("Conductor database not found at ~/Library/Application Support/com.conductor.app/conductor.db")?;
 
@@ -38,17 +38,28 @@ pub fn import_conductor_data(repo_filter: Option<&str>) -> Result<ImportResult, 
     )
     .map_err(|error| format!("Failed to open Conductor database: {error}"))?;
 
+    // Fail fast: validate repo exists in source BEFORE touching destination
+    if let Some(repo_name) = repo_filter {
+        source
+            .query_row(
+                "SELECT id FROM repos WHERE name = ?1 LIMIT 1",
+                [repo_name],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|_| format!("Repo '{repo_name}' not found in source Conductor database"))?;
+    }
+
     let dest_path = crate::data_dir::db_path()?;
+    let backup_path = dest_path.with_extension("db.bak");
 
     // If the destination already has data, back it up first
     if dest_path.is_file() {
-        let backup_path = dest_path.with_extension("db.bak");
-        if let Err(error) = std::fs::copy(&dest_path, &backup_path) {
-            eprintln!(
-                "Warning: could not create backup at {}: {error}",
+        std::fs::copy(&dest_path, &backup_path).map_err(|error| {
+            format!(
+                "Failed to create backup at {}: {error}",
                 backup_path.display()
-            );
-        }
+            )
+        })?;
     }
 
     // Open destination as writable — create if needed
@@ -71,13 +82,23 @@ pub fn import_conductor_data(repo_filter: Option<&str>) -> Result<ImportResult, 
     // Drop source — no longer needed
     drop(source);
 
-    // If a repo filter is specified, delete data for other repos
+    // If a repo filter is specified, delete data for other repos.
+    // On failure, restore from backup automatically.
     if let Some(repo_name) = repo_filter {
-        filter_to_repo(&dest, repo_name)?;
+        if let Err(error) = filter_to_repo(&dest, repo_name) {
+            drop(dest); // close connection before file ops
+            restore_backup(&dest_path, &backup_path);
+            return Err(error);
+        }
     }
 
-    // Redact sensitive settings (tokens, keys)
-    redact_sensitive_settings(&dest)?;
+    // Redact sensitive settings (tokens, keys).
+    // On failure, restore from backup automatically.
+    if let Err(error) = redact_sensitive_settings(&dest) {
+        drop(dest);
+        restore_backup(&dest_path, &backup_path);
+        return Err(error);
+    }
 
     // Vacuum to reclaim space
     dest.execute_batch("VACUUM;")
@@ -97,6 +118,19 @@ pub fn import_conductor_data(repo_filter: Option<&str>) -> Result<ImportResult, 
         sessions_count,
         messages_count,
     })
+}
+
+/// Restore the database from the .bak file after a failed post-backup operation.
+fn restore_backup(dest_path: &std::path::Path, backup_path: &std::path::Path) {
+    if backup_path.is_file() {
+        if let Err(error) = std::fs::copy(backup_path, dest_path) {
+            eprintln!(
+                "CRITICAL: Failed to restore database backup from {} to {}: {error}",
+                backup_path.display(),
+                dest_path.display()
+            );
+        }
+    }
 }
 
 /// Filter the imported database to only keep data for a specific repo.
@@ -177,7 +211,7 @@ fn count_rows(connection: &Connection, table: &str) -> Result<i64, String> {
 }
 
 /// Check if the Conductor database is available for import.
-pub fn conductor_available() -> bool {
+pub fn conductor_source_available() -> bool {
     crate::data_dir::conductor_source_db_path().is_some()
 }
 

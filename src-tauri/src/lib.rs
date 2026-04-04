@@ -1,5 +1,5 @@
 mod agents;
-mod conductor;
+mod models;
 pub mod data_dir;
 mod import;
 mod schema;
@@ -37,24 +37,24 @@ pub fn run() {
             agents::list_agent_model_sections,
             agents::send_agent_message,
             agents::send_agent_message_stream,
-            conductor::archive_workspace,
-            conductor::create_workspace_from_repo,
-            conductor::get_add_repository_defaults,
-            conductor::get_data_info,
-            conductor::get_workspace,
-            conductor::add_repository_from_local_path,
-            conductor::list_archived_workspaces,
-            conductor::list_repositories,
-            conductor::list_session_attachments,
-            conductor::list_session_messages,
-            conductor::list_workspace_groups,
-            conductor::list_workspace_sessions,
-            conductor::mark_session_read,
-            conductor::mark_workspace_read,
-            conductor::mark_workspace_unread,
-            conductor::restore_workspace,
-            conductor::import_conductor,
-            conductor::conductor_import_available
+            models::archive_workspace,
+            models::create_workspace_from_repo,
+            models::get_add_repository_defaults,
+            models::get_data_info,
+            models::get_workspace,
+            models::add_repository_from_local_path,
+            models::list_archived_workspaces,
+            models::list_repositories,
+            models::list_session_attachments,
+            models::list_session_messages,
+            models::list_workspace_groups,
+            models::list_workspace_sessions,
+            models::mark_session_read,
+            models::mark_workspace_read,
+            models::mark_workspace_unread,
+            models::restore_workspace,
+            models::import_from_conductor,
+            models::conductor_source_available
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -10,7 +10,7 @@ import {
   Square,
   Zap,
 } from "lucide-react";
-import type { AgentModelSection } from "@/lib/conductor";
+import type { AgentModelSection } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
   DropdownMenu,

@@ -33,13 +33,13 @@ pub fn get_data_info() -> Result<DataInfo, String> {
 }
 
 #[tauri::command]
-pub fn import_conductor(repo_filter: Option<String>) -> Result<crate::import::ImportResult, String> {
-    crate::import::import_conductor_data(repo_filter.as_deref())
+pub fn import_from_conductor(repo_filter: Option<String>) -> Result<crate::import::ImportResult, String> {
+    crate::import::import_from_conductor(repo_filter.as_deref())
 }
 
 #[tauri::command]
-pub fn conductor_import_available() -> bool {
-    crate::import::conductor_available()
+pub fn conductor_source_available() -> bool {
+    crate::import::conductor_source_available()
 }
 
 #[tauri::command]

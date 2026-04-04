@@ -20,7 +20,7 @@ import {
   loadAgentModelSections,
   loadAddRepositoryDefaults,
   loadArchivedWorkspaces,
-  listFixtureRepositories,
+  listRepositories,
   loadSessionAttachments,
   loadSessionMessages,
   loadWorkspaceDetail,
@@ -42,7 +42,7 @@ import {
   type WorkspaceRow,
   type WorkspaceSessionSummary,
   type WorkspaceSummary,
-} from "./lib/conductor";
+} from "./lib/api";
 import { StreamAccumulator } from "./lib/stream-accumulator";
 import { WorkspacesSidebar } from "./components/workspaces-sidebar";
 import { WorkspacePanel } from "./components/workspace-panel";
@@ -252,7 +252,7 @@ function App() {
       loadWorkspaceGroups(),
       loadArchivedWorkspaces(),
       loadAgentModelSections(),
-      listFixtureRepositories(),
+      listRepositories(),
     ]).then(([loadedGroups, loadedArchived, loadedModelSections, loadedRepositories]) => {
         if (disposed) {
           return;
@@ -381,7 +381,7 @@ function App() {
     const [loadedGroups, loadedArchived, loadedRepositories] = await Promise.all([
       loadWorkspaceGroups(),
       loadArchivedWorkspaces(),
-      listFixtureRepositories(),
+      listRepositories(),
     ]);
 
     setGroups(loadedGroups);

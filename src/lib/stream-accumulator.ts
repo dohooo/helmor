@@ -5,7 +5,7 @@
  * Collects full assistant/user events (tool calls, tool results, text, thinking)
  * so intermediate steps are visible during streaming.
  */
-import type { SessionMessageRecord } from "./conductor";
+import type { SessionMessageRecord } from "./api";
 
 export class StreamAccumulator {
   /** Collected full message events (assistant + user) for rendering. */

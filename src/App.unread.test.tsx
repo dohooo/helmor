@@ -1,7 +1,7 @@
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const conductorMocks = vi.hoisted(() => ({
+const apiMocks = vi.hoisted(() => ({
   loadWorkspaceGroups: vi.fn(),
   loadArchivedWorkspaces: vi.fn(),
   loadAgentModelSections: vi.fn(),
@@ -21,19 +21,19 @@ const unreadRuntime = vi.hoisted(() => ({
 
 vi.mock("./App.css", () => ({}));
 
-vi.mock("./lib/conductor", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./lib/conductor")>();
+vi.mock("./lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./lib/api")>();
 
   return {
     ...actual,
-    loadWorkspaceGroups: conductorMocks.loadWorkspaceGroups,
-    loadArchivedWorkspaces: conductorMocks.loadArchivedWorkspaces,
-    loadAgentModelSections: conductorMocks.loadAgentModelSections,
-    loadWorkspaceDetail: conductorMocks.loadWorkspaceDetail,
-    loadWorkspaceSessions: conductorMocks.loadWorkspaceSessions,
-    loadSessionMessages: conductorMocks.loadSessionMessages,
-    loadSessionAttachments: conductorMocks.loadSessionAttachments,
-    markWorkspaceRead: conductorMocks.markWorkspaceRead,
+    loadWorkspaceGroups: apiMocks.loadWorkspaceGroups,
+    loadArchivedWorkspaces: apiMocks.loadArchivedWorkspaces,
+    loadAgentModelSections: apiMocks.loadAgentModelSections,
+    loadWorkspaceDetail: apiMocks.loadWorkspaceDetail,
+    loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
+    loadSessionMessages: apiMocks.loadSessionMessages,
+    loadSessionAttachments: apiMocks.loadSessionAttachments,
+    markWorkspaceRead: apiMocks.markWorkspaceRead,
   };
 });
 
@@ -46,16 +46,16 @@ describe("App unread lifecycle", () => {
     unreadRuntime.unreadSessionCount = 1;
     unreadRuntime.sessionUnreadCount = 2;
 
-    conductorMocks.loadWorkspaceGroups.mockReset();
-    conductorMocks.loadArchivedWorkspaces.mockReset();
-    conductorMocks.loadAgentModelSections.mockReset();
-    conductorMocks.loadWorkspaceDetail.mockReset();
-    conductorMocks.loadWorkspaceSessions.mockReset();
-    conductorMocks.loadSessionMessages.mockReset();
-    conductorMocks.loadSessionAttachments.mockReset();
-    conductorMocks.markWorkspaceRead.mockReset();
+    apiMocks.loadWorkspaceGroups.mockReset();
+    apiMocks.loadArchivedWorkspaces.mockReset();
+    apiMocks.loadAgentModelSections.mockReset();
+    apiMocks.loadWorkspaceDetail.mockReset();
+    apiMocks.loadWorkspaceSessions.mockReset();
+    apiMocks.loadSessionMessages.mockReset();
+    apiMocks.loadSessionAttachments.mockReset();
+    apiMocks.markWorkspaceRead.mockReset();
 
-    conductorMocks.loadWorkspaceGroups.mockImplementation(async () => [
+    apiMocks.loadWorkspaceGroups.mockImplementation(async () => [
       {
         id: "progress",
         label: "In progress",
@@ -75,9 +75,9 @@ describe("App unread lifecycle", () => {
         ],
       },
     ]);
-    conductorMocks.loadArchivedWorkspaces.mockResolvedValue([]);
-    conductorMocks.loadAgentModelSections.mockResolvedValue([]);
-    conductorMocks.loadWorkspaceDetail.mockImplementation(async () => ({
+    apiMocks.loadArchivedWorkspaces.mockResolvedValue([]);
+    apiMocks.loadAgentModelSections.mockResolvedValue([]);
+    apiMocks.loadWorkspaceDetail.mockImplementation(async () => ({
       id: "workspace-unread",
       title: "Unread workspace",
       repoId: "repo-1",
@@ -107,7 +107,7 @@ describe("App unread lifecycle", () => {
       messageCount: 0,
       attachmentCount: 0,
     }));
-    conductorMocks.loadWorkspaceSessions.mockImplementation(async () => [
+    apiMocks.loadWorkspaceSessions.mockImplementation(async () => [
       {
         id: "session-1",
         workspaceId: "workspace-unread",
@@ -133,9 +133,9 @@ describe("App unread lifecycle", () => {
         active: true,
       },
     ]);
-    conductorMocks.loadSessionMessages.mockResolvedValue([]);
-    conductorMocks.loadSessionAttachments.mockResolvedValue([]);
-    conductorMocks.markWorkspaceRead.mockImplementation(async () => {
+    apiMocks.loadSessionMessages.mockResolvedValue([]);
+    apiMocks.loadSessionAttachments.mockResolvedValue([]);
+    apiMocks.markWorkspaceRead.mockImplementation(async () => {
       unreadRuntime.workspaceUnread = 0;
       unreadRuntime.sessionUnreadTotal = 0;
       unreadRuntime.unreadSessionCount = 0;
@@ -151,8 +151,8 @@ describe("App unread lifecycle", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(conductorMocks.markWorkspaceRead).toHaveBeenCalledWith("workspace-unread");
+      expect(apiMocks.markWorkspaceRead).toHaveBeenCalledWith("workspace-unread");
     });
-    expect(conductorMocks.markWorkspaceRead).toHaveBeenCalledTimes(1);
+    expect(apiMocks.markWorkspaceRead).toHaveBeenCalledTimes(1);
   });
 });
