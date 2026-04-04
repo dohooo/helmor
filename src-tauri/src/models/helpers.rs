@@ -170,7 +170,10 @@ pub fn repo_initials_for_name(repo_name: &str) -> String {
     }
 
     if initials.is_empty() {
-        for character in repo_name.chars().filter(|character| character.is_ascii_alphanumeric()) {
+        for character in repo_name
+            .chars()
+            .filter(|character| character.is_ascii_alphanumeric())
+        {
             initials.push(character.to_ascii_uppercase());
 
             if initials.len() == 2 {
@@ -190,12 +193,8 @@ pub fn repo_initials_for_name(repo_name: &str) -> String {
 
 pub fn copy_dir_contents(source: &Path, destination: &Path) -> Result<()> {
     if !source.exists() {
-        fs::create_dir_all(destination).with_context(|| {
-            format!(
-                "Failed to create directory {}",
-                destination.display()
-            )
-        })?;
+        fs::create_dir_all(destination)
+            .with_context(|| format!("Failed to create directory {}", destination.display()))?;
         return Ok(());
     }
 
@@ -203,12 +202,8 @@ pub fn copy_dir_contents(source: &Path, destination: &Path) -> Result<()> {
         bail!("Expected directory at {}", source.display());
     }
 
-    fs::create_dir_all(destination).with_context(|| {
-        format!(
-            "Failed to create directory {}",
-            destination.display()
-        )
-    })?;
+    fs::create_dir_all(destination)
+        .with_context(|| format!("Failed to create directory {}", destination.display()))?;
 
     let entries = fs::read_dir(source)
         .with_context(|| format!("Failed to read directory {}", source.display()))?;
@@ -250,12 +245,8 @@ pub fn copy_dir_all(source: &Path, destination: &Path) -> Result<()> {
         return Ok(());
     }
 
-    fs::create_dir_all(destination).with_context(|| {
-        format!(
-            "Failed to create directory {}",
-            destination.display()
-        )
-    })?;
+    fs::create_dir_all(destination)
+        .with_context(|| format!("Failed to create directory {}", destination.display()))?;
 
     let entries = fs::read_dir(source)
         .with_context(|| format!("Failed to read directory {}", source.display()))?;
@@ -335,19 +326,103 @@ pub fn create_workspace_context_scaffold(workspace_dir: &Path) -> Result<()> {
 // ---- Branch / directory name helpers ----
 
 pub const STAR_PROPER_NAMES: &[&str] = &[
-    "acamar", "achernar", "acrux", "adhafera", "adhara", "ain", "albali", "albireo",
-    "alkaid", "alkalurops", "alkaphrah", "alpheratz", "alrakis", "altair", "alya",
-    "ancha", "ankaa", "antares", "aran", "arcturus", "aspidiske", "atik", "atria",
-    "avior", "bellatrix", "betelgeuse", "canopus", "capella", "castor", "cebalrai",
-    "deneb", "denebola", "diadem", "diphda", "electra", "elnath", "enif", "etamin",
-    "fomalhaut", "furud", "gacrux", "gienah", "hamal", "hassaleh", "hydrobius",
-    "izar", "jabbah", "kaus", "kochab", "lesath", "maia", "markab", "meissa",
-    "menkalinan", "merak", "miaplacidus", "mimosa", "mintaka", "mirach", "mirfak",
-    "mizar", "naos", "nashira", "nunki", "peacock", "phact", "phecda", "pleione",
-    "polaris", "pollux", "procyon", "propus", "regulus", "rigel", "rotanev",
-    "sabik", "sadr", "saiph", "scheat", "schedar", "secunda", "sham", "sheliak",
-    "sirius", "spica", "sualocin", "suhail", "tarazed", "tejat", "thuban",
-    "unukalhai", "vega", "wezen", "yildun", "zaniah", "zaurak", "zubenelgenubi",
+    "acamar",
+    "achernar",
+    "acrux",
+    "adhafera",
+    "adhara",
+    "ain",
+    "albali",
+    "albireo",
+    "alkaid",
+    "alkalurops",
+    "alkaphrah",
+    "alpheratz",
+    "alrakis",
+    "altair",
+    "alya",
+    "ancha",
+    "ankaa",
+    "antares",
+    "aran",
+    "arcturus",
+    "aspidiske",
+    "atik",
+    "atria",
+    "avior",
+    "bellatrix",
+    "betelgeuse",
+    "canopus",
+    "capella",
+    "castor",
+    "cebalrai",
+    "deneb",
+    "denebola",
+    "diadem",
+    "diphda",
+    "electra",
+    "elnath",
+    "enif",
+    "etamin",
+    "fomalhaut",
+    "furud",
+    "gacrux",
+    "gienah",
+    "hamal",
+    "hassaleh",
+    "hydrobius",
+    "izar",
+    "jabbah",
+    "kaus",
+    "kochab",
+    "lesath",
+    "maia",
+    "markab",
+    "meissa",
+    "menkalinan",
+    "merak",
+    "miaplacidus",
+    "mimosa",
+    "mintaka",
+    "mirach",
+    "mirfak",
+    "mizar",
+    "naos",
+    "nashira",
+    "nunki",
+    "peacock",
+    "phact",
+    "phecda",
+    "pleione",
+    "polaris",
+    "pollux",
+    "procyon",
+    "propus",
+    "regulus",
+    "rigel",
+    "rotanev",
+    "sabik",
+    "sadr",
+    "saiph",
+    "scheat",
+    "schedar",
+    "secunda",
+    "sham",
+    "sheliak",
+    "sirius",
+    "spica",
+    "sualocin",
+    "suhail",
+    "tarazed",
+    "tejat",
+    "thuban",
+    "unukalhai",
+    "vega",
+    "wezen",
+    "yildun",
+    "zaniah",
+    "zaurak",
+    "zubenelgenubi",
 ];
 
 pub fn branch_name_for_directory(

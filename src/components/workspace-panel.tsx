@@ -14,7 +14,6 @@ import {
   ArrowDown,
   Bot,
   Check,
-  Clock3,
   Copy,
   FileText,
   FilePlus,
@@ -60,6 +59,8 @@ type WorkspacePanelProps = {
   attachments?: SessionAttachmentRecord[];
   loadingWorkspace?: boolean;
   loadingSession?: boolean;
+  refreshingWorkspace?: boolean;
+  refreshingSession?: boolean;
   sending?: boolean;
   onSelectSession?: (sessionId: string) => void;
   onSessionsChanged?: () => void;
@@ -90,6 +91,8 @@ export const WorkspacePanel = memo(function WorkspacePanel({
   attachments: _attachments,
   loadingWorkspace = false,
   loadingSession = false,
+  refreshingWorkspace = false,
+  refreshingSession = false,
   sending = false,
   onSelectSession,
   onSessionsChanged,
@@ -194,11 +197,8 @@ export const WorkspacePanel = memo(function WorkspacePanel({
         {/* --- Session tabs row --- */}
         <div className="flex items-center px-4 pb-1">
           <div className="min-w-0 flex-1 overflow-x-auto [scrollbar-width:none]">
-            {loadingWorkspace ? (
-              <div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-app-muted">
-                <Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
-                Loading
-              </div>
+            {loadingWorkspace && sessions.length === 0 ? (
+              <SessionTabsSkeleton />
             ) : sessions.length > 0 ? (
               <Tabs
                 value={selectedSessionId ?? sessions[0]?.id}
@@ -257,6 +257,11 @@ export const WorkspacePanel = memo(function WorkspacePanel({
               </div>
             )}
           </div>
+          {refreshingWorkspace ? (
+            <div className="mr-1 shrink-0 rounded-full border border-app-border/60 bg-app-sidebar px-2 py-0.5 text-[11px] text-app-muted">
+              Refreshing
+            </div>
+          ) : null}
 
           {/* New session button */}
           <button
@@ -326,18 +331,20 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 
       {/* --- Timeline --- */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {loadingSession ? (
-          <div className="flex items-center gap-2 px-4 py-5 text-sm text-app-muted">
-            <Clock3 className="size-4 animate-pulse" strokeWidth={1.8} />
-            Loading session timeline
-          </div>
+        {loadingWorkspace ? (
+          <ConversationSkeleton />
+        ) : loadingSession && messages.length === 0 ? (
+          <ConversationSkeleton />
         ) : messages.length > 0 ? (
-          <ChatThread
-            key={selectedSessionId ?? "live-thread"}
-            messages={messages}
-            sessionId={selectedSessionId ?? "live-thread"}
-            sending={sending}
-          />
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <ChatThread
+              key={selectedSessionId ?? "live-thread"}
+              messages={messages}
+              sessionId={selectedSessionId ?? "live-thread"}
+              sending={sending}
+            />
+            {refreshingSession ? <ConversationRefreshOverlay /> : null}
+          </div>
         ) : (
           <EmptyState hasSession={!!selectedSession} />
         )}
@@ -362,7 +369,6 @@ function ChatThread({
   const threadMessages = useMemo(() => convertMessages(messages), [messages]);
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
-  const [isPositioning, setIsPositioning] = useState(true);
   const restoredViewportState = useMemo(
     () => sessionViewportStateBySession.get(sessionId),
     [sessionId],
@@ -432,9 +438,6 @@ function ChatThread({
 
   const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
     setIsAtBottom(atBottom);
-    if (atBottom) {
-      setIsPositioning(false);
-    }
   }, []);
 
   const virtuosoComponents = useMemo<VirtuosoComponents<RenderedMessage>>(() => ({
@@ -460,7 +463,6 @@ function ChatThread({
           ? "auto"
           : false
       )}
-      isPositioning={isPositioning}
       itemContent={itemContent}
       onAtBottomStateChange={handleAtBottomStateChange}
       restoredViewportState={restoredViewportState}
@@ -492,7 +494,6 @@ function ConversationViewport({
   components,
   data,
   followOutput,
-  isPositioning,
   itemContent,
   onAtBottomStateChange,
   restoredViewportState,
@@ -502,19 +503,13 @@ function ConversationViewport({
   components: VirtuosoComponents<RenderedMessage>;
   data: RenderedMessage[];
   followOutput: "auto" | false | ((isAtBottom: boolean) => "auto" | false);
-  isPositioning: boolean;
   itemContent: (index: number, message: RenderedMessage) => ReactNode;
   onAtBottomStateChange: (atBottom: boolean) => void;
   restoredViewportState?: StateSnapshot;
   virtuosoRef: React.RefObject<VirtuosoHandle | null>;
 }) {
   return (
-    <div
-      className={cn(
-        "relative flex min-h-0 flex-1 overflow-hidden",
-        isPositioning ? "opacity-0" : "opacity-100",
-      )}
-    >
+    <div className="relative flex min-h-0 flex-1 overflow-hidden">
       <Virtuoso
         ref={virtuosoRef}
         alignToBottom
@@ -593,6 +588,79 @@ function ConversationScrollSeekPlaceholder({
 
 function ConversationHeaderSpacer() {
   return <div className="h-6 shrink-0" />;
+}
+
+function WarmSkeletonTheme({ children }: { children: ReactNode }) {
+  return (
+    <SkeletonTheme
+      baseColor="color-mix(in oklch, var(--color-app-foreground) 10%, var(--color-app-base))"
+      highlightColor="color-mix(in oklch, var(--color-app-foreground) 18%, var(--color-app-base))"
+      duration={1.1}
+    >
+      {children}
+    </SkeletonTheme>
+  );
+}
+
+function SessionTabsSkeleton() {
+  return (
+    <WarmSkeletonTheme>
+      <div className="flex h-[1.85rem] items-center gap-2 px-2">
+        {[74, 92, 84].map((width, index) => (
+          <Skeleton
+            key={`${width}-${index}`}
+            width={width}
+            height={22}
+            borderRadius={10}
+            containerClassName="leading-none"
+          />
+        ))}
+      </div>
+    </WarmSkeletonTheme>
+  );
+}
+
+function ConversationSkeleton() {
+  const rows = [
+    { align: "start", width: "58%" },
+    { align: "end", width: "34%" },
+    { align: "start", width: "64%" },
+    { align: "start", width: "48%" },
+    { align: "end", width: "40%" },
+    { align: "start", width: "54%" },
+  ] as const;
+
+  return (
+    <WarmSkeletonTheme>
+      <div className="flex flex-1 flex-col gap-4 px-5 py-6">
+        {rows.map((row, index) => (
+          <div
+            key={`${row.width}-${index}`}
+            className={cn("flex", row.align === "end" ? "justify-end" : "justify-start")}
+          >
+            <Skeleton
+              width={row.width}
+              height={index === 2 ? 88 : 56}
+              borderRadius={12}
+              containerClassName="leading-none"
+            />
+          </div>
+        ))}
+      </div>
+    </WarmSkeletonTheme>
+  );
+}
+
+function ConversationRefreshOverlay() {
+  return (
+    <WarmSkeletonTheme>
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center px-5 pt-4">
+        <div className="w-full max-w-[18rem] rounded-full border border-app-border/40 bg-app-elevated/86 px-3 py-2 backdrop-blur-[2px]">
+          <Skeleton height={8} borderRadius={999} containerClassName="block leading-none" />
+        </div>
+      </div>
+    </WarmSkeletonTheme>
+  );
 }
 
 function ConversationMessage({

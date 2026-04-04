@@ -13,6 +13,7 @@ pub fn run() {
         .manage(agents::RunningAgentProcesses {
             map: std::sync::Mutex::new(std::collections::HashMap::new()),
         })
+        .manage(models::auth::GithubIdentityFlowRuntime::default())
         .setup(|_app| {
             // Ensure data directory structure exists
             data_dir::ensure_directory_structure().expect("Failed to create Helmor data directory");
@@ -35,11 +36,17 @@ pub fn run() {
             agents::send_agent_message,
             agents::send_agent_message_stream,
             models::archive_workspace,
+            models::cancel_github_identity_connect,
             models::create_workspace_from_repo,
+            models::disconnect_github_identity,
             models::get_add_repository_defaults,
             models::get_data_info,
+            models::get_github_cli_status,
+            models::get_github_cli_user,
+            models::get_github_identity_session,
             models::get_workspace,
             models::add_repository_from_local_path,
+            models::list_github_accessible_repositories,
             models::list_archived_workspaces,
             models::list_repositories,
             models::list_session_attachments,
@@ -55,6 +62,7 @@ pub fn run() {
             models::mark_workspace_read,
             models::mark_workspace_unread,
             models::restore_workspace,
+            models::start_github_identity_connect,
             models::import_from_conductor,
             models::merge_from_conductor,
             models::conductor_source_available

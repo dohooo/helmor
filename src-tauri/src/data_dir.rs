@@ -11,6 +11,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
+#[cfg(test)]
+pub static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Name of the database file inside the data directory.
 const DB_FILENAME: &str = "helmor.db";
 
@@ -71,8 +74,7 @@ pub fn logs_dir() -> Result<PathBuf> {
 /// This is the real Conductor database on the local machine.
 pub fn conductor_source_db_path() -> Option<PathBuf> {
     let home = dirs_home()?;
-    let path = home
-        .join("Library/Application Support/com.conductor.app/conductor.db");
+    let path = home.join("Library/Application Support/com.conductor.app/conductor.db");
     if path.is_file() {
         Some(path)
     } else {
@@ -123,7 +125,9 @@ pub fn workspace_dir(repo_name: &str, directory_name: &str) -> Result<PathBuf> {
 
 /// Returns the archived context directory for a given repo + workspace.
 pub fn archived_context_dir(repo_name: &str, directory_name: &str) -> Result<PathBuf> {
-    Ok(archived_contexts_dir()?.join(repo_name).join(directory_name))
+    Ok(archived_contexts_dir()?
+        .join(repo_name)
+        .join(directory_name))
 }
 
 /// Returns the repo mirror directory.

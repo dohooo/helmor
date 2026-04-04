@@ -246,15 +246,12 @@ pub fn load_workspace_records() -> Result<Vec<WorkspaceRecord>> {
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
-pub fn load_workspace_record_by_id(
-    workspace_id: &str,
-) -> Result<Option<WorkspaceRecord>> {
+pub fn load_workspace_record_by_id(workspace_id: &str) -> Result<Option<WorkspaceRecord>> {
     let connection = db::open_connection(false)?;
-    let mut statement = connection
-        .prepare(format!("{WORKSPACE_RECORD_SQL} WHERE w.id = ?1").as_str())?;
+    let mut statement =
+        connection.prepare(format!("{WORKSPACE_RECORD_SQL} WHERE w.id = ?1").as_str())?;
 
-    let mut rows = statement
-        .query_map([workspace_id], helpers::workspace_record_from_row)?;
+    let mut rows = statement.query_map([workspace_id], helpers::workspace_record_from_row)?;
 
     match rows.next() {
         Some(result) => Ok(result.map(Some)?),
@@ -374,9 +371,7 @@ pub fn mark_workspace_unread(workspace_id: &str) -> Result<()> {
 
 // ---- Select visible workspace for repo ----
 
-pub(crate) fn select_visible_workspace_for_repo(
-    repo_id: &str,
-) -> Result<Option<(String, String)>> {
+pub(crate) fn select_visible_workspace_for_repo(repo_id: &str) -> Result<Option<(String, String)>> {
     let mut visible_records = load_workspace_records()?
         .into_iter()
         .filter(|record| record.repo_id == repo_id && record.state != "archived")
@@ -568,8 +563,7 @@ pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResp
         .map(ToOwned::to_owned)
         .with_context(|| format!("Workspace {workspace_id} is missing branch"))?;
 
-    let workspace_dir =
-        crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
     if !workspace_dir.is_dir() {
         bail!(
             "Archive source workspace is missing at {}",
@@ -586,14 +580,12 @@ pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResp
         );
     }
 
-    fs::create_dir_all(
-        archived_context_dir.parent().with_context(|| {
-            format!(
-                "Archived context target has no parent: {}",
-                archived_context_dir.display()
-            )
-        })?,
-    )
+    fs::create_dir_all(archived_context_dir.parent().with_context(|| {
+        format!(
+            "Archived context target has no parent: {}",
+            archived_context_dir.display()
+        )
+    })?)
     .with_context(|| {
         format!(
             "Failed to create archived context parent directory for {}",
@@ -671,8 +663,7 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
         .map(ToOwned::to_owned)
         .with_context(|| format!("Workspace {workspace_id} is missing archive_commit"))?;
 
-    let workspace_dir =
-        crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
     if workspace_dir.exists() {
         bail!(
             "Restore target already exists at {}",
@@ -689,14 +680,12 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
         );
     }
 
-    fs::create_dir_all(
-        workspace_dir.parent().with_context(|| {
-            format!(
-                "Workspace restore target has no parent: {}",
-                workspace_dir.display()
-            )
-        })?,
-    )
+    fs::create_dir_all(workspace_dir.parent().with_context(|| {
+        format!(
+            "Workspace restore target has no parent: {}",
+            workspace_dir.display()
+        )
+    })?)
     .with_context(|| {
         format!(
             "Failed to create workspace parent directory for {}",
@@ -738,11 +727,9 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
         return Err(error);
     }
 
-    if let Err(error) = update_restored_workspace_state(
-        workspace_id,
-        &archived_context_dir,
-        &workspace_context_dir,
-    ) {
+    if let Err(error) =
+        update_restored_workspace_state(workspace_id, &archived_context_dir, &workspace_context_dir)
+    {
         cleanup_failed_restore(
             &mirror_dir,
             &workspace_dir,
@@ -989,11 +976,7 @@ fn update_workspace_initialization_metadata(
     Ok(())
 }
 
-fn update_workspace_state(
-    workspace_id: &str,
-    state: &str,
-    timestamp: &str,
-) -> Result<()> {
+fn update_workspace_state(workspace_id: &str, state: &str, timestamp: &str) -> Result<()> {
     let connection = db::open_connection(true)?;
     let updated_rows = connection
         .execute(
@@ -1003,25 +986,23 @@ fn update_workspace_state(
         .with_context(|| format!("Failed to update workspace state to {state}"))?;
 
     if updated_rows != 1 {
-        bail!(
-            "Workspace state update affected {updated_rows} rows for {workspace_id}"
-        );
+        bail!("Workspace state update affected {updated_rows} rows for {workspace_id}");
     }
 
     Ok(())
 }
 
-fn delete_workspace_and_session_rows(
-    workspace_id: &str,
-    session_id: &str,
-) -> Result<()> {
+fn delete_workspace_and_session_rows(workspace_id: &str, session_id: &str) -> Result<()> {
     let mut connection = db::open_connection(true)?;
     let transaction = connection
         .transaction()
         .context("Failed to start create cleanup transaction")?;
 
     transaction
-        .execute("DELETE FROM attachments WHERE session_id = ?1", [session_id])
+        .execute(
+            "DELETE FROM attachments WHERE session_id = ?1",
+            [session_id],
+        )
         .context("Failed to delete create-flow attachments")?;
     transaction
         .execute(
@@ -1041,10 +1022,7 @@ fn delete_workspace_and_session_rows(
         .context("Failed to commit create cleanup transaction")
 }
 
-fn update_archived_workspace_state(
-    workspace_id: &str,
-    archive_commit: &str,
-) -> Result<()> {
+fn update_archived_workspace_state(workspace_id: &str, archive_commit: &str) -> Result<()> {
     let mut connection = db::open_connection(true)?;
     let transaction = connection
         .transaction()
@@ -1064,9 +1042,7 @@ fn update_archived_workspace_state(
         .context("Failed to update workspace archive state")?;
 
     if updated_rows != 1 {
-        bail!(
-            "Archive state update affected {updated_rows} rows for workspace {workspace_id}"
-        );
+        bail!("Archive state update affected {updated_rows} rows for workspace {workspace_id}");
     }
 
     transaction
@@ -1099,9 +1075,7 @@ fn update_restored_workspace_state(
         .context("Failed to update workspace restore state")?;
 
     if updated_rows != 1 {
-        bail!(
-            "Restore state update affected {updated_rows} rows for workspace {workspace_id}"
-        );
+        bail!("Restore state update affected {updated_rows} rows for workspace {workspace_id}");
     }
 
     transaction
@@ -1223,9 +1197,7 @@ fn create_staged_archive_context(
     })?;
 
     if workspace_context_dir.is_dir() {
-        if let Err(error) =
-            helpers::copy_dir_contents(workspace_context_dir, staged_archive_dir)
-        {
+        if let Err(error) = helpers::copy_dir_contents(workspace_context_dir, staged_archive_dir) {
             let _ = fs::remove_dir_all(staged_archive_dir);
             return Err(error);
         }
@@ -1389,12 +1361,8 @@ fn run_setup_hook(
 }
 
 fn command_for_script(script_path: &Path) -> Result<(String, Vec<String>)> {
-    let contents = fs::read_to_string(script_path).with_context(|| {
-        format!(
-            "Failed to inspect setup script {}",
-            script_path.display()
-        )
-    })?;
+    let contents = fs::read_to_string(script_path)
+        .with_context(|| format!("Failed to inspect setup script {}", script_path.display()))?;
     let first_line = contents.lines().next().unwrap_or_default();
 
     if let Some(interpreter) = first_line.strip_prefix("#!") {
@@ -1412,12 +1380,8 @@ fn command_for_script(script_path: &Path) -> Result<(String, Vec<String>)> {
 
 fn write_log_file(path: &Path, contents: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "Failed to create log directory {}",
-                parent.display()
-            )
-        })?;
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create log directory {}", parent.display()))?;
     }
 
     fs::write(path, contents)

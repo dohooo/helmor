@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use serde::{de::DeserializeOwned, Serialize};
 
 use super::db;
 
@@ -43,6 +44,32 @@ pub fn upsert_setting_value(key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn delete_setting_value(key: &str) -> Result<()> {
+    let connection = db::open_connection(true)?;
+    connection
+        .execute("DELETE FROM settings WHERE key = ?1", [key])
+        .with_context(|| format!("Failed to delete setting {key}"))?;
+
+    Ok(())
+}
+
+pub fn load_setting_json<T: DeserializeOwned>(key: &str) -> Result<Option<T>> {
+    let Some(value) = load_setting_value(key)? else {
+        return Ok(None);
+    };
+
+    let parsed = serde_json::from_str::<T>(&value)
+        .with_context(|| format!("Failed to deserialize JSON setting {key}"))?;
+
+    Ok(Some(parsed))
+}
+
+pub fn upsert_setting_json<T: Serialize>(key: &str, value: &T) -> Result<()> {
+    let serialized = serde_json::to_string(value)
+        .with_context(|| format!("Failed to serialize JSON setting {key}"))?;
+    upsert_setting_value(key, &serialized)
+}
+
 pub fn load_branch_prefix_settings() -> Result<BranchPrefixSettings> {
     let connection = db::open_connection(false)?;
     let mut statement = connection
@@ -52,7 +79,9 @@ pub fn load_branch_prefix_settings() -> Result<BranchPrefixSettings> {
         .context("Failed to prepare branch settings query")?;
 
     let rows = statement
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .context("Failed to query branch settings")?;
 
     let mut settings = BranchPrefixSettings {
@@ -61,8 +90,7 @@ pub fn load_branch_prefix_settings() -> Result<BranchPrefixSettings> {
     };
 
     for row in rows {
-        let (key, value) =
-            row.context("Failed to read branch settings row")?;
+        let (key, value) = row.context("Failed to read branch settings row")?;
         match key.as_str() {
             "branch_prefix_type" => settings.branch_prefix_type = Some(value),
             "branch_prefix_custom" => settings.branch_prefix_custom = Some(value),
@@ -88,7 +116,9 @@ mod tests {
         let conn = test_db();
 
         // Missing key returns no rows
-        let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1").unwrap();
+        let mut stmt = conn
+            .prepare("SELECT value FROM settings WHERE key = ?1")
+            .unwrap();
         let result: Option<String> = stmt
             .query_map(["nonexistent"], |row| row.get(0))
             .unwrap()
@@ -100,9 +130,14 @@ mod tests {
         conn.execute(
             "INSERT INTO settings (key, value) VALUES ('test_key', 'test_value')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         let value: String = conn
-            .query_row("SELECT value FROM settings WHERE key = 'test_key'", [], |r| r.get(0))
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'test_key'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(value, "test_value");
     }
@@ -110,16 +145,16 @@ mod tests {
     #[test]
     fn settings_upsert_overwrites() {
         let conn = test_db();
-        conn.execute(
-            "INSERT INTO settings (key, value) VALUES ('k', 'v1')",
-            [],
-        ).unwrap();
+        conn.execute("INSERT INTO settings (key, value) VALUES ('k', 'v1')", [])
+            .unwrap();
         conn.execute(
             "INSERT INTO settings (key, value) VALUES ('k', 'v2') ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [],
         ).unwrap();
         let value: String = conn
-            .query_row("SELECT value FROM settings WHERE key = 'k'", [], |r| r.get(0))
+            .query_row("SELECT value FROM settings WHERE key = 'k'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(value, "v2");
     }
@@ -127,8 +162,16 @@ mod tests {
     #[test]
     fn branch_prefix_settings_query() {
         let conn = test_db();
-        conn.execute("INSERT INTO settings (key, value) VALUES ('branch_prefix_type', 'custom')", []).unwrap();
-        conn.execute("INSERT INTO settings (key, value) VALUES ('branch_prefix_custom', 'feat/')", []).unwrap();
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('branch_prefix_type', 'custom')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('branch_prefix_custom', 'feat/')",
+            [],
+        )
+        .unwrap();
 
         let mut stmt = conn.prepare(
             "SELECT key, value FROM settings WHERE key IN ('branch_prefix_type', 'branch_prefix_custom')"
@@ -140,7 +183,11 @@ mod tests {
             .collect();
 
         assert_eq!(rows.len(), 2);
-        assert!(rows.iter().any(|(k, v)| k == "branch_prefix_type" && v == "custom"));
-        assert!(rows.iter().any(|(k, v)| k == "branch_prefix_custom" && v == "feat/"));
+        assert!(rows
+            .iter()
+            .any(|(k, v)| k == "branch_prefix_type" && v == "custom"));
+        assert!(rows
+            .iter()
+            .any(|(k, v)| k == "branch_prefix_custom" && v == "feat/"));
     }
 }
