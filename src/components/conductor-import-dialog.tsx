@@ -168,16 +168,23 @@ export function ConductorImportDialog({
     }
   }, [selectedIds.size, importableWorkspaces]);
 
+  const [importError, setImportError] = useState<string | null>(null);
+
   // --- import handler ---
   const handleImport = useCallback(async () => {
     if (importing || selectedIds.size === 0) return;
     setImporting(true);
+    setImportError(null);
     try {
-      await importConductorWorkspaces(Array.from(selectedIds));
-      onImported();
-      onClose();
-    } catch {
-      // Import failed
+      const result = await importConductorWorkspaces(Array.from(selectedIds));
+      if (result.importedCount > 0) {
+        onImported();
+        onClose();
+      } else if (result.errors.length > 0) {
+        setImportError(result.errors[0]);
+      }
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : "Import failed");
     } finally {
       setImporting(false);
     }
@@ -294,6 +301,11 @@ export function ConductorImportDialog({
         {/* Footer — only in workspace step */}
         {selectedRepoId && !loading && (
           <div className="border-t border-app-border px-4 py-3">
+            {importError && (
+              <p className="mb-2 truncate text-[11px] text-red-400" title={importError}>
+                {importError}
+              </p>
+            )}
             <button
               type="button"
               disabled={selectedIds.size === 0 || importing}

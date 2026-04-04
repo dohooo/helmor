@@ -186,14 +186,22 @@ pub fn import_conductor_workspaces(workspace_ids: &[String]) -> Result<ImportWor
     let mut skipped_count: i64 = 0;
     let mut errors: Vec<String> = vec![];
 
+    // Phase 1: Import DB records in a transaction.
+    // Git and filesystem operations happen in Phase 2 (after commit).
     helmor_conn
         .execute_batch("BEGIN IMMEDIATE")
         .context("Failed to start transaction")?;
 
+    // Collect workspace metadata for Phase 2
+    let mut imported_workspaces: Vec<ImportedWorkspaceMeta> = vec![];
+
     for ws_id in workspace_ids {
-        match import_single_workspace(&helmor_conn, ws_id, conductor_root.as_deref(), &helmor_data_dir) {
-            Ok(ImportAction::Imported) => imported_count += 1,
-            Ok(ImportAction::Skipped) => skipped_count += 1,
+        match import_workspace_db_records(&helmor_conn, ws_id) {
+            Ok(ImportDbResult::Imported(meta)) => {
+                imported_workspaces.push(meta);
+                imported_count += 1;
+            }
+            Ok(ImportDbResult::Skipped) => skipped_count += 1,
             Err(error) => {
                 errors.push(format!("{ws_id}: {error}"));
             }
@@ -212,6 +220,44 @@ pub fn import_conductor_workspaces(workspace_ids: &[String]) -> Result<ImportWor
         .execute("DETACH DATABASE source", [])
         .ok();
 
+    // Phase 2: Git mirror, worktree, and filesystem copy (best-effort).
+    // DB records are already committed — failures here are logged but non-fatal.
+    let mut mirrors_created: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for meta in &imported_workspaces {
+        // Ensure bare mirror (once per repo)
+        if !mirrors_created.contains(&meta.repo_name) {
+            let mirror_dir = match crate::data_dir::repo_mirror_dir(&meta.repo_name) {
+                Ok(d) => d,
+                Err(e) => {
+                    errors.push(format!("{}: mirror dir: {e}", meta.workspace_id));
+                    continue;
+                }
+            };
+
+            if let Some(ref root) = meta.repo_root {
+                if root.is_dir() {
+                    if let Err(e) = git_ops::ensure_repo_mirror(root, &mirror_dir) {
+                        errors.push(format!("mirror {}: {e}", meta.repo_name));
+                    }
+                }
+            }
+            mirrors_created.insert(meta.repo_name.clone());
+        }
+
+        if let Err(e) = setup_workspace_filesystem(
+            &meta.workspace_id,
+            &meta.repo_name,
+            &meta.directory_name,
+            &meta.state,
+            meta.branch.as_deref(),
+            conductor_root.as_deref(),
+            &helmor_data_dir,
+        ) {
+            errors.push(format!("{}: {e}", meta.workspace_id));
+        }
+    }
+
     Ok(ImportWorkspacesResult {
         success: errors.is_empty(),
         imported_count,
@@ -229,18 +275,27 @@ pub fn conductor_source_available() -> bool {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-enum ImportAction {
-    Imported,
+/// Metadata collected during Phase 1 (DB import) for Phase 2 (filesystem).
+struct ImportedWorkspaceMeta {
+    workspace_id: String,
+    repo_name: String,
+    directory_name: String,
+    state: String,
+    branch: Option<String>,
+    repo_root: Option<PathBuf>,
+}
+
+enum ImportDbResult {
+    Imported(ImportedWorkspaceMeta),
     Skipped,
 }
 
-/// Import a single workspace — DB records + filesystem context.
-fn import_single_workspace(
+/// Phase 1: Import database records for a single workspace.
+/// No git or filesystem operations — those happen in Phase 2.
+fn import_workspace_db_records(
     conn: &Connection,
     workspace_id: &str,
-    conductor_root: Option<&Path>,
-    helmor_data_dir: &Path,
-) -> Result<ImportAction> {
+) -> Result<ImportDbResult> {
     // Already imported?
     let exists: bool = conn
         .query_row(
@@ -252,7 +307,7 @@ fn import_single_workspace(
         .unwrap_or(false);
 
     if exists {
-        return Ok(ImportAction::Skipped);
+        return Ok(ImportDbResult::Skipped);
     }
 
     // Read workspace info from source
@@ -344,95 +399,100 @@ fn import_single_workspace(
     )
     .context("Failed to import diff_comments")?;
 
-    // 7. Git repository reconstruction + filesystem copy
-    let mirror_dir = crate::data_dir::repo_mirror_dir(&repo_name)?;
+    Ok(ImportDbResult::Imported(ImportedWorkspaceMeta {
+        workspace_id: workspace_id.to_string(),
+        repo_name,
+        directory_name,
+        state,
+        branch,
+        repo_root: helpers::non_empty(&root_path).map(PathBuf::from),
+    }))
+}
 
-    // Ensure bare mirror exists from the source repo's root_path
-    let repo_root = helpers::non_empty(&root_path).map(PathBuf::from);
-
-    if let Some(ref repo_root) = repo_root {
-        if repo_root.is_dir() {
-            // Mirror creation is non-fatal — we still want DB records even if git fails
-            if let Err(e) = git_ops::ensure_repo_mirror(repo_root, &mirror_dir) {
-                eprintln!("[import] Failed to create mirror for {repo_name}: {e}");
-            }
-        }
-    }
+/// Phase 2: Set up filesystem for an imported workspace (git worktree + context files).
+/// Best-effort — failures are reported but don't affect the committed DB records.
+fn setup_workspace_filesystem(
+    workspace_id: &str,
+    repo_name: &str,
+    directory_name: &str,
+    state: &str,
+    branch: Option<&str>,
+    conductor_root: Option<&Path>,
+    helmor_data_dir: &Path,
+) -> Result<()> {
+    let mirror_dir = crate::data_dir::repo_mirror_dir(repo_name)?;
 
     if state != "archived" {
-        // Active workspace: create git worktree, then copy .context/ into it
-        let workspace_dir =
-            crate::data_dir::workspace_dir(&repo_name, &directory_name)?;
+        // Active workspace: create git worktree, then copy .context/
+        let workspace_dir = crate::data_dir::workspace_dir(repo_name, directory_name)?;
 
         if !workspace_dir.exists() {
-            if let Some(ref branch_name) = branch {
+            if let Some(branch_name) = branch {
                 if mirror_dir.exists() {
-                    // The original branch is likely still checked out in a
-                    // Conductor worktree, so we create a new branch with an
-                    // -import suffix based on the same commit.
                     let import_branch = format!("{branch_name}-import");
-                    setup_imported_worktree(
+                    if let Err(e) = setup_imported_worktree(
                         &mirror_dir,
                         &workspace_dir,
                         &import_branch,
                         branch_name,
-                    )?;
-
-                    // Update the DB record to reflect the actual branch
-                    conn.execute(
-                        "UPDATE main.workspaces SET branch = ?1 WHERE id = ?2",
-                        rusqlite::params![import_branch, workspace_id],
-                    )
-                    .context("Failed to update imported workspace branch")?;
+                    ) {
+                        eprintln!("[import] Worktree failed for {directory_name}: {e}");
+                        // Non-fatal: we still copy .context/ below
+                    } else {
+                        // Update branch in DB (best-effort, DB is already committed)
+                        if let Ok(conn) = crate::models::db::open_connection(true) {
+                            let _ = conn.execute(
+                                "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
+                                rusqlite::params![import_branch, workspace_id],
+                            );
+                        }
+                    }
                 }
             }
         }
 
-        // Copy .context/ from Conductor into the workspace (whether or not worktree succeeded)
+        // Copy .context/ (whether or not worktree succeeded)
         if let Some(root) = conductor_root {
             let context_src = root
                 .join("workspaces")
-                .join(&repo_name)
-                .join(&directory_name)
+                .join(repo_name)
+                .join(directory_name)
                 .join(".context");
             let context_dst = workspace_dir.join(".context");
 
             if context_src.is_dir() && !context_dst.exists() {
-                if let Some(parent) = context_dst.parent() {
-                    std::fs::create_dir_all(parent).ok();
-                }
+                std::fs::create_dir_all(context_dst.parent().unwrap_or(&workspace_dir)).ok();
                 helpers::copy_dir_all(&context_src, &context_dst)
                     .with_context(|| format!("Failed to copy .context from {}", context_src.display()))?;
             }
         }
     } else {
-        // Archived workspace: just copy archived-contexts/
+        // Archived workspace: copy archived-contexts/
         if let Some(root) = conductor_root {
             let archive_src = root
                 .join("archived-contexts")
-                .join(&repo_name)
-                .join(&directory_name);
+                .join(repo_name)
+                .join(directory_name);
             let archive_dst = helmor_data_dir
                 .join("archived-contexts")
-                .join(&repo_name)
-                .join(&directory_name);
+                .join(repo_name)
+                .join(directory_name);
 
             if archive_src.is_dir() && !archive_dst.exists() {
-                if let Some(parent) = archive_dst.parent() {
-                    std::fs::create_dir_all(parent).ok();
-                }
+                std::fs::create_dir_all(archive_dst.parent().unwrap_or(helmor_data_dir)).ok();
                 helpers::copy_dir_all(&archive_src, &archive_dst)
                     .with_context(|| format!("Failed to copy archived context from {}", archive_src.display()))?;
             }
         }
     }
 
-    // 8. Attachment path rewriting
+    // Rewrite attachment paths
     if let Some(root) = conductor_root {
-        rewrite_attachment_paths(conn, workspace_id, root, helmor_data_dir, &repo_name, &directory_name, &state)?;
+        let conn = crate::models::db::open_connection(true)?;
+        rewrite_attachment_paths(&conn, workspace_id, root, helmor_data_dir, repo_name, directory_name, state)?;
     }
 
-    Ok(ImportAction::Imported)
+    Ok(())
 }
 
 /// Create a git worktree for an imported active workspace.
@@ -609,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    fn import_single_workspace_inserts_cascade() {
+    fn import_workspace_db_records_inserts_cascade() {
         let conn = setup_test_db();
 
         // Create a "source" schema in the same in-memory DB for testing
@@ -635,8 +695,8 @@ mod tests {
         )
         .unwrap();
 
-        let result = import_single_workspace(&conn, "w1", None, std::path::Path::new("/tmp"));
-        assert!(matches!(result.unwrap(), ImportAction::Imported));
+        let result = import_workspace_db_records(&conn, "w1");
+        assert!(matches!(result.unwrap(), ImportDbResult::Imported(_)));
 
         // Verify cascade
         let repo_count: i64 = conn.query_row("SELECT count(*) FROM main.repos", [], |r| r.get(0)).unwrap();
@@ -655,7 +715,7 @@ mod tests {
     }
 
     #[test]
-    fn import_single_workspace_skips_existing() {
+    fn import_workspace_db_records_skips_existing() {
         let conn = setup_test_db();
 
         conn.execute_batch(
@@ -678,8 +738,8 @@ mod tests {
         )
         .unwrap();
 
-        let result = import_single_workspace(&conn, "w1", None, std::path::Path::new("/tmp"));
-        assert!(matches!(result.unwrap(), ImportAction::Skipped));
+        let result = import_workspace_db_records(&conn, "w1");
+        assert!(matches!(result.unwrap(), ImportDbResult::Skipped));
 
         // No sessions should have been imported
         let sess_count: i64 = conn.query_row("SELECT count(*) FROM main.sessions", [], |r| r.get(0)).unwrap();
