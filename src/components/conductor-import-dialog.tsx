@@ -7,6 +7,7 @@ import {
   GitBranch,
   Loader2,
   Search,
+  X,
 } from "lucide-react";
 import {
   type ConductorRepo,
@@ -34,6 +35,32 @@ function statusLabel(ws: ConductorWorkspace): string {
 }
 
 // ---------------------------------------------------------------------------
+// Skeleton placeholders
+// ---------------------------------------------------------------------------
+
+function SkeletonRow() {
+  return (
+    <div className="flex items-center gap-2 rounded-xl px-2 py-2">
+      <div className="size-7 shrink-0 animate-pulse rounded-lg bg-app-elevated" />
+      <div className="flex-1 space-y-1.5">
+        <div className="h-3 w-28 animate-pulse rounded bg-app-elevated" />
+        <div className="h-2.5 w-16 animate-pulse rounded bg-app-elevated" />
+      </div>
+    </div>
+  );
+}
+
+function SkeletonList({ rows = 3 }: { rows?: number }) {
+  return (
+    <>
+      {Array.from({ length: rows }, (_, i) => (
+        <SkeletonRow key={i} />
+      ))}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -55,10 +82,14 @@ export function ConductorImportDialog({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // --- ui state ---
-  const [loading, setLoading] = useState(false);
+  const [loadingRepos, setLoadingRepos] = useState(false);
+  const [loadingWorkspaces, setLoadingWorkspaces] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+
+  const loading = loadingRepos || loadingWorkspaces;
 
   // --- load repos when dialog opens ---
   useEffect(() => {
@@ -67,27 +98,28 @@ export function ConductorImportDialog({
     setWorkspaces([]);
     setSelectedIds(new Set());
     setSearchQuery("");
-    setLoading(true);
+    setImportError(null);
+    setLoadingRepos(true);
     listConductorRepos()
       .then(setRepos)
       .catch(() => setRepos([]))
-      .finally(() => setLoading(false));
+      .finally(() => setLoadingRepos(false));
   }, [open]);
 
   // --- load workspaces when repo selected ---
   useEffect(() => {
     if (!selectedRepoId) return;
     setSearchQuery("");
-    setLoading(true);
+    setImportError(null);
+    setLoadingWorkspaces(true);
     listConductorWorkspaces(selectedRepoId)
       .then((ws) => {
         setWorkspaces(ws);
-        // Pre-select all importable workspaces
         const importable = ws.filter((w) => !w.alreadyImported).map((w) => w.id);
         setSelectedIds(new Set(importable));
       })
       .catch(() => setWorkspaces([]))
-      .finally(() => setLoading(false));
+      .finally(() => setLoadingWorkspaces(false));
   }, [selectedRepoId]);
 
   // --- focus search on step change ---
@@ -102,6 +134,7 @@ export function ConductorImportDialog({
     if (!open) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (importing) return;
       if (e.key === "Escape") {
         if (selectedRepoId) {
           setSelectedRepoId(null);
@@ -112,6 +145,7 @@ export function ConductorImportDialog({
     };
 
     const handlePointerDown = (e: PointerEvent) => {
+      if (importing) return;
       if (e.target instanceof Node && !panelRef.current?.contains(e.target)) {
         onClose();
       }
@@ -123,7 +157,7 @@ export function ConductorImportDialog({
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("pointerdown", handlePointerDown);
     };
-  }, [open, selectedRepoId, onClose]);
+  }, [open, selectedRepoId, importing, onClose]);
 
   // --- filtered repos ---
   const filteredRepos = useMemo(() => {
@@ -168,8 +202,6 @@ export function ConductorImportDialog({
     }
   }, [selectedIds.size, importableWorkspaces]);
 
-  const [importError, setImportError] = useState<string | null>(null);
-
   // --- import handler ---
   const handleImport = useCallback(async () => {
     if (importing || selectedIds.size === 0) return;
@@ -192,7 +224,7 @@ export function ConductorImportDialog({
 
   if (!open) return null;
 
-  const selectedRepoName = repos.find((r) => r.id === selectedRepoId)?.name;
+  const selectedRepo = repos.find((r) => r.id === selectedRepoId);
 
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center">
@@ -211,7 +243,8 @@ export function ConductorImportDialog({
           {selectedRepoId ? (
             <button
               type="button"
-              className="flex size-6 items-center justify-center rounded-md text-app-foreground-soft transition-colors hover:text-app-foreground"
+              disabled={importing}
+              className="flex size-6 items-center justify-center rounded-md text-app-foreground-soft transition-colors hover:text-app-foreground disabled:opacity-40"
               onClick={() => setSelectedRepoId(null)}
             >
               <ArrowLeft className="size-3.5" strokeWidth={2} />
@@ -219,36 +252,59 @@ export function ConductorImportDialog({
           ) : (
             <Download className="size-3.5 text-app-foreground-soft" strokeWidth={1.8} />
           )}
-          <h2 className="text-[13px] font-medium tracking-[-0.01em] text-app-foreground">
-            {selectedRepoId ? selectedRepoName : "Import from Conductor"}
+          <h2 className="flex-1 text-[13px] font-medium tracking-[-0.01em] text-app-foreground">
+            {selectedRepoId ? selectedRepo?.name : "Import from Conductor"}
           </h2>
+          <button
+            type="button"
+            disabled={importing}
+            className="flex size-6 items-center justify-center rounded-md text-app-foreground-soft/60 transition-colors hover:text-app-foreground disabled:opacity-40"
+            onClick={onClose}
+          >
+            <X className="size-3.5" strokeWidth={2} />
+          </button>
         </div>
 
-        {/* Search */}
-        <div className="px-3 pb-2">
-          <div className="relative">
-            <Search
-              className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-app-foreground-soft/60"
-              strokeWidth={1.9}
-            />
-            <input
-              ref={searchRef}
-              type="text"
-              value={searchQuery}
-              placeholder={selectedRepoId ? "Search workspaces" : "Search repositories"}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => e.stopPropagation()}
-              className="h-9 w-full rounded-full border border-app-border bg-app-toolbar px-9 text-[13px] font-medium text-app-foreground outline-none placeholder:text-app-foreground-soft/56 focus:border-app-border-strong"
-            />
+        {/* Search — hidden while importing */}
+        {!importing && (
+          <div className="px-3 pb-2">
+            <div className="relative">
+              <Search
+                className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-app-foreground-soft/60"
+                strokeWidth={1.9}
+              />
+              <input
+                ref={searchRef}
+                type="text"
+                value={searchQuery}
+                placeholder={selectedRepoId ? "Search workspaces" : "Search repositories"}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.stopPropagation()}
+                className="h-9 w-full rounded-full border border-app-border bg-app-toolbar px-9 text-[13px] font-medium text-app-foreground outline-none placeholder:text-app-foreground-soft/56 focus:border-app-border-strong"
+              />
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Content */}
         <div className="max-h-80 min-h-[6rem] overflow-y-auto px-2 pb-2">
-          {loading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="size-4 animate-spin text-app-foreground-soft" />
+          {importing ? (
+            // --- Importing state ---
+            <div className="flex flex-col items-center justify-center gap-3 py-10">
+              <Loader2 className="size-5 animate-spin text-app-foreground-soft" />
+              <div className="text-center">
+                <p className="text-[13px] font-medium text-app-foreground">
+                  Importing {selectedIds.size} workspace{selectedIds.size === 1 ? "" : "s"}
+                </p>
+                <p className="mt-1 text-[11px] text-app-foreground-soft/60">
+                  Setting up repositories and copying data...
+                </p>
+              </div>
             </div>
+          ) : loadingRepos ? (
+            <SkeletonList rows={3} />
+          ) : loadingWorkspaces ? (
+            <SkeletonList rows={4} />
           ) : selectedRepoId ? (
             // --- Workspace list ---
             <>
@@ -298,28 +354,22 @@ export function ConductorImportDialog({
           )}
         </div>
 
-        {/* Footer — only in workspace step */}
-        {selectedRepoId && !loading && (
+        {/* Footer — workspace step, not importing */}
+        {selectedRepoId && !loading && !importing && (
           <div className="border-t border-app-border px-4 py-3">
             {importError && (
-              <p className="mb-2 truncate text-[11px] text-red-400" title={importError}>
+              <p className="mb-2 text-[11px] leading-relaxed text-red-400/90" title={importError}>
                 {importError}
               </p>
             )}
             <button
               type="button"
-              disabled={selectedIds.size === 0 || importing}
+              disabled={selectedIds.size === 0}
               onClick={handleImport}
               className="flex h-8 w-full items-center justify-center gap-2 rounded-full bg-app-elevated text-[13px] font-medium text-app-foreground transition-colors hover:brightness-110 disabled:opacity-40 disabled:hover:brightness-100"
             >
-              {importing ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <Download className="size-3.5" strokeWidth={1.8} />
-              )}
-              {importing
-                ? "Importing..."
-                : `Import ${selectedIds.size} workspace${selectedIds.size === 1 ? "" : "s"}`}
+              <Download className="size-3.5" strokeWidth={1.8} />
+              Import {selectedIds.size} workspace{selectedIds.size === 1 ? "" : "s"}
             </button>
           </div>
         )}
@@ -352,7 +402,6 @@ function RepoRow({
       }`}
       onClick={onClick}
     >
-      {/* Initials avatar */}
       <div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-app-elevated text-[11px] font-semibold uppercase text-app-foreground-soft">
         {repo.name.slice(0, 2)}
       </div>
@@ -405,7 +454,6 @@ function WorkspaceRow({
       className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-app-row-hover"
       onClick={() => onToggle(workspace.id)}
     >
-      {/* Checkbox */}
       <div
         className={`flex size-4 shrink-0 items-center justify-center rounded border transition-colors ${
           checked
