@@ -367,11 +367,23 @@ fn import_single_workspace(
         if !workspace_dir.exists() {
             if let Some(ref branch_name) = branch {
                 if mirror_dir.exists() {
+                    // The original branch is likely still checked out in a
+                    // Conductor worktree, so we create a new branch with an
+                    // -import suffix based on the same commit.
+                    let import_branch = format!("{branch_name}-import");
                     setup_imported_worktree(
                         &mirror_dir,
                         &workspace_dir,
+                        &import_branch,
                         branch_name,
                     )?;
+
+                    // Update the DB record to reflect the actual branch
+                    conn.execute(
+                        "UPDATE main.workspaces SET branch = ?1 WHERE id = ?2",
+                        rusqlite::params![import_branch, workspace_id],
+                    )
+                    .context("Failed to update imported workspace branch")?;
                 }
             }
         }
@@ -425,38 +437,34 @@ fn import_single_workspace(
 
 /// Create a git worktree for an imported active workspace.
 ///
-/// The branch may exist as a local ref or as `refs/remotes/origin/{branch}` in
-/// the mirror. We try the branch name directly first, falling back to the
-/// remote tracking ref.
+/// Creates `new_branch` (e.g. `foo-import`) based on the commit that
+/// `source_branch` points to in the mirror.  The source branch itself
+/// is likely still checked out in a Conductor worktree, so we never
+/// try to use it directly.
 fn setup_imported_worktree(
     mirror_dir: &Path,
     workspace_dir: &Path,
-    branch: &str,
+    new_branch: &str,
+    source_branch: &str,
 ) -> Result<()> {
     if let Some(parent) = workspace_dir.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create {}", parent.display()))?;
     }
 
-    // Try the branch name directly (works if it exists as a local ref in the mirror)
-    match git_ops::create_worktree(mirror_dir, workspace_dir, branch) {
-        Ok(()) => return Ok(()),
-        Err(_) => {
-            // Clean up any partial directory created by the failed attempt
-            if workspace_dir.exists() {
-                let _ = std::fs::remove_dir_all(workspace_dir);
-            }
-        }
-    }
-
-    // Fall back: the branch likely exists as refs/remotes/origin/{branch}
-    let tracking_ref = format!("refs/remotes/origin/{branch}");
-    git_ops::create_worktree_from_start_point(mirror_dir, workspace_dir, branch, &tracking_ref)
-        .with_context(|| {
-            format!(
-                "Failed to create worktree for branch {branch} (tried direct and tracking ref)"
-            )
-        })?;
+    // The source branch exists as refs/remotes/origin/{source_branch} in the mirror
+    let tracking_ref = format!("refs/remotes/origin/{source_branch}");
+    git_ops::create_worktree_from_start_point(
+        mirror_dir,
+        workspace_dir,
+        new_branch,
+        &tracking_ref,
+    )
+    .with_context(|| {
+        format!(
+            "Failed to create worktree for {new_branch} from {tracking_ref}"
+        )
+    })?;
 
     Ok(())
 }
