@@ -344,6 +344,42 @@ pub fn get_workspace(workspace_id: &str) -> Result<WorkspaceDetail> {
     Ok(record_to_detail(record))
 }
 
+// ---- Remote branches ----
+
+pub fn list_remote_branches(workspace_id: &str) -> Result<Vec<String>> {
+    let record = load_workspace_record_by_id(workspace_id)?
+        .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+
+    let repo_root = helpers::non_empty(&record.root_path)
+        .map(PathBuf::from)
+        .with_context(|| format!("Workspace {workspace_id} is missing repo root_path"))?;
+
+    let mirror_dir = crate::data_dir::repo_mirror_dir(&record.repo_name)?;
+    git_ops::ensure_repo_mirror(&repo_root, &mirror_dir)?;
+    git_ops::fetch_mirror_from_source(&repo_root, &mirror_dir)?;
+    git_ops::list_remote_branches(&mirror_dir)
+}
+
+// ---- Update intended target branch ----
+
+pub fn update_intended_target_branch(workspace_id: &str, target_branch: &str) -> Result<()> {
+    let connection = db::open_connection(true)?;
+    let updated_rows = connection
+        .execute(
+            "UPDATE workspaces SET intended_target_branch = ?2 WHERE id = ?1 AND state = 'ready'",
+            (workspace_id, target_branch),
+        )
+        .context("Failed to update intended target branch")?;
+
+    if updated_rows != 1 {
+        bail!(
+            "Cannot update target branch: workspace {workspace_id} not found or not in ready state"
+        );
+    }
+
+    Ok(())
+}
+
 // ---- Mark read / unread ----
 
 pub fn mark_workspace_read(workspace_id: &str) -> Result<()> {

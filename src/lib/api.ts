@@ -549,6 +549,38 @@ export async function loadWorkspaceDetail(
   }
 }
 
+export async function listRemoteBranches(
+  workspaceId: string,
+): Promise<string[]> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    return [];
+  }
+
+  try {
+    return await invoke<string[]>("list_remote_branches", { workspaceId });
+  } catch {
+    return [];
+  }
+}
+
+export async function updateIntendedTargetBranch(
+  workspaceId: string,
+  targetBranch: string,
+): Promise<void> {
+  const invoke = await getTauriInvoke();
+
+  if (!invoke) {
+    throw new Error("Target branch update is only available in the Tauri desktop runtime.");
+  }
+
+  return invoke<void>("update_intended_target_branch", {
+    workspaceId,
+    targetBranch,
+  });
+}
+
 export async function loadWorkspaceSessions(
   workspaceId: string,
 ): Promise<WorkspaceSessionSummary[]> {

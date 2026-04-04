@@ -87,7 +87,11 @@ pub fn ensure_repo_mirror(source_repo_root: &Path, mirror_dir: &Path) -> Result<
         )?;
     }
 
-    let source_repo_root = source_repo_root.display().to_string();
+    fetch_mirror_from_source(source_repo_root, mirror_dir)
+}
+
+pub fn fetch_mirror_from_source(source_root: &Path, mirror_dir: &Path) -> Result<()> {
+    let source_root = source_root.display().to_string();
     let mirror_dir = mirror_dir.display().to_string();
     run_git(
         [
@@ -95,13 +99,39 @@ pub fn ensure_repo_mirror(source_repo_root: &Path, mirror_dir: &Path) -> Result<
             mirror_dir.as_str(),
             "fetch",
             "--prune",
-            source_repo_root.as_str(),
+            source_root.as_str(),
             "+refs/heads/*:refs/remotes/origin/*",
         ],
         None,
-    )?;
+    )
+    .map(|_| ())
+    .context("Failed to fetch into mirror")
+}
 
-    Ok(())
+pub fn list_remote_branches(mirror_dir: &Path) -> Result<Vec<String>> {
+    let mirror_dir = mirror_dir.display().to_string();
+    let output = run_git(
+        [
+            "--git-dir",
+            mirror_dir.as_str(),
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/remotes/origin/",
+        ],
+        None,
+    )
+    .context("Failed to list remote branches")?;
+
+    let branches: Vec<String> = output
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty() && *line != "origin/HEAD")
+        .map(|line| line.strip_prefix("origin/").unwrap_or(line).to_string())
+        .collect();
+
+    let mut sorted = branches;
+    sorted.sort();
+    Ok(sorted)
 }
 
 pub fn create_worktree(

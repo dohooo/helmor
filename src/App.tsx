@@ -1142,6 +1142,11 @@ function App() {
               sending={isSending}
               onSelectSession={setSelectedSessionId}
               onSessionsChanged={() => setDataVersion((v) => v + 1)}
+              onWorkspaceChanged={() => {
+                if (selectedWorkspaceId) {
+                  void refreshSelectedWorkspaceCollections(selectedWorkspaceId, selectedSessionId);
+                }
+              }}
             />
 
             <div className="mt-auto px-4 pb-4 pt-0">

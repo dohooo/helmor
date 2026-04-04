@@ -52,6 +52,8 @@ pub fn run() {
             models::delete_session,
             models::list_hidden_sessions,
             models::mark_session_read,
+            models::list_remote_branches,
+            models::update_intended_target_branch,
             models::mark_workspace_read,
             models::mark_workspace_unread,
             models::restore_workspace,

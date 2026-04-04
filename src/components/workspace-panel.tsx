@@ -12,8 +12,10 @@ import {
 import {
   AlertCircle,
   ArrowDown,
+  ArrowRight,
   Bot,
   Check,
+  ChevronDown,
   Clock3,
   Copy,
   FileText,
@@ -22,6 +24,7 @@ import {
   FolderSearch,
   GitBranch,
   Globe,
+  LoaderCircle,
   MessageSquareText,
   Pencil,
   Search,
@@ -40,6 +43,8 @@ import {
   unhideSession,
   deleteSession,
   loadHiddenSessions,
+  listRemoteBranches,
+  updateIntendedTargetBranch,
   type SessionAttachmentRecord,
   type SessionMessageRecord,
   type WorkspaceDetail,
@@ -50,6 +55,12 @@ import {
   type MessagePart,
 } from "@/lib/message-adapter";
 import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 type WorkspacePanelProps = {
@@ -63,6 +74,7 @@ type WorkspacePanelProps = {
   sending?: boolean;
   onSelectSession?: (sessionId: string) => void;
   onSessionsChanged?: () => void;
+  onWorkspaceChanged?: () => void;
 };
 
 type RenderedMessage = ReturnType<typeof convertMessages>[number];
@@ -93,10 +105,13 @@ export const WorkspacePanel = memo(function WorkspacePanel({
   sending = false,
   onSelectSession,
   onSessionsChanged,
+  onWorkspaceChanged,
 }: WorkspacePanelProps) {
   const selectedSession = sessions.find((s) => s.id === selectedSessionId) ?? null;
   const [showHistory, setShowHistory] = useState(false);
   const [hiddenSessions, setHiddenSessions] = useState<WorkspaceSessionSummary[]>([]);
+  const [remoteBranches, setRemoteBranches] = useState<string[]>([]);
+  const [loadingBranches, setLoadingBranches] = useState(false);
 
   const handleCreateSession = useCallback(async () => {
     if (!workspace) return;
@@ -185,6 +200,62 @@ export const WorkspacePanel = memo(function WorkspacePanel({
               <GitBranch className="size-3.5 text-app-warm" strokeWidth={1.9} />
               <span className="truncate">{workspace?.branch ?? "No branch"}</span>
             </span>
+            {workspace?.intendedTargetBranch ? (
+              <>
+                <ArrowRight className="size-3 shrink-0 text-app-muted" strokeWidth={1.8} />
+                {workspace.state === "archived" ? (
+                  <span className="px-1 py-0.5 text-[13px] font-medium text-app-foreground-soft">
+                    {workspace.intendedTargetBranch}
+                  </span>
+                ) : (
+                  <DropdownMenu
+                    onOpenChange={(open) => {
+                      if (open && workspace) {
+                        setLoadingBranches(true);
+                        void listRemoteBranches(workspace.id).then((branches) => {
+                          setRemoteBranches(branches);
+                          setLoadingBranches(false);
+                        });
+                      }
+                    }}
+                  >
+                    <DropdownMenuTrigger className="inline-flex cursor-pointer items-center gap-0.5 rounded-md px-1 py-0.5 text-[13px] font-medium text-app-foreground-soft transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong">
+                      <span className="truncate">{workspace.intendedTargetBranch}</span>
+                      <ChevronDown className="size-3 shrink-0" strokeWidth={2} />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="max-h-64 min-w-40 overflow-y-auto">
+                      {loadingBranches ? (
+                        <div className="flex items-center justify-center px-3 py-2">
+                          <LoaderCircle className="size-3.5 animate-spin text-app-muted" strokeWidth={2} />
+                        </div>
+                      ) : (
+                        remoteBranches.map((branch) => (
+                          <DropdownMenuItem
+                            key={branch}
+                            onClick={() => {
+                              if (branch === workspace.intendedTargetBranch) return;
+                              void updateIntendedTargetBranch(workspace.id, branch).then(() => {
+                                onWorkspaceChanged?.();
+                              });
+                            }}
+                          >
+                            <span className={cn(
+                              "flex-1 truncate",
+                              branch === workspace.intendedTargetBranch && "font-semibold",
+                            )}>
+                              {branch}
+                            </span>
+                            {branch === workspace.intendedTargetBranch ? (
+                              <Check className="size-3.5 shrink-0 text-app-foreground" strokeWidth={2} />
+                            ) : null}
+                          </DropdownMenuItem>
+                        ))
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+              </>
+            ) : null}
             {workspace?.state === "archived" ? (
               <span className="px-1 py-0.5 font-medium text-app-muted">Archived</span>
             ) : null}

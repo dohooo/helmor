@@ -179,6 +179,26 @@ pub fn mark_workspace_unread(workspace_id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
+pub fn list_remote_branches(workspace_id: String) -> CmdResult<Vec<String>> {
+    Ok(workspaces::list_remote_branches(&workspace_id)?)
+}
+
+#[tauri::command]
+pub fn update_intended_target_branch(
+    workspace_id: String,
+    target_branch: String,
+) -> CmdResult<()> {
+    let _lock = db::WORKSPACE_MUTATION_LOCK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
+
+    Ok(workspaces::update_intended_target_branch(
+        &workspace_id,
+        &target_branch,
+    )?)
+}
+
+#[tauri::command]
 pub fn restore_workspace(
     workspace_id: String,
 ) -> CmdResult<workspaces::RestoreWorkspaceResponse> {
