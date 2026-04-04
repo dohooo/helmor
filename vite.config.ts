@@ -8,7 +8,6 @@ const host = process.env.TAURI_DEV_HOST;
 const WATCH_IGNORED = [
   "**/src-tauri/**",
   "**/.local/**",
-  "**/.local-data/**",
   "**/.local-docs/**",
   "**/.vscode/**",
   "**/dist/**",

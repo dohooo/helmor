@@ -1,7 +1,7 @@
 mod agents;
-mod models;
 pub mod data_dir;
 mod import;
+mod models;
 mod schema;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -14,16 +14,12 @@ pub fn run() {
         })
         .setup(|_app| {
             // Ensure data directory structure exists
-            data_dir::ensure_directory_structure()
-                .expect("Failed to create Helmor data directory");
+            data_dir::ensure_directory_structure().expect("Failed to create Helmor data directory");
 
             // Initialize database schema
-            let db_path = data_dir::db_path()
-                .expect("Failed to resolve database path");
-            let connection = rusqlite::Connection::open(&db_path)
-                .expect("Failed to open database");
-            schema::ensure_schema(&connection)
-                .expect("Failed to initialize database schema");
+            let db_path = data_dir::db_path().expect("Failed to resolve database path");
+            let connection = rusqlite::Connection::open(&db_path).expect("Failed to open database");
+            schema::ensure_schema(&connection).expect("Failed to initialize database schema");
 
             eprintln!(
                 "Helmor {} — data: {}",
