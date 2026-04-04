@@ -792,4 +792,46 @@ export async function isConductorAvailable(): Promise<boolean> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Session hide / delete
+// ---------------------------------------------------------------------------
+
+export type CreateSessionResponse = {
+  sessionId: string;
+};
+
+export async function createSession(workspaceId: string): Promise<CreateSessionResponse> {
+  const inv = await getTauriInvoke();
+  if (!inv) throw new Error("Session creation requires the Tauri desktop runtime.");
+  return inv<CreateSessionResponse>("create_session", { workspaceId });
+}
+
+export async function hideSession(sessionId: string): Promise<void> {
+  const inv = await getTauriInvoke();
+  if (!inv) return;
+  await inv("hide_session", { sessionId });
+}
+
+export async function unhideSession(sessionId: string): Promise<void> {
+  const inv = await getTauriInvoke();
+  if (!inv) return;
+  await inv("unhide_session", { sessionId });
+}
+
+export async function deleteSession(sessionId: string): Promise<void> {
+  const inv = await getTauriInvoke();
+  if (!inv) return;
+  await inv("delete_session", { sessionId });
+}
+
+export async function loadHiddenSessions(workspaceId: string): Promise<WorkspaceSessionSummary[]> {
+  const inv = await getTauriInvoke();
+  if (!inv) return [];
+  try {
+    return await inv<WorkspaceSessionSummary[]>("list_hidden_sessions", { workspaceId });
+  } catch {
+    return [];
+  }
+}
+
 export { DEFAULT_AGENT_MODEL_SECTIONS, DEFAULT_WORKSPACE_GROUPS };

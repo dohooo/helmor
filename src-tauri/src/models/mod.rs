@@ -118,6 +118,31 @@ pub fn list_session_attachments(
 }
 
 #[tauri::command]
+pub fn create_session(workspace_id: String) -> Result<sessions::CreateSessionResponse, String> {
+    sessions::create_session(&workspace_id)
+}
+
+#[tauri::command]
+pub fn hide_session(session_id: String) -> Result<(), String> {
+    sessions::hide_session(&session_id)
+}
+
+#[tauri::command]
+pub fn unhide_session(session_id: String) -> Result<(), String> {
+    sessions::unhide_session(&session_id)
+}
+
+#[tauri::command]
+pub fn delete_session(session_id: String) -> Result<(), String> {
+    sessions::delete_session(&session_id)
+}
+
+#[tauri::command]
+pub fn list_hidden_sessions(workspace_id: String) -> Result<Vec<sessions::WorkspaceSessionSummary>, String> {
+    sessions::list_hidden_sessions(&workspace_id)
+}
+
+#[tauri::command]
 pub fn mark_session_read(session_id: String) -> Result<(), String> {
     let _lock = db::WORKSPACE_MUTATION_LOCK
         .lock()

@@ -27,13 +27,23 @@ import {
   Search,
   Sparkles,
   SquareTerminal,
+  X,
+  History,
+  RotateCcw,
+  Trash2,
+  Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type {
-  SessionAttachmentRecord,
-  SessionMessageRecord,
-  WorkspaceDetail,
-  WorkspaceSessionSummary,
+import {
+  createSession,
+  hideSession,
+  unhideSession,
+  deleteSession,
+  loadHiddenSessions,
+  type SessionAttachmentRecord,
+  type SessionMessageRecord,
+  type WorkspaceDetail,
+  type WorkspaceSessionSummary,
 } from "@/lib/api";
 import {
   convertMessages,
@@ -52,6 +62,7 @@ type WorkspacePanelProps = {
   loadingSession?: boolean;
   sending?: boolean;
   onSelectSession?: (sessionId: string) => void;
+  onSessionsChanged?: () => void;
 };
 
 type RenderedMessage = ReturnType<typeof convertMessages>[number];
@@ -81,8 +92,59 @@ export const WorkspacePanel = memo(function WorkspacePanel({
   loadingSession = false,
   sending = false,
   onSelectSession,
+  onSessionsChanged,
 }: WorkspacePanelProps) {
   const selectedSession = sessions.find((s) => s.id === selectedSessionId) ?? null;
+  const [showHistory, setShowHistory] = useState(false);
+  const [hiddenSessions, setHiddenSessions] = useState<WorkspaceSessionSummary[]>([]);
+
+  const handleCreateSession = useCallback(async () => {
+    if (!workspace) return;
+    try {
+      const result = await createSession(workspace.id);
+      onSessionsChanged?.();
+      onSelectSession?.(result.sessionId);
+    } catch (error) {
+      console.error("Failed to create session:", error);
+    }
+  }, [workspace, onSessionsChanged, onSelectSession]);
+
+  const handleHideSession = useCallback(async (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    await hideSession(sessionId);
+    // Bump dataVersion → useEffect reloads sessions (without the hidden one)
+    // → setSelectedSessionId fallback picks next visible session automatically
+    onSessionsChanged?.();
+  }, [onSessionsChanged]);
+
+  const handleToggleHistory = useCallback(async () => {
+    if (!showHistory && workspace) {
+      const hidden = await loadHiddenSessions(workspace.id);
+      setHiddenSessions(hidden);
+    }
+    setShowHistory((v) => !v);
+  }, [showHistory, workspace]);
+
+  const handleUnhide = useCallback(async (sessionId: string) => {
+    await unhideSession(sessionId);
+    setHiddenSessions((prev) => {
+      const next = prev.filter((s) => s.id !== sessionId);
+      if (next.length === 0) setShowHistory(false);
+      return next;
+    });
+    onSessionsChanged?.();
+    onSelectSession?.(sessionId);
+  }, [onSessionsChanged, onSelectSession]);
+
+  const handleDelete = useCallback(async (sessionId: string) => {
+    await deleteSession(sessionId);
+    setHiddenSessions((prev) => {
+      const next = prev.filter((s) => s.id !== sessionId);
+      if (next.length === 0) setShowHistory(false);
+      return next;
+    });
+    onSessionsChanged?.();
+  }, [onSessionsChanged]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -129,62 +191,136 @@ export const WorkspacePanel = memo(function WorkspacePanel({
           </div>
         </div>
 
-        {/* --- Session tabs --- */}
-        <div className="overflow-x-auto px-4 pb-1 [scrollbar-width:none]">
-          {loadingWorkspace ? (
-            <div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-app-muted">
-              <Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
-              Loading
-            </div>
-          ) : sessions.length > 0 ? (
-            <Tabs
-              value={selectedSessionId ?? sessions[0]?.id}
-              onValueChange={(value) => {
-                onSelectSession?.(value);
-              }}
-              className="min-w-max gap-0"
-            >
-              <TabsList
-                aria-label="Sessions"
-                className="min-w-max justify-start rounded-xl"
+        {/* --- Session tabs row --- */}
+        <div className="flex items-center px-4 pb-1">
+          <div className="min-w-0 flex-1 overflow-x-auto [scrollbar-width:none]">
+            {loadingWorkspace ? (
+              <div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-app-muted">
+                <Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
+                Loading
+              </div>
+            ) : sessions.length > 0 ? (
+              <Tabs
+                value={selectedSessionId ?? sessions[0]?.id}
+                onValueChange={(value) => {
+                  onSelectSession?.(value);
+                }}
+                className="min-w-max gap-0"
               >
-                {sessions.map((session) => {
-                  const selected = session.id === selectedSessionId;
-                  const isActive = selected && sending;
-                  const hasUnread = session.unreadCount > 0;
+                <TabsList
+                  aria-label="Sessions"
+                  className="min-w-max justify-start rounded-xl"
+                >
+                  {sessions.map((session) => {
+                    const selected = session.id === selectedSessionId;
+                    const isActive = selected && sending;
+                    const hasUnread = session.unreadCount > 0;
 
-                  return (
-                    <TabsTrigger
-                      key={session.id}
-                      value={session.id}
-                      className="gap-1.5 rounded-[10px] px-3.5 text-[13px] text-app-foreground-soft data-[state=active]:text-app-foreground"
-                    >
-                      <SessionProviderIcon agentType={session.agentType} active={isActive} />
-                      <span
-                        className={cn(
-                          "truncate font-medium",
-                          hasUnread && !selected ? "text-app-foreground" : undefined,
-                        )}
+                    return (
+                      <TabsTrigger
+                        key={session.id}
+                        value={session.id}
+                        className="group/tab relative gap-1.5 rounded-[10px] px-3.5 pr-5 text-[13px] text-app-foreground-soft data-[state=active]:text-app-foreground"
                       >
-                        {displaySessionTitle(session)}
-                      </span>
-                      {hasUnread ? (
+                        <SessionProviderIcon agentType={session.agentType} active={isActive} />
                         <span
-                          aria-label="Unread session"
-                          className="size-1.5 shrink-0 rounded-full bg-app-progress"
-                        />
-                      ) : null}
-                    </TabsTrigger>
-                  );
-                })}
-              </TabsList>
-            </Tabs>
-          ) : (
-            <div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-app-muted">
-              <AlertCircle className="size-3" strokeWidth={1.8} />
-              No sessions
-            </div>
-          )}
+                          className={cn(
+                            "truncate font-medium",
+                            hasUnread && !selected ? "text-app-foreground" : undefined,
+                          )}
+                        >
+                          {displaySessionTitle(session)}
+                        </span>
+                        {hasUnread ? (
+                          <span
+                            aria-label="Unread session"
+                            className="size-1.5 shrink-0 rounded-full bg-app-progress"
+                          />
+                        ) : null}
+                        <span
+                          role="button"
+                          aria-label="Close session"
+                          onClick={(e) => handleHideSession(session.id, e)}
+                          className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-sm p-0.5 opacity-0 transition-opacity hover:bg-app-toolbar-hover group-hover/tab:opacity-100 data-[state=active]:opacity-100"
+                        >
+                          <X className="size-2.5" strokeWidth={2} />
+                        </span>
+                      </TabsTrigger>
+                    );
+                  })}
+                </TabsList>
+              </Tabs>
+            ) : (
+              <div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-app-muted">
+                <AlertCircle className="size-3" strokeWidth={1.8} />
+                No sessions
+              </div>
+            )}
+          </div>
+
+          {/* New session button */}
+          <button
+            type="button"
+            aria-label="New session"
+            onClick={handleCreateSession}
+            className="ml-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground-soft"
+          >
+            <Plus className="size-3.5" strokeWidth={1.8} />
+          </button>
+
+          {/* History button — right end of tab bar */}
+          <div className="relative ml-1 shrink-0">
+            <button
+              type="button"
+              aria-label="Session history"
+              onClick={handleToggleHistory}
+              className={cn(
+                "flex size-7 items-center justify-center rounded-lg text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground-soft",
+                showHistory && "bg-app-toolbar-hover text-app-foreground-soft",
+              )}
+            >
+              <History className="size-3.5" strokeWidth={1.8} />
+            </button>
+
+            {/* Dropdown menu */}
+            {showHistory ? (
+              <div className="absolute right-0 top-full z-30 mt-1 w-56 rounded-lg border border-app-border bg-app-sidebar py-1 shadow-lg">
+                {hiddenSessions.length > 0 ? (
+                  hiddenSessions.map((session) => (
+                    <div
+                      key={session.id}
+                      className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-[12px] text-app-foreground-soft hover:bg-app-toolbar-hover"
+                    >
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <SessionProviderIcon agentType={session.agentType} active={false} />
+                        <span className="truncate">{displaySessionTitle(session)}</span>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-0.5">
+                        <button
+                          type="button"
+                          aria-label="Restore session"
+                          onClick={() => handleUnhide(session.id)}
+                          className="rounded-sm p-1 text-app-muted transition-colors hover:text-app-foreground-soft"
+                        >
+                          <RotateCcw className="size-3" strokeWidth={1.8} />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Delete session permanently"
+                          onClick={() => handleDelete(session.id)}
+                          className="rounded-sm p-1 text-app-muted transition-colors hover:text-red-400"
+                        >
+                          <Trash2 className="size-3" strokeWidth={1.8} />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="px-2.5 py-1.5 text-[11px] text-app-muted">No hidden sessions</div>
+                )}
+              </div>
+            ) : null}
+          </div>
         </div>
       </header>
 

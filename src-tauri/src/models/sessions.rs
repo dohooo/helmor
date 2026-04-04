@@ -106,7 +106,7 @@ pub fn list_workspace_sessions(
               s.is_hidden,
               s.is_compacting
             FROM sessions s
-            WHERE s.workspace_id = ?1
+            WHERE s.workspace_id = ?1 AND COALESCE(s.is_hidden, 0) = 0
             ORDER BY
               CASE WHEN s.id = ?2 THEN 0 ELSE 1 END,
               datetime(s.updated_at) DESC,
@@ -391,6 +391,128 @@ pub(crate) fn sync_workspace_unread_in_transaction(
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSessionResponse {
+    pub session_id: String,
+}
+
+pub fn create_session(workspace_id: &str) -> Result<CreateSessionResponse, String> {
+    let connection = db::open_connection(true)?;
+    let session_id = uuid::Uuid::new_v4().to_string();
+
+    connection
+        .execute(
+            r#"
+            INSERT INTO sessions (id, workspace_id, status, title, permission_mode)
+            VALUES (?1, ?2, 'idle', 'Untitled', 'default')
+            "#,
+            (&session_id, workspace_id),
+        )
+        .map_err(|error| format!("Failed to create session: {error}"))?;
+
+    // Set as active session on the workspace
+    connection
+        .execute(
+            "UPDATE workspaces SET active_session_id = ?1 WHERE id = ?2",
+            (&session_id, workspace_id),
+        )
+        .map_err(|error| format!("Failed to set active session: {error}"))?;
+
+    Ok(CreateSessionResponse { session_id })
+}
+
+pub fn hide_session(session_id: &str) -> Result<(), String> {
+    let connection = db::open_connection(true)?;
+    connection
+        .execute("UPDATE sessions SET is_hidden = 1 WHERE id = ?1", [session_id])
+        .map_err(|error| format!("Failed to hide session {session_id}: {error}"))?;
+    Ok(())
+}
+
+pub fn unhide_session(session_id: &str) -> Result<(), String> {
+    let connection = db::open_connection(true)?;
+    connection
+        .execute("UPDATE sessions SET is_hidden = 0 WHERE id = ?1", [session_id])
+        .map_err(|error| format!("Failed to unhide session {session_id}: {error}"))?;
+    Ok(())
+}
+
+pub fn delete_session(session_id: &str) -> Result<(), String> {
+    let mut connection = db::open_connection(true)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+
+    transaction
+        .execute("DELETE FROM attachments WHERE session_id = ?1", [session_id])
+        .map_err(|error| format!("Failed to delete attachments: {error}"))?;
+    transaction
+        .execute("DELETE FROM session_messages WHERE session_id = ?1", [session_id])
+        .map_err(|error| format!("Failed to delete messages: {error}"))?;
+    transaction
+        .execute("DELETE FROM sessions WHERE id = ?1", [session_id])
+        .map_err(|error| format!("Failed to delete session: {error}"))?;
+
+    transaction
+        .commit()
+        .map_err(|error| format!("Failed to commit session deletion: {error}"))?;
+    Ok(())
+}
+
+pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSummary>, String> {
+    let connection = db::open_connection(false)?;
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT
+              s.id, s.workspace_id, s.title, s.agent_type, s.status, s.model,
+              s.permission_mode, s.claude_session_id, s.unread_count,
+              s.context_token_count, s.context_used_percent, s.thinking_enabled,
+              s.codex_thinking_level, s.fast_mode, s.agent_personality,
+              s.created_at, s.updated_at, s.last_user_message_at,
+              s.resume_session_at, s.is_hidden, s.is_compacting
+            FROM sessions s
+            WHERE s.workspace_id = ?1 AND s.is_hidden = 1
+            ORDER BY datetime(s.updated_at) DESC
+            "#,
+        )
+        .map_err(|error| format!("Failed to prepare hidden sessions query: {error}"))?;
+
+    let rows = statement
+        .query_map([workspace_id], |row| {
+            let id: String = row.get(0)?;
+            Ok(WorkspaceSessionSummary {
+                active: false,
+                id,
+                workspace_id: row.get(1)?,
+                title: row.get(2)?,
+                agent_type: row.get(3)?,
+                status: row.get(4)?,
+                model: row.get(5)?,
+                permission_mode: row.get(6)?,
+                claude_session_id: row.get(7)?,
+                unread_count: row.get(8)?,
+                context_token_count: row.get(9)?,
+                context_used_percent: row.get(10)?,
+                thinking_enabled: row.get::<_, i64>(11)? != 0,
+                codex_thinking_level: row.get(12)?,
+                fast_mode: row.get::<_, i64>(13)? != 0,
+                agent_personality: row.get(14)?,
+                created_at: row.get(15)?,
+                updated_at: row.get(16)?,
+                last_user_message_at: row.get(17)?,
+                resume_session_at: row.get(18)?,
+                is_hidden: row.get::<_, i64>(19)? != 0,
+                is_compacting: row.get::<_, i64>(20)? != 0,
+            })
+        })
+        .map_err(|error| format!("Failed to query hidden sessions: {error}"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to read hidden sessions: {error}"))
 }
 
 #[cfg(test)]

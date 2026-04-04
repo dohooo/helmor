@@ -1125,6 +1125,7 @@ function App() {
               loadingSession={loadingSession}
               sending={isSending}
               onSelectSession={setSelectedSessionId}
+              onSessionsChanged={() => setDataVersion((v) => v + 1)}
             />
 
             <div className="mt-auto px-4 pb-4 pt-0">
