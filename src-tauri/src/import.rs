@@ -1,315 +1,521 @@
-//! Optional import of Conductor data into the Helmor database.
+//! Workspace-granular import of Conductor data into Helmor.
 //!
-//! Uses the SQLite backup API to safely copy data from a running or
-//! closed Conductor database without corrupting the source.
+//! Users browse Conductor repos/workspaces, select individual workspaces,
+//! and import both database records and filesystem context files.
 
 use anyhow::{bail, Context, Result};
 use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
 
+use crate::models::helpers;
+
+// ---------------------------------------------------------------------------
+// Public types
+// ---------------------------------------------------------------------------
+
+/// A repository found in the Conductor database.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConductorRepo {
+    pub id: String,
+    pub name: String,
+    pub remote_url: Option<String>,
+    pub workspace_count: i64,
+    pub already_imported_count: i64,
+}
+
+/// A workspace found in the Conductor database.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConductorWorkspace {
+    pub id: String,
+    pub directory_name: String,
+    pub state: String,
+    pub branch: Option<String>,
+    pub derived_status: Option<String>,
+    pub pr_title: Option<String>,
+    pub session_count: i64,
+    pub message_count: i64,
+    pub already_imported: bool,
+}
+
 /// Result returned to the frontend after an import attempt.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ImportResult {
+pub struct ImportWorkspacesResult {
     pub success: bool,
-    pub source_path: String,
-    pub repos_count: i64,
-    pub workspaces_count: i64,
-    pub sessions_count: i64,
-    pub messages_count: i64,
+    pub imported_count: i64,
+    pub skipped_count: i64,
+    pub errors: Vec<String>,
 }
 
-/// Import Conductor data into the Helmor database.
+// ---------------------------------------------------------------------------
+// Browsing — list repos and workspaces from Conductor
+// ---------------------------------------------------------------------------
+
+/// List all repositories in the Conductor database with workspace counts.
+pub fn list_conductor_repos() -> Result<Vec<ConductorRepo>> {
+    let (helmor_conn, _source_path) = open_with_conductor_attached()?;
+
+    let mut stmt = helmor_conn
+        .prepare(
+            r#"
+            SELECT
+                r.id,
+                r.name,
+                r.remote_url,
+                (SELECT count(*) FROM source.workspaces w
+                 WHERE w.repository_id = r.id
+                   AND w.state IN ('ready', 'archived')) AS workspace_count,
+                (SELECT count(*) FROM source.workspaces w
+                 WHERE w.repository_id = r.id
+                   AND w.state IN ('ready', 'archived')
+                   AND w.id IN (SELECT id FROM main.workspaces)) AS already_imported_count
+            FROM source.repos r
+            WHERE r.hidden = 0 OR r.hidden IS NULL
+            ORDER BY r.name COLLATE NOCASE
+            "#,
+        )
+        .context("Failed to query Conductor repos")?;
+
+    let repos = stmt
+        .query_map([], |row| {
+            Ok(ConductorRepo {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                remote_url: row.get(2)?,
+                workspace_count: row.get(3)?,
+                already_imported_count: row.get(4)?,
+            })
+        })
+        .context("Failed to read Conductor repos")?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("Failed to collect Conductor repos")?;
+
+    drop(stmt);
+
+    helmor_conn
+        .execute("DETACH DATABASE source", [])
+        .ok();
+
+    Ok(repos)
+}
+
+/// List workspaces for a given repo in the Conductor database.
+pub fn list_conductor_workspaces(repo_id: &str) -> Result<Vec<ConductorWorkspace>> {
+    let (helmor_conn, _source_path) = open_with_conductor_attached()?;
+
+    let mut stmt = helmor_conn
+        .prepare(
+            r#"
+            SELECT
+                w.id,
+                w.directory_name,
+                w.state,
+                w.branch,
+                w.derived_status,
+                w.pr_title,
+                (SELECT count(*) FROM source.sessions s
+                 WHERE s.workspace_id = w.id) AS session_count,
+                (SELECT count(*) FROM source.session_messages m
+                 WHERE m.session_id IN (
+                     SELECT s.id FROM source.sessions s WHERE s.workspace_id = w.id
+                 )) AS message_count,
+                (CASE WHEN w.id IN (SELECT id FROM main.workspaces) THEN 1 ELSE 0 END) AS already_imported
+            FROM source.workspaces w
+            WHERE w.repository_id = ?1
+              AND w.state IN ('ready', 'archived')
+            ORDER BY w.updated_at DESC
+            "#,
+        )
+        .context("Failed to query Conductor workspaces")?;
+
+    let workspaces = stmt
+        .query_map([repo_id], |row| {
+            Ok(ConductorWorkspace {
+                id: row.get(0)?,
+                directory_name: row.get(1)?,
+                state: row.get(2)?,
+                branch: row.get(3)?,
+                derived_status: row.get(4)?,
+                pr_title: row.get(5)?,
+                session_count: row.get(6)?,
+                message_count: row.get(7)?,
+                already_imported: row.get::<_, i64>(8)? != 0,
+            })
+        })
+        .context("Failed to read Conductor workspaces")?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("Failed to collect Conductor workspaces")?;
+
+    helmor_conn
+        .execute("DETACH DATABASE source", [])
+        .ok();
+
+    Ok(workspaces)
+}
+
+// ---------------------------------------------------------------------------
+// Import — copy selected workspaces into Helmor
+// ---------------------------------------------------------------------------
+
+/// Import selected workspaces from Conductor into Helmor.
 ///
-/// - Opens the Conductor DB in read-only mode (safe even if Conductor is running)
-/// - Uses SQLite backup API to copy all data
-/// - Optionally filters to a single repository
-///
-/// WARNING: This replaces all data in the Helmor database.
-pub fn import_from_conductor(repo_filter: Option<&str>) -> Result<ImportResult> {
-    let source_path = crate::data_dir::conductor_source_db_path()
-        .context("Conductor database not found at ~/Library/Application Support/com.conductor.app/conductor.db")?;
-
-    let source_display = source_path.display().to_string();
-
-    // Open source as read-only — safe even if Conductor is running
-    let source = Connection::open_with_flags(
-        &source_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .context("Failed to open Conductor database")?;
-
-    // Fail fast: validate repo exists in source BEFORE touching destination
-    if let Some(repo_name) = repo_filter {
-        source
-            .query_row(
-                "SELECT id FROM repos WHERE name = ?1 LIMIT 1",
-                [repo_name],
-                |row| row.get::<_, String>(0),
-            )
-            .with_context(|| format!("Repo '{repo_name}' not found in source Conductor database"))?;
+/// For each workspace:
+/// 1. Copies database records (repo, workspace, sessions, messages, attachments, diff_comments)
+/// 2. Copies filesystem context files (notes, todos, plans, attachments)
+/// 3. Rewrites attachment paths to Helmor's data directory
+pub fn import_conductor_workspaces(workspace_ids: &[String]) -> Result<ImportWorkspacesResult> {
+    if workspace_ids.is_empty() {
+        return Ok(ImportWorkspacesResult {
+            success: true,
+            imported_count: 0,
+            skipped_count: 0,
+            errors: vec![],
+        });
     }
 
-    let dest_path = crate::data_dir::db_path()?;
-    let backup_path = dest_path.with_extension("db.bak");
+    let (helmor_conn, _source_path) = open_with_conductor_attached()?;
 
-    // If the destination already has data, back it up first
-    if dest_path.is_file() {
-        std::fs::copy(&dest_path, &backup_path).with_context(|| {
-            format!(
-                "Failed to create backup at {}",
-                backup_path.display()
-            )
-        })?;
-    }
+    let conductor_root = crate::data_dir::conductor_root_path();
+    let helmor_data_dir = crate::data_dir::data_dir()?;
 
-    // Open destination as writable — create if needed
-    let mut dest = Connection::open_with_flags(
-        &dest_path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE
-            | OpenFlags::SQLITE_OPEN_CREATE
-            | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .context("Failed to open Helmor database for import")?;
+    let mut imported_count: i64 = 0;
+    let mut skipped_count: i64 = 0;
+    let mut errors: Vec<String> = vec![];
 
-    // Use SQLite backup API — copies page by page, safe and atomic
-    {
-        let backup = rusqlite::backup::Backup::new(&source, &mut dest)
-            .context("Failed to start database backup")?;
-        backup
-            .run_to_completion(100, std::time::Duration::from_millis(50), None)
-            .context("Database backup failed")?;
-    }
-    // Drop source — no longer needed
-    drop(source);
+    helmor_conn
+        .execute_batch("BEGIN IMMEDIATE")
+        .context("Failed to start transaction")?;
 
-    // All post-backup operations: on ANY failure, restore from .bak
-    let post_backup_result = (|| -> Result<()> {
-        if let Some(repo_name) = repo_filter {
-            filter_to_repo(&dest, repo_name)?;
+    for ws_id in workspace_ids {
+        match import_single_workspace(&helmor_conn, ws_id, conductor_root.as_deref(), &helmor_data_dir) {
+            Ok(ImportAction::Imported) => imported_count += 1,
+            Ok(ImportAction::Skipped) => skipped_count += 1,
+            Err(error) => {
+                errors.push(format!("{ws_id}: {error}"));
+            }
         }
-        redact_sensitive_settings(&dest)?;
-        Ok(())
-    })();
-
-    if let Err(error) = post_backup_result {
-        drop(dest);
-        restore_backup(&dest_path, &backup_path);
-        return Err(error);
     }
 
-    // VACUUM is non-fatal — data is already correct
-    let _ = dest.execute_batch("VACUUM;");
+    if imported_count > 0 || skipped_count > 0 {
+        helmor_conn
+            .execute_batch("COMMIT")
+            .context("Failed to commit")?;
+    } else {
+        helmor_conn.execute_batch("ROLLBACK").ok();
+    }
 
-    // Stats collection is non-fatal
-    let repos_count = count_rows(&dest, "repos").unwrap_or(0);
-    let workspaces_count = count_rows(&dest, "workspaces").unwrap_or(0);
-    let sessions_count = count_rows(&dest, "sessions").unwrap_or(0);
-    let messages_count = count_rows(&dest, "session_messages").unwrap_or(0);
+    helmor_conn
+        .execute("DETACH DATABASE source", [])
+        .ok();
 
-    Ok(ImportResult {
-        success: true,
-        source_path: source_display,
-        repos_count,
-        workspaces_count,
-        sessions_count,
-        messages_count,
+    Ok(ImportWorkspacesResult {
+        success: errors.is_empty(),
+        imported_count,
+        skipped_count,
+        errors,
     })
 }
 
-/// Restore the database from the .bak file after a failed post-backup operation.
-fn restore_backup(dest_path: &std::path::Path, backup_path: &std::path::Path) {
-    if backup_path.is_file() {
-        if let Err(error) = std::fs::copy(backup_path, dest_path) {
-            eprintln!(
-                "CRITICAL: Failed to restore database backup from {} to {}: {error}",
-                backup_path.display(),
-                dest_path.display()
-            );
-        }
-    }
+/// Check if the Conductor database is available for import.
+pub fn conductor_source_available() -> bool {
+    crate::data_dir::conductor_source_db_path().is_some()
 }
 
-/// Filter the imported database to only keep data for a specific repo.
-fn filter_to_repo(connection: &Connection, repo_name: &str) -> Result<()> {
-    connection
-        .execute_batch("PRAGMA foreign_keys = OFF;")
-        .context("Failed to disable foreign keys")?;
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
 
-    let repo_id: String = connection
+enum ImportAction {
+    Imported,
+    Skipped,
+}
+
+/// Import a single workspace — DB records + filesystem context.
+fn import_single_workspace(
+    conn: &Connection,
+    workspace_id: &str,
+    conductor_root: Option<&std::path::Path>,
+    helmor_data_dir: &std::path::Path,
+) -> Result<ImportAction> {
+    // Already imported?
+    let exists: bool = conn
         .query_row(
-            "SELECT id FROM repos WHERE name = ?1 LIMIT 1",
-            [repo_name],
+            "SELECT count(*) FROM main.workspaces WHERE id = ?1",
+            [workspace_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|c| c > 0)
+        .unwrap_or(false);
+
+    if exists {
+        return Ok(ImportAction::Skipped);
+    }
+
+    // Read workspace info from source
+    let (repo_id, directory_name, state): (String, String, String) = conn
+        .query_row(
+            "SELECT repository_id, directory_name, state FROM source.workspaces WHERE id = ?1",
+            [workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .with_context(|| format!("Workspace {workspace_id} not found in Conductor"))?;
+
+    // Read repo name from source
+    let repo_name: String = conn
+        .query_row(
+            "SELECT name FROM source.repos WHERE id = ?1",
+            [&repo_id],
             |row| row.get(0),
         )
-        .with_context(|| format!("Repo '{repo_name}' not found in source database"))?;
+        .with_context(|| format!("Repo {repo_id} not found in Conductor"))?;
 
-    let params: &[&dyn rusqlite::types::ToSql] = &[&repo_id];
+    // 1. Ensure parent repo exists
+    let repo_columns = get_table_columns(conn, "repos")?;
+    let repo_col_list = repo_columns.join(", ");
+    conn.execute(
+        &format!(
+            "INSERT OR IGNORE INTO main.repos ({repo_col_list}) SELECT {repo_col_list} FROM source.repos WHERE id = ?1"
+        ),
+        [&repo_id],
+    )
+    .context("Failed to import repo")?;
 
-    connection
-        .execute(
-            "DELETE FROM attachments WHERE session_id NOT IN (
-                SELECT s.id FROM sessions s
-                JOIN workspaces w ON w.id = s.workspace_id
-                WHERE w.repository_id = ?1
-            )",
-            params,
-        )
-        .context("Filter attachments failed")?;
+    // 2. Insert workspace
+    let ws_columns = get_table_columns(conn, "workspaces")?;
+    let ws_col_list = ws_columns.join(", ");
+    conn.execute(
+        &format!(
+            "INSERT OR IGNORE INTO main.workspaces ({ws_col_list}) SELECT {ws_col_list} FROM source.workspaces WHERE id = ?1"
+        ),
+        [workspace_id],
+    )
+    .context("Failed to import workspace")?;
 
-    connection
-        .execute(
-            "DELETE FROM session_messages WHERE session_id NOT IN (
-                SELECT s.id FROM sessions s
-                JOIN workspaces w ON w.id = s.workspace_id
-                WHERE w.repository_id = ?1
-            )",
-            params,
-        )
-        .context("Filter messages failed")?;
+    // 3. Insert sessions
+    let sess_columns = get_table_columns(conn, "sessions")?;
+    let sess_col_list = sess_columns.join(", ");
+    conn.execute(
+        &format!(
+            "INSERT OR IGNORE INTO main.sessions ({sess_col_list}) SELECT {sess_col_list} FROM source.sessions WHERE workspace_id = ?1"
+        ),
+        [workspace_id],
+    )
+    .context("Failed to import sessions")?;
 
-    connection
-        .execute(
-            "DELETE FROM sessions WHERE workspace_id NOT IN (
-                SELECT id FROM workspaces WHERE repository_id = ?1
-            )",
-            params,
-        )
-        .context("Filter sessions failed")?;
+    // 4. Insert session_messages
+    let msg_columns = get_table_columns(conn, "session_messages")?;
+    let msg_col_list = msg_columns.join(", ");
+    conn.execute(
+        &format!(
+            "INSERT OR IGNORE INTO main.session_messages ({msg_col_list}) \
+             SELECT {msg_col_list} FROM source.session_messages \
+             WHERE session_id IN (SELECT id FROM source.sessions WHERE workspace_id = ?1)"
+        ),
+        [workspace_id],
+    )
+    .context("Failed to import messages")?;
 
-    connection
-        .execute("DELETE FROM workspaces WHERE repository_id != ?1", params)
-        .context("Filter workspaces failed")?;
+    // 5. Insert attachments
+    let att_columns = get_table_columns(conn, "attachments")?;
+    let att_col_list = att_columns.join(", ");
+    conn.execute(
+        &format!(
+            "INSERT OR IGNORE INTO main.attachments ({att_col_list}) \
+             SELECT {att_col_list} FROM source.attachments \
+             WHERE session_id IN (SELECT id FROM source.sessions WHERE workspace_id = ?1)"
+        ),
+        [workspace_id],
+    )
+    .context("Failed to import attachments")?;
 
-    connection
-        .execute("DELETE FROM repos WHERE id != ?1", params)
-        .context("Filter repos failed")?;
+    // 6. Insert diff_comments
+    let dc_columns = get_table_columns(conn, "diff_comments")?;
+    let dc_col_list = dc_columns.join(", ");
+    conn.execute(
+        &format!(
+            "INSERT OR IGNORE INTO main.diff_comments ({dc_col_list}) \
+             SELECT {dc_col_list} FROM source.diff_comments WHERE workspace_id = ?1"
+        ),
+        [workspace_id],
+    )
+    .context("Failed to import diff_comments")?;
+
+    // 7. Filesystem copy + attachment path rewriting
+    if let Some(root) = conductor_root {
+        copy_workspace_context(root, helmor_data_dir, &repo_name, &directory_name, &state)?;
+        rewrite_attachment_paths(conn, workspace_id, root, helmor_data_dir, &repo_name, &directory_name, &state)?;
+    }
+
+    Ok(ImportAction::Imported)
+}
+
+/// Copy workspace context files from Conductor's filesystem to Helmor's.
+fn copy_workspace_context(
+    conductor_root: &std::path::Path,
+    helmor_data_dir: &std::path::Path,
+    repo_name: &str,
+    directory_name: &str,
+    state: &str,
+) -> Result<()> {
+    let (source_dir, dest_dir) = if state == "archived" {
+        // Archived: {root}/archived-contexts/{repo}/{ws}/ -> {helmor}/archived-contexts/{repo}/{ws}/
+        let src = conductor_root
+            .join("archived-contexts")
+            .join(repo_name)
+            .join(directory_name);
+        let dst = helmor_data_dir
+            .join("archived-contexts")
+            .join(repo_name)
+            .join(directory_name);
+        (src, dst)
+    } else {
+        // Active: {root}/workspaces/{repo}/{ws}/.context/ -> {helmor}/workspaces/{repo}/{ws}/.context/
+        let src = conductor_root
+            .join("workspaces")
+            .join(repo_name)
+            .join(directory_name)
+            .join(".context");
+        let dst = helmor_data_dir
+            .join("workspaces")
+            .join(repo_name)
+            .join(directory_name)
+            .join(".context");
+        (src, dst)
+    };
+
+    // Skip if source doesn't exist (context files are optional)
+    if !source_dir.is_dir() {
+        return Ok(());
+    }
+
+    // Skip if destination already exists (don't overwrite)
+    if dest_dir.exists() {
+        return Ok(());
+    }
+
+    // Ensure parent directory exists
+    if let Some(parent) = dest_dir.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+
+    helpers::copy_dir_all(&source_dir, &dest_dir)
+        .with_context(|| format!("Failed to copy context from {}", source_dir.display()))?;
 
     Ok(())
 }
 
-/// Redact token-like settings to avoid leaking secrets.
-fn redact_sensitive_settings(connection: &Connection) -> Result<()> {
-    connection
-        .execute(
-            "UPDATE settings SET value = '[REDACTED]' WHERE lower(key) LIKE '%token%'",
-            [],
-        )
-        .context("Failed to redact settings")?;
+/// Rewrite attachment paths from Conductor locations to Helmor locations.
+fn rewrite_attachment_paths(
+    conn: &Connection,
+    workspace_id: &str,
+    conductor_root: &std::path::Path,
+    helmor_data_dir: &std::path::Path,
+    repo_name: &str,
+    directory_name: &str,
+    state: &str,
+) -> Result<()> {
+    // Conductor attachment paths may point to:
+    //   {root}/workspaces/{repo}/{ws}/.context/attachments/...
+    // Even for archived workspaces (paths are not rewritten on archive).
+    // We also handle the case where they were rewritten to archived-contexts.
+
+    let conductor_ws_prefix = conductor_root
+        .join("workspaces")
+        .join(repo_name)
+        .join(directory_name)
+        .join(".context");
+    let conductor_archive_prefix = conductor_root
+        .join("archived-contexts")
+        .join(repo_name)
+        .join(directory_name);
+
+    let helmor_prefix = if state == "archived" {
+        helmor_data_dir
+            .join("archived-contexts")
+            .join(repo_name)
+            .join(directory_name)
+    } else {
+        helmor_data_dir
+            .join("workspaces")
+            .join(repo_name)
+            .join(directory_name)
+            .join(".context")
+    };
+
+    let helmor_prefix_str = helmor_prefix.to_string_lossy();
+    let conductor_ws_str = conductor_ws_prefix.to_string_lossy();
+    let conductor_archive_str = conductor_archive_prefix.to_string_lossy();
+
+    // Rewrite active-workspace paths
+    conn.execute(
+        r#"
+        UPDATE main.attachments
+        SET path = REPLACE(path, ?1, ?2)
+        WHERE session_id IN (
+            SELECT id FROM main.sessions WHERE workspace_id = ?3
+        ) AND path LIKE ?4
+        "#,
+        rusqlite::params![
+            conductor_ws_str.as_ref(),
+            helmor_prefix_str.as_ref(),
+            workspace_id,
+            format!("{}%", conductor_ws_str),
+        ],
+    )
+    .context("Failed to rewrite workspace attachment paths")?;
+
+    // Rewrite archived-context paths
+    conn.execute(
+        r#"
+        UPDATE main.attachments
+        SET path = REPLACE(path, ?1, ?2)
+        WHERE session_id IN (
+            SELECT id FROM main.sessions WHERE workspace_id = ?3
+        ) AND path LIKE ?4
+        "#,
+        rusqlite::params![
+            conductor_archive_str.as_ref(),
+            helmor_prefix_str.as_ref(),
+            workspace_id,
+            format!("{}%", conductor_archive_str),
+        ],
+    )
+    .context("Failed to rewrite archived attachment paths")?;
+
     Ok(())
 }
 
-fn count_rows(connection: &Connection, table: &str) -> Result<i64> {
-    connection
-        .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
-            row.get(0)
-        })
-        .with_context(|| format!("Failed to count {table}"))
-}
-
-/// Merge Conductor data into Helmor without replacing existing records.
-///
-/// Uses ATTACH DATABASE + INSERT OR IGNORE: only adds records that
-/// don't already exist in Helmor (matched by primary key).
-/// Existing Helmor data is never modified or deleted.
-pub fn merge_from_conductor() -> Result<ImportResult> {
+/// Open the Helmor DB and attach Conductor DB as `source`.
+fn open_with_conductor_attached() -> Result<(Connection, String)> {
     let source_path = crate::data_dir::conductor_source_db_path()
         .context("Conductor database not found")?;
     let source_display = source_path.display().to_string();
     let dest_path = crate::data_dir::db_path()?;
 
-    let connection = Connection::open_with_flags(
+    let conn = Connection::open_with_flags(
         &dest_path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .context("Failed to open Helmor database")?;
 
-    connection
-        .busy_timeout(std::time::Duration::from_secs(5))
+    conn.busy_timeout(std::time::Duration::from_secs(5))
         .context("Failed to set busy timeout")?;
 
-    // Attach the Conductor DB as a read-only source
-    connection
-        .execute(
-            "ATTACH DATABASE ?1 AS source",
-            [source_path.to_string_lossy().as_ref()],
-        )
-        .context("Failed to attach Conductor database")?;
+    conn.execute(
+        "ATTACH DATABASE ?1 AS source",
+        [source_path.to_string_lossy().as_ref()],
+    )
+    .context("Failed to attach Conductor database")?;
 
-    // All merges inside a single transaction for atomicity
-    connection
-        .execute_batch("BEGIN IMMEDIATE")
-        .context("Failed to start transaction")?;
-
-    let merge_result = (|| -> Result<()> {
-        let tables = [
-            "repos",
-            "workspaces",
-            "sessions",
-            "session_messages",
-            "attachments",
-            "diff_comments",
-            "settings",
-        ];
-
-        for table in &tables {
-            let columns = get_table_columns(&connection, table)?;
-            let col_list = columns.join(", ");
-
-            // For settings: redact tokens in the SELECT so we never write
-            // sensitive values into Helmor. Existing Helmor settings are
-            // untouched because of INSERT OR IGNORE.
-            let select = if *table == "settings" {
-                format!(
-                    "SELECT {col_list} FROM (
-                        SELECT *, CASE WHEN lower(key) LIKE '%token%' THEN '[REDACTED]' ELSE value END AS value
-                        FROM source.{table}
-                    )"
-                )
-            } else {
-                format!("SELECT {col_list} FROM source.{table}")
-            };
-
-            connection
-                .execute(&format!("INSERT OR IGNORE INTO main.{table} ({col_list}) {select}"), [])
-                .with_context(|| format!("Failed to merge {table}"))?;
-        }
-
-        Ok(())
-    })();
-
-    if let Err(error) = merge_result {
-        let _ = connection.execute_batch("ROLLBACK");
-        let _ = connection.execute("DETACH DATABASE source", []);
-        return Err(error);
-    }
-
-    connection
-        .execute_batch("COMMIT")
-        .context("Failed to commit")?;
-
-    connection
-        .execute("DETACH DATABASE source", [])
-        .context("Failed to detach")?;
-
-    let repos_count = count_rows(&connection, "repos")?;
-    let workspaces_count = count_rows(&connection, "workspaces")?;
-    let sessions_count = count_rows(&connection, "sessions")?;
-    let messages_count = count_rows(&connection, "session_messages")?;
-
-    Ok(ImportResult {
-        success: true,
-        source_path: source_display,
-        repos_count,
-        workspaces_count,
-        sessions_count,
-        messages_count,
-    })
+    Ok((conn, source_display))
 }
 
 /// Get column names for a table (from the main schema).
-fn get_table_columns(connection: &Connection, table: &str) -> Result<Vec<String>> {
-    let mut stmt = connection
+fn get_table_columns(conn: &Connection, table: &str) -> Result<Vec<String>> {
+    let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({table})"))
         .with_context(|| format!("Failed to get columns for {table}"))?;
 
@@ -326,77 +532,103 @@ fn get_table_columns(connection: &Connection, table: &str) -> Result<Vec<String>
     Ok(columns)
 }
 
-/// Check if the Conductor database is available for import.
-pub fn conductor_source_available() -> bool {
-    crate::data_dir::conductor_source_db_path().is_some()
-}
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn setup_test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::ensure_schema(&conn).unwrap();
+        conn
+    }
+
     #[test]
-    fn filter_to_repo_deletes_unrelated_data() {
-        let source = Connection::open_in_memory().unwrap();
-        crate::schema::ensure_schema(&source).unwrap();
+    fn import_single_workspace_inserts_cascade() {
+        let conn = setup_test_db();
 
-        // Insert two repos
-        source.execute("INSERT INTO repos (id, name) VALUES ('r1', 'keep-me')", []).unwrap();
-        source.execute("INSERT INTO repos (id, name) VALUES ('r2', 'delete-me')", []).unwrap();
-        source.execute("INSERT INTO workspaces (id, repository_id, directory_name) VALUES ('w1', 'r1', 'd1')", []).unwrap();
-        source.execute("INSERT INTO workspaces (id, repository_id, directory_name) VALUES ('w2', 'r2', 'd2')", []).unwrap();
-        source.execute("INSERT INTO sessions (id, workspace_id) VALUES ('s1', 'w1')", []).unwrap();
-        source.execute("INSERT INTO sessions (id, workspace_id) VALUES ('s2', 'w2')", []).unwrap();
-        source.execute("INSERT INTO session_messages (id, session_id, role, content) VALUES ('m1', 's1', 'user', 'hi')", []).unwrap();
-        source.execute("INSERT INTO session_messages (id, session_id, role, content) VALUES ('m2', 's2', 'user', 'bye')", []).unwrap();
+        // Create a "source" schema in the same in-memory DB for testing
+        conn.execute_batch(
+            r#"
+            ATTACH DATABASE ':memory:' AS source;
+            CREATE TABLE source.repos AS SELECT * FROM main.repos WHERE 0;
+            CREATE TABLE source.workspaces AS SELECT * FROM main.workspaces WHERE 0;
+            CREATE TABLE source.sessions AS SELECT * FROM main.sessions WHERE 0;
+            CREATE TABLE source.session_messages AS SELECT * FROM main.session_messages WHERE 0;
+            CREATE TABLE source.attachments AS SELECT * FROM main.attachments WHERE 0;
+            CREATE TABLE source.diff_comments AS SELECT * FROM main.diff_comments WHERE 0;
 
-        filter_to_repo(&source, "keep-me").unwrap();
+            INSERT INTO source.repos (id, name, created_at, updated_at) VALUES ('r1', 'my-repo', datetime('now'), datetime('now'));
+            INSERT INTO source.workspaces (id, repository_id, directory_name, state, created_at, updated_at) VALUES ('w1', 'r1', 'boston', 'ready', datetime('now'), datetime('now'));
+            INSERT INTO source.sessions (id, workspace_id, created_at, updated_at) VALUES ('s1', 'w1', datetime('now'), datetime('now'));
+            INSERT INTO source.sessions (id, workspace_id, created_at, updated_at) VALUES ('s2', 'w1', datetime('now'), datetime('now'));
+            INSERT INTO source.session_messages (id, session_id, role, content, created_at) VALUES ('m1', 's1', 'user', 'hello', datetime('now'));
+            INSERT INTO source.session_messages (id, session_id, role, content, created_at) VALUES ('m2', 's2', 'user', 'world', datetime('now'));
+            INSERT INTO source.attachments (id, session_id, type, path, created_at) VALUES ('a1', 's1', 'image', '/old/path/img.png', datetime('now'));
+            INSERT INTO source.diff_comments (id, workspace_id, body, created_at) VALUES ('dc1', 'w1', 'comment', 1000);
+            "#,
+        )
+        .unwrap();
 
-        let repo_count: i64 = source.query_row("SELECT count(*) FROM repos", [], |r| r.get(0)).unwrap();
-        let ws_count: i64 = source.query_row("SELECT count(*) FROM workspaces", [], |r| r.get(0)).unwrap();
-        let sess_count: i64 = source.query_row("SELECT count(*) FROM sessions", [], |r| r.get(0)).unwrap();
-        let msg_count: i64 = source.query_row("SELECT count(*) FROM session_messages", [], |r| r.get(0)).unwrap();
+        let result = import_single_workspace(&conn, "w1", None, std::path::Path::new("/tmp"));
+        assert!(matches!(result.unwrap(), ImportAction::Imported));
+
+        // Verify cascade
+        let repo_count: i64 = conn.query_row("SELECT count(*) FROM main.repos", [], |r| r.get(0)).unwrap();
+        let ws_count: i64 = conn.query_row("SELECT count(*) FROM main.workspaces", [], |r| r.get(0)).unwrap();
+        let sess_count: i64 = conn.query_row("SELECT count(*) FROM main.sessions", [], |r| r.get(0)).unwrap();
+        let msg_count: i64 = conn.query_row("SELECT count(*) FROM main.session_messages", [], |r| r.get(0)).unwrap();
+        let att_count: i64 = conn.query_row("SELECT count(*) FROM main.attachments", [], |r| r.get(0)).unwrap();
+        let dc_count: i64 = conn.query_row("SELECT count(*) FROM main.diff_comments", [], |r| r.get(0)).unwrap();
 
         assert_eq!(repo_count, 1);
         assert_eq!(ws_count, 1);
-        assert_eq!(sess_count, 1);
-        assert_eq!(msg_count, 1);
+        assert_eq!(sess_count, 2);
+        assert_eq!(msg_count, 2);
+        assert_eq!(att_count, 1);
+        assert_eq!(dc_count, 1);
     }
 
     #[test]
-    fn filter_to_repo_errors_on_unknown_repo() {
-        let source = Connection::open_in_memory().unwrap();
-        crate::schema::ensure_schema(&source).unwrap();
+    fn import_single_workspace_skips_existing() {
+        let conn = setup_test_db();
 
-        let result = filter_to_repo(&source, "nonexistent");
-        assert!(result.is_err());
+        conn.execute_batch(
+            r#"
+            INSERT INTO main.repos (id, name) VALUES ('r1', 'my-repo');
+            INSERT INTO main.workspaces (id, repository_id, directory_name) VALUES ('w1', 'r1', 'boston');
+
+            ATTACH DATABASE ':memory:' AS source;
+            CREATE TABLE source.repos AS SELECT * FROM main.repos WHERE 0;
+            CREATE TABLE source.workspaces AS SELECT * FROM main.workspaces WHERE 0;
+            CREATE TABLE source.sessions AS SELECT * FROM main.sessions WHERE 0;
+            CREATE TABLE source.session_messages AS SELECT * FROM main.session_messages WHERE 0;
+            CREATE TABLE source.attachments AS SELECT * FROM main.attachments WHERE 0;
+            CREATE TABLE source.diff_comments AS SELECT * FROM main.diff_comments WHERE 0;
+
+            INSERT INTO source.repos (id, name, created_at, updated_at) VALUES ('r1', 'my-repo', datetime('now'), datetime('now'));
+            INSERT INTO source.workspaces (id, repository_id, directory_name, state, created_at, updated_at) VALUES ('w1', 'r1', 'boston', 'ready', datetime('now'), datetime('now'));
+            INSERT INTO source.sessions (id, workspace_id, created_at, updated_at) VALUES ('s1', 'w1', datetime('now'), datetime('now'));
+            "#,
+        )
+        .unwrap();
+
+        let result = import_single_workspace(&conn, "w1", None, std::path::Path::new("/tmp"));
+        assert!(matches!(result.unwrap(), ImportAction::Skipped));
+
+        // No sessions should have been imported
+        let sess_count: i64 = conn.query_row("SELECT count(*) FROM main.sessions", [], |r| r.get(0)).unwrap();
+        assert_eq!(sess_count, 0);
     }
 
     #[test]
-    fn redact_sensitive_settings_removes_tokens() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::ensure_schema(&conn).unwrap();
-
-        conn.execute("INSERT INTO settings (key, value) VALUES ('api_token', 'secret123')", []).unwrap();
-        conn.execute("INSERT INTO settings (key, value) VALUES ('username', 'john')", []).unwrap();
-
-        redact_sensitive_settings(&conn).unwrap();
-
-        let token: String = conn.query_row("SELECT value FROM settings WHERE key = 'api_token'", [], |r| r.get(0)).unwrap();
-        let username: String = conn.query_row("SELECT value FROM settings WHERE key = 'username'", [], |r| r.get(0)).unwrap();
-
-        assert_eq!(token, "[REDACTED]");
-        assert_eq!(username, "john");
-    }
-
-    #[test]
-    fn count_rows_works() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::ensure_schema(&conn).unwrap();
-
-        assert_eq!(count_rows(&conn, "repos").unwrap(), 0);
-
-        conn.execute("INSERT INTO repos (id, name) VALUES ('r1', 'test')", []).unwrap();
-        assert_eq!(count_rows(&conn, "repos").unwrap(), 1);
+    fn get_table_columns_works() {
+        let conn = setup_test_db();
+        let cols = get_table_columns(&conn, "repos").unwrap();
+        assert!(cols.contains(&"id".to_string()));
+        assert!(cols.contains(&"name".to_string()));
     }
 }

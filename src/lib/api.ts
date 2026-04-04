@@ -762,25 +762,35 @@ export async function listenAgentStream(
 }
 
 // ---------------------------------------------------------------------------
-// Conductor sync (merge)
+// Conductor import
 // ---------------------------------------------------------------------------
 
-export type ImportResult = {
-  success: boolean;
-  sourcePath: string;
-  reposCount: number;
-  workspacesCount: number;
-  sessionsCount: number;
-  messagesCount: number;
+export type ConductorRepo = {
+  id: string;
+  name: string;
+  remoteUrl: string | null;
+  workspaceCount: number;
+  alreadyImportedCount: number;
 };
 
-export async function mergeFromConductor(): Promise<ImportResult> {
-  const inv = await getTauriInvoke();
-  if (!inv) {
-    throw new Error("Conductor sync is only available in the Tauri desktop runtime.");
-  }
-  return inv<ImportResult>("merge_from_conductor");
-}
+export type ConductorWorkspace = {
+  id: string;
+  directoryName: string;
+  state: string;
+  branch: string | null;
+  derivedStatus: string | null;
+  prTitle: string | null;
+  sessionCount: number;
+  messageCount: number;
+  alreadyImported: boolean;
+};
+
+export type ImportWorkspacesResult = {
+  success: boolean;
+  importedCount: number;
+  skippedCount: number;
+  errors: string[];
+};
 
 export async function isConductorAvailable(): Promise<boolean> {
   const inv = await getTauriInvoke();
@@ -790,6 +800,26 @@ export async function isConductorAvailable(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export async function listConductorRepos(): Promise<ConductorRepo[]> {
+  const inv = await getTauriInvoke();
+  if (!inv) return [];
+  return inv<ConductorRepo[]>("list_conductor_repos");
+}
+
+export async function listConductorWorkspaces(repoId: string): Promise<ConductorWorkspace[]> {
+  const inv = await getTauriInvoke();
+  if (!inv) return [];
+  return inv<ConductorWorkspace[]>("list_conductor_workspaces", { repoId });
+}
+
+export async function importConductorWorkspaces(workspaceIds: string[]): Promise<ImportWorkspacesResult> {
+  const inv = await getTauriInvoke();
+  if (!inv) {
+    throw new Error("Conductor import is only available in the Tauri desktop runtime.");
+  }
+  return inv<ImportWorkspacesResult>("import_conductor_workspaces", { workspaceIds });
 }
 
 // ---------------------------------------------------------------------------

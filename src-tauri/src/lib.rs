@@ -55,9 +55,10 @@ pub fn run() {
             models::mark_workspace_read,
             models::mark_workspace_unread,
             models::restore_workspace,
-            models::import_from_conductor,
-            models::merge_from_conductor,
-            models::conductor_source_available
+            models::conductor_source_available,
+            models::list_conductor_repos,
+            models::list_conductor_workspaces,
+            models::import_conductor_workspaces
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

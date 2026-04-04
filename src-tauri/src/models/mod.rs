@@ -37,18 +37,23 @@ pub fn get_data_info() -> CmdResult<DataInfo> {
 }
 
 #[tauri::command]
-pub fn import_from_conductor(repo_filter: Option<String>) -> CmdResult<crate::import::ImportResult> {
-    Ok(crate::import::import_from_conductor(repo_filter.as_deref())?)
-}
-
-#[tauri::command]
-pub fn merge_from_conductor() -> CmdResult<crate::import::ImportResult> {
-    Ok(crate::import::merge_from_conductor()?)
-}
-
-#[tauri::command]
 pub fn conductor_source_available() -> bool {
     crate::import::conductor_source_available()
+}
+
+#[tauri::command]
+pub fn list_conductor_repos() -> CmdResult<Vec<crate::import::ConductorRepo>> {
+    Ok(crate::import::list_conductor_repos()?)
+}
+
+#[tauri::command]
+pub fn list_conductor_workspaces(repo_id: String) -> CmdResult<Vec<crate::import::ConductorWorkspace>> {
+    Ok(crate::import::list_conductor_workspaces(&repo_id)?)
+}
+
+#[tauri::command]
+pub fn import_conductor_workspaces(workspace_ids: Vec<String>) -> CmdResult<crate::import::ImportWorkspacesResult> {
+    Ok(crate::import::import_conductor_workspaces(&workspace_ids)?)
 }
 
 #[tauri::command]

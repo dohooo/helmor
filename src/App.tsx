@@ -10,7 +10,7 @@ import {
   useState,
   useCallback,
 } from "react";
-import { Moon, Sun, RefreshCw } from "lucide-react";
+import { Download, Moon, Sun } from "lucide-react";
 import {
   DEFAULT_AGENT_MODEL_SECTIONS,
   DEFAULT_WORKSPACE_GROUPS,
@@ -32,7 +32,6 @@ import {
   restoreWorkspace,
   sendAgentMessage,
   startAgentMessageStream,
-  mergeFromConductor,
   isConductorAvailable,
   type AgentModelOption,
   type AgentModelSection,
@@ -47,6 +46,7 @@ import {
 } from "./lib/api";
 import { StreamAccumulator } from "./lib/stream-accumulator";
 import { WorkspacesSidebar } from "./components/workspaces-sidebar";
+import { ConductorImportDialog } from "./components/conductor-import-dialog";
 import { WorkspacePanel } from "./components/workspace-panel";
 import { WorkspaceComposer } from "./components/workspace-composer";
 import { ShimmerText } from "./components/ui/shimmer-text";
@@ -154,7 +154,13 @@ function App() {
     if (typeof window === "undefined") return "dark";
     return (localStorage.getItem("helmor.theme") as "light" | "dark") ?? "dark";
   });
+  const [conductorAvailable, setConductorAvailable] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const isResizing = resizeState !== null;
+
+  useEffect(() => {
+    void isConductorAvailable().then(setConductorAvailable);
+  }, []);
 
   const toggleTheme = useCallback(() => {
     setTheme((t) => {
@@ -1096,7 +1102,17 @@ function App() {
           />
 
           <div className="absolute right-4 top-[0.55rem] z-30 flex items-center gap-1">
-            <SyncConductorButton onSynced={refreshAllData} />
+            {conductorAvailable && (
+              <button
+                type="button"
+                aria-label="Import from Conductor"
+                onClick={() => setImportDialogOpen(true)}
+                title="Import workspaces from Conductor"
+                className="flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
+              >
+                <Download className="size-3.5" strokeWidth={1.8} />
+              </button>
+            )}
             <button
               type="button"
               aria-label="Toggle theme"
@@ -1182,6 +1198,11 @@ function App() {
             <ToastClose aria-label="Dismiss notification" />
           </Toast>
         ))}
+      <ConductorImportDialog
+        open={importDialogOpen}
+        onClose={() => setImportDialogOpen(false)}
+        onImported={refreshAllData}
+      />
       </main>
     </ToastProvider>
   );
@@ -1442,45 +1463,6 @@ function haveSameLiveMessages(
       && message.createdAt === nextMessage.createdAt
     );
   });
-}
-
-function SyncConductorButton({ onSynced }: { onSynced: () => void }) {
-  const [syncing, setSyncing] = useState(false);
-  const [available, setAvailable] = useState(false);
-
-  useEffect(() => {
-    void isConductorAvailable().then(setAvailable);
-  }, []);
-
-  const handleSync = useCallback(async () => {
-    if (syncing) return;
-    setSyncing(true);
-    try {
-      const result = await mergeFromConductor();
-      if (result.success) {
-        onSynced();
-      }
-    } catch {
-      // Sync failed — no user-visible action needed beyond stopping the spinner
-    } finally {
-      setSyncing(false);
-    }
-  }, [syncing, onSynced]);
-
-  if (!available) return null;
-
-  return (
-    <button
-      type="button"
-      aria-label="Sync from Conductor"
-      onClick={handleSync}
-      disabled={syncing}
-      title="Merge data from Conductor"
-      className="flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground disabled:opacity-40"
-    >
-      <RefreshCw className={`size-3.5 ${syncing ? "animate-spin" : ""}`} strokeWidth={1.8} />
-    </button>
-  );
 }
 
 export default App;
