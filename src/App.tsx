@@ -92,6 +92,13 @@ type WorkspaceToast = {
 	title: string;
 	description: string;
 	variant?: "default" | "destructive";
+	action?: {
+		label: string;
+		onClick: () => void;
+		destructive?: boolean;
+	};
+	/** If true, toast stays until manually dismissed (no auto-close) */
+	persistent?: boolean;
 };
 
 type GithubIdentityState =
@@ -319,6 +326,10 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			description: string,
 			title = "Action failed",
 			variant: "default" | "destructive" = "destructive",
+			opts?: {
+				action?: WorkspaceToast["action"];
+				persistent?: boolean;
+			},
 		) => {
 			setWorkspaceToasts((current) => [
 				...current,
@@ -327,6 +338,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 					title,
 					description,
 					variant,
+					action: opts?.action,
+					persistent: opts?.persistent,
 				},
 			]);
 		},
@@ -1044,18 +1057,65 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 					key={toast.id}
 					open
 					variant={toast.variant ?? "destructive"}
-					duration={4200}
+					duration={toast.persistent ? 999999999 : 4200}
 					onOpenChange={(open: boolean) => {
 						if (!open) {
 							dismissWorkspaceToast(toast.id);
 						}
 					}}
+					className={
+						toast.action
+							? "flex-col items-stretch gap-0 rounded-xl border border-app-border bg-app-sidebar p-0 shadow-xl"
+							: undefined
+					}
 				>
-					<div className="grid gap-1">
-						<ToastTitle>{toast.title}</ToastTitle>
-						<ToastDescription>{toast.description}</ToastDescription>
-					</div>
-					<ToastClose aria-label="Dismiss notification" />
+					{toast.action ? (
+						<>
+							<div className="px-4 pt-4 pb-3">
+								<ToastTitle className="text-[13px] font-semibold text-app-foreground">
+									{toast.title}
+								</ToastTitle>
+								<ToastDescription className="mt-1.5 text-[12px] leading-relaxed text-app-muted">
+									{toast.description}
+								</ToastDescription>
+							</div>
+							<div className="flex items-center justify-end gap-2 border-t border-app-border/50 px-3 py-2.5">
+								<button
+									type="button"
+									onClick={() => dismissWorkspaceToast(toast.id)}
+									className="rounded-md px-3 py-1.5 text-[12px] font-medium text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.06]"
+								>
+									Dismiss
+								</button>
+								<button
+									type="button"
+									onClick={() => {
+										toast.action?.onClick();
+										dismissWorkspaceToast(toast.id);
+									}}
+									className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors ${
+										toast.action.destructive
+											? "bg-red-500 text-white hover:bg-red-600"
+											: "bg-app-foreground/10 text-app-foreground hover:bg-app-foreground/20"
+									}`}
+								>
+									{toast.action.label}
+								</button>
+							</div>
+							<ToastClose
+								aria-label="Dismiss notification"
+								className="absolute right-2 top-2"
+							/>
+						</>
+					) : (
+						<>
+							<div className="grid gap-1">
+								<ToastTitle>{toast.title}</ToastTitle>
+								<ToastDescription>{toast.description}</ToastDescription>
+							</div>
+							<ToastClose aria-label="Dismiss notification" />
+						</>
+					)}
 				</Toast>
 			))}
 			<ConductorImportDialog

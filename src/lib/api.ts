@@ -1360,6 +1360,14 @@ export async function archiveWorkspace(
 	});
 }
 
+export async function permanentlyDeleteWorkspace(
+	workspaceId: string,
+): Promise<void> {
+	const invoke = await getTauriInvoke();
+	if (!invoke) return;
+	await invoke("permanently_delete_workspace", { workspaceId });
+}
+
 export async function createWorkspaceFromRepo(
 	repoId: string,
 ): Promise<CreateWorkspaceResponse> {

@@ -1086,6 +1086,79 @@ fn delete_workspace_and_session_rows(workspace_id: &str, session_id: &str) -> Re
         .context("Failed to commit create cleanup transaction")
 }
 
+/// Permanently delete a workspace and all its data (sessions, messages,
+/// attachments, diff_comments) from the database, plus any filesystem
+/// artifacts (worktree directory, archived context).
+pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
+    let mut connection = db::open_connection(true)?;
+
+    // Load workspace info for filesystem cleanup
+    let record: Option<(String, String, String)> = connection
+        .query_row(
+            "SELECT r.name, w.directory_name, w.state FROM workspaces w JOIN repos r ON r.id = w.repository_id WHERE w.id = ?1",
+            [workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .ok();
+
+    // Delete all DB records in a transaction
+    let transaction = connection
+        .transaction()
+        .context("Failed to start delete workspace transaction")?;
+
+    transaction
+        .execute(
+            "DELETE FROM diff_comments WHERE workspace_id = ?1",
+            [workspace_id],
+        )
+        .ok();
+    transaction.execute(
+        "DELETE FROM attachments WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
+        [workspace_id],
+    ).ok();
+    transaction.execute(
+        "DELETE FROM session_messages WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
+        [workspace_id],
+    ).ok();
+    transaction
+        .execute(
+            "DELETE FROM sessions WHERE workspace_id = ?1",
+            [workspace_id],
+        )
+        .ok();
+    transaction
+        .execute("DELETE FROM workspaces WHERE id = ?1", [workspace_id])
+        .ok();
+
+    transaction
+        .commit()
+        .context("Failed to commit delete workspace transaction")?;
+
+    // Filesystem cleanup (best-effort)
+    if let Some((repo_name, directory_name, state)) = record {
+        // Remove worktree directory
+        if let Ok(ws_dir) = crate::data_dir::workspace_dir(&repo_name, &directory_name) {
+            if ws_dir.is_dir() {
+                std::fs::remove_dir_all(&ws_dir).ok();
+            }
+        }
+        // Remove archived context
+        if state == "archived" {
+            if let Ok(data_dir) = crate::data_dir::data_dir() {
+                let archived = data_dir
+                    .join("archived-contexts")
+                    .join(&repo_name)
+                    .join(&directory_name);
+                if archived.is_dir() {
+                    std::fs::remove_dir_all(&archived).ok();
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn update_archived_workspace_state(workspace_id: &str, archive_commit: &str) -> Result<()> {
     let mut connection = db::open_connection(true)?;
     let transaction = connection

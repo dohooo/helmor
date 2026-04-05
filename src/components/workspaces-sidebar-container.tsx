@@ -8,6 +8,7 @@ import {
 	loadAddRepositoryDefaults,
 	markWorkspaceRead,
 	markWorkspaceUnread,
+	permanentlyDeleteWorkspace,
 	restoreWorkspace,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
@@ -40,6 +41,10 @@ type WorkspacesSidebarContainerProps = {
 		description: string,
 		title?: string,
 		variant?: WorkspaceToastVariant,
+		opts?: {
+			action?: { label: string; onClick: () => void; destructive?: boolean };
+			persistent?: boolean;
+		},
 	) => void;
 };
 
@@ -564,9 +569,47 @@ export const WorkspacesSidebarContainer = memo(
 					}
 					onSelectWorkspace(nextWorkspaceId);
 				} catch (error) {
-					pushWorkspaceToast(
-						describeUnknownError(error, "Unable to archive workspace."),
+					const msg = describeUnknownError(
+						error,
+						"Unable to archive workspace.",
 					);
+					if (msg.includes("missing")) {
+						pushWorkspaceToast(msg, "Archive failed", "destructive", {
+							persistent: true,
+							action: {
+								label: "Permanently Delete",
+								destructive: true,
+								onClick: () => {
+									void (async () => {
+										try {
+											await permanentlyDeleteWorkspace(workspaceId);
+											const { loadedGroups, loadedArchived } =
+												await refetchNavigation();
+											const nextWorkspaceId =
+												findInitialWorkspaceId(loadedGroups) ??
+												loadedArchived[0]?.id ??
+												null;
+											onSelectWorkspace(nextWorkspaceId);
+											pushWorkspaceToast(
+												"Workspace permanently deleted.",
+												"Done",
+												"default",
+											);
+										} catch (deleteError) {
+											pushWorkspaceToast(
+												describeUnknownError(
+													deleteError,
+													"Unable to delete workspace.",
+												),
+											);
+										}
+									})();
+								},
+							},
+						});
+					} else {
+						pushWorkspaceToast(msg);
+					}
 				} finally {
 					setArchivingWorkspaceId(null);
 				}

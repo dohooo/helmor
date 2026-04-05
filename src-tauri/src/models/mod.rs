@@ -310,6 +310,15 @@ pub fn archive_workspace(workspace_id: String) -> CmdResult<workspaces::ArchiveW
     Ok(workspaces::archive_workspace_impl(&workspace_id)?)
 }
 
+#[tauri::command]
+pub fn permanently_delete_workspace(workspace_id: String) -> CmdResult<()> {
+    let _lock = db::WORKSPACE_MUTATION_LOCK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
+
+    Ok(workspaces::permanently_delete_workspace(&workspace_id)?)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

@@ -805,18 +805,23 @@ mod tests {
         )
         .unwrap();
 
-        // r1 should still be able to pick "mercury" — names are per-repo
-        let mut found_mercury = false;
-        for _ in 0..50 {
-            let name = allocate_directory_name_with_conn(&conn, "r1").unwrap();
-            if name == "mercury" {
-                found_mercury = true;
-                break;
+        // Use all names EXCEPT "mercury" in r1 — forces the only possible pick
+        for name in WORKSPACE_NAMES {
+            if *name == "mercury" {
+                continue;
             }
+            conn.execute(
+                "INSERT INTO workspaces (id, repository_id, directory_name) VALUES (?1, 'r1', ?2)",
+                [&uuid::Uuid::new_v4().to_string(), &name.to_string()],
+            )
+            .unwrap();
         }
-        assert!(
-            found_mercury,
-            "'mercury' should be available for r1 since it's only used in r2"
+
+        // r1's only available name is "mercury" — even though r2 uses it
+        let name = allocate_directory_name_with_conn(&conn, "r1").unwrap();
+        assert_eq!(
+            name, "mercury",
+            "Names are per-repo, so r1 can still use 'mercury'"
         );
     }
 }
