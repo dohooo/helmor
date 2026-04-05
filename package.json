@@ -13,7 +13,8 @@
 		"tauri": "tauacri",
 		"tauri:debug": "HELMOR_SIDECAR_DEBUG=1 tauri dev",
 		"lint": "biome check . --config-path=./biome.json",
-		"lint:fix": "biome check . --write --config-path=./biome.json"
+		"lint:fix": "biome check . --write --config-path=./biome.json",
+		"prepare": "husky"
 	},
 	"dependencies": {
 		"@base-ui/react": "^1.3.0",
@@ -50,10 +51,20 @@
 		"@types/react": "19.2.14",
 		"@types/react-dom": "19.2.3",
 		"@vitejs/plugin-react": "6.0.1",
+		"husky": "^9.1.7",
 		"jsdom": "29.0.1",
+		"lint-staged": "^16.4.0",
 		"tailwindcss": "4.2.2",
 		"typescript": "6.0.2",
 		"vite": "8.0.3",
 		"vitest": "4.1.2"
+	},
+	"lint-staged": {
+		"*.{ts,tsx,js,jsx,json,css}": [
+			"biome check --write --error-on-warnings --no-errors-on-unmatched --files-ignore-unknown=true --config-path=./biome.json"
+		],
+		"*.rs": [
+			"cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings"
+		]
 	}
 }
