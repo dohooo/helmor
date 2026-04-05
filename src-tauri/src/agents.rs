@@ -28,7 +28,7 @@ pub enum AgentStreamEvent {
         resolved_model: String,
         session_id: Option<String>,
         working_directory: String,
-        persisted_to_fixture: bool,
+        persisted: bool,
     },
     Error {
         message: String,
@@ -281,27 +281,44 @@ fn stream_via_sidecar(
         );
     }
 
-    // Resolve session ID for resume from DB if not provided by frontend
+    // Resolve session ID for resume from DB if not provided by frontend.
+    // Only resume if the stored session was created by the SAME provider —
+    // Claude session IDs are incompatible with Codex thread IDs.
     let resume_session_id = request
         .session_id
         .clone()
         .or_else(|| {
-            request.helmor_session_id.as_deref().and_then(|csid| {
+            request.helmor_session_id.as_deref().and_then(|hsid| {
                 let conn = open_write_connection().ok()?;
-                conn.query_row(
-                    "SELECT provider_session_id FROM sessions WHERE id = ?1",
-                    [csid],
-                    |row| row.get::<_, Option<String>>(0),
-                )
-                .ok()
-                .flatten()
+                let (stored_sid, stored_provider): (Option<String>, Option<String>) = conn
+                    .query_row(
+                        "SELECT provider_session_id, agent_type FROM sessions WHERE id = ?1",
+                        [hsid],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .ok()?;
+
+                let sid = stored_sid?;
+                let stored_provider = stored_provider.unwrap_or_default();
+
+                if stored_provider == model.provider {
+                    Some(sid)
+                } else {
+                    if debug {
+                        eprintln!(
+                            "[agents:debug] Skipping resume — stored provider={stored_provider}, requested={}",
+                            model.provider
+                        );
+                    }
+                    None
+                }
             })
         });
 
     if debug {
         eprintln!(
-            "[agents:debug] resume_session_id={:?} helmor_session_id={:?}",
-            resume_session_id, request.helmor_session_id
+            "[agents:debug] resume_session_id={:?} helmor_session_id={:?} provider={}",
+            resume_session_id, request.helmor_session_id, model.provider
         );
     }
 
@@ -392,7 +409,7 @@ fn stream_via_sidecar(
                                 resolved_session_id.as_deref(),
                                 model_copy.cli_model,
                             ) {
-                                if persist_exchange_to_fixture(
+                                if persist_exchange(
                                     hsid,
                                     &prompt_copy,
                                     &model_copy,
@@ -420,7 +437,7 @@ fn stream_via_sidecar(
                             resolved_model: model_copy.cli_model.to_string(),
                             session_id: resolved_session_id.clone(),
                             working_directory: working_dir_str.clone(),
-                            persisted_to_fixture: persisted,
+                            persisted,
                         },
                     );
                     break;
@@ -656,10 +673,12 @@ fn parse_codex_output(
 ) -> Result<ParsedAgentOutput> {
     let mut session_id = fallback_session_id.map(str::to_string);
     let mut assistant_chunks = Vec::new();
+    let mut turns: Vec<CollectedTurn> = Vec::new();
     let mut usage = AgentUsage {
         input_tokens: None,
         output_tokens: None,
     };
+    let mut result_json: Option<String> = None;
 
     for line in stdout
         .lines()
@@ -677,11 +696,17 @@ fn parse_codex_output(
         match value.get("type").and_then(Value::as_str) {
             Some("item.completed") => {
                 if let Some(item) = value.get("item") {
-                    if item.get("type").and_then(Value::as_str) == Some("agent_message") {
+                    let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
+                    if item_type == "agent_message" {
                         if let Some(text) = item.get("text").and_then(Value::as_str) {
                             assistant_chunks.push(text.to_string());
                         }
                     }
+                    // Collect ALL item.completed events as turns for persistence
+                    turns.push(CollectedTurn {
+                        role: "assistant".to_string(),
+                        content_json: line.to_string(),
+                    });
                 }
             }
             Some("thread.started") | Some("thread.resumed") => {
@@ -694,6 +719,7 @@ fn parse_codex_output(
                     usage.input_tokens = parsed_usage.get("input_tokens").and_then(Value::as_i64);
                     usage.output_tokens = parsed_usage.get("output_tokens").and_then(Value::as_i64);
                 }
+                result_json = Some(line.to_string());
             }
             _ => {}
         }
@@ -710,8 +736,8 @@ fn parse_codex_output(
         session_id,
         resolved_model: fallback_model.to_string(),
         usage,
-        turns: Vec::new(),
-        result_json: None,
+        turns,
+        result_json,
     })
 }
 
@@ -795,7 +821,7 @@ fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn persist_exchange_to_fixture(
+fn persist_exchange(
     helmor_session_id: &str,
     prompt: &str,
     model: &AgentModelDefinition,
@@ -901,9 +927,10 @@ fn persist_exchange_to_fixture(
             SET
               status = 'idle',
               model = ?2,
-              last_user_message_at = ?3,
+              agent_type = ?3,
+              last_user_message_at = ?4,
               provider_session_id = CASE
-                WHEN ?4 IS NOT NULL THEN ?4
+                WHEN ?5 IS NOT NULL THEN ?5
                 ELSE provider_session_id
               END
             WHERE id = ?1
@@ -911,6 +938,7 @@ fn persist_exchange_to_fixture(
         params![
             helmor_session_id,
             model.id,
+            model.provider,
             now,
             provider_session_id
         ],

@@ -38,7 +38,7 @@ export type WorkspaceGroup = {
 
 export type DataInfo = {
 	dataMode: string;
-	fixtureRoot: string;
+	dataRoot: string;
 	dbPath: string;
 	archiveRoot: string;
 };
@@ -971,7 +971,7 @@ export type AgentStreamEvent =
 			resolvedModel: string;
 			sessionId?: string | null;
 			workingDirectory: string;
-			persistedToFixture: boolean;
+			persisted: boolean;
 	  }
 	| { kind: "error"; message: string };
 

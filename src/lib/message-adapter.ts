@@ -118,6 +118,27 @@ function convertMessagesFlat(
 			continue;
 		}
 
+		// Codex: item.completed with agent_message — render as assistant text
+		if (msgType === "item.completed") {
+			const item = parsed?.item as Record<string, unknown> | undefined;
+			if (item?.type === "agent_message" && typeof item.text === "string") {
+				result.push({
+					role: "assistant",
+					id: msg.id,
+					createdAt: new Date(msg.createdAt),
+					content: [{ type: "text", text: item.text as string }],
+					status: { type: "complete", reason: "stop" },
+				});
+			}
+			continue;
+		}
+
+		// Codex: turn.completed — render as session summary
+		if (msgType === "turn.completed") {
+			result.push(makeSystem(msg, buildResultLabel(parsed!)));
+			continue;
+		}
+
 		// user by role (plain text, non-JSON)
 		if (msg.role === "user" && !parsed) {
 			result.push(convertUserMessage(msg, undefined));
