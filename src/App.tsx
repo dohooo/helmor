@@ -6,7 +6,7 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Download, Moon, RefreshCw, Sun } from "lucide-react";
+import { Check, Copy, Download, Moon, RefreshCw, Sun } from "lucide-react";
 import {
 	type KeyboardEvent,
 	type MouseEvent,
@@ -279,7 +279,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		null,
 	);
 	const [workspaceToasts, setWorkspaceToasts] = useState<WorkspaceToast[]>([]);
-	const openedGithubDeviceCodesRef = useRef<Set<string>>(new Set());
+
 	const [theme, setTheme] = useState<"light" | "dark">(() => {
 		if (typeof window === "undefined") return "dark";
 		return (localStorage.getItem("helmor.theme") as "light" | "dark") ?? "dark";
@@ -359,28 +359,6 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	useEffect(() => {
 		document.documentElement.classList.toggle("dark", theme === "dark");
 	}, [theme]);
-
-	useEffect(() => {
-		if (githubIdentityState.status !== "pending") {
-			return;
-		}
-
-		const { deviceCode, verificationUri, verificationUriComplete } =
-			githubIdentityState.flow;
-
-		if (openedGithubDeviceCodesRef.current.has(deviceCode)) {
-			return;
-		}
-
-		openedGithubDeviceCodesRef.current.add(deviceCode);
-		void (async () => {
-			try {
-				await openUrl(verificationUriComplete ?? verificationUri);
-			} catch {
-				// Keep the pending state visible even if the browser cannot be opened.
-			}
-		})();
-	}, [githubIdentityState]);
 
 	useEffect(() => {
 		let disposed = false;
@@ -1219,6 +1197,8 @@ function GithubIdentityGate({
 	onCopyGithubCode: (userCode: string) => Promise<boolean>;
 	onCancelGithubConnect: () => void;
 }) {
+	const [codeCopied, setCodeCopied] = useState(false);
+
 	const title =
 		identityState.status === "checking"
 			? "Checking GitHub connection"
@@ -1233,15 +1213,15 @@ function GithubIdentityGate({
 		identityState.status === "checking"
 			? "Helmor is restoring your last GitHub account session."
 			: identityState.status === "pending"
-				? "A browser window should open for authorization. If it does not, complete GitHub device sign-in with the code below."
+				? "Copy the code below, then you'll be redirected to GitHub to authorize."
 				: identityState.status === "unconfigured"
 					? identityState.message
 					: identityState.status === "error"
 						? identityState.message
 						: "GitHub account connection is required before Helmor loads your workspaces.";
 
-	const handleCopyCode = useCallback(async () => {
-		if (identityState.status !== "pending") {
+	const handleCopyCodeThenRedirect = useCallback(async () => {
+		if (identityState.status !== "pending" || codeCopied) {
 			return;
 		}
 
@@ -1250,7 +1230,21 @@ function GithubIdentityGate({
 		if (!copied) {
 			return;
 		}
-	}, [identityState, onCopyGithubCode]);
+
+		setCodeCopied(true);
+
+		const { verificationUri, verificationUriComplete } = identityState.flow;
+
+		setTimeout(() => {
+			void (async () => {
+				try {
+					await openUrl(verificationUriComplete ?? verificationUri);
+				} catch {
+					// Keep the pending state visible even if the browser cannot be opened.
+				}
+			})();
+		}, 600);
+	}, [identityState, onCopyGithubCode, codeCopied]);
 
 	return (
 		<main
@@ -1279,14 +1273,28 @@ function GithubIdentityGate({
 							<button
 								type="button"
 								onClick={() => {
-									void handleCopyCode();
+									void handleCopyCodeThenRedirect();
 								}}
-								className="rounded-2xl px-3 py-2 transition-colors hover:bg-app-toolbar-hover/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong"
+								disabled={codeCopied}
+								className="relative rounded-2xl px-3 py-2 transition-colors hover:bg-app-toolbar-hover/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong"
 								aria-label="Copy one-time code"
 								title="Copy one-time code"
 							>
 								<span className="font-mono text-[30px] tracking-[0.18em] text-app-foreground">
 									{identityState.flow.userCode}
+								</span>
+								<span className="absolute bottom-1 right-1 flex items-center justify-center rounded-md p-1 transition-all">
+									{codeCopied ? (
+										<Check
+											className="size-4 text-green-400"
+											strokeWidth={2.5}
+										/>
+									) : (
+										<Copy
+											className="size-4 text-app-foreground/40"
+											strokeWidth={1.8}
+										/>
+									)}
 								</span>
 							</button>
 							<div className="flex flex-wrap items-center justify-center gap-3">
