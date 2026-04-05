@@ -83,6 +83,20 @@ export const WorkspaceConversationContainer = memo(
 			displayedWorkspaceId,
 			displayedSessionId,
 		);
+		const prevContextKeyRef = useRef(composerContextKey);
+		// Clear live messages from the previous context when user switches session.
+		// This ensures we fall back to DB data when returning to a session.
+		if (prevContextKeyRef.current !== composerContextKey) {
+			const prevKey = prevContextKeyRef.current;
+			prevContextKeyRef.current = composerContextKey;
+			if (liveMessagesByContext[prevKey]?.length) {
+				setLiveMessagesByContext((current) => {
+					const next = { ...current };
+					delete next[prevKey];
+					return next;
+				});
+			}
+		}
 		const liveMessages = liveMessagesByContext[composerContextKey] ?? [];
 		const activeSendError = sendErrorsByContext[composerContextKey] ?? null;
 		const isSending = sendingContextKeys.has(composerContextKey);
