@@ -34,6 +34,7 @@ pub fn run() {
             agents::list_agent_model_sections,
             agents::send_agent_message_stream,
             agents::stop_agent_stream,
+            agents::generate_session_title,
             models::archive_workspace,
             models::cancel_github_identity_connect,
             models::create_workspace_from_repo,

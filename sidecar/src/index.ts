@@ -112,6 +112,27 @@ for await (const line of rl) {
 				break;
 			}
 
+			case "generateTitle": {
+				const userMessage = params.userMessage as string;
+				debug(
+					`[${id}] generateTitle — message="${userMessage.slice(0, 60)}..."`,
+				);
+
+				// Always use Claude (haiku) for title generation — fast and cheap.
+				// Falls back to a generic error if Claude is unavailable.
+				claudeSessions
+					.generateTitle(id, userMessage, emit)
+					.then(() => {
+						debug(`[${id}] generateTitle completed`);
+					})
+					.catch((err: unknown) => {
+						const msg = err instanceof Error ? err.message : String(err);
+						debug(`[${id}] generateTitle FAILED: ${msg}`);
+						emit({ id, type: "error", message: msg });
+					});
+				break;
+			}
+
 			case "stopSession": {
 				const stopProvider = (params.provider as string) ?? "claude";
 				const stopManager =

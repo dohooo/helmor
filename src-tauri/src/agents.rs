@@ -287,6 +287,133 @@ pub async fn stop_agent_stream(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Session auto-title generation
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateSessionTitleRequest {
+    pub session_id: String,
+    pub user_message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateSessionTitleResponse {
+    pub title: Option<String>,
+    pub skipped: bool,
+}
+
+/// Generate a short title for a session based on the user's first message.
+///
+/// Checks if the session title is still "Untitled" — if it has already been
+/// renamed, the call is a no-op (returns `skipped: true`).
+///
+/// Uses the sidecar's `generateTitle` method (Claude haiku) to produce
+/// a concise title, then persists it to the database.
+#[tauri::command]
+pub async fn generate_session_title(
+    app: AppHandle,
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    request: GenerateSessionTitleRequest,
+) -> CmdResult<GenerateSessionTitleResponse> {
+    // 1. Check whether the session still needs a title
+    {
+        let connection =
+            open_write_connection().map_err(|e| anyhow::anyhow!("Failed to open DB: {e}"))?;
+        let current_title: String = connection
+            .query_row(
+                "SELECT title FROM sessions WHERE id = ?1",
+                [&request.session_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| anyhow::anyhow!("Session not found: {e}"))?;
+
+        if current_title != "Untitled" {
+            return Ok(GenerateSessionTitleResponse {
+                title: None,
+                skipped: true,
+            });
+        }
+    }
+
+    // 2. Ask the sidecar to generate a title
+    let request_id = Uuid::new_v4().to_string();
+    let sidecar_req = crate::sidecar::SidecarRequest {
+        id: request_id.clone(),
+        method: "generateTitle".to_string(),
+        params: serde_json::json!({
+            "userMessage": request.user_message,
+        }),
+    };
+
+    let rx = sidecar.subscribe(&request_id);
+
+    if let Err(e) = sidecar.send(&sidecar_req) {
+        sidecar.unsubscribe(&request_id);
+        return Err(anyhow::anyhow!("Sidecar send failed: {e}").into());
+    }
+
+    // 3. Wait for the titleGenerated or error event (blocking thread)
+    let session_id = request.session_id.clone();
+    let generated_title: Option<String> = tauri::async_runtime::spawn_blocking({
+        let rid = request_id;
+        move || {
+            let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
+            let mut title: Option<String> = None;
+
+            for event in rx.iter() {
+                match event.event_type() {
+                    "titleGenerated" => {
+                        title = event
+                            .raw
+                            .get("title")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                            .filter(|t| !t.is_empty());
+                        break;
+                    }
+                    "error" => {
+                        let msg = event
+                            .raw
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Unknown error");
+                        eprintln!("[generate_session_title] Sidecar error: {msg}");
+                        break;
+                    }
+                    _ => {
+                        // Ignore intermediate events (e.g. streaming deltas)
+                    }
+                }
+            }
+
+            sidecar_state.unsubscribe(&rid);
+            title
+        }
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("Title generation task failed: {e}"))?;
+
+    // 4. Persist to DB if we got a title
+    if let Some(ref title) = generated_title {
+        let connection =
+            open_write_connection().map_err(|e| anyhow::anyhow!("Failed to open DB: {e}"))?;
+        connection
+            .execute(
+                "UPDATE sessions SET title = ?1 WHERE id = ?2",
+                (title.as_str(), session_id.as_str()),
+            )
+            .map_err(|e| anyhow::anyhow!("Failed to update session title: {e}"))?;
+    }
+
+    Ok(GenerateSessionTitleResponse {
+        title: generated_title,
+        skipped: false,
+    })
+}
+
 fn sidecar_debug_enabled() -> bool {
     std::env::var("HELMOR_SIDECAR_DEBUG")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))

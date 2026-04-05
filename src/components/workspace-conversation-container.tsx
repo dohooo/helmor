@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { AgentModelOption, SessionMessageRecord } from "@/lib/api";
 import {
+	generateSessionTitle,
 	listenAgentStream,
 	startAgentMessageStream,
 	stopAgentStream,
@@ -334,6 +335,23 @@ export const WorkspaceConversationContainer = memo(
 									displayedWorkspaceId,
 									displayedSessionId,
 								);
+
+								// Auto-generate session title in the background.
+								// The backend checks if the title is still "Untitled"
+								// and skips if already renamed.
+								if (displayedSessionId) {
+									void generateSessionTitle(
+										displayedSessionId,
+										trimmedPrompt,
+									).then((result) => {
+										if (result?.title) {
+											void invalidateConversationQueries(
+												displayedWorkspaceId,
+												displayedSessionId,
+											);
+										}
+									});
+								}
 							}
 
 							sendingWorkspaceMapRef.current.delete(contextKey);

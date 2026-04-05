@@ -1044,6 +1044,33 @@ export async function renameSession(
 	await inv("rename_session", { sessionId, title });
 }
 
+export type GenerateSessionTitleResponse = {
+	title: string | null;
+	skipped: boolean;
+};
+
+/**
+ * Ask the backend to auto-generate a title for a session based on the user's
+ * first message. No-ops if the session already has a non-"Untitled" title.
+ */
+export async function generateSessionTitle(
+	sessionId: string,
+	userMessage: string,
+): Promise<GenerateSessionTitleResponse | null> {
+	const inv = await getTauriInvoke();
+	if (!inv) return null;
+	try {
+		return await inv<GenerateSessionTitleResponse>("generate_session_title", {
+			sessionId,
+			userMessage,
+		});
+	} catch (error) {
+		// Title generation is best-effort — don't propagate errors
+		console.warn("[generateSessionTitle] Failed:", error);
+		return null;
+	}
+}
+
 export async function hideSession(sessionId: string): Promise<void> {
 	const inv = await getTauriInvoke();
 	if (!inv) return;

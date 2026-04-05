@@ -132,6 +132,69 @@ export class SessionManager {
 	}
 
 	/**
+	 * Generate a short title for a session based on the user's message.
+	 *
+	 * Uses haiku (cheapest/fastest model) with plan mode (no tool use).
+	 * Returns the generated title string via a single "titleGenerated" event.
+	 */
+	async generateTitle(
+		requestId: string,
+		userMessage: string,
+		emit: EmitFn,
+	): Promise<void> {
+		const titlePrompt = [
+			"Based on the following user message, generate a concise session title.",
+			"Rules:",
+			"- Maximum 8 words",
+			"- No quotes, no trailing punctuation",
+			"- Use the same language as the user message",
+			"- Output ONLY the title text, nothing else",
+			"",
+			"User message:",
+			userMessage,
+		].join("\n");
+
+		const abortController = new AbortController();
+		// Auto-cancel after 15 seconds
+		const timeout = setTimeout(() => abortController.abort(), 15_000);
+
+		try {
+			const q = query({
+				prompt: titlePrompt,
+				options: {
+					abortController,
+					model: "haiku",
+					permissionMode: "plan",
+					allowDangerouslySkipPermissions: true,
+				},
+			});
+
+			let title = "";
+			for await (const message of q) {
+				const msg = message as unknown as Record<string, unknown>;
+				// Collect text from "result" event (Claude CLI final output)
+				if (msg.type === "result" && typeof msg.result === "string") {
+					title = msg.result;
+				}
+			}
+
+			// Clean up: strip surrounding quotes if any
+			title = title
+				.trim()
+				.replace(/^["'""'']+|["'""'']+$/g, "")
+				.trim();
+
+			emit({
+				id: requestId,
+				type: "titleGenerated",
+				title,
+			});
+		} finally {
+			clearTimeout(timeout);
+		}
+	}
+
+	/**
 	 * Stop an active session.
 	 */
 	async stopSession(sessionId: string): Promise<void> {
