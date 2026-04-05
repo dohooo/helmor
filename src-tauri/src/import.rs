@@ -484,7 +484,93 @@ fn setup_workspace_filesystem(
         rewrite_attachment_paths(&conn, workspace_id, root, helmor_data_dir, repo_name, directory_name, state)?;
     }
 
+    // Copy Claude Code session files from Conductor's project dir to Helmor's.
+    // Claude Code stores sessions under ~/.claude/projects/{encoded-cwd}/ and
+    // the cwd changed from Conductor's worktree to Helmor's worktree, so
+    // sessions are invisible unless we copy them over.
+    if let Some(root) = conductor_root {
+        copy_claude_sessions_for_workspace(root, helmor_data_dir, repo_name, directory_name);
+    }
+
     Ok(())
+}
+
+/// Encode a filesystem path into a Claude Code project directory name.
+/// Claude uses `path.replace('/', '-').replace('.', '-')`.
+fn encode_claude_project_dir(path: &Path) -> String {
+    path.display()
+        .to_string()
+        .replace(['/', '.'], "-")
+}
+
+/// Copy Claude Code session .jsonl files from the Conductor project dir
+/// to the Helmor project dir so that imported sessions can be resumed.
+fn copy_claude_sessions_for_workspace(
+    conductor_root: &Path,
+    helmor_data_dir: &Path,
+    repo_name: &str,
+    directory_name: &str,
+) {
+    let home = match std::env::var_os("HOME").map(PathBuf::from) {
+        Some(h) => h,
+        None => return,
+    };
+    let claude_projects = home.join(".claude").join("projects");
+    if !claude_projects.is_dir() {
+        return;
+    }
+
+    let conductor_ws_path = conductor_root
+        .join("workspaces")
+        .join(repo_name)
+        .join(directory_name);
+    let helmor_ws_path = helmor_data_dir
+        .join("workspaces")
+        .join(repo_name)
+        .join(directory_name);
+
+    let src_dir = claude_projects.join(encode_claude_project_dir(&conductor_ws_path));
+    let dst_dir = claude_projects.join(encode_claude_project_dir(&helmor_ws_path));
+
+    if !src_dir.is_dir() {
+        return;
+    }
+
+    // Create destination dir if needed
+    if std::fs::create_dir_all(&dst_dir).is_err() {
+        eprintln!(
+            "[import] Failed to create Claude project dir: {}",
+            dst_dir.display()
+        );
+        return;
+    }
+
+    // Copy each .jsonl session file (skip if already exists)
+    let entries = match std::fs::read_dir(&src_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    let mut copied = 0u32;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "jsonl") {
+            let dst_file = dst_dir.join(entry.file_name());
+            if !dst_file.exists()
+                && std::fs::copy(&path, &dst_file).is_ok()
+            {
+                copied += 1;
+            }
+        }
+    }
+
+    if copied > 0 {
+        eprintln!(
+            "[import] Copied {copied} Claude session file(s): {} → {}",
+            src_dir.display(),
+            dst_dir.display()
+        );
+    }
 }
 
 /// Resolve which branch to use as the source for the imported worktree.
