@@ -81,9 +81,8 @@ export class SessionManager {
 						| "bypassPermissions"
 						| "acceptEdits"
 						| "dontAsk"
-						| "auto") || "acceptEdits",
-				allowDangerouslySkipPermissions:
-					permissionMode === "bypassPermissions" || undefined,
+						| "auto") || "bypassPermissions",
+				allowDangerouslySkipPermissions: true,
 				effort: (effortLevel as "low" | "medium" | "high" | "max") || undefined,
 				includePartialMessages: true,
 				settingSources: ["user", "project", "local"],
