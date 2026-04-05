@@ -227,6 +227,7 @@ export type WorkspaceSessionSummary = {
 	model?: string | null;
 	permissionMode: string;
 	providerSessionId?: string | null;
+	effortLevel?: string | null;
 	unreadCount: number;
 	contextTokenCount: number;
 	contextUsedPercent?: number | null;

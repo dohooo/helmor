@@ -396,6 +396,7 @@ fn stream_via_sidecar(
     let prompt_copy = prompt.to_string();
     let working_dir_str = working_directory.display().to_string();
     let hsid_copy = helmor_session_id;
+    let effort_copy = request.effort_level.clone();
     let rid = request_id.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -447,6 +448,7 @@ fn stream_via_sidecar(
                                 &output.assistant_text,
                                 output.thinking_text.as_deref(),
                                 output.session_id.as_deref(),
+                                effort_copy.as_deref(),
                                 &output.usage,
                                 &output.turns,
                                 output.result_json.as_deref(),
@@ -897,6 +899,7 @@ fn persist_exchange(
     assistant_text: &str,
     _thinking_text: Option<&str>,
     provider_session_id: Option<&str>,
+    effort_level: Option<&str>,
     usage: &AgentUsage,
     turns: &[CollectedTurn],
     raw_result_json: Option<&str>,
@@ -1000,7 +1003,8 @@ fn persist_exchange(
               provider_session_id = CASE
                 WHEN ?5 IS NOT NULL THEN ?5
                 ELSE provider_session_id
-              END
+              END,
+              effort_level = COALESCE(?6, effort_level)
             WHERE id = ?1
             "#,
         params![
@@ -1008,7 +1012,8 @@ fn persist_exchange(
             model.id,
             model.provider,
             now,
-            provider_session_id
+            provider_session_id,
+            effort_level
         ],
     )?;
 

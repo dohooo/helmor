@@ -420,7 +420,10 @@ function App() {
 	const selectedModel = findModelOption(agentModelSections, selectedModelId);
 	const isOpusModel =
 		selectedModelId === "opus-1m" || selectedModelId === "opus";
-	const rawEffortLevel = composerEffortLevels[composerContextKey] ?? "high";
+	const rawEffortLevel =
+		composerEffortLevels[composerContextKey] ??
+		selectedSession?.effortLevel ??
+		"high";
 	const currentEffortLevel = (() => {
 		let level = rawEffortLevel;
 		if (selectedModel?.provider === "codex") {
