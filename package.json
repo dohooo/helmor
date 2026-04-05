@@ -64,7 +64,8 @@
 			"biome check --write --error-on-warnings --no-errors-on-unmatched --files-ignore-unknown=true --config-path=./biome.json"
 		],
 		"*.rs": [
-			"sh -c 'cargo fmt --manifest-path src-tauri/Cargo.toml -- \"$@\"' sh"
+			"sh -c 'cargo fmt --manifest-path src-tauri/Cargo.toml --all' sh",
+			"sh -c 'cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings' sh"
 		]
 	}
 }
