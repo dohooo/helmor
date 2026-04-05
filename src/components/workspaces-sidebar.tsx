@@ -734,7 +734,15 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 						<Collapsible defaultOpen={false}>
 							<section aria-label="Archived" className="space-y-1.5">
-								<CollapsibleTrigger className="group/trigger flex w-full cursor-pointer select-none items-center justify-between rounded-xl px-1 py-1 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70">
+								<CollapsibleTrigger
+									className={cn(
+										"group/trigger flex w-full select-none items-center justify-between rounded-xl px-1 py-1 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70",
+										archivedRows.length > 0
+											? "cursor-pointer"
+											: "cursor-default",
+									)}
+									disabled={archivedRows.length === 0}
+								>
 									<span className="flex items-center gap-2">
 										<Archive
 											className="size-[14px] shrink-0 text-app-backlog"
@@ -743,10 +751,12 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 										<span>Archived</span>
 									</span>
 
-									<ChevronDown
-										className="size-4 shrink-0 text-app-foreground-soft transition-transform group-data-[panel-open]/trigger:-rotate-0 group-data-[panel-closed]/trigger:-rotate-90"
-										strokeWidth={2}
-									/>
+									{archivedRows.length > 0 ? (
+										<ChevronDown
+											className="size-4 shrink-0 text-app-foreground-soft transition-transform group-data-[panel-open]/trigger:-rotate-0 group-data-[panel-closed]/trigger:-rotate-90"
+											strokeWidth={2}
+										/>
+									) : null}
 								</CollapsibleTrigger>
 
 								{archivedRows.length > 0 ? (
