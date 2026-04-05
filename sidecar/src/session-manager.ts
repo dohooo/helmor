@@ -143,12 +143,13 @@ export class SessionManager {
 		emit: EmitFn,
 	): Promise<void> {
 		const titlePrompt = [
-			"Based on the following user message, generate a concise session title.",
-			"Rules:",
-			"- Maximum 8 words",
-			"- No quotes, no trailing punctuation",
-			"- Use the same language as the user message",
-			"- Output ONLY the title text, nothing else",
+			"Based on the following user message, generate TWO things:",
+			"1. A concise session title (use the same language as the user message, max 8 words)",
+			"2. A git branch name segment (English only, lowercase, hyphens for spaces, max 4 words, no prefix)",
+			"",
+			"Output EXACTLY in this format (two lines, nothing else):",
+			"title: <the title>",
+			"branch: <the-branch-name>",
 			"",
 			"User message:",
 			userMessage,
@@ -178,16 +179,39 @@ export class SessionManager {
 				}
 			}
 
-			// Clean up: strip surrounding quotes if any
-			title = title
-				.trim()
-				.replace(/^["'""'']+|["'""'']+$/g, "")
-				.trim();
+			// Parse "title: ..." and "branch: ..." from the result
+			let parsedTitle = "";
+			let parsedBranch = "";
+			for (const line of title.split("\n")) {
+				const trimmed = line.trim();
+				if (trimmed.toLowerCase().startsWith("title:")) {
+					parsedTitle = trimmed
+						.slice(6)
+						.trim()
+						.replace(/^["'""'']+|["'""'']+$/g, "")
+						.trim();
+				} else if (trimmed.toLowerCase().startsWith("branch:")) {
+					parsedBranch = trimmed
+						.slice(7)
+						.trim()
+						.replace(/[^a-z0-9-]/g, "")
+						.replace(/-+/g, "-")
+						.replace(/^-|-$/g, "");
+				}
+			}
+			// Fallback: if parsing failed, use raw result as title
+			if (!parsedTitle && title.trim()) {
+				parsedTitle = title
+					.trim()
+					.replace(/^["'""'']+|["'""'']+$/g, "")
+					.trim();
+			}
 
 			emit({
 				id: requestId,
 				type: "titleGenerated",
-				title,
+				title: parsedTitle,
+				branchName: parsedBranch || undefined,
 			});
 		} finally {
 			clearTimeout(timeout);

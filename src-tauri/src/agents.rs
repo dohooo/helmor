@@ -357,11 +357,12 @@ pub async fn generate_session_title(
 
     // 3. Wait for the titleGenerated or error event (blocking thread)
     let session_id = request.session_id.clone();
-    let generated_title: Option<String> = tauri::async_runtime::spawn_blocking({
+    let result: (Option<String>, Option<String>) = tauri::async_runtime::spawn_blocking({
         let rid = request_id;
         move || {
             let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
             let mut title: Option<String> = None;
+            let mut branch_name: Option<String> = None;
 
             for event in rx.iter() {
                 match event.event_type() {
@@ -372,6 +373,12 @@ pub async fn generate_session_title(
                             .and_then(Value::as_str)
                             .map(str::to_string)
                             .filter(|t| !t.is_empty());
+                        branch_name = event
+                            .raw
+                            .get("branchName")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                            .filter(|b| !b.is_empty());
                         break;
                     }
                     "error" => {
@@ -390,22 +397,68 @@ pub async fn generate_session_title(
             }
 
             sidecar_state.unsubscribe(&rid);
-            title
+            (title, branch_name)
         }
     })
     .await
     .map_err(|e| anyhow::anyhow!("Title generation task failed: {e}"))?;
 
-    // 4. Persist to DB if we got a title
+    let (generated_title, generated_branch) = result;
+
+    // 4. Persist title to DB
     if let Some(ref title) = generated_title {
+        crate::models::sessions::rename_session(&session_id, title)
+            .map_err(|e| anyhow::anyhow!("Failed to rename session: {e}"))?;
+    }
+
+    // 5. Rename git branch if a branch name was generated
+    if let Some(ref branch_segment) = generated_branch {
         let connection =
             open_write_connection().map_err(|e| anyhow::anyhow!("Failed to open DB: {e}"))?;
-        connection
-            .execute(
-                "UPDATE sessions SET title = ?1 WHERE id = ?2",
-                (title.as_str(), session_id.as_str()),
+
+        // Find the workspace for this session
+        let ws_info: Option<(String, Option<String>, Option<String>)> = connection
+            .query_row(
+                r#"SELECT w.id, w.branch, r.root_path
+                   FROM workspaces w
+                   JOIN repos r ON r.id = w.repository_id
+                   WHERE w.active_session_id = ?1 AND w.state = 'ready'"#,
+                [&session_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
-            .map_err(|e| anyhow::anyhow!("Failed to update session title: {e}"))?;
+            .ok();
+
+        if let Some((workspace_id, old_branch, root_path)) = ws_info {
+            let branch_settings = crate::models::settings::load_branch_prefix_settings().unwrap_or(
+                crate::models::settings::BranchPrefixSettings {
+                    branch_prefix_type: None,
+                    branch_prefix_custom: None,
+                },
+            );
+            let new_branch =
+                crate::models::helpers::branch_name_for_directory(branch_segment, &branch_settings);
+
+            if old_branch.as_deref() != Some(new_branch.as_str()) {
+                // Rename the actual git branch
+                if let (Some(ref old_name), Some(ref repo_root)) = (&old_branch, &root_path) {
+                    if std::path::Path::new(repo_root).is_dir() {
+                        crate::models::git_ops::run_git(
+                            ["-C", repo_root, "branch", "-m", old_name, &new_branch],
+                            None,
+                        )
+                        .ok();
+                    }
+                }
+
+                // Update branch in DB
+                connection
+                    .execute(
+                        "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
+                        (&new_branch, &workspace_id),
+                    )
+                    .ok();
+            }
+        }
     }
 
     Ok(GenerateSessionTitleResponse {

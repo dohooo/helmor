@@ -7,12 +7,16 @@ import { cva } from "class-variance-authority";
 import {
 	Archive,
 	ChevronRight,
+	Circle,
 	FolderPlus,
 	GitBranch,
 	LoaderCircle,
+	Pin,
+	PinOff,
 	Plus,
 	RotateCcw,
 	Search,
+	Trash2,
 } from "lucide-react";
 import {
 	type ButtonHTMLAttributes,
@@ -44,6 +48,10 @@ import {
 	ContextMenu,
 	ContextMenuContent,
 	ContextMenuItem,
+	ContextMenuSeparator,
+	ContextMenuSub,
+	ContextMenuSubContent,
+	ContextMenuSubTrigger,
 	ContextMenuTrigger,
 } from "./ui/context-menu";
 import { ScrollArea } from "./ui/scroll-area";
@@ -65,6 +73,7 @@ const rowVariants = cva(
 );
 
 const groupToneClasses: Record<GroupTone, string> = {
+	pinned: "text-app-foreground-soft",
 	done: "text-app-done",
 	review: "text-app-review",
 	progress: "text-app-progress",
@@ -177,6 +186,14 @@ function GroupIcon({ tone }: { tone: GroupTone }) {
 	const iconSize = 14;
 
 	switch (tone) {
+		case "pinned":
+			return (
+				<Pin
+					className={cn(className, "-rotate-45")}
+					size={iconSize}
+					strokeWidth={2}
+				/>
+			);
 		case "done":
 			return <IssueClosedIcon className={className} size={iconSize} />;
 		case "review":
@@ -287,6 +304,9 @@ type WorkspaceRowItemProps = {
 	onArchiveWorkspace?: (workspaceId: string) => void;
 	onMarkWorkspaceUnread?: (workspaceId: string) => void;
 	onRestoreWorkspace?: (workspaceId: string) => void;
+	onDeleteWorkspace?: (workspaceId: string) => void;
+	onTogglePin?: (workspaceId: string, currentlyPinned: boolean) => void;
+	onSetManualStatus?: (workspaceId: string, status: string | null) => void;
 	archivingWorkspaceId?: string | null;
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
@@ -302,8 +322,11 @@ const WorkspaceRowItem = memo(
 		onSelect,
 		onPrefetch,
 		onArchiveWorkspace,
-		onMarkWorkspaceUnread,
+		onMarkWorkspaceUnread: _onMarkWorkspaceUnread,
 		onRestoreWorkspace,
+		onDeleteWorkspace,
+		onTogglePin,
+		onSetManualStatus,
 		archivingWorkspaceId,
 		markingUnreadWorkspaceId,
 		restoringWorkspaceId,
@@ -320,11 +343,6 @@ const WorkspaceRowItem = memo(
 		const hasActionHandler = isRestoreAction
 			? Boolean(onRestoreWorkspace)
 			: Boolean(onArchiveWorkspace);
-		const canMarkAsUnread =
-			Boolean(onMarkWorkspaceUnread) &&
-			!row.hasUnread &&
-			!workspaceActionsDisabled &&
-			!isBusy;
 		const actionIcon = isBusy ? (
 			<LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.1} />
 		) : isRestoreAction ? (
@@ -392,59 +410,136 @@ const WorkspaceRowItem = memo(
 									: "font-medium",
 						)}
 					>
-						{row.title}
+						{row.branch ?? row.title}
 					</span>
 				</div>
 
 				{hasActionHandler ? (
-					<BaseTooltip side="top" content={<span>{actionLabel}</span>}>
-						<button
-							type="button"
-							aria-label={actionLabel}
-							disabled={Boolean(workspaceActionsDisabled)}
-							onClick={(event) => {
-								event.stopPropagation();
-
-								if (workspaceActionsDisabled) {
-									return;
-								}
-
-								if (isRestoreAction) {
-									onRestoreWorkspace?.(row.id);
-								} else {
-									onArchiveWorkspace?.(row.id);
-								}
-							}}
-							className={cn(
-								"flex shrink-0 items-center justify-center text-app-muted",
-								isBusy ? "visible" : "invisible group-hover:visible",
-								workspaceActionsDisabled
-									? "cursor-not-allowed opacity-60"
-									: "cursor-pointer hover:text-app-foreground",
-							)}
-						>
-							{actionIcon}
-						</button>
-					</BaseTooltip>
+					<span
+						className={cn(
+							"flex shrink-0 items-center gap-1.5",
+							isBusy ? "visible" : "invisible group-hover:visible",
+						)}
+					>
+						<BaseTooltip side="top" content={<span>{actionLabel}</span>}>
+							<button
+								type="button"
+								aria-label={actionLabel}
+								disabled={Boolean(workspaceActionsDisabled)}
+								onClick={(event) => {
+									event.stopPropagation();
+									if (workspaceActionsDisabled) return;
+									if (isRestoreAction) {
+										onRestoreWorkspace?.(row.id);
+									} else {
+										onArchiveWorkspace?.(row.id);
+									}
+								}}
+								className={cn(
+									"flex items-center justify-center text-app-muted",
+									workspaceActionsDisabled
+										? "cursor-not-allowed opacity-60"
+										: "cursor-pointer hover:text-app-foreground",
+								)}
+							>
+								{actionIcon}
+							</button>
+						</BaseTooltip>
+						{isRestoreAction && onDeleteWorkspace ? (
+							<BaseTooltip side="top" content={<span>Delete permanently</span>}>
+								<button
+									type="button"
+									aria-label="Delete permanently"
+									disabled={Boolean(workspaceActionsDisabled)}
+									onClick={(event) => {
+										event.stopPropagation();
+										if (workspaceActionsDisabled) return;
+										onDeleteWorkspace(row.id);
+									}}
+									className={cn(
+										"flex items-center justify-center text-app-muted",
+										workspaceActionsDisabled
+											? "cursor-not-allowed opacity-60"
+											: "cursor-pointer hover:text-red-400",
+									)}
+								>
+									<Trash2 className="size-3.5" strokeWidth={2.1} />
+								</button>
+							</BaseTooltip>
+						) : null}
+					</span>
 				) : null}
 			</div>
 		);
 
+		const isPinned = Boolean(row.pinnedAt);
+		const effectiveStatus =
+			row.manualStatus ?? row.derivedStatus ?? "in-progress";
+		const statusOptions: Array<{
+			value: string;
+			label: string;
+			tone: GroupTone;
+		}> = [
+			{ value: "backlog", label: "Backlog", tone: "backlog" },
+			{ value: "in-progress", label: "In progress", tone: "progress" },
+			{ value: "review", label: "In review", tone: "review" },
+			{ value: "done", label: "Done", tone: "done" },
+			{ value: "canceled", label: "Canceled", tone: "canceled" },
+		];
+
 		return (
 			<ContextMenu>
 				<ContextMenuTrigger className="block">{rowBody}</ContextMenuTrigger>
-				<ContextMenuContent className="min-w-40">
-					<ContextMenuItem
-						disabled={!canMarkAsUnread}
-						onClick={() => {
-							if (canMarkAsUnread) {
-								onMarkWorkspaceUnread?.(row.id);
-							}
-						}}
-					>
-						<span className="size-2 shrink-0 rounded-full bg-app-progress" />
-						<span>Mark as unread</span>
+				<ContextMenuContent className="min-w-48">
+					<ContextMenuItem onClick={() => onTogglePin?.(row.id, isPinned)}>
+						{isPinned ? (
+							<PinOff className="size-4 shrink-0" strokeWidth={1.6} />
+						) : (
+							<Pin className="size-4 shrink-0" strokeWidth={1.6} />
+						)}
+						<span>{isPinned ? "Unpin" : "Pin"}</span>
 					</ContextMenuItem>
+
+					<ContextMenuSub>
+						<ContextMenuSubTrigger>
+							<Circle className="size-4 shrink-0" strokeWidth={1.6} />
+							<span>Set status</span>
+						</ContextMenuSubTrigger>
+						<ContextMenuSubContent>
+							{statusOptions.map((opt) => (
+								<ContextMenuItem
+									key={opt.value}
+									onClick={() => onSetManualStatus?.(row.id, opt.value)}
+								>
+									<GroupIcon tone={opt.tone} />
+									<span className="flex-1">{opt.label}</span>
+									{effectiveStatus === opt.value ? (
+										<span className="ml-auto text-app-foreground">✓</span>
+									) : null}
+								</ContextMenuItem>
+							))}
+						</ContextMenuSubContent>
+					</ContextMenuSub>
+
+					<ContextMenuSeparator />
+
+					{isRestoreAction ? (
+						<ContextMenuItem
+							disabled={isBusy || workspaceActionsDisabled}
+							onClick={() => onRestoreWorkspace?.(row.id)}
+						>
+							<RotateCcw className="size-4 shrink-0" strokeWidth={1.6} />
+							<span>Restore</span>
+						</ContextMenuItem>
+					) : (
+						<ContextMenuItem
+							disabled={isBusy || workspaceActionsDisabled}
+							onClick={() => onArchiveWorkspace?.(row.id)}
+						>
+							<Archive className="size-4 shrink-0" strokeWidth={1.6} />
+							<span>Archive</span>
+						</ContextMenuItem>
+					)}
 				</ContextMenuContent>
 			</ContextMenu>
 		);
@@ -480,6 +575,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onArchiveWorkspace,
 	onMarkWorkspaceUnread,
 	onRestoreWorkspace,
+	onDeleteWorkspace,
+	onTogglePin,
+	onSetManualStatus,
 	archivingWorkspaceId,
 	markingUnreadWorkspaceId,
 	restoringWorkspaceId,
@@ -498,6 +596,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onArchiveWorkspace?: (workspaceId: string) => void;
 	onMarkWorkspaceUnread?: (workspaceId: string) => void;
 	onRestoreWorkspace?: (workspaceId: string) => void;
+	onDeleteWorkspace?: (workspaceId: string) => void;
+	onTogglePin?: (workspaceId: string, currentlyPinned: boolean) => void;
+	onSetManualStatus?: (workspaceId: string, status: string | null) => void;
 	archivingWorkspaceId?: string | null;
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
@@ -839,82 +940,86 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					viewportClassName="h-full min-w-0 w-full rounded-[inherit] px-2 pr-3"
 				>
 					<div className="flex min-h-full flex-col gap-4 pb-3">
-						{groups.map((group) => {
-							const canCollapse = group.rows.length > 0;
+						{groups
+							.filter((group) => group.id !== "pinned" || group.rows.length > 0)
+							.map((group) => {
+								const canCollapse = group.rows.length > 0;
 
-							return (
-								<Collapsible
-									key={group.id}
-									open={sectionOpenState[group.id] ?? group.rows.length > 0}
-									onOpenChange={(open) => {
-										setSectionOpenState((current) => ({
-											...current,
-											[group.id]: open,
-										}));
-									}}
-								>
-									<section aria-label={group.label} className="space-y-1.5">
-										<CollapsibleTrigger
-											className={cn(
-												"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 py-1.5 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70",
-												canCollapse ? "cursor-pointer" : "cursor-default",
-											)}
-											disabled={!canCollapse}
-										>
-											<span className="flex items-center gap-2">
-												<GroupIcon tone={group.tone} />
-												<span>{group.label}</span>
-											</span>
+								return (
+									<Collapsible
+										key={group.id}
+										open={sectionOpenState[group.id] ?? group.rows.length > 0}
+										onOpenChange={(open) => {
+											setSectionOpenState((current) => ({
+												...current,
+												[group.id]: open,
+											}));
+										}}
+									>
+										<section aria-label={group.label} className="space-y-1.5">
+											<CollapsibleTrigger
+												className={cn(
+													"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 py-1.5 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70",
+													canCollapse ? "cursor-pointer" : "cursor-default",
+												)}
+												disabled={!canCollapse}
+											>
+												<span className="flex items-center gap-2">
+													<GroupIcon tone={group.tone} />
+													<span>{group.label}</span>
+												</span>
 
-											<span className="flex items-center gap-1.5">
-												{group.rows.length > 0 ? (
-													<span className="min-w-[1.25rem] rounded-full bg-app-row-selected px-1.5 py-px text-center text-[10.5px] font-medium leading-[16px] text-app-muted">
-														{group.rows.length}
-													</span>
-												) : null}
-												{canCollapse ? (
-													<ChevronRight
-														className="size-3.5 shrink-0 text-app-muted opacity-0 transition-all group-hover/trigger:opacity-100 group-data-[panel-open]/trigger:rotate-90"
-														strokeWidth={2}
-													/>
-												) : null}
-											</span>
-										</CollapsibleTrigger>
-
-										{group.rows.length > 0 ? (
-											<CollapsibleContent>
-												<div className="space-y-0.5">
-													{group.rows.map((row) => (
-														<WorkspaceRowItem
-															key={row.id}
-															row={row}
-															selected={selectedWorkspaceId === row.id}
-															isSending={sendingWorkspaceIds?.has(row.id)}
-															rowRef={setWorkspaceRowRef(row.id)}
-															onSelect={onSelectWorkspace}
-															onPrefetch={onPrefetchWorkspace}
-															onArchiveWorkspace={onArchiveWorkspace}
-															onMarkWorkspaceUnread={onMarkWorkspaceUnread}
-															archivingWorkspaceId={archivingWorkspaceId}
-															markingUnreadWorkspaceId={
-																markingUnreadWorkspaceId
-															}
-															restoringWorkspaceId={restoringWorkspaceId}
-															workspaceActionsDisabled={Boolean(
-																creatingWorkspaceRepoId ||
-																	archivingWorkspaceId ||
-																	markingUnreadWorkspaceId ||
-																	restoringWorkspaceId,
-															)}
+												<span className="flex items-center gap-1.5">
+													{group.rows.length > 0 ? (
+														<span className="min-w-[1.25rem] rounded-full bg-app-row-selected px-1.5 py-px text-center text-[10.5px] font-medium leading-[16px] text-app-muted">
+															{group.rows.length}
+														</span>
+													) : null}
+													{canCollapse ? (
+														<ChevronRight
+															className="size-3.5 shrink-0 text-app-muted opacity-0 transition-all group-hover/trigger:opacity-100 group-data-[panel-open]/trigger:rotate-90"
+															strokeWidth={2}
 														/>
-													))}
-												</div>
-											</CollapsibleContent>
-										) : null}
-									</section>
-								</Collapsible>
-							);
-						})}
+													) : null}
+												</span>
+											</CollapsibleTrigger>
+
+											{group.rows.length > 0 ? (
+												<CollapsibleContent>
+													<div className="space-y-0.5">
+														{group.rows.map((row) => (
+															<WorkspaceRowItem
+																key={row.id}
+																row={row}
+																selected={selectedWorkspaceId === row.id}
+																isSending={sendingWorkspaceIds?.has(row.id)}
+																rowRef={setWorkspaceRowRef(row.id)}
+																onSelect={onSelectWorkspace}
+																onPrefetch={onPrefetchWorkspace}
+																onArchiveWorkspace={onArchiveWorkspace}
+																onMarkWorkspaceUnread={onMarkWorkspaceUnread}
+																onTogglePin={onTogglePin}
+																onSetManualStatus={onSetManualStatus}
+																archivingWorkspaceId={archivingWorkspaceId}
+																markingUnreadWorkspaceId={
+																	markingUnreadWorkspaceId
+																}
+																restoringWorkspaceId={restoringWorkspaceId}
+																workspaceActionsDisabled={Boolean(
+																	creatingWorkspaceRepoId ||
+																		archivingWorkspaceId ||
+																		markingUnreadWorkspaceId ||
+																		restoringWorkspaceId,
+																)}
+															/>
+														))}
+													</div>
+												</CollapsibleContent>
+											) : null}
+										</section>
+									</Collapsible>
+								);
+							})}
 
 						<Collapsible
 							open={sectionOpenState[ARCHIVED_SECTION_ID] ?? false}
@@ -972,6 +1077,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 													onArchiveWorkspace={onArchiveWorkspace}
 													onMarkWorkspaceUnread={onMarkWorkspaceUnread}
 													onRestoreWorkspace={onRestoreWorkspace}
+													onDeleteWorkspace={onDeleteWorkspace}
+													onTogglePin={onTogglePin}
+													onSetManualStatus={onSetManualStatus}
 													archivingWorkspaceId={archivingWorkspaceId}
 													markingUnreadWorkspaceId={markingUnreadWorkspaceId}
 													restoringWorkspaceId={restoringWorkspaceId}

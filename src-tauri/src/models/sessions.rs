@@ -438,6 +438,7 @@ pub fn create_session(workspace_id: &str) -> Result<CreateSessionResponse> {
 
 pub fn rename_session(session_id: &str, title: &str) -> Result<()> {
     let connection = db::open_connection(true)?;
+
     let updated_rows = connection
         .execute(
             "UPDATE sessions SET title = ?1 WHERE id = ?2",

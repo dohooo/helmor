@@ -118,12 +118,21 @@ for await (const line of rl) {
 					`[${id}] generateTitle — message="${userMessage.slice(0, 60)}..."`,
 				);
 
-				// Always use Claude (haiku) for title generation — fast and cheap.
-				// Falls back to a generic error if Claude is unavailable.
+				// Try Claude (haiku) first, fallback to Codex
 				claudeSessions
 					.generateTitle(id, userMessage, emit)
 					.then(() => {
-						debug(`[${id}] generateTitle completed`);
+						debug(`[${id}] generateTitle completed (claude)`);
+					})
+					.catch((claudeErr: unknown) => {
+						debug(
+							`[${id}] generateTitle claude failed, trying codex: ${claudeErr}`,
+						);
+						return codexSessions
+							.generateTitle(id, userMessage, emit)
+							.then(() => {
+								debug(`[${id}] generateTitle completed (codex fallback)`);
+							});
 					})
 					.catch((err: unknown) => {
 						const msg = err instanceof Error ? err.message : String(err);
