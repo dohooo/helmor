@@ -124,18 +124,54 @@ pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRe
 
 pub(crate) fn load_repository_by_root_path(root_path: &str) -> Result<Option<RepositoryRecord>> {
     let connection = db::open_connection(false)?;
+    if let Some(repository) = query_repository_by_root_path(&connection, root_path)? {
+        return Ok(Some(repository));
+    }
+
+    if let Some(normalized_root) = normalize_filesystem_path(Path::new(root_path)) {
+        if normalized_root != root_path {
+            if let Some(repository) = query_repository_by_root_path(&connection, &normalized_root)?
+            {
+                return Ok(Some(repository));
+            }
+        }
+
+        if let Some(repository_name) = Path::new(root_path)
+            .file_name()
+            .and_then(|value| value.to_str())
+        {
+            for repository in query_repository_candidates_by_name(&connection, repository_name)? {
+                let normalized_repository_root =
+                    normalize_filesystem_path(Path::new(&repository.root_path))
+                        .unwrap_or_else(|| repository.root_path.clone());
+                if normalized_repository_root == normalized_root {
+                    return Ok(Some(repository));
+                }
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn query_repository_by_root_path(
+    connection: &rusqlite::Connection,
+    root_path: &str,
+) -> Result<Option<RepositoryRecord>> {
     let mut statement = connection
         .prepare(
             r#"
             SELECT id, name, default_branch, root_path, setup_script
             FROM repos
+            WHERE root_path = ?1
             ORDER BY created_at ASC
+            LIMIT 1
             "#,
         )
-        .context("Failed to prepare repository root lookup")?;
+        .with_context(|| format!("Failed to prepare repository root lookup for {root_path}"))?;
 
-    let rows = statement
-        .query_map([], |row| {
+    let mut rows = statement
+        .query_map([root_path], |row| {
             Ok(RepositoryRecord {
                 id: row.get(0)?,
                 name: row.get(1)?,
@@ -144,29 +180,50 @@ pub(crate) fn load_repository_by_root_path(root_path: &str) -> Result<Option<Rep
                 setup_script: row.get(4)?,
             })
         })
-        .with_context(|| format!("Failed to query repository rows for {root_path}"))?;
+        .with_context(|| format!("Failed to query repository row for {root_path}"))?;
 
-    let rows = rows
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .with_context(|| format!("Failed to deserialize repository for {root_path}"))?;
-    let normalized_requested_root =
-        normalize_filesystem_path(Path::new(root_path)).unwrap_or_else(|| root_path.to_string());
-
-    for repository in rows {
-        if repository.root_path == root_path {
-            return Ok(Some(repository));
-        }
-
-        let normalized_repository_root =
-            normalize_filesystem_path(Path::new(&repository.root_path))
-                .unwrap_or_else(|| repository.root_path.clone());
-
-        if normalized_repository_root == normalized_requested_root {
-            return Ok(Some(repository));
-        }
+    match rows.next() {
+        Some(result) => result
+            .map(Some)
+            .with_context(|| format!("Failed to deserialize repository for {root_path}")),
+        None => Ok(None),
     }
+}
 
-    Ok(None)
+fn query_repository_candidates_by_name(
+    connection: &rusqlite::Connection,
+    repository_name: &str,
+) -> Result<Vec<RepositoryRecord>> {
+    let root_suffix = format!("%/{repository_name}");
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT id, name, default_branch, root_path, setup_script
+            FROM repos
+            WHERE name = ?1 OR root_path LIKE ?2
+            ORDER BY created_at ASC
+            "#,
+        )
+        .with_context(|| {
+            format!("Failed to prepare repository candidate lookup for {repository_name}")
+        })?;
+
+    let rows = statement
+        .query_map([repository_name, root_suffix.as_str()], |row| {
+            Ok(RepositoryRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                default_branch: row.get(2)?,
+                root_path: row.get(3)?,
+                setup_script: row.get(4)?,
+            })
+        })
+        .with_context(|| format!("Failed to query repository candidates for {repository_name}"))?;
+
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .with_context(|| {
+            format!("Failed to deserialize repository candidates for {repository_name}")
+        })
 }
 
 pub(crate) fn insert_repository(repository: &ResolvedRepositoryInput) -> Result<String> {

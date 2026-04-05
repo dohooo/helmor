@@ -3,10 +3,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::process::Command;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 const GITHUB_HOST: &str = "github.com";
 const GITHUB_REPOS_ENDPOINT: &str =
     "/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member";
+const GITHUB_CLI_STATUS_CACHE_TTL: Duration = Duration::from_secs(2);
+
+static SYSTEM_GH_STATUS_CACHE: LazyLock<Mutex<Option<CachedGithubCliStatus>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "status", rename_all = "camelCase")]
@@ -80,16 +86,24 @@ trait GhCommandRunner {
         S: AsRef<OsStr>;
 }
 
+#[derive(Debug, Clone)]
+struct CachedGithubCliStatus {
+    cached_at: Instant,
+    status: GithubCliStatus,
+}
+
 pub fn get_github_cli_status() -> Result<GithubCliStatus> {
-    get_github_cli_status_with(&SystemGhRunner)
+    load_cached_system_github_cli_status()
 }
 
 pub fn get_github_cli_user() -> Result<Option<GithubCliUser>> {
-    get_github_cli_user_with(&SystemGhRunner)
+    let status = load_cached_system_github_cli_status()?;
+    get_github_cli_user_with_status(&SystemGhRunner, &status)
 }
 
 pub fn list_github_accessible_repositories() -> Result<Vec<GithubRepositorySummary>> {
-    list_github_accessible_repositories_with(&SystemGhRunner)
+    let status = load_cached_system_github_cli_status()?;
+    list_github_accessible_repositories_with_status(&SystemGhRunner, &status)
 }
 
 fn get_github_cli_status_with(runner: &impl GhCommandRunner) -> Result<GithubCliStatus> {
@@ -201,11 +215,17 @@ fn get_github_cli_status_with(runner: &impl GhCommandRunner) -> Result<GithubCli
     })
 }
 
+#[cfg(test)]
 fn get_github_cli_user_with(runner: &impl GhCommandRunner) -> Result<Option<GithubCliUser>> {
-    if !matches!(
-        get_github_cli_status_with(runner)?,
-        GithubCliStatus::Ready { .. }
-    ) {
+    let status = get_github_cli_status_with(runner)?;
+    get_github_cli_user_with_status(runner, &status)
+}
+
+fn get_github_cli_user_with_status(
+    runner: &impl GhCommandRunner,
+    status: &GithubCliStatus,
+) -> Result<Option<GithubCliUser>> {
+    if !github_cli_is_ready(status) {
         return Ok(None);
     }
 
@@ -241,13 +261,19 @@ fn get_github_cli_user_with(runner: &impl GhCommandRunner) -> Result<Option<Gith
     }))
 }
 
+#[cfg(test)]
 fn list_github_accessible_repositories_with(
     runner: &impl GhCommandRunner,
 ) -> Result<Vec<GithubRepositorySummary>> {
-    if !matches!(
-        get_github_cli_status_with(runner)?,
-        GithubCliStatus::Ready { .. }
-    ) {
+    let status = get_github_cli_status_with(runner)?;
+    list_github_accessible_repositories_with_status(runner, &status)
+}
+
+fn list_github_accessible_repositories_with_status(
+    runner: &impl GhCommandRunner,
+    status: &GithubCliStatus,
+) -> Result<Vec<GithubRepositorySummary>> {
+    if !github_cli_is_ready(status) {
         return Ok(Vec::new());
     }
 
@@ -321,6 +347,38 @@ fn looks_like_unauthenticated(message: &str) -> bool {
     normalized.contains("not logged into")
         || normalized.contains("authentication failed")
         || normalized.contains("gh auth login")
+}
+
+fn github_cli_is_ready(status: &GithubCliStatus) -> bool {
+    matches!(status, GithubCliStatus::Ready { .. })
+}
+
+fn load_cached_system_github_cli_status() -> Result<GithubCliStatus> {
+    load_cached_status(&SYSTEM_GH_STATUS_CACHE, GITHUB_CLI_STATUS_CACHE_TTL, || {
+        get_github_cli_status_with(&SystemGhRunner)
+    })
+}
+
+fn load_cached_status(
+    cache: &Mutex<Option<CachedGithubCliStatus>>,
+    ttl: Duration,
+    loader: impl FnOnce() -> Result<GithubCliStatus>,
+) -> Result<GithubCliStatus> {
+    let mut cache_guard = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(cached) = cache_guard.as_ref() {
+        if cached.cached_at.elapsed() <= ttl {
+            return Ok(cached.status.clone());
+        }
+    }
+
+    let status = loader()?;
+    *cache_guard = Some(CachedGithubCliStatus {
+        cached_at: Instant::now(),
+        status: status.clone(),
+    });
+    Ok(status)
 }
 
 struct SystemGhRunner;
@@ -402,7 +460,7 @@ struct GithubApiRepositoryOwner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
 
     #[derive(Clone)]
@@ -641,5 +699,32 @@ mod tests {
                 message: "Unable to read GitHub CLI version: permission denied".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn load_cached_status_reuses_fresh_cached_value() {
+        let cache = Mutex::new(None);
+        let calls = Cell::new(0);
+
+        let first = load_cached_status(&cache, Duration::from_secs(60), || {
+            calls.set(calls.get() + 1);
+            Ok(GithubCliStatus::Unavailable {
+                host: "github.com".to_string(),
+                message: "missing".to_string(),
+            })
+        })
+        .unwrap();
+
+        let second = load_cached_status(&cache, Duration::from_secs(60), || {
+            calls.set(calls.get() + 1);
+            Ok(GithubCliStatus::Unavailable {
+                host: "github.com".to_string(),
+                message: "other".to_string(),
+            })
+        })
+        .unwrap();
+
+        assert_eq!(calls.get(), 1);
+        assert_eq!(first, second);
     }
 }

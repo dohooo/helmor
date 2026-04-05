@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use rusqlite::Transaction;
+use rusqlite::{Connection, Transaction};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -144,6 +144,13 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
 
 pub fn list_session_messages(session_id: &str) -> Result<Vec<SessionMessageRecord>> {
     let connection = db::open_connection(false)?;
+    list_session_messages_with_connection(&connection, session_id)
+}
+
+fn list_session_messages_with_connection(
+    connection: &Connection,
+    session_id: &str,
+) -> Result<Vec<SessionMessageRecord>> {
     let mut statement = connection.prepare(
         r#"
             SELECT
@@ -159,12 +166,17 @@ pub fn list_session_messages(session_id: &str) -> Result<Vec<SessionMessageRecor
               sm.last_assistant_message_id,
               sm.turn_id,
               sm.is_resumable_message,
-              (
-                SELECT COUNT(*)
-                FROM attachments a
-                WHERE a.session_message_id = sm.id
-              ) AS attachment_count
+              COALESCE(ac.attachment_count, 0) AS attachment_count
             FROM session_messages sm
+            LEFT JOIN (
+              SELECT
+                session_message_id,
+                COUNT(*) AS attachment_count
+              FROM attachments
+              WHERE session_id = ?1
+                AND session_message_id IS NOT NULL
+              GROUP BY session_message_id
+            ) ac ON ac.session_message_id = sm.id
             WHERE sm.session_id = ?1
             ORDER BY
               COALESCE(julianday(sm.sent_at), julianday(sm.created_at)) ASC,
@@ -174,7 +186,7 @@ pub fn list_session_messages(session_id: &str) -> Result<Vec<SessionMessageRecor
 
     let rows = statement.query_map([session_id], |row| {
         let content: String = row.get(3)?;
-        let parsed_content = serde_json::from_str::<Value>(&content).ok();
+        let parsed_content = parse_session_message_content(&content);
         let is_resumable_message = row.get::<_, Option<i64>>(11)?.map(|value| value != 0);
 
         Ok(SessionMessageRecord {
@@ -197,6 +209,18 @@ pub fn list_session_messages(session_id: &str) -> Result<Vec<SessionMessageRecor
     })?;
 
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+fn parse_session_message_content(content: &str) -> Option<Value> {
+    if !content
+        .bytes()
+        .find(|byte| !byte.is_ascii_whitespace())
+        .is_some_and(|byte| matches!(byte, b'{' | b'['))
+    {
+        return None;
+    }
+
+    serde_json::from_str::<Value>(content).ok()
 }
 
 pub fn list_session_attachments(session_id: &str) -> Result<Vec<SessionAttachmentRecord>> {
@@ -583,12 +607,15 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use rusqlite::Connection;
 
-    fn test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
+    fn test_db() -> (Connection, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let conn = Connection::open(&db_path).unwrap();
         crate::schema::ensure_schema(&conn).unwrap();
-        conn
+        (conn, dir)
     }
 
     fn seed(conn: &Connection) {
@@ -609,7 +636,7 @@ mod tests {
 
     #[test]
     fn session_row_exists_after_insert() {
-        let conn = test_db();
+        let (conn, _dir) = test_db();
         seed(&conn);
         let count: i64 = conn
             .query_row(
@@ -630,7 +657,7 @@ mod tests {
 
     #[test]
     fn message_json_detection() {
-        let conn = test_db();
+        let (conn, _dir) = test_db();
         seed(&conn);
         conn.execute(
             "INSERT INTO session_messages (id, session_id, role, content) VALUES ('m1', 's1', 'assistant', ?1)",
@@ -638,6 +665,14 @@ mod tests {
         ).unwrap();
         conn.execute(
             "INSERT INTO session_messages (id, session_id, role, content) VALUES ('m2', 's1', 'user', 'plain text')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO attachments (id, session_id, session_message_id, type, created_at) VALUES ('a1', 's1', 'm1', 'image', '2026-01-01T00:00:30')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO attachments (id, session_id, session_message_id, type, created_at) VALUES ('a2', 's1', 'm1', 'image', '2026-01-01T00:00:31')",
             [],
         ).unwrap();
 
@@ -660,11 +695,20 @@ mod tests {
             .unwrap();
         let parsed2: Result<serde_json::Value, _> = serde_json::from_str(&content2);
         assert!(parsed2.is_err());
+
+        let records = list_session_messages_with_connection(&conn, "s1").unwrap();
+        let json_record = records.iter().find(|record| record.id == "m1").unwrap();
+        let text_record = records.iter().find(|record| record.id == "m2").unwrap();
+
+        assert!(json_record.content_is_json);
+        assert_eq!(json_record.attachment_count, 2);
+        assert!(!text_record.content_is_json);
+        assert_eq!(text_record.attachment_count, 0);
     }
 
     #[test]
     fn attachment_table_empty_by_default() {
-        let conn = test_db();
+        let (conn, _dir) = test_db();
         let count: i64 = conn
             .query_row("SELECT count(*) FROM attachments", [], |r| r.get(0))
             .unwrap();
@@ -717,7 +761,7 @@ mod tests {
 
     #[test]
     fn hide_session_clears_active_session_id() {
-        let conn = test_db();
+        let (conn, _dir) = test_db();
         seed_with_active_session(&conn);
         assert_eq!(get_active_session_id(&conn, "w1"), Some("s1".to_string()));
 
@@ -745,7 +789,7 @@ mod tests {
 
     #[test]
     fn hide_session_switches_to_next_visible_session() {
-        let conn = test_db();
+        let (conn, _dir) = test_db();
         seed_two_sessions(&conn);
         assert_eq!(get_active_session_id(&conn, "w1"), Some("s1".to_string()));
 
@@ -771,7 +815,7 @@ mod tests {
 
     #[test]
     fn delete_session_clears_active_session_id() {
-        let conn = test_db();
+        let (conn, _dir) = test_db();
         seed_with_active_session(&conn);
         assert_eq!(get_active_session_id(&conn, "w1"), Some("s1".to_string()));
 
@@ -793,7 +837,7 @@ mod tests {
 
     #[test]
     fn create_session_validates_workspace_exists() {
-        let conn = test_db();
+        let (conn, _dir) = test_db();
         // No seed — workspace 'w1' does not exist
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM workspaces WHERE id = 'w1'", [], |r| {
@@ -817,7 +861,7 @@ mod tests {
 
     #[test]
     fn create_session_sets_active_session_id() {
-        let conn = test_db();
+        let (conn, _dir) = test_db();
         seed(&conn);
         assert_eq!(get_active_session_id(&conn, "w1"), None);
 
@@ -841,7 +885,7 @@ mod tests {
 
     #[test]
     fn unhide_session_restores_visibility() {
-        let conn = test_db();
+        let (conn, _dir) = test_db();
         seed_with_active_session(&conn);
 
         // Hide then unhide
@@ -865,7 +909,7 @@ mod tests {
 
     #[test]
     fn messages_ordered_by_created_at() {
-        let conn = test_db();
+        let (conn, _dir) = test_db();
         seed(&conn);
         conn.execute(
             "INSERT INTO session_messages (id, session_id, role, content, created_at) VALUES ('m1', 's1', 'user', 'first', '2026-01-01T00:00:00')",

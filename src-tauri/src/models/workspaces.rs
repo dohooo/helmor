@@ -170,6 +170,31 @@ pub struct WorkspaceRecord {
 }
 
 pub const WORKSPACE_RECORD_SQL: &str = r#"
+    WITH session_stats AS (
+      SELECT
+        workspace_id,
+        SUM(COALESCE(unread_count, 0)) AS session_unread_total,
+        SUM(CASE WHEN COALESCE(unread_count, 0) > 0 THEN 1 ELSE 0 END) AS unread_session_count,
+        COUNT(*) AS session_count
+      FROM sessions
+      GROUP BY workspace_id
+    ),
+    message_stats AS (
+      SELECT
+        ws.workspace_id,
+        COUNT(*) AS message_count
+      FROM sessions ws
+      JOIN session_messages sm ON sm.session_id = ws.id
+      GROUP BY ws.workspace_id
+    ),
+    attachment_stats AS (
+      SELECT
+        ws.workspace_id,
+        COUNT(*) AS attachment_count
+      FROM sessions ws
+      JOIN attachments a ON a.session_id = ws.id
+      GROUP BY ws.workspace_id
+    )
     SELECT
       w.id,
       r.id AS repo_id,
@@ -180,25 +205,12 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       w.directory_name,
       w.state,
       CASE
-        WHEN COALESCE(w.unread, 0) > 0 OR COALESCE((
-          SELECT SUM(ws.unread_count)
-          FROM sessions ws
-          WHERE ws.workspace_id = w.id
-        ), 0) > 0 THEN 1
+        WHEN COALESCE(w.unread, 0) > 0 OR COALESCE(ss.session_unread_total, 0) > 0 THEN 1
         ELSE 0
       END AS has_unread,
       COALESCE(w.unread, 0) AS workspace_unread,
-      COALESCE((
-        SELECT SUM(ws.unread_count)
-        FROM sessions ws
-        WHERE ws.workspace_id = w.id
-      ), 0) AS session_unread_total,
-      COALESCE((
-        SELECT COUNT(*)
-        FROM sessions ws
-        WHERE ws.workspace_id = w.id
-          AND COALESCE(ws.unread_count, 0) > 0
-      ), 0) AS unread_session_count,
+      COALESCE(ss.session_unread_total, 0) AS session_unread_total,
+      COALESCE(ss.unread_session_count, 0) AS unread_session_count,
       COALESCE(w.derived_status, 'in-progress') AS derived_status,
       w.manual_status,
       w.branch,
@@ -213,26 +225,15 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       w.pr_title,
       w.pr_description,
       w.archive_commit,
-      (
-        SELECT COUNT(*)
-        FROM sessions ws
-        WHERE ws.workspace_id = w.id
-      ) AS session_count,
-      (
-        SELECT COUNT(*)
-        FROM session_messages sm
-        JOIN sessions ws ON ws.id = sm.session_id
-        WHERE ws.workspace_id = w.id
-      ) AS message_count,
-      (
-        SELECT COUNT(*)
-        FROM attachments a
-        JOIN sessions ws ON ws.id = a.session_id
-        WHERE ws.workspace_id = w.id
-      ) AS attachment_count
+      COALESCE(ss.session_count, 0) AS session_count,
+      COALESCE(ms.message_count, 0) AS message_count,
+      COALESCE(att.attachment_count, 0) AS attachment_count
     FROM workspaces w
     JOIN repos r ON r.id = w.repository_id
     LEFT JOIN sessions s ON s.id = w.active_session_id
+    LEFT JOIN session_stats ss ON ss.workspace_id = w.id
+    LEFT JOIN message_stats ms ON ms.workspace_id = w.id
+    LEFT JOIN attachment_stats att ON att.workspace_id = w.id
 "#;
 
 // ---- Loading workspace records ----
@@ -730,7 +731,12 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
 
     // Save the original branch commit so we can restore it on failure
     let original_branch_commit = git_ops::run_git(
-        ["-C", &repo_root.display().to_string(), "rev-parse", &format!("refs/heads/{branch}")],
+        [
+            "-C",
+            &repo_root.display().to_string(),
+            "rev-parse",
+            &format!("refs/heads/{branch}"),
+        ],
         None,
     )
     .context("Failed to read current branch commit")?;

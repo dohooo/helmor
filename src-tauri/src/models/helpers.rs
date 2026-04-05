@@ -1,8 +1,10 @@
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
+    sync::{LazyLock, Mutex},
 };
 
 use rusqlite::Row;
@@ -109,6 +111,9 @@ const REPO_ICON_CANDIDATES: &[&str] = &[
     "src/assets/icon.png",
 ];
 
+static REPO_ICON_SRC_CACHE: LazyLock<Mutex<HashMap<String, Option<String>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 pub fn repo_icon_path_for_root_path(root_path: Option<&str>) -> Option<String> {
     let root_path = root_path?.trim();
 
@@ -130,14 +135,33 @@ pub fn repo_icon_path_for_root_path(root_path: Option<&str>) -> Option<String> {
 }
 
 pub fn repo_icon_src_for_root_path(root_path: Option<&str>) -> Option<String> {
-    let icon_path = repo_icon_path_for_root_path(root_path)?;
-    let mime_type = repo_icon_mime_type(Path::new(&icon_path));
-    let bytes = fs::read(icon_path).ok()?;
+    let root_path = root_path?.trim();
+    if root_path.is_empty() {
+        return None;
+    }
 
-    Some(format!(
-        "data:{mime_type};base64,{}",
-        BASE64_STANDARD.encode(bytes)
-    ))
+    if let Ok(cache) = REPO_ICON_SRC_CACHE.lock() {
+        if let Some(cached) = cache.get(root_path) {
+            return cached.clone();
+        }
+    }
+
+    let icon_path = repo_icon_path_for_root_path(Some(root_path));
+    let icon_src = icon_path.and_then(|icon_path| {
+        let mime_type = repo_icon_mime_type(Path::new(&icon_path));
+        let bytes = fs::read(icon_path).ok()?;
+
+        Some(format!(
+            "data:{mime_type};base64,{}",
+            BASE64_STANDARD.encode(bytes)
+        ))
+    });
+
+    if let Ok(mut cache) = REPO_ICON_SRC_CACHE.lock() {
+        cache.insert(root_path.to_string(), icon_src.clone());
+    }
+
+    icon_src
 }
 
 pub fn repo_icon_mime_type(path: &Path) -> &'static str {

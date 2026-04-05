@@ -1,6 +1,7 @@
 use std::sync::Mutex;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use chrono::{SecondsFormat, Utc};
 use rusqlite::{Connection, OpenFlags};
 
 pub static WORKSPACE_MUTATION_LOCK: Mutex<()> = Mutex::new(());
@@ -32,10 +33,7 @@ pub fn open_connection_with_flags(
     Ok(connection)
 }
 
-/// Get the current timestamp from SQLite.
+/// Get the current UTC timestamp without opening a throwaway SQLite connection.
 pub fn current_timestamp() -> Result<String> {
-    let connection = open_connection(false)?;
-    connection
-        .query_row("SELECT datetime('now')", [], |row| row.get(0))
-        .context("Failed to resolve timestamp")
+    Ok(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true))
 }

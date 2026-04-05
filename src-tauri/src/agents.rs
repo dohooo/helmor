@@ -96,6 +96,38 @@ struct ParsedAgentOutput {
     result_json: Option<String>,
 }
 
+#[derive(Debug)]
+struct ClaudeOutputAccumulator {
+    assistant_text: String,
+    thinking_text: String,
+    saw_text_delta: bool,
+    saw_thinking_delta: bool,
+    session_id: Option<String>,
+    resolved_model: String,
+    usage: AgentUsage,
+    turns: Vec<CollectedTurn>,
+    cur_asst_id: Option<String>,
+    cur_asst_blocks: Vec<Value>,
+    cur_asst_template: Option<Value>,
+    result_json: Option<String>,
+}
+
+#[derive(Debug)]
+struct CodexOutputAccumulator {
+    assistant_text: String,
+    session_id: Option<String>,
+    resolved_model: String,
+    usage: AgentUsage,
+    turns: Vec<CollectedTurn>,
+    result_json: Option<String>,
+}
+
+#[derive(Debug)]
+enum StreamOutputAccumulator {
+    Claude(ClaudeOutputAccumulator),
+    Codex(CodexOutputAccumulator),
+}
+
 #[derive(Debug, Clone, Copy)]
 struct AgentModelDefinition {
     id: &'static str,
@@ -365,7 +397,9 @@ fn stream_via_sidecar(
     tauri::async_runtime::spawn_blocking(move || {
         let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
         let mut resolved_session_id: Option<String> = None;
-        let mut all_lines: Vec<String> = Vec::new();
+        let mut output_accumulator = hsid_copy
+            .as_ref()
+            .map(|_| StreamOutputAccumulator::new(provider.as_str(), model_copy.cli_model));
         let debug = sidecar_debug_enabled();
         let mut event_count: u64 = 0;
 
@@ -389,42 +423,33 @@ fn stream_via_sidecar(
                 "end" => {
                     if debug {
                         eprintln!(
-                            "[agents:debug] [{rid}] End — {event_count} events, {} lines collected, session={:?}",
-                            all_lines.len(),
+                            "[agents:debug] [{rid}] End — {event_count} events, session={:?}",
                             resolved_session_id
                         );
                     }
                     // Persist the exchange to the DB
                     let mut persisted = false;
-                    if let Some(ref hsid) = hsid_copy {
-                        if !all_lines.is_empty() {
-                            let full_stdout = all_lines.join("\n");
-                            let parse_fn = if provider == "codex" {
-                                parse_codex_output
-                            } else {
-                                parse_claude_output
-                            };
-                            if let Ok(output) = parse_fn(
-                                &full_stdout,
-                                resolved_session_id.as_deref(),
-                                model_copy.cli_model,
-                            ) {
-                                if persist_exchange(
-                                    hsid,
-                                    &prompt_copy,
-                                    &model_copy,
-                                    &output.resolved_model,
-                                    &output.assistant_text,
-                                    output.thinking_text.as_deref(),
-                                    output.session_id.as_deref(),
-                                    &output.usage,
-                                    &output.turns,
-                                    output.result_json.as_deref(),
-                                )
-                                .is_ok()
-                                {
-                                    persisted = true;
-                                }
+                    let mut resolved_model = model_copy.cli_model.to_string();
+                    if let (Some(hsid), Some(accumulator)) =
+                        (hsid_copy.as_deref(), output_accumulator.take())
+                    {
+                        if let Ok(output) = accumulator.finish(resolved_session_id.as_deref()) {
+                            resolved_model = output.resolved_model.clone();
+                            if persist_exchange(
+                                hsid,
+                                &prompt_copy,
+                                &model_copy,
+                                &output.resolved_model,
+                                &output.assistant_text,
+                                output.thinking_text.as_deref(),
+                                output.session_id.as_deref(),
+                                &output.usage,
+                                &output.turns,
+                                output.result_json.as_deref(),
+                            )
+                            .is_ok()
+                            {
+                                persisted = true;
                             }
                         }
                     }
@@ -434,7 +459,7 @@ fn stream_via_sidecar(
                         AgentStreamEvent::Done {
                             provider: provider.clone(),
                             model_id: model_id.clone(),
-                            resolved_model: model_copy.cli_model.to_string(),
+                            resolved_model,
                             session_id: resolved_session_id.clone(),
                             working_directory: working_dir_str.clone(),
                             persisted,
@@ -452,21 +477,17 @@ fn stream_via_sidecar(
                     if debug {
                         eprintln!("[agents:debug] [{rid}] Sidecar error: {msg}");
                     }
-                    let _ = app.emit(
-                        &event_name,
-                        AgentStreamEvent::Error { message: msg },
-                    );
+                    let _ = app.emit(&event_name, AgentStreamEvent::Error { message: msg });
                     break;
                 }
                 _ => {
                     // Forward raw SDK message preserving all fields (incl. type)
                     let line = serde_json::to_string(&event.raw).unwrap_or_default();
                     if !line.is_empty() && line != "{}" {
-                        let _ = app.emit(
-                            &event_name,
-                            AgentStreamEvent::Line { line: line.clone() },
-                        );
-                        all_lines.push(line);
+                        if let Some(accumulator) = output_accumulator.as_mut() {
+                            accumulator.push_value(&event.raw, &line);
+                        }
+                        let _ = app.emit(&event_name, AgentStreamEvent::Line { line });
                     }
                 }
             }
@@ -482,66 +503,58 @@ fn stream_via_sidecar(
         stream_id: request_id,
     })
 }
-
-
-
-fn parse_claude_output(
-    stdout: &str,
-    fallback_session_id: Option<&str>,
-    fallback_model: &str,
-) -> Result<ParsedAgentOutput> {
-    let mut assistant_text = String::new();
-    let mut thinking_text = String::new();
-    let mut saw_text_delta = false;
-    let mut saw_thinking_delta = false;
-    let mut session_id = fallback_session_id.map(str::to_string);
-    let mut resolved_model = fallback_model.to_string();
-    let mut usage = AgentUsage {
-        input_tokens: None,
-        output_tokens: None,
-    };
-
-    // Collect intermediate turns: merge partial assistant messages by message ID.
-    let mut turns: Vec<CollectedTurn> = Vec::new();
-    let mut cur_asst_id: Option<String> = None;
-    let mut cur_asst_blocks: Vec<Value> = Vec::new();
-    let mut cur_asst_template: Option<Value> = None;
-    let mut result_json: Option<String> = None;
-
-    let flush_assistant = |turns: &mut Vec<CollectedTurn>,
-                           cur_id: &mut Option<String>,
-                           blocks: &mut Vec<Value>,
-                           template: &mut Option<Value>| {
-        if blocks.is_empty() {
-            return;
+impl StreamOutputAccumulator {
+    fn new(provider: &str, fallback_model: &str) -> Self {
+        if provider == "codex" {
+            Self::Codex(CodexOutputAccumulator::new(fallback_model))
+        } else {
+            Self::Claude(ClaudeOutputAccumulator::new(fallback_model))
         }
-        if let Some(mut tmpl) = template.take() {
-            if let Some(msg) = tmpl.get_mut("message") {
-                msg["content"] = Value::Array(std::mem::take(blocks));
-            }
-            turns.push(CollectedTurn {
-                role: "assistant".to_string(),
-                content_json: tmpl.to_string(),
-            });
+    }
+
+    fn push_value(&mut self, value: &Value, raw_line: &str) {
+        match self {
+            Self::Claude(accumulator) => accumulator.push_value(value, raw_line),
+            Self::Codex(accumulator) => accumulator.push_value(value, raw_line),
         }
-        *cur_id = None;
-    };
+    }
 
-    for line in stdout
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
+    fn finish(self, fallback_session_id: Option<&str>) -> Result<ParsedAgentOutput> {
+        match self {
+            Self::Claude(accumulator) => accumulator.finish(fallback_session_id),
+            Self::Codex(accumulator) => accumulator.finish(fallback_session_id),
+        }
+    }
+}
 
+impl ClaudeOutputAccumulator {
+    fn new(fallback_model: &str) -> Self {
+        Self {
+            assistant_text: String::new(),
+            thinking_text: String::new(),
+            saw_text_delta: false,
+            saw_thinking_delta: false,
+            session_id: None,
+            resolved_model: fallback_model.to_string(),
+            usage: AgentUsage {
+                input_tokens: None,
+                output_tokens: None,
+            },
+            turns: Vec::new(),
+            cur_asst_id: None,
+            cur_asst_blocks: Vec::new(),
+            cur_asst_template: None,
+            result_json: None,
+        }
+    }
+
+    fn push_value(&mut self, value: &Value, raw_line: &str) {
         if let Some(found_session_id) = value.get("session_id").and_then(Value::as_str) {
-            session_id = Some(found_session_id.to_string());
+            self.session_id = Some(found_session_id.to_string());
         }
 
-        if let Some(found_model) = extract_claude_model_name(&value) {
-            resolved_model = found_model;
+        if let Some(found_model) = extract_claude_model_name(value) {
+            self.resolved_model = found_model;
         }
 
         match value.get("type").and_then(Value::as_str) {
@@ -550,135 +563,211 @@ fn parse_claude_output(
 
                 if let Some(delta_text) = delta.and_then(|d| d.get("text")).and_then(Value::as_str)
                 {
-                    assistant_text.push_str(delta_text);
-                    saw_text_delta = true;
+                    self.assistant_text.push_str(delta_text);
+                    self.saw_text_delta = true;
                 }
 
                 if let Some(delta_thinking) = delta
                     .and_then(|d| d.get("thinking"))
                     .and_then(Value::as_str)
                 {
-                    thinking_text.push_str(delta_thinking);
-                    saw_thinking_delta = true;
+                    self.thinking_text.push_str(delta_thinking);
+                    self.saw_thinking_delta = true;
                 }
             }
             Some("assistant") => {
-                // Extract text/thinking for the response.
-                if !saw_text_delta {
-                    if let Some(text) = extract_claude_assistant_text(&value) {
-                        assistant_text.push_str(&text);
+                if !self.saw_text_delta {
+                    if let Some(text) = extract_claude_assistant_text(value) {
+                        self.assistant_text.push_str(&text);
                     }
                 }
-                if !saw_thinking_delta {
-                    if let Some(thinking) = extract_claude_thinking_text(&value) {
-                        thinking_text.push_str(&thinking);
+                if !self.saw_thinking_delta {
+                    if let Some(thinking) = extract_claude_thinking_text(value) {
+                        self.thinking_text.push_str(&thinking);
                     }
                 }
 
-                // Collect intermediate turn: merge partial messages by ID.
                 let msg_id = value
                     .get("message")
-                    .and_then(|m| m.get("id"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
+                    .and_then(|message| message.get("id"))
+                    .and_then(Value::as_str);
 
-                if cur_asst_id.is_some() && cur_asst_id != msg_id {
-                    flush_assistant(
-                        &mut turns,
-                        &mut cur_asst_id,
-                        &mut cur_asst_blocks,
-                        &mut cur_asst_template,
-                    );
+                if self
+                    .cur_asst_id
+                    .as_deref()
+                    .is_some_and(|current| Some(current) != msg_id)
+                {
+                    self.flush_assistant();
                 }
 
-                if cur_asst_id.is_none() {
-                    cur_asst_id = msg_id;
-                    cur_asst_template = Some(value.clone());
+                if self.cur_asst_id.is_none() {
+                    self.cur_asst_id = msg_id.map(str::to_string);
+                    self.cur_asst_template = Some(value.clone());
                 }
 
                 if let Some(blocks) = value
                     .get("message")
-                    .and_then(|m| m.get("content"))
+                    .and_then(|message| message.get("content"))
                     .and_then(Value::as_array)
                 {
-                    for block in blocks {
-                        cur_asst_blocks.push(block.clone());
-                    }
+                    self.cur_asst_blocks.extend(blocks.iter().cloned());
                 }
             }
             Some("user") => {
-                // Flush any pending assistant turn.
-                flush_assistant(
-                    &mut turns,
-                    &mut cur_asst_id,
-                    &mut cur_asst_blocks,
-                    &mut cur_asst_template,
-                );
-                turns.push(CollectedTurn {
+                self.flush_assistant();
+                self.turns.push(CollectedTurn {
                     role: "user".to_string(),
-                    content_json: value.to_string(),
+                    content_json: raw_line.to_string(),
                 });
             }
             Some("result") => {
-                if assistant_text.trim().is_empty() {
+                if self.assistant_text.trim().is_empty() {
                     if let Some(text) = value.get("result").and_then(Value::as_str) {
-                        assistant_text.push_str(text);
+                        self.assistant_text.push_str(text);
                     }
                 }
                 if let Some(parsed_usage) = value.get("usage") {
-                    usage.input_tokens = parsed_usage.get("input_tokens").and_then(Value::as_i64);
-                    usage.output_tokens = parsed_usage.get("output_tokens").and_then(Value::as_i64);
+                    self.usage.input_tokens =
+                        parsed_usage.get("input_tokens").and_then(Value::as_i64);
+                    self.usage.output_tokens =
+                        parsed_usage.get("output_tokens").and_then(Value::as_i64);
                 }
-                result_json = Some(value.to_string());
+                self.result_json = Some(raw_line.to_string());
             }
             _ => {}
         }
     }
 
-    // Flush final pending assistant turn.
-    flush_assistant(
-        &mut turns,
-        &mut cur_asst_id,
-        &mut cur_asst_blocks,
-        &mut cur_asst_template,
-    );
+    fn finish(mut self, fallback_session_id: Option<&str>) -> Result<ParsedAgentOutput> {
+        self.flush_assistant();
 
-    let assistant_text = assistant_text.trim().to_string();
-    if assistant_text.is_empty() {
-        bail!("Claude returned no assistant text.");
+        let assistant_text = self.assistant_text.trim().to_string();
+        if assistant_text.is_empty() {
+            bail!("Claude returned no assistant text.");
+        }
+
+        let thinking_text = self.thinking_text.trim().to_string();
+        let thinking_text = if thinking_text.is_empty() {
+            None
+        } else {
+            Some(thinking_text)
+        };
+
+        Ok(ParsedAgentOutput {
+            assistant_text,
+            thinking_text,
+            session_id: self
+                .session_id
+                .or_else(|| fallback_session_id.map(str::to_string)),
+            resolved_model: self.resolved_model,
+            usage: self.usage,
+            turns: self.turns,
+            result_json: self.result_json,
+        })
     }
 
-    let thinking_text = thinking_text.trim().to_string();
-    let thinking_text = if thinking_text.is_empty() {
-        None
-    } else {
-        Some(thinking_text)
-    };
+    fn flush_assistant(&mut self) {
+        if self.cur_asst_blocks.is_empty() {
+            self.cur_asst_id = None;
+            return;
+        }
 
-    Ok(ParsedAgentOutput {
-        assistant_text,
-        thinking_text,
-        session_id,
-        resolved_model,
-        usage,
-        turns,
-        result_json,
-    })
+        if let Some(mut template) = self.cur_asst_template.take() {
+            if let Some(message) = template.get_mut("message") {
+                message["content"] = Value::Array(std::mem::take(&mut self.cur_asst_blocks));
+            }
+            self.turns.push(CollectedTurn {
+                role: "assistant".to_string(),
+                content_json: template.to_string(),
+            });
+        }
+
+        self.cur_asst_id = None;
+    }
 }
 
-fn parse_codex_output(
+impl CodexOutputAccumulator {
+    fn new(fallback_model: &str) -> Self {
+        Self {
+            assistant_text: String::new(),
+            session_id: None,
+            resolved_model: fallback_model.to_string(),
+            usage: AgentUsage {
+                input_tokens: None,
+                output_tokens: None,
+            },
+            turns: Vec::new(),
+            result_json: None,
+        }
+    }
+
+    fn push_value(&mut self, value: &Value, raw_line: &str) {
+        if let Some(thread_id) = value.get("thread_id").and_then(Value::as_str) {
+            self.session_id = Some(thread_id.to_string());
+        }
+
+        match value.get("type").and_then(Value::as_str) {
+            Some("item.completed") => {
+                if let Some(item) = value.get("item") {
+                    if item.get("type").and_then(Value::as_str) == Some("agent_message") {
+                        if let Some(text) = item.get("text").and_then(Value::as_str) {
+                            if !self.assistant_text.is_empty() {
+                                self.assistant_text.push_str("\n\n");
+                            }
+                            self.assistant_text.push_str(text);
+                        }
+                    }
+                    self.turns.push(CollectedTurn {
+                        role: "assistant".to_string(),
+                        content_json: raw_line.to_string(),
+                    });
+                }
+            }
+            Some("thread.started") | Some("thread.resumed") => {
+                if let Some(thread_id) = value.get("thread_id").and_then(Value::as_str) {
+                    self.session_id = Some(thread_id.to_string());
+                }
+            }
+            Some("turn.completed") => {
+                if let Some(parsed_usage) = value.get("usage") {
+                    self.usage.input_tokens =
+                        parsed_usage.get("input_tokens").and_then(Value::as_i64);
+                    self.usage.output_tokens =
+                        parsed_usage.get("output_tokens").and_then(Value::as_i64);
+                }
+                self.result_json = Some(raw_line.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    fn finish(self, fallback_session_id: Option<&str>) -> Result<ParsedAgentOutput> {
+        let assistant_text = self.assistant_text.trim().to_string();
+        if assistant_text.is_empty() {
+            bail!("Codex returned no assistant text.");
+        }
+
+        Ok(ParsedAgentOutput {
+            assistant_text,
+            thinking_text: None,
+            session_id: self
+                .session_id
+                .or_else(|| fallback_session_id.map(str::to_string)),
+            resolved_model: self.resolved_model,
+            usage: self.usage,
+            turns: self.turns,
+            result_json: self.result_json,
+        })
+    }
+}
+
+#[cfg(test)]
+fn parse_claude_output(
     stdout: &str,
     fallback_session_id: Option<&str>,
     fallback_model: &str,
 ) -> Result<ParsedAgentOutput> {
-    let mut session_id = fallback_session_id.map(str::to_string);
-    let mut assistant_chunks = Vec::new();
-    let mut turns: Vec<CollectedTurn> = Vec::new();
-    let mut usage = AgentUsage {
-        input_tokens: None,
-        output_tokens: None,
-    };
-    let mut result_json: Option<String> = None;
+    let mut accumulator = ClaudeOutputAccumulator::new(fallback_model);
 
     for line in stdout
         .lines()
@@ -688,57 +777,32 @@ fn parse_codex_output(
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-
-        if let Some(thread_id) = value.get("thread_id").and_then(Value::as_str) {
-            session_id = Some(thread_id.to_string());
-        }
-
-        match value.get("type").and_then(Value::as_str) {
-            Some("item.completed") => {
-                if let Some(item) = value.get("item") {
-                    let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
-                    if item_type == "agent_message" {
-                        if let Some(text) = item.get("text").and_then(Value::as_str) {
-                            assistant_chunks.push(text.to_string());
-                        }
-                    }
-                    // Collect ALL item.completed events as turns for persistence
-                    turns.push(CollectedTurn {
-                        role: "assistant".to_string(),
-                        content_json: line.to_string(),
-                    });
-                }
-            }
-            Some("thread.started") | Some("thread.resumed") => {
-                if let Some(thread_id) = value.get("thread_id").and_then(Value::as_str) {
-                    session_id = Some(thread_id.to_string());
-                }
-            }
-            Some("turn.completed") => {
-                if let Some(parsed_usage) = value.get("usage") {
-                    usage.input_tokens = parsed_usage.get("input_tokens").and_then(Value::as_i64);
-                    usage.output_tokens = parsed_usage.get("output_tokens").and_then(Value::as_i64);
-                }
-                result_json = Some(line.to_string());
-            }
-            _ => {}
-        }
+        accumulator.push_value(&value, line);
     }
 
-    let assistant_text = assistant_chunks.join("\n\n").trim().to_string();
-    if assistant_text.is_empty() {
-        bail!("Codex returned no assistant text.");
+    accumulator.finish(fallback_session_id)
+}
+
+#[cfg(test)]
+fn parse_codex_output(
+    stdout: &str,
+    fallback_session_id: Option<&str>,
+    fallback_model: &str,
+) -> Result<ParsedAgentOutput> {
+    let mut accumulator = CodexOutputAccumulator::new(fallback_model);
+
+    for line in stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        accumulator.push_value(&value, line);
     }
 
-    Ok(ParsedAgentOutput {
-        assistant_text,
-        thinking_text: None,
-        session_id,
-        resolved_model: fallback_model.to_string(),
-        usage,
-        turns,
-        result_json,
-    })
+    accumulator.finish(fallback_session_id)
 }
 
 fn extract_claude_model_name(value: &Value) -> Option<String> {
@@ -966,12 +1030,7 @@ fn open_write_connection() -> Result<Connection> {
 }
 
 fn current_timestamp_string() -> Result<String> {
-    let connection = Connection::open_in_memory()?;
-    connection
-        .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |row| {
-            row.get::<_, String>(0)
-        })
-        .context("Failed to resolve current timestamp")
+    crate::models::db::current_timestamp()
 }
 
 fn find_model_definition(model_id: &str) -> Option<&'static AgentModelDefinition> {
@@ -1122,5 +1181,57 @@ mod tests {
         assert_eq!(non_empty(Some("  ")), None);
         assert_eq!(non_empty(Some("hello")), Some("hello"));
     }
-}
 
+    // -----------------------------------------------------------------------
+    // parse_codex_output — persistence (turns + result_json)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_codex_output_collects_turns() {
+        let stdout = r#"
+            {"type":"thread.started","thread_id":"t1"}
+            {"type":"item.completed","item":{"type":"agent_message","text":"Hello"}}
+            {"type":"item.completed","item":{"type":"command_execution","command":"ls"}}
+            {"type":"item.completed","item":{"type":"agent_message","text":"Done"}}
+            {"type":"turn.completed","usage":{"input_tokens":50,"output_tokens":10}}
+        "#;
+
+        let output = parse_codex_output(stdout, None, "gpt-5.4").unwrap();
+        // All item.completed events should be collected as turns
+        assert_eq!(output.turns.len(), 3);
+        assert!(output.turns[0].content_json.contains("agent_message"));
+        assert!(output.turns[1].content_json.contains("command_execution"));
+        assert!(output.turns[2].content_json.contains("agent_message"));
+        // result_json should be the turn.completed line
+        assert!(output.result_json.is_some());
+        assert!(output.result_json.unwrap().contains("turn.completed"));
+    }
+
+    // -----------------------------------------------------------------------
+    // find_model_definition — provider lookup
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_model_definition_resolves_providers() {
+        let claude = find_model_definition("opus-1m").unwrap();
+        assert_eq!(claude.provider, "claude");
+
+        let codex = find_model_definition("gpt-5.4").unwrap();
+        assert_eq!(codex.provider, "codex");
+
+        assert!(find_model_definition("nonexistent").is_none());
+    }
+
+    #[test]
+    fn model_definitions_have_unique_ids() {
+        let all: Vec<_> = CLAUDE_MODEL_DEFINITIONS
+            .iter()
+            .chain(CODEX_MODEL_DEFINITIONS.iter())
+            .collect();
+        let mut ids: Vec<&str> = all.iter().map(|m| m.id).collect();
+        let len_before = ids.len();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), len_before, "Duplicate model IDs found");
+    }
+}
