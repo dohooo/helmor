@@ -1,47 +1,50 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Helmor",
-  "version": "0.1.0",
-  "identifier": "build.helmor.app",
-  "build": {
-    "beforeDevCommand": "pnpm run dev",
-    "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm run build",
-    "frontendDist": "../dist"
-  },
-  "app": {
-    "windows": [
-      {
-        "title": "Helmor",
-        "width": 1200,
-        "height": 900,
-        "titleBarStyle": "Overlay",
-        "trafficLightPosition": {
-          "x": 16,
-          "y": 24
-        },
-        "hiddenTitle": true
-      }
-    ],
-    "security": {
-      "csp": null,
-      "assetProtocol": {
-        "enable": true,
-        "scope": {
-          "allow": ["**"]
-        }
-      }
-    }
-  },
-  "bundle": {
-    "active": true,
-    "targets": "all",
-    "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
-    ]
-  }
+	"$schema": "https://schema.tauri.app/config/2",
+	"productName": "Helmor",
+	"version": "0.1.0",
+	"identifier": "build.helmor.app",
+	"build": {
+		"beforeDevCommand": "pnpm run dev",
+		"devUrl": "http://localhost:1420",
+		"beforeBuildCommand": "cd sidecar && bun install --frozen-lockfile && bun run build && cd .. && pnpm run build",
+		"frontendDist": "../dist"
+	},
+	"app": {
+		"windows": [
+			{
+				"title": "Helmor",
+				"width": 1200,
+				"height": 900,
+				"titleBarStyle": "Overlay",
+				"trafficLightPosition": {
+					"x": 16,
+					"y": 24
+				},
+				"hiddenTitle": true
+			}
+		],
+		"security": {
+			"csp": null,
+			"assetProtocol": {
+				"enable": true,
+				"scope": {
+					"allow": ["**"]
+				}
+			}
+		}
+	},
+	"bundle": {
+		"active": true,
+		"targets": "all",
+		"resources": {
+			"../sidecar/dist/sidecar.js": "sidecar/"
+		},
+		"icon": [
+			"icons/32x32.png",
+			"icons/128x128.png",
+			"icons/128x128@2x.png",
+			"icons/icon.icns",
+			"icons/icon.ico"
+		]
+	}
 }

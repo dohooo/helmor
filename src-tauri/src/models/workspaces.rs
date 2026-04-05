@@ -968,7 +968,7 @@ fn insert_initializing_workspace_and_session(
               status,
               model,
               permission_mode,
-              claude_session_id,
+              provider_session_id,
               unread_count,
               context_token_count,
               context_used_percent,

@@ -11,7 +11,25 @@ use rusqlite::Connection;
 pub fn ensure_schema(connection: &Connection) -> Result<()> {
     connection
         .execute_batch(SCHEMA_SQL)
-        .context("Failed to initialize database schema")
+        .context("Failed to initialize database schema")?;
+    run_migrations(connection).context("Failed to run database migrations")
+}
+
+/// Incremental migrations for schema changes to existing databases.
+fn run_migrations(connection: &Connection) -> Result<()> {
+    // Migration: rename claude_session_id → provider_session_id (supports any agent provider)
+    let has_old_column: bool = connection
+        .prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'claude_session_id'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+
+    if has_old_column {
+        connection
+            .execute_batch("ALTER TABLE sessions RENAME COLUMN claude_session_id TO provider_session_id")
+            .context("Failed to rename claude_session_id → provider_session_id")?;
+    }
+
+    Ok(())
 }
 
 const SCHEMA_SQL: &str = r#"
@@ -83,7 +101,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     workspace_id TEXT,
     status TEXT DEFAULT 'idle',
-    claude_session_id TEXT,
+    provider_session_id TEXT,
     unread_count INTEGER DEFAULT 0,
     freshly_compacted INTEGER DEFAULT 0,
     context_token_count INTEGER DEFAULT 0,
@@ -220,5 +238,81 @@ mod tests {
         ensure_schema(&connection).unwrap();
         // Call again — should not error
         ensure_schema(&connection).unwrap();
+    }
+
+    #[test]
+    fn migration_renames_claude_session_id_to_provider_session_id() {
+        let connection = Connection::open_in_memory().unwrap();
+
+        // Simulate old schema with claude_session_id
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT,
+                    status TEXT DEFAULT 'idle',
+                    claude_session_id TEXT,
+                    unread_count INTEGER DEFAULT 0,
+                    model TEXT,
+                    permission_mode TEXT DEFAULT 'default',
+                    last_user_message_at TEXT,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now'))
+                );
+                INSERT INTO sessions (id, claude_session_id) VALUES ('s1', 'old-uuid-123');
+                "#,
+            )
+            .unwrap();
+
+        // Run migration
+        run_migrations(&connection).unwrap();
+
+        // Verify column was renamed
+        let has_old: bool = connection
+            .prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'claude_session_id'")
+            .unwrap()
+            .exists([])
+            .unwrap();
+        assert!(!has_old, "claude_session_id should no longer exist");
+
+        let has_new: bool = connection
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'provider_session_id'",
+            )
+            .unwrap()
+            .exists([])
+            .unwrap();
+        assert!(has_new, "provider_session_id should exist");
+
+        // Verify data preserved
+        let value: String = connection
+            .query_row(
+                "SELECT provider_session_id FROM sessions WHERE id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "old-uuid-123");
+    }
+
+    #[test]
+    fn migration_is_idempotent_on_new_schema() {
+        // When the table already has provider_session_id (fresh install),
+        // the migration should be a no-op.
+        let connection = Connection::open_in_memory().unwrap();
+        ensure_schema(&connection).unwrap();
+
+        // Run migrations again — should not error
+        run_migrations(&connection).unwrap();
+
+        let has_new: bool = connection
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'provider_session_id'",
+            )
+            .unwrap()
+            .exists([])
+            .unwrap();
+        assert!(has_new);
     }
 }

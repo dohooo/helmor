@@ -1,16 +1,40 @@
-//! Manages the Bun sidecar process for Claude Agent SDK communication.
+//! Manages the Bun sidecar process for agent SDK communication.
 //!
-//! The sidecar is a long-running Node.js/Bun process that wraps the
-//! Claude Agent SDK. Communication happens via stdin/stdout JSON Lines.
+//! The sidecar is a long-running Bun process that wraps the Claude Agent
+//! SDK (and optionally Codex SDK). Communication happens via stdin/stdout
+//! JSON Lines. Bun is required — there is no Node.js fallback.
+//!
+//! Events from the sidecar are dispatched to per-request channels so that
+//! multiple concurrent streaming requests can coexist without interference.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
+
+// ---------------------------------------------------------------------------
+// Debug logging — enabled via HELMOR_SIDECAR_DEBUG=1
+// ---------------------------------------------------------------------------
+
+fn debug_enabled() -> bool {
+    std::env::var("HELMOR_SIDECAR_DEBUG")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+macro_rules! sidecar_debug {
+    ($($arg:tt)*) => {
+        if debug_enabled() {
+            eprintln!("[sidecar:debug] {}", format!($($arg)*));
+        }
+    };
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -23,50 +47,72 @@ pub struct SidecarRequest {
     pub params: Value,
 }
 
-#[derive(Debug, Deserialize)]
+/// A single event received from the sidecar.
+///
+/// We preserve the raw JSON `Value` intact so that forwarding to the frontend
+/// never loses fields (e.g. `type`) that the streaming parser depends on.
+#[derive(Debug, Clone)]
 pub struct SidecarEvent {
-    pub id: Option<String>,
-    #[serde(rename = "type")]
-    pub event_type: String,
-    #[serde(rename = "sessionId")]
-    pub session_id: Option<String>,
-    #[serde(flatten)]
-    pub extra: Value,
+    pub raw: Value,
+}
+
+impl SidecarEvent {
+    pub fn id(&self) -> Option<&str> {
+        self.raw.get("id")?.as_str()
+    }
+
+    pub fn event_type(&self) -> &str {
+        self.raw
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+    }
+
+    pub fn session_id(&self) -> Option<&str> {
+        self.raw.get("sessionId")?.as_str()
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Sidecar process
+// Sidecar process (low-level)
 // ---------------------------------------------------------------------------
 
-pub struct SidecarProcess {
+struct SidecarProcess {
     child: Child,
     stdin: Arc<Mutex<std::process::ChildStdin>>,
-    stdout_reader: Arc<Mutex<BufReader<std::process::ChildStdout>>>,
 }
 
 impl SidecarProcess {
     /// Start the sidecar process and wait for the "ready" signal.
-    pub fn start() -> Result<Self> {
+    /// Returns the process and a BufReader for stdout (to be consumed by the reader thread).
+    fn start() -> Result<(Self, BufReader<std::process::ChildStdout>)> {
         let sidecar_script = resolve_sidecar_path()?;
+        sidecar_debug!("Resolved script path: {}", sidecar_script.display());
 
-        let runtime = if which_exists("bun") {
-            "bun"
-        } else {
-            "node"
-        };
-
-        let mut child = Command::new(runtime)
-            .arg("run")
+        let debug = debug_enabled();
+        let mut cmd = Command::new("bun");
+        cmd.arg("run")
             .arg(&sidecar_script)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit()) // debug logs go to terminal
+            .stderr(Stdio::inherit());
+
+        // Pass debug flag to the TS sidecar process
+        if debug {
+            cmd.env("HELMOR_SIDECAR_DEBUG", "1");
+        }
+
+        sidecar_debug!("Spawning: bun run {}", sidecar_script.display());
+
+        let mut child = cmd
             .spawn()
-            .with_context(|| format!("Failed to start sidecar with {runtime}"))?;
+            .context("Failed to start sidecar — is Bun installed? (https://bun.sh)")?;
 
         let stdin = child.stdin.take().context("Failed to capture sidecar stdin")?;
         let stdout = child.stdout.take().context("Failed to capture sidecar stdout")?;
         let mut reader = BufReader::new(stdout);
+
+        sidecar_debug!("Waiting for ready signal...");
 
         // Wait for "ready" signal
         let mut line = String::new();
@@ -82,61 +128,32 @@ impl SidecarProcess {
 
         eprintln!("[sidecar] Started (pid={})", child.id());
 
-        Ok(Self {
+        let process = Self {
             child,
             stdin: Arc::new(Mutex::new(stdin)),
-            stdout_reader: Arc::new(Mutex::new(reader)),
-        })
+        };
+        Ok((process, reader))
     }
 
-    /// Send a request to the sidecar.
-    pub fn send(&self, request: &SidecarRequest) -> Result<()> {
+    fn send(&self, request: &SidecarRequest) -> Result<()> {
         let mut stdin = self
             .stdin
             .lock()
             .map_err(|_| anyhow::anyhow!("Sidecar stdin lock poisoned"))?;
 
         let json = serde_json::to_string(request).context("Failed to serialize request")?;
+        sidecar_debug!("→ stdin [{}] {} ({}B)", request.id, request.method, json.len());
         writeln!(stdin, "{json}").context("Failed to write to sidecar stdin")?;
         stdin.flush().context("Failed to flush sidecar stdin")?;
 
         Ok(())
     }
 
-    /// Read the next event from the sidecar (blocking).
-    pub fn read_event(&self) -> Result<Option<SidecarEvent>> {
-        let mut reader = self
-            .stdout_reader
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Sidecar stdout lock poisoned"))?;
-
-        let mut line = String::new();
-        let bytes = reader
-            .read_line(&mut line)
-            .context("Failed to read from sidecar")?;
-
-        if bytes == 0 {
-            return Ok(None); // EOF — sidecar exited
-        }
-
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-
-        let event: SidecarEvent =
-            serde_json::from_str(trimmed).with_context(|| format!("Invalid sidecar event: {trimmed}"))?;
-
-        Ok(Some(event))
-    }
-
-    /// Check if the sidecar is still alive.
-    pub fn is_alive(&mut self) -> bool {
+    fn is_alive(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
     }
 
-    /// Kill the sidecar process.
-    pub fn kill(&mut self) {
+    fn kill(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -149,11 +166,16 @@ impl Drop for SidecarProcess {
 }
 
 // ---------------------------------------------------------------------------
-// Managed sidecar with auto-restart
+// Managed sidecar with event dispatcher
 // ---------------------------------------------------------------------------
+
+type Listeners = Arc<Mutex<HashMap<String, mpsc::Sender<SidecarEvent>>>>;
 
 pub struct ManagedSidecar {
     process: Mutex<Option<SidecarProcess>>,
+    listeners: Listeners,
+    /// Shared flag so the reader thread can signal its own exit.
+    reader_running: Arc<Mutex<bool>>,
 }
 
 impl Default for ManagedSidecar {
@@ -166,6 +188,28 @@ impl ManagedSidecar {
     pub fn new() -> Self {
         Self {
             process: Mutex::new(None),
+            listeners: Arc::new(Mutex::new(HashMap::new())),
+            reader_running: Arc::new(Mutex::new(false)),
+        }
+    }
+
+    /// Register a listener for events matching `request_id`.
+    /// Returns a `Receiver` that will receive dispatched events.
+    pub fn subscribe(&self, request_id: &str) -> mpsc::Receiver<SidecarEvent> {
+        let (tx, rx) = mpsc::channel();
+        if let Ok(mut map) = self.listeners.lock() {
+            sidecar_debug!("subscribe({}) — {} active listeners", request_id, map.len() + 1);
+            map.insert(request_id.to_string(), tx);
+        }
+        rx
+    }
+
+    /// Unregister a listener (called automatically when the sender is dropped,
+    /// but explicit cleanup avoids accumulating stale keys).
+    pub fn unsubscribe(&self, request_id: &str) {
+        if let Ok(mut map) = self.listeners.lock() {
+            map.remove(request_id);
+            sidecar_debug!("unsubscribe({}) — {} active listeners", request_id, map.len());
         }
     }
 
@@ -183,26 +227,108 @@ impl ManagedSidecar {
         };
 
         if needs_restart {
+            sidecar_debug!("send() — sidecar needs (re)start");
             if let Some(mut old) = guard.take() {
+                sidecar_debug!("send() — killing old sidecar process");
                 old.kill();
             }
-            *guard = Some(SidecarProcess::start()?);
+            let (process, reader) = SidecarProcess::start()?;
+            *guard = Some(process);
+
+            // Start the reader/dispatcher thread (always spawns fresh)
+            self.start_reader_thread(reader);
         }
 
         guard.as_ref().unwrap().send(request)
     }
 
-    /// Read the next event (blocking). Caller should do this in a loop on a background thread.
-    pub fn read_event(&self) -> Result<Option<SidecarEvent>> {
-        let guard = self
-            .process
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Sidecar lock poisoned"))?;
-
-        match guard.as_ref() {
-            Some(p) => p.read_event(),
-            None => bail!("Sidecar not started"),
+    /// Spawn a background thread that reads all sidecar stdout and dispatches
+    /// events to the correct per-request channel. On exit (EOF / error), the
+    /// thread clears `reader_running` and drops all listener senders so that
+    /// blocked `rx.iter()` calls in `stream_via_sidecar` unblock immediately.
+    fn start_reader_thread(&self, reader: BufReader<std::process::ChildStdout>) {
+        // Reset flag — previous reader (if any) already exited or we killed its process.
+        if let Ok(mut running) = self.reader_running.lock() {
+            *running = false;
         }
+
+        let mut running = self.reader_running.lock().unwrap();
+        if *running {
+            return;
+        }
+        *running = true;
+        drop(running);
+
+        let listeners = Arc::clone(&self.listeners);
+        let reader_flag = Arc::clone(&self.reader_running);
+        let debug = debug_enabled();
+
+        std::thread::Builder::new()
+            .name("sidecar-reader".into())
+            .spawn(move || {
+                if debug { eprintln!("[sidecar:debug] Reader thread started"); }
+                let mut reader = reader;
+                let mut event_count: u64 = 0;
+                loop {
+                    let mut line = String::new();
+                    match reader.read_line(&mut line) {
+                        Ok(0) => {
+                            eprintln!("[sidecar] Process exited (EOF) — {event_count} events dispatched");
+                            break;
+                        }
+                        Ok(_) => {
+                            let trimmed = line.trim();
+                            if trimmed.is_empty() {
+                                continue;
+                            }
+                            let Ok(raw) = serde_json::from_str::<Value>(trimmed) else {
+                                eprintln!(
+                                    "[sidecar] Invalid JSON: {}",
+                                    &trimmed[..trimmed.len().min(200)]
+                                );
+                                continue;
+                            };
+                            let event = SidecarEvent { raw };
+
+                            if let Some(request_id) = event.id() {
+                                let event_type = event.event_type().to_string();
+                                let map = listeners.lock().unwrap_or_else(|e| e.into_inner());
+                                if let Some(tx) = map.get(request_id) {
+                                    if debug {
+                                        let preview = &trimmed[..trimmed.len().min(120)];
+                                        eprintln!("[sidecar:debug] ← stdout [{request_id}] type={event_type} ({preview}...)");
+                                    }
+                                    let _ = tx.send(event);
+                                    event_count += 1;
+                                } else if debug {
+                                    eprintln!("[sidecar:debug] ← stdout [{request_id}] type={event_type} — NO LISTENER (dropped)");
+                                }
+                            } else if debug {
+                                let preview = &trimmed[..trimmed.len().min(80)];
+                                eprintln!("[sidecar:debug] ← stdout [no-id] {preview}");
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[sidecar] Read error: {e}");
+                            break;
+                        }
+                    }
+                }
+
+                // --- Cleanup on exit ---
+                if debug { eprintln!("[sidecar:debug] Reader thread exiting — cleaning up"); }
+                // 1. Clear reader_running so next send() spawns a fresh reader.
+                if let Ok(mut flag) = reader_flag.lock() {
+                    *flag = false;
+                }
+                // 2. Drop all listener senders so blocked rx.iter() calls return.
+                if let Ok(mut map) = listeners.lock() {
+                    let count = map.len();
+                    map.clear();
+                    if debug { eprintln!("[sidecar:debug] Cleared {count} listeners"); }
+                }
+            })
+            .ok();
     }
 }
 
@@ -219,31 +345,125 @@ fn resolve_sidecar_path() -> Result<PathBuf> {
         }
     }
 
-    // 2. Development: sidecar/src/index.ts (for `bun run`)
-    let dev_path = std::env::current_dir()
-        .unwrap_or_default()
-        .join("sidecar/src/index.ts");
-    if dev_path.is_file() {
-        return Ok(dev_path);
+    // 2. Development: sidecar/src/index.ts (Bun runs .ts directly)
+    //    Tauri dev sets cwd to src-tauri/, so also check parent directory.
+    if let Ok(cwd) = std::env::current_dir() {
+        for base in [cwd.as_path(), cwd.parent().unwrap_or(cwd.as_path())] {
+            let candidate = base.join("sidecar/src/index.ts");
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
     }
 
-    // 3. Built: sidecar/dist/sidecar.js
-    let dist_path = std::env::current_dir()
-        .unwrap_or_default()
-        .join("sidecar/dist/sidecar.js");
-    if dist_path.is_file() {
-        return Ok(dist_path);
+    // 3. Production: bundled resource relative to the executable.
+    //    macOS: Helmor.app/Contents/MacOS/Helmor → ../Resources/sidecar/sidecar.js
+    //    Linux: helmor → ./sidecar/sidecar.js (flat layout)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            // macOS .app bundle
+            let macos_resource = exe_dir.join("../Resources/sidecar/sidecar.js");
+            if macos_resource.is_file() {
+                return Ok(macos_resource);
+            }
+            // Flat layout (Linux / dev dist)
+            let flat = exe_dir.join("sidecar/sidecar.js");
+            if flat.is_file() {
+                return Ok(flat);
+            }
+        }
     }
 
-    bail!("Sidecar script not found. Set HELMOR_SIDECAR_PATH or build with `cd sidecar && bun run build`.")
+    bail!("Sidecar script not found. Set HELMOR_SIDECAR_PATH or ensure Bun sidecar is built.")
 }
 
-fn which_exists(name: &str) -> bool {
-    Command::new("which")
-        .arg(name)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sidecar_event_preserves_all_fields() {
+        let raw = serde_json::json!({
+            "id": "req-1",
+            "type": "assistant",
+            "sessionId": "sess-abc",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+        });
+        let event = SidecarEvent { raw };
+        assert_eq!(event.id(), Some("req-1"));
+        assert_eq!(event.event_type(), "assistant");
+        assert_eq!(event.session_id(), Some("sess-abc"));
+        // Verify full JSON is preserved for forwarding
+        let serialized = serde_json::to_string(&event.raw).unwrap();
+        assert!(serialized.contains("\"type\":\"assistant\""));
+        assert!(serialized.contains("\"message\""));
+    }
+
+    #[test]
+    fn sidecar_event_handles_missing_fields() {
+        let raw = serde_json::json!({"data": "something"});
+        let event = SidecarEvent { raw };
+        assert_eq!(event.id(), None);
+        assert_eq!(event.event_type(), "unknown");
+        assert_eq!(event.session_id(), None);
+    }
+
+    #[test]
+    fn managed_sidecar_subscribe_unsubscribe() {
+        let sidecar = ManagedSidecar::new();
+        let rx = sidecar.subscribe("req-1");
+
+        // Manually push an event through the listeners
+        {
+            let map = sidecar.listeners.lock().unwrap();
+            let tx = map.get("req-1").unwrap();
+            tx.send(SidecarEvent {
+                raw: serde_json::json!({"type": "test"}),
+            })
+            .unwrap();
+        }
+
+        let event = rx.recv().unwrap();
+        assert_eq!(event.event_type(), "test");
+
+        sidecar.unsubscribe("req-1");
+        let map = sidecar.listeners.lock().unwrap();
+        assert!(!map.contains_key("req-1"));
+    }
+
+    #[test]
+    fn reader_cleanup_unblocks_receivers() {
+        let sidecar = ManagedSidecar::new();
+        let rx = sidecar.subscribe("req-1");
+
+        // Simulate reader exit: clear listeners (drops senders)
+        {
+            let mut map = sidecar.listeners.lock().unwrap();
+            map.clear();
+        }
+
+        // rx.iter() should now terminate (sender dropped)
+        let events: Vec<_> = rx.iter().collect();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn reader_running_flag_allows_restart() {
+        let sidecar = ManagedSidecar::new();
+
+        // Simulate: reader was running, then exited and cleared flag
+        {
+            let mut flag = sidecar.reader_running.lock().unwrap();
+            *flag = true;
+        }
+        // Simulate reader exit cleanup
+        {
+            let mut flag = sidecar.reader_running.lock().unwrap();
+            *flag = false;
+        }
+
+        // Now start_reader_thread should be willing to start again
+        let flag = sidecar.reader_running.lock().unwrap();
+        assert!(!*flag, "Flag should be cleared, allowing restart");
+    }
 }

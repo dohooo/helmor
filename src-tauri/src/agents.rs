@@ -1,12 +1,5 @@
 use crate::models::sessions::mark_session_read_in_transaction;
-use std::{
-    collections::HashMap,
-    env,
-    io::{BufRead, BufReader},
-    path::{Path, PathBuf},
-    process::{Command, Stdio},
-    sync::Mutex,
-};
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection};
@@ -48,10 +41,6 @@ pub struct AgentStreamStartResponse {
     pub stream_id: String,
 }
 
-pub struct RunningAgentProcesses {
-    pub map: Mutex<HashMap<String, u32>>,
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentModelOption {
@@ -77,23 +66,8 @@ pub struct AgentSendRequest {
     pub model_id: String,
     pub prompt: String,
     pub session_id: Option<String>,
-    pub conductor_session_id: Option<String>,
+    pub helmor_session_id: Option<String>,
     pub working_directory: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentSendResponse {
-    pub provider: String,
-    pub model_id: String,
-    pub resolved_model: String,
-    pub session_id: Option<String>,
-    pub assistant_text: String,
-    pub thinking_text: Option<String>,
-    pub working_directory: String,
-    pub input_tokens: Option<i64>,
-    pub output_tokens: Option<i64>,
-    pub persisted_to_fixture: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -216,18 +190,8 @@ pub fn list_agent_model_sections() -> Vec<AgentModelSection> {
 }
 
 #[tauri::command]
-pub async fn send_agent_message(request: AgentSendRequest) -> CmdResult<AgentSendResponse> {
-    Ok(
-        tauri::async_runtime::spawn_blocking(move || send_agent_message_blocking(request))
-            .await
-            .context("agent task panicked")??,
-    )
-}
-
-#[tauri::command]
 pub async fn send_agent_message_stream(
     app: AppHandle,
-    state: tauri::State<'_, RunningAgentProcesses>,
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
     request: AgentSendRequest,
 ) -> CmdResult<AgentStreamStartResponse> {
@@ -251,29 +215,22 @@ pub async fn send_agent_message_stream(
     let working_directory = resolve_working_directory(request.working_directory.as_deref())?;
     let stream_id = Uuid::new_v4().to_string();
 
-    if model.provider == "claude" {
-        // --- Claude: use sidecar (SDK) ---
-        return stream_via_sidecar(
-            app,
-            &sidecar,
-            &stream_id,
-            model,
-            &prompt,
-            &request,
-            &working_directory,
-        );
-    }
-
-    // --- Codex: keep existing CLI approach ---
-    stream_via_cli(
+    // All providers go through the sidecar
+    stream_via_sidecar(
         app,
-        &state,
+        &sidecar,
         &stream_id,
         model,
         &prompt,
         &request,
         &working_directory,
     )
+}
+
+fn sidecar_debug_enabled() -> bool {
+    std::env::var("HELMOR_SIDECAR_DEBUG")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 fn stream_via_sidecar(
@@ -286,16 +243,27 @@ fn stream_via_sidecar(
     working_directory: &Path,
 ) -> CmdResult<AgentStreamStartResponse> {
     let request_id = stream_id.to_string();
+    let debug = sidecar_debug_enabled();
+
+    if debug {
+        eprintln!(
+            "[agents:debug] stream_via_sidecar — provider={} model={} cwd={} prompt_len={}",
+            model.provider,
+            model.cli_model,
+            working_directory.display(),
+            prompt.len()
+        );
+    }
 
     // Resolve session ID for resume from DB if not provided by frontend
     let resume_session_id = request
         .session_id
         .clone()
         .or_else(|| {
-            request.conductor_session_id.as_deref().and_then(|csid| {
+            request.helmor_session_id.as_deref().and_then(|csid| {
                 let conn = open_write_connection().ok()?;
                 conn.query_row(
-                    "SELECT claude_session_id FROM sessions WHERE id = ?1",
+                    "SELECT provider_session_id FROM sessions WHERE id = ?1",
                     [csid],
                     |row| row.get::<_, Option<String>>(0),
                 )
@@ -304,8 +272,18 @@ fn stream_via_sidecar(
             })
         });
 
-    let conductor_session_id = request
-        .conductor_session_id
+    if debug {
+        eprintln!(
+            "[agents:debug] resume_session_id={:?} helmor_session_id={:?}",
+            resume_session_id, request.helmor_session_id
+        );
+    }
+
+    // Keep as Option — only persist if a real session exists
+    let helmor_session_id = request.helmor_session_id.clone();
+
+    // The sidecar needs a session ID for the SDK; use the real one or a temporary UUID
+    let sidecar_session_id = helmor_session_id
         .clone()
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
@@ -314,15 +292,20 @@ fn stream_via_sidecar(
         id: request_id.clone(),
         method: "sendMessage".to_string(),
         params: serde_json::json!({
-            "sessionId": conductor_session_id,
+            "sessionId": sidecar_session_id,
             "prompt": prompt,
             "model": model.cli_model,
             "cwd": working_directory.display().to_string(),
             "resume": resume_session_id,
+            "provider": model.provider,
         }),
     };
 
+    // Subscribe to events for this request BEFORE sending (no race)
+    let rx = sidecar.subscribe(&request_id);
+
     if let Err(e) = sidecar.send(&sidecar_req) {
+        sidecar.unsubscribe(&request_id);
         return Err(anyhow::anyhow!("Sidecar send failed: {e}").into());
     }
 
@@ -333,62 +316,72 @@ fn stream_via_sidecar(
     let model_copy = *model;
     let prompt_copy = prompt.to_string();
     let working_dir_str = working_directory.display().to_string();
-    let csid_copy = conductor_session_id.clone();
+    let hsid_copy = helmor_session_id;
     let rid = request_id.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
         let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
         let mut resolved_session_id: Option<String> = None;
         let mut all_lines: Vec<String> = Vec::new();
+        let debug = sidecar_debug_enabled();
+        let mut event_count: u64 = 0;
 
-        loop {
-            let event = match sidecar_state.read_event() {
-                Ok(Some(event)) => event,
-                Ok(None) => break,
-                Err(e) => {
-                    let _ = app.emit(&event_name, AgentStreamEvent::Error {
-                        message: format!("Sidecar read error: {e}"),
-                    });
-                    break;
-                }
-            };
+        if debug {
+            eprintln!("[agents:debug] [{rid}] Waiting for sidecar events...");
+        }
 
-            // Only process events for our request
-            if event.id.as_deref() != Some(rid.as_str()) {
-                continue;
-            }
+        // Receive events from our dedicated channel (dispatched by request ID)
+        for event in rx.iter() {
+            event_count += 1;
 
             // Capture session ID
-            if let Some(ref sid) = event.session_id {
-                resolved_session_id = Some(sid.clone());
+            if let Some(sid) = event.session_id() {
+                if debug && resolved_session_id.is_none() {
+                    eprintln!("[agents:debug] [{rid}] Provider session resolved: {sid}");
+                }
+                resolved_session_id = Some(sid.to_string());
             }
 
-            match event.event_type.as_str() {
+            match event.event_type() {
                 "end" => {
+                    if debug {
+                        eprintln!(
+                            "[agents:debug] [{rid}] End — {event_count} events, {} lines collected, session={:?}",
+                            all_lines.len(),
+                            resolved_session_id
+                        );
+                    }
                     // Persist the exchange to the DB
                     let mut persisted = false;
-                    if !all_lines.is_empty() {
-                        let full_stdout = all_lines.join("\n");
-                        if let Ok(output) = parse_claude_output(
-                            &full_stdout,
-                            resolved_session_id.as_deref(),
-                            model_copy.cli_model,
-                        ) {
-                            if persist_exchange_to_fixture(
-                                &csid_copy,
-                                &prompt_copy,
-                                &model_copy,
-                                &output.resolved_model,
-                                &output.assistant_text,
-                                output.thinking_text.as_deref(),
-                                output.session_id.as_deref(),
-                                &output.usage,
-                                &output.turns,
-                                output.result_json.as_deref(),
-                            )
-                            .is_ok()
-                            {
-                                persisted = true;
+                    if let Some(ref hsid) = hsid_copy {
+                        if !all_lines.is_empty() {
+                            let full_stdout = all_lines.join("\n");
+                            let parse_fn = if provider == "codex" {
+                                parse_codex_output
+                            } else {
+                                parse_claude_output
+                            };
+                            if let Ok(output) = parse_fn(
+                                &full_stdout,
+                                resolved_session_id.as_deref(),
+                                model_copy.cli_model,
+                            ) {
+                                if persist_exchange_to_fixture(
+                                    hsid,
+                                    &prompt_copy,
+                                    &model_copy,
+                                    &output.resolved_model,
+                                    &output.assistant_text,
+                                    output.thinking_text.as_deref(),
+                                    output.session_id.as_deref(),
+                                    &output.usage,
+                                    &output.turns,
+                                    output.result_json.as_deref(),
+                                )
+                                .is_ok()
+                                {
+                                    persisted = true;
+                                }
                             }
                         }
                     }
@@ -408,11 +401,14 @@ fn stream_via_sidecar(
                 }
                 "error" => {
                     let msg = event
-                        .extra
+                        .raw
                         .get("message")
                         .and_then(Value::as_str)
                         .unwrap_or("Unknown sidecar error")
                         .to_string();
+                    if debug {
+                        eprintln!("[agents:debug] [{rid}] Sidecar error: {msg}");
+                    }
                     let _ = app.emit(
                         &event_name,
                         AgentStreamEvent::Error { message: msg },
@@ -420,8 +416,8 @@ fn stream_via_sidecar(
                     break;
                 }
                 _ => {
-                    // Forward SDK message as a JSON line (same format the frontend expects)
-                    let line = serde_json::to_string(&event.extra).unwrap_or_default();
+                    // Forward raw SDK message preserving all fields (incl. type)
+                    let line = serde_json::to_string(&event.raw).unwrap_or_default();
                     if !line.is_empty() && line != "{}" {
                         let _ = app.emit(
                             &event_name,
@@ -432,6 +428,11 @@ fn stream_via_sidecar(
                 }
             }
         }
+
+        if debug {
+            eprintln!("[agents:debug] [{rid}] Event loop exited after {event_count} events");
+        }
+        sidecar_state.unsubscribe(&rid);
     });
 
     Ok(AgentStreamStartResponse {
@@ -439,363 +440,7 @@ fn stream_via_sidecar(
     })
 }
 
-fn stream_via_cli(
-    app: AppHandle,
-    state: &tauri::State<'_, RunningAgentProcesses>,
-    stream_id: &str,
-    model: &AgentModelDefinition,
-    prompt: &str,
-    request: &AgentSendRequest,
-    working_directory: &Path,
-) -> CmdResult<AgentStreamStartResponse> {
-    let mut command = build_cli_command(
-        model,
-        prompt,
-        request.session_id.as_deref(),
-        working_directory,
-    )?;
 
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-    let mut child = command.spawn().context("Failed to spawn CLI process")?;
-    let stdout = child.stdout.take().context("Failed to capture stdout")?;
-
-    if let Ok(mut map) = state.map.lock() {
-        map.insert(stream_id.to_string(), child.id());
-    }
-
-    let event_name = format!("agent-stream:{stream_id}");
-    let cleanup_id = stream_id.to_string();
-    let provider = model.provider.to_string();
-    let model_id = model.id.to_string();
-    let cli_model = model.cli_model.to_string();
-    let conductor_session_id = request.conductor_session_id.clone();
-    let fallback_session_id = request.session_id.clone();
-    let working_dir_str = working_directory.display().to_string();
-    let model_copy = *model;
-    let prompt_copy = prompt.to_string();
-
-    tauri::async_runtime::spawn_blocking(move || {
-        let reader = BufReader::new(stdout);
-        let mut all_lines = Vec::new();
-
-        for line_result in reader.lines() {
-            match line_result {
-                Ok(line) => {
-                    let trimmed = line.trim().to_string();
-                    if !trimmed.is_empty() {
-                        let _ = app.emit(
-                            &event_name,
-                            AgentStreamEvent::Line {
-                                line: trimmed.clone(),
-                            },
-                        );
-                        all_lines.push(trimmed);
-                    }
-                }
-                Err(e) => {
-                    let _ = app.emit(
-                        &event_name,
-                        AgentStreamEvent::Error {
-                            message: e.to_string(),
-                        },
-                    );
-                    return;
-                }
-            }
-        }
-
-        let status = child.wait();
-        let (exit_ok, exit_code) = match &status {
-            Ok(s) => (s.success(), s.code()),
-            Err(_) => (false, None),
-        };
-
-        if !exit_ok {
-            let stderr_text = child
-                .stderr
-                .take()
-                .map(|mut se| {
-                    let mut buf = String::new();
-                    let _ = std::io::Read::read_to_string(&mut se, &mut buf);
-                    buf
-                })
-                .unwrap_or_default();
-            let _ = app.emit(
-                &event_name,
-                AgentStreamEvent::Error {
-                    message: format_process_failure("Codex", stderr_text.as_bytes(), exit_code),
-                },
-            );
-            return;
-        }
-
-        let full_stdout = all_lines.join("\n");
-        let parse_result =
-            parse_codex_output(&full_stdout, fallback_session_id.as_deref(), &cli_model);
-
-        match parse_result {
-            Ok(output) => {
-                let mut persisted = false;
-                if let Some(csid) = non_empty(conductor_session_id.as_deref()) {
-                    if persist_exchange_to_fixture(
-                        csid,
-                        &prompt_copy,
-                        &model_copy,
-                        &output.resolved_model,
-                        &output.assistant_text,
-                        output.thinking_text.as_deref(),
-                        output.session_id.as_deref(),
-                        &output.usage,
-                        &output.turns,
-                        output.result_json.as_deref(),
-                    )
-                    .is_ok()
-                    {
-                        persisted = true;
-                    }
-                }
-
-                let _ = app.emit(
-                    &event_name,
-                    AgentStreamEvent::Done {
-                        provider,
-                        model_id,
-                        resolved_model: output.resolved_model,
-                        session_id: output.session_id,
-                        working_directory: working_dir_str,
-                        persisted_to_fixture: persisted,
-                    },
-                );
-            }
-            Err(e) => {
-                let _ = app.emit(
-                    &event_name,
-                    AgentStreamEvent::Error {
-                        message: format!("{e:#}"),
-                    },
-                );
-            }
-        }
-
-        {
-            let processes: tauri::State<'_, RunningAgentProcesses> = app.state();
-            let mut map = processes.map.lock().unwrap_or_else(|e| e.into_inner());
-            map.remove(&cleanup_id);
-            drop(map);
-        }
-    });
-
-    Ok(AgentStreamStartResponse {
-        stream_id: stream_id.to_string(),
-    })
-}
-
-fn send_agent_message_blocking(request: AgentSendRequest) -> Result<AgentSendResponse> {
-    let prompt = request.prompt.trim();
-    if prompt.is_empty() {
-        bail!("Prompt cannot be empty.");
-    }
-
-    let model = find_model_definition(&request.model_id)
-        .with_context(|| format!("Unknown model id: {}", request.model_id))?;
-
-    if request.provider != model.provider {
-        bail!(
-            "Model {} does not belong to provider {}.",
-            request.model_id,
-            request.provider
-        );
-    }
-
-    let working_directory = resolve_working_directory(request.working_directory.as_deref())?;
-
-    let output = match model.provider {
-        "claude" => send_with_claude(
-            model,
-            prompt,
-            request.session_id.as_deref(),
-            &working_directory,
-        )?,
-        "codex" => send_with_codex(
-            model,
-            prompt,
-            request.session_id.as_deref(),
-            &working_directory,
-        )?,
-        provider => bail!("Unsupported provider: {provider}"),
-    };
-    let persisted_to_fixture =
-        if let Some(conductor_session_id) = non_empty(request.conductor_session_id.as_deref()) {
-            persist_exchange_to_fixture(
-                conductor_session_id,
-                prompt,
-                model,
-                &output.resolved_model,
-                &output.assistant_text,
-                output.thinking_text.as_deref(),
-                output.session_id.as_deref(),
-                &output.usage,
-                &output.turns,
-                output.result_json.as_deref(),
-            )?;
-            true
-        } else {
-            false
-        };
-
-    Ok(AgentSendResponse {
-        provider: model.provider.to_string(),
-        model_id: model.id.to_string(),
-        resolved_model: output.resolved_model,
-        session_id: output.session_id,
-        assistant_text: output.assistant_text,
-        thinking_text: output.thinking_text,
-        working_directory: working_directory.display().to_string(),
-        input_tokens: output.usage.input_tokens,
-        output_tokens: output.usage.output_tokens,
-        persisted_to_fixture,
-    })
-}
-
-fn build_cli_command(
-    model: &AgentModelDefinition,
-    prompt: &str,
-    session_id: Option<&str>,
-    working_directory: &Path,
-) -> Result<Command> {
-    let binary = resolve_binary_path(model.provider)?;
-    let mut command = Command::new(binary);
-
-    if model.provider == "claude" {
-        command
-            .current_dir(working_directory)
-            .arg("-p")
-            .arg("--verbose")
-            .arg("--output-format")
-            .arg("stream-json")
-            .arg("--include-partial-messages")
-            .arg("--model")
-            .arg(model.cli_model);
-
-        if let Some(existing_session_id) = non_empty(session_id) {
-            command.arg("--resume").arg(existing_session_id);
-        }
-
-        command.arg(prompt);
-    } else {
-        // codex
-        command.current_dir(working_directory);
-
-        if let Some(existing_session_id) = non_empty(session_id) {
-            command
-                .arg("exec")
-                .arg("resume")
-                .arg("--json")
-                .arg("--skip-git-repo-check")
-                .arg("-m")
-                .arg(model.cli_model)
-                .arg(existing_session_id)
-                .arg(prompt);
-        } else {
-            command
-                .arg("exec")
-                .arg("--json")
-                .arg("--skip-git-repo-check")
-                .arg("-m")
-                .arg(model.cli_model)
-                .arg(prompt);
-        }
-    }
-
-    Ok(command)
-}
-
-fn send_with_claude(
-    model: &AgentModelDefinition,
-    prompt: &str,
-    session_id: Option<&str>,
-    working_directory: &Path,
-) -> Result<ParsedAgentOutput> {
-    let binary = resolve_binary_path("claude")?;
-    let mut command = Command::new(binary);
-    command
-        .current_dir(working_directory)
-        .arg("-p")
-        .arg("--verbose")
-        .arg("--output-format")
-        .arg("stream-json")
-        .arg("--include-partial-messages")
-        .arg("--model")
-        .arg(model.cli_model);
-
-    if let Some(existing_session_id) = non_empty(session_id) {
-        command.arg("--resume").arg(existing_session_id);
-    }
-
-    command.arg(prompt);
-
-    let output = command.output().context("Failed to run Claude CLI")?;
-
-    if !output.status.success() {
-        bail!(
-            "{}",
-            format_process_failure("Claude", &output.stderr, output.status.code())
-        );
-    }
-
-    parse_claude_output(
-        &String::from_utf8_lossy(&output.stdout),
-        session_id,
-        model.cli_model,
-    )
-}
-
-fn send_with_codex(
-    model: &AgentModelDefinition,
-    prompt: &str,
-    session_id: Option<&str>,
-    working_directory: &Path,
-) -> Result<ParsedAgentOutput> {
-    let binary = resolve_binary_path("codex")?;
-    let mut command = Command::new(binary);
-    command.current_dir(working_directory);
-
-    if let Some(existing_session_id) = non_empty(session_id) {
-        command
-            .arg("exec")
-            .arg("resume")
-            .arg("--json")
-            .arg("--skip-git-repo-check")
-            .arg("-m")
-            .arg(model.cli_model)
-            .arg(existing_session_id)
-            .arg(prompt);
-    } else {
-        command
-            .arg("exec")
-            .arg("--json")
-            .arg("--skip-git-repo-check")
-            .arg("-m")
-            .arg(model.cli_model)
-            .arg(prompt);
-    }
-
-    let output = command.output().context("Failed to run Codex CLI")?;
-
-    if !output.status.success() {
-        bail!(
-            "{}",
-            format_process_failure("Codex", &output.stderr, output.status.code())
-        );
-    }
-
-    parse_codex_output(
-        &String::from_utf8_lossy(&output.stdout),
-        session_id,
-        model.cli_model,
-    )
-}
 
 fn parse_claude_output(
     stdout: &str,
@@ -1120,12 +765,12 @@ fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf> {
         }
     }
 
-    env::current_dir().context("Failed to resolve working directory")
+    std::env::current_dir().context("Failed to resolve working directory")
 }
 
 #[allow(clippy::too_many_arguments)]
 fn persist_exchange_to_fixture(
-    conductor_session_id: &str,
+    helmor_session_id: &str,
     prompt: &str,
     model: &AgentModelDefinition,
     resolved_model: &str,
@@ -1170,7 +815,7 @@ fn persist_exchange_to_fixture(
             "#,
         params![
             user_message_id,
-            conductor_session_id,
+            helmor_session_id,
             prompt,
             now,
             model.id,
@@ -1192,7 +837,7 @@ fn persist_exchange_to_fixture(
                     "#,
                 params![
                     msg_id,
-                    conductor_session_id,
+                    helmor_session_id,
                     collected_turn.role,
                     collected_turn.content_json,
                     now,
@@ -1214,7 +859,7 @@ fn persist_exchange_to_fixture(
             "#,
         params![
             result_message_id,
-            conductor_session_id,
+            helmor_session_id,
             result_payload,
             now,
             resolved_model,
@@ -1231,17 +876,16 @@ fn persist_exchange_to_fixture(
               status = 'idle',
               model = ?2,
               last_user_message_at = ?3,
-              claude_session_id = CASE
-                WHEN ?4 = 'claude' AND ?5 IS NOT NULL THEN ?5
-                ELSE claude_session_id
+              provider_session_id = CASE
+                WHEN ?4 IS NOT NULL THEN ?4
+                ELSE provider_session_id
               END
             WHERE id = ?1
             "#,
         params![
-            conductor_session_id,
+            helmor_session_id,
             model.id,
             now,
-            model.provider,
             provider_session_id
         ],
     )?;
@@ -1253,10 +897,10 @@ fn persist_exchange_to_fixture(
               active_session_id = ?2
             WHERE id = (SELECT workspace_id FROM sessions WHERE id = ?1)
             "#,
-        params![conductor_session_id, conductor_session_id],
+        params![helmor_session_id, helmor_session_id],
     )?;
 
-    mark_session_read_in_transaction(&transaction, conductor_session_id)?;
+    mark_session_read_in_transaction(&transaction, helmor_session_id)?;
 
     transaction
         .commit()
@@ -1274,52 +918,6 @@ fn current_timestamp_string() -> Result<String> {
             row.get::<_, String>(0)
         })
         .context("Failed to resolve current timestamp")
-}
-
-fn resolve_binary_path(binary_name: &str) -> Result<PathBuf> {
-    let env_key = match binary_name {
-        "claude" => "HELMOR_CLAUDE_BIN",
-        "codex" => "HELMOR_CODEX_BIN",
-        _ => bail!("Unsupported binary: {binary_name}"),
-    };
-
-    if let Some(explicit_path) = env::var_os(env_key)
-        .map(PathBuf::from)
-        .filter(|path| path.is_file())
-    {
-        return Ok(explicit_path);
-    }
-
-    if let Some(path_candidate) = search_path(binary_name) {
-        return Ok(path_candidate);
-    }
-
-    let home_dir = env::var_os("HOME")
-        .map(PathBuf::from)
-        .with_context(|| format!("Unable to resolve HOME while locating {binary_name}."))?;
-
-    let fallback_candidates = match binary_name {
-        "claude" => vec![home_dir.join(".local/bin/claude")],
-        "codex" => vec![home_dir.join("Library/pnpm/codex")],
-        _ => Vec::new(),
-    };
-
-    fallback_candidates
-        .into_iter()
-        .find(|path| path.is_file())
-        .with_context(|| {
-            format!(
-                "Unable to locate {binary_name}. Set {env_key} or add it to PATH before sending."
-            )
-        })
-}
-
-fn search_path(binary_name: &str) -> Option<PathBuf> {
-    let paths = env::var_os("PATH")?;
-
-    env::split_paths(&paths)
-        .map(|directory| directory.join(binary_name))
-        .find(|candidate| candidate.is_file())
 }
 
 fn find_model_definition(model_id: &str) -> Option<&'static AgentModelDefinition> {
@@ -1343,15 +941,3 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
     value.filter(|inner| !inner.trim().is_empty())
 }
 
-fn format_process_failure(name: &str, stderr: &[u8], exit_code: Option<i32>) -> String {
-    let stderr_text = String::from_utf8_lossy(stderr).trim().to_string();
-
-    if stderr_text.is_empty() {
-        match exit_code {
-            Some(code) => format!("{name} exited with status {code}."),
-            None => format!("{name} exited unsuccessfully."),
-        }
-    } else {
-        format!("{name} failed: {stderr_text}")
-    }
-}

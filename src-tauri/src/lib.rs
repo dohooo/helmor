@@ -11,9 +11,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .manage(agents::RunningAgentProcesses {
-            map: std::sync::Mutex::new(std::collections::HashMap::new()),
-        })
         .manage(models::auth::GithubIdentityFlowRuntime::default())
         .manage(sidecar::ManagedSidecar::new())
         .setup(|_app| {
@@ -35,7 +32,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             agents::list_agent_model_sections,
-            agents::send_agent_message,
             agents::send_agent_message_stream,
             models::archive_workspace,
             models::cancel_github_identity_connect,
