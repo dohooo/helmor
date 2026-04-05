@@ -64,6 +64,8 @@ pub fn run() {
             models::update_intended_target_branch,
             models::mark_workspace_read,
             models::mark_workspace_unread,
+            models::detect_installed_editors,
+            models::open_workspace_in_editor,
             models::permanently_delete_workspace,
             models::restore_workspace,
             models::start_github_identity_connect,

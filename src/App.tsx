@@ -6,7 +6,15 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Check, Copy, FolderInput, Moon, RefreshCw, Sun } from "lucide-react";
+import {
+	Check,
+	Copy,
+	ExternalLink,
+	FolderInput,
+	Moon,
+	RefreshCw,
+	Sun,
+} from "lucide-react";
 import {
 	type KeyboardEvent,
 	type MouseEvent,
@@ -17,6 +25,12 @@ import {
 	useRef,
 	useState,
 } from "react";
+import {
+	OpenIn,
+	OpenInContent,
+	OpenInItem,
+	OpenInTrigger,
+} from "./components/ai/open-in-chat";
 import { ConductorImportDialog } from "./components/conductor-import-dialog";
 import { SettingsButton, SettingsDialog } from "./components/settings-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "./components/ui/avatar";
@@ -39,6 +53,8 @@ import { WorkspaceConversationContainer } from "./components/workspace-conversat
 import { WorkspacesSidebarContainer } from "./components/workspaces-sidebar-container";
 import {
 	cancelGithubIdentityConnect,
+	type DetectedEditor,
+	detectInstalledEditors,
 	disconnectGithubIdentity,
 	type GithubIdentityDeviceFlowStart,
 	type GithubIdentitySnapshot,
@@ -46,6 +62,7 @@ import {
 	isConductorAvailable,
 	listenGithubIdentityChanged,
 	loadGithubIdentitySession,
+	openWorkspaceInEditor,
 	startGithubIdentityConnect,
 	type WorkspaceDetail,
 	type WorkspaceGroup,
@@ -293,6 +310,9 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		return (localStorage.getItem("helmor.theme") as "light" | "dark") ?? "dark";
 	});
 	const [conductorAvailable, setConductorAvailable] = useState(false);
+	const [installedEditors, setInstalledEditors] = useState<DetectedEditor[]>(
+		[],
+	);
 	const [importDialogOpen, setImportDialogOpen] = useState(false);
 	const isResizing = resizeState !== null;
 	const isIdentityConnected = githubIdentityState.status === "connected";
@@ -312,6 +332,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 	useEffect(() => {
 		void isConductorAvailable().then(setConductorAvailable);
+		void detectInstalledEditors().then(setInstalledEditors);
 	}, []);
 
 	const toggleTheme = useCallback(() => {
@@ -493,11 +514,6 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 			try {
 				await navigator.clipboard.writeText(userCode);
-				pushWorkspaceToast(
-					"The GitHub one-time code has been copied to your clipboard.",
-					"Code copied",
-					"default",
-				);
 				return true;
 			} catch {
 				pushWorkspaceToast("Unable to copy the one-time code.", "Copy failed");
@@ -1003,6 +1019,56 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 							/>
 
 							<div className="absolute right-4 top-[0.55rem] z-30 flex items-center gap-1">
+								{selectedWorkspaceId && installedEditors.length > 0 && (
+									<OpenIn query="">
+										<OpenInTrigger className="flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:text-app-foreground focus-visible:outline-none">
+											<ExternalLink className="size-3.5" strokeWidth={1.8} />
+										</OpenInTrigger>
+										<OpenInContent
+											align="end"
+											sideOffset={6}
+											className="min-w-[11rem]"
+										>
+											{installedEditors.map((editor) => (
+												<OpenInItem
+													key={editor.id}
+													onClick={() =>
+														void openWorkspaceInEditor(
+															selectedWorkspaceId,
+															editor.id as "cursor" | "vscode",
+														).catch((e) =>
+															pushWorkspaceToast(
+																String(e),
+																`Failed to open ${editor.name}`,
+															),
+														)
+													}
+													className="flex items-center gap-2"
+												>
+													{editor.id === "cursor" && (
+														<svg
+															className="size-4 shrink-0"
+															viewBox="0 0 466.73 532.09"
+															fill="currentColor"
+														>
+															<path d="M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z" />
+														</svg>
+													)}
+													{editor.id === "vscode" && (
+														<svg
+															className="size-4 shrink-0"
+															viewBox="0 0 24 24"
+															fill="currentColor"
+														>
+															<path d="M17.58 2.39L10 9.43 4.64 5.42 2 6.76v10.48l2.64 1.34L10 14.57l7.58 7.04L22 19.33V4.67l-4.42-2.28zM4.64 15.36V8.64L7.93 12l-3.29 3.36zM17.58 17.6l-5.37-5.6 5.37-5.6v11.2z" />
+														</svg>
+													)}
+													<span className="font-medium">{editor.name}</span>
+												</OpenInItem>
+											))}
+										</OpenInContent>
+									</OpenIn>
+								)}
 								{conductorAvailable && (
 									<Button
 										variant="ghost"
@@ -1339,14 +1405,14 @@ function GithubIdentityGate({
 									void handleCopyCodeThenRedirect();
 								}}
 								disabled={codeCopied}
-								className="relative rounded-2xl px-3 py-2 transition-colors hover:bg-app-toolbar-hover/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong"
+								className="relative rounded-2xl px-5 py-3 transition-colors hover:bg-app-toolbar-hover/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong"
 								aria-label="Copy one-time code"
 								title="Copy one-time code"
 							>
 								<span className="font-mono text-[30px] tracking-[0.18em] text-app-foreground">
 									{identityState.flow.userCode}
 								</span>
-								<span className="absolute bottom-1 right-1 flex items-center justify-center rounded-md p-1 transition-all">
+								<span className="absolute -right-6 top-1/2 flex -translate-y-1/2 items-center justify-center">
 									{codeCopied ? (
 										<Check
 											className="size-4 text-green-400"

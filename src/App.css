@@ -62,41 +62,37 @@ body {
 .conversation-scroll-button {
 	position: absolute;
 	left: 50%;
-	bottom: 1.5rem;
+	bottom: 1.25rem;
 	z-index: 10;
-	display: inline-flex;
+	display: flex;
 	align-items: center;
-	gap: 0.45rem;
+	justify-content: center;
+	width: 2rem;
+	height: 2rem;
 	transform: translateX(-50%);
-	border: 1px solid
-		color-mix(in oklch, var(--color-app-border-strong) 70%, transparent);
-	background: linear-gradient(
-		180deg,
-		color-mix(in oklch, var(--color-app-elevated) 96%, white 4%),
-		color-mix(in oklch, var(--color-app-sidebar) 94%, black 6%)
-	);
-	color: var(--color-app-foreground-soft);
-	box-shadow: 0 10px 30px oklch(0% 0 0 / 0.12);
-	border-radius: 999px;
-	padding: 0.45rem 0.8rem;
-	font-size: 12px;
-	font-weight: 600;
+	border: none;
+	background: var(--color-app-sidebar);
+	color: var(--color-app-muted);
+	border-radius: 9999px;
+	padding: 0;
+	cursor: pointer;
+	opacity: 1;
 	transition:
-		transform 160ms ease,
-		color 160ms ease,
-		border-color 160ms ease,
-		box-shadow 160ms ease;
+		opacity 200ms ease,
+		transform 200ms ease,
+		color 150ms ease,
+		background-color 150ms ease;
+}
+
+.conversation-scroll-button-hidden {
+	opacity: 0;
+	transform: translateX(-50%) translateY(6px);
+	pointer-events: none;
 }
 
 .conversation-scroll-button:hover {
-	transform: translateX(-50%) translateY(-1px);
+	background: var(--color-app-sidebar-strong);
 	color: var(--color-app-foreground);
-	border-color: color-mix(
-		in oklch,
-		var(--color-app-project) 35%,
-		var(--color-app-border-strong)
-	);
-	box-shadow: 0 14px 32px oklch(0% 0 0 / 0.16);
 }
 
 .helmor-shimmer-text {
