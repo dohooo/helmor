@@ -44,7 +44,9 @@ pub fn get_data_info() -> CmdResult<DataInfo> {
 pub fn get_app_settings() -> CmdResult<std::collections::HashMap<String, String>> {
     let conn = db::open_connection(false)?;
     let mut stmt = conn
-        .prepare("SELECT key, value FROM settings WHERE key LIKE 'app.%'")
+        .prepare(
+            "SELECT key, value FROM settings WHERE key LIKE 'app.%' OR key LIKE 'branch_prefix_%'",
+        )
         .context("Failed to query app settings")?;
     let rows = stmt
         .query_map([], |row| {
@@ -62,7 +64,7 @@ pub fn get_app_settings() -> CmdResult<std::collections::HashMap<String, String>
 #[tauri::command]
 pub fn update_app_settings(settings: std::collections::HashMap<String, String>) -> CmdResult<()> {
     for (key, value) in &settings {
-        if !key.starts_with("app.") {
+        if !key.starts_with("app.") && !key.starts_with("branch_prefix_") {
             continue;
         }
         settings::upsert_setting_value(key, value)?;

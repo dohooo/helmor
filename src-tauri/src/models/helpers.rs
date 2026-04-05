@@ -448,22 +448,42 @@ pub fn branch_name_for_directory(
     directory_name: &str,
     settings: &super::settings::BranchPrefixSettings,
 ) -> String {
-    let prefix = match settings
+    let prefix_type = settings
         .branch_prefix_type
         .as_deref()
-        .map(|value| value.trim().to_ascii_lowercase())
-        .as_deref()
-    {
+        .map(|value| value.trim().to_ascii_lowercase());
+
+    let prefix = match prefix_type.as_deref() {
         Some("custom") => settings
             .branch_prefix_custom
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .unwrap_or(""),
-        _ => "",
+            .unwrap_or("")
+            .to_string(),
+        Some("none") => String::new(),
+        // Default: use GitHub login as prefix (e.g., "username/")
+        _ => {
+            if let Ok(Some(login)) = resolve_github_login() {
+                format!("{login}/")
+            } else {
+                String::new()
+            }
+        }
     };
 
     format!("{prefix}{directory_name}")
+}
+
+/// Read the GitHub login from the stored identity metadata.
+fn resolve_github_login() -> Result<Option<String>> {
+    let raw = super::settings::load_setting_value("github_identity_meta")?;
+    let raw = match raw {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+    let meta: serde_json::Value = serde_json::from_str(&raw)?;
+    Ok(meta.get("login").and_then(|v| v.as_str()).map(String::from))
 }
 
 pub fn allocate_directory_name_for_repo(repo_id: &str) -> Result<String> {
