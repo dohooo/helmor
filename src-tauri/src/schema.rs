@@ -41,6 +41,13 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         connection
             .execute_batch("ALTER TABLE sessions ADD COLUMN effort_level TEXT DEFAULT 'high'")
             .context("Failed to add effort_level column")?;
+
+        // Backfill effort_level from codex_thinking_level for imported Codex sessions
+        connection
+            .execute_batch(
+                "UPDATE sessions SET effort_level = codex_thinking_level WHERE codex_thinking_level IS NOT NULL AND codex_thinking_level != '' AND effort_level = 'high'"
+            )
+            .ok();
     }
 
     Ok(())
@@ -130,7 +137,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     context_used_percent REAL,
     effort_level TEXT DEFAULT 'high',
     thinking_enabled INTEGER DEFAULT 1,
-    codex_thinking_level TEXT,
     fast_mode INTEGER DEFAULT 0,
     agent_personality TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),

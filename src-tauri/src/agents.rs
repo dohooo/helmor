@@ -397,6 +397,7 @@ fn stream_via_sidecar(
     let working_dir_str = working_directory.display().to_string();
     let hsid_copy = helmor_session_id;
     let effort_copy = request.effort_level.clone();
+    let permission_mode_copy = request.permission_mode.clone();
     let rid = request_id.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -449,6 +450,7 @@ fn stream_via_sidecar(
                                 output.thinking_text.as_deref(),
                                 output.session_id.as_deref(),
                                 effort_copy.as_deref(),
+                                permission_mode_copy.as_deref(),
                                 &output.usage,
                                 &output.turns,
                                 output.result_json.as_deref(),
@@ -900,6 +902,7 @@ fn persist_exchange(
     _thinking_text: Option<&str>,
     provider_session_id: Option<&str>,
     effort_level: Option<&str>,
+    permission_mode: Option<&str>,
     usage: &AgentUsage,
     turns: &[CollectedTurn],
     raw_result_json: Option<&str>,
@@ -1004,7 +1007,8 @@ fn persist_exchange(
                 WHEN ?5 IS NOT NULL THEN ?5
                 ELSE provider_session_id
               END,
-              effort_level = COALESCE(?6, effort_level)
+              effort_level = COALESCE(?6, effort_level),
+              permission_mode = COALESCE(?7, permission_mode)
             WHERE id = ?1
             "#,
         params![
@@ -1013,7 +1017,8 @@ fn persist_exchange(
             model.provider,
             now,
             provider_session_id,
-            effort_level
+            effort_level,
+            permission_mode
         ],
     )?;
 
@@ -1229,6 +1234,158 @@ mod tests {
         assert_eq!(codex.provider, "codex");
 
         assert!(find_model_definition("nonexistent").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // persist_exchange — integration test with real DB
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn persist_exchange_writes_effort_and_permission_mode() {
+        // Use a temp dir as HELMOR_DATA_DIR
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+
+        // Initialize schema + seed data
+        let db_path = dir.path().join("helmor.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        crate::schema::ensure_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name) VALUES ('r1', 'test-repo')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, state) VALUES ('w1', 'r1', 'test', 'ready')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('s1', 'w1', 'idle', 'Test')",
+            [],
+        ).unwrap();
+        drop(conn);
+
+        // Call persist_exchange with effort + permission_mode
+        let model = find_model_definition("opus-1m").unwrap();
+        let result = persist_exchange(
+            "s1",
+            "Hello",
+            model,
+            "claude-opus-4-20250514",
+            "Response text",
+            None,
+            Some("sdk-session-123"),
+            Some("max"),
+            Some("plan"),
+            &AgentUsage {
+                input_tokens: Some(100),
+                output_tokens: Some(50),
+            },
+            &[],
+            None,
+        );
+        assert!(
+            result.is_ok(),
+            "persist_exchange failed: {:?}",
+            result.err()
+        );
+
+        // Verify DB was updated
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let (effort, perm, agent_type, model_id): (String, String, String, String) = conn
+            .query_row(
+                "SELECT effort_level, permission_mode, agent_type, model FROM sessions WHERE id = 's1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+
+        assert_eq!(effort, "max", "effort_level should be persisted");
+        assert_eq!(perm, "plan", "permission_mode should be persisted");
+        assert_eq!(
+            agent_type, "claude",
+            "agent_type should be set from model provider"
+        );
+        assert_eq!(model_id, "opus-1m", "model should be persisted");
+
+        // Verify messages were created
+        let msg_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM session_messages WHERE session_id = 's1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            msg_count >= 2,
+            "Should have at least user + assistant messages, got {msg_count}"
+        );
+
+        // Cleanup env
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn persist_exchange_preserves_existing_values_when_null() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+
+        let db_path = dir.path().join("helmor.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        crate::schema::ensure_schema(&conn).unwrap();
+        conn.execute("INSERT INTO repos (id, name) VALUES ('r1', 'repo')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, state) VALUES ('w1', 'r1', 't', 'ready')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status, effort_level, permission_mode) VALUES ('s1', 'w1', 'idle', 'high', 'acceptEdits')",
+            [],
+        ).unwrap();
+        drop(conn);
+
+        let model = find_model_definition("opus-1m").unwrap();
+        persist_exchange(
+            "s1",
+            "Hi",
+            model,
+            "opus",
+            "Reply",
+            None,
+            None,
+            None, // effort_level = None → should keep 'high'
+            None, // permission_mode = None → should keep 'acceptEdits'
+            &AgentUsage {
+                input_tokens: None,
+                output_tokens: None,
+            },
+            &[],
+            None,
+        )
+        .unwrap();
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let (effort, perm): (String, String) = conn
+            .query_row(
+                "SELECT effort_level, permission_mode FROM sessions WHERE id = 's1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(
+            effort, "high",
+            "effort_level should be preserved when None passed"
+        );
+        assert_eq!(
+            perm, "acceptEdits",
+            "permission_mode should be preserved when None passed"
+        );
+
+        std::env::remove_var("HELMOR_DATA_DIR");
     }
 
     #[test]

@@ -319,6 +319,27 @@ pub fn permanently_delete_workspace(workspace_id: String) -> CmdResult<()> {
     Ok(workspaces::permanently_delete_workspace(&workspace_id)?)
 }
 
+#[tauri::command]
+pub fn update_session_settings(
+    session_id: String,
+    effort_level: Option<String>,
+    permission_mode: Option<String>,
+) -> CmdResult<()> {
+    let connection = db::open_connection(true)?;
+    connection
+        .execute(
+            r#"
+            UPDATE sessions SET
+              effort_level = COALESCE(?2, effort_level),
+              permission_mode = COALESCE(?3, permission_mode)
+            WHERE id = ?1
+            "#,
+            rusqlite::params![session_id, effort_level, permission_mode],
+        )
+        .context("Failed to update session settings")?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -782,35 +803,33 @@ mod tests {
     }
 
     #[test]
-    fn restore_workspace_fails_when_target_directory_exists() {
+    fn restore_workspace_cleans_up_existing_target_directory() {
         let _guard = TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let harness = RestoreTestHarness::new(true);
+        // Pre-create the target directory — restore should clean it up and succeed
         fs::create_dir_all(harness.workspace_dir()).unwrap();
+        fs::write(harness.workspace_dir().join("stale.txt"), "old").unwrap();
 
-        let error = workspaces::restore_workspace_impl(&harness.workspace_id).unwrap_err();
-
-        assert!(error.to_string().contains("already exists"));
-        assert!(harness.archived_context_dir().exists());
-
-        let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
-        let state: String = connection
-            .query_row(
-                "SELECT state FROM workspaces WHERE id = ?1",
-                [&harness.workspace_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(state, "archived");
+        let result = workspaces::restore_workspace_impl(&harness.workspace_id);
+        assert!(
+            result.is_ok(),
+            "Restore should succeed by replacing existing dir: {:?}",
+            result.err()
+        );
+        // Stale file should be gone, replaced by worktree
+        assert!(!harness.workspace_dir().join("stale.txt").exists());
+        assert!(harness.workspace_dir().join(".git").exists());
     }
 
     #[test]
-    fn restore_workspace_fails_when_branch_no_longer_exists() {
+    fn restore_workspace_recreates_deleted_branch() {
         let _guard = TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let harness = RestoreTestHarness::new(true);
+        // Delete the branch — restore should recreate it from archive_commit
         git_ops::run_git(
             [
                 "-C",
@@ -823,11 +842,16 @@ mod tests {
         )
         .unwrap();
 
-        let error = workspaces::restore_workspace_impl(&harness.workspace_id).unwrap_err();
-
-        assert!(error.to_string().contains("Branch does not exist"));
-        assert!(!harness.workspace_dir().exists());
-        assert!(harness.archived_context_dir().exists());
+        let result = workspaces::restore_workspace_impl(&harness.workspace_id);
+        assert!(
+            result.is_ok(),
+            "Restore should succeed by recreating branch: {:?}",
+            result.err()
+        );
+        assert!(
+            harness.workspace_dir().exists(),
+            "Worktree should be created"
+        );
     }
 
     #[test]

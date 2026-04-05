@@ -125,11 +125,15 @@ export const WorkspaceConversationContainer = memo(
 				imagePaths,
 				model,
 				workingDirectory,
+				effortLevel,
+				permissionMode,
 			}: {
 				prompt: string;
 				imagePaths: string[];
 				model: AgentModelOption;
 				workingDirectory: string | null;
+				effortLevel: string;
+				permissionMode: string;
 			}) => {
 				const trimmedPrompt = prompt.trim();
 				if (!trimmedPrompt || selectionPending) {
@@ -170,6 +174,8 @@ export const WorkspaceConversationContainer = memo(
 						sessionId: providerSessionId,
 						helmorSessionId: displayedSessionId,
 						workingDirectory,
+						effortLevel,
+						permissionMode,
 					});
 					const sidecarSessionId = displayedSessionId ?? `tmp-${streamId}`;
 					setActiveSessionByContext((current) => ({
@@ -285,10 +291,17 @@ export const WorkspaceConversationContainer = memo(
 
 						if (event.kind === "error") {
 							cleanup();
-							setSendErrorsByContext((current) => ({
-								...current,
-								[contextKey]: event.message,
-							}));
+							// Don't show abort errors — the user triggered the stop
+							const isAbort =
+								event.message?.includes("aborted") ||
+								event.message?.includes("abort") ||
+								event.message?.includes("cancel");
+							if (!isAbort) {
+								setSendErrorsByContext((current) => ({
+									...current,
+									[contextKey]: event.message,
+								}));
+							}
 							setActiveSessionByContext((current) => {
 								if (!(contextKey in current)) {
 									return current;

@@ -71,7 +71,8 @@ pub fn run() {
             models::list_conductor_repos,
             models::list_conductor_workspaces,
             models::import_conductor_workspaces,
-            models::update_app_settings
+            models::update_app_settings,
+            models::update_session_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -23,7 +23,6 @@ pub struct WorkspaceSessionSummary {
     pub context_token_count: i64,
     pub context_used_percent: Option<f64>,
     pub thinking_enabled: bool,
-    pub codex_thinking_level: Option<String>,
     pub fast_mode: bool,
     pub agent_personality: Option<String>,
     pub created_at: String,
@@ -94,7 +93,6 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
               s.context_token_count,
               s.context_used_percent,
               s.thinking_enabled,
-              s.codex_thinking_level,
               s.fast_mode,
               s.agent_personality,
               s.created_at,
@@ -106,13 +104,11 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
             FROM sessions s
             WHERE s.workspace_id = ?1 AND COALESCE(s.is_hidden, 0) = 0
             ORDER BY
-              CASE WHEN s.id = ?2 THEN 0 ELSE 1 END,
-              datetime(s.updated_at) DESC,
-              datetime(s.created_at) DESC
+              datetime(s.created_at) ASC
             "#,
     )?;
 
-    let rows = statement.query_map((workspace_id, active_session_id.as_deref()), |row| {
+    let rows = statement.query_map([workspace_id], |row| {
         let id: String = row.get(0)?;
 
         Ok(WorkspaceSessionSummary {
@@ -130,15 +126,14 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
             context_token_count: row.get(10)?,
             context_used_percent: row.get(11)?,
             thinking_enabled: row.get::<_, i64>(12)? != 0,
-            codex_thinking_level: row.get(13)?,
-            fast_mode: row.get::<_, i64>(14)? != 0,
-            agent_personality: row.get(15)?,
-            created_at: row.get(16)?,
-            updated_at: row.get(17)?,
-            last_user_message_at: row.get(18)?,
-            resume_session_at: row.get(19)?,
-            is_hidden: row.get::<_, i64>(20)? != 0,
-            is_compacting: row.get::<_, i64>(21)? != 0,
+            fast_mode: row.get::<_, i64>(13)? != 0,
+            agent_personality: row.get(14)?,
+            created_at: row.get(15)?,
+            updated_at: row.get(16)?,
+            last_user_message_at: row.get(17)?,
+            resume_session_at: row.get(18)?,
+            is_hidden: row.get::<_, i64>(19)? != 0,
+            is_compacting: row.get::<_, i64>(20)? != 0,
         })
     })?;
 
@@ -580,12 +575,12 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
               s.id, s.workspace_id, s.title, s.agent_type, s.status, s.model,
               s.permission_mode, s.provider_session_id, s.effort_level, s.unread_count,
               s.context_token_count, s.context_used_percent, s.thinking_enabled,
-              s.codex_thinking_level, s.fast_mode, s.agent_personality,
+              s.fast_mode, s.agent_personality,
               s.created_at, s.updated_at, s.last_user_message_at,
               s.resume_session_at, s.is_hidden, s.is_compacting
             FROM sessions s
             WHERE s.workspace_id = ?1 AND s.is_hidden = 1
-            ORDER BY datetime(s.updated_at) DESC
+            ORDER BY datetime(s.created_at) ASC
             "#,
         )
         .context("Failed to prepare hidden sessions query")?;
@@ -608,15 +603,14 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
                 context_token_count: row.get(10)?,
                 context_used_percent: row.get(11)?,
                 thinking_enabled: row.get::<_, i64>(12)? != 0,
-                codex_thinking_level: row.get(13)?,
-                fast_mode: row.get::<_, i64>(14)? != 0,
-                agent_personality: row.get(15)?,
-                created_at: row.get(16)?,
-                updated_at: row.get(17)?,
-                last_user_message_at: row.get(18)?,
-                resume_session_at: row.get(19)?,
-                is_hidden: row.get::<_, i64>(20)? != 0,
-                is_compacting: row.get::<_, i64>(21)? != 0,
+                fast_mode: row.get::<_, i64>(13)? != 0,
+                agent_personality: row.get(14)?,
+                created_at: row.get(15)?,
+                updated_at: row.get(16)?,
+                last_user_message_at: row.get(17)?,
+                resume_session_at: row.get(18)?,
+                is_hidden: row.get::<_, i64>(19)? != 0,
+                is_compacting: row.get::<_, i64>(20)? != 0,
             })
         })
         .context("Failed to query hidden sessions")?;

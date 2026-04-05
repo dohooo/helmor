@@ -232,7 +232,7 @@ export type WorkspaceSessionSummary = {
 	contextTokenCount: number;
 	contextUsedPercent?: number | null;
 	thinkingEnabled: boolean;
-	codexThinkingLevel?: string | null;
+
 	fastMode: boolean;
 	agentPersonality?: string | null;
 	createdAt: string;
@@ -531,7 +531,7 @@ const BROWSER_FIXTURE_WORKSPACE_SESSIONS: Record<
 			contextTokenCount: 1200,
 			contextUsedPercent: 18,
 			thinkingEnabled: true,
-			codexThinkingLevel: null,
+
 			fastMode: false,
 			agentPersonality: null,
 			createdAt: "2026-04-05T01:00:00Z",
@@ -555,7 +555,7 @@ const BROWSER_FIXTURE_WORKSPACE_SESSIONS: Record<
 			contextTokenCount: 980,
 			contextUsedPercent: 14,
 			thinkingEnabled: true,
-			codexThinkingLevel: null,
+
 			fastMode: false,
 			agentPersonality: null,
 			createdAt: "2026-04-05T01:10:00Z",
@@ -581,7 +581,7 @@ const BROWSER_FIXTURE_WORKSPACE_SESSIONS: Record<
 			contextTokenCount: 1340,
 			contextUsedPercent: 21,
 			thinkingEnabled: true,
-			codexThinkingLevel: "high",
+
 			fastMode: true,
 			agentPersonality: null,
 			createdAt: "2026-04-05T02:00:00Z",
@@ -605,7 +605,7 @@ const BROWSER_FIXTURE_WORKSPACE_SESSIONS: Record<
 			contextTokenCount: 860,
 			contextUsedPercent: 11,
 			thinkingEnabled: true,
-			codexThinkingLevel: "medium",
+
 			fastMode: false,
 			agentPersonality: null,
 			createdAt: "2026-04-05T02:10:00Z",
@@ -1366,6 +1366,19 @@ export async function permanentlyDeleteWorkspace(
 	const invoke = await getTauriInvoke();
 	if (!invoke) return;
 	await invoke("permanently_delete_workspace", { workspaceId });
+}
+
+export async function updateSessionSettings(
+	sessionId: string,
+	settings: { effortLevel?: string; permissionMode?: string },
+): Promise<void> {
+	const invoke = await getTauriInvoke();
+	if (!invoke) return;
+	await invoke("update_session_settings", {
+		sessionId,
+		effortLevel: settings.effortLevel ?? null,
+		permissionMode: settings.permissionMode ?? null,
+	});
 }
 
 export async function createWorkspaceFromRepo(
