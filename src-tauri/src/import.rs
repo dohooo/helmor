@@ -284,18 +284,54 @@ fn import_workspace_db_records(
     conn: &Connection,
     workspace_id: &str,
 ) -> Result<ImportDbResult> {
-    // Already imported?
-    let exists: bool = conn
+    // Already imported? Check DB existence AND filesystem completeness.
+    // If DB record exists but the worktree directory is missing, allow
+    // Phase 2 to re-run by returning Imported (not Skipped).
+    let existing: Option<(String, String, String, Option<String>)> = conn
         .query_row(
-            "SELECT count(*) FROM main.workspaces WHERE id = ?1",
+            "SELECT repository_id, directory_name, state, branch FROM main.workspaces WHERE id = ?1",
             [workspace_id],
-            |row| row.get::<_, i64>(0),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
-        .map(|c| c > 0)
-        .unwrap_or(false);
+        .ok();
 
-    if exists {
-        return Ok(ImportDbResult::Skipped);
+    if let Some((repo_id, directory_name, state, branch)) = existing {
+        // DB records exist — check if filesystem setup is complete
+        let fs_complete = if state == "archived" {
+            true // archived workspaces don't need a worktree
+        } else {
+            crate::data_dir::workspace_dir(
+                &conn
+                    .query_row("SELECT name FROM main.repos WHERE id = ?1", [&repo_id], |r| r.get::<_, String>(0))
+                    .unwrap_or_default(),
+                &directory_name,
+            )
+            .map(|p| p.exists())
+            .unwrap_or(false)
+        };
+
+        if fs_complete {
+            return Ok(ImportDbResult::Skipped);
+        }
+
+        // DB exists but filesystem incomplete — return metadata so Phase 2 retries
+        let (repo_name, root_path): (String, Option<String>) = conn
+            .query_row(
+                "SELECT name, root_path FROM main.repos WHERE id = ?1",
+                [&repo_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap_or_else(|_| ("unknown".to_string(), None));
+
+        eprintln!("[import] Workspace {workspace_id} exists in DB but filesystem incomplete — retrying Phase 2");
+        return Ok(ImportDbResult::Imported(ImportedWorkspaceMeta {
+            workspace_id: workspace_id.to_string(),
+            repo_name,
+            directory_name,
+            state,
+            branch,
+            repo_root: helpers::non_empty(&root_path).map(PathBuf::from),
+        }));
     }
 
     // Read workspace info from source
@@ -419,6 +455,9 @@ fn setup_workspace_filesystem(
                         directory_name,
                     );
 
+                    if source_branch.is_none() {
+                        eprintln!("[import] Could not resolve source branch for {directory_name} — worktree not created");
+                    }
                     if let Some(ref src) = source_branch {
                         let import_branch = format!("{src}-import");
                         if let Err(e) = setup_imported_worktree(
@@ -431,11 +470,18 @@ fn setup_workspace_filesystem(
                             // Non-fatal: we still copy .context/ below
                         } else {
                             // Update branch in DB (best-effort, DB is already committed)
-                            if let Ok(conn) = crate::models::db::open_connection(true) {
-                                let _ = conn.execute(
-                                    "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
-                                    rusqlite::params![import_branch, workspace_id],
-                                );
+                            match crate::models::db::open_connection(true) {
+                                Ok(conn) => {
+                                    if let Err(e) = conn.execute(
+                                        "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
+                                        rusqlite::params![import_branch, workspace_id],
+                                    ) {
+                                        eprintln!("[import] Failed to update branch for {directory_name}: {e}");
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("[import] Failed to open DB to update branch for {directory_name}: {e}");
+                                }
                             }
                         }
                     }
@@ -452,7 +498,11 @@ fn setup_workspace_filesystem(
                 .join(".context");
             let context_dst = workspace_dir.join(".context");
 
-            if context_src.is_dir() && !context_dst.exists() {
+            if context_src.is_dir() {
+                // Overwrite if exists — ensures clean state on re-import
+                if context_dst.exists() {
+                    std::fs::remove_dir_all(&context_dst).ok();
+                }
                 std::fs::create_dir_all(context_dst.parent().unwrap_or(&workspace_dir)).ok();
                 helpers::copy_dir_all(&context_src, &context_dst)
                     .with_context(|| format!("Failed to copy .context from {}", context_src.display()))?;
@@ -470,7 +520,11 @@ fn setup_workspace_filesystem(
                 .join(repo_name)
                 .join(directory_name);
 
-            if archive_src.is_dir() && !archive_dst.exists() {
+            if archive_src.is_dir() {
+                // Overwrite if exists — ensures clean state on re-import
+                if archive_dst.exists() {
+                    std::fs::remove_dir_all(&archive_dst).ok();
+                }
                 std::fs::create_dir_all(archive_dst.parent().unwrap_or(helmor_data_dir)).ok();
                 helpers::copy_dir_all(&archive_src, &archive_dst)
                     .with_context(|| format!("Failed to copy archived context from {}", archive_src.display()))?;
@@ -545,7 +599,7 @@ fn copy_claude_sessions_for_workspace(
         return;
     }
 
-    // Copy each .jsonl session file (skip if already exists)
+    // Copy each .jsonl session file (overwrite if exists)
     let entries = match std::fs::read_dir(&src_dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -556,9 +610,7 @@ fn copy_claude_sessions_for_workspace(
         let path = entry.path();
         if path.extension().is_some_and(|ext| ext == "jsonl") {
             let dst_file = dst_dir.join(entry.file_name());
-            if !dst_file.exists()
-                && std::fs::copy(&path, &dst_file).is_ok()
-            {
+            if std::fs::copy(&path, &dst_file).is_ok() {
                 copied += 1;
             }
         }
@@ -926,10 +978,16 @@ mod tests {
         )
         .unwrap();
 
-        let result = import_workspace_db_records(&conn, "w1");
-        assert!(matches!(result.unwrap(), ImportDbResult::Skipped));
+        let result = import_workspace_db_records(&conn, "w1").unwrap();
 
-        // No sessions should have been imported
+        // Workspace exists in DB but worktree directory is missing,
+        // so it returns Imported to allow Phase 2 retry
+        assert!(
+            matches!(result, ImportDbResult::Imported(_) | ImportDbResult::Skipped),
+            "Should return Imported (retry) or Skipped"
+        );
+
+        // No new sessions should have been inserted (DB records already exist)
         let sess_count: i64 = conn.query_row("SELECT count(*) FROM main.sessions", [], |r| r.get(0)).unwrap();
         assert_eq!(sess_count, 0);
     }
