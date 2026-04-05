@@ -39,6 +39,7 @@ export class CodexSessionManager {
 			const threadOpts: ThreadOptions = {
 				...(model ? { model } : {}),
 				...(cwd ? { workingDirectory: cwd } : {}),
+				skipGitRepoCheck: true,
 			};
 
 			const thread = resume
