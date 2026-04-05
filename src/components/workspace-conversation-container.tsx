@@ -3,6 +3,7 @@ import {
 	memo,
 	startTransition,
 	useCallback,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -113,16 +114,18 @@ export const WorkspaceConversationContainer = memo(
 			return ids;
 		}, [sendingContextKeys]);
 
-		// Report sending workspace IDs up — called synchronously from handlers
+		// Report sending workspace IDs to parent before paint.
+		// useLayoutEffect ensures the sidebar update commits in the same
+		// paint as the tab update, so both loading spinners appear together.
 		const onSendingWorkspacesChangeRef = useRef(onSendingWorkspacesChange);
 		onSendingWorkspacesChangeRef.current = onSendingWorkspacesChange;
-		const reportSendingWorkspaces = useCallback(() => {
+		useLayoutEffect(() => {
 			const workspaceIds = new Set<string>();
 			for (const [, wsId] of sendingWorkspaceMapRef.current) {
 				workspaceIds.add(wsId);
 			}
 			onSendingWorkspacesChangeRef.current?.(workspaceIds);
-		}, []);
+		}, [sendingContextKeys]);
 		const selectionPending =
 			selectedWorkspaceId !== displayedWorkspaceId ||
 			selectedSessionId !== displayedSessionId;
@@ -220,7 +223,6 @@ export const WorkspaceConversationContainer = memo(
 					next.add(contextKey);
 					return next;
 				});
-				reportSendingWorkspaces();
 
 				try {
 					const { streamId } = await startAgentMessageStream({
@@ -360,7 +362,6 @@ export const WorkspaceConversationContainer = memo(
 								next.delete(contextKey);
 								return next;
 							});
-							reportSendingWorkspaces();
 							return;
 						}
 
@@ -404,7 +405,6 @@ export const WorkspaceConversationContainer = memo(
 								next.delete(contextKey);
 								return next;
 							});
-							reportSendingWorkspaces();
 						}
 					});
 				} catch (error) {
@@ -433,7 +433,6 @@ export const WorkspaceConversationContainer = memo(
 						next.delete(contextKey);
 						return next;
 					});
-					reportSendingWorkspaces();
 				}
 			},
 			[
