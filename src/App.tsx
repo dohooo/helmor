@@ -1643,6 +1643,13 @@ function App() {
 										sending={isSending}
 										onSelectSession={setSelectedSessionId}
 										onSessionsChanged={() => setDataVersion((v) => v + 1)}
+										onSessionRenamed={(sessionId, title) => {
+											setWorkspaceSessions((prev) =>
+												prev.map((s) =>
+													s.id === sessionId ? { ...s, title } : s,
+												),
+											);
+										}}
 										onWorkspaceChanged={() => {
 											if (selectedWorkspaceId) {
 												void refreshSelectedWorkspaceCollections(

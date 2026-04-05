@@ -1,10 +1,8 @@
 import {
 	ArrowUp,
 	BookOpen,
-	Bot,
 	BrainCircuit,
 	Plus,
-	Sparkles,
 	Square,
 	Zap,
 } from "lucide-react";
@@ -18,6 +16,7 @@ import {
 } from "react";
 import type { AgentModelSection } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { ClaudeIcon, OpenAIIcon } from "./icons";
 import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
 import {
 	DropdownMenu,
@@ -172,9 +171,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 					<DropdownMenu>
 						<DropdownMenuTrigger className="flex items-center gap-1.5 rounded-lg px-1 py-0.5 text-[13px] font-medium text-app-foreground-soft transition-colors hover:text-app-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong">
 							{selectedModel?.provider === "codex" ? (
-								<Bot className="size-[14px]" strokeWidth={1.8} />
+								<OpenAIIcon className="size-[14px]" />
 							) : (
-								<Sparkles className="size-[14px]" strokeWidth={1.8} />
+								<ClaudeIcon className="size-[14px]" />
 							)}
 							<span>{selectedModel?.label ?? "Select model"}</span>
 						</DropdownMenuTrigger>
@@ -199,10 +198,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										>
 											<div className="flex items-center gap-3">
 												<span className="text-app-foreground-soft">
-													{option.provider === "claude" ? (
-														<Sparkles className="size-4" strokeWidth={1.9} />
+													{option.provider === "codex" ? (
+														<OpenAIIcon className="size-4" />
 													) : (
-														<Bot className="size-4" strokeWidth={1.8} />
+														<ClaudeIcon className="size-4" />
 													)}
 												</span>
 												<span className="font-medium">{option.label}</span>

@@ -20,7 +20,6 @@ import {
 	Plus,
 	RotateCcw,
 	Search,
-	Sparkles,
 	SquareTerminal,
 	Trash2,
 	X,
@@ -52,6 +51,7 @@ import {
 	hideSession,
 	listRemoteBranches,
 	loadHiddenSessions,
+	renameSession,
 	type SessionAttachmentRecord,
 	type SessionMessageRecord,
 	unhideSession,
@@ -62,6 +62,7 @@ import {
 import { convertMessages, type MessagePart } from "@/lib/message-adapter";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
+import { ClaudeIcon, OpenAIIcon } from "./icons";
 import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
 import {
 	DropdownMenu,
@@ -82,6 +83,7 @@ type WorkspacePanelProps = {
 	sending?: boolean;
 	onSelectSession?: (sessionId: string) => void;
 	onSessionsChanged?: () => void;
+	onSessionRenamed?: (sessionId: string, title: string) => void;
 	onWorkspaceChanged?: () => void;
 };
 
@@ -113,6 +115,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	sending = false,
 	onSelectSession,
 	onSessionsChanged,
+	onSessionRenamed,
 	onWorkspaceChanged,
 }: WorkspacePanelProps) {
 	const selectedSession =
@@ -123,6 +126,8 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	>([]);
 	const [remoteBranches, setRemoteBranches] = useState<string[]>([]);
 	const [loadingBranches, setLoadingBranches] = useState(false);
+	const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+	const [editingTitle, setEditingTitle] = useState("");
 
 	const handleCreateSession = useCallback(async () => {
 		if (!workspace) return;
@@ -180,6 +185,31 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 		},
 		[onSessionsChanged],
 	);
+
+	const handleStartRename = useCallback(
+		(session: WorkspaceSessionSummary, e: React.MouseEvent) => {
+			e.stopPropagation();
+			setEditingSessionId(session.id);
+			setEditingTitle(displaySessionTitle(session));
+		},
+		[],
+	);
+
+	const handleCommitRename = useCallback(async () => {
+		if (!editingSessionId) return;
+		const trimmed = editingTitle.trim();
+		if (trimmed) {
+			await renameSession(editingSessionId, trimmed);
+			onSessionRenamed?.(editingSessionId, trimmed);
+		}
+		setEditingSessionId(null);
+		setEditingTitle("");
+	}, [editingSessionId, editingTitle, onSessionRenamed]);
+
+	const handleCancelRename = useCallback(() => {
+		setEditingSessionId(null);
+		setEditingTitle("");
+	}, []);
 
 	useEffect(() => {
 		if (typeof window === "undefined") return;
@@ -345,41 +375,73 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 										const selected = session.id === selectedSessionId;
 										const isActive = selected && sending;
 										const hasUnread = session.unreadCount > 0;
+										const isEditing = editingSessionId === session.id;
 
 										return (
 											<TabsTrigger
 												key={session.id}
 												value={session.id}
-												className="group/tab relative gap-1.5 rounded-[10px] px-3.5 pr-5 text-[13px] text-app-foreground-soft data-[state=active]:text-app-foreground"
+												className="group/tab relative gap-1.5 rounded-[10px] px-3.5 pr-8 text-[13px] text-app-foreground-soft data-[state=active]:text-app-foreground"
 											>
 												<SessionProviderIcon
 													agentType={session.agentType}
 													active={isActive}
 												/>
-												<span
-													className={cn(
-														"truncate font-medium",
-														hasUnread && !selected
-															? "text-app-foreground"
-															: undefined,
-													)}
-												>
-													{displaySessionTitle(session)}
-												</span>
-												{hasUnread ? (
+												{isEditing ? (
+													<input
+														ref={(el) => el?.focus()}
+														value={editingTitle}
+														onChange={(e) => setEditingTitle(e.target.value)}
+														onKeyDown={(e) => {
+															if (e.key === "Enter") {
+																e.preventDefault();
+																void handleCommitRename();
+															} else if (e.key === "Escape") {
+																handleCancelRename();
+															}
+														}}
+														onBlur={() => void handleCommitRename()}
+														onClick={(e) => e.stopPropagation()}
+														className="w-20 truncate rounded border border-app-border bg-app-base px-1 py-0 text-[13px] font-medium text-app-foreground outline-none focus:border-app-border-strong"
+													/>
+												) : (
+													<span
+														className={cn(
+															"truncate font-medium",
+															hasUnread && !selected
+																? "text-app-foreground"
+																: undefined,
+														)}
+													>
+														{displaySessionTitle(session)}
+													</span>
+												)}
+												{hasUnread && !isEditing ? (
 													<span
 														aria-label="Unread session"
 														className="size-1.5 shrink-0 rounded-full bg-app-progress"
 													/>
 												) : null}
-												<span
-													role="button"
-													aria-label="Close session"
-													onClick={(e) => handleHideSession(session.id, e)}
-													className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-sm p-0.5 opacity-0 transition-opacity hover:bg-app-toolbar-hover group-hover/tab:opacity-100 data-[state=active]:opacity-100"
-												>
-													<X className="size-2.5" strokeWidth={2} />
-												</span>
+												{!isEditing ? (
+													<>
+														<span
+															role="button"
+															aria-label="Rename session"
+															onClick={(e) => handleStartRename(session, e)}
+															className="absolute right-4 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-sm p-0.5 opacity-0 transition-opacity hover:bg-app-toolbar-hover group-hover/tab:opacity-100"
+														>
+															<Pencil className="size-2.5" strokeWidth={2} />
+														</span>
+														<span
+															role="button"
+															aria-label="Close session"
+															onClick={(e) => handleHideSession(session.id, e)}
+															className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-sm p-0.5 opacity-0 transition-opacity hover:bg-app-toolbar-hover group-hover/tab:opacity-100 data-[state=active]:opacity-100"
+														>
+															<X className="size-2.5" strokeWidth={2} />
+														</span>
+													</>
+												) : null}
 											</TabsTrigger>
 										);
 									})}
@@ -1504,15 +1566,10 @@ function SessionProviderIcon({
 			</span>
 		);
 	}
-	return (
-		<Sparkles
-			className={cn(
-				"size-3 shrink-0",
-				agentType === "codex" ? "text-app-project" : "text-app-foreground-soft",
-			)}
-			strokeWidth={1.8}
-		/>
-	);
+	if (agentType === "codex") {
+		return <OpenAIIcon className="size-3 shrink-0 text-app-foreground-soft" />;
+	}
+	return <ClaudeIcon className="size-3 shrink-0 text-app-foreground-soft" />;
 }
 
 function displaySessionTitle(session: WorkspaceSessionSummary): string {

@@ -1095,6 +1095,15 @@ export async function createSession(
 	return inv<CreateSessionResponse>("create_session", { workspaceId });
 }
 
+export async function renameSession(
+	sessionId: string,
+	title: string,
+): Promise<void> {
+	const inv = await getTauriInvoke();
+	if (!inv) return;
+	await inv("rename_session", { sessionId, title });
+}
+
 export async function hideSession(sessionId: string): Promise<void> {
 	const inv = await getTauriInvoke();
 	if (!inv) return;

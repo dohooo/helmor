@@ -47,7 +47,9 @@ pub fn get_app_settings() -> CmdResult<std::collections::HashMap<String, String>
         .prepare("SELECT key, value FROM settings WHERE key LIKE 'app.%'")
         .context("Failed to query app settings")?;
     let rows = stmt
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .context("Failed to iterate app settings")?;
 
     let mut map = std::collections::HashMap::new();
@@ -58,9 +60,7 @@ pub fn get_app_settings() -> CmdResult<std::collections::HashMap<String, String>
 }
 
 #[tauri::command]
-pub fn update_app_settings(
-    settings: std::collections::HashMap<String, String>,
-) -> CmdResult<()> {
+pub fn update_app_settings(settings: std::collections::HashMap<String, String>) -> CmdResult<()> {
     for (key, value) in &settings {
         if !key.starts_with("app.") {
             continue;
@@ -124,8 +124,8 @@ pub fn get_github_cli_user() -> CmdResult<Option<github_cli::GithubCliUser>> {
 }
 
 #[tauri::command]
-pub fn list_github_accessible_repositories(
-) -> CmdResult<Vec<github_cli::GithubRepositorySummary>> {
+pub fn list_github_accessible_repositories() -> CmdResult<Vec<github_cli::GithubRepositorySummary>>
+{
     Ok(github_cli::list_github_accessible_repositories()?)
 }
 
@@ -135,12 +135,16 @@ pub fn list_conductor_repos() -> CmdResult<Vec<crate::import::ConductorRepo>> {
 }
 
 #[tauri::command]
-pub fn list_conductor_workspaces(repo_id: String) -> CmdResult<Vec<crate::import::ConductorWorkspace>> {
+pub fn list_conductor_workspaces(
+    repo_id: String,
+) -> CmdResult<Vec<crate::import::ConductorWorkspace>> {
     Ok(crate::import::list_conductor_workspaces(&repo_id)?)
 }
 
 #[tauri::command]
-pub fn import_conductor_workspaces(workspace_ids: Vec<String>) -> CmdResult<crate::import::ImportWorkspacesResult> {
+pub fn import_conductor_workspaces(
+    workspace_ids: Vec<String>,
+) -> CmdResult<crate::import::ImportWorkspacesResult> {
     Ok(crate::import::import_conductor_workspaces(&workspace_ids)?)
 }
 
@@ -201,9 +205,7 @@ pub fn list_workspace_sessions(
 }
 
 #[tauri::command]
-pub fn list_session_messages(
-    session_id: String,
-) -> CmdResult<Vec<sessions::SessionMessageRecord>> {
+pub fn list_session_messages(session_id: String) -> CmdResult<Vec<sessions::SessionMessageRecord>> {
     Ok(sessions::list_session_messages(&session_id)?)
 }
 
@@ -217,6 +219,11 @@ pub fn list_session_attachments(
 #[tauri::command]
 pub fn create_session(workspace_id: String) -> CmdResult<sessions::CreateSessionResponse> {
     Ok(sessions::create_session(&workspace_id)?)
+}
+
+#[tauri::command]
+pub fn rename_session(session_id: String, title: String) -> CmdResult<()> {
+    Ok(sessions::rename_session(&session_id, &title)?)
 }
 
 #[tauri::command]
@@ -235,7 +242,9 @@ pub fn delete_session(session_id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub fn list_hidden_sessions(workspace_id: String) -> CmdResult<Vec<sessions::WorkspaceSessionSummary>> {
+pub fn list_hidden_sessions(
+    workspace_id: String,
+) -> CmdResult<Vec<sessions::WorkspaceSessionSummary>> {
     Ok(sessions::list_hidden_sessions(&workspace_id)?)
 }
 
@@ -272,10 +281,7 @@ pub fn list_remote_branches(workspace_id: String) -> CmdResult<Vec<String>> {
 }
 
 #[tauri::command]
-pub fn update_intended_target_branch(
-    workspace_id: String,
-    target_branch: String,
-) -> CmdResult<()> {
+pub fn update_intended_target_branch(workspace_id: String, target_branch: String) -> CmdResult<()> {
     let _lock = db::WORKSPACE_MUTATION_LOCK
         .lock()
         .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
@@ -287,9 +293,7 @@ pub fn update_intended_target_branch(
 }
 
 #[tauri::command]
-pub fn restore_workspace(
-    workspace_id: String,
-) -> CmdResult<workspaces::RestoreWorkspaceResponse> {
+pub fn restore_workspace(workspace_id: String) -> CmdResult<workspaces::RestoreWorkspaceResponse> {
     let _lock = db::WORKSPACE_MUTATION_LOCK
         .lock()
         .map_err(|_| anyhow::anyhow!("Restore lock poisoned"))?;
@@ -298,9 +302,7 @@ pub fn restore_workspace(
 }
 
 #[tauri::command]
-pub fn archive_workspace(
-    workspace_id: String,
-) -> CmdResult<workspaces::ArchiveWorkspaceResponse> {
+pub fn archive_workspace(workspace_id: String) -> CmdResult<workspaces::ArchiveWorkspaceResponse> {
     let _lock = db::WORKSPACE_MUTATION_LOCK
         .lock()
         .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
@@ -327,10 +329,8 @@ mod tests {
 
     impl TestDataDir {
         fn new(name: &str) -> Self {
-            let root = std::env::temp_dir().join(format!(
-                "helmor-test-{name}-{}",
-                uuid::Uuid::new_v4()
-            ));
+            let root =
+                std::env::temp_dir().join(format!("helmor-test-{name}-{}", uuid::Uuid::new_v4()));
             std::env::set_var("HELMOR_DATA_DIR", root.display().to_string());
             crate::data_dir::ensure_directory_structure().unwrap();
             Self { root }
@@ -372,7 +372,12 @@ mod tests {
             init_git_repo(&source_repo_root);
 
             let archive_commit = git_ops::run_git(
-                ["-C", source_repo_root.to_str().unwrap(), "rev-parse", "HEAD"],
+                [
+                    "-C",
+                    source_repo_root.to_str().unwrap(),
+                    "rev-parse",
+                    "HEAD",
+                ],
                 None,
             )
             .unwrap();
@@ -390,7 +395,8 @@ mod tests {
             let branch = "feature/restore-target".to_string();
 
             // Create archived context directory
-            let archived_ctx = crate::data_dir::archived_context_dir(&repo_name, &directory_name).unwrap();
+            let archived_ctx =
+                crate::data_dir::archived_context_dir(&repo_name, &directory_name).unwrap();
             fs::create_dir_all(archived_ctx.join("attachments")).unwrap();
             fs::write(archived_ctx.join("notes.md"), "archived notes").unwrap();
             fs::write(archived_ctx.join("attachments/evidence.txt"), "evidence").unwrap();
@@ -469,13 +475,20 @@ mod tests {
             let session_id = "session-archive".to_string();
             let branch = "feature/restore-target".to_string();
             let head_commit = git_ops::run_git(
-                ["-C", source_repo_root.to_str().unwrap(), "rev-parse", "HEAD"],
+                [
+                    "-C",
+                    source_repo_root.to_str().unwrap(),
+                    "rev-parse",
+                    "HEAD",
+                ],
                 None,
             )
             .unwrap();
 
             // Create archived-contexts parent
-            let archived_ctx_parent = crate::data_dir::archived_contexts_dir().unwrap().join(&repo_name);
+            let archived_ctx_parent = crate::data_dir::archived_contexts_dir()
+                .unwrap()
+                .join(&repo_name);
             fs::create_dir_all(&archived_ctx_parent).unwrap();
 
             // Create workspaces parent
@@ -493,7 +506,8 @@ mod tests {
                 include_updated_at,
             );
 
-            let workspace_dir = crate::data_dir::workspace_dir(&repo_name, &directory_name).unwrap();
+            let workspace_dir =
+                crate::data_dir::workspace_dir(&repo_name, &directory_name).unwrap();
             git_ops::point_branch_to_commit(&source_repo_root, &branch, &head_commit).unwrap();
             git_ops::create_worktree(&source_repo_root, &workspace_dir, &branch).unwrap();
             fs::create_dir_all(workspace_dir.join(".context/attachments")).unwrap();
@@ -609,13 +623,7 @@ mod tests {
                 .unwrap();
         }
 
-        fn insert_repo(
-            &self,
-            repo_id: &str,
-            repo_name: &str,
-            display_order: i64,
-            hidden: i64,
-        ) {
+        fn insert_repo(&self, repo_id: &str, repo_name: &str, display_order: i64, hidden: i64) {
             let connection = Connection::open(self.db_path()).unwrap();
             connection
                 .execute(
@@ -1045,25 +1053,20 @@ mod tests {
         let harness = RestoreTestHarness::new(true);
         let source = &harness.source_repo_root;
 
-        git_ops::run_git(
-            ["-C", source.to_str().unwrap(), "checkout", "main"],
-            None,
-        )
-        .unwrap();
+        git_ops::run_git(["-C", source.to_str().unwrap(), "checkout", "main"], None).unwrap();
         git_ops::run_git(
             [
-                "-C", source.to_str().unwrap(),
-                "checkout", "-b", "feature/second-restore-target",
+                "-C",
+                source.to_str().unwrap(),
+                "checkout",
+                "-b",
+                "feature/second-restore-target",
             ],
             None,
         )
         .unwrap();
         fs::write(source.join("second.txt"), "second branch").unwrap();
-        git_ops::run_git(
-            ["-C", source.to_str().unwrap(), "add", "second.txt"],
-            None,
-        )
-        .unwrap();
+        git_ops::run_git(["-C", source.to_str().unwrap(), "add", "second.txt"], None).unwrap();
         git_ops::run_git(
             [
                 "-C",
@@ -1138,7 +1141,27 @@ mod tests {
         assert!(workspace_dir.join("setup-from-json.txt").exists());
 
         let connection = Connection::open(harness.db_path()).unwrap();
-        let (state, branch, placeholder_branch_name, initialization_parent_branch, intended_target_branch, initialization_files_copied, setup_log_path, initialization_log_path, active_session_id): (String, String, String, String, String, i64, String, String, String) = connection
+        let (
+            state,
+            branch,
+            placeholder_branch_name,
+            initialization_parent_branch,
+            intended_target_branch,
+            initialization_files_copied,
+            setup_log_path,
+            initialization_log_path,
+            active_session_id,
+        ): (
+            String,
+            String,
+            String,
+            String,
+            String,
+            i64,
+            String,
+            String,
+            String,
+        ) = connection
             .query_row(
                 r#"
                 SELECT state, branch, placeholder_branch_name, initialization_parent_branch,
@@ -1147,7 +1170,19 @@ mod tests {
                 FROM workspaces WHERE id = ?1
                 "#,
                 [&response.created_workspace_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                    ))
+                },
             )
             .unwrap();
         let (session_title, session_model, session_permission_mode, thinking_enabled): (String, String, String, i64) = connection
@@ -1180,9 +1215,18 @@ mod tests {
         let harness = CreateTestHarness::new();
         harness.set_repo_setup_script(Some("$CONDUCTOR_ROOT_PATH/repo-settings-setup.sh"));
         harness.commit_repo_files(&[
-            ("conductor.json", r#"{"scripts":{"setup":"$CONDUCTOR_ROOT_PATH/conductor-setup.sh"}}"#),
-            ("conductor-setup.sh", "#!/bin/sh\nset -e\nprintf 'json' > \"$CONDUCTOR_WORKSPACE_PATH/json-setup.txt\"\n"),
-            ("repo-settings-setup.sh", "#!/bin/sh\nset -e\nprintf 'repo' > \"$CONDUCTOR_WORKSPACE_PATH/repo-setup.txt\"\n"),
+            (
+                "conductor.json",
+                r#"{"scripts":{"setup":"$CONDUCTOR_ROOT_PATH/conductor-setup.sh"}}"#,
+            ),
+            (
+                "conductor-setup.sh",
+                "#!/bin/sh\nset -e\nprintf 'json' > \"$CONDUCTOR_WORKSPACE_PATH/json-setup.txt\"\n",
+            ),
+            (
+                "repo-settings-setup.sh",
+                "#!/bin/sh\nset -e\nprintf 'repo' > \"$CONDUCTOR_WORKSPACE_PATH/repo-setup.txt\"\n",
+            ),
         ]);
 
         let response = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap();
@@ -1246,8 +1290,14 @@ mod tests {
         let harness = CreateTestHarness::new();
 
         harness.commit_repo_files(&[
-            ("conductor.json", r#"{"scripts":{"setup":"$CONDUCTOR_ROOT_PATH/conductor-setup.sh"}}"#),
-            ("conductor-setup.sh", "#!/bin/sh\nset -e\necho 'failing setup'\nexit 7\n"),
+            (
+                "conductor.json",
+                r#"{"scripts":{"setup":"$CONDUCTOR_ROOT_PATH/conductor-setup.sh"}}"#,
+            ),
+            (
+                "conductor-setup.sh",
+                "#!/bin/sh\nset -e\necho 'failing setup'\nexit 7\n",
+            ),
         ]);
 
         let error = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap_err();
@@ -1293,7 +1343,8 @@ mod tests {
         init_create_git_repo(&added_repo_root);
         let normalized_repo_root = repos::normalize_filesystem_path(&added_repo_root).unwrap();
 
-        let response = repos::add_repository_from_local_path(added_repo_root.to_str().unwrap()).unwrap();
+        let response =
+            repos::add_repository_from_local_path(added_repo_root.to_str().unwrap()).unwrap();
         let connection = Connection::open(harness.db_path()).unwrap();
         let (repo_count, workspace_count, session_count): (i64, i64, i64) = connection
             .query_row(
@@ -1302,13 +1353,14 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        let (remote, remote_url, default_branch): (Option<String>, Option<String>, String) = connection
-            .query_row(
-                "SELECT remote, remote_url, default_branch FROM repos WHERE id = ?1",
-                [&response.repository_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
+        let (remote, remote_url, default_branch): (Option<String>, Option<String>, String) =
+            connection
+                .query_row(
+                    "SELECT remote, remote_url, default_branch FROM repos WHERE id = ?1",
+                    [&response.repository_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
         let created_workspace_state: String = connection
             .query_row(
                 "SELECT state FROM workspaces WHERE id = ?1",
@@ -1336,7 +1388,9 @@ mod tests {
         let harness = CreateTestHarness::new();
         let created = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap();
 
-        let response = repos::add_repository_from_local_path(harness.source_repo_root.to_str().unwrap()).unwrap();
+        let response =
+            repos::add_repository_from_local_path(harness.source_repo_root.to_str().unwrap())
+                .unwrap();
         let connection = Connection::open(harness.db_path()).unwrap();
         let (repo_count, workspace_count): (i64, i64) = connection
             .query_row(
@@ -1383,7 +1437,11 @@ mod tests {
     fn init_create_git_repo(repo_root: &Path) {
         git_ops::run_git(["init", "-b", "main", repo_root.to_str().unwrap()], None).unwrap();
         fs::write(repo_root.join("tracked.txt"), "main").unwrap();
-        git_ops::run_git(["-C", repo_root.to_str().unwrap(), "add", "tracked.txt"], None).unwrap();
+        git_ops::run_git(
+            ["-C", repo_root.to_str().unwrap(), "add", "tracked.txt"],
+            None,
+        )
+        .unwrap();
         git_ops::run_git(
             [
                 "-C",
@@ -1420,7 +1478,11 @@ mod tests {
     fn init_git_repo(repo_root: &Path) {
         git_ops::run_git(["init", "-b", "main", repo_root.to_str().unwrap()], None).unwrap();
         fs::write(repo_root.join("tracked.txt"), "main").unwrap();
-        git_ops::run_git(["-C", repo_root.to_str().unwrap(), "add", "tracked.txt"], None).unwrap();
+        git_ops::run_git(
+            ["-C", repo_root.to_str().unwrap(), "add", "tracked.txt"],
+            None,
+        )
+        .unwrap();
         git_ops::run_git(
             [
                 "-C",
@@ -1438,9 +1500,23 @@ mod tests {
             None,
         )
         .unwrap();
-        git_ops::run_git(["-C", repo_root.to_str().unwrap(), "checkout", "-b", "feature/restore-target"], None).unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                repo_root.to_str().unwrap(),
+                "checkout",
+                "-b",
+                "feature/restore-target",
+            ],
+            None,
+        )
+        .unwrap();
         fs::write(repo_root.join("tracked.txt"), "archived snapshot").unwrap();
-        git_ops::run_git(["-C", repo_root.to_str().unwrap(), "add", "tracked.txt"], None).unwrap();
+        git_ops::run_git(
+            ["-C", repo_root.to_str().unwrap(), "add", "tracked.txt"],
+            None,
+        )
+        .unwrap();
         git_ops::run_git(
             [
                 "-C",
@@ -1459,10 +1535,19 @@ mod tests {
         )
         .unwrap();
         // Switch back to main so feature/restore-target is free for worktree checkout
-        git_ops::run_git(["-C", repo_root.to_str().unwrap(), "checkout", "main"], None).unwrap();
+        git_ops::run_git(
+            ["-C", repo_root.to_str().unwrap(), "checkout", "main"],
+            None,
+        )
+        .unwrap();
     }
 
-    fn create_workspace_fixture_db(db_path: &Path, source_repo_root: &Path, repo_id: &str, repo_name: &str) {
+    fn create_workspace_fixture_db(
+        db_path: &Path,
+        source_repo_root: &Path,
+        repo_id: &str,
+        repo_name: &str,
+    ) {
         let connection = Connection::open(db_path).unwrap();
         connection.execute_batch(&fixture_schema_sql(true)).unwrap();
         connection
@@ -1477,12 +1562,20 @@ mod tests {
 
     #[allow(clippy::too_many_arguments)]
     fn create_fixture_db(
-        db_path: &Path, source_repo_root: &Path, repo_name: &str, directory_name: &str,
-        workspace_id: &str, session_id: &str, branch: &str, archive_commit: &str,
+        db_path: &Path,
+        source_repo_root: &Path,
+        repo_name: &str,
+        directory_name: &str,
+        workspace_id: &str,
+        session_id: &str,
+        branch: &str,
+        archive_commit: &str,
         include_updated_at: bool,
     ) {
         let connection = Connection::open(db_path).unwrap();
-        connection.execute_batch(&fixture_schema_sql(include_updated_at)).unwrap();
+        connection
+            .execute_batch(&fixture_schema_sql(include_updated_at))
+            .unwrap();
         connection
             .execute("INSERT INTO repos (id, name, remote_url, default_branch, root_path) VALUES (?1, ?2, NULL, 'main', ?3)", ["repo-1", repo_name, source_repo_root.to_str().unwrap()])
             .unwrap();
@@ -1502,11 +1595,12 @@ mod tests {
             [session_id, workspace_id],
         ).unwrap();
 
-        let archived_attachment_path = crate::data_dir::archived_context_dir(repo_name, directory_name)
-            .unwrap()
-            .join("attachments/evidence.txt")
-            .display()
-            .to_string();
+        let archived_attachment_path =
+            crate::data_dir::archived_context_dir(repo_name, directory_name)
+                .unwrap()
+                .join("attachments/evidence.txt")
+                .display()
+                .to_string();
         connection.execute(
             "INSERT INTO attachments (id, session_id, session_message_id, type, original_name, path, is_loading, is_draft, created_at) VALUES ('attachment-1', ?1, NULL, 'text', 'evidence.txt', ?2, 0, 0, CURRENT_TIMESTAMP)",
             [session_id, archived_attachment_path.as_str()],
@@ -1515,11 +1609,19 @@ mod tests {
 
     #[allow(clippy::too_many_arguments)]
     fn create_ready_fixture_db(
-        db_path: &Path, source_repo_root: &Path, repo_name: &str, directory_name: &str,
-        workspace_id: &str, session_id: &str, branch: &str, include_updated_at: bool,
+        db_path: &Path,
+        source_repo_root: &Path,
+        repo_name: &str,
+        directory_name: &str,
+        workspace_id: &str,
+        session_id: &str,
+        branch: &str,
+        include_updated_at: bool,
     ) {
         let connection = Connection::open(db_path).unwrap();
-        connection.execute_batch(&fixture_schema_sql(include_updated_at)).unwrap();
+        connection
+            .execute_batch(&fixture_schema_sql(include_updated_at))
+            .unwrap();
         connection
             .execute("INSERT INTO repos (id, name, remote_url, default_branch, root_path) VALUES (?1, ?2, NULL, 'main', ?3)", ["repo-1", repo_name, source_repo_root.to_str().unwrap()])
             .unwrap();

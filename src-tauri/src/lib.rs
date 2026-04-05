@@ -54,6 +54,7 @@ pub fn run() {
             models::list_workspace_groups,
             models::list_workspace_sessions,
             models::create_session,
+            models::rename_session,
             models::hide_session,
             models::unhide_session,
             models::delete_session,
