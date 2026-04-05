@@ -1,7 +1,7 @@
 //! Resolves the Helmor data directory based on build profile and environment.
 //!
-//! - Debug builds: `~/.helmor.dev/`
-//! - Release builds: `~/.helmor/`
+//! - Debug builds: `~/helmor-dev/`
+//! - Release builds: `~/helmor/`
 //! - `HELMOR_DATA_DIR` env var overrides both
 //!
 //! The SQLite database lives at `{data_dir}/helmor.db`.
@@ -16,6 +16,15 @@ pub static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Name of the database file inside the data directory.
 const DB_FILENAME: &str = "helmor.db";
+
+/// Default top-level directory name for Helmor app data.
+const fn default_data_dir_name() -> &'static str {
+    if cfg!(debug_assertions) {
+        "helmor-dev"
+    } else {
+        "helmor"
+    }
+}
 
 /// Returns the resolved data directory, creating it if necessary.
 pub fn data_dir() -> Result<PathBuf> {
@@ -120,11 +129,7 @@ fn resolve_data_dir() -> Result<PathBuf> {
     // 2. Build profile based
     let home = dirs_home().context("Could not determine home directory")?;
 
-    if cfg!(debug_assertions) {
-        Ok(home.join(".helmor.dev"))
-    } else {
-        Ok(home.join(".helmor"))
-    }
+    Ok(home.join(default_data_dir_name()))
 }
 
 fn dirs_home() -> Option<PathBuf> {
@@ -192,6 +197,11 @@ mod tests {
     #[test]
     fn data_mode_label_returns_development_in_debug() {
         assert_eq!(data_mode_label(), "development");
+    }
+
+    #[test]
+    fn default_data_dir_name_returns_dev_directory_in_debug() {
+        assert_eq!(default_data_dir_name(), "helmor-dev");
     }
 
     #[test]

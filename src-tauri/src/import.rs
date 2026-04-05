@@ -1159,8 +1159,8 @@ mod tests {
         let encoded = encode_claude_project_dir(&path);
         assert_eq!(encoded, "-Users-me--conductor-workspaces-repo-ws");
 
-        let path2 = PathBuf::from("/Users/me/.helmor.dev/workspaces/repo/ws");
+        let path2 = PathBuf::from("/Users/me/helmor-dev/workspaces/repo/ws");
         let encoded2 = encode_claude_project_dir(&path2);
-        assert_eq!(encoded2, "-Users-me--helmor-dev-workspaces-repo-ws");
+        assert_eq!(encoded2, "-Users-me-helmor-dev-workspaces-repo-ws");
     }
 }

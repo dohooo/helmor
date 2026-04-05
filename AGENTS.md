@@ -4,7 +4,7 @@ This file provides guidance to AI coding agents working with code in this reposi
 
 ## What is Helmor
 
-Helmor is a local-first desktop app built with **Tauri v2** (Rust backend) + **React 19** + **Vite** + **TypeScript**. It provides a workspace management UI with its own SQLite database (`~/.helmor/` in release, `~/.helmor.dev/` in debug), letting users browse workspaces/sessions/messages and send prompts to AI agents (Claude Code CLI, OpenAI Codex CLI) via streaming or blocking IPC. Data can be optionally imported from a local [Conductor](https://conductor.app) installation.
+Helmor is a local-first desktop app built with **Tauri v2** (Rust backend) + **React 19** + **Vite** + **TypeScript**. It provides a workspace management UI with its own SQLite database (`~/helmor/` in release, `~/helmor-dev/` in debug), letting users browse workspaces/sessions/messages and send prompts to AI agents (Claude Code CLI, OpenAI Codex CLI) via streaming or blocking IPC. Data can be optionally imported from a local [Conductor](https://conductor.app) installation.
 
 ## UI Design Source of Truth
 
@@ -43,7 +43,7 @@ cargo check                  # Type-check without building
 ### Two-process model (Tauri)
 
 - **Frontend** (`src/`): React SPA rendered in a Tauri webview. All state lives in `App.tsx` via `useState`. No router, no external state manager.
-- **Backend** (`src-tauri/src/`): Rust process exposing Tauri commands via `invoke()`. Reads/writes Helmor's own SQLite database (`~/.helmor/helmor.db` or `~/.helmor.dev/helmor.db`). Spawns CLI subprocesses for agent communication.
+- **Backend** (`src-tauri/src/`): Rust process exposing Tauri commands via `invoke()`. Reads/writes Helmor's own SQLite database (`~/helmor/helmor.db` or `~/helmor-dev/helmor.db`). Spawns CLI subprocesses for agent communication.
 
 ### Frontend structure
 
@@ -64,7 +64,7 @@ cargo check                  # Type-check without building
 | File                   | Role                                                                                                                                                                                                 |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `lib.rs`               | Tauri app builder. Registers all commands, manages `RunningAgentProcesses` state, runs setup hook (directory + schema init).                                                                         |
-| `data_dir.rs`          | Resolves the Helmor data directory (`~/.helmor` or `~/.helmor.dev`). Supports `HELMOR_DATA_DIR` env var override.                                                                                    |
+| `data_dir.rs`          | Resolves the Helmor data directory (`~/helmor` or `~/helmor-dev`). Supports `HELMOR_DATA_DIR` env var override.                                                                                      |
 | `schema.rs`            | Database schema initialization — creates all tables/indexes/triggers if not present.                                                                                                                 |
 | `import.rs`            | Optional merge-import of data from a local Conductor installation via SQLite `ATTACH DATABASE` + `INSERT OR IGNORE`. Atomic (transaction-wrapped), non-destructive (existing Helmor data preserved). |
 | `error.rs`             | `CommandError` wrapper — bridges `anyhow::Error` to Tauri-serializable errors for IPC.                                                                                                               |
@@ -92,7 +92,7 @@ cargo check                  # Type-check without building
 - **UI components**: shadcn/ui (base-nova style, `components.json` configured, no RSC)
 - **Chat rendering**: `@assistant-ui/react` with `ExternalStoreRuntime` for message display, `@assistant-ui/react-markdown` + `remark-gfm` for markdown
 - **Testing**: Vitest + jsdom + @testing-library/react. Setup in `src/test/setup.ts`. Tests co-located with source (e.g., `App.test.tsx`).
-- **Data directory**: `~/.helmor/` (release) or `~/.helmor.dev/` (debug). Override with `HELMOR_DATA_DIR` env var. Database auto-created on first startup.
+- **Data directory**: `~/helmor/` (release) or `~/helmor-dev/` (debug). Override with `HELMOR_DATA_DIR` env var. Database auto-created on first startup.
 - **macOS window chrome**: Overlay title bar with traffic lights at (16, 24). Drag region via `data-tauri-drag-region`.
 - **Serde convention**: Rust structs use `#[serde(rename_all = "camelCase")]` so JSON fields match TypeScript types directly.
 - **Rust clippy**: All Rust code must pass `cargo clippy -- -D warnings` with zero warnings. Run clippy before committing any Rust changes.
