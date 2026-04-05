@@ -295,7 +295,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						className={cn(
 							"gap-1.5 rounded-md px-2 py-0.5 text-[13px] font-medium transition-colors",
 							permissionMode === "plan"
-								? "text-[#48968c] ring-1 ring-[#48968c]/40"
+								? "text-[#48968c] ring-1 ring-[#48968c]/40 hover:text-[#48968c]"
 								: "text-app-muted/50 hover:text-app-muted",
 						)}
 						onClick={onTogglePlanMode}
