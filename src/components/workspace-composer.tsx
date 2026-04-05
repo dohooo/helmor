@@ -232,7 +232,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										<DropdownMenuItem
 											key={option.id}
 											disabled={disabled}
-											onSelect={() => {
+											onClick={() => {
 												onSelectModel(option.id);
 											}}
 											className="flex items-center justify-between gap-3"
@@ -300,7 +300,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 									<DropdownMenuItem
 										key={level}
 										disabled={disabled}
-										onSelect={() => onSelectEffort(level)}
+										onClick={() => onSelectEffort(level)}
 										className="flex items-center justify-between gap-3"
 									>
 										<div className="flex items-center gap-2.5">

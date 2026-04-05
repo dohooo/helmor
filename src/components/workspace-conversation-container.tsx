@@ -195,14 +195,14 @@ export const WorkspaceConversationContainer = memo(
 						}
 					};
 
-					const flushStreamMessages = () => {
+					const flushStreamMessages = (immediate = false) => {
 						frameId = null;
 						const streamMessages = accumulator.toMessages(
 							contextKey,
 							displayedSessionId ?? contextKey,
 						);
 						const nextMessages = [optimisticUserMessage, ...streamMessages];
-						startTransition(() => {
+						const doFlush = () => {
 							setLiveMessagesByContext((current) => {
 								if (haveSameLiveMessages(current[contextKey], nextMessages)) {
 									return current;
@@ -213,7 +213,15 @@ export const WorkspaceConversationContainer = memo(
 									[contextKey]: nextMessages,
 								};
 							});
-						});
+						};
+						// Use startTransition for intermediate flushes (lower priority).
+						// Final flush (on "done") uses direct setState so it commits
+						// before reloadAfterPersist clears live messages.
+						if (immediate) {
+							doFlush();
+						} else {
+							startTransition(doFlush);
+						}
 					};
 
 					const scheduleFlush = () => {
@@ -221,7 +229,7 @@ export const WorkspaceConversationContainer = memo(
 							return;
 						}
 
-						frameId = window.requestAnimationFrame(flushStreamMessages);
+						frameId = window.requestAnimationFrame(() => flushStreamMessages());
 					};
 
 					unlistenFn = await listenAgentStream(streamId, (event) => {
@@ -236,7 +244,7 @@ export const WorkspaceConversationContainer = memo(
 								window.cancelAnimationFrame(frameId);
 								frameId = null;
 							}
-							flushStreamMessages();
+							flushStreamMessages(true); // immediate — commit before reload
 							cleanup();
 
 							setLiveSessionsByContext((current) => ({
@@ -398,11 +406,10 @@ export const WorkspaceConversationContainer = memo(
 								setComposerPermissionModes((current) => ({
 									...current,
 									[contextKey]:
-										current[contextKey] === "plan"
-											? "acceptEdits"
-											: "plan",
+										current[contextKey] === "plan" ? "acceptEdits" : "plan",
 								}));
 							}}
+							onSwitchSession={onSelectSession}
 							onSubmit={(payload) => {
 								void handleComposerSubmit(payload);
 							}}
