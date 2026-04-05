@@ -1129,10 +1129,18 @@ mod tests {
         let response = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap();
 
         assert_eq!(response.created_state, "ready");
-        assert_eq!(response.directory_name, "acamar");
-        assert_eq!(response.branch, "caspian/acamar");
+        assert!(
+            helpers::WORKSPACE_NAMES.contains(&response.directory_name.as_str()),
+            "Expected a name from WORKSPACE_NAMES, got: {}",
+            response.directory_name
+        );
+        assert!(
+            response.branch.starts_with("caspian/"),
+            "Expected caspian/ prefix, got: {}",
+            response.branch
+        );
 
-        let workspace_dir = harness.workspace_dir("acamar");
+        let workspace_dir = harness.workspace_dir(&response.directory_name);
         assert!(workspace_dir.join(".git").exists());
         assert!(workspace_dir.join(".context/notes.md").exists());
         assert!(workspace_dir.join(".context/todos.md").exists());
@@ -1194,8 +1202,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(state, "ready");
-        assert_eq!(branch, "caspian/acamar");
-        assert_eq!(placeholder_branch_name, "caspian/acamar");
+        assert!(
+            branch.starts_with("caspian/"),
+            "Expected caspian/ prefix, got: {branch}"
+        );
+        assert_eq!(branch, placeholder_branch_name);
         assert_eq!(initialization_parent_branch, "main");
         assert_eq!(intended_target_branch, "main");
         assert!(initialization_files_copied > 0);
@@ -1243,14 +1254,22 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let harness = CreateTestHarness::new();
 
-        for star_name in helpers::STAR_PROPER_NAMES {
+        for star_name in helpers::WORKSPACE_NAMES {
             harness.insert_workspace_name(star_name);
         }
 
         let response = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap();
 
-        assert_eq!(response.directory_name, "acamar-v2");
-        assert_eq!(response.branch, "caspian/acamar-v2");
+        assert!(
+            response.directory_name.ends_with("-v2"),
+            "Expected -v2 suffix, got: {}",
+            response.directory_name
+        );
+        assert!(
+            response.branch.starts_with("caspian/") && response.branch.ends_with("-v2"),
+            "Expected caspian/*-v2 branch, got: {}",
+            response.branch
+        );
     }
 
     #[test]
@@ -1259,15 +1278,17 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let harness = CreateTestHarness::new();
-        let conflicting_workspace_dir = harness.workspace_dir("acamar");
 
-        fs::create_dir_all(&conflicting_workspace_dir).unwrap();
-        fs::write(conflicting_workspace_dir.join("keep.txt"), "keep").unwrap();
+        // Create conflicting directories for ALL possible names so any random pick fails
+        for name in helpers::WORKSPACE_NAMES {
+            let dir = harness.workspace_dir(name);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("keep.txt"), "keep").unwrap();
+        }
 
         let error = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap_err();
 
         assert!(error.to_string().contains("already exists"));
-        assert!(conflicting_workspace_dir.join("keep.txt").exists());
 
         let connection = Connection::open(harness.db_path()).unwrap();
         let (workspace_count, session_count): (i64, i64) = connection

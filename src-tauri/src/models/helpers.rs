@@ -349,104 +349,99 @@ pub fn create_workspace_context_scaffold(workspace_dir: &Path) -> Result<()> {
 
 // ---- Branch / directory name helpers ----
 
-pub const STAR_PROPER_NAMES: &[&str] = &[
-    "acamar",
-    "achernar",
-    "acrux",
-    "adhafera",
-    "adhara",
-    "ain",
-    "albali",
-    "albireo",
-    "alkaid",
-    "alkalurops",
-    "alkaphrah",
-    "alpheratz",
-    "alrakis",
-    "altair",
-    "alya",
-    "ancha",
-    "ankaa",
-    "antares",
-    "aran",
-    "arcturus",
-    "aspidiske",
-    "atik",
-    "atria",
-    "avior",
-    "bellatrix",
-    "betelgeuse",
-    "canopus",
-    "capella",
-    "castor",
-    "cebalrai",
-    "deneb",
-    "denebola",
-    "diadem",
-    "diphda",
-    "electra",
-    "elnath",
-    "enif",
-    "etamin",
-    "fomalhaut",
-    "furud",
-    "gacrux",
-    "gienah",
-    "hamal",
-    "hassaleh",
-    "hydrobius",
-    "izar",
-    "jabbah",
-    "kaus",
-    "kochab",
-    "lesath",
-    "maia",
-    "markab",
-    "meissa",
-    "menkalinan",
-    "merak",
-    "miaplacidus",
-    "mimosa",
-    "mintaka",
-    "mirach",
-    "mirfak",
-    "mizar",
-    "naos",
-    "nashira",
-    "nunki",
-    "peacock",
-    "phact",
-    "phecda",
-    "pleione",
-    "polaris",
-    "pollux",
-    "procyon",
-    "propus",
-    "regulus",
-    "rigel",
-    "rotanev",
-    "sabik",
-    "sadr",
-    "saiph",
-    "scheat",
-    "schedar",
-    "secunda",
-    "sham",
-    "sheliak",
+pub const WORKSPACE_NAMES: &[&str] = &[
+    "mercury",
+    "venus",
+    "earth",
+    "mars",
+    "jupiter",
+    "saturn",
+    "uranus",
+    "neptune",
+    "pluto",
     "sirius",
-    "spica",
-    "sualocin",
-    "suhail",
-    "tarazed",
-    "tejat",
-    "thuban",
-    "unukalhai",
+    "polaris",
     "vega",
-    "wezen",
-    "yildun",
-    "zaniah",
-    "zaurak",
+    "betelgeuse",
+    "rigel",
+    "altair",
+    "deneb",
+    "antares",
+    "aldebaran",
+    "procyon",
+    "orion",
+    "cassiopeia",
+    "andromeda",
+    "lyra",
+    "cygnus",
+    "scorpius",
+    "leo",
+    "taurus",
+    "gemini",
+    "sagittarius",
+    "arcturus",
+    "capella",
+    "spica",
+    "regulus",
+    "bellatrix",
+    "alnitak",
+    "alnilam",
+    "mintaka",
+    "fomalhaut",
+    "shaula",
+    "castor",
+    "pollux",
+    "mizar",
+    "alcor",
+    "dubhe",
+    "merak",
+    "enceladus",
+    "titan",
+    "europa",
+    "ganymede",
+    "callisto",
+    "io",
+    "triton",
+    "hyperion",
+    "rhea",
+    "milkyway",
+    "andromedagalaxy",
+    "triangulum",
+    "sombrero",
+    "whirlpool",
+    "pinwheel",
+    "cartwheel",
+    "centaurusa",
+    "ursamajor",
+    "ursaminor",
+    "perseus",
+    "draco",
+    "phoenix",
+    "hydra",
+    "aquarius",
+    "pisces",
+    "aries",
+    "cancer",
+    "cepheus",
+    "pegasus",
+    "hercules",
+    "delphinus",
+    "monoceros",
+    "lepus",
+    "canopus",
+    "achernar",
+    "hadar",
+    "menkent",
     "zubenelgenubi",
+    "zubeneschamali",
+    "rasalhague",
+    "alpheratz",
+    "hamal",
+    "diphda",
+    "mirach",
+    "nunki",
+    "sadr",
+    "aludra",
 ];
 
 pub fn branch_name_for_directory(
@@ -473,6 +468,15 @@ pub fn branch_name_for_directory(
 
 pub fn allocate_directory_name_for_repo(repo_id: &str) -> Result<String> {
     let connection = super::db::open_connection(false)?;
+    allocate_directory_name_with_conn(&connection, repo_id)
+}
+
+pub fn allocate_directory_name_with_conn(
+    connection: &rusqlite::Connection,
+    repo_id: &str,
+) -> Result<String> {
+    use rand::prelude::IndexedRandom;
+
     let mut statement = connection
         .prepare(
             "SELECT directory_name FROM workspaces WHERE repository_id = ?1 AND directory_name IS NOT NULL",
@@ -490,22 +494,30 @@ pub fn allocate_directory_name_for_repo(repo_id: &str) -> Result<String> {
         .map(|value| value.to_ascii_lowercase())
         .collect::<std::collections::HashSet<_>>();
 
-    for star_name in STAR_PROPER_NAMES {
-        if !used.contains(*star_name) {
-            return Ok((*star_name).to_string());
-        }
+    // Collect available names (not yet used) and pick one randomly
+    let available: Vec<&&str> = WORKSPACE_NAMES
+        .iter()
+        .filter(|name| !used.contains(**name))
+        .collect();
+
+    if let Some(name) = available.choose(&mut rand::rng()) {
+        return Ok((**name).to_string());
     }
 
+    // All names taken — append version suffix and pick randomly
     for version in 2..=999 {
-        for star_name in STAR_PROPER_NAMES {
-            let candidate = format!("{star_name}-v{version}");
-            if !used.contains(candidate.as_str()) {
-                return Ok(candidate);
-            }
+        let versioned: Vec<String> = WORKSPACE_NAMES
+            .iter()
+            .map(|name| format!("{name}-v{version}"))
+            .filter(|candidate| !used.contains(candidate.as_str()))
+            .collect();
+
+        if let Some(name) = versioned.choose(&mut rand::rng()) {
+            return Ok(name.clone());
         }
     }
 
-    bail!("Unable to allocate a workspace name from the vendored star list")
+    bail!("Unable to allocate a workspace name")
 }
 
 // ---- Archive helpers ----
@@ -639,5 +651,172 @@ mod tests {
         assert!(repo_icon_path_for_root_path(None).is_none());
         assert!(repo_icon_path_for_root_path(Some("")).is_none());
         assert!(repo_icon_path_for_root_path(Some("   ")).is_none());
+    }
+
+    // ---- Workspace naming tests ----
+
+    fn test_db() -> (rusqlite::Connection, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        crate::schema::ensure_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name) VALUES ('r1', 'test-repo')",
+            [],
+        )
+        .unwrap();
+        (conn, dir)
+    }
+
+    #[test]
+    fn workspace_names_list_is_not_empty() {
+        assert!(!WORKSPACE_NAMES.is_empty());
+    }
+
+    #[test]
+    fn workspace_names_are_all_lowercase() {
+        for name in WORKSPACE_NAMES {
+            assert_eq!(
+                *name,
+                name.to_ascii_lowercase(),
+                "Name should be lowercase: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_names_have_no_duplicates() {
+        let mut seen = std::collections::HashSet::new();
+        for name in WORKSPACE_NAMES {
+            assert!(seen.insert(*name), "Duplicate workspace name: {name}");
+        }
+    }
+
+    #[test]
+    fn allocate_picks_from_workspace_names() {
+        let (conn, _dir) = test_db();
+        let name = allocate_directory_name_with_conn(&conn, "r1").unwrap();
+        assert!(
+            WORKSPACE_NAMES.contains(&name.as_str()),
+            "Allocated name should be from WORKSPACE_NAMES: {name}"
+        );
+    }
+
+    #[test]
+    fn allocate_avoids_used_names() {
+        let (conn, _dir) = test_db();
+
+        // Use all names except one
+        let reserved = WORKSPACE_NAMES.last().unwrap();
+        for name in &WORKSPACE_NAMES[..WORKSPACE_NAMES.len() - 1] {
+            conn.execute(
+                "INSERT INTO workspaces (id, repository_id, directory_name) VALUES (?1, 'r1', ?2)",
+                [&uuid::Uuid::new_v4().to_string(), &name.to_string()],
+            )
+            .unwrap();
+        }
+
+        // The only available name should be the reserved one
+        let allocated = allocate_directory_name_with_conn(&conn, "r1").unwrap();
+        assert_eq!(allocated, *reserved, "Should pick the only remaining name");
+    }
+
+    #[test]
+    fn allocate_uses_v2_suffix_when_all_taken() {
+        let (conn, _dir) = test_db();
+
+        // Use all names
+        for name in WORKSPACE_NAMES {
+            conn.execute(
+                "INSERT INTO workspaces (id, repository_id, directory_name) VALUES (?1, 'r1', ?2)",
+                [&uuid::Uuid::new_v4().to_string(), &name.to_string()],
+            )
+            .unwrap();
+        }
+
+        let allocated = allocate_directory_name_with_conn(&conn, "r1").unwrap();
+        assert!(
+            allocated.ends_with("-v2"),
+            "Should have -v2 suffix when all names taken: {allocated}"
+        );
+        // The base name (before -v2) should be from the list
+        let base = allocated.strip_suffix("-v2").unwrap();
+        assert!(
+            WORKSPACE_NAMES.contains(&base),
+            "Base name should be from WORKSPACE_NAMES: {base}"
+        );
+    }
+
+    #[test]
+    fn allocate_is_random_not_sequential() {
+        let (conn, _dir) = test_db();
+
+        // Allocate multiple names and check they're not always the same order
+        let mut first_picks = std::collections::HashSet::new();
+        for _ in 0..10 {
+            // Use a fresh DB each time to get the first pick
+            let (c, _d) = test_db();
+            let name = allocate_directory_name_with_conn(&c, "r1").unwrap();
+            first_picks.insert(name);
+        }
+
+        // With 90 names and 10 picks, randomness should give us at least 2 different names
+        assert!(
+            first_picks.len() >= 2,
+            "Expected random picks but got only: {:?}",
+            first_picks
+        );
+    }
+
+    #[test]
+    fn allocate_is_case_insensitive() {
+        let (conn, _dir) = test_db();
+
+        // Insert with uppercase — should still be recognized as used
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name) VALUES ('w1', 'r1', 'MERCURY')",
+            [],
+        )
+        .unwrap();
+
+        // Allocate many times — "mercury" should never be picked
+        for _ in 0..20 {
+            let name = allocate_directory_name_with_conn(&conn, "r1").unwrap();
+            assert_ne!(
+                name, "mercury",
+                "Should not pick 'mercury' when 'MERCURY' is already used"
+            );
+        }
+    }
+
+    #[test]
+    fn allocate_scoped_to_repo() {
+        let (conn, _dir) = test_db();
+        conn.execute(
+            "INSERT INTO repos (id, name) VALUES ('r2', 'other-repo')",
+            [],
+        )
+        .unwrap();
+
+        // Use "mercury" in repo r2
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name) VALUES ('w1', 'r2', 'mercury')",
+            [],
+        )
+        .unwrap();
+
+        // r1 should still be able to pick "mercury" — names are per-repo
+        let mut found_mercury = false;
+        for _ in 0..50 {
+            let name = allocate_directory_name_with_conn(&conn, "r1").unwrap();
+            if name == "mercury" {
+                found_mercury = true;
+                break;
+            }
+        }
+        assert!(
+            found_mercury,
+            "'mercury' should be available for r1 since it's only used in r2"
+        );
     }
 }
