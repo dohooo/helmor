@@ -32,6 +32,7 @@ import {
 type WorkspaceComposerProps = {
 	contextKey: string;
 	onSubmit: (prompt: string, imagePaths: string[]) => void;
+	onStop?: () => void;
 	sending?: boolean;
 	selectedModelId: string | null;
 	modelSections: AgentModelSection[];
@@ -69,6 +70,7 @@ function ComposerButton({
 export const WorkspaceComposer = memo(function WorkspaceComposer({
 	contextKey: _contextKey,
 	onSubmit,
+	onStop,
 	sending = false,
 	selectedModelId,
 	modelSections,
@@ -253,24 +255,31 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						<Plus className="size-4" strokeWidth={1.8} />
 					</ComposerButton>
 
-					<button
-						type="button"
-						aria-label="Send"
-						onClick={handleSubmit}
-						disabled={sendDisabled}
-						className={cn(
-							"flex size-8 items-center justify-center rounded-[9px] border border-app-border-strong bg-app-sidebar-strong text-app-foreground transition-transform focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong",
-							sendDisabled
-								? "cursor-not-allowed opacity-50"
-								: "hover:-translate-y-px",
-						)}
-					>
-						{sending ? (
+					{sending ? (
+						<button
+							type="button"
+							aria-label="Stop"
+							onClick={onStop}
+							className="flex size-8 items-center justify-center rounded-[9px] border border-red-500/40 bg-red-500/10 text-red-400 transition-transform hover:-translate-y-px focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-red-500/40"
+						>
 							<Square className="size-3 fill-current" strokeWidth={0} />
-						) : (
+						</button>
+					) : (
+						<button
+							type="button"
+							aria-label="Send"
+							onClick={handleSubmit}
+							disabled={sendDisabled}
+							className={cn(
+								"flex size-8 items-center justify-center rounded-[9px] border border-app-border-strong bg-app-sidebar-strong text-app-foreground transition-transform focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong",
+								sendDisabled
+									? "cursor-not-allowed opacity-50"
+									: "hover:-translate-y-px",
+							)}
+						>
 							<ArrowUp className="size-[15px]" strokeWidth={2.2} />
-						)}
-					</button>
+						</button>
+					)}
 				</div>
 			</div>
 		</div>

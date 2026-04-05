@@ -864,6 +864,20 @@ pub fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
 pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
     let repo_initials = helpers::repo_initials_for_name(&record.repo_name);
 
+    // Use the worktree path as root_path so Claude Code/Codex operate in the
+    // correct workspace directory, not the source repository.
+    let worktree_path = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
+        .ok()
+        .and_then(|p| {
+            if p.is_dir() {
+                p.to_str().map(|s| s.to_string())
+            } else {
+                // Worktree doesn't exist (archived?) — fall back to source repo
+                record.root_path.clone()
+            }
+        })
+        .or_else(|| record.root_path.clone());
+
     WorkspaceDetail {
         title: helpers::display_title(&record),
         id: record.id,
@@ -873,7 +887,7 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         repo_initials,
         remote_url: record.remote_url,
         default_branch: record.default_branch,
-        root_path: record.root_path,
+        root_path: worktree_path,
         directory_name: record.directory_name,
         state: record.state,
         has_unread: record.has_unread,

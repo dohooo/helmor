@@ -998,6 +998,17 @@ export async function listenAgentStream(
 	});
 }
 
+export async function stopAgentStream(
+	sessionId: string,
+	provider?: string,
+): Promise<void> {
+	const inv = await getTauriInvoke();
+	if (!inv) return;
+	await inv("stop_agent_stream", {
+		request: { sessionId, provider: provider ?? null },
+	});
+}
+
 // ---------------------------------------------------------------------------
 // Conductor import
 // ---------------------------------------------------------------------------

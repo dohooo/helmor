@@ -33,6 +33,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             agents::list_agent_model_sections,
             agents::send_agent_message_stream,
+            agents::stop_agent_stream,
             models::archive_workspace,
             models::cancel_github_identity_connect,
             models::create_workspace_from_repo,

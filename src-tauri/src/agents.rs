@@ -227,6 +227,32 @@ pub async fn send_agent_message_stream(
     )
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentStopRequest {
+    pub session_id: String,
+    pub provider: Option<String>,
+}
+
+#[tauri::command]
+pub async fn stop_agent_stream(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    request: AgentStopRequest,
+) -> CmdResult<()> {
+    let stop_req = crate::sidecar::SidecarRequest {
+        id: Uuid::new_v4().to_string(),
+        method: "stopSession".to_string(),
+        params: serde_json::json!({
+            "sessionId": request.session_id,
+            "provider": request.provider.unwrap_or_else(|| "claude".to_string()),
+        }),
+    };
+    sidecar
+        .send(&stop_req)
+        .map_err(|e| anyhow::anyhow!("Failed to stop session: {e}"))?;
+    Ok(())
+}
+
 fn sidecar_debug_enabled() -> bool {
     std::env::var("HELMOR_SIDECAR_DEBUG")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))

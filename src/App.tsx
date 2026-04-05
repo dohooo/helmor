@@ -68,6 +68,7 @@ import {
 	type SessionMessageRecord,
 	startAgentMessageStream,
 	startGithubIdentityConnect,
+	stopAgentStream,
 	type WorkspaceDetail,
 	type WorkspaceGroup,
 	type WorkspaceRow,
@@ -200,9 +201,13 @@ function App() {
 	const [sendErrorsByContext, setSendErrorsByContext] = useState<
 		Record<string, string | null>
 	>({});
-	const [sendingContextKey, setSendingContextKey] = useState<string | null>(
-		null,
-	);
+	const [sendingContextKeys, setSendingContextKeys] = useState<
+		Record<string, boolean>
+	>({});
+	// Track active sidecar session IDs for stop functionality
+	const [activeSessionByContext, setActiveSessionByContext] = useState<
+		Record<string, { sessionId: string; provider: string }>
+	>({});
 	const [markingReadWorkspaceId, setMarkingReadWorkspaceId] = useState<
 		string | null
 	>(null);
@@ -283,7 +288,8 @@ function App() {
 		setLiveMessagesByContext({});
 		setLiveSessionsByContext({});
 		setSendErrorsByContext({});
-		setSendingContextKey(null);
+		setSendingContextKeys({});
+		setActiveSessionByContext({});
 		setLoadingWorkspace(false);
 		setLoadingSession(false);
 		setDataVersion(0);
@@ -382,7 +388,7 @@ function App() {
 		[sessionMessages, liveMessages],
 	);
 	const activeSendError = sendErrorsByContext[composerContextKey] ?? null;
-	const isSending = sendingContextKey === composerContextKey;
+	const isSending = sendingContextKeys[composerContextKey] ?? false;
 
 	useEffect(() => {
 		try {
@@ -981,6 +987,13 @@ function App() {
 		restoringWorkspaceId,
 	]);
 
+	const handleStopStream = useCallback(() => {
+		const active = activeSessionByContext[composerContextKey];
+		if (active) {
+			void stopAgentStream(active.sessionId, active.provider);
+		}
+	}, [composerContextKey, activeSessionByContext]);
+
 	const handleComposerSubmit = async (
 		submittedPrompt: string,
 		imagePaths: string[],
@@ -1011,7 +1024,7 @@ function App() {
 		);
 		setComposerRestoreState(null);
 		setSendErrorsByContext((current) => ({ ...current, [contextKey]: null }));
-		setSendingContextKey(contextKey);
+		setSendingContextKeys((current) => ({ ...current, [contextKey]: true }));
 
 		try {
 			// Try streaming first, fall back to blocking
@@ -1023,6 +1036,16 @@ function App() {
 				helmorSessionId: selectedSessionId,
 				workingDirectory: workspaceDetail?.rootPath ?? null,
 			});
+
+			// Track session for stop functionality
+			const sidecarSessionId = selectedSessionId ?? `tmp-${streamId}`;
+			setActiveSessionByContext((current) => ({
+				...current,
+				[contextKey]: {
+					sessionId: sidecarSessionId,
+					provider: selectedModel.provider,
+				},
+			}));
 
 			const accumulator = new StreamAccumulator();
 			let unlistenFn: (() => void) | null = null;
@@ -1096,9 +1119,16 @@ function App() {
 						);
 					}
 
-					setSendingContextKey((current) =>
-						current === contextKey ? null : current,
-					);
+					setSendingContextKeys((current) => {
+						const next = { ...current };
+						delete next[contextKey];
+						return next;
+					});
+					setActiveSessionByContext((current) => {
+						const next = { ...current };
+						delete next[contextKey];
+						return next;
+					});
 					return;
 				}
 
@@ -1120,9 +1150,16 @@ function App() {
 							(m) => m.id !== optimisticUserMessage.id,
 						),
 					}));
-					setSendingContextKey((current) =>
-						current === contextKey ? null : current,
-					);
+					setSendingContextKeys((current) => {
+						const next = { ...current };
+						delete next[contextKey];
+						return next;
+					});
+					setActiveSessionByContext((current) => {
+						const next = { ...current };
+						delete next[contextKey];
+						return next;
+					});
 				}
 			});
 		} catch (error) {
@@ -1143,9 +1180,16 @@ function App() {
 					(m) => m.id !== optimisticUserMessage.id,
 				),
 			}));
-			setSendingContextKey((current) =>
-				current === contextKey ? null : current,
-			);
+			setSendingContextKeys((current) => {
+				const next = { ...current };
+				delete next[contextKey];
+				return next;
+			});
+			setActiveSessionByContext((current) => {
+				const next = { ...current };
+				delete next[contextKey];
+				return next;
+			});
 		}
 	};
 
@@ -1509,6 +1553,7 @@ function App() {
 											onSubmit={(prompt, imagePaths) => {
 												void handleComposerSubmit(prompt, imagePaths);
 											}}
+											onStop={handleStopStream}
 											sending={isSending}
 											selectedModelId={selectedModelId}
 											modelSections={agentModelSections}

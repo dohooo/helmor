@@ -13,7 +13,9 @@ import { createInterface } from "node:readline";
 import { CodexSessionManager } from "./codex-session-manager.js";
 import { SessionManager } from "./session-manager.js";
 
-const DEBUG = process.env.HELMOR_SIDECAR_DEBUG === "1" || process.env.HELMOR_SIDECAR_DEBUG === "true";
+const DEBUG =
+	process.env.HELMOR_SIDECAR_DEBUG === "1" ||
+	process.env.HELMOR_SIDECAR_DEBUG === "true";
 
 function debug(...args: unknown[]) {
 	if (DEBUG) {
@@ -53,9 +55,13 @@ for await (const line of rl) {
 	const { id, method, params } = request;
 	requestCount++;
 
-	debug(`← stdin [${id}] method=${method} provider=${params.provider ?? "claude"} (#${requestCount})`);
+	debug(
+		`← stdin [${id}] method=${method} provider=${params.provider ?? "claude"} (#${requestCount})`,
+	);
 	if (DEBUG && method === "sendMessage") {
-		debug(`  prompt="${String(params.prompt ?? "").slice(0, 80)}..." model=${params.model} cwd=${params.cwd} resume=${params.resume ?? "none"}`);
+		debug(
+			`  prompt="${String(params.prompt ?? "").slice(0, 80)}..." model=${params.model} cwd=${params.cwd} resume=${params.resume ?? "none"}`,
+		);
 	}
 
 	try {
@@ -89,7 +95,9 @@ for await (const line of rl) {
 						debugEmit,
 					)
 					.then(() => {
-						debug(`[${id}] sendMessage completed — ${eventCount} events emitted`);
+						debug(
+							`[${id}] sendMessage completed — ${eventCount} events emitted`,
+						);
 					})
 					.catch((err: unknown) => {
 						const msg = err instanceof Error ? err.message : String(err);
