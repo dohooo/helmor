@@ -381,7 +381,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 											<TabsTrigger
 												key={session.id}
 												value={session.id}
-												className="group/tab relative gap-1.5 rounded-[10px] px-3.5 pr-8 text-[13px] text-app-foreground-soft data-[state=active]:text-app-foreground"
+												className="group/tab relative gap-1.5 overflow-hidden rounded-[10px] px-3.5 text-[13px] text-app-foreground-soft data-[state=active]:text-app-foreground"
 											>
 												<SessionProviderIcon
 													agentType={session.agentType}
@@ -423,12 +423,12 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 													/>
 												) : null}
 												{!isEditing ? (
-													<>
+													<span className="pointer-events-none absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-gradient-to-r from-transparent via-muted via-[35%] to-muted pl-5 pr-1 opacity-0 transition-opacity group-hover/tab:pointer-events-auto group-hover/tab:opacity-100 group-data-[state=active]/tab:via-background group-data-[state=active]/tab:to-background">
 														<span
 															role="button"
 															aria-label="Rename session"
 															onClick={(e) => handleStartRename(session, e)}
-															className="absolute right-4 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-sm p-0.5 opacity-0 transition-opacity hover:bg-app-toolbar-hover group-hover/tab:opacity-100"
+															className="flex items-center justify-center rounded-sm p-0.5 hover:bg-app-toolbar-hover"
 														>
 															<Pencil className="size-2.5" strokeWidth={2} />
 														</span>
@@ -436,11 +436,11 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 															role="button"
 															aria-label="Close session"
 															onClick={(e) => handleHideSession(session.id, e)}
-															className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-sm p-0.5 opacity-0 transition-opacity hover:bg-app-toolbar-hover group-hover/tab:opacity-100 data-[state=active]:opacity-100"
+															className="flex items-center justify-center rounded-sm p-0.5 hover:bg-app-toolbar-hover"
 														>
 															<X className="size-2.5" strokeWidth={2} />
 														</span>
-													</>
+													</span>
 												) : null}
 											</TabsTrigger>
 										);
