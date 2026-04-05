@@ -114,9 +114,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const sendDisabled =
 		disabled || submitDisabled || sending || !selectedModel || !hasContent;
 
+	const prevContextKeyRef = useRef(contextKey);
 	useEffect(() => {
-		setDraftValue(restoreDraft ?? "");
-		setAttachedImages(restoreImages);
+		if (prevContextKeyRef.current !== contextKey) {
+			// User switched session/workspace — reset draft
+			prevContextKeyRef.current = contextKey;
+			setDraftValue(restoreDraft ?? "");
+			setAttachedImages(restoreImages);
+		}
 	}, [contextKey, restoreDraft, restoreImages]);
 
 	useEffect(() => {
