@@ -3,6 +3,7 @@ import {
 	memo,
 	startTransition,
 	useCallback,
+	useEffect,
 	useLayoutEffect,
 	useMemo,
 	useRef,
@@ -225,6 +226,39 @@ export const WorkspaceConversationContainer = memo(
 				});
 
 				try {
+					// Fire auto-title generation before starting the stream.
+					// Runs in background — doesn't block the actual AI response.
+					if (displayedSessionId) {
+						void generateSessionTitle(displayedSessionId, trimmedPrompt).then(
+							(result) => {
+								if (result?.title) {
+									// Lightweight refresh — only sidebar/tabs, not messages
+									void Promise.all([
+										queryClient.invalidateQueries({
+											queryKey: helmorQueryKeys.workspaceGroups,
+										}),
+										displayedWorkspaceId
+											? queryClient.invalidateQueries({
+													queryKey:
+														helmorQueryKeys.workspaceSessions(
+															displayedWorkspaceId,
+														),
+												})
+											: undefined,
+										displayedWorkspaceId
+											? queryClient.invalidateQueries({
+													queryKey:
+														helmorQueryKeys.workspaceDetail(
+															displayedWorkspaceId,
+														),
+												})
+											: undefined,
+									]);
+								}
+							},
+						);
+					}
+
 					const { streamId } = await startAgentMessageStream({
 						provider: model.provider,
 						modelId: model.id,
@@ -330,30 +364,19 @@ export const WorkspaceConversationContainer = memo(
 							});
 
 							if (event.persisted) {
-								// Invalidate queries to update sidebar counts, etc.
-								// but do NOT clear live messages — keep streaming data
-								// visible until the user switches away from this session.
+								// Invalidate queries so DB data loads, then clear live
+								// messages in the same tick to avoid duplicates.
 								void invalidateConversationQueries(
 									displayedWorkspaceId,
 									displayedSessionId,
-								);
-
-								// Auto-generate session title in the background.
-								// The backend checks if the title is still "Untitled"
-								// and skips if already renamed.
-								if (displayedSessionId) {
-									void generateSessionTitle(
-										displayedSessionId,
-										trimmedPrompt,
-									).then((result) => {
-										if (result?.title) {
-											void invalidateConversationQueries(
-												displayedWorkspaceId,
-												displayedSessionId,
-											);
-										}
+								).then(() => {
+									setLiveMessagesByContext((current) => {
+										if (!current[contextKey]?.length) return current;
+										const next = { ...current };
+										delete next[contextKey];
+										return next;
 									});
-								}
+								});
 							}
 
 							sendingWorkspaceMapRef.current.delete(contextKey);
@@ -519,19 +542,35 @@ export const WorkspaceConversationContainer = memo(
 );
 
 function SendingStatusBar({ active }: { active: boolean }) {
-	if (!active) {
-		return <div className="h-3" aria-hidden="true" />;
-	}
+	const [elapsed, setElapsed] = useState(0);
+
+	useEffect(() => {
+		if (!active) {
+			setElapsed(0);
+			return;
+		}
+		const start = Date.now();
+		const id = window.setInterval(() => {
+			setElapsed(Math.floor((Date.now() - start) / 1000));
+		}, 1000);
+		return () => window.clearInterval(id);
+	}, [active]);
+
+	if (!active) return null;
+
+	const display =
+		elapsed < 60
+			? `${elapsed}s`
+			: `${Math.floor(elapsed / 60)}m ${(elapsed % 60).toString().padStart(2, "0")}s`;
 
 	return (
-		<div
-			aria-live="polite"
-			className="flex h-3 items-center pb-2 text-[11px] text-app-muted"
-		>
-			<span className="inline-flex items-center gap-1.5">
-				<span className="size-1.5 rounded-full bg-app-progress" />
-				Sending to agent
+		<div className="mb-6 flex items-center gap-1.5 text-[12px] tabular-nums text-app-muted">
+			<span className="flex gap-[2px]">
+				<span className="inline-block size-[3px] animate-bounce rounded-full bg-app-muted [animation-delay:0ms]" />
+				<span className="inline-block size-[3px] animate-bounce rounded-full bg-app-muted [animation-delay:150ms]" />
+				<span className="inline-block size-[3px] animate-bounce rounded-full bg-app-muted [animation-delay:300ms]" />
 			</span>
+			{display}
 		</div>
 	);
 }

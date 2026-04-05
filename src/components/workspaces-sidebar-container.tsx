@@ -9,7 +9,10 @@ import {
 	markWorkspaceRead,
 	markWorkspaceUnread,
 	permanentlyDeleteWorkspace,
+	pinWorkspace,
 	restoreWorkspace,
+	setWorkspaceManualStatus,
+	unpinWorkspace,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
 import {
@@ -449,6 +452,134 @@ export const WorkspacesSidebarContainer = memo(
 			],
 		);
 
+		const handleTogglePin = useCallback(
+			async (workspaceId: string, currentlyPinned: boolean) => {
+				// Optimistic update: move between pinned and status groups
+				const statusToGroupId: Record<string, string> = {
+					done: "done",
+					review: "review",
+					"in-review": "review",
+					"in-progress": "progress",
+					backlog: "backlog",
+					canceled: "canceled",
+				};
+
+				queryClient.setQueryData(helmorQueryKeys.workspaceGroups, (current) => {
+					if (!Array.isArray(current)) return current;
+					const groupsCopy = current as typeof groups;
+
+					// Find the row across all groups
+					type Row = (typeof groups)[number]["rows"][number];
+					let foundRow: Row | null = null;
+					const withoutRow = groupsCopy.map((group) => {
+						const idx = group.rows.findIndex((row) => row.id === workspaceId);
+						if (idx === -1) return group;
+						foundRow = group.rows[idx];
+						return {
+							...group,
+							rows: [...group.rows.slice(0, idx), ...group.rows.slice(idx + 1)],
+						};
+					});
+
+					if (!foundRow) return current;
+					const row = foundRow as Row;
+
+					const updatedRow: Row = {
+						...row,
+						pinnedAt: currentlyPinned ? null : new Date().toISOString(),
+					};
+
+					// Determine target group
+					const targetGroupId = currentlyPinned
+						? (statusToGroupId[
+								updatedRow.manualStatus ??
+									updatedRow.derivedStatus ??
+									"in-progress"
+							] ?? "progress")
+						: "pinned";
+
+					return withoutRow.map((group) =>
+						group.id === targetGroupId
+							? { ...group, rows: [...group.rows, updatedRow] }
+							: group,
+					);
+				});
+
+				try {
+					if (currentlyPinned) {
+						await unpinWorkspace(workspaceId);
+					} else {
+						await pinWorkspace(workspaceId);
+					}
+					await invalidateWorkspaceSummary(workspaceId);
+				} catch (error) {
+					void queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceGroups,
+					});
+					pushWorkspaceToast(
+						describeUnknownError(error, "Unable to update pin state."),
+					);
+				}
+			},
+			[groups, invalidateWorkspaceSummary, pushWorkspaceToast, queryClient],
+		);
+
+		const handleSetManualStatus = useCallback(
+			async (workspaceId: string, status: string | null) => {
+				// Map status value → group id
+				const statusToGroupId: Record<string, string> = {
+					done: "done",
+					review: "review",
+					"in-review": "review",
+					"in-progress": "progress",
+					backlog: "backlog",
+					canceled: "canceled",
+				};
+				const targetGroupId =
+					statusToGroupId[status ?? "in-progress"] ?? "progress";
+
+				// Optimistic update: move workspace to target group
+				queryClient.setQueryData(helmorQueryKeys.workspaceGroups, (current) => {
+					if (!Array.isArray(current)) return current;
+					const groupsCopy = current as typeof groups;
+
+					// Find and remove the row from its current group
+					let movedRow: (typeof groups)[number]["rows"][number] | null = null;
+					const withoutRow = groupsCopy.map((group) => {
+						const idx = group.rows.findIndex((row) => row.id === workspaceId);
+						if (idx === -1) return group;
+						movedRow = { ...group.rows[idx], manualStatus: status };
+						return {
+							...group,
+							rows: [...group.rows.slice(0, idx), ...group.rows.slice(idx + 1)],
+						};
+					});
+
+					if (!movedRow) return current;
+
+					// Add to target group
+					return withoutRow.map((group) =>
+						group.id === targetGroupId
+							? { ...group, rows: [...group.rows, movedRow] }
+							: group,
+					);
+				});
+
+				try {
+					await setWorkspaceManualStatus(workspaceId, status);
+					await invalidateWorkspaceSummary(workspaceId);
+				} catch (error) {
+					void queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceGroups,
+					});
+					pushWorkspaceToast(
+						describeUnknownError(error, "Unable to set status."),
+					);
+				}
+			},
+			[groups, invalidateWorkspaceSummary, pushWorkspaceToast, queryClient],
+		);
+
 		const handleCreateWorkspaceFromRepo = useCallback(
 			async (repoId: string) => {
 				if (
@@ -575,43 +706,39 @@ export const WorkspacesSidebarContainer = memo(
 						error,
 						"Unable to archive workspace.",
 					);
-					if (msg.includes("missing")) {
-						pushWorkspaceToast(msg, "Archive failed", "destructive", {
-							persistent: true,
-							action: {
-								label: "Permanently Delete",
-								destructive: true,
-								onClick: () => {
-									void (async () => {
-										try {
-											await permanentlyDeleteWorkspace(workspaceId);
-											const { loadedGroups, loadedArchived } =
-												await refetchNavigation();
-											const nextWorkspaceId =
-												findInitialWorkspaceId(loadedGroups) ??
-												loadedArchived[0]?.id ??
-												null;
-											onSelectWorkspace(nextWorkspaceId);
-											pushWorkspaceToast(
-												"Workspace permanently deleted.",
-												"Done",
-												"default",
-											);
-										} catch (deleteError) {
-											pushWorkspaceToast(
-												describeUnknownError(
-													deleteError,
-													"Unable to delete workspace.",
-												),
-											);
-										}
-									})();
-								},
+					pushWorkspaceToast(msg, "Archive failed", "destructive", {
+						persistent: true,
+						action: {
+							label: "Permanently Delete",
+							destructive: true,
+							onClick: () => {
+								void (async () => {
+									try {
+										await permanentlyDeleteWorkspace(workspaceId);
+										const { loadedGroups, loadedArchived } =
+											await refetchNavigation();
+										const nextWorkspaceId =
+											findInitialWorkspaceId(loadedGroups) ??
+											loadedArchived[0]?.id ??
+											null;
+										onSelectWorkspace(nextWorkspaceId);
+										pushWorkspaceToast(
+											"Workspace permanently deleted.",
+											"Done",
+											"default",
+										);
+									} catch (deleteError) {
+										pushWorkspaceToast(
+											describeUnknownError(
+												deleteError,
+												"Unable to delete workspace.",
+											),
+										);
+									}
+								})();
 							},
-						});
-					} else {
-						pushWorkspaceToast(msg);
-					}
+						},
+					});
 				} finally {
 					setArchivingWorkspaceId(null);
 				}
@@ -668,6 +795,32 @@ export const WorkspacesSidebarContainer = memo(
 			],
 		);
 
+		const handleDeleteWorkspace = useCallback(
+			async (workspaceId: string) => {
+				try {
+					await permanentlyDeleteWorkspace(workspaceId);
+					const { loadedGroups, loadedArchived } = await refetchNavigation();
+					if (selectedWorkspaceId === workspaceId) {
+						const nextWorkspaceId =
+							findInitialWorkspaceId(loadedGroups) ??
+							loadedArchived[0]?.id ??
+							null;
+						onSelectWorkspace(nextWorkspaceId);
+					}
+				} catch (error) {
+					pushWorkspaceToast(
+						describeUnknownError(error, "Unable to delete workspace."),
+					);
+				}
+			},
+			[
+				onSelectWorkspace,
+				pushWorkspaceToast,
+				refetchNavigation,
+				selectedWorkspaceId,
+			],
+		);
+
 		return (
 			<WorkspacesSidebar
 				groups={groups}
@@ -693,6 +846,15 @@ export const WorkspacesSidebarContainer = memo(
 				}}
 				onRestoreWorkspace={(workspaceId) => {
 					void handleRestoreWorkspace(workspaceId);
+				}}
+				onDeleteWorkspace={(workspaceId) => {
+					void handleDeleteWorkspace(workspaceId);
+				}}
+				onTogglePin={(workspaceId, pinned) => {
+					void handleTogglePin(workspaceId, pinned);
+				}}
+				onSetManualStatus={(workspaceId, status) => {
+					void handleSetManualStatus(workspaceId, status);
 				}}
 				archivingWorkspaceId={archivingWorkspaceId}
 				markingUnreadWorkspaceId={markingUnreadWorkspaceId}
