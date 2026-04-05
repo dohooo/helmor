@@ -60,7 +60,9 @@ import {
 } from "@/lib/api";
 import { recordMessageRender } from "@/lib/dev-render-debug";
 import { convertMessages, type MessagePart } from "@/lib/message-adapter";
+import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
+import { ClaudeIcon, OpenAIIcon } from "./icons";
 import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
 import {
 	DropdownMenu,
@@ -68,9 +70,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
-import { ClaudeIcon, OpenAIIcon } from "./icons";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
-import { useSettings } from "@/lib/settings";
 
 type WorkspacePanelProps = {
 	workspace: WorkspaceDetail | null;

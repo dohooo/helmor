@@ -20,6 +20,7 @@ import {
 import { ConductorImportDialog } from "./components/conductor-import-dialog";
 import { SettingsButton, SettingsDialog } from "./components/settings-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "./components/ui/avatar";
+import { Button } from "./components/ui/button";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -1003,28 +1004,30 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 							<div className="absolute right-4 top-[0.55rem] z-30 flex items-center gap-1">
 								{conductorAvailable && (
-									<button
-										type="button"
+									<Button
+										variant="ghost"
+										size="icon-xs"
 										aria-label="Import from Conductor"
 										onClick={() => setImportDialogOpen(true)}
 										title="Import workspaces from Conductor"
-										className="flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
+										className="text-app-muted hover:text-app-foreground"
 									>
 										<Download className="size-3.5" strokeWidth={1.8} />
-									</button>
+									</Button>
 								)}
-								<button
-									type="button"
+								<Button
+									variant="ghost"
+									size="icon-xs"
 									aria-label="Toggle theme"
 									onClick={toggleTheme}
-									className="flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
+									className="text-app-muted hover:text-app-foreground"
 								>
 									{theme === "dark" ? (
 										<Sun className="size-3.5" strokeWidth={1.8} />
 									) : (
 										<Moon className="size-3.5" strokeWidth={1.8} />
 									)}
-								</button>
+								</Button>
 								<GithubStatusMenu
 									identityState={githubIdentityState}
 									onDisconnectGithub={() => {

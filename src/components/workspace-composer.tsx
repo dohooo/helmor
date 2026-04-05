@@ -13,6 +13,7 @@ import { recordComposerRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
 import { ClaudeIcon, OpenAIIcon } from "./icons";
 import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
+import { Button } from "./ui/button";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -44,27 +45,26 @@ type WorkspaceComposerProps = {
 	restoreNonce?: number;
 };
 
-type ComposerButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-	children: ReactNode;
-	className?: string;
-};
-
 function ComposerButton({
 	children,
 	className,
 	...props
-}: ComposerButtonProps) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+	children: ReactNode;
+	className?: string;
+}) {
 	return (
-		<button
+		<Button
 			{...props}
-			type="button"
+			variant="ghost"
+			size="sm"
 			className={cn(
-				"flex items-center gap-1.5 rounded-lg text-app-foreground-soft transition-colors hover:text-app-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong disabled:cursor-not-allowed disabled:opacity-45",
+				"h-auto gap-1.5 rounded-lg text-app-foreground-soft hover:text-app-foreground",
 				className,
 			)}
 		>
 			{children}
-		</button>
+		</Button>
 	);
 }
 
@@ -336,35 +336,27 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 
 				<div className="flex items-center gap-2">
 					{sending ? (
-						<button
-							type="button"
+						<Button
+							variant="destructive"
+							size="icon"
 							aria-label="Stop"
 							onClick={onStop}
 							disabled={disabled || submitDisabled}
-							className={cn(
-								"flex size-8 items-center justify-center rounded-[9px] border border-red-500/40 bg-red-500/10 text-red-400 transition-transform focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-red-500/40",
-								disabled
-									? "cursor-not-allowed opacity-50"
-									: "hover:-translate-y-px",
-							)}
+							className="rounded-[9px]"
 						>
 							<Square className="size-3 fill-current" strokeWidth={0} />
-						</button>
+						</Button>
 					) : (
-						<button
-							type="button"
+						<Button
+							variant="outline"
+							size="icon"
 							aria-label="Send"
 							onClick={handleSubmit}
 							disabled={sendDisabled}
-							className={cn(
-								"flex size-8 items-center justify-center rounded-[9px] border border-app-border-strong bg-app-sidebar-strong text-app-foreground transition-transform focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong",
-								sendDisabled
-									? "cursor-not-allowed opacity-50"
-									: "hover:-translate-y-px",
-							)}
+							className="rounded-[9px]"
 						>
 							<ArrowUp className="size-[15px]" strokeWidth={2.2} />
-						</button>
+						</Button>
 					)}
 				</div>
 			</div>

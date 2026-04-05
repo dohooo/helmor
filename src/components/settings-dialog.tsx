@@ -1,6 +1,8 @@
-import { Minus, Plus, Settings, X } from "lucide-react";
+import { Minus, Plus, Settings } from "lucide-react";
 import { memo, useState } from "react";
 import { useSettings } from "@/lib/settings";
+import { Button } from "./ui/button";
+import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 
 const MIN_FONT_SIZE = 12;
 const MAX_FONT_SIZE = 20;
@@ -15,70 +17,56 @@ export const SettingsDialog = memo(function SettingsDialog({
 	const { settings, updateSettings } = useSettings();
 	const [activeSection] = useState("general");
 
-	if (!open) return null;
-
 	return (
-		<div className="fixed inset-0 z-50 flex items-center justify-center">
-			{/* Backdrop */}
-			<div
-				className="absolute inset-0 bg-black/40"
-				onClick={onClose}
-				onKeyDown={(e) => e.key === "Escape" && onClose()}
-			/>
-
-			{/* Dialog */}
-			<div className="relative flex h-[420px] w-[560px] overflow-hidden rounded-[14px] border border-app-border bg-app-sidebar shadow-2xl">
-				{/* Sidebar */}
-				<div className="flex w-[160px] shrink-0 flex-col border-r border-app-border bg-app-base/50 p-2 pt-10">
+		<Dialog open={open} onOpenChange={onClose}>
+			<DialogContent className="flex h-[min(80vh,640px)] w-[min(80vw,860px)] max-w-[860px] sm:max-w-[860px] gap-0 overflow-hidden rounded-2xl border border-app-border/60 bg-app-sidebar p-0 shadow-2xl">
+				{/* Nav sidebar */}
+				<nav className="flex w-[200px] shrink-0 flex-col gap-1 border-r border-app-border/40 bg-app-base/40 px-3 pt-14 pb-6">
 					<button
 						type="button"
-						className={`rounded-lg px-3 py-1.5 text-left text-[13px] font-medium ${
+						className={`rounded-lg px-3 py-2 text-left text-[13px] font-medium transition-colors ${
 							activeSection === "general"
-								? "bg-app-foreground/[0.08] text-app-foreground"
-								: "text-app-muted hover:text-app-foreground"
+								? "bg-app-foreground/[0.07] text-app-foreground"
+								: "text-app-muted hover:bg-app-foreground/[0.04] hover:text-app-foreground"
 						}`}
 					>
 						General
 					</button>
-				</div>
+				</nav>
 
-				{/* Content */}
+				{/* Main content */}
 				<div className="flex flex-1 flex-col">
 					{/* Header */}
-					<div className="flex items-center justify-between border-b border-app-border px-5 py-3">
-						<h2 className="text-[14px] font-semibold text-app-foreground">
+					<div className="flex items-center border-b border-app-border/40 px-8 py-4">
+						<DialogTitle className="text-[15px] font-semibold text-app-foreground">
 							Settings
-						</h2>
-						<button
-							type="button"
-							onClick={onClose}
-							className="rounded-md p-1 text-app-muted transition-colors hover:bg-app-foreground/[0.06] hover:text-app-foreground"
-						>
-							<X className="size-4" strokeWidth={2} />
-						</button>
+						</DialogTitle>
 					</div>
 
-					{/* General section */}
-					<div className="flex-1 overflow-y-auto px-5 py-4">
-						<div className="space-y-5">
-							<div>
-								<h3 className="mb-3 text-[12px] font-semibold uppercase tracking-wider text-app-muted">
-									Appearance
-								</h3>
+					{/* Content area */}
+					<div className="flex-1 overflow-y-auto px-8 py-6">
+						{/* Appearance section */}
+						<section>
+							<h3 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.08em] text-app-muted">
+								Appearance
+							</h3>
 
-								<div className="flex items-center justify-between rounded-lg border border-app-border/50 bg-app-base/30 px-4 py-3">
-									<div>
-										<div className="text-[13px] font-medium text-app-foreground">
+							<div className="space-y-3">
+								{/* Font Size */}
+								<div className="flex items-center justify-between rounded-xl border border-app-border/30 bg-app-base/20 px-5 py-4">
+									<div className="mr-8">
+										<div className="text-[13px] font-medium leading-snug text-app-foreground">
 											Font Size
 										</div>
-										<div className="mt-0.5 text-[11px] text-app-muted">
-											Chat message text size
+										<div className="mt-1 text-[12px] leading-snug text-app-muted">
+											Adjust the text size for chat messages
 										</div>
 									</div>
 
-									<div className="flex items-center gap-2">
-										<button
-											type="button"
+									<div className="flex items-center gap-3">
+										<Button
+											variant="outline"
+											size="icon-sm"
 											onClick={() =>
 												updateSettings({
 													fontSize: Math.max(
@@ -88,17 +76,17 @@ export const SettingsDialog = memo(function SettingsDialog({
 												})
 											}
 											disabled={settings.fontSize <= MIN_FONT_SIZE}
-											className="flex size-7 items-center justify-center rounded-md border border-app-border bg-app-sidebar text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.06] disabled:opacity-30"
 										>
 											<Minus className="size-3.5" strokeWidth={2} />
-										</button>
+										</Button>
 
-										<span className="w-10 text-center text-[13px] font-medium tabular-nums text-app-foreground">
+										<span className="w-12 text-center text-[14px] font-semibold tabular-nums text-app-foreground">
 											{settings.fontSize}px
 										</span>
 
-										<button
-											type="button"
+										<Button
+											variant="outline"
+											size="icon-sm"
 											onClick={() =>
 												updateSettings({
 													fontSize: Math.min(
@@ -108,30 +96,30 @@ export const SettingsDialog = memo(function SettingsDialog({
 												})
 											}
 											disabled={settings.fontSize >= MAX_FONT_SIZE}
-											className="flex size-7 items-center justify-center rounded-md border border-app-border bg-app-sidebar text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.06] disabled:opacity-30"
 										>
 											<Plus className="size-3.5" strokeWidth={2} />
-										</button>
+										</Button>
 									</div>
 								</div>
 							</div>
-						</div>
+						</section>
 					</div>
 				</div>
-			</div>
-		</div>
+			</DialogContent>
+		</Dialog>
 	);
 });
 
 export function SettingsButton({ onClick }: { onClick: () => void }) {
 	return (
-		<button
-			type="button"
+		<Button
+			variant="ghost"
+			size="icon"
 			onClick={onClick}
-			className="flex size-8 items-center justify-center rounded-lg text-app-muted transition-colors hover:bg-app-toolbar-hover/70 hover:text-app-foreground"
 			title="Settings"
+			className="text-app-muted hover:text-app-foreground"
 		>
 			<Settings className="size-[15px]" strokeWidth={1.8} />
-		</button>
+		</Button>
 	);
 }

@@ -5,10 +5,8 @@ import {
 	GitBranch,
 	Loader2,
 	Search,
-	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import {
 	type ConductorRepo,
 	type ConductorWorkspace,
@@ -16,6 +14,7 @@ import {
 	listConductorRepos,
 	listConductorWorkspaces,
 } from "@/lib/api";
+import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -229,21 +228,14 @@ export function ConductorImportDialog({
 		}
 	}, [importing, selectedIds, onImported, onClose]);
 
-	if (!open) return null;
-
 	const selectedRepo = repos.find((r) => r.id === selectedRepoId);
 
-	return createPortal(
-		<div className="fixed inset-0 z-[9999] flex items-center justify-center">
-			{/* Backdrop */}
-			<div className="absolute inset-0 bg-black/50" />
-
-			{/* Panel */}
-			<div
+	return (
+		<Dialog open={open} onOpenChange={(v) => !v && !importing && onClose()}>
+			<DialogContent
 				ref={panelRef}
-				role="dialog"
-				aria-label="Import from Conductor"
-				className="relative z-10 flex w-[24rem] flex-col rounded-[14px] border border-app-border bg-app-sidebar shadow-[0_18px_48px_rgba(0,0,0,0.38)]"
+				showCloseButton={!importing}
+				className="flex w-[24rem] max-w-[24rem] flex-col gap-0 rounded-xl border border-app-border bg-app-sidebar p-0 shadow-2xl"
 			>
 				{/* Header */}
 				<div className="flex items-center gap-2 px-4 pt-4 pb-2">
@@ -262,17 +254,9 @@ export function ConductorImportDialog({
 							strokeWidth={1.8}
 						/>
 					)}
-					<h2 className="flex-1 text-[13px] font-medium tracking-[-0.01em] text-app-foreground">
+					<DialogTitle className="flex-1 text-[13px] font-medium tracking-[-0.01em] text-app-foreground">
 						{selectedRepoId ? selectedRepo?.name : "Import from Conductor"}
-					</h2>
-					<button
-						type="button"
-						disabled={importing}
-						className="flex size-6 items-center justify-center rounded-md text-app-foreground-soft/60 transition-colors hover:text-app-foreground disabled:opacity-40"
-						onClick={onClose}
-					>
-						<X className="size-3.5" strokeWidth={2} />
-					</button>
+					</DialogTitle>
 				</div>
 
 				{/* Search — hidden while importing */}
@@ -388,9 +372,8 @@ export function ConductorImportDialog({
 						</button>
 					</div>
 				)}
-			</div>
-		</div>,
-		document.body,
+			</DialogContent>
+		</Dialog>
 	);
 }
 
