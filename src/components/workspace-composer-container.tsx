@@ -108,7 +108,9 @@ export const WorkspaceComposerContainer = memo(
 		const effortLevel = effectiveEffort;
 		const permissionMode =
 			permissionModes[composerContextKey] ??
-			(currentSession?.permissionMode === "plan" ? "plan" : "acceptEdits");
+			(currentSession?.permissionMode === "plan"
+				? "plan"
+				: "bypassPermissions");
 		const loadingConversationContext =
 			Boolean(displayedWorkspaceId) &&
 			(workspaceDetailQuery.isPending || sessionsQuery.isPending);

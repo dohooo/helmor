@@ -2,11 +2,14 @@ import { Minus, Plus, Settings } from "lucide-react";
 import { memo, useEffect, useState } from "react";
 import { loadGithubIdentitySession } from "@/lib/api";
 import { useSettings } from "@/lib/settings";
+import { cn } from "@/lib/utils";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 
 const MIN_FONT_SIZE = 12;
 const MAX_FONT_SIZE = 20;
+
+type SettingsSection = "appearance" | "workspace";
 
 export const SettingsDialog = memo(function SettingsDialog({
 	open,
@@ -16,7 +19,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 	onClose: () => void;
 }) {
 	const { settings, updateSettings } = useSettings();
-	const [activeSection] = useState("general");
+	const [activeSection, setActiveSection] =
+		useState<SettingsSection>("appearance");
 	const [githubLogin, setGithubLogin] = useState<string | null>(null);
 
 	useEffect(() => {
@@ -34,35 +38,35 @@ export const SettingsDialog = memo(function SettingsDialog({
 			<DialogContent className="flex h-[min(80vh,640px)] w-[min(80vw,860px)] max-w-[860px] sm:max-w-[860px] gap-0 overflow-hidden rounded-2xl border border-app-border/60 bg-app-sidebar p-0 shadow-2xl">
 				{/* Nav sidebar */}
 				<nav className="flex w-[200px] shrink-0 flex-col gap-1 border-r border-app-border/40 bg-app-base/40 px-3 pt-14 pb-6">
-					<button
-						type="button"
-						className={`rounded-lg px-3 py-2 text-left text-[13px] font-medium transition-colors ${
-							activeSection === "general"
-								? "bg-app-foreground/[0.07] text-app-foreground"
-								: "text-app-muted hover:bg-app-foreground/[0.04] hover:text-app-foreground"
-						}`}
-					>
-						General
-					</button>
+					{(["appearance", "workspace"] as const).map((section) => (
+						<button
+							key={section}
+							type="button"
+							onClick={() => setActiveSection(section)}
+							className={cn(
+								"rounded-lg px-3 py-2 text-left text-[13px] font-medium capitalize transition-colors",
+								activeSection === section
+									? "bg-app-foreground/[0.07] text-app-foreground"
+									: "text-app-muted hover:bg-app-foreground/[0.04] hover:text-app-foreground",
+							)}
+						>
+							{section}
+						</button>
+					))}
 				</nav>
 
 				{/* Main content */}
 				<div className="flex flex-1 flex-col">
 					{/* Header */}
 					<div className="flex items-center border-b border-app-border/40 px-8 py-4">
-						<DialogTitle className="text-[15px] font-semibold text-app-foreground">
-							Settings
+						<DialogTitle className="text-[15px] font-semibold capitalize text-app-foreground">
+							{activeSection}
 						</DialogTitle>
 					</div>
 
 					{/* Content area */}
-					<div className="flex-1 space-y-8 overflow-y-auto px-8 py-6">
-						{/* Appearance section */}
-						<section>
-							<h3 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.08em] text-app-muted">
-								Appearance
-							</h3>
-
+					<div className="flex-1 overflow-y-auto px-8 py-6">
+						{activeSection === "appearance" && (
 							<div className="space-y-3">
 								{/* Font Size */}
 								<div className="flex items-center justify-between rounded-xl border border-app-border/30 bg-app-base/20 px-5 py-4">
@@ -114,13 +118,9 @@ export const SettingsDialog = memo(function SettingsDialog({
 									</div>
 								</div>
 							</div>
-						</section>
+						)}
 
-						{/* Workspace section */}
-						<section>
-							<h3 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.08em] text-app-muted">
-								Workspace
-							</h3>
+						{activeSection === "workspace" && (
 							<div className="space-y-3">
 								<div className="rounded-xl border border-app-border/30 bg-app-base/20 px-5 py-4">
 									<div className="text-[13px] font-medium leading-snug text-app-foreground">
@@ -176,7 +176,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 									</div>
 								</div>
 							</div>
-						</section>
+						)}
 					</div>
 				</div>
 			</DialogContent>
