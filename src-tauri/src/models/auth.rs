@@ -14,6 +14,7 @@ use tauri::{AppHandle, Emitter};
 use super::settings;
 
 const GITHUB_IDENTITY_META_KEY: &str = "github_identity_meta";
+const DEV_IDENTITY_SECRET_KEY: &str = "github_identity_secret";
 const KEYRING_SERVICE: &str = "build.helmor.app";
 const KEYRING_ACCOUNT: &str = "github-identity";
 const DEVICE_FLOW_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
@@ -195,7 +196,7 @@ trait GithubHttpClient {
 
 pub fn get_github_identity_session() -> Result<GithubIdentitySnapshot> {
     let client = ReqwestGithubClient::new()?;
-    let secret_store = KeyringSecretStore;
+    let secret_store = active_secret_store();
     match get_github_identity_session_with(github_client_id(), &client, &secret_store) {
         Ok(snapshot) => Ok(snapshot),
         Err(error) => Ok(GithubIdentitySnapshot::Error {
@@ -227,7 +228,7 @@ pub fn disconnect_github_identity(
     app: AppHandle,
     runtime: GithubIdentityFlowRuntime,
 ) -> Result<()> {
-    let secret_store = KeyringSecretStore;
+    let secret_store = active_secret_store();
     runtime.cancel_current_flow();
     clear_stored_identity(&secret_store)?;
     emit_github_identity_snapshot(&app, &GithubIdentitySnapshot::Disconnected)
@@ -326,7 +327,7 @@ fn spawn_identity_poll_loop(
                 return;
             }
         };
-        let secret_store = KeyringSecretStore;
+        let secret_store = active_secret_store();
         let mut interval_seconds = flow.interval_seconds.max(1);
 
         loop {
@@ -613,6 +614,61 @@ impl SecretStore for KeyringSecretStore {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(error) => Err(error).context("Failed to delete GitHub identity secret"),
         }
+    }
+}
+
+struct DevSettingsSecretStore;
+
+impl SecretStore for DevSettingsSecretStore {
+    fn load(&self) -> Result<Option<StoredIdentitySecret>> {
+        settings::load_setting_json::<StoredIdentitySecret>(DEV_IDENTITY_SECRET_KEY)
+            .context("Failed to load GitHub identity secret from development settings")
+    }
+
+    fn save(&self, secret: &StoredIdentitySecret) -> Result<()> {
+        settings::upsert_setting_json(DEV_IDENTITY_SECRET_KEY, secret)
+            .context("Failed to save GitHub identity secret to development settings")
+    }
+
+    fn delete(&self) -> Result<()> {
+        settings::delete_setting_value(DEV_IDENTITY_SECRET_KEY)
+            .context("Failed to delete GitHub identity secret from development settings")
+    }
+}
+
+enum ActiveSecretStore {
+    Keyring(KeyringSecretStore),
+    Development(DevSettingsSecretStore),
+}
+
+impl SecretStore for ActiveSecretStore {
+    fn load(&self) -> Result<Option<StoredIdentitySecret>> {
+        match self {
+            Self::Keyring(store) => store.load(),
+            Self::Development(store) => store.load(),
+        }
+    }
+
+    fn save(&self, secret: &StoredIdentitySecret) -> Result<()> {
+        match self {
+            Self::Keyring(store) => store.save(secret),
+            Self::Development(store) => store.save(secret),
+        }
+    }
+
+    fn delete(&self) -> Result<()> {
+        match self {
+            Self::Keyring(store) => store.delete(),
+            Self::Development(store) => store.delete(),
+        }
+    }
+}
+
+fn active_secret_store() -> ActiveSecretStore {
+    if crate::data_dir::is_dev() {
+        ActiveSecretStore::Development(DevSettingsSecretStore)
+    } else {
+        ActiveSecretStore::Keyring(KeyringSecretStore)
     }
 }
 
