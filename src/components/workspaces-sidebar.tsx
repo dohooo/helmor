@@ -456,6 +456,7 @@ const WorkspaceRowItem = memo(
 		return (
 			previous.row === next.row &&
 			previous.selected === next.selected &&
+			previous.isSending === next.isSending &&
 			previous.archivingWorkspaceId === next.archivingWorkspaceId &&
 			previous.markingUnreadWorkspaceId === next.markingUnreadWorkspaceId &&
 			previous.restoringWorkspaceId === next.restoringWorkspaceId &&
