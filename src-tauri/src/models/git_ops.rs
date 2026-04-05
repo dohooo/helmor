@@ -80,10 +80,16 @@ pub fn list_remote_branches(repo_root: &Path) -> Result<Vec<String>> {
     Ok(sorted)
 }
 
+/// Prune stale worktree registrations whose directories no longer exist.
+fn prune_worktrees(repo_root: &str) {
+    let _ = run_git(["-C", repo_root, "worktree", "prune"], None);
+}
+
 /// Create a worktree that checks out an existing branch.
 pub fn create_worktree(repo_root: &Path, workspace_dir: &Path, branch: &str) -> Result<()> {
     let repo_root = repo_root.display().to_string();
     let workspace_dir_arg = workspace_dir.display().to_string();
+    prune_worktrees(&repo_root);
     run_git(
         [
             "-C",
@@ -115,6 +121,7 @@ pub fn create_worktree_from_start_point(
 ) -> Result<String> {
     let repo_root = repo_root.display().to_string();
     let workspace_dir_arg = workspace_dir.display().to_string();
+    prune_worktrees(&repo_root);
     run_git(
         [
             "-C",

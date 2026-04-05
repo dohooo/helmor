@@ -319,6 +319,89 @@ pub fn permanently_delete_workspace(workspace_id: String) -> CmdResult<()> {
     Ok(workspaces::permanently_delete_workspace(&workspace_id)?)
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedEditor {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+}
+
+#[tauri::command]
+pub fn detect_installed_editors() -> CmdResult<Vec<DetectedEditor>> {
+    let mut editors = Vec::new();
+
+    // macOS application paths to check
+    let candidates: &[(&str, &str, &[&str])] = &[
+        (
+            "cursor",
+            "Cursor",
+            &["/Applications/Cursor.app", "$HOME/Applications/Cursor.app"],
+        ),
+        (
+            "vscode",
+            "VS Code",
+            &[
+                "/Applications/Visual Studio Code.app",
+                "$HOME/Applications/Visual Studio Code.app",
+            ],
+        ),
+    ];
+
+    let home = std::env::var("HOME").unwrap_or_default();
+
+    for (id, name, paths) in candidates {
+        for path in *paths {
+            let resolved = path.replace("$HOME", &home);
+            if std::path::Path::new(&resolved).exists() {
+                editors.push(DetectedEditor {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    path: resolved,
+                });
+                break;
+            }
+        }
+    }
+
+    Ok(editors)
+}
+
+#[tauri::command]
+pub fn open_workspace_in_editor(workspace_id: String, editor: String) -> CmdResult<()> {
+    let record = workspaces::load_workspace_record_by_id(&workspace_id)?
+        .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+
+    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+    if !workspace_dir.is_dir() {
+        Err(anyhow::anyhow!(
+            "Workspace directory not found: {}",
+            workspace_dir.display()
+        ))?;
+    }
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let dir_str = workspace_dir.display().to_string();
+
+    // Try to open via macOS `open -a` first, then fall back to CLI
+    let result = match editor.as_str() {
+        "cursor" => std::process::Command::new("open")
+            .args(["-a", "Cursor", &dir_str])
+            .spawn(),
+        "vscode" => std::process::Command::new("open")
+            .args(["-a", "Visual Studio Code", &dir_str])
+            .spawn(),
+        _ => {
+            Err(anyhow::anyhow!("Unsupported editor: {editor}"))?;
+            unreachable!()
+        }
+    };
+
+    let _ = home; // suppress unused warning
+    result.with_context(|| format!("Failed to open {editor}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn update_session_settings(
     session_id: String,
@@ -1014,10 +1097,10 @@ mod tests {
                 INSERT INTO sessions (
                   id, workspace_id, title, agent_type, status, model, permission_mode,
                   provider_session_id, unread_count, context_token_count, context_used_percent,
-                  thinking_enabled, codex_thinking_level, fast_mode, agent_personality,
+                  thinking_enabled, fast_mode, agent_personality,
                   created_at, updated_at, last_user_message_at, resume_session_at,
                   is_hidden, is_compacting
-                ) VALUES ('session-archive-2', ?1, 'Second session', 'claude', 'idle', 'opus', 'default', NULL, 2, 0, NULL, 0, NULL, 0, 'none', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL, 0, 0)
+                ) VALUES ('session-archive-2', ?1, 'Second session', 'claude', 'idle', 'opus', 'default', NULL, 2, 0, NULL, 0, 0, 'none', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL, 0, 0)
                 "#,
                 [&harness.workspace_id],
             )
@@ -1645,7 +1728,7 @@ mod tests {
             ).unwrap();
         }
         connection.execute(
-            r#"INSERT INTO sessions (id, workspace_id, title, agent_type, status, model, permission_mode, provider_session_id, unread_count, context_token_count, context_used_percent, thinking_enabled, codex_thinking_level, fast_mode, agent_personality, created_at, updated_at, last_user_message_at, resume_session_at, is_hidden, is_compacting) VALUES (?1, ?2, 'Archived session', 'claude', 'idle', 'opus', 'default', NULL, 0, 0, NULL, 0, NULL, 0, 'none', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL, 0, 0)"#,
+            r#"INSERT INTO sessions (id, workspace_id, title, agent_type, status, model, permission_mode, provider_session_id, unread_count, context_token_count, context_used_percent, thinking_enabled, fast_mode, agent_personality, created_at, updated_at, last_user_message_at, resume_session_at, is_hidden, is_compacting) VALUES (?1, ?2, 'Archived session', 'claude', 'idle', 'opus', 'default', NULL, 0, 0, NULL, 0, 0, 'none', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL, 0, 0)"#,
             [session_id, workspace_id],
         ).unwrap();
 
@@ -1691,7 +1774,7 @@ mod tests {
             ).unwrap();
         }
         connection.execute(
-            r#"INSERT INTO sessions (id, workspace_id, title, agent_type, status, model, permission_mode, provider_session_id, unread_count, context_token_count, context_used_percent, thinking_enabled, codex_thinking_level, fast_mode, agent_personality, created_at, updated_at, last_user_message_at, resume_session_at, is_hidden, is_compacting) VALUES (?1, ?2, 'Ready session', 'claude', 'idle', 'opus', 'default', NULL, 0, 0, NULL, 0, NULL, 0, 'none', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL, 0, 0)"#,
+            r#"INSERT INTO sessions (id, workspace_id, title, agent_type, status, model, permission_mode, provider_session_id, unread_count, context_token_count, context_used_percent, thinking_enabled, fast_mode, agent_personality, created_at, updated_at, last_user_message_at, resume_session_at, is_hidden, is_compacting) VALUES (?1, ?2, 'Ready session', 'claude', 'idle', 'opus', 'default', NULL, 0, 0, NULL, 0, 0, 'none', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL, 0, 0)"#,
             [session_id, workspace_id],
         ).unwrap();
 

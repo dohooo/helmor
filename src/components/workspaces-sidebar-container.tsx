@@ -95,7 +95,7 @@ export const WorkspacesSidebarContainer = memo(
 				return;
 			}
 
-			// Avoid selecting fixture fallback rows while the real desktop query is still loading.
+			// Avoid selecting browser-dev fallback rows while the real desktop query is still loading.
 			if (
 				selectedWorkspaceId === null &&
 				groupsQuery.isFetching &&

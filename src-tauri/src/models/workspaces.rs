@@ -1051,7 +1051,6 @@ fn insert_initializing_workspace_and_session(
               context_token_count,
               context_used_percent,
               thinking_enabled,
-              codex_thinking_level,
               fast_mode,
               agent_personality,
               created_at,
@@ -1060,7 +1059,7 @@ fn insert_initializing_workspace_and_session(
               resume_session_at,
               is_hidden,
               is_compacting
-            ) VALUES (?1, ?2, 'Untitled', 'claude', 'idle', 'opus', 'default', NULL, 0, 0, NULL, 1, NULL, 0, NULL, ?3, ?3, NULL, NULL, 0, 0)
+            ) VALUES (?1, ?2, 'Untitled', 'claude', 'idle', 'opus', 'default', NULL, 0, 0, NULL, 1, 0, NULL, ?3, ?3, NULL, NULL, 0, 0)
             "#,
             (session_id, workspace_id, timestamp),
         )

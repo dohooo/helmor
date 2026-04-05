@@ -479,7 +479,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 													/>
 												) : null}
 												{!isEditing ? (
-													<span className="pointer-events-none absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-gradient-to-r from-transparent via-muted via-[35%] to-muted pl-5 pr-1 opacity-0 transition-opacity group-hover/tab:pointer-events-auto group-hover/tab:opacity-100 group-data-[state=active]/tab:via-background group-data-[state=active]/tab:to-background">
+													<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-gradient-to-r from-transparent via-muted via-[35%] to-muted pl-5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible group-data-[state=active]/tab:via-background group-data-[state=active]/tab:to-background">
 														<span
 															role="button"
 															aria-label="Rename session"
@@ -987,19 +987,16 @@ function ChatThread({
 			restoredViewportState={restoredViewportState}
 			virtuosoRef={virtuosoRef}
 		>
-			{!isAtBottom && !sendingJustStarted ? (
-				<button
-					type="button"
-					onClick={() => {
-						scrollThreadToBottom();
-					}}
-					className="conversation-scroll-button"
-					aria-label="Scroll to latest message"
-				>
-					<ArrowDown className="size-3.5" strokeWidth={1.9} />
-					Latest
-				</button>
-			) : null}
+			<button
+				type="button"
+				onClick={() => {
+					scrollThreadToBottom();
+				}}
+				className={`conversation-scroll-button ${isAtBottom || sendingJustStarted ? "conversation-scroll-button-hidden" : ""}`}
+				aria-label="Scroll to latest message"
+			>
+				<ArrowDown className="size-4" strokeWidth={2} />
+			</button>
 		</ConversationViewport>
 	);
 }
@@ -1850,7 +1847,7 @@ function EmptyState({ hasSession }: { hasSession: boolean }) {
 			</p>
 			<p className="mt-2 max-w-[30rem] text-[13px] leading-6 text-app-muted">
 				{hasSession
-					? "This session does not have stored timeline events in the current fixture."
+					? "This session does not have any messages yet."
 					: "Choose a session from the header to inspect its timeline."}
 			</p>
 		</div>
