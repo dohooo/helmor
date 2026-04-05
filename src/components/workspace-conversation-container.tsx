@@ -3,7 +3,6 @@ import {
 	memo,
 	startTransition,
 	useCallback,
-	useEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -99,17 +98,16 @@ export const WorkspaceConversationContainer = memo(
 			return ids;
 		}, [sendingContextKeys]);
 
-		// Report sending workspace IDs up
+		// Report sending workspace IDs up — called synchronously from handlers
 		const onSendingWorkspacesChangeRef = useRef(onSendingWorkspacesChange);
 		onSendingWorkspacesChangeRef.current = onSendingWorkspacesChange;
-		useEffect(() => {
+		const reportSendingWorkspaces = useCallback(() => {
 			const workspaceIds = new Set<string>();
-			for (const key of sendingContextKeys) {
-				const wsId = sendingWorkspaceMapRef.current.get(key);
-				if (wsId) workspaceIds.add(wsId);
+			for (const [, wsId] of sendingWorkspaceMapRef.current) {
+				workspaceIds.add(wsId);
 			}
 			onSendingWorkspacesChangeRef.current?.(workspaceIds);
-		}, [sendingContextKeys]);
+		}, []);
 		const selectionPending =
 			selectedWorkspaceId !== displayedWorkspaceId ||
 			selectedSessionId !== displayedSessionId;
@@ -207,6 +205,7 @@ export const WorkspaceConversationContainer = memo(
 					next.add(contextKey);
 					return next;
 				});
+				reportSendingWorkspaces();
 
 				try {
 					const { streamId } = await startAgentMessageStream({
@@ -314,15 +313,13 @@ export const WorkspaceConversationContainer = memo(
 							});
 
 							if (event.persisted) {
+								// Invalidate queries to update sidebar counts, etc.
+								// but do NOT clear live messages — keep streaming data
+								// visible until the user switches away from this session.
 								void invalidateConversationQueries(
 									displayedWorkspaceId,
 									displayedSessionId,
-								).finally(() => {
-									setLiveMessagesByContext((current) => ({
-										...current,
-										[contextKey]: [],
-									}));
-								});
+								);
 							}
 
 							sendingWorkspaceMapRef.current.delete(contextKey);
@@ -331,6 +328,7 @@ export const WorkspaceConversationContainer = memo(
 								next.delete(contextKey);
 								return next;
 							});
+							reportSendingWorkspaces();
 							return;
 						}
 
@@ -374,6 +372,7 @@ export const WorkspaceConversationContainer = memo(
 								next.delete(contextKey);
 								return next;
 							});
+							reportSendingWorkspaces();
 						}
 					});
 				} catch (error) {
@@ -402,6 +401,7 @@ export const WorkspaceConversationContainer = memo(
 						next.delete(contextKey);
 						return next;
 					});
+					reportSendingWorkspaces();
 				}
 			},
 			[
