@@ -52,7 +52,6 @@ pub fn archived_contexts_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-
 /// Returns the logs directory inside the data dir.
 pub fn logs_dir() -> Result<PathBuf> {
     let dir = data_dir()?.join("logs");

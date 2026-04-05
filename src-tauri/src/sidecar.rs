@@ -93,9 +93,7 @@ impl SidecarProcess {
 
         // Development (.ts) → bun run index.ts
         // Production (compiled binary) → execute directly
-        let is_dev = sidecar_path
-            .extension()
-            .is_some_and(|ext| ext == "ts");
+        let is_dev = sidecar_path.extension().is_some_and(|ext| ext == "ts");
 
         let mut cmd = if is_dev {
             let mut c = Command::new("bun");
@@ -130,8 +128,14 @@ impl SidecarProcess {
             }
         })?;
 
-        let stdin = child.stdin.take().context("Failed to capture sidecar stdin")?;
-        let stdout = child.stdout.take().context("Failed to capture sidecar stdout")?;
+        let stdin = child
+            .stdin
+            .take()
+            .context("Failed to capture sidecar stdin")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("Failed to capture sidecar stdout")?;
         let mut reader = BufReader::new(stdout);
 
         sidecar_debug!("Waiting for ready signal...");
@@ -164,7 +168,12 @@ impl SidecarProcess {
             .map_err(|_| anyhow::anyhow!("Sidecar stdin lock poisoned"))?;
 
         let json = serde_json::to_string(request).context("Failed to serialize request")?;
-        sidecar_debug!("→ stdin [{}] {} ({}B)", request.id, request.method, json.len());
+        sidecar_debug!(
+            "→ stdin [{}] {} ({}B)",
+            request.id,
+            request.method,
+            json.len()
+        );
         writeln!(stdin, "{json}").context("Failed to write to sidecar stdin")?;
         stdin.flush().context("Failed to flush sidecar stdin")?;
 
@@ -220,7 +229,11 @@ impl ManagedSidecar {
     pub fn subscribe(&self, request_id: &str) -> mpsc::Receiver<SidecarEvent> {
         let (tx, rx) = mpsc::channel();
         if let Ok(mut map) = self.listeners.lock() {
-            sidecar_debug!("subscribe({}) — {} active listeners", request_id, map.len() + 1);
+            sidecar_debug!(
+                "subscribe({}) — {} active listeners",
+                request_id,
+                map.len() + 1
+            );
             map.insert(request_id.to_string(), tx);
         }
         rx
@@ -231,7 +244,11 @@ impl ManagedSidecar {
     pub fn unsubscribe(&self, request_id: &str) {
         if let Ok(mut map) = self.listeners.lock() {
             map.remove(request_id);
-            sidecar_debug!("unsubscribe({}) — {} active listeners", request_id, map.len());
+            sidecar_debug!(
+                "unsubscribe({}) — {} active listeners",
+                request_id,
+                map.len()
+            );
         }
     }
 

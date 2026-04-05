@@ -1,10 +1,5 @@
 use anyhow::{bail, Context, Result};
-use std::{
-    ffi::OsStr,
-    fs,
-    path::Path,
-    process::Command,
-};
+use std::{ffi::OsStr, fs, path::Path, process::Command};
 
 pub fn run_git<I, S>(args: I, current_dir: Option<&Path>) -> Result<String>
 where
@@ -21,9 +16,7 @@ where
         command.current_dir(current_dir);
     }
 
-    let output = command
-        .output()
-        .context("Failed to run git")?;
+    let output = command.output().context("Failed to run git")?;
 
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
@@ -55,12 +48,9 @@ pub fn ensure_git_repository(repo_root: &Path) -> Result<()> {
 /// Fetch latest refs from the remote into the source repo.
 pub fn fetch_remote(repo_root: &Path) -> Result<()> {
     let repo_root = repo_root.display().to_string();
-    run_git(
-        ["-C", repo_root.as_str(), "fetch", "--prune"],
-        None,
-    )
-    .map(|_| ())
-    .context("Failed to fetch from remote")
+    run_git(["-C", repo_root.as_str(), "fetch", "--prune"], None)
+        .map(|_| ())
+        .context("Failed to fetch from remote")
 }
 
 /// List remote-tracking branches in the source repo.
@@ -91,11 +81,7 @@ pub fn list_remote_branches(repo_root: &Path) -> Result<Vec<String>> {
 }
 
 /// Create a worktree that checks out an existing branch.
-pub fn create_worktree(
-    repo_root: &Path,
-    workspace_dir: &Path,
-    branch: &str,
-) -> Result<()> {
+pub fn create_worktree(repo_root: &Path, workspace_dir: &Path, branch: &str) -> Result<()> {
     let repo_root = repo_root.display().to_string();
     let workspace_dir_arg = workspace_dir.display().to_string();
     run_git(
@@ -167,12 +153,7 @@ pub fn remove_worktree(repo_root: &Path, workspace_dir: &Path) -> Result<()> {
         None,
     )
     .map(|_| ())
-    .with_context(|| {
-        format!(
-            "Failed to remove worktree at {}",
-            workspace_dir.display()
-        )
-    })
+    .with_context(|| format!("Failed to remove worktree at {}", workspace_dir.display()))
 }
 
 pub fn remove_branch(repo_root: &Path, branch: &str) -> Result<()> {
@@ -210,11 +191,12 @@ pub fn refresh_repo_setup_root(
         let _ = fs::remove_dir_all(setup_root_dir);
     }
 
-    fs::create_dir_all(
-        setup_root_dir
-            .parent()
-            .with_context(|| format!("Setup root path has no parent: {}", setup_root_dir.display()))?,
-    )
+    fs::create_dir_all(setup_root_dir.parent().with_context(|| {
+        format!(
+            "Setup root path has no parent: {}",
+            setup_root_dir.display()
+        )
+    })?)
     .with_context(|| {
         format!(
             "Failed to create setup root parent for {}",
@@ -305,11 +287,7 @@ pub fn verify_commitish_exists(
 }
 
 /// Point a branch ref at a specific commit.
-pub fn point_branch_to_commit(
-    repo_root: &Path,
-    branch: &str,
-    commit: &str,
-) -> Result<()> {
+pub fn point_branch_to_commit(repo_root: &Path, branch: &str, commit: &str) -> Result<()> {
     let repo_root = repo_root.display().to_string();
     let branch_ref = format!("refs/heads/{branch}");
     run_git(
@@ -323,15 +301,13 @@ pub fn point_branch_to_commit(
         None,
     )
     .map(|_| ())
-    .with_context(|| {
-        format!("Failed to point branch {branch} at {commit}")
-    })
+    .with_context(|| format!("Failed to point branch {branch} at {commit}"))
 }
 
 pub fn current_workspace_head_commit(workspace_dir: &Path) -> Result<String> {
     let workspace_dir = workspace_dir.display().to_string();
-    let commit = run_git(["-C", workspace_dir.as_str(), "rev-parse", "HEAD"], None)
-        .with_context(|| {
+    let commit =
+        run_git(["-C", workspace_dir.as_str(), "rev-parse", "HEAD"], None).with_context(|| {
             format!(
                 "Failed to resolve archive commit from workspace {}",
                 workspace_dir

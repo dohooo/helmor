@@ -478,7 +478,10 @@ fn poll_github_identity_connect_outcome(
             refresh_token_expires_at: secret.refresh_token_expires_at.clone(),
         };
 
-        return Ok(DeviceFlowPollOutcome::Connected { meta: Box::new(meta), secret });
+        return Ok(DeviceFlowPollOutcome::Connected {
+            meta: Box::new(meta),
+            secret,
+        });
     }
 
     let code = token.error.unwrap_or_else(|| "unknown_error".to_string());

@@ -62,6 +62,9 @@
 	"lint-staged": {
 		"*.{ts,tsx,js,jsx,json,css}": [
 			"biome check --write --error-on-warnings --no-errors-on-unmatched --files-ignore-unknown=true --config-path=./biome.json"
+		],
+		"*.rs": [
+			"sh -c 'cargo fmt --manifest-path src-tauri/Cargo.toml -- \"$@\"' sh"
 		]
 	}
 }
