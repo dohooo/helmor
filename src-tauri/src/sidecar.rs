@@ -86,27 +86,49 @@ impl SidecarProcess {
     /// Start the sidecar process and wait for the "ready" signal.
     /// Returns the process and a BufReader for stdout (to be consumed by the reader thread).
     fn start() -> Result<(Self, BufReader<std::process::ChildStdout>)> {
-        let sidecar_script = resolve_sidecar_path()?;
-        sidecar_debug!("Resolved script path: {}", sidecar_script.display());
+        let sidecar_path = resolve_sidecar_path()?;
+        sidecar_debug!("Resolved sidecar path: {}", sidecar_path.display());
 
         let debug = debug_enabled();
-        let mut cmd = Command::new("bun");
-        cmd.arg("run")
-            .arg(&sidecar_script)
-            .stdin(Stdio::piped())
+
+        // Development (.ts) → bun run index.ts
+        // Production (compiled binary) → execute directly
+        let is_dev = sidecar_path
+            .extension()
+            .is_some_and(|ext| ext == "ts");
+
+        let mut cmd = if is_dev {
+            let mut c = Command::new("bun");
+            c.arg("run").arg(&sidecar_path);
+            c
+        } else {
+            Command::new(&sidecar_path)
+        };
+
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
 
-        // Pass debug flag to the TS sidecar process
         if debug {
             cmd.env("HELMOR_SIDECAR_DEBUG", "1");
         }
 
-        sidecar_debug!("Spawning: bun run {}", sidecar_script.display());
+        sidecar_debug!(
+            "Spawning: {}",
+            if is_dev {
+                format!("bun run {}", sidecar_path.display())
+            } else {
+                sidecar_path.display().to_string()
+            }
+        );
 
-        let mut child = cmd
-            .spawn()
-            .context("Failed to start sidecar — is Bun installed? (https://bun.sh)")?;
+        let mut child = cmd.spawn().with_context(|| {
+            if is_dev {
+                "Failed to start sidecar — is Bun installed? (https://bun.sh)".to_string()
+            } else {
+                format!("Failed to start sidecar binary: {}", sidecar_path.display())
+            }
+        })?;
 
         let stdin = child.stdin.take().context("Failed to capture sidecar stdin")?;
         let stdout = child.stdout.take().context("Failed to capture sidecar stdout")?;
@@ -356,25 +378,19 @@ fn resolve_sidecar_path() -> Result<PathBuf> {
         }
     }
 
-    // 3. Production: bundled resource relative to the executable.
-    //    macOS: Helmor.app/Contents/MacOS/Helmor → ../Resources/sidecar/sidecar.js
-    //    Linux: helmor → ./sidecar/sidecar.js (flat layout)
+    // 3. Production: compiled binary placed by Tauri externalBin.
+    //    Tauri puts external binaries next to the main executable
+    //    (e.g. Helmor.app/Contents/MacOS/helmor-sidecar).
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
-            // macOS .app bundle
-            let macos_resource = exe_dir.join("../Resources/sidecar/sidecar.js");
-            if macos_resource.is_file() {
-                return Ok(macos_resource);
-            }
-            // Flat layout (Linux / dev dist)
-            let flat = exe_dir.join("sidecar/sidecar.js");
-            if flat.is_file() {
-                return Ok(flat);
+            let binary = exe_dir.join("helmor-sidecar");
+            if binary.is_file() {
+                return Ok(binary);
             }
         }
     }
 
-    bail!("Sidecar script not found. Set HELMOR_SIDECAR_PATH or ensure Bun sidecar is built.")
+    bail!("Sidecar not found. In dev, ensure sidecar/src/index.ts exists. Set HELMOR_SIDECAR_PATH to override.")
 }
 
 #[cfg(test)]

@@ -10,7 +10,7 @@
 		"preview": "vite preview",
 		"test": "vitest run",
 		"test:watch": "vitest",
-		"tauri": "tauacri",
+		"tauri": "tauri",
 		"tauri:debug": "HELMOR_SIDECAR_DEBUG=1 tauri dev",
 		"lint": "biome check . --config-path=./biome.json",
 		"lint:fix": "biome check . --write --config-path=./biome.json",

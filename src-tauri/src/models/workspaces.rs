@@ -866,17 +866,17 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
 
     // Use the worktree path as root_path so Claude Code/Codex operate in the
     // correct workspace directory, not the source repository.
+    // Archived workspaces have no worktree — return None so the frontend
+    // knows agent messaging is unavailable.
     let worktree_path = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
         .ok()
         .and_then(|p| {
             if p.is_dir() {
                 p.to_str().map(|s| s.to_string())
             } else {
-                // Worktree doesn't exist (archived?) — fall back to source repo
-                record.root_path.clone()
+                None
             }
-        })
-        .or_else(|| record.root_path.clone());
+        });
 
     WorkspaceDetail {
         title: helpers::display_title(&record),

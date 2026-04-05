@@ -4,7 +4,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"build": "bun build src/index.ts --target=node --outfile=dist/sidecar.js",
+		"build": "bun build --compile src/index.ts --outfile dist/helmor-sidecar",
 		"dev": "bun run src/index.ts"
 	},
 	"dependencies": {

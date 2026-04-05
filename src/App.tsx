@@ -863,11 +863,20 @@ function App() {
 				loadArchivedWorkspaces(),
 			]);
 
-		setSessionMessages(messages);
-		if (wsId) {
+		// Only update workspace-specific state if this workspace is still
+		// the one the user is viewing. Prevents background stream completions
+		// from overwriting the currently visible workspace.
+		const isCurrentWorkspace = wsId && wsId === selectedWorkspaceId;
+		const isCurrentSession = sessId === selectedSessionId;
+
+		if (isCurrentSession) {
+			setSessionMessages(messages);
+		}
+		if (isCurrentWorkspace) {
 			setWorkspaceDetail(detail);
 			setWorkspaceSessions(sessions);
 		}
+		// Groups and archived list are global — always update
 		setGroups(loadedGroups);
 		setArchivedSummaries(loadedArchived);
 		setLiveMessagesByContext((current) => ({

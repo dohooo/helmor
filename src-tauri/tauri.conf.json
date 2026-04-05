@@ -6,7 +6,7 @@
 	"build": {
 		"beforeDevCommand": "pnpm run dev",
 		"devUrl": "http://localhost:1420",
-		"beforeBuildCommand": "cd sidecar && bun install --frozen-lockfile && bun run build && cd .. && pnpm run build",
+		"beforeBuildCommand": "cd sidecar && bun install --frozen-lockfile && bun run build && cp dist/helmor-sidecar dist/helmor-sidecar-$(rustc -vV | grep host | cut -d' ' -f2) && cd .. && pnpm run build",
 		"frontendDist": "../dist"
 	},
 	"app": {
@@ -36,9 +36,7 @@
 	"bundle": {
 		"active": true,
 		"targets": "all",
-		"resources": {
-			"../sidecar/dist/sidecar.js": "sidecar/"
-		},
+		"externalBin": ["../sidecar/dist/helmor-sidecar"],
 		"icon": [
 			"icons/32x32.png",
 			"icons/128x128.png",
