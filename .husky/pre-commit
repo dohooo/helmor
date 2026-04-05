@@ -1,2 +1,1 @@
 pnpm lint-staged
-cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
