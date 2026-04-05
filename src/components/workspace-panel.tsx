@@ -413,7 +413,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 							>
 								<TabsList
 									aria-label="Sessions"
-									className="min-w-max justify-start rounded-xl"
+									className="min-w-max justify-start rounded-xl bg-app-sidebar"
 								>
 									{sessions.map((session) => {
 										const selected = session.id === selectedSessionId;

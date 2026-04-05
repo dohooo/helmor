@@ -749,7 +749,7 @@ mod tests {
 
     #[test]
     fn allocate_is_random_not_sequential() {
-        let (conn, _dir) = test_db();
+        let (_conn, _dir) = test_db();
 
         // Allocate multiple names and check they're not always the same order
         let mut first_picks = std::collections::HashSet::new();

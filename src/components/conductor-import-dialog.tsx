@@ -1,7 +1,7 @@
 import {
 	ArrowLeft,
 	Check,
-	Download,
+	FolderInput,
 	GitBranch,
 	Loader2,
 	Search,
@@ -249,7 +249,7 @@ export function ConductorImportDialog({
 							<ArrowLeft className="size-3.5" strokeWidth={2} />
 						</button>
 					) : (
-						<Download
+						<FolderInput
 							className="size-3.5 text-app-foreground-soft"
 							strokeWidth={1.8}
 						/>
@@ -366,7 +366,7 @@ export function ConductorImportDialog({
 							onClick={handleImport}
 							className="flex h-8 w-full items-center justify-center gap-2 rounded-full bg-app-elevated text-[13px] font-medium text-app-foreground transition-colors hover:brightness-110 disabled:opacity-40 disabled:hover:brightness-100"
 						>
-							<Download className="size-3.5" strokeWidth={1.8} />
+							<FolderInput className="size-3.5" strokeWidth={1.8} />
 							Import {selectedIds.size} workspace
 							{selectedIds.size === 1 ? "" : "s"}
 						</button>

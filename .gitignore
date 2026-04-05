@@ -27,5 +27,5 @@ dist-ssr
 *.sw?
 # Sidecar compiled binary
 sidecar/dist/
-helmor-dev.db
+helmor.db
 *.bun-build

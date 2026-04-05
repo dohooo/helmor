@@ -6,8 +6,8 @@ import {
 import { cva } from "class-variance-authority";
 import {
 	Archive,
-	BookMarked,
-	ChevronDown,
+	ChevronRight,
+	FolderPlus,
 	GitBranch,
 	LoaderCircle,
 	Plus,
@@ -50,12 +50,12 @@ import { ScrollArea } from "./ui/scroll-area";
 import { TooltipProvider } from "./ui/tooltip";
 
 const rowVariants = cva(
-	"group relative flex h-9 select-none items-center gap-2 rounded-md px-3 text-[13px] cursor-pointer",
+	"group relative flex h-7.5 select-none items-center gap-2 rounded-md px-2.5 text-[13px] cursor-pointer",
 	{
 		variants: {
 			active: {
 				true: "bg-app-row-selected text-app-foreground",
-				false: "text-app-foreground-soft/70 hover:bg-app-row-hover",
+				false: "text-app-foreground/80 hover:bg-app-row-hover",
 			},
 		},
 		defaultVariants: {
@@ -357,6 +357,7 @@ const WorkspaceRowItem = memo(
 				className={cn(
 					rowVariants({ active: selected }),
 					"w-full text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong",
+					!selected && row.state === "archived" && "opacity-50",
 				)}
 			>
 				<div className="flex min-w-0 flex-1 items-center gap-2">
@@ -379,7 +380,7 @@ const WorkspaceRowItem = memo(
 									: "font-medium text-app-foreground"
 								: row.hasUnread
 									? "font-semibold text-app-foreground"
-									: "font-medium text-app-foreground-soft/70",
+									: "font-medium",
 						)}
 					>
 						{row.title}
@@ -708,7 +709,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 										strokeWidth={2.1}
 									/>
 								) : (
-									<BookMarked className="size-3.5" strokeWidth={2} />
+									<FolderPlus className="size-3.5" strokeWidth={2} />
 								)}
 							</ToolbarButton>
 						</BaseTooltip>
@@ -843,7 +844,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 									<section aria-label={group.label} className="space-y-1.5">
 										<CollapsibleTrigger
 											className={cn(
-												"group/trigger flex w-full select-none items-center justify-between rounded-xl px-1 py-1 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70",
+												"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 py-1.5 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70",
 												canCollapse ? "cursor-pointer" : "cursor-default",
 											)}
 											disabled={!canCollapse}
@@ -853,12 +854,19 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 												<span>{group.label}</span>
 											</span>
 
-											{canCollapse ? (
-												<ChevronDown
-													className="size-4 shrink-0 text-app-foreground-soft transition-transform group-data-[panel-open]/trigger:-rotate-0 group-data-[panel-closed]/trigger:-rotate-90"
-													strokeWidth={2}
-												/>
-											) : null}
+											<span className="flex items-center gap-1.5">
+												{group.rows.length > 0 ? (
+													<span className="min-w-[1.25rem] rounded-full bg-app-row-selected px-1.5 py-px text-center text-[10.5px] font-medium leading-[16px] text-app-muted">
+														{group.rows.length}
+													</span>
+												) : null}
+												{canCollapse ? (
+													<ChevronRight
+														className="size-3.5 shrink-0 text-app-muted opacity-0 transition-all group-hover/trigger:opacity-100 group-data-[panel-open]/trigger:rotate-90"
+														strokeWidth={2}
+													/>
+												) : null}
+											</span>
 										</CollapsibleTrigger>
 
 										{group.rows.length > 0 ? (
@@ -907,7 +915,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							<section aria-label="Archived" className="space-y-1.5">
 								<CollapsibleTrigger
 									className={cn(
-										"group/trigger flex w-full select-none items-center justify-between rounded-xl px-1 py-1 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70",
+										"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 py-1.5 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70",
 										archivedRows.length > 0
 											? "cursor-pointer"
 											: "cursor-default",
@@ -922,12 +930,19 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 										<span>Archived</span>
 									</span>
 
-									{archivedRows.length > 0 ? (
-										<ChevronDown
-											className="size-4 shrink-0 text-app-foreground-soft transition-transform group-data-[panel-open]/trigger:-rotate-0 group-data-[panel-closed]/trigger:-rotate-90"
-											strokeWidth={2}
-										/>
-									) : null}
+									<span className="flex items-center gap-1.5">
+										{archivedRows.length > 0 ? (
+											<span className="min-w-[1.25rem] rounded-full bg-app-row-selected px-1.5 py-px text-center text-[10.5px] font-medium leading-[16px] text-app-muted">
+												{archivedRows.length}
+											</span>
+										) : null}
+										{archivedRows.length > 0 ? (
+											<ChevronRight
+												className="size-3.5 shrink-0 text-app-muted opacity-0 transition-all group-hover/trigger:opacity-100 group-data-[panel-open]/trigger:rotate-90"
+												strokeWidth={2}
+											/>
+										) : null}
+									</span>
 								</CollapsibleTrigger>
 
 								{archivedRows.length > 0 ? (

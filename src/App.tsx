@@ -6,7 +6,7 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Check, Copy, Download, Moon, RefreshCw, Sun } from "lucide-react";
+import { Check, Copy, FolderInput, Moon, RefreshCw, Sun } from "lucide-react";
 import {
 	type KeyboardEvent,
 	type MouseEvent,
@@ -950,7 +950,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 					aria-label="Application shell"
 					className="relative h-screen overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
 				>
-					<div className="relative flex h-full min-h-0 bg-app-base">
+					<div className="relative flex h-full min-h-0 bg-app-sidebar">
 						<aside
 							aria-label="Workspace sidebar"
 							className="relative h-full shrink-0 overflow-hidden bg-app-sidebar"
@@ -984,17 +984,17 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 						>
 							<span
 								aria-hidden="true"
-								className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
+								className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,opacity] duration-150 ${
 									isResizing
-										? "w-[2px] bg-app-foreground/80 shadow-[0_0_12px_rgba(250,249,246,0.2)]"
-										: "w-px bg-app-border group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
+										? "w-[2px] bg-app-foreground/60"
+										: "w-px bg-app-border/0 group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/40"
 								}`}
 							/>
 						</div>
 
 						<section
 							aria-label="Workspace panel"
-							className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-app-elevated"
+							className="relative my-1 mr-1 flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-app-elevated"
 						>
 							<div
 								aria-label="Workspace panel drag region"
@@ -1012,7 +1012,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 										title="Import workspaces from Conductor"
 										className="text-app-muted hover:text-app-foreground"
 									>
-										<Download className="size-3.5" strokeWidth={1.8} />
+										<FolderInput className="size-3.5" strokeWidth={1.8} />
 									</Button>
 								)}
 								<Button
@@ -1038,7 +1038,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 							<div
 								aria-label="Workspace viewport"
-								className="flex min-h-0 flex-1 flex-col bg-white dark:bg-app-elevated"
+								className="flex min-h-0 flex-1 flex-col bg-app-elevated"
 							>
 								<WorkspaceConversationContainer
 									selectedWorkspaceId={selectedWorkspaceId}

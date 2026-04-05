@@ -26,7 +26,7 @@ const tabsTriggerVariants = cva(
 			variant: {
 				default:
 					"rounded-md px-3 py-1 text-sm font-medium text-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm",
-				line: "group relative -mb-px flex h-[1.85rem] w-[8rem] shrink-0 items-center justify-start gap-1.5 border-b border-transparent px-2.5 text-left text-[12px] text-app-foreground-soft data-[state=active]:border-app-foreground-soft/60 data-[state=active]:bg-app-foreground/[0.06] data-[state=active]:text-app-foreground hover:bg-app-foreground/[0.04] hover:text-app-foreground",
+				line: "group relative -mb-px flex h-[1.85rem] w-[8rem] shrink-0 items-center justify-start gap-1.5 border-b border-transparent px-2.5 text-left text-[12px] text-app-foreground-soft data-[state=active]:border-app-foreground-soft/60 data-[state=active]:bg-app-elevated data-[state=active]:text-app-foreground hover:bg-app-foreground/[0.04] hover:text-app-foreground",
 			},
 		},
 		defaultVariants: {

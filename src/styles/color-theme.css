@@ -1,11 +1,11 @@
 :root {
 	color-scheme: light;
 
-	--app-base: #f8f8f8;
-	--app-canvas: #f8f8f8;
-	--app-elevated: #f8f8f8;
-	--app-sidebar: #f1f4f4;
-	--app-sidebar-strong: #e8eded;
+	--app-base: #fafafa;
+	--app-canvas: #fafafa;
+	--app-elevated: #fafafa;
+	--app-sidebar: #f2f3f3;
+	--app-sidebar-strong: #e9ecec;
 	--app-overlay: rgb(20 33 32 / 0.14);
 	--app-row-hover: rgb(20 33 32 / 0.03);
 	--app-row-selected: rgb(20 33 32 / 0.06);
@@ -16,11 +16,11 @@
 	--app-foreground-soft: #5b686b;
 	--app-muted: #848f92;
 	--app-tooltip: #243032;
-	--app-done: #7f8d87;
-	--app-review: #838893;
-	--app-progress: #818d8d;
+	--app-done: #6b80a4;
+	--app-review: #a09040;
+	--app-progress: #508a5a;
 	--app-backlog: #848f92;
-	--app-canceled: #8d7f86;
+	--app-canceled: #a86868;
 	--app-project: #687a7d;
 	--app-accent: #eaeeee;
 	--app-accent-strong: #dfe6e6;
@@ -74,8 +74,8 @@
 	--foreground: #faf9f6;
 	--card: #181716;
 	--card-foreground: #faf9f6;
-	--popover: #1f1d1c;
-	--popover-foreground: #faf9f6;
+	--popover: #1a1a1a;
+	--popover-foreground: #f0efec;
 	--primary: #353534;
 	--primary-foreground: #afaeac;
 	--secondary: #262423;
@@ -102,11 +102,11 @@
 	--sidebar-border: rgb(226 226 226 / 0.14);
 	--sidebar-ring: rgb(118 116 121 / 0.36);
 
-	--app-base: #121110;
-	--app-canvas: #121110;
-	--app-elevated: #0e0d0d;
-	--app-sidebar: #1a1918;
-	--app-sidebar-strong: #242322;
+	--app-base: #161514;
+	--app-canvas: #161514;
+	--app-elevated: #161514;
+	--app-sidebar: #1e1d1c;
+	--app-sidebar-strong: #272625;
 	--app-overlay: rgb(10 8 7 / 0.68);
 	--app-row-hover: rgb(250 249 246 / 0.04);
 	--app-row-selected: rgb(250 249 246 / 0.08);
@@ -117,11 +117,11 @@
 	--app-foreground-soft: #afaeac;
 	--app-muted: #868584;
 	--app-tooltip: #1f1d1c;
-	--app-done: #b4af91;
-	--app-review: #ad9a90;
-	--app-progress: #baa28b;
+	--app-done: #8da0c8;
+	--app-review: #c4aa55;
+	--app-progress: #70b07a;
 	--app-backlog: #868584;
-	--app-canceled: #b08880;
+	--app-canceled: #c48585;
 	--app-project: #767479;
 	--app-accent: #353534;
 	--app-accent-strong: #454545;
