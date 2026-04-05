@@ -14,7 +14,9 @@
 			"!!**/dist",
 			"!**/node_modules",
 			"!!**/.claude",
-			"!!**/coverage"
+			"!!**/coverage",
+			"!src-tauri/gen",
+			"!src-tauri/target"
 		]
 	},
 	"formatter": {

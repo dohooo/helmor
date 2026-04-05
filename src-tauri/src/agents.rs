@@ -967,3 +967,132 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
     value.filter(|inner| !inner.trim().is_empty())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // parse_claude_output
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_claude_output_extracts_text_from_stream_deltas() {
+        let stdout = r#"
+            {"type":"stream_event","event":{"delta":{"text":"Hello "}}}
+            {"type":"stream_event","event":{"delta":{"text":"world"}}}
+            {"type":"result","result":"Hello world","session_id":"sess-123","usage":{"input_tokens":10,"output_tokens":5}}
+        "#;
+
+        let output = parse_claude_output(stdout, None, "opus").unwrap();
+        assert_eq!(output.assistant_text, "Hello world");
+        assert_eq!(output.session_id.as_deref(), Some("sess-123"));
+        assert_eq!(output.usage.input_tokens, Some(10));
+        assert_eq!(output.usage.output_tokens, Some(5));
+    }
+
+    #[test]
+    fn parse_claude_output_extracts_thinking() {
+        let stdout = r#"
+            {"type":"stream_event","event":{"delta":{"thinking":"Let me think..."}}}
+            {"type":"stream_event","event":{"delta":{"text":"Answer"}}}
+            {"type":"result","result":"Answer","usage":{}}
+        "#;
+
+        let output = parse_claude_output(stdout, None, "opus").unwrap();
+        assert_eq!(output.assistant_text, "Answer");
+        assert_eq!(output.thinking_text.as_deref(), Some("Let me think..."));
+    }
+
+    #[test]
+    fn parse_claude_output_uses_fallback_session_id() {
+        let stdout = r#"
+            {"type":"stream_event","event":{"delta":{"text":"Hi"}}}
+            {"type":"result","result":"Hi","usage":{}}
+        "#;
+
+        let output = parse_claude_output(stdout, Some("fallback-id"), "opus").unwrap();
+        assert_eq!(output.session_id.as_deref(), Some("fallback-id"));
+    }
+
+    #[test]
+    fn parse_claude_output_fails_on_empty_text() {
+        let stdout = r#"{"type":"result","result":"","usage":{}}"#;
+        let result = parse_claude_output(stdout, None, "opus");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_claude_output_extracts_model_name() {
+        let stdout = r#"
+            {"type":"assistant","model":"claude-opus-4-20250514","message":{"content":[{"type":"text","text":"Hi"}]}}
+            {"type":"result","result":"Hi","usage":{}}
+        "#;
+
+        let output = parse_claude_output(stdout, None, "opus").unwrap();
+        assert_eq!(output.resolved_model, "claude-opus-4-20250514");
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_codex_output
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_codex_output_extracts_agent_message() {
+        let stdout = r#"
+            {"type":"thread.started","thread_id":"thread-abc"}
+            {"type":"item.completed","item":{"type":"agent_message","text":"Hello from Codex"}}
+            {"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":20}}
+        "#;
+
+        let output = parse_codex_output(stdout, None, "gpt-5.4").unwrap();
+        assert_eq!(output.assistant_text, "Hello from Codex");
+        assert_eq!(output.session_id.as_deref(), Some("thread-abc"));
+        assert_eq!(output.usage.input_tokens, Some(100));
+        assert_eq!(output.usage.output_tokens, Some(20));
+    }
+
+    #[test]
+    fn parse_codex_output_uses_thread_resumed() {
+        let stdout = r#"
+            {"type":"thread.resumed","thread_id":"thread-xyz"}
+            {"type":"item.completed","item":{"type":"agent_message","text":"Resumed"}}
+            {"type":"turn.completed","usage":{}}
+        "#;
+
+        let output = parse_codex_output(stdout, None, "gpt-5.4").unwrap();
+        assert_eq!(output.session_id.as_deref(), Some("thread-xyz"));
+    }
+
+    #[test]
+    fn parse_codex_output_fails_on_empty() {
+        let stdout = r#"{"type":"thread.started","thread_id":"t1"}"#;
+        let result = parse_codex_output(stdout, None, "gpt-5.4");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_codex_output_joins_multiple_messages() {
+        let stdout = r#"
+            {"type":"item.completed","item":{"type":"agent_message","text":"Part 1"}}
+            {"type":"item.completed","item":{"type":"agent_message","text":"Part 2"}}
+            {"type":"turn.completed","usage":{}}
+        "#;
+
+        let output = parse_codex_output(stdout, None, "gpt-5.4").unwrap();
+        assert!(output.assistant_text.contains("Part 1"));
+        assert!(output.assistant_text.contains("Part 2"));
+    }
+
+    // -----------------------------------------------------------------------
+    // non_empty helper
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn non_empty_filters_correctly() {
+        assert_eq!(non_empty(None), None);
+        assert_eq!(non_empty(Some("")), None);
+        assert_eq!(non_empty(Some("  ")), None);
+        assert_eq!(non_empty(Some("hello")), Some("hello"));
+    }
+}
+

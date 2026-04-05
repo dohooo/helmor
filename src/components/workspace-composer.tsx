@@ -192,7 +192,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 									{section.options.map((option) => (
 										<DropdownMenuItem
 											key={option.id}
-											onSelect={() => {
+											onClick={() => {
 												onSelectModel(option.id);
 											}}
 											className="flex items-center justify-between gap-3"

@@ -999,4 +999,147 @@ mod tests {
         assert!(cols.contains(&"id".to_string()));
         assert!(cols.contains(&"name".to_string()));
     }
+
+    #[test]
+    fn import_column_lists_handles_renamed_columns() {
+        let conn = setup_test_db();
+
+        // Simulate Conductor source with old column name
+        conn.execute_batch(
+            r#"
+            ATTACH DATABASE ':memory:' AS source;
+            CREATE TABLE source.sessions (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT,
+                status TEXT DEFAULT 'idle',
+                claude_session_id TEXT,
+                model TEXT,
+                permission_mode TEXT DEFAULT 'default',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            "#,
+        )
+        .unwrap();
+
+        let (main_cols, src_cols) = import_column_lists(&conn, "sessions").unwrap();
+
+        // main should have provider_session_id, source should map claude_session_id AS provider_session_id
+        assert!(
+            main_cols.contains("provider_session_id"),
+            "main_cols should contain provider_session_id: {main_cols}"
+        );
+        assert!(
+            src_cols.contains("claude_session_id AS provider_session_id"),
+            "src_cols should map old→new: {src_cols}"
+        );
+    }
+
+    #[test]
+    fn import_column_lists_handles_identical_schemas() {
+        let conn = setup_test_db();
+
+        conn.execute_batch(
+            r#"
+            ATTACH DATABASE ':memory:' AS source;
+            CREATE TABLE source.repos AS SELECT * FROM main.repos WHERE 0;
+            "#,
+        )
+        .unwrap();
+
+        let (main_cols, src_cols) = import_column_lists(&conn, "repos").unwrap();
+        // When schemas are identical, both column lists should be the same
+        assert_eq!(main_cols, src_cols);
+    }
+
+    #[test]
+    fn import_column_lists_drops_source_only_columns() {
+        let conn = setup_test_db();
+
+        // Source has an extra column that main doesn't
+        conn.execute_batch(
+            r#"
+            ATTACH DATABASE ':memory:' AS source;
+            CREATE TABLE source.repos (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                extra_conductor_field TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            "#,
+        )
+        .unwrap();
+
+        let (main_cols, src_cols) = import_column_lists(&conn, "repos").unwrap();
+        // extra_conductor_field should NOT appear in either list
+        assert!(
+            !main_cols.contains("extra_conductor_field"),
+            "main_cols should not contain source-only column"
+        );
+        assert!(
+            !src_cols.contains("extra_conductor_field"),
+            "src_cols should not contain source-only column"
+        );
+    }
+
+    #[test]
+    fn import_preserves_conductor_provider_session_id() {
+        let conn = setup_test_db();
+
+        conn.execute_batch(
+            r#"
+            ATTACH DATABASE ':memory:' AS source;
+            CREATE TABLE source.repos AS SELECT * FROM main.repos WHERE 0;
+            CREATE TABLE source.workspaces AS SELECT * FROM main.workspaces WHERE 0;
+            CREATE TABLE source.sessions (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT,
+                status TEXT DEFAULT 'idle',
+                claude_session_id TEXT,
+                model TEXT,
+                permission_mode TEXT DEFAULT 'default',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE source.session_messages AS SELECT * FROM main.session_messages WHERE 0;
+            CREATE TABLE source.attachments AS SELECT * FROM main.attachments WHERE 0;
+            CREATE TABLE source.diff_comments AS SELECT * FROM main.diff_comments WHERE 0;
+
+            INSERT INTO source.repos (id, name, created_at, updated_at) VALUES ('r1', 'my-repo', datetime('now'), datetime('now'));
+            INSERT INTO source.workspaces (id, repository_id, directory_name, state, created_at, updated_at) VALUES ('w1', 'r1', 'boston', 'ready', datetime('now'), datetime('now'));
+            INSERT INTO source.sessions (id, workspace_id, claude_session_id, created_at, updated_at)
+                VALUES ('s1', 'w1', 'real-claude-uuid-123', datetime('now'), datetime('now'));
+            "#,
+        )
+        .unwrap();
+
+        let result = import_workspace_db_records(&conn, "w1");
+        assert!(matches!(result.unwrap(), ImportDbResult::Imported(_)));
+
+        // Verify the old claude_session_id was imported as provider_session_id
+        let provider_sid: Option<String> = conn
+            .query_row(
+                "SELECT provider_session_id FROM main.sessions WHERE id = 's1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            provider_sid.as_deref(),
+            Some("real-claude-uuid-123"),
+            "claude_session_id should be mapped to provider_session_id"
+        );
+    }
+
+    #[test]
+    fn encode_claude_project_dir_encodes_correctly() {
+        let path = PathBuf::from("/Users/me/.conductor/workspaces/repo/ws");
+        let encoded = encode_claude_project_dir(&path);
+        assert_eq!(encoded, "-Users-me--conductor-workspaces-repo-ws");
+
+        let path2 = PathBuf::from("/Users/me/.helmor.dev/workspaces/repo/ws");
+        let encoded2 = encode_claude_project_dir(&path2);
+        assert_eq!(encoded2, "-Users-me--helmor-dev-workspaces-repo-ws");
+    }
 }
