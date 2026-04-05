@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { StateSnapshot } from "react-virtuoso";
 import type { SessionMessageRecord } from "@/lib/api";
+import { generateSessionTitle } from "@/lib/api";
 import {
 	publishChatCacheSnapshot,
 	shouldTrackDevCacheStats,
@@ -634,6 +635,46 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		displayedWorkspaceId,
 		invalidateWorkspaceQueries,
 		queryClient,
+		threadSessionId,
+	]);
+
+	// Auto-generate title for existing sessions still named "Untitled".
+	// When a session is displayed and its messages are loaded, if the title
+	// is "Untitled" and there is at least one user message, trigger rename.
+	const autoTitleAttemptedRef = useRef<Set<string>>(new Set());
+	useEffect(() => {
+		if (!threadSessionId || !displayedWorkspaceId) return;
+
+		// Already attempted for this session — skip
+		if (autoTitleAttemptedRef.current.has(threadSessionId)) return;
+
+		const currentSession = sessions.find(
+			(session) => session.id === threadSessionId,
+		);
+		if (!currentSession || currentSession.title !== "Untitled") return;
+
+		const messages = messagesQuery.data;
+		if (!messages || messages.length === 0) return;
+
+		const firstUserMessage = messages.find(
+			(message) => message.role === "user",
+		);
+		if (!firstUserMessage) return;
+
+		autoTitleAttemptedRef.current.add(threadSessionId);
+
+		void generateSessionTitle(threadSessionId, firstUserMessage.content).then(
+			(result) => {
+				if (result?.title) {
+					void invalidateWorkspaceQueries();
+				}
+			},
+		);
+	}, [
+		displayedWorkspaceId,
+		invalidateWorkspaceQueries,
+		messagesQuery.data,
+		sessions,
 		threadSessionId,
 	]);
 
