@@ -1,5 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { memo, startTransition, useCallback, useState } from "react";
+import {
+	memo,
+	startTransition,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import type { AgentModelOption, SessionMessageRecord } from "@/lib/api";
 import {
 	listenAgentStream,
@@ -25,6 +33,7 @@ type WorkspaceConversationContainerProps = {
 	displayedSessionId: string | null;
 	onSelectSession: (sessionId: string | null) => void;
 	onResolveDisplayedSession: (sessionId: string | null) => void;
+	onSendingWorkspacesChange?: (workspaceIds: Set<string>) => void;
 };
 
 export const WorkspaceConversationContainer = memo(
@@ -35,6 +44,7 @@ export const WorkspaceConversationContainer = memo(
 		displayedSessionId,
 		onSelectSession,
 		onResolveDisplayedSession,
+		onSendingWorkspacesChange,
 	}: WorkspaceConversationContainerProps) {
 		const queryClient = useQueryClient();
 		const [composerModelSelections, setComposerModelSelections] = useState<
@@ -64,9 +74,11 @@ export const WorkspaceConversationContainer = memo(
 		const [activeSessionByContext, setActiveSessionByContext] = useState<
 			Record<string, { sessionId: string; provider: string }>
 		>({});
-		const [sendingContextKey, setSendingContextKey] = useState<string | null>(
-			null,
+		const [sendingContextKeys, setSendingContextKeys] = useState<Set<string>>(
+			() => new Set(),
 		);
+		// Map context key → workspace ID so we can report sending workspaces
+		const sendingWorkspaceMapRef = useRef<Map<string, string>>(new Map());
 
 		const composerContextKey = getComposerContextKey(
 			displayedWorkspaceId,
@@ -74,7 +86,30 @@ export const WorkspaceConversationContainer = memo(
 		);
 		const liveMessages = liveMessagesByContext[composerContextKey] ?? [];
 		const activeSendError = sendErrorsByContext[composerContextKey] ?? null;
-		const isSending = sendingContextKey === composerContextKey;
+		const isSending = sendingContextKeys.has(composerContextKey);
+
+		// Derive sending session IDs for tab indicators
+		const sendingSessionIds = useMemo(() => {
+			const ids = new Set<string>();
+			for (const key of sendingContextKeys) {
+				if (key.startsWith("session:")) {
+					ids.add(key.slice(8));
+				}
+			}
+			return ids;
+		}, [sendingContextKeys]);
+
+		// Report sending workspace IDs up
+		const onSendingWorkspacesChangeRef = useRef(onSendingWorkspacesChange);
+		onSendingWorkspacesChangeRef.current = onSendingWorkspacesChange;
+		useEffect(() => {
+			const workspaceIds = new Set<string>();
+			for (const key of sendingContextKeys) {
+				const wsId = sendingWorkspaceMapRef.current.get(key);
+				if (wsId) workspaceIds.add(wsId);
+			}
+			onSendingWorkspacesChangeRef.current?.(workspaceIds);
+		}, [sendingContextKeys]);
 		const selectionPending =
 			selectedWorkspaceId !== displayedWorkspaceId ||
 			selectedSessionId !== displayedSessionId;
@@ -164,7 +199,14 @@ export const WorkspaceConversationContainer = memo(
 					...current,
 					[contextKey]: null,
 				}));
-				setSendingContextKey(contextKey);
+				if (displayedWorkspaceId) {
+					sendingWorkspaceMapRef.current.set(contextKey, displayedWorkspaceId);
+				}
+				setSendingContextKeys((current) => {
+					const next = new Set(current);
+					next.add(contextKey);
+					return next;
+				});
 
 				try {
 					const { streamId } = await startAgentMessageStream({
@@ -283,9 +325,12 @@ export const WorkspaceConversationContainer = memo(
 								});
 							}
 
-							setSendingContextKey((current) =>
-								current === contextKey ? null : current,
-							);
+							sendingWorkspaceMapRef.current.delete(contextKey);
+							setSendingContextKeys((current) => {
+								const next = new Set(current);
+								next.delete(contextKey);
+								return next;
+							});
 							return;
 						}
 
@@ -323,9 +368,12 @@ export const WorkspaceConversationContainer = memo(
 									(message) => message.id !== optimisticUserMessage.id,
 								),
 							}));
-							setSendingContextKey((current) =>
-								current === contextKey ? null : current,
-							);
+							sendingWorkspaceMapRef.current.delete(contextKey);
+							setSendingContextKeys((current) => {
+								const next = new Set(current);
+								next.delete(contextKey);
+								return next;
+							});
 						}
 					});
 				} catch (error) {
@@ -348,9 +396,12 @@ export const WorkspaceConversationContainer = memo(
 							(message) => message.id !== optimisticUserMessage.id,
 						),
 					}));
-					setSendingContextKey((current) =>
-						current === contextKey ? null : current,
-					);
+					sendingWorkspaceMapRef.current.delete(contextKey);
+					setSendingContextKeys((current) => {
+						const next = new Set(current);
+						next.delete(contextKey);
+						return next;
+					});
 				}
 			},
 			[
@@ -372,6 +423,7 @@ export const WorkspaceConversationContainer = memo(
 					displayedSessionId={displayedSessionId}
 					liveMessages={liveMessages}
 					sending={isSending}
+					sendingSessionIds={sendingSessionIds}
 					onSelectSession={onSelectSession}
 					onResolveDisplayedSession={onResolveDisplayedSession}
 				/>

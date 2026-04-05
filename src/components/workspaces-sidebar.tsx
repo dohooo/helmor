@@ -280,6 +280,7 @@ const WorkspaceAvatar = memo(function WorkspaceAvatar({
 type WorkspaceRowItemProps = {
 	row: WorkspaceRow;
 	selected: boolean;
+	isSending?: boolean;
 	rowRef?: (element: HTMLDivElement | null) => void;
 	onSelect?: (workspaceId: string) => void;
 	onPrefetch?: (workspaceId: string) => void;
@@ -296,6 +297,7 @@ const WorkspaceRowItem = memo(
 	function WorkspaceRowItem({
 		row,
 		selected,
+		isSending,
 		rowRef,
 		onSelect,
 		onPrefetch,
@@ -367,10 +369,17 @@ const WorkspaceRowItem = memo(
 						repoName={row.repoName}
 						title={row.title}
 					/>
-					<GitBranch
-						className="size-[13px] shrink-0 text-app-warm"
-						strokeWidth={1.9}
-					/>
+					{isSending ? (
+						<span className="relative flex size-[13px] shrink-0 items-center justify-center">
+							<span className="absolute inset-0 animate-spin rounded-full border border-transparent border-t-app-progress" />
+							<span className="size-1 rounded-full bg-app-progress" />
+						</span>
+					) : (
+						<GitBranch
+							className="size-[13px] shrink-0 text-app-warm"
+							strokeWidth={1.9}
+						/>
+					)}
 					<span
 						className={cn(
 							"truncate leading-none",
@@ -461,6 +470,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	availableRepositories,
 	addingRepository,
 	selectedWorkspaceId,
+	sendingWorkspaceIds,
 	creatingWorkspaceRepoId,
 	onAddRepository,
 	onSelectWorkspace,
@@ -478,6 +488,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	availableRepositories?: RepositoryCreateOption[];
 	addingRepository?: boolean;
 	selectedWorkspaceId?: string | null;
+	sendingWorkspaceIds?: Set<string>;
 	creatingWorkspaceRepoId?: string | null;
 	onAddRepository?: () => void;
 	onSelectWorkspace?: (workspaceId: string) => void;
@@ -877,6 +888,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 															key={row.id}
 															row={row}
 															selected={selectedWorkspaceId === row.id}
+															isSending={sendingWorkspaceIds?.has(row.id)}
 															rowRef={setWorkspaceRowRef(row.id)}
 															onSelect={onSelectWorkspace}
 															onPrefetch={onPrefetchWorkspace}

@@ -41,6 +41,7 @@ type WorkspacePanelContainerProps = {
 	displayedSessionId: string | null;
 	liveMessages: SessionMessageRecord[];
 	sending: boolean;
+	sendingSessionIds?: Set<string>;
 	onSelectSession: (sessionId: string | null) => void;
 	onResolveDisplayedSession: (sessionId: string | null) => void;
 };
@@ -90,6 +91,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	displayedSessionId,
 	liveMessages,
 	sending,
+	sendingSessionIds,
 	onSelectSession,
 	onResolveDisplayedSession,
 }: WorkspacePanelContainerProps) {
@@ -822,6 +824,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			refreshingWorkspace={refreshingWorkspace}
 			refreshingSession={refreshingSession}
 			sending={sending}
+			sendingSessionIds={sendingSessionIds}
 			onSelectSession={(sessionId) => {
 				onSelectSession(sessionId);
 			}}

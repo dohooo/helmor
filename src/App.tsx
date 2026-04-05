@@ -304,6 +304,9 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		null,
 	);
 	const [workspaceToasts, setWorkspaceToasts] = useState<WorkspaceToast[]>([]);
+	const [sendingWorkspaceIds, setSendingWorkspaceIds] = useState<Set<string>>(
+		() => new Set(),
+	);
 
 	const [theme, setTheme] = useState<"light" | "dark">(() => {
 		if (typeof window === "undefined") return "dark";
@@ -974,6 +977,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 						>
 							<WorkspacesSidebarContainer
 								selectedWorkspaceId={selectedWorkspaceId}
+								sendingWorkspaceIds={sendingWorkspaceIds}
 								onSelectWorkspace={handleSelectWorkspace}
 								pushWorkspaceToast={pushWorkspaceToast}
 							/>
@@ -1113,6 +1117,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 									displayedSessionId={displayedSessionId}
 									onSelectSession={handleSelectSession}
 									onResolveDisplayedSession={handleResolveDisplayedSession}
+									onSendingWorkspacesChange={setSendingWorkspaceIds}
 								/>
 							</div>
 							<ChatCacheDebugHud />

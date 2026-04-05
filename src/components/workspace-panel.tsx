@@ -96,6 +96,7 @@ type WorkspacePanelProps = {
 	refreshingWorkspace?: boolean;
 	refreshingSession?: boolean;
 	sending?: boolean;
+	sendingSessionIds?: Set<string>;
 	onSelectSession?: (sessionId: string) => void;
 	onPrefetchSession?: (sessionId: string) => void;
 	onSessionsChanged?: () => void;
@@ -152,6 +153,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	refreshingWorkspace: _refreshingWorkspace = false,
 	refreshingSession: _refreshingSession = false,
 	sending = false,
+	sendingSessionIds,
 	onSelectSession,
 	onPrefetchSession,
 	onSessionsChanged,
@@ -417,7 +419,9 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 								>
 									{sessions.map((session) => {
 										const selected = session.id === selectedSessionId;
-										const isActive = selected && sending;
+										const isActive = sendingSessionIds
+											? sendingSessionIds.has(session.id)
+											: selected && sending;
 										const hasUnread = session.unreadCount > 0;
 										const isEditing = editingSessionId === session.id;
 
