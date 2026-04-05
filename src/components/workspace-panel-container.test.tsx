@@ -35,10 +35,16 @@ vi.mock("./workspace-panel", () => ({
 				return;
 			}
 
-			onSessionPrepared(preparingSessionId, {
-				layoutCacheKey: "test-layout",
-				lastMeasuredAt: Date.now(),
-			});
+			const timeoutId = window.setTimeout(() => {
+				onSessionPrepared(preparingSessionId, {
+					layoutCacheKey: "test-layout",
+					lastMeasuredAt: Date.now(),
+				});
+			}, 0);
+
+			return () => {
+				window.clearTimeout(timeoutId);
+			};
 		}, [props.onSessionPrepared, props.preparingSessionId]);
 
 		panelRenderSpy(props);
@@ -385,10 +391,111 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		);
 
 		expect(getLatestPanelProps().loadingSession).toBe(false);
-		expect(getSessionPaneIds()).toEqual(
-			expect.arrayContaining(["session-1", "session-3"]),
-		);
+		expect(getSessionPaneIds()).toContain("session-1");
 
 		deferredMessages.resolve(createMessages("session-1"));
+	});
+
+	it("does not retain empty sessions in the keep-alive pane registry", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			createWorkspaceDetail("workspace-1", "session-2"),
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			createWorkspaceSessions("workspace-1"),
+		);
+		queryClient.setQueryData(helmorQueryKeys.sessionMessages("session-2"), []);
+		queryClient.setQueryData(
+			helmorQueryKeys.sessionMessages("session-1"),
+			createMessages("session-1"),
+		);
+
+		const rendered = renderWithProviders(
+			<WorkspacePanelContainer
+				selectedWorkspaceId="workspace-1"
+				displayedWorkspaceId="workspace-1"
+				selectedSessionId="session-2"
+				displayedSessionId="session-2"
+				liveMessages={[]}
+				sending={false}
+				onSelectSession={vi.fn()}
+				onResolveDisplayedSession={vi.fn()}
+			/>,
+			{ queryClient },
+		);
+
+		await waitFor(() => {
+			expect(getSessionPaneIds()).toContain("session-2");
+		});
+
+		rendered.rerender(
+			<WorkspacePanelContainer
+				selectedWorkspaceId="workspace-1"
+				displayedWorkspaceId="workspace-1"
+				selectedSessionId="session-1"
+				displayedSessionId="session-1"
+				liveMessages={[]}
+				sending={false}
+				onSelectSession={vi.fn()}
+				onResolveDisplayedSession={vi.fn()}
+			/>,
+		);
+
+		await waitFor(() => {
+			expect(getSessionPaneIds()).toContain("session-1");
+			expect(getSessionPaneIds()).not.toContain("session-2");
+		});
+	});
+
+	it("promotes the target session immediately when the previous visible pane was dropped", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			createWorkspaceDetail("workspace-1", "session-2"),
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			createWorkspaceSessions("workspace-1"),
+		);
+		queryClient.setQueryData(helmorQueryKeys.sessionMessages("session-2"), []);
+		queryClient.setQueryData(
+			helmorQueryKeys.sessionMessages("session-1"),
+			createMessages("session-1"),
+		);
+
+		const rendered = renderWithProviders(
+			<WorkspacePanelContainer
+				selectedWorkspaceId="workspace-1"
+				displayedWorkspaceId="workspace-1"
+				selectedSessionId="session-2"
+				displayedSessionId="session-2"
+				liveMessages={[]}
+				sending={false}
+				onSelectSession={vi.fn()}
+				onResolveDisplayedSession={vi.fn()}
+			/>,
+			{ queryClient },
+		);
+
+		rendered.rerender(
+			<WorkspacePanelContainer
+				selectedWorkspaceId="workspace-1"
+				displayedWorkspaceId="workspace-1"
+				selectedSessionId="session-1"
+				displayedSessionId="session-1"
+				liveMessages={[]}
+				sending={false}
+				onSelectSession={vi.fn()}
+				onResolveDisplayedSession={vi.fn()}
+			/>,
+		);
+
+		await waitFor(() => {
+			expect(getLatestPanelProps().visibleSessionId).toBe("session-1");
+			expect(getLatestPanelProps().preparingSessionId).toBeNull();
+			expect(getSessionPaneIds()).toContain("session-1");
+		});
 	});
 });

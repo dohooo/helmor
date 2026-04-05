@@ -6,6 +6,8 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
+		"analyze:web": "VITE_HELMOR_ANALYZE=1 vite",
+		"analyze": "VITE_HELMOR_ANALYZE=1 HELMOR_SIDECAR_DEBUG=1 tauri dev",
 		"build": "tsc && vite build",
 		"preview": "vite preview",
 		"test": "vitest run",

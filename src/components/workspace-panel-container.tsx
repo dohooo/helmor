@@ -3,6 +3,10 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { StateSnapshot } from "react-virtuoso";
 import type { SessionMessageRecord } from "@/lib/api";
 import {
+	publishChatCacheSnapshot,
+	shouldTrackDevCacheStats,
+} from "@/lib/dev-render-debug";
+import {
 	helmorQueryKeys,
 	sessionMessagesQueryOptions,
 	workspaceDetailQueryOptions,
@@ -10,7 +14,7 @@ import {
 } from "@/lib/query-client";
 import { WorkspacePanel } from "./workspace-panel";
 
-const SESSION_PANE_LIMIT = 30;
+const SESSION_PANE_LIMIT = 8;
 
 type SessionThreadPane = {
 	sessionId: string;
@@ -50,6 +54,33 @@ function arePaneMeasurementsEqual(
 		current?.layoutCacheKey === next.layoutCacheKey &&
 		current?.lastMeasuredAt === next.lastMeasuredAt
 	);
+}
+
+function estimateMessageBytes(messages: SessionMessageRecord[]) {
+	let total = 0;
+
+	for (const message of messages) {
+		total += 160;
+		total += message.id.length * 2;
+		total += message.sessionId.length * 2;
+		total += message.role.length * 2;
+		total += message.content.length * 2;
+		total += message.createdAt.length * 2;
+
+		if (message.model) {
+			total += message.model.length * 2;
+		}
+
+		if (message.contentIsJson && message.parsedContent !== undefined) {
+			try {
+				total += JSON.stringify(message.parsedContent).length * 2;
+			} catch {
+				// Ignore non-serializable debug payloads.
+			}
+		}
+	}
+
+	return total;
 }
 
 export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
@@ -178,7 +209,9 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			threadSessionId &&
 				(hasResolvedSessionMessages || liveMessages.length > 0),
 		);
-	const hasVisiblePane = visibleSessionId !== null;
+	const hasVisiblePane = Boolean(
+		visibleSessionId && paneRegistry.panes[visibleSessionId],
+	);
 
 	const loadingWorkspace =
 		Boolean(displayedWorkspaceId) &&
@@ -223,7 +256,14 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			return;
 		}
 
-		if (!visibleSessionIdRef.current) {
+		const retainedVisibleSessionId = visibleSessionIdRef.current;
+		const retainedVisiblePane = retainedVisibleSessionId
+			? paneRegistry.panes[retainedVisibleSessionId]
+			: null;
+		const targetHasMessages =
+			(targetPane?.messages.length ?? mergedMessages.length) > 0;
+
+		if (!retainedVisiblePane) {
 			setColdRevealSessionId(
 				targetPane?.presentationState === "cold-unpresented"
 					? threadSessionId
@@ -235,7 +275,15 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			return;
 		}
 
-		if (threadSessionId === visibleSessionIdRef.current) {
+		if (!targetHasMessages) {
+			setColdRevealSessionId(null);
+			setVisibleSessionId(threadSessionId);
+			setPreparingSessionId(null);
+			setPreparedSessionId(null);
+			return;
+		}
+
+		if (threadSessionId === retainedVisibleSessionId) {
 			if (preparingSessionIdRef.current) {
 				setPreparingSessionId(null);
 				setPreparedSessionId(null);
@@ -247,7 +295,16 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			setPreparedSessionId(null);
 			setPreparingSessionId(threadSessionId);
 		}
-	}, [hasTargetPane, loadingWorkspace, refreshingWorkspace, threadSessionId]);
+	}, [
+		hasTargetPane,
+		loadingWorkspace,
+		mergedMessages.length,
+		paneRegistry.panes,
+		refreshingWorkspace,
+		targetPane?.presentationState,
+		targetPane?.messages.length,
+		threadSessionId,
+	]);
 
 	useEffect(() => {
 		if (!preparedSessionId) {
@@ -374,9 +431,10 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			for (const sessionId of evictedIds) {
 				const pane = nextPanes[sessionId];
 				if (
-					pane?.viewportSnapshot ||
-					pane?.layoutCacheKey ||
-					pane?.lastMeasuredAt
+					pane &&
+					pane.presentationState === "presented" &&
+					pane.messages.length > 0 &&
+					(pane.viewportSnapshot || pane.layoutCacheKey || pane.lastMeasuredAt)
 				) {
 					warmCacheRef.current[sessionId] = {
 						viewportSnapshot: pane.viewportSnapshot,
@@ -410,6 +468,48 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		sending,
 		threadSessionId,
 	]);
+
+	useEffect(() => {
+		setPaneRegistry((current) => {
+			const removablePaneIds = current.order.filter((sessionId) => {
+				const pane = current.panes[sessionId];
+				if (!pane) {
+					return false;
+				}
+
+				const isProtected =
+					sessionId !== visibleSessionIdRef.current &&
+					sessionId !== preparingSessionIdRef.current &&
+					sessionId !== threadSessionIdRef.current;
+				if (!isProtected) {
+					return false;
+				}
+
+				return (
+					pane.presentationState === "cold-unpresented" ||
+					pane.messages.length === 0
+				);
+			});
+
+			if (removablePaneIds.length === 0) {
+				return current;
+			}
+
+			const removablePaneIdSet = new Set(removablePaneIds);
+			const nextPanes = { ...current.panes };
+			for (const sessionId of removablePaneIds) {
+				delete nextPanes[sessionId];
+				delete warmCacheRef.current[sessionId];
+			}
+
+			return {
+				order: current.order.filter(
+					(sessionId) => !removablePaneIdSet.has(sessionId),
+				),
+				panes: nextPanes,
+			};
+		});
+	}, [preparingSessionId, threadSessionId, visibleSessionId]);
 
 	useEffect(() => {
 		if (!displayedWorkspaceId) {
@@ -631,6 +731,81 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		paneRegistry,
 		sending,
 		threadSessionId,
+	]);
+
+	useEffect(() => {
+		if (!shouldTrackDevCacheStats()) {
+			return;
+		}
+
+		const panesBySession = Object.fromEntries(
+			sessionPanes.map((pane) => [
+				pane.sessionId,
+				{
+					workspaceId: paneRegistry.panes[pane.sessionId]?.workspaceId ?? null,
+					messageCount: pane.messages.length,
+					estimatedMessageBytes: estimateMessageBytes(pane.messages),
+					sending: pane.sending,
+					hasLoaded: pane.hasLoaded,
+					presentationState: pane.presentationState,
+					hasViewportSnapshot: Boolean(pane.viewportSnapshot),
+					layoutCacheKey: pane.layoutCacheKey ?? null,
+					lastMeasuredAt: pane.lastMeasuredAt,
+				},
+			]),
+		);
+		const sessionMessageKeyPrefix =
+			helmorQueryKeys.sessionMessages("__debug__")[0];
+		const querySessionEntries = queryClient
+			.getQueryCache()
+			.getAll()
+			.filter(
+				(query) =>
+					Array.isArray(query.queryKey) &&
+					query.queryKey[0] === sessionMessageKeyPrefix,
+			);
+
+		publishChatCacheSnapshot({
+			paneLimit: SESSION_PANE_LIMIT,
+			visibleSessionId,
+			preparingSessionId,
+			threadSessionId,
+			hotPaneCount: paneRegistry.order.length,
+			warmEntryCount: Object.keys(warmCacheRef.current).length,
+			totalRetainedMessages: sessionPanes.reduce(
+				(sum, pane) => sum + pane.messages.length,
+				0,
+			),
+			totalEstimatedMessageBytes: Object.values(panesBySession).reduce(
+				(sum, pane) => sum + pane.estimatedMessageBytes,
+				0,
+			),
+			querySessionMessageCount: querySessionEntries.length,
+			querySessionMessageObserverCount: querySessionEntries.reduce(
+				(sum, query) =>
+					sum +
+					(typeof query.getObserversCount === "function"
+						? query.getObserversCount()
+						: 0),
+				0,
+			),
+			querySessionMessageDataMessages: querySessionEntries.reduce(
+				(sum, query) =>
+					sum + (Array.isArray(query.state.data) ? query.state.data.length : 0),
+				0,
+			),
+			paneOrder: paneRegistry.order,
+			warmSessionIds: Object.keys(warmCacheRef.current),
+			panesBySession,
+		});
+	}, [
+		paneRegistry.order,
+		paneRegistry.panes,
+		preparingSessionId,
+		queryClient,
+		sessionPanes,
+		threadSessionId,
+		visibleSessionId,
 	]);
 
 	return (
