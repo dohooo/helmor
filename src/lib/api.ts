@@ -1,7 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type GroupTone = "done" | "review" | "progress" | "backlog" | "canceled";
+export type GroupTone =
+	| "pinned"
+	| "done"
+	| "review"
+	| "progress"
+	| "backlog"
+	| "canceled";
 
 export type WorkspaceRow = {
 	id: string;
@@ -24,6 +30,7 @@ export type WorkspaceRow = {
 	activeSessionAgentType?: string | null;
 	activeSessionStatus?: string | null;
 	prTitle?: string | null;
+	pinnedAt?: string | null;
 	sessionCount?: number;
 	messageCount?: number;
 	attachmentCount?: number;
@@ -894,6 +901,32 @@ export async function markWorkspaceUnread(
 	});
 }
 
+export async function pinWorkspace(workspaceId: string): Promise<void> {
+	const inv = await getTauriInvoke();
+	if (!inv)
+		throw new Error("Pin is only available in the Tauri desktop runtime.");
+	return inv<void>("pin_workspace", { workspaceId });
+}
+
+export async function unpinWorkspace(workspaceId: string): Promise<void> {
+	const inv = await getTauriInvoke();
+	if (!inv)
+		throw new Error("Unpin is only available in the Tauri desktop runtime.");
+	return inv<void>("unpin_workspace", { workspaceId });
+}
+
+export async function setWorkspaceManualStatus(
+	workspaceId: string,
+	status: string | null,
+): Promise<void> {
+	const inv = await getTauriInvoke();
+	if (!inv)
+		throw new Error(
+			"Set status is only available in the Tauri desktop runtime.",
+		);
+	return inv<void>("set_workspace_manual_status", { workspaceId, status });
+}
+
 // ---------------------------------------------------------------------------
 // Streaming agent API
 // ---------------------------------------------------------------------------
@@ -1061,8 +1094,7 @@ export async function generateSessionTitle(
 	if (!inv) return null;
 	try {
 		return await inv<GenerateSessionTitleResponse>("generate_session_title", {
-			sessionId,
-			userMessage,
+			request: { sessionId, userMessage },
 		});
 	} catch (error) {
 		// Title generation is best-effort — don't propagate errors

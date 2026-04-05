@@ -278,6 +278,36 @@ pub fn mark_workspace_unread(workspace_id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
+pub fn pin_workspace(workspace_id: String) -> CmdResult<()> {
+    let _lock = db::WORKSPACE_MUTATION_LOCK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
+
+    Ok(workspaces::pin_workspace(&workspace_id)?)
+}
+
+#[tauri::command]
+pub fn unpin_workspace(workspace_id: String) -> CmdResult<()> {
+    let _lock = db::WORKSPACE_MUTATION_LOCK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
+
+    Ok(workspaces::unpin_workspace(&workspace_id)?)
+}
+
+#[tauri::command]
+pub fn set_workspace_manual_status(workspace_id: String, status: Option<String>) -> CmdResult<()> {
+    let _lock = db::WORKSPACE_MUTATION_LOCK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
+
+    Ok(workspaces::set_workspace_manual_status(
+        &workspace_id,
+        status.as_deref(),
+    )?)
+}
+
+#[tauri::command]
 pub fn list_remote_branches(workspace_id: String) -> CmdResult<Vec<String>> {
     Ok(workspaces::list_remote_branches(&workspace_id)?)
 }

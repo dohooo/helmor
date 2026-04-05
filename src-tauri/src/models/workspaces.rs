@@ -58,6 +58,7 @@ pub struct WorkspaceSidebarRow {
     pub active_session_agent_type: Option<String>,
     pub active_session_status: Option<String>,
     pub pr_title: Option<String>,
+    pub pinned_at: Option<String>,
     pub session_count: i64,
     pub message_count: i64,
     pub attachment_count: i64,
@@ -263,6 +264,7 @@ pub fn load_workspace_record_by_id(workspace_id: &str) -> Result<Option<Workspac
 // ---- Sidebar groups ----
 
 pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
+    let mut pinned = Vec::new();
     let mut done = Vec::new();
     let mut review = Vec::new();
     let mut progress = Vec::new();
@@ -273,16 +275,22 @@ pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
         if record.state == "archived" {
             continue;
         }
+        let is_pinned = record.pinned_at.is_some();
         let row = record_to_sidebar_row(record);
-        match helpers::group_id_from_status(&row.manual_status, &row.derived_status) {
-            "done" => done.push(row),
-            "review" => review.push(row),
-            "backlog" => backlog.push(row),
-            "canceled" => canceled.push(row),
-            _ => progress.push(row),
+        if is_pinned {
+            pinned.push(row);
+        } else {
+            match helpers::group_id_from_status(&row.manual_status, &row.derived_status) {
+                "done" => done.push(row),
+                "review" => review.push(row),
+                "backlog" => backlog.push(row),
+                "canceled" => canceled.push(row),
+                _ => progress.push(row),
+            }
         }
     }
 
+    helpers::sort_sidebar_rows(&mut pinned);
     helpers::sort_sidebar_rows(&mut done);
     helpers::sort_sidebar_rows(&mut review);
     helpers::sort_sidebar_rows(&mut progress);
@@ -290,6 +298,12 @@ pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
     helpers::sort_sidebar_rows(&mut canceled);
 
     Ok(vec![
+        WorkspaceSidebarGroup {
+            id: "pinned".to_string(),
+            label: "Pinned".to_string(),
+            tone: "pinned".to_string(),
+            rows: pinned,
+        },
         WorkspaceSidebarGroup {
             id: "done".to_string(),
             label: "Done".to_string(),
@@ -324,13 +338,18 @@ pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
 }
 
 pub fn list_archived_workspaces() -> Result<Vec<WorkspaceSummary>> {
-    let mut archived = load_workspace_records()?
-        .into_iter()
-        .filter(|record| record.state == "archived")
+    let connection = db::open_connection(false)?;
+    let mut statement = connection
+        .prepare(&format!(
+            "{WORKSPACE_RECORD_SQL} WHERE w.state = 'archived' ORDER BY w.updated_at DESC"
+        ))
+        .context("Failed to prepare archived workspaces query")?;
+
+    let archived = statement
+        .query_map([], helpers::workspace_record_from_row)?
+        .filter_map(|row| row.ok())
         .map(record_to_summary)
         .collect::<Vec<_>>();
-
-    archived.sort_by(|left, right| left.title.to_lowercase().cmp(&right.title.to_lowercase()));
 
     Ok(archived)
 }
@@ -403,6 +422,39 @@ pub fn mark_workspace_unread(workspace_id: &str) -> Result<()> {
     transaction
         .commit()
         .context("Failed to commit workspace unread transaction")
+}
+
+pub fn pin_workspace(workspace_id: &str) -> Result<()> {
+    let connection = db::open_connection(true)?;
+    connection
+        .execute(
+            "UPDATE workspaces SET pinned_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to pin workspace")?;
+    Ok(())
+}
+
+pub fn unpin_workspace(workspace_id: &str) -> Result<()> {
+    let connection = db::open_connection(true)?;
+    connection
+        .execute(
+            "UPDATE workspaces SET pinned_at = NULL, updated_at = datetime('now') WHERE id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to unpin workspace")?;
+    Ok(())
+}
+
+pub fn set_workspace_manual_status(workspace_id: &str, status: Option<&str>) -> Result<()> {
+    let connection = db::open_connection(true)?;
+    connection
+        .execute(
+            "UPDATE workspaces SET manual_status = ?2, updated_at = datetime('now') WHERE id = ?1",
+            rusqlite::params![workspace_id, status],
+        )
+        .context("Failed to set workspace manual status")?;
+    Ok(())
 }
 
 // ---- Select visible workspace for repo ----
@@ -890,6 +942,7 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         active_session_agent_type: record.active_session_agent_type,
         active_session_status: record.active_session_status,
         pr_title: record.pr_title,
+        pinned_at: record.pinned_at,
         session_count: record.session_count,
         message_count: record.message_count,
         attachment_count: record.attachment_count,
