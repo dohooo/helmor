@@ -39,6 +39,7 @@ pub fn run() {
             models::create_workspace_from_repo,
             models::disconnect_github_identity,
             models::get_add_repository_defaults,
+            models::get_app_settings,
             models::get_data_info,
             models::get_github_cli_status,
             models::get_github_cli_user,
@@ -67,7 +68,8 @@ pub fn run() {
             models::conductor_source_available,
             models::list_conductor_repos,
             models::list_conductor_workspaces,
-            models::import_conductor_workspaces
+            models::import_conductor_workspaces,
+            models::update_app_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

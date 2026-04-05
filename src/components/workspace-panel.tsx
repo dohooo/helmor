@@ -60,6 +60,7 @@ import {
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
 import { convertMessages, type MessagePart } from "@/lib/message-adapter";
+import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
 import {
@@ -776,6 +777,7 @@ const MemoConversationMessage = memo(ConversationMessage, (prev, next) => {
 
 function ChatUserMessage({ message }: { message: RenderedMessage }) {
 	const parts = message.content as MessagePart[];
+	const { settings } = useSettings();
 
 	return (
 		<div
@@ -783,7 +785,10 @@ function ChatUserMessage({ message }: { message: RenderedMessage }) {
 			data-message-role="user"
 			className="flex min-w-0 justify-end"
 		>
-			<div className="max-w-[75%] overflow-hidden rounded-md bg-app-foreground/[0.03] px-3 py-2 text-[14px] leading-7 text-app-foreground">
+			<div
+				className="max-w-[75%] overflow-hidden rounded-md bg-app-foreground/[0.03] px-3 py-2 leading-7 text-app-foreground"
+				style={{ fontSize: `${settings.fontSize}px` }}
+			>
 				{parts.map((part, idx) =>
 					isTextPart(part) ? <UserText key={idx} text={part.text} /> : null,
 				)}
@@ -887,9 +892,13 @@ function AssistantText({
 	streaming: boolean;
 }) {
 	const mode: StreamdownMode = streaming ? "streaming" : "static";
+	const { settings } = useSettings();
 
 	return (
-		<div className="conversation-markdown prose prose-sm max-w-none break-words text-[12px] leading-6 text-app-foreground prose-headings:my-0 prose-headings:text-app-foreground prose-p:my-0 prose-p:text-app-foreground prose-li:my-0 prose-li:text-app-foreground prose-strong:text-app-foreground prose-em:text-app-foreground prose-pre:my-0 prose-pre:border prose-pre:border-app-border prose-pre:bg-app-sidebar prose-pre:text-[12px] prose-pre:text-app-foreground prose-ul:my-0 prose-ol:my-0 prose-blockquote:my-0 prose-blockquote:border-app-border prose-blockquote:text-app-muted prose-table:my-0 prose-table:text-[11px] prose-table:text-app-foreground prose-th:border-app-border prose-th:text-app-foreground prose-td:border-app-border prose-td:text-app-foreground prose-tr:border-app-border prose-a:text-app-project prose-a:underline prose-a:decoration-app-project/30 prose-code:rounded prose-code:border prose-code:border-app-border/50 prose-code:bg-app-sidebar prose-code:px-1 prose-code:py-px prose-code:text-[12px] prose-code:text-app-foreground-soft">
+		<div
+			className="conversation-markdown prose prose-sm max-w-none break-words leading-6 text-app-foreground prose-headings:my-0 prose-headings:text-app-foreground prose-p:my-0 prose-p:text-app-foreground prose-li:my-0 prose-li:text-app-foreground prose-strong:text-app-foreground prose-em:text-app-foreground prose-pre:my-0 prose-pre:border prose-pre:border-app-border prose-pre:bg-app-sidebar prose-pre:text-[12px] prose-pre:text-app-foreground prose-ul:my-0 prose-ol:my-0 prose-blockquote:my-0 prose-blockquote:border-app-border prose-blockquote:text-app-muted prose-table:my-0 prose-table:text-[11px] prose-table:text-app-foreground prose-th:border-app-border prose-th:text-app-foreground prose-td:border-app-border prose-td:text-app-foreground prose-tr:border-app-border prose-a:text-app-project prose-a:underline prose-a:decoration-app-project/30 prose-code:rounded prose-code:border prose-code:border-app-border/50 prose-code:bg-app-sidebar prose-code:px-1 prose-code:py-px prose-code:text-[12px] prose-code:text-app-foreground-soft"
+			style={{ fontSize: `${settings.fontSize}px` }}
+		>
 			<Suspense
 				fallback={<AssistantTextFallback text={text} streaming={streaming} />}
 			>
@@ -1473,7 +1482,7 @@ function EmptyState({ hasSession }: { hasSession: boolean }) {
 			</p>
 			<p className="mt-2 max-w-[30rem] text-[13px] leading-6 text-app-muted">
 				{hasSession
-					? "This session does not have stored timeline events in the current fixture."
+					? "This session does not have any messages yet."
 					: "Choose a session from the header to inspect its timeline."}
 			</p>
 		</div>

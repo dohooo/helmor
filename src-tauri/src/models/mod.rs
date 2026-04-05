@@ -8,6 +8,7 @@ pub mod sessions;
 pub mod settings;
 pub mod workspaces;
 
+use anyhow::Context;
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
@@ -37,6 +38,36 @@ pub fn get_data_info() -> CmdResult<DataInfo> {
         data_dir: data_dir.display().to_string(),
         db_path: db_path.display().to_string(),
     })
+}
+
+#[tauri::command]
+pub fn get_app_settings() -> CmdResult<std::collections::HashMap<String, String>> {
+    let conn = db::open_connection(false)?;
+    let mut stmt = conn
+        .prepare("SELECT key, value FROM settings WHERE key LIKE 'app.%'")
+        .context("Failed to query app settings")?;
+    let rows = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .context("Failed to iterate app settings")?;
+
+    let mut map = std::collections::HashMap::new();
+    for row in rows.flatten() {
+        map.insert(row.0, row.1);
+    }
+    Ok(map)
+}
+
+#[tauri::command]
+pub fn update_app_settings(
+    settings: std::collections::HashMap<String, String>,
+) -> CmdResult<()> {
+    for (key, value) in &settings {
+        if !key.starts_with("app.") {
+            continue;
+        }
+        settings::upsert_setting_value(key, value)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

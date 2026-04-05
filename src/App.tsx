@@ -15,6 +15,7 @@ import {
 	useState,
 } from "react";
 import { ConductorImportDialog } from "./components/conductor-import-dialog";
+import { SettingsButton, SettingsDialog } from "./components/settings-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "./components/ui/avatar";
 import {
 	DropdownMenu,
@@ -40,6 +41,7 @@ import {
 	addRepositoryFromLocalPath,
 	archiveWorkspace,
 	cancelGithubIdentityConnect,
+	createSession,
 	createWorkspaceFromRepo,
 	DEFAULT_AGENT_MODEL_SECTIONS,
 	DEFAULT_WORKSPACE_GROUPS,
@@ -75,6 +77,13 @@ import {
 	type WorkspaceSessionSummary,
 	type WorkspaceSummary,
 } from "./lib/api";
+import {
+	type AppSettings,
+	DEFAULT_SETTINGS,
+	loadSettings,
+	SettingsContext,
+	saveSettings,
+} from "./lib/settings";
 import { StreamAccumulator } from "./lib/stream-accumulator";
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "helmor.workspaceSidebarWidth";
@@ -147,6 +156,27 @@ function getInitialGithubIdentityState(): GithubIdentityState {
 }
 
 function App() {
+	const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+	const [settingsOpen, setSettingsOpen] = useState(false);
+	const settingsContextValue = useMemo(
+		() => ({
+			settings: appSettings,
+			updateSettings: (patch: Partial<AppSettings>) => {
+				setAppSettings((prev) => {
+					const next = { ...prev, ...patch };
+					void saveSettings(patch);
+					return next;
+				});
+			},
+		}),
+		[appSettings],
+	);
+
+	// Load settings from DB on mount
+	useEffect(() => {
+		void loadSettings().then(setAppSettings);
+	}, []);
+
 	const [githubIdentityState, setGithubIdentityState] =
 		useState<GithubIdentityState>(getInitialGithubIdentityState);
 	const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
@@ -160,9 +190,9 @@ function App() {
 	const [archivedSummaries, setArchivedSummaries] = useState<
 		WorkspaceSummary[]
 	>([]);
-	const [fixtureRepositories, setFixtureRepositories] = useState<
-		RepositoryCreateOption[]
-	>([]);
+	const [repositories, setRepositories] = useState<RepositoryCreateOption[]>(
+		[],
+	);
 	const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
 		findInitialWorkspaceId(DEFAULT_WORKSPACE_GROUPS),
 	);
@@ -284,7 +314,7 @@ function App() {
 		setWorkspaceSessions([]);
 		setSessionMessages([]);
 		setSessionAttachments([]);
-		setFixtureRepositories([]);
+		setRepositories([]);
 		setLiveMessagesByContext({});
 		setLiveSessionsByContext({});
 		setSendErrorsByContext({});
@@ -459,7 +489,7 @@ function App() {
 				setGroups(loadedGroups);
 				setArchivedSummaries(loadedArchived);
 				setAgentModelSections(loadedModelSections);
-				setFixtureRepositories(loadedRepositories);
+				setRepositories(loadedRepositories);
 				setSelectedWorkspaceId((current) => {
 					if (
 						current &&
@@ -494,7 +524,7 @@ function App() {
 		]).then(([loadedGroups, loadedArchived, loadedRepositories]) => {
 			setGroups(loadedGroups);
 			setArchivedSummaries(loadedArchived);
-			setFixtureRepositories(loadedRepositories);
+			setRepositories(loadedRepositories);
 
 			// Auto-select first workspace if none is currently selected
 			setSelectedWorkspaceId((current) => {
@@ -627,7 +657,7 @@ function App() {
 
 		setGroups(loadedGroups);
 		setArchivedSummaries(loadedArchived);
-		setFixtureRepositories(loadedRepositories);
+		setRepositories(loadedRepositories);
 
 		return {
 			loadedGroups,
@@ -869,9 +899,17 @@ function App() {
 		const isCurrentWorkspace = wsId && wsId === selectedWorkspaceId;
 		const isCurrentSession = sessId === selectedSessionId;
 
+		// Batch all state updates together so React commits them in a single
+		// render pass. This prevents a flash where live messages are cleared
+		// before DB messages appear (or vice versa).
 		if (isCurrentSession) {
 			setSessionMessages(messages);
 		}
+		// Clear live messages in the same render batch as setting DB messages
+		setLiveMessagesByContext((current) => ({
+			...current,
+			[ctxKey]: [],
+		}));
 		if (isCurrentWorkspace) {
 			setWorkspaceDetail(detail);
 			setWorkspaceSessions(sessions);
@@ -879,10 +917,6 @@ function App() {
 		// Groups and archived list are global — always update
 		setGroups(loadedGroups);
 		setArchivedSummaries(loadedArchived);
-		setLiveMessagesByContext((current) => ({
-			...current,
-			[ctxKey]: [],
-		}));
 	};
 
 	const handleCreateWorkspaceFromRepo = useCallback(
@@ -996,6 +1030,58 @@ function App() {
 		restoringWorkspaceId,
 	]);
 
+	const handleModelSelect = async (modelId: string) => {
+		const newModel = findModelOption(agentModelSections, modelId);
+		const currentProvider = selectedModel?.provider ?? null;
+		const newProvider = newModel?.provider ?? null;
+
+		// If provider changed and the current session already has messages,
+		// create a new session. Empty sessions can switch provider freely.
+		const hasMessages = sessionMessages.length > 0;
+		if (
+			newProvider &&
+			currentProvider &&
+			newProvider !== currentProvider &&
+			selectedSessionId &&
+			selectedWorkspaceId &&
+			hasMessages
+		) {
+			try {
+				const { sessionId: newSessionId } =
+					await createSession(selectedWorkspaceId);
+
+				// Reload sessions list
+				const sessions = await loadWorkspaceSessions(selectedWorkspaceId);
+				setWorkspaceSessions(sessions);
+
+				// Switch to the new session
+				setSelectedSessionId(newSessionId);
+
+				// Set model on the NEW session's context key
+				const newContextKey = getComposerContextKey(
+					selectedWorkspaceId,
+					newSessionId,
+				);
+				setComposerModelSelections((current) => ({
+					...current,
+					[newContextKey]: modelId,
+				}));
+			} catch {
+				// If session creation fails, just update model in current context
+				setComposerModelSelections((current) => ({
+					...current,
+					[composerContextKey]: modelId,
+				}));
+			}
+		} else {
+			// Same provider or no session yet — just update model selection
+			setComposerModelSelections((current) => ({
+				...current,
+				[composerContextKey]: modelId,
+			}));
+		}
+	};
+
 	const handleStopStream = useCallback(() => {
 		const active = activeSessionByContext[composerContextKey];
 		if (active) {
@@ -1071,14 +1157,14 @@ function App() {
 				}
 			};
 
-			const flushStreamMessages = () => {
+			const flushStreamMessages = (immediate = false) => {
 				frameId = null;
 				const streamMessages = accumulator.toMessages(
 					contextKey,
 					selectedSessionId ?? contextKey,
 				);
 				const nextMessages = [optimisticUserMessage, ...streamMessages];
-				startTransition(() => {
+				const doFlush = () => {
 					setLiveMessagesByContext((current) => {
 						if (haveSameLiveMessages(current[contextKey], nextMessages)) {
 							return current;
@@ -1088,12 +1174,20 @@ function App() {
 							[contextKey]: nextMessages,
 						};
 					});
-				});
+				};
+				// Use startTransition for intermediate flushes (lower priority).
+				// Final flush (on "done") uses direct setState so it commits
+				// before reloadAfterPersist clears live messages.
+				if (immediate) {
+					doFlush();
+				} else {
+					startTransition(doFlush);
+				}
 			};
 
 			const scheduleFlush = () => {
 				if (frameId !== null) return;
-				frameId = window.requestAnimationFrame(flushStreamMessages);
+				frameId = window.requestAnimationFrame(() => flushStreamMessages());
 			};
 
 			unlistenFn = await listenAgentStream(streamId, (event) => {
@@ -1108,7 +1202,7 @@ function App() {
 						window.cancelAnimationFrame(frameId);
 						frameId = null;
 					}
-					flushStreamMessages();
+					flushStreamMessages(true); // immediate — commit before reload
 					cleanup();
 
 					setLiveSessionsByContext((current) => ({
@@ -1120,7 +1214,7 @@ function App() {
 						},
 					}));
 
-					if (event.persistedToFixture && selectedSessionId) {
+					if (event.persisted && selectedSessionId) {
 						void reloadAfterPersist(
 							contextKey,
 							selectedSessionId,
@@ -1410,218 +1504,229 @@ function App() {
 	);
 
 	return (
-		<ToastProvider swipeDirection="right">
-			{!isIdentityConnected ? (
-				<GithubIdentityGate
-					identityState={githubIdentityState}
-					onConnectGithub={() => {
-						void handleStartGithubIdentityConnect();
-					}}
-					onCopyGithubCode={(userCode) => handleCopyGithubDeviceCode(userCode)}
-					onCancelGithubConnect={handleCancelGithubIdentityConnect}
-				/>
-			) : (
-				<main
-					aria-label="Application shell"
-					className="relative h-screen overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
-				>
-					<div className="relative flex h-full min-h-0 bg-app-base">
-						<aside
-							aria-label="Workspace sidebar"
-							className="relative h-full shrink-0 overflow-hidden bg-app-sidebar"
-							style={{ width: `${sidebarWidth}px` }}
-						>
-							<WorkspacesSidebar
-								groups={groups}
-								archivedRows={archivedRows}
-								availableRepositories={fixtureRepositories}
-								addingRepository={addingRepository}
-								selectedWorkspaceId={selectedWorkspaceId}
-								creatingWorkspaceRepoId={creatingWorkspaceRepoId}
-								onAddRepository={() => {
-									void handleAddRepository();
-								}}
-								onSelectWorkspace={handleSelectWorkspace}
-								onCreateWorkspace={(repoId) => {
-									void handleCreateWorkspaceFromRepo(repoId);
-								}}
-								onArchiveWorkspace={(workspaceId) => {
-									void handleArchiveWorkspace(workspaceId);
-								}}
-								onMarkWorkspaceUnread={(workspaceId) => {
-									void handleMarkWorkspaceUnread(workspaceId);
-								}}
-								onRestoreWorkspace={(workspaceId) => {
-									void handleRestoreWorkspace(workspaceId);
-								}}
-								archivingWorkspaceId={archivingWorkspaceId}
-								markingUnreadWorkspaceId={markingUnreadWorkspaceId}
-								restoringWorkspaceId={restoringWorkspaceId}
-							/>
-						</aside>
+		<SettingsContext.Provider value={settingsContextValue}>
+			<ToastProvider swipeDirection="right">
+				{!isIdentityConnected ? (
+					<GithubIdentityGate
+						identityState={githubIdentityState}
+						onConnectGithub={() => {
+							void handleStartGithubIdentityConnect();
+						}}
+						onCopyGithubCode={(userCode) =>
+							handleCopyGithubDeviceCode(userCode)
+						}
+						onCancelGithubConnect={handleCancelGithubIdentityConnect}
+					/>
+				) : (
+					<main
+						aria-label="Application shell"
+						className="relative h-screen overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
+					>
+						<div className="relative flex h-full min-h-0 bg-app-base">
+							<aside
+								aria-label="Workspace sidebar"
+								className="relative h-full shrink-0 overflow-hidden bg-app-sidebar"
+								style={{ width: `${sidebarWidth}px` }}
+							>
+								<WorkspacesSidebar
+									groups={groups}
+									archivedRows={archivedRows}
+									availableRepositories={repositories}
+									addingRepository={addingRepository}
+									selectedWorkspaceId={selectedWorkspaceId}
+									creatingWorkspaceRepoId={creatingWorkspaceRepoId}
+									onAddRepository={() => {
+										void handleAddRepository();
+									}}
+									onSelectWorkspace={handleSelectWorkspace}
+									onCreateWorkspace={(repoId) => {
+										void handleCreateWorkspaceFromRepo(repoId);
+									}}
+									onArchiveWorkspace={(workspaceId) => {
+										void handleArchiveWorkspace(workspaceId);
+									}}
+									onMarkWorkspaceUnread={(workspaceId) => {
+										void handleMarkWorkspaceUnread(workspaceId);
+									}}
+									onRestoreWorkspace={(workspaceId) => {
+										void handleRestoreWorkspace(workspaceId);
+									}}
+									archivingWorkspaceId={archivingWorkspaceId}
+									markingUnreadWorkspaceId={markingUnreadWorkspaceId}
+									restoringWorkspaceId={restoringWorkspaceId}
+								/>
+								<div className="absolute bottom-3 left-3 z-20">
+									<SettingsButton onClick={() => setSettingsOpen(true)} />
+								</div>
+							</aside>
 
-						<div
-							role="separator"
-							tabIndex={0}
-							aria-label="Resize sidebar"
-							aria-orientation="vertical"
-							aria-valuemin={MIN_SIDEBAR_WIDTH}
-							aria-valuemax={MAX_SIDEBAR_WIDTH}
-							aria-valuenow={sidebarWidth}
-							onMouseDown={handleResizeStart}
-							onKeyDown={handleResizeKeyDown}
-							className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
-							style={{
-								left: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
-								width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
-							}}
-						>
-							<span
-								aria-hidden="true"
-								className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
-									isResizing
-										? "w-[2px] bg-app-foreground/80 shadow-[0_0_12px_rgba(250,249,246,0.2)]"
-										: "w-px bg-app-border group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
-								}`}
-							/>
-						</div>
-
-						<section
-							aria-label="Workspace panel"
-							className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-app-elevated"
-						>
 							<div
-								aria-label="Workspace panel drag region"
-								className="absolute inset-x-0 top-0 z-10 h-[2.6rem] bg-transparent"
-								data-tauri-drag-region
-							/>
+								role="separator"
+								tabIndex={0}
+								aria-label="Resize sidebar"
+								aria-orientation="vertical"
+								aria-valuemin={MIN_SIDEBAR_WIDTH}
+								aria-valuemax={MAX_SIDEBAR_WIDTH}
+								aria-valuenow={sidebarWidth}
+								onMouseDown={handleResizeStart}
+								onKeyDown={handleResizeKeyDown}
+								className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+								style={{
+									left: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
+									width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
+								}}
+							>
+								<span
+									aria-hidden="true"
+									className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
+										isResizing
+											? "w-[2px] bg-app-foreground/80 shadow-[0_0_12px_rgba(250,249,246,0.2)]"
+											: "w-px bg-app-border group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
+									}`}
+								/>
+							</div>
 
-							<div className="absolute right-4 top-[0.55rem] z-30 flex items-center gap-1">
-								{conductorAvailable && (
+							<section
+								aria-label="Workspace panel"
+								className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-app-elevated"
+							>
+								<div
+									aria-label="Workspace panel drag region"
+									className="absolute inset-x-0 top-0 z-10 h-[2.6rem] bg-transparent"
+									data-tauri-drag-region
+								/>
+
+								<div className="absolute right-4 top-[0.55rem] z-30 flex items-center gap-1">
+									{conductorAvailable && (
+										<button
+											type="button"
+											aria-label="Import from Conductor"
+											onClick={() => setImportDialogOpen(true)}
+											title="Import workspaces from Conductor"
+											className="flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
+										>
+											<Download className="size-3.5" strokeWidth={1.8} />
+										</button>
+									)}
 									<button
 										type="button"
-										aria-label="Import from Conductor"
-										onClick={() => setImportDialogOpen(true)}
-										title="Import workspaces from Conductor"
+										aria-label="Toggle theme"
+										onClick={toggleTheme}
 										className="flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
 									>
-										<Download className="size-3.5" strokeWidth={1.8} />
+										{theme === "dark" ? (
+											<Sun className="size-3.5" strokeWidth={1.8} />
+										) : (
+											<Moon className="size-3.5" strokeWidth={1.8} />
+										)}
 									</button>
-								)}
-								<button
-									type="button"
-									aria-label="Toggle theme"
-									onClick={toggleTheme}
-									className="flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
+									<GithubStatusMenu
+										identityState={githubIdentityState}
+										onDisconnectGithub={() => {
+											void handleDisconnectGithubIdentity();
+										}}
+									/>
+								</div>
+
+								<div
+									aria-label="Workspace viewport"
+									className="flex min-h-0 flex-1 flex-col bg-white dark:bg-app-elevated"
 								>
-									{theme === "dark" ? (
-										<Sun className="size-3.5" strokeWidth={1.8} />
-									) : (
-										<Moon className="size-3.5" strokeWidth={1.8} />
-									)}
-								</button>
-								<GithubStatusMenu
-									identityState={githubIdentityState}
-									onDisconnectGithub={() => {
-										void handleDisconnectGithubIdentity();
-									}}
-								/>
-							</div>
+									<WorkspacePanel
+										workspace={workspaceDetail}
+										sessions={workspaceSessions}
+										selectedSessionId={selectedSessionId}
+										messages={mergedMessages}
+										attachments={sessionAttachments}
+										loadingWorkspace={loadingWorkspace}
+										loadingSession={loadingSession}
+										sending={isSending}
+										onSelectSession={setSelectedSessionId}
+										onSessionsChanged={() => setDataVersion((v) => v + 1)}
+										onWorkspaceChanged={() => {
+											if (selectedWorkspaceId) {
+												void refreshSelectedWorkspaceCollections(
+													selectedWorkspaceId,
+													selectedSessionId,
+												);
+											}
+										}}
+									/>
 
-							<div
-								aria-label="Workspace viewport"
-								className="flex min-h-0 flex-1 flex-col bg-white dark:bg-app-elevated"
-							>
-								<WorkspacePanel
-									workspace={workspaceDetail}
-									sessions={workspaceSessions}
-									selectedSessionId={selectedSessionId}
-									messages={mergedMessages}
-									attachments={sessionAttachments}
-									loadingWorkspace={loadingWorkspace}
-									loadingSession={loadingSession}
-									sending={isSending}
-									onSelectSession={setSelectedSessionId}
-									onSessionsChanged={() => setDataVersion((v) => v + 1)}
-									onWorkspaceChanged={() => {
-										if (selectedWorkspaceId) {
-											void refreshSelectedWorkspaceCollections(
-												selectedWorkspaceId,
-												selectedSessionId,
-											);
-										}
-									}}
-								/>
-
-								<div className="mt-auto px-4 pb-4 pt-0">
-									<SendingStatusBar active={isSending} />
-									<div>
-										<WorkspaceComposer
-											key={composerContextKey}
-											contextKey={composerContextKey}
-											onSubmit={(prompt, imagePaths) => {
-												void handleComposerSubmit(prompt, imagePaths);
-											}}
-											onStop={handleStopStream}
-											sending={isSending}
-											selectedModelId={selectedModelId}
-											modelSections={agentModelSections}
-											onSelectModel={(modelId) => {
-												setComposerModelSelections((current) => ({
-													...current,
-													[composerContextKey]: modelId,
-												}));
-											}}
-											sendError={activeSendError}
-											restoreDraft={
-												composerRestoreState?.contextKey === composerContextKey
-													? composerRestoreState.draft
-													: null
-											}
-											restoreImages={
-												composerRestoreState?.contextKey === composerContextKey
-													? composerRestoreState.images
-													: []
-											}
-											restoreNonce={
-												composerRestoreState?.contextKey === composerContextKey
-													? composerRestoreState.nonce
-													: 0
-											}
-										/>
+									<div className="mt-auto px-4 pb-4 pt-0">
+										<SendingStatusBar active={isSending} />
+										<div>
+											<WorkspaceComposer
+												key={composerContextKey}
+												contextKey={composerContextKey}
+												onSubmit={(prompt, imagePaths) => {
+													void handleComposerSubmit(prompt, imagePaths);
+												}}
+												onStop={handleStopStream}
+												sending={isSending}
+												selectedModelId={selectedModelId}
+												modelSections={agentModelSections}
+												onSelectModel={(modelId) => {
+													void handleModelSelect(modelId);
+												}}
+												sendError={activeSendError}
+												restoreDraft={
+													composerRestoreState?.contextKey ===
+													composerContextKey
+														? composerRestoreState.draft
+														: null
+												}
+												restoreImages={
+													composerRestoreState?.contextKey ===
+													composerContextKey
+														? composerRestoreState.images
+														: []
+												}
+												restoreNonce={
+													composerRestoreState?.contextKey ===
+													composerContextKey
+														? composerRestoreState.nonce
+														: 0
+												}
+											/>
+										</div>
 									</div>
 								</div>
-							</div>
-						</section>
-					</div>
-				</main>
-			)}
-			<ToastViewport />
-			{workspaceToasts.map((toast) => (
-				<Toast
-					key={toast.id}
-					open
-					variant={toast.variant ?? "destructive"}
-					duration={4200}
-					onOpenChange={(open: boolean) => {
-						if (!open) {
-							dismissWorkspaceToast(toast.id);
-						}
-					}}
-				>
-					<div className="grid gap-1">
-						<ToastTitle>{toast.title}</ToastTitle>
-						<ToastDescription>{toast.description}</ToastDescription>
-					</div>
-					<ToastClose aria-label="Dismiss notification" />
-				</Toast>
-			))}
-			<ConductorImportDialog
-				open={importDialogOpen}
-				onClose={() => setImportDialogOpen(false)}
-				onImported={refreshAllData}
+							</section>
+						</div>
+					</main>
+				)}
+				<ToastViewport />
+				{workspaceToasts.map((toast) => (
+					<Toast
+						key={toast.id}
+						open
+						variant={toast.variant ?? "destructive"}
+						duration={4200}
+						onOpenChange={(open: boolean) => {
+							if (!open) {
+								dismissWorkspaceToast(toast.id);
+							}
+						}}
+					>
+						<div className="grid gap-1">
+							<ToastTitle>{toast.title}</ToastTitle>
+							<ToastDescription>{toast.description}</ToastDescription>
+						</div>
+						<ToastClose aria-label="Dismiss notification" />
+					</Toast>
+				))}
+				<ConductorImportDialog
+					open={importDialogOpen}
+					onClose={() => setImportDialogOpen(false)}
+					onImported={refreshAllData}
+				/>
+			</ToastProvider>
+			<SettingsDialog
+				open={settingsOpen}
+				onClose={() => setSettingsOpen(false)}
 			/>
-		</ToastProvider>
+		</SettingsContext.Provider>
 	);
 }
 
