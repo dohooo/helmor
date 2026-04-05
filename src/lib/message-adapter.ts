@@ -25,10 +25,46 @@ export type ThreadMessageLike = {
 	};
 };
 
+type ProjectionCache = {
+	rawSignatures: string[];
+	renderedSignatures: string[];
+	renderedMessages: ThreadMessageLike[];
+};
+
+const projectionCacheBySession = new Map<string, ProjectionCache>();
+
 export function convertMessages(
 	messages: SessionMessageRecord[],
+	sessionId = "__default__",
 ): ThreadMessageLike[] {
-	return groupChildMessages(convertMessagesFlat(messages));
+	const rawSignatures = messages.map(getRawMessageSignature);
+	const cached = projectionCacheBySession.get(sessionId);
+
+	if (cached && arraysEqual(cached.rawSignatures, rawSignatures)) {
+		return cached.renderedMessages;
+	}
+
+	const nextMessages = groupChildMessages(convertMessagesFlat(messages));
+	const renderedSignatures = nextMessages.map(getRenderedMessageSignature);
+	const renderedMessages = nextMessages.map((message, index) => {
+		if (
+			cached?.renderedMessages[index] &&
+			cached.renderedMessages[index]?.id === message.id &&
+			cached.renderedSignatures[index] === renderedSignatures[index]
+		) {
+			return cached.renderedMessages[index];
+		}
+
+		return message;
+	});
+
+	projectionCacheBySession.set(sessionId, {
+		rawSignatures,
+		renderedSignatures,
+		renderedMessages,
+	});
+
+	return renderedMessages;
 }
 
 function convertMessagesFlat(
@@ -437,4 +473,37 @@ function isObj(v: unknown): v is Record<string, unknown> {
 
 function formatCount(value: number): string {
 	return new Intl.NumberFormat("en-US").format(value);
+}
+
+function getRawMessageSignature(message: SessionMessageRecord): string {
+	return [
+		message.id,
+		message.role,
+		message.createdAt,
+		message.contentIsJson ? "1" : "0",
+		message.content,
+	].join("\u0000");
+}
+
+function getRenderedMessageSignature(message: ThreadMessageLike): string {
+	return JSON.stringify({
+		id: message.id ?? null,
+		role: message.role,
+		status: message.status ?? null,
+		content: message.content,
+	});
+}
+
+function arraysEqual(a: string[], b: string[]): boolean {
+	if (a.length !== b.length) {
+		return false;
+	}
+
+	for (let index = 0; index < a.length; index++) {
+		if (a[index] !== b[index]) {
+			return false;
+		}
+	}
+
+	return true;
 }

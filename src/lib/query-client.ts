@@ -13,8 +13,8 @@ import {
 } from "./api";
 
 const NAVIGATION_STALE_TIME = 15_000;
-const WORKSPACE_STALE_TIME = 20_000;
-const SESSION_STALE_TIME = 45_000;
+const WORKSPACE_STALE_TIME = 5 * 60_000;
+const SESSION_STALE_TIME = 10 * 60_000;
 const DEFAULT_GC_TIME = 30 * 60_000;
 const SESSION_GC_TIME = 60 * 60_000;
 
@@ -27,10 +27,10 @@ export const helmorQueryKeys = {
 		["workspaceDetail", workspaceId] as const,
 	workspaceSessions: (workspaceId: string) =>
 		["workspaceSessions", workspaceId] as const,
-	sessionMessages: (workspaceId: string, sessionId: string) =>
-		["sessionMessages", workspaceId, sessionId] as const,
-	sessionAttachments: (workspaceId: string, sessionId: string) =>
-		["sessionAttachments", workspaceId, sessionId] as const,
+	sessionMessages: (sessionId: string) =>
+		["sessionMessages", sessionId] as const,
+	sessionAttachments: (sessionId: string) =>
+		["sessionAttachments", sessionId] as const,
 };
 
 export function createHelmorQueryClient() {
@@ -51,6 +51,7 @@ export function workspaceGroupsQueryOptions() {
 		queryKey: helmorQueryKeys.workspaceGroups,
 		queryFn: loadWorkspaceGroups,
 		initialData: DEFAULT_WORKSPACE_GROUPS,
+		initialDataUpdatedAt: 0,
 		staleTime: NAVIGATION_STALE_TIME,
 	});
 }
@@ -60,6 +61,7 @@ export function archivedWorkspacesQueryOptions() {
 		queryKey: helmorQueryKeys.archivedWorkspaces,
 		queryFn: loadArchivedWorkspaces,
 		initialData: [],
+		initialDataUpdatedAt: 0,
 		staleTime: NAVIGATION_STALE_TIME,
 	});
 }
@@ -69,7 +71,8 @@ export function repositoriesQueryOptions() {
 		queryKey: helmorQueryKeys.repositories,
 		queryFn: listRepositories,
 		initialData: [],
-		staleTime: NAVIGATION_STALE_TIME,
+		initialDataUpdatedAt: 0,
+		staleTime: 5 * 60_000,
 	});
 }
 
@@ -78,6 +81,7 @@ export function agentModelSectionsQueryOptions() {
 		queryKey: helmorQueryKeys.agentModelSections,
 		queryFn: loadAgentModelSections,
 		initialData: DEFAULT_AGENT_MODEL_SECTIONS,
+		initialDataUpdatedAt: 0,
 		staleTime: 5 * 60_000,
 	});
 }
@@ -98,26 +102,20 @@ export function workspaceSessionsQueryOptions(workspaceId: string) {
 	});
 }
 
-export function sessionMessagesQueryOptions(
-	workspaceId: string,
-	sessionId: string,
-) {
+export function sessionMessagesQueryOptions(sessionId: string) {
 	return queryOptions({
-		queryKey: helmorQueryKeys.sessionMessages(workspaceId, sessionId),
+		queryKey: helmorQueryKeys.sessionMessages(sessionId),
 		queryFn: () => loadSessionMessages(sessionId),
 		gcTime: SESSION_GC_TIME,
 		staleTime: SESSION_STALE_TIME,
 	});
 }
 
-export function sessionAttachmentsQueryOptions(
-	workspaceId: string,
-	sessionId: string,
-) {
+export function sessionAttachmentsQueryOptions(sessionId: string) {
 	return queryOptions({
-		queryKey: helmorQueryKeys.sessionAttachments(workspaceId, sessionId),
+		queryKey: helmorQueryKeys.sessionAttachments(sessionId),
 		queryFn: () => loadSessionAttachments(sessionId),
 		gcTime: SESSION_GC_TIME,
-		staleTime: SESSION_STALE_TIME,
+		staleTime: 60_000,
 	});
 }

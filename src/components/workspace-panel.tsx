@@ -31,14 +31,13 @@ import {
 	Suspense,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
 } from "react";
 import { createPortal } from "react-dom";
-import Skeleton, { SkeletonTheme } from "react-loading-skeleton";
 import {
-	type ScrollSeekPlaceholderProps,
 	type StateSnapshot,
 	Virtuoso,
 	type Components as VirtuosoComponents,
@@ -59,10 +58,9 @@ import {
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
+import { recordMessageRender } from "@/lib/dev-render-debug";
 import { convertMessages, type MessagePart } from "@/lib/message-adapter";
-import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
-import { ClaudeIcon, OpenAIIcon } from "./icons";
 import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
 import {
 	DropdownMenu,
@@ -70,22 +68,55 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
+import { ClaudeIcon, OpenAIIcon } from "./icons";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
+import { useSettings } from "@/lib/settings";
 
 type WorkspacePanelProps = {
 	workspace: WorkspaceDetail | null;
 	sessions: WorkspaceSessionSummary[];
 	selectedSessionId: string | null;
 	selectedProvider?: string | null;
-	messages: SessionMessageRecord[];
+	visibleSessionId?: string | null;
+	preparingSessionId?: string | null;
+	coldRevealSessionId?: string | null;
+	sessionPanes: Array<{
+		sessionId: string;
+		messages: SessionMessageRecord[];
+		sending: boolean;
+		hasLoaded: boolean;
+		presentationState: "cold-unpresented" | "presented";
+		viewportSnapshot?: StateSnapshot;
+		layoutCacheKey?: string | null;
+		lastMeasuredAt?: number;
+	}>;
 	attachments?: SessionAttachmentRecord[];
 	loadingWorkspace?: boolean;
 	loadingSession?: boolean;
+	refreshingWorkspace?: boolean;
+	refreshingSession?: boolean;
 	sending?: boolean;
 	onSelectSession?: (sessionId: string) => void;
+	onPrefetchSession?: (sessionId: string) => void;
 	onSessionsChanged?: () => void;
 	onSessionRenamed?: (sessionId: string, title: string) => void;
 	onWorkspaceChanged?: () => void;
+	onSessionMeasurements?: (
+		sessionId: string,
+		payload: {
+			viewportSnapshot?: StateSnapshot;
+			layoutCacheKey?: string | null;
+			lastMeasuredAt?: number;
+		},
+	) => void;
+	onSessionPrepared?: (
+		sessionId: string,
+		payload: {
+			viewportSnapshot?: StateSnapshot;
+			layoutCacheKey?: string | null;
+			lastMeasuredAt?: number;
+		},
+	) => void;
 };
 
 type RenderedMessage = ReturnType<typeof convertMessages>[number];
@@ -98,6 +129,7 @@ const LazyStreamdown = lazy(async () => {
 
 let hasPreloadedStreamdown = false;
 const sessionViewportStateBySession = new Map<string, StateSnapshot>();
+const CHAT_LAYOUT_CACHE_VERSION = "chat-layout-v1";
 
 function preloadStreamdown() {
 	if (hasPreloadedStreamdown) return;
@@ -110,18 +142,28 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	sessions,
 	selectedSessionId,
 	selectedProvider,
-	messages,
+	visibleSessionId = selectedSessionId,
+	preparingSessionId = null,
+	coldRevealSessionId = null,
+	sessionPanes,
 	attachments: _attachments,
 	loadingWorkspace = false,
 	loadingSession = false,
+	refreshingWorkspace: _refreshingWorkspace = false,
+	refreshingSession: _refreshingSession = false,
 	sending = false,
 	onSelectSession,
+	onPrefetchSession,
 	onSessionsChanged,
 	onSessionRenamed,
 	onWorkspaceChanged,
+	onSessionMeasurements,
+	onSessionPrepared,
 }: WorkspacePanelProps) {
 	const selectedSession =
 		sessions.find((s) => s.id === selectedSessionId) ?? null;
+	const visiblePane =
+		sessionPanes.find((pane) => pane.sessionId === visibleSessionId) ?? null;
 	const [showHistory, setShowHistory] = useState(false);
 	const [hiddenSessions, setHiddenSessions] = useState<
 		WorkspaceSessionSummary[]
@@ -146,8 +188,8 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 		async (sessionId: string, e: React.MouseEvent) => {
 			e.stopPropagation();
 			await hideSession(sessionId);
-			// Bump dataVersion → useEffect reloads sessions (without the hidden one)
-			// → setSelectedSessionId fallback picks next visible session automatically
+			// The container invalidates workspace/session queries so selection can
+			// reconcile against the refreshed visible-session list.
 			onSessionsChanged?.();
 		},
 		[onSessionsChanged],
@@ -189,8 +231,8 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	);
 
 	const handleStartRename = useCallback(
-		(session: WorkspaceSessionSummary, e: React.MouseEvent) => {
-			e.stopPropagation();
+		(session: WorkspaceSessionSummary, event: React.MouseEvent) => {
+			event.stopPropagation();
 			setEditingSessionId(session.id);
 			setEditingTitle(displaySessionTitle(session));
 		},
@@ -383,7 +425,13 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 											<TabsTrigger
 												key={session.id}
 												value={session.id}
-												className="group/tab relative gap-1.5 overflow-hidden rounded-[10px] px-3.5 text-[13px] text-app-foreground-soft data-[state=active]:text-app-foreground"
+												onMouseEnter={() => {
+													onPrefetchSession?.(session.id);
+												}}
+												onFocus={() => {
+													onPrefetchSession?.(session.id);
+												}}
+												className="group/tab relative gap-1.5 overflow-hidden rounded-[10px] px-3.5 pr-5 text-[13px] text-app-foreground-soft data-[state=active]:text-app-foreground"
 											>
 												<SessionProviderIcon
 													agentType={
@@ -395,19 +443,21 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 												/>
 												{isEditing ? (
 													<input
-														ref={(el) => el?.focus()}
+														ref={(element) => element?.focus()}
 														value={editingTitle}
-														onChange={(e) => setEditingTitle(e.target.value)}
-														onKeyDown={(e) => {
-															if (e.key === "Enter") {
-																e.preventDefault();
+														onChange={(event) =>
+															setEditingTitle(event.target.value)
+														}
+														onKeyDown={(event) => {
+															if (event.key === "Enter") {
+																event.preventDefault();
 																void handleCommitRename();
-															} else if (e.key === "Escape") {
+															} else if (event.key === "Escape") {
 																handleCancelRename();
 															}
 														}}
 														onBlur={() => void handleCommitRename()}
-														onClick={(e) => e.stopPropagation()}
+														onClick={(event) => event.stopPropagation()}
 														className="w-20 truncate rounded border border-app-border bg-app-base px-1 py-0 text-[13px] font-medium text-app-foreground outline-none focus:border-app-border-strong"
 													/>
 												) : (
@@ -433,7 +483,9 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 														<span
 															role="button"
 															aria-label="Rename session"
-															onClick={(e) => handleStartRename(session, e)}
+															onClick={(event) =>
+																handleStartRename(session, event)
+															}
 															className="flex items-center justify-center rounded-sm p-0.5 hover:bg-app-toolbar-hover"
 														>
 															<Pencil className="size-2.5" strokeWidth={2} />
@@ -441,7 +493,9 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 														<span
 															role="button"
 															aria-label="Close session"
-															onClick={(e) => handleHideSession(session.id, e)}
+															onClick={(event) =>
+																handleHideSession(session.id, event)
+															}
 															className="flex items-center justify-center rounded-sm p-0.5 hover:bg-app-toolbar-hover"
 														>
 															<X className="size-2.5" strokeWidth={2} />
@@ -535,18 +589,18 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 			</header>
 
 			{/* --- Timeline --- */}
-			<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-				{loadingSession ? (
-					<div className="flex items-center gap-2 px-4 py-5 text-sm text-app-muted">
-						<Clock3 className="size-4 animate-pulse" strokeWidth={1.8} />
-						Loading session timeline
-					</div>
-				) : messages.length > 0 ? (
-					<ChatThread
-						key={selectedSessionId ?? "live-thread"}
-						messages={messages}
-						sessionId={selectedSessionId ?? "live-thread"}
-						sending={sending}
+			<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+				{loadingWorkspace || loadingSession ? (
+					<ConversationColdPlaceholder />
+				) : visibleSessionId && visiblePane?.hasLoaded ? (
+					<KeepAliveThreadStack
+						coldRevealSessionId={coldRevealSessionId}
+						visibleSessionId={visibleSessionId}
+						preparingSessionId={preparingSessionId}
+						hasSession={!!selectedSession}
+						sessionPanes={sessionPanes}
+						onSessionMeasurements={onSessionMeasurements}
+						onSessionPrepared={onSessionPrepared}
 					/>
 				) : (
 					<EmptyState hasSession={!!selectedSession} />
@@ -556,26 +610,162 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	);
 });
 
+function KeepAliveThreadStack({
+	coldRevealSessionId,
+	visibleSessionId,
+	preparingSessionId,
+	hasSession,
+	sessionPanes,
+	onSessionMeasurements,
+	onSessionPrepared,
+}: {
+	coldRevealSessionId: string | null;
+	visibleSessionId: string;
+	preparingSessionId: string | null;
+	hasSession: boolean;
+	sessionPanes: Array<{
+		sessionId: string;
+		messages: SessionMessageRecord[];
+		sending: boolean;
+		hasLoaded: boolean;
+		presentationState: "cold-unpresented" | "presented";
+		viewportSnapshot?: StateSnapshot;
+		layoutCacheKey?: string | null;
+		lastMeasuredAt?: number;
+	}>;
+	onSessionMeasurements?: WorkspacePanelProps["onSessionMeasurements"];
+	onSessionPrepared?: WorkspacePanelProps["onSessionPrepared"];
+}) {
+	const stackRef = useRef<HTMLDivElement | null>(null);
+	const [widthBucket, setWidthBucket] = useState(0);
+
+	useLayoutEffect(() => {
+		if (
+			typeof window === "undefined" ||
+			typeof ResizeObserver === "undefined"
+		) {
+			return;
+		}
+
+		const stack = stackRef.current;
+		if (!stack) {
+			return;
+		}
+
+		const updateWidthBucket = () => {
+			const width = stack.clientWidth;
+			setWidthBucket(width > 0 ? Math.max(1, Math.round(width / 32)) : 0);
+		};
+
+		updateWidthBucket();
+		const observer = new ResizeObserver(() => {
+			updateWidthBucket();
+		});
+		observer.observe(stack);
+
+		return () => {
+			observer.disconnect();
+		};
+	}, []);
+
+	return (
+		<div
+			ref={stackRef}
+			className="relative flex min-h-0 flex-1 overflow-hidden"
+		>
+			{sessionPanes.map((pane) => {
+				const mode =
+					pane.sessionId === visibleSessionId
+						? "visible"
+						: pane.sessionId === preparingSessionId
+							? "preparing"
+							: "parked";
+				const layoutCacheKey = getSessionLayoutCacheKey(
+					pane.sessionId,
+					pane.messages,
+					widthBucket,
+				);
+				const initialSnapshot =
+					pane.layoutCacheKey === layoutCacheKey
+						? pane.viewportSnapshot
+						: undefined;
+				return (
+					<div
+						key={pane.sessionId}
+						aria-hidden={mode === "visible" ? undefined : true}
+						className={cn(
+							"min-h-0",
+							mode === "visible"
+								? "relative z-10 flex flex-1"
+								: "absolute inset-0 flex pointer-events-none",
+							mode === "visible" && pane.sessionId === coldRevealSessionId
+								? "conversation-thread-enter"
+								: null,
+						)}
+						style={{
+							opacity: mode === "preparing" ? 0 : 1,
+							visibility: mode === "parked" ? "hidden" : "visible",
+						}}
+					>
+						{pane.messages.length > 0 ? (
+							<ChatThread
+								initialSnapshot={initialSnapshot}
+								layoutCacheKey={layoutCacheKey}
+								messages={pane.messages}
+								mode={mode}
+								onPrepared={onSessionPrepared}
+								onViewportSnapshot={onSessionMeasurements}
+								sessionId={pane.sessionId}
+								sending={pane.sending}
+							/>
+						) : (
+							<div className="flex min-h-0 flex-1 flex-col">
+								<EmptyState hasSession={hasSession} />
+							</div>
+						)}
+					</div>
+				);
+			})}
+		</div>
+	);
+}
+
 // ---------------------------------------------------------------------------
 // Stick-to-bottom powered thread
 // ---------------------------------------------------------------------------
 
 function ChatThread({
+	initialSnapshot,
+	layoutCacheKey,
 	messages,
+	mode,
+	onPrepared,
+	onViewportSnapshot,
 	sessionId,
 	sending,
 }: {
+	initialSnapshot?: StateSnapshot;
+	layoutCacheKey: string;
 	messages: SessionMessageRecord[];
+	mode: "visible" | "preparing" | "parked";
+	onPrepared?: WorkspacePanelProps["onSessionPrepared"];
+	onViewportSnapshot?: WorkspacePanelProps["onSessionMeasurements"];
 	sessionId: string;
 	sending: boolean;
 }) {
-	const threadMessages = useMemo(() => convertMessages(messages), [messages]);
+	const threadMessages = useMemo(
+		() => convertMessages(messages, sessionId),
+		[messages, sessionId],
+	);
 	const virtuosoRef = useRef<VirtuosoHandle | null>(null);
 	const [isAtBottom, setIsAtBottom] = useState(true);
-	const [isPositioning, setIsPositioning] = useState(true);
+	const isAtBottomRef = useRef(true);
+	const preparePhaseRef = useRef<"idle" | "waiting-bottom">("idle");
+	const prepareRunIdRef = useRef(0);
+	const prepareFinishRef = useRef<(() => void) | null>(null);
 	const restoredViewportState = useMemo(
-		() => sessionViewportStateBySession.get(sessionId),
-		[sessionId],
+		() => initialSnapshot ?? sessionViewportStateBySession.get(sessionId),
+		[initialSnapshot, sessionId],
 	);
 	const previousSendingRef = useRef(sending);
 	const sendingJustStarted = sending && !previousSendingRef.current;
@@ -608,6 +798,10 @@ function ChatThread({
 	}, [sending]);
 
 	useEffect(() => {
+		isAtBottomRef.current = isAtBottom;
+	}, [isAtBottom]);
+
+	useEffect(() => {
 		return () => {
 			const virtuoso = virtuosoRef.current;
 			if (!virtuoso) return;
@@ -628,6 +822,40 @@ function ChatThread({
 		});
 	}, []);
 
+	const captureViewportSnapshot = useCallback(
+		(
+			callback?: (payload: {
+				viewportSnapshot?: StateSnapshot;
+				layoutCacheKey?: string | null;
+				lastMeasuredAt?: number;
+			}) => void,
+		) => {
+			const virtuoso = virtuosoRef.current;
+			if (!virtuoso) {
+				const payload = {
+					viewportSnapshot: undefined,
+					layoutCacheKey,
+					lastMeasuredAt: Date.now(),
+				};
+				onViewportSnapshot?.(sessionId, payload);
+				callback?.(payload);
+				return;
+			}
+
+			virtuoso.getState((snapshot) => {
+				sessionViewportStateBySession.set(sessionId, snapshot);
+				const payload = {
+					viewportSnapshot: snapshot,
+					layoutCacheKey,
+					lastMeasuredAt: Date.now(),
+				};
+				onViewportSnapshot?.(sessionId, payload);
+				callback?.(payload);
+			});
+		},
+		[layoutCacheKey, onViewportSnapshot, sessionId],
+	);
+
 	useEffect(() => {
 		if (sendingJustStarted) {
 			scrollThreadToBottom();
@@ -635,22 +863,104 @@ function ChatThread({
 	}, [sendingJustStarted, scrollThreadToBottom]);
 
 	useEffect(() => {
-		if (!restoredViewportState) return;
-		scrollThreadToBottom();
-	}, [restoredViewportState, scrollThreadToBottom]);
+		return () => {
+			if (mode === "visible" || mode === "preparing") {
+				captureViewportSnapshot();
+			}
+		};
+	}, [captureViewportSnapshot, mode]);
+
+	useEffect(() => {
+		if (mode !== "preparing" || typeof window === "undefined") {
+			preparePhaseRef.current = "idle";
+			prepareFinishRef.current = null;
+			return;
+		}
+
+		prepareRunIdRef.current += 1;
+		const runId = prepareRunIdRef.current;
+		let frameId = 0;
+		let nestedFrameId = 0;
+		let settleFrameId = 0;
+		let timeoutId = 0;
+		const finishPrepare = () => {
+			if (prepareRunIdRef.current !== runId) {
+				return;
+			}
+
+			preparePhaseRef.current = "idle";
+			captureViewportSnapshot((payload) => {
+				if (prepareRunIdRef.current !== runId) {
+					return;
+				}
+				onPrepared?.(sessionId, payload);
+			});
+		};
+
+		prepareFinishRef.current = finishPrepare;
+		frameId = window.requestAnimationFrame(() => {
+			nestedFrameId = window.requestAnimationFrame(() => {
+				scrollThreadToBottom();
+				preparePhaseRef.current = "waiting-bottom";
+				settleFrameId = window.requestAnimationFrame(() => {
+					if (isAtBottomRef.current) {
+						finishPrepare();
+						return;
+					}
+
+					timeoutId = window.setTimeout(() => {
+						finishPrepare();
+					}, 64);
+				});
+			});
+		});
+
+		return () => {
+			if (frameId !== 0) {
+				window.cancelAnimationFrame(frameId);
+			}
+			if (nestedFrameId !== 0) {
+				window.cancelAnimationFrame(nestedFrameId);
+			}
+			if (settleFrameId !== 0) {
+				window.cancelAnimationFrame(settleFrameId);
+			}
+			if (timeoutId !== 0) {
+				window.clearTimeout(timeoutId);
+			}
+			if (prepareRunIdRef.current === runId) {
+				preparePhaseRef.current = "idle";
+				prepareFinishRef.current = null;
+			}
+		};
+	}, [
+		captureViewportSnapshot,
+		layoutCacheKey,
+		mode,
+		onPrepared,
+		scrollThreadToBottom,
+		sessionId,
+		threadMessages,
+	]);
+
+	useEffect(() => {
+		if (
+			mode === "preparing" &&
+			preparePhaseRef.current === "waiting-bottom" &&
+			isAtBottom
+		) {
+			prepareFinishRef.current?.();
+		}
+	}, [isAtBottom, mode]);
 
 	const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
 		setIsAtBottom(atBottom);
-		if (atBottom) {
-			setIsPositioning(false);
-		}
 	}, []);
 
 	const virtuosoComponents = useMemo<VirtuosoComponents<RenderedMessage>>(
 		() => ({
 			Header: ConversationHeaderSpacer,
 			Item: ConversationItem,
-			ScrollSeekPlaceholder: ConversationScrollSeekPlaceholder,
 		}),
 		[],
 	);
@@ -659,11 +969,12 @@ function ChatThread({
 		(index: number, message: RenderedMessage) => (
 			<MemoConversationMessage
 				message={message}
+				sessionId={sessionId}
 				streaming={message.id === streamingMessageId}
 				itemIndex={index}
 			/>
 		),
-		[streamingMessageId],
+		[sessionId, streamingMessageId],
 	);
 
 	return (
@@ -671,7 +982,6 @@ function ChatThread({
 			components={virtuosoComponents}
 			data={threadMessages}
 			followOutput={(atBottom) => (sending && atBottom ? "auto" : false)}
-			isPositioning={isPositioning}
 			itemContent={itemContent}
 			onAtBottomStateChange={handleAtBottomStateChange}
 			restoredViewportState={restoredViewportState}
@@ -703,7 +1013,6 @@ function ConversationViewport({
 	components,
 	data,
 	followOutput,
-	isPositioning,
 	itemContent,
 	onAtBottomStateChange,
 	restoredViewportState,
@@ -713,19 +1022,13 @@ function ConversationViewport({
 	components: VirtuosoComponents<RenderedMessage>;
 	data: RenderedMessage[];
 	followOutput: "auto" | false | ((isAtBottom: boolean) => "auto" | false);
-	isPositioning: boolean;
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
 	onAtBottomStateChange: (atBottom: boolean) => void;
 	restoredViewportState?: StateSnapshot;
 	virtuosoRef: React.RefObject<VirtuosoHandle | null>;
 }) {
 	return (
-		<div
-			className={cn(
-				"relative flex min-h-0 flex-1 overflow-hidden",
-				isPositioning ? "opacity-0" : "opacity-100",
-			)}
-		>
+		<div className="relative flex min-h-0 flex-1 overflow-hidden">
 			<Virtuoso
 				ref={virtuosoRef}
 				alignToBottom
@@ -747,16 +1050,43 @@ function ConversationViewport({
 				minOverscanItemCount={{ top: 8, bottom: 4 }}
 				overscan={{ main: 600, reverse: 300 }}
 				restoreStateFrom={restoredViewportState}
-				scrollSeekConfiguration={{
-					enter: (velocity) => Math.abs(velocity) > 2200,
-					exit: (velocity) => Math.abs(velocity) < 180,
-				}}
 				skipAnimationFrameInResizeObserver
 				style={{ height: "100%", width: "100%" }}
 			/>
 			{children}
 		</div>
 	);
+}
+
+function getSessionLayoutCacheKey(
+	sessionId: string,
+	messages: SessionMessageRecord[],
+	widthBucket: number,
+) {
+	let hash = 0;
+
+	for (const message of messages) {
+		const signature = [
+			message.id,
+			message.role,
+			message.createdAt,
+			message.contentIsJson ? "json" : "text",
+			String(message.content.length),
+			String(message.attachmentCount ?? 0),
+		].join("|");
+
+		for (let index = 0; index < signature.length; index += 1) {
+			hash = (hash * 31 + signature.charCodeAt(index)) >>> 0;
+		}
+	}
+
+	return [
+		CHAT_LAYOUT_CACHE_VERSION,
+		sessionId,
+		String(widthBucket),
+		String(messages.length),
+		String(hash),
+	].join(":");
 }
 
 const ConversationItem = memo(function ConversationItem({
@@ -772,43 +1102,8 @@ const ConversationItem = memo(function ConversationItem({
 	);
 });
 
-function ConversationScrollSeekPlaceholder({
-	height,
-	index,
-}: ScrollSeekPlaceholderProps) {
-	const isUserLike = index % 3 === 1;
-	const width = isUserLike
-		? "36%"
-		: index % 5 === 0
-			? "44%"
-			: index % 2 === 0
-				? "62%"
-				: "52%";
-
-	return (
-		<div className="box-border h-full px-5 pb-1.5" style={{ height }}>
-			<div
-				className={cn(
-					"flex h-full items-center",
-					isUserLike ? "justify-end" : "justify-start",
-				)}
-			>
-				<div style={{ width }}>
-					<SkeletonTheme
-						baseColor="color-mix(in oklch, var(--color-app-foreground) 10%, var(--color-app-base))"
-						highlightColor="color-mix(in oklch, var(--color-app-foreground) 18%, var(--color-app-base))"
-						duration={1.15}
-					>
-						<Skeleton
-							height="100%"
-							borderRadius={10}
-							containerClassName="block h-full leading-none"
-						/>
-					</SkeletonTheme>
-				</div>
-			</div>
-		</div>
-	);
+function ConversationColdPlaceholder() {
+	return <div className="flex min-h-0 flex-1" aria-hidden="true" />;
 }
 
 function ConversationHeaderSpacer() {
@@ -817,13 +1112,17 @@ function ConversationHeaderSpacer() {
 
 function ConversationMessage({
 	message,
+	sessionId,
 	streaming,
-	itemIndex: _itemIndex,
+	itemIndex,
 }: {
 	message: RenderedMessage;
+	sessionId: string;
 	streaming: boolean;
 	itemIndex: number;
 }) {
+	recordMessageRender(sessionId, message.id ?? `${message.role}:${itemIndex}`);
+
 	if (message.role === "user") {
 		return <ChatUserMessage message={message} />;
 	}
@@ -838,6 +1137,7 @@ function ConversationMessage({
 const MemoConversationMessage = memo(ConversationMessage, (prev, next) => {
 	return (
 		prev.message === next.message &&
+		prev.sessionId === next.sessionId &&
 		prev.streaming === next.streaming &&
 		prev.itemIndex === next.itemIndex
 	);
@@ -1550,7 +1850,7 @@ function EmptyState({ hasSession }: { hasSession: boolean }) {
 			</p>
 			<p className="mt-2 max-w-[30rem] text-[13px] leading-6 text-app-muted">
 				{hasSession
-					? "This session does not have any messages yet."
+					? "This session does not have stored timeline events in the current fixture."
 					: "Choose a session from the header to inspect its timeline."}
 			</p>
 		</div>

@@ -1,12 +1,15 @@
 import "./App.css";
 import { MarkGithubIcon } from "@primer/octicons-react";
-import { open } from "@tauri-apps/plugin-dialog";
+import {
+	QueryClientProvider,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Download, Moon, RefreshCw, Sun } from "lucide-react";
 import {
 	type KeyboardEvent,
 	type MouseEvent,
-	memo,
 	startTransition,
 	useCallback,
 	useEffect,
@@ -23,7 +26,6 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "./components/ui/dropdown-menu";
-import { ShimmerText } from "./components/ui/shimmer-text";
 import {
 	Toast,
 	ToastClose,
@@ -32,51 +34,32 @@ import {
 	ToastTitle,
 	ToastViewport,
 } from "./components/ui/toast";
-import { WorkspaceComposer } from "./components/workspace-composer";
-import { WorkspacePanel } from "./components/workspace-panel";
-import { WorkspacesSidebar } from "./components/workspaces-sidebar";
+import { WorkspaceConversationContainer } from "./components/workspace-conversation-container";
+import { WorkspacesSidebarContainer } from "./components/workspaces-sidebar-container";
 import {
-	type AgentModelOption,
-	type AgentModelSection,
-	addRepositoryFromLocalPath,
-	archiveWorkspace,
 	cancelGithubIdentityConnect,
-	createSession,
-	createWorkspaceFromRepo,
-	DEFAULT_AGENT_MODEL_SECTIONS,
-	DEFAULT_WORKSPACE_GROUPS,
 	disconnectGithubIdentity,
 	type GithubIdentityDeviceFlowStart,
 	type GithubIdentitySnapshot,
 	hasTauriRuntime,
 	isConductorAvailable,
-	listenAgentStream,
 	listenGithubIdentityChanged,
-	listRepositories,
-	loadAddRepositoryDefaults,
-	loadAgentModelSections,
-	loadArchivedWorkspaces,
 	loadGithubIdentitySession,
-	loadSessionAttachments,
-	loadSessionMessages,
-	loadWorkspaceDetail,
-	loadWorkspaceGroups,
-	loadWorkspaceSessions,
-	markWorkspaceRead,
-	markWorkspaceUnread,
-	type RepositoryCreateOption,
-	restoreWorkspace,
-	type SessionAttachmentRecord,
-	type SessionMessageRecord,
-	startAgentMessageStream,
 	startGithubIdentityConnect,
-	stopAgentStream,
 	type WorkspaceDetail,
 	type WorkspaceGroup,
 	type WorkspaceRow,
 	type WorkspaceSessionSummary,
-	type WorkspaceSummary,
 } from "./lib/api";
+import {
+	archivedWorkspacesQueryOptions,
+	createHelmorQueryClient,
+	helmorQueryKeys,
+	sessionMessagesQueryOptions,
+	workspaceDetailQueryOptions,
+	workspaceGroupsQueryOptions,
+	workspaceSessionsQueryOptions,
+} from "./lib/query-client";
 import {
 	type AppSettings,
 	DEFAULT_SETTINGS,
@@ -84,7 +67,10 @@ import {
 	SettingsContext,
 	saveSettings,
 } from "./lib/settings";
-import { StreamAccumulator } from "./lib/stream-accumulator";
+import {
+	describeUnknownError,
+	summaryToArchivedRow,
+} from "./lib/workspace-helpers";
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "helmor.workspaceSidebarWidth";
 const DEFAULT_SIDEBAR_WIDTH = 336;
@@ -92,8 +78,13 @@ const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 520;
 const SIDEBAR_RESIZE_STEP = 16;
 const SIDEBAR_RESIZE_HIT_AREA = 20;
-const DEFAULT_CLAUDE_MODEL_ID = "opus-1m";
-const DEFAULT_CODEX_MODEL_ID = "gpt-5.4";
+const WORKSPACE_NAVIGATION_ORDER = [
+	"done",
+	"review",
+	"progress",
+	"backlog",
+	"canceled",
+] as const;
 
 type WorkspaceToast = {
 	id: string;
@@ -155,15 +146,86 @@ function getInitialGithubIdentityState(): GithubIdentityState {
 	return { status: "checking" };
 }
 
+function findAdjacentSessionId(
+	workspaceSessions: WorkspaceSessionSummary[],
+	selectedSessionId: string | null,
+	offset: -1 | 1,
+) {
+	if (!selectedSessionId || workspaceSessions.length < 2) {
+		return null;
+	}
+
+	const currentIndex = workspaceSessions.findIndex(
+		(session) => session.id === selectedSessionId,
+	);
+
+	if (currentIndex === -1) {
+		return null;
+	}
+
+	const nextIndex = currentIndex + offset;
+
+	if (nextIndex < 0 || nextIndex >= workspaceSessions.length) {
+		return null;
+	}
+
+	return workspaceSessions[nextIndex]?.id ?? null;
+}
+
+function flattenWorkspaceRows(
+	groups: WorkspaceGroup[],
+	archivedRows: WorkspaceRow[],
+) {
+	const orderedRows = WORKSPACE_NAVIGATION_ORDER.flatMap((tone) =>
+		groups
+			.filter((group) => group.tone === tone)
+			.flatMap((group) => group.rows),
+	);
+
+	return [...orderedRows, ...archivedRows];
+}
+
+function findAdjacentWorkspaceId(
+	groups: WorkspaceGroup[],
+	archivedRows: WorkspaceRow[],
+	selectedWorkspaceId: string | null,
+	offset: -1 | 1,
+) {
+	if (!selectedWorkspaceId) {
+		return null;
+	}
+
+	const rows = flattenWorkspaceRows(groups, archivedRows);
+
+	if (rows.length < 2) {
+		return null;
+	}
+
+	const currentIndex = rows.findIndex((row) => row.id === selectedWorkspaceId);
+
+	if (currentIndex === -1) {
+		return null;
+	}
+
+	const nextIndex = currentIndex + offset;
+
+	if (nextIndex < 0 || nextIndex >= rows.length) {
+		return null;
+	}
+
+	return rows[nextIndex]?.id ?? null;
+}
+
 function App() {
 	const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [queryClient] = useState(() => createHelmorQueryClient());
 	const settingsContextValue = useMemo(
 		() => ({
 			settings: appSettings,
 			updateSettings: (patch: Partial<AppSettings>) => {
-				setAppSettings((prev) => {
-					const next = { ...prev, ...patch };
+				setAppSettings((previous) => {
+					const next = { ...previous, ...patch };
 					void saveSettings(patch);
 					return next;
 				});
@@ -172,11 +234,30 @@ function App() {
 		[appSettings],
 	);
 
-	// Load settings from DB on mount
 	useEffect(() => {
 		void loadSettings().then(setAppSettings);
 	}, []);
 
+	return (
+		<SettingsContext.Provider value={settingsContextValue}>
+			<QueryClientProvider client={queryClient}>
+				<AppShell onOpenSettings={() => setSettingsOpen(true)} />
+			</QueryClientProvider>
+			<SettingsDialog
+				open={settingsOpen}
+				onClose={() => setSettingsOpen(false)}
+			/>
+		</SettingsContext.Provider>
+	);
+}
+
+function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
+	const queryClient = useQueryClient();
+	const workspaceSelectionRequestRef = useRef(0);
+	const sessionSelectionRequestRef = useRef(0);
+	const startupPrefetchedWorkspaceRef = useRef<string | null>(null);
+	const selectedWorkspaceIdRef = useRef<string | null>(null);
+	const selectedSessionIdRef = useRef<string | null>(null);
 	const [githubIdentityState, setGithubIdentityState] =
 		useState<GithubIdentityState>(getInitialGithubIdentityState);
 	const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
@@ -184,89 +265,20 @@ function App() {
 		pointerX: number;
 		sidebarWidth: number;
 	} | null>(null);
-	const [groups, setGroups] = useState<WorkspaceGroup[]>(
-		DEFAULT_WORKSPACE_GROUPS,
-	);
-	const [archivedSummaries, setArchivedSummaries] = useState<
-		WorkspaceSummary[]
-	>([]);
-	const [repositories, setRepositories] = useState<RepositoryCreateOption[]>(
-		[],
-	);
 	const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
-		findInitialWorkspaceId(DEFAULT_WORKSPACE_GROUPS),
+		null,
 	);
+	const [displayedWorkspaceId, setDisplayedWorkspaceId] = useState<
+		string | null
+	>(null);
 	const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
 		null,
 	);
-	const [workspaceDetail, setWorkspaceDetail] =
-		useState<WorkspaceDetail | null>(null);
-	const [workspaceSessions, setWorkspaceSessions] = useState<
-		WorkspaceSessionSummary[]
-	>([]);
-	const [sessionMessages, setSessionMessages] = useState<
-		SessionMessageRecord[]
-	>([]);
-	const [sessionAttachments, setSessionAttachments] = useState<
-		SessionAttachmentRecord[]
-	>([]);
-	const [agentModelSections, setAgentModelSections] = useState<
-		AgentModelSection[]
-	>(DEFAULT_AGENT_MODEL_SECTIONS);
-	const [composerModelSelections, setComposerModelSelections] = useState<
-		Record<string, string>
-	>({});
-	const [composerEffortLevels, setComposerEffortLevels] = useState<
-		Record<string, string>
-	>({});
-	const [composerPermissionModes, setComposerPermissionModes] = useState<
-		Record<string, string>
-	>({});
-	const [composerRestoreState, setComposerRestoreState] = useState<{
-		contextKey: string;
-		draft: string;
-		images: string[];
-		nonce: number;
-	} | null>(null);
-	const [liveMessagesByContext, setLiveMessagesByContext] = useState<
-		Record<string, SessionMessageRecord[]>
-	>({});
-	const [liveSessionsByContext, setLiveSessionsByContext] = useState<
-		Record<string, { provider: string; sessionId?: string | null }>
-	>({});
-	const [sendErrorsByContext, setSendErrorsByContext] = useState<
-		Record<string, string | null>
-	>({});
-	const [sendingContextKeys, setSendingContextKeys] = useState<
-		Record<string, boolean>
-	>({});
-	// Track active sidecar session IDs for stop functionality
-	const [activeSessionByContext, setActiveSessionByContext] = useState<
-		Record<string, { sessionId: string; provider: string }>
-	>({});
-	const [markingReadWorkspaceId, setMarkingReadWorkspaceId] = useState<
-		string | null
-	>(null);
-	const [markingUnreadWorkspaceId, setMarkingUnreadWorkspaceId] = useState<
-		string | null
-	>(null);
-	const [deferredWorkspaceReadClearId, setDeferredWorkspaceReadClearId] =
-		useState<string | null>(null);
-	const [archivingWorkspaceId, setArchivingWorkspaceId] = useState<
-		string | null
-	>(null);
-	const [restoringWorkspaceId, setRestoringWorkspaceId] = useState<
-		string | null
-	>(null);
-	const [addingRepository, setAddingRepository] = useState(false);
-	const [creatingWorkspaceRepoId, setCreatingWorkspaceRepoId] = useState<
-		string | null
-	>(null);
+	const [displayedSessionId, setDisplayedSessionId] = useState<string | null>(
+		null,
+	);
 	const [workspaceToasts, setWorkspaceToasts] = useState<WorkspaceToast[]>([]);
 	const openedGithubDeviceCodesRef = useRef<Set<string>>(new Set());
-	const [loadingWorkspace, setLoadingWorkspace] = useState(false);
-	const [loadingSession, setLoadingSession] = useState(false);
-	const [dataVersion, setDataVersion] = useState(0);
 	const [theme, setTheme] = useState<"light" | "dark">(() => {
 		if (typeof window === "undefined") return "dark";
 		return (localStorage.getItem("helmor.theme") as "light" | "dark") ?? "dark";
@@ -275,6 +287,19 @@ function App() {
 	const [importDialogOpen, setImportDialogOpen] = useState(false);
 	const isResizing = resizeState !== null;
 	const isIdentityConnected = githubIdentityState.status === "connected";
+	const navigationGroupsQuery = useQuery({
+		...workspaceGroupsQueryOptions(),
+		enabled: isIdentityConnected,
+	});
+	const navigationArchivedQuery = useQuery({
+		...archivedWorkspacesQueryOptions(),
+		enabled: isIdentityConnected,
+	});
+	const workspaceGroups = navigationGroupsQuery.data ?? [];
+	const archivedRows = useMemo(
+		() => (navigationArchivedQuery.data ?? []).map(summaryToArchivedRow),
+		[navigationArchivedQuery.data],
+	);
 
 	useEffect(() => {
 		void isConductorAvailable().then(setConductorAvailable);
@@ -314,22 +339,21 @@ function App() {
 	}, []);
 
 	const clearWorkspaceRuntimeState = useCallback(() => {
+		selectedWorkspaceIdRef.current = null;
+		selectedSessionIdRef.current = null;
 		setSelectedWorkspaceId(null);
+		setDisplayedWorkspaceId(null);
 		setSelectedSessionId(null);
-		setWorkspaceDetail(null);
-		setWorkspaceSessions([]);
-		setSessionMessages([]);
-		setSessionAttachments([]);
-		setRepositories([]);
-		setLiveMessagesByContext({});
-		setLiveSessionsByContext({});
-		setSendErrorsByContext({});
-		setSendingContextKeys({});
-		setActiveSessionByContext({});
-		setLoadingWorkspace(false);
-		setLoadingSession(false);
-		setDataVersion(0);
+		setDisplayedSessionId(null);
 	}, []);
+
+	useEffect(() => {
+		selectedWorkspaceIdRef.current = selectedWorkspaceId;
+	}, [selectedWorkspaceId]);
+
+	useEffect(() => {
+		selectedSessionIdRef.current = selectedSessionId;
+	}, [selectedSessionId]);
 
 	useEffect(() => {
 		document.documentElement.classList.toggle("dark", theme === "dark");
@@ -403,48 +427,6 @@ function App() {
 		clearWorkspaceRuntimeState();
 	}, [clearWorkspaceRuntimeState, githubIdentityState.status]);
 
-	const archivedRows = useMemo(
-		() => archivedSummaries.map(summaryToArchivedRow),
-		[archivedSummaries],
-	);
-	const selectedSession =
-		workspaceSessions.find((session) => session.id === selectedSessionId) ??
-		null;
-	const composerContextKey = getComposerContextKey(
-		selectedWorkspaceId,
-		selectedSessionId,
-	);
-	const selectedModelId =
-		composerModelSelections[composerContextKey] ??
-		inferDefaultModelId(selectedSession, agentModelSections);
-	const selectedModel = findModelOption(agentModelSections, selectedModelId);
-	const isOpusModel =
-		selectedModelId === "opus-1m" || selectedModelId === "opus";
-	const rawEffortLevel =
-		composerEffortLevels[composerContextKey] ??
-		selectedSession?.effortLevel ??
-		"high";
-	const currentEffortLevel = (() => {
-		let level = rawEffortLevel;
-		if (selectedModel?.provider === "codex") {
-			if (level === "max") level = "xhigh";
-		} else {
-			if (level === "xhigh") level = isOpusModel ? "max" : "high";
-			if (level === "minimal") level = "low";
-			if (level === "max" && !isOpusModel) level = "high";
-		}
-		return level;
-	})();
-	const currentPermissionMode =
-		composerPermissionModes[composerContextKey] ?? "acceptEdits";
-	const liveMessages = liveMessagesByContext[composerContextKey] ?? [];
-	const mergedMessages = useMemo(
-		() => [...sessionMessages, ...liveMessages],
-		[sessionMessages, liveMessages],
-	);
-	const activeSendError = sendErrorsByContext[composerContextKey] ?? null;
-	const isSending = sendingContextKeys[composerContextKey] ?? false;
-
 	useEffect(() => {
 		try {
 			window.localStorage.setItem(
@@ -487,323 +469,6 @@ function App() {
 			window.removeEventListener("mouseup", handleMouseUp);
 		};
 	}, [resizeState]);
-
-	useEffect(() => {
-		if (!isIdentityConnected) {
-			return;
-		}
-
-		let disposed = false;
-
-		void Promise.all([
-			loadWorkspaceGroups(),
-			loadArchivedWorkspaces(),
-			loadAgentModelSections(),
-			listRepositories(),
-		]).then(
-			([
-				loadedGroups,
-				loadedArchived,
-				loadedModelSections,
-				loadedRepositories,
-			]) => {
-				if (disposed) {
-					return;
-				}
-
-				setGroups(loadedGroups);
-				setArchivedSummaries(loadedArchived);
-				setAgentModelSections(loadedModelSections);
-				setRepositories(loadedRepositories);
-				setSelectedWorkspaceId((current) => {
-					if (
-						current &&
-						hasWorkspaceId(current, loadedGroups, loadedArchived)
-					) {
-						return current;
-					}
-
-					return (
-						findInitialWorkspaceId(loadedGroups) ??
-						loadedArchived[0]?.id ??
-						null
-					);
-				});
-			},
-		);
-
-		return () => {
-			disposed = true;
-		};
-	}, [isIdentityConnected]);
-
-	const refreshAllData = useCallback(() => {
-		if (!isIdentityConnected) {
-			return;
-		}
-
-		void Promise.all([
-			loadWorkspaceGroups(),
-			loadArchivedWorkspaces(),
-			listRepositories(),
-		]).then(([loadedGroups, loadedArchived, loadedRepositories]) => {
-			setGroups(loadedGroups);
-			setArchivedSummaries(loadedArchived);
-			setRepositories(loadedRepositories);
-
-			// Auto-select first workspace if none is currently selected
-			setSelectedWorkspaceId((current) => {
-				if (current && hasWorkspaceId(current, loadedGroups, loadedArchived)) {
-					return current;
-				}
-				return (
-					findInitialWorkspaceId(loadedGroups) ?? loadedArchived[0]?.id ?? null
-				);
-			});
-
-			// Bump dataVersion to force workspace detail + session useEffects to re-run
-			setDataVersion((v) => v + 1);
-		});
-	}, [isIdentityConnected]);
-
-	useEffect(() => {
-		if (!isIdentityConnected) {
-			return;
-		}
-
-		if (!selectedWorkspaceId) {
-			setWorkspaceDetail(null);
-			setWorkspaceSessions([]);
-			setSelectedSessionId(null);
-			return;
-		}
-
-		let disposed = false;
-		setLoadingWorkspace(true);
-
-		void Promise.all([
-			loadWorkspaceDetail(selectedWorkspaceId),
-			loadWorkspaceSessions(selectedWorkspaceId),
-		]).then(([detail, sessions]) => {
-			if (disposed) {
-				return;
-			}
-
-			setWorkspaceDetail(detail);
-			setWorkspaceSessions(sessions);
-			setSelectedSessionId((current) => {
-				if (current && sessions.some((session) => session.id === current)) {
-					return current;
-				}
-
-				return (
-					detail?.activeSessionId ??
-					sessions.find((session) => session.active)?.id ??
-					sessions[0]?.id ??
-					null
-				);
-			});
-			setLoadingWorkspace(false);
-		});
-
-		return () => {
-			disposed = true;
-		};
-	}, [dataVersion, isIdentityConnected, selectedWorkspaceId]);
-
-	useEffect(() => {
-		if (!isIdentityConnected) {
-			return;
-		}
-
-		if (!selectedSessionId) {
-			setSessionMessages([]);
-			setSessionAttachments([]);
-			return;
-		}
-
-		let disposed = false;
-		setLoadingSession(true);
-
-		void Promise.all([
-			loadSessionMessages(selectedSessionId),
-			loadSessionAttachments(selectedSessionId),
-		]).then(([messages, attachments]) => {
-			if (disposed) {
-				return;
-			}
-
-			setSessionMessages(messages);
-			setSessionAttachments(attachments);
-			setLoadingSession(false);
-		});
-
-		return () => {
-			disposed = true;
-		};
-	}, [dataVersion, isIdentityConnected, selectedSessionId]);
-
-	const refreshSelectedWorkspaceCollections = useCallback(
-		async (workspaceId: string, preferredSessionId: string | null) => {
-			const [detail, sessions, loadedGroups, loadedArchived] =
-				await Promise.all([
-					loadWorkspaceDetail(workspaceId),
-					loadWorkspaceSessions(workspaceId),
-					loadWorkspaceGroups(),
-					loadArchivedWorkspaces(),
-				]);
-
-			setWorkspaceDetail(detail);
-			setWorkspaceSessions(sessions);
-			setGroups(loadedGroups);
-			setArchivedSummaries(loadedArchived);
-
-			const resolvedSessionId =
-				preferredSessionId &&
-				sessions.some((session) => session.id === preferredSessionId)
-					? preferredSessionId
-					: (detail?.activeSessionId ??
-						sessions.find((session) => session.active)?.id ??
-						sessions[0]?.id ??
-						null);
-
-			setSelectedSessionId(resolvedSessionId);
-		},
-		[],
-	);
-
-	const refreshWorkspaceNavigation = useCallback(async () => {
-		const [loadedGroups, loadedArchived, loadedRepositories] =
-			await Promise.all([
-				loadWorkspaceGroups(),
-				loadArchivedWorkspaces(),
-				listRepositories(),
-			]);
-
-		setGroups(loadedGroups);
-		setArchivedSummaries(loadedArchived);
-		setRepositories(loadedRepositories);
-
-		return {
-			loadedGroups,
-			loadedArchived,
-			loadedRepositories,
-		};
-	}, []);
-
-	const hydrateWorkspaceSelection = useCallback(
-		async (workspaceId: string | null) => {
-			setSelectedWorkspaceId(workspaceId);
-
-			if (!workspaceId) {
-				setWorkspaceDetail(null);
-				setWorkspaceSessions([]);
-				setSelectedSessionId(null);
-				setSessionMessages([]);
-				setSessionAttachments([]);
-				return;
-			}
-
-			setLoadingWorkspace(true);
-			const [detail, sessions] = await Promise.all([
-				loadWorkspaceDetail(workspaceId),
-				loadWorkspaceSessions(workspaceId),
-			]);
-			const nextSessionId =
-				detail?.activeSessionId ??
-				sessions.find((session) => session.active)?.id ??
-				sessions[0]?.id ??
-				null;
-
-			setWorkspaceDetail(detail);
-			setWorkspaceSessions(sessions);
-			setSelectedSessionId(nextSessionId);
-			setLoadingWorkspace(false);
-
-			if (!nextSessionId) {
-				setSessionMessages([]);
-				setSessionAttachments([]);
-				return;
-			}
-
-			setLoadingSession(true);
-			const [messages, attachments] = await Promise.all([
-				loadSessionMessages(nextSessionId),
-				loadSessionAttachments(nextSessionId),
-			]);
-			setSessionMessages(messages);
-			setSessionAttachments(attachments);
-			setLoadingSession(false);
-		},
-		[],
-	);
-
-	useEffect(() => {
-		if (!isIdentityConnected) {
-			return;
-		}
-
-		if (!selectedWorkspaceId || loadingWorkspace || loadingSession) {
-			return;
-		}
-
-		let disposed = false;
-
-		const syncUnreadState = async () => {
-			if (
-				((workspaceDetail?.workspaceUnread ?? 0) > 0 ||
-					(workspaceDetail?.sessionUnreadTotal ?? 0) > 0) &&
-				deferredWorkspaceReadClearId !== selectedWorkspaceId &&
-				markingReadWorkspaceId !== selectedWorkspaceId
-			) {
-				setMarkingReadWorkspaceId(selectedWorkspaceId);
-
-				try {
-					await markWorkspaceRead(selectedWorkspaceId);
-
-					if (!disposed) {
-						await refreshSelectedWorkspaceCollections(
-							selectedWorkspaceId,
-							null,
-						);
-					}
-				} catch (error) {
-					console.error("Failed to mark workspace as read", error);
-				} finally {
-					if (!disposed) {
-						setMarkingReadWorkspaceId((current) =>
-							current === selectedWorkspaceId ? null : current,
-						);
-					}
-				}
-			}
-		};
-
-		void syncUnreadState();
-
-		return () => {
-			disposed = true;
-		};
-	}, [
-		loadingSession,
-		loadingWorkspace,
-		markingReadWorkspaceId,
-		deferredWorkspaceReadClearId,
-		refreshSelectedWorkspaceCollections,
-		selectedWorkspaceId,
-		workspaceDetail?.sessionUnreadTotal,
-		workspaceDetail?.workspaceUnread,
-		isIdentityConnected,
-	]);
-
-	useEffect(() => {
-		if (
-			deferredWorkspaceReadClearId &&
-			selectedWorkspaceId !== deferredWorkspaceReadClearId
-		) {
-			setDeferredWorkspaceReadClearId(null);
-		}
-	}, [deferredWorkspaceReadClearId, selectedWorkspaceId]);
 
 	const handleStartGithubIdentityConnect = useCallback(async () => {
 		try {
@@ -904,1142 +569,522 @@ function App() {
 		}
 	};
 
-	const reloadAfterPersist = async (
-		ctxKey: string,
-		sessId: string,
-		wsId: string | null,
-	) => {
-		const [messages, detail, sessions, loadedGroups, loadedArchived] =
-			await Promise.all([
-				loadSessionMessages(sessId),
-				wsId ? loadWorkspaceDetail(wsId) : null,
-				wsId ? loadWorkspaceSessions(wsId) : [],
-				loadWorkspaceGroups(),
-				loadArchivedWorkspaces(),
+	const primeWorkspaceDisplay = useCallback(
+		async (workspaceId: string) => {
+			const [workspaceDetail, workspaceSessions] = await Promise.all([
+				queryClient.ensureQueryData(workspaceDetailQueryOptions(workspaceId)),
+				queryClient.ensureQueryData(workspaceSessionsQueryOptions(workspaceId)),
 			]);
 
-		// Only update workspace-specific state if this workspace is still
-		// the one the user is viewing. Prevents background stream completions
-		// from overwriting the currently visible workspace.
-		const isCurrentWorkspace = wsId && wsId === selectedWorkspaceId;
-		const isCurrentSession = sessId === selectedSessionId;
+			const resolvedSessionId =
+				workspaceDetail?.activeSessionId ??
+				workspaceSessions.find((session) => session.active)?.id ??
+				workspaceSessions[0]?.id ??
+				null;
 
-		// Batch all state updates together so React commits them in a single
-		// render pass. This prevents a flash where live messages are cleared
-		// before DB messages appear (or vice versa).
-		if (isCurrentSession) {
-			setSessionMessages(messages);
-		}
-		// Clear live messages in the same render batch as setting DB messages
-		setLiveMessagesByContext((current) => ({
-			...current,
-			[ctxKey]: [],
-		}));
-		if (isCurrentWorkspace) {
-			setWorkspaceDetail(detail);
-			setWorkspaceSessions(sessions);
-		}
-		// Groups and archived list are global — always update
-		setGroups(loadedGroups);
-		setArchivedSummaries(loadedArchived);
-	};
-
-	const handleCreateWorkspaceFromRepo = useCallback(
-		async (repoId: string) => {
-			if (
-				addingRepository ||
-				creatingWorkspaceRepoId ||
-				archivingWorkspaceId ||
-				restoringWorkspaceId ||
-				markingUnreadWorkspaceId
-			) {
-				return;
-			}
-
-			setCreatingWorkspaceRepoId(repoId);
-
-			try {
-				const response = await createWorkspaceFromRepo(repoId);
-				const { loadedGroups, loadedArchived } =
-					await refreshWorkspaceNavigation();
-				const nextWorkspaceId = hasWorkspaceId(
-					response.selectedWorkspaceId,
-					loadedGroups,
-					loadedArchived,
-				)
-					? response.selectedWorkspaceId
-					: (findInitialWorkspaceId(loadedGroups) ??
-						loadedArchived[0]?.id ??
-						null);
-
-				await hydrateWorkspaceSelection(nextWorkspaceId);
-			} catch (error) {
-				pushWorkspaceToast(
-					describeUnknownError(error, "Unable to create workspace."),
+			if (resolvedSessionId) {
+				await queryClient.ensureQueryData(
+					sessionMessagesQueryOptions(resolvedSessionId),
 				);
-			} finally {
-				setCreatingWorkspaceRepoId(null);
-				setLoadingWorkspace(false);
-				setLoadingSession(false);
 			}
+
+			return {
+				workspaceId,
+				sessionId: resolvedSessionId,
+			};
 		},
-		[
-			addingRepository,
-			archivingWorkspaceId,
-			creatingWorkspaceRepoId,
-			hydrateWorkspaceSelection,
-			markingUnreadWorkspaceId,
-			pushWorkspaceToast,
-			refreshWorkspaceNavigation,
-			restoringWorkspaceId,
-		],
+		[queryClient],
 	);
 
-	const handleAddRepository = useCallback(async () => {
-		if (
-			addingRepository ||
-			creatingWorkspaceRepoId ||
-			archivingWorkspaceId ||
-			restoringWorkspaceId ||
-			markingUnreadWorkspaceId
-		) {
-			return;
-		}
-
-		setAddingRepository(true);
-
-		try {
-			const defaults = await loadAddRepositoryDefaults();
-			const selection = await open({
-				directory: true,
-				multiple: false,
-				defaultPath: defaults.lastCloneDirectory ?? undefined,
-			});
-			const selectedPath = Array.isArray(selection) ? selection[0] : selection;
-
-			if (!selectedPath) {
-				return;
-			}
-
-			const response = await addRepositoryFromLocalPath(selectedPath);
-			const { loadedGroups, loadedArchived } =
-				await refreshWorkspaceNavigation();
-			const nextWorkspaceId = hasWorkspaceId(
-				response.selectedWorkspaceId,
-				loadedGroups,
-				loadedArchived,
-			)
-				? response.selectedWorkspaceId
-				: (findInitialWorkspaceId(loadedGroups) ??
-					loadedArchived[0]?.id ??
-					null);
-
-			await hydrateWorkspaceSelection(nextWorkspaceId);
-		} catch (error) {
-			pushWorkspaceToast(
-				describeUnknownError(error, "Unable to add repository."),
+	const resolveCachedWorkspaceDisplay = useCallback(
+		(workspaceId: string) => {
+			const workspaceDetail = queryClient.getQueryData<WorkspaceDetail | null>(
+				helmorQueryKeys.workspaceDetail(workspaceId),
 			);
-		} finally {
-			setAddingRepository(false);
-			setLoadingWorkspace(false);
-			setLoadingSession(false);
-		}
-	}, [
-		addingRepository,
-		archivingWorkspaceId,
-		creatingWorkspaceRepoId,
-		hydrateWorkspaceSelection,
-		markingUnreadWorkspaceId,
-		pushWorkspaceToast,
-		refreshWorkspaceNavigation,
-		restoringWorkspaceId,
-	]);
+			const workspaceSessions = queryClient.getQueryData<
+				WorkspaceSessionSummary[] | undefined
+			>(helmorQueryKeys.workspaceSessions(workspaceId));
 
-	const handleModelSelect = async (modelId: string) => {
-		const newModel = findModelOption(agentModelSections, modelId);
-		const currentProvider = selectedModel?.provider ?? null;
-		const newProvider = newModel?.provider ?? null;
-
-		// If provider changed and the current session already has messages,
-		// create a new session. Empty sessions can switch provider freely.
-		const hasMessages = sessionMessages.length > 0;
-		if (
-			newProvider &&
-			currentProvider &&
-			newProvider !== currentProvider &&
-			selectedSessionId &&
-			selectedWorkspaceId &&
-			hasMessages
-		) {
-			try {
-				const { sessionId: newSessionId } =
-					await createSession(selectedWorkspaceId);
-
-				// Reload sessions list
-				const sessions = await loadWorkspaceSessions(selectedWorkspaceId);
-				setWorkspaceSessions(sessions);
-
-				// Switch to the new session
-				setSelectedSessionId(newSessionId);
-
-				// Set model on the NEW session's context key
-				const newContextKey = getComposerContextKey(
-					selectedWorkspaceId,
-					newSessionId,
-				);
-				setComposerModelSelections((current) => ({
-					...current,
-					[newContextKey]: modelId,
-				}));
-			} catch {
-				// If session creation fails, just update model in current context
-				setComposerModelSelections((current) => ({
-					...current,
-					[composerContextKey]: modelId,
-				}));
+			if (!workspaceDetail || !Array.isArray(workspaceSessions)) {
+				return null;
 			}
-		} else {
-			// Same provider or no session yet — just update model selection
-			setComposerModelSelections((current) => ({
-				...current,
-				[composerContextKey]: modelId,
-			}));
-		}
-	};
 
-	const handleStopStream = useCallback(() => {
-		const active = activeSessionByContext[composerContextKey];
-		if (active) {
-			void stopAgentStream(active.sessionId, active.provider);
-		}
-	}, [composerContextKey, activeSessionByContext]);
+			const sessionId =
+				workspaceDetail.activeSessionId ??
+				workspaceSessions.find((session) => session.active)?.id ??
+				workspaceSessions[0]?.id ??
+				null;
+			const hasSessionMessages =
+				sessionId === null ||
+				queryClient.getQueryData(helmorQueryKeys.sessionMessages(sessionId)) !==
+					undefined;
 
-	const handleComposerSubmit = async (
-		submittedPrompt: string,
-		imagePaths: string[],
-	) => {
-		const prompt = submittedPrompt.trim();
-		if (!prompt || !selectedModel) {
+			if (!hasSessionMessages) {
+				return null;
+			}
+
+			return {
+				workspaceId,
+				sessionId,
+			};
+		},
+		[queryClient],
+	);
+
+	const primeInitialWorkspaceDisplay = useCallback(
+		async (workspaceId: string) => {
+			await primeWorkspaceDisplay(workspaceId);
+		},
+		[primeWorkspaceDisplay],
+	);
+
+	useEffect(() => {
+		if (!selectedWorkspaceId || displayedWorkspaceId !== null) {
 			return;
 		}
 
-		const contextKey = composerContextKey;
-		const now = new Date().toISOString();
-		const optimisticUserMessage = createLiveMessage({
-			id: `${contextKey}:user:${Date.now()}`,
-			sessionId: selectedSessionId ?? contextKey,
-			role: "user",
-			content: prompt,
-			createdAt: now,
-			model: selectedModel.id,
-		});
-		const previousLiveSession = liveSessionsByContext[contextKey];
-		const sessionId =
-			previousLiveSession?.provider === selectedModel.provider
-				? (previousLiveSession.sessionId ?? undefined)
-				: undefined;
-
-		setLiveMessagesByContext((current) =>
-			appendLiveMessage(current, contextKey, optimisticUserMessage),
-		);
-		setComposerRestoreState(null);
-		setSendErrorsByContext((current) => ({ ...current, [contextKey]: null }));
-		setSendingContextKeys((current) => ({ ...current, [contextKey]: true }));
-
-		try {
-			// Try streaming first, fall back to blocking
-			const { streamId } = await startAgentMessageStream({
-				provider: selectedModel.provider,
-				modelId: selectedModel.id,
-				prompt,
-				sessionId,
-				helmorSessionId: selectedSessionId,
-				workingDirectory: workspaceDetail?.rootPath ?? null,
-				effortLevel: currentEffortLevel,
-				permissionMode: currentPermissionMode,
-			});
-
-			// Track session for stop functionality
-			const sidecarSessionId = selectedSessionId ?? `tmp-${streamId}`;
-			setActiveSessionByContext((current) => ({
-				...current,
-				[contextKey]: {
-					sessionId: sidecarSessionId,
-					provider: selectedModel.provider,
-				},
-			}));
-
-			const accumulator = new StreamAccumulator();
-			let unlistenFn: (() => void) | null = null;
-			let frameId: number | null = null;
-
-			const cleanup = () => {
-				if (frameId !== null) {
-					window.cancelAnimationFrame(frameId);
-					frameId = null;
-				}
-				if (unlistenFn) {
-					unlistenFn();
-					unlistenFn = null;
-				}
-			};
-
-			const flushStreamMessages = (immediate = false) => {
-				frameId = null;
-				const streamMessages = accumulator.toMessages(
-					contextKey,
-					selectedSessionId ?? contextKey,
-				);
-				const nextMessages = [optimisticUserMessage, ...streamMessages];
-				const doFlush = () => {
-					setLiveMessagesByContext((current) => {
-						if (haveSameLiveMessages(current[contextKey], nextMessages)) {
-							return current;
-						}
-						return {
-							...current,
-							[contextKey]: nextMessages,
-						};
-					});
-				};
-				// Use startTransition for intermediate flushes (lower priority).
-				// Final flush (on "done") uses direct setState so it commits
-				// before reloadAfterPersist clears live messages.
-				if (immediate) {
-					doFlush();
-				} else {
-					startTransition(doFlush);
-				}
-			};
-
-			const scheduleFlush = () => {
-				if (frameId !== null) return;
-				frameId = window.requestAnimationFrame(() => flushStreamMessages());
-			};
-
-			unlistenFn = await listenAgentStream(streamId, (event) => {
-				if (event.kind === "line") {
-					accumulator.addLine(event.line);
-					scheduleFlush();
-					return;
-				}
-
-				if (event.kind === "done") {
-					if (frameId !== null) {
-						window.cancelAnimationFrame(frameId);
-						frameId = null;
-					}
-					flushStreamMessages(true); // immediate — commit before reload
-					cleanup();
-
-					setLiveSessionsByContext((current) => ({
-						...current,
-						[contextKey]: {
-							provider: event.provider,
-							sessionId:
-								event.sessionId ?? current[contextKey]?.sessionId ?? null,
-						},
-					}));
-
-					if (event.persisted && selectedSessionId) {
-						void reloadAfterPersist(
-							contextKey,
-							selectedSessionId,
-							selectedWorkspaceId,
-						);
-					}
-
-					setSendingContextKeys((current) => {
-						const next = { ...current };
-						delete next[contextKey];
-						return next;
-					});
-					setActiveSessionByContext((current) => {
-						const next = { ...current };
-						delete next[contextKey];
-						return next;
-					});
-					return;
-				}
-
-				if (event.kind === "error") {
-					cleanup();
-					setSendErrorsByContext((current) => ({
-						...current,
-						[contextKey]: event.message,
-					}));
-					setComposerRestoreState({
-						contextKey,
-						draft: prompt,
-						images: imagePaths,
-						nonce: Date.now(),
-					});
-					setLiveMessagesByContext((current) => ({
-						...current,
-						[contextKey]: (current[contextKey] ?? []).filter(
-							(m) => m.id !== optimisticUserMessage.id,
-						),
-					}));
-					setSendingContextKeys((current) => {
-						const next = { ...current };
-						delete next[contextKey];
-						return next;
-					});
-					setActiveSessionByContext((current) => {
-						const next = { ...current };
-						delete next[contextKey];
-						return next;
-					});
-				}
-			});
-		} catch (error) {
-			const message = describeUnknownError(error, "Unable to send message.");
-			setSendErrorsByContext((current) => ({
-				...current,
-				[contextKey]: message,
-			}));
-			setComposerRestoreState({
-				contextKey,
-				draft: prompt,
-				images: imagePaths,
-				nonce: Date.now(),
-			});
-			setLiveMessagesByContext((current) => ({
-				...current,
-				[contextKey]: (current[contextKey] ?? []).filter(
-					(m) => m.id !== optimisticUserMessage.id,
-				),
-			}));
-			setSendingContextKeys((current) => {
-				const next = { ...current };
-				delete next[contextKey];
-				return next;
-			});
-			setActiveSessionByContext((current) => {
-				const next = { ...current };
-				delete next[contextKey];
-				return next;
-			});
+		if (startupPrefetchedWorkspaceRef.current === selectedWorkspaceId) {
+			return;
 		}
-	};
 
-	const handleArchiveWorkspace = useCallback(
-		async (workspaceId: string) => {
-			if (addingRepository || archivingWorkspaceId || restoringWorkspaceId) {
-				return;
-			}
-
-			setArchivingWorkspaceId(workspaceId);
-
-			try {
-				await archiveWorkspace(workspaceId);
-				const { loadedGroups, loadedArchived } =
-					await refreshWorkspaceNavigation();
-				const nextWorkspaceId =
-					selectedWorkspaceId && selectedWorkspaceId !== workspaceId
-						? hasWorkspaceId(selectedWorkspaceId, loadedGroups, loadedArchived)
-							? selectedWorkspaceId
-							: (findInitialWorkspaceId(loadedGroups) ??
-								loadedArchived[0]?.id ??
-								null)
-						: (findInitialWorkspaceId(loadedGroups) ??
-							loadedArchived[0]?.id ??
-							null);
-
-				await hydrateWorkspaceSelection(nextWorkspaceId);
-			} catch (error) {
-				pushWorkspaceToast(
-					describeUnknownError(error, "Unable to archive workspace."),
-				);
-			} finally {
-				setArchivingWorkspaceId(null);
-				setLoadingWorkspace(false);
-				setLoadingSession(false);
-			}
-		},
-		[
-			addingRepository,
-			archivingWorkspaceId,
-			hydrateWorkspaceSelection,
-			pushWorkspaceToast,
-			refreshWorkspaceNavigation,
-			restoringWorkspaceId,
-			selectedWorkspaceId,
-		],
-	);
-
-	const handleMarkWorkspaceUnread = useCallback(
-		async (workspaceId: string) => {
-			if (
-				addingRepository ||
-				archivingWorkspaceId ||
-				restoringWorkspaceId ||
-				markingUnreadWorkspaceId
-			) {
-				return;
-			}
-
-			setMarkingUnreadWorkspaceId(workspaceId);
-
-			try {
-				await markWorkspaceUnread(workspaceId);
-
-				if (selectedWorkspaceId === workspaceId) {
-					setDeferredWorkspaceReadClearId(workspaceId);
-				}
-
-				await refreshWorkspaceNavigation();
-
-				if (selectedWorkspaceId === workspaceId) {
-					const [detail, sessions] = await Promise.all([
-						loadWorkspaceDetail(workspaceId),
-						loadWorkspaceSessions(workspaceId),
-					]);
-
-					setWorkspaceDetail(detail);
-					setWorkspaceSessions(sessions);
-				}
-			} catch (error) {
-				pushWorkspaceToast(
-					describeUnknownError(error, "Unable to mark workspace as unread."),
-				);
-			} finally {
-				setMarkingUnreadWorkspaceId(null);
-			}
-		},
-		[
-			addingRepository,
-			archivingWorkspaceId,
-			markingUnreadWorkspaceId,
-			pushWorkspaceToast,
-			refreshWorkspaceNavigation,
-			restoringWorkspaceId,
-			selectedWorkspaceId,
-		],
-	);
+		startupPrefetchedWorkspaceRef.current = selectedWorkspaceId;
+		void primeInitialWorkspaceDisplay(selectedWorkspaceId).catch(() => {
+			// Keep the first paint path resilient even if prewarm fails.
+		});
+	}, [displayedWorkspaceId, primeInitialWorkspaceDisplay, selectedWorkspaceId]);
 
 	const handleSelectWorkspace = useCallback(
-		(workspaceId: string) => {
-			setSelectedWorkspaceId(workspaceId);
+		(workspaceId: string | null) => {
+			if (workspaceId === selectedWorkspaceIdRef.current) {
+				return;
+			}
 
-			const selectedRow = findWorkspaceRowById(
-				workspaceId,
-				groups,
-				archivedRows,
-			);
+			const requestId = workspaceSelectionRequestRef.current + 1;
+			workspaceSelectionRequestRef.current = requestId;
+			sessionSelectionRequestRef.current += 1;
+			selectedWorkspaceIdRef.current = workspaceId;
+			selectedSessionIdRef.current = null;
+			setSelectedWorkspaceId(workspaceId);
+			setSelectedSessionId(null);
+			if (workspaceId === null) {
+				startTransition(() => {
+					if (workspaceSelectionRequestRef.current !== requestId) {
+						return;
+					}
+
+					setDisplayedWorkspaceId(null);
+					setDisplayedSessionId(null);
+				});
+				return;
+			}
+
+			const cachedWorkspaceDisplay = resolveCachedWorkspaceDisplay(workspaceId);
+			if (cachedWorkspaceDisplay) {
+				selectedSessionIdRef.current = cachedWorkspaceDisplay.sessionId;
+				setSelectedSessionId(cachedWorkspaceDisplay.sessionId);
+				startTransition(() => {
+					if (workspaceSelectionRequestRef.current !== requestId) {
+						return;
+					}
+
+					setDisplayedWorkspaceId(cachedWorkspaceDisplay.workspaceId);
+					setDisplayedSessionId(cachedWorkspaceDisplay.sessionId);
+				});
+				void queryClient.prefetchQuery(
+					workspaceDetailQueryOptions(workspaceId),
+				);
+				void queryClient.prefetchQuery(
+					workspaceSessionsQueryOptions(workspaceId),
+				);
+				if (cachedWorkspaceDisplay.sessionId) {
+					void queryClient.prefetchQuery(
+						sessionMessagesQueryOptions(cachedWorkspaceDisplay.sessionId),
+					);
+				}
+				return;
+			}
+
+			void primeWorkspaceDisplay(workspaceId)
+				.then(({ sessionId }) => {
+					if (workspaceSelectionRequestRef.current !== requestId) {
+						return;
+					}
+
+					startTransition(() => {
+						if (workspaceSelectionRequestRef.current !== requestId) {
+							return;
+						}
+
+						selectedSessionIdRef.current = sessionId;
+						setSelectedSessionId(sessionId);
+						setDisplayedWorkspaceId(workspaceId);
+						setDisplayedSessionId(sessionId);
+					});
+				})
+				.catch(() => {
+					if (workspaceSelectionRequestRef.current !== requestId) {
+						return;
+					}
+
+					startTransition(() => {
+						if (workspaceSelectionRequestRef.current !== requestId) {
+							return;
+						}
+
+						setDisplayedWorkspaceId(workspaceId);
+						setDisplayedSessionId(null);
+					});
+				});
+		},
+		[primeWorkspaceDisplay, queryClient, resolveCachedWorkspaceDisplay],
+	);
+
+	const handleSelectSession = useCallback(
+		(sessionId: string | null) => {
+			if (sessionId === selectedSessionIdRef.current) {
+				return;
+			}
+
+			const requestId = sessionSelectionRequestRef.current + 1;
+			sessionSelectionRequestRef.current = requestId;
+			selectedSessionIdRef.current = sessionId;
+			setSelectedSessionId(sessionId);
+			if (sessionId === null) {
+				startTransition(() => {
+					if (sessionSelectionRequestRef.current !== requestId) {
+						return;
+					}
+
+					setDisplayedSessionId(null);
+				});
+				return;
+			}
 
 			if (
-				!selectedRow?.hasUnread ||
-				deferredWorkspaceReadClearId === workspaceId ||
-				markingReadWorkspaceId === workspaceId
+				queryClient.getQueryData(helmorQueryKeys.sessionMessages(sessionId)) !==
+				undefined
+			) {
+				startTransition(() => {
+					if (sessionSelectionRequestRef.current !== requestId) {
+						return;
+					}
+
+					setDisplayedSessionId(sessionId);
+				});
+				void queryClient.prefetchQuery(sessionMessagesQueryOptions(sessionId));
+				return;
+			}
+
+			void queryClient
+				.ensureQueryData(sessionMessagesQueryOptions(sessionId))
+				.then(() => {
+					if (sessionSelectionRequestRef.current !== requestId) {
+						return;
+					}
+
+					startTransition(() => {
+						if (sessionSelectionRequestRef.current !== requestId) {
+							return;
+						}
+
+						setDisplayedSessionId(sessionId);
+					});
+				})
+				.catch(() => {
+					if (sessionSelectionRequestRef.current !== requestId) {
+						return;
+					}
+
+					startTransition(() => {
+						if (sessionSelectionRequestRef.current !== requestId) {
+							return;
+						}
+
+						setDisplayedSessionId(sessionId);
+					});
+				});
+		},
+		[queryClient],
+	);
+
+	const handleNavigateSessions = useCallback(
+		(offset: -1 | 1) => {
+			const workspaceId = selectedWorkspaceIdRef.current;
+			if (!workspaceId) {
+				return;
+			}
+
+			const workspaceSessions =
+				queryClient.getQueryData<WorkspaceSessionSummary[]>(
+					helmorQueryKeys.workspaceSessions(workspaceId),
+				) ?? [];
+			const nextSessionId = findAdjacentSessionId(
+				workspaceSessions,
+				selectedSessionIdRef.current,
+				offset,
+			);
+
+			if (!nextSessionId) {
+				return;
+			}
+
+			handleSelectSession(nextSessionId);
+		},
+		[handleSelectSession, queryClient],
+	);
+
+	const handleNavigateWorkspaces = useCallback(
+		(offset: -1 | 1) => {
+			const nextWorkspaceId = findAdjacentWorkspaceId(
+				workspaceGroups,
+				archivedRows,
+				selectedWorkspaceIdRef.current,
+				offset,
+			);
+
+			if (!nextWorkspaceId) {
+				return;
+			}
+
+			handleSelectWorkspace(nextWorkspaceId);
+		},
+		[archivedRows, handleSelectWorkspace, workspaceGroups],
+	);
+
+	const handleResolveDisplayedSession = useCallback(
+		(sessionId: string | null) => {
+			selectedSessionIdRef.current = sessionId;
+			setSelectedSessionId((current) =>
+				current === sessionId ? current : sessionId,
+			);
+			startTransition(() => {
+				setDisplayedSessionId((current) =>
+					current === sessionId ? current : sessionId,
+				);
+			});
+		},
+		[],
+	);
+
+	const handleImportedFromConductor = useCallback(() => {
+		void Promise.all([
+			queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceGroups,
+			}),
+			queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.archivedWorkspaces,
+			}),
+			queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.repositories,
+			}),
+			displayedWorkspaceId
+				? queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceDetail(displayedWorkspaceId),
+					})
+				: Promise.resolve(),
+			displayedWorkspaceId
+				? queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceSessions(displayedWorkspaceId),
+					})
+				: Promise.resolve(),
+			displayedSessionId
+				? queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.sessionMessages(displayedSessionId),
+					})
+				: Promise.resolve(),
+		]);
+	}, [displayedSessionId, displayedWorkspaceId, queryClient]);
+
+	useEffect(() => {
+		if (!isIdentityConnected) {
+			return;
+		}
+
+		const handleWindowKeyDown = (event: globalThis.KeyboardEvent) => {
+			if (!event.metaKey || !event.altKey || event.ctrlKey || event.shiftKey) {
+				return;
+			}
+
+			if (
+				event.key !== "ArrowLeft" &&
+				event.key !== "ArrowRight" &&
+				event.key !== "ArrowUp" &&
+				event.key !== "ArrowDown"
 			) {
 				return;
 			}
 
-			setGroups((current) =>
-				clearWorkspaceUnreadFromGroups(current, workspaceId),
-			);
-			setArchivedSummaries((current) =>
-				clearWorkspaceUnreadFromSummaries(current, workspaceId),
-			);
-			setWorkspaceDetail((current) =>
-				current?.id === workspaceId
-					? {
-							...current,
-							hasUnread: false,
-							workspaceUnread: 0,
-							sessionUnreadTotal: 0,
-							unreadSessionCount: 0,
-						}
-					: current,
-			);
+			event.preventDefault();
 
-			setMarkingReadWorkspaceId(workspaceId);
-
-			void (async () => {
-				try {
-					await markWorkspaceRead(workspaceId);
-					await refreshSelectedWorkspaceCollections(workspaceId, null);
-				} catch (error) {
-					pushWorkspaceToast(
-						describeUnknownError(error, "Unable to mark workspace as read."),
-					);
-					const [loadedGroups, loadedArchived] = await Promise.all([
-						loadWorkspaceGroups(),
-						loadArchivedWorkspaces(),
-					]);
-					setGroups(loadedGroups);
-					setArchivedSummaries(loadedArchived);
-				} finally {
-					setMarkingReadWorkspaceId((current) =>
-						current === workspaceId ? null : current,
-					);
-				}
-			})();
-		},
-		[
-			archivedRows,
-			deferredWorkspaceReadClearId,
-			groups,
-			markingReadWorkspaceId,
-			pushWorkspaceToast,
-			refreshSelectedWorkspaceCollections,
-		],
-	);
-
-	const handleRestoreWorkspace = useCallback(
-		async (workspaceId: string) => {
-			if (addingRepository || archivingWorkspaceId || restoringWorkspaceId) {
+			if (event.key === "ArrowLeft") {
+				handleNavigateSessions(-1);
 				return;
 			}
 
-			setRestoringWorkspaceId(workspaceId);
-
-			try {
-				const response = await restoreWorkspace(workspaceId);
-				const { loadedGroups, loadedArchived } =
-					await refreshWorkspaceNavigation();
-				const nextWorkspaceId = hasWorkspaceId(
-					response.selectedWorkspaceId,
-					loadedGroups,
-					loadedArchived,
-				)
-					? response.selectedWorkspaceId
-					: (findInitialWorkspaceId(loadedGroups) ??
-						loadedArchived[0]?.id ??
-						null);
-
-				await hydrateWorkspaceSelection(nextWorkspaceId);
-			} catch (error) {
-				pushWorkspaceToast(
-					describeUnknownError(error, "Unable to restore workspace."),
-				);
-			} finally {
-				setRestoringWorkspaceId(null);
-				setLoadingWorkspace(false);
-				setLoadingSession(false);
+			if (event.key === "ArrowRight") {
+				handleNavigateSessions(1);
+				return;
 			}
-		},
-		[
-			addingRepository,
-			archivingWorkspaceId,
-			hydrateWorkspaceSelection,
-			pushWorkspaceToast,
-			refreshWorkspaceNavigation,
-			restoringWorkspaceId,
-		],
-	);
+
+			if (event.key === "ArrowUp") {
+				handleNavigateWorkspaces(-1);
+				return;
+			}
+
+			handleNavigateWorkspaces(1);
+		};
+
+		window.addEventListener("keydown", handleWindowKeyDown, true);
+
+		return () => {
+			window.removeEventListener("keydown", handleWindowKeyDown, true);
+		};
+	}, [handleNavigateSessions, handleNavigateWorkspaces, isIdentityConnected]);
 
 	return (
-		<SettingsContext.Provider value={settingsContextValue}>
-			<ToastProvider swipeDirection="right">
-				{!isIdentityConnected ? (
-					<GithubIdentityGate
-						identityState={githubIdentityState}
-						onConnectGithub={() => {
-							void handleStartGithubIdentityConnect();
-						}}
-						onCopyGithubCode={(userCode) =>
-							handleCopyGithubDeviceCode(userCode)
-						}
-						onCancelGithubConnect={handleCancelGithubIdentityConnect}
-					/>
-				) : (
-					<main
-						aria-label="Application shell"
-						className="relative h-screen overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
-					>
-						<div className="relative flex h-full min-h-0 bg-app-base">
-							<aside
-								aria-label="Workspace sidebar"
-								className="relative h-full shrink-0 overflow-hidden bg-app-sidebar"
-								style={{ width: `${sidebarWidth}px` }}
-							>
-								<WorkspacesSidebar
-									groups={groups}
-									archivedRows={archivedRows}
-									availableRepositories={repositories}
-									addingRepository={addingRepository}
-									selectedWorkspaceId={selectedWorkspaceId}
-									creatingWorkspaceRepoId={creatingWorkspaceRepoId}
-									onAddRepository={() => {
-										void handleAddRepository();
-									}}
-									onSelectWorkspace={handleSelectWorkspace}
-									onCreateWorkspace={(repoId) => {
-										void handleCreateWorkspaceFromRepo(repoId);
-									}}
-									onArchiveWorkspace={(workspaceId) => {
-										void handleArchiveWorkspace(workspaceId);
-									}}
-									onMarkWorkspaceUnread={(workspaceId) => {
-										void handleMarkWorkspaceUnread(workspaceId);
-									}}
-									onRestoreWorkspace={(workspaceId) => {
-										void handleRestoreWorkspace(workspaceId);
-									}}
-									archivingWorkspaceId={archivingWorkspaceId}
-									markingUnreadWorkspaceId={markingUnreadWorkspaceId}
-									restoringWorkspaceId={restoringWorkspaceId}
-								/>
-								<div className="absolute bottom-3 left-3 z-20">
-									<SettingsButton onClick={() => setSettingsOpen(true)} />
-								</div>
-							</aside>
+		<ToastProvider swipeDirection="right">
+			{!isIdentityConnected ? (
+				<GithubIdentityGate
+					identityState={githubIdentityState}
+					onConnectGithub={() => {
+						void handleStartGithubIdentityConnect();
+					}}
+					onCopyGithubCode={(userCode) => handleCopyGithubDeviceCode(userCode)}
+					onCancelGithubConnect={handleCancelGithubIdentityConnect}
+				/>
+			) : (
+				<main
+					aria-label="Application shell"
+					className="relative h-screen overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
+				>
+					<div className="relative flex h-full min-h-0 bg-app-base">
+						<aside
+							aria-label="Workspace sidebar"
+							className="relative h-full shrink-0 overflow-hidden bg-app-sidebar"
+							style={{ width: `${sidebarWidth}px` }}
+						>
+							<WorkspacesSidebarContainer
+								selectedWorkspaceId={selectedWorkspaceId}
+								onSelectWorkspace={handleSelectWorkspace}
+								pushWorkspaceToast={pushWorkspaceToast}
+							/>
+							<div className="absolute bottom-3 left-3 z-20">
+								<SettingsButton onClick={onOpenSettings} />
+							</div>
+						</aside>
 
+						<div
+							role="separator"
+							tabIndex={0}
+							aria-label="Resize sidebar"
+							aria-orientation="vertical"
+							aria-valuemin={MIN_SIDEBAR_WIDTH}
+							aria-valuemax={MAX_SIDEBAR_WIDTH}
+							aria-valuenow={sidebarWidth}
+							onMouseDown={handleResizeStart}
+							onKeyDown={handleResizeKeyDown}
+							className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+							style={{
+								left: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
+								width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
+							}}
+						>
+							<span
+								aria-hidden="true"
+								className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
+									isResizing
+										? "w-[2px] bg-app-foreground/80 shadow-[0_0_12px_rgba(250,249,246,0.2)]"
+										: "w-px bg-app-border group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
+								}`}
+							/>
+						</div>
+
+						<section
+							aria-label="Workspace panel"
+							className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-app-elevated"
+						>
 							<div
-								role="separator"
-								tabIndex={0}
-								aria-label="Resize sidebar"
-								aria-orientation="vertical"
-								aria-valuemin={MIN_SIDEBAR_WIDTH}
-								aria-valuemax={MAX_SIDEBAR_WIDTH}
-								aria-valuenow={sidebarWidth}
-								onMouseDown={handleResizeStart}
-								onKeyDown={handleResizeKeyDown}
-								className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
-								style={{
-									left: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
-									width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
-								}}
-							>
-								<span
-									aria-hidden="true"
-									className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
-										isResizing
-											? "w-[2px] bg-app-foreground/80 shadow-[0_0_12px_rgba(250,249,246,0.2)]"
-											: "w-px bg-app-border group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
-									}`}
+								aria-label="Workspace panel drag region"
+								className="absolute inset-x-0 top-0 z-10 h-[2.6rem] bg-transparent"
+								data-tauri-drag-region
+							/>
+
+							<div className="absolute right-4 top-[0.55rem] z-30 flex items-center gap-1">
+								{conductorAvailable && (
+									<button
+										type="button"
+										aria-label="Import from Conductor"
+										onClick={() => setImportDialogOpen(true)}
+										title="Import workspaces from Conductor"
+										className="flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
+									>
+										<Download className="size-3.5" strokeWidth={1.8} />
+									</button>
+								)}
+								<button
+									type="button"
+									aria-label="Toggle theme"
+									onClick={toggleTheme}
+									className="flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
+								>
+									{theme === "dark" ? (
+										<Sun className="size-3.5" strokeWidth={1.8} />
+									) : (
+										<Moon className="size-3.5" strokeWidth={1.8} />
+									)}
+								</button>
+								<GithubStatusMenu
+									identityState={githubIdentityState}
+									onDisconnectGithub={() => {
+										void handleDisconnectGithubIdentity();
+									}}
 								/>
 							</div>
 
-							<section
-								aria-label="Workspace panel"
-								className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-app-elevated"
+							<div
+								aria-label="Workspace viewport"
+								className="flex min-h-0 flex-1 flex-col bg-white dark:bg-app-elevated"
 							>
-								<div
-									aria-label="Workspace panel drag region"
-									className="absolute inset-x-0 top-0 z-10 h-[2.6rem] bg-transparent"
-									data-tauri-drag-region
+								<WorkspaceConversationContainer
+									selectedWorkspaceId={selectedWorkspaceId}
+									displayedWorkspaceId={displayedWorkspaceId}
+									selectedSessionId={selectedSessionId}
+									displayedSessionId={displayedSessionId}
+									onSelectSession={handleSelectSession}
+									onResolveDisplayedSession={handleResolveDisplayedSession}
 								/>
-
-								<div className="absolute right-4 top-[0.55rem] z-30 flex items-center gap-1">
-									{conductorAvailable && (
-										<button
-											type="button"
-											aria-label="Import from Conductor"
-											onClick={() => setImportDialogOpen(true)}
-											title="Import workspaces from Conductor"
-											className="flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
-										>
-											<Download className="size-3.5" strokeWidth={1.8} />
-										</button>
-									)}
-									<button
-										type="button"
-										aria-label="Toggle theme"
-										onClick={toggleTheme}
-										className="flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
-									>
-										{theme === "dark" ? (
-											<Sun className="size-3.5" strokeWidth={1.8} />
-										) : (
-											<Moon className="size-3.5" strokeWidth={1.8} />
-										)}
-									</button>
-									<GithubStatusMenu
-										identityState={githubIdentityState}
-										onDisconnectGithub={() => {
-											void handleDisconnectGithubIdentity();
-										}}
-									/>
-								</div>
-
-								<div
-									aria-label="Workspace viewport"
-									className="flex min-h-0 flex-1 flex-col bg-white dark:bg-app-elevated"
-								>
-									<WorkspacePanel
-										workspace={workspaceDetail}
-										sessions={workspaceSessions}
-										selectedSessionId={selectedSessionId}
-										selectedProvider={selectedModel?.provider}
-										messages={mergedMessages}
-										attachments={sessionAttachments}
-										loadingWorkspace={loadingWorkspace}
-										loadingSession={loadingSession}
-										sending={isSending}
-										onSelectSession={setSelectedSessionId}
-										onSessionsChanged={() => setDataVersion((v) => v + 1)}
-										onSessionRenamed={(sessionId, title) => {
-											setWorkspaceSessions((prev) =>
-												prev.map((s) =>
-													s.id === sessionId ? { ...s, title } : s,
-												),
-											);
-										}}
-										onWorkspaceChanged={() => {
-											if (selectedWorkspaceId) {
-												void refreshSelectedWorkspaceCollections(
-													selectedWorkspaceId,
-													selectedSessionId,
-												);
-											}
-										}}
-									/>
-
-									<div className="mt-auto px-4 pb-4 pt-0">
-										<SendingStatusBar active={isSending} />
-										<div>
-											<WorkspaceComposer
-												key={composerContextKey}
-												contextKey={composerContextKey}
-												onSubmit={(prompt, imagePaths) => {
-													void handleComposerSubmit(prompt, imagePaths);
-												}}
-												onStop={handleStopStream}
-												sending={isSending}
-												selectedModelId={selectedModelId}
-												modelSections={agentModelSections}
-												onSelectModel={(modelId) => {
-													void handleModelSelect(modelId);
-												}}
-												provider={selectedModel?.provider}
-												effortLevel={currentEffortLevel}
-												onSelectEffort={(level) => {
-													setComposerEffortLevels((c) => ({
-														...c,
-														[composerContextKey]: level,
-													}));
-												}}
-												permissionMode={currentPermissionMode}
-												onTogglePlanMode={() => {
-													setComposerPermissionModes((c) => ({
-														...c,
-														[composerContextKey]:
-															c[composerContextKey] === "plan"
-																? "acceptEdits"
-																: "plan",
-													}));
-												}}
-												sendError={activeSendError}
-												restoreDraft={
-													composerRestoreState?.contextKey ===
-													composerContextKey
-														? composerRestoreState.draft
-														: null
-												}
-												restoreImages={
-													composerRestoreState?.contextKey ===
-													composerContextKey
-														? composerRestoreState.images
-														: []
-												}
-												restoreNonce={
-													composerRestoreState?.contextKey ===
-													composerContextKey
-														? composerRestoreState.nonce
-														: 0
-												}
-											/>
-										</div>
-									</div>
-								</div>
-							</section>
-						</div>
-					</main>
-				)}
-				<ToastViewport />
-				{workspaceToasts.map((toast) => (
-					<Toast
-						key={toast.id}
-						open
-						variant={toast.variant ?? "destructive"}
-						duration={4200}
-						onOpenChange={(open: boolean) => {
-							if (!open) {
-								dismissWorkspaceToast(toast.id);
-							}
-						}}
-					>
-						<div className="grid gap-1">
-							<ToastTitle>{toast.title}</ToastTitle>
-							<ToastDescription>{toast.description}</ToastDescription>
-						</div>
-						<ToastClose aria-label="Dismiss notification" />
-					</Toast>
-				))}
-				<ConductorImportDialog
-					open={importDialogOpen}
-					onClose={() => setImportDialogOpen(false)}
-					onImported={refreshAllData}
-				/>
-			</ToastProvider>
-			<SettingsDialog
-				open={settingsOpen}
-				onClose={() => setSettingsOpen(false)}
+							</div>
+						</section>
+					</div>
+				</main>
+			)}
+			<ToastViewport />
+			{workspaceToasts.map((toast) => (
+				<Toast
+					key={toast.id}
+					open
+					variant={toast.variant ?? "destructive"}
+					duration={4200}
+					onOpenChange={(open: boolean) => {
+						if (!open) {
+							dismissWorkspaceToast(toast.id);
+						}
+					}}
+				>
+					<div className="grid gap-1">
+						<ToastTitle>{toast.title}</ToastTitle>
+						<ToastDescription>{toast.description}</ToastDescription>
+					</div>
+					<ToastClose aria-label="Dismiss notification" />
+				</Toast>
+			))}
+			<ConductorImportDialog
+				open={importDialogOpen}
+				onClose={() => setImportDialogOpen(false)}
+				onImported={handleImportedFromConductor}
 			/>
-		</SettingsContext.Provider>
+		</ToastProvider>
 	);
-}
-
-const SendingStatusBar = memo(function SendingStatusBar({
-	active,
-}: {
-	active: boolean;
-}) {
-	return (
-		<div
-			aria-hidden={!active}
-			className={`overflow-hidden px-1 transition-none ${active ? "h-6 pb-1" : "h-0 pb-0"}`}
-		>
-			<div className="flex items-center py-1 text-[11px] font-medium">
-				<ShimmerText className="text-[12px] text-app-muted">
-					Thinking
-				</ShimmerText>
-			</div>
-		</div>
-	);
-});
-
-function findInitialWorkspaceId(groups: WorkspaceGroup[]): string | null {
-	for (const group of groups) {
-		if (group.rows.length > 0) {
-			return group.rows[0].id;
-		}
-	}
-
-	return null;
-}
-
-function hasWorkspaceId(
-	workspaceId: string,
-	groups: WorkspaceGroup[],
-	archived: WorkspaceSummary[],
-) {
-	return (
-		groups.some((group) => group.rows.some((row) => row.id === workspaceId)) ||
-		archived.some((workspace) => workspace.id === workspaceId)
-	);
-}
-
-function findWorkspaceRowById(
-	workspaceId: string,
-	groups: WorkspaceGroup[],
-	archivedRows: WorkspaceRow[],
-) {
-	for (const group of groups) {
-		const match = group.rows.find((row) => row.id === workspaceId);
-
-		if (match) {
-			return match;
-		}
-	}
-
-	return archivedRows.find((row) => row.id === workspaceId) ?? null;
-}
-
-function clearWorkspaceUnreadFromRow(row: WorkspaceRow): WorkspaceRow {
-	return {
-		...row,
-		hasUnread: false,
-		workspaceUnread: 0,
-		sessionUnreadTotal: 0,
-		unreadSessionCount: 0,
-	};
-}
-
-function clearWorkspaceUnreadFromGroups(
-	groups: WorkspaceGroup[],
-	workspaceId: string,
-): WorkspaceGroup[] {
-	return groups.map((group) => ({
-		...group,
-		rows: group.rows.map((row) =>
-			row.id === workspaceId ? clearWorkspaceUnreadFromRow(row) : row,
-		),
-	}));
-}
-
-function clearWorkspaceUnreadFromSummaries(
-	summaries: WorkspaceSummary[],
-	workspaceId: string,
-): WorkspaceSummary[] {
-	return summaries.map((summary) =>
-		summary.id === workspaceId
-			? {
-					...summary,
-					hasUnread: false,
-					workspaceUnread: 0,
-					sessionUnreadTotal: 0,
-					unreadSessionCount: 0,
-				}
-			: summary,
-	);
-}
-
-function summaryToArchivedRow(summary: WorkspaceSummary): WorkspaceRow {
-	return {
-		id: summary.id,
-		title: summary.title,
-		directoryName: summary.directoryName,
-		repoName: summary.repoName,
-		repoIconSrc: summary.repoIconSrc ?? null,
-		repoInitials: summary.repoInitials ?? null,
-		state: summary.state,
-		hasUnread: summary.hasUnread,
-		workspaceUnread: summary.workspaceUnread,
-		sessionUnreadTotal: summary.sessionUnreadTotal,
-		unreadSessionCount: summary.unreadSessionCount,
-		derivedStatus: summary.derivedStatus,
-		manualStatus: summary.manualStatus ?? null,
-		branch: summary.branch ?? null,
-		activeSessionId: summary.activeSessionId ?? null,
-		activeSessionTitle: summary.activeSessionTitle ?? null,
-		activeSessionAgentType: summary.activeSessionAgentType ?? null,
-		activeSessionStatus: summary.activeSessionStatus ?? null,
-		prTitle: summary.prTitle ?? null,
-		sessionCount: summary.sessionCount,
-		messageCount: summary.messageCount,
-		attachmentCount: summary.attachmentCount,
-	};
-}
-
-function getComposerContextKey(
-	workspaceId: string | null,
-	sessionId: string | null,
-): string {
-	if (sessionId) {
-		return `session:${sessionId}`;
-	}
-
-	if (workspaceId) {
-		return `workspace:${workspaceId}`;
-	}
-
-	return "global";
-}
-
-function inferDefaultModelId(
-	session: WorkspaceSessionSummary | null,
-	modelSections: AgentModelSection[],
-): string {
-	const preferredModelId = session?.model ?? null;
-	if (preferredModelId && findModelOption(modelSections, preferredModelId)) {
-		return preferredModelId;
-	}
-
-	return session?.agentType === "codex"
-		? DEFAULT_CODEX_MODEL_ID
-		: DEFAULT_CLAUDE_MODEL_ID;
-}
-
-function describeUnknownError(error: unknown, fallback: string): string {
-	if (error instanceof Error && error.message.trim()) {
-		return error.message;
-	}
-
-	if (typeof error === "string" && error.trim()) {
-		return error;
-	}
-
-	if (
-		typeof error === "object" &&
-		error !== null &&
-		"message" in error &&
-		typeof error.message === "string" &&
-		error.message.trim()
-	) {
-		return error.message;
-	}
-
-	try {
-		const serialized = JSON.stringify(error);
-		if (serialized && serialized !== "{}") {
-			return serialized;
-		}
-	} catch {
-		// Ignore serialization failures and fall through.
-	}
-
-	return fallback;
-}
-
-function findModelOption(
-	modelSections: AgentModelSection[],
-	modelId: string | null,
-): AgentModelOption | null {
-	if (!modelId) {
-		return null;
-	}
-
-	return (
-		modelSections
-			.flatMap((section) => section.options)
-			.find((option) => option.id === modelId) ?? null
-	);
-}
-
-function createLiveMessage({
-	id,
-	sessionId,
-	role,
-	content,
-	createdAt,
-	model,
-}: {
-	id: string;
-	sessionId: string;
-	role: string;
-	content: string;
-	createdAt: string;
-	model: string;
-}): SessionMessageRecord {
-	return {
-		id,
-		sessionId,
-		role,
-		content,
-		contentIsJson: false,
-		createdAt,
-		sentAt: createdAt,
-		cancelledAt: null,
-		model,
-		sdkMessageId: null,
-		lastAssistantMessageId: null,
-		turnId: null,
-		isResumableMessage: null,
-		attachmentCount: 0,
-	};
-}
-
-function appendLiveMessage(
-	current: Record<string, SessionMessageRecord[]>,
-	contextKey: string,
-	message: SessionMessageRecord,
-) {
-	return {
-		...current,
-		[contextKey]: [...(current[contextKey] ?? []), message],
-	};
-}
-
-function haveSameLiveMessages(
-	current: SessionMessageRecord[] | undefined,
-	next: SessionMessageRecord[],
-) {
-	if (!current || current.length !== next.length) return false;
-
-	return current.every((message, index) => {
-		const nextMessage = next[index];
-		return (
-			message.id === nextMessage.id &&
-			message.role === nextMessage.role &&
-			message.content === nextMessage.content &&
-			message.contentIsJson === nextMessage.contentIsJson &&
-			message.createdAt === nextMessage.createdAt
-		);
-	});
 }
 
 function GithubIdentityGate({

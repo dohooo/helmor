@@ -246,7 +246,7 @@ describe("App create workspace flow", () => {
 		render(<App />);
 
 		await user.click(screen.getByRole("button", { name: "New workspace" }));
-		await user.click(screen.getByText("dosu-cli"));
+		await user.click(await screen.findByText("dosu-cli"));
 
 		await waitFor(() => {
 			expect(apiMocks.createWorkspaceFromRepo).toHaveBeenCalledWith("repo-1");

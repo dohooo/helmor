@@ -5,9 +5,11 @@ import {
 	type ReactNode,
 	useCallback,
 	useEffect,
+	useRef,
 	useState,
 } from "react";
 import type { AgentModelSection } from "@/lib/api";
+import { recordComposerRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
 import { ClaudeIcon, OpenAIIcon } from "./icons";
 import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
@@ -24,6 +26,8 @@ import {
 type WorkspaceComposerProps = {
 	contextKey: string;
 	onSubmit: (prompt: string, imagePaths: string[]) => void;
+	disabled?: boolean;
+	submitDisabled?: boolean;
 	onStop?: () => void;
 	sending?: boolean;
 	selectedModelId: string | null;
@@ -65,8 +69,10 @@ function ComposerButton({
 }
 
 export const WorkspaceComposer = memo(function WorkspaceComposer({
-	contextKey: _contextKey,
+	contextKey,
 	onSubmit,
+	disabled = false,
+	submitDisabled = false,
 	onStop,
 	sending = false,
 	selectedModelId,
@@ -82,18 +88,19 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	restoreImages = [],
 	restoreNonce = 0,
 }: WorkspaceComposerProps) {
+	const instanceIdRef = useRef(
+		`composer-${Math.random().toString(36).slice(2, 10)}`,
+	);
+	recordComposerRender(contextKey, instanceIdRef.current);
 	const [draftValue, setDraftValue] = useState(restoreDraft ?? "");
 	const isOpus = selectedModelId === "opus-1m" || selectedModelId === "opus";
 	const effectiveEffort = (() => {
 		let level = effortLevel;
 		if (provider === "codex") {
-			// Claude → Codex mapping
 			if (level === "max") level = "xhigh";
 		} else {
-			// Codex → Claude mapping
 			if (level === "xhigh") level = isOpus ? "max" : "high";
 			if (level === "minimal") level = "low";
-			// Non-Opus can't use max
 			if (level === "max" && !isOpus) level = "high";
 		}
 		return level;
@@ -104,7 +111,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			.find((option) => option.id === selectedModelId) ?? null;
 	const [attachedImages, setAttachedImages] = useState<string[]>(restoreImages);
 	const hasContent = draftValue.trim().length > 0 || attachedImages.length > 0;
-	const sendDisabled = sending || !selectedModel || !hasContent;
+	const sendDisabled =
+		disabled || submitDisabled || sending || !selectedModel || !hasContent;
+
+	useEffect(() => {
+		setDraftValue(restoreDraft ?? "");
+		setAttachedImages(restoreImages);
+	}, [contextKey, restoreDraft, restoreImages]);
 
 	useEffect(() => {
 		if (!restoreDraft && restoreImages.length === 0) return;
@@ -166,6 +179,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				onChange={(event) => {
 					handleValueChange(event.currentTarget.value);
 				}}
+				disabled={disabled}
 				onKeyDown={(event) => {
 					if (event.key === "Enter" && !event.shiftKey) {
 						event.preventDefault();
@@ -187,7 +201,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			<div className="mt-2.5 flex items-end justify-between gap-3">
 				<div className="flex flex-wrap items-center gap-2">
 					<DropdownMenu>
-						<DropdownMenuTrigger className="flex items-center gap-1.5 rounded-lg px-1 py-0.5 text-[13px] font-medium text-app-foreground-soft transition-colors hover:text-app-foreground focus-visible:outline-none">
+						<DropdownMenuTrigger
+							disabled={disabled}
+							className={cn(
+								"flex items-center gap-1.5 rounded-lg px-1 py-0.5 text-[13px] font-medium text-app-foreground-soft transition-colors hover:text-app-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong",
+								disabled &&
+									"cursor-not-allowed opacity-45 hover:text-app-foreground-soft",
+							)}
+						>
 							{selectedModel?.provider === "codex" ? (
 								<OpenAIIcon className="size-[14px]" />
 							) : (
@@ -210,7 +231,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 									{section.options.map((option) => (
 										<DropdownMenuItem
 											key={option.id}
-											onClick={() => {
+											disabled={disabled}
+											onSelect={() => {
 												onSelectModel(option.id);
 											}}
 											className="flex items-center justify-between gap-3"
@@ -238,9 +260,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						</DropdownMenuContent>
 					</DropdownMenu>
 
-					{/* Effort level dropdown — text-only trigger */}
 					<DropdownMenu>
-						<DropdownMenuTrigger className="flex items-center gap-0.5 px-1 py-0.5 text-[13px] font-medium focus-visible:outline-none">
+						<DropdownMenuTrigger
+							disabled={disabled}
+							className={cn(
+								"flex items-center gap-0.5 px-1 py-0.5 text-[13px] font-medium focus-visible:outline-none",
+								disabled ? "cursor-not-allowed opacity-45" : null,
+							)}
+						>
 							<span
 								className={cn(
 									"capitalize",
@@ -272,7 +299,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								).map((level) => (
 									<DropdownMenuItem
 										key={level}
-										onClick={() => onSelectEffort(level)}
+										disabled={disabled}
+										onSelect={() => onSelectEffort(level)}
 										className="flex items-center justify-between gap-3"
 									>
 										<div className="flex items-center gap-2.5">
@@ -289,9 +317,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 							</DropdownMenuGroup>
 						</DropdownMenuContent>
 					</DropdownMenu>
-					{/* Plan mode toggle */}
+
 					<ComposerButton
 						aria-label="Plan mode"
+						disabled={disabled}
 						className={cn(
 							"gap-1.5 rounded-md px-2 py-0.5 text-[13px] font-medium transition-colors",
 							permissionMode === "plan"
@@ -311,7 +340,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 							type="button"
 							aria-label="Stop"
 							onClick={onStop}
-							className="flex size-8 items-center justify-center rounded-[9px] border border-red-500/40 bg-red-500/10 text-red-400 transition-transform hover:-translate-y-px focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-red-500/40"
+							disabled={disabled || submitDisabled}
+							className={cn(
+								"flex size-8 items-center justify-center rounded-[9px] border border-red-500/40 bg-red-500/10 text-red-400 transition-transform focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-red-500/40",
+								disabled
+									? "cursor-not-allowed opacity-50"
+									: "hover:-translate-y-px",
+							)}
 						>
 							<Square className="size-3 fill-current" strokeWidth={0} />
 						</button>
@@ -337,14 +372,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	);
 });
 
-/**
- * Brain icon with varying cortex complexity to represent effort levels.
- * From smooth (minimal/low) to deeply folded (max/xhigh).
- */
 function EffortBrainIcon({ level }: { level: string }) {
 	const cls = "size-4 shrink-0";
 
-	// minimal — smooth brain, no folds
 	if (level === "minimal") {
 		return (
 			<svg
@@ -364,7 +394,6 @@ function EffortBrainIcon({ level }: { level: string }) {
 		);
 	}
 
-	// low — one gentle fold
 	if (level === "low") {
 		return (
 			<svg
@@ -385,7 +414,6 @@ function EffortBrainIcon({ level }: { level: string }) {
 		);
 	}
 
-	// medium — two folds
 	if (level === "medium") {
 		return (
 			<svg
@@ -407,7 +435,6 @@ function EffortBrainIcon({ level }: { level: string }) {
 		);
 	}
 
-	// high — three folds
 	if (level === "high") {
 		return (
 			<svg
@@ -427,7 +454,6 @@ function EffortBrainIcon({ level }: { level: string }) {
 		);
 	}
 
-	// max / xhigh — dense folds, full complexity
 	return (
 		<svg
 			className={cls}

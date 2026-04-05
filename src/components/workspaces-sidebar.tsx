@@ -32,6 +32,7 @@ import type {
 	WorkspaceGroup,
 	WorkspaceRow,
 } from "@/lib/api";
+import { recordSidebarRowRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
 import { BaseTooltip } from "./ui/base-tooltip";
 import {
@@ -70,6 +71,36 @@ const groupToneClasses: Record<GroupTone, string> = {
 	backlog: "text-app-backlog",
 	canceled: "text-app-canceled",
 };
+const ARCHIVED_SECTION_ID = "__archived__";
+
+function createInitialSectionOpenState(groups: WorkspaceGroup[]) {
+	return Object.fromEntries([
+		...groups.map((group) => [group.id, group.rows.length > 0]),
+		[ARCHIVED_SECTION_ID, false],
+	]) as Record<string, boolean>;
+}
+
+function findSelectedSectionId(
+	selectedWorkspaceId: string | null | undefined,
+	groups: WorkspaceGroup[],
+	archivedRows: WorkspaceRow[],
+) {
+	if (!selectedWorkspaceId) {
+		return null;
+	}
+
+	for (const group of groups) {
+		if (group.rows.some((row) => row.id === selectedWorkspaceId)) {
+			return group.id;
+		}
+	}
+
+	if (archivedRows.some((row) => row.id === selectedWorkspaceId)) {
+		return ARCHIVED_SECTION_ID;
+	}
+
+	return null;
+}
 
 type ToolbarButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 	label: string;
@@ -195,7 +226,7 @@ function getWorkspaceAvatarSrc(repoIconSrc?: string | null) {
 	return repoIconSrc?.trim() ? repoIconSrc : null;
 }
 
-function WorkspaceAvatar({
+const WorkspaceAvatar = memo(function WorkspaceAvatar({
 	repoIconSrc,
 	repoInitials,
 	repoName,
@@ -244,23 +275,14 @@ function WorkspaceAvatar({
 			) : null}
 		</span>
 	);
-}
+});
 
-function WorkspaceRowItem({
-	row,
-	selected,
-	onSelect,
-	onArchiveWorkspace,
-	onMarkWorkspaceUnread,
-	onRestoreWorkspace,
-	archivingWorkspaceId,
-	markingUnreadWorkspaceId,
-	restoringWorkspaceId,
-	workspaceActionsDisabled,
-}: {
+type WorkspaceRowItemProps = {
 	row: WorkspaceRow;
 	selected: boolean;
+	rowRef?: (element: HTMLDivElement | null) => void;
 	onSelect?: (workspaceId: string) => void;
+	onPrefetch?: (workspaceId: string) => void;
 	onArchiveWorkspace?: (workspaceId: string) => void;
 	onMarkWorkspaceUnread?: (workspaceId: string) => void;
 	onRestoreWorkspace?: (workspaceId: string) => void;
@@ -268,130 +290,169 @@ function WorkspaceRowItem({
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
 	workspaceActionsDisabled?: boolean;
-}) {
-	const actionLabel =
-		row.state === "archived" ? "Restore workspace" : "Archive workspace";
-	const isArchiving = archivingWorkspaceId === row.id;
-	const isMarkingUnread = markingUnreadWorkspaceId === row.id;
-	const isRestoring = restoringWorkspaceId === row.id;
-	const isRestoreAction = row.state === "archived";
-	const isBusy = isArchiving || isMarkingUnread || isRestoring;
-	const hasActionHandler = isRestoreAction
-		? Boolean(onRestoreWorkspace)
-		: Boolean(onArchiveWorkspace);
-	const canMarkAsUnread =
-		Boolean(onMarkWorkspaceUnread) &&
-		!row.hasUnread &&
-		!workspaceActionsDisabled &&
-		!isBusy;
-	const actionIcon = isBusy ? (
-		<LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.1} />
-	) : isRestoreAction ? (
-		<RotateCcw className="size-3.5" strokeWidth={2.1} />
-	) : (
-		<Archive className="size-3.5" strokeWidth={1.9} />
-	);
+};
 
-	const rowBody = (
-		<div
-			role="button"
-			tabIndex={0}
-			aria-label={row.title}
-			data-has-unread={row.hasUnread ? "true" : "false"}
-			onClick={() => {
-				onSelect?.(row.id);
-			}}
-			onKeyDown={(event) => {
-				if (event.key === "Enter" || event.key === " ") {
-					event.preventDefault();
+const WorkspaceRowItem = memo(
+	function WorkspaceRowItem({
+		row,
+		selected,
+		rowRef,
+		onSelect,
+		onPrefetch,
+		onArchiveWorkspace,
+		onMarkWorkspaceUnread,
+		onRestoreWorkspace,
+		archivingWorkspaceId,
+		markingUnreadWorkspaceId,
+		restoringWorkspaceId,
+		workspaceActionsDisabled,
+	}: WorkspaceRowItemProps) {
+		recordSidebarRowRender(row.id);
+		const actionLabel =
+			row.state === "archived" ? "Restore workspace" : "Archive workspace";
+		const isArchiving = archivingWorkspaceId === row.id;
+		const isMarkingUnread = markingUnreadWorkspaceId === row.id;
+		const isRestoring = restoringWorkspaceId === row.id;
+		const isRestoreAction = row.state === "archived";
+		const isBusy = isArchiving || isMarkingUnread || isRestoring;
+		const hasActionHandler = isRestoreAction
+			? Boolean(onRestoreWorkspace)
+			: Boolean(onArchiveWorkspace);
+		const canMarkAsUnread =
+			Boolean(onMarkWorkspaceUnread) &&
+			!row.hasUnread &&
+			!workspaceActionsDisabled &&
+			!isBusy;
+		const actionIcon = isBusy ? (
+			<LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.1} />
+		) : isRestoreAction ? (
+			<RotateCcw className="size-3.5" strokeWidth={2.1} />
+		) : (
+			<Archive className="size-3.5" strokeWidth={1.9} />
+		);
+
+		const rowBody = (
+			<div
+				ref={rowRef}
+				role="button"
+				tabIndex={0}
+				aria-label={row.title}
+				data-workspace-row-id={row.id}
+				data-has-unread={row.hasUnread ? "true" : "false"}
+				onMouseEnter={() => {
+					onPrefetch?.(row.id);
+				}}
+				onFocus={() => {
+					onPrefetch?.(row.id);
+				}}
+				onClick={() => {
 					onSelect?.(row.id);
-				}
-			}}
-			className={cn(
-				rowVariants({ active: selected }),
-				"w-full text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong",
-			)}
-		>
-			<div className="flex min-w-0 flex-1 items-center gap-2">
-				<WorkspaceAvatar
-					repoIconSrc={row.repoIconSrc}
-					repoInitials={row.repoInitials ?? row.avatar ?? null}
-					repoName={row.repoName}
-					title={row.title}
-				/>
-				<GitBranch
-					className="size-[13px] shrink-0 text-app-warm"
-					strokeWidth={1.9}
-				/>
-				<span
-					className={cn(
-						"truncate leading-none",
-						selected
-							? row.hasUnread
-								? "font-semibold text-app-foreground"
-								: "font-medium text-app-foreground"
-							: row.hasUnread
-								? "font-semibold text-app-foreground"
-								: "font-medium text-app-foreground-soft/70",
-					)}
-				>
-					{row.title}
-				</span>
-			</div>
-
-			{hasActionHandler ? (
-				<BaseTooltip side="top" content={<span>{actionLabel}</span>}>
-					<button
-						type="button"
-						aria-label={actionLabel}
-						disabled={Boolean(workspaceActionsDisabled)}
-						onClick={(event) => {
-							event.stopPropagation();
-
-							if (workspaceActionsDisabled) {
-								return;
-							}
-
-							if (isRestoreAction) {
-								onRestoreWorkspace?.(row.id);
-							} else {
-								onArchiveWorkspace?.(row.id);
-							}
-						}}
+				}}
+				onKeyDown={(event) => {
+					if (event.key === "Enter" || event.key === " ") {
+						event.preventDefault();
+						onSelect?.(row.id);
+					}
+				}}
+				className={cn(
+					rowVariants({ active: selected }),
+					"w-full text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong",
+				)}
+			>
+				<div className="flex min-w-0 flex-1 items-center gap-2">
+					<WorkspaceAvatar
+						repoIconSrc={row.repoIconSrc}
+						repoInitials={row.repoInitials ?? row.avatar ?? null}
+						repoName={row.repoName}
+						title={row.title}
+					/>
+					<GitBranch
+						className="size-[13px] shrink-0 text-app-warm"
+						strokeWidth={1.9}
+					/>
+					<span
 						className={cn(
-							"flex shrink-0 items-center justify-center text-app-muted",
-							isBusy ? "visible" : "invisible group-hover:visible",
-							workspaceActionsDisabled
-								? "cursor-not-allowed opacity-60"
-								: "cursor-pointer hover:text-app-foreground",
+							"truncate leading-none",
+							selected
+								? row.hasUnread
+									? "font-semibold text-app-foreground"
+									: "font-medium text-app-foreground"
+								: row.hasUnread
+									? "font-semibold text-app-foreground"
+									: "font-medium text-app-foreground-soft/70",
 						)}
 					>
-						{actionIcon}
-					</button>
-				</BaseTooltip>
-			) : null}
-		</div>
-	);
+						{row.title}
+					</span>
+				</div>
 
-	return (
-		<ContextMenu>
-			<ContextMenuTrigger className="block">{rowBody}</ContextMenuTrigger>
-			<ContextMenuContent className="min-w-40">
-				<ContextMenuItem
-					disabled={!canMarkAsUnread}
-					onClick={() => {
-						if (canMarkAsUnread) {
-							onMarkWorkspaceUnread?.(row.id);
-						}
-					}}
-				>
-					<span className="size-2 shrink-0 rounded-full bg-app-progress" />
-					<span>Mark as unread</span>
-				</ContextMenuItem>
-			</ContextMenuContent>
-		</ContextMenu>
-	);
-}
+				{hasActionHandler ? (
+					<BaseTooltip side="top" content={<span>{actionLabel}</span>}>
+						<button
+							type="button"
+							aria-label={actionLabel}
+							disabled={Boolean(workspaceActionsDisabled)}
+							onClick={(event) => {
+								event.stopPropagation();
+
+								if (workspaceActionsDisabled) {
+									return;
+								}
+
+								if (isRestoreAction) {
+									onRestoreWorkspace?.(row.id);
+								} else {
+									onArchiveWorkspace?.(row.id);
+								}
+							}}
+							className={cn(
+								"flex shrink-0 items-center justify-center text-app-muted",
+								isBusy ? "visible" : "invisible group-hover:visible",
+								workspaceActionsDisabled
+									? "cursor-not-allowed opacity-60"
+									: "cursor-pointer hover:text-app-foreground",
+							)}
+						>
+							{actionIcon}
+						</button>
+					</BaseTooltip>
+				) : null}
+			</div>
+		);
+
+		return (
+			<ContextMenu>
+				<ContextMenuTrigger className="block">{rowBody}</ContextMenuTrigger>
+				<ContextMenuContent className="min-w-40">
+					<ContextMenuItem
+						disabled={!canMarkAsUnread}
+						onClick={() => {
+							if (canMarkAsUnread) {
+								onMarkWorkspaceUnread?.(row.id);
+							}
+						}}
+					>
+						<span className="size-2 shrink-0 rounded-full bg-app-progress" />
+						<span>Mark as unread</span>
+					</ContextMenuItem>
+				</ContextMenuContent>
+			</ContextMenu>
+		);
+	},
+	function areWorkspaceRowItemPropsEqual(
+		previous: WorkspaceRowItemProps,
+		next: WorkspaceRowItemProps,
+	) {
+		return (
+			previous.row === next.row &&
+			previous.selected === next.selected &&
+			previous.archivingWorkspaceId === next.archivingWorkspaceId &&
+			previous.markingUnreadWorkspaceId === next.markingUnreadWorkspaceId &&
+			previous.restoringWorkspaceId === next.restoringWorkspaceId &&
+			previous.workspaceActionsDisabled === next.workspaceActionsDisabled
+		);
+	},
+);
 
 export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	groups,
@@ -402,6 +463,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	creatingWorkspaceRepoId,
 	onAddRepository,
 	onSelectWorkspace,
+	onPrefetchWorkspace,
 	onCreateWorkspace,
 	onArchiveWorkspace,
 	onMarkWorkspaceUnread,
@@ -418,6 +480,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	creatingWorkspaceRepoId?: string | null;
 	onAddRepository?: () => void;
 	onSelectWorkspace?: (workspaceId: string) => void;
+	onPrefetchWorkspace?: (workspaceId: string) => void;
 	onCreateWorkspace?: (repoId: string) => void;
 	onArchiveWorkspace?: (workspaceId: string) => void;
 	onMarkWorkspaceUnread?: (workspaceId: string) => void;
@@ -435,6 +498,94 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		top: number;
 		left: number;
 	} | null>(null);
+	const viewportRef = useRef<HTMLDivElement | null>(null);
+	const workspaceRowRefs = useRef(new Map<string, HTMLDivElement>());
+	const [sectionOpenState, setSectionOpenState] = useState(() =>
+		createInitialSectionOpenState(groups),
+	);
+
+	const setWorkspaceRowRef = useCallback(
+		(workspaceId: string) => (element: HTMLDivElement | null) => {
+			if (element) {
+				workspaceRowRefs.current.set(workspaceId, element);
+				return;
+			}
+
+			workspaceRowRefs.current.delete(workspaceId);
+		},
+		[],
+	);
+
+	useEffect(() => {
+		setSectionOpenState((current) => {
+			const next: Record<string, boolean> = {};
+			let changed = false;
+
+			for (const group of groups) {
+				const nextValue = current[group.id] ?? group.rows.length > 0;
+				next[group.id] = nextValue;
+				if (current[group.id] !== nextValue) {
+					changed = true;
+				}
+			}
+
+			const archivedValue = current[ARCHIVED_SECTION_ID] ?? false;
+			next[ARCHIVED_SECTION_ID] = archivedValue;
+			if (current[ARCHIVED_SECTION_ID] !== archivedValue) {
+				changed = true;
+			}
+
+			if (Object.keys(current).length !== Object.keys(next).length) {
+				changed = true;
+			}
+
+			return changed ? next : current;
+		});
+	}, [archivedRows, groups]);
+
+	useEffect(() => {
+		const selectedSectionId = findSelectedSectionId(
+			selectedWorkspaceId,
+			groups,
+			archivedRows,
+		);
+
+		if (!selectedSectionId) {
+			return;
+		}
+
+		setSectionOpenState((current) =>
+			current[selectedSectionId]
+				? current
+				: { ...current, [selectedSectionId]: true },
+		);
+	}, [archivedRows, groups, selectedWorkspaceId]);
+
+	useLayoutEffect(() => {
+		if (!selectedWorkspaceId) {
+			return;
+		}
+
+		const selectedRowElement =
+			workspaceRowRefs.current.get(selectedWorkspaceId);
+		if (
+			!selectedRowElement ||
+			typeof selectedRowElement.scrollIntoView !== "function"
+		) {
+			return;
+		}
+
+		const frameId = window.requestAnimationFrame(() => {
+			selectedRowElement.scrollIntoView({
+				block: "nearest",
+				inline: "nearest",
+			});
+		});
+
+		return () => {
+			window.cancelAnimationFrame(frameId);
+		};
+	}, [sectionOpenState, selectedWorkspaceId]);
 
 	const updatePickerPosition = useCallback(() => {
 		const anchor = repoPickerAnchorRef.current;
@@ -671,6 +822,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				<ScrollArea
 					data-slot="workspace-groups-scroll"
 					className="relative mt-4 min-h-0 flex-1 overflow-hidden"
+					viewportRef={viewportRef}
 					viewportClassName="h-full min-w-0 w-full rounded-[inherit] px-2 pr-3"
 				>
 					<div className="flex min-h-full flex-col gap-4 pb-3">
@@ -678,7 +830,16 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							const canCollapse = group.rows.length > 0;
 
 							return (
-								<Collapsible key={group.id} defaultOpen>
+								<Collapsible
+									key={group.id}
+									open={sectionOpenState[group.id] ?? group.rows.length > 0}
+									onOpenChange={(open) => {
+										setSectionOpenState((current) => ({
+											...current,
+											[group.id]: open,
+										}));
+									}}
+								>
 									<section aria-label={group.label} className="space-y-1.5">
 										<CollapsibleTrigger
 											className={cn(
@@ -708,7 +869,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 															key={row.id}
 															row={row}
 															selected={selectedWorkspaceId === row.id}
+															rowRef={setWorkspaceRowRef(row.id)}
 															onSelect={onSelectWorkspace}
+															onPrefetch={onPrefetchWorkspace}
 															onArchiveWorkspace={onArchiveWorkspace}
 															onMarkWorkspaceUnread={onMarkWorkspaceUnread}
 															archivingWorkspaceId={archivingWorkspaceId}
@@ -732,7 +895,15 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							);
 						})}
 
-						<Collapsible defaultOpen={false}>
+						<Collapsible
+							open={sectionOpenState[ARCHIVED_SECTION_ID] ?? false}
+							onOpenChange={(open) => {
+								setSectionOpenState((current) => ({
+									...current,
+									[ARCHIVED_SECTION_ID]: open,
+								}));
+							}}
+						>
 							<section aria-label="Archived" className="space-y-1.5">
 								<CollapsibleTrigger
 									className={cn(
@@ -767,7 +938,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 													key={row.id}
 													row={row}
 													selected={selectedWorkspaceId === row.id}
+													rowRef={setWorkspaceRowRef(row.id)}
 													onSelect={onSelectWorkspace}
+													onPrefetch={onPrefetchWorkspace}
 													onArchiveWorkspace={onArchiveWorkspace}
 													onMarkWorkspaceUnread={onMarkWorkspaceUnread}
 													onRestoreWorkspace={onRestoreWorkspace}

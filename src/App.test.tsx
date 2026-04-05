@@ -368,6 +368,111 @@ describe("App", () => {
 		expect(unreadLabel.className).toContain("font-semibold");
 	});
 
+	it("reopens a collapsed group when selection moves into it", async () => {
+		const user = userEvent.setup();
+		const groups: WorkspaceGroup[] = [
+			{
+				id: "review",
+				label: "In review",
+				tone: "review",
+				rows: [
+					{
+						id: "review-workspace",
+						title: "Review workspace",
+						state: "ready",
+						repoName: "helmor-core",
+					},
+				],
+			},
+			{
+				id: "progress",
+				label: "In progress",
+				tone: "progress",
+				rows: [
+					{
+						id: "progress-workspace",
+						title: "Progress workspace",
+						state: "ready",
+						repoName: "helmor-core",
+					},
+				],
+			},
+		];
+		const { rerender } = render(
+			<WorkspacesSidebar
+				groups={groups}
+				archivedRows={[]}
+				selectedWorkspaceId="review-workspace"
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "In progress" }));
+
+		expect(
+			screen.queryByRole("button", { name: "Progress workspace" }),
+		).not.toBeInTheDocument();
+
+		rerender(
+			<WorkspacesSidebar
+				groups={groups}
+				archivedRows={[]}
+				selectedWorkspaceId="progress-workspace"
+			/>,
+		);
+
+		await waitFor(() => {
+			expect(
+				screen.getByRole("button", { name: "Progress workspace" }),
+			).toBeInTheDocument();
+		});
+	});
+
+	it("opens archived and scrolls the selected workspace into view", async () => {
+		const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+		const scrollIntoViewMock = vi.fn();
+		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+			configurable: true,
+			value: scrollIntoViewMock,
+		});
+
+		const archivedRows = [
+			{
+				id: "archived-workspace",
+				title: "Archived workspace",
+				state: "archived",
+				repoName: "helmor-core",
+			},
+		];
+
+		try {
+			const { rerender } = render(
+				<WorkspacesSidebar groups={[]} archivedRows={archivedRows} />,
+			);
+
+			rerender(
+				<WorkspacesSidebar
+					groups={[]}
+					archivedRows={archivedRows}
+					selectedWorkspaceId="archived-workspace"
+				/>,
+			);
+
+			await waitFor(() => {
+				expect(
+					screen.getByRole("button", { name: "Archived workspace" }),
+				).toBeInTheDocument();
+			});
+			await waitFor(() => {
+				expect(scrollIntoViewMock).toHaveBeenCalled();
+			});
+		} finally {
+			Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+				configurable: true,
+				value: originalScrollIntoView,
+			});
+		}
+	});
+
 	it("disables restore while a workspace is being restored", async () => {
 		const user = userEvent.setup();
 		const onRestoreWorkspace = vi.fn();
@@ -458,7 +563,16 @@ describe("App", () => {
 					},
 				]}
 				selectedSessionId="session-1"
-				messages={[]}
+				visibleSessionId="session-1"
+				sessionPanes={[
+					{
+						sessionId: "session-1",
+						messages: [],
+						sending: false,
+						hasLoaded: true,
+						presentationState: "presented",
+					},
+				]}
 			/>,
 		);
 

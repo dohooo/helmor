@@ -263,6 +263,19 @@ export type CreateWorkspaceResponse = {
 	branch: string;
 };
 
+type BrowserFixtureName = "workspace-cache";
+
+type BrowserFixtureStats = {
+	activeFixture: BrowserFixtureName;
+	callCounts: Record<string, number>;
+};
+
+declare global {
+	interface Window {
+		__HELMOR_DEV_FIXTURE_STATS__?: BrowserFixtureStats;
+	}
+}
+
 export type MarkWorkspaceReadResponse = undefined;
 
 export type SessionMessageRecord = {
@@ -392,6 +405,298 @@ const DEFAULT_REPOSITORIES: RepositoryCreateOption[] = [];
 const DEFAULT_ADD_REPOSITORY_DEFAULTS: AddRepositoryDefaults = {
 	lastCloneDirectory: null,
 };
+
+const BROWSER_FIXTURE_WORKSPACE_GROUPS: WorkspaceGroup[] = [
+	{
+		id: "progress",
+		label: "In progress",
+		tone: "progress",
+		rows: [
+			{
+				id: "fixture-alpha",
+				title: "Fixture Alpha",
+				repoName: "helmor-fixtures",
+				repoInitials: "HF",
+				state: "ready",
+				activeSessionId: "fixture-alpha-session-1",
+				activeSessionTitle: "Alpha planning",
+				activeSessionAgentType: "claude",
+				activeSessionStatus: "idle",
+				sessionCount: 2,
+				messageCount: 6,
+				attachmentCount: 0,
+			},
+			{
+				id: "fixture-beta",
+				title: "Fixture Beta",
+				repoName: "helmor-fixtures",
+				repoInitials: "HF",
+				state: "ready",
+				activeSessionId: "fixture-beta-session-1",
+				activeSessionTitle: "Beta launch",
+				activeSessionAgentType: "codex",
+				activeSessionStatus: "idle",
+				sessionCount: 2,
+				messageCount: 8,
+				attachmentCount: 0,
+			},
+		],
+	},
+];
+
+const BROWSER_FIXTURE_WORKSPACE_DETAILS: Record<string, WorkspaceDetail> = {
+	"fixture-alpha": {
+		id: "fixture-alpha",
+		title: "Fixture Alpha",
+		repoId: "repo-fixture",
+		repoName: "helmor-fixtures",
+		repoInitials: "HF",
+		remoteUrl: "https://example.com/helmor-fixtures.git",
+		defaultBranch: "main",
+		rootPath: "/tmp/helmor-fixtures/alpha",
+		directoryName: "fixture-alpha",
+		state: "ready",
+		hasUnread: false,
+		workspaceUnread: 0,
+		sessionUnreadTotal: 0,
+		unreadSessionCount: 0,
+		derivedStatus: "progress",
+		manualStatus: null,
+		activeSessionId: "fixture-alpha-session-1",
+		activeSessionTitle: "Alpha planning",
+		activeSessionAgentType: "claude",
+		activeSessionStatus: "idle",
+		branch: "main",
+		initializationParentBranch: "main",
+		intendedTargetBranch: "main",
+		notes: null,
+		pinnedAt: null,
+		prTitle: null,
+		prDescription: null,
+		archiveCommit: null,
+		sessionCount: 2,
+		messageCount: 6,
+		attachmentCount: 0,
+	},
+	"fixture-beta": {
+		id: "fixture-beta",
+		title: "Fixture Beta",
+		repoId: "repo-fixture",
+		repoName: "helmor-fixtures",
+		repoInitials: "HF",
+		remoteUrl: "https://example.com/helmor-fixtures.git",
+		defaultBranch: "release",
+		rootPath: "/tmp/helmor-fixtures/beta",
+		directoryName: "fixture-beta",
+		state: "ready",
+		hasUnread: false,
+		workspaceUnread: 0,
+		sessionUnreadTotal: 0,
+		unreadSessionCount: 0,
+		derivedStatus: "progress",
+		manualStatus: null,
+		activeSessionId: "fixture-beta-session-1",
+		activeSessionTitle: "Beta launch",
+		activeSessionAgentType: "codex",
+		activeSessionStatus: "idle",
+		branch: "release",
+		initializationParentBranch: "main",
+		intendedTargetBranch: "main",
+		notes: null,
+		pinnedAt: null,
+		prTitle: null,
+		prDescription: null,
+		archiveCommit: null,
+		sessionCount: 2,
+		messageCount: 8,
+		attachmentCount: 0,
+	},
+};
+
+const BROWSER_FIXTURE_WORKSPACE_SESSIONS: Record<
+	string,
+	WorkspaceSessionSummary[]
+> = {
+	"fixture-alpha": [
+		{
+			id: "fixture-alpha-session-1",
+			workspaceId: "fixture-alpha",
+			title: "Alpha planning",
+			agentType: "claude",
+			status: "idle",
+			model: "opus-1m",
+			permissionMode: "default",
+			providerSessionId: null,
+			unreadCount: 0,
+			contextTokenCount: 1200,
+			contextUsedPercent: 18,
+			thinkingEnabled: true,
+			codexThinkingLevel: null,
+			fastMode: false,
+			agentPersonality: null,
+			createdAt: "2026-04-05T01:00:00Z",
+			updatedAt: "2026-04-05T01:00:00Z",
+			lastUserMessageAt: "2026-04-05T01:05:00Z",
+			resumeSessionAt: null,
+			isHidden: false,
+			isCompacting: false,
+			active: true,
+		},
+		{
+			id: "fixture-alpha-session-2",
+			workspaceId: "fixture-alpha",
+			title: "Alpha review",
+			agentType: "claude",
+			status: "idle",
+			model: "opus-1m",
+			permissionMode: "default",
+			providerSessionId: null,
+			unreadCount: 0,
+			contextTokenCount: 980,
+			contextUsedPercent: 14,
+			thinkingEnabled: true,
+			codexThinkingLevel: null,
+			fastMode: false,
+			agentPersonality: null,
+			createdAt: "2026-04-05T01:10:00Z",
+			updatedAt: "2026-04-05T01:10:00Z",
+			lastUserMessageAt: "2026-04-05T01:12:00Z",
+			resumeSessionAt: null,
+			isHidden: false,
+			isCompacting: false,
+			active: false,
+		},
+	],
+	"fixture-beta": [
+		{
+			id: "fixture-beta-session-1",
+			workspaceId: "fixture-beta",
+			title: "Beta launch",
+			agentType: "codex",
+			status: "idle",
+			model: "gpt-5.4",
+			permissionMode: "default",
+			providerSessionId: null,
+			unreadCount: 0,
+			contextTokenCount: 1340,
+			contextUsedPercent: 21,
+			thinkingEnabled: true,
+			codexThinkingLevel: "high",
+			fastMode: true,
+			agentPersonality: null,
+			createdAt: "2026-04-05T02:00:00Z",
+			updatedAt: "2026-04-05T02:00:00Z",
+			lastUserMessageAt: "2026-04-05T02:05:00Z",
+			resumeSessionAt: null,
+			isHidden: false,
+			isCompacting: false,
+			active: true,
+		},
+		{
+			id: "fixture-beta-session-2",
+			workspaceId: "fixture-beta",
+			title: "Beta bugfixes",
+			agentType: "codex",
+			status: "idle",
+			model: "gpt-5.4",
+			permissionMode: "default",
+			providerSessionId: null,
+			unreadCount: 0,
+			contextTokenCount: 860,
+			contextUsedPercent: 11,
+			thinkingEnabled: true,
+			codexThinkingLevel: "medium",
+			fastMode: false,
+			agentPersonality: null,
+			createdAt: "2026-04-05T02:10:00Z",
+			updatedAt: "2026-04-05T02:10:00Z",
+			lastUserMessageAt: "2026-04-05T02:14:00Z",
+			resumeSessionAt: null,
+			isHidden: false,
+			isCompacting: false,
+			active: false,
+		},
+	],
+};
+
+const BROWSER_FIXTURE_MESSAGES: Record<string, SessionMessageRecord[]> = {
+	"fixture-alpha-session-1": [
+		createFixtureMessage(
+			"fixture-alpha-session-1-user-1",
+			"fixture-alpha-session-1",
+			"user",
+			"Summarize the current alpha launch blockers.",
+			"2026-04-05T01:00:10Z",
+			"opus-1m",
+		),
+		createFixtureMessage(
+			"fixture-alpha-session-1-assistant-1",
+			"fixture-alpha-session-1",
+			"assistant",
+			"There are three blockers: caching semantics, refresh overlay timing, and sidebar selection reconciliation.",
+			"2026-04-05T01:00:20Z",
+			"opus-1m",
+		),
+	],
+	"fixture-alpha-session-2": [
+		createFixtureMessage(
+			"fixture-alpha-session-2-user-1",
+			"fixture-alpha-session-2",
+			"user",
+			"Review the previous patch and identify regressions.",
+			"2026-04-05T01:10:10Z",
+			"opus-1m",
+		),
+		createFixtureMessage(
+			"fixture-alpha-session-2-assistant-1",
+			"fixture-alpha-session-2",
+			"assistant",
+			"The main regression is that session pending state never settles after workspace switches.",
+			"2026-04-05T01:10:22Z",
+			"opus-1m",
+		),
+	],
+	"fixture-beta-session-1": [
+		createFixtureMessage(
+			"fixture-beta-session-1-user-1",
+			"fixture-beta-session-1",
+			"user",
+			"Prepare the beta workspace for release validation.",
+			"2026-04-05T02:00:05Z",
+			"gpt-5.4",
+		),
+		createFixtureMessage(
+			"fixture-beta-session-1-assistant-1",
+			"fixture-beta-session-1",
+			"assistant",
+			"I have prepared the release checklist, smoke tests, and a rollback plan.",
+			"2026-04-05T02:00:19Z",
+			"gpt-5.4",
+		),
+	],
+	"fixture-beta-session-2": [
+		createFixtureMessage(
+			"fixture-beta-session-2-user-1",
+			"fixture-beta-session-2",
+			"user",
+			"Track the beta bugfixes and cache-related UX issues.",
+			"2026-04-05T02:10:08Z",
+			"gpt-5.4",
+		),
+		createFixtureMessage(
+			"fixture-beta-session-2-assistant-1",
+			"fixture-beta-session-2",
+			"assistant",
+			"The cache should keep already viewed workspaces and sessions hot so revisits avoid cold skeletons.",
+			"2026-04-05T02:10:21Z",
+			"gpt-5.4",
+		),
+	],
+};
+
+const BROWSER_FIXTURE_ARCHIVED_WORKSPACES: WorkspaceSummary[] = [];
+const browserFixtureSeenKeys = new Set<string>();
+const browserFixtureCallCounts = new Map<string, number>();
 
 const DEFAULT_ARCHIVED_WORKSPACES: WorkspaceSummary[] = [
 	{
@@ -532,6 +837,108 @@ const BROWSER_FALLBACK_GITHUB_CLI_USER: GithubCliUser = {
 	email: null,
 };
 
+function createFixtureMessage(
+	id: string,
+	sessionId: string,
+	role: string,
+	content: string,
+	createdAt: string,
+	model: string,
+): SessionMessageRecord {
+	return {
+		id,
+		sessionId,
+		role,
+		content,
+		contentIsJson: false,
+		createdAt,
+		sentAt: createdAt,
+		cancelledAt: null,
+		model,
+		sdkMessageId: null,
+		lastAssistantMessageId: null,
+		turnId: null,
+		isResumableMessage: null,
+		attachmentCount: 0,
+	};
+}
+
+function cloneFixtureValue<T>(value: T): T {
+	return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function getBrowserFixtureName(): BrowserFixtureName | null {
+	if (typeof window === "undefined") {
+		return null;
+	}
+
+	const params = new URLSearchParams(window.location.search);
+	const fixtureName = params.get("fixture");
+	return fixtureName === "workspace-cache" ? fixtureName : null;
+}
+
+function getBrowserFixtureFirstLoadDelayMs() {
+	if (typeof window === "undefined") {
+		return 380;
+	}
+
+	const params = new URLSearchParams(window.location.search);
+	const rawDelay = params.get("fixtureDelayMs");
+	if (!rawDelay) {
+		return 380;
+	}
+
+	const parsedDelay = Number.parseInt(rawDelay, 10);
+	if (!Number.isFinite(parsedDelay) || parsedDelay < 0) {
+		return 380;
+	}
+
+	return parsedDelay;
+}
+
+function recordBrowserFixtureCall(cacheKey: string) {
+	const activeFixture = getBrowserFixtureName();
+	if (!activeFixture || typeof window === "undefined") {
+		return;
+	}
+
+	const nextCount = (browserFixtureCallCounts.get(cacheKey) ?? 0) + 1;
+	browserFixtureCallCounts.set(cacheKey, nextCount);
+	window.__HELMOR_DEV_FIXTURE_STATS__ = {
+		activeFixture,
+		callCounts: Object.fromEntries(browserFixtureCallCounts.entries()),
+	};
+}
+
+async function resolveBrowserFixtureValue<T>(
+	cacheKey: string,
+	value: T | null | undefined,
+): Promise<T | null | undefined> {
+	const activeFixture = getBrowserFixtureName();
+	if (!activeFixture) {
+		return undefined;
+	}
+
+	recordBrowserFixtureCall(cacheKey);
+	const firstLoad = !browserFixtureSeenKeys.has(cacheKey);
+	browserFixtureSeenKeys.add(cacheKey);
+	const delayMs = firstLoad ? getBrowserFixtureFirstLoadDelayMs() : 40;
+
+	if (delayMs > 0) {
+		await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+	}
+
+	if (value === undefined) {
+		return undefined;
+	}
+
+	if (value === null) {
+		return null;
+	}
+
+	return cloneFixtureValue(value);
+}
+
 export function hasTauriRuntime(): boolean {
 	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
@@ -548,13 +955,23 @@ export async function loadWorkspaceGroups(): Promise<WorkspaceGroup[]> {
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
+		const fixtureGroups = await resolveBrowserFixtureValue(
+			"workspaceGroups",
+			BROWSER_FIXTURE_WORKSPACE_GROUPS,
+		);
+		if (fixtureGroups) {
+			return fixtureGroups;
+		}
+
 		return DEFAULT_WORKSPACE_GROUPS;
 	}
 
 	try {
 		return await invoke<WorkspaceGroup[]>("list_workspace_groups");
-	} catch {
-		return DEFAULT_WORKSPACE_GROUPS;
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load workspace groups."),
+		);
 	}
 }
 
@@ -689,13 +1106,23 @@ export async function loadArchivedWorkspaces(): Promise<WorkspaceSummary[]> {
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
+		const fixtureArchived = await resolveBrowserFixtureValue(
+			"archivedWorkspaces",
+			BROWSER_FIXTURE_ARCHIVED_WORKSPACES,
+		);
+		if (fixtureArchived) {
+			return fixtureArchived;
+		}
+
 		return DEFAULT_ARCHIVED_WORKSPACES;
 	}
 
 	try {
 		return await invoke<WorkspaceSummary[]>("list_archived_workspaces");
-	} catch {
-		return DEFAULT_ARCHIVED_WORKSPACES;
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load archived workspaces."),
+		);
 	}
 }
 
@@ -703,13 +1130,21 @@ export async function listRepositories(): Promise<RepositoryCreateOption[]> {
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
+		const fixtureRepositories = await resolveBrowserFixtureValue(
+			"repositories",
+			DEFAULT_REPOSITORIES,
+		);
+		if (fixtureRepositories) {
+			return fixtureRepositories;
+		}
+
 		return DEFAULT_REPOSITORIES;
 	}
 
 	try {
 		return await invoke<RepositoryCreateOption[]>("list_repositories");
-	} catch {
-		return DEFAULT_REPOSITORIES;
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to load repositories."));
 	}
 }
 
@@ -731,13 +1166,21 @@ export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
+		const fixtureModels = await resolveBrowserFixtureValue(
+			"agentModelSections",
+			DEFAULT_AGENT_MODEL_SECTIONS,
+		);
+		if (fixtureModels) {
+			return fixtureModels;
+		}
+
 		return DEFAULT_AGENT_MODEL_SECTIONS;
 	}
 
 	try {
 		return await invoke<AgentModelSection[]>("list_agent_model_sections");
-	} catch {
-		return DEFAULT_AGENT_MODEL_SECTIONS;
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to load agent models."));
 	}
 }
 
@@ -747,13 +1190,23 @@ export async function loadWorkspaceDetail(
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
+		const fixtureDetail = await resolveBrowserFixtureValue(
+			`workspaceDetail:${workspaceId}`,
+			BROWSER_FIXTURE_WORKSPACE_DETAILS[workspaceId] ?? null,
+		);
+		if (fixtureDetail !== undefined) {
+			return fixtureDetail;
+		}
+
 		return null;
 	}
 
 	try {
 		return await invoke<WorkspaceDetail>("get_workspace", { workspaceId });
-	} catch {
-		return null;
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load workspace detail."),
+		);
 	}
 }
 
@@ -797,6 +1250,14 @@ export async function loadWorkspaceSessions(
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
+		const fixtureSessions = await resolveBrowserFixtureValue(
+			`workspaceSessions:${workspaceId}`,
+			BROWSER_FIXTURE_WORKSPACE_SESSIONS[workspaceId] ?? [],
+		);
+		if (fixtureSessions) {
+			return fixtureSessions;
+		}
+
 		return [];
 	}
 
@@ -804,8 +1265,10 @@ export async function loadWorkspaceSessions(
 		return await invoke<WorkspaceSessionSummary[]>("list_workspace_sessions", {
 			workspaceId,
 		});
-	} catch {
-		return [];
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load workspace sessions."),
+		);
 	}
 }
 
@@ -815,6 +1278,14 @@ export async function loadSessionMessages(
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
+		const fixtureMessages = await resolveBrowserFixtureValue(
+			`sessionMessages:${sessionId}`,
+			BROWSER_FIXTURE_MESSAGES[sessionId] ?? [],
+		);
+		if (fixtureMessages) {
+			return fixtureMessages;
+		}
+
 		return [];
 	}
 
@@ -822,8 +1293,10 @@ export async function loadSessionMessages(
 		return await invoke<SessionMessageRecord[]>("list_session_messages", {
 			sessionId,
 		});
-	} catch {
-		return [];
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load session messages."),
+		);
 	}
 }
 
@@ -833,6 +1306,14 @@ export async function loadSessionAttachments(
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
+		const fixtureAttachments = await resolveBrowserFixtureValue(
+			`sessionAttachments:${sessionId}`,
+			[],
+		);
+		if (fixtureAttachments) {
+			return fixtureAttachments;
+		}
+
 		return [];
 	}
 
@@ -840,8 +1321,10 @@ export async function loadSessionAttachments(
 		return await invoke<SessionAttachmentRecord[]>("list_session_attachments", {
 			sessionId,
 		});
-	} catch {
-		return [];
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load session attachments."),
+		);
 	}
 }
 
