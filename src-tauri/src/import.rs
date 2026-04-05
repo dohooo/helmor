@@ -610,7 +610,7 @@ fn copy_claude_sessions_for_workspace(
         return;
     }
 
-    // Copy each .jsonl session file (overwrite if exists)
+    // Copy each session file (.jsonl) and session directory (subagents, tool-results)
     let entries = match std::fs::read_dir(&src_dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -619,9 +619,17 @@ fn copy_claude_sessions_for_workspace(
     let mut copied = 0u32;
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "jsonl") {
-            let dst_file = dst_dir.join(entry.file_name());
-            if std::fs::copy(&path, &dst_file).is_ok() {
+        let dst_path = dst_dir.join(entry.file_name());
+        if path.is_file() && path.extension().is_some_and(|ext| ext == "jsonl") {
+            if std::fs::copy(&path, &dst_path).is_ok() {
+                copied += 1;
+            }
+        } else if path.is_dir() {
+            // Session directory (contains subagents/, tool-results/, etc.)
+            if dst_path.exists() {
+                std::fs::remove_dir_all(&dst_path).ok();
+            }
+            if helpers::copy_dir_all(&path, &dst_path).is_ok() {
                 copied += 1;
             }
         }

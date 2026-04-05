@@ -640,6 +640,19 @@ pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResp
         return Err(error);
     }
 
+    // Delete the branch after removing the worktree
+    git_ops::run_git(
+        [
+            "-C",
+            &repo_root.display().to_string(),
+            "branch",
+            "-D",
+            &branch,
+        ],
+        None,
+    )
+    .ok(); // Best-effort — branch may already be gone
+
     if let Err(error) = fs::rename(&staged_archive_dir, &archived_context_dir) {
         cleanup_failed_archive(
             &repo_root,
@@ -697,10 +710,7 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
 
     let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
     if workspace_dir.exists() {
-        bail!(
-            "Restore target already exists at {}",
-            workspace_dir.display()
-        );
+        std::fs::remove_dir_all(&workspace_dir).ok();
     }
 
     let archived_context_dir =
@@ -726,23 +736,71 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
     })?;
 
     git_ops::ensure_git_repository(&repo_root)?;
-    git_ops::verify_branch_exists(&repo_root, &branch)?;
     git_ops::verify_commit_exists(&repo_root, &archive_commit)?;
 
-    // Save the original branch commit so we can restore it on failure
+    // Resolve the branch name — if it already exists, find an available -v{N} variant
+    let actual_branch = if git_ops::verify_branch_exists(&repo_root, &branch).is_ok() {
+        // Branch exists — find a free -v{N} suffix
+        let mut candidate = branch.clone();
+        for version in 1..=999 {
+            candidate = format!("{branch}-v{version}");
+            if git_ops::verify_branch_exists(&repo_root, &candidate).is_err() {
+                break;
+            }
+        }
+        candidate
+    } else {
+        branch.clone()
+    };
+
+    // Create the branch from the archive commit (or the parent branch as fallback)
+    // Prefer intended_target_branch (user may have changed it),
+    // fall back to initialization_parent_branch, then "main"
+    let parent_branch = helpers::non_empty(&record.intended_target_branch)
+        .or_else(|| helpers::non_empty(&record.initialization_parent_branch))
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "main".to_string());
+    let base_ref = if git_ops::verify_commit_exists(&repo_root, &archive_commit).is_ok() {
+        archive_commit.clone()
+    } else {
+        parent_branch.clone()
+    };
+
+    git_ops::run_git(
+        [
+            "-C",
+            &repo_root.display().to_string(),
+            "branch",
+            &actual_branch,
+            &base_ref,
+        ],
+        None,
+    )
+    .with_context(|| format!("Failed to create branch {actual_branch} from {base_ref}"))?;
+
+    // Save the branch commit for cleanup on failure
     let original_branch_commit = git_ops::run_git(
         [
             "-C",
             &repo_root.display().to_string(),
             "rev-parse",
-            &format!("refs/heads/{branch}"),
+            &format!("refs/heads/{actual_branch}"),
         ],
         None,
     )
-    .context("Failed to read current branch commit")?;
+    .context("Failed to read branch commit")?;
 
-    git_ops::point_branch_to_commit(&repo_root, &branch, &archive_commit)?;
-    git_ops::create_worktree(&repo_root, &workspace_dir, &branch)?;
+    git_ops::create_worktree(&repo_root, &workspace_dir, &actual_branch)?;
+
+    // Update branch name in DB if it changed
+    if actual_branch != branch {
+        let conn = db::open_connection(true)?;
+        conn.execute(
+            "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
+            rusqlite::params![actual_branch, workspace_id],
+        )
+        .ok();
+    }
 
     let staged_archive_dir = helpers::staged_archive_context_dir(&archived_context_dir);
     fs::rename(&archived_context_dir, &staged_archive_dir).map_err(|error| {
@@ -752,7 +810,7 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
             None,
             &staged_archive_dir,
             &archived_context_dir,
-            &branch,
+            &actual_branch,
             &original_branch_commit,
         );
         anyhow::anyhow!(
@@ -769,7 +827,7 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
             Some(&workspace_context_dir),
             &staged_archive_dir,
             &archived_context_dir,
-            &branch,
+            &actual_branch,
             &original_branch_commit,
         );
         return Err(error);
@@ -784,7 +842,7 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
             Some(&workspace_context_dir),
             &staged_archive_dir,
             &archived_context_dir,
-            &branch,
+            &actual_branch,
             &original_branch_commit,
         );
         return Err(error);

@@ -636,7 +636,15 @@ export const WorkspacesSidebarContainer = memo(
 
 				try {
 					const response = await restoreWorkspace(workspaceId);
-					await refetchNavigation();
+					await Promise.all([
+						refetchNavigation(),
+						queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+						}),
+						queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+						}),
+					]);
 					prefetchWorkspace(response.selectedWorkspaceId);
 					onSelectWorkspace(response.selectedWorkspaceId);
 				} catch (error) {
