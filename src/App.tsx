@@ -8,6 +8,7 @@ import {
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	Check,
+	ChevronDown,
 	Copy,
 	ExternalLink,
 	FolderInput,
@@ -25,12 +26,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import {
-	OpenIn,
-	OpenInContent,
-	OpenInItem,
-	OpenInTrigger,
-} from "./components/ai/open-in-chat";
 import { ConductorImportDialog } from "./components/conductor-import-dialog";
 import { SettingsButton, SettingsDialog } from "./components/settings-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "./components/ui/avatar";
@@ -316,6 +311,13 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const [installedEditors, setInstalledEditors] = useState<DetectedEditor[]>(
 		[],
 	);
+	const [preferredEditorId, setPreferredEditorId] = useState<string | null>(
+		null,
+	);
+	const preferredEditor =
+		installedEditors.find((e) => e.id === preferredEditorId) ??
+		installedEditors[0] ??
+		null;
 	const [importDialogOpen, setImportDialogOpen] = useState(false);
 	const isResizing = resizeState !== null;
 	const isIdentityConnected = githubIdentityState.status === "connected";
@@ -1023,56 +1025,77 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 							/>
 
 							<div className="absolute right-4 top-[0.55rem] z-30 flex items-center gap-1">
-								{selectedWorkspaceId && installedEditors.length > 0 && (
-									<OpenIn query="">
-										<OpenInTrigger className="flex size-6 items-center justify-center rounded-md text-app-muted transition-colors hover:text-app-foreground focus-visible:outline-none">
-											<ExternalLink className="size-3.5" strokeWidth={1.8} />
-										</OpenInTrigger>
-										<OpenInContent
-											align="end"
-											sideOffset={6}
-											className="min-w-[11rem]"
-										>
-											{installedEditors.map((editor) => (
-												<OpenInItem
-													key={editor.id}
-													onClick={() =>
-														void openWorkspaceInEditor(
-															selectedWorkspaceId,
-															editor.id as "cursor" | "vscode",
-														).catch((e) =>
-															pushWorkspaceToast(
-																String(e),
-																`Failed to open ${editor.name}`,
-															),
-														)
-													}
-													className="flex items-center gap-2"
-												>
-													{editor.id === "cursor" && (
-														<svg
-															className="size-4 shrink-0"
-															viewBox="0 0 466.73 532.09"
-															fill="currentColor"
-														>
-															<path d="M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z" />
-														</svg>
-													)}
-													{editor.id === "vscode" && (
-														<svg
-															className="size-4 shrink-0"
-															viewBox="0 0 24 24"
-															fill="currentColor"
-														>
-															<path d="M17.58 2.39L10 9.43 4.64 5.42 2 6.76v10.48l2.64 1.34L10 14.57l7.58 7.04L22 19.33V4.67l-4.42-2.28zM4.64 15.36V8.64L7.93 12l-3.29 3.36zM17.58 17.6l-5.37-5.6 5.37-5.6v11.2z" />
-														</svg>
-													)}
-													<span className="font-medium">{editor.name}</span>
-												</OpenInItem>
-											))}
-										</OpenInContent>
-									</OpenIn>
-								)}
+								{selectedWorkspaceId &&
+									installedEditors.length > 0 &&
+									preferredEditor && (
+										<div className="flex items-center rounded-md border border-app-border/40 bg-app-elevated/50">
+											<button
+												type="button"
+												aria-label={`Open in ${preferredEditor.name}`}
+												title={`Open in ${preferredEditor.name}`}
+												onClick={() =>
+													void openWorkspaceInEditor(
+														selectedWorkspaceId,
+														preferredEditor.id as "cursor" | "vscode",
+													).catch((e) =>
+														pushWorkspaceToast(
+															String(e),
+															`Failed to open ${preferredEditor.name}`,
+														),
+													)
+												}
+												className={`flex size-6 items-center justify-center text-app-muted transition-colors hover:bg-app-foreground/[0.07] hover:text-app-foreground focus-visible:outline-none ${installedEditors.length > 1 ? "rounded-l-[5px]" : "rounded-[5px]"}`}
+											>
+												<EditorIcon
+													editorId={preferredEditor.id}
+													className="size-3.5"
+												/>
+											</button>
+											{installedEditors.length > 1 && (
+												<DropdownMenu>
+													<DropdownMenuTrigger className="flex h-6 w-4 items-center justify-center rounded-r-[5px] border-l border-app-border/40 text-app-muted transition-colors hover:bg-app-foreground/[0.07] hover:text-app-foreground focus-visible:outline-none">
+														<ChevronDown className="size-2.5" strokeWidth={2} />
+													</DropdownMenuTrigger>
+													<DropdownMenuContent
+														side="bottom"
+														align="end"
+														sideOffset={6}
+														className="min-w-[11rem]"
+													>
+														{installedEditors.map((editor) => (
+															<DropdownMenuItem
+																key={editor.id}
+																onClick={() => {
+																	setPreferredEditorId(editor.id);
+																	void openWorkspaceInEditor(
+																		selectedWorkspaceId,
+																		editor.id as "cursor" | "vscode",
+																	).catch((e) =>
+																		pushWorkspaceToast(
+																			String(e),
+																			`Failed to open ${editor.name}`,
+																		),
+																	);
+																}}
+																className="flex items-center gap-2"
+															>
+																<EditorIcon
+																	editorId={editor.id}
+																	className="size-4 shrink-0"
+																/>
+																<span className="font-medium">
+																	{editor.name}
+																</span>
+																{editor.id === preferredEditor.id && (
+																	<Check className="ml-auto size-3.5 text-app-foreground-soft" />
+																)}
+															</DropdownMenuItem>
+														))}
+													</DropdownMenuContent>
+												</DropdownMenu>
+											)}
+										</div>
+									)}
 								{conductorAvailable && (
 									<Button
 										variant="ghost"
@@ -1199,6 +1222,35 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			/>
 		</ToastProvider>
 	);
+}
+
+function EditorIcon({
+	editorId,
+	className,
+}: {
+	editorId: string;
+	className?: string;
+}) {
+	if (editorId === "cursor") {
+		return (
+			<svg
+				className={className}
+				viewBox="0 0 466.73 532.09"
+				fill="currentColor"
+			>
+				<path d="M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z" />
+			</svg>
+		);
+	}
+	if (editorId === "vscode") {
+		return (
+			<svg className={className} viewBox="0 0 24 24" fill="currentColor">
+				<path d="M17.58 2.39L10 9.43 4.64 5.42 2 6.76v10.48l2.64 1.34L10 14.57l7.58 7.04L22 19.33V4.67l-4.42-2.28zM4.64 15.36V8.64L7.93 12l-3.29 3.36zM17.58 17.6l-5.37-5.6 5.37-5.6v11.2z" />
+			</svg>
+		);
+	}
+	// Fallback: generic external link icon
+	return <ExternalLink className={className} strokeWidth={1.8} />;
 }
 
 function ChatCacheDebugHud() {

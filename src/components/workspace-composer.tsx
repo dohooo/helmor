@@ -92,6 +92,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
 	);
 	recordComposerRender(contextKey, instanceIdRef.current);
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const [draftValue, setDraftValue] = useState(restoreDraft ?? "");
 	const isOpus = selectedModelId === "opus-1m" || selectedModelId === "opus";
 	const effectiveEffort = (() => {
@@ -130,6 +131,19 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		setAttachedImages(restoreImages);
 	}, [restoreNonce]);
 
+	// Auto-resize textarea to fit content, capped at a maximum height
+	const TEXTAREA_MAX_HEIGHT = 240;
+	useEffect(() => {
+		const el = textareaRef.current;
+		if (!el) return;
+		// Reset to min so scrollHeight recalculates correctly
+		el.style.height = "auto";
+		const next = Math.min(el.scrollHeight, TEXTAREA_MAX_HEIGHT);
+		el.style.height = `${next}px`;
+		// Always show the bottom of the text (scroll to end)
+		el.scrollTop = el.scrollHeight;
+	}, [draftValue]);
+
 	// Intercept value changes to extract image paths
 	const handleValueChange = useCallback((newValue: string) => {
 		const found = extractImagePaths(newValue);
@@ -159,7 +173,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	return (
 		<div
 			aria-label="Workspace composer"
-			className="flex min-h-[132px] flex-col rounded-2xl border border-app-border/40 bg-app-sidebar px-4 pb-3 pt-3 shadow-[0_-4px_24px_rgba(0,0,0,0.12),0_0_0_1px_rgba(255,255,255,0.03)]"
+			className="flex flex-col rounded-2xl border border-app-border/40 bg-app-sidebar px-4 pb-3 pt-3 shadow-[0_-4px_24px_rgba(0,0,0,0.12),0_0_0_1px_rgba(255,255,255,0.03)]"
 		>
 			<label htmlFor="workspace-input" className="sr-only">
 				Workspace input
@@ -178,6 +192,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			) : null}
 
 			<textarea
+				ref={textareaRef}
 				id="workspace-input"
 				aria-label="Workspace input"
 				value={draftValue}
@@ -194,7 +209,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 					}
 				}}
 				placeholder="Ask to make changes, @mention files, run /commands"
-				className="min-h-[64px] flex-1 resize-none bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-app-foreground outline-none placeholder:text-app-muted"
+				className="min-h-[64px] resize-none overflow-y-auto bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-app-foreground outline-none placeholder:text-app-muted"
 			/>
 
 			{sendError ? (
