@@ -286,10 +286,15 @@ body {
 }
 
 .conversation-markdown :where(code):not(pre code) {
+	font-size: inherit;
 	color: var(--color-app-foreground-soft);
 	background: color-mix(in oklch, var(--color-app-sidebar) 94%, transparent);
 	border: 1px solid
 		color-mix(in oklch, var(--color-app-border) 88%, transparent);
+}
+
+.conversation-streamdown :where(code):not(pre code, [data-streamdown] code) {
+	font-size: inherit;
 }
 
 .conversation-markdown :where(pre) {
