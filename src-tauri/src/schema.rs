@@ -25,7 +25,9 @@ fn run_migrations(connection: &Connection) -> Result<()> {
 
     if has_old_column {
         connection
-            .execute_batch("ALTER TABLE sessions RENAME COLUMN claude_session_id TO provider_session_id")
+            .execute_batch(
+                "ALTER TABLE sessions RENAME COLUMN claude_session_id TO provider_session_id",
+            )
             .context("Failed to rename claude_session_id → provider_session_id")?;
     }
 
@@ -210,9 +212,16 @@ CREATE TRIGGER IF NOT EXISTS update_sessions_updated_at
 mod tests {
     use super::*;
 
+    fn open_test_db() -> (Connection, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let conn = Connection::open(&db_path).unwrap();
+        (conn, dir)
+    }
+
     #[test]
     fn ensure_schema_creates_tables() {
-        let connection = Connection::open_in_memory().unwrap();
+        let (connection, _dir) = open_test_db();
         ensure_schema(&connection).unwrap();
 
         // Verify tables exist
@@ -234,7 +243,7 @@ mod tests {
 
     #[test]
     fn ensure_schema_is_idempotent() {
-        let connection = Connection::open_in_memory().unwrap();
+        let (connection, _dir) = open_test_db();
         ensure_schema(&connection).unwrap();
         // Call again — should not error
         ensure_schema(&connection).unwrap();
@@ -242,7 +251,7 @@ mod tests {
 
     #[test]
     fn migration_renames_claude_session_id_to_provider_session_id() {
-        let connection = Connection::open_in_memory().unwrap();
+        let (connection, _dir) = open_test_db();
 
         // Simulate old schema with claude_session_id
         connection
@@ -300,7 +309,7 @@ mod tests {
     fn migration_is_idempotent_on_new_schema() {
         // When the table already has provider_session_id (fresh install),
         // the migration should be a no-op.
-        let connection = Connection::open_in_memory().unwrap();
+        let (connection, _dir) = open_test_db();
         ensure_schema(&connection).unwrap();
 
         // Run migrations again — should not error

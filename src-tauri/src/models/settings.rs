@@ -105,15 +105,17 @@ pub fn load_branch_prefix_settings() -> Result<BranchPrefixSettings> {
 mod tests {
     use rusqlite::Connection;
 
-    fn test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
+    fn test_db() -> (Connection, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let conn = Connection::open(&db_path).unwrap();
         crate::schema::ensure_schema(&conn).unwrap();
-        conn
+        (conn, dir)
     }
 
     #[test]
     fn settings_crud() {
-        let conn = test_db();
+        let (conn, _dir) = test_db();
 
         // Missing key returns no rows
         let mut stmt = conn
@@ -144,7 +146,7 @@ mod tests {
 
     #[test]
     fn settings_upsert_overwrites() {
-        let conn = test_db();
+        let (conn, _dir) = test_db();
         conn.execute("INSERT INTO settings (key, value) VALUES ('k', 'v1')", [])
             .unwrap();
         conn.execute(
@@ -161,7 +163,7 @@ mod tests {
 
     #[test]
     fn branch_prefix_settings_query() {
-        let conn = test_db();
+        let (conn, _dir) = test_db();
         conn.execute(
             "INSERT INTO settings (key, value) VALUES ('branch_prefix_type', 'custom')",
             [],
@@ -189,5 +191,54 @@ mod tests {
         assert!(rows
             .iter()
             .any(|(k, v)| k == "branch_prefix_custom" && v == "feat/"));
+    }
+
+    #[test]
+    fn app_settings_roundtrip() {
+        let (conn, _dir) = test_db();
+
+        // Insert app settings
+        conn.execute(
+            "INSERT INTO settings (key, value, created_at, updated_at) VALUES ('app.font_size', '16', datetime('now'), datetime('now'))",
+            [],
+        ).unwrap();
+
+        // Read back
+        let mut stmt = conn
+            .prepare("SELECT key, value FROM settings WHERE key LIKE 'app.%'")
+            .unwrap();
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "app.font_size");
+        assert_eq!(rows[0].1, "16");
+    }
+
+    #[test]
+    fn app_settings_upsert() {
+        let (conn, _dir) = test_db();
+
+        // Insert then update
+        conn.execute(
+            "INSERT INTO settings (key, value, created_at, updated_at) VALUES ('app.font_size', '14', datetime('now'), datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO settings (key, value, created_at, updated_at) VALUES ('app.font_size', '18', datetime('now'), datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        ).unwrap();
+
+        let value: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'app.font_size'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "18");
     }
 }

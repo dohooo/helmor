@@ -96,9 +96,7 @@ pub fn list_conductor_repos() -> Result<Vec<ConductorRepo>> {
 
     drop(stmt);
 
-    helmor_conn
-        .execute("DETACH DATABASE source", [])
-        .ok();
+    helmor_conn.execute("DETACH DATABASE source", []).ok();
 
     Ok(repos)
 }
@@ -150,9 +148,7 @@ pub fn list_conductor_workspaces(repo_id: &str) -> Result<Vec<ConductorWorkspace
         .collect::<rusqlite::Result<Vec<_>>>()
         .context("Failed to collect Conductor workspaces")?;
 
-    helmor_conn
-        .execute("DETACH DATABASE source", [])
-        .ok();
+    helmor_conn.execute("DETACH DATABASE source", []).ok();
 
     Ok(workspaces)
 }
@@ -201,17 +197,25 @@ pub fn import_conductor_workspaces(workspace_ids: &[String]) -> Result<ImportWor
 
         match import_workspace_db_records(&helmor_conn, ws_id) {
             Ok(ImportDbResult::Imported(meta)) => {
-                helmor_conn.execute_batch("RELEASE SAVEPOINT ws_import").ok();
+                helmor_conn
+                    .execute_batch("RELEASE SAVEPOINT ws_import")
+                    .ok();
                 imported_workspaces.push(meta);
                 imported_count += 1;
             }
             Ok(ImportDbResult::Skipped) => {
-                helmor_conn.execute_batch("RELEASE SAVEPOINT ws_import").ok();
+                helmor_conn
+                    .execute_batch("RELEASE SAVEPOINT ws_import")
+                    .ok();
                 skipped_count += 1;
             }
             Err(error) => {
-                helmor_conn.execute_batch("ROLLBACK TO SAVEPOINT ws_import").ok();
-                helmor_conn.execute_batch("RELEASE SAVEPOINT ws_import").ok();
+                helmor_conn
+                    .execute_batch("ROLLBACK TO SAVEPOINT ws_import")
+                    .ok();
+                helmor_conn
+                    .execute_batch("RELEASE SAVEPOINT ws_import")
+                    .ok();
                 errors.push(format!("{ws_id}: {error}"));
             }
         }
@@ -225,9 +229,7 @@ pub fn import_conductor_workspaces(workspace_ids: &[String]) -> Result<ImportWor
         helmor_conn.execute_batch("ROLLBACK").ok();
     }
 
-    helmor_conn
-        .execute("DETACH DATABASE source", [])
-        .ok();
+    helmor_conn.execute("DETACH DATABASE source", []).ok();
 
     // Phase 2: Git worktree and filesystem copy (best-effort).
     // DB records are already committed — failures here are logged but non-fatal.
@@ -280,10 +282,7 @@ enum ImportDbResult {
 
 /// Phase 1: Import database records for a single workspace.
 /// No git or filesystem operations — those happen in Phase 2.
-fn import_workspace_db_records(
-    conn: &Connection,
-    workspace_id: &str,
-) -> Result<ImportDbResult> {
+fn import_workspace_db_records(conn: &Connection, workspace_id: &str) -> Result<ImportDbResult> {
     // Already imported? Check DB existence AND filesystem completeness.
     // If DB record exists but the worktree directory is missing, allow
     // Phase 2 to re-run by returning Imported (not Skipped).
@@ -302,7 +301,11 @@ fn import_workspace_db_records(
         } else {
             crate::data_dir::workspace_dir(
                 &conn
-                    .query_row("SELECT name FROM main.repos WHERE id = ?1", [&repo_id], |r| r.get::<_, String>(0))
+                    .query_row(
+                        "SELECT name FROM main.repos WHERE id = ?1",
+                        [&repo_id],
+                        |r| r.get::<_, String>(0),
+                    )
                     .unwrap_or_default(),
                 &directory_name,
             )
@@ -460,12 +463,9 @@ fn setup_workspace_filesystem(
                     }
                     if let Some(ref src) = source_branch {
                         let import_branch = format!("{src}-import");
-                        if let Err(e) = setup_imported_worktree(
-                            root,
-                            &workspace_dir,
-                            &import_branch,
-                            src,
-                        ) {
+                        if let Err(e) =
+                            setup_imported_worktree(root, &workspace_dir, &import_branch, src)
+                        {
                             eprintln!("[import] Worktree failed for {directory_name}: {e}");
                             // Non-fatal: we still copy .context/ below
                         } else {
@@ -504,8 +504,9 @@ fn setup_workspace_filesystem(
                     std::fs::remove_dir_all(&context_dst).ok();
                 }
                 std::fs::create_dir_all(context_dst.parent().unwrap_or(&workspace_dir)).ok();
-                helpers::copy_dir_all(&context_src, &context_dst)
-                    .with_context(|| format!("Failed to copy .context from {}", context_src.display()))?;
+                helpers::copy_dir_all(&context_src, &context_dst).with_context(|| {
+                    format!("Failed to copy .context from {}", context_src.display())
+                })?;
             }
         }
     } else {
@@ -526,8 +527,12 @@ fn setup_workspace_filesystem(
                     std::fs::remove_dir_all(&archive_dst).ok();
                 }
                 std::fs::create_dir_all(archive_dst.parent().unwrap_or(helmor_data_dir)).ok();
-                helpers::copy_dir_all(&archive_src, &archive_dst)
-                    .with_context(|| format!("Failed to copy archived context from {}", archive_src.display()))?;
+                helpers::copy_dir_all(&archive_src, &archive_dst).with_context(|| {
+                    format!(
+                        "Failed to copy archived context from {}",
+                        archive_src.display()
+                    )
+                })?;
             }
         }
     }
@@ -535,7 +540,15 @@ fn setup_workspace_filesystem(
     // Rewrite attachment paths
     if let Some(root) = conductor_root {
         let conn = crate::models::db::open_connection(true)?;
-        rewrite_attachment_paths(&conn, workspace_id, root, helmor_data_dir, repo_name, directory_name, state)?;
+        rewrite_attachment_paths(
+            &conn,
+            workspace_id,
+            root,
+            helmor_data_dir,
+            repo_name,
+            directory_name,
+            state,
+        )?;
     }
 
     // Copy Claude Code session files from Conductor's project dir to Helmor's.
@@ -552,9 +565,7 @@ fn setup_workspace_filesystem(
 /// Encode a filesystem path into a Claude Code project directory name.
 /// Claude uses `path.replace('/', '-').replace('.', '-')`.
 fn encode_claude_project_dir(path: &Path) -> String {
-    path.display()
-        .to_string()
-        .replace(['/', '.'], "-")
+    path.display().to_string().replace(['/', '.'], "-")
 }
 
 /// Copy Claude Code session .jsonl files from the Conductor project dir
@@ -639,14 +650,17 @@ fn resolve_source_branch(
 ) -> Option<String> {
     // Prefer the live Conductor worktree HEAD — it's the ground truth
     if let Some(root) = conductor_root {
-        let conductor_ws = root
-            .join("workspaces")
-            .join(repo_name)
-            .join(directory_name);
+        let conductor_ws = root.join("workspaces").join(repo_name).join(directory_name);
 
         if conductor_ws.is_dir() {
             if let Ok(output) = std::process::Command::new("git")
-                .args(["-C", &conductor_ws.display().to_string(), "rev-parse", "--abbrev-ref", "HEAD"])
+                .args([
+                    "-C",
+                    &conductor_ws.display().to_string(),
+                    "rev-parse",
+                    "--abbrev-ref",
+                    "HEAD",
+                ])
                 .output()
             {
                 let actual = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -693,17 +707,8 @@ fn setup_imported_worktree(
 
     // Create new branch based on the source branch (a local ref)
     let start_ref = format!("refs/heads/{source_branch}");
-    git_ops::create_worktree_from_start_point(
-        repo_root,
-        workspace_dir,
-        new_branch,
-        &start_ref,
-    )
-    .with_context(|| {
-        format!(
-            "Failed to create worktree for {new_branch} from {start_ref}"
-        )
-    })?;
+    git_ops::create_worktree_from_start_point(repo_root, workspace_dir, new_branch, &start_ref)
+        .with_context(|| format!("Failed to create worktree for {new_branch} from {start_ref}"))?;
 
     Ok(())
 }
@@ -791,8 +796,8 @@ fn rewrite_attachment_paths(
 
 /// Open the Helmor DB and attach Conductor DB as `source`.
 fn open_with_conductor_attached() -> Result<(Connection, String)> {
-    let source_path = crate::data_dir::conductor_source_db_path()
-        .context("Conductor database not found")?;
+    let source_path =
+        crate::data_dir::conductor_source_db_path().context("Conductor database not found")?;
     let source_display = source_path.display().to_string();
     let dest_path = crate::data_dir::db_path()?;
 
@@ -835,19 +840,14 @@ fn get_table_columns(conn: &Connection, table: &str) -> Result<Vec<String>> {
 
 /// Column name mappings from Conductor (source) → Helmor (main).
 /// Used during import to bridge schema renames.
-const COLUMN_RENAMES: &[(&str, &str)] = &[
-    ("claude_session_id", "provider_session_id"),
-];
+const COLUMN_RENAMES: &[(&str, &str)] = &[("claude_session_id", "provider_session_id")];
 
 /// Build INSERT-SELECT column lists that handle renamed columns between
 /// source (Conductor) and main (Helmor) schemas.
 ///
 /// Returns `(main_col_list, source_col_list)` where renamed columns use
 /// `source_name AS main_name` in the SELECT list.
-fn import_column_lists(
-    conn: &Connection,
-    table: &str,
-) -> Result<(String, String)> {
+fn import_column_lists(conn: &Connection, table: &str) -> Result<(String, String)> {
     let main_cols = get_table_columns(conn, table)?;
 
     let source_cols: Vec<String> = conn
@@ -902,15 +902,17 @@ fn import_column_lists(
 mod tests {
     use super::*;
 
-    fn setup_test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
+    fn setup_test_db() -> (Connection, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let conn = Connection::open(&db_path).unwrap();
         crate::schema::ensure_schema(&conn).unwrap();
-        conn
+        (conn, dir)
     }
 
     #[test]
     fn import_workspace_db_records_inserts_cascade() {
-        let conn = setup_test_db();
+        let (conn, _dir) = setup_test_db();
 
         // Create a "source" schema in the same in-memory DB for testing
         conn.execute_batch(
@@ -939,12 +941,26 @@ mod tests {
         assert!(matches!(result.unwrap(), ImportDbResult::Imported(_)));
 
         // Verify cascade
-        let repo_count: i64 = conn.query_row("SELECT count(*) FROM main.repos", [], |r| r.get(0)).unwrap();
-        let ws_count: i64 = conn.query_row("SELECT count(*) FROM main.workspaces", [], |r| r.get(0)).unwrap();
-        let sess_count: i64 = conn.query_row("SELECT count(*) FROM main.sessions", [], |r| r.get(0)).unwrap();
-        let msg_count: i64 = conn.query_row("SELECT count(*) FROM main.session_messages", [], |r| r.get(0)).unwrap();
-        let att_count: i64 = conn.query_row("SELECT count(*) FROM main.attachments", [], |r| r.get(0)).unwrap();
-        let dc_count: i64 = conn.query_row("SELECT count(*) FROM main.diff_comments", [], |r| r.get(0)).unwrap();
+        let repo_count: i64 = conn
+            .query_row("SELECT count(*) FROM main.repos", [], |r| r.get(0))
+            .unwrap();
+        let ws_count: i64 = conn
+            .query_row("SELECT count(*) FROM main.workspaces", [], |r| r.get(0))
+            .unwrap();
+        let sess_count: i64 = conn
+            .query_row("SELECT count(*) FROM main.sessions", [], |r| r.get(0))
+            .unwrap();
+        let msg_count: i64 = conn
+            .query_row("SELECT count(*) FROM main.session_messages", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let att_count: i64 = conn
+            .query_row("SELECT count(*) FROM main.attachments", [], |r| r.get(0))
+            .unwrap();
+        let dc_count: i64 = conn
+            .query_row("SELECT count(*) FROM main.diff_comments", [], |r| r.get(0))
+            .unwrap();
 
         assert_eq!(repo_count, 1);
         assert_eq!(ws_count, 1);
@@ -956,7 +972,7 @@ mod tests {
 
     #[test]
     fn import_workspace_db_records_skips_existing() {
-        let conn = setup_test_db();
+        let (conn, _dir) = setup_test_db();
 
         conn.execute_batch(
             r#"
@@ -983,18 +999,23 @@ mod tests {
         // Workspace exists in DB but worktree directory is missing,
         // so it returns Imported to allow Phase 2 retry
         assert!(
-            matches!(result, ImportDbResult::Imported(_) | ImportDbResult::Skipped),
+            matches!(
+                result,
+                ImportDbResult::Imported(_) | ImportDbResult::Skipped
+            ),
             "Should return Imported (retry) or Skipped"
         );
 
         // No new sessions should have been inserted (DB records already exist)
-        let sess_count: i64 = conn.query_row("SELECT count(*) FROM main.sessions", [], |r| r.get(0)).unwrap();
+        let sess_count: i64 = conn
+            .query_row("SELECT count(*) FROM main.sessions", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(sess_count, 0);
     }
 
     #[test]
     fn get_table_columns_works() {
-        let conn = setup_test_db();
+        let (conn, _dir) = setup_test_db();
         let cols = get_table_columns(&conn, "repos").unwrap();
         assert!(cols.contains(&"id".to_string()));
         assert!(cols.contains(&"name".to_string()));
@@ -1002,7 +1023,7 @@ mod tests {
 
     #[test]
     fn import_column_lists_handles_renamed_columns() {
-        let conn = setup_test_db();
+        let (conn, _dir) = setup_test_db();
 
         // Simulate Conductor source with old column name
         conn.execute_batch(
@@ -1037,7 +1058,7 @@ mod tests {
 
     #[test]
     fn import_column_lists_handles_identical_schemas() {
-        let conn = setup_test_db();
+        let (conn, _dir) = setup_test_db();
 
         conn.execute_batch(
             r#"
@@ -1054,7 +1075,7 @@ mod tests {
 
     #[test]
     fn import_column_lists_drops_source_only_columns() {
-        let conn = setup_test_db();
+        let (conn, _dir) = setup_test_db();
 
         // Source has an extra column that main doesn't
         conn.execute_batch(
@@ -1085,7 +1106,7 @@ mod tests {
 
     #[test]
     fn import_preserves_conductor_provider_session_id() {
-        let conn = setup_test_db();
+        let (conn, _dir) = setup_test_db();
 
         conn.execute_batch(
             r#"
