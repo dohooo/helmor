@@ -48,13 +48,15 @@ export class SessionManager {
 		const abortController = new AbortController();
 
 		// sessionId and resume are mutually exclusive in the SDK contract.
-		// When resuming, only pass resume. When starting fresh, pass sessionId.
+		// When resuming, pass resume so the SDK loads existing context.
+		// When starting fresh, let the SDK auto-generate its own session ID
+		// — do NOT pass our Helmor UUID as sessionId, because the SDK's
+		// internal session store may use a different ID format.
 		const sessionOpts: Record<string, unknown> = {};
 		if (resume) {
 			sessionOpts.resume = resume;
-		} else {
-			sessionOpts.sessionId = sessionId;
 		}
+		// For new sessions: no sessionId → SDK generates its own
 
 		const q = query({
 			prompt,

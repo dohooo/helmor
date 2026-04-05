@@ -119,7 +119,8 @@ pub fn create_worktree(
     })
 }
 
-/// Create a worktree with a new branch based on a start point.
+/// Create a worktree with a branch based on a start point.
+/// Uses `-B` to create or reset the branch if it already exists.
 pub fn create_worktree_from_start_point(
     repo_root: &Path,
     workspace_dir: &Path,
@@ -134,7 +135,7 @@ pub fn create_worktree_from_start_point(
             repo_root.as_str(),
             "worktree",
             "add",
-            "-b",
+            "-B",
             branch,
             workspace_dir_arg.as_str(),
             start_point,

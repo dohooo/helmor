@@ -317,45 +317,41 @@ fn import_workspace_db_records(
         .with_context(|| format!("Repo {repo_id} not found in Conductor"))?;
 
     // 1. Ensure parent repo exists
-    let repo_columns = get_table_columns(conn, "repos")?;
-    let repo_col_list = repo_columns.join(", ");
+    let (repo_main, repo_src) = import_column_lists(conn, "repos")?;
     conn.execute(
         &format!(
-            "INSERT OR IGNORE INTO main.repos ({repo_col_list}) SELECT {repo_col_list} FROM source.repos WHERE id = ?1"
+            "INSERT OR IGNORE INTO main.repos ({repo_main}) SELECT {repo_src} FROM source.repos WHERE id = ?1"
         ),
         [&repo_id],
     )
     .context("Failed to import repo")?;
 
     // 2. Insert workspace
-    let ws_columns = get_table_columns(conn, "workspaces")?;
-    let ws_col_list = ws_columns.join(", ");
+    let (ws_main, ws_src) = import_column_lists(conn, "workspaces")?;
     conn.execute(
         &format!(
-            "INSERT OR IGNORE INTO main.workspaces ({ws_col_list}) SELECT {ws_col_list} FROM source.workspaces WHERE id = ?1"
+            "INSERT OR IGNORE INTO main.workspaces ({ws_main}) SELECT {ws_src} FROM source.workspaces WHERE id = ?1"
         ),
         [workspace_id],
     )
     .context("Failed to import workspace")?;
 
-    // 3. Insert sessions
-    let sess_columns = get_table_columns(conn, "sessions")?;
-    let sess_col_list = sess_columns.join(", ");
+    // 3. Insert sessions (handles claude_session_id → provider_session_id rename)
+    let (sess_main, sess_src) = import_column_lists(conn, "sessions")?;
     conn.execute(
         &format!(
-            "INSERT OR IGNORE INTO main.sessions ({sess_col_list}) SELECT {sess_col_list} FROM source.sessions WHERE workspace_id = ?1"
+            "INSERT OR IGNORE INTO main.sessions ({sess_main}) SELECT {sess_src} FROM source.sessions WHERE workspace_id = ?1"
         ),
         [workspace_id],
     )
     .context("Failed to import sessions")?;
 
     // 4. Insert session_messages
-    let msg_columns = get_table_columns(conn, "session_messages")?;
-    let msg_col_list = msg_columns.join(", ");
+    let (msg_main, msg_src) = import_column_lists(conn, "session_messages")?;
     conn.execute(
         &format!(
-            "INSERT OR IGNORE INTO main.session_messages ({msg_col_list}) \
-             SELECT {msg_col_list} FROM source.session_messages \
+            "INSERT OR IGNORE INTO main.session_messages ({msg_main}) \
+             SELECT {msg_src} FROM source.session_messages \
              WHERE session_id IN (SELECT id FROM source.sessions WHERE workspace_id = ?1)"
         ),
         [workspace_id],
@@ -363,12 +359,11 @@ fn import_workspace_db_records(
     .context("Failed to import messages")?;
 
     // 5. Insert attachments
-    let att_columns = get_table_columns(conn, "attachments")?;
-    let att_col_list = att_columns.join(", ");
+    let (att_main, att_src) = import_column_lists(conn, "attachments")?;
     conn.execute(
         &format!(
-            "INSERT OR IGNORE INTO main.attachments ({att_col_list}) \
-             SELECT {att_col_list} FROM source.attachments \
+            "INSERT OR IGNORE INTO main.attachments ({att_main}) \
+             SELECT {att_src} FROM source.attachments \
              WHERE session_id IN (SELECT id FROM source.sessions WHERE workspace_id = ?1)"
         ),
         [workspace_id],
@@ -376,12 +371,11 @@ fn import_workspace_db_records(
     .context("Failed to import attachments")?;
 
     // 6. Insert diff_comments
-    let dc_columns = get_table_columns(conn, "diff_comments")?;
-    let dc_col_list = dc_columns.join(", ");
+    let (dc_main, dc_src) = import_column_lists(conn, "diff_comments")?;
     conn.execute(
         &format!(
-            "INSERT OR IGNORE INTO main.diff_comments ({dc_col_list}) \
-             SELECT {dc_col_list} FROM source.diff_comments WHERE workspace_id = ?1"
+            "INSERT OR IGNORE INTO main.diff_comments ({dc_main}) \
+             SELECT {dc_src} FROM source.diff_comments WHERE workspace_id = ?1"
         ),
         [workspace_id],
     )
@@ -699,6 +693,67 @@ fn get_table_columns(conn: &Connection, table: &str) -> Result<Vec<String>> {
     }
 
     Ok(columns)
+}
+
+/// Column name mappings from Conductor (source) → Helmor (main).
+/// Used during import to bridge schema renames.
+const COLUMN_RENAMES: &[(&str, &str)] = &[
+    ("claude_session_id", "provider_session_id"),
+];
+
+/// Build INSERT-SELECT column lists that handle renamed columns between
+/// source (Conductor) and main (Helmor) schemas.
+///
+/// Returns `(main_col_list, source_col_list)` where renamed columns use
+/// `source_name AS main_name` in the SELECT list.
+fn import_column_lists(
+    conn: &Connection,
+    table: &str,
+) -> Result<(String, String)> {
+    let main_cols = get_table_columns(conn, table)?;
+
+    let source_cols: Vec<String> = conn
+        .prepare(&format!("PRAGMA source.table_info({table})"))
+        .and_then(|mut stmt| {
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .map(|rows| rows.filter_map(Result::ok).collect())
+        })
+        .unwrap_or_default();
+
+    let source_set: std::collections::HashSet<&str> =
+        source_cols.iter().map(|s| s.as_str()).collect();
+
+    // Build column lists using only columns that exist in both schemas
+    let mut main_parts = Vec::new();
+    let mut source_parts = Vec::new();
+
+    for col in &main_cols {
+        if source_set.contains(col.as_str()) {
+            // Column exists in both with the same name
+            main_parts.push(col.clone());
+            source_parts.push(col.clone());
+        } else {
+            // Check if it was renamed
+            let old_name = COLUMN_RENAMES
+                .iter()
+                .find(|(_, new)| *new == col.as_str())
+                .map(|(old, _)| *old);
+
+            if let Some(old) = old_name {
+                if source_set.contains(old) {
+                    main_parts.push(col.clone());
+                    source_parts.push(format!("{old} AS {col}"));
+                }
+            }
+            // Column only in main (new column) — skip, will get DEFAULT value
+        }
+    }
+
+    if main_parts.is_empty() {
+        bail!("No compatible columns found for table {table}");
+    }
+
+    Ok((main_parts.join(", "), source_parts.join(", ")))
 }
 
 // ---------------------------------------------------------------------------
