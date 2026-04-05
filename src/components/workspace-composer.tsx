@@ -1,11 +1,4 @@
-import {
-	ArrowUp,
-	BookOpen,
-	BrainCircuit,
-	Plus,
-	Square,
-	Zap,
-} from "lucide-react";
+import { ArrowUp, ChevronDown, ClipboardList, Square } from "lucide-react";
 import {
 	type ButtonHTMLAttributes,
 	memo,
@@ -36,6 +29,11 @@ type WorkspaceComposerProps = {
 	selectedModelId: string | null;
 	modelSections: AgentModelSection[];
 	onSelectModel: (modelId: string) => void;
+	provider?: string;
+	effortLevel: string;
+	onSelectEffort: (level: string) => void;
+	permissionMode: string;
+	onTogglePlanMode: () => void;
 	sendError?: string | null;
 	restoreDraft?: string | null;
 	restoreImages?: string[];
@@ -74,12 +72,32 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	selectedModelId,
 	modelSections,
 	onSelectModel,
+	provider = "claude",
+	effortLevel,
+	onSelectEffort,
+	permissionMode,
+	onTogglePlanMode,
 	sendError,
 	restoreDraft,
 	restoreImages = [],
 	restoreNonce = 0,
 }: WorkspaceComposerProps) {
 	const [draftValue, setDraftValue] = useState(restoreDraft ?? "");
+	const isOpus = selectedModelId === "opus-1m" || selectedModelId === "opus";
+	const effectiveEffort = (() => {
+		let level = effortLevel;
+		if (provider === "codex") {
+			// Claude → Codex mapping
+			if (level === "max") level = "xhigh";
+		} else {
+			// Codex → Claude mapping
+			if (level === "xhigh") level = isOpus ? "max" : "high";
+			if (level === "minimal") level = "low";
+			// Non-Opus can't use max
+			if (level === "max" && !isOpus) level = "high";
+		}
+		return level;
+	})();
 	const selectedModel =
 		modelSections
 			.flatMap((section) => section.options)
@@ -167,15 +185,16 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			) : null}
 
 			<div className="mt-2.5 flex items-end justify-between gap-3">
-				<div className="flex flex-wrap items-center gap-1">
+				<div className="flex flex-wrap items-center gap-2">
 					<DropdownMenu>
-						<DropdownMenuTrigger className="flex items-center gap-1.5 rounded-lg px-1 py-0.5 text-[13px] font-medium text-app-foreground-soft transition-colors hover:text-app-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong">
+						<DropdownMenuTrigger className="flex items-center gap-1.5 rounded-lg px-1 py-0.5 text-[13px] font-medium text-app-foreground-soft transition-colors hover:text-app-foreground focus-visible:outline-none">
 							{selectedModel?.provider === "codex" ? (
 								<OpenAIIcon className="size-[14px]" />
 							) : (
 								<ClaudeIcon className="size-[14px]" />
 							)}
 							<span>{selectedModel?.label ?? "Select model"}</span>
+							<ChevronDown className="size-3 opacity-40" strokeWidth={2} />
 						</DropdownMenuTrigger>
 
 						<DropdownMenuContent
@@ -219,41 +238,74 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						</DropdownMenuContent>
 					</DropdownMenu>
 
+					{/* Effort level dropdown — text-only trigger */}
+					<DropdownMenu>
+						<DropdownMenuTrigger className="flex items-center gap-0.5 px-1 py-0.5 text-[13px] font-medium focus-visible:outline-none">
+							<span
+								className={cn(
+									"capitalize",
+									effectiveEffort === "max" || effectiveEffort === "xhigh"
+										? "effort-max-text"
+										: "text-violet-400",
+								)}
+							>
+								{effectiveEffort === "xhigh" ? "Extra High" : effectiveEffort}
+							</span>
+							<ChevronDown
+								className="size-3 text-app-foreground-soft/40"
+								strokeWidth={2}
+							/>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent
+							side="top"
+							align="start"
+							sideOffset={8}
+							className="min-w-[11rem]"
+						>
+							<DropdownMenuGroup>
+								<DropdownMenuLabel>Effort</DropdownMenuLabel>
+								{(provider === "codex"
+									? (["minimal", "low", "medium", "high", "xhigh"] as const)
+									: isOpus
+										? (["low", "medium", "high", "max"] as const)
+										: (["low", "medium", "high"] as const)
+								).map((level) => (
+									<DropdownMenuItem
+										key={level}
+										onClick={() => onSelectEffort(level)}
+										className="flex items-center justify-between gap-3"
+									>
+										<div className="flex items-center gap-2.5">
+											<EffortBrainIcon level={level} />
+											<span className="font-medium capitalize">
+												{level === "xhigh" ? "Extra High" : level}
+											</span>
+										</div>
+										{level === effectiveEffort ? (
+											<span className="text-[11px] text-violet-400">✓</span>
+										) : null}
+									</DropdownMenuItem>
+								))}
+							</DropdownMenuGroup>
+						</DropdownMenuContent>
+					</DropdownMenu>
+					{/* Plan mode toggle */}
 					<ComposerButton
-						aria-label="Quick command"
-						className="justify-center p-1"
-						disabled
+						aria-label="Plan mode"
+						className={cn(
+							"gap-1.5 rounded-md px-2 py-0.5 text-[13px] font-medium transition-colors",
+							permissionMode === "plan"
+								? "text-[#48968c] ring-1 ring-[#48968c]/40"
+								: "text-app-muted/50 hover:text-app-muted",
+						)}
+						onClick={onTogglePlanMode}
 					>
-						<Zap className="size-[15px]" strokeWidth={1.9} />
-					</ComposerButton>
-
-					<ComposerButton
-						aria-label="Reasoning mode"
-						className="gap-1.5 rounded-md bg-app-sidebar-strong px-2.5 py-1 text-[13px] font-medium text-app-foreground-soft hover:text-app-foreground"
-						disabled
-					>
-						<BrainCircuit className="size-[14px]" strokeWidth={1.8} />
-						<span>Thinking</span>
-					</ComposerButton>
-
-					<ComposerButton
-						aria-label="References"
-						className="justify-center p-1"
-						disabled
-					>
-						<BookOpen className="size-[15px]" strokeWidth={1.8} />
+						<ClipboardList className="size-[14px]" strokeWidth={1.8} />
+						<span>Plan</span>
 					</ComposerButton>
 				</div>
 
-				<div className="flex items-center gap-1">
-					<ComposerButton
-						aria-label="Add attachment"
-						className="justify-center p-1"
-						disabled
-					>
-						<Plus className="size-4" strokeWidth={1.8} />
-					</ComposerButton>
-
+				<div className="flex items-center gap-2">
 					{sending ? (
 						<button
 							type="button"
@@ -284,3 +336,114 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		</div>
 	);
 });
+
+/**
+ * Brain icon with varying cortex complexity to represent effort levels.
+ * From smooth (minimal/low) to deeply folded (max/xhigh).
+ */
+function EffortBrainIcon({ level }: { level: string }) {
+	const cls = "size-4 shrink-0";
+
+	// minimal — smooth brain, no folds
+	if (level === "minimal") {
+		return (
+			<svg
+				className={cls}
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				strokeWidth="1.5"
+				strokeLinecap="round"
+				strokeLinejoin="round"
+			>
+				<path
+					d="M12 2C8.5 2 5 5 5 9c0 3 1.5 5 3 6.5V20a2 2 0 002 2h4a2 2 0 002-2v-4.5c1.5-1.5 3-3.5 3-6.5 0-4-3.5-7-7-7z"
+					opacity="0.7"
+				/>
+			</svg>
+		);
+	}
+
+	// low — one gentle fold
+	if (level === "low") {
+		return (
+			<svg
+				className={cls}
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				strokeWidth="1.5"
+				strokeLinecap="round"
+				strokeLinejoin="round"
+			>
+				<path
+					d="M12 2C8.5 2 5 5 5 9c0 3 1.5 5 3 6.5V20a2 2 0 002 2h4a2 2 0 002-2v-4.5c1.5-1.5 3-3.5 3-6.5 0-4-3.5-7-7-7z"
+					opacity="0.8"
+				/>
+				<path d="M8.5 8c2-1.5 5-1.5 7 0" opacity="0.5" />
+			</svg>
+		);
+	}
+
+	// medium — two folds
+	if (level === "medium") {
+		return (
+			<svg
+				className={cls}
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				strokeWidth="1.5"
+				strokeLinecap="round"
+				strokeLinejoin="round"
+			>
+				<path
+					d="M12 2C8.5 2 5 5 5 9c0 3 1.5 5 3 6.5V20a2 2 0 002 2h4a2 2 0 002-2v-4.5c1.5-1.5 3-3.5 3-6.5 0-4-3.5-7-7-7z"
+					opacity="0.85"
+				/>
+				<path d="M8 7c2-1.5 4-1 6 0" opacity="0.5" />
+				<path d="M8.5 11c1.5 1 3.5 1 5 0" opacity="0.5" />
+			</svg>
+		);
+	}
+
+	// high — three folds
+	if (level === "high") {
+		return (
+			<svg
+				className={cls}
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				strokeWidth="1.5"
+				strokeLinecap="round"
+				strokeLinejoin="round"
+			>
+				<path d="M12 2C8.5 2 5 5 5 9c0 3 1.5 5 3 6.5V20a2 2 0 002 2h4a2 2 0 002-2v-4.5c1.5-1.5 3-3.5 3-6.5 0-4-3.5-7-7-7z" />
+				<path d="M7.5 7c1.5-1.5 4-2 6.5-0.5" opacity="0.6" />
+				<path d="M8 10c1.5 1 3 1.2 5 0" opacity="0.6" />
+				<path d="M9 13c1 0.8 2.5 0.8 4 0" opacity="0.6" />
+			</svg>
+		);
+	}
+
+	// max / xhigh — dense folds, full complexity
+	return (
+		<svg
+			className={cls}
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth="1.5"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+		>
+			<path d="M12 2C8.5 2 5 5 5 9c0 3 1.5 5 3 6.5V20a2 2 0 002 2h4a2 2 0 002-2v-4.5c1.5-1.5 3-3.5 3-6.5 0-4-3.5-7-7-7z" />
+			<path d="M7 6.5c2-2 5-2 7.5-0.5" opacity="0.7" />
+			<path d="M7.5 9c1.5 1.5 4 1.5 6 0" opacity="0.7" />
+			<path d="M8 11.5c1.5 1 3.5 1.2 5 0" opacity="0.7" />
+			<path d="M9 14c1 0.7 2.5 0.7 3.5 0" opacity="0.7" />
+			<path d="M12 4v2" opacity="0.4" />
+		</svg>
+	);
+}

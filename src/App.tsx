@@ -216,6 +216,12 @@ function App() {
 	const [composerModelSelections, setComposerModelSelections] = useState<
 		Record<string, string>
 	>({});
+	const [composerEffortLevels, setComposerEffortLevels] = useState<
+		Record<string, string>
+	>({});
+	const [composerPermissionModes, setComposerPermissionModes] = useState<
+		Record<string, string>
+	>({});
 	const [composerRestoreState, setComposerRestoreState] = useState<{
 		contextKey: string;
 		draft: string;
@@ -412,6 +418,22 @@ function App() {
 		composerModelSelections[composerContextKey] ??
 		inferDefaultModelId(selectedSession, agentModelSections);
 	const selectedModel = findModelOption(agentModelSections, selectedModelId);
+	const isOpusModel =
+		selectedModelId === "opus-1m" || selectedModelId === "opus";
+	const rawEffortLevel = composerEffortLevels[composerContextKey] ?? "high";
+	const currentEffortLevel = (() => {
+		let level = rawEffortLevel;
+		if (selectedModel?.provider === "codex") {
+			if (level === "max") level = "xhigh";
+		} else {
+			if (level === "xhigh") level = isOpusModel ? "max" : "high";
+			if (level === "minimal") level = "low";
+			if (level === "max" && !isOpusModel) level = "high";
+		}
+		return level;
+	})();
+	const currentPermissionMode =
+		composerPermissionModes[composerContextKey] ?? "acceptEdits";
 	const liveMessages = liveMessagesByContext[composerContextKey] ?? [];
 	const mergedMessages = useMemo(
 		() => [...sessionMessages, ...liveMessages],
@@ -1130,6 +1152,8 @@ function App() {
 				sessionId,
 				helmorSessionId: selectedSessionId,
 				workingDirectory: workspaceDetail?.rootPath ?? null,
+				effortLevel: currentEffortLevel,
+				permissionMode: currentPermissionMode,
 			});
 
 			// Track session for stop functionality
@@ -1636,6 +1660,7 @@ function App() {
 										workspace={workspaceDetail}
 										sessions={workspaceSessions}
 										selectedSessionId={selectedSessionId}
+										selectedProvider={selectedModel?.provider}
 										messages={mergedMessages}
 										attachments={sessionAttachments}
 										loadingWorkspace={loadingWorkspace}
@@ -1675,6 +1700,24 @@ function App() {
 												modelSections={agentModelSections}
 												onSelectModel={(modelId) => {
 													void handleModelSelect(modelId);
+												}}
+												provider={selectedModel?.provider}
+												effortLevel={currentEffortLevel}
+												onSelectEffort={(level) => {
+													setComposerEffortLevels((c) => ({
+														...c,
+														[composerContextKey]: level,
+													}));
+												}}
+												permissionMode={currentPermissionMode}
+												onTogglePlanMode={() => {
+													setComposerPermissionModes((c) => ({
+														...c,
+														[composerContextKey]:
+															c[composerContextKey] === "plan"
+																? "acceptEdits"
+																: "plan",
+													}));
 												}}
 												sendError={activeSendError}
 												restoreDraft={

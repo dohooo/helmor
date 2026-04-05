@@ -68,6 +68,8 @@ pub struct AgentSendRequest {
     pub session_id: Option<String>,
     pub helmor_session_id: Option<String>,
     pub working_directory: Option<String>,
+    pub effort_level: Option<String>,
+    pub permission_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -373,6 +375,8 @@ fn stream_via_sidecar(
             "cwd": working_directory.display().to_string(),
             "resume": resume_session_id,
             "provider": model.provider,
+            "effortLevel": request.effort_level,
+            "permissionMode": request.permission_mode,
         }),
     };
 

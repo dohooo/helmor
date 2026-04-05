@@ -237,6 +237,32 @@ body {
 	}
 }
 
+/* Effort max/xhigh animated gradient text */
+.effort-max-text {
+	background: linear-gradient(
+		135deg,
+		oklch(0.7 0.22 280),
+		oklch(0.65 0.24 330),
+		oklch(0.7 0.22 20),
+		oklch(0.65 0.24 280)
+	);
+	background-size: 300% 300%;
+	animation: effort-shimmer 4s ease-in-out infinite;
+	-webkit-background-clip: text;
+	background-clip: text;
+	-webkit-text-fill-color: transparent;
+}
+
+@keyframes effort-shimmer {
+	0%,
+	100% {
+		background-position: 0% 50%;
+	}
+	50% {
+		background-position: 100% 50%;
+	}
+}
+
 .conversation-markdown {
 	color: var(--color-app-foreground);
 }

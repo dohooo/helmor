@@ -24,10 +24,20 @@ export class CodexSessionManager {
 			model?: string;
 			cwd?: string;
 			resume?: string;
+			effortLevel?: string;
+			permissionMode?: string;
 		},
 		emit: EmitFn,
 	): Promise<void> {
-		const { sessionId, prompt, model, cwd, resume } = params;
+		const {
+			sessionId,
+			prompt,
+			model,
+			cwd,
+			resume,
+			effortLevel,
+			permissionMode,
+		} = params;
 
 		const abortController = new AbortController();
 		this.abortControllers.set(sessionId, abortController);
@@ -40,6 +50,19 @@ export class CodexSessionManager {
 				...(model ? { model } : {}),
 				...(cwd ? { workingDirectory: cwd } : {}),
 				skipGitRepoCheck: true,
+				...(effortLevel
+					? {
+							modelReasoningEffort: effortLevel as
+								| "minimal"
+								| "low"
+								| "medium"
+								| "high"
+								| "xhigh",
+						}
+					: {}),
+				...(permissionMode === "plan"
+					? { approvalPolicy: "never" as const }
+					: {}),
 			};
 
 			const thread = resume

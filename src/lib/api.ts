@@ -66,6 +66,8 @@ export type AgentSendRequest = {
 	sessionId?: string | null;
 	helmorSessionId?: string | null;
 	workingDirectory?: string | null;
+	effortLevel?: string | null;
+	permissionMode?: string | null;
 };
 
 export type WorkspaceSummary = {

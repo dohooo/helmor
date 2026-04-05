@@ -76,6 +76,7 @@ type WorkspacePanelProps = {
 	workspace: WorkspaceDetail | null;
 	sessions: WorkspaceSessionSummary[];
 	selectedSessionId: string | null;
+	selectedProvider?: string | null;
 	messages: SessionMessageRecord[];
 	attachments?: SessionAttachmentRecord[];
 	loadingWorkspace?: boolean;
@@ -108,6 +109,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	workspace,
 	sessions,
 	selectedSessionId,
+	selectedProvider,
 	messages,
 	attachments: _attachments,
 	loadingWorkspace = false,
@@ -384,7 +386,11 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 												className="group/tab relative gap-1.5 overflow-hidden rounded-[10px] px-3.5 text-[13px] text-app-foreground-soft data-[state=active]:text-app-foreground"
 											>
 												<SessionProviderIcon
-													agentType={session.agentType}
+													agentType={
+														selected
+															? (selectedProvider ?? session.agentType)
+															: session.agentType
+													}
 													active={isActive}
 												/>
 												{isEditing ? (
@@ -1574,5 +1580,5 @@ function SessionProviderIcon({
 
 function displaySessionTitle(session: WorkspaceSessionSummary): string {
 	if (session.title && session.title !== "Untitled") return session.title;
-	return session.agentType === "codex" ? "Codex session" : "Claude session";
+	return "Untitled";
 }

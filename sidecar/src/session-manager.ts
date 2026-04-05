@@ -40,10 +40,19 @@ export class SessionManager {
 			cwd?: string;
 			resume?: string;
 			permissionMode?: string;
+			effortLevel?: string;
 		},
 		emit: EmitFn,
 	): Promise<void> {
-		const { sessionId, prompt, model, cwd, resume, permissionMode } = params;
+		const {
+			sessionId,
+			prompt,
+			model,
+			cwd,
+			resume,
+			permissionMode,
+			effortLevel,
+		} = params;
 
 		const abortController = new AbortController();
 
@@ -75,6 +84,7 @@ export class SessionManager {
 						| "auto") || "acceptEdits",
 				allowDangerouslySkipPermissions:
 					permissionMode === "bypassPermissions" || undefined,
+				effort: (effortLevel as "low" | "medium" | "high" | "max") || undefined,
 				includePartialMessages: true,
 				settingSources: ["user", "project", "local"],
 			},

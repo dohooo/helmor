@@ -91,6 +91,7 @@ for await (const line of rl) {
 							cwd?: string;
 							resume?: string;
 							permissionMode?: string;
+							effortLevel?: string;
 						},
 						debugEmit,
 					)

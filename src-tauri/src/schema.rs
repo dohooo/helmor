@@ -31,6 +31,18 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to rename claude_session_id → provider_session_id")?;
     }
 
+    // Migration: add effort_level column if missing (replaces thinking_enabled + codex_thinking_level)
+    let has_effort: bool = connection
+        .prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'effort_level'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+
+    if !has_effort {
+        connection
+            .execute_batch("ALTER TABLE sessions ADD COLUMN effort_level TEXT DEFAULT 'high'")
+            .context("Failed to add effort_level column")?;
+    }
+
     Ok(())
 }
 
@@ -116,6 +128,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     agent_type TEXT,
     title TEXT DEFAULT 'Untitled',
     context_used_percent REAL,
+    effort_level TEXT DEFAULT 'high',
     thinking_enabled INTEGER DEFAULT 1,
     codex_thinking_level TEXT,
     fast_mode INTEGER DEFAULT 0,
