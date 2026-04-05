@@ -1044,56 +1044,52 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 														),
 													)
 												}
-												className={`flex size-6 items-center justify-center text-app-muted transition-colors hover:bg-app-foreground/[0.07] hover:text-app-foreground focus-visible:outline-none ${installedEditors.length > 1 ? "rounded-l-[5px]" : "rounded-[5px]"}`}
+												className="flex size-6 items-center justify-center rounded-l-[5px] text-app-muted transition-colors hover:bg-app-foreground/[0.07] hover:text-app-foreground focus-visible:outline-none"
 											>
 												<EditorIcon
 													editorId={preferredEditor.id}
 													className="size-3.5"
 												/>
 											</button>
-											{installedEditors.length > 1 && (
-												<DropdownMenu>
-													<DropdownMenuTrigger className="flex h-6 w-4 items-center justify-center rounded-r-[5px] border-l border-app-border/40 text-app-muted transition-colors hover:bg-app-foreground/[0.07] hover:text-app-foreground focus-visible:outline-none">
-														<ChevronDown className="size-2.5" strokeWidth={2} />
-													</DropdownMenuTrigger>
-													<DropdownMenuContent
-														side="bottom"
-														align="end"
-														sideOffset={6}
-														className="min-w-[11rem]"
-													>
-														{installedEditors.map((editor) => (
-															<DropdownMenuItem
-																key={editor.id}
-																onClick={() => {
-																	setPreferredEditorId(editor.id);
-																	void openWorkspaceInEditor(
-																		selectedWorkspaceId,
-																		editor.id as "cursor" | "vscode",
-																	).catch((e) =>
-																		pushWorkspaceToast(
-																			String(e),
-																			`Failed to open ${editor.name}`,
-																		),
-																	);
-																}}
-																className="flex items-center gap-2"
-															>
-																<EditorIcon
-																	editorId={editor.id}
-																	className="size-4 shrink-0"
-																/>
-																<span className="font-medium">
-																	{editor.name}
-																</span>
-																{editor.id === preferredEditor.id && (
-																	<Check className="ml-auto size-3.5 text-app-foreground-soft" />
-																)}
-															</DropdownMenuItem>
-														))}
-													</DropdownMenuContent>
-												</DropdownMenu>
-											)}
+											<DropdownMenu>
+												<DropdownMenuTrigger className="flex h-6 w-4 items-center justify-center rounded-r-[5px] border-l border-app-border/40 text-app-muted transition-colors hover:bg-app-foreground/[0.07] hover:text-app-foreground focus-visible:outline-none">
+													<ChevronDown className="size-2.5" strokeWidth={2} />
+												</DropdownMenuTrigger>
+												<DropdownMenuContent
+													side="bottom"
+													align="end"
+													sideOffset={6}
+													className="min-w-[11rem]"
+												>
+													{installedEditors.map((editor) => (
+														<DropdownMenuItem
+															key={editor.id}
+															onClick={() => {
+																setPreferredEditorId(editor.id);
+																void openWorkspaceInEditor(
+																	selectedWorkspaceId,
+																	editor.id as "cursor" | "vscode",
+																).catch((e) =>
+																	pushWorkspaceToast(
+																		String(e),
+																		`Failed to open ${editor.name}`,
+																	),
+																);
+															}}
+															className="flex items-center gap-2"
+														>
+															<EditorIcon
+																editorId={editor.id}
+																className="size-4 shrink-0"
+															/>
+															<span className="font-medium">{editor.name}</span>
+															{editor.id === preferredEditor.id && (
+																<Check className="ml-auto size-3.5 text-app-foreground-soft" />
+															)}
+														</DropdownMenuItem>
+													))}
+												</DropdownMenuContent>
+											</DropdownMenu>
 										</div>
 									)}
 								{conductorAvailable && (
