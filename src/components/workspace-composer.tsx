@@ -1,3 +1,10 @@
+import { LexicalComposer } from "@lexical/react/LexicalComposer";
+import { ContentEditable } from "@lexical/react/LexicalContentEditable";
+import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
+import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
+import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
+import type { LexicalEditor } from "lexical";
+import { $createParagraphNode, $createTextNode, $getRoot } from "lexical";
 import { ArrowUp, ChevronDown, ClipboardList, Square } from "lucide-react";
 import {
 	type ButtonHTMLAttributes,
@@ -12,11 +19,17 @@ import type { AgentModelSection } from "@/lib/api";
 import { recordComposerRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
 import {
-	clampEffortToModel,
-	getAvailableEffortLevels,
-} from "@/lib/workspace-helpers";
+	$createImageBadgeNode,
+	ImageBadgeNode,
+} from "./composer-editor/image-badge-node";
+import { AutoResizePlugin } from "./composer-editor/plugins/auto-resize-plugin";
+import { EditablePlugin } from "./composer-editor/plugins/editable-plugin";
+import { EditorRefPlugin } from "./composer-editor/plugins/editor-ref-plugin";
+import { HasContentPlugin } from "./composer-editor/plugins/has-content-plugin";
+import { PasteImagePlugin } from "./composer-editor/plugins/paste-image-plugin";
+import { SubmitPlugin } from "./composer-editor/plugins/submit-plugin";
+import { $extractComposerContent } from "./composer-editor/utils";
 import { ClaudeIcon, OpenAIIcon } from "./icons";
-import { isImagePath } from "./image-preview";
 import { Button } from "./ui/button";
 import {
 	DropdownMenu,
@@ -73,162 +86,33 @@ function ComposerButton({
 }
 
 // ---------------------------------------------------------------------------
-// ContentEditable helpers
+// Lexical editor config (stable reference — defined outside component)
 // ---------------------------------------------------------------------------
 
-const IMAGE_BADGE_ATTR = "data-image-path";
+const EDITOR_THEME = {
+	root: "composer-editor",
+	paragraph: "composer-paragraph",
+};
 
-/** Create an inline image badge DOM element for insertion into the editor. */
-function createImageBadgeElement(path: string): HTMLSpanElement {
-	const badge = document.createElement("span");
-	badge.setAttribute(IMAGE_BADGE_ATTR, path);
-	badge.contentEditable = "false";
-	badge.className =
-		"inline-flex items-center gap-1 rounded border border-app-border/60 text-[12px] mx-0.5 align-middle cursor-default select-none transition-colors hover:border-app-foreground-soft/40 hover:bg-app-foreground/[0.03]";
-
-	const icon = document.createElement("span");
-	icon.className = "inline-flex items-center gap-1.5 px-1.5 py-0.5";
-	icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="size-3 shrink-0 text-app-project"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>`;
-	const nameSpan = document.createElement("span");
-	nameSpan.className = "max-w-[200px] truncate text-app-foreground-soft";
-	nameSpan.textContent = path.split("/").pop() ?? path;
-	icon.appendChild(nameSpan);
-
-	const removeBtn = document.createElement("span");
-	removeBtn.className =
-		"px-1 py-0.5 text-app-muted/40 hover:text-app-muted cursor-pointer";
-	removeBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="size-3"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`;
-	removeBtn.setAttribute("data-remove-image", "true");
-
-	badge.appendChild(icon);
-	badge.appendChild(removeBtn);
-	return badge;
+function onEditorError(error: Error) {
+	console.error("[Composer Lexical]", error);
 }
 
-/** Extract text and image paths from the contentEditable element. */
-function extractEditorContent(el: HTMLElement): {
-	text: string;
-	images: string[];
-} {
-	const images: string[] = [];
-	const textParts: string[] = [];
-
-	function walk(node: Node) {
-		if (node.nodeType === Node.TEXT_NODE) {
-			textParts.push(node.textContent ?? "");
-			return;
-		}
-		if (node.nodeType !== Node.ELEMENT_NODE) return;
-		const element = node as HTMLElement;
-
-		// Image badge — collect path, represent as @path in text
-		const imgPath = element.getAttribute(IMAGE_BADGE_ATTR);
-		if (imgPath) {
-			images.push(imgPath);
-			textParts.push(`@${imgPath}`);
-			return;
-		}
-
-		// Line breaks
-		const tag = element.tagName;
-		if (tag === "BR") {
-			textParts.push("\n");
-			return;
-		}
-		if (tag === "DIV" || tag === "P") {
-			// Block elements add a newline before if there's preceding content
-			if (textParts.length > 0 && textParts[textParts.length - 1] !== "\n") {
-				textParts.push("\n");
-			}
-		}
-
-		for (const child of node.childNodes) {
-			walk(child);
-		}
-	}
-
-	for (const child of el.childNodes) {
-		walk(child);
-	}
-
-	return {
-		text: textParts
-			.join("")
-			// Remove zero-width spaces used as cursor spacers
-			.replace(/\u200B/g, " ")
-			.replace(/ {2,}/g, " ")
-			.replace(/\n{3,}/g, "\n\n")
-			.trim(),
-		images: [...new Set(images)],
-	};
-}
-
-/** Check if the editor is effectively empty (no text, no images). */
-function isEditorEmpty(el: HTMLElement): boolean {
-	const { text, images } = extractEditorContent(el);
-	return text.replace(/@\/\S+/g, "").trim().length === 0 && images.length === 0;
-}
-
-/** Set editor content from text draft + image paths for restore. */
-function setEditorContent(el: HTMLElement, draft: string, images: string[]) {
-	el.innerHTML = "";
+/** Imperatively set Lexical editor content from draft text + image paths. */
+function $setEditorContent(draft: string, images: string[]) {
+	const root = $getRoot();
+	root.clear();
+	const paragraph = $createParagraphNode();
 	if (draft) {
-		el.appendChild(document.createTextNode(draft));
+		paragraph.append($createTextNode(draft));
 	}
 	for (const path of images) {
-		if (draft) {
-			el.appendChild(document.createTextNode(" "));
+		if (draft || paragraph.getChildrenSize() > 0) {
+			paragraph.append($createTextNode(" "));
 		}
-		el.appendChild(createImageBadgeElement(path));
+		paragraph.append($createImageBadgeNode(path));
 	}
-}
-
-/** Place cursor at the end of the contentEditable element. */
-function placeCursorAtEnd(el: HTMLElement) {
-	const selection = window.getSelection();
-	if (!selection) return;
-	const range = document.createRange();
-	range.selectNodeContents(el);
-	range.collapse(false);
-	selection.removeAllRanges();
-	selection.addRange(range);
-}
-
-/** Insert an image badge at the current cursor position. */
-function insertImageBadgeAtCursor(editor: HTMLElement, path: string) {
-	const badge = createImageBadgeElement(path);
-	const selection = window.getSelection();
-
-	if (!selection || selection.rangeCount === 0) {
-		// No selection — append at end
-		editor.appendChild(badge);
-		editor.appendChild(document.createTextNode("\u200B"));
-		placeCursorAtEnd(editor);
-		return;
-	}
-
-	const range = selection.getRangeAt(0);
-
-	// Ensure cursor is within the editor
-	if (!editor.contains(range.commonAncestorContainer)) {
-		editor.appendChild(badge);
-		editor.appendChild(document.createTextNode("\u200B"));
-		placeCursorAtEnd(editor);
-		return;
-	}
-
-	range.deleteContents();
-	// Insert a zero-width space after the badge so the cursor has a place to land
-	const spacer = document.createTextNode("\u200B");
-	range.insertNode(spacer);
-	range.insertNode(badge);
-
-	// Move cursor after the spacer
-	const newRange = document.createRange();
-	newRange.setStartAfter(spacer);
-	newRange.collapse(true);
-	selection.removeAllRanges();
-	selection.addRange(newRange);
+	root.append(paragraph);
 }
 
 export const WorkspaceComposer = memo(function WorkspaceComposer({
@@ -255,17 +139,20 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
 	);
 	recordComposerRender(contextKey, instanceIdRef.current);
-	const editorRef = useRef<HTMLDivElement>(null);
+	const editorRef = useRef<LexicalEditor | null>(null);
 	const [hasContent, setHasContent] = useState(false);
-	const effectiveEffort = clampEffortToModel(
-		effortLevel,
-		selectedModelId,
-		provider,
-	);
-	const availableEffortLevels = getAvailableEffortLevels(
-		selectedModelId,
-		provider,
-	);
+	const isOpus = selectedModelId === "opus-1m" || selectedModelId === "opus";
+	const effectiveEffort = (() => {
+		let level = effortLevel;
+		if (provider === "codex") {
+			if (level === "max") level = "xhigh";
+		} else {
+			if (level === "xhigh") level = isOpus ? "max" : "high";
+			if (level === "minimal") level = "low";
+			if (level === "max" && !isOpus) level = "high";
+		}
+		return level;
+	})();
 	const selectedModel =
 		modelSections
 			.flatMap((section) => section.options)
@@ -273,24 +160,24 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const sendDisabled =
 		disabled || submitDisabled || sending || !selectedModel || !hasContent;
 
-	const updateHasContent = useCallback(() => {
-		const el = editorRef.current;
-		if (!el) return;
-		setHasContent(!isEditorEmpty(el));
-	}, []);
+	// Lexical initial config — must be a new object per mount for key resets
+	const initialConfig = useRef({
+		namespace: "WorkspaceComposer",
+		theme: EDITOR_THEME,
+		nodes: [ImageBadgeNode],
+		onError: onEditorError,
+	}).current;
 
 	// Restore content on context switch
 	const prevContextKeyRef = useRef(contextKey);
 	useEffect(() => {
 		if (prevContextKeyRef.current !== contextKey) {
 			prevContextKeyRef.current = contextKey;
-			const el = editorRef.current;
-			if (el) {
-				setEditorContent(el, restoreDraft ?? "", restoreImages);
-				updateHasContent();
-			}
+			editorRef.current?.update(() => {
+				$setEditorContent(restoreDraft ?? "", restoreImages);
+			});
 		}
-	}, [contextKey, restoreDraft, restoreImages, updateHasContent]);
+	}, [contextKey, restoreDraft, restoreImages]);
 
 	// Restore on nonce change (error restore / draft restore)
 	const prevNonceRef = useRef(restoreNonce);
@@ -298,108 +185,28 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		if (restoreNonce === prevNonceRef.current) return;
 		prevNonceRef.current = restoreNonce;
 		if (!restoreDraft && restoreImages.length === 0) return;
-		const el = editorRef.current;
-		if (el) {
-			setEditorContent(el, restoreDraft ?? "", restoreImages);
-			updateHasContent();
-		}
-	}, [restoreNonce, restoreDraft, restoreImages, updateHasContent]);
-
-	// Auto-resize editor, capped at max height
-	const EDITOR_MAX_HEIGHT = 240;
-	useEffect(() => {
-		const el = editorRef.current;
-		if (!el) return;
-		el.style.height = "auto";
-		const next = Math.min(el.scrollHeight, EDITOR_MAX_HEIGHT);
-		el.style.height = `${next}px`;
-		el.scrollTop = el.scrollHeight;
-	});
+		editorRef.current?.update(() => {
+			$setEditorContent(restoreDraft ?? "", restoreImages);
+		});
+	}, [restoreNonce, restoreDraft, restoreImages]);
 
 	const handleSubmit = useCallback(() => {
-		const el = editorRef.current;
-		if (!el) return;
-		const { text, images } = extractEditorContent(el);
-		// text already contains @path references, so just use it as the prompt
-		const prompt = text.trim();
+		const editor = editorRef.current;
+		if (!editor) return;
+		let prompt = "";
+		let images: string[] = [];
+		editor.read(() => {
+			const result = $extractComposerContent();
+			prompt = result.text;
+			images = result.images;
+		});
 		if (!prompt && images.length === 0) return;
 		onSubmit(prompt, images);
-		el.innerHTML = "";
+		editor.update(() => {
+			$getRoot().clear();
+		});
 		setHasContent(false);
 	}, [onSubmit]);
-
-	const handlePaste = useCallback(
-		(event: React.ClipboardEvent<HTMLDivElement>) => {
-			const el = editorRef.current;
-			if (!el) return;
-
-			const pastedText = event.clipboardData.getData("text/plain");
-			if (!pastedText) return;
-
-			// Always prevent default to avoid HTML paste artifacts
-			event.preventDefault();
-
-			// Check if any of the pasted lines contain image paths
-			const lines = pastedText.split("\n");
-			const hasImagePaths = lines.some((line) => isImagePath(line.trim()));
-
-			if (!hasImagePaths) {
-				// No image paths — insert as plain text via execCommand
-				// (handles cursor position correctly, supports undo)
-				document.execCommand("insertText", false, pastedText);
-				updateHasContent();
-				return;
-			}
-
-			// Has image paths — insert mixed content line by line
-			for (let i = 0; i < lines.length; i++) {
-				const line = lines[i].trim();
-				if (isImagePath(line)) {
-					insertImageBadgeAtCursor(el, line);
-				} else if (line) {
-					document.execCommand("insertText", false, line);
-				}
-				// Add line break between lines (but not after the last one)
-				if (i < lines.length - 1 && (line || i === 0)) {
-					document.execCommand("insertLineBreak");
-				}
-			}
-
-			updateHasContent();
-		},
-		[updateHasContent],
-	);
-
-	const handleKeyDown = useCallback(
-		(event: React.KeyboardEvent<HTMLDivElement>) => {
-			if (event.key === "Enter" && !event.shiftKey) {
-				event.preventDefault();
-				if (!sendDisabled) {
-					handleSubmit();
-				}
-			}
-		},
-		[sendDisabled, handleSubmit],
-	);
-
-	const handleClick = useCallback(
-		(event: React.MouseEvent<HTMLDivElement>) => {
-			// Handle remove button clicks on image badges
-			const target = event.target as HTMLElement;
-			const removeBtn = target.closest("[data-remove-image]");
-			if (removeBtn) {
-				event.preventDefault();
-				event.stopPropagation();
-				const badge = removeBtn.closest(`[${IMAGE_BADGE_ATTR}]`);
-				if (badge) {
-					badge.remove();
-					updateHasContent();
-				}
-				return;
-			}
-		},
-		[updateHasContent],
-	);
 
 	return (
 		<div
@@ -410,24 +217,33 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				Workspace input
 			</label>
 
-			<div
-				ref={editorRef}
-				id="workspace-input"
-				role="textbox"
-				aria-label="Workspace input"
-				aria-multiline="true"
-				contentEditable={!disabled}
-				suppressContentEditableWarning
-				onInput={updateHasContent}
-				onPaste={handlePaste}
-				onKeyDown={handleKeyDown}
-				onClick={handleClick}
-				data-placeholder="Ask to make changes, @mention files, run /commands"
-				className={cn(
-					"composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-app-foreground outline-none",
-					"empty:before:pointer-events-none empty:before:text-app-muted empty:before:content-[attr(data-placeholder)]",
-				)}
-			/>
+			<LexicalComposer initialConfig={initialConfig}>
+				<div className="relative">
+					<PlainTextPlugin
+						contentEditable={
+							<ContentEditable
+								id="workspace-input"
+								aria-label="Workspace input"
+								aria-multiline
+								className="composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-app-foreground outline-none"
+							/>
+						}
+						placeholder={
+							<div className="pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-app-muted">
+								Ask to make changes, @mention files, run /commands
+							</div>
+						}
+						ErrorBoundary={LexicalErrorBoundary}
+					/>
+				</div>
+				<HistoryPlugin />
+				<SubmitPlugin onSubmit={handleSubmit} disabled={sendDisabled} />
+				<PasteImagePlugin />
+				<AutoResizePlugin minHeight={64} maxHeight={240} />
+				<EditorRefPlugin editorRef={editorRef} />
+				<EditablePlugin disabled={disabled} />
+				<HasContentPlugin onChange={setHasContent} />
+			</LexicalComposer>
 
 			{sendError ? (
 				<div className="mt-2 rounded-lg border border-app-canceled/30 bg-app-canceled/10 px-3 py-2 text-[12px] text-app-foreground-soft">
@@ -528,7 +344,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						>
 							<DropdownMenuGroup>
 								<DropdownMenuLabel>Effort</DropdownMenuLabel>
-								{availableEffortLevels.map((level) => (
+								{(provider === "codex"
+									? (["minimal", "low", "medium", "high", "xhigh"] as const)
+									: isOpus
+										? (["low", "medium", "high", "max"] as const)
+										: (["low", "medium", "high"] as const)
+								).map((level) => (
 									<DropdownMenuItem
 										key={level}
 										disabled={disabled}
