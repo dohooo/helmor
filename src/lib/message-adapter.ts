@@ -60,7 +60,9 @@ export function convertMessages(
 		return cached.renderedMessages;
 	}
 
-	let nextMessages = groupChildMessages(convertMessagesFlat(messages));
+	let nextMessages = mergeAdjacentAssistantMessages(
+		groupChildMessages(convertMessagesFlat(messages)),
+	);
 
 	// Apply collapse pass: consecutive search/read tool calls → summary groups
 	if (options?.collapse) {
@@ -209,6 +211,40 @@ function convertMessagesFlat(
 	}
 
 	return result;
+}
+
+/**
+ * Merge adjacent assistant turns into one UI message.
+ *
+ * During tool-heavy streaming, Claude/Codex emit many assistant turns that are
+ * logically part of the same response, with user tool_result records in
+ * between. Those user records are already folded into the preceding assistant,
+ * so the remaining assistant turns become adjacent here. Keeping them as
+ * separate UI rows makes the list grow on every tool call, which causes
+ * excessive remeasurement and visible flicker in the chat viewport.
+ */
+function mergeAdjacentAssistantMessages(
+	msgs: ThreadMessageLike[],
+): ThreadMessageLike[] {
+	const out: ThreadMessageLike[] = [];
+
+	for (const msg of msgs) {
+		const prev = out[out.length - 1];
+		if (prev?.role === "assistant" && msg.role === "assistant") {
+			out[out.length - 1] = {
+				...prev,
+				content: [...prev.content, ...msg.content],
+				status: msg.status ?? prev.status,
+				streaming:
+					prev.streaming === true || msg.streaming === true || undefined,
+			};
+			continue;
+		}
+
+		out.push(msg);
+	}
+
+	return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -564,7 +600,7 @@ function applyCollapsePass(messages: ThreadMessageLike[]): ThreadMessageLike[] {
 		// Skip messages with no tool-calls
 		if (!parts.some((p) => p.type === "tool-call")) return msg;
 
-		const isStreaming = msg.status?.type !== "complete";
+		const isStreaming = msg.streaming === true;
 		const collapsed = collapseToolCallsInParts(parts, isStreaming);
 
 		// If nothing was collapsed, return original reference (cache-friendly)

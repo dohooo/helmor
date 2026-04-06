@@ -1,3 +1,10 @@
+import { LexicalComposer } from "@lexical/react/LexicalComposer";
+import { ContentEditable } from "@lexical/react/LexicalContentEditable";
+import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
+import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
+import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
+import type { LexicalEditor } from "lexical";
+import { $createParagraphNode, $createTextNode, $getRoot } from "lexical";
 import { ArrowUp, ChevronDown, ClipboardList, Square } from "lucide-react";
 import {
 	type ButtonHTMLAttributes,
@@ -11,8 +18,20 @@ import {
 import type { AgentModelSection } from "@/lib/api";
 import { recordComposerRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
+import { FileBadgeNode } from "./composer-editor/file-badge-node";
+import {
+	$createImageBadgeNode,
+	ImageBadgeNode,
+} from "./composer-editor/image-badge-node";
+import { AutoResizePlugin } from "./composer-editor/plugins/auto-resize-plugin";
+import { DropFilePlugin } from "./composer-editor/plugins/drop-file-plugin";
+import { EditablePlugin } from "./composer-editor/plugins/editable-plugin";
+import { EditorRefPlugin } from "./composer-editor/plugins/editor-ref-plugin";
+import { HasContentPlugin } from "./composer-editor/plugins/has-content-plugin";
+import { PasteImagePlugin } from "./composer-editor/plugins/paste-image-plugin";
+import { SubmitPlugin } from "./composer-editor/plugins/submit-plugin";
+import { $extractComposerContent } from "./composer-editor/utils";
 import { ClaudeIcon, OpenAIIcon } from "./icons";
-import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
 import { Button } from "./ui/button";
 import {
 	DropdownMenu,
@@ -68,6 +87,36 @@ function ComposerButton({
 	);
 }
 
+// ---------------------------------------------------------------------------
+// Lexical editor config (stable reference — defined outside component)
+// ---------------------------------------------------------------------------
+
+const EDITOR_THEME = {
+	root: "composer-editor",
+	paragraph: "composer-paragraph",
+};
+
+function onEditorError(error: Error) {
+	console.error("[Composer Lexical]", error);
+}
+
+/** Imperatively set Lexical editor content from draft text + image paths. */
+function $setEditorContent(draft: string, images: string[]) {
+	const root = $getRoot();
+	root.clear();
+	const paragraph = $createParagraphNode();
+	if (draft) {
+		paragraph.append($createTextNode(draft));
+	}
+	for (const path of images) {
+		if (draft || paragraph.getChildrenSize() > 0) {
+			paragraph.append($createTextNode(" "));
+		}
+		paragraph.append($createImageBadgeNode(path));
+	}
+	root.append(paragraph);
+}
+
 export const WorkspaceComposer = memo(function WorkspaceComposer({
 	contextKey,
 	onSubmit,
@@ -92,8 +141,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
 	);
 	recordComposerRender(contextKey, instanceIdRef.current);
-	const textareaRef = useRef<HTMLTextAreaElement>(null);
-	const [draftValue, setDraftValue] = useState(restoreDraft ?? "");
+	const editorRef = useRef<LexicalEditor | null>(null);
+	const [hasContent, setHasContent] = useState(false);
 	const isOpus = selectedModelId === "opus-1m" || selectedModelId === "opus";
 	const effectiveEffort = (() => {
 		let level = effortLevel;
@@ -110,65 +159,56 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		modelSections
 			.flatMap((section) => section.options)
 			.find((option) => option.id === selectedModelId) ?? null;
-	const [attachedImages, setAttachedImages] = useState<string[]>(restoreImages);
-	const hasContent = draftValue.trim().length > 0 || attachedImages.length > 0;
 	const sendDisabled =
 		disabled || submitDisabled || sending || !selectedModel || !hasContent;
 
+	// Lexical initial config — must be a new object per mount for key resets
+	const initialConfig = useRef({
+		namespace: "WorkspaceComposer",
+		theme: EDITOR_THEME,
+		nodes: [ImageBadgeNode, FileBadgeNode],
+		onError: onEditorError,
+	}).current;
+
+	// Restore content on context switch
 	const prevContextKeyRef = useRef(contextKey);
 	useEffect(() => {
 		if (prevContextKeyRef.current !== contextKey) {
-			// User switched session/workspace — reset draft
 			prevContextKeyRef.current = contextKey;
-			setDraftValue(restoreDraft ?? "");
-			setAttachedImages(restoreImages);
+			editorRef.current?.update(() => {
+				$setEditorContent(restoreDraft ?? "", restoreImages);
+			});
 		}
 	}, [contextKey, restoreDraft, restoreImages]);
 
+	// Restore on nonce change (error restore / draft restore)
+	const prevNonceRef = useRef(restoreNonce);
 	useEffect(() => {
+		if (restoreNonce === prevNonceRef.current) return;
+		prevNonceRef.current = restoreNonce;
 		if (!restoreDraft && restoreImages.length === 0) return;
-		setDraftValue(restoreDraft ?? "");
-		setAttachedImages(restoreImages);
-	}, [restoreNonce]);
-
-	// Auto-resize textarea to fit content, capped at a maximum height
-	const TEXTAREA_MAX_HEIGHT = 240;
-	useEffect(() => {
-		const el = textareaRef.current;
-		if (!el) return;
-		// Reset to min so scrollHeight recalculates correctly
-		el.style.height = "auto";
-		const next = Math.min(el.scrollHeight, TEXTAREA_MAX_HEIGHT);
-		el.style.height = `${next}px`;
-		// Always show the bottom of the text (scroll to end)
-		el.scrollTop = el.scrollHeight;
-	}, [draftValue]);
-
-	// Intercept value changes to extract image paths
-	const handleValueChange = useCallback((newValue: string) => {
-		const found = extractImagePaths(newValue);
-		if (found.length > 0) {
-			let cleaned = newValue;
-			for (const p of found) cleaned = cleaned.replace(p, "");
-			cleaned = cleaned.replace(/\n{2,}/g, "\n").trim();
-			setAttachedImages((prev) => [...new Set([...prev, ...found])]);
-			setDraftValue(cleaned);
-		} else {
-			setDraftValue(newValue);
-		}
-	}, []);
-
-	const handleRemoveImage = useCallback((path: string) => {
-		setAttachedImages((prev) => prev.filter((p) => p !== path));
-	}, []);
+		editorRef.current?.update(() => {
+			$setEditorContent(restoreDraft ?? "", restoreImages);
+		});
+	}, [restoreNonce, restoreDraft, restoreImages]);
 
 	const handleSubmit = useCallback(() => {
-		const imageRefs = attachedImages.map((p) => `@${p}`);
-		const prompt = [draftValue.trim(), ...imageRefs].filter(Boolean).join("\n");
-		onSubmit(prompt, attachedImages);
-		setDraftValue("");
-		setAttachedImages([]);
-	}, [draftValue, attachedImages, onSubmit]);
+		const editor = editorRef.current;
+		if (!editor) return;
+		let prompt = "";
+		let images: string[] = [];
+		editor.read(() => {
+			const result = $extractComposerContent();
+			prompt = result.text;
+			images = result.images;
+		});
+		if (!prompt && images.length === 0) return;
+		onSubmit(prompt, images);
+		editor.update(() => {
+			$getRoot().clear();
+		});
+		setHasContent(false);
+	}, [onSubmit]);
 
 	return (
 		<div
@@ -179,38 +219,34 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				Workspace input
 			</label>
 
-			{attachedImages.length > 0 ? (
-				<div className="mb-2 flex flex-wrap gap-1.5">
-					{attachedImages.map((p) => (
-						<ImagePreviewBadge
-							key={p}
-							path={p}
-							onRemove={() => handleRemoveImage(p)}
-						/>
-					))}
-				</div>
-			) : null}
-
-			<textarea
-				ref={textareaRef}
-				id="workspace-input"
-				aria-label="Workspace input"
-				value={draftValue}
-				onChange={(event) => {
-					handleValueChange(event.currentTarget.value);
-				}}
-				disabled={disabled}
-				onKeyDown={(event) => {
-					if (event.key === "Enter" && !event.shiftKey) {
-						event.preventDefault();
-						if (!sendDisabled) {
-							handleSubmit();
+			<LexicalComposer initialConfig={initialConfig}>
+				<div className="relative">
+					<PlainTextPlugin
+						contentEditable={
+							<ContentEditable
+								id="workspace-input"
+								aria-label="Workspace input"
+								aria-multiline
+								className="composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-app-foreground outline-none"
+							/>
 						}
-					}
-				}}
-				placeholder="Ask to make changes, @mention files, run /commands"
-				className="min-h-[64px] resize-none overflow-y-auto bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-app-foreground outline-none placeholder:text-app-muted"
-			/>
+						placeholder={
+							<div className="pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-app-muted">
+								Ask to make changes, @mention files, run /commands
+							</div>
+						}
+						ErrorBoundary={LexicalErrorBoundary}
+					/>
+				</div>
+				<HistoryPlugin />
+				<SubmitPlugin onSubmit={handleSubmit} disabled={sendDisabled} />
+				<PasteImagePlugin />
+				<DropFilePlugin />
+				<AutoResizePlugin minHeight={64} maxHeight={240} />
+				<EditorRefPlugin editorRef={editorRef} />
+				<EditablePlugin disabled={disabled} />
+				<HasContentPlugin onChange={setHasContent} />
+			</LexicalComposer>
 
 			{sendError ? (
 				<div className="mt-2 rounded-lg border border-app-canceled/30 bg-app-canceled/10 px-3 py-2 text-[12px] text-app-foreground-soft">

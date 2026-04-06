@@ -1,4 +1,3 @@
-import { code as codePlugin } from "@streamdown/code";
 import { useQuery } from "@tanstack/react-query";
 import {
 	AlertCircle,
@@ -26,9 +25,10 @@ import {
 	X,
 } from "lucide-react";
 import {
+	lazy,
 	memo,
-	Profiler,
 	type ReactNode,
+	Suspense,
 	useCallback,
 	useEffect,
 	useLayoutEffect,
@@ -44,7 +44,6 @@ import {
 	type VirtuosoHandle,
 	type ItemProps as VirtuosoItemProps,
 } from "react-virtuoso";
-import { Streamdown } from "streamdown";
 import {
 	createSession,
 	deleteSession,
@@ -70,8 +69,8 @@ import {
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { ClaudeIcon, OpenAIIcon } from "./icons";
-import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
-import { streamdownComponents } from "./streamdown-components";
+import { ImagePreviewBadge } from "./image-preview";
+import { BaseTooltip } from "./ui/base-tooltip";
 import {
 	Command,
 	CommandEmpty,
@@ -134,9 +133,38 @@ type WorkspacePanelProps = {
 };
 
 type RenderedMessage = ReturnType<typeof convertMessages>[number];
+type StreamdownMode = "static" | "streaming";
 
+const LazyStreamdown = lazy(async () => {
+	const [{ Streamdown }, { streamdownComponents }] = await Promise.all([
+		import("streamdown"),
+		import("./streamdown-components"),
+	]);
+
+	function StreamdownWithOverrides(
+		props: React.ComponentProps<typeof Streamdown>,
+	) {
+		return (
+			<Streamdown
+				{...props}
+				components={{ ...streamdownComponents, ...props.components }}
+			/>
+		);
+	}
+
+	return { default: StreamdownWithOverrides };
+});
+
+let hasPreloadedStreamdown = false;
 const sessionViewportStateBySession = new Map<string, StateSnapshot>();
 const CHAT_LAYOUT_CACHE_VERSION = "chat-layout-v1";
+
+function preloadStreamdown() {
+	if (hasPreloadedStreamdown) return;
+	hasPreloadedStreamdown = true;
+	void import("streamdown");
+	void import("./streamdown-components");
+}
 
 export const WorkspacePanel = memo(function WorkspacePanel({
 	workspace,
@@ -266,6 +294,30 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 		setEditingTitle("");
 	}, []);
 
+	useEffect(() => {
+		if (typeof window === "undefined") return;
+
+		const idleCallbackId =
+			"requestIdleCallback" in window
+				? window.requestIdleCallback(() => preloadStreamdown(), {
+						timeout: 1200,
+					})
+				: null;
+		const timeoutId =
+			idleCallbackId === null
+				? window.setTimeout(() => preloadStreamdown(), 180)
+				: null;
+
+		return () => {
+			if (idleCallbackId !== null && "cancelIdleCallback" in window) {
+				window.cancelIdleCallback(idleCallbackId);
+			}
+			if (timeoutId !== null) {
+				window.clearTimeout(timeoutId);
+			}
+		};
+	}, []);
+
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-transparent">
 			{/* --- Header --- */}
@@ -354,87 +406,92 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 										const isEditing = editingSessionId === session.id;
 
 										return (
-											<TabsTrigger
+											<BaseTooltip
 												key={session.id}
-												value={session.id}
-												onMouseEnter={() => {
-													onPrefetchSession?.(session.id);
-												}}
-												onFocus={() => {
-													onPrefetchSession?.(session.id);
-												}}
-												className="group/tab relative gap-1.5 overflow-hidden pr-5 text-app-foreground-soft data-[state=active]:text-app-foreground"
+												side="bottom"
+												content={<span>{displaySessionTitle(session)}</span>}
 											>
-												<SessionProviderIcon
-													agentType={
-														selected
-															? (selectedProvider ?? session.agentType)
-															: session.agentType
-													}
-													active={isActive}
-												/>
-												{isEditing ? (
-													<input
-														ref={(element) => element?.focus()}
-														value={editingTitle}
-														onChange={(event) =>
-															setEditingTitle(event.target.value)
+												<TabsTrigger
+													value={session.id}
+													onMouseEnter={() => {
+														onPrefetchSession?.(session.id);
+													}}
+													onFocus={() => {
+														onPrefetchSession?.(session.id);
+													}}
+													className="group/tab relative w-[7rem] shrink-0 justify-start gap-1.5 overflow-hidden pr-5 text-app-foreground-soft data-[state=active]:text-app-foreground"
+												>
+													<SessionProviderIcon
+														agentType={
+															selected
+																? (selectedProvider ?? session.agentType)
+																: session.agentType
 														}
-														onKeyDown={(event) => {
-															if (event.key === "Enter") {
-																event.preventDefault();
-																void handleCommitRename();
-															} else if (event.key === "Escape") {
-																handleCancelRename();
-															}
-														}}
-														onBlur={() => void handleCommitRename()}
-														onClick={(event) => event.stopPropagation()}
-														className="w-20 truncate rounded border border-app-border bg-app-base px-1 py-0 text-[13px] font-medium text-app-foreground outline-none focus:border-app-border-strong"
+														active={isActive}
 													/>
-												) : (
-													<span
-														className={cn(
-															"truncate font-medium",
-															hasUnread && !selected
-																? "text-app-foreground"
-																: undefined,
-														)}
-													>
-														{displaySessionTitle(session)}
-													</span>
-												)}
-												{hasUnread && !isEditing ? (
-													<span
-														aria-label="Unread session"
-														className="size-1.5 shrink-0 rounded-full bg-app-progress"
-													/>
-												) : null}
-												{!isEditing ? (
-													<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-gradient-to-r from-transparent via-muted via-[35%] to-muted pl-5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible group-data-[state=active]/tab:via-background group-data-[state=active]/tab:to-background">
-														<span
-															role="button"
-															aria-label="Rename session"
-															onClick={(event) =>
-																handleStartRename(session, event)
+													{isEditing ? (
+														<input
+															ref={(element) => element?.focus()}
+															value={editingTitle}
+															onChange={(event) =>
+																setEditingTitle(event.target.value)
 															}
-															className="flex items-center justify-center rounded-sm p-0.5 hover:bg-app-toolbar-hover"
-														>
-															<Pencil className="size-2.5" strokeWidth={2} />
-														</span>
+															onKeyDown={(event) => {
+																if (event.key === "Enter") {
+																	event.preventDefault();
+																	void handleCommitRename();
+																} else if (event.key === "Escape") {
+																	handleCancelRename();
+																}
+															}}
+															onBlur={() => void handleCommitRename()}
+															onClick={(event) => event.stopPropagation()}
+															className="w-20 truncate rounded border border-app-border bg-app-base px-1 py-0 text-[13px] font-medium text-app-foreground outline-none focus:border-app-border-strong"
+														/>
+													) : (
 														<span
-															role="button"
-															aria-label="Close session"
-															onClick={(event) =>
-																handleHideSession(session.id, event)
-															}
-															className="flex items-center justify-center rounded-sm p-0.5 hover:bg-app-toolbar-hover"
+															className={cn(
+																"truncate font-medium",
+																hasUnread && !selected
+																	? "text-app-foreground"
+																	: undefined,
+															)}
 														>
-															<X className="size-2.5" strokeWidth={2} />
+															{displaySessionTitle(session)}
 														</span>
-													</span>
-												) : null}
-											</TabsTrigger>
+													)}
+													{hasUnread && !isEditing ? (
+														<span
+															aria-label="Unread session"
+															className="size-1.5 shrink-0 rounded-full bg-app-progress"
+														/>
+													) : null}
+													{!isEditing ? (
+														<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-gradient-to-r from-transparent via-muted via-[35%] to-muted pl-5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible group-data-[state=active]/tab:via-background group-data-[state=active]/tab:to-background">
+															<span
+																role="button"
+																aria-label="Rename session"
+																onClick={(event) =>
+																	handleStartRename(session, event)
+																}
+																className="flex items-center justify-center rounded-sm p-0.5 hover:bg-app-toolbar-hover"
+															>
+																<Pencil className="size-2.5" strokeWidth={2} />
+															</span>
+															<span
+																role="button"
+																aria-label="Close session"
+																onClick={(event) =>
+																	handleHideSession(session.id, event)
+																}
+																className="flex items-center justify-center rounded-sm p-0.5 hover:bg-app-toolbar-hover"
+															>
+																<X className="size-2.5" strokeWidth={2} />
+															</span>
+														</span>
+													) : null}
+												</TabsTrigger>
+											</BaseTooltip>
 										);
 									})}
 								</TabsList>
@@ -1071,11 +1128,10 @@ function ConversationMessage({
 }) {
 	recordMessageRender(sessionId, message.id ?? `${message.role}:${itemIndex}`);
 
-	// Derive streaming state from the message itself — avoids external prop
-	// that changes callback references and causes Virtuoso re-renders.
-	const streaming =
-		message.role === "assistant" &&
-		(message.id?.startsWith("stream:") === true || message.streaming === true);
+	// Only the actual streaming partial carries `streaming: true` (set by
+	// the accumulator's __streaming flag).  Completed intermediate messages
+	// with `stream:` prefix IDs are NOT streaming — they should render static.
+	const streaming = message.role === "assistant" && message.streaming === true;
 
 	if (message.role === "user") {
 		return <ChatUserMessage message={message} />;
@@ -1136,13 +1192,17 @@ function ChatAssistantMessage({
 			{parts.map((part, idx) => {
 				if (isTextPart(part)) {
 					return (
-						<AssistantText key={idx} text={part.text} streaming={streaming} />
+						<AssistantText
+							key={`text:${idx}`}
+							text={part.text}
+							streaming={streaming}
+						/>
 					);
 				}
 				if (isReasoningPart(part)) {
 					return (
 						<AssistantReasoning
-							key={idx}
+							key={`reasoning:${idx}`}
 							text={part.text}
 							streaming={streaming}
 						/>
@@ -1159,7 +1219,7 @@ function ChatAssistantMessage({
 				if (isToolCallPart(part)) {
 					return (
 						<AssistantToolCall
-							key={part.toolCallId ?? `${part.toolName}:${idx}`}
+							key={`tc:${part.toolCallId ?? `${part.toolName}:${idx}`}`}
 							toolName={part.toolName}
 							args={part.args}
 							result={part.result}
@@ -1196,224 +1256,143 @@ function ChatSystemMessage({ message }: { message: RenderedMessage }) {
 // Content part components
 // ---------------------------------------------------------------------------
 
-function UserText({ text }: { text: string }) {
-	const images = extractImagePaths(text);
-	if (images.length > 0) {
-		// Remove image paths from text, show as badges
-		let remaining = text;
-		for (const p of images) {
-			remaining = remaining.replace(p, "").trim();
-		}
-		return (
-			<div className="flex flex-col gap-2">
-				{remaining ? (
-					<p className="whitespace-pre-wrap break-words">{remaining}</p>
-				) : null}
-				<div className="flex flex-wrap gap-1.5">
-					{images.map((p) => (
-						<ImagePreviewBadge key={p} path={p} />
-					))}
-				</div>
-			</div>
-		);
+/** Regex matching @/path references (files with or without extension). */
+const USER_FILE_RE = /@(\/\S+)(?=\s|$)/gi;
+
+/** Image extensions for distinguishing images from other files. */
+const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|svg|bmp|ico)$/i;
+
+type UserContentSegment =
+	| { type: "text"; value: string }
+	| { type: "image"; value: string }
+	| { type: "file"; value: string };
+
+/** Split user text into interleaved text, image, and file segments. */
+function splitUserContent(text: string): UserContentSegment[] {
+	const segments: UserContentSegment[] = [];
+	let lastIndex = 0;
+	USER_FILE_RE.lastIndex = 0;
+	for (
+		let match = USER_FILE_RE.exec(text);
+		match !== null;
+		match = USER_FILE_RE.exec(text)
+	) {
+		const before = text.slice(lastIndex, match.index);
+		if (before) segments.push({ type: "text", value: before });
+		const filePath = match[1];
+		segments.push({
+			type: IMAGE_EXT_RE.test(filePath) ? "image" : "file",
+			value: filePath,
+		});
+		lastIndex = match.index + match[0].length;
 	}
-	return <p className="whitespace-pre-wrap break-words">{text}</p>;
+	const after = text.slice(lastIndex);
+	if (after) segments.push({ type: "text", value: after });
+	return segments;
 }
 
-function AssistantText({
+function UserText({ text }: { text: string }) {
+	const segments = splitUserContent(text);
+	const hasAttachments = segments.some(
+		(s) => s.type === "image" || s.type === "file",
+	);
+
+	if (!hasAttachments) {
+		return <p className="whitespace-pre-wrap break-words">{text}</p>;
+	}
+
+	return (
+		<p className="whitespace-pre-wrap break-words">
+			{segments.map((seg, idx) => {
+				if (seg.type === "image") {
+					return (
+						<ImagePreviewBadge key={`${seg.value}-${idx}`} path={seg.value} />
+					);
+				}
+				if (seg.type === "file") {
+					return (
+						<FileBadgeInline key={`${seg.value}-${idx}`} path={seg.value} />
+					);
+				}
+				return <span key={idx}>{seg.value}</span>;
+			})}
+		</p>
+	);
+}
+
+/** Inline file badge for non-image files in chat messages. */
+function FileBadgeInline({ path }: { path: string }) {
+	const fileName = path.split("/").pop() ?? path;
+	return (
+		<span className="inline-flex items-center gap-1 rounded border border-app-border/60 text-[12px] mx-0.5 align-middle">
+			<span className="inline-flex items-center gap-1.5 px-1.5 py-0.5">
+				<FileText
+					className="size-3 shrink-0 text-app-muted"
+					strokeWidth={1.8}
+				/>
+				<span className="max-w-[200px] truncate text-app-foreground-soft">
+					{fileName}
+				</span>
+			</span>
+		</span>
+	);
+}
+
+/** Stable animation config — avoids creating a new object on every render. */
+const STREAMING_ANIMATED = {
+	animation: "blurIn" as const,
+	duration: 150,
+	easing: "linear" as const,
+	sep: "word" as const,
+	stagger: 30,
+};
+
+const AssistantText = memo(function AssistantText({
 	text,
 	streaming,
 }: {
 	text: string;
 	streaming: boolean;
 }) {
-	const mode = streaming ? "streaming" : "static";
+	const mode: StreamdownMode = streaming ? "streaming" : "static";
 	const { settings } = useSettings();
-	const containerRef = useRef<HTMLDivElement>(null);
-
-	// === DEBUG: Instance ID & render count ===
-	const instanceId = useRef(Math.random().toString(36).slice(2, 8));
-	const renderCount = useRef(0);
-	renderCount.current += 1;
-
-	// === DEBUG: Mount/unmount detection ===
-	useEffect(() => {
-		const id = instanceId.current;
-		console.log(
-			`%c[AssistantText] MOUNT instance=${id} streaming=${streaming} textLen=${text.length}`,
-			"color: lime; font-weight: bold",
-		);
-		return () => {
-			console.log(
-				`%c[AssistantText] UNMOUNT instance=${id}`,
-				"color: red; font-weight: bold",
-			);
-		};
-	}, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-	// === DEBUG: Prop change tracking ===
-	const prevText = useRef(text);
-	const prevStreaming = useRef(streaming);
-	const prevTimestamp = useRef(performance.now());
-	useEffect(() => {
-		const now = performance.now();
-		const dt = now - prevTimestamp.current;
-		prevTimestamp.current = now;
-
-		const textChanged = prevText.current !== text;
-		const streamingChanged = prevStreaming.current !== streaming;
-
-		if (textChanged) {
-			const prevLen = prevText.current.length;
-			const curLen = text.length;
-			const delta = curLen - prevLen;
-			if (delta < 0 || curLen === 0) {
-				console.warn(
-					`%c[AssistantText:${instanceId.current}] ⚠️ TEXT REGRESSION: ${prevLen}→${curLen} (${delta}) dt=${dt.toFixed(1)}ms`,
-					"color: red; font-weight: bold; font-size: 14px",
-				);
-			} else {
-				console.log(
-					`[AssistantText:${instanceId.current}] text: ${prevLen}→${curLen} (+${delta}) dt=${dt.toFixed(1)}ms render=#${renderCount.current}`,
-				);
-			}
-			prevText.current = text;
-		}
-
-		if (streamingChanged) {
-			console.warn(
-				`%c[AssistantText:${instanceId.current}] STREAMING TOGGLED: ${prevStreaming.current}→${streaming} textLen=${text.length} dt=${dt.toFixed(1)}ms`,
-				"color: orange; font-weight: bold",
-			);
-			prevStreaming.current = streaming;
-		}
-
-		// Detect post-stream text changes
-		if (textChanged && !streaming && !streamingChanged) {
-			console.warn(
-				`%c[AssistantText:${instanceId.current}] ⚠️ POST-STREAM TEXT CHANGE: ${prevText.current.length}→${text.length} dt=${dt.toFixed(1)}ms`,
-				"color: red; font-weight: bold; font-size: 14px; background: yellow",
-			);
-		}
-	});
-
-	// === DEBUG: MutationObserver (always on) ===
-	useEffect(() => {
-		const el = containerRef.current;
-		if (!el) return;
-		let mutationCount = 0;
-		const startTime = performance.now();
-		const observer = new MutationObserver((mutations) => {
-			for (const m of mutations) {
-				mutationCount++;
-				if (m.type === "childList") {
-					const added = m.addedNodes.length;
-					const removed = m.removedNodes.length;
-					if (added > 0 && removed > 0) {
-						const elapsed = (performance.now() - startTime).toFixed(1);
-						console.log(
-							`%c[DOM ${elapsed}ms] #${mutationCount} SUBTREE REPLACE +${added} -${removed}`,
-							"color: red; font-weight: bold",
-						);
-					}
-				}
-			}
-		});
-		observer.observe(el, { childList: true, subtree: true });
-		return () => {
-			observer.disconnect();
-			console.log(
-				`%c[DOM SUMMARY] Total mutations: ${mutationCount}`,
-				"color: cyan; font-weight: bold",
-			);
-		};
-	}, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-	// === DEBUG: Layout Shift ===
-	useEffect(() => {
-		if (typeof PerformanceObserver === "undefined") return;
-		let totalCLS = 0;
-		let shiftCount = 0;
-		const po = new PerformanceObserver((list) => {
-			for (const entry of list.getEntries()) {
-				const le = entry as PerformanceEntry & {
-					value: number;
-					hadRecentInput: boolean;
-				};
-				if (le.hadRecentInput) continue;
-				totalCLS += le.value;
-				shiftCount++;
-				if (le.value > 0.01) {
-					console.log(
-						`%c[CLS] shift #${shiftCount} value=${le.value.toFixed(4)} cumulative=${totalCLS.toFixed(4)}`,
-						"color: orange; font-weight: bold",
-					);
-				}
-			}
-		});
-		try {
-			po.observe({ type: "layout-shift", buffered: false });
-		} catch {
-			/* */
-		}
-		return () => {
-			po.disconnect();
-			if (shiftCount > 0) {
-				console.log(
-					`%c[CLS SUMMARY] ${shiftCount} shifts, total=${totalCLS.toFixed(4)}`,
-					totalCLS > 0.1
-						? "color: red; font-weight: bold; font-size: 14px"
-						: "color: green; font-weight: bold",
-				);
-			}
-		};
-	}, []);
 
 	return (
-		<Profiler
-			id={`sd-${instanceId.current}`}
-			onRender={(id, phase, actualDuration) => {
-				if (actualDuration > 5 || phase === "mount") {
-					console.log(
-						`%c[Profiler] id=${id} phase=${phase} actual=${actualDuration.toFixed(1)}ms textLen=${text.length}`,
-						phase === "mount" || actualDuration > 16
-							? "color: red; font-weight: bold"
-							: "color: orange",
-					);
-				}
-			}}
+		<div
+			className="conversation-markdown prose prose-sm max-w-none break-words leading-6 text-app-foreground prose-headings:my-0 prose-headings:text-app-foreground prose-p:my-0 prose-p:text-app-foreground prose-li:my-0 prose-li:text-app-foreground prose-strong:text-app-foreground prose-em:text-app-foreground prose-pre:my-0 prose-pre:border prose-pre:border-app-border prose-pre:bg-app-sidebar prose-pre:text-[12px] prose-pre:text-app-foreground prose-ul:my-0 prose-ol:my-0 prose-blockquote:my-0 prose-blockquote:border-app-border prose-blockquote:text-app-muted prose-table:my-0 prose-table:text-[11px] prose-table:text-app-foreground prose-th:border-app-border prose-th:text-app-foreground prose-td:border-app-border prose-td:text-app-foreground prose-tr:border-app-border prose-a:text-app-project prose-a:underline prose-a:decoration-app-project/30 prose-code:rounded prose-code:border prose-code:border-app-border/50 prose-code:bg-app-sidebar prose-code:px-1 prose-code:py-px prose-code:text-[12px] prose-code:text-app-foreground-soft"
+			style={{ fontSize: `${settings.fontSize}px` }}
 		>
-			<div
-				ref={containerRef}
-				className="conversation-streamdown"
-				style={{ fontSize: `${settings.fontSize}px` }}
+			<Suspense
+				fallback={<AssistantTextFallback text={text} streaming={streaming} />}
 			>
-				<Streamdown
-					plugins={{ code: codePlugin }}
-					components={streamdownComponents}
-					animated={
-						streaming
-							? {
-									animation: "blurIn",
-									duration: 150,
-									easing: "linear",
-									sep: "word",
-									stagger: 30,
-								}
-							: false
-					}
+				<LazyStreamdown
+					animated={streaming ? STREAMING_ANIMATED : false}
+					caret={undefined}
 					className="conversation-streamdown"
 					isAnimating={streaming}
-					mode={mode as "streaming" | "static"}
+					mode={mode}
 				>
 					{text}
-				</Streamdown>
-			</div>
-		</Profiler>
+				</LazyStreamdown>
+			</Suspense>
+		</div>
+	);
+});
+
+function AssistantTextFallback({
+	text,
+}: {
+	text: string;
+	streaming?: boolean;
+}) {
+	return (
+		<div className="conversation-streamdown whitespace-pre-wrap break-words">
+			{text}
+		</div>
 	);
 }
 
-function AssistantReasoning({
+const AssistantReasoning = memo(function AssistantReasoning({
 	text,
 	streaming,
 }: {
@@ -1421,12 +1400,11 @@ function AssistantReasoning({
 	streaming?: boolean;
 }) {
 	const { settings } = useSettings();
-
 	return (
 		<details className="group flex flex-col" open>
 			<summary className="flex cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-app-muted hover:text-app-foreground-soft [&::-webkit-details-marker]:hidden">
 				<svg
-					className="size-2.5 shrink-0 transition-transform group-open:rotate-90"
+					className="size-2.5 shrink-0 group-open:rotate-90"
 					viewBox="0 0 12 12"
 					fill="none"
 				>
@@ -1456,155 +1434,173 @@ function AssistantReasoning({
 			</div>
 		</details>
 	);
-}
+});
 
-function AssistantToolCall({
-	toolName,
-	args,
-	result,
-	streamingStatus,
-}: {
-	toolName: string;
-	args: Record<string, unknown>;
-	result?: unknown;
-	streamingStatus?: string;
-}) {
-	const info = getToolInfo(toolName, args);
-	const isEdit = toolName === "Edit";
-	const oldStr =
-		isEdit && typeof args.old_string === "string" ? args.old_string : null;
-	const newStr =
-		isEdit && typeof args.new_string === "string" ? args.new_string : null;
-	const hasDiff = oldStr != null || newStr != null;
+const AssistantToolCall = memo(
+	function AssistantToolCall({
+		toolName,
+		args,
+		result,
+		streamingStatus,
+	}: {
+		toolName: string;
+		args: Record<string, unknown>;
+		result?: unknown;
+		streamingStatus?: string;
+	}) {
+		const info = getToolInfo(toolName, args);
+		const isEdit = toolName === "Edit";
+		const oldStr =
+			isEdit && typeof args.old_string === "string" ? args.old_string : null;
+		const newStr =
+			isEdit && typeof args.new_string === "string" ? args.new_string : null;
+		const hasDiff = oldStr != null || newStr != null;
 
-	// Detect __children__ encoded in result (sub-agent steps)
-	const resultStr =
-		result != null
-			? typeof result === "string"
-				? result
-				: JSON.stringify(result, null, 2)
+		// Detect __children__ encoded in result (sub-agent steps)
+		const resultStr =
+			result != null
+				? typeof result === "string"
+					? result
+					: JSON.stringify(result, null, 2)
+				: null;
+		const isChildrenResult = resultStr?.startsWith("__children__") ?? false;
+		const childrenData = isChildrenResult
+			? (() => {
+					try {
+						return JSON.parse(resultStr!.slice("__children__".length)) as {
+							parts: Array<Record<string, unknown>>;
+						};
+					} catch {
+						return null;
+					}
+				})()
 			: null;
-	const isChildrenResult = resultStr?.startsWith("__children__") ?? false;
-	const childrenData = isChildrenResult
-		? (() => {
-				try {
-					return JSON.parse(resultStr!.slice("__children__".length)) as {
-						parts: Array<Record<string, unknown>>;
-					};
-				} catch {
-					return null;
-				}
-			})()
-		: null;
-	const resultText = isChildrenResult ? null : resultStr;
-	const hasOutput = resultText != null && resultText.length > 5;
+		const resultText = isChildrenResult ? null : resultStr;
+		const hasOutput = resultText != null && resultText.length > 5;
 
-	// Streaming status indicator
-	const statusIndicator =
-		streamingStatus === "pending" || streamingStatus === "streaming_input" ? (
-			<LoaderCircle
-				className="size-3 animate-spin text-app-muted/50"
-				strokeWidth={2}
-			/>
-		) : streamingStatus === "running" ? (
-			<LoaderCircle
-				className="size-3 animate-spin text-app-progress"
-				strokeWidth={2}
-			/>
-		) : streamingStatus === "error" ? (
-			<AlertCircle className="size-3 text-app-negative" strokeWidth={2} />
-		) : null;
+		// Streaming status indicator
+		const statusIndicator =
+			streamingStatus === "pending" || streamingStatus === "streaming_input" ? (
+				<LoaderCircle
+					className="size-3 animate-spin text-app-muted/50"
+					strokeWidth={2}
+				/>
+			) : streamingStatus === "running" ? (
+				<LoaderCircle
+					className="size-3 animate-spin text-app-progress"
+					strokeWidth={2}
+				/>
+			) : streamingStatus === "error" ? (
+				<AlertCircle className="size-3 text-app-negative" strokeWidth={2} />
+			) : null;
 
-	const toolLine = (
-		<>
-			<span className="shrink-0">{info.icon}</span>
-			<span className="font-medium">{info.action}</span>
-			{info.file ? (
-				hasDiff ? (
-					<EditDiffTrigger
-						file={info.file}
-						diffAdd={info.diffAdd}
-						diffDel={info.diffDel}
-						oldStr={oldStr}
-						newStr={newStr}
-					/>
-				) : (
-					<span className="truncate text-app-foreground-soft">{info.file}</span>
-				)
-			) : null}
-			{!hasDiff && (info.diffAdd != null || info.diffDel != null) ? (
-				<span className="flex items-center gap-1 text-[11px]">
-					{info.diffAdd != null ? (
-						<span className="text-app-positive">+{info.diffAdd}</span>
-					) : null}
-					{info.diffDel != null ? (
-						<span className="text-app-negative">-{info.diffDel}</span>
-					) : null}
-				</span>
-			) : null}
-			{info.command ? (
-				<code className="truncate rounded bg-app-foreground/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-app-foreground-soft">
-					{info.command}
-				</code>
-			) : info.detail ? (
-				<span className="truncate text-app-muted/60">{info.detail}</span>
-			) : null}
-			{statusIndicator}
-		</>
-	);
-
-	// Sub-agent children: show last N steps with "show more" toggle
-	if (childrenData) {
-		return (
-			<AgentChildrenBlock
-				toolLine={toolLine}
-				parts={childrenData.parts}
-				streaming={!!streamingStatus}
-			/>
-		);
-	}
-
-	// Normal tool call with optional output
-	return (
-		<details className="group/out flex flex-col" open={false}>
-			<summary className="flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
-				{toolLine}
-				{hasOutput ? (
-					<span className="shrink-0 cursor-pointer text-app-muted/40 hover:text-app-muted">
-						<svg
-							className="size-2.5 transition-transform group-open/out:rotate-90"
-							viewBox="0 0 12 12"
-							fill="none"
-						>
-							<path
-								d="M4.5 2.5L8.5 6L4.5 9.5"
-								stroke="currentColor"
-								strokeWidth="1.5"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-							/>
-						</svg>
+		const toolLine = (
+			<>
+				<span className="shrink-0">{info.icon}</span>
+				<span className="font-medium">{info.action}</span>
+				{info.file ? (
+					hasDiff ? (
+						<EditDiffTrigger
+							file={info.file}
+							diffAdd={info.diffAdd}
+							diffDel={info.diffDel}
+							oldStr={oldStr}
+							newStr={newStr}
+						/>
+					) : (
+						<span className="truncate text-app-foreground-soft">
+							{info.file}
+						</span>
+					)
+				) : null}
+				{!hasDiff && (info.diffAdd != null || info.diffDel != null) ? (
+					<span className="flex items-center gap-1 text-[11px]">
+						{info.diffAdd != null ? (
+							<span className="text-app-positive">+{info.diffAdd}</span>
+						) : null}
+						{info.diffDel != null ? (
+							<span className="text-app-negative">-{info.diffDel}</span>
+						) : null}
 					</span>
 				) : null}
-			</summary>
-			{hasOutput ? (
-				<div className="max-h-[16rem] overflow-auto rounded-md bg-app-foreground/[0.02] text-[11px] leading-5">
-					{info.fullCommand ? (
-						<div className="border-b border-app-border/20 px-2 py-1.5">
-							<span className="mr-1.5 text-app-project/60">$</span>
-							<code className="font-mono text-app-foreground-soft">
-								{info.fullCommand}
-							</code>
-						</div>
+				{info.command ? (
+					<code className="truncate rounded bg-app-foreground/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-app-foreground-soft">
+						{info.command}
+					</code>
+				) : info.detail ? (
+					<span className="truncate text-app-muted/60">{info.detail}</span>
+				) : null}
+				{statusIndicator}
+			</>
+		);
+
+		// Sub-agent children: show last N steps with "show more" toggle
+		if (childrenData) {
+			return (
+				<AgentChildrenBlock
+					toolLine={toolLine}
+					parts={childrenData.parts}
+					streaming={!!streamingStatus}
+				/>
+			);
+		}
+
+		// Normal tool call with optional output
+		return (
+			<details className="group/out flex flex-col">
+				<summary className="flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
+					{toolLine}
+					{hasOutput ? (
+						<span className="shrink-0 cursor-pointer text-app-muted/40 hover:text-app-muted">
+							<svg
+								className="size-2.5 group-open/out:rotate-90"
+								viewBox="0 0 12 12"
+								fill="none"
+							>
+								<path
+									d="M4.5 2.5L8.5 6L4.5 9.5"
+									stroke="currentColor"
+									strokeWidth="1.5"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+								/>
+							</svg>
+						</span>
 					) : null}
-					<pre className="whitespace-pre-wrap break-words p-1.5 text-app-muted/70">
-						{resultText!.slice(0, 2000)}
-						{resultText!.length > 2000 ? "…" : ""}
-					</pre>
-				</div>
-			) : null}
-		</details>
-	);
+				</summary>
+				{hasOutput ? (
+					<div className="max-h-[16rem] overflow-auto rounded-md bg-app-foreground/[0.02] text-[11px] leading-5">
+						{info.fullCommand ? (
+							<div className="border-b border-app-border/20 px-2 py-1.5">
+								<span className="mr-1.5 text-app-project/60">$</span>
+								<code className="font-mono text-app-foreground-soft">
+									{info.fullCommand}
+								</code>
+							</div>
+						) : null}
+						<pre className="whitespace-pre-wrap break-words p-1.5 text-app-muted/70">
+							{resultText!.slice(0, 2000)}
+							{resultText!.length > 2000 ? "…" : ""}
+						</pre>
+					</div>
+				) : null}
+			</details>
+		);
+	},
+	(prev, next) =>
+		prev.toolName === next.toolName &&
+		prev.streamingStatus === next.streamingStatus &&
+		prev.result === next.result &&
+		argsEqual(prev.args, next.args),
+);
+
+/** Deep-compare tool call args via JSON serialization. */
+function argsEqual(
+	a: Record<string, unknown>,
+	b: Record<string, unknown>,
+): boolean {
+	if (a === b) return true;
+	return JSON.stringify(a) === JSON.stringify(b);
 }
 
 /** Number of recent children steps to show by default. */
@@ -1715,7 +1711,7 @@ function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 		);
 
 	return (
-		<details className="group/collapse flex flex-col" open={false}>
+		<details className="group/collapse flex flex-col">
 			<summary className="flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
 				<span className="shrink-0">{icon}</span>
 				<span className="font-medium">{group.summary}</span>
@@ -1729,7 +1725,7 @@ function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 				)}
 				<span className="shrink-0 cursor-pointer text-app-muted/40 hover:text-app-muted">
 					<svg
-						className="size-2.5 transition-transform group-open/collapse:rotate-90"
+						className="size-2.5 group-open/collapse:rotate-90"
 						viewBox="0 0 12 12"
 						fill="none"
 					>

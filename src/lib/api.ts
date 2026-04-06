@@ -77,7 +77,6 @@ export type AgentSendRequest = {
 	effortLevel?: string | null;
 	permissionMode?: string | null;
 	userMessageId?: string | null;
-	assistantMessageId?: string | null;
 };
 
 export type WorkspaceSummary = {
@@ -391,10 +390,10 @@ const DEFAULT_AGENT_MODEL_SECTIONS: AgentModelSection[] = [
 				badge: "NEW",
 			},
 			{
-				id: "gpt-5.3-codex-spark",
+				id: "gpt-5.4-mini",
 				provider: "codex",
-				label: "GPT-5.3-Codex-Spark",
-				cliModel: "gpt-5.3-codex-spark",
+				label: "GPT-5.4-Mini",
+				cliModel: "gpt-5.4-mini",
 			},
 			{
 				id: "gpt-5.3-codex",
@@ -407,6 +406,24 @@ const DEFAULT_AGENT_MODEL_SECTIONS: AgentModelSection[] = [
 				provider: "codex",
 				label: "GPT-5.2-Codex",
 				cliModel: "gpt-5.2-codex",
+			},
+			{
+				id: "gpt-5.2",
+				provider: "codex",
+				label: "GPT-5.2",
+				cliModel: "gpt-5.2",
+			},
+			{
+				id: "gpt-5.1-codex-max",
+				provider: "codex",
+				label: "GPT-5.1-Codex-Max",
+				cliModel: "gpt-5.1-codex-max",
+			},
+			{
+				id: "gpt-5.1-codex-mini",
+				provider: "codex",
+				label: "GPT-5.1-Codex-Mini",
+				cliModel: "gpt-5.1-codex-mini",
 			},
 		],
 	},
@@ -1170,7 +1187,7 @@ export type AgentStreamStartResponse = {
 };
 
 export type AgentStreamEvent =
-	| { kind: "line"; line: string }
+	| { kind: "line"; line: string; persistedIds?: string[] }
 	| {
 			kind: "done";
 			provider: AgentProvider;
@@ -1180,7 +1197,21 @@ export type AgentStreamEvent =
 			workingDirectory: string;
 			persisted: boolean;
 	  }
-	| { kind: "error"; message: string };
+	| { kind: "error"; message: string; persisted: boolean };
+
+/**
+ * Save a pasted clipboard image (base64) to a temp file and return its path.
+ */
+export async function savePastedImage(
+	data: string,
+	mediaType: string,
+): Promise<string> {
+	const inv = await getTauriInvoke();
+	if (!inv) {
+		throw new Error("savePastedImage is only available in Tauri.");
+	}
+	return inv<string>("save_pasted_image", { data, mediaType });
+}
 
 export async function startAgentMessageStream(
 	request: AgentSendRequest,

@@ -132,6 +132,112 @@ describe("StreamAccumulator", () => {
 			expect(messages.length).toBe(1);
 			expect(messages[0].role).toBe("assistant");
 		});
+
+		it("keeps the partial message timestamp stable while streaming", () => {
+			const acc = new StreamAccumulator();
+			acc.addLine(
+				JSON.stringify({
+					type: "stream_event",
+					event: {
+						type: "content_block_start",
+						index: 0,
+						content_block: {
+							type: "tool_use",
+							id: "tool-1",
+							name: "Bash",
+						},
+					},
+				}),
+			);
+			acc.addLine(
+				JSON.stringify({
+					type: "stream_event",
+					event: {
+						type: "content_block_delta",
+						index: 0,
+						delta: {
+							type: "input_json_delta",
+							partial_json: '{"command":"ls"',
+						},
+					},
+				}),
+			);
+
+			const first = acc.toMessages("ctx", "sess").at(-1);
+			acc.addLine(
+				JSON.stringify({
+					type: "stream_event",
+					event: {
+						type: "content_block_delta",
+						index: 0,
+						delta: { type: "input_json_delta", partial_json: ',"cwd":"/tmp"}' },
+					},
+				}),
+			);
+			const second = acc.toMessages("ctx", "sess").at(-1);
+
+			expect(first?.id).toBe("ctx:stream-partial:1");
+			expect(second?.id).toBe("ctx:stream-partial:1");
+			expect(second?.createdAt).toBe(first?.createdAt);
+			expect(second?.content).not.toBe(first?.content);
+		});
+
+		it("reuses the partial message id when the assistant turn finalizes", () => {
+			const acc = new StreamAccumulator();
+			acc.addLine(
+				JSON.stringify({
+					type: "stream_event",
+					event: {
+						type: "content_block_start",
+						index: 0,
+						content_block: {
+							type: "tool_use",
+							id: "tool-1",
+							name: "Bash",
+						},
+					},
+				}),
+			);
+			acc.addLine(
+				JSON.stringify({
+					type: "stream_event",
+					event: {
+						type: "content_block_delta",
+						index: 0,
+						delta: {
+							type: "input_json_delta",
+							partial_json: '{"command":"git status --short"}',
+						},
+					},
+				}),
+			);
+
+			const partial = acc.toMessages("ctx", "sess").at(-1);
+			acc.addLine(
+				JSON.stringify({
+					type: "assistant",
+					message: {
+						type: "message",
+						role: "assistant",
+						content: [
+							{
+								type: "tool_use",
+								id: "tool-1",
+								name: "Bash",
+								input: { command: "git status --short" },
+							},
+						],
+					},
+				}),
+				["persisted-assistant-id"],
+			);
+
+			const messages = acc.toMessages("ctx", "sess");
+			expect(messages).toHaveLength(1);
+			expect(messages[0].id).toBe(partial?.id);
+			expect(messages[0].id).not.toBe("persisted-assistant-id");
+			expect(messages[0].content).toContain("git status --short");
+		});
 	});
 
 	// -----------------------------------------------------------------------

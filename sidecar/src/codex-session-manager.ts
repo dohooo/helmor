@@ -5,9 +5,51 @@
  * Codex Thread that streams ThreadEvents back to the caller.
  */
 
-import { Codex, type ThreadOptions } from "@openai/codex-sdk";
+import {
+	Codex,
+	type Input,
+	type ThreadOptions,
+	type UserInput,
+} from "@openai/codex-sdk";
 
 type EmitFn = (data: Record<string, unknown>) => void;
+
+/** Regex matching @/absolute/path.ext image references in a prompt. */
+const IMAGE_REF_RE = /@(\/\S+\.(?:png|jpe?g|gif|webp|svg|bmp|ico))/gi;
+
+/**
+ * Parse a prompt string, extract image refs, and return Codex Input.
+ * If images found, returns UserInput[] with text + local_image entries;
+ * otherwise returns the original string.
+ */
+function buildCodexInput(prompt: string): Input {
+	const imagePaths: string[] = [];
+	IMAGE_REF_RE.lastIndex = 0;
+	for (
+		let match = IMAGE_REF_RE.exec(prompt);
+		match !== null;
+		match = IMAGE_REF_RE.exec(prompt)
+	) {
+		imagePaths.push(match[1]);
+	}
+	if (imagePaths.length === 0) {
+		return prompt;
+	}
+	let text = prompt;
+	for (const p of imagePaths) {
+		text = text.replace(`@${p}`, "");
+	}
+	text = text.replace(/ {2,}/g, " ").trim();
+
+	const parts: UserInput[] = [];
+	if (text) {
+		parts.push({ type: "text", text });
+	}
+	for (const p of [...new Set(imagePaths)]) {
+		parts.push({ type: "local_image", path: p });
+	}
+	return parts;
+}
 
 export class CodexSessionManager {
 	private abortControllers = new Map<string, AbortController>();
@@ -69,8 +111,11 @@ export class CodexSessionManager {
 				? codex.resumeThread(resume, threadOpts)
 				: codex.startThread(threadOpts);
 
+			// Parse image references and build appropriate input
+			const input = buildCodexInput(prompt);
+
 			// runStreamed returns { events: AsyncGenerator<ThreadEvent> }
-			const streamedTurn = await thread.runStreamed(prompt, {
+			const streamedTurn = await thread.runStreamed(input, {
 				signal: abortController.signal,
 			});
 

@@ -351,13 +351,19 @@ pub fn start_agent_stream(
                             .and_then(serde_json::Value::as_str)
                             .unwrap_or("Unknown sidecar error")
                             .to_string();
-                        let _ = tx.send(AgentStreamEvent::Error { message: msg });
+                        let _ = tx.send(AgentStreamEvent::Error {
+                            message: msg,
+                            persisted: false,
+                        });
                         break;
                     }
                     _ => {
                         let line = serde_json::to_string(&event.raw).unwrap_or_default();
                         if !line.is_empty() && line != "{}" {
-                            let _ = tx.send(AgentStreamEvent::Line { line });
+                            let _ = tx.send(AgentStreamEvent::Line {
+                                line,
+                                persisted_ids: vec![],
+                            });
                         }
                     }
                 }

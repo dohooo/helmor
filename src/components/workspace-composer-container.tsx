@@ -9,6 +9,7 @@ import {
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
 import {
+	clampEffortToModel,
 	findModelOption,
 	getComposerContextKey,
 	inferDefaultModelId,
@@ -91,21 +92,13 @@ export const WorkspaceComposerContainer = memo(
 		);
 		const provider =
 			selectedModel?.provider ?? currentSession?.agentType ?? "claude";
-		const isOpus = selectedModelId === "opus-1m" || selectedModelId === "opus";
 		const rawEffort =
 			effortLevels[composerContextKey] ?? currentSession?.effortLevel ?? "high";
-		const effectiveEffort = (() => {
-			let level = rawEffort;
-			if (provider === "codex") {
-				if (level === "max") level = "xhigh";
-			} else {
-				if (level === "xhigh") level = isOpus ? "max" : "high";
-				if (level === "minimal") level = "low";
-				if (level === "max" && !isOpus) level = "high";
-			}
-			return level;
-		})();
-		const effortLevel = effectiveEffort;
+		const effortLevel = clampEffortToModel(
+			rawEffort,
+			selectedModelId,
+			provider,
+		);
 		const permissionMode =
 			permissionModes[composerContextKey] ??
 			(currentSession?.permissionMode === "plan"
@@ -177,7 +170,7 @@ export const WorkspaceComposerContainer = memo(
 						imagePaths,
 						model: selectedModel,
 						workingDirectory: workspaceDetailQuery.data?.rootPath ?? null,
-						effortLevel: effectiveEffort,
+						effortLevel,
 						permissionMode,
 					});
 				}}

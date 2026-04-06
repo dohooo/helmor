@@ -6,10 +6,13 @@
  * the streaming input interface.
  */
 
+import { readFile } from "node:fs/promises";
+import { extname } from "node:path";
 import {
 	type Query,
 	query,
 	type SDKMessage,
+	type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 
 type EmitFn = (data: Record<string, unknown>) => void;
@@ -17,6 +20,106 @@ type EmitFn = (data: Record<string, unknown>) => void;
 interface LiveSession {
 	query: Query;
 	abortController: AbortController;
+}
+
+/** Regex matching @/absolute/path.ext image references in a prompt. */
+const IMAGE_REF_RE = /@(\/\S+\.(?:png|jpe?g|gif|webp|svg|bmp|ico))/gi;
+
+type MediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+
+function extToMediaType(filePath: string): MediaType {
+	const ext = extname(filePath).toLowerCase();
+	switch (ext) {
+		case ".jpg":
+		case ".jpeg":
+			return "image/jpeg";
+		case ".png":
+			return "image/png";
+		case ".gif":
+			return "image/gif";
+		case ".webp":
+			return "image/webp";
+		default:
+			return "image/png";
+	}
+}
+
+/**
+ * Parse a prompt string and extract inline image references.
+ * Returns the cleaned text (without @/path refs) and the image paths.
+ */
+function parseImageRefsFromPrompt(prompt: string): {
+	text: string;
+	imagePaths: string[];
+} {
+	const imagePaths: string[] = [];
+	IMAGE_REF_RE.lastIndex = 0;
+	for (
+		let match = IMAGE_REF_RE.exec(prompt);
+		match !== null;
+		match = IMAGE_REF_RE.exec(prompt)
+	) {
+		imagePaths.push(match[1]);
+	}
+	if (imagePaths.length === 0) {
+		return { text: prompt, imagePaths: [] };
+	}
+	let text = prompt;
+	for (const p of imagePaths) {
+		text = text.replace(`@${p}`, "");
+	}
+	text = text.replace(/ {2,}/g, " ").trim();
+	return { text, imagePaths: [...new Set(imagePaths)] };
+}
+
+/**
+ * Build an SDKUserMessage with text + base64 image content blocks.
+ */
+async function buildUserMessageWithImages(
+	text: string,
+	imagePaths: string[],
+): Promise<SDKUserMessage> {
+	const content: Array<
+		| { type: "text"; text: string }
+		| {
+				type: "image";
+				source: { type: "base64"; media_type: MediaType; data: string };
+		  }
+	> = [];
+
+	if (text) {
+		content.push({ type: "text", text });
+	}
+
+	for (const imgPath of imagePaths) {
+		try {
+			const data = await readFile(imgPath);
+			const base64 = data.toString("base64");
+			content.push({
+				type: "image",
+				source: {
+					type: "base64",
+					media_type: extToMediaType(imgPath),
+					data: base64,
+				},
+			});
+		} catch {
+			// If we can't read the image, include it as text reference
+			content.push({
+				type: "text",
+				text: `[Image not found: ${imgPath}]`,
+			});
+		}
+	}
+
+	return {
+		type: "user",
+		message: {
+			role: "user",
+			content,
+		},
+		parent_tool_use_id: null,
+	} as SDKUserMessage;
 }
 
 export class SessionManager {
@@ -67,8 +170,23 @@ export class SessionManager {
 		}
 		// For new sessions: no sessionId → SDK generates its own
 
+		// Parse image references from the prompt
+		const { text, imagePaths } = parseImageRefsFromPrompt(prompt);
+
+		// If prompt contains images, use SDKUserMessage with ImageBlockParam;
+		// otherwise use plain string (simpler, preserves existing behavior).
+		let promptValue: string | AsyncIterable<SDKUserMessage>;
+		if (imagePaths.length > 0) {
+			const userMessage = await buildUserMessageWithImages(text, imagePaths);
+			promptValue = (async function* () {
+				yield userMessage;
+			})();
+		} else {
+			promptValue = prompt;
+		}
+
 		const q = query({
-			prompt,
+			prompt: promptValue,
 			options: {
 				abortController,
 				cwd: cwd || undefined,
