@@ -389,10 +389,10 @@ const DEFAULT_AGENT_MODEL_SECTIONS: AgentModelSection[] = [
 				badge: "NEW",
 			},
 			{
-				id: "gpt-5.3-codex-spark",
+				id: "gpt-5.4-mini",
 				provider: "codex",
-				label: "GPT-5.3-Codex-Spark",
-				cliModel: "gpt-5.3-codex-spark",
+				label: "GPT-5.4-Mini",
+				cliModel: "gpt-5.4-mini",
 			},
 			{
 				id: "gpt-5.3-codex",
@@ -405,6 +405,24 @@ const DEFAULT_AGENT_MODEL_SECTIONS: AgentModelSection[] = [
 				provider: "codex",
 				label: "GPT-5.2-Codex",
 				cliModel: "gpt-5.2-codex",
+			},
+			{
+				id: "gpt-5.2",
+				provider: "codex",
+				label: "GPT-5.2",
+				cliModel: "gpt-5.2",
+			},
+			{
+				id: "gpt-5.1-codex-max",
+				provider: "codex",
+				label: "GPT-5.1-Codex-Max",
+				cliModel: "gpt-5.1-codex-max",
+			},
+			{
+				id: "gpt-5.1-codex-mini",
+				provider: "codex",
+				label: "GPT-5.1-Codex-Mini",
+				cliModel: "gpt-5.1-codex-mini",
 			},
 		],
 	},

@@ -95,10 +95,15 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const [draftValue, setDraftValue] = useState(restoreDraft ?? "");
 	const isOpus = selectedModelId === "opus-1m" || selectedModelId === "opus";
+	const isCodexMini = selectedModelId === "gpt-5.1-codex-mini";
 	const effectiveEffort = (() => {
 		let level = effortLevel;
 		if (provider === "codex") {
 			if (level === "max") level = "xhigh";
+			if (level === "minimal") level = "low";
+			if (isCodexMini) {
+				if (level === "low" || level === "xhigh") level = "medium";
+			}
 		} else {
 			if (level === "xhigh") level = isOpus ? "max" : "high";
 			if (level === "minimal") level = "low";
@@ -312,7 +317,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 							<DropdownMenuGroup>
 								<DropdownMenuLabel>Effort</DropdownMenuLabel>
 								{(provider === "codex"
-									? (["minimal", "low", "medium", "high", "xhigh"] as const)
+									? isCodexMini
+										? (["medium", "high"] as const)
+										: (["low", "medium", "high", "xhigh"] as const)
 									: isOpus
 										? (["low", "medium", "high", "max"] as const)
 										: (["low", "medium", "high"] as const)
