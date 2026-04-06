@@ -1132,7 +1132,8 @@ function ConversationMessage({
 	// that changes callback references and causes Virtuoso re-renders.
 	const streaming =
 		message.role === "assistant" &&
-		(message.id?.startsWith("stream:") === true ||
+		(message.streaming === true ||
+			message.id?.startsWith("stream:") === true ||
 			message.id?.endsWith(":stream-partial") === true);
 
 	if (message.role === "user") {

@@ -197,8 +197,13 @@ export const WorkspaceConversationContainer = memo(
 
 				const contextKey = composerContextKey;
 				const now = new Date().toISOString();
+				// Pre-generate stable message IDs so the streaming partial
+				// and the persisted DB record share the same ID, preventing
+				// React key changes that cause unmount/remount flicker.
+				const userMessageId = crypto.randomUUID();
+				const assistantMessageId = crypto.randomUUID();
 				const optimisticUserMessage = createLiveMessage({
-					id: `${contextKey}:user:${Date.now()}`,
+					id: userMessageId,
 					sessionId: displayedSessionId ?? contextKey,
 					role: "user",
 					content: trimmedPrompt,
@@ -261,12 +266,6 @@ export const WorkspaceConversationContainer = memo(
 							},
 						);
 					}
-
-					// Pre-generate stable message IDs so the streaming partial
-					// and the persisted DB record share the same ID, preventing
-					// React key changes that cause unmount/remount flicker.
-					const userMessageId = crypto.randomUUID();
-					const assistantMessageId = crypto.randomUUID();
 
 					const { streamId } = await startAgentMessageStream({
 						provider: model.provider,

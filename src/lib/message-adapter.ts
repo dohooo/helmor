@@ -564,7 +564,7 @@ function applyCollapsePass(messages: ThreadMessageLike[]): ThreadMessageLike[] {
 		// Skip messages with no tool-calls
 		if (!parts.some((p) => p.type === "tool-call")) return msg;
 
-		const isStreaming = msg.status?.type !== "complete";
+		const isStreaming = msg.streaming === true;
 		const collapsed = collapseToolCallsInParts(parts, isStreaming);
 
 		// If nothing was collapsed, return original reference (cache-friendly)
