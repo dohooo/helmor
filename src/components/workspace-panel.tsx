@@ -762,8 +762,9 @@ function ChatThread({
 		[messages, sessionId],
 	);
 	const virtuosoRef = useRef<VirtuosoHandle | null>(null);
-	const { scrollRef, contentRef, scrollToBottom, isAtBottom } =
-		useStickToBottom({ initial: "instant" });
+	const { scrollRef, scrollToBottom, isAtBottom } = useStickToBottom({
+		initial: "instant",
+	});
 	const isAtBottomRef = useRef(isAtBottom);
 	isAtBottomRef.current = isAtBottom;
 	const preparePhaseRef = useRef<"idle" | "waiting-bottom">("idle");
@@ -991,8 +992,8 @@ function ChatThread({
 	return (
 		<ConversationViewport
 			components={virtuosoComponents}
-			contentRef={contentRef}
 			data={threadMessages}
+			isAtBottom={isAtBottom}
 			itemContent={itemContent}
 			restoredViewportState={restoredViewportState}
 			scrollRef={scrollRef}
@@ -1019,8 +1020,8 @@ function ChatThread({
 function ConversationViewport({
 	children,
 	components,
-	contentRef,
 	data,
+	isAtBottom,
 	itemContent,
 	restoredViewportState,
 	scrollRef,
@@ -1028,8 +1029,8 @@ function ConversationViewport({
 }: {
 	children?: ReactNode;
 	components: VirtuosoComponents<RenderedMessage>;
-	contentRef: React.RefCallback<HTMLElement>;
 	data: RenderedMessage[];
+	isAtBottom: boolean;
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
 	restoredViewportState?: StateSnapshot;
 	scrollRef: React.RefCallback<HTMLElement>;
@@ -1053,34 +1054,30 @@ function ConversationViewport({
 			overlay={children}
 			type="always"
 		>
-			<div ref={contentRef}>
-				{scrollParent ? (
-					<Virtuoso
-						ref={virtuosoRef}
-						alignToBottom
-						atBottomThreshold={48}
-						components={components}
-						computeItemKey={(index, message) =>
-							message.id ?? `${message.role}:${index}`
-						}
-						customScrollParent={scrollParent}
-						data={data}
-						defaultItemHeight={92}
-						followOutput={false}
-						initialTopMostItemIndex={
-							restoredViewportState
-								? undefined
-								: { index: "LAST", align: "end" }
-						}
-						increaseViewportBy={{ bottom: 720, top: 360 }}
-						itemContent={itemContent}
-						minOverscanItemCount={{ top: 8, bottom: 4 }}
-						overscan={{ main: 600, reverse: 300 }}
-						restoreStateFrom={restoredViewportState}
-						skipAnimationFrameInResizeObserver
-					/>
-				) : null}
-			</div>
+			{scrollParent ? (
+				<Virtuoso
+					ref={virtuosoRef}
+					alignToBottom
+					atBottomThreshold={48}
+					components={components}
+					computeItemKey={(index, message) =>
+						message.id ?? `${message.role}:${index}`
+					}
+					customScrollParent={scrollParent}
+					data={data}
+					defaultItemHeight={92}
+					followOutput={isAtBottom ? "smooth" : false}
+					initialTopMostItemIndex={
+						restoredViewportState ? undefined : { index: "LAST", align: "end" }
+					}
+					increaseViewportBy={{ bottom: 720, top: 360 }}
+					itemContent={itemContent}
+					minOverscanItemCount={{ top: 8, bottom: 4 }}
+					overscan={{ main: 600, reverse: 300 }}
+					restoreStateFrom={restoredViewportState}
+					skipAnimationFrameInResizeObserver
+				/>
+			) : null}
 		</ScrollArea>
 	);
 }
