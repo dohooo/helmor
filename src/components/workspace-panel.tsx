@@ -229,7 +229,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 		} catch (error) {
 			console.error("Failed to create session:", error);
 		}
-	}, [workspace, onSessionsChanged, onSelectSession]);
+	}, [workspace, onSessionsChanged, onSelectSession, visibleSessionId]);
 
 	const handleHideSession = useCallback(
 		async (sessionId: string, e: React.MouseEvent) => {
@@ -239,7 +239,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 			// reconcile against the refreshed visible-session list.
 			onSessionsChanged?.();
 		},
-		[onSessionsChanged],
+		[onSessionsChanged, selectedSessionId, visibleSessionId],
 	);
 
 	const handleToggleHistory = useCallback(async () => {
@@ -687,10 +687,6 @@ function KeepAliveThreadStack({
 					pane.layoutCacheKey === layoutCacheKey
 						? pane.viewportSnapshot
 						: undefined;
-				const initialPlainScrollTop =
-					pane.layoutCacheKey === layoutCacheKey
-						? pane.plainScrollTop
-						: undefined;
 				return (
 					<div
 						key={pane.sessionId}
@@ -710,7 +706,6 @@ function KeepAliveThreadStack({
 						}}
 					>
 						<ChatThread
-							initialPlainScrollTop={initialPlainScrollTop}
 							initialSnapshot={initialSnapshot}
 							layoutCacheKey={layoutCacheKey}
 							messages={pane.messages}
@@ -733,7 +728,6 @@ function KeepAliveThreadStack({
 // ---------------------------------------------------------------------------
 
 function ChatThread({
-	initialPlainScrollTop,
 	initialSnapshot,
 	layoutCacheKey,
 	messages,
@@ -744,7 +738,6 @@ function ChatThread({
 	sessionId,
 	sending,
 }: {
-	initialPlainScrollTop?: number;
 	initialSnapshot?: StateSnapshot;
 	layoutCacheKey: string;
 	messages: SessionMessageRecord[];
@@ -773,11 +766,6 @@ function ChatThread({
 			scrollRef(element);
 		},
 		[scrollRef],
-	);
-	const restoredPlainScrollTop = useMemo(
-		() =>
-			initialPlainScrollTop ?? sessionPlainScrollTopBySession.get(sessionId),
-		[initialPlainScrollTop, sessionId],
 	);
 	const isAtBottomRef = useRef(isAtBottom);
 	isAtBottomRef.current = isAtBottom;
@@ -865,13 +853,12 @@ function ChatThread({
 	// when it was hidden. Force a scroll so it re-renders the correct items.
 	const prevModeRef = useRef(mode);
 	useEffect(() => {
+		const prevMode = prevModeRef.current;
+		prevModeRef.current = mode;
 		if (usePlainThread) {
-			prevModeRef.current = mode;
 			return;
 		}
 
-		const prevMode = prevModeRef.current;
-		prevModeRef.current = mode;
 		if (mode === "visible" && prevMode === "parked") {
 			window.requestAnimationFrame(() => {
 				void scrollToBottom("instant");
@@ -896,6 +883,50 @@ function ChatThread({
 
 		prepareRunIdRef.current += 1;
 		const runId = prepareRunIdRef.current;
+
+		if (usePlainThread) {
+			let frameId = 0;
+			let nestedFrameId = 0;
+			const finishPrepare = () => {
+				if (prepareRunIdRef.current !== runId) {
+					return;
+				}
+
+				preparePhaseRef.current = "idle";
+				captureViewportSnapshot((payload) => {
+					if (prepareRunIdRef.current !== runId) {
+						return;
+					}
+					onPrepared?.(sessionId, payload);
+				});
+			};
+
+			prepareFinishRef.current = finishPrepare;
+			frameId = window.requestAnimationFrame(() => {
+				const scrollParent = scrollParentRef.current;
+				if (scrollParent) {
+					scrollParent.scrollTop = scrollParent.scrollHeight;
+				}
+
+				nestedFrameId = window.requestAnimationFrame(() => {
+					finishPrepare();
+				});
+			});
+
+			return () => {
+				if (frameId !== 0) {
+					window.cancelAnimationFrame(frameId);
+				}
+				if (nestedFrameId !== 0) {
+					window.cancelAnimationFrame(nestedFrameId);
+				}
+				if (prepareRunIdRef.current === runId) {
+					preparePhaseRef.current = "idle";
+					prepareFinishRef.current = null;
+				}
+			};
+		}
+
 		let frameId = 0;
 		let nestedFrameId = 0;
 		let settleFrameId = 0;
@@ -952,12 +983,11 @@ function ChatThread({
 		};
 	}, [
 		captureViewportSnapshot,
-		layoutCacheKey,
 		mode,
 		onPrepared,
 		scrollToBottom,
 		sessionId,
-		threadMessages,
+		usePlainThread,
 	]);
 
 	useEffect(() => {
@@ -969,6 +999,25 @@ function ChatThread({
 			prepareFinishRef.current?.();
 		}
 	}, [isAtBottom, mode, sessionId]);
+
+	useLayoutEffect(() => {
+		const prevMode = prevModeRef.current;
+		if (
+			!usePlainThread ||
+			mode !== "visible" ||
+			prevMode === "visible" ||
+			typeof window === "undefined"
+		) {
+			return;
+		}
+
+		const scrollParent = scrollParentRef.current;
+		if (!scrollParent) {
+			return;
+		}
+
+		scrollParent.scrollTop = scrollParent.scrollHeight;
+	}, [mode, sessionId, usePlainThread]);
 
 	const virtuosoComponents = useMemo<VirtuosoComponents<RenderedMessage>>(
 		() => ({
@@ -1002,7 +1051,6 @@ function ChatThread({
 			data={threadMessages}
 			isAtBottom={isAtBottom}
 			itemContent={itemContent}
-			restoredPlainScrollTop={restoredPlainScrollTop}
 			restoredViewportState={restoredViewportState}
 			scrollRef={handleScrollRef}
 			usePlainThread={usePlainThread}
@@ -1033,7 +1081,6 @@ function ConversationViewport({
 	data,
 	isAtBottom,
 	itemContent,
-	restoredPlainScrollTop,
 	restoredViewportState,
 	scrollRef,
 	usePlainThread,
@@ -1045,14 +1092,12 @@ function ConversationViewport({
 	data: RenderedMessage[];
 	isAtBottom: boolean;
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
-	restoredPlainScrollTop?: number;
 	restoredViewportState?: StateSnapshot;
 	scrollRef: React.RefCallback<HTMLElement>;
 	usePlainThread: boolean;
 	virtuosoRef: React.RefObject<VirtuosoHandle | null>;
 }) {
 	const [scrollParent, setScrollParent] = useState<HTMLDivElement | null>(null);
-	const restoredPlainScrollAppliedRef = useRef(false);
 
 	const viewportRef = useCallback(
 		(el: HTMLDivElement | null) => {
@@ -1061,24 +1106,6 @@ function ConversationViewport({
 		},
 		[scrollRef],
 	);
-
-	useEffect(() => {
-		restoredPlainScrollAppliedRef.current = false;
-	}, [restoredPlainScrollTop, usePlainThread]);
-
-	useLayoutEffect(() => {
-		if (
-			!usePlainThread ||
-			scrollParent == null ||
-			restoredPlainScrollTop == null ||
-			restoredPlainScrollAppliedRef.current
-		) {
-			return;
-		}
-
-		scrollParent.scrollTop = restoredPlainScrollTop;
-		restoredPlainScrollAppliedRef.current = true;
-	}, [restoredPlainScrollTop, scrollParent, usePlainThread]);
 
 	const Header = components.Header;
 	const Footer = components.Footer;

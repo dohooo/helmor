@@ -42,6 +42,7 @@ type WorkspacePanelContainerProps = {
 	displayedWorkspaceId: string | null;
 	selectedSessionId: string | null;
 	displayedSessionId: string | null;
+	sessionSelectionHistory?: string[];
 	liveMessages: SessionMessageRecord[];
 	sending: boolean;
 	sendingSessionIds?: Set<string>;
@@ -95,6 +96,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	displayedWorkspaceId,
 	selectedSessionId,
 	displayedSessionId,
+	sessionSelectionHistory = [],
 	liveMessages,
 	sending,
 	sendingSessionIds,
@@ -141,6 +143,21 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 
 	const workspace = detailQuery.data ?? null;
 	const sessions = sessionsQuery.data ?? [];
+	const rememberedSessionId = useMemo(() => {
+		if (sessionSelectionHistory.length === 0 || sessions.length === 0) {
+			return null;
+		}
+
+		const visibleSessionIds = new Set(sessions.map((session) => session.id));
+		for (let i = sessionSelectionHistory.length - 1; i >= 0; i -= 1) {
+			const sessionId = sessionSelectionHistory[i];
+			if (visibleSessionIds.has(sessionId)) {
+				return sessionId;
+			}
+		}
+
+		return null;
+	}, [sessionSelectionHistory, sessions]);
 
 	const threadSessionId = useMemo(() => {
 		if (!displayedWorkspaceId) {
@@ -155,6 +172,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		}
 
 		return (
+			rememberedSessionId ??
 			workspace?.activeSessionId ??
 			sessions.find((session) => session.active)?.id ??
 			sessions[0]?.id ??
@@ -163,6 +181,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	}, [
 		displayedSessionId,
 		displayedWorkspaceId,
+		rememberedSessionId,
 		sessions,
 		workspace?.activeSessionId,
 	]);
