@@ -1,7 +1,7 @@
 /**
  * Lexical plugin: intercept paste to handle:
- * 1. Text image paths (e.g. /Users/x/screenshot.png) → ImageBadgeNode
- * 2. Clipboard image data (e.g. screenshot Cmd+Shift+4) → save to temp file → ImageBadgeNode
+ * 1. Clipboard image data (e.g. screenshot Cmd+Shift+4) → save to temp file → ImageBadgeNode
+ * 2. Text image paths (e.g. /Users/x/screenshot.png) → ImageBadgeNode
  *
  * Uses CRITICAL priority to run before PlainTextPlugin's own paste handler.
  */
@@ -10,7 +10,9 @@ import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext
 import {
 	$createLineBreakNode,
 	$createTextNode,
+	$getRoot,
 	$getSelection,
+	$isElementNode,
 	$isRangeSelection,
 	COMMAND_PRIORITY_CRITICAL,
 	PASTE_COMMAND,
@@ -26,13 +28,26 @@ function readFileAsBase64(file: File): Promise<string> {
 		const reader = new FileReader();
 		reader.onload = () => {
 			const result = reader.result as string;
-			// Strip "data:image/png;base64," prefix
 			const base64 = result.split(",")[1] ?? result;
 			resolve(base64);
 		};
 		reader.onerror = () => reject(reader.error);
 		reader.readAsDataURL(file);
 	});
+}
+
+/** Append a node at the end of the last paragraph (or create one). */
+function $appendToEnd(...nodes: import("lexical").LexicalNode[]) {
+	const root = $getRoot();
+	let lastChild = root.getLastChild();
+	if (!lastChild || !$isElementNode(lastChild)) {
+		const { $createParagraphNode } = require("lexical");
+		lastChild = $createParagraphNode();
+		root.append(lastChild);
+	}
+	for (const node of nodes) {
+		(lastChild as import("lexical").ElementNode).append(node);
+	}
 }
 
 export function PasteImagePlugin() {
@@ -58,16 +73,14 @@ export function PasteImagePlugin() {
 				if (imageFiles.length > 0) {
 					event.preventDefault();
 
-					// Process async: save each image to temp file, insert badge
 					for (const file of imageFiles) {
 						readFileAsBase64(file)
 							.then((base64) => savePastedImage(base64, file.type))
 							.then((savedPath) => {
 								editor.update(() => {
-									const selection = $getSelection();
-									if ($isRangeSelection(selection)) {
-										selection.insertNodes([$createImageBadgeNode(savedPath)]);
-									}
+									// Use $appendToEnd instead of selection-based insert,
+									// because the selection may be stale after async operations.
+									$appendToEnd($createImageBadgeNode(savedPath));
 								});
 							})
 							.catch((err) => {

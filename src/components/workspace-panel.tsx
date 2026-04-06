@@ -1255,24 +1255,34 @@ function ChatSystemMessage({ message }: { message: RenderedMessage }) {
 // Content part components
 // ---------------------------------------------------------------------------
 
-/** Regex matching @/absolute/path/to/image.ext or bare /absolute/path/to/image.ext */
-const USER_IMAGE_RE = /@?(\/\S+\.(?:png|jpe?g|gif|webp|svg|bmp|ico))(?:\s|$)/gi;
+/** Regex matching @/path/to/file.ext references (images and general files). */
+const USER_FILE_RE = /@(\/\S+?\.\w+)(?=\s|$)/gi;
 
-/** Split user text into interleaved text and image segments for inline rendering. */
-function splitTextAndImages(
-	text: string,
-): { type: "text" | "image"; value: string }[] {
-	const segments: { type: "text" | "image"; value: string }[] = [];
+/** Image extensions for distinguishing images from other files. */
+const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|svg|bmp|ico)$/i;
+
+type UserContentSegment =
+	| { type: "text"; value: string }
+	| { type: "image"; value: string }
+	| { type: "file"; value: string };
+
+/** Split user text into interleaved text, image, and file segments. */
+function splitUserContent(text: string): UserContentSegment[] {
+	const segments: UserContentSegment[] = [];
 	let lastIndex = 0;
-	USER_IMAGE_RE.lastIndex = 0;
+	USER_FILE_RE.lastIndex = 0;
 	for (
-		let match = USER_IMAGE_RE.exec(text);
+		let match = USER_FILE_RE.exec(text);
 		match !== null;
-		match = USER_IMAGE_RE.exec(text)
+		match = USER_FILE_RE.exec(text)
 	) {
 		const before = text.slice(lastIndex, match.index);
 		if (before) segments.push({ type: "text", value: before });
-		segments.push({ type: "image", value: match[1] });
+		const filePath = match[1];
+		segments.push({
+			type: IMAGE_EXT_RE.test(filePath) ? "image" : "file",
+			value: filePath,
+		});
 		lastIndex = match.index + match[0].length;
 	}
 	const after = text.slice(lastIndex);
@@ -1281,23 +1291,49 @@ function splitTextAndImages(
 }
 
 function UserText({ text }: { text: string }) {
-	const segments = splitTextAndImages(text);
-	const hasImages = segments.some((s) => s.type === "image");
+	const segments = splitUserContent(text);
+	const hasAttachments = segments.some(
+		(s) => s.type === "image" || s.type === "file",
+	);
 
-	if (!hasImages) {
+	if (!hasAttachments) {
 		return <p className="whitespace-pre-wrap break-words">{text}</p>;
 	}
 
 	return (
 		<p className="whitespace-pre-wrap break-words">
-			{segments.map((seg, idx) =>
-				seg.type === "image" ? (
-					<ImagePreviewBadge key={`${seg.value}-${idx}`} path={seg.value} />
-				) : (
-					<span key={idx}>{seg.value}</span>
-				),
-			)}
+			{segments.map((seg, idx) => {
+				if (seg.type === "image") {
+					return (
+						<ImagePreviewBadge key={`${seg.value}-${idx}`} path={seg.value} />
+					);
+				}
+				if (seg.type === "file") {
+					return (
+						<FileBadgeInline key={`${seg.value}-${idx}`} path={seg.value} />
+					);
+				}
+				return <span key={idx}>{seg.value}</span>;
+			})}
 		</p>
+	);
+}
+
+/** Inline file badge for non-image files in chat messages. */
+function FileBadgeInline({ path }: { path: string }) {
+	const fileName = path.split("/").pop() ?? path;
+	return (
+		<span className="inline-flex items-center gap-1 rounded border border-app-border/60 text-[12px] mx-0.5 align-middle">
+			<span className="inline-flex items-center gap-1.5 px-1.5 py-0.5">
+				<FileText
+					className="size-3 shrink-0 text-app-muted"
+					strokeWidth={1.8}
+				/>
+				<span className="max-w-[200px] truncate text-app-foreground-soft">
+					{fileName}
+				</span>
+			</span>
+		</span>
 	);
 }
 

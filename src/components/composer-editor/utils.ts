@@ -10,6 +10,7 @@ import {
 	$isLineBreakNode,
 	$isTextNode,
 } from "lexical";
+import { $isFileBadgeNode } from "./file-badge-node";
 import { $isImageBadgeNode } from "./image-badge-node";
 
 export function $extractComposerContent(): {
@@ -24,7 +25,6 @@ export function $extractComposerContent(): {
 		const paragraph = root.getChildAtIndex(pi);
 		if (!paragraph) continue;
 
-		// Add newline between paragraphs (not before the first)
 		if (pi > 0) textParts.push("\n");
 
 		if ($isElementNode(paragraph)) {
@@ -35,6 +35,8 @@ export function $extractComposerContent(): {
 					const path = child.getImagePath();
 					images.push(path);
 					textParts.push(`@${path}`);
+				} else if ($isFileBadgeNode(child)) {
+					textParts.push(`@${child.getFilePath()}`);
 				} else if ($isLineBreakNode(child)) {
 					textParts.push("\n");
 				}
