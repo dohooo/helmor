@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Duration, Utc};
-use keyring::Entry;
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::StatusCode;
@@ -15,8 +14,6 @@ use super::settings;
 
 const GITHUB_IDENTITY_META_KEY: &str = "github_identity_meta";
 const DEV_IDENTITY_SECRET_KEY: &str = "github_identity_secret";
-const KEYRING_SERVICE: &str = "build.helmor.app";
-const KEYRING_ACCOUNT: &str = "github-identity";
 const DEVICE_FLOW_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 const REFRESH_GRANT_TYPE: &str = "refresh_token";
 const DEFAULT_POLL_INTERVAL_SECONDS: u64 = 5;
@@ -583,40 +580,6 @@ fn default_oauth_error_message(code: &str) -> &'static str {
     }
 }
 
-struct KeyringSecretStore;
-
-impl SecretStore for KeyringSecretStore {
-    fn load(&self) -> Result<Option<StoredIdentitySecret>> {
-        let entry = Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)?;
-        match entry.get_password() {
-            Ok(value) => {
-                let parsed = serde_json::from_str::<StoredIdentitySecret>(&value)
-                    .context("Failed to deserialize stored GitHub identity secret")?;
-                Ok(Some(parsed))
-            }
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(error) => Err(error).context("Failed to load GitHub identity secret"),
-        }
-    }
-
-    fn save(&self, secret: &StoredIdentitySecret) -> Result<()> {
-        let entry = Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)?;
-        let serialized =
-            serde_json::to_string(secret).context("Failed to serialize GitHub identity secret")?;
-        entry
-            .set_password(&serialized)
-            .context("Failed to save GitHub identity secret")
-    }
-
-    fn delete(&self) -> Result<()> {
-        let entry = Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)?;
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(error).context("Failed to delete GitHub identity secret"),
-        }
-    }
-}
-
 struct DevSettingsSecretStore;
 
 impl SecretStore for DevSettingsSecretStore {
@@ -636,40 +599,8 @@ impl SecretStore for DevSettingsSecretStore {
     }
 }
 
-enum ActiveSecretStore {
-    Keyring(KeyringSecretStore),
-    Development(DevSettingsSecretStore),
-}
-
-impl SecretStore for ActiveSecretStore {
-    fn load(&self) -> Result<Option<StoredIdentitySecret>> {
-        match self {
-            Self::Keyring(store) => store.load(),
-            Self::Development(store) => store.load(),
-        }
-    }
-
-    fn save(&self, secret: &StoredIdentitySecret) -> Result<()> {
-        match self {
-            Self::Keyring(store) => store.save(secret),
-            Self::Development(store) => store.save(secret),
-        }
-    }
-
-    fn delete(&self) -> Result<()> {
-        match self {
-            Self::Keyring(store) => store.delete(),
-            Self::Development(store) => store.delete(),
-        }
-    }
-}
-
-fn active_secret_store() -> ActiveSecretStore {
-    if crate::data_dir::is_dev() {
-        ActiveSecretStore::Development(DevSettingsSecretStore)
-    } else {
-        ActiveSecretStore::Keyring(KeyringSecretStore)
-    }
+fn active_secret_store() -> DevSettingsSecretStore {
+    DevSettingsSecretStore
 }
 
 struct ReqwestGithubClient {
