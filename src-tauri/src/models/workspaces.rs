@@ -372,7 +372,8 @@ pub fn list_remote_branches(workspace_id: &str) -> Result<Vec<String>> {
         .with_context(|| format!("Workspace {workspace_id} is missing repo root_path"))?;
 
     git_ops::ensure_git_repository(&repo_root)?;
-    git_ops::fetch_remote(&repo_root)?;
+    // Read cached remote branches (no network). A background fetch
+    // runs on workspace creation; users can also trigger a manual refresh.
     git_ops::list_remote_branches(&repo_root)
 }
 

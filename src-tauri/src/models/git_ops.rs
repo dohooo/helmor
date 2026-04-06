@@ -46,6 +46,7 @@ pub fn ensure_git_repository(repo_root: &Path) -> Result<()> {
 }
 
 /// Fetch latest refs from the remote into the source repo.
+#[allow(dead_code)]
 pub fn fetch_remote(repo_root: &Path) -> Result<()> {
     let repo_root = repo_root.display().to_string();
     run_git(["-C", repo_root.as_str(), "fetch", "--prune"], None)
@@ -71,8 +72,9 @@ pub fn list_remote_branches(repo_root: &Path) -> Result<Vec<String>> {
     let branches: Vec<String> = output
         .lines()
         .map(|line| line.trim())
-        .filter(|line| !line.is_empty() && *line != "origin/HEAD")
+        .filter(|line| !line.is_empty() && *line != "origin/HEAD" && *line != "origin")
         .map(|line| line.strip_prefix("origin/").unwrap_or(line).to_string())
+        .filter(|name| !name.is_empty() && name != "HEAD")
         .collect();
 
     let mut sorted = branches;

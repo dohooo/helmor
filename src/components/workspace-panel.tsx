@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import {
 	AlertCircle,
 	ArrowDown,
@@ -65,11 +66,13 @@ import { cn } from "@/lib/utils";
 import { ClaudeIcon, OpenAIIcon } from "./icons";
 import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
 import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuTrigger,
-} from "./ui/dropdown-menu";
+	Command,
+	CommandEmpty,
+	CommandInput,
+	CommandItem,
+	CommandList,
+} from "./ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { ScrollArea } from "./ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
@@ -187,8 +190,15 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	const [hiddenSessions, setHiddenSessions] = useState<
 		WorkspaceSessionSummary[]
 	>([]);
-	const [remoteBranches, setRemoteBranches] = useState<string[]>([]);
-	const [loadingBranches, setLoadingBranches] = useState(false);
+	const branchesQuery = useQuery({
+		queryKey: ["remoteBranches", workspace?.id],
+		queryFn: () => listRemoteBranches(workspace!.id),
+		enabled: false, // only fetch on demand
+		staleTime: 5 * 60 * 1000, // cache for 5 minutes
+		gcTime: 10 * 60 * 1000,
+	});
+	const remoteBranches = branchesQuery.data ?? [];
+	const loadingBranches = branchesQuery.isFetching;
 	const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
 	const [editingTitle, setEditingTitle] = useState("");
 
@@ -335,74 +345,21 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 										{workspace.intendedTargetBranch}
 									</span>
 								) : (
-									<DropdownMenu
-										onOpenChange={(open) => {
-											if (open && workspace) {
-												setLoadingBranches(true);
-												void listRemoteBranches(workspace.id).then(
-													(branches) => {
-														setRemoteBranches(branches);
-														setLoadingBranches(false);
-													},
-												);
-											}
+									<BranchPicker
+										currentBranch={workspace.intendedTargetBranch ?? ""}
+										branches={remoteBranches}
+										loading={loadingBranches}
+										onOpen={() => branchesQuery.refetch()}
+										onSelect={(branch: string) => {
+											if (branch === workspace.intendedTargetBranch) return;
+											void updateIntendedTargetBranch(
+												workspace.id,
+												branch,
+											).then(() => {
+												onWorkspaceChanged?.();
+											});
 										}}
-									>
-										<DropdownMenuTrigger className="inline-flex cursor-pointer items-center gap-0.5 rounded-md px-1 py-0.5 text-[13px] font-medium text-app-foreground-soft transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong">
-											<span className="truncate">
-												{workspace.intendedTargetBranch}
-											</span>
-											<ChevronDown
-												className="size-3 shrink-0"
-												strokeWidth={2}
-											/>
-										</DropdownMenuTrigger>
-										<DropdownMenuContent
-											align="start"
-											className="max-h-64 min-w-40 overflow-y-auto"
-										>
-											{loadingBranches ? (
-												<div className="flex items-center justify-center px-3 py-2">
-													<LoaderCircle
-														className="size-3.5 animate-spin text-app-muted"
-														strokeWidth={2}
-													/>
-												</div>
-											) : (
-												remoteBranches.map((branch) => (
-													<DropdownMenuItem
-														key={branch}
-														onClick={() => {
-															if (branch === workspace.intendedTargetBranch)
-																return;
-															void updateIntendedTargetBranch(
-																workspace.id,
-																branch,
-															).then(() => {
-																onWorkspaceChanged?.();
-															});
-														}}
-													>
-														<span
-															className={cn(
-																"flex-1 truncate",
-																branch === workspace.intendedTargetBranch &&
-																	"font-semibold",
-															)}
-														>
-															{branch}
-														</span>
-														{branch === workspace.intendedTargetBranch ? (
-															<Check
-																className="size-3.5 shrink-0 text-app-foreground"
-																strokeWidth={2}
-															/>
-														) : null}
-													</DropdownMenuItem>
-												))
-											)}
-										</DropdownMenuContent>
-									</DropdownMenu>
+									/>
 								)}
 							</>
 						) : null}
@@ -1917,4 +1874,75 @@ function SessionProviderIcon({
 function displaySessionTitle(session: WorkspaceSessionSummary): string {
 	if (session.title && session.title !== "Untitled") return session.title;
 	return "Untitled";
+}
+
+function BranchPicker({
+	currentBranch,
+	branches,
+	loading,
+	onOpen,
+	onSelect,
+}: {
+	currentBranch: string;
+	branches: string[];
+	loading: boolean;
+	onOpen: () => void;
+	onSelect: (branch: string) => void;
+}) {
+	const [open, setOpen] = useState(false);
+
+	return (
+		<Popover
+			open={open}
+			onOpenChange={(next) => {
+				setOpen(next);
+				if (next) onOpen();
+			}}
+		>
+			<PopoverTrigger className="inline-flex cursor-pointer items-center gap-0.5 rounded-md px-1 py-0.5 text-[13px] font-medium text-app-foreground-soft transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground focus-visible:outline-none">
+				<span className="truncate">{currentBranch}</span>
+				<ChevronDown className="size-3 shrink-0" strokeWidth={2} />
+			</PopoverTrigger>
+			<PopoverContent align="start" className="w-[280px] p-0">
+				<Command>
+					<CommandInput placeholder="Search branches..." />
+					<CommandList className="max-h-56">
+						{loading && branches.length === 0 ? (
+							<div className="flex items-center justify-center gap-2 py-6 text-[13px] text-app-muted">
+								<LoaderCircle
+									className="size-3.5 animate-spin"
+									strokeWidth={2}
+								/>
+								Loading branches...
+							</div>
+						) : null}
+						<CommandEmpty>No branches found</CommandEmpty>
+						{branches.map((branch) => (
+							<CommandItem
+								key={branch}
+								value={branch}
+								onSelect={() => {
+									onSelect(branch);
+									setOpen(false);
+								}}
+								className="flex items-center justify-between gap-2"
+							>
+								<span
+									className={cn(
+										"truncate",
+										branch === currentBranch && "font-semibold",
+									)}
+								>
+									{branch}
+								</span>
+								{branch === currentBranch && (
+									<Check className="size-3.5 shrink-0" strokeWidth={2} />
+								)}
+							</CommandItem>
+						))}
+					</CommandList>
+				</Command>
+			</PopoverContent>
+		</Popover>
+	);
 }
