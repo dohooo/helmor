@@ -179,10 +179,10 @@ const CODEX_MODEL_DEFINITIONS: &[AgentModelDefinition] = &[
         badge: Some("NEW"),
     },
     AgentModelDefinition {
-        id: "gpt-5.3-codex-spark",
+        id: "gpt-5.4-mini",
         provider: "codex",
-        label: "GPT-5.3-Codex-Spark",
-        cli_model: "gpt-5.3-codex-spark",
+        label: "GPT-5.4-Mini",
+        cli_model: "gpt-5.4-mini",
         badge: None,
     },
     AgentModelDefinition {
@@ -197,6 +197,27 @@ const CODEX_MODEL_DEFINITIONS: &[AgentModelDefinition] = &[
         provider: "codex",
         label: "GPT-5.2-Codex",
         cli_model: "gpt-5.2-codex",
+        badge: None,
+    },
+    AgentModelDefinition {
+        id: "gpt-5.2",
+        provider: "codex",
+        label: "GPT-5.2",
+        cli_model: "gpt-5.2",
+        badge: None,
+    },
+    AgentModelDefinition {
+        id: "gpt-5.1-codex-max",
+        provider: "codex",
+        label: "GPT-5.1-Codex-Max",
+        cli_model: "gpt-5.1-codex-max",
+        badge: None,
+    },
+    AgentModelDefinition {
+        id: "gpt-5.1-codex-mini",
+        provider: "codex",
+        label: "GPT-5.1-Codex-Mini",
+        cli_model: "gpt-5.1-codex-mini",
         badge: None,
     },
 ];
