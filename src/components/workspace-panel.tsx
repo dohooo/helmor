@@ -25,6 +25,7 @@ import {
 	X,
 } from "lucide-react";
 import {
+	createElement,
 	lazy,
 	memo,
 	type ReactNode,
@@ -99,6 +100,7 @@ type WorkspacePanelProps = {
 		hasLoaded: boolean;
 		presentationState: "cold-unpresented" | "presented";
 		viewportSnapshot?: StateSnapshot;
+		plainScrollTop?: number;
 		layoutCacheKey?: string | null;
 		lastMeasuredAt?: number;
 	}>;
@@ -118,6 +120,7 @@ type WorkspacePanelProps = {
 		sessionId: string,
 		payload: {
 			viewportSnapshot?: StateSnapshot;
+			plainScrollTop?: number;
 			layoutCacheKey?: string | null;
 			lastMeasuredAt?: number;
 		},
@@ -126,6 +129,7 @@ type WorkspacePanelProps = {
 		sessionId: string,
 		payload: {
 			viewportSnapshot?: StateSnapshot;
+			plainScrollTop?: number;
 			layoutCacheKey?: string | null;
 			lastMeasuredAt?: number;
 		},
@@ -159,7 +163,9 @@ const LazyStreamdown = lazy(async () => {
 
 let hasPreloadedStreamdown = false;
 const sessionViewportStateBySession = new Map<string, StateSnapshot>();
+const sessionPlainScrollTopBySession = new Map<string, number>();
 const CHAT_LAYOUT_CACHE_VERSION = "chat-layout-v1";
+const NON_VIRTUALIZED_THREAD_MESSAGE_LIMIT = 12;
 
 function preloadStreamdown() {
 	if (hasPreloadedStreamdown) return;
@@ -621,6 +627,7 @@ function KeepAliveThreadStack({
 		hasLoaded: boolean;
 		presentationState: "cold-unpresented" | "presented";
 		viewportSnapshot?: StateSnapshot;
+		plainScrollTop?: number;
 		layoutCacheKey?: string | null;
 		lastMeasuredAt?: number;
 	}>;
@@ -680,6 +687,10 @@ function KeepAliveThreadStack({
 					pane.layoutCacheKey === layoutCacheKey
 						? pane.viewportSnapshot
 						: undefined;
+				const initialPlainScrollTop =
+					pane.layoutCacheKey === layoutCacheKey
+						? pane.plainScrollTop
+						: undefined;
 				return (
 					<div
 						key={pane.sessionId}
@@ -699,6 +710,7 @@ function KeepAliveThreadStack({
 						}}
 					>
 						<ChatThread
+							initialPlainScrollTop={initialPlainScrollTop}
 							initialSnapshot={initialSnapshot}
 							layoutCacheKey={layoutCacheKey}
 							messages={pane.messages}
@@ -721,6 +733,7 @@ function KeepAliveThreadStack({
 // ---------------------------------------------------------------------------
 
 function ChatThread({
+	initialPlainScrollTop,
 	initialSnapshot,
 	layoutCacheKey,
 	messages,
@@ -731,6 +744,7 @@ function ChatThread({
 	sessionId,
 	sending,
 }: {
+	initialPlainScrollTop?: number;
 	initialSnapshot?: StateSnapshot;
 	layoutCacheKey: string;
 	messages: SessionMessageRecord[];
@@ -745,10 +759,26 @@ function ChatThread({
 		() => convertMessages(messages, sessionId, { collapse: true }),
 		[messages, sessionId],
 	);
+	const usePlainThread =
+		threadMessages.length <= NON_VIRTUALIZED_THREAD_MESSAGE_LIMIT;
 	const virtuosoRef = useRef<VirtuosoHandle | null>(null);
-	const { scrollRef, scrollToBottom, isAtBottom } = useStickToBottom({
-		initial: "instant",
-	});
+	const scrollParentRef = useRef<HTMLElement | null>(null);
+	const { contentRef, scrollRef, scrollToBottom, isAtBottom } =
+		useStickToBottom({
+			initial: "instant",
+		});
+	const handleScrollRef = useCallback(
+		(element: HTMLElement | null) => {
+			scrollParentRef.current = element;
+			scrollRef(element);
+		},
+		[scrollRef],
+	);
+	const restoredPlainScrollTop = useMemo(
+		() =>
+			initialPlainScrollTop ?? sessionPlainScrollTopBySession.get(sessionId),
+		[initialPlainScrollTop, sessionId],
+	);
 	const isAtBottomRef = useRef(isAtBottom);
 	isAtBottomRef.current = isAtBottom;
 	const preparePhaseRef = useRef<"idle" | "waiting-bottom">("idle");
@@ -769,6 +799,11 @@ function ChatThread({
 
 	useEffect(() => {
 		return () => {
+			const plainScrollTop = scrollParentRef.current?.scrollTop;
+			if (plainScrollTop !== undefined) {
+				sessionPlainScrollTopBySession.set(sessionId, plainScrollTop);
+			}
+
 			const virtuoso = virtuosoRef.current;
 			if (!virtuoso) return;
 			virtuoso.getState((snapshot) => {
@@ -781,14 +816,21 @@ function ChatThread({
 		(
 			callback?: (payload: {
 				viewportSnapshot?: StateSnapshot;
+				plainScrollTop?: number;
 				layoutCacheKey?: string | null;
 				lastMeasuredAt?: number;
 			}) => void,
 		) => {
-			const virtuoso = virtuosoRef.current;
+			const plainScrollTop = scrollParentRef.current?.scrollTop;
+			if (plainScrollTop !== undefined) {
+				sessionPlainScrollTopBySession.set(sessionId, plainScrollTop);
+			}
+
+			const virtuoso = !usePlainThread ? virtuosoRef.current : null;
 			if (!virtuoso) {
 				const payload = {
 					viewportSnapshot: undefined,
+					plainScrollTop,
 					layoutCacheKey,
 					lastMeasuredAt: Date.now(),
 				};
@@ -801,6 +843,7 @@ function ChatThread({
 				sessionViewportStateBySession.set(sessionId, snapshot);
 				const payload = {
 					viewportSnapshot: snapshot,
+					plainScrollTop,
 					layoutCacheKey,
 					lastMeasuredAt: Date.now(),
 				};
@@ -808,7 +851,7 @@ function ChatThread({
 				callback?.(payload);
 			});
 		},
-		[layoutCacheKey, onViewportSnapshot, sessionId],
+		[layoutCacheKey, onViewportSnapshot, sessionId, usePlainThread],
 	);
 
 	useEffect(() => {
@@ -822,6 +865,11 @@ function ChatThread({
 	// when it was hidden. Force a scroll so it re-renders the correct items.
 	const prevModeRef = useRef(mode);
 	useEffect(() => {
+		if (usePlainThread) {
+			prevModeRef.current = mode;
+			return;
+		}
+
 		const prevMode = prevModeRef.current;
 		prevModeRef.current = mode;
 		if (mode === "visible" && prevMode === "parked") {
@@ -829,7 +877,7 @@ function ChatThread({
 				void scrollToBottom("instant");
 			});
 		}
-	}, [mode, scrollToBottom]);
+	}, [mode, scrollToBottom, usePlainThread]);
 
 	useEffect(() => {
 		return () => {
@@ -950,11 +998,14 @@ function ChatThread({
 	return (
 		<ConversationViewport
 			components={virtuosoComponents}
+			contentRef={usePlainThread ? contentRef : undefined}
 			data={threadMessages}
 			isAtBottom={isAtBottom}
 			itemContent={itemContent}
+			restoredPlainScrollTop={restoredPlainScrollTop}
 			restoredViewportState={restoredViewportState}
-			scrollRef={scrollRef}
+			scrollRef={handleScrollRef}
+			usePlainThread={usePlainThread}
 			virtuosoRef={virtuosoRef}
 		>
 			<button
@@ -978,23 +1029,30 @@ function ChatThread({
 function ConversationViewport({
 	children,
 	components,
+	contentRef,
 	data,
 	isAtBottom,
 	itemContent,
+	restoredPlainScrollTop,
 	restoredViewportState,
 	scrollRef,
+	usePlainThread,
 	virtuosoRef,
 }: {
 	children?: ReactNode;
 	components: VirtuosoComponents<RenderedMessage>;
+	contentRef?: React.RefCallback<HTMLElement>;
 	data: RenderedMessage[];
 	isAtBottom: boolean;
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
+	restoredPlainScrollTop?: number;
 	restoredViewportState?: StateSnapshot;
 	scrollRef: React.RefCallback<HTMLElement>;
+	usePlainThread: boolean;
 	virtuosoRef: React.RefObject<VirtuosoHandle | null>;
 }) {
 	const [scrollParent, setScrollParent] = useState<HTMLDivElement | null>(null);
+	const restoredPlainScrollAppliedRef = useRef(false);
 
 	const viewportRef = useCallback(
 		(el: HTMLDivElement | null) => {
@@ -1004,6 +1062,28 @@ function ConversationViewport({
 		[scrollRef],
 	);
 
+	useEffect(() => {
+		restoredPlainScrollAppliedRef.current = false;
+	}, [restoredPlainScrollTop, usePlainThread]);
+
+	useLayoutEffect(() => {
+		if (
+			!usePlainThread ||
+			scrollParent == null ||
+			restoredPlainScrollTop == null ||
+			restoredPlainScrollAppliedRef.current
+		) {
+			return;
+		}
+
+		scrollParent.scrollTop = restoredPlainScrollTop;
+		restoredPlainScrollAppliedRef.current = true;
+	}, [restoredPlainScrollTop, scrollParent, usePlainThread]);
+
+	const Header = components.Header;
+	const Footer = components.Footer;
+	const EmptyPlaceholder = components.EmptyPlaceholder;
+
 	return (
 		<ScrollArea
 			className="relative min-h-0 flex-1"
@@ -1012,7 +1092,23 @@ function ConversationViewport({
 			overlay={children}
 			type="always"
 		>
-			{scrollParent ? (
+			{usePlainThread ? (
+				<div ref={contentRef}>
+					{Header ? createElement(Header) : null}
+					{data.length === 0
+						? EmptyPlaceholder
+							? createElement(EmptyPlaceholder)
+							: null
+						: data.map((message, index) => (
+								<ConversationRowShell
+									key={message.id ?? `${message.role}:${index}`}
+								>
+									{itemContent(index, message)}
+								</ConversationRowShell>
+							))}
+					{Footer ? createElement(Footer) : null}
+				</div>
+			) : scrollParent ? (
 				<Virtuoso
 					ref={virtuosoRef}
 					alignToBottom
@@ -1037,6 +1133,25 @@ function ConversationViewport({
 				/>
 			) : null}
 		</ScrollArea>
+	);
+}
+
+// Dynamic-height collapsibles inside a message row can trigger a broad repaint
+// in Chromium when the row shrinks. Isolating paint to the row keeps adjacent
+// messages from flashing during close transitions.
+const conversationRowIsolationStyle = {
+	contain: "paint",
+	isolation: "isolate",
+} as const;
+
+function ConversationRowShell({ children }: { children: ReactNode }) {
+	return (
+		<div
+			style={conversationRowIsolationStyle}
+			className="flow-root px-5 pb-1.5"
+		>
+			{children}
+		</div>
 	);
 }
 
@@ -1078,7 +1193,14 @@ const ConversationItem = memo(function ConversationItem({
 	...props
 }: VirtuosoItemProps<RenderedMessage>) {
 	return (
-		<div {...props} style={style} className="flow-root px-5 pb-1.5">
+		<div
+			{...props}
+			style={{
+				...style,
+				...conversationRowIsolationStyle,
+			}}
+			className="flow-root px-5 pb-1.5"
+		>
 			{children}
 		</div>
 	);

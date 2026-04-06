@@ -25,12 +25,14 @@ type SessionThreadPane = {
 	hasLoaded: boolean;
 	presentationState: "cold-unpresented" | "presented";
 	viewportSnapshot?: StateSnapshot;
+	plainScrollTop?: number;
 	layoutCacheKey?: string | null;
 	lastMeasuredAt?: number;
 };
 
 type SessionViewportCacheEntry = {
 	viewportSnapshot?: StateSnapshot;
+	plainScrollTop?: number;
 	layoutCacheKey?: string | null;
 	lastMeasuredAt?: number;
 };
@@ -55,6 +57,7 @@ function arePaneMeasurementsEqual(
 ) {
 	return (
 		current?.viewportSnapshot === next.viewportSnapshot &&
+		current?.plainScrollTop === next.plainScrollTop &&
 		current?.layoutCacheKey === next.layoutCacheKey &&
 		current?.lastMeasuredAt === next.lastMeasuredAt
 	);
@@ -404,6 +407,8 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 					(warmEntry ? "presented" : "cold-unpresented"),
 				viewportSnapshot:
 					existingPane?.viewportSnapshot ?? warmEntry?.viewportSnapshot,
+				plainScrollTop:
+					existingPane?.plainScrollTop ?? warmEntry?.plainScrollTop,
 				layoutCacheKey:
 					existingPane?.layoutCacheKey ?? warmEntry?.layoutCacheKey ?? null,
 				lastMeasuredAt:
@@ -448,10 +453,14 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 					pane &&
 					pane.presentationState === "presented" &&
 					pane.messages.length > 0 &&
-					(pane.viewportSnapshot || pane.layoutCacheKey || pane.lastMeasuredAt)
+					(pane.viewportSnapshot ||
+						pane.plainScrollTop !== undefined ||
+						pane.layoutCacheKey ||
+						pane.lastMeasuredAt)
 				) {
 					warmCacheRef.current[sessionId] = {
 						viewportSnapshot: pane.viewportSnapshot,
+						plainScrollTop: pane.plainScrollTop,
 						layoutCacheKey: pane.layoutCacheKey ?? null,
 						lastMeasuredAt: pane.lastMeasuredAt,
 					};
@@ -576,6 +585,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 
 				if (
 					pane.viewportSnapshot === payload.viewportSnapshot &&
+					pane.plainScrollTop === payload.plainScrollTop &&
 					pane.layoutCacheKey === payload.layoutCacheKey &&
 					pane.lastMeasuredAt === payload.lastMeasuredAt
 				) {
@@ -589,6 +599,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 						[sessionId]: {
 							...pane,
 							viewportSnapshot: payload.viewportSnapshot,
+							plainScrollTop: payload.plainScrollTop,
 							layoutCacheKey: payload.layoutCacheKey ?? null,
 							lastMeasuredAt: payload.lastMeasuredAt,
 						},
@@ -741,6 +752,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 					presentationState: pane.presentationState,
 					viewportSnapshot:
 						pane.viewportSnapshot ?? warmEntry?.viewportSnapshot,
+					plainScrollTop: pane.plainScrollTop ?? warmEntry?.plainScrollTop,
 					layoutCacheKey:
 						pane.layoutCacheKey ?? warmEntry?.layoutCacheKey ?? null,
 					lastMeasuredAt: pane.lastMeasuredAt ?? warmEntry?.lastMeasuredAt,
@@ -761,6 +773,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 					paneRegistry.panes[threadSessionId]?.presentationState ??
 					(warmEntry ? "presented" : "cold-unpresented"),
 				viewportSnapshot: warmEntry?.viewportSnapshot,
+				plainScrollTop: warmEntry?.plainScrollTop,
 				layoutCacheKey: warmEntry?.layoutCacheKey ?? null,
 				lastMeasuredAt: warmEntry?.lastMeasuredAt,
 			};
