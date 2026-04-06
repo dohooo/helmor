@@ -1200,6 +1200,20 @@ export type AgentStreamEvent =
 	  }
 	| { kind: "error"; message: string; persisted: boolean };
 
+/**
+ * Save a pasted clipboard image (base64) to a temp file and return its path.
+ */
+export async function savePastedImage(
+	data: string,
+	mediaType: string,
+): Promise<string> {
+	const inv = await getTauriInvoke();
+	if (!inv) {
+		throw new Error("savePastedImage is only available in Tauri.");
+	}
+	return inv<string>("save_pasted_image", { data, mediaType });
+}
+
 export async function startAgentMessageStream(
 	request: AgentSendRequest,
 ): Promise<AgentStreamStartResponse> {
