@@ -1,6 +1,9 @@
 /**
  * Lexical plugin: intercept paste to detect image paths and
  * insert ImageBadgeNode inline.
+ *
+ * Uses CRITICAL priority to run before PlainTextPlugin's own
+ * paste handler.
  */
 
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
@@ -9,7 +12,7 @@ import {
 	$createTextNode,
 	$getSelection,
 	$isRangeSelection,
-	COMMAND_PRIORITY_HIGH,
+	COMMAND_PRIORITY_CRITICAL,
 	PASTE_COMMAND,
 } from "lexical";
 import { useEffect } from "react";
@@ -22,13 +25,17 @@ export function PasteImagePlugin() {
 	useEffect(() => {
 		return editor.registerCommand(
 			PASTE_COMMAND,
-			(event: ClipboardEvent) => {
+			(event) => {
+				// PASTE_COMMAND can receive ClipboardEvent, InputEvent, or KeyboardEvent.
+				// Only ClipboardEvent has clipboardData.
+				if (!(event instanceof ClipboardEvent)) return false;
+
 				const text = event.clipboardData?.getData("text/plain");
 				if (!text) return false;
 
 				const lines = text.split("\n");
 				const hasImages = lines.some((line) => isImagePath(line.trim()));
-				if (!hasImages) return false; // let Lexical handle normal text paste
+				if (!hasImages) return false; // let PlainTextPlugin handle normal text
 
 				event.preventDefault();
 
@@ -54,7 +61,7 @@ export function PasteImagePlugin() {
 
 				return true;
 			},
-			COMMAND_PRIORITY_HIGH,
+			COMMAND_PRIORITY_CRITICAL,
 		);
 	}, [editor]);
 
