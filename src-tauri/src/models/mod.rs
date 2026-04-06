@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod db;
+pub mod editor_files;
 pub mod git_ops;
 pub mod github_cli;
 pub mod helpers;
@@ -432,6 +433,40 @@ pub fn open_workspace_in_editor(workspace_id: String, editor: String) -> CmdResu
     let _ = home; // suppress unused warning
     result.with_context(|| format!("Failed to open {editor}"))?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn read_editor_file(path: String) -> CmdResult<editor_files::EditorFileReadResponse> {
+    Ok(editor_files::read_editor_file(&path)?)
+}
+
+#[tauri::command]
+pub fn list_editor_files(
+    workspace_root_path: String,
+) -> CmdResult<Vec<editor_files::EditorFileListItem>> {
+    Ok(editor_files::list_editor_files(&workspace_root_path)?)
+}
+
+#[tauri::command]
+pub fn list_editor_files_with_content(
+    workspace_root_path: String,
+) -> CmdResult<editor_files::EditorFilesWithContentResponse> {
+    Ok(editor_files::list_editor_files_with_content(
+        &workspace_root_path,
+    )?)
+}
+
+#[tauri::command]
+pub fn write_editor_file(
+    path: String,
+    content: String,
+) -> CmdResult<editor_files::EditorFileWriteResponse> {
+    Ok(editor_files::write_editor_file(&path, &content)?)
+}
+
+#[tauri::command]
+pub fn stat_editor_file(path: String) -> CmdResult<editor_files::EditorFileStatResponse> {
+    Ok(editor_files::stat_editor_file(&path)?)
 }
 
 #[tauri::command]

@@ -14,19 +14,35 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { listEditorFilesWithContent } from "@/lib/api";
+import type { InspectorFileItem } from "@/lib/editor-session";
 import { cn } from "@/lib/utils";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
-const DEFAULT_CHANGES_HEIGHT = 120;
-const DEFAULT_ACTIONS_HEIGHT = 200;
+const DEFAULT_CHANGES_RATIO = 0.4;
+const DEFAULT_ACTIONS_RATIO = 0.3;
 const MIN_SECTION_HEIGHT = 48;
 const RESIZE_HIT_AREA = 8;
 
-export function WorkspaceInspectorSidebar() {
+type WorkspaceInspectorSidebarProps = {
+	workspaceRootPath?: string | null;
+	editorMode: boolean;
+	activeEditorPath?: string | null;
+	onOpenEditorFile(path: string): void;
+	onOpenMockReview?: (path: string) => void;
+};
+
+export function WorkspaceInspectorSidebar({
+	workspaceRootPath,
+	editorMode,
+	activeEditorPath,
+	onOpenEditorFile,
+}: WorkspaceInspectorSidebarProps) {
 	const [tabsOpen, setTabsOpen] = useState(true);
 	const [activeTab, setActiveTab] = useState("setup");
-	const [changesHeight, setChangesHeight] = useState(DEFAULT_CHANGES_HEIGHT);
-	const [actionsHeight, setActionsHeight] = useState(DEFAULT_ACTIONS_HEIGHT);
+	const [changesHeight, setChangesHeight] = useState(0);
+	const [actionsHeight, setActionsHeight] = useState(0);
+	const [changes, setChanges] = useState<InspectorFileItem[]>([]);
 	const [resizeState, setResizeState] = useState<{
 		pointerY: number;
 		initialChangesHeight: number;
@@ -34,12 +50,56 @@ export function WorkspaceInspectorSidebar() {
 		target: "actions" | "tabs";
 	} | null>(null);
 
+	const containerRef = useRef<HTMLDivElement>(null);
 	const tabsWrapperRef = useRef<HTMLDivElement>(null);
 	const actionsRef = useRef<HTMLElement>(null);
+
+	// Compute initial section heights from container size (40/30/30 ratio)
+	useEffect(() => {
+		const el = containerRef.current;
+		if (!el || changesHeight > 0) return;
+		// 3 section headers (h-9 = 36px each) + 2 resize handles (~8px each)
+		const overhead = 36 * 3 + 8 * 2;
+		const available = Math.max(0, el.clientHeight - overhead);
+		setChangesHeight(Math.round(available * DEFAULT_CHANGES_RATIO));
+		setActionsHeight(Math.round(available * DEFAULT_ACTIONS_RATIO));
+	}, [changesHeight]);
 
 	const isResizing = resizeState !== null;
 	const isActionsResizing = resizeState?.target === "actions";
 	const isTabsResizing = resizeState?.target === "tabs";
+
+	useEffect(() => {
+		let cancelled = false;
+
+		if (!workspaceRootPath) {
+			setChanges([]);
+			return () => {
+				cancelled = true;
+			};
+		}
+
+		void listEditorFilesWithContent(workspaceRootPath)
+			.then(async (response) => {
+				if (cancelled) return;
+				setChanges(response.items);
+
+				// Pre-warm Monaco models so file switches are instant
+				if (response.prefetched.length > 0) {
+					const { preWarmModels } = await import("@/lib/monaco-runtime");
+					await preWarmModels(response.prefetched);
+				}
+			})
+			.catch(() => {
+				if (!cancelled) {
+					setChanges([]);
+				}
+			});
+
+		return () => {
+			cancelled = true;
+		};
+	}, [workspaceRootPath]);
 
 	const handleToggleTabs = useCallback(() => {
 		const tabsEl = tabsWrapperRef.current;
@@ -152,12 +212,19 @@ export function WorkspaceInspectorSidebar() {
 
 	return (
 		<div
+			ref={containerRef}
 			className={cn(
 				"flex h-full min-h-0 flex-col border-l border-app-border/70 bg-app-sidebar",
 				isResizing && "select-none",
 			)}
 		>
-			<ChangesSection bodyHeight={changesHeight} />
+			<ChangesSection
+				bodyHeight={changesHeight}
+				changes={changes}
+				editorMode={editorMode}
+				activeEditorPath={activeEditorPath}
+				onOpenEditorFile={onOpenEditorFile}
+			/>
 
 			<HorizontalResizeHandle
 				onMouseDown={handleResizeStart("actions")}
@@ -438,7 +505,7 @@ function ActionsSection({
 			)}
 		>
 			<div className="flex h-9 min-w-0 shrink-0 items-center border-b border-app-border/60 bg-app-base/[0.3] px-3">
-				<span className="inline-flex h-9 items-center text-[12px] font-medium tracking-[-0.01em] text-app-foreground-soft">
+				<span className="inline-flex h-9 items-center text-[13px] font-medium tracking-[-0.01em] text-app-foreground-soft">
 					Actions
 				</span>
 			</div>
@@ -535,34 +602,12 @@ function ActionsSection({
 
 // -- Changes section with file tree / flat list toggle --
 
-interface MockChange {
-	path: string;
-	name: string;
-	status: "M" | "A" | "D";
-}
-
-const MOCK_CHANGES: MockChange[] = [
-	{
-		path: "src/components/workspace-inspector-sidebar.tsx",
-		name: "workspace-inspector-sidebar.tsx",
-		status: "M",
-	},
-	{ path: "src/App.tsx", name: "App.tsx", status: "M" },
-	{
-		path: "src/components/ai/file-tree.tsx",
-		name: "file-tree.tsx",
-		status: "A",
-	},
-	{ path: "src/lib/utils.ts", name: "utils.ts", status: "M" },
-	{ path: "src-tauri/src/agents.rs", name: "agents.rs", status: "D" },
-];
-
-function buildTree(changes: MockChange[]) {
+function buildTree(changes: InspectorFileItem[]) {
 	type TreeNode = {
 		name: string;
 		path: string;
 		children: Map<string, TreeNode>;
-		file?: MockChange;
+		file?: InspectorFileItem;
 	};
 
 	const root: TreeNode = { name: "", path: "", children: new Map() };
@@ -592,13 +637,25 @@ function buildTree(changes: MockChange[]) {
 	return root;
 }
 
-const STATUS_COLORS: Record<MockChange["status"], string> = {
+const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
 	M: "text-yellow-500",
 	A: "text-green-500",
 	D: "text-red-500",
 };
 
-function ChangesSection({ bodyHeight }: { bodyHeight: number }) {
+function ChangesSection({
+	bodyHeight,
+	changes,
+	editorMode,
+	activeEditorPath,
+	onOpenEditorFile,
+}: {
+	bodyHeight: number;
+	changes: InspectorFileItem[];
+	editorMode: boolean;
+	activeEditorPath?: string | null;
+	onOpenEditorFile: (path: string) => void;
+}) {
 	const [treeView, setTreeView] = useState(true);
 
 	return (
@@ -607,7 +664,7 @@ function ChangesSection({ bodyHeight }: { bodyHeight: number }) {
 			className="flex min-h-0 flex-col border-b border-app-border/60 bg-app-sidebar"
 		>
 			<div className="flex h-9 min-w-0 items-center justify-between border-b border-app-border/60 bg-app-base/[0.3] px-3">
-				<span className="inline-flex h-9 items-center text-[12px] font-medium tracking-[-0.01em] text-app-foreground-soft">
+				<span className="inline-flex h-9 items-center text-[13px] font-medium tracking-[-0.01em] text-app-foreground-soft">
 					Changes
 				</span>
 				{treeView ? (
@@ -630,17 +687,43 @@ function ChangesSection({ bodyHeight }: { bodyHeight: number }) {
 				className="overflow-y-auto bg-app-base/[0.16] font-mono text-[11.5px]"
 				style={{ height: `${bodyHeight}px` }}
 			>
-				{treeView ? (
-					<ChangesTreeView changes={MOCK_CHANGES} />
+				{changes.length > 0 ? (
+					treeView ? (
+						<ChangesTreeView
+							changes={changes}
+							editorMode={editorMode}
+							activeEditorPath={activeEditorPath}
+							onOpenEditorFile={onOpenEditorFile}
+						/>
+					) : (
+						<ChangesFlatView
+							changes={changes}
+							editorMode={editorMode}
+							activeEditorPath={activeEditorPath}
+							onOpenEditorFile={onOpenEditorFile}
+						/>
+					)
 				) : (
-					<ChangesFlatView changes={MOCK_CHANGES} />
+					<div className="px-3 py-3 text-[11px] leading-5 text-app-muted">
+						Select a workspace with a root path to open files here.
+					</div>
 				)}
 			</div>
 		</section>
 	);
 }
 
-function ChangesTreeView({ changes }: { changes: MockChange[] }) {
+function ChangesTreeView({
+	changes,
+	editorMode,
+	activeEditorPath,
+	onOpenEditorFile,
+}: {
+	changes: InspectorFileItem[];
+	editorMode: boolean;
+	activeEditorPath?: string | null;
+	onOpenEditorFile: (path: string) => void;
+}) {
 	const tree = buildTree(changes);
 	const [expanded, setExpanded] = useState<Set<string>>(
 		() => new Set(collectFolderPaths(tree)),
@@ -662,6 +745,9 @@ function ChangesTreeView({ changes }: { changes: MockChange[] }) {
 				expanded={expanded}
 				onToggle={toggle}
 				depth={0}
+				editorMode={editorMode}
+				activeEditorPath={activeEditorPath}
+				onOpenEditorFile={onOpenEditorFile}
 			/>
 		</div>
 	);
@@ -683,11 +769,17 @@ function TreeNodeList({
 	expanded,
 	onToggle,
 	depth,
+	editorMode,
+	activeEditorPath,
+	onOpenEditorFile,
 }: {
 	nodes: Map<string, ReturnType<typeof buildTree>>;
 	expanded: Set<string>;
 	onToggle: (path: string) => void;
 	depth: number;
+	editorMode: boolean;
+	activeEditorPath?: string | null;
+	onOpenEditorFile: (path: string) => void;
 }) {
 	const sorted = [...nodes.values()].sort((a, b) => {
 		const aIsFolder = a.children.size > 0 && !a.file;
@@ -742,19 +834,39 @@ function TreeNodeList({
 									expanded={expanded}
 									onToggle={onToggle}
 									depth={depth + 1}
+									editorMode={editorMode}
+									activeEditorPath={activeEditorPath}
+									onOpenEditorFile={onOpenEditorFile}
 								/>
 							)}
 						</div>
 					);
 				}
 
+				const selected = node.file?.absolutePath === activeEditorPath;
+
 				return (
 					<div
 						key={node.path}
-						className="flex cursor-pointer items-center gap-1 py-[1.5px] pr-2 text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.04]"
+						className={cn(
+							"flex cursor-pointer items-center gap-1 py-[1.5px] pr-2 text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.04]",
+							selected &&
+								(editorMode
+									? "bg-app-row-selected text-app-foreground"
+									: "bg-app-foreground/[0.05] text-app-foreground"),
+						)}
 						style={{ paddingLeft: `${depth * 12 + 8 + 14}px` }}
 						role="treeitem"
 						tabIndex={0}
+						onClick={() =>
+							node.file && onOpenEditorFile(node.file.absolutePath)
+						}
+						onKeyDown={(event) => {
+							if ((event.key === "Enter" || event.key === " ") && node.file) {
+								event.preventDefault();
+								onOpenEditorFile(node.file.absolutePath);
+							}
+						}}
 					>
 						<FileIcon
 							className="size-3.5 shrink-0 text-app-muted"
@@ -778,14 +890,38 @@ function TreeNodeList({
 	);
 }
 
-function ChangesFlatView({ changes }: { changes: MockChange[] }) {
+function ChangesFlatView({
+	changes,
+	editorMode,
+	activeEditorPath,
+	onOpenEditorFile,
+}: {
+	changes: InspectorFileItem[];
+	editorMode: boolean;
+	activeEditorPath?: string | null;
+	onOpenEditorFile: (path: string) => void;
+}) {
 	return (
 		<div className="py-0.5">
 			{changes.map((change) => (
 				<div
 					key={change.path}
-					className="flex cursor-pointer items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.04]"
-					role="listitem"
+					className={cn(
+						"flex cursor-pointer items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.04]",
+						change.absolutePath === activeEditorPath &&
+							(editorMode
+								? "bg-app-row-selected text-app-foreground"
+								: "bg-app-foreground/[0.05] text-app-foreground"),
+					)}
+					role="button"
+					tabIndex={0}
+					onClick={() => onOpenEditorFile(change.absolutePath)}
+					onKeyDown={(event) => {
+						if (event.key === "Enter" || event.key === " ") {
+							event.preventDefault();
+							onOpenEditorFile(change.absolutePath);
+						}
+					}}
 				>
 					<FileIcon
 						className="size-3.5 shrink-0 text-app-muted"
