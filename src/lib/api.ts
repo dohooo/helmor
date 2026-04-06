@@ -810,6 +810,32 @@ export async function loadSessionMessages(
 	}
 }
 
+/**
+ * Load session messages as pipeline-rendered ThreadMessageLike[].
+ * The frontend can render these directly without any conversion.
+ */
+export async function loadSessionThreadMessages(
+	sessionId: string,
+): Promise<ThreadMessageLike[]> {
+	const invoke = await getTauriInvoke();
+
+	if (!invoke) {
+		return devFetch<ThreadMessageLike[]>("list_session_thread_messages", {
+			id: sessionId,
+		});
+	}
+
+	try {
+		return await invoke<ThreadMessageLike[]>("list_session_thread_messages", {
+			sessionId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load session thread messages."),
+		);
+	}
+}
+
 export async function loadSessionAttachments(
 	sessionId: string,
 ): Promise<SessionAttachmentRecord[]> {
@@ -1186,8 +1212,63 @@ export type AgentStreamStartResponse = {
 	streamId: string;
 };
 
+// ---------------------------------------------------------------------------
+// Pipeline output types — match Rust pipeline::types serde output exactly
+// ---------------------------------------------------------------------------
+
+export type StreamingStatus =
+	| "pending"
+	| "streaming_input"
+	| "running"
+	| "done"
+	| "error";
+
+export type TextPart = { type: "text"; text: string };
+export type ReasoningPart = { type: "reasoning"; text: string };
+export type ToolCallPart = {
+	type: "tool-call";
+	toolCallId: string;
+	toolName: string;
+	args: Record<string, unknown>;
+	argsText: string;
+	result?: unknown;
+	streamingStatus?: StreamingStatus;
+};
+export type MessagePart = TextPart | ReasoningPart | ToolCallPart;
+
+export type CollapsedGroupPart = {
+	type: "collapsed-group";
+	category: "search" | "read" | "mixed";
+	tools: ToolCallPart[];
+	active: boolean;
+	summary: string;
+};
+
+export type ExtendedMessagePart = MessagePart | CollapsedGroupPart;
+
+export type ThreadMessageLike = {
+	role: "assistant" | "system" | "user";
+	id?: string;
+	createdAt?: string;
+	content: ExtendedMessagePart[];
+	status?: { type: string; reason?: string };
+	streaming?: boolean;
+};
+
+// ---------------------------------------------------------------------------
+// Agent stream events
+// ---------------------------------------------------------------------------
+
 export type AgentStreamEvent =
-	| { kind: "line"; line: string; persistedIds?: string[] }
+	| {
+			kind: "update";
+			messages: ThreadMessageLike[];
+			persistedIds?: string[];
+	  }
+	| {
+			kind: "streamingPartial";
+			message: ThreadMessageLike;
+	  }
 	| {
 			kind: "done";
 			provider: AgentProvider;

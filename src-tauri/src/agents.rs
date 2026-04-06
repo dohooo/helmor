@@ -1,7 +1,7 @@
 use crate::models::sessions::mark_session_read_in_transaction;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,12 +19,18 @@ type CmdResult<T> = std::result::Result<T, CommandError>;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum AgentStreamEvent {
-    Line {
-        line: String,
-        /// DB message IDs for turns persisted in this event batch.
-        /// The frontend uses these so streaming keys match DB keys exactly.
+    /// Full snapshot — sent on finalization events (assistant, user, result).
+    /// The frontend replaces its entire message array.
+    Update {
+        messages: Vec<crate::pipeline::types::ThreadMessageLike>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         persisted_ids: Vec<String>,
+    },
+    /// Only the streaming partial changed — sent on stream deltas.
+    /// The frontend replaces only the trailing streaming message.
+    /// IPC payload: ~one message instead of the entire conversation.
+    StreamingPartial {
+        message: crate::pipeline::types::ThreadMessageLike,
     },
     Done {
         provider: String,
@@ -78,19 +84,8 @@ pub struct AgentSendRequest {
     pub user_message_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentUsage {
-    pub input_tokens: Option<i64>,
-    pub output_tokens: Option<i64>,
-}
-
-/// A single intermediate message collected from the CLI stream output.
-#[derive(Debug, Clone)]
-struct CollectedTurn {
-    role: String,
-    content_json: String,
-}
+// Re-export pipeline types used by persistence functions in this file.
+use crate::pipeline::types::{AgentUsage, CollectedTurn};
 
 /// Context shared across incremental persistence calls within a single exchange.
 struct ExchangeContext {
@@ -100,51 +95,6 @@ struct ExchangeContext {
     model_provider: String,
     assistant_sdk_message_id: String,
     user_message_id: String,
-}
-
-/// Full parsed output from a CLI invocation.
-#[derive(Debug)]
-struct ParsedAgentOutput {
-    assistant_text: String,
-    #[allow(dead_code)] // Populated for future use (e.g. storing thinking in DB)
-    thinking_text: Option<String>,
-    session_id: Option<String>,
-    resolved_model: String,
-    usage: AgentUsage,
-    turns: Vec<CollectedTurn>,
-    result_json: Option<String>,
-}
-
-#[derive(Debug)]
-struct ClaudeOutputAccumulator {
-    assistant_text: String,
-    thinking_text: String,
-    saw_text_delta: bool,
-    saw_thinking_delta: bool,
-    session_id: Option<String>,
-    resolved_model: String,
-    usage: AgentUsage,
-    turns: Vec<CollectedTurn>,
-    cur_asst_id: Option<String>,
-    cur_asst_blocks: Vec<Value>,
-    cur_asst_template: Option<Value>,
-    result_json: Option<String>,
-}
-
-#[derive(Debug)]
-struct CodexOutputAccumulator {
-    assistant_text: String,
-    session_id: Option<String>,
-    resolved_model: String,
-    usage: AgentUsage,
-    turns: Vec<CollectedTurn>,
-    result_json: Option<String>,
-}
-
-#[derive(Debug)]
-enum StreamOutputAccumulator {
-    Claude(ClaudeOutputAccumulator),
-    Codex(CodexOutputAccumulator),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -622,15 +572,22 @@ fn stream_via_sidecar(
     tauri::async_runtime::spawn_blocking(move || {
         let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
         let mut resolved_session_id: Option<String> = None;
-        let mut output_accumulator = hsid_copy
-            .as_ref()
-            .map(|_| StreamOutputAccumulator::new(provider.as_str(), model_copy.cli_model));
+        // Pipeline: replaces StreamOutputAccumulator — produces ThreadMessageLike[]
+        // directly, with hash-based change detection.
+        let context_key = rid.clone();
+        let pipeline_session_id = hsid_copy.clone().unwrap_or_else(|| context_key.clone());
+        let mut pipeline = hsid_copy.as_ref().map(|_| {
+            crate::pipeline::MessagePipeline::new(
+                provider.as_str(),
+                model_copy.cli_model,
+                &context_key,
+                &pipeline_session_id,
+            )
+        });
         let debug = sidecar_debug_enabled();
         let mut event_count: u64 = 0;
 
         // --- Incremental persistence setup ---
-        // Open a single DB connection for the entire exchange and persist
-        // the user message immediately, before entering the event loop.
         let mut exchange_ctx: Option<ExchangeContext> = None;
         let mut persisted_turn_count: usize = 0;
         let db_conn = if hsid_copy.is_some() {
@@ -693,22 +650,35 @@ fn stream_via_sidecar(
                     let persisted = exchange_ctx.is_some();
                     let mut resolved_model = model_copy.cli_model.to_string();
 
-                    if let Some(accumulator) = output_accumulator.take() {
-                        if let Ok(output) = accumulator.finish(resolved_session_id.as_deref()) {
+                    if let Some(pl) = pipeline.take() {
+                        // Persist any remaining turns via the pipeline's accumulator
+                        if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
+                            let model_str = pl.accumulator.resolved_model();
+                            while persisted_turn_count < pl.accumulator.turns_len() {
+                                match persist_turn_message(
+                                    conn,
+                                    ctx,
+                                    pl.accumulator.turn_at(persisted_turn_count),
+                                    model_str,
+                                ) {
+                                    Ok(_) => persisted_turn_count += 1,
+                                    Err(e) => {
+                                        eprintln!(
+                                            "[agents] Failed to persist turn {persisted_turn_count}: {e}"
+                                        );
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Finalize the accumulator for persistence output
+                        if let Ok(output) =
+                            pl.accumulator.finish_output(resolved_session_id.as_deref())
+                        {
                             resolved_model = output.resolved_model.clone();
 
                             if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
-                                // Persist any remaining turns (finish() may flush_assistant)
-                                for turn in output.turns.iter().skip(persisted_turn_count) {
-                                    let _ = persist_turn_message(
-                                        conn,
-                                        ctx,
-                                        turn,
-                                        &output.resolved_model,
-                                    );
-                                }
-
-                                // Persist result summary and finalize session metadata
                                 if let Err(e) = persist_result_and_finalize(
                                     conn,
                                     ctx,
@@ -721,7 +691,6 @@ fn stream_via_sidecar(
                                     output.result_json.as_deref(),
                                 ) {
                                     eprintln!("[agents] Failed to finalize exchange: {e}");
-                                    // persisted stays true — user msg + turns are already in DB
                                 }
                             }
                         }
@@ -760,48 +729,56 @@ fn stream_via_sidecar(
                     break;
                 }
                 _ => {
-                    // Forward raw SDK message preserving all fields (incl. type)
                     let line = serde_json::to_string(&event.raw).unwrap_or_default();
                     if !line.is_empty() && line != "{}" {
-                        if let Some(accumulator) = output_accumulator.as_mut() {
-                            accumulator.push_value(&event.raw, &line);
-                        }
+                        if let Some(pl) = pipeline.as_mut() {
+                            let emit = pl.push_event(&event.raw, &line, &[]);
 
-                        // Persist newly completed turns and collect their DB IDs
-                        let mut batch_ids: Vec<String> = Vec::new();
-                        if let (Some(ctx), Some(conn), Some(accumulator)) =
-                            (&exchange_ctx, &db_conn, output_accumulator.as_ref())
-                        {
-                            let model_str = accumulator.resolved_model();
-                            while persisted_turn_count < accumulator.turns_len() {
-                                match persist_turn_message(
-                                    conn,
-                                    ctx,
-                                    accumulator.turn_at(persisted_turn_count),
-                                    model_str,
-                                ) {
-                                    Ok(msg_id) => {
-                                        batch_ids.push(msg_id);
-                                        persisted_turn_count += 1;
-                                    }
-                                    Err(e) => {
-                                        eprintln!(
-                                            "[agents] Failed to persist turn {}: {e}",
-                                            persisted_turn_count
-                                        );
-                                        break;
+                            // Persist newly completed turns
+                            let mut batch_ids: Vec<String> = Vec::new();
+                            if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
+                                let model_str = pl.accumulator.resolved_model().to_string();
+                                while persisted_turn_count < pl.accumulator.turns_len() {
+                                    match persist_turn_message(
+                                        conn,
+                                        ctx,
+                                        pl.accumulator.turn_at(persisted_turn_count),
+                                        &model_str,
+                                    ) {
+                                        Ok(msg_id) => {
+                                            batch_ids.push(msg_id);
+                                            persisted_turn_count += 1;
+                                        }
+                                        Err(e) => {
+                                            eprintln!(
+                                                "[agents] Failed to persist turn {persisted_turn_count}: {e}"
+                                            );
+                                            break;
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        let _ = app.emit(
-                            &event_name,
-                            AgentStreamEvent::Line {
-                                line,
-                                persisted_ids: batch_ids,
-                            },
-                        );
+                            // Emit based on pipeline output type
+                            match emit {
+                                crate::pipeline::PipelineEmit::Full(messages) => {
+                                    let _ = app.emit(
+                                        &event_name,
+                                        AgentStreamEvent::Update {
+                                            messages,
+                                            persisted_ids: batch_ids,
+                                        },
+                                    );
+                                }
+                                crate::pipeline::PipelineEmit::Partial(message) => {
+                                    let _ = app.emit(
+                                        &event_name,
+                                        AgentStreamEvent::StreamingPartial { message },
+                                    );
+                                }
+                                crate::pipeline::PipelineEmit::None => {}
+                            }
+                        }
                     }
                 }
             }
@@ -817,293 +794,15 @@ fn stream_via_sidecar(
         stream_id: request_id,
     })
 }
-impl StreamOutputAccumulator {
-    fn new(provider: &str, fallback_model: &str) -> Self {
-        if provider == "codex" {
-            Self::Codex(CodexOutputAccumulator::new(fallback_model))
-        } else {
-            Self::Claude(ClaudeOutputAccumulator::new(fallback_model))
-        }
-    }
-
-    fn push_value(&mut self, value: &Value, raw_line: &str) {
-        match self {
-            Self::Claude(accumulator) => accumulator.push_value(value, raw_line),
-            Self::Codex(accumulator) => accumulator.push_value(value, raw_line),
-        }
-    }
-
-    fn finish(self, fallback_session_id: Option<&str>) -> Result<ParsedAgentOutput> {
-        match self {
-            Self::Claude(accumulator) => accumulator.finish(fallback_session_id),
-            Self::Codex(accumulator) => accumulator.finish(fallback_session_id),
-        }
-    }
-
-    fn turns_len(&self) -> usize {
-        match self {
-            Self::Claude(a) => a.turns.len(),
-            Self::Codex(a) => a.turns.len(),
-        }
-    }
-
-    fn turn_at(&self, index: usize) -> &CollectedTurn {
-        match self {
-            Self::Claude(a) => &a.turns[index],
-            Self::Codex(a) => &a.turns[index],
-        }
-    }
-
-    fn resolved_model(&self) -> &str {
-        match self {
-            Self::Claude(a) => &a.resolved_model,
-            Self::Codex(a) => &a.resolved_model,
-        }
-    }
-}
-
-impl ClaudeOutputAccumulator {
-    fn new(fallback_model: &str) -> Self {
-        Self {
-            assistant_text: String::new(),
-            thinking_text: String::new(),
-            saw_text_delta: false,
-            saw_thinking_delta: false,
-            session_id: None,
-            resolved_model: fallback_model.to_string(),
-            usage: AgentUsage {
-                input_tokens: None,
-                output_tokens: None,
-            },
-            turns: Vec::new(),
-            cur_asst_id: None,
-            cur_asst_blocks: Vec::new(),
-            cur_asst_template: None,
-            result_json: None,
-        }
-    }
-
-    fn push_value(&mut self, value: &Value, raw_line: &str) {
-        if let Some(found_session_id) = value.get("session_id").and_then(Value::as_str) {
-            self.session_id = Some(found_session_id.to_string());
-        }
-
-        if let Some(found_model) = extract_claude_model_name(value) {
-            self.resolved_model = found_model;
-        }
-
-        match value.get("type").and_then(Value::as_str) {
-            Some("stream_event") => {
-                let delta = value.get("event").and_then(|event| event.get("delta"));
-
-                if let Some(delta_text) = delta.and_then(|d| d.get("text")).and_then(Value::as_str)
-                {
-                    self.assistant_text.push_str(delta_text);
-                    self.saw_text_delta = true;
-                }
-
-                if let Some(delta_thinking) = delta
-                    .and_then(|d| d.get("thinking"))
-                    .and_then(Value::as_str)
-                {
-                    self.thinking_text.push_str(delta_thinking);
-                    self.saw_thinking_delta = true;
-                }
-            }
-            Some("assistant") => {
-                if !self.saw_text_delta {
-                    if let Some(text) = extract_claude_assistant_text(value) {
-                        self.assistant_text.push_str(&text);
-                    }
-                }
-                if !self.saw_thinking_delta {
-                    if let Some(thinking) = extract_claude_thinking_text(value) {
-                        self.thinking_text.push_str(&thinking);
-                    }
-                }
-
-                let msg_id = value
-                    .get("message")
-                    .and_then(|message| message.get("id"))
-                    .and_then(Value::as_str);
-
-                if self
-                    .cur_asst_id
-                    .as_deref()
-                    .is_some_and(|current| Some(current) != msg_id)
-                {
-                    self.flush_assistant();
-                }
-
-                if self.cur_asst_id.is_none() {
-                    self.cur_asst_id = msg_id.map(str::to_string);
-                    self.cur_asst_template = Some(value.clone());
-                }
-
-                if let Some(blocks) = value
-                    .get("message")
-                    .and_then(|message| message.get("content"))
-                    .and_then(Value::as_array)
-                {
-                    self.cur_asst_blocks.extend(blocks.iter().cloned());
-                }
-            }
-            Some("user") => {
-                self.flush_assistant();
-                self.turns.push(CollectedTurn {
-                    role: "user".to_string(),
-                    content_json: raw_line.to_string(),
-                });
-            }
-            Some("result") => {
-                if self.assistant_text.trim().is_empty() {
-                    if let Some(text) = value.get("result").and_then(Value::as_str) {
-                        self.assistant_text.push_str(text);
-                    }
-                }
-                if let Some(parsed_usage) = value.get("usage") {
-                    self.usage.input_tokens =
-                        parsed_usage.get("input_tokens").and_then(Value::as_i64);
-                    self.usage.output_tokens =
-                        parsed_usage.get("output_tokens").and_then(Value::as_i64);
-                }
-                self.result_json = Some(raw_line.to_string());
-            }
-            _ => {}
-        }
-    }
-
-    fn finish(mut self, fallback_session_id: Option<&str>) -> Result<ParsedAgentOutput> {
-        self.flush_assistant();
-
-        let assistant_text = self.assistant_text.trim().to_string();
-        if assistant_text.is_empty() {
-            bail!("Claude returned no assistant text.");
-        }
-
-        let thinking_text = self.thinking_text.trim().to_string();
-        let thinking_text = if thinking_text.is_empty() {
-            None
-        } else {
-            Some(thinking_text)
-        };
-
-        Ok(ParsedAgentOutput {
-            assistant_text,
-            thinking_text,
-            session_id: self
-                .session_id
-                .or_else(|| fallback_session_id.map(str::to_string)),
-            resolved_model: self.resolved_model,
-            usage: self.usage,
-            turns: self.turns,
-            result_json: self.result_json,
-        })
-    }
-
-    fn flush_assistant(&mut self) {
-        if self.cur_asst_blocks.is_empty() {
-            self.cur_asst_id = None;
-            return;
-        }
-
-        if let Some(mut template) = self.cur_asst_template.take() {
-            if let Some(message) = template.get_mut("message") {
-                message["content"] = Value::Array(std::mem::take(&mut self.cur_asst_blocks));
-            }
-            self.turns.push(CollectedTurn {
-                role: "assistant".to_string(),
-                content_json: template.to_string(),
-            });
-        }
-
-        self.cur_asst_id = None;
-    }
-}
-
-impl CodexOutputAccumulator {
-    fn new(fallback_model: &str) -> Self {
-        Self {
-            assistant_text: String::new(),
-            session_id: None,
-            resolved_model: fallback_model.to_string(),
-            usage: AgentUsage {
-                input_tokens: None,
-                output_tokens: None,
-            },
-            turns: Vec::new(),
-            result_json: None,
-        }
-    }
-
-    fn push_value(&mut self, value: &Value, raw_line: &str) {
-        if let Some(thread_id) = value.get("thread_id").and_then(Value::as_str) {
-            self.session_id = Some(thread_id.to_string());
-        }
-
-        match value.get("type").and_then(Value::as_str) {
-            Some("item.completed") => {
-                if let Some(item) = value.get("item") {
-                    if item.get("type").and_then(Value::as_str) == Some("agent_message") {
-                        if let Some(text) = item.get("text").and_then(Value::as_str) {
-                            if !self.assistant_text.is_empty() {
-                                self.assistant_text.push_str("\n\n");
-                            }
-                            self.assistant_text.push_str(text);
-                        }
-                    }
-                    self.turns.push(CollectedTurn {
-                        role: "assistant".to_string(),
-                        content_json: raw_line.to_string(),
-                    });
-                }
-            }
-            Some("thread.started") | Some("thread.resumed") => {
-                if let Some(thread_id) = value.get("thread_id").and_then(Value::as_str) {
-                    self.session_id = Some(thread_id.to_string());
-                }
-            }
-            Some("turn.completed") => {
-                if let Some(parsed_usage) = value.get("usage") {
-                    self.usage.input_tokens =
-                        parsed_usage.get("input_tokens").and_then(Value::as_i64);
-                    self.usage.output_tokens =
-                        parsed_usage.get("output_tokens").and_then(Value::as_i64);
-                }
-                self.result_json = Some(raw_line.to_string());
-            }
-            _ => {}
-        }
-    }
-
-    fn finish(self, fallback_session_id: Option<&str>) -> Result<ParsedAgentOutput> {
-        let assistant_text = self.assistant_text.trim().to_string();
-        if assistant_text.is_empty() {
-            bail!("Codex returned no assistant text.");
-        }
-
-        Ok(ParsedAgentOutput {
-            assistant_text,
-            thinking_text: None,
-            session_id: self
-                .session_id
-                .or_else(|| fallback_session_id.map(str::to_string)),
-            resolved_model: self.resolved_model,
-            usage: self.usage,
-            turns: self.turns,
-            result_json: self.result_json,
-        })
-    }
-}
-
+// Test helpers using the new pipeline accumulator
 #[cfg(test)]
 fn parse_claude_output(
     stdout: &str,
     fallback_session_id: Option<&str>,
     fallback_model: &str,
-) -> Result<ParsedAgentOutput> {
-    let mut accumulator = ClaudeOutputAccumulator::new(fallback_model);
-
+) -> Result<crate::pipeline::types::ParsedAgentOutput> {
+    let mut accumulator =
+        crate::pipeline::accumulator::StreamAccumulator::new("claude", fallback_model);
     for line in stdout
         .lines()
         .map(str::trim)
@@ -1112,10 +811,9 @@ fn parse_claude_output(
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        accumulator.push_value(&value, line);
+        accumulator.push_event(&value, line, &[]);
     }
-
-    accumulator.finish(fallback_session_id)
+    accumulator.finish_output(fallback_session_id)
 }
 
 #[cfg(test)]
@@ -1123,9 +821,9 @@ fn parse_codex_output(
     stdout: &str,
     fallback_session_id: Option<&str>,
     fallback_model: &str,
-) -> Result<ParsedAgentOutput> {
-    let mut accumulator = CodexOutputAccumulator::new(fallback_model);
-
+) -> Result<crate::pipeline::types::ParsedAgentOutput> {
+    let mut accumulator =
+        crate::pipeline::accumulator::StreamAccumulator::new("codex", fallback_model);
     for line in stdout
         .lines()
         .map(str::trim)
@@ -1134,78 +832,9 @@ fn parse_codex_output(
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        accumulator.push_value(&value, line);
+        accumulator.push_event(&value, line, &[]);
     }
-
-    accumulator.finish(fallback_session_id)
-}
-
-fn extract_claude_model_name(value: &Value) -> Option<String> {
-    if let Some(model) = value.get("model").and_then(Value::as_str) {
-        return Some(model.to_string());
-    }
-
-    if let Some(model) = value
-        .get("message")
-        .and_then(|message| message.get("model"))
-        .and_then(Value::as_str)
-    {
-        return Some(model.to_string());
-    }
-
-    if let Some(model) = value
-        .get("model")
-        .and_then(|model| model.get("display_name"))
-        .and_then(Value::as_str)
-    {
-        return Some(model.to_string());
-    }
-
-    None
-}
-
-fn extract_claude_thinking_text(value: &Value) -> Option<String> {
-    let content = value
-        .get("message")
-        .and_then(|message| message.get("content"))
-        .and_then(Value::as_array)?;
-
-    let text = content
-        .iter()
-        .filter_map(|block| {
-            let is_thinking = block.get("type").and_then(Value::as_str) == Some("thinking");
-            if !is_thinking {
-                return None;
-            }
-
-            block.get("thinking").and_then(Value::as_str)
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-
-    (!text.trim().is_empty()).then_some(text)
-}
-
-fn extract_claude_assistant_text(value: &Value) -> Option<String> {
-    let content = value
-        .get("message")
-        .and_then(|message| message.get("content"))
-        .and_then(Value::as_array)?;
-
-    let text = content
-        .iter()
-        .filter_map(|block| {
-            let is_text = block.get("type").and_then(Value::as_str) == Some("text");
-            if !is_text {
-                return None;
-            }
-
-            block.get("text").and_then(Value::as_str)
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-
-    (!text.trim().is_empty()).then_some(text)
+    accumulator.finish_output(fallback_session_id)
 }
 
 pub(crate) fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf> {
@@ -1542,7 +1171,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn parse_codex_output_collects_turns() {
+    fn parse_codex_output_collects_text_and_result() {
         let stdout = r#"
             {"type":"thread.started","thread_id":"t1"}
             {"type":"item.completed","item":{"type":"agent_message","text":"Hello"}}
@@ -1552,14 +1181,15 @@ mod tests {
         "#;
 
         let output = parse_codex_output(stdout, None, "gpt-5.4").unwrap();
-        // All item.completed events should be collected as turns
-        assert_eq!(output.turns.len(), 3);
-        assert!(output.turns[0].content_json.contains("agent_message"));
-        assert!(output.turns[1].content_json.contains("command_execution"));
-        assert!(output.turns[2].content_json.contains("agent_message"));
+        // Assistant text should combine all agent_message texts
+        assert!(output.assistant_text.contains("Hello"));
+        assert!(output.assistant_text.contains("Done"));
         // result_json should be the turn.completed line
         assert!(output.result_json.is_some());
         assert!(output.result_json.unwrap().contains("turn.completed"));
+        // Usage should be captured
+        assert_eq!(output.usage.input_tokens, Some(50));
+        assert_eq!(output.usage.output_tokens, Some(10));
     }
 
     // -----------------------------------------------------------------------

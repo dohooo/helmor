@@ -21,6 +21,7 @@ const apiMocks = vi.hoisted(() => ({
 	loadWorkspaceDetail: vi.fn(),
 	loadWorkspaceSessions: vi.fn(),
 	loadSessionMessages: vi.fn(),
+	loadSessionThreadMessages: vi.fn(),
 	loadSessionAttachments: vi.fn(),
 }));
 
@@ -53,6 +54,7 @@ vi.mock("./lib/api", async (importOriginal) => {
 		loadWorkspaceDetail: apiMocks.loadWorkspaceDetail,
 		loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
 		loadSessionMessages: apiMocks.loadSessionMessages,
+		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 		loadSessionAttachments: apiMocks.loadSessionAttachments,
 	};
 });
@@ -156,6 +158,7 @@ function mockWorkspaceData() {
 		},
 	]);
 	apiMocks.loadSessionMessages.mockResolvedValue([]);
+	apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
 	apiMocks.loadSessionAttachments.mockResolvedValue([]);
 }
 
@@ -191,6 +194,7 @@ describe("App GitHub identity states", () => {
 		apiMocks.loadWorkspaceDetail.mockReset();
 		apiMocks.loadWorkspaceSessions.mockReset();
 		apiMocks.loadSessionMessages.mockReset();
+		apiMocks.loadSessionThreadMessages.mockReset();
 		apiMocks.loadSessionAttachments.mockReset();
 		openerMocks.openUrl.mockReset();
 

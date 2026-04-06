@@ -2,6 +2,7 @@ import type {
 	AgentModelOption,
 	AgentModelSection,
 	SessionMessageRecord,
+	ThreadMessageLike,
 	WorkspaceGroup,
 	WorkspaceRow,
 	WorkspaceSessionSummary,
@@ -191,6 +192,27 @@ export function findModelOption(
 	);
 }
 
+/** Create a live ThreadMessageLike for optimistic rendering. */
+export function createLiveThreadMessage({
+	id,
+	role,
+	text,
+	createdAt,
+}: {
+	id: string;
+	role: "user" | "assistant" | "system";
+	text: string;
+	createdAt: string;
+}): ThreadMessageLike {
+	return {
+		role,
+		id,
+		createdAt,
+		content: [{ type: "text", text }],
+	};
+}
+
+/** @deprecated Use createLiveThreadMessage for new code. */
 export function createLiveMessage({
 	id,
 	sessionId,
@@ -221,6 +243,17 @@ export function createLiveMessage({
 		turnId: null,
 		isResumableMessage: null,
 		attachmentCount: 0,
+	};
+}
+
+export function appendLiveThreadMessage(
+	current: Record<string, ThreadMessageLike[]>,
+	contextKey: string,
+	message: ThreadMessageLike,
+) {
+	return {
+		...current,
+		[contextKey]: [...(current[contextKey] ?? []), message],
 	};
 }
 
@@ -271,7 +304,10 @@ export function clampEffortToModel(
 	const minRank = Math.min(...ranked.map((a) => a.rank));
 	const maxRank = Math.max(...ranked.map((a) => a.rank));
 	const clamped = Math.max(minRank, Math.min(maxRank, rank));
-	return ranked.find((a) => a.rank === clamped)?.level ?? available.at(-1)!;
+	return (
+		ranked.find((a) => a.rank === clamped)?.level ??
+		available[available.length - 1]!
+	);
 }
 
 export function haveSameLiveMessages(

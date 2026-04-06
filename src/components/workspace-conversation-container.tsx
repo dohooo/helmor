@@ -7,7 +7,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { AgentModelOption, SessionMessageRecord } from "@/lib/api";
+import type { AgentModelOption, ThreadMessageLike } from "@/lib/api";
 import {
 	generateSessionTitle,
 	listenAgentStream,
@@ -15,13 +15,11 @@ import {
 	stopAgentStream,
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
-import { StreamAccumulator } from "@/lib/stream-accumulator";
 import {
-	appendLiveMessage,
-	createLiveMessage,
+	appendLiveThreadMessage,
+	createLiveThreadMessage,
 	describeUnknownError,
 	getComposerContextKey,
-	haveSameLiveMessages,
 } from "@/lib/workspace-helpers";
 import { WorkspaceComposerContainer } from "./workspace-composer-container";
 import { WorkspacePanelContainer } from "./workspace-panel-container";
@@ -67,7 +65,7 @@ export const WorkspaceConversationContainer = memo(
 			nonce: number;
 		} | null>(null);
 		const [liveMessagesByContext, setLiveMessagesByContext] = useState<
-			Record<string, SessionMessageRecord[]>
+			Record<string, ThreadMessageLike[]>
 		>({});
 		const [liveSessionsByContext, setLiveSessionsByContext] = useState<
 			Record<string, { provider: string; sessionId?: string | null }>
@@ -222,13 +220,11 @@ export const WorkspaceConversationContainer = memo(
 				// Pre-generate user message ID so it matches the DB primary key.
 				// AI message IDs come from the Rust backend via persistedIds.
 				const userMessageId = crypto.randomUUID();
-				const optimisticUserMessage = createLiveMessage({
+				const optimisticUserMessage = createLiveThreadMessage({
 					id: userMessageId,
-					sessionId: displayedSessionId ?? contextKey,
 					role: "user",
-					content: trimmedPrompt,
+					text: trimmedPrompt,
 					createdAt: now,
-					model: model.id,
 				});
 				const previousLiveSession = liveSessionsByContext[contextKey];
 				const providerSessionId =
@@ -237,7 +233,7 @@ export const WorkspaceConversationContainer = memo(
 						: undefined;
 
 				setLiveMessagesByContext((current) =>
-					appendLiveMessage(current, contextKey, optimisticUserMessage),
+					appendLiveThreadMessage(current, contextKey, optimisticUserMessage),
 				);
 				setComposerRestoreState(null);
 				setSendErrorsByContext((current) => ({
@@ -307,9 +303,13 @@ export const WorkspaceConversationContainer = memo(
 						},
 					}));
 
-					const accumulator = new StreamAccumulator();
 					let unlistenFn: (() => void) | null = null;
 					let frameId: number | null = null;
+					// Full snapshot from the last finalization event.
+					let baseMessages: ThreadMessageLike[] = [];
+					// Latest streaming partial (replaces trailing message).
+					let pendingPartial: ThreadMessageLike | null = null;
+					let needsFlush = false;
 
 					// Periodically refresh file changes while the agent is streaming
 					const changesRefreshInterval = window.setInterval(() => {
@@ -317,6 +317,27 @@ export const WorkspaceConversationContainer = memo(
 							queryKey: ["workspaceChanges"],
 						});
 					}, 3_000);
+
+					const flushStreamMessages = () => {
+						frameId = null;
+						if (!needsFlush) return;
+						needsFlush = false;
+
+						const rendered = pendingPartial
+							? [...baseMessages, pendingPartial]
+							: baseMessages;
+						const nextMessages = [optimisticUserMessage, ...rendered];
+						setLiveMessagesByContext((current) => ({
+							...current,
+							[contextKey]: nextMessages,
+						}));
+					};
+
+					const scheduleFlush = () => {
+						needsFlush = true;
+						if (frameId !== null) return;
+						frameId = window.requestAnimationFrame(() => flushStreamMessages());
+					};
 
 					const cleanup = () => {
 						window.clearInterval(changesRefreshInterval);
@@ -330,46 +351,24 @@ export const WorkspaceConversationContainer = memo(
 						}
 					};
 
-					const flushStreamMessages = () => {
-						frameId = null;
-						const streamMessages = accumulator.toMessages(
-							contextKey,
-							displayedSessionId ?? contextKey,
-						);
-						const nextMessages = [optimisticUserMessage, ...streamMessages];
-						const doFlush = () => {
-							setLiveMessagesByContext((current) => {
-								if (haveSameLiveMessages(current[contextKey], nextMessages)) {
-									return current;
-								}
-
-								return {
-									...current,
-									[contextKey]: nextMessages,
-								};
-							});
-						};
-						// Always flush synchronously to avoid deferred/split rendering
-						// that can cause visual flicker between transition frames.
-						doFlush();
-					};
-
-					const scheduleFlush = () => {
-						if (frameId !== null) {
+					unlistenFn = await listenAgentStream(streamId, (event) => {
+						if (event.kind === "update") {
+							// Full snapshot from finalization — replace base
+							baseMessages = event.messages;
+							pendingPartial = null;
+							scheduleFlush();
 							return;
 						}
 
-						frameId = window.requestAnimationFrame(() => flushStreamMessages());
-					};
-
-					unlistenFn = await listenAgentStream(streamId, (event) => {
-						if (event.kind === "line") {
-							accumulator.addLine(event.line, event.persistedIds);
+						if (event.kind === "streamingPartial") {
+							// Only the streaming partial changed — lightweight
+							pendingPartial = event.message;
 							scheduleFlush();
 							return;
 						}
 
 						if (event.kind === "done") {
+							// Flush any buffered messages immediately
 							if (frameId !== null) {
 								window.cancelAnimationFrame(frameId);
 								frameId = null;

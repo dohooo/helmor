@@ -39,6 +39,26 @@ pub fn list_session_messages(session_id: &str) -> Result<Vec<sessions::SessionMe
     sessions::list_session_messages(session_id)
 }
 
+pub fn list_session_thread_messages(
+    session_id: &str,
+) -> Result<Vec<crate::pipeline::types::ThreadMessageLike>> {
+    let records = sessions::list_session_messages(session_id)?;
+    let historical: Vec<crate::pipeline::types::HistoricalRecord> = records
+        .into_iter()
+        .map(|r| crate::pipeline::types::HistoricalRecord {
+            id: r.id,
+            role: r.role,
+            content: r.content,
+            content_is_json: r.content_is_json,
+            parsed_content: r.parsed_content,
+            created_at: r.created_at,
+        })
+        .collect();
+    Ok(crate::pipeline::MessagePipeline::convert_historical(
+        &historical,
+    ))
+}
+
 pub fn list_session_attachments(
     session_id: &str,
 ) -> Result<Vec<sessions::SessionAttachmentRecord>> {
@@ -326,11 +346,21 @@ pub fn start_agent_stream(
     let rid = stream_id.clone();
     let model_id = model.id.to_string();
     let provider = model.provider.to_string();
+    let model_cli = model.cli_model.to_string();
     let working_dir_str = working_directory.display().to_string();
+    let context_key = stream_id.clone();
+    let pipeline_session_id = sidecar_session_id.clone();
 
     std::thread::Builder::new()
         .name(format!("dev-stream-{}", &stream_id[..8]))
         .spawn(move || {
+            let mut pipeline = crate::pipeline::MessagePipeline::new(
+                &provider,
+                &model_cli,
+                &context_key,
+                &pipeline_session_id,
+            );
+
             for event in sidecar_rx.iter() {
                 match event.event_type() {
                     "end" => {
@@ -360,18 +390,24 @@ pub fn start_agent_stream(
                     _ => {
                         let line = serde_json::to_string(&event.raw).unwrap_or_default();
                         if !line.is_empty() && line != "{}" {
-                            let _ = tx.send(AgentStreamEvent::Line {
-                                line,
-                                persisted_ids: vec![],
-                            });
+                            match pipeline.push_event(&event.raw, &line, &[]) {
+                                crate::pipeline::PipelineEmit::Full(messages) => {
+                                    let _ = tx.send(AgentStreamEvent::Update {
+                                        messages,
+                                        persisted_ids: vec![],
+                                    });
+                                }
+                                crate::pipeline::PipelineEmit::Partial(message) => {
+                                    let _ = tx.send(AgentStreamEvent::StreamingPartial { message });
+                                }
+                                crate::pipeline::PipelineEmit::None => {}
+                            }
                         }
                     }
                 }
             }
-            // The sidecar reference is held by the ManagedSidecar state, unsubscribe
-            // happens when the sidecar_rx is dropped (sender removed from map).
             drop(sidecar_rx);
-            let _ = &rid; // keep rid alive for logging if needed
+            let _ = &rid;
         })
         .context("Failed to spawn dev stream reader thread")?;
 

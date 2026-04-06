@@ -14,6 +14,7 @@ const apiMocks = vi.hoisted(() => ({
 	loadWorkspaceDetail: vi.fn(),
 	loadWorkspaceSessions: vi.fn(),
 	loadSessionMessages: vi.fn(),
+	loadSessionThreadMessages: vi.fn(),
 }));
 
 vi.mock("./App.css", () => ({}));
@@ -31,6 +32,7 @@ vi.mock("./lib/api", async (importOriginal) => {
 		loadWorkspaceDetail: apiMocks.loadWorkspaceDetail,
 		loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
 		loadSessionMessages: apiMocks.loadSessionMessages,
+		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 	};
 });
 
@@ -175,6 +177,7 @@ describe("App editor mode", () => {
 		apiMocks.loadWorkspaceDetail.mockReset();
 		apiMocks.loadWorkspaceSessions.mockReset();
 		apiMocks.loadSessionMessages.mockReset();
+		apiMocks.loadSessionThreadMessages.mockReset();
 
 		apiMocks.loadWorkspaceGroups.mockResolvedValue([
 			{
@@ -219,6 +222,7 @@ describe("App editor mode", () => {
 		apiMocks.loadWorkspaceDetail.mockResolvedValue(createWorkspaceDetail());
 		apiMocks.loadWorkspaceSessions.mockResolvedValue(createWorkspaceSessions());
 		apiMocks.loadSessionMessages.mockResolvedValue(createMessages());
+		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
 	});
 
 	afterEach(() => {

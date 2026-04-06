@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { StateSnapshot } from "react-virtuoso";
-import type { SessionMessageRecord } from "@/lib/api";
+import type { ThreadMessageLike } from "@/lib/api";
 import { generateSessionTitle } from "@/lib/api";
 import {
 	publishChatCacheSnapshot,
@@ -9,7 +9,7 @@ import {
 } from "@/lib/dev-render-debug";
 import {
 	helmorQueryKeys,
-	sessionMessagesQueryOptions,
+	sessionThreadMessagesQueryOptions,
 	workspaceDetailQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
@@ -20,7 +20,7 @@ const SESSION_PANE_LIMIT = 8;
 type SessionThreadPane = {
 	sessionId: string;
 	workspaceId: string | null;
-	messages: SessionMessageRecord[];
+	messages: ThreadMessageLike[];
 	sending: boolean;
 	hasLoaded: boolean;
 	presentationState: "cold-unpresented" | "presented";
@@ -40,7 +40,7 @@ type WorkspacePanelContainerProps = {
 	displayedWorkspaceId: string | null;
 	selectedSessionId: string | null;
 	displayedSessionId: string | null;
-	liveMessages: SessionMessageRecord[];
+	liveMessages: ThreadMessageLike[];
 	sending: boolean;
 	sendingSessionIds?: Set<string>;
 	onSelectSession: (sessionId: string | null) => void;
@@ -60,28 +60,15 @@ function arePaneMeasurementsEqual(
 	);
 }
 
-function estimateMessageBytes(messages: SessionMessageRecord[]) {
+function estimateMessageBytes(messages: ThreadMessageLike[]) {
 	let total = 0;
 
 	for (const message of messages) {
 		total += 160;
-		total += message.id.length * 2;
-		total += message.sessionId.length * 2;
+		total += (message.id?.length ?? 0) * 2;
 		total += message.role.length * 2;
-		total += message.content.length * 2;
-		total += message.createdAt.length * 2;
-
-		if (message.model) {
-			total += message.model.length * 2;
-		}
-
-		if (message.contentIsJson && message.parsedContent !== undefined) {
-			try {
-				total += JSON.stringify(message.parsedContent).length * 2;
-			} catch {
-				// Ignore non-serializable debug payloads.
-			}
-		}
+		total += message.content.length * 40; // rough estimate per part
+		total += (message.createdAt?.length ?? 0) * 2;
 	}
 
 	return total;
@@ -188,12 +175,12 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		}
 
 		void queryClient.prefetchQuery(
-			sessionMessagesQueryOptions(threadSessionId),
+			sessionThreadMessagesQueryOptions(threadSessionId),
 		);
 	}, [queryClient, threadSessionId]);
 
 	const messagesQuery = useQuery({
-		...sessionMessagesQueryOptions(threadSessionId ?? "__none__"),
+		...sessionThreadMessagesQueryOptions(threadSessionId ?? "__none__"),
 		enabled: Boolean(threadSessionId),
 	});
 
@@ -674,13 +661,18 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 
 		autoTitleAttemptedRef.current.add(threadSessionId);
 
-		void generateSessionTitle(threadSessionId, firstUserMessage.content).then(
-			(result) => {
-				if (result?.title) {
-					void invalidateWorkspaceQueries();
-				}
-			},
-		);
+		// Extract text from thread message content parts
+		const userText = firstUserMessage.content
+			.filter((p): p is { type: "text"; text: string } => p.type === "text")
+			.map((p) => p.text)
+			.join("\n");
+		if (!userText) return;
+
+		void generateSessionTitle(threadSessionId, userText).then((result) => {
+			if (result?.title) {
+				void invalidateWorkspaceQueries();
+			}
+		});
 	}, [
 		displayedWorkspaceId,
 		invalidateWorkspaceQueries,
@@ -721,7 +713,9 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 
 	const handlePrefetchSession = useCallback(
 		(sessionId: string) => {
-			void queryClient.prefetchQuery(sessionMessagesQueryOptions(sessionId));
+			void queryClient.prefetchQuery(
+				sessionThreadMessagesQueryOptions(sessionId),
+			);
 		},
 		[queryClient],
 	);

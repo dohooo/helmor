@@ -5,6 +5,7 @@ pub mod dev_api;
 pub mod error;
 mod import;
 mod models;
+pub mod pipeline;
 mod schema;
 pub mod sidecar;
 
@@ -59,6 +60,7 @@ pub fn run() {
             models::list_repositories,
             models::list_session_attachments,
             models::list_session_messages,
+            models::list_session_thread_messages,
             models::list_workspace_groups,
             models::list_workspace_sessions,
             models::create_session,

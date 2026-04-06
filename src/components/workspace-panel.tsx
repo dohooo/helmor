@@ -45,27 +45,24 @@ import {
 	type ItemProps as VirtuosoItemProps,
 } from "react-virtuoso";
 import {
+	type CollapsedGroupPart,
 	createSession,
 	deleteSession,
+	type ExtendedMessagePart,
 	hideSession,
 	listRemoteBranches,
 	loadHiddenSessions,
+	type MessagePart,
 	renameSession,
 	type SessionAttachmentRecord,
-	type SessionMessageRecord,
+	type ThreadMessageLike,
+	type ToolCallPart,
 	unhideSession,
 	updateIntendedTargetBranch,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
 import { recordMessageRender } from "@/lib/dev-render-debug";
-import {
-	type CollapsedGroupPart,
-	convertMessages,
-	type ExtendedMessagePart,
-	type MessagePart,
-	type ToolCallPart,
-} from "@/lib/message-adapter";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { ClaudeIcon, OpenAIIcon } from "./icons";
@@ -92,7 +89,7 @@ type WorkspacePanelProps = {
 	coldRevealSessionId?: string | null;
 	sessionPanes: Array<{
 		sessionId: string;
-		messages: SessionMessageRecord[];
+		messages: ThreadMessageLike[];
 		sending: boolean;
 		hasLoaded: boolean;
 		presentationState: "cold-unpresented" | "presented";
@@ -132,7 +129,7 @@ type WorkspacePanelProps = {
 	headerLeading?: React.ReactNode;
 };
 
-type RenderedMessage = ReturnType<typeof convertMessages>[number];
+type RenderedMessage = ThreadMessageLike;
 type StreamdownMode = "static" | "streaming";
 
 const LazyStreamdown = lazy(async () => {
@@ -614,7 +611,7 @@ function KeepAliveThreadStack({
 	hasSession: boolean;
 	sessionPanes: Array<{
 		sessionId: string;
-		messages: SessionMessageRecord[];
+		messages: ThreadMessageLike[];
 		sending: boolean;
 		hasLoaded: boolean;
 		presentationState: "cold-unpresented" | "presented";
@@ -735,17 +732,15 @@ function ChatThread({
 }: {
 	initialSnapshot?: StateSnapshot;
 	layoutCacheKey: string;
-	messages: SessionMessageRecord[];
+	messages: ThreadMessageLike[];
 	mode: "visible" | "preparing" | "parked";
 	onPrepared?: WorkspacePanelProps["onSessionPrepared"];
 	onViewportSnapshot?: WorkspacePanelProps["onSessionMeasurements"];
 	sessionId: string;
 	sending: boolean;
 }) {
-	const threadMessages = useMemo(
-		() => convertMessages(messages, sessionId, { collapse: true }),
-		[messages, sessionId],
-	);
+	// Messages are already pipeline-rendered ThreadMessageLike[] from Rust.
+	const threadMessages = messages;
 	const virtuosoRef = useRef<VirtuosoHandle | null>(null);
 	const [isAtBottom, setIsAtBottom] = useState(true);
 	const isAtBottomRef = useRef(true);
@@ -1039,19 +1034,17 @@ function ConversationViewport({
 
 function getSessionLayoutCacheKey(
 	sessionId: string,
-	messages: SessionMessageRecord[],
+	messages: ThreadMessageLike[],
 	widthBucket: number,
 ) {
 	let hash = 0;
 
 	for (const message of messages) {
 		const signature = [
-			message.id,
+			message.id ?? "",
 			message.role,
-			message.createdAt,
-			message.contentIsJson ? "json" : "text",
+			message.createdAt ?? "",
 			String(message.content.length),
-			String(message.attachmentCount ?? 0),
 		].join("|");
 
 		for (let index = 0; index < signature.length; index += 1) {

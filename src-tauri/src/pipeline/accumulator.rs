@@ -1,0 +1,1192 @@
+//! Stream accumulation: raw sidecar JSON events → IntermediateMessage snapshots.
+//!
+//! Replaces BOTH the TypeScript `StreamAccumulator` class AND the Rust
+//! `ClaudeOutputAccumulator` / `CodexOutputAccumulator` structs.
+//!
+//! Responsibilities:
+//! - Block-level tracking for Claude streaming (content_block_start/delta/stop)
+//! - Codex item.completed synthesis (agent_message + command_execution)
+//! - Persistence data collection (turns, session_id, usage, model)
+//! - Partial message snapshot generation for the adapter stage
+
+use std::collections::{BTreeMap, VecDeque};
+
+use anyhow::{bail, Result};
+use serde_json::Value;
+
+use super::types::{AgentUsage, CollectedTurn, IntermediateMessage, ParsedAgentOutput};
+
+// ---------------------------------------------------------------------------
+// Streaming block types (internal)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+enum StreamingBlock {
+    Text {
+        text: String,
+    },
+    Thinking {
+        text: String,
+    },
+    ToolUse {
+        tool_use_id: String,
+        tool_name: String,
+        input_json_text: String,
+        parsed_input: Option<Value>,
+        status: &'static str,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// StreamAccumulator
+// ---------------------------------------------------------------------------
+
+/// Unified stream accumulator for both Claude and Codex providers.
+///
+/// Tracks block-level streaming state for real-time rendering and collects
+/// persistence data (turns, usage, model) for the DB layer in `agents.rs`.
+pub struct StreamAccumulator {
+    provider: String,
+
+    // ── Rendering state (replaces TS StreamAccumulator) ──────────────
+    /// Finalized full messages ready for the adapter.
+    collected: Vec<IntermediateMessage>,
+    /// Block-level tracking for Claude structured streaming.
+    blocks: BTreeMap<usize, StreamingBlock>,
+    /// Whether we've seen at least one content_block_start event.
+    has_block_structure: bool,
+    /// Fallback flat delta text (legacy backends without block structure).
+    fallback_text: String,
+    /// Fallback flat delta thinking text.
+    fallback_thinking: String,
+    /// Stable timestamp for the current streaming partial.
+    partial_created_at: Option<String>,
+    /// Stable UI message ID for the current in-progress assistant turn.
+    active_partial_id: Option<String>,
+    partial_count: u32,
+    line_count: u64,
+    /// DB-assigned message IDs consumed one-per-collected-message.
+    persisted_id_queue: VecDeque<String>,
+
+    // ── Persistence state (replaces Rust ClaudeOutputAccumulator) ────
+    /// Completed turns for DB persistence.
+    turns: Vec<CollectedTurn>,
+    /// Provider session ID (Claude session_id or Codex thread_id).
+    session_id: Option<String>,
+    /// Resolved model name.
+    resolved_model: String,
+    /// Token usage counters.
+    usage: AgentUsage,
+    /// Raw result JSON line.
+    result_json: Option<String>,
+    /// Concatenated assistant text (for persistence finalization).
+    assistant_text: String,
+    /// Concatenated thinking text (Claude only).
+    thinking_text: String,
+    saw_text_delta: bool,
+    saw_thinking_delta: bool,
+
+    // ── Claude-specific accumulation ─────────────────────────────────
+    /// Current assistant message ID being built (for turn batching).
+    cur_asst_id: Option<String>,
+    /// Content blocks from the current assistant message.
+    cur_asst_blocks: Vec<Value>,
+    /// Template of the current assistant message (for rebuilding).
+    cur_asst_template: Option<Value>,
+}
+
+impl StreamAccumulator {
+    pub fn new(provider: &str, fallback_model: &str) -> Self {
+        Self {
+            provider: provider.to_string(),
+            collected: Vec::new(),
+            blocks: BTreeMap::new(),
+            has_block_structure: false,
+            fallback_text: String::new(),
+            fallback_thinking: String::new(),
+            partial_created_at: None,
+            active_partial_id: None,
+            partial_count: 0,
+            line_count: 0,
+            persisted_id_queue: VecDeque::new(),
+            turns: Vec::new(),
+            session_id: None,
+            resolved_model: fallback_model.to_string(),
+            usage: AgentUsage::default(),
+            result_json: None,
+            assistant_text: String::new(),
+            thinking_text: String::new(),
+            saw_text_delta: false,
+            saw_thinking_delta: false,
+            cur_asst_id: None,
+            cur_asst_blocks: Vec::new(),
+            cur_asst_template: None,
+        }
+    }
+
+    // =====================================================================
+    // Public API
+    // =====================================================================
+
+    /// Feed a raw sidecar JSON event into the accumulator.
+    pub fn push_event(&mut self, value: &Value, raw_line: &str, persisted_ids: &[String]) {
+        for id in persisted_ids {
+            self.persisted_id_queue.push_back(id.clone());
+        }
+        self.line_count += 1;
+
+        // Extract session ID
+        if let Some(sid) = value
+            .get("session_id")
+            .and_then(Value::as_str)
+            .or_else(|| value.get("thread_id").and_then(Value::as_str))
+        {
+            self.session_id = Some(sid.to_string());
+        }
+
+        // Extract resolved model (Claude only)
+        if self.provider != "codex" {
+            if let Some(model) = extract_claude_model_name(value) {
+                self.resolved_model = model;
+            }
+        }
+
+        let event_type = value.get("type").and_then(Value::as_str);
+
+        match event_type {
+            Some("stream_event") => self.handle_stream_event(value),
+            Some("tool_progress") => self.handle_tool_progress(value),
+            Some("assistant") => self.handle_assistant(value, raw_line),
+            Some("user") => self.handle_user(raw_line, value),
+            Some("result") => self.handle_result(value, raw_line),
+            Some("error") => self.handle_error(raw_line, value),
+            Some("item.completed") => self.handle_codex_item_completed(raw_line, value),
+            Some("turn.completed") => self.handle_turn_completed(value, raw_line),
+            Some("thread.started") | Some("thread.resumed") => {
+                if let Some(tid) = value.get("thread_id").and_then(Value::as_str) {
+                    self.session_id = Some(tid.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Borrow the collected (finalized) messages — no allocation.
+    pub fn collected(&self) -> &[IntermediateMessage] {
+        &self.collected
+    }
+
+    /// Build only the trailing partial message (if any streaming content exists).
+    /// Returns `None` if there is no active streaming content.
+    /// This is the only allocation needed per render cycle.
+    pub fn build_partial(
+        &self,
+        context_key: &str,
+        session_id: &str,
+    ) -> Option<IntermediateMessage> {
+        if !self.blocks.is_empty() {
+            Some(self.build_partial_from_blocks(context_key, session_id))
+        } else {
+            let text = self.fallback_text.trim();
+            let thinking = self.fallback_thinking.trim();
+            if !text.is_empty() || !thinking.is_empty() {
+                Some(self.build_partial_fallback(context_key, session_id))
+            } else {
+                None
+            }
+        }
+    }
+
+    /// Convenience: build full snapshot (collected + partial) as one Vec.
+    /// Used by tests. Production code uses `collected()` + `build_partial()`
+    /// to avoid cloning the collected vec.
+    #[cfg(test)]
+    pub fn snapshot(&self, context_key: &str, session_id: &str) -> Vec<IntermediateMessage> {
+        let mut messages = self.collected.clone();
+        if let Some(partial) = self.build_partial(context_key, session_id) {
+            messages.push(partial);
+        }
+        messages
+    }
+
+    /// Whether the accumulator has an active streaming partial.
+    pub fn has_active_partial(&self) -> bool {
+        !self.blocks.is_empty()
+            || !self.fallback_text.trim().is_empty()
+            || !self.fallback_thinking.trim().is_empty()
+    }
+
+    // ── Persistence accessors ───────────────────────────────────────
+
+    pub fn turns_len(&self) -> usize {
+        self.turns.len()
+    }
+
+    pub fn turn_at(&self, index: usize) -> &CollectedTurn {
+        &self.turns[index]
+    }
+
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    pub fn resolved_model(&self) -> &str {
+        &self.resolved_model
+    }
+
+    pub fn usage(&self) -> &AgentUsage {
+        &self.usage
+    }
+
+    pub fn result_json(&self) -> Option<&str> {
+        self.result_json.as_deref()
+    }
+
+    /// Finalize the accumulator and return persistence output.
+    pub fn finish_output(mut self, fallback_session_id: Option<&str>) -> Result<ParsedAgentOutput> {
+        self.flush_assistant();
+
+        let assistant_text = self.assistant_text.trim().to_string();
+        if assistant_text.is_empty() {
+            bail!(
+                "{} returned no assistant text.",
+                if self.provider == "codex" {
+                    "Codex"
+                } else {
+                    "Claude"
+                }
+            );
+        }
+
+        let thinking_text = self.thinking_text.trim().to_string();
+        let thinking_text = if thinking_text.is_empty() {
+            None
+        } else {
+            Some(thinking_text)
+        };
+
+        Ok(ParsedAgentOutput {
+            assistant_text,
+            thinking_text,
+            session_id: self
+                .session_id
+                .or_else(|| fallback_session_id.map(str::to_string)),
+            resolved_model: self.resolved_model,
+            usage: self.usage,
+            result_json: self.result_json,
+        })
+    }
+
+    // =====================================================================
+    // Event handlers
+    // =====================================================================
+
+    fn handle_stream_event(&mut self, value: &Value) {
+        let event = match value.get("event") {
+            Some(e) => e,
+            None => return,
+        };
+        let event_type = event.get("type").and_then(Value::as_str);
+
+        match event_type {
+            Some("content_block_start") => {
+                self.has_block_structure = true;
+                self.handle_block_start(event);
+            }
+            Some("content_block_delta") => {
+                if self.has_block_structure {
+                    self.handle_block_delta(event);
+                } else {
+                    self.handle_legacy_delta(event);
+                }
+            }
+            Some("content_block_stop") => {
+                self.handle_block_stop(event);
+            }
+            _ => {
+                // Legacy/simple delta format (no eventType, just delta object)
+                if let Some(delta) = event.get("delta") {
+                    if event_type.is_none() {
+                        self.apply_delta(delta);
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_block_start(&mut self, event: &Value) {
+        let index = event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let content_block = match event.get("content_block") {
+            Some(cb) => cb,
+            None => return,
+        };
+        let block_type = content_block
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+
+        match block_type {
+            "text" => {
+                self.blocks.insert(
+                    index,
+                    StreamingBlock::Text {
+                        text: String::new(),
+                    },
+                );
+            }
+            "thinking" => {
+                self.blocks.insert(
+                    index,
+                    StreamingBlock::Thinking {
+                        text: String::new(),
+                    },
+                );
+            }
+            "tool_use" => {
+                self.blocks.insert(
+                    index,
+                    StreamingBlock::ToolUse {
+                        tool_use_id: content_block
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        tool_name: content_block
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown")
+                            .to_string(),
+                        input_json_text: String::new(),
+                        parsed_input: None,
+                        status: "pending",
+                    },
+                );
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_block_delta(&mut self, event: &Value) {
+        let index = event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let delta = match event.get("delta") {
+            Some(d) => d,
+            None => return,
+        };
+        let block = match self.blocks.get_mut(&index) {
+            Some(b) => b,
+            None => return,
+        };
+        let delta_type = delta.get("type").and_then(Value::as_str);
+
+        match (block, delta_type) {
+            (StreamingBlock::Text { text }, Some("text_delta")) => {
+                if let Some(dt) = delta.get("text").and_then(Value::as_str) {
+                    text.push_str(dt);
+                    // Also accumulate for persistence
+                    self.assistant_text.push_str(dt);
+                    self.saw_text_delta = true;
+                }
+            }
+            (StreamingBlock::Thinking { text }, Some("thinking_delta")) => {
+                if let Some(dt) = delta.get("thinking").and_then(Value::as_str) {
+                    text.push_str(dt);
+                    self.thinking_text.push_str(dt);
+                    self.saw_thinking_delta = true;
+                }
+            }
+            (
+                StreamingBlock::ToolUse {
+                    input_json_text,
+                    status,
+                    ..
+                },
+                Some("input_json_delta"),
+            ) => {
+                if let Some(pj) = delta.get("partial_json").and_then(Value::as_str) {
+                    input_json_text.push_str(pj);
+                    *status = "streaming_input";
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_block_stop(&mut self, event: &Value) {
+        let index = event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        if let Some(StreamingBlock::ToolUse {
+            input_json_text,
+            parsed_input,
+            status,
+            ..
+        }) = self.blocks.get_mut(&index)
+        {
+            if !input_json_text.is_empty() {
+                if let Ok(v) = serde_json::from_str::<Value>(input_json_text) {
+                    *parsed_input = Some(v);
+                }
+            }
+            *status = "running";
+        }
+    }
+
+    fn handle_legacy_delta(&mut self, event: &Value) {
+        if let Some(delta) = event.get("delta") {
+            if let Some(text) = delta.get("text").and_then(Value::as_str) {
+                self.fallback_text.push_str(text);
+                self.assistant_text.push_str(text);
+                self.saw_text_delta = true;
+            }
+            if let Some(thinking) = delta.get("thinking").and_then(Value::as_str) {
+                self.fallback_thinking.push_str(thinking);
+                self.thinking_text.push_str(thinking);
+                self.saw_thinking_delta = true;
+            }
+        }
+    }
+
+    fn apply_delta(&mut self, delta: &Value) {
+        if let Some(text) = delta.get("text").and_then(Value::as_str) {
+            if self.has_block_structure {
+                self.append_to_last_text_block(text);
+            } else {
+                self.fallback_text.push_str(text);
+            }
+            self.assistant_text.push_str(text);
+            self.saw_text_delta = true;
+        }
+        if let Some(thinking) = delta.get("thinking").and_then(Value::as_str) {
+            if self.has_block_structure {
+                self.append_to_last_thinking_block(thinking);
+            } else {
+                self.fallback_thinking.push_str(thinking);
+            }
+            self.thinking_text.push_str(thinking);
+            self.saw_thinking_delta = true;
+        }
+    }
+
+    fn handle_tool_progress(&mut self, value: &Value) {
+        let tool_use_id = match value.get("tool_use_id").and_then(Value::as_str) {
+            Some(id) => id,
+            None => return,
+        };
+        for block in self.blocks.values_mut() {
+            if let StreamingBlock::ToolUse {
+                tool_use_id: id,
+                status,
+                ..
+            } = block
+            {
+                if id == tool_use_id {
+                    *status = "running";
+                    break;
+                }
+            }
+        }
+    }
+
+    fn handle_assistant(&mut self, value: &Value, raw_line: &str) {
+        // === Persistence ===
+        if !self.saw_text_delta {
+            if let Some(text) = extract_claude_assistant_text(value) {
+                self.assistant_text.push_str(&text);
+            }
+        }
+        if !self.saw_thinking_delta {
+            if let Some(thinking) = extract_claude_thinking_text(value) {
+                self.thinking_text.push_str(&thinking);
+            }
+        }
+
+        // Turn batching for persistence: group content blocks by message ID.
+        let msg_id = value
+            .get("message")
+            .and_then(|m| m.get("id"))
+            .and_then(Value::as_str);
+
+        if self
+            .cur_asst_id
+            .as_deref()
+            .is_some_and(|current| Some(current) != msg_id)
+        {
+            self.flush_assistant();
+        }
+
+        self.cur_asst_id = msg_id.map(str::to_string);
+        self.cur_asst_template = Some(value.clone());
+        if let Some(blocks) = value
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(Value::as_array)
+        {
+            // Replace (not extend) — each event carries all blocks for this turn.
+            self.cur_asst_blocks = blocks.clone();
+        }
+
+        // === Rendering ===
+        // Finalize streaming blocks and push the full message to collected.
+        // Matches TS behavior: always push, never replace.
+        // The adapter's merge_adjacent_assistants handles merging.
+        let partial_id = self.active_partial_id.clone();
+        self.finalize_blocks();
+        self.collect_message(raw_line, value, "assistant", partial_id.as_deref());
+    }
+
+    fn handle_user(&mut self, raw_line: &str, value: &Value) {
+        // Persistence: flush any pending assistant turn
+        self.flush_assistant();
+        self.turns.push(CollectedTurn {
+            role: "user".to_string(),
+            content_json: raw_line.to_string(),
+        });
+
+        // Rendering
+        self.collect_message(raw_line, value, "user", None);
+    }
+
+    fn handle_result(&mut self, value: &Value, raw_line: &str) {
+        // Persistence
+        if self.assistant_text.trim().is_empty() {
+            if let Some(text) = value.get("result").and_then(Value::as_str) {
+                self.assistant_text.push_str(text);
+            }
+        }
+        if let Some(parsed_usage) = value.get("usage") {
+            self.usage.input_tokens = parsed_usage.get("input_tokens").and_then(Value::as_i64);
+            self.usage.output_tokens = parsed_usage.get("output_tokens").and_then(Value::as_i64);
+        }
+        self.result_json = Some(raw_line.to_string());
+
+        // Rendering
+        self.collect_message(raw_line, value, "assistant", None);
+    }
+
+    fn handle_error(&mut self, raw_line: &str, value: &Value) {
+        self.collect_message(raw_line, value, "error", None);
+    }
+
+    fn handle_codex_item_completed(&mut self, raw_line: &str, value: &Value) {
+        let item = match value.get("item") {
+            Some(i) => i,
+            None => return,
+        };
+
+        let item_type = item.get("type").and_then(Value::as_str);
+
+        if item_type == Some("agent_message") {
+            if let Some(text) = item.get("text").and_then(Value::as_str) {
+                if !self.assistant_text.is_empty() {
+                    self.assistant_text.push_str("\n\n");
+                }
+                self.assistant_text.push_str(text);
+            }
+            // Persistence: push as a turn
+            self.turns.push(CollectedTurn {
+                role: "assistant".to_string(),
+                content_json: raw_line.to_string(),
+            });
+            // Rendering
+            self.collect_message(raw_line, value, "assistant", None);
+            return;
+        }
+
+        if item_type == Some("command_execution") {
+            let command = item.get("command").and_then(Value::as_str).unwrap_or("");
+            let output = item.get("output").and_then(Value::as_str).unwrap_or("");
+            let exit_code = item.get("exit_code").and_then(Value::as_i64).unwrap_or(0);
+            let synthetic_id = format!("codex-cmd-{}", self.line_count);
+
+            // Synthesize tool_use("Bash")
+            let synthetic_assistant = serde_json::json!({
+                "type": "assistant",
+                "message": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": synthetic_id,
+                        "name": "Bash",
+                        "input": {"command": command}
+                    }]
+                }
+            });
+            let sa_str = serde_json::to_string(&synthetic_assistant).unwrap_or_default();
+            self.collect_message(&sa_str, &synthetic_assistant, "assistant", None);
+
+            // Synthesize tool_result
+            let result_content = if exit_code == 0 {
+                output.to_string()
+            } else {
+                format!("Exit code: {exit_code}\n{output}")
+            };
+            let synthetic_result = serde_json::json!({
+                "type": "user",
+                "message": {
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": synthetic_id,
+                        "content": result_content
+                    }]
+                }
+            });
+            let sr_str = serde_json::to_string(&synthetic_result).unwrap_or_default();
+            self.collect_message(&sr_str, &synthetic_result, "user", None);
+
+            // Persistence: push raw line as a turn
+            self.turns.push(CollectedTurn {
+                role: "assistant".to_string(),
+                content_json: raw_line.to_string(),
+            });
+        }
+    }
+
+    fn handle_turn_completed(&mut self, value: &Value, raw_line: &str) {
+        // Persistence
+        if let Some(parsed_usage) = value.get("usage") {
+            self.usage.input_tokens = parsed_usage.get("input_tokens").and_then(Value::as_i64);
+            self.usage.output_tokens = parsed_usage.get("output_tokens").and_then(Value::as_i64);
+        }
+        self.result_json = Some(raw_line.to_string());
+
+        // Rendering
+        self.collect_message(raw_line, value, "assistant", None);
+    }
+
+    // =====================================================================
+    // Internal helpers
+    // =====================================================================
+
+    fn finalize_blocks(&mut self) {
+        self.blocks.clear();
+        self.has_block_structure = false;
+        self.fallback_text.clear();
+        self.fallback_thinking.clear();
+        self.partial_created_at = None;
+        self.active_partial_id = None;
+    }
+
+    fn flush_assistant(&mut self) {
+        if self.cur_asst_blocks.is_empty() {
+            self.cur_asst_id = None;
+            return;
+        }
+
+        if let Some(mut template) = self.cur_asst_template.take() {
+            if let Some(message) = template.get_mut("message") {
+                message["content"] = Value::Array(std::mem::take(&mut self.cur_asst_blocks));
+            }
+            self.turns.push(CollectedTurn {
+                role: "assistant".to_string(),
+                content_json: template.to_string(),
+            });
+        }
+
+        self.cur_asst_id = None;
+    }
+
+    fn collect_message(
+        &mut self,
+        raw: &str,
+        parsed: &Value,
+        role: &str,
+        override_id: Option<&str>,
+    ) {
+        let persisted_id = self.persisted_id_queue.pop_front();
+        let id = override_id
+            .map(|s| s.to_string())
+            .or(persisted_id)
+            .unwrap_or_else(|| format!("stream:{}:{role}", self.line_count));
+        let created_at = self.get_partial_created_at();
+
+        self.collected.push(IntermediateMessage {
+            id,
+            role: role.to_string(),
+            raw_json: raw.to_string(),
+            parsed: Some(parsed.clone()),
+            created_at,
+            is_streaming: false,
+        });
+    }
+
+    fn get_partial_created_at(&mut self) -> String {
+        if self.partial_created_at.is_none() {
+            self.partial_created_at = Some(chrono::Utc::now().to_rfc3339());
+        }
+        self.partial_created_at.clone().unwrap()
+    }
+
+    fn append_to_last_text_block(&mut self, text: &str) {
+        for block in self.blocks.values_mut().rev() {
+            if let StreamingBlock::Text { text: t } = block {
+                t.push_str(text);
+                return;
+            }
+        }
+        // No text block exists — create one
+        let idx = self.blocks.len();
+        self.blocks.insert(
+            idx,
+            StreamingBlock::Text {
+                text: text.to_string(),
+            },
+        );
+    }
+
+    fn append_to_last_thinking_block(&mut self, text: &str) {
+        for block in self.blocks.values_mut().rev() {
+            if let StreamingBlock::Thinking { text: t } = block {
+                t.push_str(text);
+                return;
+            }
+        }
+        let idx = self.blocks.len();
+        self.blocks.insert(
+            idx,
+            StreamingBlock::Thinking {
+                text: text.to_string(),
+            },
+        );
+    }
+
+    // =====================================================================
+    // Partial message builders
+    // =====================================================================
+
+    fn build_partial_from_blocks(
+        &self,
+        context_key: &str,
+        _session_id: &str,
+    ) -> IntermediateMessage {
+        let created_at = self
+            .partial_created_at
+            .clone()
+            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+        let partial_id = self
+            .active_partial_id
+            .clone()
+            .unwrap_or_else(|| format!("{context_key}:stream-partial:{}", self.partial_count + 1));
+
+        let mut content_blocks = Vec::new();
+        for block in self.blocks.values() {
+            match block {
+                StreamingBlock::Text { text } => {
+                    let display = if text.is_empty() {
+                        "..."
+                    } else {
+                        text.as_str()
+                    };
+                    content_blocks.push(serde_json::json!({"type": "text", "text": display}));
+                }
+                StreamingBlock::Thinking { text } => {
+                    if !text.is_empty() {
+                        content_blocks
+                            .push(serde_json::json!({"type": "thinking", "thinking": text}));
+                    }
+                }
+                StreamingBlock::ToolUse {
+                    tool_use_id,
+                    tool_name,
+                    input_json_text,
+                    parsed_input,
+                    status,
+                } => {
+                    let input = parsed_input
+                        .clone()
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    content_blocks.push(serde_json::json!({
+                        "type": "tool_use",
+                        "id": tool_use_id,
+                        "name": tool_name,
+                        "input": input,
+                        "__streaming_status": status,
+                        "__input_json_text": input_json_text,
+                    }));
+                }
+            }
+        }
+
+        if content_blocks.is_empty() {
+            content_blocks.push(serde_json::json!({"type": "text", "text": "..."}));
+        }
+
+        let parsed = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "type": "message",
+                "role": "assistant",
+                "content": content_blocks,
+            },
+            "__streaming": true,
+        });
+
+        IntermediateMessage {
+            id: partial_id,
+            role: "assistant".to_string(),
+            raw_json: serde_json::to_string(&parsed).unwrap_or_default(),
+            parsed: Some(parsed),
+            created_at,
+            is_streaming: true,
+        }
+    }
+
+    fn build_partial_fallback(&self, context_key: &str, _session_id: &str) -> IntermediateMessage {
+        let created_at = self
+            .partial_created_at
+            .clone()
+            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+        let partial_id = self
+            .active_partial_id
+            .clone()
+            .unwrap_or_else(|| format!("{context_key}:stream-partial:{}", self.partial_count + 1));
+
+        let text = self.fallback_text.trim();
+        let thinking = self.fallback_thinking.trim();
+        let display_text = if text.is_empty() { "..." } else { text };
+
+        let parsed = if !thinking.is_empty() {
+            serde_json::json!({
+                "type": "assistant",
+                "message": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": thinking},
+                        {"type": "text", "text": display_text},
+                    ],
+                },
+                "__streaming": true,
+            })
+        } else {
+            serde_json::json!({
+                "type": "assistant",
+                "message": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": display_text},
+                    ],
+                },
+                "__streaming": true,
+            })
+        };
+
+        IntermediateMessage {
+            id: partial_id,
+            role: "assistant".to_string(),
+            raw_json: serde_json::to_string(&parsed).unwrap_or_default(),
+            parsed: Some(parsed),
+            created_at,
+            is_streaming: true,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Claude text extraction helpers (moved from agents.rs)
+// ---------------------------------------------------------------------------
+
+fn extract_claude_model_name(value: &Value) -> Option<String> {
+    if let Some(model) = value.get("model").and_then(Value::as_str) {
+        return Some(model.to_string());
+    }
+    if let Some(model) = value
+        .get("message")
+        .and_then(|m| m.get("model"))
+        .and_then(Value::as_str)
+    {
+        return Some(model.to_string());
+    }
+    if let Some(model) = value
+        .get("model")
+        .and_then(|m| m.get("display_name"))
+        .and_then(Value::as_str)
+    {
+        return Some(model.to_string());
+    }
+    None
+}
+
+fn extract_claude_assistant_text(value: &Value) -> Option<String> {
+    let content = value
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(Value::as_array)?;
+    let text: String = content
+        .iter()
+        .filter_map(|block| {
+            if block.get("type").and_then(Value::as_str) == Some("text") {
+                block.get("text").and_then(Value::as_str)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    (!text.trim().is_empty()).then_some(text)
+}
+
+fn extract_claude_thinking_text(value: &Value) -> Option<String> {
+    let content = value
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(Value::as_array)?;
+    let text: String = content
+        .iter()
+        .filter_map(|block| {
+            if block.get("type").and_then(Value::as_str) == Some("thinking") {
+                block.get("thinking").and_then(Value::as_str)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    (!text.trim().is_empty()).then_some(text)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn accumulate_text_deltas() {
+        let mut acc = StreamAccumulator::new("claude", "opus");
+        acc.push_event(
+            &json!({
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text"}
+                }
+            }),
+            "",
+            &[],
+        );
+        acc.push_event(
+            &json!({
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "Hello"}
+                }
+            }),
+            "",
+            &[],
+        );
+        acc.push_event(
+            &json!({
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": " world"}
+                }
+            }),
+            "",
+            &[],
+        );
+
+        let snapshot = acc.snapshot("ctx", "sess");
+        assert_eq!(snapshot.len(), 1);
+        assert!(snapshot[0].is_streaming);
+        let parsed = snapshot[0].parsed.as_ref().unwrap();
+        let text = parsed["message"]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(text, "Hello world");
+    }
+
+    #[test]
+    fn accumulate_tool_use_blocks() {
+        let mut acc = StreamAccumulator::new("claude", "opus");
+        acc.push_event(
+            &json!({
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "tool_use", "id": "tc1", "name": "read"}
+                }
+            }),
+            "",
+            &[],
+        );
+        acc.push_event(
+            &json!({
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": "{\"file_path\""}
+                }
+            }),
+            "",
+            &[],
+        );
+        acc.push_event(
+            &json!({
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": ": \"/a.txt\"}"}
+                }
+            }),
+            "",
+            &[],
+        );
+        acc.push_event(
+            &json!({
+                "type": "stream_event",
+                "event": {"type": "content_block_stop", "index": 0}
+            }),
+            "",
+            &[],
+        );
+
+        let snapshot = acc.snapshot("ctx", "sess");
+        assert_eq!(snapshot.len(), 1);
+        let parsed = snapshot[0].parsed.as_ref().unwrap();
+        let block = &parsed["message"]["content"][0];
+        assert_eq!(block["name"].as_str().unwrap(), "read");
+        assert_eq!(block["__streaming_status"].as_str().unwrap(), "running");
+    }
+
+    #[test]
+    fn full_assistant_clears_blocks() {
+        let mut acc = StreamAccumulator::new("claude", "opus");
+        // Add a text block
+        acc.push_event(
+            &json!({
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text"}
+                }
+            }),
+            "",
+            &[],
+        );
+        acc.push_event(
+            &json!({
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "hello"}
+                }
+            }),
+            "",
+            &[],
+        );
+
+        // Full assistant message arrives — should clear blocks
+        let full_msg = json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg1",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hello"}]
+            }
+        });
+        let raw = serde_json::to_string(&full_msg).unwrap();
+        acc.push_event(&full_msg, &raw, &[]);
+
+        let snapshot = acc.snapshot("ctx", "sess");
+        // Should have the collected full message, no streaming partial
+        assert_eq!(snapshot.len(), 1);
+        assert!(!snapshot[0].is_streaming);
+    }
+
+    #[test]
+    fn codex_command_execution_synthesis() {
+        let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+        let event = json!({
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "command": "ls -la",
+                "output": "file1.txt\nfile2.txt",
+                "exit_code": 0
+            }
+        });
+        let raw = serde_json::to_string(&event).unwrap();
+        acc.push_event(&event, &raw, &[]);
+
+        let snapshot = acc.snapshot("ctx", "sess");
+        // Should have synthetic assistant (tool_use) + user (tool_result)
+        assert_eq!(snapshot.len(), 2);
+        assert_eq!(snapshot[0].role, "assistant");
+        assert_eq!(snapshot[1].role, "user");
+    }
+
+    #[test]
+    fn persisted_ids_consumed_in_order() {
+        let mut acc = StreamAccumulator::new("claude", "opus");
+        let msg1 = json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg1",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "first"}]
+            }
+        });
+        let msg2 = json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg2",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "second"}]
+            }
+        });
+        let raw1 = serde_json::to_string(&msg1).unwrap();
+        let raw2 = serde_json::to_string(&msg2).unwrap();
+
+        acc.push_event(&msg1, &raw1, &["db-id-1".to_string()]);
+        acc.push_event(&msg2, &raw2, &["db-id-2".to_string()]);
+
+        let snapshot = acc.snapshot("ctx", "sess");
+        assert_eq!(snapshot[0].id, "db-id-1");
+        assert_eq!(snapshot[1].id, "db-id-2");
+    }
+
+    #[test]
+    fn fallback_delta_accumulation() {
+        let mut acc = StreamAccumulator::new("claude", "opus");
+        // Legacy delta without block structure
+        acc.push_event(
+            &json!({
+                "type": "stream_event",
+                "event": {
+                    "delta": {"text": "Hello", "thinking": "hmm"}
+                }
+            }),
+            "",
+            &[],
+        );
+        acc.push_event(
+            &json!({
+                "type": "stream_event",
+                "event": {
+                    "delta": {"text": " world"}
+                }
+            }),
+            "",
+            &[],
+        );
+
+        let snapshot = acc.snapshot("ctx", "sess");
+        assert_eq!(snapshot.len(), 1);
+        assert!(snapshot[0].is_streaming);
+        let parsed = snapshot[0].parsed.as_ref().unwrap();
+        // Should have thinking + text blocks
+        let content = parsed["message"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+    }
+}

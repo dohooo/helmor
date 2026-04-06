@@ -8,6 +8,7 @@ import {
 	loadArchivedWorkspaces,
 	loadSessionAttachments,
 	loadSessionMessages,
+	loadSessionThreadMessages,
 	loadWorkspaceDetail,
 	loadWorkspaceGroups,
 	loadWorkspaceSessions,
@@ -111,6 +112,16 @@ export function sessionMessagesQueryOptions(sessionId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.sessionMessages(sessionId),
 		queryFn: () => loadSessionMessages(sessionId),
+		gcTime: SESSION_GC_TIME,
+		staleTime: SESSION_STALE_TIME,
+	});
+}
+
+/** Pipeline-rendered thread messages — ready for direct rendering. */
+export function sessionThreadMessagesQueryOptions(sessionId: string) {
+	return queryOptions({
+		queryKey: [...helmorQueryKeys.sessionMessages(sessionId), "thread"],
+		queryFn: () => loadSessionThreadMessages(sessionId),
 		gcTime: SESSION_GC_TIME,
 		staleTime: SESSION_STALE_TIME,
 	});
