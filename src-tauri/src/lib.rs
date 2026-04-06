@@ -67,18 +67,25 @@ pub fn run() {
             models::mark_workspace_unread,
             models::pin_workspace,
             models::unpin_workspace,
+            models::list_editor_files,
+            models::list_editor_files_with_content,
+            models::list_workspace_changes,
+            models::list_workspace_changes_with_content,
+            models::read_editor_file,
             models::set_workspace_manual_status,
             models::detect_installed_editors,
             models::open_workspace_in_editor,
             models::permanently_delete_workspace,
             models::restore_workspace,
+            models::stat_editor_file,
             models::start_github_identity_connect,
             models::conductor_source_available,
             models::list_conductor_repos,
             models::list_conductor_workspaces,
             models::import_conductor_workspaces,
             models::update_app_settings,
-            models::update_session_settings
+            models::update_session_settings,
+            models::write_editor_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

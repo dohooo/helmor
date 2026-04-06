@@ -1,5 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import {
+	buildFallbackInspectorFileItems,
+	type InspectorFileItem,
+} from "./editor-session";
 
 export type GroupTone =
 	| "pinned"
@@ -301,6 +305,35 @@ export type SessionAttachmentRecord = {
 	isLoading: boolean;
 	isDraft: boolean;
 	createdAt: string;
+};
+
+export type EditorFileReadResponse = {
+	path: string;
+	content: string;
+	mtimeMs: number;
+};
+
+export type EditorFileWriteResponse = {
+	path: string;
+	mtimeMs: number;
+};
+
+export type EditorFileStatResponse = {
+	path: string;
+	exists: boolean;
+	isFile: boolean;
+	mtimeMs: number | null;
+	size: number | null;
+};
+
+export type EditorFilePrefetchItem = {
+	absolutePath: string;
+	content: string;
+};
+
+export type EditorFilesWithContentResponse = {
+	items: InspectorFileItem[];
+	prefetched: EditorFilePrefetchItem[];
 };
 
 const DEFAULT_WORKSPACE_GROUPS: WorkspaceGroup[] = [
@@ -798,6 +831,128 @@ export async function openWorkspaceInEditor(
 	const invoke = await getTauriInvoke();
 	if (!invoke) return;
 	await invoke("open_workspace_in_editor", { workspaceId, editor });
+}
+
+export async function readEditorFile(
+	path: string,
+): Promise<EditorFileReadResponse> {
+	const inv = await getTauriInvoke();
+	if (!inv) {
+		throw new Error(
+			"File editing is only available in the Tauri desktop runtime.",
+		);
+	}
+
+	try {
+		return await inv<EditorFileReadResponse>("read_editor_file", { path });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to open the selected file."),
+		);
+	}
+}
+
+export async function writeEditorFile(
+	path: string,
+	content: string,
+): Promise<EditorFileWriteResponse> {
+	const inv = await getTauriInvoke();
+	if (!inv) {
+		throw new Error(
+			"File editing is only available in the Tauri desktop runtime.",
+		);
+	}
+
+	try {
+		return await inv<EditorFileWriteResponse>("write_editor_file", {
+			path,
+			content,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to save the selected file."),
+		);
+	}
+}
+
+export async function statEditorFile(
+	path: string,
+): Promise<EditorFileStatResponse> {
+	const inv = await getTauriInvoke();
+	if (!inv) {
+		throw new Error(
+			"File editing is only available in the Tauri desktop runtime.",
+		);
+	}
+
+	try {
+		return await inv<EditorFileStatResponse>("stat_editor_file", { path });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to inspect the selected file."),
+		);
+	}
+}
+
+export async function listEditorFiles(
+	workspaceRootPath: string,
+): Promise<InspectorFileItem[]> {
+	const inv = await getTauriInvoke();
+	if (!inv) {
+		return buildFallbackInspectorFileItems(workspaceRootPath);
+	}
+
+	try {
+		return await inv<InspectorFileItem[]>("list_editor_files", {
+			workspaceRootPath,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to list editor files."));
+	}
+}
+
+export async function listEditorFilesWithContent(
+	workspaceRootPath: string,
+): Promise<EditorFilesWithContentResponse> {
+	const inv = await getTauriInvoke();
+	if (!inv) {
+		return {
+			items: buildFallbackInspectorFileItems(workspaceRootPath),
+			prefetched: [],
+		};
+	}
+
+	try {
+		return await inv<EditorFilesWithContentResponse>(
+			"list_editor_files_with_content",
+			{ workspaceRootPath },
+		);
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to list editor files."));
+	}
+}
+
+export async function listWorkspaceChangesWithContent(
+	workspaceRootPath: string,
+): Promise<EditorFilesWithContentResponse> {
+	const inv = await getTauriInvoke();
+	if (!inv) {
+		return {
+			items: buildFallbackInspectorFileItems(workspaceRootPath),
+			prefetched: [],
+		};
+	}
+
+	try {
+		return await inv<EditorFilesWithContentResponse>(
+			"list_workspace_changes_with_content",
+			{ workspaceRootPath },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to list workspace changes."),
+		);
+	}
 }
 
 export async function permanentlyDeleteWorkspace(
