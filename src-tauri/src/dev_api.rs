@@ -351,7 +351,10 @@ pub fn start_agent_stream(
                             .and_then(serde_json::Value::as_str)
                             .unwrap_or("Unknown sidecar error")
                             .to_string();
-                        let _ = tx.send(AgentStreamEvent::Error { message: msg });
+                        let _ = tx.send(AgentStreamEvent::Error {
+                            message: msg,
+                            persisted: false,
+                        });
                         break;
                     }
                     _ => {
