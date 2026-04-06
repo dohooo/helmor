@@ -13,14 +13,15 @@
 		"windows": [
 			{
 				"title": "Helmor",
-				"width": 1200,
-				"height": 900,
+				"width": 1300,
+				"height": 810,
 				"titleBarStyle": "Overlay",
 				"trafficLightPosition": {
 					"x": 16,
 					"y": 24
 				},
-				"hiddenTitle": true
+				"hiddenTitle": true,
+				"center": true
 			}
 		],
 		"security": {
