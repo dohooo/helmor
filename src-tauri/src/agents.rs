@@ -21,6 +21,10 @@ type CmdResult<T> = std::result::Result<T, CommandError>;
 pub enum AgentStreamEvent {
     Line {
         line: String,
+        /// DB message IDs for turns persisted in this event batch.
+        /// The frontend uses these so streaming keys match DB keys exactly.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        persisted_ids: Vec<String>,
     },
     Done {
         provider: String,
@@ -72,7 +76,6 @@ pub struct AgentSendRequest {
     pub effort_level: Option<String>,
     pub permission_mode: Option<String>,
     pub user_message_id: Option<String>,
-    pub assistant_message_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -97,7 +100,6 @@ struct ExchangeContext {
     model_provider: String,
     assistant_sdk_message_id: String,
     user_message_id: String,
-    assistant_message_id_override: Option<String>,
 }
 
 /// Full parsed output from a CLI invocation.
@@ -615,7 +617,6 @@ fn stream_via_sidecar(
     let effort_copy = request.effort_level.clone();
     let permission_mode_copy = request.permission_mode.clone();
     let user_message_id_copy = request.user_message_id.clone();
-    let assistant_message_id_copy = request.assistant_message_id.clone();
     let rid = request_id.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -648,7 +649,6 @@ fn stream_via_sidecar(
                 user_message_id: user_message_id_copy
                     .clone()
                     .unwrap_or_else(|| Uuid::new_v4().to_string()),
-                assistant_message_id_override: assistant_message_id_copy.clone(),
             };
 
             match persist_user_message(conn, &ctx, &prompt_copy) {
@@ -700,8 +700,12 @@ fn stream_via_sidecar(
                             if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
                                 // Persist any remaining turns (finish() may flush_assistant)
                                 for turn in output.turns.iter().skip(persisted_turn_count) {
-                                    persist_turn_message(conn, ctx, turn, &output.resolved_model)
-                                        .ok();
+                                    let _ = persist_turn_message(
+                                        conn,
+                                        ctx,
+                                        turn,
+                                        &output.resolved_model,
+                                    );
                                 }
 
                                 // Persist result summary and finalize session metadata
@@ -763,7 +767,8 @@ fn stream_via_sidecar(
                             accumulator.push_value(&event.raw, &line);
                         }
 
-                        // Persist newly completed turns incrementally
+                        // Persist newly completed turns and collect their DB IDs
+                        let mut batch_ids: Vec<String> = Vec::new();
                         if let (Some(ctx), Some(conn), Some(accumulator)) =
                             (&exchange_ctx, &db_conn, output_accumulator.as_ref())
                         {
@@ -775,7 +780,10 @@ fn stream_via_sidecar(
                                     accumulator.turn_at(persisted_turn_count),
                                     model_str,
                                 ) {
-                                    Ok(()) => persisted_turn_count += 1,
+                                    Ok(msg_id) => {
+                                        batch_ids.push(msg_id);
+                                        persisted_turn_count += 1;
+                                    }
                                     Err(e) => {
                                         eprintln!(
                                             "[agents] Failed to persist turn {}: {e}",
@@ -787,7 +795,13 @@ fn stream_via_sidecar(
                             }
                         }
 
-                        let _ = app.emit(&event_name, AgentStreamEvent::Line { line });
+                        let _ = app.emit(
+                            &event_name,
+                            AgentStreamEvent::Line {
+                                line,
+                                persisted_ids: batch_ids,
+                            },
+                        );
                     }
                 }
             }
@@ -1238,12 +1252,13 @@ fn persist_user_message(conn: &Connection, ctx: &ExchangeContext, prompt: &str) 
 
 /// Persist a single intermediate turn (assistant message or user tool result).
 /// Called each time the accumulator produces a complete turn during streaming.
+/// Persist a single intermediate turn. Returns the DB message ID.
 fn persist_turn_message(
     conn: &Connection,
     ctx: &ExchangeContext,
     turn: &CollectedTurn,
     resolved_model: &str,
-) -> Result<()> {
+) -> Result<String> {
     let now = current_timestamp_string()?;
     let msg_id = Uuid::new_v4().to_string();
 
@@ -1264,7 +1279,7 @@ fn persist_turn_message(
             ctx.turn_id
         ],
     )?;
-    Ok(())
+    Ok(msg_id)
 }
 
 /// Persist the result summary and finalize session/workspace metadata.
@@ -1282,10 +1297,7 @@ fn persist_result_and_finalize(
     raw_result_json: Option<&str>,
 ) -> Result<()> {
     let now = current_timestamp_string()?;
-    let result_message_id = ctx
-        .assistant_message_id_override
-        .clone()
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let result_message_id = Uuid::new_v4().to_string();
 
     let result_payload = raw_result_json.map(str::to_string).unwrap_or_else(|| {
         serde_json::json!({
@@ -1605,7 +1617,6 @@ mod tests {
             model_provider: "claude".to_string(),
             assistant_sdk_message_id: format!("helmor-assistant-{}", Uuid::new_v4()),
             user_message_id: Uuid::new_v4().to_string(),
-            assistant_message_id_override: None,
         };
 
         // 1. Persist user message
@@ -1681,7 +1692,6 @@ mod tests {
             model_provider: "claude".to_string(),
             assistant_sdk_message_id: format!("helmor-assistant-{}", Uuid::new_v4()),
             user_message_id: Uuid::new_v4().to_string(),
-            assistant_message_id_override: None,
         };
 
         persist_user_message(&conn, &ctx, "Hi").unwrap();
@@ -1697,8 +1707,6 @@ mod tests {
                 input_tokens: None,
                 output_tokens: None,
             },
-            None,
-            None,
             None,
         )
         .unwrap();
@@ -1743,7 +1751,6 @@ mod tests {
             model_provider: "claude".to_string(),
             assistant_sdk_message_id: format!("helmor-assistant-{}", Uuid::new_v4()),
             user_message_id: Uuid::new_v4().to_string(),
-            assistant_message_id_override: None,
         };
 
         // Persist user message
@@ -1763,8 +1770,8 @@ mod tests {
                     .to_string(),
         };
 
-        persist_turn_message(&conn, &ctx, &turn1, "opus").unwrap();
-        persist_turn_message(&conn, &ctx, &turn2, "opus").unwrap();
+        let _ = persist_turn_message(&conn, &ctx, &turn1, "opus").unwrap();
+        let _ = persist_turn_message(&conn, &ctx, &turn2, "opus").unwrap();
 
         // Verify: 3 messages so far (user + 2 turns), all with same turn_id
         let msg_count: i64 = conn

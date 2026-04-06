@@ -77,7 +77,6 @@ export type AgentSendRequest = {
 	effortLevel?: string | null;
 	permissionMode?: string | null;
 	userMessageId?: string | null;
-	assistantMessageId?: string | null;
 };
 
 export type WorkspaceSummary = {
@@ -1188,7 +1187,7 @@ export type AgentStreamStartResponse = {
 };
 
 export type AgentStreamEvent =
-	| { kind: "line"; line: string }
+	| { kind: "line"; line: string; persistedIds?: string[] }
 	| {
 			kind: "done";
 			provider: AgentProvider;

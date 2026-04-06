@@ -63,10 +63,25 @@ export class StreamAccumulator {
 	private fallbackDeltaThinking = "";
 	/** Whether we've seen at least one content_block_start event. */
 	private hasBlockStructure = false;
+	/** Stable timestamp for the currently rendered streaming partial. */
+	private partialCreatedAt: string | null = null;
+	/** Stable UI message ID for the current in-progress assistant turn. */
+	private activePartialMessageId: string | null = null;
+	private partialMessageCount = 0;
 
 	private lineCount = 0;
 
-	addLine(line: string): void {
+	/**
+	 * DB-assigned message IDs from the Rust backend.
+	 * Consumed one-per-collected-message in addLine so streaming keys
+	 * match DB primary keys exactly — zero flicker on live→DB transition.
+	 */
+	private persistedIdQueue: string[] = [];
+
+	addLine(line: string, persistedIds?: string[]): void {
+		if (persistedIds?.length) {
+			this.persistedIdQueue.push(...persistedIds);
+		}
 		this.lineCount++;
 		try {
 			const value = JSON.parse(line) as Record<string, unknown>;
@@ -92,9 +107,10 @@ export class StreamAccumulator {
 			// Full assistant message — store and reset blocks
 			// ------------------------------------------------------------------
 			if (type === "assistant") {
+				const partialMessageId = this.activePartialMessageId;
 				this.finalizeBlocks();
 				this.collectedMessages.push(
-					this.jsonToMessage(line, value, "assistant"),
+					this.jsonToMessage(line, value, "assistant", partialMessageId),
 				);
 				return;
 			}
@@ -325,8 +341,6 @@ export class StreamAccumulator {
 		if (!item) return;
 
 		if (item.type === "agent_message" && typeof item.text === "string") {
-			// Accumulate text for partial display
-			this.fallbackDeltaText += `${item.text}\n\n`;
 			this.collectedMessages.push(this.jsonToMessage(line, value, "assistant"));
 			return;
 		}
@@ -396,6 +410,8 @@ export class StreamAccumulator {
 		this.hasBlockStructure = false;
 		this.fallbackDeltaText = "";
 		this.fallbackDeltaThinking = "";
+		this.partialCreatedAt = null;
+		this.activePartialMessageId = null;
 	}
 
 	// ------------------------------------------------------------------
@@ -406,13 +422,9 @@ export class StreamAccumulator {
 	 * Returns all collected messages plus a trailing partial message
 	 * from accumulated blocks/deltas (if any new content since last full message).
 	 */
-	toMessages(
-		contextKey: string,
-		sessionId: string,
-		assistantMessageId?: string,
-	): SessionMessageRecord[] {
+	toMessages(contextKey: string, sessionId: string): SessionMessageRecord[] {
 		const messages = [...this.collectedMessages];
-		const partialId = assistantMessageId ?? `${contextKey}:stream-partial`;
+		const partialId = this.getPartialMessageId(contextKey);
 
 		// Prefer block-level partial if we have structured blocks
 		if (this.blocks.size > 0) {
@@ -444,9 +456,8 @@ export class StreamAccumulator {
 	toPartialMessage(
 		contextKey: string,
 		sessionId: string,
-		assistantMessageId?: string,
 	): SessionMessageRecord {
-		const messages = this.toMessages(contextKey, sessionId, assistantMessageId);
+		const messages = this.toMessages(contextKey, sessionId);
 		return (
 			messages[messages.length - 1] ??
 			this.buildPartialMessage(
@@ -454,7 +465,7 @@ export class StreamAccumulator {
 				sessionId,
 				"...",
 				"",
-				assistantMessageId ?? `${contextKey}:stream-partial`,
+				this.getPartialMessageId(contextKey),
 			)
 		);
 	}
@@ -472,6 +483,7 @@ export class StreamAccumulator {
 		sessionId: string,
 		partialId: string,
 	): SessionMessageRecord {
+		const createdAt = this.getPartialCreatedAt();
 		const sortedBlocks = [...this.blocks.values()].sort(
 			(a, b) => a.blockIndex - b.blockIndex,
 		);
@@ -519,7 +531,7 @@ export class StreamAccumulator {
 			content: JSON.stringify(parsed),
 			contentIsJson: true,
 			parsedContent: parsed,
-			createdAt: new Date().toISOString(),
+			createdAt,
 			sentAt: null,
 			cancelledAt: null,
 			model: null,
@@ -539,6 +551,7 @@ export class StreamAccumulator {
 		thinking: string,
 		partialId: string,
 	): SessionMessageRecord {
+		const createdAt = this.getPartialCreatedAt();
 		const displayText = text || "...";
 
 		if (thinking) {
@@ -560,7 +573,7 @@ export class StreamAccumulator {
 				content: JSON.stringify(parsed),
 				contentIsJson: true,
 				parsedContent: parsed,
-				createdAt: new Date().toISOString(),
+				createdAt,
 				sentAt: null,
 				cancelledAt: null,
 				model: null,
@@ -578,7 +591,7 @@ export class StreamAccumulator {
 			role: "assistant",
 			content: displayText,
 			contentIsJson: false,
-			createdAt: new Date().toISOString(),
+			createdAt,
 			sentAt: null,
 			cancelledAt: null,
 			model: null,
@@ -594,14 +607,37 @@ export class StreamAccumulator {
 	// Helpers
 	// ------------------------------------------------------------------
 
+	private getPartialCreatedAt(): string {
+		if (this.partialCreatedAt === null) {
+			this.partialCreatedAt = new Date().toISOString();
+		}
+
+		return this.partialCreatedAt;
+	}
+
+	private getPartialMessageId(contextKey: string): string {
+		if (this.activePartialMessageId === null) {
+			this.partialMessageCount += 1;
+			this.activePartialMessageId = `${contextKey}:stream-partial:${this.partialMessageCount}`;
+		}
+
+		return this.activePartialMessageId;
+	}
+
 	private jsonToMessage(
 		raw: string,
 		_parsed: Record<string, unknown>,
 		role: string,
+		overrideId?: string | null,
 	): SessionMessageRecord {
 		const parsed = _parsed;
+		// Prefer a DB-assigned ID so the streaming key matches the DB primary key.
+		// When a streaming partial becomes a full assistant turn, keep its UI ID
+		// stable so the row does not unmount/remount mid-stream.
+		const persistedId = this.persistedIdQueue.shift();
+		const id = overrideId ?? persistedId ?? `stream:${this.lineCount}:${role}`;
 		return {
-			id: `stream:${this.lineCount}:${role}`,
+			id,
 			sessionId: "",
 			role,
 			content: raw,

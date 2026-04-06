@@ -360,7 +360,10 @@ pub fn start_agent_stream(
                     _ => {
                         let line = serde_json::to_string(&event.raw).unwrap_or_default();
                         if !line.is_empty() && line != "{}" {
-                            let _ = tx.send(AgentStreamEvent::Line { line });
+                            let _ = tx.send(AgentStreamEvent::Line {
+                                line,
+                                persisted_ids: vec![],
+                            });
                         }
                     }
                 }

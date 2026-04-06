@@ -1128,13 +1128,10 @@ function ConversationMessage({
 }) {
 	recordMessageRender(sessionId, message.id ?? `${message.role}:${itemIndex}`);
 
-	// Derive streaming state from the message itself — avoids external prop
-	// that changes callback references and causes Virtuoso re-renders.
-	const streaming =
-		message.role === "assistant" &&
-		(message.streaming === true ||
-			message.id?.startsWith("stream:") === true ||
-			message.id?.endsWith(":stream-partial") === true);
+	// Only the actual streaming partial carries `streaming: true` (set by
+	// the accumulator's __streaming flag).  Completed intermediate messages
+	// with `stream:` prefix IDs are NOT streaming — they should render static.
+	const streaming = message.role === "assistant" && message.streaming === true;
 
 	if (message.role === "user") {
 		return <ChatUserMessage message={message} />;
@@ -1195,13 +1192,17 @@ function ChatAssistantMessage({
 			{parts.map((part, idx) => {
 				if (isTextPart(part)) {
 					return (
-						<AssistantText key={idx} text={part.text} streaming={streaming} />
+						<AssistantText
+							key={`text:${idx}`}
+							text={part.text}
+							streaming={streaming}
+						/>
 					);
 				}
 				if (isReasoningPart(part)) {
 					return (
 						<AssistantReasoning
-							key={idx}
+							key={`reasoning:${idx}`}
 							text={part.text}
 							streaming={streaming}
 						/>
@@ -1218,7 +1219,7 @@ function ChatAssistantMessage({
 				if (isToolCallPart(part)) {
 					return (
 						<AssistantToolCall
-							key={part.toolCallId ?? `${part.toolName}:${idx}`}
+							key={`tc:${part.toolCallId ?? `${part.toolName}:${idx}`}`}
 							toolName={part.toolName}
 							args={part.args}
 							result={part.result}
@@ -1337,7 +1338,16 @@ function FileBadgeInline({ path }: { path: string }) {
 	);
 }
 
-function AssistantText({
+/** Stable animation config — avoids creating a new object on every render. */
+const STREAMING_ANIMATED = {
+	animation: "blurIn" as const,
+	duration: 150,
+	easing: "linear" as const,
+	sep: "word" as const,
+	stagger: 30,
+};
+
+const AssistantText = memo(function AssistantText({
 	text,
 	streaming,
 }: {
@@ -1356,17 +1366,7 @@ function AssistantText({
 				fallback={<AssistantTextFallback text={text} streaming={streaming} />}
 			>
 				<LazyStreamdown
-					animated={
-						streaming
-							? {
-									animation: "blurIn",
-									duration: 150,
-									easing: "linear",
-									sep: "word",
-									stagger: 30,
-								}
-							: false
-					}
+					animated={streaming ? STREAMING_ANIMATED : false}
 					caret={undefined}
 					className="conversation-streamdown"
 					isAnimating={streaming}
@@ -1377,7 +1377,7 @@ function AssistantText({
 			</Suspense>
 		</div>
 	);
-}
+});
 
 function AssistantTextFallback({
 	text,
@@ -1392,7 +1392,7 @@ function AssistantTextFallback({
 	);
 }
 
-function AssistantReasoning({
+const AssistantReasoning = memo(function AssistantReasoning({
 	text,
 	streaming,
 }: {
@@ -1400,12 +1400,11 @@ function AssistantReasoning({
 	streaming?: boolean;
 }) {
 	const { settings } = useSettings();
-
 	return (
-		<details className="group flex flex-col" open={streaming || undefined}>
+		<details className="group flex flex-col" open>
 			<summary className="flex cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-app-muted hover:text-app-foreground-soft [&::-webkit-details-marker]:hidden">
 				<svg
-					className="size-2.5 shrink-0 transition-transform group-open:rotate-90"
+					className="size-2.5 shrink-0 group-open:rotate-90"
 					viewBox="0 0 12 12"
 					fill="none"
 				>
@@ -1435,155 +1434,173 @@ function AssistantReasoning({
 			</div>
 		</details>
 	);
-}
+});
 
-function AssistantToolCall({
-	toolName,
-	args,
-	result,
-	streamingStatus,
-}: {
-	toolName: string;
-	args: Record<string, unknown>;
-	result?: unknown;
-	streamingStatus?: string;
-}) {
-	const info = getToolInfo(toolName, args);
-	const isEdit = toolName === "Edit";
-	const oldStr =
-		isEdit && typeof args.old_string === "string" ? args.old_string : null;
-	const newStr =
-		isEdit && typeof args.new_string === "string" ? args.new_string : null;
-	const hasDiff = oldStr != null || newStr != null;
+const AssistantToolCall = memo(
+	function AssistantToolCall({
+		toolName,
+		args,
+		result,
+		streamingStatus,
+	}: {
+		toolName: string;
+		args: Record<string, unknown>;
+		result?: unknown;
+		streamingStatus?: string;
+	}) {
+		const info = getToolInfo(toolName, args);
+		const isEdit = toolName === "Edit";
+		const oldStr =
+			isEdit && typeof args.old_string === "string" ? args.old_string : null;
+		const newStr =
+			isEdit && typeof args.new_string === "string" ? args.new_string : null;
+		const hasDiff = oldStr != null || newStr != null;
 
-	// Detect __children__ encoded in result (sub-agent steps)
-	const resultStr =
-		result != null
-			? typeof result === "string"
-				? result
-				: JSON.stringify(result, null, 2)
+		// Detect __children__ encoded in result (sub-agent steps)
+		const resultStr =
+			result != null
+				? typeof result === "string"
+					? result
+					: JSON.stringify(result, null, 2)
+				: null;
+		const isChildrenResult = resultStr?.startsWith("__children__") ?? false;
+		const childrenData = isChildrenResult
+			? (() => {
+					try {
+						return JSON.parse(resultStr!.slice("__children__".length)) as {
+							parts: Array<Record<string, unknown>>;
+						};
+					} catch {
+						return null;
+					}
+				})()
 			: null;
-	const isChildrenResult = resultStr?.startsWith("__children__") ?? false;
-	const childrenData = isChildrenResult
-		? (() => {
-				try {
-					return JSON.parse(resultStr!.slice("__children__".length)) as {
-						parts: Array<Record<string, unknown>>;
-					};
-				} catch {
-					return null;
-				}
-			})()
-		: null;
-	const resultText = isChildrenResult ? null : resultStr;
-	const hasOutput = resultText != null && resultText.length > 5;
+		const resultText = isChildrenResult ? null : resultStr;
+		const hasOutput = resultText != null && resultText.length > 5;
 
-	// Streaming status indicator
-	const statusIndicator =
-		streamingStatus === "pending" || streamingStatus === "streaming_input" ? (
-			<LoaderCircle
-				className="size-3 animate-spin text-app-muted/50"
-				strokeWidth={2}
-			/>
-		) : streamingStatus === "running" ? (
-			<LoaderCircle
-				className="size-3 animate-spin text-app-progress"
-				strokeWidth={2}
-			/>
-		) : streamingStatus === "error" ? (
-			<AlertCircle className="size-3 text-app-negative" strokeWidth={2} />
-		) : null;
+		// Streaming status indicator
+		const statusIndicator =
+			streamingStatus === "pending" || streamingStatus === "streaming_input" ? (
+				<LoaderCircle
+					className="size-3 animate-spin text-app-muted/50"
+					strokeWidth={2}
+				/>
+			) : streamingStatus === "running" ? (
+				<LoaderCircle
+					className="size-3 animate-spin text-app-progress"
+					strokeWidth={2}
+				/>
+			) : streamingStatus === "error" ? (
+				<AlertCircle className="size-3 text-app-negative" strokeWidth={2} />
+			) : null;
 
-	const toolLine = (
-		<>
-			<span className="shrink-0">{info.icon}</span>
-			<span className="font-medium">{info.action}</span>
-			{info.file ? (
-				hasDiff ? (
-					<EditDiffTrigger
-						file={info.file}
-						diffAdd={info.diffAdd}
-						diffDel={info.diffDel}
-						oldStr={oldStr}
-						newStr={newStr}
-					/>
-				) : (
-					<span className="truncate text-app-foreground-soft">{info.file}</span>
-				)
-			) : null}
-			{!hasDiff && (info.diffAdd != null || info.diffDel != null) ? (
-				<span className="flex items-center gap-1 text-[11px]">
-					{info.diffAdd != null ? (
-						<span className="text-app-positive">+{info.diffAdd}</span>
-					) : null}
-					{info.diffDel != null ? (
-						<span className="text-app-negative">-{info.diffDel}</span>
-					) : null}
-				</span>
-			) : null}
-			{info.command ? (
-				<code className="truncate rounded bg-app-foreground/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-app-foreground-soft">
-					{info.command}
-				</code>
-			) : info.detail ? (
-				<span className="truncate text-app-muted/60">{info.detail}</span>
-			) : null}
-			{statusIndicator}
-		</>
-	);
-
-	// Sub-agent children: show last N steps with "show more" toggle
-	if (childrenData) {
-		return (
-			<AgentChildrenBlock
-				toolLine={toolLine}
-				parts={childrenData.parts}
-				streaming={!!streamingStatus}
-			/>
-		);
-	}
-
-	// Normal tool call with optional output
-	return (
-		<details className="group/out flex flex-col" open={false}>
-			<summary className="flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
-				{toolLine}
-				{hasOutput ? (
-					<span className="shrink-0 cursor-pointer text-app-muted/40 hover:text-app-muted">
-						<svg
-							className="size-2.5 transition-transform group-open/out:rotate-90"
-							viewBox="0 0 12 12"
-							fill="none"
-						>
-							<path
-								d="M4.5 2.5L8.5 6L4.5 9.5"
-								stroke="currentColor"
-								strokeWidth="1.5"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-							/>
-						</svg>
+		const toolLine = (
+			<>
+				<span className="shrink-0">{info.icon}</span>
+				<span className="font-medium">{info.action}</span>
+				{info.file ? (
+					hasDiff ? (
+						<EditDiffTrigger
+							file={info.file}
+							diffAdd={info.diffAdd}
+							diffDel={info.diffDel}
+							oldStr={oldStr}
+							newStr={newStr}
+						/>
+					) : (
+						<span className="truncate text-app-foreground-soft">
+							{info.file}
+						</span>
+					)
+				) : null}
+				{!hasDiff && (info.diffAdd != null || info.diffDel != null) ? (
+					<span className="flex items-center gap-1 text-[11px]">
+						{info.diffAdd != null ? (
+							<span className="text-app-positive">+{info.diffAdd}</span>
+						) : null}
+						{info.diffDel != null ? (
+							<span className="text-app-negative">-{info.diffDel}</span>
+						) : null}
 					</span>
 				) : null}
-			</summary>
-			{hasOutput ? (
-				<div className="max-h-[16rem] overflow-auto rounded-md bg-app-foreground/[0.02] text-[11px] leading-5">
-					{info.fullCommand ? (
-						<div className="border-b border-app-border/20 px-2 py-1.5">
-							<span className="mr-1.5 text-app-project/60">$</span>
-							<code className="font-mono text-app-foreground-soft">
-								{info.fullCommand}
-							</code>
-						</div>
+				{info.command ? (
+					<code className="truncate rounded bg-app-foreground/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-app-foreground-soft">
+						{info.command}
+					</code>
+				) : info.detail ? (
+					<span className="truncate text-app-muted/60">{info.detail}</span>
+				) : null}
+				{statusIndicator}
+			</>
+		);
+
+		// Sub-agent children: show last N steps with "show more" toggle
+		if (childrenData) {
+			return (
+				<AgentChildrenBlock
+					toolLine={toolLine}
+					parts={childrenData.parts}
+					streaming={!!streamingStatus}
+				/>
+			);
+		}
+
+		// Normal tool call with optional output
+		return (
+			<details className="group/out flex flex-col">
+				<summary className="flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
+					{toolLine}
+					{hasOutput ? (
+						<span className="shrink-0 cursor-pointer text-app-muted/40 hover:text-app-muted">
+							<svg
+								className="size-2.5 group-open/out:rotate-90"
+								viewBox="0 0 12 12"
+								fill="none"
+							>
+								<path
+									d="M4.5 2.5L8.5 6L4.5 9.5"
+									stroke="currentColor"
+									strokeWidth="1.5"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+								/>
+							</svg>
+						</span>
 					) : null}
-					<pre className="whitespace-pre-wrap break-words p-1.5 text-app-muted/70">
-						{resultText!.slice(0, 2000)}
-						{resultText!.length > 2000 ? "…" : ""}
-					</pre>
-				</div>
-			) : null}
-		</details>
-	);
+				</summary>
+				{hasOutput ? (
+					<div className="max-h-[16rem] overflow-auto rounded-md bg-app-foreground/[0.02] text-[11px] leading-5">
+						{info.fullCommand ? (
+							<div className="border-b border-app-border/20 px-2 py-1.5">
+								<span className="mr-1.5 text-app-project/60">$</span>
+								<code className="font-mono text-app-foreground-soft">
+									{info.fullCommand}
+								</code>
+							</div>
+						) : null}
+						<pre className="whitespace-pre-wrap break-words p-1.5 text-app-muted/70">
+							{resultText!.slice(0, 2000)}
+							{resultText!.length > 2000 ? "…" : ""}
+						</pre>
+					</div>
+				) : null}
+			</details>
+		);
+	},
+	(prev, next) =>
+		prev.toolName === next.toolName &&
+		prev.streamingStatus === next.streamingStatus &&
+		prev.result === next.result &&
+		argsEqual(prev.args, next.args),
+);
+
+/** Deep-compare tool call args via JSON serialization. */
+function argsEqual(
+	a: Record<string, unknown>,
+	b: Record<string, unknown>,
+): boolean {
+	if (a === b) return true;
+	return JSON.stringify(a) === JSON.stringify(b);
 }
 
 /** Number of recent children steps to show by default. */
@@ -1694,7 +1711,7 @@ function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 		);
 
 	return (
-		<details className="group/collapse flex flex-col" open={false}>
+		<details className="group/collapse flex flex-col">
 			<summary className="flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
 				<span className="shrink-0">{icon}</span>
 				<span className="font-medium">{group.summary}</span>
@@ -1708,7 +1725,7 @@ function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 				)}
 				<span className="shrink-0 cursor-pointer text-app-muted/40 hover:text-app-muted">
 					<svg
-						className="size-2.5 transition-transform group-open/collapse:rotate-90"
+						className="size-2.5 group-open/collapse:rotate-90"
 						viewBox="0 0 12 12"
 						fill="none"
 					>

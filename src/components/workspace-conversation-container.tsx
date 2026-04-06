@@ -1,7 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
 	memo,
-	startTransition,
 	useCallback,
 	useLayoutEffect,
 	useMemo,
@@ -174,6 +173,29 @@ export const WorkspaceConversationContainer = memo(
 			[queryClient],
 		);
 
+		/** Refresh sidebar metadata only — no session messages reload. */
+		const invalidateSidebarQueries = useCallback(
+			(workspaceId: string | null) => {
+				const invalidations: Promise<unknown>[] = [
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceGroups,
+					}),
+				];
+				if (workspaceId) {
+					invalidations.push(
+						queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+						}),
+						queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+						}),
+					);
+				}
+				return Promise.all(invalidations);
+			},
+			[queryClient],
+		);
+
 		const handleComposerSubmit = useCallback(
 			async ({
 				prompt,
@@ -197,11 +219,9 @@ export const WorkspaceConversationContainer = memo(
 
 				const contextKey = composerContextKey;
 				const now = new Date().toISOString();
-				// Pre-generate stable message IDs so the streaming partial
-				// and the persisted DB record share the same ID, preventing
-				// React key changes that cause unmount/remount flicker.
+				// Pre-generate user message ID so it matches the DB primary key.
+				// AI message IDs come from the Rust backend via persistedIds.
 				const userMessageId = crypto.randomUUID();
-				const assistantMessageId = crypto.randomUUID();
 				const optimisticUserMessage = createLiveMessage({
 					id: userMessageId,
 					sessionId: displayedSessionId ?? contextKey,
@@ -277,7 +297,6 @@ export const WorkspaceConversationContainer = memo(
 						effortLevel,
 						permissionMode,
 						userMessageId,
-						assistantMessageId,
 					});
 					const sidecarSessionId = displayedSessionId ?? `tmp-${streamId}`;
 					setActiveSessionByContext((current) => ({
@@ -311,12 +330,11 @@ export const WorkspaceConversationContainer = memo(
 						}
 					};
 
-					const flushStreamMessages = (immediate = false) => {
+					const flushStreamMessages = () => {
 						frameId = null;
 						const streamMessages = accumulator.toMessages(
 							contextKey,
 							displayedSessionId ?? contextKey,
-							assistantMessageId,
 						);
 						const nextMessages = [optimisticUserMessage, ...streamMessages];
 						const doFlush = () => {
@@ -331,14 +349,9 @@ export const WorkspaceConversationContainer = memo(
 								};
 							});
 						};
-						// Use startTransition for intermediate flushes (lower priority).
-						// Final flush (on "done") uses direct setState so it commits
-						// before reloadAfterPersist clears live messages.
-						if (immediate) {
-							doFlush();
-						} else {
-							startTransition(doFlush);
-						}
+						// Always flush synchronously to avoid deferred/split rendering
+						// that can cause visual flicker between transition frames.
+						doFlush();
 					};
 
 					const scheduleFlush = () => {
@@ -351,7 +364,7 @@ export const WorkspaceConversationContainer = memo(
 
 					unlistenFn = await listenAgentStream(streamId, (event) => {
 						if (event.kind === "line") {
-							accumulator.addLine(event.line);
+							accumulator.addLine(event.line, event.persistedIds);
 							scheduleFlush();
 							return;
 						}
@@ -361,7 +374,7 @@ export const WorkspaceConversationContainer = memo(
 								window.cancelAnimationFrame(frameId);
 								frameId = null;
 							}
-							flushStreamMessages(true); // immediate — commit before reload
+							flushStreamMessages();
 							cleanup();
 
 							// Refresh file changes — agent likely modified files
@@ -388,20 +401,11 @@ export const WorkspaceConversationContainer = memo(
 							});
 
 							if (event.persisted) {
-								// Clear live messages first, then load DB data.
-								// Because we pre-generated the message UUIDs, the DB
-								// records share the same IDs as the live stream messages.
-								// Virtuoso keys stay stable → no unmount/remount flicker.
-								setLiveMessagesByContext((current) => {
-									if (!current[contextKey]?.length) return current;
-									const next = { ...current };
-									delete next[contextKey];
-									return next;
-								});
-								void invalidateConversationQueries(
-									displayedWorkspaceId,
-									displayedSessionId,
-								);
+								// Only refresh sidebar metadata (groups, session list).
+								// Do NOT invalidate sessionMessages or clear live
+								// messages — the live data IS the complete conversation.
+								// It stays until the user navigates away from this session.
+								void invalidateSidebarQueries(displayedWorkspaceId);
 							}
 
 							sendingWorkspaceMapRef.current.delete(contextKey);
