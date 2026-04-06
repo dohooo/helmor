@@ -287,12 +287,11 @@ export function WorkspaceEditorSurface({
 		}
 
 		return () => {
+			// Only guard against stale async completions — do NOT dispose the
+			// editor here.  The slow path's entry block already calls
+			// disposeControllers before creating a new editor (handles kind
+			// changes), and the separate unmount effect handles final cleanup.
 			disposed = true;
-			disposeControllers({
-				fileControllerRef,
-				diffControllerRef,
-				changeSubscriptionRef,
-			});
 		};
 	}, [canRenderDiff, canRenderFile, editorSession.kind, editorSession.path]);
 
