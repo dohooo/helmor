@@ -182,8 +182,7 @@ pub struct CollectedTurn {
 }
 
 /// Input record for converting historical (DB-persisted) messages through
-/// the adapter pipeline.  Mirrors the DB row shape without pulling in the
-/// full `SessionMessageRecord` type.
+/// the adapter pipeline. Mirrors the subset of DB fields needed for rendering.
 #[derive(Debug, Clone)]
 pub struct HistoricalRecord {
     pub id: String,

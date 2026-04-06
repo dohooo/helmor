@@ -210,9 +210,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		const db = messagesQuery.data ?? [];
 		if (liveMessages.length === 0) return db;
 		if (db.length === 0) return liveMessages;
-		// Dedup by ID — DB messages take priority over live messages.
-		// With persistedIds, live and DB share the same IDs for persisted turns,
-		// so duplicates are removed without any visual disruption.
+		// Dedup by ID when an error-path refetch briefly overlaps with live data.
 		const seen = new Set(db.map((m) => m.id));
 		const uniqueLive = liveMessages.filter((m) => !seen.has(m.id));
 		return [...db, ...uniqueLive];
@@ -657,7 +655,10 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		await invalidateWorkspaceQueries();
 		if (threadSessionId) {
 			await queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.sessionMessages(threadSessionId),
+				queryKey: [
+					...helmorQueryKeys.sessionMessages(threadSessionId),
+					"thread",
+				],
 			});
 		}
 	}, [

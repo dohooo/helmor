@@ -59,7 +59,6 @@ pub fn run() {
             models::list_archived_workspaces,
             models::list_repositories,
             models::list_session_attachments,
-            models::list_session_messages,
             models::list_session_thread_messages,
             models::list_workspace_groups,
             models::list_workspace_sessions,

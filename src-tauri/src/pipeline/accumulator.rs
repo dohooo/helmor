@@ -9,7 +9,7 @@
 //! - Persistence data collection (turns, session_id, usage, model)
 //! - Partial message snapshot generation for the adapter stage
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 
 use anyhow::{bail, Result};
 use serde_json::Value;
@@ -67,8 +67,6 @@ pub struct StreamAccumulator {
     active_partial_id: Option<String>,
     partial_count: u32,
     line_count: u64,
-    /// DB-assigned message IDs consumed one-per-collected-message.
-    persisted_id_queue: VecDeque<String>,
 
     // ── Persistence state (replaces Rust ClaudeOutputAccumulator) ────
     /// Completed turns for DB persistence.
@@ -110,7 +108,6 @@ impl StreamAccumulator {
             active_partial_id: None,
             partial_count: 0,
             line_count: 0,
-            persisted_id_queue: VecDeque::new(),
             turns: Vec::new(),
             session_id: None,
             resolved_model: fallback_model.to_string(),
@@ -131,10 +128,7 @@ impl StreamAccumulator {
     // =====================================================================
 
     /// Feed a raw sidecar JSON event into the accumulator.
-    pub fn push_event(&mut self, value: &Value, raw_line: &str, persisted_ids: &[String]) {
-        for id in persisted_ids {
-            self.persisted_id_queue.push_back(id.clone());
-        }
+    pub fn push_event(&mut self, value: &Value, raw_line: &str) {
         self.line_count += 1;
 
         // Extract session ID
@@ -182,17 +176,19 @@ impl StreamAccumulator {
     /// Returns `None` if there is no active streaming content.
     /// This is the only allocation needed per render cycle.
     pub fn build_partial(
-        &self,
+        &mut self,
         context_key: &str,
         session_id: &str,
     ) -> Option<IntermediateMessage> {
         if !self.blocks.is_empty() {
-            Some(self.build_partial_from_blocks(context_key, session_id))
+            let (partial_id, created_at) = self.get_or_create_partial_identity(context_key);
+            Some(self.build_partial_from_blocks(session_id, partial_id, created_at))
         } else {
             let text = self.fallback_text.trim();
             let thinking = self.fallback_thinking.trim();
             if !text.is_empty() || !thinking.is_empty() {
-                Some(self.build_partial_fallback(context_key, session_id))
+                let (partial_id, created_at) = self.get_or_create_partial_identity(context_key);
+                Some(self.build_partial_fallback(session_id, partial_id, created_at))
             } else {
                 None
             }
@@ -203,7 +199,7 @@ impl StreamAccumulator {
     /// Used by tests. Production code uses `collected()` + `build_partial()`
     /// to avoid cloning the collected vec.
     #[cfg(test)]
-    pub fn snapshot(&self, context_key: &str, session_id: &str) -> Vec<IntermediateMessage> {
+    pub fn snapshot(&mut self, context_key: &str, session_id: &str) -> Vec<IntermediateMessage> {
         let mut messages = self.collected.clone();
         if let Some(partial) = self.build_partial(context_key, session_id) {
             messages.push(partial);
@@ -699,10 +695,8 @@ impl StreamAccumulator {
         role: &str,
         override_id: Option<&str>,
     ) {
-        let persisted_id = self.persisted_id_queue.pop_front();
         let id = override_id
             .map(|s| s.to_string())
-            .or(persisted_id)
             .unwrap_or_else(|| format!("stream:{}:{role}", self.line_count));
         let created_at = self.get_partial_created_at();
 
@@ -721,6 +715,18 @@ impl StreamAccumulator {
             self.partial_created_at = Some(chrono::Utc::now().to_rfc3339());
         }
         self.partial_created_at.clone().unwrap()
+    }
+
+    fn get_or_create_partial_identity(&mut self, context_key: &str) -> (String, String) {
+        let created_at = self.get_partial_created_at();
+        if self.active_partial_id.is_none() {
+            self.partial_count += 1;
+            self.active_partial_id = Some(format!(
+                "{context_key}:stream-partial:{}",
+                self.partial_count
+            ));
+        }
+        (self.active_partial_id.clone().unwrap(), created_at)
     }
 
     fn append_to_last_text_block(&mut self, text: &str) {
@@ -763,18 +769,10 @@ impl StreamAccumulator {
 
     fn build_partial_from_blocks(
         &self,
-        context_key: &str,
         _session_id: &str,
+        partial_id: String,
+        created_at: String,
     ) -> IntermediateMessage {
-        let created_at = self
-            .partial_created_at
-            .clone()
-            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-        let partial_id = self
-            .active_partial_id
-            .clone()
-            .unwrap_or_else(|| format!("{context_key}:stream-partial:{}", self.partial_count + 1));
-
         let mut content_blocks = Vec::new();
         for block in self.blocks.values() {
             match block {
@@ -841,16 +839,12 @@ impl StreamAccumulator {
         }
     }
 
-    fn build_partial_fallback(&self, context_key: &str, _session_id: &str) -> IntermediateMessage {
-        let created_at = self
-            .partial_created_at
-            .clone()
-            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-        let partial_id = self
-            .active_partial_id
-            .clone()
-            .unwrap_or_else(|| format!("{context_key}:stream-partial:{}", self.partial_count + 1));
-
+    fn build_partial_fallback(
+        &self,
+        _session_id: &str,
+        partial_id: String,
+        created_at: String,
+    ) -> IntermediateMessage {
         let text = self.fallback_text.trim();
         let thinking = self.fallback_thinking.trim();
         let display_text = if text.is_empty() { "..." } else { text };
@@ -978,7 +972,6 @@ mod tests {
                 }
             }),
             "",
-            &[],
         );
         acc.push_event(
             &json!({
@@ -990,7 +983,6 @@ mod tests {
                 }
             }),
             "",
-            &[],
         );
         acc.push_event(
             &json!({
@@ -1002,7 +994,6 @@ mod tests {
                 }
             }),
             "",
-            &[],
         );
 
         let snapshot = acc.snapshot("ctx", "sess");
@@ -1026,7 +1017,6 @@ mod tests {
                 }
             }),
             "",
-            &[],
         );
         acc.push_event(
             &json!({
@@ -1038,7 +1028,6 @@ mod tests {
                 }
             }),
             "",
-            &[],
         );
         acc.push_event(
             &json!({
@@ -1050,7 +1039,6 @@ mod tests {
                 }
             }),
             "",
-            &[],
         );
         acc.push_event(
             &json!({
@@ -1058,7 +1046,6 @@ mod tests {
                 "event": {"type": "content_block_stop", "index": 0}
             }),
             "",
-            &[],
         );
 
         let snapshot = acc.snapshot("ctx", "sess");
@@ -1083,7 +1070,6 @@ mod tests {
                 }
             }),
             "",
-            &[],
         );
         acc.push_event(
             &json!({
@@ -1095,7 +1081,6 @@ mod tests {
                 }
             }),
             "",
-            &[],
         );
 
         // Full assistant message arrives — should clear blocks
@@ -1108,7 +1093,7 @@ mod tests {
             }
         });
         let raw = serde_json::to_string(&full_msg).unwrap();
-        acc.push_event(&full_msg, &raw, &[]);
+        acc.push_event(&full_msg, &raw);
 
         let snapshot = acc.snapshot("ctx", "sess");
         // Should have the collected full message, no streaming partial
@@ -1129,7 +1114,7 @@ mod tests {
             }
         });
         let raw = serde_json::to_string(&event).unwrap();
-        acc.push_event(&event, &raw, &[]);
+        acc.push_event(&event, &raw);
 
         let snapshot = acc.snapshot("ctx", "sess");
         // Should have synthetic assistant (tool_use) + user (tool_result)
@@ -1139,33 +1124,99 @@ mod tests {
     }
 
     #[test]
-    fn persisted_ids_consumed_in_order() {
+    fn partial_identity_stays_stable_across_deltas() {
         let mut acc = StreamAccumulator::new("claude", "opus");
-        let msg1 = json!({
-            "type": "assistant",
-            "message": {
-                "id": "msg1",
-                "role": "assistant",
-                "content": [{"type": "text", "text": "first"}]
-            }
-        });
-        let msg2 = json!({
-            "type": "assistant",
-            "message": {
-                "id": "msg2",
-                "role": "assistant",
-                "content": [{"type": "text", "text": "second"}]
-            }
-        });
-        let raw1 = serde_json::to_string(&msg1).unwrap();
-        let raw2 = serde_json::to_string(&msg2).unwrap();
+        acc.push_event(
+            &json!({
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "tool_use", "id": "tool-1", "name": "Bash"}
+                }
+            }),
+            "",
+        );
+        acc.push_event(
+            &json!({
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": "{\"command\":\"ls\""}
+                }
+            }),
+            "",
+        );
 
-        acc.push_event(&msg1, &raw1, &["db-id-1".to_string()]);
-        acc.push_event(&msg2, &raw2, &["db-id-2".to_string()]);
+        let first = acc.snapshot("ctx", "sess").pop().unwrap();
+
+        acc.push_event(
+            &json!({
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": ",\"cwd\":\"/tmp\"}"}
+                }
+            }),
+            "",
+        );
+
+        let second = acc.snapshot("ctx", "sess").pop().unwrap();
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.created_at, second.created_at);
+    }
+
+    #[test]
+    fn finalized_assistant_reuses_partial_id() {
+        let mut acc = StreamAccumulator::new("claude", "opus");
+        acc.push_event(
+            &json!({
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "tool_use", "id": "tool-1", "name": "Bash"}
+                }
+            }),
+            "",
+        );
+        acc.push_event(
+            &json!({
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": "{\"command\":\"git status --short\"}"
+                    }
+                }
+            }),
+            "",
+        );
+
+        let partial_id = acc.snapshot("ctx", "sess").pop().unwrap().id;
+        let full_msg = json!({
+            "type": "assistant",
+            "message": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tool-1",
+                    "name": "Bash",
+                    "input": {"command": "git status --short"}
+                }]
+            }
+        });
+        let raw = serde_json::to_string(&full_msg).unwrap();
+        acc.push_event(&full_msg, &raw);
 
         let snapshot = acc.snapshot("ctx", "sess");
-        assert_eq!(snapshot[0].id, "db-id-1");
-        assert_eq!(snapshot[1].id, "db-id-2");
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].id, partial_id);
     }
 
     #[test]
@@ -1180,7 +1231,6 @@ mod tests {
                 }
             }),
             "",
-            &[],
         );
         acc.push_event(
             &json!({
@@ -1190,7 +1240,6 @@ mod tests {
                 }
             }),
             "",
-            &[],
         );
 
         let snapshot = acc.snapshot("ctx", "sess");

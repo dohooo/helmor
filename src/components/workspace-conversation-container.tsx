@@ -163,7 +163,10 @@ export const WorkspaceConversationContainer = memo(
 				if (sessionId) {
 					invalidations.push(
 						queryClient.invalidateQueries({
-							queryKey: helmorQueryKeys.sessionMessages(sessionId),
+							queryKey: [
+								...helmorQueryKeys.sessionMessages(sessionId),
+								"thread",
+							],
 						}),
 					);
 				}
@@ -219,8 +222,8 @@ export const WorkspaceConversationContainer = memo(
 
 				const contextKey = composerContextKey;
 				const now = new Date().toISOString();
-				// Pre-generate user message ID so it matches the DB primary key.
-				// AI message IDs come from the Rust backend via persistedIds.
+				// Pre-generate the user message ID so the optimistic row already
+				// matches the eventual persisted record.
 				const userMessageId = crypto.randomUUID();
 				const optimisticUserMessage = createLiveThreadMessage({
 					id: userMessageId,
@@ -403,7 +406,7 @@ export const WorkspaceConversationContainer = memo(
 
 							if (event.persisted) {
 								// Only refresh sidebar metadata (groups, session list).
-								// Do NOT invalidate sessionMessages or clear live
+								// Do NOT invalidate the thread query or clear live
 								// messages — the live data IS the complete conversation.
 								// It stays until the user navigates away from this session.
 								void invalidateSidebarQueries(displayedWorkspaceId);

@@ -5,6 +5,8 @@ use rusqlite::{Connection, Transaction};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::pipeline::types::HistoricalRecord;
+
 use super::db;
 
 #[derive(Debug, Clone, Serialize)]
@@ -32,26 +34,6 @@ pub struct WorkspaceSessionSummary {
     pub is_hidden: bool,
     pub is_compacting: bool,
     pub active: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionMessageRecord {
-    pub id: String,
-    pub session_id: String,
-    pub role: String,
-    pub content: String,
-    pub content_is_json: bool,
-    pub parsed_content: Option<Value>,
-    pub created_at: String,
-    pub sent_at: Option<String>,
-    pub cancelled_at: Option<String>,
-    pub model: Option<String>,
-    pub sdk_message_id: Option<String>,
-    pub last_assistant_message_id: Option<String>,
-    pub turn_id: Option<String>,
-    pub is_resumable_message: Option<bool>,
-    pub attachment_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -140,41 +122,23 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
-pub fn list_session_messages(session_id: &str) -> Result<Vec<SessionMessageRecord>> {
+pub fn list_session_historical_records(session_id: &str) -> Result<Vec<HistoricalRecord>> {
     let connection = db::open_connection(false)?;
-    list_session_messages_with_connection(&connection, session_id)
+    list_session_historical_records_with_connection(&connection, session_id)
 }
 
-fn list_session_messages_with_connection(
+fn list_session_historical_records_with_connection(
     connection: &Connection,
     session_id: &str,
-) -> Result<Vec<SessionMessageRecord>> {
+) -> Result<Vec<HistoricalRecord>> {
     let mut statement = connection.prepare(
         r#"
             SELECT
               sm.id,
-              sm.session_id,
               sm.role,
               sm.content,
-              sm.created_at,
-              sm.sent_at,
-              sm.cancelled_at,
-              sm.model,
-              sm.sdk_message_id,
-              sm.last_assistant_message_id,
-              sm.turn_id,
-              sm.is_resumable_message,
-              COALESCE(ac.attachment_count, 0) AS attachment_count
+              sm.created_at
             FROM session_messages sm
-            LEFT JOIN (
-              SELECT
-                session_message_id,
-                COUNT(*) AS attachment_count
-              FROM attachments
-              WHERE session_id = ?1
-                AND session_message_id IS NOT NULL
-              GROUP BY session_message_id
-            ) ac ON ac.session_message_id = sm.id
             WHERE sm.session_id = ?1
             ORDER BY
               COALESCE(julianday(sm.sent_at), julianday(sm.created_at)) ASC,
@@ -183,26 +147,16 @@ fn list_session_messages_with_connection(
     )?;
 
     let rows = statement.query_map([session_id], |row| {
-        let content: String = row.get(3)?;
+        let content: String = row.get(2)?;
         let parsed_content = parse_session_message_content(&content);
-        let is_resumable_message = row.get::<_, Option<i64>>(11)?.map(|value| value != 0);
 
-        Ok(SessionMessageRecord {
+        Ok(HistoricalRecord {
             id: row.get(0)?,
-            session_id: row.get(1)?,
-            role: row.get(2)?,
+            role: row.get(1)?,
+            content,
             content_is_json: parsed_content.is_some(),
             parsed_content,
-            content,
-            created_at: row.get(4)?,
-            sent_at: row.get(5)?,
-            cancelled_at: row.get(6)?,
-            model: row.get(7)?,
-            sdk_message_id: row.get(8)?,
-            last_assistant_message_id: row.get(9)?,
-            turn_id: row.get(10)?,
-            is_resumable_message,
-            attachment_count: row.get(12)?,
+            created_at: row.get(3)?,
         })
     })?;
 
@@ -682,15 +636,6 @@ mod tests {
             "INSERT INTO session_messages (id, session_id, role, content) VALUES ('m2', 's1', 'user', 'plain text')",
             [],
         ).unwrap();
-        conn.execute(
-            "INSERT INTO attachments (id, session_id, session_message_id, type, created_at) VALUES ('a1', 's1', 'm1', 'image', '2026-01-01T00:00:30')",
-            [],
-        ).unwrap();
-        conn.execute(
-            "INSERT INTO attachments (id, session_id, session_message_id, type, created_at) VALUES ('a2', 's1', 'm1', 'image', '2026-01-01T00:00:31')",
-            [],
-        ).unwrap();
-
         let content: String = conn
             .query_row(
                 "SELECT content FROM session_messages WHERE id = 'm1'",
@@ -711,14 +656,12 @@ mod tests {
         let parsed2: Result<serde_json::Value, _> = serde_json::from_str(&content2);
         assert!(parsed2.is_err());
 
-        let records = list_session_messages_with_connection(&conn, "s1").unwrap();
+        let records = list_session_historical_records_with_connection(&conn, "s1").unwrap();
         let json_record = records.iter().find(|record| record.id == "m1").unwrap();
         let text_record = records.iter().find(|record| record.id == "m2").unwrap();
 
         assert!(json_record.content_is_json);
-        assert_eq!(json_record.attachment_count, 2);
         assert!(!text_record.content_is_json);
-        assert_eq!(text_record.attachment_count, 0);
     }
 
     #[test]

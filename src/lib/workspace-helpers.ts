@@ -1,7 +1,6 @@
 import type {
 	AgentModelOption,
 	AgentModelSection,
-	SessionMessageRecord,
 	ThreadMessageLike,
 	WorkspaceGroup,
 	WorkspaceRow,
@@ -212,55 +211,10 @@ export function createLiveThreadMessage({
 	};
 }
 
-/** @deprecated Use createLiveThreadMessage for new code. */
-export function createLiveMessage({
-	id,
-	sessionId,
-	role,
-	content,
-	createdAt,
-	model,
-}: {
-	id: string;
-	sessionId: string;
-	role: string;
-	content: string;
-	createdAt: string;
-	model: string;
-}): SessionMessageRecord {
-	return {
-		id,
-		sessionId,
-		role,
-		content,
-		contentIsJson: false,
-		createdAt,
-		sentAt: createdAt,
-		cancelledAt: null,
-		model,
-		sdkMessageId: null,
-		lastAssistantMessageId: null,
-		turnId: null,
-		isResumableMessage: null,
-		attachmentCount: 0,
-	};
-}
-
 export function appendLiveThreadMessage(
 	current: Record<string, ThreadMessageLike[]>,
 	contextKey: string,
 	message: ThreadMessageLike,
-) {
-	return {
-		...current,
-		[contextKey]: [...(current[contextKey] ?? []), message],
-	};
-}
-
-export function appendLiveMessage(
-	current: Record<string, SessionMessageRecord[]>,
-	contextKey: string,
-	message: SessionMessageRecord,
 ) {
 	return {
 		...current,
@@ -308,22 +262,4 @@ export function clampEffortToModel(
 		ranked.find((a) => a.rank === clamped)?.level ??
 		available[available.length - 1]!
 	);
-}
-
-export function haveSameLiveMessages(
-	current: SessionMessageRecord[] | undefined,
-	next: SessionMessageRecord[],
-) {
-	if (!current || current.length !== next.length) return false;
-
-	return current.every((message, index) => {
-		const nextMessage = next[index];
-		return (
-			message.id === nextMessage.id &&
-			message.role === nextMessage.role &&
-			message.content === nextMessage.content &&
-			message.contentIsJson === nextMessage.contentIsJson &&
-			message.createdAt === nextMessage.createdAt
-		);
-	});
 }

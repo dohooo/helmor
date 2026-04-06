@@ -68,7 +68,7 @@ import {
 	archivedWorkspacesQueryOptions,
 	createHelmorQueryClient,
 	helmorQueryKeys,
-	sessionMessagesQueryOptions,
+	sessionThreadMessagesQueryOptions,
 	workspaceDetailQueryOptions,
 	workspaceGroupsQueryOptions,
 	workspaceSessionsQueryOptions,
@@ -769,7 +769,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 			if (resolvedSessionId) {
 				await queryClient.ensureQueryData(
-					sessionMessagesQueryOptions(resolvedSessionId),
+					sessionThreadMessagesQueryOptions(resolvedSessionId),
 				);
 			}
 
@@ -801,8 +801,10 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 				null;
 			const hasSessionMessages =
 				sessionId === null ||
-				queryClient.getQueryData(helmorQueryKeys.sessionMessages(sessionId)) !==
-					undefined;
+				queryClient.getQueryData([
+					...helmorQueryKeys.sessionMessages(sessionId),
+					"thread",
+				]) !== undefined;
 
 			if (!hasSessionMessages) {
 				return null;
@@ -884,7 +886,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 				);
 				if (cachedWorkspaceDisplay.sessionId) {
 					void queryClient.prefetchQuery(
-						sessionMessagesQueryOptions(cachedWorkspaceDisplay.sessionId),
+						sessionThreadMessagesQueryOptions(cachedWorkspaceDisplay.sessionId),
 					);
 				}
 				return;
@@ -954,8 +956,10 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			}
 
 			if (
-				queryClient.getQueryData(helmorQueryKeys.sessionMessages(sessionId)) !==
-				undefined
+				queryClient.getQueryData([
+					...helmorQueryKeys.sessionMessages(sessionId),
+					"thread",
+				]) !== undefined
 			) {
 				startTransition(() => {
 					if (sessionSelectionRequestRef.current !== requestId) {
@@ -964,12 +968,14 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 					setDisplayedSessionId(sessionId);
 				});
-				void queryClient.prefetchQuery(sessionMessagesQueryOptions(sessionId));
+				void queryClient.prefetchQuery(
+					sessionThreadMessagesQueryOptions(sessionId),
+				);
 				return;
 			}
 
 			void queryClient
-				.ensureQueryData(sessionMessagesQueryOptions(sessionId))
+				.ensureQueryData(sessionThreadMessagesQueryOptions(sessionId))
 				.then(() => {
 					if (sessionSelectionRequestRef.current !== requestId) {
 						return;

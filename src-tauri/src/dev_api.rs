@@ -35,25 +35,10 @@ pub fn list_workspace_sessions(
     sessions::list_workspace_sessions(workspace_id)
 }
 
-pub fn list_session_messages(session_id: &str) -> Result<Vec<sessions::SessionMessageRecord>> {
-    sessions::list_session_messages(session_id)
-}
-
 pub fn list_session_thread_messages(
     session_id: &str,
 ) -> Result<Vec<crate::pipeline::types::ThreadMessageLike>> {
-    let records = sessions::list_session_messages(session_id)?;
-    let historical: Vec<crate::pipeline::types::HistoricalRecord> = records
-        .into_iter()
-        .map(|r| crate::pipeline::types::HistoricalRecord {
-            id: r.id,
-            role: r.role,
-            content: r.content,
-            content_is_json: r.content_is_json,
-            parsed_content: r.parsed_content,
-            created_at: r.created_at,
-        })
-        .collect();
+    let historical = sessions::list_session_historical_records(session_id)?;
     Ok(crate::pipeline::MessagePipeline::convert_historical(
         &historical,
     ))
@@ -390,12 +375,9 @@ pub fn start_agent_stream(
                     _ => {
                         let line = serde_json::to_string(&event.raw).unwrap_or_default();
                         if !line.is_empty() && line != "{}" {
-                            match pipeline.push_event(&event.raw, &line, &[]) {
+                            match pipeline.push_event(&event.raw, &line) {
                                 crate::pipeline::PipelineEmit::Full(messages) => {
-                                    let _ = tx.send(AgentStreamEvent::Update {
-                                        messages,
-                                        persisted_ids: vec![],
-                                    });
+                                    let _ = tx.send(AgentStreamEvent::Update { messages });
                                 }
                                 crate::pipeline::PipelineEmit::Partial(message) => {
                                     let _ = tx.send(AgentStreamEvent::StreamingPartial { message });

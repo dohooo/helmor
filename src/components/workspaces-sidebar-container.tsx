@@ -19,7 +19,7 @@ import {
 	archivedWorkspacesQueryOptions,
 	helmorQueryKeys,
 	repositoriesQueryOptions,
-	sessionMessagesQueryOptions,
+	sessionThreadMessagesQueryOptions,
 	workspaceDetailQueryOptions,
 	workspaceGroupsQueryOptions,
 	workspaceSessionsQueryOptions,
@@ -149,7 +149,7 @@ export const WorkspacesSidebarContainer = memo(
 
 					if (sessionId) {
 						await queryClient.prefetchQuery(
-							sessionMessagesQueryOptions(sessionId),
+							sessionThreadMessagesQueryOptions(sessionId),
 						);
 					}
 				})();

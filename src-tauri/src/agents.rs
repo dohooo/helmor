@@ -23,8 +23,6 @@ pub enum AgentStreamEvent {
     /// The frontend replaces its entire message array.
     Update {
         messages: Vec<crate::pipeline::types::ThreadMessageLike>,
-        #[serde(skip_serializing_if = "Vec::is_empty")]
-        persisted_ids: Vec<String>,
     },
     /// Only the streaming partial changed — sent on stream deltas.
     /// The frontend replaces only the trailing streaming message.
@@ -732,10 +730,9 @@ fn stream_via_sidecar(
                     let line = serde_json::to_string(&event.raw).unwrap_or_default();
                     if !line.is_empty() && line != "{}" {
                         if let Some(pl) = pipeline.as_mut() {
-                            let emit = pl.push_event(&event.raw, &line, &[]);
+                            let emit = pl.push_event(&event.raw, &line);
 
                             // Persist newly completed turns
-                            let mut batch_ids: Vec<String> = Vec::new();
                             if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
                                 let model_str = pl.accumulator.resolved_model().to_string();
                                 while persisted_turn_count < pl.accumulator.turns_len() {
@@ -745,8 +742,7 @@ fn stream_via_sidecar(
                                         pl.accumulator.turn_at(persisted_turn_count),
                                         &model_str,
                                     ) {
-                                        Ok(msg_id) => {
-                                            batch_ids.push(msg_id);
+                                        Ok(_) => {
                                             persisted_turn_count += 1;
                                         }
                                         Err(e) => {
@@ -762,13 +758,8 @@ fn stream_via_sidecar(
                             // Emit based on pipeline output type
                             match emit {
                                 crate::pipeline::PipelineEmit::Full(messages) => {
-                                    let _ = app.emit(
-                                        &event_name,
-                                        AgentStreamEvent::Update {
-                                            messages,
-                                            persisted_ids: batch_ids,
-                                        },
-                                    );
+                                    let _ = app
+                                        .emit(&event_name, AgentStreamEvent::Update { messages });
                                 }
                                 crate::pipeline::PipelineEmit::Partial(message) => {
                                     let _ = app.emit(
@@ -811,7 +802,7 @@ fn parse_claude_output(
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        accumulator.push_event(&value, line, &[]);
+        accumulator.push_event(&value, line);
     }
     accumulator.finish_output(fallback_session_id)
 }
@@ -832,7 +823,7 @@ fn parse_codex_output(
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        accumulator.push_event(&value, line, &[]);
+        accumulator.push_event(&value, line);
     }
     accumulator.finish_output(fallback_session_id)
 }

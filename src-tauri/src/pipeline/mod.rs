@@ -72,13 +72,8 @@ impl MessagePipeline {
     }
 
     /// Feed a raw sidecar JSON event.
-    pub fn push_event(
-        &mut self,
-        value: &Value,
-        raw_line: &str,
-        persisted_ids: &[String],
-    ) -> PipelineEmit {
-        self.accumulator.push_event(value, raw_line, persisted_ids);
+    pub fn push_event(&mut self, value: &Value, raw_line: &str) -> PipelineEmit {
+        self.accumulator.push_event(value, raw_line);
         self.generation += 1;
 
         let event_type = value.get("type").and_then(Value::as_str);

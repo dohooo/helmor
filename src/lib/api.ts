@@ -274,24 +274,6 @@ export type CreateWorkspaceResponse = {
 
 export type MarkWorkspaceReadResponse = undefined;
 
-export type SessionMessageRecord = {
-	id: string;
-	sessionId: string;
-	role: string;
-	content: string;
-	contentIsJson: boolean;
-	parsedContent?: unknown;
-	createdAt: string;
-	sentAt?: string | null;
-	cancelledAt?: string | null;
-	model?: string | null;
-	sdkMessageId?: string | null;
-	lastAssistantMessageId?: string | null;
-	turnId?: string | null;
-	isResumableMessage?: boolean | null;
-	attachmentCount: number;
-};
-
 export type SessionAttachmentRecord = {
 	id: string;
 	sessionId: string;
@@ -788,28 +770,6 @@ export async function loadWorkspaceSessions(
 	}
 }
 
-export async function loadSessionMessages(
-	sessionId: string,
-): Promise<SessionMessageRecord[]> {
-	const invoke = await getTauriInvoke();
-
-	if (!invoke) {
-		return devFetch<SessionMessageRecord[]>("list_session_messages", {
-			id: sessionId,
-		});
-	}
-
-	try {
-		return await invoke<SessionMessageRecord[]>("list_session_messages", {
-			sessionId,
-		});
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to load session messages."),
-		);
-	}
-}
-
 /**
  * Load session messages as pipeline-rendered ThreadMessageLike[].
  * The frontend can render these directly without any conversion.
@@ -1268,7 +1228,6 @@ export type AgentStreamEvent =
 	| {
 			kind: "update";
 			messages: ThreadMessageLike[];
-			persistedIds?: string[];
 	  }
 	| {
 			kind: "streamingPartial";

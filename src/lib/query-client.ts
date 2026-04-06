@@ -7,7 +7,6 @@ import {
 	loadAgentModelSections,
 	loadArchivedWorkspaces,
 	loadSessionAttachments,
-	loadSessionMessages,
 	loadSessionThreadMessages,
 	loadWorkspaceDetail,
 	loadWorkspaceGroups,
@@ -105,15 +104,6 @@ export function workspaceSessionsQueryOptions(workspaceId: string) {
 		queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
 		queryFn: () => loadWorkspaceSessions(workspaceId),
 		staleTime: WORKSPACE_STALE_TIME,
-	});
-}
-
-export function sessionMessagesQueryOptions(sessionId: string) {
-	return queryOptions({
-		queryKey: helmorQueryKeys.sessionMessages(sessionId),
-		queryFn: () => loadSessionMessages(sessionId),
-		gcTime: SESSION_GC_TIME,
-		staleTime: SESSION_STALE_TIME,
 	});
 }
 

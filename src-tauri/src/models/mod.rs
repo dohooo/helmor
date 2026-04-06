@@ -207,29 +207,13 @@ pub fn list_workspace_sessions(
     Ok(sessions::list_workspace_sessions(&workspace_id)?)
 }
 
-#[tauri::command]
-pub fn list_session_messages(session_id: String) -> CmdResult<Vec<sessions::SessionMessageRecord>> {
-    Ok(sessions::list_session_messages(&session_id)?)
-}
-
 /// Return pipeline-rendered ThreadMessageLike[] for a session.
 /// The frontend can render these directly without any conversion.
 #[tauri::command]
 pub fn list_session_thread_messages(
     session_id: String,
 ) -> CmdResult<Vec<crate::pipeline::types::ThreadMessageLike>> {
-    let records = sessions::list_session_messages(&session_id)?;
-    let historical: Vec<crate::pipeline::types::HistoricalRecord> = records
-        .into_iter()
-        .map(|r| crate::pipeline::types::HistoricalRecord {
-            id: r.id,
-            role: r.role,
-            content: r.content,
-            content_is_json: r.content_is_json,
-            parsed_content: r.parsed_content,
-            created_at: r.created_at,
-        })
-        .collect();
+    let historical = sessions::list_session_historical_records(&session_id)?;
     Ok(crate::pipeline::MessagePipeline::convert_historical(
         &historical,
     ))
