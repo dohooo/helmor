@@ -235,6 +235,45 @@ export function appendLiveMessage(
 	};
 }
 
+// ── Effort-level helpers ──────────────────────────────────────────────
+
+const EFFORT_RANK: Record<string, number> = {
+	minimal: 0,
+	low: 1,
+	medium: 2,
+	high: 3,
+	xhigh: 4,
+	max: 4,
+};
+
+export function getAvailableEffortLevels(
+	modelId: string | null,
+	provider: string,
+): string[] {
+	if (modelId === "gpt-5.1-codex-mini") return ["medium", "high"];
+	if (provider === "codex") return ["low", "medium", "high", "xhigh"];
+	if (modelId === "opus-1m" || modelId === "opus")
+		return ["low", "medium", "high", "max"];
+	return ["low", "medium", "high"];
+}
+
+export function clampEffortToModel(
+	rawEffort: string,
+	modelId: string | null,
+	provider: string,
+): string {
+	const available = getAvailableEffortLevels(modelId, provider);
+	const rank = EFFORT_RANK[rawEffort] ?? 3;
+	const ranked = available.map((l) => ({
+		level: l,
+		rank: EFFORT_RANK[l] ?? 0,
+	}));
+	const minRank = Math.min(...ranked.map((a) => a.rank));
+	const maxRank = Math.max(...ranked.map((a) => a.rank));
+	const clamped = Math.max(minRank, Math.min(maxRank, rank));
+	return ranked.find((a) => a.rank === clamped)?.level ?? available.at(-1)!;
+}
+
 export function haveSameLiveMessages(
 	current: SessionMessageRecord[] | undefined,
 	next: SessionMessageRecord[],
