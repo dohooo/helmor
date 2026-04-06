@@ -28,7 +28,7 @@ export function BaseTooltip({
 				align={align}
 				arrow={false}
 				className={cn(
-					"flex items-center rounded-md px-1.5 py-1 text-[11px] leading-none",
+					"flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none",
 					className,
 				)}
 			>

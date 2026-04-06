@@ -1,22 +1,27 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createContext, useContext } from "react";
 
+export type ThemeMode = "system" | "light" | "dark";
+
 export type AppSettings = {
 	fontSize: number;
 	branchPrefixType: "github" | "custom" | "none";
 	branchPrefixCustom: string;
+	theme: ThemeMode;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
 	fontSize: 14,
 	branchPrefixType: "github",
 	branchPrefixCustom: "",
+	theme: "system",
 };
 
 const SETTINGS_KEY_MAP: Record<keyof AppSettings, string> = {
 	fontSize: "app.font_size",
 	branchPrefixType: "branch_prefix_type",
 	branchPrefixCustom: "branch_prefix_custom",
+	theme: "app.theme",
 };
 
 export async function loadSettings(): Promise<AppSettings> {
@@ -34,6 +39,9 @@ export async function loadSettings(): Promise<AppSettings> {
 			branchPrefixCustom:
 				raw[SETTINGS_KEY_MAP.branchPrefixCustom] ??
 				DEFAULT_SETTINGS.branchPrefixCustom,
+			theme:
+				(raw[SETTINGS_KEY_MAP.theme] as AppSettings["theme"]) ??
+				DEFAULT_SETTINGS.theme,
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS };
@@ -67,4 +75,20 @@ export const SettingsContext = createContext<SettingsContextValue>({
 
 export function useSettings(): SettingsContextValue {
 	return useContext(SettingsContext);
+}
+
+/** Resolve the effective theme ("light" | "dark") from a ThemeMode setting. */
+export function resolveTheme(mode: ThemeMode): "light" | "dark" {
+	if (mode === "system") {
+		if (
+			typeof window !== "undefined" &&
+			typeof window.matchMedia === "function"
+		) {
+			return window.matchMedia("(prefers-color-scheme: dark)").matches
+				? "dark"
+				: "light";
+		}
+		return "dark";
+	}
+	return mode;
 }

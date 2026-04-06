@@ -9,7 +9,13 @@
 
 use std::net::SocketAddr;
 
-use axum::{extract::Query, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
+use axum::{
+    extract::Query,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
 use tower_http::cors::CorsLayer;
 
 use helmor_lib::data_dir;
@@ -30,6 +36,23 @@ fn cmd_err(e: anyhow::Error) -> impl IntoResponse {
 #[derive(serde::Deserialize)]
 struct IdQuery {
     id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct PathQuery {
+    path: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RootQuery {
+    #[serde(alias = "workspaceRootPath")]
+    root: String,
+}
+
+#[derive(serde::Deserialize)]
+struct WriteBody {
+    path: String,
+    content: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +159,59 @@ mod handlers {
             Err(e) => cmd_err(e).into_response(),
         }
     }
+
+    // --- editor file operations -----------------------------------------------
+
+    pub async fn read_editor_file(Query(q): Query<PathQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::read_editor_file(&q.path) {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn write_editor_file(Json(body): Json<WriteBody>) -> impl IntoResponse {
+        match helmor_lib::dev_api::write_editor_file(&body.path, &body.content) {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn stat_editor_file(Query(q): Query<PathQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::stat_editor_file(&q.path) {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn list_editor_files(Query(q): Query<RootQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::list_editor_files(&q.root) {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn list_editor_files_with_content(Query(q): Query<RootQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::list_editor_files_with_content(&q.root) {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn list_workspace_changes(Query(q): Query<RootQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::list_workspace_changes(&q.root) {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn list_workspace_changes_with_content(
+        Query(q): Query<RootQuery>,
+    ) -> impl IntoResponse {
+        match helmor_lib::dev_api::list_workspace_changes_with_content(&q.root) {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -193,6 +269,23 @@ async fn main() {
         .route(
             "/api/list_hidden_sessions",
             get(handlers::list_hidden_sessions),
+        )
+        // Editor file operations
+        .route("/api/read_editor_file", get(handlers::read_editor_file))
+        .route("/api/write_editor_file", post(handlers::write_editor_file))
+        .route("/api/stat_editor_file", get(handlers::stat_editor_file))
+        .route("/api/list_editor_files", get(handlers::list_editor_files))
+        .route(
+            "/api/list_editor_files_with_content",
+            get(handlers::list_editor_files_with_content),
+        )
+        .route(
+            "/api/list_workspace_changes",
+            get(handlers::list_workspace_changes),
+        )
+        .route(
+            "/api/list_workspace_changes_with_content",
+            get(handlers::list_workspace_changes_with_content),
         )
         .layer(CorsLayer::permissive());
 

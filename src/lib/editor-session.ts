@@ -15,6 +15,8 @@ export type InspectorFileItem = {
 	absolutePath: string;
 	name: string;
 	status: "M" | "A" | "D";
+	insertions: number;
+	deletions: number;
 };
 
 const DEFAULT_INSPECTOR_RELATIVE_FILES: Array<{
@@ -48,6 +50,8 @@ export function buildFallbackInspectorFileItems(
 		absolutePath: joinPath(normalizedRoot, file.path),
 		name: getBaseName(file.path),
 		status: file.status,
+		insertions: 0,
+		deletions: 0,
 	}));
 }
 

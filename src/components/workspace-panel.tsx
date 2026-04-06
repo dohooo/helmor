@@ -10,7 +10,6 @@ import {
 	Copy,
 	FilePlus,
 	FileText,
-	FolderKanban,
 	FolderSearch,
 	GitBranch,
 	Globe,
@@ -122,6 +121,8 @@ type WorkspacePanelProps = {
 			lastMeasuredAt?: number;
 		},
 	) => void;
+	headerActions?: React.ReactNode;
+	headerLeading?: React.ReactNode;
 };
 
 type RenderedMessage = ReturnType<typeof convertMessages>[number];
@@ -181,6 +182,8 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	onWorkspaceChanged,
 	onSessionMeasurements,
 	onSessionPrepared,
+	headerActions,
+	headerLeading,
 }: WorkspacePanelProps) {
 	const selectedSession =
 		sessions.find((s) => s.id === selectedSessionId) ?? null;
@@ -314,20 +317,11 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 			<header className="relative z-20">
 				<div
 					aria-label="Workspace header"
-					className="flex h-[2.4rem] items-center gap-3 px-5"
+					className="flex h-9 items-center justify-between gap-3 px-[18px]"
 					data-tauri-drag-region
 				>
-					<div className="flex min-w-0 items-center gap-2 text-[13px]">
-						<span className="inline-flex items-center gap-1 px-1 py-0.5 font-medium text-app-foreground-soft">
-							<FolderKanban
-								className="size-3.5 text-app-project"
-								strokeWidth={1.9}
-							/>
-							<span className="truncate">
-								{workspace?.repoName ?? "Workspace"}
-							</span>
-						</span>
-						<span className="text-app-muted">/</span>
+					<div className="flex min-w-0 items-center gap-2 text-[12.5px]">
+						{headerLeading}
 						<span className="inline-flex items-center gap-1 px-1 py-0.5 font-medium text-app-foreground">
 							<GitBranch className="size-3.5 text-app-warm" strokeWidth={1.9} />
 							<span className="truncate">
@@ -341,7 +335,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 									strokeWidth={1.8}
 								/>
 								{workspace.state === "archived" ? (
-									<span className="px-1 py-0.5 text-[13px] font-medium text-app-foreground-soft">
+									<span className="px-1 py-0.5 font-medium text-app-foreground-soft">
 										{workspace.intendedTargetBranch}
 									</span>
 								) : (
@@ -369,11 +363,16 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 							</span>
 						) : null}
 					</div>
+					{headerActions && (
+						<div className="flex shrink-0 items-center gap-1">
+							{headerActions}
+						</div>
+					)}
 				</div>
 
 				{/* --- Session tabs row --- */}
 				<div className="flex items-center px-4 pb-1">
-					<div className="min-w-0 flex-1 overflow-x-auto [scrollbar-width:none]">
+					<div className="scrollbar-none min-w-0 flex-1 overflow-x-auto">
 						{loadingWorkspace ? (
 							<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-app-muted">
 								<Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
@@ -389,7 +388,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 							>
 								<TabsList
 									aria-label="Sessions"
-									className="min-w-max justify-start rounded-xl bg-app-sidebar"
+									className="inline-flex w-auto justify-start bg-app-sidebar"
 								>
 									{sessions.map((session) => {
 										const selected = session.id === selectedSessionId;
@@ -409,7 +408,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 												onFocus={() => {
 													onPrefetchSession?.(session.id);
 												}}
-												className="group/tab relative gap-1.5 overflow-hidden rounded-[10px] px-3.5 pr-5 text-[13px] text-app-foreground-soft data-[state=active]:text-app-foreground"
+												className="group/tab relative gap-1.5 overflow-hidden pr-5 text-app-foreground-soft data-[state=active]:text-app-foreground"
 											>
 												<SessionProviderIcon
 													agentType={

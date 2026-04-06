@@ -3,6 +3,7 @@ import {
 	DEFAULT_AGENT_MODEL_SECTIONS,
 	DEFAULT_WORKSPACE_GROUPS,
 	listRepositories,
+	listWorkspaceChangesWithContent,
 	loadAgentModelSections,
 	loadArchivedWorkspaces,
 	loadSessionAttachments,
@@ -15,6 +16,8 @@ import {
 const NAVIGATION_STALE_TIME = 15_000;
 const WORKSPACE_STALE_TIME = 5 * 60_000;
 const SESSION_STALE_TIME = 10 * 60_000;
+const CHANGES_STALE_TIME = 3_000;
+const CHANGES_REFETCH_INTERVAL = 10_000;
 const DEFAULT_GC_TIME = 30 * 60_000;
 const SESSION_GC_TIME = 60 * 60_000;
 
@@ -31,6 +34,8 @@ export const helmorQueryKeys = {
 		["sessionMessages", sessionId] as const,
 	sessionAttachments: (sessionId: string) =>
 		["sessionAttachments", sessionId] as const,
+	workspaceChanges: (workspaceRootPath: string) =>
+		["workspaceChanges", workspaceRootPath] as const,
 };
 
 export function createHelmorQueryClient() {
@@ -117,5 +122,15 @@ export function sessionAttachmentsQueryOptions(sessionId: string) {
 		queryFn: () => loadSessionAttachments(sessionId),
 		gcTime: SESSION_GC_TIME,
 		staleTime: 60_000,
+	});
+}
+
+export function workspaceChangesQueryOptions(workspaceRootPath: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.workspaceChanges(workspaceRootPath),
+		queryFn: () => listWorkspaceChangesWithContent(workspaceRootPath),
+		staleTime: CHANGES_STALE_TIME,
+		refetchOnWindowFocus: true,
+		refetchInterval: CHANGES_REFETCH_INTERVAL,
 	});
 }

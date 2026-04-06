@@ -44,6 +44,8 @@ pub struct EditorFileListItem {
     pub absolute_path: String,
     pub name: String,
     pub status: String,
+    pub insertions: u32,
+    pub deletions: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -161,6 +163,8 @@ pub fn list_editor_files(workspace_root_path: &str) -> Result<Vec<EditorFileList
                 absolute_path: path.display().to_string(),
                 name: path.file_name()?.to_string_lossy().to_string(),
                 status: "M".to_string(),
+                insertions: 0,
+                deletions: 0,
             })
         })
         .collect())
@@ -248,7 +252,23 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
         }
     }
 
-    // Remove deleted files that no longer exist (D status stays — it's informational)
+    // Collect line-level stats via --numstat (insertions/deletions per file).
+    // We accumulate across committed + staged + unstaged so the totals reflect
+    // the full diff from merge-base to the working tree.
+    let mut stats_map = std::collections::BTreeMap::<String, (u32, u32)>::new();
+    let committed_numstat = git_ops::run_git(
+        ["diff", "--numstat", merge_base.as_str(), "HEAD"],
+        Some(workspace_root),
+    )
+    .unwrap_or_default();
+    let staged_numstat = git_ops::run_git(["diff", "--numstat", "--cached"], Some(workspace_root))
+        .unwrap_or_default();
+    let unstaged_numstat =
+        git_ops::run_git(["diff", "--numstat"], Some(workspace_root)).unwrap_or_default();
+    parse_numstat_into(&committed_numstat, &mut stats_map);
+    parse_numstat_into(&staged_numstat, &mut stats_map);
+    parse_numstat_into(&unstaged_numstat, &mut stats_map);
+
     Ok(file_map
         .into_iter()
         .map(|(relative_path, status)| {
@@ -257,11 +277,14 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| relative_path.clone());
+            let (insertions, deletions) = stats_map.get(&relative_path).copied().unwrap_or((0, 0));
             EditorFileListItem {
                 path: relative_path,
                 absolute_path: absolute.display().to_string(),
                 name,
                 status,
+                insertions,
+                deletions,
             }
         })
         .collect())
@@ -354,6 +377,52 @@ fn parse_name_status_into(output: &str, map: &mut std::collections::BTreeMap<Str
         };
 
         map.insert(path.to_string(), status.to_string());
+    }
+}
+
+/// Parse `git diff --numstat` output and accumulate insertions/deletions per path.
+/// Format: "123\t456\tpath" — binary files show "-\t-\tpath".
+fn parse_numstat_into(output: &str, map: &mut std::collections::BTreeMap<String, (u32, u32)>) {
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(3, '\t');
+        let Some(ins_str) = parts.next() else {
+            continue;
+        };
+        let Some(del_str) = parts.next() else {
+            continue;
+        };
+        let Some(path) = parts.next() else {
+            continue;
+        };
+        // Binary files report "-" — skip them
+        let Ok(ins) = ins_str.parse::<u32>() else {
+            continue;
+        };
+        let Ok(del) = del_str.parse::<u32>() else {
+            continue;
+        };
+        // For renames "old => new", use the new path
+        let resolved_path = if let Some(arrow_pos) = path.find(" => ") {
+            // Could be "dir/{old => new}/file" or "old => new"
+            if let Some(brace_start) = path[..arrow_pos].rfind('{') {
+                let prefix = &path[..brace_start];
+                let new_part = &path[arrow_pos + 4..];
+                let suffix = new_part.find('}').map_or("", |i| &new_part[i + 1..]);
+                let new_name = new_part.find('}').map_or(new_part, |i| &new_part[..i]);
+                format!("{prefix}{new_name}{suffix}")
+            } else {
+                path[arrow_pos + 4..].to_string()
+            }
+        } else {
+            path.to_string()
+        };
+        let entry = map.entry(resolved_path).or_insert((0, 0));
+        entry.0 += ins;
+        entry.1 += del;
     }
 }
 

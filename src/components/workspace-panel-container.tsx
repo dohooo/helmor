@@ -45,6 +45,8 @@ type WorkspacePanelContainerProps = {
 	sendingSessionIds?: Set<string>;
 	onSelectSession: (sessionId: string | null) => void;
 	onResolveDisplayedSession: (sessionId: string | null) => void;
+	headerActions?: React.ReactNode;
+	headerLeading?: React.ReactNode;
 };
 
 function arePaneMeasurementsEqual(
@@ -95,6 +97,8 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	sendingSessionIds,
 	onSelectSession,
 	onResolveDisplayedSession,
+	headerActions,
+	headerLeading,
 }: WorkspacePanelContainerProps) {
 	const queryClient = useQueryClient();
 	const warmCacheRef = useRef<Record<string, SessionViewportCacheEntry>>({});
@@ -879,6 +883,8 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			}}
 			onSessionMeasurements={handlePaneMeasurements}
 			onSessionPrepared={handlePanePrepared}
+			headerActions={headerActions}
+			headerLeading={headerLeading}
 		/>
 	);
 });

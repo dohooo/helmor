@@ -11,10 +11,9 @@ import {
 	ChevronDown,
 	Copy,
 	ExternalLink,
-	FolderInput,
-	Moon,
+	PanelLeftClose,
+	PanelLeftOpen,
 	RefreshCw,
-	Sun,
 } from "lucide-react";
 import {
 	type KeyboardEvent,
@@ -26,10 +25,8 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { ConductorImportDialog } from "./components/conductor-import-dialog";
 import { SettingsButton, SettingsDialog } from "./components/settings-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "./components/ui/avatar";
-import { Button } from "./components/ui/button";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -50,13 +47,10 @@ import { WorkspaceInspectorSidebar } from "./components/workspace-inspector-side
 import { WorkspacesSidebarContainer } from "./components/workspaces-sidebar-container";
 import {
 	cancelGithubIdentityConnect,
-	type DetectedEditor,
-	detectInstalledEditors,
 	disconnectGithubIdentity,
 	type GithubIdentityDeviceFlowStart,
 	type GithubIdentitySnapshot,
 	hasTauriRuntime,
-	isConductorAvailable,
 	listenGithubIdentityChanged,
 	loadGithubIdentitySession,
 	openWorkspaceInEditor,
@@ -82,13 +76,25 @@ import {
 	type AppSettings,
 	DEFAULT_SETTINGS,
 	loadSettings,
+	resolveTheme,
 	SettingsContext,
 	saveSettings,
+	useSettings,
 } from "./lib/settings";
 import {
 	describeUnknownError,
 	summaryToArchivedRow,
 } from "./lib/workspace-helpers";
+
+const ALL_EDITORS = [
+	{ id: "cursor", name: "Cursor" },
+	{ id: "vscode", name: "VS Code" },
+	{ id: "vscode-insiders", name: "VS Code Insiders" },
+	{ id: "windsurf", name: "Windsurf" },
+	{ id: "zed", name: "Zed" },
+	{ id: "webstorm", name: "WebStorm" },
+	{ id: "sublime", name: "Sublime Text" },
+] as const;
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "helmor.workspaceSidebarWidth";
 const INSPECTOR_WIDTH_STORAGE_KEY = "helmor.workspaceInspectorWidth";
@@ -268,11 +274,11 @@ function App() {
 		<SettingsContext.Provider value={settingsContextValue}>
 			<QueryClientProvider client={queryClient}>
 				<AppShell onOpenSettings={() => setSettingsOpen(true)} />
+				<SettingsDialog
+					open={settingsOpen}
+					onClose={() => setSettingsOpen(false)}
+				/>
 			</QueryClientProvider>
-			<SettingsDialog
-				open={settingsOpen}
-				onClose={() => setSettingsOpen(false)}
-			/>
 		</SettingsContext.Provider>
 	);
 }
@@ -287,6 +293,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const [githubIdentityState, setGithubIdentityState] =
 		useState<GithubIdentityState>(getInitialGithubIdentityState);
 	const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
+	const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 	const [inspectorWidth, setInspectorWidth] = useState(() =>
 		getInitialSidebarWidth(INSPECTOR_WIDTH_STORAGE_KEY),
 	);
@@ -318,22 +325,12 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		() => new Set(),
 	);
 
-	const [theme, setTheme] = useState<"light" | "dark">(() => {
-		if (typeof window === "undefined") return "dark";
-		return (localStorage.getItem("helmor.theme") as "light" | "dark") ?? "dark";
-	});
-	const [conductorAvailable, setConductorAvailable] = useState(false);
-	const [installedEditors, setInstalledEditors] = useState<DetectedEditor[]>(
-		[],
-	);
+	const { settings: appSettings } = useSettings();
 	const [preferredEditorId, setPreferredEditorId] = useState<string | null>(
 		null,
 	);
 	const preferredEditor =
-		installedEditors.find((e) => e.id === preferredEditorId) ??
-		installedEditors[0] ??
-		null;
-	const [importDialogOpen, setImportDialogOpen] = useState(false);
+		ALL_EDITORS.find((e) => e.id === preferredEditorId) ?? ALL_EDITORS[0];
 	const isSidebarResizing = resizeState?.target === "sidebar";
 	const isInspectorResizing = resizeState?.target === "inspector";
 	const isIdentityConnected = githubIdentityState.status === "connected";
@@ -362,19 +359,6 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 				)?.rootPath
 			: null) ??
 		null;
-
-	useEffect(() => {
-		void isConductorAvailable().then(setConductorAvailable);
-		void detectInstalledEditors().then(setInstalledEditors);
-	}, []);
-
-	const toggleTheme = useCallback(() => {
-		setTheme((t) => {
-			const next = t === "dark" ? "light" : "dark";
-			localStorage.setItem("helmor.theme", next);
-			return next;
-		});
-	}, []);
 
 	const pushWorkspaceToast = useCallback(
 		(
@@ -440,8 +424,22 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	}, [editorSession, workspaceRootPath]);
 
 	useEffect(() => {
-		document.documentElement.classList.toggle("dark", theme === "dark");
-	}, [theme]);
+		const apply = () => {
+			const effective = resolveTheme(appSettings.theme);
+			document.documentElement.classList.toggle("dark", effective === "dark");
+		};
+
+		apply();
+
+		if (
+			appSettings.theme === "system" &&
+			typeof window.matchMedia === "function"
+		) {
+			const mq = window.matchMedia("(prefers-color-scheme: dark)");
+			mq.addEventListener("change", apply);
+			return () => mq.removeEventListener("change", apply);
+		}
+	}, [appSettings.theme]);
 
 	useEffect(() => {
 		let disposed = false;
@@ -707,7 +705,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 			setWorkspaceViewMode("editor");
 			setEditorSession({
-				kind: "file",
+				kind: "diff",
 				path,
 				inline: false,
 				dirty: false,
@@ -1034,35 +1032,6 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		[],
 	);
 
-	const handleImportedFromConductor = useCallback(() => {
-		void Promise.all([
-			queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			}),
-			queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.archivedWorkspaces,
-			}),
-			queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.repositories,
-			}),
-			displayedWorkspaceId
-				? queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceDetail(displayedWorkspaceId),
-					})
-				: Promise.resolve(),
-			displayedWorkspaceId
-				? queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceSessions(displayedWorkspaceId),
-					})
-				: Promise.resolve(),
-			displayedSessionId
-				? queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.sessionMessages(displayedSessionId),
-					})
-				: Promise.resolve(),
-		]);
-	}, [displayedSessionId, displayedWorkspaceId, queryClient]);
-
 	useEffect(() => {
 		if (!isIdentityConnected || workspaceViewMode === "editor") {
 			return;
@@ -1133,168 +1102,78 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 					<div className="relative flex h-full min-h-0 bg-app-sidebar">
 						{workspaceViewMode === "conversation" && (
 							<>
-								<aside
-									aria-label="Workspace sidebar"
-									className="relative h-full shrink-0 overflow-hidden bg-app-sidebar"
-									style={{ width: `${sidebarWidth}px` }}
-								>
-									<WorkspacesSidebarContainer
-										selectedWorkspaceId={selectedWorkspaceId}
-										sendingWorkspaceIds={sendingWorkspaceIds}
-										onSelectWorkspace={handleSelectWorkspace}
-										pushWorkspaceToast={pushWorkspaceToast}
-									/>
-									<div className="absolute bottom-3 left-3 z-20">
-										<SettingsButton onClick={onOpenSettings} />
-									</div>
-								</aside>
+								{!sidebarCollapsed && (
+									<aside
+										aria-label="Workspace sidebar"
+										className="relative h-full shrink-0 overflow-hidden bg-app-sidebar"
+										style={{ width: `${sidebarWidth}px` }}
+									>
+										<WorkspacesSidebarContainer
+											selectedWorkspaceId={selectedWorkspaceId}
+											sendingWorkspaceIds={sendingWorkspaceIds}
+											onSelectWorkspace={handleSelectWorkspace}
+											pushWorkspaceToast={pushWorkspaceToast}
+										/>
+										<button
+											type="button"
+											aria-label="Collapse sidebar"
+											onClick={() => setSidebarCollapsed(true)}
+											className="absolute right-[16px] top-[24px] z-20 flex size-5 items-center justify-center rounded text-app-muted/50 transition-colors hover:text-app-foreground"
+										>
+											<PanelLeftClose className="size-3.5" strokeWidth={1.8} />
+										</button>
+										<div className="absolute inset-x-3 bottom-3 z-20 flex items-center justify-between">
+											<SettingsButton onClick={onOpenSettings} />
+											<GithubStatusMenu
+												identityState={githubIdentityState}
+												onDisconnectGithub={() => {
+													void handleDisconnectGithubIdentity();
+												}}
+											/>
+										</div>
+									</aside>
+								)}
 
-								<div
-									role="separator"
-									tabIndex={0}
-									aria-label="Resize sidebar"
-									aria-orientation="vertical"
-									aria-valuemin={MIN_SIDEBAR_WIDTH}
-									aria-valuemax={MAX_SIDEBAR_WIDTH}
-									aria-valuenow={sidebarWidth}
-									onMouseDown={handleResizeStart("sidebar")}
-									onKeyDown={handleResizeKeyDown("sidebar")}
-									className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
-									style={{
-										left: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
-										width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
-									}}
-								>
-									<span
-										aria-hidden="true"
-										className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
-											isSidebarResizing
-												? "w-[2px] bg-app-foreground/80 shadow-[0_0_12px_rgba(250,249,246,0.2)]"
-												: "w-px bg-app-border group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
-										}`}
-									/>
-								</div>
+								{!sidebarCollapsed && (
+									<div
+										role="separator"
+										tabIndex={0}
+										aria-label="Resize sidebar"
+										aria-orientation="vertical"
+										aria-valuemin={MIN_SIDEBAR_WIDTH}
+										aria-valuemax={MAX_SIDEBAR_WIDTH}
+										aria-valuenow={sidebarWidth}
+										onMouseDown={handleResizeStart("sidebar")}
+										onKeyDown={handleResizeKeyDown("sidebar")}
+										className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+										style={{
+											left: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
+											width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
+										}}
+									>
+										<span
+											aria-hidden="true"
+											className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
+												isSidebarResizing
+													? "w-[2px] bg-app-foreground/80 shadow-[0_0_12px_rgba(250,249,246,0.2)]"
+													: "w-px bg-app-border group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
+											}`}
+										/>
+									</div>
+								)}
 							</>
 						)}
 
 						<section
 							aria-label="Workspace panel"
-							className={`relative flex min-h-0 flex-1 flex-col overflow-hidden bg-app-elevated ${workspaceViewMode === "editor" ? "" : "my-1 mr-1"}`}
+							className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-app-elevated"
 						>
 							{workspaceViewMode === "conversation" && (
-								<>
-									<div
-										aria-label="Workspace panel drag region"
-										className="absolute inset-x-0 top-0 z-10 h-[2.6rem] bg-transparent"
-										data-tauri-drag-region
-									/>
-
-									<div className="absolute right-4 top-[0.55rem] z-30 flex items-center gap-1">
-										{selectedWorkspaceId &&
-											installedEditors.length > 0 &&
-											preferredEditor && (
-												<div className="flex items-center rounded-md border border-app-border/40 bg-app-elevated/50">
-													<button
-														type="button"
-														aria-label={`Open in ${preferredEditor.name}`}
-														title={`Open in ${preferredEditor.name}`}
-														onClick={() =>
-															void openWorkspaceInEditor(
-																selectedWorkspaceId,
-																preferredEditor.id as "cursor" | "vscode",
-															).catch((e) =>
-																pushWorkspaceToast(
-																	String(e),
-																	`Failed to open ${preferredEditor.name}`,
-																),
-															)
-														}
-														className="flex size-6 items-center justify-center rounded-l-[5px] text-app-muted transition-colors hover:bg-app-foreground/[0.07] hover:text-app-foreground focus-visible:outline-none"
-													>
-														<EditorIcon
-															editorId={preferredEditor.id}
-															className="size-3.5"
-														/>
-													</button>
-													<DropdownMenu>
-														<DropdownMenuTrigger className="flex h-6 w-4 items-center justify-center rounded-r-[5px] border-l border-app-border/40 text-app-muted transition-colors hover:bg-app-foreground/[0.07] hover:text-app-foreground focus-visible:outline-none">
-															<ChevronDown
-																className="size-2.5"
-																strokeWidth={2}
-															/>
-														</DropdownMenuTrigger>
-														<DropdownMenuContent
-															side="bottom"
-															align="end"
-															sideOffset={6}
-															className="min-w-[11rem]"
-														>
-															{installedEditors.map((editor) => (
-																<DropdownMenuItem
-																	key={editor.id}
-																	onClick={() => {
-																		setPreferredEditorId(editor.id);
-																		void openWorkspaceInEditor(
-																			selectedWorkspaceId,
-																			editor.id as "cursor" | "vscode",
-																		).catch((e) =>
-																			pushWorkspaceToast(
-																				String(e),
-																				`Failed to open ${editor.name}`,
-																			),
-																		);
-																	}}
-																	className="flex items-center gap-2"
-																>
-																	<EditorIcon
-																		editorId={editor.id}
-																		className="size-4 shrink-0"
-																	/>
-																	<span className="font-medium">
-																		{editor.name}
-																	</span>
-																	{editor.id === preferredEditor.id && (
-																		<Check className="ml-auto size-3.5 text-app-foreground-soft" />
-																	)}
-																</DropdownMenuItem>
-															))}
-														</DropdownMenuContent>
-													</DropdownMenu>
-												</div>
-											)}
-										{conductorAvailable && (
-											<Button
-												variant="ghost"
-												size="icon-xs"
-												aria-label="Import from Conductor"
-												onClick={() => setImportDialogOpen(true)}
-												title="Import workspaces from Conductor"
-												className="text-app-muted hover:text-app-foreground"
-											>
-												<FolderInput className="size-3.5" strokeWidth={1.8} />
-											</Button>
-										)}
-										<Button
-											variant="ghost"
-											size="icon-xs"
-											aria-label="Toggle theme"
-											onClick={toggleTheme}
-											className="text-app-muted hover:text-app-foreground"
-										>
-											{theme === "dark" ? (
-												<Sun className="size-3.5" strokeWidth={1.8} />
-											) : (
-												<Moon className="size-3.5" strokeWidth={1.8} />
-											)}
-										</Button>
-										<GithubStatusMenu
-											identityState={githubIdentityState}
-											onDisconnectGithub={() => {
-												void handleDisconnectGithubIdentity();
-											}}
-										/>
-									</div>
-								</>
+								<div
+									aria-label="Workspace panel drag region"
+									className="absolute inset-x-0 top-0 z-10 h-9 bg-transparent"
+									data-tauri-drag-region
+								/>
 							)}
 
 							<div
@@ -1318,6 +1197,74 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 										onSelectSession={handleSelectSession}
 										onResolveDisplayedSession={handleResolveDisplayedSession}
 										onSendingWorkspacesChange={setSendingWorkspaceIds}
+										headerLeading={
+											sidebarCollapsed ? (
+												<button
+													type="button"
+													aria-label="Expand sidebar"
+													onClick={() => setSidebarCollapsed(false)}
+													className="flex size-5 items-center justify-center rounded text-app-muted transition-colors hover:text-app-foreground"
+												>
+													<PanelLeftOpen
+														className="size-3.5"
+														strokeWidth={1.8}
+													/>
+												</button>
+											) : undefined
+										}
+										headerActions={
+											selectedWorkspaceId && preferredEditor ? (
+												<DropdownMenu>
+													<DropdownMenuTrigger className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] font-medium text-app-muted transition-colors hover:text-app-foreground focus-visible:outline-none">
+														<EditorIcon
+															editorId={preferredEditor.id}
+															className="size-3.5"
+														/>
+														<span>{preferredEditor.name}</span>
+														<ChevronDown
+															className="size-2.5 opacity-50"
+															strokeWidth={2}
+														/>
+													</DropdownMenuTrigger>
+													<DropdownMenuContent
+														side="bottom"
+														align="end"
+														sideOffset={6}
+														className="min-w-[11rem]"
+													>
+														{ALL_EDITORS.map((editor) => (
+															<DropdownMenuItem
+																key={editor.id}
+																onClick={() => {
+																	setPreferredEditorId(editor.id);
+																	void openWorkspaceInEditor(
+																		selectedWorkspaceId,
+																		editor.id,
+																	).catch((e) =>
+																		pushWorkspaceToast(
+																			String(e),
+																			`Failed to open ${editor.name}`,
+																		),
+																	);
+																}}
+																className="flex items-center gap-2"
+															>
+																<EditorIcon
+																	editorId={editor.id}
+																	className="size-3.5 shrink-0"
+																/>
+																<span className="flex-1 font-medium">
+																	{editor.name}
+																</span>
+																{editor.id === preferredEditor.id && (
+																	<Check className="ml-auto size-3 text-app-foreground-soft" />
+																)}
+															</DropdownMenuItem>
+														))}
+													</DropdownMenuContent>
+												</DropdownMenu>
+											) : undefined
+										}
 									/>
 								)}
 							</div>
@@ -1432,11 +1379,6 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 					)}
 				</Toast>
 			))}
-			<ConductorImportDialog
-				open={importDialogOpen}
-				onClose={() => setImportDialogOpen(false)}
-				onImported={handleImportedFromConductor}
-			/>
 		</ToastProvider>
 	);
 }
@@ -1448,26 +1390,51 @@ function EditorIcon({
 	editorId: string;
 	className?: string;
 }) {
-	if (editorId === "cursor") {
-		return (
-			<svg
-				className={className}
-				viewBox="0 0 466.73 532.09"
-				fill="currentColor"
-			>
-				<path d="M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z" />
-			</svg>
-		);
+	switch (editorId) {
+		case "cursor":
+			return (
+				<svg
+					className={className}
+					viewBox="0 0 466.73 532.09"
+					fill="currentColor"
+				>
+					<path d="M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z" />
+				</svg>
+			);
+		case "vscode":
+		case "vscode-insiders":
+			return (
+				<svg className={className} viewBox="0 0 24 24" fill="currentColor">
+					<path d="M17.58 2.39L10 9.43 4.64 5.42 2 6.76v10.48l2.64 1.34L10 14.57l7.58 7.04L22 19.33V4.67l-4.42-2.28zM4.64 15.36V8.64L7.93 12l-3.29 3.36zM17.58 17.6l-5.37-5.6 5.37-5.6v11.2z" />
+				</svg>
+			);
+		case "windsurf":
+			return (
+				<svg className={className} viewBox="0 0 24 24" fill="currentColor">
+					<path d="M22.6522 4.79395L12.5765 19.206L2.50098 4.79395H10.5387L12.5765 7.93835L14.6143 4.79395H22.6522Z" />
+				</svg>
+			);
+		case "zed":
+			return (
+				<svg className={className} viewBox="0 0 24 24" fill="currentColor">
+					<path d="M5.976 4.016L15.584 4.016L5.648 16H10.496L12.08 13.664L18.688 4.016L20 4.016V20H5.976V17.6H15.584L5.648 4.016H5.976ZM12.08 13.664L10.496 16H20V20H5.976L15.912 8H11.064L9.48 10.336L2.872 20H1.56V4.016H15.584L5.648 16H10.496" />
+				</svg>
+			);
+		case "webstorm":
+			return (
+				<svg className={className} viewBox="0 0 24 24" fill="currentColor">
+					<path d="M0 0v24h24V0H0zm2.4 2.4h19.2v19.2H2.4V2.4zm1.8 1.5v1.2h6v-1.2h-6zm8.7 0L9.6 12.6l-1.8-5.4H6l3 9h1.5l1.5-4.5 1.5 4.5H15l3-9h-1.8l-1.8 5.4-1.5-8.7h-1.5zM4.2 19.2h7.2v1.2H4.2v-1.2z" />
+				</svg>
+			);
+		case "sublime":
+			return (
+				<svg className={className} viewBox="0 0 24 24" fill="currentColor">
+					<path d="M20.953 6.924c-.123-.429-.404-.715-.834-.858-.378-.126-6.32-2.048-6.32-2.048s-.065-.024-.203-.065c-.484-.138-.793-.065-1.136.199-.243.188-8.39 6.1-8.39 6.1S3.535 10.579 3.2 10.877c-.233.208-.374.463-.373.794.002.33.087.523.393.754l8.04 5.078s5.833 1.953 6.243 2.086c.488.16.867.09 1.2-.166.236-.183.347-.273.347-.273l-.003-5.402-7.473-4.424 7.476-2.4" />
+				</svg>
+			);
+		default:
+			return <ExternalLink className={className} strokeWidth={1.8} />;
 	}
-	if (editorId === "vscode") {
-		return (
-			<svg className={className} viewBox="0 0 24 24" fill="currentColor">
-				<path d="M17.58 2.39L10 9.43 4.64 5.42 2 6.76v10.48l2.64 1.34L10 14.57l7.58 7.04L22 19.33V4.67l-4.42-2.28zM4.64 15.36V8.64L7.93 12l-3.29 3.36zM17.58 17.6l-5.37-5.6 5.37-5.6v11.2z" />
-			</svg>
-		);
-	}
-	// Fallback: generic external link icon
-	return <ExternalLink className={className} strokeWidth={1.8} />;
 }
 
 function ChatCacheDebugHud() {
@@ -1760,7 +1727,7 @@ function GithubStatusMenu({
 		<DropdownMenu>
 			<DropdownMenuTrigger
 				aria-label="GitHub account menu"
-				className="inline-flex h-6 items-center gap-1.5 rounded-md px-1.5 text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
+				className="inline-flex h-7 items-center gap-2 rounded-md px-1.5 text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
 			>
 				<Avatar size="sm" className="size-4">
 					{identitySession?.avatarUrl ? (
@@ -1769,11 +1736,11 @@ function GithubStatusMenu({
 							alt={identitySession.login}
 						/>
 					) : null}
-					<AvatarFallback className="bg-app-toolbar text-[9px] font-medium text-app-foreground-soft">
+					<AvatarFallback className="bg-app-toolbar text-[10px] font-medium text-app-foreground-soft">
 						{identitySession?.login.slice(0, 2).toUpperCase() ?? "GH"}
 					</AvatarFallback>
 				</Avatar>
-				<span className="text-[12px] font-medium text-app-foreground-soft/74">
+				<span className="text-[13px] font-medium text-app-foreground-soft/74">
 					{triggerLabel}
 				</span>
 			</DropdownMenuTrigger>

@@ -1,9 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import {
-	buildFallbackInspectorFileItems,
-	type InspectorFileItem,
-} from "./editor-session";
+import type { InspectorFileItem } from "./editor-session";
 
 export type GroupTone =
 	| "pinned"
@@ -467,6 +464,7 @@ async function getTauriInvoke(): Promise<TauriInvoke | null> {
 async function devFetch<T>(
 	endpoint: string,
 	params?: Record<string, string>,
+	options?: { method?: string; body?: unknown },
 ): Promise<T> {
 	const url = new URL(`/api/${endpoint}`, window.location.origin);
 	if (params) {
@@ -474,7 +472,15 @@ async function devFetch<T>(
 			url.searchParams.set(k, v);
 		}
 	}
-	const res = await fetch(url.toString());
+	const init: RequestInit = {};
+	if (options?.method) {
+		init.method = options.method;
+	}
+	if (options?.body !== undefined) {
+		init.headers = { "Content-Type": "application/json" };
+		init.body = JSON.stringify(options.body);
+	}
+	const res = await fetch(url.toString(), init);
 	if (!res.ok) {
 		const body = await res.text();
 		throw new Error(`Dev server error (${res.status}): ${body}`);
@@ -855,7 +861,7 @@ export async function detectInstalledEditors(): Promise<DetectedEditor[]> {
 
 export async function openWorkspaceInEditor(
 	workspaceId: string,
-	editor: "cursor" | "vscode",
+	editor: string,
 ): Promise<void> {
 	const invoke = await getTauriInvoke();
 	if (!invoke) return;
@@ -867,9 +873,7 @@ export async function readEditorFile(
 ): Promise<EditorFileReadResponse> {
 	const inv = await getTauriInvoke();
 	if (!inv) {
-		throw new Error(
-			"File editing is only available in the Tauri desktop runtime.",
-		);
+		return devFetch<EditorFileReadResponse>("read_editor_file", { path });
 	}
 
 	try {
@@ -887,9 +891,10 @@ export async function writeEditorFile(
 ): Promise<EditorFileWriteResponse> {
 	const inv = await getTauriInvoke();
 	if (!inv) {
-		throw new Error(
-			"File editing is only available in the Tauri desktop runtime.",
-		);
+		return devFetch<EditorFileWriteResponse>("write_editor_file", undefined, {
+			method: "POST",
+			body: { path, content },
+		});
 	}
 
 	try {
@@ -909,9 +914,7 @@ export async function statEditorFile(
 ): Promise<EditorFileStatResponse> {
 	const inv = await getTauriInvoke();
 	if (!inv) {
-		throw new Error(
-			"File editing is only available in the Tauri desktop runtime.",
-		);
+		return devFetch<EditorFileStatResponse>("stat_editor_file", { path });
 	}
 
 	try {
@@ -928,7 +931,9 @@ export async function listEditorFiles(
 ): Promise<InspectorFileItem[]> {
 	const inv = await getTauriInvoke();
 	if (!inv) {
-		return buildFallbackInspectorFileItems(workspaceRootPath);
+		return devFetch<InspectorFileItem[]>("list_editor_files", {
+			root: workspaceRootPath,
+		});
 	}
 
 	try {
@@ -945,10 +950,10 @@ export async function listEditorFilesWithContent(
 ): Promise<EditorFilesWithContentResponse> {
 	const inv = await getTauriInvoke();
 	if (!inv) {
-		return {
-			items: buildFallbackInspectorFileItems(workspaceRootPath),
-			prefetched: [],
-		};
+		return devFetch<EditorFilesWithContentResponse>(
+			"list_editor_files_with_content",
+			{ root: workspaceRootPath },
+		);
 	}
 
 	try {
@@ -966,10 +971,10 @@ export async function listWorkspaceChangesWithContent(
 ): Promise<EditorFilesWithContentResponse> {
 	const inv = await getTauriInvoke();
 	if (!inv) {
-		return {
-			items: buildFallbackInspectorFileItems(workspaceRootPath),
-			prefetched: [],
-		};
+		return devFetch<EditorFilesWithContentResponse>(
+			"list_workspace_changes_with_content",
+			{ root: workspaceRootPath },
+		);
 	}
 
 	try {

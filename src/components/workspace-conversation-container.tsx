@@ -36,6 +36,8 @@ type WorkspaceConversationContainerProps = {
 	onSelectSession: (sessionId: string | null) => void;
 	onResolveDisplayedSession: (sessionId: string | null) => void;
 	onSendingWorkspacesChange?: (workspaceIds: Set<string>) => void;
+	headerActions?: React.ReactNode;
+	headerLeading?: React.ReactNode;
 };
 
 export const WorkspaceConversationContainer = memo(
@@ -47,6 +49,8 @@ export const WorkspaceConversationContainer = memo(
 		onSelectSession,
 		onResolveDisplayedSession,
 		onSendingWorkspacesChange,
+		headerActions,
+		headerLeading,
 	}: WorkspaceConversationContainerProps) {
 		const queryClient = useQueryClient();
 		const [composerModelSelections, setComposerModelSelections] = useState<
@@ -282,7 +286,15 @@ export const WorkspaceConversationContainer = memo(
 					let unlistenFn: (() => void) | null = null;
 					let frameId: number | null = null;
 
+					// Periodically refresh file changes while the agent is streaming
+					const changesRefreshInterval = window.setInterval(() => {
+						void queryClient.invalidateQueries({
+							queryKey: ["workspaceChanges"],
+						});
+					}, 3_000);
+
 					const cleanup = () => {
+						window.clearInterval(changesRefreshInterval);
 						if (frameId !== null) {
 							window.cancelAnimationFrame(frameId);
 							frameId = null;
@@ -344,6 +356,11 @@ export const WorkspaceConversationContainer = memo(
 							}
 							flushStreamMessages(true); // immediate — commit before reload
 							cleanup();
+
+							// Refresh file changes — agent likely modified files
+							void queryClient.invalidateQueries({
+								queryKey: ["workspaceChanges"],
+							});
 
 							setLiveSessionsByContext((current) => ({
 								...current,
@@ -480,6 +497,8 @@ export const WorkspaceConversationContainer = memo(
 					sendingSessionIds={sendingSessionIds}
 					onSelectSession={onSelectSession}
 					onResolveDisplayedSession={onResolveDisplayedSession}
+					headerActions={headerActions}
+					headerLeading={headerLeading}
 				/>
 
 				<div className="mt-auto px-4 pb-4 pt-0">

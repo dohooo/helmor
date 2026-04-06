@@ -379,6 +379,43 @@ pub fn detect_installed_editors() -> CmdResult<Vec<DetectedEditor>> {
                 "$HOME/Applications/Visual Studio Code.app",
             ],
         ),
+        (
+            "vscode-insiders",
+            "VS Code Insiders",
+            &[
+                "/Applications/Visual Studio Code - Insiders.app",
+                "$HOME/Applications/Visual Studio Code - Insiders.app",
+            ],
+        ),
+        (
+            "windsurf",
+            "Windsurf",
+            &[
+                "/Applications/Windsurf.app",
+                "$HOME/Applications/Windsurf.app",
+            ],
+        ),
+        (
+            "zed",
+            "Zed",
+            &["/Applications/Zed.app", "$HOME/Applications/Zed.app"],
+        ),
+        (
+            "webstorm",
+            "WebStorm",
+            &[
+                "/Applications/WebStorm.app",
+                "$HOME/Applications/WebStorm.app",
+            ],
+        ),
+        (
+            "sublime",
+            "Sublime Text",
+            &[
+                "/Applications/Sublime Text.app",
+                "$HOME/Applications/Sublime Text.app",
+            ],
+        ),
     ];
 
     let home = std::env::var("HOME").unwrap_or_default();
@@ -417,18 +454,22 @@ pub fn open_workspace_in_editor(workspace_id: String, editor: String) -> CmdResu
     let dir_str = workspace_dir.display().to_string();
 
     // Try to open via macOS `open -a` first, then fall back to CLI
-    let result = match editor.as_str() {
-        "cursor" => std::process::Command::new("open")
-            .args(["-a", "Cursor", &dir_str])
-            .spawn(),
-        "vscode" => std::process::Command::new("open")
-            .args(["-a", "Visual Studio Code", &dir_str])
-            .spawn(),
+    let app_name = match editor.as_str() {
+        "cursor" => "Cursor",
+        "vscode" => "Visual Studio Code",
+        "vscode-insiders" => "Visual Studio Code - Insiders",
+        "windsurf" => "Windsurf",
+        "zed" => "Zed",
+        "webstorm" => "WebStorm",
+        "sublime" => "Sublime Text",
         _ => {
             Err(anyhow::anyhow!("Unsupported editor: {editor}"))?;
             unreachable!()
         }
     };
+    let result = std::process::Command::new("open")
+        .args(["-a", app_name, &dir_str])
+        .spawn();
 
     let _ = home; // suppress unused warning
     result.with_context(|| format!("Failed to open {editor}"))?;

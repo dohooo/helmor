@@ -1,22 +1,26 @@
 import { MarkGithubIcon } from "@primer/octicons-react";
+import { useQuery } from "@tanstack/react-query";
+import {
+	getMaterialFileIcon,
+	getMaterialFolderIcon,
+} from "file-extension-icon-js";
 import {
 	ArrowUpRightIcon,
 	CheckIcon,
 	ChevronDown,
 	ChevronRightIcon,
 	CircleIcon,
-	FileIcon,
-	FolderIcon,
-	FolderOpenIcon,
 	ListIcon,
 	ListTreeIcon,
 	TriangleIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { listWorkspaceChangesWithContent } from "@/lib/api";
 import type { InspectorFileItem } from "@/lib/editor-session";
+import { workspaceChangesQueryOptions } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
+import { AnimatedShinyText } from "./ui/animated-shiny-text";
+import { NumberTicker } from "./ui/number-ticker";
 import { ScrollArea } from "./ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
@@ -43,7 +47,6 @@ export function WorkspaceInspectorSidebar({
 	const [activeTab, setActiveTab] = useState("setup");
 	const [changesHeight, setChangesHeight] = useState(0);
 	const [actionsHeight, setActionsHeight] = useState(0);
-	const [changes, setChanges] = useState<InspectorFileItem[]>([]);
 	const [resizeState, setResizeState] = useState<{
 		pointerY: number;
 		initialChangesHeight: number;
@@ -70,37 +73,58 @@ export function WorkspaceInspectorSidebar({
 	const isActionsResizing = resizeState?.target === "actions";
 	const isTabsResizing = resizeState?.target === "tabs";
 
-	useEffect(() => {
-		let cancelled = false;
+	const changesQuery = useQuery({
+		...workspaceChangesQueryOptions(workspaceRootPath ?? ""),
+		enabled: !!workspaceRootPath,
+	});
+	const changes: InspectorFileItem[] = changesQuery.data?.items ?? [];
 
-		if (!workspaceRootPath) {
-			setChanges([]);
-			return () => {
-				cancelled = true;
-			};
+	// Track which file paths should flash (new or stats changed).
+	// `null` means we haven't seen any data yet — skip flashing on first load.
+	const prevChangesRef = useRef<Map<string, string> | null>(null);
+	const prevRootPathRef = useRef(workspaceRootPath);
+	if (prevRootPathRef.current !== workspaceRootPath) {
+		prevRootPathRef.current = workspaceRootPath;
+		prevChangesRef.current = null; // reset on workspace switch
+	}
+	const flashingPaths = useMemo(() => {
+		const prevMap = prevChangesRef.current;
+
+		// Build snapshot for current data
+		const nextMap = new Map<string, string>();
+		for (const item of changes) {
+			nextMap.set(
+				item.path,
+				`${item.insertions}:${item.deletions}:${item.status}`,
+			);
 		}
 
-		void listWorkspaceChangesWithContent(workspaceRootPath)
-			.then(async (response) => {
-				if (cancelled) return;
-				setChanges(response.items);
+		// First load or workspace switch — seed the ref, don't flash
+		if (prevMap === null) {
+			prevChangesRef.current = nextMap;
+			return new Set<string>();
+		}
 
-				// Cache file contents so switches are instant (no IPC needed)
-				if (response.prefetched.length > 0) {
-					const { preWarmFileContents } = await import("@/lib/monaco-runtime");
-					preWarmFileContents(response.prefetched);
-				}
-			})
-			.catch(() => {
-				if (!cancelled) {
-					setChanges([]);
-				}
-			});
+		const flashing = new Set<string>();
+		for (const item of changes) {
+			const key = nextMap.get(item.path)!;
+			const prev = prevMap.get(item.path);
+			if (prev === undefined || prev !== key) {
+				flashing.add(item.path);
+			}
+		}
+		prevChangesRef.current = nextMap;
+		return flashing;
+	}, [changes]);
 
-		return () => {
-			cancelled = true;
-		};
-	}, [workspaceRootPath]);
+	// Pre-warm Monaco file cache when changes data arrives
+	useEffect(() => {
+		const prefetched = changesQuery.data?.prefetched;
+		if (!prefetched?.length) return;
+		void import("@/lib/monaco-runtime").then(({ preWarmFileContents }) => {
+			preWarmFileContents(prefetched);
+		});
+	}, [changesQuery.data]);
 
 	const handleToggleTabs = useCallback(() => {
 		const tabsEl = tabsWrapperRef.current;
@@ -225,6 +249,7 @@ export function WorkspaceInspectorSidebar({
 				editorMode={editorMode}
 				activeEditorPath={activeEditorPath}
 				onOpenEditorFile={onOpenEditorFile}
+				flashingPaths={flashingPaths}
 			/>
 
 			<HorizontalResizeHandle
@@ -647,12 +672,14 @@ function ChangesSection({
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
+	flashingPaths,
 }: {
 	bodyHeight: number;
 	changes: InspectorFileItem[];
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string) => void;
+	flashingPaths: Set<string>;
 }) {
 	const [treeView, setTreeView] = useState(true);
 
@@ -692,6 +719,7 @@ function ChangesSection({
 							editorMode={editorMode}
 							activeEditorPath={activeEditorPath}
 							onOpenEditorFile={onOpenEditorFile}
+							flashingPaths={flashingPaths}
 						/>
 					) : (
 						<ChangesFlatView
@@ -699,6 +727,7 @@ function ChangesSection({
 							editorMode={editorMode}
 							activeEditorPath={activeEditorPath}
 							onOpenEditorFile={onOpenEditorFile}
+							flashingPaths={flashingPaths}
 						/>
 					)
 				) : (
@@ -716,11 +745,13 @@ function ChangesTreeView({
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
+	flashingPaths,
 }: {
 	changes: InspectorFileItem[];
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string) => void;
+	flashingPaths: Set<string>;
 }) {
 	const tree = buildTree(changes);
 	const [expanded, setExpanded] = useState<Set<string>>(
@@ -746,6 +777,7 @@ function ChangesTreeView({
 				editorMode={editorMode}
 				activeEditorPath={activeEditorPath}
 				onOpenEditorFile={onOpenEditorFile}
+				flashingPaths={flashingPaths}
 			/>
 		</div>
 	);
@@ -770,6 +802,7 @@ function TreeNodeList({
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
+	flashingPaths,
 }: {
 	nodes: Map<string, ReturnType<typeof buildTree>>;
 	expanded: Set<string>;
@@ -778,6 +811,7 @@ function TreeNodeList({
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string) => void;
+	flashingPaths: Set<string>;
 }) {
 	const sorted = [...nodes.values()].sort((a, b) => {
 		const aIsFolder = a.children.size > 0 && !a.file;
@@ -813,17 +847,11 @@ function TreeNodeList({
 									)}
 									strokeWidth={1.8}
 								/>
-								{isOpen ? (
-									<FolderOpenIcon
-										className="size-3.5 shrink-0 text-blue-400/80"
-										strokeWidth={1.5}
-									/>
-								) : (
-									<FolderIcon
-										className="size-3.5 shrink-0 text-blue-400/80"
-										strokeWidth={1.5}
-									/>
-								)}
+								<img
+									src={getMaterialFolderIcon(node.name, isOpen || undefined)}
+									alt=""
+									className="size-4 shrink-0"
+								/>
 								<span className="truncate">{node.name}</span>
 							</div>
 							{isOpen && (
@@ -835,6 +863,7 @@ function TreeNodeList({
 									editorMode={editorMode}
 									activeEditorPath={activeEditorPath}
 									onOpenEditorFile={onOpenEditorFile}
+									flashingPaths={flashingPaths}
 								/>
 							)}
 						</div>
@@ -842,6 +871,7 @@ function TreeNodeList({
 				}
 
 				const selected = node.file?.absolutePath === activeEditorPath;
+				const isFlashing = !!node.file && flashingPaths.has(node.file.path);
 
 				return (
 					<div
@@ -866,19 +896,26 @@ function TreeNodeList({
 							}
 						}}
 					>
-						<FileIcon
-							className="size-3.5 shrink-0 text-app-muted"
-							strokeWidth={1.5}
+						<img
+							src={getMaterialFileIcon(node.name)}
+							alt=""
+							className="size-4 shrink-0"
 						/>
-						<span className="truncate">{node.name}</span>
+						<ShinyFlash active={isFlashing}>{node.name}</ShinyFlash>
 						{node.file && (
-							<span
-								className={cn(
-									"ml-auto shrink-0 text-[10px] font-semibold",
-									STATUS_COLORS[node.file.status],
-								)}
-							>
-								{node.file.status}
+							<span className="ml-auto flex shrink-0 items-center gap-1.5">
+								<LineStats
+									insertions={node.file.insertions}
+									deletions={node.file.deletions}
+								/>
+								<span
+									className={cn(
+										"text-[10px] font-semibold",
+										STATUS_COLORS[node.file.status],
+									)}
+								>
+									{node.file.status}
+								</span>
 							</span>
 						)}
 					</div>
@@ -893,11 +930,13 @@ function ChangesFlatView({
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
+	flashingPaths,
 }: {
 	changes: InspectorFileItem[];
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string) => void;
+	flashingPaths: Set<string>;
 }) {
 	return (
 		<div className="py-0.5">
@@ -921,14 +960,21 @@ function ChangesFlatView({
 						}
 					}}
 				>
-					<FileIcon
-						className="size-3.5 shrink-0 text-app-muted"
-						strokeWidth={1.5}
+					<img
+						src={getMaterialFileIcon(change.name)}
+						alt=""
+						className="size-4 shrink-0"
 					/>
-					<span className="truncate">{change.name}</span>
+					<ShinyFlash active={flashingPaths.has(change.path)}>
+						{change.name}
+					</ShinyFlash>
 					<span className="ml-auto shrink-0 truncate text-[10px] text-app-muted">
 						{change.path.slice(0, change.path.lastIndexOf("/"))}
 					</span>
+					<LineStats
+						insertions={change.insertions}
+						deletions={change.deletions}
+					/>
 					<span
 						className={cn(
 							"shrink-0 text-[10px] font-semibold",
@@ -940,5 +986,64 @@ function ChangesFlatView({
 				</div>
 			))}
 		</div>
+	);
+}
+
+function LineStats({
+	insertions,
+	deletions,
+}: {
+	insertions: number;
+	deletions: number;
+}) {
+	if (insertions === 0 && deletions === 0) return null;
+
+	return (
+		<span className="flex shrink-0 items-center gap-1 text-[10px]">
+			{insertions > 0 && (
+				<span className="text-green-500">
+					+<NumberTicker value={insertions} className="text-green-500" />
+				</span>
+			)}
+			{deletions > 0 && (
+				<span className="text-red-400">
+					−<NumberTicker value={deletions} className="text-red-400" />
+				</span>
+			)}
+		</span>
+	);
+}
+
+/** Applies animated-shiny-text shimmer when `active` flips to true, then fades back. */
+function ShinyFlash({
+	active,
+	children,
+}: {
+	active: boolean;
+	children: React.ReactNode;
+}) {
+	const [shimmer, setShimmer] = useState(false);
+	const counterRef = useRef(0);
+
+	useEffect(() => {
+		if (!active) return;
+		counterRef.current += 1;
+		setShimmer(true);
+		const id = window.setTimeout(() => setShimmer(false), 3000);
+		return () => window.clearTimeout(id);
+	}, [active]);
+
+	if (!shimmer) {
+		return <span className="truncate">{children}</span>;
+	}
+
+	return (
+		<AnimatedShinyText
+			key={counterRef.current}
+			shimmerWidth={60}
+			className="!mx-0 !max-w-none truncate !text-neutral-500/80 dark:!text-neutral-500/80 ![animation-name:shiny-text-continuous] [animation-duration:1s] [animation-iteration-count:3] [animation-timing-function:ease-in-out] dark:via-white via-black"
+		>
+			{children}
+		</AnimatedShinyText>
 	);
 }

@@ -10,7 +10,12 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { type BundledLanguage, codeToHtml, type ShikiTransformer } from "shiki";
+import {
+	type BundledLanguage,
+	bundledLanguages,
+	codeToHtml,
+	type ShikiTransformer,
+} from "shiki";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -58,14 +63,17 @@ export async function highlightCode(
 		? [lineNumberTransformer]
 		: [];
 
+	// Fall back to "text" for languages not included in the Shiki bundle
+	const lang = language in bundledLanguages ? language : "text";
+
 	return await Promise.all([
 		codeToHtml(code, {
-			lang: language,
+			lang,
 			theme: "one-light",
 			transformers,
 		}),
 		codeToHtml(code, {
-			lang: language,
+			lang,
 			theme: "one-dark-pro",
 			transformers,
 		}),

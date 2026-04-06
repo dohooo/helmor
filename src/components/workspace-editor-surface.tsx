@@ -1,8 +1,6 @@
-import { ArrowLeft, GitCompareArrows, Save } from "lucide-react";
+import { X } from "lucide-react";
 import {
 	type MutableRefObject,
-	type ReactNode,
-	useCallback,
 	useEffect,
 	useLayoutEffect,
 	useRef,
@@ -10,7 +8,8 @@ import {
 } from "react";
 import type { EditorSessionState } from "@/lib/editor-session";
 import { describeUnknownError } from "@/lib/workspace-helpers";
-import { writeEditorFile } from "../lib/api";
+import { BaseTooltip } from "./ui/base-tooltip";
+import { KbdKey } from "./ui/kbd-key";
 
 type WorkspaceEditorSurfaceProps = {
 	editorSession: EditorSessionState;
@@ -52,8 +51,6 @@ export function WorkspaceEditorSurface({
 	const [surfaceStatus, setSurfaceStatus] = useState<SurfaceStatus>({
 		kind: "ready",
 	});
-	const [saving, setSaving] = useState(false);
-
 	latestSessionRef.current = editorSession;
 	onChangeSessionRef.current = onChangeSession;
 	onErrorRef.current = onError;
@@ -66,11 +63,6 @@ export function WorkspaceEditorSurface({
 		editorSession.kind === "diff" &&
 		editorSession.originalText !== undefined &&
 		editorSession.modifiedText !== undefined;
-	const canOpenReview =
-		editorSession.kind === "file" &&
-		editorSession.originalText !== undefined &&
-		editorSession.modifiedText !== undefined;
-	const dirty = Boolean(editorSession.dirty);
 
 	useEffect(() => {
 		if (
@@ -345,64 +337,17 @@ export function WorkspaceEditorSurface({
 		editorSession.originalText,
 	]);
 
-	const handleSave = useCallback(async () => {
-		if (editorSession.kind !== "file" || !fileControllerRef.current) {
-			return;
-		}
-
-		const content = fileControllerRef.current.getValue();
-		setSaving(true);
-
-		try {
-			const response = await writeEditorFile(editorSession.path, content);
-			void import("@/lib/monaco-runtime")
-				.then(({ syncVirtualFile }) =>
-					syncVirtualFile(editorSession.path, content),
-				)
-				.catch(() => {
-					// The Tauri write is authoritative; keep the virtual model best-effort.
-				});
-			onChangeSessionRef.current({
-				...latestSessionRef.current,
-				kind: "file",
-				originalText: content,
-				modifiedText: content,
-				dirty: false,
-				mtimeMs: response.mtimeMs,
-			});
-		} catch (error) {
-			const message = describeUnknownError(
-				error,
-				"Unable to save the selected file.",
-			);
-			onErrorRef.current?.(message, "Save failed");
-		} finally {
-			setSaving(false);
-		}
-	}, [editorSession.kind, editorSession.path]);
-
-	const handleOpenReview = useCallback(() => {
-		if (!canOpenReview) {
-			return;
-		}
-
-		onChangeSessionRef.current({
-			...latestSessionRef.current,
-			kind: "diff",
-			inline: false,
-		});
-	}, [canOpenReview]);
-
-	const handleToggleDiffLayout = useCallback(() => {
-		if (editorSession.kind !== "diff") {
-			return;
-		}
-
-		onChangeSessionRef.current({
-			...latestSessionRef.current,
-			inline: !editorSession.inline,
-		});
-	}, [editorSession.inline, editorSession.kind]);
+	// ESC key to exit
+	useEffect(() => {
+		const handleKeyDown = (e: KeyboardEvent) => {
+			if (e.key === "Escape") {
+				e.preventDefault();
+				onExit();
+			}
+		};
+		window.addEventListener("keydown", handleKeyDown);
+		return () => window.removeEventListener("keydown", handleKeyDown);
+	}, [onExit]);
 
 	return (
 		<section
@@ -410,7 +355,7 @@ export function WorkspaceEditorSurface({
 			className="flex h-full min-h-0 flex-col overflow-hidden bg-[#161514] text-[#cccccc]"
 		>
 			<div
-				className="flex h-9 items-center border-b border-[#2b2b2b] pr-3"
+				className="flex h-9 items-center border-b border-[#2b2b2b]"
 				data-tauri-drag-region
 			>
 				{/* Traffic-light inset: macOS stoplight buttons sit at x=16, ~70px total width */}
@@ -418,32 +363,26 @@ export function WorkspaceEditorSurface({
 
 				<div className="min-w-0 flex-1" data-tauri-drag-region />
 
-				<div className="flex shrink-0 items-center gap-1">
-					<EditorIconButton onClick={onExit} title="Back to chat">
-						<ArrowLeft className="size-3.5" strokeWidth={1.8} />
-					</EditorIconButton>
-					<EditorIconButton
-						onClick={handleSave}
-						disabled={editorSession.kind !== "file" || !dirty || saving}
-						title={saving ? "Saving..." : "Save"}
+				<div className="flex shrink-0 items-center pr-2">
+					<BaseTooltip
+						side="bottom"
+						sideOffset={6}
+						content={
+							<>
+								<span className="leading-none">Close</span>
+								<KbdKey name="Esc" className="ml-1" />
+							</>
+						}
 					>
-						<Save className="size-3.5" strokeWidth={1.8} />
-					</EditorIconButton>
-					<EditorIconButton
-						onClick={handleOpenReview}
-						disabled={!canOpenReview || editorSession.kind === "diff"}
-						title="Open review"
-					>
-						<GitCompareArrows className="size-3.5" strokeWidth={1.8} />
-					</EditorIconButton>
-					{editorSession.kind === "diff" && (
-						<EditorIconButton
-							onClick={handleToggleDiffLayout}
-							title={editorSession.inline ? "Side-by-side" : "Inline"}
+						<button
+							type="button"
+							onClick={onExit}
+							aria-label="Close"
+							className="inline-flex aspect-square h-full items-center justify-center text-[#8f8f8f] transition-colors hover:text-white"
 						>
-							<GitCompareArrows className="size-3.5" strokeWidth={1.8} />
-						</EditorIconButton>
-					)}
+							<X className="size-3.5" strokeWidth={1.8} />
+						</button>
+					</BaseTooltip>
 				</div>
 			</div>
 
@@ -456,10 +395,7 @@ export function WorkspaceEditorSurface({
 
 				{surfaceStatus.kind === "error" && (
 					<div className="absolute inset-0 flex items-center justify-center bg-[#161514]">
-						<SurfaceMessage
-							title="Editor unavailable"
-							message={surfaceStatus.message}
-						/>
+						<SurfaceMessage message={surfaceStatus.message} />
 					</div>
 				)}
 			</div>
@@ -467,45 +403,8 @@ export function WorkspaceEditorSurface({
 	);
 }
 
-function EditorIconButton({
-	children,
-	disabled,
-	onClick,
-	title,
-}: {
-	children: ReactNode;
-	disabled?: boolean;
-	onClick: () => void;
-	title?: string;
-}) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			disabled={disabled}
-			title={title}
-			className="inline-flex size-8 items-center justify-center text-[#8f8f8f] transition-colors hover:text-white disabled:cursor-not-allowed disabled:text-[#4a4a4a]"
-		>
-			{children}
-		</button>
-	);
-}
-
-function SurfaceMessage({
-	title,
-	message,
-}: {
-	title: string;
-	message: string;
-}) {
-	return (
-		<div className="max-w-lg rounded-xl border border-[#313131] bg-[#181818] px-5 py-4 text-left shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
-			<p className="text-[11px] uppercase tracking-[0.18em] text-[#8f8f8f]">
-				{title}
-			</p>
-			<p className="mt-2 text-[13px] leading-6 text-[#d4d4d4]">{message}</p>
-		</div>
-	);
+function SurfaceMessage({ message }: { message: string }) {
+	return <p className="text-[13px] leading-5 text-[#8f8f8f]">{message}</p>;
 }
 
 function disposeControllers({

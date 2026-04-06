@@ -105,3 +105,13 @@ cargo check                  # Type-check without building
 - `/agent-browser` 可以导航页面、截图、检查元素、分析性能、执行 JavaScript 等。
 - 如果 `localhost:1420` 没有数据或无法访问，先让用户确认 `pnpm run dev` 已运行。
 - 推荐调试流程：用 `/agent-browser` 访问 `http://localhost:1420` → 截图确认当前状态 → 定位问题 → 修改代码 → 刷新页面验证。
+
+### Maintaining browser bridge for new Tauri commands
+
+When adding a new Tauri command that does file I/O or data queries:
+
+1. Add a wrapper function in `src-tauri/src/dev_api.rs` calling the underlying model function.
+2. Add a route + handler in `src-tauri/src/bin/dev_server.rs` (GET for reads, POST for writes).
+3. In `src/lib/api.ts`, the `if (!inv)` branch must call `devFetch(...)` instead of throwing or returning hardcoded fallback.
+
+Never throw "only available in Tauri" for any command that has a dev server counterpart.

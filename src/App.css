@@ -150,6 +150,13 @@ body {
 	background: transparent;
 }
 
+.scrollbar-none {
+	scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+	display: none;
+}
+
 [data-slot="scroll-area-viewport"] > div {
 	display: block !important;
 	min-width: 0 !important;
@@ -232,6 +239,18 @@ body {
 	--color-app-info: var(--app-info);
 	--color-app-scrollbar-thumb: var(--app-scrollbar-thumb);
 	--color-app-scrollbar-thumb-hover: var(--app-scrollbar-thumb-hover);
+	--animate-shiny-text: shiny-text 8s infinite;
+	@keyframes shiny-text {
+		0%,
+		90%,
+		100% {
+			background-position: calc(-100% - var(--shiny-width)) 0;
+		}
+		30%,
+		60% {
+			background-position: calc(100% + var(--shiny-width)) 0;
+		}
+	}
 }
 
 @layer base {
@@ -269,6 +288,18 @@ body {
 	}
 	50% {
 		background-position: 100% 50%;
+	}
+}
+
+@keyframes shiny-text-continuous {
+	0% {
+		background-position: calc(-100% - var(--shiny-width)) 0;
+	}
+	50% {
+		background-position: calc(100% + var(--shiny-width)) 0;
+	}
+	100% {
+		background-position: calc(-100% - var(--shiny-width)) 0;
 	}
 }
 

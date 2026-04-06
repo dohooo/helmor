@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::models::{db, repos, sessions, workspaces, DetectedEditor};
+use crate::models::{db, editor_files, repos, sessions, workspaces, DetectedEditor};
 
 // ---------------------------------------------------------------------------
 // Workspace queries
@@ -87,6 +87,53 @@ pub fn get_app_settings() -> Result<HashMap<String, String>> {
     Ok(map)
 }
 
+// ---------------------------------------------------------------------------
+// Editor file operations
+// ---------------------------------------------------------------------------
+
+pub fn read_editor_file(path: &str) -> Result<editor_files::EditorFileReadResponse> {
+    editor_files::read_editor_file(path)
+}
+
+pub fn write_editor_file(
+    path: &str,
+    content: &str,
+) -> Result<editor_files::EditorFileWriteResponse> {
+    editor_files::write_editor_file(path, content)
+}
+
+pub fn stat_editor_file(path: &str) -> Result<editor_files::EditorFileStatResponse> {
+    editor_files::stat_editor_file(path)
+}
+
+pub fn list_editor_files(
+    workspace_root_path: &str,
+) -> Result<Vec<editor_files::EditorFileListItem>> {
+    editor_files::list_editor_files(workspace_root_path)
+}
+
+pub fn list_editor_files_with_content(
+    workspace_root_path: &str,
+) -> Result<editor_files::EditorFilesWithContentResponse> {
+    editor_files::list_editor_files_with_content(workspace_root_path)
+}
+
+pub fn list_workspace_changes(
+    workspace_root_path: &str,
+) -> Result<Vec<editor_files::EditorFileListItem>> {
+    editor_files::list_workspace_changes(workspace_root_path)
+}
+
+pub fn list_workspace_changes_with_content(
+    workspace_root_path: &str,
+) -> Result<editor_files::EditorFilesWithContentResponse> {
+    editor_files::list_workspace_changes_with_content(workspace_root_path)
+}
+
+// ---------------------------------------------------------------------------
+// Editors
+// ---------------------------------------------------------------------------
+
 pub fn detect_installed_editors() -> Result<Vec<DetectedEditor>> {
     let mut editors = Vec::new();
 
@@ -102,6 +149,43 @@ pub fn detect_installed_editors() -> Result<Vec<DetectedEditor>> {
             &[
                 "/Applications/Visual Studio Code.app",
                 "$HOME/Applications/Visual Studio Code.app",
+            ],
+        ),
+        (
+            "vscode-insiders",
+            "VS Code Insiders",
+            &[
+                "/Applications/Visual Studio Code - Insiders.app",
+                "$HOME/Applications/Visual Studio Code - Insiders.app",
+            ],
+        ),
+        (
+            "windsurf",
+            "Windsurf",
+            &[
+                "/Applications/Windsurf.app",
+                "$HOME/Applications/Windsurf.app",
+            ],
+        ),
+        (
+            "zed",
+            "Zed",
+            &["/Applications/Zed.app", "$HOME/Applications/Zed.app"],
+        ),
+        (
+            "webstorm",
+            "WebStorm",
+            &[
+                "/Applications/WebStorm.app",
+                "$HOME/Applications/WebStorm.app",
+            ],
+        ),
+        (
+            "sublime",
+            "Sublime Text",
+            &[
+                "/Applications/Sublime Text.app",
+                "$HOME/Applications/Sublime Text.app",
             ],
         ),
     ];

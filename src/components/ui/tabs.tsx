@@ -9,7 +9,7 @@ const tabsListVariants = cva(
 	{
 		variants: {
 			variant: {
-				default: "h-9 rounded-lg bg-muted p-1",
+				default: "rounded-[8px] bg-muted px-1 py-[3px]",
 				line: "h-auto gap-0 border-b border-app-border bg-transparent p-0",
 			},
 		},
@@ -25,7 +25,7 @@ const tabsTriggerVariants = cva(
 		variants: {
 			variant: {
 				default:
-					"rounded-md px-3 py-1 text-sm font-medium text-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm",
+					"rounded-[6px] px-3 py-1 text-[12.5px] font-medium text-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm",
 				line: "group relative -mb-px flex h-[1.85rem] w-[8rem] shrink-0 items-center justify-start gap-1.5 border-b border-transparent px-2.5 text-left text-[12px] text-app-foreground-soft data-[state=active]:border-app-foreground-soft/60 data-[state=active]:bg-app-elevated data-[state=active]:text-app-foreground hover:bg-app-foreground/[0.04] hover:text-app-foreground",
 			},
 		},
@@ -42,7 +42,7 @@ function Tabs({
 	return (
 		<TabsPrimitive.Root
 			data-slot="tabs"
-			className={cn("flex flex-col gap-2", className)}
+			className={cn("flex flex-col gap-0", className)}
 			{...props}
 		/>
 	);
