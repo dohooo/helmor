@@ -1153,7 +1153,7 @@ export type AgentStreamEvent =
 			workingDirectory: string;
 			persisted: boolean;
 	  }
-	| { kind: "error"; message: string };
+	| { kind: "error"; message: string; persisted: boolean };
 
 export async function startAgentMessageStream(
 	request: AgentSendRequest,

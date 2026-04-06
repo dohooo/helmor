@@ -426,18 +426,36 @@ export const WorkspaceConversationContainer = memo(
 								delete next[contextKey];
 								return next;
 							});
-							setComposerRestoreState({
-								contextKey,
-								draft: trimmedPrompt,
-								images: imagePaths,
-								nonce: Date.now(),
-							});
-							setLiveMessagesByContext((current) => ({
-								...current,
-								[contextKey]: (current[contextKey] ?? []).filter(
-									(message) => message.id !== optimisticUserMessage.id,
-								),
-							}));
+
+							if (event.persisted) {
+								// Messages were persisted incrementally — reload from DB
+								void invalidateConversationQueries(
+									displayedWorkspaceId,
+									displayedSessionId,
+								).then(() => {
+									setLiveMessagesByContext((current) => {
+										if (!current[contextKey]?.length) return current;
+										const next = { ...current };
+										delete next[contextKey];
+										return next;
+									});
+								});
+							} else {
+								// Nothing was persisted — restore the draft
+								setComposerRestoreState({
+									contextKey,
+									draft: trimmedPrompt,
+									images: imagePaths,
+									nonce: Date.now(),
+								});
+								setLiveMessagesByContext((current) => ({
+									...current,
+									[contextKey]: (current[contextKey] ?? []).filter(
+										(message) => message.id !== optimisticUserMessage.id,
+									),
+								}));
+							}
+
 							sendingWorkspaceMapRef.current.delete(contextKey);
 							setSendingContextKeys((current) => {
 								const next = new Set(current);

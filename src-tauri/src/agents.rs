@@ -32,6 +32,7 @@ pub enum AgentStreamEvent {
     },
     Error {
         message: String,
+        persisted: bool,
     },
 }
 
@@ -86,10 +87,20 @@ struct CollectedTurn {
     content_json: String,
 }
 
+/// Context shared across incremental persistence calls within a single exchange.
+struct ExchangeContext {
+    helmor_session_id: String,
+    turn_id: String,
+    model_id: String,
+    model_provider: String,
+    assistant_sdk_message_id: String,
+}
+
 /// Full parsed output from a CLI invocation.
 #[derive(Debug)]
 struct ParsedAgentOutput {
     assistant_text: String,
+    #[allow(dead_code)] // Populated for future use (e.g. storing thinking in DB)
     thinking_text: Option<String>,
     session_id: Option<String>,
     resolved_model: String,
@@ -610,6 +621,39 @@ fn stream_via_sidecar(
         let debug = sidecar_debug_enabled();
         let mut event_count: u64 = 0;
 
+        // --- Incremental persistence setup ---
+        // Open a single DB connection for the entire exchange and persist
+        // the user message immediately, before entering the event loop.
+        let mut exchange_ctx: Option<ExchangeContext> = None;
+        let mut persisted_turn_count: usize = 0;
+        let db_conn = if hsid_copy.is_some() {
+            open_write_connection().ok()
+        } else {
+            None
+        };
+
+        if let (Some(hsid), Some(conn)) = (&hsid_copy, &db_conn) {
+            let ctx = ExchangeContext {
+                helmor_session_id: hsid.clone(),
+                turn_id: Uuid::new_v4().to_string(),
+                model_id: model_copy.id.to_string(),
+                model_provider: model_copy.provider.to_string(),
+                assistant_sdk_message_id: format!("helmor-assistant-{}", Uuid::new_v4()),
+            };
+
+            match persist_user_message(conn, &ctx, &prompt_copy) {
+                Ok(()) => {
+                    if debug {
+                        eprintln!("[agents:debug] [{rid}] User message persisted to DB");
+                    }
+                    exchange_ctx = Some(ctx);
+                }
+                Err(e) => {
+                    eprintln!("[agents] Failed to persist user message: {e}");
+                }
+            }
+        }
+
         if debug {
             eprintln!("[agents:debug] [{rid}] Waiting for sidecar events...");
         }
@@ -634,31 +678,37 @@ fn stream_via_sidecar(
                             resolved_session_id
                         );
                     }
-                    // Persist the exchange to the DB
-                    let mut persisted = false;
+
+                    // Finalize persistence: flush remaining turns + result + metadata
+                    let persisted = exchange_ctx.is_some();
                     let mut resolved_model = model_copy.cli_model.to_string();
-                    if let (Some(hsid), Some(accumulator)) =
-                        (hsid_copy.as_deref(), output_accumulator.take())
-                    {
+
+                    if let Some(accumulator) = output_accumulator.take() {
                         if let Ok(output) = accumulator.finish(resolved_session_id.as_deref()) {
                             resolved_model = output.resolved_model.clone();
-                            if persist_exchange(
-                                hsid,
-                                &prompt_copy,
-                                &model_copy,
-                                &output.resolved_model,
-                                &output.assistant_text,
-                                output.thinking_text.as_deref(),
-                                output.session_id.as_deref(),
-                                effort_copy.as_deref(),
-                                permission_mode_copy.as_deref(),
-                                &output.usage,
-                                &output.turns,
-                                output.result_json.as_deref(),
-                            )
-                            .is_ok()
-                            {
-                                persisted = true;
+
+                            if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
+                                // Persist any remaining turns (finish() may flush_assistant)
+                                for turn in output.turns.iter().skip(persisted_turn_count) {
+                                    persist_turn_message(conn, ctx, turn, &output.resolved_model)
+                                        .ok();
+                                }
+
+                                // Persist result summary and finalize session metadata
+                                if let Err(e) = persist_result_and_finalize(
+                                    conn,
+                                    ctx,
+                                    &output.resolved_model,
+                                    &output.assistant_text,
+                                    output.session_id.as_deref(),
+                                    effort_copy.as_deref(),
+                                    permission_mode_copy.as_deref(),
+                                    &output.usage,
+                                    output.result_json.as_deref(),
+                                ) {
+                                    eprintln!("[agents] Failed to finalize exchange: {e}");
+                                    // persisted stays true — user msg + turns are already in DB
+                                }
                             }
                         }
                     }
@@ -686,7 +736,13 @@ fn stream_via_sidecar(
                     if debug {
                         eprintln!("[agents:debug] [{rid}] Sidecar error: {msg}");
                     }
-                    let _ = app.emit(&event_name, AgentStreamEvent::Error { message: msg });
+                    let _ = app.emit(
+                        &event_name,
+                        AgentStreamEvent::Error {
+                            message: msg,
+                            persisted: exchange_ctx.is_some(),
+                        },
+                    );
                     break;
                 }
                 _ => {
@@ -696,6 +752,31 @@ fn stream_via_sidecar(
                         if let Some(accumulator) = output_accumulator.as_mut() {
                             accumulator.push_value(&event.raw, &line);
                         }
+
+                        // Persist newly completed turns incrementally
+                        if let (Some(ctx), Some(conn), Some(accumulator)) =
+                            (&exchange_ctx, &db_conn, output_accumulator.as_ref())
+                        {
+                            let model_str = accumulator.resolved_model();
+                            while persisted_turn_count < accumulator.turns_len() {
+                                match persist_turn_message(
+                                    conn,
+                                    ctx,
+                                    accumulator.turn_at(persisted_turn_count),
+                                    model_str,
+                                ) {
+                                    Ok(()) => persisted_turn_count += 1,
+                                    Err(e) => {
+                                        eprintln!(
+                                            "[agents] Failed to persist turn {}: {e}",
+                                            persisted_turn_count
+                                        );
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
                         let _ = app.emit(&event_name, AgentStreamEvent::Line { line });
                     }
                 }
@@ -732,6 +813,27 @@ impl StreamOutputAccumulator {
         match self {
             Self::Claude(accumulator) => accumulator.finish(fallback_session_id),
             Self::Codex(accumulator) => accumulator.finish(fallback_session_id),
+        }
+    }
+
+    fn turns_len(&self) -> usize {
+        match self {
+            Self::Claude(a) => a.turns.len(),
+            Self::Codex(a) => a.turns.len(),
+        }
+    }
+
+    fn turn_at(&self, index: usize) -> &CollectedTurn {
+        match self {
+            Self::Claude(a) => &a.turns[index],
+            Self::Codex(a) => &a.turns[index],
+        }
+    }
+
+    fn resolved_model(&self) -> &str {
+        match self {
+            Self::Claude(a) => &a.resolved_model,
+            Self::Codex(a) => &a.resolved_model,
         }
     }
 }
@@ -1093,27 +1195,84 @@ fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf> {
     std::env::current_dir().context("Failed to resolve working directory")
 }
 
+// ---------------------------------------------------------------------------
+// Incremental persistence — each message is INSERT-ed as it arrives
+// ---------------------------------------------------------------------------
+
+/// Persist the user's prompt as the first message of the exchange.
+/// Called once at stream start, before entering the event loop.
+fn persist_user_message(conn: &Connection, ctx: &ExchangeContext, prompt: &str) -> Result<()> {
+    let now = current_timestamp_string()?;
+    let user_message_id = Uuid::new_v4().to_string();
+
+    conn.execute(
+        r#"
+            INSERT INTO session_messages (
+              id, session_id, role, content, created_at, sent_at,
+              full_message, model, last_assistant_message_id, turn_id,
+              is_resumable_message
+            ) VALUES (?1, ?2, 'user', ?3, ?4, ?4, ?3, ?5, ?6, ?7, 0)
+            "#,
+        params![
+            user_message_id,
+            ctx.helmor_session_id,
+            prompt,
+            now,
+            ctx.model_id,
+            ctx.assistant_sdk_message_id,
+            ctx.turn_id
+        ],
+    )?;
+    Ok(())
+}
+
+/// Persist a single intermediate turn (assistant message or user tool result).
+/// Called each time the accumulator produces a complete turn during streaming.
+fn persist_turn_message(
+    conn: &Connection,
+    ctx: &ExchangeContext,
+    turn: &CollectedTurn,
+    resolved_model: &str,
+) -> Result<()> {
+    let now = current_timestamp_string()?;
+    let msg_id = Uuid::new_v4().to_string();
+
+    conn.execute(
+        r#"
+            INSERT INTO session_messages (
+              id, session_id, role, content, created_at, sent_at,
+              full_message, model, turn_id, is_resumable_message
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?4, ?6, ?7, 0)
+            "#,
+        params![
+            msg_id,
+            ctx.helmor_session_id,
+            turn.role,
+            turn.content_json,
+            now,
+            resolved_model,
+            ctx.turn_id
+        ],
+    )?;
+    Ok(())
+}
+
+/// Persist the result summary and finalize session/workspace metadata.
+/// Called once on the "end" event after all turns have been persisted.
 #[allow(clippy::too_many_arguments)]
-fn persist_exchange(
-    helmor_session_id: &str,
-    prompt: &str,
-    model: &AgentModelDefinition,
+fn persist_result_and_finalize(
+    conn: &Connection,
+    ctx: &ExchangeContext,
     resolved_model: &str,
     assistant_text: &str,
-    _thinking_text: Option<&str>,
     provider_session_id: Option<&str>,
     effort_level: Option<&str>,
     permission_mode: Option<&str>,
     usage: &AgentUsage,
-    turns: &[CollectedTurn],
     raw_result_json: Option<&str>,
 ) -> Result<()> {
-    let connection = open_write_connection()?;
     let now = current_timestamp_string()?;
-    let turn_id = Uuid::new_v4().to_string();
-    let user_message_id = Uuid::new_v4().to_string();
     let result_message_id = Uuid::new_v4().to_string();
-    let assistant_sdk_message_id = format!("helmor-assistant-{}", Uuid::new_v4());
 
     let result_payload = raw_result_json.map(str::to_string).unwrap_or_else(|| {
         serde_json::json!({
@@ -1129,53 +1288,9 @@ fn persist_exchange(
         .to_string()
     });
 
-    let transaction = connection.unchecked_transaction()?;
+    let transaction = conn.unchecked_transaction()?;
 
-    // 1. Insert the original user prompt.
-    transaction.execute(
-        r#"
-            INSERT INTO session_messages (
-              id, session_id, role, content, created_at, sent_at,
-              full_message, model, last_assistant_message_id, turn_id,
-              is_resumable_message
-            ) VALUES (?1, ?2, 'user', ?3, ?4, ?4, ?3, ?5, ?6, ?7, 0)
-            "#,
-        params![
-            user_message_id,
-            helmor_session_id,
-            prompt,
-            now,
-            model.id,
-            assistant_sdk_message_id,
-            turn_id
-        ],
-    )?;
-
-    // 2. Insert all intermediate turns (assistant tool calls, user tool results, etc.).
-    if !turns.is_empty() {
-        for collected_turn in turns {
-            let msg_id = Uuid::new_v4().to_string();
-            transaction.execute(
-                r#"
-                    INSERT INTO session_messages (
-                      id, session_id, role, content, created_at, sent_at,
-                      full_message, model, turn_id, is_resumable_message
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?4, ?6, ?7, 0)
-                    "#,
-                params![
-                    msg_id,
-                    helmor_session_id,
-                    collected_turn.role,
-                    collected_turn.content_json,
-                    now,
-                    resolved_model,
-                    turn_id
-                ],
-            )?;
-        }
-    }
-
-    // 3. Insert result summary.
+    // Insert result summary.
     transaction.execute(
         r#"
             INSERT INTO session_messages (
@@ -1186,16 +1301,16 @@ fn persist_exchange(
             "#,
         params![
             result_message_id,
-            helmor_session_id,
+            ctx.helmor_session_id,
             result_payload,
             now,
             resolved_model,
-            assistant_sdk_message_id,
-            turn_id
+            ctx.assistant_sdk_message_id,
+            ctx.turn_id
         ],
     )?;
 
-    // 4. Update session and workspace metadata.
+    // Update session and workspace metadata.
     transaction.execute(
         r#"
             UPDATE sessions
@@ -1213,9 +1328,9 @@ fn persist_exchange(
             WHERE id = ?1
             "#,
         params![
-            helmor_session_id,
-            model.id,
-            model.provider,
+            ctx.helmor_session_id,
+            ctx.model_id,
+            ctx.model_provider,
             now,
             provider_session_id,
             effort_level,
@@ -1230,14 +1345,14 @@ fn persist_exchange(
               active_session_id = ?2
             WHERE id = (SELECT workspace_id FROM sessions WHERE id = ?1)
             "#,
-        params![helmor_session_id, helmor_session_id],
+        params![ctx.helmor_session_id, ctx.helmor_session_id],
     )?;
 
-    mark_session_read_in_transaction(&transaction, helmor_session_id)?;
+    mark_session_read_in_transaction(&transaction, &ctx.helmor_session_id)?;
 
     transaction
         .commit()
-        .context("Failed to commit persist exchange transaction")
+        .context("Failed to commit result and finalize transaction")
 }
 
 fn open_write_connection() -> Result<Connection> {
@@ -1438,18 +1553,11 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // persist_exchange — integration test with real DB
+    // Incremental persistence — integration tests with real DB
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn persist_exchange_writes_effort_and_permission_mode() {
-        // Use a temp dir as HELMOR_DATA_DIR
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
-        std::env::set_var("HELMOR_DATA_DIR", dir.path());
-
-        // Initialize schema + seed data
-        let db_path = dir.path().join("helmor.db");
+    fn setup_test_db(dir: &std::path::Path) -> std::path::PathBuf {
+        let db_path = dir.join("helmor.db");
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         crate::schema::ensure_schema(&conn).unwrap();
         conn.execute(
@@ -1461,21 +1569,39 @@ mod tests {
             "INSERT INTO workspaces (id, repository_id, directory_name, state) VALUES ('w1', 'r1', 'test', 'ready')",
             [],
         ).unwrap();
+        db_path
+    }
+
+    #[test]
+    fn incremental_persist_writes_effort_and_permission_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+
+        let db_path = setup_test_db(dir.path());
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
         conn.execute(
             "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('s1', 'w1', 'idle', 'Test')",
             [],
         ).unwrap();
-        drop(conn);
 
-        // Call persist_exchange with effort + permission_mode
-        let model = find_model_definition("opus-1m").unwrap();
-        let result = persist_exchange(
-            "s1",
-            "Hello",
-            model,
+        let ctx = ExchangeContext {
+            helmor_session_id: "s1".to_string(),
+            turn_id: Uuid::new_v4().to_string(),
+            model_id: "opus-1m".to_string(),
+            model_provider: "claude".to_string(),
+            assistant_sdk_message_id: format!("helmor-assistant-{}", Uuid::new_v4()),
+        };
+
+        // 1. Persist user message
+        persist_user_message(&conn, &ctx, "Hello").unwrap();
+
+        // 2. Persist result and finalize with effort + permission_mode
+        persist_result_and_finalize(
+            &conn,
+            &ctx,
             "claude-opus-4-20250514",
             "Response text",
-            None,
             Some("sdk-session-123"),
             Some("max"),
             Some("plan"),
@@ -1483,17 +1609,11 @@ mod tests {
                 input_tokens: Some(100),
                 output_tokens: Some(50),
             },
-            &[],
             None,
-        );
-        assert!(
-            result.is_ok(),
-            "persist_exchange failed: {:?}",
-            result.err()
-        );
+        )
+        .unwrap();
 
-        // Verify DB was updated
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        // Verify session metadata
         let (effort, perm, agent_type, model_id): (String, String, String, String) = conn
             .query_row(
                 "SELECT effort_level, permission_mode, agent_type, model FROM sessions WHERE id = 's1'",
@@ -1510,7 +1630,7 @@ mod tests {
         );
         assert_eq!(model_id, "opus-1m", "model should be persisted");
 
-        // Verify messages were created
+        // Verify messages were created (user + result)
         let msg_count: i64 = conn
             .query_row(
                 "SELECT count(*) FROM session_messages WHERE session_id = 's1'",
@@ -1520,42 +1640,39 @@ mod tests {
             .unwrap();
         assert!(
             msg_count >= 2,
-            "Should have at least user + assistant messages, got {msg_count}"
+            "Should have at least user + result messages, got {msg_count}"
         );
 
-        // Cleanup env
         std::env::remove_var("HELMOR_DATA_DIR");
     }
 
     #[test]
-    fn persist_exchange_preserves_existing_values_when_null() {
+    fn incremental_persist_preserves_existing_values_when_null() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
         std::env::set_var("HELMOR_DATA_DIR", dir.path());
 
-        let db_path = dir.path().join("helmor.db");
+        let db_path = setup_test_db(dir.path());
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        crate::schema::ensure_schema(&conn).unwrap();
-        conn.execute("INSERT INTO repos (id, name) VALUES ('r1', 'repo')", [])
-            .unwrap();
-        conn.execute(
-            "INSERT INTO workspaces (id, repository_id, directory_name, state) VALUES ('w1', 'r1', 't', 'ready')",
-            [],
-        ).unwrap();
         conn.execute(
             "INSERT INTO sessions (id, workspace_id, status, effort_level, permission_mode) VALUES ('s1', 'w1', 'idle', 'high', 'acceptEdits')",
             [],
         ).unwrap();
-        drop(conn);
 
-        let model = find_model_definition("opus-1m").unwrap();
-        persist_exchange(
-            "s1",
-            "Hi",
-            model,
+        let ctx = ExchangeContext {
+            helmor_session_id: "s1".to_string(),
+            turn_id: Uuid::new_v4().to_string(),
+            model_id: "opus-1m".to_string(),
+            model_provider: "claude".to_string(),
+            assistant_sdk_message_id: format!("helmor-assistant-{}", Uuid::new_v4()),
+        };
+
+        persist_user_message(&conn, &ctx, "Hi").unwrap();
+        persist_result_and_finalize(
+            &conn,
+            &ctx,
             "opus",
             "Reply",
-            None,
             None,
             None, // effort_level = None → should keep 'high'
             None, // permission_mode = None → should keep 'acceptEdits'
@@ -1563,12 +1680,10 @@ mod tests {
                 input_tokens: None,
                 output_tokens: None,
             },
-            &[],
             None,
         )
         .unwrap();
 
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
         let (effort, perm): (String, String) = conn
             .query_row(
                 "SELECT effort_level, permission_mode FROM sessions WHERE id = 's1'",
@@ -1585,6 +1700,60 @@ mod tests {
             perm, "acceptEdits",
             "permission_mode should be preserved when None passed"
         );
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn incremental_persist_turn_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+
+        let db_path = setup_test_db(dir.path());
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('s1', 'w1', 'idle', 'Test')",
+            [],
+        ).unwrap();
+
+        let ctx = ExchangeContext {
+            helmor_session_id: "s1".to_string(),
+            turn_id: Uuid::new_v4().to_string(),
+            model_id: "opus-1m".to_string(),
+            model_provider: "claude".to_string(),
+            assistant_sdk_message_id: format!("helmor-assistant-{}", Uuid::new_v4()),
+        };
+
+        // Persist user message
+        persist_user_message(&conn, &ctx, "Do something").unwrap();
+
+        // Persist two intermediate turns
+        let turn1 = CollectedTurn {
+            role: "assistant".to_string(),
+            content_json:
+                r#"{"type":"assistant","message":{"content":[{"type":"text","text":"I'll help"}]}}"#
+                    .to_string(),
+        };
+        let turn2 = CollectedTurn {
+            role: "user".to_string(),
+            content_json:
+                r#"{"type":"user","content":[{"type":"tool_result","tool_use_id":"t1"}]}"#
+                    .to_string(),
+        };
+
+        persist_turn_message(&conn, &ctx, &turn1, "opus").unwrap();
+        persist_turn_message(&conn, &ctx, &turn2, "opus").unwrap();
+
+        // Verify: 3 messages so far (user + 2 turns), all with same turn_id
+        let msg_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM session_messages WHERE session_id = 's1' AND turn_id = ?1",
+                [&ctx.turn_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(msg_count, 3, "Should have user + 2 turn messages");
 
         std::env::remove_var("HELMOR_DATA_DIR");
     }
