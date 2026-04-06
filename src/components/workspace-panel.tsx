@@ -1254,7 +1254,10 @@ function ChatAssistantMessage({
 				}
 				if (isReasoningPart(part)) {
 					return (
-						<Reasoning key={`reasoning:${idx}`} isStreaming={streaming}>
+						<Reasoning
+							key={`reasoning:${idx}`}
+							isStreaming={part.streaming === true}
+						>
 							<ReasoningTrigger />
 							<ReasoningContent fontSize={settings.fontSize}>
 								{part.text}

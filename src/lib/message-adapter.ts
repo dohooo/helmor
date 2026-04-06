@@ -9,7 +9,11 @@ import {
 } from "./collapse-read-search";
 
 export type TextPart = { type: "text"; text: string };
-export type ReasoningPart = { type: "reasoning"; text: string };
+export type ReasoningPart = {
+	type: "reasoning";
+	text: string;
+	streaming?: boolean;
+};
 export type ToolCallPart = {
 	type: "tool-call";
 	toolCallId: string;
@@ -263,7 +267,11 @@ function parseAssistantParts(
 	for (const b of blocks) {
 		if (!isObj(b)) continue;
 		if (b.type === "thinking" && typeof b.thinking === "string") {
-			parts.push({ type: "reasoning", text: b.thinking });
+			parts.push({
+				type: "reasoning",
+				text: b.thinking,
+				...(b.__is_streaming === true ? { streaming: true } : {}),
+			});
 		} else if (b.type === "redacted_thinking") {
 			parts.push({ type: "reasoning", text: "[Thinking redacted]" });
 		} else if (b.type === "text" && typeof b.text === "string") {

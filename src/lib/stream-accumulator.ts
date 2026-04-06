@@ -24,6 +24,8 @@ type StreamingThinkingBlock = {
 	kind: "thinking";
 	blockIndex: number;
 	text: string;
+	/** Set to true when content_block_stop arrives — block is complete. */
+	done?: boolean;
 };
 
 type StreamingToolUseBlock = {
@@ -262,6 +264,11 @@ export class StreamAccumulator {
 		const block = this.blocks.get(index);
 		if (!block) return;
 
+		if (block.kind === "thinking") {
+			block.done = true;
+			return;
+		}
+
 		if (block.kind === "tool_use") {
 			// Try to parse the accumulated JSON
 			if (block.inputJsonText) {
@@ -494,7 +501,12 @@ export class StreamAccumulator {
 				contentBlocks.push({ type: "text", text: block.text || "..." });
 			} else if (block.kind === "thinking") {
 				if (block.text) {
-					contentBlocks.push({ type: "thinking", thinking: block.text });
+					contentBlocks.push({
+						type: "thinking",
+						thinking: block.text,
+						// Mark as streaming only if content_block_stop hasn't arrived yet.
+						__is_streaming: !block.done,
+					});
 				}
 			} else if (block.kind === "tool_use") {
 				contentBlocks.push({
