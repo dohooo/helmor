@@ -457,6 +457,22 @@ pub fn list_editor_files_with_content(
 }
 
 #[tauri::command]
+pub fn list_workspace_changes(
+    workspace_root_path: String,
+) -> CmdResult<Vec<editor_files::EditorFileListItem>> {
+    Ok(editor_files::list_workspace_changes(&workspace_root_path)?)
+}
+
+#[tauri::command]
+pub fn list_workspace_changes_with_content(
+    workspace_root_path: String,
+) -> CmdResult<editor_files::EditorFilesWithContentResponse> {
+    Ok(editor_files::list_workspace_changes_with_content(
+        &workspace_root_path,
+    )?)
+}
+
+#[tauri::command]
 pub fn write_editor_file(
     path: String,
     content: String,

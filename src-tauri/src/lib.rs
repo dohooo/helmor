@@ -69,6 +69,8 @@ pub fn run() {
             models::unpin_workspace,
             models::list_editor_files,
             models::list_editor_files_with_content,
+            models::list_workspace_changes,
+            models::list_workspace_changes_with_content,
             models::read_editor_file,
             models::set_workspace_manual_status,
             models::detect_installed_editors,

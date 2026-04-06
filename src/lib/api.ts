@@ -932,6 +932,29 @@ export async function listEditorFilesWithContent(
 	}
 }
 
+export async function listWorkspaceChangesWithContent(
+	workspaceRootPath: string,
+): Promise<EditorFilesWithContentResponse> {
+	const inv = await getTauriInvoke();
+	if (!inv) {
+		return {
+			items: buildFallbackInspectorFileItems(workspaceRootPath),
+			prefetched: [],
+		};
+	}
+
+	try {
+		return await inv<EditorFilesWithContentResponse>(
+			"list_workspace_changes_with_content",
+			{ workspaceRootPath },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to list workspace changes."),
+		);
+	}
+}
+
 export async function permanentlyDeleteWorkspace(
 	workspaceId: string,
 ): Promise<void> {

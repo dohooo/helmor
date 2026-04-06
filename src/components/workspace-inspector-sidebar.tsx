@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { listEditorFilesWithContent } from "@/lib/api";
+import { listWorkspaceChangesWithContent } from "@/lib/api";
 import type { InspectorFileItem } from "@/lib/editor-session";
 import { cn } from "@/lib/utils";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
@@ -79,7 +79,7 @@ export function WorkspaceInspectorSidebar({
 			};
 		}
 
-		void listEditorFilesWithContent(workspaceRootPath)
+		void listWorkspaceChangesWithContent(workspaceRootPath)
 			.then(async (response) => {
 				if (cancelled) return;
 				setChanges(response.items);

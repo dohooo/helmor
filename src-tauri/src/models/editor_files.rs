@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use uuid::Uuid;
 
-use super::workspaces;
+use super::{git_ops, workspaces};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -193,6 +193,168 @@ pub fn list_editor_files_with_content(
         .collect();
 
     Ok(EditorFilesWithContentResponse { items, prefetched })
+}
+
+/// List files changed on the current branch relative to the default branch (main/master),
+/// including both committed and uncommitted changes.
+pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFileListItem>> {
+    let workspace_root = Path::new(workspace_root_path);
+    if !workspace_root.is_absolute() || !workspace_root.is_dir() {
+        bail!(
+            "Workspace root is not a valid directory: {}",
+            workspace_root.display()
+        );
+    }
+
+    let merge_base = find_merge_base(workspace_root)?;
+
+    // Committed changes: merge-base..HEAD
+    let committed_output = git_ops::run_git(
+        ["diff", "--name-status", merge_base.as_str(), "HEAD"],
+        Some(workspace_root),
+    )
+    .unwrap_or_default();
+
+    // Unstaged changes
+    let unstaged_output =
+        git_ops::run_git(["diff", "--name-status"], Some(workspace_root)).unwrap_or_default();
+
+    // Staged changes
+    let staged_output =
+        git_ops::run_git(["diff", "--name-status", "--cached"], Some(workspace_root))
+            .unwrap_or_default();
+
+    // Untracked files
+    let untracked_output = git_ops::run_git(
+        ["ls-files", "--others", "--exclude-standard"],
+        Some(workspace_root),
+    )
+    .unwrap_or_default();
+
+    let mut file_map = std::collections::BTreeMap::<String, String>::new();
+
+    // Layer in order: committed first, then staged, then unstaged (latest wins)
+    parse_name_status_into(&committed_output, &mut file_map);
+    parse_name_status_into(&staged_output, &mut file_map);
+    parse_name_status_into(&unstaged_output, &mut file_map);
+
+    // Untracked files are all "A" (added)
+    for line in untracked_output.lines() {
+        let path = line.trim();
+        if !path.is_empty() {
+            file_map
+                .entry(path.to_string())
+                .or_insert_with(|| "A".to_string());
+        }
+    }
+
+    // Remove deleted files that no longer exist (D status stays — it's informational)
+    Ok(file_map
+        .into_iter()
+        .map(|(relative_path, status)| {
+            let absolute = workspace_root.join(&relative_path);
+            let name = Path::new(&relative_path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| relative_path.clone());
+            EditorFileListItem {
+                path: relative_path,
+                absolute_path: absolute.display().to_string(),
+                name,
+                status,
+            }
+        })
+        .collect())
+}
+
+/// List workspace changes and eagerly read their contents in a single IPC call.
+pub fn list_workspace_changes_with_content(
+    workspace_root_path: &str,
+) -> Result<EditorFilesWithContentResponse> {
+    let items = list_workspace_changes(workspace_root_path)?;
+
+    const MAX_PREFETCH_BYTES: u64 = 1_048_576; // 1 MB
+
+    let prefetched = items
+        .iter()
+        .filter(|item| item.status != "D")
+        .filter_map(|item| {
+            let path = Path::new(&item.absolute_path);
+            let metadata = fs::metadata(path).ok()?;
+            if metadata.len() > MAX_PREFETCH_BYTES {
+                return None;
+            }
+            let bytes = fs::read(path).ok()?;
+            let content = String::from_utf8(bytes).ok()?;
+            Some(EditorFilePrefetchItem {
+                absolute_path: item.absolute_path.clone(),
+                content,
+            })
+        })
+        .collect();
+
+    Ok(EditorFilesWithContentResponse { items, prefetched })
+}
+
+/// Find the merge-base commit between HEAD and the default branch.
+fn find_merge_base(workspace_root: &Path) -> Result<String> {
+    // Try main, then master
+    for branch in &["refs/heads/main", "refs/heads/master"] {
+        if let Ok(base) = git_ops::run_git(["merge-base", "HEAD", *branch], Some(workspace_root)) {
+            if !base.trim().is_empty() {
+                return Ok(base.trim().to_string());
+            }
+        }
+    }
+
+    // Fallback: empty tree object (treats all files as added)
+    let empty_tree = git_ops::run_git(
+        ["hash-object", "-t", "tree", "/dev/null"],
+        Some(workspace_root),
+    )
+    .context("Failed to generate empty tree hash")?;
+    Ok(empty_tree.trim().to_string())
+}
+
+/// Parse `git diff --name-status` output into a path→status map.
+fn parse_name_status_into(output: &str, map: &mut std::collections::BTreeMap<String, String>) {
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // Format: "M\tpath" or "R100\told\tnew" (rename)
+        let mut parts = line.splitn(2, '\t');
+        let Some(raw_status) = parts.next() else {
+            continue;
+        };
+        let Some(path) = parts.next() else {
+            continue;
+        };
+
+        // Normalize status: R(ename) → A for the new path, C(opy) → A
+        let status = match raw_status.chars().next() {
+            Some('M') => "M",
+            Some('A') => "A",
+            Some('D') => "D",
+            Some('R') => {
+                // Rename: "R100\told\tnew" — treat new path as Added
+                if let Some(new_path) = path.split('\t').nth(1) {
+                    map.insert(new_path.to_string(), "A".to_string());
+                }
+                // Mark old path as deleted
+                if let Some(old_path) = path.split('\t').next() {
+                    map.insert(old_path.to_string(), "D".to_string());
+                }
+                continue;
+            }
+            Some('C') => "A",
+            Some('T') => "M", // Type change
+            _ => "M",         // Unknown → treat as modified
+        };
+
+        map.insert(path.to_string(), status.to_string());
+    }
 }
 
 fn resolve_allowed_path(path: &Path, require_existing: bool) -> Result<PathBuf> {
