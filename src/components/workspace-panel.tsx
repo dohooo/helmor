@@ -69,6 +69,7 @@ import {
 } from "@/lib/message-adapter";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
+import { Reasoning, ReasoningContent, ReasoningTrigger } from "./ai/reasoning";
 import { ClaudeIcon, OpenAIIcon } from "./icons";
 import { ImagePreviewBadge } from "./image-preview";
 import { BaseTooltip } from "./ui/base-tooltip";
@@ -81,7 +82,6 @@ import {
 } from "./ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { ScrollArea } from "./ui/scroll-area";
-import { ShimmerText } from "./ui/shimmer-text";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 type WorkspacePanelProps = {
@@ -581,6 +581,22 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 
 			{/* --- Timeline --- */}
 			<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+				{(() => {
+					console.log("[SESSION-SWITCH] WorkspacePanel render", {
+						visibleSessionId,
+						preparingSessionId,
+						coldRevealSessionId,
+						visiblePaneHasLoaded: visiblePane?.hasLoaded,
+						visiblePaneState: visiblePane?.presentationState,
+						visiblePaneMsgCount: visiblePane?.messages.length,
+						loadingWorkspace,
+						loadingSession,
+						sessionPaneIds: sessionPanes.map(
+							(p) => `${p.sessionId.slice(0, 6)}(${p.presentationState})`,
+						),
+					});
+					return null;
+				})()}
 				{loadingWorkspace || loadingSession ? (
 					<ConversationColdPlaceholder />
 				) : visibleSessionId && visiblePane?.hasLoaded ? (
@@ -842,6 +858,13 @@ function ChatThread({
 	}, [captureViewportSnapshot, mode]);
 
 	useEffect(() => {
+		console.log("[SESSION-SWITCH] ChatThread mode changed", {
+			sessionId,
+			mode,
+			isAtBottom,
+			messageCount: threadMessages.length,
+		});
+
 		if (mode !== "preparing" || typeof window === "undefined") {
 			preparePhaseRef.current = "idle";
 			prepareFinishRef.current = null;
@@ -859,6 +882,10 @@ function ChatThread({
 				return;
 			}
 
+			console.log("[SESSION-SWITCH] prepare finishPrepare called", {
+				sessionId,
+				isAtBottom: isAtBottomRef.current,
+			});
 			preparePhaseRef.current = "idle";
 			captureViewportSnapshot((payload) => {
 				if (prepareRunIdRef.current !== runId) {
@@ -871,15 +898,27 @@ function ChatThread({
 		prepareFinishRef.current = finishPrepare;
 		frameId = window.requestAnimationFrame(() => {
 			nestedFrameId = window.requestAnimationFrame(() => {
+				console.log("[SESSION-SWITCH] prepare: scrollToBottom called", {
+					sessionId,
+					isAtBottom: isAtBottomRef.current,
+				});
 				void scrollToBottom("instant");
 				preparePhaseRef.current = "waiting-bottom";
 				settleFrameId = window.requestAnimationFrame(() => {
+					console.log("[SESSION-SWITCH] prepare: settle frame", {
+						sessionId,
+						isAtBottom: isAtBottomRef.current,
+					});
 					if (isAtBottomRef.current) {
 						finishPrepare();
 						return;
 					}
 
 					timeoutId = window.setTimeout(() => {
+						console.log(
+							"[SESSION-SWITCH] prepare: timeout fallback finishPrepare",
+							{ sessionId, isAtBottom: isAtBottomRef.current },
+						);
 						finishPrepare();
 					}, 64);
 				});
@@ -920,15 +959,18 @@ function ChatThread({
 			preparePhaseRef.current === "waiting-bottom" &&
 			isAtBottom
 		) {
+			console.log("[SESSION-SWITCH] isAtBottom triggered finishPrepare", {
+				sessionId,
+			});
 			prepareFinishRef.current?.();
 		}
-	}, [isAtBottom, mode]);
+	}, [isAtBottom, mode, sessionId]);
 
 	const virtuosoComponents = useMemo<VirtuosoComponents<RenderedMessage>>(
 		() => ({
 			Header: ConversationHeaderSpacer,
 			Item: ConversationItem,
-			Footer: sending ? StreamingFooter : undefined,
+			Footer: sending ? StreamingFooter : ConversationFooterSpacer,
 		}),
 		[sending],
 	);
@@ -1093,6 +1135,10 @@ function ConversationHeaderSpacer() {
 	return <div className="h-6 shrink-0" />;
 }
 
+function ConversationFooterSpacer() {
+	return <div className="h-5 shrink-0" />;
+}
+
 function StreamingFooter() {
 	const [elapsed, setElapsed] = useState(0);
 
@@ -1186,6 +1232,7 @@ function ChatAssistantMessage({
 	streaming: boolean;
 }) {
 	const parts = message.content as ExtendedMessagePart[];
+	const { settings } = useSettings();
 
 	return (
 		<div
@@ -1205,11 +1252,12 @@ function ChatAssistantMessage({
 				}
 				if (isReasoningPart(part)) {
 					return (
-						<AssistantReasoning
-							key={`reasoning:${idx}`}
-							text={part.text}
-							streaming={streaming}
-						/>
+						<Reasoning key={`reasoning:${idx}`} isStreaming={streaming}>
+							<ReasoningTrigger />
+							<ReasoningContent fontSize={settings.fontSize}>
+								{part.text}
+							</ReasoningContent>
+						</Reasoning>
 					);
 				}
 				if (isCollapsedGroupPart(part)) {
@@ -1395,90 +1443,6 @@ function AssistantTextFallback({
 		</div>
 	);
 }
-
-const AssistantReasoning = memo(function AssistantReasoning({
-	text,
-	streaming,
-}: {
-	text: string;
-	streaming?: boolean;
-}) {
-	const { settings } = useSettings();
-	const { scrollRef, contentRef } = useStickToBottom({ initial: "instant" });
-
-	const [isOpen, setIsOpen] = useState(true);
-	const [hasAutoClosed, setHasAutoClosed] = useState(false);
-	const [duration, setDuration] = useState<number | undefined>(undefined);
-	const startTimeRef = useRef<number | null>(null);
-
-	// Track duration start/end
-	useEffect(() => {
-		if (streaming) {
-			if (startTimeRef.current === null) startTimeRef.current = Date.now();
-		} else if (startTimeRef.current !== null) {
-			setDuration(Math.ceil((Date.now() - startTimeRef.current) / 1000));
-			startTimeRef.current = null;
-		}
-	}, [streaming]);
-
-	// Auto-collapse 1s after streaming ends (once only)
-	useEffect(() => {
-		if (!streaming && isOpen && !hasAutoClosed) {
-			const timer = setTimeout(() => {
-				setIsOpen(false);
-				setHasAutoClosed(true);
-			}, 1000);
-			return () => clearTimeout(timer);
-		}
-	}, [streaming, isOpen, hasAutoClosed]);
-
-	const label = streaming ? (
-		<ShimmerText className="text-[12px]">Thinking...</ShimmerText>
-	) : duration !== undefined ? (
-		<span>Thought for {duration}s</span>
-	) : (
-		<span>Thinking</span>
-	);
-
-	return (
-		<details
-			className="group flex flex-col"
-			open={isOpen}
-			onToggle={(e) => setIsOpen((e.target as HTMLDetailsElement).open)}
-		>
-			<summary className="flex cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-app-muted hover:text-app-foreground-soft [&::-webkit-details-marker]:hidden">
-				<svg
-					className="size-2.5 shrink-0 group-open:rotate-90 transition-transform"
-					viewBox="0 0 12 12"
-					fill="none"
-				>
-					<path
-						d="M4.5 2.5L8.5 6L4.5 9.5"
-						stroke="currentColor"
-						strokeWidth="1.5"
-						strokeLinecap="round"
-						strokeLinejoin="round"
-					/>
-				</svg>
-				{label}
-			</summary>
-			<div className="pt-1.5">
-				<div
-					ref={scrollRef}
-					className="max-h-[20rem] overflow-auto rounded-lg bg-app-foreground/[0.03]"
-				>
-					<pre
-						ref={contentRef}
-						className="whitespace-pre-wrap break-words px-3 py-2.5 font-sans leading-relaxed text-app-muted/70"
-						style={{ fontSize: `${settings.fontSize}px` }}
-					>
-						{text}
-					</pre>
-				</div>
-			</div>
-		</details>
-	);
-});
 
 const AssistantToolCall = memo(
 	function AssistantToolCall({
@@ -1736,7 +1700,10 @@ function AgentChildrenBlock({
 					}
 					if (part.type === "reasoning" && part.text) {
 						return (
-							<AssistantReasoning key={globalIdx} text={part.text as string} />
+							<Reasoning key={globalIdx}>
+								<ReasoningTrigger />
+								<ReasoningContent>{part.text as string}</ReasoningContent>
+							</Reasoning>
 						);
 					}
 					return null;

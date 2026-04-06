@@ -235,8 +235,9 @@ function mergeAdjacentAssistantMessages(
 				...prev,
 				content: [...prev.content, ...msg.content],
 				status: msg.status ?? prev.status,
-				streaming:
-					prev.streaming === true || msg.streaming === true || undefined,
+				// Only the latest message determines the streaming flag.
+				// Using OR would propagate streaming=true to all earlier completed parts.
+				streaming: msg.streaming === true || undefined,
 			};
 			continue;
 		}
