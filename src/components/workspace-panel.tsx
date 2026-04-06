@@ -363,7 +363,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 												onFocus={() => {
 													onPrefetchSession?.(session.id);
 												}}
-												className="group/tab relative gap-1.5 overflow-hidden pr-5 text-app-foreground-soft data-[state=active]:text-app-foreground"
+												className="group/tab relative min-w-[8rem] max-w-[14rem] gap-1.5 overflow-hidden pr-5 text-app-foreground-soft data-[state=active]:text-app-foreground"
 											>
 												<SessionProviderIcon
 													agentType={
