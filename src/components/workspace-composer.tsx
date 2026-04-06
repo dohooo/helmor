@@ -18,6 +18,7 @@ import {
 import type { AgentModelSection } from "@/lib/api";
 import { recordComposerRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
+import { FileBadgeNode } from "./composer-editor/file-badge-node";
 import {
 	$createImageBadgeNode,
 	ImageBadgeNode,
@@ -165,7 +166,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const initialConfig = useRef({
 		namespace: "WorkspaceComposer",
 		theme: EDITOR_THEME,
-		nodes: [ImageBadgeNode],
+		nodes: [ImageBadgeNode, FileBadgeNode],
 		onError: onEditorError,
 	}).current;
 
