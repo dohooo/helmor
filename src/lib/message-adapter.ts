@@ -36,6 +36,8 @@ export type ThreadMessageLike = {
 		type: string;
 		reason?: string;
 	};
+	/** True when this message is still being streamed from an agent. */
+	streaming?: boolean;
 };
 
 type ProjectionCache = {
@@ -156,6 +158,7 @@ function convertMessagesFlat(
 				createdAt: new Date(msg.createdAt),
 				content: parts,
 				status: { type: "complete", reason: "stop" },
+				streaming: parsed?.__streaming === true || undefined,
 			});
 			continue;
 		}

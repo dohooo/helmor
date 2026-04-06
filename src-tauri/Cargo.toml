@@ -34,10 +34,14 @@ tauri-plugin-opener = "2"
 uuid = { version = "1", features = ["v4"] }
 
 [features]
-dev-server = ["dep:axum", "dep:tokio", "dep:tower-http"]
+dev-server = ["dep:axum", "dep:futures-core", "dep:tokio", "dep:tower-http"]
 
 [dependencies.axum]
 version = "0.8"
+optional = true
+
+[dependencies.futures-core]
+version = "0.3"
 optional = true
 
 [dependencies.tokio]

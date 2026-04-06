@@ -406,12 +406,19 @@ export class StreamAccumulator {
 	 * Returns all collected messages plus a trailing partial message
 	 * from accumulated blocks/deltas (if any new content since last full message).
 	 */
-	toMessages(contextKey: string, sessionId: string): SessionMessageRecord[] {
+	toMessages(
+		contextKey: string,
+		sessionId: string,
+		assistantMessageId?: string,
+	): SessionMessageRecord[] {
 		const messages = [...this.collectedMessages];
+		const partialId = assistantMessageId ?? `${contextKey}:stream-partial`;
 
 		// Prefer block-level partial if we have structured blocks
 		if (this.blocks.size > 0) {
-			messages.push(this.buildPartialFromBlocks(contextKey, sessionId));
+			messages.push(
+				this.buildPartialFromBlocks(contextKey, sessionId, partialId),
+			);
 			return messages;
 		}
 
@@ -425,6 +432,7 @@ export class StreamAccumulator {
 					sessionId,
 					trimmedText,
 					trimmedThinking,
+					partialId,
 				),
 			);
 		}
@@ -436,11 +444,18 @@ export class StreamAccumulator {
 	toPartialMessage(
 		contextKey: string,
 		sessionId: string,
+		assistantMessageId?: string,
 	): SessionMessageRecord {
-		const messages = this.toMessages(contextKey, sessionId);
+		const messages = this.toMessages(contextKey, sessionId, assistantMessageId);
 		return (
 			messages[messages.length - 1] ??
-			this.buildPartialMessage(contextKey, sessionId, "...", "")
+			this.buildPartialMessage(
+				contextKey,
+				sessionId,
+				"...",
+				"",
+				assistantMessageId ?? `${contextKey}:stream-partial`,
+			)
 		);
 	}
 
@@ -453,8 +468,9 @@ export class StreamAccumulator {
 	 * Produces Claude API content format so parseAssistantParts can parse it.
 	 */
 	private buildPartialFromBlocks(
-		contextKey: string,
+		_contextKey: string,
 		sessionId: string,
+		partialId: string,
 	): SessionMessageRecord {
 		const sortedBlocks = [...this.blocks.values()].sort(
 			(a, b) => a.blockIndex - b.blockIndex,
@@ -497,7 +513,7 @@ export class StreamAccumulator {
 		};
 
 		return {
-			id: `${contextKey}:stream-partial`,
+			id: partialId,
 			sessionId,
 			role: "assistant",
 			content: JSON.stringify(parsed),
@@ -517,10 +533,11 @@ export class StreamAccumulator {
 
 	/** Flat partial message (legacy fallback). */
 	private buildPartialMessage(
-		contextKey: string,
+		_contextKey: string,
 		sessionId: string,
 		text: string,
 		thinking: string,
+		partialId: string,
 	): SessionMessageRecord {
 		const displayText = text || "...";
 
@@ -537,7 +554,7 @@ export class StreamAccumulator {
 				},
 			};
 			return {
-				id: `${contextKey}:stream-partial`,
+				id: partialId,
 				sessionId,
 				role: "assistant",
 				content: JSON.stringify(parsed),
@@ -556,7 +573,7 @@ export class StreamAccumulator {
 		}
 
 		return {
-			id: `${contextKey}:stream-partial`,
+			id: partialId,
 			sessionId,
 			role: "assistant",
 			content: displayText,

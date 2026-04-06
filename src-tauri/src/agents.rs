@@ -71,6 +71,8 @@ pub struct AgentSendRequest {
     pub working_directory: Option<String>,
     pub effort_level: Option<String>,
     pub permission_mode: Option<String>,
+    pub user_message_id: Option<String>,
+    pub assistant_message_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,6 +96,8 @@ struct ExchangeContext {
     model_id: String,
     model_provider: String,
     assistant_sdk_message_id: String,
+    user_message_id: String,
+    assistant_message_id_override: Option<String>,
 }
 
 /// Full parsed output from a CLI invocation.
@@ -142,12 +146,12 @@ enum StreamOutputAccumulator {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct AgentModelDefinition {
-    id: &'static str,
-    provider: &'static str,
-    label: &'static str,
-    cli_model: &'static str,
-    badge: Option<&'static str>,
+pub(crate) struct AgentModelDefinition {
+    pub(crate) id: &'static str,
+    pub(crate) provider: &'static str,
+    pub(crate) label: &'static str,
+    pub(crate) cli_model: &'static str,
+    pub(crate) badge: Option<&'static str>,
 }
 
 const CLAUDE_MODEL_DEFINITIONS: &[AgentModelDefinition] = &[
@@ -610,6 +614,8 @@ fn stream_via_sidecar(
     let hsid_copy = helmor_session_id;
     let effort_copy = request.effort_level.clone();
     let permission_mode_copy = request.permission_mode.clone();
+    let user_message_id_copy = request.user_message_id.clone();
+    let assistant_message_id_copy = request.assistant_message_id.clone();
     let rid = request_id.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -639,6 +645,10 @@ fn stream_via_sidecar(
                 model_id: model_copy.id.to_string(),
                 model_provider: model_copy.provider.to_string(),
                 assistant_sdk_message_id: format!("helmor-assistant-{}", Uuid::new_v4()),
+                user_message_id: user_message_id_copy
+                    .clone()
+                    .unwrap_or_else(|| Uuid::new_v4().to_string()),
+                assistant_message_id_override: assistant_message_id_copy.clone(),
             };
 
             match persist_user_message(conn, &ctx, &prompt_copy) {
@@ -1184,7 +1194,7 @@ fn extract_claude_assistant_text(value: &Value) -> Option<String> {
     (!text.trim().is_empty()).then_some(text)
 }
 
-fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf> {
+pub(crate) fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf> {
     if let Some(path) = non_empty(provided) {
         let directory = PathBuf::from(path);
         if directory.is_dir() {
@@ -1203,7 +1213,7 @@ fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf> {
 /// Called once at stream start, before entering the event loop.
 fn persist_user_message(conn: &Connection, ctx: &ExchangeContext, prompt: &str) -> Result<()> {
     let now = current_timestamp_string()?;
-    let user_message_id = Uuid::new_v4().to_string();
+    let user_message_id = ctx.user_message_id.clone();
 
     conn.execute(
         r#"
@@ -1272,7 +1282,10 @@ fn persist_result_and_finalize(
     raw_result_json: Option<&str>,
 ) -> Result<()> {
     let now = current_timestamp_string()?;
-    let result_message_id = Uuid::new_v4().to_string();
+    let result_message_id = ctx
+        .assistant_message_id_override
+        .clone()
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
 
     let result_payload = raw_result_json.map(str::to_string).unwrap_or_else(|| {
         serde_json::json!({
@@ -1363,7 +1376,7 @@ fn current_timestamp_string() -> Result<String> {
     crate::models::db::current_timestamp()
 }
 
-fn find_model_definition(model_id: &str) -> Option<&'static AgentModelDefinition> {
+pub(crate) fn find_model_definition(model_id: &str) -> Option<&'static AgentModelDefinition> {
     CLAUDE_MODEL_DEFINITIONS
         .iter()
         .chain(CODEX_MODEL_DEFINITIONS.iter())
@@ -1591,6 +1604,8 @@ mod tests {
             model_id: "opus-1m".to_string(),
             model_provider: "claude".to_string(),
             assistant_sdk_message_id: format!("helmor-assistant-{}", Uuid::new_v4()),
+            user_message_id: Uuid::new_v4().to_string(),
+            assistant_message_id_override: None,
         };
 
         // 1. Persist user message
@@ -1665,6 +1680,8 @@ mod tests {
             model_id: "opus-1m".to_string(),
             model_provider: "claude".to_string(),
             assistant_sdk_message_id: format!("helmor-assistant-{}", Uuid::new_v4()),
+            user_message_id: Uuid::new_v4().to_string(),
+            assistant_message_id_override: None,
         };
 
         persist_user_message(&conn, &ctx, "Hi").unwrap();
@@ -1680,6 +1697,8 @@ mod tests {
                 input_tokens: None,
                 output_tokens: None,
             },
+            None,
+            None,
             None,
         )
         .unwrap();
@@ -1723,6 +1742,8 @@ mod tests {
             model_id: "opus-1m".to_string(),
             model_provider: "claude".to_string(),
             assistant_sdk_message_id: format!("helmor-assistant-{}", Uuid::new_v4()),
+            user_message_id: Uuid::new_v4().to_string(),
+            assistant_message_id_override: None,
         };
 
         // Persist user message

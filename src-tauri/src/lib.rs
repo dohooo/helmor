@@ -1,4 +1,4 @@
-mod agents;
+pub mod agents;
 pub mod data_dir;
 #[cfg(feature = "dev-server")]
 pub mod dev_api;
