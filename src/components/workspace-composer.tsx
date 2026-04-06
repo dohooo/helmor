@@ -335,65 +335,32 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			const pastedText = event.clipboardData.getData("text/plain");
 			if (!pastedText) return;
 
+			// Always prevent default to avoid HTML paste artifacts
+			event.preventDefault();
+
 			// Check if any of the pasted lines contain image paths
 			const lines = pastedText.split("\n");
 			const hasImagePaths = lines.some((line) => isImagePath(line.trim()));
 
 			if (!hasImagePaths) {
-				// No image paths — let the browser handle as plain text paste
-				event.preventDefault();
-				// Insert as plain text (avoid HTML paste)
-				const selection = window.getSelection();
-				if (selection && selection.rangeCount > 0) {
-					const range = selection.getRangeAt(0);
-					range.deleteContents();
-					range.insertNode(document.createTextNode(pastedText));
-					range.collapse(false);
-					selection.removeAllRanges();
-					selection.addRange(range);
-				}
+				// No image paths — insert as plain text via execCommand
+				// (handles cursor position correctly, supports undo)
+				document.execCommand("insertText", false, pastedText);
 				updateHasContent();
 				return;
 			}
 
-			// Has image paths — prevent default, insert mixed content
-			event.preventDefault();
-
+			// Has image paths — insert mixed content line by line
 			for (let i = 0; i < lines.length; i++) {
 				const line = lines[i].trim();
-				if (!line) {
-					if (i < lines.length - 1) {
-						// Insert line break for empty lines between content
-						const selection = window.getSelection();
-						if (selection && selection.rangeCount > 0) {
-							const range = selection.getRangeAt(0);
-							range.deleteContents();
-							range.insertNode(document.createElement("br"));
-							range.collapse(false);
-						}
-					}
-					continue;
-				}
 				if (isImagePath(line)) {
 					insertImageBadgeAtCursor(el, line);
-				} else {
-					// Insert as text
-					const selection = window.getSelection();
-					if (selection && selection.rangeCount > 0) {
-						const range = selection.getRangeAt(0);
-						range.deleteContents();
-						range.insertNode(document.createTextNode(line));
-						range.collapse(false);
-					}
+				} else if (line) {
+					document.execCommand("insertText", false, line);
 				}
 				// Add line break between lines (but not after the last one)
-				if (i < lines.length - 1) {
-					const selection = window.getSelection();
-					if (selection && selection.rangeCount > 0) {
-						const range = selection.getRangeAt(0);
-						range.insertNode(document.createElement("br"));
-						range.collapse(false);
-					}
+				if (i < lines.length - 1 && (line || i === 0)) {
+					document.execCommand("insertLineBreak");
 				}
 			}
 
@@ -456,7 +423,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				onClick={handleClick}
 				data-placeholder="Ask to make changes, @mention files, run /commands"
 				className={cn(
-					"composer-editor min-h-[64px] max-h-[240px] resize-none overflow-y-auto bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-app-foreground outline-none",
+					"composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-app-foreground outline-none",
 					"empty:before:pointer-events-none empty:before:text-app-muted empty:before:content-[attr(data-placeholder)]",
 				)}
 			/>
