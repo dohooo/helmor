@@ -408,13 +408,29 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 											<TabsTrigger
 												key={session.id}
 												value={session.id}
-												onMouseEnter={() => {
+												onMouseEnter={(e) => {
 													onPrefetchSession?.(session.id);
+													const textEl =
+														e.currentTarget.querySelector<HTMLElement>(
+															"[data-tab-title]",
+														);
+													if (
+														textEl &&
+														textEl.scrollWidth > textEl.clientWidth
+													) {
+														e.currentTarget.title =
+															displaySessionTitle(session);
+													} else {
+														e.currentTarget.removeAttribute("title");
+													}
+												}}
+												onMouseLeave={(e) => {
+													e.currentTarget.removeAttribute("title");
 												}}
 												onFocus={() => {
 													onPrefetchSession?.(session.id);
 												}}
-												className="group/tab relative min-w-[8rem] max-w-[14rem] justify-start gap-1.5 overflow-hidden pr-5 text-app-foreground-soft data-[state=active]:text-app-foreground"
+												className="group/tab relative w-[10rem] shrink-0 justify-start gap-1.5 overflow-hidden pr-5 text-app-foreground-soft data-[state=active]:text-app-foreground"
 											>
 												<SessionProviderIcon
 													agentType={
@@ -445,6 +461,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 													/>
 												) : (
 													<span
+														data-tab-title
 														className={cn(
 															"truncate font-medium",
 															hasUnread && !selected
