@@ -34,8 +34,17 @@ export function $extractComposerContent(): {
 				} else if ($isImageBadgeNode(child)) {
 					const path = child.getImagePath();
 					images.push(path);
+					// Ensure space before @ref so chat regex can match each one
+					const last = textParts[textParts.length - 1];
+					if (last && !last.endsWith(" ") && !last.endsWith("\n")) {
+						textParts.push(" ");
+					}
 					textParts.push(`@${path}`);
 				} else if ($isFileBadgeNode(child)) {
+					const last = textParts[textParts.length - 1];
+					if (last && !last.endsWith(" ") && !last.endsWith("\n")) {
+						textParts.push(" ");
+					}
 					textParts.push(`@${child.getFilePath()}`);
 				} else if ($isLineBreakNode(child)) {
 					textParts.push("\n");

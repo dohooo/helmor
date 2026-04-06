@@ -1,13 +1,22 @@
 /**
  * Lexical plugin: handle file drag-and-drop via Tauri's drag-drop event.
  *
- * When files are dropped on the window, inserts them into the editor:
- * - Image files → ImageBadgeNode (inline badge)
- * - Other files → FileBadgeNode (inline badge with file icon)
+ * Inserts dropped files into the editor:
+ * - Image files → ImageBadgeNode
+ * - Other files → FileBadgeNode
+ *
+ * Also blocks the native browser drop to prevent duplicate insertion.
  */
 
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import { $createParagraphNode, $getRoot, $isElementNode } from "lexical";
+import {
+	$createParagraphNode,
+	$createTextNode,
+	$getRoot,
+	$isElementNode,
+	COMMAND_PRIORITY_CRITICAL,
+	DROP_COMMAND,
+} from "lexical";
 import { useEffect } from "react";
 import { $createFileBadgeNode } from "../file-badge-node";
 import { $createImageBadgeNode } from "../image-badge-node";
@@ -18,6 +27,17 @@ export function DropFilePlugin() {
 	const [editor] = useLexicalComposerContext();
 
 	useEffect(() => {
+		// Block native browser drop so PlainTextPlugin doesn't also insert content
+		const unregisterDrop = editor.registerCommand(
+			DROP_COMMAND,
+			(event) => {
+				// Prevent native drop — Tauri's drag-drop event handles it
+				event.preventDefault();
+				return true;
+			},
+			COMMAND_PRIORITY_CRITICAL,
+		);
+
 		let unlisten: (() => void) | null = null;
 
 		import("@tauri-apps/api/event")
@@ -42,9 +62,12 @@ export function DropFilePlugin() {
 								paragraph.append($createFileBadgeNode(filePath));
 							}
 						}
-					});
 
-					editor.focus();
+						// Trailing space + select so cursor lands after badges
+						const spacer = $createTextNode(" ");
+						paragraph.append(spacer);
+						spacer.select(1, 1);
+					});
 				}).then((fn) => {
 					unlisten = fn;
 				});
@@ -54,6 +77,7 @@ export function DropFilePlugin() {
 			});
 
 		return () => {
+			unregisterDrop();
 			unlisten?.();
 		};
 	}, [editor]);
