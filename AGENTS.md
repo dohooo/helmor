@@ -18,8 +18,9 @@ Helmor is a local-first desktop app built with **Tauri v2** (Rust backend) + **R
 
 ```bash
 pnpm install                 # Install dependencies (pnpm 10+, enforced via packageManager)
-pnpm run dev                 # Vite dev server on localhost:1420 (frontend only, no Tauri)
-pnpm run tauri dev           # Full desktop app: Rust backend + Vite frontend with HMR
+pnpm run dev                 # Full desktop app: Tauri + Vite + dev API server (localhost:1420 also serves real data)
+pnpm run dev:vite            # Vite dev server only (no Tauri, no API)
+pnpm run dev:api             # Dev API server only (localhost:3001, serves real data for browser mode)
 pnpm run build               # tsc + vite build (frontend bundle to dist/)
 pnpm run test                # vitest run (single pass)
 pnpm run test:watch          # vitest in watch mode
@@ -96,3 +97,11 @@ cargo check                  # Type-check without building
 - **macOS window chrome**: Overlay title bar with traffic lights at (16, 24). Drag region via `data-tauri-drag-region`.
 - **Serde convention**: Rust structs use `#[serde(rename_all = "camelCase")]` so JSON fields match TypeScript types directly.
 - **Rust clippy**: All Rust code must pass `cargo clippy -- -D warnings` with zero warnings. Run clippy before committing any Rust changes.
+
+## Browser Debugging (Agent Browser)
+
+- `pnpm run dev` 启动后，`http://localhost:1420` 可在浏览器中访问完整应用（含真实数据），Vite 会将 `/api/*` 请求代理到 dev API server（localhost:3001）。
+- 当需要调试 UI、排查性能问题、检查布局或验证视觉变更时，**优先使用 `/agent-browser` skill** 连接浏览器进行调试，而不是仅靠阅读代码猜测。
+- `/agent-browser` 可以导航页面、截图、检查元素、分析性能、执行 JavaScript 等。
+- 如果 `localhost:1420` 没有数据或无法访问，先让用户确认 `pnpm run dev` 已运行。
+- 推荐调试流程：用 `/agent-browser` 访问 `http://localhost:1420` → 截图确认当前状态 → 定位问题 → 修改代码 → 刷新页面验证。
