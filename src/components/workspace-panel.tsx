@@ -1255,8 +1255,8 @@ function ChatSystemMessage({ message }: { message: RenderedMessage }) {
 // Content part components
 // ---------------------------------------------------------------------------
 
-/** Regex matching @/path/to/file.ext references (images and general files). */
-const USER_FILE_RE = /@(\/\S+?\.\w+)(?=\s|$)/gi;
+/** Regex matching @/path references (files with or without extension). */
+const USER_FILE_RE = /@(\/\S+)(?=\s|$)/gi;
 
 /** Image extensions for distinguishing images from other files. */
 const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|svg|bmp|ico)$/i;

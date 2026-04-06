@@ -9,6 +9,7 @@
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import {
 	$createLineBreakNode,
+	$createParagraphNode,
 	$createTextNode,
 	$getRoot,
 	$getSelection,
@@ -36,18 +37,22 @@ function readFileAsBase64(file: File): Promise<string> {
 	});
 }
 
-/** Append a node at the end of the last paragraph (or create one). */
+/** Append a node at the end of the last paragraph and move cursor after it. */
 function $appendToEnd(...nodes: import("lexical").LexicalNode[]) {
 	const root = $getRoot();
 	let lastChild = root.getLastChild();
 	if (!lastChild || !$isElementNode(lastChild)) {
-		const { $createParagraphNode } = require("lexical");
 		lastChild = $createParagraphNode();
 		root.append(lastChild);
 	}
+	const paragraph = lastChild as import("lexical").ElementNode;
 	for (const node of nodes) {
-		(lastChild as import("lexical").ElementNode).append(node);
+		paragraph.append(node);
 	}
+	// Append a trailing space so cursor lands after the badge
+	const spacer = $createTextNode(" ");
+	paragraph.append(spacer);
+	spacer.select(1, 1);
 }
 
 export function PasteImagePlugin() {
