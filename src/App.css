@@ -303,80 +303,23 @@ body {
 	}
 }
 
-.conversation-markdown {
+/* Streamdown theme overrides — minimal, no !important */
+.conversation-streamdown {
 	color: var(--color-app-foreground);
 }
 
-.conversation-markdown :where(p, li, ul, ol, blockquote, table, strong, em) {
+.conversation-streamdown :where(p, li, ul, ol, blockquote, table, strong, em) {
 	color: inherit;
 }
 
-.conversation-markdown :where(a) {
+.conversation-streamdown :where(a) {
 	color: var(--color-app-project);
 }
 
-.conversation-markdown :where(code):not(pre code) {
-	font-size: inherit;
-	color: var(--color-app-foreground-soft);
-	background: color-mix(in oklch, var(--color-app-sidebar) 94%, transparent);
-	border: 1px solid
-		color-mix(in oklch, var(--color-app-border) 88%, transparent);
-}
-
-.conversation-streamdown :where(code):not(pre code, [data-streamdown] code) {
-	font-size: inherit;
-}
-
-.conversation-markdown :where(pre) {
-	color: var(--color-app-foreground);
-	background: var(--color-app-sidebar);
-	border: 1px solid
-		color-mix(in oklch, var(--color-app-border) 92%, transparent);
-}
-
-.conversation-markdown :where(pre code) {
-	background: transparent;
-	border: 0;
-}
-
-.conversation-markdown :where(blockquote) {
+.conversation-streamdown :where(blockquote) {
 	color: var(--color-app-muted);
 	border-left: 0.25rem solid
 		color-mix(in oklch, var(--color-app-border) 90%, transparent);
-}
-
-.conversation-streamdown :where(.shiki, pre) {
-	background: var(--color-app-sidebar) !important;
-	color: var(--color-app-foreground) !important;
-	border: 1px solid
-		color-mix(in oklch, var(--color-app-border) 92%, transparent);
-}
-
-.conversation-streamdown :where([data-streamdown="code-block-body"]) {
-	font-size: inherit !important;
-	line-height: inherit;
-}
-
-.conversation-streamdown
-	:where(
-		[data-streamdown="code-block-body"] pre,
-		[data-streamdown="code-block-body"] code
-	) {
-	font-size: inherit !important;
-	line-height: inherit;
-}
-
-.conversation-streamdown
-	:where([data-streamdown="code-block-body"] span)::before {
-	font-size: inherit;
-}
-
-.conversation-streamdown :where(.shiki code, pre code) {
-	color: inherit !important;
-}
-
-.conversation-streamdown :where(.line) {
-	color: inherit;
 }
 
 /* Table layout for assistant markdown */

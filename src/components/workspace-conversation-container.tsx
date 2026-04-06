@@ -262,6 +262,12 @@ export const WorkspaceConversationContainer = memo(
 						);
 					}
 
+					// Pre-generate stable message IDs so the streaming partial
+					// and the persisted DB record share the same ID, preventing
+					// React key changes that cause unmount/remount flicker.
+					const userMessageId = crypto.randomUUID();
+					const assistantMessageId = crypto.randomUUID();
+
 					const { streamId } = await startAgentMessageStream({
 						provider: model.provider,
 						modelId: model.id,
@@ -271,6 +277,8 @@ export const WorkspaceConversationContainer = memo(
 						workingDirectory,
 						effortLevel,
 						permissionMode,
+						userMessageId,
+						assistantMessageId,
 					});
 					const sidecarSessionId = displayedSessionId ?? `tmp-${streamId}`;
 					setActiveSessionByContext((current) => ({
@@ -309,6 +317,7 @@ export const WorkspaceConversationContainer = memo(
 						const streamMessages = accumulator.toMessages(
 							contextKey,
 							displayedSessionId ?? contextKey,
+							assistantMessageId,
 						);
 						const nextMessages = [optimisticUserMessage, ...streamMessages];
 						const doFlush = () => {
@@ -380,19 +389,20 @@ export const WorkspaceConversationContainer = memo(
 							});
 
 							if (event.persisted) {
-								// Invalidate queries so DB data loads, then clear live
-								// messages in the same tick to avoid duplicates.
+								// Clear live messages first, then load DB data.
+								// Because we pre-generated the message UUIDs, the DB
+								// records share the same IDs as the live stream messages.
+								// Virtuoso keys stay stable → no unmount/remount flicker.
+								setLiveMessagesByContext((current) => {
+									if (!current[contextKey]?.length) return current;
+									const next = { ...current };
+									delete next[contextKey];
+									return next;
+								});
 								void invalidateConversationQueries(
 									displayedWorkspaceId,
 									displayedSessionId,
-								).then(() => {
-									setLiveMessagesByContext((current) => {
-										if (!current[contextKey]?.length) return current;
-										const next = { ...current };
-										delete next[contextKey];
-										return next;
-									});
-								});
+								);
 							}
 
 							sendingWorkspaceMapRef.current.delete(contextKey);

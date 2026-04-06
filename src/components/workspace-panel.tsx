@@ -1,3 +1,4 @@
+import { code as codePlugin } from "@streamdown/code";
 import { useQuery } from "@tanstack/react-query";
 import {
 	AlertCircle,
@@ -25,10 +26,9 @@ import {
 	X,
 } from "lucide-react";
 import {
-	lazy,
 	memo,
+	Profiler,
 	type ReactNode,
-	Suspense,
 	useCallback,
 	useEffect,
 	useLayoutEffect,
@@ -44,6 +44,7 @@ import {
 	type VirtuosoHandle,
 	type ItemProps as VirtuosoItemProps,
 } from "react-virtuoso";
+import { Streamdown } from "streamdown";
 import {
 	createSession,
 	deleteSession,
@@ -70,6 +71,7 @@ import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { ClaudeIcon, OpenAIIcon } from "./icons";
 import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
+import { streamdownComponents } from "./streamdown-components";
 import {
 	Command,
 	CommandEmpty,
@@ -132,38 +134,9 @@ type WorkspacePanelProps = {
 };
 
 type RenderedMessage = ReturnType<typeof convertMessages>[number];
-type StreamdownMode = "static" | "streaming";
 
-const LazyStreamdown = lazy(async () => {
-	const [{ Streamdown }, { streamdownComponents }] = await Promise.all([
-		import("streamdown"),
-		import("./streamdown-components"),
-	]);
-
-	function StreamdownWithOverrides(
-		props: React.ComponentProps<typeof Streamdown>,
-	) {
-		return (
-			<Streamdown
-				{...props}
-				components={{ ...streamdownComponents, ...props.components }}
-			/>
-		);
-	}
-
-	return { default: StreamdownWithOverrides };
-});
-
-let hasPreloadedStreamdown = false;
 const sessionViewportStateBySession = new Map<string, StateSnapshot>();
 const CHAT_LAYOUT_CACHE_VERSION = "chat-layout-v1";
-
-function preloadStreamdown() {
-	if (hasPreloadedStreamdown) return;
-	hasPreloadedStreamdown = true;
-	void import("streamdown");
-	void import("./streamdown-components");
-}
 
 export const WorkspacePanel = memo(function WorkspacePanel({
 	workspace,
@@ -291,30 +264,6 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	const handleCancelRename = useCallback(() => {
 		setEditingSessionId(null);
 		setEditingTitle("");
-	}, []);
-
-	useEffect(() => {
-		if (typeof window === "undefined") return;
-
-		const idleCallbackId =
-			"requestIdleCallback" in window
-				? window.requestIdleCallback(() => preloadStreamdown(), {
-						timeout: 1200,
-					})
-				: null;
-		const timeoutId =
-			idleCallbackId === null
-				? window.setTimeout(() => preloadStreamdown(), 180)
-				: null;
-
-		return () => {
-			if (idleCallbackId !== null && "cancelIdleCallback" in window) {
-				window.cancelIdleCallback(idleCallbackId);
-			}
-			if (timeoutId !== null) {
-				window.clearTimeout(timeoutId);
-			}
-		};
 	}, []);
 
 	return (
@@ -1126,8 +1075,7 @@ function ConversationMessage({
 	// that changes callback references and causes Virtuoso re-renders.
 	const streaming =
 		message.role === "assistant" &&
-		(message.id?.startsWith("stream:") === true ||
-			message.id?.endsWith(":stream-partial") === true);
+		(message.id?.startsWith("stream:") === true || message.streaming === true);
 
 	if (message.role === "user") {
 		return <ChatUserMessage message={message} />;
@@ -1279,18 +1227,170 @@ function AssistantText({
 	text: string;
 	streaming: boolean;
 }) {
-	const mode: StreamdownMode = streaming ? "streaming" : "static";
+	const mode = streaming ? "streaming" : "static";
 	const { settings } = useSettings();
+	const containerRef = useRef<HTMLDivElement>(null);
+
+	// === DEBUG: Instance ID & render count ===
+	const instanceId = useRef(Math.random().toString(36).slice(2, 8));
+	const renderCount = useRef(0);
+	renderCount.current += 1;
+
+	// === DEBUG: Mount/unmount detection ===
+	useEffect(() => {
+		const id = instanceId.current;
+		console.log(
+			`%c[AssistantText] MOUNT instance=${id} streaming=${streaming} textLen=${text.length}`,
+			"color: lime; font-weight: bold",
+		);
+		return () => {
+			console.log(
+				`%c[AssistantText] UNMOUNT instance=${id}`,
+				"color: red; font-weight: bold",
+			);
+		};
+	}, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+	// === DEBUG: Prop change tracking ===
+	const prevText = useRef(text);
+	const prevStreaming = useRef(streaming);
+	const prevTimestamp = useRef(performance.now());
+	useEffect(() => {
+		const now = performance.now();
+		const dt = now - prevTimestamp.current;
+		prevTimestamp.current = now;
+
+		const textChanged = prevText.current !== text;
+		const streamingChanged = prevStreaming.current !== streaming;
+
+		if (textChanged) {
+			const prevLen = prevText.current.length;
+			const curLen = text.length;
+			const delta = curLen - prevLen;
+			if (delta < 0 || curLen === 0) {
+				console.warn(
+					`%c[AssistantText:${instanceId.current}] ⚠️ TEXT REGRESSION: ${prevLen}→${curLen} (${delta}) dt=${dt.toFixed(1)}ms`,
+					"color: red; font-weight: bold; font-size: 14px",
+				);
+			} else {
+				console.log(
+					`[AssistantText:${instanceId.current}] text: ${prevLen}→${curLen} (+${delta}) dt=${dt.toFixed(1)}ms render=#${renderCount.current}`,
+				);
+			}
+			prevText.current = text;
+		}
+
+		if (streamingChanged) {
+			console.warn(
+				`%c[AssistantText:${instanceId.current}] STREAMING TOGGLED: ${prevStreaming.current}→${streaming} textLen=${text.length} dt=${dt.toFixed(1)}ms`,
+				"color: orange; font-weight: bold",
+			);
+			prevStreaming.current = streaming;
+		}
+
+		// Detect post-stream text changes
+		if (textChanged && !streaming && !streamingChanged) {
+			console.warn(
+				`%c[AssistantText:${instanceId.current}] ⚠️ POST-STREAM TEXT CHANGE: ${prevText.current.length}→${text.length} dt=${dt.toFixed(1)}ms`,
+				"color: red; font-weight: bold; font-size: 14px; background: yellow",
+			);
+		}
+	});
+
+	// === DEBUG: MutationObserver (always on) ===
+	useEffect(() => {
+		const el = containerRef.current;
+		if (!el) return;
+		let mutationCount = 0;
+		const startTime = performance.now();
+		const observer = new MutationObserver((mutations) => {
+			for (const m of mutations) {
+				mutationCount++;
+				if (m.type === "childList") {
+					const added = m.addedNodes.length;
+					const removed = m.removedNodes.length;
+					if (added > 0 && removed > 0) {
+						const elapsed = (performance.now() - startTime).toFixed(1);
+						console.log(
+							`%c[DOM ${elapsed}ms] #${mutationCount} SUBTREE REPLACE +${added} -${removed}`,
+							"color: red; font-weight: bold",
+						);
+					}
+				}
+			}
+		});
+		observer.observe(el, { childList: true, subtree: true });
+		return () => {
+			observer.disconnect();
+			console.log(
+				`%c[DOM SUMMARY] Total mutations: ${mutationCount}`,
+				"color: cyan; font-weight: bold",
+			);
+		};
+	}, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+	// === DEBUG: Layout Shift ===
+	useEffect(() => {
+		if (typeof PerformanceObserver === "undefined") return;
+		let totalCLS = 0;
+		let shiftCount = 0;
+		const po = new PerformanceObserver((list) => {
+			for (const entry of list.getEntries()) {
+				const le = entry as PerformanceEntry & {
+					value: number;
+					hadRecentInput: boolean;
+				};
+				if (le.hadRecentInput) continue;
+				totalCLS += le.value;
+				shiftCount++;
+				if (le.value > 0.01) {
+					console.log(
+						`%c[CLS] shift #${shiftCount} value=${le.value.toFixed(4)} cumulative=${totalCLS.toFixed(4)}`,
+						"color: orange; font-weight: bold",
+					);
+				}
+			}
+		});
+		try {
+			po.observe({ type: "layout-shift", buffered: false });
+		} catch {
+			/* */
+		}
+		return () => {
+			po.disconnect();
+			if (shiftCount > 0) {
+				console.log(
+					`%c[CLS SUMMARY] ${shiftCount} shifts, total=${totalCLS.toFixed(4)}`,
+					totalCLS > 0.1
+						? "color: red; font-weight: bold; font-size: 14px"
+						: "color: green; font-weight: bold",
+				);
+			}
+		};
+	}, []);
 
 	return (
-		<div
-			className="conversation-markdown prose prose-sm max-w-none break-words leading-6 text-app-foreground prose-headings:my-0 prose-headings:text-app-foreground prose-p:my-0 prose-p:text-app-foreground prose-li:my-0 prose-li:text-app-foreground prose-strong:text-app-foreground prose-em:text-app-foreground prose-pre:my-0 prose-pre:border prose-pre:border-app-border prose-pre:bg-app-sidebar prose-pre:text-[12px] prose-pre:text-app-foreground prose-ul:my-0 prose-ol:my-0 prose-blockquote:my-0 prose-blockquote:border-app-border prose-blockquote:text-app-muted prose-table:my-0 prose-table:text-[11px] prose-table:text-app-foreground prose-th:border-app-border prose-th:text-app-foreground prose-td:border-app-border prose-td:text-app-foreground prose-tr:border-app-border prose-a:text-app-project prose-a:underline prose-a:decoration-app-project/30 prose-code:rounded prose-code:border prose-code:border-app-border/50 prose-code:bg-app-sidebar prose-code:px-1 prose-code:py-px prose-code:text-[12px] prose-code:text-app-foreground-soft"
-			style={{ fontSize: `${settings.fontSize}px` }}
+		<Profiler
+			id={`sd-${instanceId.current}`}
+			onRender={(id, phase, actualDuration) => {
+				if (actualDuration > 5 || phase === "mount") {
+					console.log(
+						`%c[Profiler] id=${id} phase=${phase} actual=${actualDuration.toFixed(1)}ms textLen=${text.length}`,
+						phase === "mount" || actualDuration > 16
+							? "color: red; font-weight: bold"
+							: "color: orange",
+					);
+				}
+			}}
 		>
-			<Suspense
-				fallback={<AssistantTextFallback text={text} streaming={streaming} />}
+			<div
+				ref={containerRef}
+				className="conversation-streamdown"
+				style={{ fontSize: `${settings.fontSize}px` }}
 			>
-				<LazyStreamdown
+				<Streamdown
+					plugins={{ code: codePlugin }}
+					components={streamdownComponents}
 					animated={
 						streaming
 							? {
@@ -1302,28 +1402,14 @@ function AssistantText({
 								}
 							: false
 					}
-					caret={undefined}
 					className="conversation-streamdown"
 					isAnimating={streaming}
-					mode={mode}
+					mode={mode as "streaming" | "static"}
 				>
 					{text}
-				</LazyStreamdown>
-			</Suspense>
-		</div>
-	);
-}
-
-function AssistantTextFallback({
-	text,
-}: {
-	text: string;
-	streaming?: boolean;
-}) {
-	return (
-		<div className="conversation-streamdown whitespace-pre-wrap break-words">
-			{text}
-		</div>
+				</Streamdown>
+			</div>
+		</Profiler>
 	);
 }
 
@@ -1337,7 +1423,7 @@ function AssistantReasoning({
 	const { settings } = useSettings();
 
 	return (
-		<details className="group flex flex-col" open={streaming || undefined}>
+		<details className="group flex flex-col" open>
 			<summary className="flex cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-app-muted hover:text-app-foreground-soft [&::-webkit-details-marker]:hidden">
 				<svg
 					className="size-2.5 shrink-0 transition-transform group-open:rotate-90"

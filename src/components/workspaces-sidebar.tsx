@@ -781,7 +781,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		<div className="flex h-full min-h-0 flex-col overflow-hidden pb-4">
 			<div
 				data-slot="window-safe-top"
-				className="flex h-11 shrink-0 items-center pr-3"
+				className="flex h-9 shrink-0 items-center pr-3"
 			>
 				<div data-tauri-drag-region className="h-full w-[94px] shrink-0" />
 				<div data-tauri-drag-region className="h-full flex-1" />

@@ -70,6 +70,8 @@ pub struct AgentSendRequest {
     pub working_directory: Option<String>,
     pub effort_level: Option<String>,
     pub permission_mode: Option<String>,
+    pub user_message_id: Option<String>,
+    pub assistant_message_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -578,6 +580,8 @@ fn stream_via_sidecar(
     let hsid_copy = helmor_session_id;
     let effort_copy = request.effort_level.clone();
     let permission_mode_copy = request.permission_mode.clone();
+    let user_message_id_copy = request.user_message_id.clone();
+    let assistant_message_id_copy = request.assistant_message_id.clone();
     let rid = request_id.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -634,6 +638,8 @@ fn stream_via_sidecar(
                                 &output.usage,
                                 &output.turns,
                                 output.result_json.as_deref(),
+                                user_message_id_copy.as_deref(),
+                                assistant_message_id_copy.as_deref(),
                             )
                             .is_ok()
                             {
@@ -1086,12 +1092,18 @@ fn persist_exchange(
     usage: &AgentUsage,
     turns: &[CollectedTurn],
     raw_result_json: Option<&str>,
+    user_message_id_override: Option<&str>,
+    assistant_message_id_override: Option<&str>,
 ) -> Result<()> {
     let connection = open_write_connection()?;
     let now = current_timestamp_string()?;
     let turn_id = Uuid::new_v4().to_string();
-    let user_message_id = Uuid::new_v4().to_string();
-    let result_message_id = Uuid::new_v4().to_string();
+    let user_message_id = user_message_id_override
+        .map(str::to_string)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let result_message_id = assistant_message_id_override
+        .map(str::to_string)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let assistant_sdk_message_id = format!("helmor-assistant-{}", Uuid::new_v4());
 
     let result_payload = raw_result_json.map(str::to_string).unwrap_or_else(|| {
@@ -1464,6 +1476,8 @@ mod tests {
             },
             &[],
             None,
+            None,
+            None,
         );
         assert!(
             result.is_ok(),
@@ -1543,6 +1557,8 @@ mod tests {
                 output_tokens: None,
             },
             &[],
+            None,
+            None,
             None,
         )
         .unwrap();

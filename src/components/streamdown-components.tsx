@@ -1,18 +1,15 @@
 /**
  * Custom component overrides for streamdown.
  *
- * Replaces streamdown's built-in code-block and table rendering
+ * Replaces streamdown's built-in table rendering
  * with shadcn/ui styled components.
+ *
+ * Code highlighting is handled by the @streamdown/code plugin.
  *
  * @see https://streamdown.ai/docs/components
  */
 import type { ReactNode } from "react";
-import {
-	TableCopyDropdown,
-	TableDownloadDropdown,
-	useIsCodeFenceIncomplete,
-} from "streamdown";
-import { CodeBlock, CodeBlockCopyButton } from "@/components/ai/code-block";
+import { TableCopyDropdown, TableDownloadDropdown } from "streamdown";
 import {
 	Table,
 	TableBody,
@@ -22,57 +19,6 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-
-// ---------------------------------------------------------------------------
-// Code block
-// ---------------------------------------------------------------------------
-
-/**
- * Block code override for `components.code`.
- *
- * Replaces the entire code rendering pipeline — syntax highlighting is
- * handled by the shadcn CodeBlock (shiki).  During streaming, an incomplete
- * fence shows a skeleton placeholder via `useIsCodeFenceIncomplete()`.
- */
-export function StreamdownCode({
-	children,
-	className,
-}: {
-	children?: ReactNode;
-	className?: string;
-}) {
-	const isIncomplete = useIsCodeFenceIncomplete();
-	const language = className?.replace("language-", "") ?? "text";
-	const code =
-		typeof children === "string"
-			? children.replace(/\n$/, "")
-			: String(children ?? "");
-
-	if (isIncomplete) {
-		return <div className="my-4 h-24 animate-pulse rounded-md bg-muted" />;
-	}
-
-	return (
-		<div className="my-4">
-			<CodeBlock code={code} language={language as never}>
-				<CodeBlockCopyButton />
-			</CodeBlock>
-		</div>
-	);
-}
-
-/**
- * Inline code override for `components.inlineCode`.
- *
- * Prevents the `components.code` override from also capturing inline code.
- */
-export function StreamdownInlineCode({ children }: { children?: ReactNode }) {
-	return (
-		<code className="rounded border border-border/50 bg-muted px-1 py-px text-[12px]">
-			{children}
-		</code>
-	);
-}
 
 // ---------------------------------------------------------------------------
 // Table
@@ -165,11 +111,7 @@ export function StreamdownTableCell({
 // Aggregated components map
 // ---------------------------------------------------------------------------
 
-// Cast needed because streamdown's Components index signature expects
-// `Record<string, unknown> & ExtraProps` which is wider than our typed props.
 export const streamdownComponents = {
-	code: StreamdownCode,
-	inlineCode: StreamdownInlineCode,
 	table: StreamdownTable,
 	thead: StreamdownTableHeader,
 	tbody: StreamdownTableBody,

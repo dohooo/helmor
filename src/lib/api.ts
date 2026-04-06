@@ -76,6 +76,8 @@ export type AgentSendRequest = {
 	workingDirectory?: string | null;
 	effortLevel?: string | null;
 	permissionMode?: string | null;
+	userMessageId?: string | null;
+	assistantMessageId?: string | null;
 };
 
 export type WorkspaceSummary = {
