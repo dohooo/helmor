@@ -344,12 +344,9 @@ const DEFAULT_WORKSPACE_GROUPS: WorkspaceGroup[] = [
 	{ id: "canceled", label: "Canceled", tone: "canceled", rows: [] },
 ];
 
-const DEFAULT_REPOSITORIES: RepositoryCreateOption[] = [];
 const DEFAULT_ADD_REPOSITORY_DEFAULTS: AddRepositoryDefaults = {
 	lastCloneDirectory: null,
 };
-
-const DEFAULT_ARCHIVED_WORKSPACES: WorkspaceSummary[] = [];
 
 const DEFAULT_AGENT_MODEL_SECTIONS: AgentModelSection[] = [
 	{
@@ -463,11 +460,33 @@ async function getTauriInvoke(): Promise<TauriInvoke | null> {
 	return invoke as TauriInvoke;
 }
 
+// ---------------------------------------------------------------------------
+// Dev server fetch helper (used when Tauri runtime is absent)
+// ---------------------------------------------------------------------------
+
+async function devFetch<T>(
+	endpoint: string,
+	params?: Record<string, string>,
+): Promise<T> {
+	const url = new URL(`/api/${endpoint}`, window.location.origin);
+	if (params) {
+		for (const [k, v] of Object.entries(params)) {
+			url.searchParams.set(k, v);
+		}
+	}
+	const res = await fetch(url.toString());
+	if (!res.ok) {
+		const body = await res.text();
+		throw new Error(`Dev server error (${res.status}): ${body}`);
+	}
+	return res.json() as Promise<T>;
+}
+
 export async function loadWorkspaceGroups(): Promise<WorkspaceGroup[]> {
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		return DEFAULT_WORKSPACE_GROUPS;
+		return devFetch<WorkspaceGroup[]>("list_workspace_groups");
 	}
 
 	try {
@@ -596,7 +615,11 @@ export async function loadDataInfo(): Promise<DataInfo | null> {
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		return null;
+		try {
+			return await devFetch<DataInfo>("get_data_info");
+		} catch {
+			return null;
+		}
 	}
 
 	try {
@@ -610,7 +633,7 @@ export async function loadArchivedWorkspaces(): Promise<WorkspaceSummary[]> {
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		return DEFAULT_ARCHIVED_WORKSPACES;
+		return devFetch<WorkspaceSummary[]>("list_archived_workspaces");
 	}
 
 	try {
@@ -626,7 +649,7 @@ export async function listRepositories(): Promise<RepositoryCreateOption[]> {
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		return DEFAULT_REPOSITORIES;
+		return devFetch<RepositoryCreateOption[]>("list_repositories");
 	}
 
 	try {
@@ -654,7 +677,7 @@ export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		return DEFAULT_AGENT_MODEL_SECTIONS;
+		return devFetch<AgentModelSection[]>("list_agent_model_sections");
 	}
 
 	try {
@@ -670,7 +693,7 @@ export async function loadWorkspaceDetail(
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		return null;
+		return devFetch<WorkspaceDetail>("get_workspace", { id: workspaceId });
 	}
 
 	try {
@@ -722,7 +745,9 @@ export async function loadWorkspaceSessions(
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		return [];
+		return devFetch<WorkspaceSessionSummary[]>("list_workspace_sessions", {
+			id: workspaceId,
+		});
 	}
 
 	try {
@@ -742,7 +767,9 @@ export async function loadSessionMessages(
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		return [];
+		return devFetch<SessionMessageRecord[]>("list_session_messages", {
+			id: sessionId,
+		});
 	}
 
 	try {
@@ -762,7 +789,9 @@ export async function loadSessionAttachments(
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		return [];
+		return devFetch<SessionAttachmentRecord[]>("list_session_attachments", {
+			id: sessionId,
+		});
 	}
 
 	try {
@@ -1280,7 +1309,15 @@ export async function loadHiddenSessions(
 	workspaceId: string,
 ): Promise<WorkspaceSessionSummary[]> {
 	const inv = await getTauriInvoke();
-	if (!inv) return [];
+	if (!inv) {
+		try {
+			return await devFetch<WorkspaceSessionSummary[]>("list_hidden_sessions", {
+				id: workspaceId,
+			});
+		} catch {
+			return [];
+		}
+	}
 	try {
 		return await inv<WorkspaceSessionSummary[]>("list_hidden_sessions", {
 			workspaceId,

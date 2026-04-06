@@ -70,6 +70,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
+import { ScrollArea } from "./ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 type WorkspacePanelProps = {
@@ -124,8 +125,23 @@ type RenderedMessage = ReturnType<typeof convertMessages>[number];
 type StreamdownMode = "static" | "streaming";
 
 const LazyStreamdown = lazy(async () => {
-	const mod = await import("streamdown");
-	return { default: mod.Streamdown };
+	const [{ Streamdown }, { streamdownComponents }] = await Promise.all([
+		import("streamdown"),
+		import("./streamdown-components"),
+	]);
+
+	function StreamdownWithOverrides(
+		props: React.ComponentProps<typeof Streamdown>,
+	) {
+		return (
+			<Streamdown
+				{...props}
+				components={{ ...streamdownComponents, ...props.components }}
+			/>
+		);
+	}
+
+	return { default: StreamdownWithOverrides };
 });
 
 let hasPreloadedStreamdown = false;
@@ -136,6 +152,7 @@ function preloadStreamdown() {
 	if (hasPreloadedStreamdown) return;
 	hasPreloadedStreamdown = true;
 	void import("streamdown");
+	void import("./streamdown-components");
 }
 
 export const WorkspacePanel = memo(function WorkspacePanel({
@@ -1028,34 +1045,41 @@ function ConversationViewport({
 	restoredViewportState?: StateSnapshot;
 	virtuosoRef: React.RefObject<VirtuosoHandle | null>;
 }) {
+	const [scrollParent, setScrollParent] = useState<HTMLDivElement | null>(null);
+
 	return (
-		<div className="relative flex min-h-0 flex-1 overflow-hidden">
-			<Virtuoso
-				ref={virtuosoRef}
-				alignToBottom
-				atBottomStateChange={onAtBottomStateChange}
-				atBottomThreshold={48}
-				className="conversation-scroll"
-				components={components}
-				computeItemKey={(index, message) =>
-					message.id ?? `${message.role}:${index}`
-				}
-				data={data}
-				defaultItemHeight={92}
-				followOutput={followOutput}
-				initialTopMostItemIndex={
-					restoredViewportState ? undefined : { index: "LAST", align: "end" }
-				}
-				increaseViewportBy={{ bottom: 720, top: 360 }}
-				itemContent={itemContent}
-				minOverscanItemCount={{ top: 8, bottom: 4 }}
-				overscan={{ main: 600, reverse: 300 }}
-				restoreStateFrom={restoredViewportState}
-				skipAnimationFrameInResizeObserver
-				style={{ height: "100%", width: "100%" }}
-			/>
-			{children}
-		</div>
+		<ScrollArea
+			className="relative min-h-0 flex-1"
+			viewportRef={setScrollParent}
+			viewportClassName="conversation-scroll-viewport"
+			overlay={children}
+		>
+			{scrollParent ? (
+				<Virtuoso
+					ref={virtuosoRef}
+					alignToBottom
+					atBottomStateChange={onAtBottomStateChange}
+					atBottomThreshold={48}
+					components={components}
+					computeItemKey={(index, message) =>
+						message.id ?? `${message.role}:${index}`
+					}
+					customScrollParent={scrollParent}
+					data={data}
+					defaultItemHeight={92}
+					followOutput={followOutput}
+					initialTopMostItemIndex={
+						restoredViewportState ? undefined : { index: "LAST", align: "end" }
+					}
+					increaseViewportBy={{ bottom: 720, top: 360 }}
+					itemContent={itemContent}
+					minOverscanItemCount={{ top: 8, bottom: 4 }}
+					overscan={{ main: 600, reverse: 300 }}
+					restoreStateFrom={restoredViewportState}
+					skipAnimationFrameInResizeObserver
+				/>
+			) : null}
+		</ScrollArea>
 	);
 }
 
@@ -1272,7 +1296,18 @@ function AssistantText({
 				fallback={<AssistantTextFallback text={text} streaming={streaming} />}
 			>
 				<LazyStreamdown
-					animated={streaming}
+					animated={
+						streaming
+							? {
+									animation: "blurIn",
+									duration: 150,
+									easing: "linear",
+									sep: "word",
+									stagger: 30,
+								}
+							: false
+					}
+					caret={undefined}
 					className="conversation-streamdown"
 					isAnimating={streaming}
 					mode={mode}

@@ -39,10 +39,9 @@ body {
 	background-color: var(--color-app-base);
 }
 
-.conversation-scroll {
+.conversation-scroll-viewport {
 	overscroll-behavior: none;
 	overflow-anchor: none;
-	scrollbar-gutter: stable;
 }
 
 .conversation-thread-enter {

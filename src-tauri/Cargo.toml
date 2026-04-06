@@ -33,5 +33,27 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 uuid = { version = "1", features = ["v4"] }
 
+[features]
+dev-server = ["dep:axum", "dep:tokio", "dep:tower-http"]
+
+[dependencies.axum]
+version = "0.8"
+optional = true
+
+[dependencies.tokio]
+version = "1"
+features = ["full"]
+optional = true
+
+[dependencies.tower-http]
+version = "0.6"
+features = ["cors"]
+optional = true
+
+[[bin]]
+name = "helmor-dev-server"
+path = "src/bin/dev_server.rs"
+required-features = ["dev-server"]
+
 [dev-dependencies]
 tempfile = "3"

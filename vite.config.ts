@@ -59,6 +59,13 @@ export default defineConfig(async () => ({
 					port: 1421,
 				}
 			: undefined,
+		proxy: {
+			// Forward /api/* to the Rust dev server (browser-only dev mode)
+			"/api": {
+				target: "http://127.0.0.1:3001",
+				changeOrigin: true,
+			},
+		},
 		watch: {
 			// 3. ignore app-internal local data/docs, Rust backend, editor metadata, logs, and build artifacts
 			ignored: WATCH_IGNORED,

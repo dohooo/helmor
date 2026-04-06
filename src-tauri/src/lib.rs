@@ -1,10 +1,17 @@
 mod agents;
 pub mod data_dir;
+#[cfg(feature = "dev-server")]
+pub mod dev_api;
 pub mod error;
 mod import;
 mod models;
 mod schema;
 pub mod sidecar;
+
+/// Initialise the database schema (call once at startup).
+pub fn schema_init(conn: &rusqlite::Connection) {
+    schema::ensure_schema(conn).expect("Failed to initialize database schema");
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

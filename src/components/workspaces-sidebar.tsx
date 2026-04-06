@@ -969,19 +969,17 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 													<span>{group.label}</span>
 												</span>
 
-												<span className="flex items-center gap-1.5">
-													{group.rows.length > 0 ? (
-														<span className="min-w-[1.25rem] rounded-full bg-app-row-selected px-1.5 py-px text-center text-[10.5px] font-medium leading-[16px] text-app-muted">
+												{group.rows.length > 0 ? (
+													<span className="relative flex h-5 min-w-5 items-center justify-center">
+														<span className="rounded-full bg-app-row-selected px-1.5 py-px text-center text-[10.5px] font-medium leading-[16px] text-app-muted transition-opacity group-hover/trigger:opacity-0">
 															{group.rows.length}
 														</span>
-													) : null}
-													{canCollapse ? (
 														<ChevronRight
-															className="size-3.5 shrink-0 text-app-muted opacity-0 transition-all group-hover/trigger:opacity-100 group-data-[panel-open]/trigger:rotate-90"
+															className="absolute left-1/2 top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 text-app-muted opacity-0 transition-all group-hover/trigger:opacity-100 group-data-[panel-open]/trigger:rotate-90"
 															strokeWidth={2}
 														/>
-													) : null}
-												</span>
+													</span>
+												) : null}
 											</CollapsibleTrigger>
 
 											{group.rows.length > 0 ? (
@@ -1048,19 +1046,17 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 										<span>Archived</span>
 									</span>
 
-									<span className="flex items-center gap-1.5">
-										{archivedRows.length > 0 ? (
-											<span className="min-w-[1.25rem] rounded-full bg-app-row-selected px-1.5 py-px text-center text-[10.5px] font-medium leading-[16px] text-app-muted">
+									{archivedRows.length > 0 ? (
+										<span className="relative flex h-5 min-w-5 items-center justify-center">
+											<span className="rounded-full bg-app-row-selected px-1.5 py-px text-center text-[10.5px] font-medium leading-[16px] text-app-muted transition-opacity group-hover/trigger:opacity-0">
 												{archivedRows.length}
 											</span>
-										) : null}
-										{archivedRows.length > 0 ? (
 											<ChevronRight
-												className="size-3.5 shrink-0 text-app-muted opacity-0 transition-all group-hover/trigger:opacity-100 group-data-[panel-open]/trigger:rotate-90"
+												className="absolute left-1/2 top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 text-app-muted opacity-0 transition-all group-hover/trigger:opacity-100 group-data-[panel-open]/trigger:rotate-90"
 												strokeWidth={2}
 											/>
-										) : null}
-									</span>
+										</span>
+									) : null}
 								</CollapsibleTrigger>
 
 								{archivedRows.length > 0 ? (

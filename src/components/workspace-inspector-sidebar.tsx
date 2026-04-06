@@ -17,6 +17,7 @@ import { flushSync } from "react-dom";
 import { listWorkspaceChangesWithContent } from "@/lib/api";
 import type { InspectorFileItem } from "@/lib/editor-session";
 import { cn } from "@/lib/utils";
+import { ScrollArea } from "./ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 const DEFAULT_CHANGES_RATIO = 0.4;
@@ -510,12 +511,9 @@ function ActionsSection({
 				</span>
 			</div>
 
-			<div
+			<ScrollArea
 				aria-label="Actions panel body"
-				className={cn(
-					"overflow-y-auto bg-app-base/[0.16] text-[11.5px]",
-					expanded && "flex-1",
-				)}
+				className={cn("bg-app-base/[0.16] text-[11.5px]", expanded && "flex-1")}
 				style={expanded ? undefined : { height: `${bodyHeight}px` }}
 			>
 				{/* Git status */}
@@ -595,7 +593,7 @@ function ActionsSection({
 						)}
 					</div>
 				))}
-			</div>
+			</ScrollArea>
 		</section>
 	);
 }
@@ -682,9 +680,9 @@ function ChangesSection({
 				)}
 			</div>
 
-			<div
+			<ScrollArea
 				aria-label="Changes panel body"
-				className="overflow-y-auto bg-app-base/[0.16] font-mono text-[11.5px]"
+				className="bg-app-base/[0.16] font-mono text-[11.5px]"
 				style={{ height: `${bodyHeight}px` }}
 			>
 				{changes.length > 0 ? (
@@ -708,7 +706,7 @@ function ChangesSection({
 						Select a workspace with a root path to open files here.
 					</div>
 				)}
-			</div>
+			</ScrollArea>
 		</section>
 	);
 }
