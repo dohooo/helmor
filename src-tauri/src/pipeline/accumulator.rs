@@ -27,6 +27,8 @@ enum StreamingBlock {
     },
     Thinking {
         text: String,
+        /// Set to true when content_block_stop arrives.
+        done: bool,
     },
     ToolUse {
         tool_use_id: String,
@@ -339,6 +341,7 @@ impl StreamAccumulator {
                     index,
                     StreamingBlock::Thinking {
                         text: String::new(),
+                        done: false,
                     },
                 );
             }
@@ -387,7 +390,7 @@ impl StreamAccumulator {
                     self.saw_text_delta = true;
                 }
             }
-            (StreamingBlock::Thinking { text }, Some("thinking_delta")) => {
+            (StreamingBlock::Thinking { text, .. }, Some("thinking_delta")) => {
                 if let Some(dt) = delta.get("thinking").and_then(Value::as_str) {
                     text.push_str(dt);
                     self.thinking_text.push_str(dt);
@@ -413,19 +416,24 @@ impl StreamAccumulator {
 
     fn handle_block_stop(&mut self, event: &Value) {
         let index = event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
-        if let Some(StreamingBlock::ToolUse {
-            input_json_text,
-            parsed_input,
-            status,
-            ..
-        }) = self.blocks.get_mut(&index)
-        {
-            if !input_json_text.is_empty() {
-                if let Ok(v) = serde_json::from_str::<Value>(input_json_text) {
-                    *parsed_input = Some(v);
-                }
+        match self.blocks.get_mut(&index) {
+            Some(StreamingBlock::Thinking { done, .. }) => {
+                *done = true;
             }
-            *status = "running";
+            Some(StreamingBlock::ToolUse {
+                input_json_text,
+                parsed_input,
+                status,
+                ..
+            }) => {
+                if !input_json_text.is_empty() {
+                    if let Ok(v) = serde_json::from_str::<Value>(input_json_text) {
+                        *parsed_input = Some(v);
+                    }
+                }
+                *status = "running";
+            }
+            _ => {}
         }
     }
 
@@ -734,7 +742,7 @@ impl StreamAccumulator {
 
     fn append_to_last_thinking_block(&mut self, text: &str) {
         for block in self.blocks.values_mut().rev() {
-            if let StreamingBlock::Thinking { text: t } = block {
+            if let StreamingBlock::Thinking { text: t, .. } = block {
                 t.push_str(text);
                 return;
             }
@@ -744,6 +752,7 @@ impl StreamAccumulator {
             idx,
             StreamingBlock::Thinking {
                 text: text.to_string(),
+                done: false,
             },
         );
     }
@@ -777,10 +786,13 @@ impl StreamAccumulator {
                     };
                     content_blocks.push(serde_json::json!({"type": "text", "text": display}));
                 }
-                StreamingBlock::Thinking { text } => {
+                StreamingBlock::Thinking { text, done } => {
                     if !text.is_empty() {
-                        content_blocks
-                            .push(serde_json::json!({"type": "thinking", "thinking": text}));
+                        content_blocks.push(serde_json::json!({
+                            "type": "thinking",
+                            "thinking": text,
+                            "__is_streaming": !done,
+                        }));
                     }
                 }
                 StreamingBlock::ToolUse {

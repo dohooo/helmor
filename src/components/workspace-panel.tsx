@@ -25,6 +25,7 @@ import {
 	X,
 } from "lucide-react";
 import {
+	createElement,
 	lazy,
 	memo,
 	type ReactNode,
@@ -44,6 +45,7 @@ import {
 	type VirtuosoHandle,
 	type ItemProps as VirtuosoItemProps,
 } from "react-virtuoso";
+import { useStickToBottom } from "use-stick-to-bottom";
 import {
 	type CollapsedGroupPart,
 	createSession,
@@ -65,6 +67,7 @@ import {
 import { recordMessageRender } from "@/lib/dev-render-debug";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
+import { Reasoning, ReasoningContent, ReasoningTrigger } from "./ai/reasoning";
 import { ClaudeIcon, OpenAIIcon } from "./icons";
 import { ImagePreviewBadge } from "./image-preview";
 import { BaseTooltip } from "./ui/base-tooltip";
@@ -94,6 +97,7 @@ type WorkspacePanelProps = {
 		hasLoaded: boolean;
 		presentationState: "cold-unpresented" | "presented";
 		viewportSnapshot?: StateSnapshot;
+		plainScrollTop?: number;
 		layoutCacheKey?: string | null;
 		lastMeasuredAt?: number;
 	}>;
@@ -113,6 +117,7 @@ type WorkspacePanelProps = {
 		sessionId: string,
 		payload: {
 			viewportSnapshot?: StateSnapshot;
+			plainScrollTop?: number;
 			layoutCacheKey?: string | null;
 			lastMeasuredAt?: number;
 		},
@@ -121,6 +126,7 @@ type WorkspacePanelProps = {
 		sessionId: string,
 		payload: {
 			viewportSnapshot?: StateSnapshot;
+			plainScrollTop?: number;
 			layoutCacheKey?: string | null;
 			lastMeasuredAt?: number;
 		},
@@ -154,7 +160,9 @@ const LazyStreamdown = lazy(async () => {
 
 let hasPreloadedStreamdown = false;
 const sessionViewportStateBySession = new Map<string, StateSnapshot>();
+const sessionPlainScrollTopBySession = new Map<string, number>();
 const CHAT_LAYOUT_CACHE_VERSION = "chat-layout-v1";
+const NON_VIRTUALIZED_THREAD_MESSAGE_LIMIT = 12;
 
 function preloadStreamdown() {
 	if (hasPreloadedStreamdown) return;
@@ -218,7 +226,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 		} catch (error) {
 			console.error("Failed to create session:", error);
 		}
-	}, [workspace, onSessionsChanged, onSelectSession]);
+	}, [workspace, onSessionsChanged, onSelectSession, visibleSessionId]);
 
 	const handleHideSession = useCallback(
 		async (sessionId: string, e: React.MouseEvent) => {
@@ -228,7 +236,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 			// reconcile against the refreshed visible-session list.
 			onSessionsChanged?.();
 		},
-		[onSessionsChanged],
+		[onSessionsChanged, selectedSessionId, visibleSessionId],
 	);
 
 	const handleToggleHistory = useCallback(async () => {
@@ -616,6 +624,7 @@ function KeepAliveThreadStack({
 		hasLoaded: boolean;
 		presentationState: "cold-unpresented" | "presented";
 		viewportSnapshot?: StateSnapshot;
+		plainScrollTop?: number;
 		layoutCacheKey?: string | null;
 		lastMeasuredAt?: number;
 	}>;
@@ -693,22 +702,17 @@ function KeepAliveThreadStack({
 							visibility: mode === "parked" ? "hidden" : "visible",
 						}}
 					>
-						{pane.messages.length > 0 ? (
-							<ChatThread
-								initialSnapshot={initialSnapshot}
-								layoutCacheKey={layoutCacheKey}
-								messages={pane.messages}
-								mode={mode}
-								onPrepared={onSessionPrepared}
-								onViewportSnapshot={onSessionMeasurements}
-								sessionId={pane.sessionId}
-								sending={pane.sending}
-							/>
-						) : (
-							<div className="flex min-h-0 flex-1 flex-col">
-								<EmptyState hasSession={hasSession} />
-							</div>
-						)}
+						<ChatThread
+							initialSnapshot={initialSnapshot}
+							layoutCacheKey={layoutCacheKey}
+							messages={pane.messages}
+							mode={mode}
+							hasSession={hasSession}
+							onPrepared={onSessionPrepared}
+							onViewportSnapshot={onSessionMeasurements}
+							sessionId={pane.sessionId}
+							sending={pane.sending}
+						/>
 					</div>
 				);
 			})}
@@ -725,6 +729,7 @@ function ChatThread({
 	layoutCacheKey,
 	messages,
 	mode,
+	hasSession,
 	onPrepared,
 	onViewportSnapshot,
 	sessionId,
@@ -734,6 +739,7 @@ function ChatThread({
 	layoutCacheKey: string;
 	messages: ThreadMessageLike[];
 	mode: "visible" | "preparing" | "parked";
+	hasSession: boolean;
 	onPrepared?: WorkspacePanelProps["onSessionPrepared"];
 	onViewportSnapshot?: WorkspacePanelProps["onSessionMeasurements"];
 	sessionId: string;
@@ -741,9 +747,23 @@ function ChatThread({
 }) {
 	// Messages are already pipeline-rendered ThreadMessageLike[] from Rust.
 	const threadMessages = messages;
+	const usePlainThread =
+		threadMessages.length <= NON_VIRTUALIZED_THREAD_MESSAGE_LIMIT;
 	const virtuosoRef = useRef<VirtuosoHandle | null>(null);
-	const [isAtBottom, setIsAtBottom] = useState(true);
-	const isAtBottomRef = useRef(true);
+	const scrollParentRef = useRef<HTMLElement | null>(null);
+	const { contentRef, scrollRef, scrollToBottom, isAtBottom } =
+		useStickToBottom({
+			initial: "instant",
+		});
+	const handleScrollRef = useCallback(
+		(element: HTMLElement | null) => {
+			scrollParentRef.current = element;
+			scrollRef(element);
+		},
+		[scrollRef],
+	);
+	const isAtBottomRef = useRef(isAtBottom);
+	isAtBottomRef.current = isAtBottom;
 	const preparePhaseRef = useRef<"idle" | "waiting-bottom">("idle");
 	const prepareRunIdRef = useRef(0);
 	const prepareFinishRef = useRef<(() => void) | null>(null);
@@ -761,11 +781,12 @@ function ChatThread({
 	}, [sending]);
 
 	useEffect(() => {
-		isAtBottomRef.current = isAtBottom;
-	}, [isAtBottom]);
-
-	useEffect(() => {
 		return () => {
+			const plainScrollTop = scrollParentRef.current?.scrollTop;
+			if (plainScrollTop !== undefined) {
+				sessionPlainScrollTopBySession.set(sessionId, plainScrollTop);
+			}
+
 			const virtuoso = virtuosoRef.current;
 			if (!virtuoso) return;
 			virtuoso.getState((snapshot) => {
@@ -774,29 +795,25 @@ function ChatThread({
 		};
 	}, [sessionId]);
 
-	const scrollThreadToBottom = useCallback(() => {
-		const virtuoso = virtuosoRef.current;
-		if (!virtuoso) return;
-
-		virtuoso.scrollToIndex({
-			index: "LAST",
-			align: "end",
-			behavior: "auto",
-		});
-	}, []);
-
 	const captureViewportSnapshot = useCallback(
 		(
 			callback?: (payload: {
 				viewportSnapshot?: StateSnapshot;
+				plainScrollTop?: number;
 				layoutCacheKey?: string | null;
 				lastMeasuredAt?: number;
 			}) => void,
 		) => {
-			const virtuoso = virtuosoRef.current;
+			const plainScrollTop = scrollParentRef.current?.scrollTop;
+			if (plainScrollTop !== undefined) {
+				sessionPlainScrollTopBySession.set(sessionId, plainScrollTop);
+			}
+
+			const virtuoso = !usePlainThread ? virtuosoRef.current : null;
 			if (!virtuoso) {
 				const payload = {
 					viewportSnapshot: undefined,
+					plainScrollTop,
 					layoutCacheKey,
 					lastMeasuredAt: Date.now(),
 				};
@@ -809,6 +826,7 @@ function ChatThread({
 				sessionViewportStateBySession.set(sessionId, snapshot);
 				const payload = {
 					viewportSnapshot: snapshot,
+					plainScrollTop,
 					layoutCacheKey,
 					lastMeasuredAt: Date.now(),
 				};
@@ -816,14 +834,32 @@ function ChatThread({
 				callback?.(payload);
 			});
 		},
-		[layoutCacheKey, onViewportSnapshot, sessionId],
+		[layoutCacheKey, onViewportSnapshot, sessionId, usePlainThread],
 	);
 
 	useEffect(() => {
 		if (sendingJustStarted) {
-			scrollThreadToBottom();
+			void scrollToBottom("instant");
 		}
-	}, [sendingJustStarted, scrollThreadToBottom]);
+	}, [sendingJustStarted, scrollToBottom]);
+
+	// When a parked pane becomes directly visible (skipping the prepare phase,
+	// e.g. after session deletion), Virtuoso may have stale measurements from
+	// when it was hidden. Force a scroll so it re-renders the correct items.
+	const prevModeRef = useRef(mode);
+	useEffect(() => {
+		const prevMode = prevModeRef.current;
+		prevModeRef.current = mode;
+		if (usePlainThread) {
+			return;
+		}
+
+		if (mode === "visible" && prevMode === "parked") {
+			window.requestAnimationFrame(() => {
+				void scrollToBottom("instant");
+			});
+		}
+	}, [mode, scrollToBottom, usePlainThread]);
 
 	useEffect(() => {
 		return () => {
@@ -842,6 +878,50 @@ function ChatThread({
 
 		prepareRunIdRef.current += 1;
 		const runId = prepareRunIdRef.current;
+
+		if (usePlainThread) {
+			let frameId = 0;
+			let nestedFrameId = 0;
+			const finishPrepare = () => {
+				if (prepareRunIdRef.current !== runId) {
+					return;
+				}
+
+				preparePhaseRef.current = "idle";
+				captureViewportSnapshot((payload) => {
+					if (prepareRunIdRef.current !== runId) {
+						return;
+					}
+					onPrepared?.(sessionId, payload);
+				});
+			};
+
+			prepareFinishRef.current = finishPrepare;
+			frameId = window.requestAnimationFrame(() => {
+				const scrollParent = scrollParentRef.current;
+				if (scrollParent) {
+					scrollParent.scrollTop = scrollParent.scrollHeight;
+				}
+
+				nestedFrameId = window.requestAnimationFrame(() => {
+					finishPrepare();
+				});
+			});
+
+			return () => {
+				if (frameId !== 0) {
+					window.cancelAnimationFrame(frameId);
+				}
+				if (nestedFrameId !== 0) {
+					window.cancelAnimationFrame(nestedFrameId);
+				}
+				if (prepareRunIdRef.current === runId) {
+					preparePhaseRef.current = "idle";
+					prepareFinishRef.current = null;
+				}
+			};
+		}
+
 		let frameId = 0;
 		let nestedFrameId = 0;
 		let settleFrameId = 0;
@@ -863,7 +943,7 @@ function ChatThread({
 		prepareFinishRef.current = finishPrepare;
 		frameId = window.requestAnimationFrame(() => {
 			nestedFrameId = window.requestAnimationFrame(() => {
-				scrollThreadToBottom();
+				void scrollToBottom("instant");
 				preparePhaseRef.current = "waiting-bottom";
 				settleFrameId = window.requestAnimationFrame(() => {
 					if (isAtBottomRef.current) {
@@ -898,12 +978,11 @@ function ChatThread({
 		};
 	}, [
 		captureViewportSnapshot,
-		layoutCacheKey,
 		mode,
 		onPrepared,
-		scrollThreadToBottom,
+		scrollToBottom,
 		sessionId,
-		threadMessages,
+		usePlainThread,
 	]);
 
 	useEffect(() => {
@@ -914,19 +993,39 @@ function ChatThread({
 		) {
 			prepareFinishRef.current?.();
 		}
-	}, [isAtBottom, mode]);
+	}, [isAtBottom, mode, sessionId]);
 
-	const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
-		setIsAtBottom(atBottom);
-	}, []);
+	useLayoutEffect(() => {
+		const prevMode = prevModeRef.current;
+		if (
+			!usePlainThread ||
+			mode !== "visible" ||
+			prevMode === "visible" ||
+			typeof window === "undefined"
+		) {
+			return;
+		}
+
+		const scrollParent = scrollParentRef.current;
+		if (!scrollParent) {
+			return;
+		}
+
+		scrollParent.scrollTop = scrollParent.scrollHeight;
+	}, [mode, sessionId, usePlainThread]);
 
 	const virtuosoComponents = useMemo<VirtuosoComponents<RenderedMessage>>(
 		() => ({
 			Header: ConversationHeaderSpacer,
 			Item: ConversationItem,
-			Footer: sending ? StreamingFooter : undefined,
+			Footer: sending ? StreamingFooter : ConversationFooterSpacer,
+			EmptyPlaceholder: () => (
+				<div className="flex min-h-full flex-1 flex-col">
+					<EmptyState hasSession={hasSession} />
+				</div>
+			),
 		}),
-		[sending],
+		[sending, hasSession],
 	);
 
 	const itemContent = useCallback(
@@ -940,27 +1039,22 @@ function ChatThread({
 		[sessionId],
 	);
 
-	// Stable followOutput callback
-	const followOutput = useCallback(
-		(atBottom: boolean) =>
-			sendingRef.current && atBottom ? ("auto" as const) : false,
-		[],
-	);
-
 	return (
 		<ConversationViewport
 			components={virtuosoComponents}
+			contentRef={usePlainThread ? contentRef : undefined}
 			data={threadMessages}
-			followOutput={followOutput}
+			isAtBottom={isAtBottom}
 			itemContent={itemContent}
-			onAtBottomStateChange={handleAtBottomStateChange}
 			restoredViewportState={restoredViewportState}
+			scrollRef={handleScrollRef}
+			usePlainThread={usePlainThread}
 			virtuosoRef={virtuosoRef}
 		>
 			<button
 				type="button"
 				onClick={() => {
-					scrollThreadToBottom();
+					scrollToBottom();
 				}}
 				className={`conversation-scroll-button ${isAtBottom || sendingJustStarted ? "conversation-scroll-button-hidden" : ""}`}
 				aria-label="Scroll to latest message"
@@ -978,36 +1072,68 @@ function ChatThread({
 function ConversationViewport({
 	children,
 	components,
+	contentRef,
 	data,
-	followOutput,
+	isAtBottom,
 	itemContent,
-	onAtBottomStateChange,
 	restoredViewportState,
+	scrollRef,
+	usePlainThread,
 	virtuosoRef,
 }: {
 	children?: ReactNode;
 	components: VirtuosoComponents<RenderedMessage>;
+	contentRef?: React.RefCallback<HTMLElement>;
 	data: RenderedMessage[];
-	followOutput: "auto" | false | ((isAtBottom: boolean) => "auto" | false);
+	isAtBottom: boolean;
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
-	onAtBottomStateChange: (atBottom: boolean) => void;
 	restoredViewportState?: StateSnapshot;
+	scrollRef: React.RefCallback<HTMLElement>;
+	usePlainThread: boolean;
 	virtuosoRef: React.RefObject<VirtuosoHandle | null>;
 }) {
 	const [scrollParent, setScrollParent] = useState<HTMLDivElement | null>(null);
 
+	const viewportRef = useCallback(
+		(el: HTMLDivElement | null) => {
+			setScrollParent(el);
+			scrollRef(el);
+		},
+		[scrollRef],
+	);
+
+	const Header = components.Header;
+	const Footer = components.Footer;
+	const EmptyPlaceholder = components.EmptyPlaceholder;
+
 	return (
 		<ScrollArea
 			className="relative min-h-0 flex-1"
-			viewportRef={setScrollParent}
+			viewportRef={viewportRef}
 			viewportClassName="conversation-scroll-viewport"
 			overlay={children}
+			type="always"
 		>
-			{scrollParent ? (
+			{usePlainThread ? (
+				<div ref={contentRef}>
+					{Header ? createElement(Header) : null}
+					{data.length === 0
+						? EmptyPlaceholder
+							? createElement(EmptyPlaceholder)
+							: null
+						: data.map((message, index) => (
+								<ConversationRowShell
+									key={message.id ?? `${message.role}:${index}`}
+								>
+									{itemContent(index, message)}
+								</ConversationRowShell>
+							))}
+					{Footer ? createElement(Footer) : null}
+				</div>
+			) : scrollParent ? (
 				<Virtuoso
 					ref={virtuosoRef}
 					alignToBottom
-					atBottomStateChange={onAtBottomStateChange}
 					atBottomThreshold={48}
 					components={components}
 					computeItemKey={(index, message) =>
@@ -1016,7 +1142,7 @@ function ConversationViewport({
 					customScrollParent={scrollParent}
 					data={data}
 					defaultItemHeight={92}
-					followOutput={followOutput}
+					followOutput={isAtBottom ? "smooth" : false}
 					initialTopMostItemIndex={
 						restoredViewportState ? undefined : { index: "LAST", align: "end" }
 					}
@@ -1029,6 +1155,25 @@ function ConversationViewport({
 				/>
 			) : null}
 		</ScrollArea>
+	);
+}
+
+// Dynamic-height collapsibles inside a message row can trigger a broad repaint
+// in Chromium when the row shrinks. Isolating paint to the row keeps adjacent
+// messages from flashing during close transitions.
+const conversationRowIsolationStyle = {
+	contain: "paint",
+	isolation: "isolate",
+} as const;
+
+function ConversationRowShell({ children }: { children: ReactNode }) {
+	return (
+		<div
+			style={conversationRowIsolationStyle}
+			className="flow-root px-5 pb-1.5"
+		>
+			{children}
+		</div>
 	);
 }
 
@@ -1068,7 +1213,14 @@ const ConversationItem = memo(function ConversationItem({
 	...props
 }: VirtuosoItemProps<RenderedMessage>) {
 	return (
-		<div {...props} style={style} className="flow-root px-5 pb-1.5">
+		<div
+			{...props}
+			style={{
+				...style,
+				...conversationRowIsolationStyle,
+			}}
+			className="flow-root px-5 pb-1.5"
+		>
 			{children}
 		</div>
 	);
@@ -1080,6 +1232,10 @@ function ConversationColdPlaceholder() {
 
 function ConversationHeaderSpacer() {
 	return <div className="h-6 shrink-0" />;
+}
+
+function ConversationFooterSpacer() {
+	return <div className="h-5 shrink-0" />;
 }
 
 function StreamingFooter() {
@@ -1175,6 +1331,7 @@ function ChatAssistantMessage({
 	streaming: boolean;
 }) {
 	const parts = message.content as ExtendedMessagePart[];
+	const { settings } = useSettings();
 
 	return (
 		<div
@@ -1194,11 +1351,15 @@ function ChatAssistantMessage({
 				}
 				if (isReasoningPart(part)) {
 					return (
-						<AssistantReasoning
+						<Reasoning
 							key={`reasoning:${idx}`}
-							text={part.text}
-							streaming={streaming}
-						/>
+							isStreaming={part.streaming === true}
+						>
+							<ReasoningTrigger />
+							<ReasoningContent fontSize={settings.fontSize}>
+								{part.text}
+							</ReasoningContent>
+						</Reasoning>
 					);
 				}
 				if (isCollapsedGroupPart(part)) {
@@ -1384,50 +1545,6 @@ function AssistantTextFallback({
 		</div>
 	);
 }
-
-const AssistantReasoning = memo(function AssistantReasoning({
-	text,
-	streaming,
-}: {
-	text: string;
-	streaming?: boolean;
-}) {
-	const { settings } = useSettings();
-	return (
-		<details className="group flex flex-col" open>
-			<summary className="flex cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-app-muted hover:text-app-foreground-soft [&::-webkit-details-marker]:hidden">
-				<svg
-					className="size-2.5 shrink-0 group-open:rotate-90"
-					viewBox="0 0 12 12"
-					fill="none"
-				>
-					<path
-						d="M4.5 2.5L8.5 6L4.5 9.5"
-						stroke="currentColor"
-						strokeWidth="1.5"
-						strokeLinecap="round"
-						strokeLinejoin="round"
-					/>
-				</svg>
-				Thinking
-				{streaming ? (
-					<LoaderCircle
-						className="size-3 animate-spin text-app-muted/50"
-						strokeWidth={2}
-					/>
-				) : null}
-			</summary>
-			<div className="pt-1.5">
-				<pre
-					className="max-h-[20rem] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-app-foreground/[0.03] px-3 py-2.5 font-sans leading-relaxed text-app-muted/70"
-					style={{ fontSize: `${settings.fontSize}px` }}
-				>
-					{text}
-				</pre>
-			</div>
-		</details>
-	);
-});
 
 const AssistantToolCall = memo(
 	function AssistantToolCall({
@@ -1685,7 +1802,10 @@ function AgentChildrenBlock({
 					}
 					if (part.type === "reasoning" && part.text) {
 						return (
-							<AssistantReasoning key={globalIdx} text={part.text as string} />
+							<Reasoning key={globalIdx}>
+								<ReasoningTrigger />
+								<ReasoningContent>{part.text as string}</ReasoningContent>
+							</Reasoning>
 						);
 					}
 					return null;

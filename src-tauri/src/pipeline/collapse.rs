@@ -287,6 +287,7 @@ mod tests {
     fn reasoning(t: &str) -> ExtendedMessagePart {
         ExtendedMessagePart::Basic(MessagePart::Reasoning {
             text: t.to_string(),
+            streaming: None,
         })
     }
 

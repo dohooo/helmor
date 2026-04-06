@@ -43,7 +43,12 @@ pub enum MessagePart {
 
     /// Extended thinking / reasoning block.
     #[serde(rename = "reasoning")]
-    Reasoning { text: String },
+    Reasoning {
+        text: String,
+        /// Per-part streaming state — only the active thinking block is streaming.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        streaming: Option<bool>,
+    },
 
     /// Tool invocation with optional result.
     #[serde(rename = "tool-call", rename_all = "camelCase")]

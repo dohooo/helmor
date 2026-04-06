@@ -25,12 +25,14 @@ type SessionThreadPane = {
 	hasLoaded: boolean;
 	presentationState: "cold-unpresented" | "presented";
 	viewportSnapshot?: StateSnapshot;
+	plainScrollTop?: number;
 	layoutCacheKey?: string | null;
 	lastMeasuredAt?: number;
 };
 
 type SessionViewportCacheEntry = {
 	viewportSnapshot?: StateSnapshot;
+	plainScrollTop?: number;
 	layoutCacheKey?: string | null;
 	lastMeasuredAt?: number;
 };
@@ -40,6 +42,7 @@ type WorkspacePanelContainerProps = {
 	displayedWorkspaceId: string | null;
 	selectedSessionId: string | null;
 	displayedSessionId: string | null;
+	sessionSelectionHistory?: string[];
 	liveMessages: ThreadMessageLike[];
 	sending: boolean;
 	sendingSessionIds?: Set<string>;
@@ -55,6 +58,7 @@ function arePaneMeasurementsEqual(
 ) {
 	return (
 		current?.viewportSnapshot === next.viewportSnapshot &&
+		current?.plainScrollTop === next.plainScrollTop &&
 		current?.layoutCacheKey === next.layoutCacheKey &&
 		current?.lastMeasuredAt === next.lastMeasuredAt
 	);
@@ -67,7 +71,7 @@ function estimateMessageBytes(messages: ThreadMessageLike[]) {
 		total += 160;
 		total += (message.id?.length ?? 0) * 2;
 		total += message.role.length * 2;
-		total += message.content.length * 40; // rough estimate per part
+		total += message.content.length * 40;
 		total += (message.createdAt?.length ?? 0) * 2;
 	}
 
@@ -79,6 +83,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	displayedWorkspaceId,
 	selectedSessionId,
 	displayedSessionId,
+	sessionSelectionHistory = [],
 	liveMessages,
 	sending,
 	sendingSessionIds,
@@ -125,6 +130,21 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 
 	const workspace = detailQuery.data ?? null;
 	const sessions = sessionsQuery.data ?? [];
+	const rememberedSessionId = useMemo(() => {
+		if (sessionSelectionHistory.length === 0 || sessions.length === 0) {
+			return null;
+		}
+
+		const visibleSessionIds = new Set(sessions.map((session) => session.id));
+		for (let i = sessionSelectionHistory.length - 1; i >= 0; i -= 1) {
+			const sessionId = sessionSelectionHistory[i];
+			if (visibleSessionIds.has(sessionId)) {
+				return sessionId;
+			}
+		}
+
+		return null;
+	}, [sessionSelectionHistory, sessions]);
 
 	const threadSessionId = useMemo(() => {
 		if (!displayedWorkspaceId) {
@@ -139,6 +159,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		}
 
 		return (
+			rememberedSessionId ??
 			workspace?.activeSessionId ??
 			sessions.find((session) => session.active)?.id ??
 			sessions[0]?.id ??
@@ -147,6 +168,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	}, [
 		displayedSessionId,
 		displayedWorkspaceId,
+		rememberedSessionId,
 		sessions,
 		workspace?.activeSessionId,
 	]);
@@ -265,11 +287,11 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			(targetPane?.messages.length ?? mergedMessages.length) > 0;
 
 		if (!retainedVisiblePane) {
-			setColdRevealSessionId(
+			const coldReveal =
 				targetPane?.presentationState === "cold-unpresented"
 					? threadSessionId
-					: null,
-			);
+					: null;
+			setColdRevealSessionId(coldReveal);
 			setVisibleSessionId(threadSessionId);
 			setPreparingSessionId(null);
 			setPreparedSessionId(null);
@@ -391,6 +413,8 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 					(warmEntry ? "presented" : "cold-unpresented"),
 				viewportSnapshot:
 					existingPane?.viewportSnapshot ?? warmEntry?.viewportSnapshot,
+				plainScrollTop:
+					existingPane?.plainScrollTop ?? warmEntry?.plainScrollTop,
 				layoutCacheKey:
 					existingPane?.layoutCacheKey ?? warmEntry?.layoutCacheKey ?? null,
 				lastMeasuredAt:
@@ -435,10 +459,14 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 					pane &&
 					pane.presentationState === "presented" &&
 					pane.messages.length > 0 &&
-					(pane.viewportSnapshot || pane.layoutCacheKey || pane.lastMeasuredAt)
+					(pane.viewportSnapshot ||
+						pane.plainScrollTop !== undefined ||
+						pane.layoutCacheKey ||
+						pane.lastMeasuredAt)
 				) {
 					warmCacheRef.current[sessionId] = {
 						viewportSnapshot: pane.viewportSnapshot,
+						plainScrollTop: pane.plainScrollTop,
 						layoutCacheKey: pane.layoutCacheKey ?? null,
 						lastMeasuredAt: pane.lastMeasuredAt,
 					};
@@ -478,18 +506,15 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 					return false;
 				}
 
-				const isProtected =
-					sessionId !== visibleSessionIdRef.current &&
-					sessionId !== preparingSessionIdRef.current &&
-					sessionId !== threadSessionIdRef.current;
-				if (!isProtected) {
-					return false;
-				}
+				const isVisible = sessionId === visibleSessionIdRef.current;
+				const isPreparing = sessionId === preparingSessionIdRef.current;
+				const isThread = sessionId === threadSessionIdRef.current;
+				const isProtected = isVisible || isPreparing || isThread;
+				const removableBecauseCold =
+					pane.presentationState === "cold-unpresented";
+				const removableBecauseEmpty = pane.messages.length === 0;
 
-				return (
-					pane.presentationState === "cold-unpresented" ||
-					pane.messages.length === 0
-				);
+				return !isProtected && (removableBecauseCold || removableBecauseEmpty);
 			});
 
 			if (removablePaneIds.length === 0) {
@@ -521,10 +546,14 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		setPaneRegistry((current) => {
 			const removableIds = current.order.filter((sessionId) => {
 				const pane = current.panes[sessionId];
-				return (
-					pane?.workspaceId === displayedWorkspaceId &&
-					!visibleSessionIds.has(sessionId)
-				);
+				const inDisplayedWorkspace = pane?.workspaceId === displayedWorkspaceId;
+				const stillVisibleInSessions = visibleSessionIds.has(sessionId);
+				const isVisible = sessionId === visibleSessionIdRef.current;
+				const isPreparing = sessionId === preparingSessionIdRef.current;
+				const isThread = sessionId === threadSessionIdRef.current;
+				const isProtected = isVisible || isPreparing || isThread;
+
+				return inDisplayedWorkspace && !stillVisibleInSessions && !isProtected;
 			});
 
 			if (removableIds.length === 0) {
@@ -562,6 +591,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 
 				if (
 					pane.viewportSnapshot === payload.viewportSnapshot &&
+					pane.plainScrollTop === payload.plainScrollTop &&
 					pane.layoutCacheKey === payload.layoutCacheKey &&
 					pane.lastMeasuredAt === payload.lastMeasuredAt
 				) {
@@ -575,6 +605,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 						[sessionId]: {
 							...pane,
 							viewportSnapshot: payload.viewportSnapshot,
+							plainScrollTop: payload.plainScrollTop,
 							layoutCacheKey: payload.layoutCacheKey ?? null,
 							lastMeasuredAt: payload.lastMeasuredAt,
 						},
@@ -661,7 +692,6 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 
 		autoTitleAttemptedRef.current.add(threadSessionId);
 
-		// Extract text from thread message content parts
 		const userText = firstUserMessage.content
 			.filter((p): p is { type: "text"; text: string } => p.type === "text")
 			.map((p) => p.text)
@@ -734,6 +764,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 					presentationState: pane.presentationState,
 					viewportSnapshot:
 						pane.viewportSnapshot ?? warmEntry?.viewportSnapshot,
+					plainScrollTop: pane.plainScrollTop ?? warmEntry?.plainScrollTop,
 					layoutCacheKey:
 						pane.layoutCacheKey ?? warmEntry?.layoutCacheKey ?? null,
 					lastMeasuredAt: pane.lastMeasuredAt ?? warmEntry?.lastMeasuredAt,
@@ -754,6 +785,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 					paneRegistry.panes[threadSessionId]?.presentationState ??
 					(warmEntry ? "presented" : "cold-unpresented"),
 				viewportSnapshot: warmEntry?.viewportSnapshot,
+				plainScrollTop: warmEntry?.plainScrollTop,
 				layoutCacheKey: warmEntry?.layoutCacheKey ?? null,
 				lastMeasuredAt: warmEntry?.lastMeasuredAt,
 			};

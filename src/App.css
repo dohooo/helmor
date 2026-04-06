@@ -308,6 +308,10 @@ body {
 	color: var(--color-app-foreground);
 }
 
+.conversation-streamdown [data-sd-animate] {
+	animation: none;
+}
+
 .conversation-streamdown :where(p, li, ul, ol, blockquote, table, strong, em) {
 	color: inherit;
 }

@@ -265,14 +265,20 @@ fn parse_assistant_parts(parsed: Option<&Value>) -> Vec<MessagePart> {
         match block_type {
             "thinking" => {
                 if let Some(text) = obj.get("thinking").and_then(Value::as_str) {
+                    let is_streaming = obj
+                        .get("__is_streaming")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
                     parts.push(MessagePart::Reasoning {
                         text: text.to_string(),
+                        streaming: if is_streaming { Some(true) } else { None },
                     });
                 }
             }
             "redacted_thinking" => {
                 parts.push(MessagePart::Reasoning {
                     text: "[Thinking redacted]".to_string(),
+                    streaming: None,
                 });
             }
             "text" => {
@@ -852,7 +858,7 @@ mod tests {
         assert_eq!(result[0].content.len(), 2);
         assert!(matches!(
             &result[0].content[0],
-            ExtendedMessagePart::Basic(MessagePart::Reasoning { text }) if text == "let me think..."
+            ExtendedMessagePart::Basic(MessagePart::Reasoning { text, .. }) if text == "let me think..."
         ));
         assert!(matches!(
             &result[0].content[1],

@@ -1224,7 +1224,12 @@ export type StreamingStatus =
 	| "error";
 
 export type TextPart = { type: "text"; text: string };
-export type ReasoningPart = { type: "reasoning"; text: string };
+export type ReasoningPart = {
+	type: "reasoning";
+	text: string;
+	/** Per-part streaming state — only the active thinking block is streaming. */
+	streaming?: boolean;
+};
 export type ToolCallPart = {
 	type: "tool-call";
 	toolCallId: string;

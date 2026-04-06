@@ -291,6 +291,9 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const startupPrefetchedWorkspaceRef = useRef<string | null>(null);
 	const selectedWorkspaceIdRef = useRef<string | null>(null);
 	const selectedSessionIdRef = useRef<string | null>(null);
+	const sessionSelectionHistoryByWorkspaceRef = useRef<
+		Record<string, string[]>
+	>({});
 	const [githubIdentityState, setGithubIdentityState] =
 		useState<GithubIdentityState>(getInitialGithubIdentityState);
 	const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
@@ -410,6 +413,21 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	useEffect(() => {
 		selectedSessionIdRef.current = selectedSessionId;
 	}, [selectedSessionId]);
+
+	const rememberSessionSelection = useCallback(
+		(workspaceId: string | null, sessionId: string | null) => {
+			if (!workspaceId || !sessionId) {
+				return;
+			}
+
+			const current =
+				sessionSelectionHistoryByWorkspaceRef.current[workspaceId] ?? [];
+			const next = [...current.filter((id) => id !== sessionId), sessionId];
+			sessionSelectionHistoryByWorkspaceRef.current[workspaceId] =
+				next.slice(-16);
+		},
+		[],
+	);
 
 	useEffect(() => {
 		if (!editorSession) {
@@ -848,6 +866,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			const cachedWorkspaceDisplay = resolveCachedWorkspaceDisplay(workspaceId);
 			if (cachedWorkspaceDisplay) {
 				selectedSessionIdRef.current = cachedWorkspaceDisplay.sessionId;
+				rememberSessionSelection(workspaceId, cachedWorkspaceDisplay.sessionId);
 				setSelectedSessionId(cachedWorkspaceDisplay.sessionId);
 				startTransition(() => {
 					if (workspaceSelectionRequestRef.current !== requestId) {
@@ -883,6 +902,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 						}
 
 						selectedSessionIdRef.current = sessionId;
+						rememberSessionSelection(workspaceId, sessionId);
 						setSelectedSessionId(sessionId);
 						setDisplayedWorkspaceId(workspaceId);
 						setDisplayedSessionId(sessionId);
@@ -903,7 +923,12 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 					});
 				});
 		},
-		[primeWorkspaceDisplay, queryClient, resolveCachedWorkspaceDisplay],
+		[
+			primeWorkspaceDisplay,
+			queryClient,
+			rememberSessionSelection,
+			resolveCachedWorkspaceDisplay,
+		],
 	);
 
 	const handleSelectSession = useCallback(
@@ -914,6 +939,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 			const requestId = sessionSelectionRequestRef.current + 1;
 			sessionSelectionRequestRef.current = requestId;
+			rememberSessionSelection(selectedWorkspaceIdRef.current, sessionId);
 			selectedSessionIdRef.current = sessionId;
 			setSelectedSessionId(sessionId);
 			if (sessionId === null) {
@@ -971,7 +997,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 					});
 				});
 		},
-		[queryClient],
+		[queryClient, rememberSessionSelection],
 	);
 
 	const handleNavigateSessions = useCallback(
@@ -1020,6 +1046,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 	const handleResolveDisplayedSession = useCallback(
 		(sessionId: string | null) => {
+			rememberSessionSelection(selectedWorkspaceIdRef.current, sessionId);
 			selectedSessionIdRef.current = sessionId;
 			setSelectedSessionId((current) =>
 				current === sessionId ? current : sessionId,
@@ -1030,7 +1057,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 				);
 			});
 		},
-		[],
+		[rememberSessionSelection],
 	);
 
 	useEffect(() => {
@@ -1122,12 +1149,9 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 												type="button"
 												aria-label="Collapse sidebar"
 												onClick={() => setSidebarCollapsed(true)}
-												className="absolute right-[16px] top-[24px] z-20 flex size-5 items-center justify-center rounded text-app-muted/50 transition-colors hover:text-app-foreground"
+												className="absolute right-[12px] top-[8px] z-20 flex size-5 items-center justify-center rounded text-app-foreground-soft/80 transition-colors hover:text-app-foreground"
 											>
-												<PanelLeftClose
-													className="size-3.5"
-													strokeWidth={1.8}
-												/>
+												<PanelLeftClose className="size-4" strokeWidth={1.8} />
 											</button>
 											<div className="absolute inset-x-3 bottom-3 z-20 flex items-center justify-between">
 												<SettingsButton onClick={onOpenSettings} />
@@ -1201,22 +1225,33 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 											displayedWorkspaceId={displayedWorkspaceId}
 											selectedSessionId={selectedSessionId}
 											displayedSessionId={displayedSessionId}
+											sessionSelectionHistory={
+												selectedWorkspaceId
+													? (sessionSelectionHistoryByWorkspaceRef.current[
+															selectedWorkspaceId
+														] ?? [])
+													: []
+											}
 											onSelectSession={handleSelectSession}
 											onResolveDisplayedSession={handleResolveDisplayedSession}
 											onSendingWorkspacesChange={setSendingWorkspaceIds}
 											headerLeading={
 												sidebarCollapsed ? (
-													<button
-														type="button"
-														aria-label="Expand sidebar"
-														onClick={() => setSidebarCollapsed(false)}
-														className="flex size-5 items-center justify-center rounded text-app-muted transition-colors hover:text-app-foreground"
-													>
-														<PanelLeftOpen
-															className="size-3.5"
-															strokeWidth={1.8}
-														/>
-													</button>
+													<>
+														{/* Spacer to avoid macOS traffic lights */}
+														<div className="w-[52px] shrink-0" />
+														<button
+															type="button"
+															aria-label="Expand sidebar"
+															onClick={() => setSidebarCollapsed(false)}
+															className="flex size-5 items-center justify-center rounded text-app-foreground-soft/80 transition-colors hover:text-app-foreground"
+														>
+															<PanelLeftOpen
+																className="size-4"
+																strokeWidth={1.8}
+															/>
+														</button>
+													</>
 												) : undefined
 											}
 											headerActions={
