@@ -45,6 +45,7 @@ import {
 	ToastViewport,
 } from "./components/ui/toast";
 import { WorkspaceConversationContainer } from "./components/workspace-conversation-container";
+import { WorkspaceInspectorSidebar } from "./components/workspace-inspector-sidebar";
 import { WorkspacesSidebarContainer } from "./components/workspaces-sidebar-container";
 import {
 	cancelGithubIdentityConnect,
@@ -87,6 +88,7 @@ import {
 } from "./lib/workspace-helpers";
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "helmor.workspaceSidebarWidth";
+const INSPECTOR_WIDTH_STORAGE_KEY = "helmor.workspaceInspectorWidth";
 const DEFAULT_SIDEBAR_WIDTH = 336;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 520;
@@ -134,13 +136,13 @@ function clampSidebarWidth(width: number) {
 	return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width));
 }
 
-function getInitialSidebarWidth() {
+function getInitialSidebarWidth(storageKey = SIDEBAR_WIDTH_STORAGE_KEY) {
 	if (typeof window === "undefined") {
 		return DEFAULT_SIDEBAR_WIDTH;
 	}
 
 	try {
-		const storedWidth = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+		const storedWidth = window.localStorage.getItem(storageKey);
 
 		if (!storedWidth) {
 			return DEFAULT_SIDEBAR_WIDTH;
@@ -282,9 +284,13 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const [githubIdentityState, setGithubIdentityState] =
 		useState<GithubIdentityState>(getInitialGithubIdentityState);
 	const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
+	const [inspectorWidth, setInspectorWidth] = useState(() =>
+		getInitialSidebarWidth(INSPECTOR_WIDTH_STORAGE_KEY),
+	);
 	const [resizeState, setResizeState] = useState<{
 		pointerX: number;
 		sidebarWidth: number;
+		target: "sidebar" | "inspector";
 	} | null>(null);
 	const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
 		null,
@@ -319,7 +325,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		installedEditors[0] ??
 		null;
 	const [importDialogOpen, setImportDialogOpen] = useState(false);
-	const isResizing = resizeState !== null;
+	const isSidebarResizing = resizeState?.target === "sidebar";
+	const isInspectorResizing = resizeState?.target === "inspector";
 	const isIdentityConnected = githubIdentityState.status === "connected";
 	const navigationGroupsQuery = useQuery({
 		...workspaceGroupsQueryOptions(),
@@ -458,16 +465,34 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	}, [sidebarWidth]);
 
 	useEffect(() => {
+		try {
+			window.localStorage.setItem(
+				INSPECTOR_WIDTH_STORAGE_KEY,
+				String(inspectorWidth),
+			);
+		} catch {
+			// Ignore storage failures and keep the current in-memory width.
+		}
+	}, [inspectorWidth]);
+
+	useEffect(() => {
 		if (!resizeState) {
 			return;
 		}
 
 		const handleMouseMove = (event: globalThis.MouseEvent) => {
-			setSidebarWidth(
-				clampSidebarWidth(
-					resizeState.sidebarWidth + event.clientX - resizeState.pointerX,
-				),
-			);
+			const deltaX = event.clientX - resizeState.pointerX;
+			const nextWidth =
+				resizeState.target === "sidebar"
+					? resizeState.sidebarWidth + deltaX
+					: resizeState.sidebarWidth - deltaX;
+
+			if (resizeState.target === "sidebar") {
+				setSidebarWidth(clampSidebarWidth(nextWidth));
+				return;
+			}
+
+			setInspectorWidth(clampSidebarWidth(nextWidth));
 		};
 		const handleMouseUp = () => {
 			setResizeState(null);
@@ -559,29 +584,48 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		}
 	}, []);
 
-	const handleResizeStart = (event: MouseEvent<HTMLDivElement>) => {
-		event.preventDefault();
-		setResizeState({
-			pointerX: event.clientX,
-			sidebarWidth,
-		});
-	};
-
-	const handleResizeKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-		if (event.key === "ArrowLeft") {
+	const handleResizeStart =
+		(target: "sidebar" | "inspector") =>
+		(event: MouseEvent<HTMLDivElement>) => {
 			event.preventDefault();
-			setSidebarWidth((currentWidth) =>
-				clampSidebarWidth(currentWidth - SIDEBAR_RESIZE_STEP),
-			);
-		}
+			setResizeState({
+				pointerX: event.clientX,
+				sidebarWidth: target === "sidebar" ? sidebarWidth : inspectorWidth,
+				target,
+			});
+		};
 
-		if (event.key === "ArrowRight") {
-			event.preventDefault();
-			setSidebarWidth((currentWidth) =>
-				clampSidebarWidth(currentWidth + SIDEBAR_RESIZE_STEP),
-			);
-		}
-	};
+	const handleResizeKeyDown =
+		(target: "sidebar" | "inspector") =>
+		(event: KeyboardEvent<HTMLDivElement>) => {
+			if (event.key === "ArrowLeft") {
+				event.preventDefault();
+				if (target === "sidebar") {
+					setSidebarWidth((currentWidth) =>
+						clampSidebarWidth(currentWidth - SIDEBAR_RESIZE_STEP),
+					);
+					return;
+				}
+
+				setInspectorWidth((currentWidth) =>
+					clampSidebarWidth(currentWidth + SIDEBAR_RESIZE_STEP),
+				);
+			}
+
+			if (event.key === "ArrowRight") {
+				event.preventDefault();
+				if (target === "sidebar") {
+					setSidebarWidth((currentWidth) =>
+						clampSidebarWidth(currentWidth + SIDEBAR_RESIZE_STEP),
+					);
+					return;
+				}
+
+				setInspectorWidth((currentWidth) =>
+					clampSidebarWidth(currentWidth - SIDEBAR_RESIZE_STEP),
+				);
+			}
+		};
 
 	const primeWorkspaceDisplay = useCallback(
 		async (workspaceId: string) => {
@@ -996,8 +1040,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 							aria-valuemin={MIN_SIDEBAR_WIDTH}
 							aria-valuemax={MAX_SIDEBAR_WIDTH}
 							aria-valuenow={sidebarWidth}
-							onMouseDown={handleResizeStart}
-							onKeyDown={handleResizeKeyDown}
+							onMouseDown={handleResizeStart("sidebar")}
+							onKeyDown={handleResizeKeyDown("sidebar")}
 							className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
 							style={{
 								left: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
@@ -1006,10 +1050,10 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 						>
 							<span
 								aria-hidden="true"
-								className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,opacity] duration-150 ${
-									isResizing
-										? "w-[2px] bg-app-foreground/60"
-										: "w-px bg-app-border/0 group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/40"
+								className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
+									isSidebarResizing
+										? "w-[2px] bg-app-foreground/80 shadow-[0_0_12px_rgba(250,249,246,0.2)]"
+										: "w-px bg-app-border group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
 								}`}
 							/>
 						</div>
@@ -1141,6 +1185,40 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 							</div>
 							<ChatCacheDebugHud />
 						</section>
+
+						<div
+							role="separator"
+							tabIndex={0}
+							aria-label="Resize inspector sidebar"
+							aria-orientation="vertical"
+							aria-valuemin={MIN_SIDEBAR_WIDTH}
+							aria-valuemax={MAX_SIDEBAR_WIDTH}
+							aria-valuenow={inspectorWidth}
+							onMouseDown={handleResizeStart("inspector")}
+							onKeyDown={handleResizeKeyDown("inspector")}
+							className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+							style={{
+								right: `${inspectorWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
+								width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
+							}}
+						>
+							<span
+								aria-hidden="true"
+								className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
+									isInspectorResizing
+										? "w-[2px] bg-app-foreground/80 shadow-[0_0_12px_rgba(250,249,246,0.2)]"
+										: "w-px bg-app-border group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
+								}`}
+							/>
+						</div>
+
+						<aside
+							aria-label="Inspector sidebar"
+							className="relative h-full shrink-0 overflow-hidden bg-app-sidebar"
+							style={{ width: `${inspectorWidth}px` }}
+						>
+							<WorkspaceInspectorSidebar />
+						</aside>
 					</div>
 				</main>
 			)}

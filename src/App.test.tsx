@@ -18,6 +18,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 }));
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "helmor.workspaceSidebarWidth";
+const INSPECTOR_WIDTH_STORAGE_KEY = "helmor.workspaceInspectorWidth";
 
 describe("App", () => {
 	beforeEach(() => {
@@ -34,6 +35,7 @@ describe("App", () => {
 
 		const shell = screen.getByRole("main", { name: "Application shell" });
 		const sidebar = screen.getByLabelText("Workspace sidebar");
+		const inspector = screen.getByLabelText("Inspector sidebar");
 		const panel = screen.getByLabelText("Workspace panel");
 		const dragRegion = screen.getByLabelText("Workspace panel drag region");
 		const viewport = screen.getByLabelText("Workspace viewport");
@@ -41,6 +43,9 @@ describe("App", () => {
 		const input = screen.getByLabelText("Workspace input");
 		const resizeHandle = screen.getByRole("separator", {
 			name: "Resize sidebar",
+		});
+		const inspectorResizeHandle = screen.getByRole("separator", {
+			name: "Resize inspector sidebar",
 		});
 		const doneGroup = screen.getByRole("button", { name: "Done" });
 		const progressGroup = screen.getByRole("button", { name: "In progress" });
@@ -66,6 +71,28 @@ describe("App", () => {
 		expect(sidebar).toHaveClass("bg-app-sidebar");
 		expect(sidebar).toHaveClass("overflow-hidden");
 		expect(sidebar).toHaveStyle({ width: "336px" });
+		expect(inspector).toHaveClass("bg-app-sidebar");
+		expect(inspector).toHaveClass("overflow-hidden");
+		expect(inspector).toHaveStyle({ width: "336px" });
+		expect(
+			screen.getByLabelText("Inspector section Changes"),
+		).toBeInTheDocument();
+		expect(
+			screen.getByLabelText("Inspector section Actions"),
+		).toBeInTheDocument();
+		expect(screen.getByLabelText("Inspector section Tabs")).toBeInTheDocument();
+		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
+		expect(screen.getByLabelText("Changes panel body")).toHaveStyle({
+			height: "120px",
+		});
+		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
+		expect(screen.getByLabelText("Actions panel body")).toHaveStyle({
+			height: "120px",
+		});
+		expect(screen.getByLabelText("Inspector tabs body")).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Setup" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Run" })).toBeInTheDocument();
+		expect(screen.queryByText("Terminal")).not.toBeInTheDocument();
 		expect(panel).toHaveClass("relative");
 		expect(panel).toHaveClass("bg-app-elevated");
 		expect(dragRegion).toHaveAttribute("data-tauri-drag-region");
@@ -77,6 +104,7 @@ describe("App", () => {
 			"Ask to make changes, @mention files, run /commands",
 		);
 		expect(resizeHandle).toHaveAttribute("aria-valuenow", "336");
+		expect(inspectorResizeHandle).toHaveAttribute("aria-valuenow", "336");
 		expect(safeAreas).toHaveLength(1);
 		expect(avatars).toHaveLength(11);
 		expect(groupsScrollRegion).toHaveClass("overflow-hidden");
@@ -97,6 +125,26 @@ describe("App", () => {
 		expect(screen.queryByText("Cambridge")).not.toBeInTheDocument();
 		await user.click(progressGroup);
 		expect(screen.getByText("Cambridge")).toBeInTheDocument();
+	});
+
+	it("collapses the inspector tabs section while leaving the first two panels expanded", async () => {
+		const user = userEvent.setup();
+		render(<App />);
+
+		const tabsSection = screen.getByLabelText("Inspector section Tabs");
+
+		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
+		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
+		expect(screen.getByLabelText("Inspector tabs body")).toBeInTheDocument();
+
+		await user.click(screen.getByLabelText("Toggle inspector tabs section"));
+
+		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
+		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
+		expect(
+			screen.queryByLabelText("Inspector tabs body"),
+		).not.toBeInTheDocument();
+		expect(tabsSection.parentElement).toHaveClass("mt-auto");
 	});
 
 	it("resizes the sidebar and persists the width", async () => {
@@ -129,17 +177,56 @@ describe("App", () => {
 		expect(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)).toBe("360");
 	});
 
+	it("resizes the inspector sidebar and persists the width", async () => {
+		render(<App />);
+
+		const inspector = screen.getByLabelText("Inspector sidebar");
+		const resizeHandle = screen.getByRole("separator", {
+			name: "Resize inspector sidebar",
+		});
+
+		fireEvent.mouseDown(resizeHandle, { clientX: 1200 });
+
+		await waitFor(() => {
+			expect(document.body.style.cursor).toBe("ew-resize");
+		});
+
+		fireEvent.mouseMove(window, { clientX: 1172 });
+
+		await waitFor(() => {
+			expect(inspector).toHaveStyle({ width: "364px" });
+			expect(resizeHandle).toHaveAttribute("aria-valuenow", "364");
+		});
+
+		fireEvent.mouseUp(window);
+
+		await waitFor(() => {
+			expect(document.body.style.cursor).toBe("");
+		});
+
+		expect(window.localStorage.getItem(INSPECTOR_WIDTH_STORAGE_KEY)).toBe(
+			"364",
+		);
+	});
+
 	it("restores the saved sidebar width from localStorage", () => {
 		window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, "404");
+		window.localStorage.setItem(INSPECTOR_WIDTH_STORAGE_KEY, "388");
 
 		render(<App />);
 
 		expect(screen.getByLabelText("Workspace sidebar")).toHaveStyle({
 			width: "404px",
 		});
+		expect(screen.getByLabelText("Inspector sidebar")).toHaveStyle({
+			width: "388px",
+		});
 		expect(
 			screen.getByRole("separator", { name: "Resize sidebar" }),
 		).toHaveAttribute("aria-valuenow", "404");
+		expect(
+			screen.getByRole("separator", { name: "Resize inspector sidebar" }),
+		).toHaveAttribute("aria-valuenow", "388");
 	});
 
 	it("falls back to repo-name initials when a workspace has no icon", () => {
