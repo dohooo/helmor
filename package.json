@@ -5,7 +5,9 @@
 	"packageManager": "pnpm@10.13.1",
 	"type": "module",
 	"scripts": {
-		"dev": "vite",
+		"dev": "tauri dev",
+		"dev:vite": "vite",
+		"dev:api": "cd src-tauri && cargo run --bin helmor-dev-server --features dev-server",
 		"analyze:web": "VITE_HELMOR_ANALYZE=1 vite",
 		"analyze": "VITE_HELMOR_ANALYZE=1 HELMOR_SIDECAR_DEBUG=1 tauri dev",
 		"build": "tsc && vite build",
