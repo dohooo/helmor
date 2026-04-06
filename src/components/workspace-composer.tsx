@@ -12,7 +12,7 @@ import type { AgentModelSection } from "@/lib/api";
 import { recordComposerRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
 import { ClaudeIcon, OpenAIIcon } from "./icons";
-import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
+import { isImagePath } from "./image-preview";
 import { Button } from "./ui/button";
 import {
 	DropdownMenu,
@@ -68,6 +68,165 @@ function ComposerButton({
 	);
 }
 
+// ---------------------------------------------------------------------------
+// ContentEditable helpers
+// ---------------------------------------------------------------------------
+
+const IMAGE_BADGE_ATTR = "data-image-path";
+
+/** Create an inline image badge DOM element for insertion into the editor. */
+function createImageBadgeElement(path: string): HTMLSpanElement {
+	const badge = document.createElement("span");
+	badge.setAttribute(IMAGE_BADGE_ATTR, path);
+	badge.contentEditable = "false";
+	badge.className =
+		"inline-flex items-center gap-1 rounded border border-app-border/60 text-[12px] mx-0.5 align-middle cursor-default select-none transition-colors hover:border-app-foreground-soft/40 hover:bg-app-foreground/[0.03]";
+
+	const icon = document.createElement("span");
+	icon.className = "inline-flex items-center gap-1.5 px-1.5 py-0.5";
+	icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="size-3 shrink-0 text-app-project"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>`;
+	const nameSpan = document.createElement("span");
+	nameSpan.className = "max-w-[200px] truncate text-app-foreground-soft";
+	nameSpan.textContent = path.split("/").pop() ?? path;
+	icon.appendChild(nameSpan);
+
+	const removeBtn = document.createElement("span");
+	removeBtn.className =
+		"px-1 py-0.5 text-app-muted/40 hover:text-app-muted cursor-pointer";
+	removeBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="size-3"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`;
+	removeBtn.setAttribute("data-remove-image", "true");
+
+	badge.appendChild(icon);
+	badge.appendChild(removeBtn);
+	return badge;
+}
+
+/** Extract text and image paths from the contentEditable element. */
+function extractEditorContent(el: HTMLElement): {
+	text: string;
+	images: string[];
+} {
+	const images: string[] = [];
+	const textParts: string[] = [];
+
+	function walk(node: Node) {
+		if (node.nodeType === Node.TEXT_NODE) {
+			textParts.push(node.textContent ?? "");
+			return;
+		}
+		if (node.nodeType !== Node.ELEMENT_NODE) return;
+		const element = node as HTMLElement;
+
+		// Image badge — collect path, represent as @path in text
+		const imgPath = element.getAttribute(IMAGE_BADGE_ATTR);
+		if (imgPath) {
+			images.push(imgPath);
+			textParts.push(`@${imgPath}`);
+			return;
+		}
+
+		// Line breaks
+		const tag = element.tagName;
+		if (tag === "BR") {
+			textParts.push("\n");
+			return;
+		}
+		if (tag === "DIV" || tag === "P") {
+			// Block elements add a newline before if there's preceding content
+			if (textParts.length > 0 && textParts[textParts.length - 1] !== "\n") {
+				textParts.push("\n");
+			}
+		}
+
+		for (const child of node.childNodes) {
+			walk(child);
+		}
+	}
+
+	for (const child of el.childNodes) {
+		walk(child);
+	}
+
+	return {
+		text: textParts
+			.join("")
+			// Remove zero-width spaces used as cursor spacers
+			.replace(/\u200B/g, " ")
+			.replace(/ {2,}/g, " ")
+			.replace(/\n{3,}/g, "\n\n")
+			.trim(),
+		images: [...new Set(images)],
+	};
+}
+
+/** Check if the editor is effectively empty (no text, no images). */
+function isEditorEmpty(el: HTMLElement): boolean {
+	const { text, images } = extractEditorContent(el);
+	return text.replace(/@\/\S+/g, "").trim().length === 0 && images.length === 0;
+}
+
+/** Set editor content from text draft + image paths for restore. */
+function setEditorContent(el: HTMLElement, draft: string, images: string[]) {
+	el.innerHTML = "";
+	if (draft) {
+		el.appendChild(document.createTextNode(draft));
+	}
+	for (const path of images) {
+		if (draft) {
+			el.appendChild(document.createTextNode(" "));
+		}
+		el.appendChild(createImageBadgeElement(path));
+	}
+}
+
+/** Place cursor at the end of the contentEditable element. */
+function placeCursorAtEnd(el: HTMLElement) {
+	const selection = window.getSelection();
+	if (!selection) return;
+	const range = document.createRange();
+	range.selectNodeContents(el);
+	range.collapse(false);
+	selection.removeAllRanges();
+	selection.addRange(range);
+}
+
+/** Insert an image badge at the current cursor position. */
+function insertImageBadgeAtCursor(editor: HTMLElement, path: string) {
+	const badge = createImageBadgeElement(path);
+	const selection = window.getSelection();
+
+	if (!selection || selection.rangeCount === 0) {
+		// No selection — append at end
+		editor.appendChild(badge);
+		editor.appendChild(document.createTextNode("\u200B"));
+		placeCursorAtEnd(editor);
+		return;
+	}
+
+	const range = selection.getRangeAt(0);
+
+	// Ensure cursor is within the editor
+	if (!editor.contains(range.commonAncestorContainer)) {
+		editor.appendChild(badge);
+		editor.appendChild(document.createTextNode("\u200B"));
+		placeCursorAtEnd(editor);
+		return;
+	}
+
+	range.deleteContents();
+	// Insert a zero-width space after the badge so the cursor has a place to land
+	const spacer = document.createTextNode("\u200B");
+	range.insertNode(spacer);
+	range.insertNode(badge);
+
+	// Move cursor after the spacer
+	const newRange = document.createRange();
+	newRange.setStartAfter(spacer);
+	newRange.collapse(true);
+	selection.removeAllRanges();
+	selection.addRange(newRange);
+}
+
 export const WorkspaceComposer = memo(function WorkspaceComposer({
 	contextKey,
 	onSubmit,
@@ -92,8 +251,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
 	);
 	recordComposerRender(contextKey, instanceIdRef.current);
-	const textareaRef = useRef<HTMLTextAreaElement>(null);
-	const [draftValue, setDraftValue] = useState(restoreDraft ?? "");
+	const editorRef = useRef<HTMLDivElement>(null);
+	const [hasContent, setHasContent] = useState(false);
 	const isOpus = selectedModelId === "opus-1m" || selectedModelId === "opus";
 	const isCodexMini = selectedModelId === "gpt-5.1-codex-mini";
 	const effectiveEffort = (() => {
@@ -115,65 +274,169 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		modelSections
 			.flatMap((section) => section.options)
 			.find((option) => option.id === selectedModelId) ?? null;
-	const [attachedImages, setAttachedImages] = useState<string[]>(restoreImages);
-	const hasContent = draftValue.trim().length > 0 || attachedImages.length > 0;
 	const sendDisabled =
 		disabled || submitDisabled || sending || !selectedModel || !hasContent;
 
+	const updateHasContent = useCallback(() => {
+		const el = editorRef.current;
+		if (!el) return;
+		setHasContent(!isEditorEmpty(el));
+	}, []);
+
+	// Restore content on context switch
 	const prevContextKeyRef = useRef(contextKey);
 	useEffect(() => {
 		if (prevContextKeyRef.current !== contextKey) {
-			// User switched session/workspace — reset draft
 			prevContextKeyRef.current = contextKey;
-			setDraftValue(restoreDraft ?? "");
-			setAttachedImages(restoreImages);
+			const el = editorRef.current;
+			if (el) {
+				setEditorContent(el, restoreDraft ?? "", restoreImages);
+				updateHasContent();
+			}
 		}
-	}, [contextKey, restoreDraft, restoreImages]);
+	}, [contextKey, restoreDraft, restoreImages, updateHasContent]);
 
+	// Restore on nonce change (error restore / draft restore)
+	const prevNonceRef = useRef(restoreNonce);
 	useEffect(() => {
+		if (restoreNonce === prevNonceRef.current) return;
+		prevNonceRef.current = restoreNonce;
 		if (!restoreDraft && restoreImages.length === 0) return;
-		setDraftValue(restoreDraft ?? "");
-		setAttachedImages(restoreImages);
-	}, [restoreNonce]);
-
-	// Auto-resize textarea to fit content, capped at a maximum height
-	const TEXTAREA_MAX_HEIGHT = 240;
-	useEffect(() => {
-		const el = textareaRef.current;
-		if (!el) return;
-		// Reset to min so scrollHeight recalculates correctly
-		el.style.height = "auto";
-		const next = Math.min(el.scrollHeight, TEXTAREA_MAX_HEIGHT);
-		el.style.height = `${next}px`;
-		// Always show the bottom of the text (scroll to end)
-		el.scrollTop = el.scrollHeight;
-	}, [draftValue]);
-
-	// Intercept value changes to extract image paths
-	const handleValueChange = useCallback((newValue: string) => {
-		const found = extractImagePaths(newValue);
-		if (found.length > 0) {
-			let cleaned = newValue;
-			for (const p of found) cleaned = cleaned.replace(p, "");
-			cleaned = cleaned.replace(/\n{2,}/g, "\n").trim();
-			setAttachedImages((prev) => [...new Set([...prev, ...found])]);
-			setDraftValue(cleaned);
-		} else {
-			setDraftValue(newValue);
+		const el = editorRef.current;
+		if (el) {
+			setEditorContent(el, restoreDraft ?? "", restoreImages);
+			updateHasContent();
 		}
-	}, []);
+	}, [restoreNonce, restoreDraft, restoreImages, updateHasContent]);
 
-	const handleRemoveImage = useCallback((path: string) => {
-		setAttachedImages((prev) => prev.filter((p) => p !== path));
-	}, []);
+	// Auto-resize editor, capped at max height
+	const EDITOR_MAX_HEIGHT = 240;
+	useEffect(() => {
+		const el = editorRef.current;
+		if (!el) return;
+		el.style.height = "auto";
+		const next = Math.min(el.scrollHeight, EDITOR_MAX_HEIGHT);
+		el.style.height = `${next}px`;
+		el.scrollTop = el.scrollHeight;
+	});
 
 	const handleSubmit = useCallback(() => {
-		const imageRefs = attachedImages.map((p) => `@${p}`);
-		const prompt = [draftValue.trim(), ...imageRefs].filter(Boolean).join("\n");
-		onSubmit(prompt, attachedImages);
-		setDraftValue("");
-		setAttachedImages([]);
-	}, [draftValue, attachedImages, onSubmit]);
+		const el = editorRef.current;
+		if (!el) return;
+		const { text, images } = extractEditorContent(el);
+		// text already contains @path references, so just use it as the prompt
+		const prompt = text.trim();
+		if (!prompt && images.length === 0) return;
+		onSubmit(prompt, images);
+		el.innerHTML = "";
+		setHasContent(false);
+	}, [onSubmit]);
+
+	const handlePaste = useCallback(
+		(event: React.ClipboardEvent<HTMLDivElement>) => {
+			const el = editorRef.current;
+			if (!el) return;
+
+			const pastedText = event.clipboardData.getData("text/plain");
+			if (!pastedText) return;
+
+			// Check if any of the pasted lines contain image paths
+			const lines = pastedText.split("\n");
+			const hasImagePaths = lines.some((line) => isImagePath(line.trim()));
+
+			if (!hasImagePaths) {
+				// No image paths — let the browser handle as plain text paste
+				event.preventDefault();
+				// Insert as plain text (avoid HTML paste)
+				const selection = window.getSelection();
+				if (selection && selection.rangeCount > 0) {
+					const range = selection.getRangeAt(0);
+					range.deleteContents();
+					range.insertNode(document.createTextNode(pastedText));
+					range.collapse(false);
+					selection.removeAllRanges();
+					selection.addRange(range);
+				}
+				updateHasContent();
+				return;
+			}
+
+			// Has image paths — prevent default, insert mixed content
+			event.preventDefault();
+
+			for (let i = 0; i < lines.length; i++) {
+				const line = lines[i].trim();
+				if (!line) {
+					if (i < lines.length - 1) {
+						// Insert line break for empty lines between content
+						const selection = window.getSelection();
+						if (selection && selection.rangeCount > 0) {
+							const range = selection.getRangeAt(0);
+							range.deleteContents();
+							range.insertNode(document.createElement("br"));
+							range.collapse(false);
+						}
+					}
+					continue;
+				}
+				if (isImagePath(line)) {
+					insertImageBadgeAtCursor(el, line);
+				} else {
+					// Insert as text
+					const selection = window.getSelection();
+					if (selection && selection.rangeCount > 0) {
+						const range = selection.getRangeAt(0);
+						range.deleteContents();
+						range.insertNode(document.createTextNode(line));
+						range.collapse(false);
+					}
+				}
+				// Add line break between lines (but not after the last one)
+				if (i < lines.length - 1) {
+					const selection = window.getSelection();
+					if (selection && selection.rangeCount > 0) {
+						const range = selection.getRangeAt(0);
+						range.insertNode(document.createElement("br"));
+						range.collapse(false);
+					}
+				}
+			}
+
+			updateHasContent();
+		},
+		[updateHasContent],
+	);
+
+	const handleKeyDown = useCallback(
+		(event: React.KeyboardEvent<HTMLDivElement>) => {
+			if (event.key === "Enter" && !event.shiftKey) {
+				event.preventDefault();
+				if (!sendDisabled) {
+					handleSubmit();
+				}
+			}
+		},
+		[sendDisabled, handleSubmit],
+	);
+
+	const handleClick = useCallback(
+		(event: React.MouseEvent<HTMLDivElement>) => {
+			// Handle remove button clicks on image badges
+			const target = event.target as HTMLElement;
+			const removeBtn = target.closest("[data-remove-image]");
+			if (removeBtn) {
+				event.preventDefault();
+				event.stopPropagation();
+				const badge = removeBtn.closest(`[${IMAGE_BADGE_ATTR}]`);
+				if (badge) {
+					badge.remove();
+					updateHasContent();
+				}
+				return;
+			}
+		},
+		[updateHasContent],
+	);
 
 	return (
 		<div
@@ -184,37 +447,23 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				Workspace input
 			</label>
 
-			{attachedImages.length > 0 ? (
-				<div className="mb-2 flex flex-wrap gap-1.5">
-					{attachedImages.map((p) => (
-						<ImagePreviewBadge
-							key={p}
-							path={p}
-							onRemove={() => handleRemoveImage(p)}
-						/>
-					))}
-				</div>
-			) : null}
-
-			<textarea
-				ref={textareaRef}
+			<div
+				ref={editorRef}
 				id="workspace-input"
+				role="textbox"
 				aria-label="Workspace input"
-				value={draftValue}
-				onChange={(event) => {
-					handleValueChange(event.currentTarget.value);
-				}}
-				disabled={disabled}
-				onKeyDown={(event) => {
-					if (event.key === "Enter" && !event.shiftKey) {
-						event.preventDefault();
-						if (!sendDisabled) {
-							handleSubmit();
-						}
-					}
-				}}
-				placeholder="Ask to make changes, @mention files, run /commands"
-				className="min-h-[64px] resize-none overflow-y-auto bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-app-foreground outline-none placeholder:text-app-muted"
+				aria-multiline="true"
+				contentEditable={!disabled}
+				suppressContentEditableWarning
+				onInput={updateHasContent}
+				onPaste={handlePaste}
+				onKeyDown={handleKeyDown}
+				onClick={handleClick}
+				data-placeholder="Ask to make changes, @mention files, run /commands"
+				className={cn(
+					"composer-editor min-h-[64px] max-h-[240px] resize-none overflow-y-auto bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-app-foreground outline-none",
+					"empty:before:pointer-events-none empty:before:text-app-muted empty:before:content-[attr(data-placeholder)]",
+				)}
 			/>
 
 			{sendError ? (

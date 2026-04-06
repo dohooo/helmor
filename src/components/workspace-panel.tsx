@@ -69,7 +69,7 @@ import {
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { ClaudeIcon, OpenAIIcon } from "./icons";
-import { extractImagePaths, ImagePreviewBadge } from "./image-preview";
+import { ImagePreviewBadge } from "./image-preview";
 import {
 	Command,
 	CommandEmpty,
@@ -1265,28 +1265,50 @@ function ChatSystemMessage({ message }: { message: RenderedMessage }) {
 // Content part components
 // ---------------------------------------------------------------------------
 
-function UserText({ text }: { text: string }) {
-	const images = extractImagePaths(text);
-	if (images.length > 0) {
-		// Remove image paths from text, show as badges
-		let remaining = text;
-		for (const p of images) {
-			remaining = remaining.replace(p, "").trim();
-		}
-		return (
-			<div className="flex flex-col gap-2">
-				{remaining ? (
-					<p className="whitespace-pre-wrap break-words">{remaining}</p>
-				) : null}
-				<div className="flex flex-wrap gap-1.5">
-					{images.map((p) => (
-						<ImagePreviewBadge key={p} path={p} />
-					))}
-				</div>
-			</div>
-		);
+/** Regex matching @/absolute/path/to/image.ext or bare /absolute/path/to/image.ext */
+const USER_IMAGE_RE = /@?(\/\S+\.(?:png|jpe?g|gif|webp|svg|bmp|ico))(?:\s|$)/gi;
+
+/** Split user text into interleaved text and image segments for inline rendering. */
+function splitTextAndImages(
+	text: string,
+): { type: "text" | "image"; value: string }[] {
+	const segments: { type: "text" | "image"; value: string }[] = [];
+	let lastIndex = 0;
+	USER_IMAGE_RE.lastIndex = 0;
+	for (
+		let match = USER_IMAGE_RE.exec(text);
+		match !== null;
+		match = USER_IMAGE_RE.exec(text)
+	) {
+		const before = text.slice(lastIndex, match.index);
+		if (before) segments.push({ type: "text", value: before });
+		segments.push({ type: "image", value: match[1] });
+		lastIndex = match.index + match[0].length;
 	}
-	return <p className="whitespace-pre-wrap break-words">{text}</p>;
+	const after = text.slice(lastIndex);
+	if (after) segments.push({ type: "text", value: after });
+	return segments;
+}
+
+function UserText({ text }: { text: string }) {
+	const segments = splitTextAndImages(text);
+	const hasImages = segments.some((s) => s.type === "image");
+
+	if (!hasImages) {
+		return <p className="whitespace-pre-wrap break-words">{text}</p>;
+	}
+
+	return (
+		<p className="whitespace-pre-wrap break-words">
+			{segments.map((seg, idx) =>
+				seg.type === "image" ? (
+					<ImagePreviewBadge key={`${seg.value}-${idx}`} path={seg.value} />
+				) : (
+					<span key={idx}>{seg.value}</span>
+				),
+			)}
+		</p>
+	);
 }
 
 function AssistantText({

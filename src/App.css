@@ -424,3 +424,21 @@ body {
 .aui-md-table tbody tr:last-child td {
 	border-bottom: none;
 }
+
+/* ContentEditable composer placeholder */
+.composer-editor:empty::before {
+	content: attr(data-placeholder);
+	color: var(--color-app-muted);
+	pointer-events: none;
+}
+
+/* When browser inserts a single <br> (empty state), also show placeholder */
+.composer-editor:has(> br:only-child)::before {
+	content: attr(data-placeholder);
+	color: var(--color-app-muted);
+	pointer-events: none;
+}
+
+.composer-editor:has(> br:only-child) > br {
+	display: none;
+}
