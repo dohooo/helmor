@@ -44,6 +44,7 @@ import {
 	type VirtuosoHandle,
 	type ItemProps as VirtuosoItemProps,
 } from "react-virtuoso";
+import { useStickToBottom } from "use-stick-to-bottom";
 import {
 	createSession,
 	deleteSession,
@@ -80,6 +81,7 @@ import {
 } from "./ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { ScrollArea } from "./ui/scroll-area";
+import { ShimmerText } from "./ui/shimmer-text";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 type WorkspacePanelProps = {
@@ -747,8 +749,10 @@ function ChatThread({
 		[messages, sessionId],
 	);
 	const virtuosoRef = useRef<VirtuosoHandle | null>(null);
-	const [isAtBottom, setIsAtBottom] = useState(true);
-	const isAtBottomRef = useRef(true);
+	const { scrollRef, contentRef, scrollToBottom, isAtBottom } =
+		useStickToBottom({ initial: "instant" });
+	const isAtBottomRef = useRef(isAtBottom);
+	isAtBottomRef.current = isAtBottom;
 	const preparePhaseRef = useRef<"idle" | "waiting-bottom">("idle");
 	const prepareRunIdRef = useRef(0);
 	const prepareFinishRef = useRef<(() => void) | null>(null);
@@ -766,10 +770,6 @@ function ChatThread({
 	}, [sending]);
 
 	useEffect(() => {
-		isAtBottomRef.current = isAtBottom;
-	}, [isAtBottom]);
-
-	useEffect(() => {
 		return () => {
 			const virtuoso = virtuosoRef.current;
 			if (!virtuoso) return;
@@ -778,17 +778,6 @@ function ChatThread({
 			});
 		};
 	}, [sessionId]);
-
-	const scrollThreadToBottom = useCallback(() => {
-		const virtuoso = virtuosoRef.current;
-		if (!virtuoso) return;
-
-		virtuoso.scrollToIndex({
-			index: "LAST",
-			align: "end",
-			behavior: "auto",
-		});
-	}, []);
 
 	const captureViewportSnapshot = useCallback(
 		(
@@ -826,9 +815,23 @@ function ChatThread({
 
 	useEffect(() => {
 		if (sendingJustStarted) {
-			scrollThreadToBottom();
+			void scrollToBottom("instant");
 		}
-	}, [sendingJustStarted, scrollThreadToBottom]);
+	}, [sendingJustStarted, scrollToBottom]);
+
+	// When a parked pane becomes directly visible (skipping the prepare phase,
+	// e.g. after session deletion), Virtuoso may have stale measurements from
+	// when it was hidden. Force a scroll so it re-renders the correct items.
+	const prevModeRef = useRef(mode);
+	useEffect(() => {
+		const prevMode = prevModeRef.current;
+		prevModeRef.current = mode;
+		if (mode === "visible" && prevMode === "parked") {
+			window.requestAnimationFrame(() => {
+				void scrollToBottom("instant");
+			});
+		}
+	}, [mode, scrollToBottom]);
 
 	useEffect(() => {
 		return () => {
@@ -868,7 +871,7 @@ function ChatThread({
 		prepareFinishRef.current = finishPrepare;
 		frameId = window.requestAnimationFrame(() => {
 			nestedFrameId = window.requestAnimationFrame(() => {
-				scrollThreadToBottom();
+				void scrollToBottom("instant");
 				preparePhaseRef.current = "waiting-bottom";
 				settleFrameId = window.requestAnimationFrame(() => {
 					if (isAtBottomRef.current) {
@@ -906,7 +909,7 @@ function ChatThread({
 		layoutCacheKey,
 		mode,
 		onPrepared,
-		scrollThreadToBottom,
+		scrollToBottom,
 		sessionId,
 		threadMessages,
 	]);
@@ -920,10 +923,6 @@ function ChatThread({
 			prepareFinishRef.current?.();
 		}
 	}, [isAtBottom, mode]);
-
-	const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
-		setIsAtBottom(atBottom);
-	}, []);
 
 	const virtuosoComponents = useMemo<VirtuosoComponents<RenderedMessage>>(
 		() => ({
@@ -945,27 +944,20 @@ function ChatThread({
 		[sessionId],
 	);
 
-	// Stable followOutput callback
-	const followOutput = useCallback(
-		(atBottom: boolean) =>
-			sendingRef.current && atBottom ? ("auto" as const) : false,
-		[],
-	);
-
 	return (
 		<ConversationViewport
 			components={virtuosoComponents}
+			contentRef={contentRef}
 			data={threadMessages}
-			followOutput={followOutput}
 			itemContent={itemContent}
-			onAtBottomStateChange={handleAtBottomStateChange}
 			restoredViewportState={restoredViewportState}
+			scrollRef={scrollRef}
 			virtuosoRef={virtuosoRef}
 		>
 			<button
 				type="button"
 				onClick={() => {
-					scrollThreadToBottom();
+					scrollToBottom();
 				}}
 				className={`conversation-scroll-button ${isAtBottom || sendingJustStarted ? "conversation-scroll-button-hidden" : ""}`}
 				aria-label="Scroll to latest message"
@@ -983,56 +975,68 @@ function ChatThread({
 function ConversationViewport({
 	children,
 	components,
+	contentRef,
 	data,
-	followOutput,
 	itemContent,
-	onAtBottomStateChange,
 	restoredViewportState,
+	scrollRef,
 	virtuosoRef,
 }: {
 	children?: ReactNode;
 	components: VirtuosoComponents<RenderedMessage>;
+	contentRef: React.RefCallback<HTMLElement>;
 	data: RenderedMessage[];
-	followOutput: "auto" | false | ((isAtBottom: boolean) => "auto" | false);
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
-	onAtBottomStateChange: (atBottom: boolean) => void;
 	restoredViewportState?: StateSnapshot;
+	scrollRef: React.RefCallback<HTMLElement>;
 	virtuosoRef: React.RefObject<VirtuosoHandle | null>;
 }) {
 	const [scrollParent, setScrollParent] = useState<HTMLDivElement | null>(null);
 
+	const viewportRef = useCallback(
+		(el: HTMLDivElement | null) => {
+			setScrollParent(el);
+			scrollRef(el);
+		},
+		[scrollRef],
+	);
+
 	return (
 		<ScrollArea
 			className="relative min-h-0 flex-1"
-			viewportRef={setScrollParent}
+			viewportRef={viewportRef}
 			viewportClassName="conversation-scroll-viewport"
 			overlay={children}
+			type="always"
 		>
-			{scrollParent ? (
-				<Virtuoso
-					ref={virtuosoRef}
-					alignToBottom
-					atBottomStateChange={onAtBottomStateChange}
-					atBottomThreshold={48}
-					components={components}
-					computeItemKey={(index, message) =>
-						message.id ?? `${message.role}:${index}`
-					}
-					customScrollParent={scrollParent}
-					data={data}
-					defaultItemHeight={92}
-					followOutput={followOutput}
-					initialTopMostItemIndex={
-						restoredViewportState ? undefined : { index: "LAST", align: "end" }
-					}
-					increaseViewportBy={{ bottom: 720, top: 360 }}
-					itemContent={itemContent}
-					minOverscanItemCount={{ top: 8, bottom: 4 }}
-					overscan={{ main: 600, reverse: 300 }}
-					restoreStateFrom={restoredViewportState}
-					skipAnimationFrameInResizeObserver
-				/>
-			) : null}
+			<div ref={contentRef}>
+				{scrollParent ? (
+					<Virtuoso
+						ref={virtuosoRef}
+						alignToBottom
+						atBottomThreshold={48}
+						components={components}
+						computeItemKey={(index, message) =>
+							message.id ?? `${message.role}:${index}`
+						}
+						customScrollParent={scrollParent}
+						data={data}
+						defaultItemHeight={92}
+						followOutput={false}
+						initialTopMostItemIndex={
+							restoredViewportState
+								? undefined
+								: { index: "LAST", align: "end" }
+						}
+						increaseViewportBy={{ bottom: 720, top: 360 }}
+						itemContent={itemContent}
+						minOverscanItemCount={{ top: 8, bottom: 4 }}
+						overscan={{ main: 600, reverse: 300 }}
+						restoreStateFrom={restoredViewportState}
+						skipAnimationFrameInResizeObserver
+					/>
+				) : null}
+			</div>
 		</ScrollArea>
 	);
 }
@@ -1400,11 +1404,51 @@ const AssistantReasoning = memo(function AssistantReasoning({
 	streaming?: boolean;
 }) {
 	const { settings } = useSettings();
+	const { scrollRef, contentRef } = useStickToBottom({ initial: "instant" });
+
+	const [isOpen, setIsOpen] = useState(true);
+	const [hasAutoClosed, setHasAutoClosed] = useState(false);
+	const [duration, setDuration] = useState<number | undefined>(undefined);
+	const startTimeRef = useRef<number | null>(null);
+
+	// Track duration start/end
+	useEffect(() => {
+		if (streaming) {
+			if (startTimeRef.current === null) startTimeRef.current = Date.now();
+		} else if (startTimeRef.current !== null) {
+			setDuration(Math.ceil((Date.now() - startTimeRef.current) / 1000));
+			startTimeRef.current = null;
+		}
+	}, [streaming]);
+
+	// Auto-collapse 1s after streaming ends (once only)
+	useEffect(() => {
+		if (!streaming && isOpen && !hasAutoClosed) {
+			const timer = setTimeout(() => {
+				setIsOpen(false);
+				setHasAutoClosed(true);
+			}, 1000);
+			return () => clearTimeout(timer);
+		}
+	}, [streaming, isOpen, hasAutoClosed]);
+
+	const label = streaming ? (
+		<ShimmerText className="text-[12px]">Thinking...</ShimmerText>
+	) : duration !== undefined ? (
+		<span>Thought for {duration}s</span>
+	) : (
+		<span>Thinking</span>
+	);
+
 	return (
-		<details className="group flex flex-col" open>
+		<details
+			className="group flex flex-col"
+			open={isOpen}
+			onToggle={(e) => setIsOpen((e.target as HTMLDetailsElement).open)}
+		>
 			<summary className="flex cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-app-muted hover:text-app-foreground-soft [&::-webkit-details-marker]:hidden">
 				<svg
-					className="size-2.5 shrink-0 group-open:rotate-90"
+					className="size-2.5 shrink-0 group-open:rotate-90 transition-transform"
 					viewBox="0 0 12 12"
 					fill="none"
 				>
@@ -1416,21 +1460,21 @@ const AssistantReasoning = memo(function AssistantReasoning({
 						strokeLinejoin="round"
 					/>
 				</svg>
-				Thinking
-				{streaming ? (
-					<LoaderCircle
-						className="size-3 animate-spin text-app-muted/50"
-						strokeWidth={2}
-					/>
-				) : null}
+				{label}
 			</summary>
 			<div className="pt-1.5">
-				<pre
-					className="max-h-[20rem] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-app-foreground/[0.03] px-3 py-2.5 font-sans leading-relaxed text-app-muted/70"
-					style={{ fontSize: `${settings.fontSize}px` }}
+				<div
+					ref={scrollRef}
+					className="max-h-[20rem] overflow-auto rounded-lg bg-app-foreground/[0.03]"
 				>
-					{text}
-				</pre>
+					<pre
+						ref={contentRef}
+						className="whitespace-pre-wrap break-words px-3 py-2.5 font-sans leading-relaxed text-app-muted/70"
+						style={{ fontSize: `${settings.fontSize}px` }}
+					>
+						{text}
+					</pre>
+				</div>
 			</div>
 		</details>
 	);
