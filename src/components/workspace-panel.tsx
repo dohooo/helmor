@@ -581,22 +581,6 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 
 			{/* --- Timeline --- */}
 			<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-				{(() => {
-					console.log("[SESSION-SWITCH] WorkspacePanel render", {
-						visibleSessionId,
-						preparingSessionId,
-						coldRevealSessionId,
-						visiblePaneHasLoaded: visiblePane?.hasLoaded,
-						visiblePaneState: visiblePane?.presentationState,
-						visiblePaneMsgCount: visiblePane?.messages.length,
-						loadingWorkspace,
-						loadingSession,
-						sessionPaneIds: sessionPanes.map(
-							(p) => `${p.sessionId.slice(0, 6)}(${p.presentationState})`,
-						),
-					});
-					return null;
-				})()}
 				{loadingWorkspace || loadingSession ? (
 					<ConversationColdPlaceholder />
 				) : visibleSessionId && visiblePane?.hasLoaded ? (
@@ -856,13 +840,6 @@ function ChatThread({
 	}, [captureViewportSnapshot, mode]);
 
 	useEffect(() => {
-		console.log("[SESSION-SWITCH] ChatThread mode changed", {
-			sessionId,
-			mode,
-			isAtBottom,
-			messageCount: threadMessages.length,
-		});
-
 		if (mode !== "preparing" || typeof window === "undefined") {
 			preparePhaseRef.current = "idle";
 			prepareFinishRef.current = null;
@@ -880,10 +857,6 @@ function ChatThread({
 				return;
 			}
 
-			console.log("[SESSION-SWITCH] prepare finishPrepare called", {
-				sessionId,
-				isAtBottom: isAtBottomRef.current,
-			});
 			preparePhaseRef.current = "idle";
 			captureViewportSnapshot((payload) => {
 				if (prepareRunIdRef.current !== runId) {
@@ -896,27 +869,15 @@ function ChatThread({
 		prepareFinishRef.current = finishPrepare;
 		frameId = window.requestAnimationFrame(() => {
 			nestedFrameId = window.requestAnimationFrame(() => {
-				console.log("[SESSION-SWITCH] prepare: scrollToBottom called", {
-					sessionId,
-					isAtBottom: isAtBottomRef.current,
-				});
 				void scrollToBottom("instant");
 				preparePhaseRef.current = "waiting-bottom";
 				settleFrameId = window.requestAnimationFrame(() => {
-					console.log("[SESSION-SWITCH] prepare: settle frame", {
-						sessionId,
-						isAtBottom: isAtBottomRef.current,
-					});
 					if (isAtBottomRef.current) {
 						finishPrepare();
 						return;
 					}
 
 					timeoutId = window.setTimeout(() => {
-						console.log(
-							"[SESSION-SWITCH] prepare: timeout fallback finishPrepare",
-							{ sessionId, isAtBottom: isAtBottomRef.current },
-						);
 						finishPrepare();
 					}, 64);
 				});
@@ -957,9 +918,6 @@ function ChatThread({
 			preparePhaseRef.current === "waiting-bottom" &&
 			isAtBottom
 		) {
-			console.log("[SESSION-SWITCH] isAtBottom triggered finishPrepare", {
-				sessionId,
-			});
 			prepareFinishRef.current?.();
 		}
 	}, [isAtBottom, mode, sessionId]);

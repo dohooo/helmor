@@ -267,15 +267,6 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		}
 
 		if (!hasTargetPane) {
-			console.log(
-				"[SESSION-SWITCH] pane-orchestration skipped: hasTargetPane=false",
-				{
-					threadSessionId,
-					visibleSessionId: visibleSessionIdRef.current,
-					preparingSessionId: preparingSessionIdRef.current,
-					paneKeys: Object.keys(paneRegistry.panes),
-				},
-			);
 			return;
 		}
 
@@ -286,30 +277,11 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		const targetHasMessages =
 			(targetPane?.messages.length ?? mergedMessages.length) > 0;
 
-		console.log("[SESSION-SWITCH] pane-orchestration running", {
-			threadSessionId,
-			retainedVisibleSessionId,
-			hasRetainedPane: Boolean(retainedVisiblePane),
-			retainedPaneState: retainedVisiblePane?.presentationState,
-			targetPaneState: targetPane?.presentationState,
-			targetHasMessages,
-			targetMsgCount: targetPane?.messages.length ?? mergedMessages.length,
-			paneKeys: Object.keys(paneRegistry.panes),
-		});
-
 		if (!retainedVisiblePane) {
 			const coldReveal =
 				targetPane?.presentationState === "cold-unpresented"
 					? threadSessionId
 					: null;
-			console.log(
-				"[SESSION-SWITCH] fast-path (no retained pane) → setVisibleSessionId",
-				{
-					threadSessionId,
-					coldReveal,
-					targetPaneState: targetPane?.presentationState,
-				},
-			);
 			setColdRevealSessionId(coldReveal);
 			setVisibleSessionId(threadSessionId);
 			setPreparingSessionId(null);
@@ -318,10 +290,6 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		}
 
 		if (!targetHasMessages) {
-			console.log(
-				"[SESSION-SWITCH] fast-path (no messages) → setVisibleSessionId",
-				{ threadSessionId },
-			);
 			setColdRevealSessionId(null);
 			setVisibleSessionId(threadSessionId);
 			setPreparingSessionId(null);
@@ -331,9 +299,6 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 
 		if (threadSessionId === retainedVisibleSessionId) {
 			if (preparingSessionIdRef.current) {
-				console.log("[SESSION-SWITCH] same session, clearing prepare state", {
-					threadSessionId,
-				});
 				setPreparingSessionId(null);
 				setPreparedSessionId(null);
 			}
@@ -341,10 +306,6 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		}
 
 		if (preparingSessionIdRef.current !== threadSessionId) {
-			console.log("[SESSION-SWITCH] starting prepare phase", {
-				threadSessionId,
-				retainedVisibleSessionId,
-			});
 			setPreparedSessionId(null);
 			setPreparingSessionId(threadSessionId);
 		}
@@ -368,17 +329,9 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			preparedSessionId !== preparingSessionIdRef.current ||
 			preparedSessionId !== threadSessionIdRef.current
 		) {
-			console.log("[SESSION-SWITCH] preparedSessionId mismatch, ignoring", {
-				preparedSessionId,
-				preparingSessionId: preparingSessionIdRef.current,
-				threadSessionId: threadSessionIdRef.current,
-			});
 			return;
 		}
 
-		console.log("[SESSION-SWITCH] prepare complete → setVisibleSessionId", {
-			preparedSessionId,
-		});
 		setVisibleSessionId(preparedSessionId);
 		setPreparingSessionId(null);
 		setPreparedSessionId(null);
@@ -538,18 +491,15 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 					return false;
 				}
 
-				const isProtected =
-					sessionId !== visibleSessionIdRef.current &&
-					sessionId !== preparingSessionIdRef.current &&
-					sessionId !== threadSessionIdRef.current;
-				if (!isProtected) {
-					return false;
-				}
+				const isVisible = sessionId === visibleSessionIdRef.current;
+				const isPreparing = sessionId === preparingSessionIdRef.current;
+				const isThread = sessionId === threadSessionIdRef.current;
+				const isProtected = isVisible || isPreparing || isThread;
+				const removableBecauseCold =
+					pane.presentationState === "cold-unpresented";
+				const removableBecauseEmpty = pane.messages.length === 0;
 
-				return (
-					pane.presentationState === "cold-unpresented" ||
-					pane.messages.length === 0
-				);
+				return !isProtected && (removableBecauseCold || removableBecauseEmpty);
 			});
 
 			if (removablePaneIds.length === 0) {
@@ -581,10 +531,14 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		setPaneRegistry((current) => {
 			const removableIds = current.order.filter((sessionId) => {
 				const pane = current.panes[sessionId];
-				return (
-					pane?.workspaceId === displayedWorkspaceId &&
-					!visibleSessionIds.has(sessionId)
-				);
+				const inDisplayedWorkspace = pane?.workspaceId === displayedWorkspaceId;
+				const stillVisibleInSessions = visibleSessionIds.has(sessionId);
+				const isVisible = sessionId === visibleSessionIdRef.current;
+				const isPreparing = sessionId === preparingSessionIdRef.current;
+				const isThread = sessionId === threadSessionIdRef.current;
+				const isProtected = isVisible || isPreparing || isThread;
+
+				return inDisplayedWorkspace && !stillVisibleInSessions && !isProtected;
 			});
 
 			if (removableIds.length === 0) {
