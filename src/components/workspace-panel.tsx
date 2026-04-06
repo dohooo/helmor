@@ -714,22 +714,17 @@ function KeepAliveThreadStack({
 							visibility: mode === "parked" ? "hidden" : "visible",
 						}}
 					>
-						{pane.messages.length > 0 ? (
-							<ChatThread
-								initialSnapshot={initialSnapshot}
-								layoutCacheKey={layoutCacheKey}
-								messages={pane.messages}
-								mode={mode}
-								onPrepared={onSessionPrepared}
-								onViewportSnapshot={onSessionMeasurements}
-								sessionId={pane.sessionId}
-								sending={pane.sending}
-							/>
-						) : (
-							<div className="flex min-h-0 flex-1 flex-col">
-								<EmptyState hasSession={hasSession} />
-							</div>
-						)}
+						<ChatThread
+							initialSnapshot={initialSnapshot}
+							layoutCacheKey={layoutCacheKey}
+							messages={pane.messages}
+							mode={mode}
+							hasSession={hasSession}
+							onPrepared={onSessionPrepared}
+							onViewportSnapshot={onSessionMeasurements}
+							sessionId={pane.sessionId}
+							sending={pane.sending}
+						/>
 					</div>
 				);
 			})}
@@ -746,6 +741,7 @@ function ChatThread({
 	layoutCacheKey,
 	messages,
 	mode,
+	hasSession,
 	onPrepared,
 	onViewportSnapshot,
 	sessionId,
@@ -755,6 +751,7 @@ function ChatThread({
 	layoutCacheKey: string;
 	messages: SessionMessageRecord[];
 	mode: "visible" | "preparing" | "parked";
+	hasSession: boolean;
 	onPrepared?: WorkspacePanelProps["onSessionPrepared"];
 	onViewportSnapshot?: WorkspacePanelProps["onSessionMeasurements"];
 	sessionId: string;
@@ -971,8 +968,13 @@ function ChatThread({
 			Header: ConversationHeaderSpacer,
 			Item: ConversationItem,
 			Footer: sending ? StreamingFooter : ConversationFooterSpacer,
+			EmptyPlaceholder: () => (
+				<div className="flex min-h-full flex-1 flex-col">
+					<EmptyState hasSession={hasSession} />
+				</div>
+			),
 		}),
-		[sending],
+		[sending, hasSession],
 	);
 
 	const itemContent = useCallback(
