@@ -157,19 +157,32 @@ describe("StreamAccumulator", () => {
 			expect(collected).toBeDefined();
 		});
 
-		it("ignores non-agent_message items", () => {
+		it("synthesizes Bash tool_use for command_execution items", () => {
 			const acc = new StreamAccumulator();
 			acc.addLine(
 				JSON.stringify({
 					type: "item.completed",
-					item: { type: "command_execution", command: "ls" },
+					item: {
+						type: "command_execution",
+						command: "ls",
+						output: "file.txt",
+						exit_code: 0,
+					},
 				}),
 			);
 
 			const messages = acc.toMessages("ctx", "sess");
-			// No assistant messages should be collected
+			// Should produce an assistant (tool_use) + user (tool_result) pair
 			const assistantMsgs = messages.filter((m) => m.role === "assistant");
-			expect(assistantMsgs.length).toBe(0);
+			const userMsgs = messages.filter((m) => m.role === "user");
+			expect(assistantMsgs.length).toBe(1);
+			expect(userMsgs.length).toBe(1);
+			// Verify the synthetic tool_use contains Bash
+			const parsed = assistantMsgs[0].parsedContent as Record<string, unknown>;
+			const content = (parsed.message as Record<string, unknown>)
+				.content as Array<Record<string, unknown>>;
+			expect(content[0].name).toBe("Bash");
+			expect((content[0].input as Record<string, unknown>).command).toBe("ls");
 		});
 
 		it("collects turn.completed", () => {

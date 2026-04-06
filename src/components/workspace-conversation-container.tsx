@@ -3,7 +3,6 @@ import {
 	memo,
 	startTransition,
 	useCallback,
-	useEffect,
 	useLayoutEffect,
 	useMemo,
 	useRef,
@@ -502,7 +501,6 @@ export const WorkspaceConversationContainer = memo(
 				/>
 
 				<div className="mt-auto px-4 pb-4 pt-0">
-					<SendingStatusBar active={isSending} />
 					<div>
 						<WorkspaceComposerContainer
 							displayedWorkspaceId={displayedWorkspaceId}
@@ -559,37 +557,3 @@ export const WorkspaceConversationContainer = memo(
 		);
 	},
 );
-
-function SendingStatusBar({ active }: { active: boolean }) {
-	const [elapsed, setElapsed] = useState(0);
-
-	useEffect(() => {
-		if (!active) {
-			setElapsed(0);
-			return;
-		}
-		const start = Date.now();
-		const id = window.setInterval(() => {
-			setElapsed(Math.floor((Date.now() - start) / 1000));
-		}, 1000);
-		return () => window.clearInterval(id);
-	}, [active]);
-
-	if (!active) return null;
-
-	const display =
-		elapsed < 60
-			? `${elapsed}s`
-			: `${Math.floor(elapsed / 60)}m ${(elapsed % 60).toString().padStart(2, "0")}s`;
-
-	return (
-		<div className="mb-6 flex items-center gap-1.5 text-[12px] tabular-nums text-app-muted">
-			<span className="flex gap-[2px]">
-				<span className="inline-block size-[3px] animate-bounce rounded-full bg-app-muted [animation-delay:0ms]" />
-				<span className="inline-block size-[3px] animate-bounce rounded-full bg-app-muted [animation-delay:150ms]" />
-				<span className="inline-block size-[3px] animate-bounce rounded-full bg-app-muted [animation-delay:300ms]" />
-			</span>
-			{display}
-		</div>
-	);
-}

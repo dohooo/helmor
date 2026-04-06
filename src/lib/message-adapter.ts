@@ -2,6 +2,11 @@
  * Adapter: SessionMessageRecord[] → UI thread messages
  */
 import type { SessionMessageRecord } from "./api";
+import {
+	type CollapsedGroupPart,
+	collapseToolCallsInParts,
+	type ExtendedMessagePart,
+} from "./collapse-read-search";
 
 export type TextPart = { type: "text"; text: string };
 export type ReasoningPart = { type: "reasoning"; text: string };
@@ -12,13 +17,21 @@ export type ToolCallPart = {
 	args: Record<string, unknown>;
 	argsText: string;
 	result?: unknown;
+	/** Set during streaming to indicate tool execution progress */
+	streamingStatus?:
+		| "pending"
+		| "streaming_input"
+		| "running"
+		| "done"
+		| "error";
 };
 export type MessagePart = TextPart | ReasoningPart | ToolCallPart;
+export type { CollapsedGroupPart, ExtendedMessagePart };
 export type ThreadMessageLike = {
 	role: "assistant" | "system" | "user";
 	id?: string;
 	createdAt?: Date;
-	content: MessagePart[];
+	content: (MessagePart | CollapsedGroupPart)[];
 	status?: {
 		type: string;
 		reason?: string;
@@ -36,6 +49,7 @@ const projectionCacheBySession = new Map<string, ProjectionCache>();
 export function convertMessages(
 	messages: SessionMessageRecord[],
 	sessionId = "__default__",
+	options?: { collapse?: boolean },
 ): ThreadMessageLike[] {
 	const rawSignatures = messages.map(getRawMessageSignature);
 	const cached = projectionCacheBySession.get(sessionId);
@@ -44,7 +58,13 @@ export function convertMessages(
 		return cached.renderedMessages;
 	}
 
-	const nextMessages = groupChildMessages(convertMessagesFlat(messages));
+	let nextMessages = groupChildMessages(convertMessagesFlat(messages));
+
+	// Apply collapse pass: consecutive search/read tool calls → summary groups
+	if (options?.collapse) {
+		nextMessages = applyCollapsePass(nextMessages);
+	}
+
 	const renderedSignatures = nextMessages.map(getRenderedMessageSignature);
 	const renderedMessages = nextMessages.map((message, index) => {
 		if (
@@ -210,12 +230,20 @@ function parseAssistantParts(
 			parts.push({ type: "text", text: b.text });
 		} else if (b.type === "tool_use" || b.type === "server_tool_use") {
 			const args = isObj(b.input) ? (b.input as Record<string, unknown>) : {};
+			const streamStatus = b.__streaming_status as
+				| ToolCallPart["streamingStatus"]
+				| undefined;
+			const rawJsonText =
+				typeof b.__input_json_text === "string"
+					? (b.__input_json_text as string)
+					: null;
 			parts.push({
 				type: "tool-call",
 				toolCallId: String(b.id ?? `tc-${parts.length}`),
 				toolName: String(b.name ?? "unknown"),
 				args,
-				argsText: JSON.stringify(args),
+				argsText: rawJsonText || JSON.stringify(args),
+				...(streamStatus ? { streamingStatus: streamStatus } : {}),
 			});
 		}
 	}
@@ -423,13 +451,69 @@ function extractFallback(msg: SessionMessageRecord): string {
 }
 
 /**
- * Group consecutive child messages (sub-agent) into a single collapsible
- * "children" text part on the preceding parent assistant message.
+ * Group child messages from nested sub-agents into collapsible sections.
  *
- * The component detects the `__children__` prefix in text parts and renders
- * them as a collapsible details section.
+ * Strategy:
+ * - Count how many distinct parent_tool_use_ids are in the child messages
+ * - If there's only ONE parent (single-agent mode): render children INLINE
+ *   by merging their parts into the conversation directly. This avoids
+ *   hiding all tool calls under a collapsed Agent node.
+ * - If there are MULTIPLE parents (multi-agent): group each parent's
+ *   children into `__children__` on its Agent/Task tool-call.
  */
 function groupChildMessages(msgs: ThreadMessageLike[]): ThreadMessageLike[] {
+	// Quick check: are there any child messages at all?
+	const hasChildren = msgs.some((m) => m.id?.startsWith("child:"));
+	if (!hasChildren) return msgs;
+
+	// Heuristic: count Agent/Task tool-calls in non-child messages
+	let agentToolCount = 0;
+	for (const m of msgs) {
+		if (m.id?.startsWith("child:")) continue;
+		if (m.role !== "assistant") continue;
+		const parts = m.content as MessagePart[];
+		for (const p of parts) {
+			if (
+				p.type === "tool-call" &&
+				(p.toolName === "Agent" || p.toolName === "Task")
+			) {
+				agentToolCount++;
+			}
+		}
+	}
+
+	// Single-agent mode (0 or 1 Agent tool-calls): render children inline
+	if (agentToolCount <= 1) {
+		return inlineChildMessages(msgs);
+	}
+
+	// Multi-agent mode: group children under their parent Agent/Task
+	return groupChildMessagesUnderParent(msgs);
+}
+
+/** Render child messages inline — strip the "child:" prefix and merge into conversation. */
+function inlineChildMessages(msgs: ThreadMessageLike[]): ThreadMessageLike[] {
+	const out: ThreadMessageLike[] = [];
+
+	for (const m of msgs) {
+		if (m.id?.startsWith("child:")) {
+			// Strip child prefix and render as a normal assistant message
+			out.push({
+				...m,
+				id: m.id.slice("child:".length),
+			});
+		} else {
+			out.push(m);
+		}
+	}
+
+	return out;
+}
+
+/** Group child messages under their parent Agent/Task tool-call (multi-agent mode). */
+function groupChildMessagesUnderParent(
+	msgs: ThreadMessageLike[],
+): ThreadMessageLike[] {
 	const out: ThreadMessageLike[] = [];
 
 	for (let i = 0; i < msgs.length; i++) {
@@ -437,7 +521,6 @@ function groupChildMessages(msgs: ThreadMessageLike[]): ThreadMessageLike[] {
 		if (m.id?.startsWith("child:")) {
 			const parent = out[out.length - 1];
 			if (parent?.role === "assistant") {
-				// Collect all consecutive child parts
 				const childParts: MessagePart[] = [];
 				while (i < msgs.length && msgs[i].id?.startsWith("child:")) {
 					const parts = msgs[i].content as MessagePart[];
@@ -446,7 +529,6 @@ function groupChildMessages(msgs: ThreadMessageLike[]): ThreadMessageLike[] {
 				}
 				i--;
 
-				// Find the last Agent/Task tool-call in the parent and attach children to its result
 				const parentParts = parent.content as MessagePart[];
 				const agentTc = [...parentParts]
 					.reverse()
@@ -465,6 +547,33 @@ function groupChildMessages(msgs: ThreadMessageLike[]): ThreadMessageLike[] {
 	}
 
 	return out;
+}
+
+// ---------------------------------------------------------------------------
+// Collapse pass: group consecutive search/read tool-calls into summaries
+// ---------------------------------------------------------------------------
+
+function applyCollapsePass(messages: ThreadMessageLike[]): ThreadMessageLike[] {
+	return messages.map((msg) => {
+		if (msg.role !== "assistant") return msg;
+
+		const parts = msg.content as MessagePart[];
+		// Skip messages with no tool-calls
+		if (!parts.some((p) => p.type === "tool-call")) return msg;
+
+		const isStreaming = msg.status?.type !== "complete";
+		const collapsed = collapseToolCallsInParts(parts, isStreaming);
+
+		// If nothing was collapsed, return original reference (cache-friendly)
+		if (
+			collapsed.length === parts.length &&
+			collapsed.every((p, i) => p === parts[i])
+		) {
+			return msg;
+		}
+
+		return { ...msg, content: collapsed };
+	});
 }
 
 function isObj(v: unknown): v is Record<string, unknown> {

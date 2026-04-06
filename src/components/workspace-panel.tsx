@@ -59,7 +59,13 @@ import {
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
 import { recordMessageRender } from "@/lib/dev-render-debug";
-import { convertMessages, type MessagePart } from "@/lib/message-adapter";
+import {
+	type CollapsedGroupPart,
+	convertMessages,
+	type ExtendedMessagePart,
+	type MessagePart,
+	type ToolCallPart,
+} from "@/lib/message-adapter";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { ClaudeIcon, OpenAIIcon } from "./icons";
@@ -731,7 +737,7 @@ function ChatThread({
 	sending: boolean;
 }) {
 	const threadMessages = useMemo(
-		() => convertMessages(messages, sessionId),
+		() => convertMessages(messages, sessionId, { collapse: true }),
 		[messages, sessionId],
 	);
 	const virtuosoRef = useRef<VirtuosoHandle | null>(null);
@@ -746,29 +752,8 @@ function ChatThread({
 	);
 	const previousSendingRef = useRef(sending);
 	const sendingJustStarted = sending && !previousSendingRef.current;
-	const streamingMessageId = useMemo(() => {
-		if (!sending) return null;
-
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const message = messages[i];
-			const isStreamingAssistant =
-				message.role === "assistant" &&
-				(message.id.startsWith("stream:") ||
-					message.id.endsWith(":stream-partial"));
-
-			if (!isStreamingAssistant) continue;
-
-			const parsed = message.contentIsJson
-				? (message.parsedContent as Record<string, unknown> | undefined)
-				: undefined;
-			const isChild =
-				parsed != null && typeof parsed.parent_tool_use_id === "string";
-
-			return isChild ? `child:${message.id}` : message.id;
-		}
-
-		return null;
-	}, [messages, sending]);
+	const sendingRef = useRef(sending);
+	sendingRef.current = sending;
 
 	useEffect(() => {
 		previousSendingRef.current = sending;
@@ -938,8 +923,9 @@ function ChatThread({
 		() => ({
 			Header: ConversationHeaderSpacer,
 			Item: ConversationItem,
+			Footer: sending ? StreamingFooter : undefined,
 		}),
-		[],
+		[sending],
 	);
 
 	const itemContent = useCallback(
@@ -947,18 +933,24 @@ function ChatThread({
 			<MemoConversationMessage
 				message={message}
 				sessionId={sessionId}
-				streaming={message.id === streamingMessageId}
 				itemIndex={index}
 			/>
 		),
-		[sessionId, streamingMessageId],
+		[sessionId],
+	);
+
+	// Stable followOutput callback
+	const followOutput = useCallback(
+		(atBottom: boolean) =>
+			sendingRef.current && atBottom ? ("auto" as const) : false,
+		[],
 	);
 
 	return (
 		<ConversationViewport
 			components={virtuosoComponents}
 			data={threadMessages}
-			followOutput={(atBottom) => (sending && atBottom ? "auto" : false)}
+			followOutput={followOutput}
 			itemContent={itemContent}
 			onAtBottomStateChange={handleAtBottomStateChange}
 			restoredViewportState={restoredViewportState}
@@ -1091,18 +1083,51 @@ function ConversationHeaderSpacer() {
 	return <div className="h-6 shrink-0" />;
 }
 
+function StreamingFooter() {
+	const [elapsed, setElapsed] = useState(0);
+
+	useEffect(() => {
+		const start = Date.now();
+		const id = window.setInterval(() => {
+			setElapsed(Math.floor((Date.now() - start) / 1000));
+		}, 1000);
+		return () => window.clearInterval(id);
+	}, []);
+
+	const display =
+		elapsed < 60
+			? `${elapsed}s`
+			: `${Math.floor(elapsed / 60)}m ${(elapsed % 60).toString().padStart(2, "0")}s`;
+
+	return (
+		<div className="flex items-center gap-1.5 px-5 py-3 text-[12px] tabular-nums text-app-muted">
+			<span className="flex gap-[2px]">
+				<span className="inline-block size-[3px] animate-bounce rounded-full bg-app-muted [animation-delay:0ms]" />
+				<span className="inline-block size-[3px] animate-bounce rounded-full bg-app-muted [animation-delay:150ms]" />
+				<span className="inline-block size-[3px] animate-bounce rounded-full bg-app-muted [animation-delay:300ms]" />
+			</span>
+			{display}
+		</div>
+	);
+}
+
 function ConversationMessage({
 	message,
 	sessionId,
-	streaming,
 	itemIndex,
 }: {
 	message: RenderedMessage;
 	sessionId: string;
-	streaming: boolean;
 	itemIndex: number;
 }) {
 	recordMessageRender(sessionId, message.id ?? `${message.role}:${itemIndex}`);
+
+	// Derive streaming state from the message itself — avoids external prop
+	// that changes callback references and causes Virtuoso re-renders.
+	const streaming =
+		message.role === "assistant" &&
+		(message.id?.startsWith("stream:") === true ||
+			message.id?.endsWith(":stream-partial") === true);
 
 	if (message.role === "user") {
 		return <ChatUserMessage message={message} />;
@@ -1119,7 +1144,6 @@ const MemoConversationMessage = memo(ConversationMessage, (prev, next) => {
 	return (
 		prev.message === next.message &&
 		prev.sessionId === next.sessionId &&
-		prev.streaming === next.streaming &&
 		prev.itemIndex === next.itemIndex
 	);
 });
@@ -1153,7 +1177,7 @@ function ChatAssistantMessage({
 	message: RenderedMessage;
 	streaming: boolean;
 }) {
-	const parts = message.content as MessagePart[];
+	const parts = message.content as ExtendedMessagePart[];
 
 	return (
 		<div
@@ -1168,7 +1192,21 @@ function ChatAssistantMessage({
 					);
 				}
 				if (isReasoningPart(part)) {
-					return <AssistantReasoning key={idx} text={part.text} />;
+					return (
+						<AssistantReasoning
+							key={idx}
+							text={part.text}
+							streaming={streaming}
+						/>
+					);
+				}
+				if (isCollapsedGroupPart(part)) {
+					return (
+						<CollapsedToolGroup
+							key={`group-${part.tools[0]?.toolCallId ?? idx}`}
+							group={part}
+						/>
+					);
 				}
 				if (isToolCallPart(part)) {
 					return (
@@ -1177,6 +1215,7 @@ function ChatAssistantMessage({
 							toolName={part.toolName}
 							args={part.args}
 							result={part.result}
+							streamingStatus={(part as ToolCallPart).streamingStatus}
 						/>
 					);
 				}
@@ -1277,26 +1316,28 @@ function AssistantText({
 
 function AssistantTextFallback({
 	text,
-	streaming,
 }: {
 	text: string;
-	streaming: boolean;
+	streaming?: boolean;
 }) {
 	return (
-		<div
-			className={cn(
-				"conversation-streamdown whitespace-pre-wrap break-words",
-				streaming ? "animate-in fade-in-0 duration-150" : null,
-			)}
-		>
+		<div className="conversation-streamdown whitespace-pre-wrap break-words">
 			{text}
 		</div>
 	);
 }
 
-function AssistantReasoning({ text }: { text: string }) {
+function AssistantReasoning({
+	text,
+	streaming,
+}: {
+	text: string;
+	streaming?: boolean;
+}) {
+	const { settings } = useSettings();
+
 	return (
-		<details className="group flex flex-col">
+		<details className="group flex flex-col" open={streaming || undefined}>
 			<summary className="flex cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-app-muted hover:text-app-foreground-soft [&::-webkit-details-marker]:hidden">
 				<svg
 					className="size-2.5 shrink-0 transition-transform group-open:rotate-90"
@@ -1312,9 +1353,18 @@ function AssistantReasoning({ text }: { text: string }) {
 					/>
 				</svg>
 				Thinking
+				{streaming ? (
+					<LoaderCircle
+						className="size-3 animate-spin text-app-muted/50"
+						strokeWidth={2}
+					/>
+				) : null}
 			</summary>
 			<div className="pt-1.5">
-				<pre className="max-h-[20rem] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-app-foreground/[0.03] px-3 py-2.5 font-sans text-[12px] leading-5 text-app-muted/70">
+				<pre
+					className="max-h-[20rem] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-app-foreground/[0.03] px-3 py-2.5 font-sans leading-relaxed text-app-muted/70"
+					style={{ fontSize: `${settings.fontSize}px` }}
+				>
 					{text}
 				</pre>
 			</div>
@@ -1326,10 +1376,12 @@ function AssistantToolCall({
 	toolName,
 	args,
 	result,
+	streamingStatus,
 }: {
 	toolName: string;
 	args: Record<string, unknown>;
 	result?: unknown;
+	streamingStatus?: string;
 }) {
 	const info = getToolInfo(toolName, args);
 	const isEdit = toolName === "Edit";
@@ -1360,6 +1412,22 @@ function AssistantToolCall({
 		: null;
 	const resultText = isChildrenResult ? null : resultStr;
 	const hasOutput = resultText != null && resultText.length > 5;
+
+	// Streaming status indicator
+	const statusIndicator =
+		streamingStatus === "pending" || streamingStatus === "streaming_input" ? (
+			<LoaderCircle
+				className="size-3 animate-spin text-app-muted/50"
+				strokeWidth={2}
+			/>
+		) : streamingStatus === "running" ? (
+			<LoaderCircle
+				className="size-3 animate-spin text-app-progress"
+				strokeWidth={2}
+			/>
+		) : streamingStatus === "error" ? (
+			<AlertCircle className="size-3 text-app-negative" strokeWidth={2} />
+		) : null;
 
 	const toolLine = (
 		<>
@@ -1395,66 +1463,18 @@ function AssistantToolCall({
 			) : info.detail ? (
 				<span className="truncate text-app-muted/60">{info.detail}</span>
 			) : null}
+			{statusIndicator}
 		</>
 	);
 
-	// Sub-agent children: render step count inline, expanded children below
+	// Sub-agent children: show last N steps with "show more" toggle
 	if (childrenData) {
 		return (
-			<details className="group/children flex flex-col">
-				<summary className="flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
-					{toolLine}
-					<span className="shrink-0 cursor-pointer text-[11px] text-app-muted/40 hover:text-app-muted">
-						<svg
-							className="size-2 transition-transform group-open/children:rotate-90"
-							viewBox="0 0 12 12"
-							fill="none"
-						>
-							<path
-								d="M4.5 2.5L8.5 6L4.5 9.5"
-								stroke="currentColor"
-								strokeWidth="1.5"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-							/>
-						</svg>
-					</span>
-					<span className="shrink-0 text-[11px] text-app-muted/40">
-						{childrenData.parts.length} steps
-					</span>
-				</summary>
-				<div className="ml-5 flex flex-col gap-0.5 border-l border-app-border/30 pl-3 pt-1">
-					{childrenData.parts.map((part, idx) => {
-						if (part.type === "tool-call") {
-							return (
-								<AssistantToolCall
-									key={idx}
-									toolName={(part.toolName as string) ?? "unknown"}
-									args={(part.args as Record<string, unknown>) ?? {}}
-									result={part.result}
-								/>
-							);
-						}
-						if (part.type === "text" && part.text) {
-							return (
-								<div
-									key={idx}
-									className="text-[13px] leading-6 text-app-foreground-soft"
-								>
-									{(part.text as string).slice(0, 300)}
-									{(part.text as string).length > 300 ? "…" : ""}
-								</div>
-							);
-						}
-						if (part.type === "reasoning" && part.text) {
-							return (
-								<AssistantReasoning key={idx} text={part.text as string} />
-							);
-						}
-						return null;
-					})}
-				</div>
-			</details>
+			<AgentChildrenBlock
+				toolLine={toolLine}
+				parts={childrenData.parts}
+				streaming={!!streamingStatus}
+			/>
 		);
 	}
 
@@ -1497,6 +1517,159 @@ function AssistantToolCall({
 					</pre>
 				</div>
 			) : null}
+		</details>
+	);
+}
+
+/** Number of recent children steps to show by default. */
+const AGENT_PREVIEW_STEPS = 3;
+
+function AgentChildrenBlock({
+	toolLine,
+	parts,
+	streaming,
+}: {
+	toolLine: React.ReactNode;
+	parts: Array<Record<string, unknown>>;
+	streaming: boolean;
+}) {
+	const [expanded, setExpanded] = useState(false);
+	const totalSteps = parts.length;
+	const hasMore = totalSteps > AGENT_PREVIEW_STEPS;
+
+	// When streaming, always show the latest N steps (tail).
+	// When completed + not expanded, show last N steps.
+	// When expanded, show all.
+	const visibleParts =
+		expanded || !hasMore ? parts : parts.slice(-AGENT_PREVIEW_STEPS);
+
+	const hiddenCount = totalSteps - visibleParts.length;
+
+	return (
+		<div className="flex flex-col">
+			{/* Header line: icon + tool name + step count */}
+			<div className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-muted">
+				{toolLine}
+				{streaming ? (
+					<LoaderCircle
+						className="size-3 animate-spin text-app-progress"
+						strokeWidth={2}
+					/>
+				) : null}
+				<span className="shrink-0 text-[11px] text-app-muted/40">
+					{totalSteps} steps
+				</span>
+			</div>
+
+			{/* Children steps */}
+			<div className="ml-5 flex flex-col gap-0.5 border-l border-app-border/30 pl-3 pt-1">
+				{/* "Show more" / "Collapse" toggle */}
+				{hasMore && !streaming ? (
+					<button
+						type="button"
+						onClick={() => setExpanded((v) => !v)}
+						className="mb-0.5 flex items-center gap-1 text-[11px] text-app-muted/50 transition-colors hover:text-app-muted"
+					>
+						<ChevronDown
+							className={cn(
+								"size-3 transition-transform",
+								expanded && "rotate-180",
+							)}
+							strokeWidth={1.5}
+						/>
+						{expanded
+							? "Collapse"
+							: `Show ${hiddenCount} more step${hiddenCount > 1 ? "s" : ""}`}
+					</button>
+				) : null}
+
+				{visibleParts.map((part, idx) => {
+					const globalIdx =
+						expanded || !hasMore ? idx : totalSteps - AGENT_PREVIEW_STEPS + idx;
+
+					if (part.type === "tool-call") {
+						return (
+							<AssistantToolCall
+								key={globalIdx}
+								toolName={(part.toolName as string) ?? "unknown"}
+								args={(part.args as Record<string, unknown>) ?? {}}
+								result={part.result}
+							/>
+						);
+					}
+					if (part.type === "text" && part.text) {
+						return (
+							<div
+								key={globalIdx}
+								className="text-[13px] leading-6 text-app-foreground-soft"
+							>
+								{(part.text as string).slice(0, 300)}
+								{(part.text as string).length > 300 ? "\u2026" : ""}
+							</div>
+						);
+					}
+					if (part.type === "reasoning" && part.text) {
+						return (
+							<AssistantReasoning key={globalIdx} text={part.text as string} />
+						);
+					}
+					return null;
+				})}
+			</div>
+		</div>
+	);
+}
+
+function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
+	const icon =
+		group.category === "search" ? (
+			<Search className="size-3.5 text-app-info" strokeWidth={1.8} />
+		) : (
+			<FileText className="size-3.5 text-app-info" strokeWidth={1.8} />
+		);
+
+	return (
+		<details className="group/collapse flex flex-col" open={false}>
+			<summary className="flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
+				<span className="shrink-0">{icon}</span>
+				<span className="font-medium">{group.summary}</span>
+				{group.active ? (
+					<LoaderCircle
+						className="size-3 animate-spin text-app-progress"
+						strokeWidth={2}
+					/>
+				) : (
+					<Check className="size-3 text-app-positive" strokeWidth={2} />
+				)}
+				<span className="shrink-0 cursor-pointer text-app-muted/40 hover:text-app-muted">
+					<svg
+						className="size-2.5 transition-transform group-open/collapse:rotate-90"
+						viewBox="0 0 12 12"
+						fill="none"
+					>
+						<path
+							d="M4.5 2.5L8.5 6L4.5 9.5"
+							stroke="currentColor"
+							strokeWidth="1.5"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+						/>
+					</svg>
+				</span>
+				<span className="shrink-0 text-[11px] text-app-muted/40">
+					{group.tools.length} tools
+				</span>
+			</summary>
+			<div className="ml-5 flex flex-col gap-0.5 border-l border-app-border/30 pl-3 pt-1">
+				{group.tools.map((tool, idx) => (
+					<AssistantToolCall
+						key={tool.toolCallId ?? `${tool.toolName}:${idx}`}
+						toolName={tool.toolName}
+						args={tool.args}
+						result={tool.result}
+					/>
+				))}
+			</div>
 		</details>
 	);
 }
@@ -1665,6 +1838,12 @@ function isToolCallPart(
 		part.type === "tool-call" &&
 		typeof part.toolName === "string" &&
 		isObj(part.args)
+	);
+}
+
+function isCollapsedGroupPart(part: unknown): part is CollapsedGroupPart {
+	return (
+		isObj(part) && part.type === "collapsed-group" && Array.isArray(part.tools)
 	);
 }
 
