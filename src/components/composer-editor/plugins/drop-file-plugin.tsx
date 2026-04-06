@@ -23,10 +23,14 @@ import { $createImageBadgeNode } from "../image-badge-node";
 
 const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|svg|bmp|ico)$/i;
 
+/** Dedup window (ms) — ignore identical drops within this period. */
+const DROP_DEDUP_MS = 500;
+
 export function DropFilePlugin() {
 	const [editor] = useLexicalComposerContext();
 	const unlistenRef = useRef<(() => void) | null>(null);
 	const cancelledRef = useRef(false);
+	const lastDropRef = useRef<{ key: string; ts: number }>({ key: "", ts: 0 });
 
 	useEffect(() => {
 		cancelledRef.current = false;
@@ -52,6 +56,17 @@ export function DropFilePlugin() {
 				listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
 					const paths = event.payload.paths;
 					if (!paths || paths.length === 0) return;
+
+					// Dedup: ignore if same paths within DROP_DEDUP_MS
+					const key = paths.join("|");
+					const now = Date.now();
+					if (
+						key === lastDropRef.current.key &&
+						now - lastDropRef.current.ts < DROP_DEDUP_MS
+					) {
+						return;
+					}
+					lastDropRef.current = { key, ts: now };
 
 					editor.update(() => {
 						const root = $getRoot();
