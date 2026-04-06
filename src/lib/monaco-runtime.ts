@@ -46,6 +46,9 @@ type DiffEditorController = {
 
 let runtimePromise: Promise<MonacoRuntime> | null = null;
 
+/** Content cache for pre-fetched files — avoids IPC on first switch. */
+const fileContentCache = new Map<string, string>();
+
 export async function createFileEditor(options: {
 	container: HTMLElement;
 	path: string;
@@ -56,21 +59,14 @@ export async function createFileEditor(options: {
 	const runtime = await ensureRuntime();
 	const { monaco } = runtime;
 
-	const uri = monaco.Uri.file(options.path);
 	const language = resolveLanguageId(monaco, options.path);
 
-	// Reuse existing model or create a new one
-	let model = monaco.editor.getModel(uri);
-	if (model) {
-		if (model.getValue() !== options.content) {
-			model.setValue(options.content);
-		}
-		if (language && model.getLanguageId() !== language) {
-			monaco.editor.setModelLanguage(model, language);
-		}
-	} else {
-		model = monaco.editor.createModel(options.content, language, uri);
-	}
+	// Single model shared across all file switches — avoids editor.setModel()
+	// which causes a blank frame during the detach→attach cycle.
+	const model = monaco.editor.createModel(options.content, language);
+
+	// Seed content cache for future switches
+	fileContentCache.set(options.path, options.content);
 
 	const editor = monaco.editor.create(options.container, {
 		automaticLayout: true,
@@ -93,7 +89,7 @@ export async function createFileEditor(options: {
 
 	revealEditorPosition(editor, options.line, options.column);
 
-	let currentModel = model;
+	const currentModel = model;
 
 	return {
 		editor,
@@ -119,27 +115,24 @@ export async function createFileEditor(options: {
 			});
 		},
 		switchFile(path: string, content?: string, line?: number, column?: number) {
-			const nextUri = monaco.Uri.file(path);
-			const nextLanguage = resolveLanguageId(monaco, path);
-
-			let nextModel = monaco.editor.getModel(nextUri);
-			if (nextModel) {
-				// Cache hit — reuse existing model, optionally refresh content
-				if (content !== undefined && nextModel.getValue() !== content) {
-					nextModel.setValue(content);
-				}
-				if (nextLanguage && nextModel.getLanguageId() !== nextLanguage) {
-					monaco.editor.setModelLanguage(nextModel, nextLanguage);
-				}
-			} else if (content !== undefined) {
-				nextModel = monaco.editor.createModel(content, nextLanguage, nextUri);
-			} else {
-				// No cached model and no content — caller must load the file first
+			// Resolve content: explicit param → cache → give up
+			const resolvedContent = content ?? fileContentCache.get(path);
+			if (resolvedContent === undefined) {
 				return false;
 			}
 
-			editor.setModel(nextModel);
-			currentModel = nextModel;
+			// In-place update: setValue + setModelLanguage on the SAME model.
+			// Unlike editor.setModel(), this never detaches the DOM → zero blank frames.
+			currentModel.setValue(resolvedContent);
+
+			const nextLanguage = resolveLanguageId(monaco, path);
+			if (nextLanguage && currentModel.getLanguageId() !== nextLanguage) {
+				monaco.editor.setModelLanguage(currentModel, nextLanguage);
+			}
+
+			// Keep cache fresh for future switches back to this file
+			fileContentCache.set(path, resolvedContent);
+
 			revealEditorPosition(editor, line, column);
 			return true;
 		},
@@ -226,27 +219,17 @@ export async function createDiffEditor(options: {
 	};
 }
 
-/** Pre-create Monaco models so future switchFile calls are instant cache hits. */
-export async function preWarmModels(
+/** Cache file contents so future switchFile calls resolve instantly (no IPC). */
+export function preWarmFileContents(
 	files: ReadonlyArray<{ absolutePath: string; content: string }>,
 ) {
-	const { monaco } = await ensureRuntime();
 	for (const file of files) {
-		const uri = monaco.Uri.file(file.absolutePath);
-		if (!monaco.editor.getModel(uri)) {
-			const language = resolveLanguageId(monaco, file.absolutePath);
-			monaco.editor.createModel(file.content, language, uri);
-		}
+		fileContentCache.set(file.absolutePath, file.content);
 	}
 }
 
-export async function syncVirtualFile(path: string, content: string) {
-	const { monaco } = await ensureRuntime();
-	const uri = monaco.Uri.file(path);
-	const model = monaco.editor.getModel(uri);
-	if (model && model.getValue() !== content) {
-		model.setValue(content);
-	}
+export function syncVirtualFile(path: string, content: string) {
+	fileContentCache.set(path, content);
 }
 
 async function ensureRuntime(): Promise<MonacoRuntime> {

@@ -117,7 +117,21 @@ export function WorkspaceEditorSurface({
 		};
 	}, [canRenderDiff, canRenderFile, editorSession]);
 
-	// useLayoutEffect: run model swap BEFORE browser paint to avoid 1-frame flicker
+	// Dispose editors on unmount (separate from the switching effect so the
+	// fast-path can skip cleanup without leaking on unmount).
+	useEffect(() => {
+		return () => {
+			disposeControllers({
+				fileControllerRef,
+				diffControllerRef,
+				changeSubscriptionRef,
+			});
+		};
+	}, []);
+
+	// useLayoutEffect: run model swap BEFORE browser paint to avoid flicker.
+	// The fast path returns NO cleanup — we keep the editor instance alive across
+	// path changes. Only the slow path (first creation / kind change) disposes.
 	useLayoutEffect(() => {
 		const host = editorHostRef.current;
 		if (!host) {
@@ -171,16 +185,8 @@ export function WorkspaceEditorSurface({
 					});
 			}
 
-			// Whether switched or not, keep existing editor alive.
-			// If not switched (cache miss, no content), the file-load effect will
-			// fetch content → re-render → this effect runs again with content.
-			return () => {
-				disposeControllers({
-					fileControllerRef,
-					diffControllerRef,
-					changeSubscriptionRef,
-				});
-			};
+			// No cleanup — editor stays alive. Unmount cleanup handles disposal.
+			return;
 		}
 
 		// ── Guard: need content for initial editor creation ──

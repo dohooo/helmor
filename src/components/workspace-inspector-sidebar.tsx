@@ -84,10 +84,10 @@ export function WorkspaceInspectorSidebar({
 				if (cancelled) return;
 				setChanges(response.items);
 
-				// Pre-warm Monaco models so file switches are instant
+				// Cache file contents so switches are instant (no IPC needed)
 				if (response.prefetched.length > 0) {
-					const { preWarmModels } = await import("@/lib/monaco-runtime");
-					await preWarmModels(response.prefetched);
+					const { preWarmFileContents } = await import("@/lib/monaco-runtime");
+					preWarmFileContents(response.prefetched);
 				}
 			})
 			.catch(() => {
