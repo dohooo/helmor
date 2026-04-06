@@ -7,18 +7,41 @@
 //! localhost:1420.  The frontend will detect the absence of the Tauri runtime
 //! and call `/api/*` endpoints instead.
 
+use std::collections::HashMap;
+use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use axum::{
-    extract::Query,
+    extract::{Query, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{
+        sse::{Event, Sse},
+        IntoResponse,
+    },
     routing::{get, post},
     Json, Router,
 };
+use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
 
 use helmor_lib::data_dir;
+use helmor_lib::sidecar::ManagedSidecar;
+
+// ---------------------------------------------------------------------------
+// Shared state
+// ---------------------------------------------------------------------------
+
+struct AppState {
+    sidecar: ManagedSidecar,
+    /// Active stream receivers keyed by stream_id.
+    streams:
+        Mutex<HashMap<String, std::sync::mpsc::Receiver<helmor_lib::agents::AgentStreamEvent>>>,
+}
+
+type SharedState = Arc<AppState>;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -55,25 +78,92 @@ struct WriteBody {
     content: String,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenameSessionBody {
+    session_id: String,
+    title: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateSessionSettingsBody {
+    session_id: String,
+    effort_level: Option<String>,
+    permission_mode: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetManualStatusBody {
+    workspace_id: String,
+    status: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateTargetBranchBody {
+    workspace_id: String,
+    target_branch: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentStreamRequestBody {
+    request: helmor_lib::agents::AgentSendRequest,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StopAgentStreamBody {
+    request: StopAgentStreamInner,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StopAgentStreamInner {
+    session_id: String,
+    provider: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct StreamIdQuery {
+    #[serde(alias = "streamId")]
+    stream_id: String,
+}
+
 // ---------------------------------------------------------------------------
-// Route handlers — thin wrappers around the library functions
+// SSE stream wrapper
+// ---------------------------------------------------------------------------
+
+/// Wraps a `tokio::sync::mpsc::Receiver` as a `futures_core::Stream` for SSE.
+struct SseEventStream {
+    rx: tokio::sync::mpsc::Receiver<helmor_lib::agents::AgentStreamEvent>,
+}
+
+impl futures_core::Stream for SseEventStream {
+    type Item = Result<Event, Infallible>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.rx.poll_recv(cx) {
+            Poll::Ready(Some(event)) => {
+                let data = serde_json::to_string(&event).unwrap_or_default();
+                Poll::Ready(Some(Ok(Event::default().data(data))))
+            }
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Route handlers
 // ---------------------------------------------------------------------------
 
 mod handlers {
     use super::*;
 
-    // We cannot directly import private modules from helmor_lib, but the
-    // public Tauri command functions are re-exported via `models` and `agents`.
-    // Since models/agents are not pub in lib.rs, we replicate the thin wrapper
-    // pattern here, calling the same underlying code.
-
-    // The library exposes `data_dir`, `error`, and `sidecar` as pub.
-    // For models we need to reach into the crate internals.  The easiest path
-    // is to make the necessary modules pub in lib.rs.  However, to keep changes
-    // minimal we duplicate the thin wrapper logic here — each handler opens a
-    // DB connection and runs the same SQL the Tauri command would.
-
-    // --- workspace groups ---------------------------------------------------
+    // --- workspace groups (read) -------------------------------------------
 
     pub async fn list_workspace_groups() -> impl IntoResponse {
         match helmor_lib::dev_api::list_workspace_groups() {
@@ -96,7 +186,7 @@ mod handlers {
         }
     }
 
-    // --- sessions / messages ------------------------------------------------
+    // --- sessions / messages (read) ----------------------------------------
 
     pub async fn list_workspace_sessions(Query(q): Query<IdQuery>) -> impl IntoResponse {
         match helmor_lib::dev_api::list_workspace_sessions(&q.id) {
@@ -119,7 +209,14 @@ mod handlers {
         }
     }
 
-    // --- repos / models / misc ----------------------------------------------
+    pub async fn list_hidden_sessions(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::list_hidden_sessions(&q.id) {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    // --- repos / models / misc (read) --------------------------------------
 
     pub async fn list_repositories() -> impl IntoResponse {
         match helmor_lib::dev_api::list_repositories() {
@@ -153,14 +250,7 @@ mod handlers {
         }
     }
 
-    pub async fn list_hidden_sessions(Query(q): Query<IdQuery>) -> impl IntoResponse {
-        match helmor_lib::dev_api::list_hidden_sessions(&q.id) {
-            Ok(v) => Json(v).into_response(),
-            Err(e) => cmd_err(e).into_response(),
-        }
-    }
-
-    // --- editor file operations -----------------------------------------------
+    // --- editor file operations (read/write) --------------------------------
 
     pub async fn read_editor_file(Query(q): Query<PathQuery>) -> impl IntoResponse {
         match helmor_lib::dev_api::read_editor_file(&q.path) {
@@ -212,6 +302,217 @@ mod handlers {
             Err(e) => cmd_err(e).into_response(),
         }
     }
+
+    // --- session write operations ------------------------------------------
+
+    pub async fn create_session(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::create_session(&q.id) {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn delete_session(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::delete_session(&q.id) {
+            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn hide_session(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::hide_session(&q.id) {
+            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn unhide_session(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::unhide_session(&q.id) {
+            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn rename_session(Json(body): Json<RenameSessionBody>) -> impl IntoResponse {
+        match helmor_lib::dev_api::rename_session(&body.session_id, &body.title) {
+            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn mark_session_read(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::mark_session_read(&q.id) {
+            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn update_session_settings(
+        Json(body): Json<UpdateSessionSettingsBody>,
+    ) -> impl IntoResponse {
+        match helmor_lib::dev_api::update_session_settings(
+            &body.session_id,
+            body.effort_level.as_deref(),
+            body.permission_mode.as_deref(),
+        ) {
+            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    // --- workspace write operations ----------------------------------------
+
+    pub async fn mark_workspace_read(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::mark_workspace_read(&q.id) {
+            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn mark_workspace_unread(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::mark_workspace_unread(&q.id) {
+            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn pin_workspace(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::pin_workspace(&q.id) {
+            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn unpin_workspace(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::unpin_workspace(&q.id) {
+            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn set_workspace_manual_status(
+        Json(body): Json<SetManualStatusBody>,
+    ) -> impl IntoResponse {
+        match helmor_lib::dev_api::set_workspace_manual_status(
+            &body.workspace_id,
+            body.status.as_deref(),
+        ) {
+            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn archive_workspace(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::archive_workspace(&q.id) {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn restore_workspace(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::restore_workspace(&q.id) {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn create_workspace_from_repo(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::create_workspace_from_repo(&q.id) {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn permanently_delete_workspace(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::permanently_delete_workspace(&q.id) {
+            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn update_intended_target_branch(
+        Json(body): Json<UpdateTargetBranchBody>,
+    ) -> impl IntoResponse {
+        match helmor_lib::dev_api::update_intended_target_branch(
+            &body.workspace_id,
+            &body.target_branch,
+        ) {
+            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn update_app_settings(
+        Json(body): Json<HashMap<String, String>>,
+    ) -> impl IntoResponse {
+        match helmor_lib::dev_api::update_app_settings(body) {
+            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    // --- streaming agent API -----------------------------------------------
+
+    pub async fn send_agent_message_stream(
+        State(state): State<SharedState>,
+        Json(body): Json<AgentStreamRequestBody>,
+    ) -> impl IntoResponse {
+        match helmor_lib::dev_api::start_agent_stream(&state.sidecar, body.request) {
+            Ok((response, rx)) => {
+                let stream_id = response.stream_id.clone();
+                state.streams.lock().await.insert(stream_id, rx);
+                Json(response).into_response()
+            }
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn agent_stream_sse(
+        State(state): State<SharedState>,
+        Query(q): Query<StreamIdQuery>,
+    ) -> impl IntoResponse {
+        let sync_rx = state.streams.lock().await.remove(&q.stream_id);
+
+        match sync_rx {
+            Some(sync_rx) => {
+                // Bridge sync mpsc → tokio mpsc for SSE
+                let (tx, rx) = tokio::sync::mpsc::channel(256);
+                tokio::task::spawn_blocking(move || {
+                    for event in sync_rx.iter() {
+                        if tx.blocking_send(event).is_err() {
+                            break;
+                        }
+                    }
+                });
+
+                Sse::new(SseEventStream { rx })
+                    .keep_alive(
+                        axum::response::sse::KeepAlive::new()
+                            .interval(std::time::Duration::from_secs(15)),
+                    )
+                    .into_response()
+            }
+            None => (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Stream not found"})),
+            )
+                .into_response(),
+        }
+    }
+
+    pub async fn stop_agent_stream(
+        State(state): State<SharedState>,
+        Json(body): Json<StopAgentStreamBody>,
+    ) -> impl IntoResponse {
+        match helmor_lib::dev_api::stop_agent_stream(
+            &state.sidecar,
+            &body.request.session_id,
+            body.request.provider.as_deref(),
+        ) {
+            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -233,7 +534,13 @@ async fn main() {
         db_path.display()
     );
 
+    let state: SharedState = Arc::new(AppState {
+        sidecar: ManagedSidecar::new(),
+        streams: Mutex::new(HashMap::new()),
+    });
+
     let app = Router::new()
+        // --- Read endpoints ---
         .route(
             "/api/list_workspace_groups",
             get(handlers::list_workspace_groups),
@@ -287,7 +594,59 @@ async fn main() {
             "/api/list_workspace_changes_with_content",
             get(handlers::list_workspace_changes_with_content),
         )
-        .layer(CorsLayer::permissive());
+        // --- Session write endpoints ---
+        .route("/api/create_session", post(handlers::create_session))
+        .route("/api/delete_session", post(handlers::delete_session))
+        .route("/api/hide_session", post(handlers::hide_session))
+        .route("/api/unhide_session", post(handlers::unhide_session))
+        .route("/api/rename_session", post(handlers::rename_session))
+        .route("/api/mark_session_read", post(handlers::mark_session_read))
+        .route(
+            "/api/update_session_settings",
+            post(handlers::update_session_settings),
+        )
+        // --- Workspace write endpoints ---
+        .route(
+            "/api/mark_workspace_read",
+            post(handlers::mark_workspace_read),
+        )
+        .route(
+            "/api/mark_workspace_unread",
+            post(handlers::mark_workspace_unread),
+        )
+        .route("/api/pin_workspace", post(handlers::pin_workspace))
+        .route("/api/unpin_workspace", post(handlers::unpin_workspace))
+        .route(
+            "/api/set_workspace_manual_status",
+            post(handlers::set_workspace_manual_status),
+        )
+        .route("/api/archive_workspace", post(handlers::archive_workspace))
+        .route("/api/restore_workspace", post(handlers::restore_workspace))
+        .route(
+            "/api/create_workspace_from_repo",
+            post(handlers::create_workspace_from_repo),
+        )
+        .route(
+            "/api/permanently_delete_workspace",
+            post(handlers::permanently_delete_workspace),
+        )
+        .route(
+            "/api/update_intended_target_branch",
+            post(handlers::update_intended_target_branch),
+        )
+        .route(
+            "/api/update_app_settings",
+            post(handlers::update_app_settings),
+        )
+        // --- Streaming agent endpoints ---
+        .route(
+            "/api/send_agent_message_stream",
+            post(handlers::send_agent_message_stream),
+        )
+        .route("/api/agent_stream_sse", get(handlers::agent_stream_sse))
+        .route("/api/stop_agent_stream", post(handlers::stop_agent_stream))
+        .layer(CorsLayer::permissive())
+        .with_state(state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3001));
     eprintln!("listening on http://{addr}");

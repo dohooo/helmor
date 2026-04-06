@@ -734,9 +734,11 @@ export async function updateIntendedTargetBranch(
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		throw new Error(
-			"Target branch update is only available in the Tauri desktop runtime.",
-		);
+		await devFetch("update_intended_target_branch", undefined, {
+			method: "POST",
+			body: { workspaceId, targetBranch },
+		});
+		return;
 	}
 
 	return invoke<void>("update_intended_target_branch", {
@@ -817,8 +819,10 @@ export async function restoreWorkspace(
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		throw new Error(
-			"Workspace restore is only available in the Tauri desktop runtime.",
+		return devFetch<RestoreWorkspaceResponse>(
+			"restore_workspace",
+			{ id: workspaceId },
+			{ method: "POST" },
 		);
 	}
 
@@ -833,8 +837,10 @@ export async function archiveWorkspace(
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		throw new Error(
-			"Workspace archive is only available in the Tauri desktop runtime.",
+		return devFetch<ArchiveWorkspaceResponse>(
+			"archive_workspace",
+			{ id: workspaceId },
+			{ method: "POST" },
 		);
 	}
 
@@ -851,7 +857,13 @@ export type DetectedEditor = {
 
 export async function detectInstalledEditors(): Promise<DetectedEditor[]> {
 	const invoke = await getTauriInvoke();
-	if (!invoke) return [];
+	if (!invoke) {
+		try {
+			return await devFetch<DetectedEditor[]>("detect_installed_editors");
+		} catch {
+			return [];
+		}
+	}
 	try {
 		return await invoke<DetectedEditor[]>("detect_installed_editors");
 	} catch {
@@ -993,7 +1005,14 @@ export async function permanentlyDeleteWorkspace(
 	workspaceId: string,
 ): Promise<void> {
 	const invoke = await getTauriInvoke();
-	if (!invoke) return;
+	if (!invoke) {
+		await devFetch(
+			"permanently_delete_workspace",
+			{ id: workspaceId },
+			{ method: "POST" },
+		);
+		return;
+	}
 	await invoke("permanently_delete_workspace", { workspaceId });
 }
 
@@ -1002,7 +1021,17 @@ export async function updateSessionSettings(
 	settings: { effortLevel?: string; permissionMode?: string },
 ): Promise<void> {
 	const invoke = await getTauriInvoke();
-	if (!invoke) return;
+	if (!invoke) {
+		await devFetch("update_session_settings", undefined, {
+			method: "POST",
+			body: {
+				sessionId,
+				effortLevel: settings.effortLevel ?? null,
+				permissionMode: settings.permissionMode ?? null,
+			},
+		});
+		return;
+	}
 	await invoke("update_session_settings", {
 		sessionId,
 		effortLevel: settings.effortLevel ?? null,
@@ -1016,8 +1045,10 @@ export async function createWorkspaceFromRepo(
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		throw new Error(
-			"Workspace creation is only available in the Tauri desktop runtime.",
+		return devFetch<CreateWorkspaceResponse>(
+			"create_workspace_from_repo",
+			{ id: repoId },
+			{ method: "POST" },
 		);
 	}
 
@@ -1033,7 +1064,7 @@ export async function addRepositoryFromLocalPath(
 
 	if (!invoke) {
 		throw new Error(
-			"Repository add is only available in the Tauri desktop runtime.",
+			"Repository add requires the Tauri desktop runtime (needs filesystem dialog).",
 		);
 	}
 
@@ -1048,9 +1079,8 @@ export async function markSessionRead(
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		throw new Error(
-			"Session read tracking is only available in the Tauri desktop runtime.",
-		);
+		await devFetch("mark_session_read", { id: sessionId }, { method: "POST" });
+		return undefined;
 	}
 
 	return invoke<MarkWorkspaceReadResponse>("mark_session_read", {
@@ -1064,9 +1094,12 @@ export async function markWorkspaceRead(
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		throw new Error(
-			"Workspace read tracking is only available in the Tauri desktop runtime.",
+		await devFetch(
+			"mark_workspace_read",
+			{ id: workspaceId },
+			{ method: "POST" },
 		);
+		return undefined;
 	}
 
 	return invoke<MarkWorkspaceReadResponse>("mark_workspace_read", {
@@ -1080,9 +1113,12 @@ export async function markWorkspaceUnread(
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		throw new Error(
-			"Workspace unread tracking is only available in the Tauri desktop runtime.",
+		await devFetch(
+			"mark_workspace_unread",
+			{ id: workspaceId },
+			{ method: "POST" },
 		);
+		return undefined;
 	}
 
 	return invoke<MarkWorkspaceReadResponse>("mark_workspace_unread", {
@@ -1092,15 +1128,19 @@ export async function markWorkspaceUnread(
 
 export async function pinWorkspace(workspaceId: string): Promise<void> {
 	const inv = await getTauriInvoke();
-	if (!inv)
-		throw new Error("Pin is only available in the Tauri desktop runtime.");
+	if (!inv) {
+		await devFetch("pin_workspace", { id: workspaceId }, { method: "POST" });
+		return;
+	}
 	return inv<void>("pin_workspace", { workspaceId });
 }
 
 export async function unpinWorkspace(workspaceId: string): Promise<void> {
 	const inv = await getTauriInvoke();
-	if (!inv)
-		throw new Error("Unpin is only available in the Tauri desktop runtime.");
+	if (!inv) {
+		await devFetch("unpin_workspace", { id: workspaceId }, { method: "POST" });
+		return;
+	}
 	return inv<void>("unpin_workspace", { workspaceId });
 }
 
@@ -1109,10 +1149,13 @@ export async function setWorkspaceManualStatus(
 	status: string | null,
 ): Promise<void> {
 	const inv = await getTauriInvoke();
-	if (!inv)
-		throw new Error(
-			"Set status is only available in the Tauri desktop runtime.",
-		);
+	if (!inv) {
+		await devFetch("set_workspace_manual_status", undefined, {
+			method: "POST",
+			body: { workspaceId, status },
+		});
+		return;
+	}
 	return inv<void>("set_workspace_manual_status", { workspaceId, status });
 }
 
@@ -1142,8 +1185,10 @@ export async function startAgentMessageStream(
 ): Promise<AgentStreamStartResponse> {
 	const inv = await getTauriInvoke();
 	if (!inv) {
-		throw new Error(
-			"Streaming is only available in the Tauri desktop runtime.",
+		return devFetch<AgentStreamStartResponse>(
+			"send_agent_message_stream",
+			undefined,
+			{ method: "POST", body: { request } },
 		);
 	}
 	return inv<AgentStreamStartResponse>("send_agent_message_stream", {
@@ -1155,6 +1200,35 @@ export async function listenAgentStream(
 	streamId: string,
 	callback: (event: AgentStreamEvent) => void,
 ): Promise<UnlistenFn> {
+	if (!hasTauriRuntime()) {
+		// Browser mode: use SSE instead of Tauri event listener
+		const url = new URL("/api/agent_stream_sse", window.location.origin);
+		url.searchParams.set("streamId", streamId);
+		const eventSource = new EventSource(url.toString());
+
+		eventSource.onmessage = (msg) => {
+			try {
+				const event = JSON.parse(msg.data) as AgentStreamEvent;
+				callback(event);
+				// Close SSE on terminal events
+				if (event.kind === "done" || event.kind === "error") {
+					eventSource.close();
+				}
+			} catch {
+				// Ignore unparseable SSE data
+			}
+		};
+
+		eventSource.onerror = () => {
+			eventSource.close();
+		};
+
+		// Return an unlisten function compatible with the Tauri API
+		return () => {
+			eventSource.close();
+		};
+	}
+
 	return listen<AgentStreamEvent>(`agent-stream:${streamId}`, (tauriEvent) => {
 		callback(tauriEvent.payload);
 	});
@@ -1165,7 +1239,13 @@ export async function stopAgentStream(
 	provider?: string,
 ): Promise<void> {
 	const inv = await getTauriInvoke();
-	if (!inv) return;
+	if (!inv) {
+		await devFetch("stop_agent_stream", undefined, {
+			method: "POST",
+			body: { request: { sessionId, provider: provider ?? null } },
+		});
+		return;
+	}
 	await inv("stop_agent_stream", {
 		request: { sessionId, provider: provider ?? null },
 	});
@@ -1252,8 +1332,13 @@ export async function createSession(
 	workspaceId: string,
 ): Promise<CreateSessionResponse> {
 	const inv = await getTauriInvoke();
-	if (!inv)
-		throw new Error("Session creation requires the Tauri desktop runtime.");
+	if (!inv) {
+		return devFetch<CreateSessionResponse>(
+			"create_session",
+			{ id: workspaceId },
+			{ method: "POST" },
+		);
+	}
 	return inv<CreateSessionResponse>("create_session", { workspaceId });
 }
 
@@ -1262,7 +1347,13 @@ export async function renameSession(
 	title: string,
 ): Promise<void> {
 	const inv = await getTauriInvoke();
-	if (!inv) return;
+	if (!inv) {
+		await devFetch("rename_session", undefined, {
+			method: "POST",
+			body: { sessionId, title },
+		});
+		return;
+	}
 	await inv("rename_session", { sessionId, title });
 }
 
@@ -1294,19 +1385,28 @@ export async function generateSessionTitle(
 
 export async function hideSession(sessionId: string): Promise<void> {
 	const inv = await getTauriInvoke();
-	if (!inv) return;
+	if (!inv) {
+		await devFetch("hide_session", { id: sessionId }, { method: "POST" });
+		return;
+	}
 	await inv("hide_session", { sessionId });
 }
 
 export async function unhideSession(sessionId: string): Promise<void> {
 	const inv = await getTauriInvoke();
-	if (!inv) return;
+	if (!inv) {
+		await devFetch("unhide_session", { id: sessionId }, { method: "POST" });
+		return;
+	}
 	await inv("unhide_session", { sessionId });
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
 	const inv = await getTauriInvoke();
-	if (!inv) return;
+	if (!inv) {
+		await devFetch("delete_session", { id: sessionId }, { method: "POST" });
+		return;
+	}
 	await inv("delete_session", { sessionId });
 }
 

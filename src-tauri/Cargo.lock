@@ -1632,6 +1632,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "dotenvy",
+ "futures-core",
  "keyring",
  "rand 0.10.0",
  "reqwest 0.12.28",

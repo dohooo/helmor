@@ -131,12 +131,12 @@ enum StreamOutputAccumulator {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct AgentModelDefinition {
-    id: &'static str,
-    provider: &'static str,
-    label: &'static str,
-    cli_model: &'static str,
-    badge: Option<&'static str>,
+pub(crate) struct AgentModelDefinition {
+    pub(crate) id: &'static str,
+    pub(crate) provider: &'static str,
+    pub(crate) label: &'static str,
+    pub(crate) cli_model: &'static str,
+    pub(crate) badge: Option<&'static str>,
 }
 
 const CLAUDE_MODEL_DEFINITIONS: &[AgentModelDefinition] = &[
@@ -1061,7 +1061,7 @@ fn extract_claude_assistant_text(value: &Value) -> Option<String> {
     (!text.trim().is_empty()).then_some(text)
 }
 
-fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf> {
+pub(crate) fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf> {
     if let Some(path) = non_empty(provided) {
         let directory = PathBuf::from(path);
         if directory.is_dir() {
@@ -1227,7 +1227,7 @@ fn current_timestamp_string() -> Result<String> {
     crate::models::db::current_timestamp()
 }
 
-fn find_model_definition(model_id: &str) -> Option<&'static AgentModelDefinition> {
+pub(crate) fn find_model_definition(model_id: &str) -> Option<&'static AgentModelDefinition> {
     CLAUDE_MODEL_DEFINITIONS
         .iter()
         .chain(CODEX_MODEL_DEFINITIONS.iter())
