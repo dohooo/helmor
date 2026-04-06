@@ -41,6 +41,7 @@ import {
 	ToastTitle,
 	ToastViewport,
 } from "./components/ui/toast";
+import { TooltipProvider } from "./components/ui/tooltip";
 import { WorkspaceConversationContainer } from "./components/workspace-conversation-container";
 import { WorkspaceEditorSurface } from "./components/workspace-editor-surface";
 import { WorkspaceInspectorSidebar } from "./components/workspace-inspector-sidebar";
@@ -1084,302 +1085,309 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	]);
 
 	return (
-		<ToastProvider swipeDirection="right">
-			{!isIdentityConnected ? (
-				<GithubIdentityGate
-					identityState={githubIdentityState}
-					onConnectGithub={() => {
-						void handleStartGithubIdentityConnect();
-					}}
-					onCopyGithubCode={(userCode) => handleCopyGithubDeviceCode(userCode)}
-					onCancelGithubConnect={handleCancelGithubIdentityConnect}
-				/>
-			) : (
-				<main
-					aria-label="Application shell"
-					className="relative h-screen overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
-				>
-					<div className="relative flex h-full min-h-0 bg-app-sidebar">
-						{workspaceViewMode === "conversation" && (
-							<>
-								{!sidebarCollapsed && (
-									<aside
-										aria-label="Workspace sidebar"
-										className="relative h-full shrink-0 overflow-hidden bg-app-sidebar"
-										style={{ width: `${sidebarWidth}px` }}
-									>
-										<WorkspacesSidebarContainer
-											selectedWorkspaceId={selectedWorkspaceId}
-											sendingWorkspaceIds={sendingWorkspaceIds}
-											onSelectWorkspace={handleSelectWorkspace}
-											pushWorkspaceToast={pushWorkspaceToast}
-										/>
-										<button
-											type="button"
-											aria-label="Collapse sidebar"
-											onClick={() => setSidebarCollapsed(true)}
-											className="absolute right-[16px] top-[24px] z-20 flex size-5 items-center justify-center rounded text-app-muted/50 transition-colors hover:text-app-foreground"
+		<TooltipProvider delay={0}>
+			<ToastProvider swipeDirection="right">
+				{!isIdentityConnected ? (
+					<GithubIdentityGate
+						identityState={githubIdentityState}
+						onConnectGithub={() => {
+							void handleStartGithubIdentityConnect();
+						}}
+						onCopyGithubCode={(userCode) =>
+							handleCopyGithubDeviceCode(userCode)
+						}
+						onCancelGithubConnect={handleCancelGithubIdentityConnect}
+					/>
+				) : (
+					<main
+						aria-label="Application shell"
+						className="relative h-screen overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
+					>
+						<div className="relative flex h-full min-h-0 bg-app-sidebar">
+							{workspaceViewMode === "conversation" && (
+								<>
+									{!sidebarCollapsed && (
+										<aside
+											aria-label="Workspace sidebar"
+											className="relative h-full shrink-0 overflow-hidden bg-app-sidebar"
+											style={{ width: `${sidebarWidth}px` }}
 										>
-											<PanelLeftClose className="size-3.5" strokeWidth={1.8} />
-										</button>
-										<div className="absolute inset-x-3 bottom-3 z-20 flex items-center justify-between">
-											<SettingsButton onClick={onOpenSettings} />
-											<GithubStatusMenu
-												identityState={githubIdentityState}
-												onDisconnectGithub={() => {
-													void handleDisconnectGithubIdentity();
-												}}
+											<WorkspacesSidebarContainer
+												selectedWorkspaceId={selectedWorkspaceId}
+												sendingWorkspaceIds={sendingWorkspaceIds}
+												onSelectWorkspace={handleSelectWorkspace}
+												pushWorkspaceToast={pushWorkspaceToast}
+											/>
+											<button
+												type="button"
+												aria-label="Collapse sidebar"
+												onClick={() => setSidebarCollapsed(true)}
+												className="absolute right-[16px] top-[24px] z-20 flex size-5 items-center justify-center rounded text-app-muted/50 transition-colors hover:text-app-foreground"
+											>
+												<PanelLeftClose
+													className="size-3.5"
+													strokeWidth={1.8}
+												/>
+											</button>
+											<div className="absolute inset-x-3 bottom-3 z-20 flex items-center justify-between">
+												<SettingsButton onClick={onOpenSettings} />
+												<GithubStatusMenu
+													identityState={githubIdentityState}
+													onDisconnectGithub={() => {
+														void handleDisconnectGithubIdentity();
+													}}
+												/>
+											</div>
+										</aside>
+									)}
+
+									{!sidebarCollapsed && (
+										<div
+											role="separator"
+											tabIndex={0}
+											aria-label="Resize sidebar"
+											aria-orientation="vertical"
+											aria-valuemin={MIN_SIDEBAR_WIDTH}
+											aria-valuemax={MAX_SIDEBAR_WIDTH}
+											aria-valuenow={sidebarWidth}
+											onMouseDown={handleResizeStart("sidebar")}
+											onKeyDown={handleResizeKeyDown("sidebar")}
+											className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+											style={{
+												left: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
+												width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
+											}}
+										>
+											<span
+												aria-hidden="true"
+												className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
+													isSidebarResizing
+														? "w-[2px] bg-app-foreground/80 shadow-[0_0_12px_rgba(250,249,246,0.2)]"
+														: "w-px bg-app-border group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
+												}`}
 											/>
 										</div>
-									</aside>
-								)}
-
-								{!sidebarCollapsed && (
-									<div
-										role="separator"
-										tabIndex={0}
-										aria-label="Resize sidebar"
-										aria-orientation="vertical"
-										aria-valuemin={MIN_SIDEBAR_WIDTH}
-										aria-valuemax={MAX_SIDEBAR_WIDTH}
-										aria-valuenow={sidebarWidth}
-										onMouseDown={handleResizeStart("sidebar")}
-										onKeyDown={handleResizeKeyDown("sidebar")}
-										className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
-										style={{
-											left: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
-											width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
-										}}
-									>
-										<span
-											aria-hidden="true"
-											className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
-												isSidebarResizing
-													? "w-[2px] bg-app-foreground/80 shadow-[0_0_12px_rgba(250,249,246,0.2)]"
-													: "w-px bg-app-border group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
-											}`}
-										/>
-									</div>
-								)}
-							</>
-						)}
-
-						<section
-							aria-label="Workspace panel"
-							className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-app-elevated"
-						>
-							{workspaceViewMode === "conversation" && (
-								<div
-									aria-label="Workspace panel drag region"
-									className="absolute inset-x-0 top-0 z-10 h-9 bg-transparent"
-									data-tauri-drag-region
-								/>
+									)}
+								</>
 							)}
 
-							<div
-								aria-label="Workspace viewport"
-								className="flex min-h-0 flex-1 flex-col bg-app-elevated"
+							<section
+								aria-label="Workspace panel"
+								className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-app-elevated"
 							>
-								{workspaceViewMode === "editor" && editorSession ? (
-									<WorkspaceEditorSurface
-										editorSession={editorSession}
-										workspaceRootPath={workspaceRootPath}
-										onChangeSession={handleEditorSessionChange}
-										onExit={handleExitEditorMode}
-										onError={handleEditorSurfaceError}
-									/>
-								) : (
-									<WorkspaceConversationContainer
-										selectedWorkspaceId={selectedWorkspaceId}
-										displayedWorkspaceId={displayedWorkspaceId}
-										selectedSessionId={selectedSessionId}
-										displayedSessionId={displayedSessionId}
-										onSelectSession={handleSelectSession}
-										onResolveDisplayedSession={handleResolveDisplayedSession}
-										onSendingWorkspacesChange={setSendingWorkspaceIds}
-										headerLeading={
-											sidebarCollapsed ? (
-												<button
-													type="button"
-													aria-label="Expand sidebar"
-													onClick={() => setSidebarCollapsed(false)}
-													className="flex size-5 items-center justify-center rounded text-app-muted transition-colors hover:text-app-foreground"
-												>
-													<PanelLeftOpen
-														className="size-3.5"
-														strokeWidth={1.8}
-													/>
-												</button>
-											) : undefined
-										}
-										headerActions={
-											selectedWorkspaceId && preferredEditor ? (
-												<DropdownMenu>
-													<DropdownMenuTrigger className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] font-medium text-app-muted transition-colors hover:text-app-foreground focus-visible:outline-none">
-														<EditorIcon
-															editorId={preferredEditor.id}
-															className="size-3.5"
-														/>
-														<span>{preferredEditor.name}</span>
-														<ChevronDown
-															className="size-2.5 opacity-50"
-															strokeWidth={2}
-														/>
-													</DropdownMenuTrigger>
-													<DropdownMenuContent
-														side="bottom"
-														align="end"
-														sideOffset={6}
-														className="min-w-[11rem]"
-													>
-														{ALL_EDITORS.map((editor) => (
-															<DropdownMenuItem
-																key={editor.id}
-																onClick={() => {
-																	setPreferredEditorId(editor.id);
-																	void openWorkspaceInEditor(
-																		selectedWorkspaceId,
-																		editor.id,
-																	).catch((e) =>
-																		pushWorkspaceToast(
-																			String(e),
-																			`Failed to open ${editor.name}`,
-																		),
-																	);
-																}}
-																className="flex items-center gap-2"
-															>
-																<EditorIcon
-																	editorId={editor.id}
-																	className="size-3.5 shrink-0"
-																/>
-																<span className="flex-1 font-medium">
-																	{editor.name}
-																</span>
-																{editor.id === preferredEditor.id && (
-																	<Check className="ml-auto size-3 text-app-foreground-soft" />
-																)}
-															</DropdownMenuItem>
-														))}
-													</DropdownMenuContent>
-												</DropdownMenu>
-											) : undefined
-										}
+								{workspaceViewMode === "conversation" && (
+									<div
+										aria-label="Workspace panel drag region"
+										className="absolute inset-x-0 top-0 z-10 h-9 bg-transparent"
+										data-tauri-drag-region
 									/>
 								)}
-							</div>
-							{workspaceViewMode === "conversation" && <ChatCacheDebugHud />}
-						</section>
 
-						<div
-							role="separator"
-							tabIndex={0}
-							aria-label="Resize inspector sidebar"
-							aria-orientation="vertical"
-							aria-valuemin={MIN_SIDEBAR_WIDTH}
-							aria-valuemax={MAX_SIDEBAR_WIDTH}
-							aria-valuenow={inspectorWidth}
-							onMouseDown={handleResizeStart("inspector")}
-							onKeyDown={handleResizeKeyDown("inspector")}
-							className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
-							style={{
-								right: `${inspectorWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
-								width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
-							}}
-						>
-							<span
-								aria-hidden="true"
-								className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
-									isInspectorResizing
-										? "w-[2px] bg-app-foreground/80 shadow-[0_0_12px_rgba(250,249,246,0.2)]"
-										: "w-px bg-app-border group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
-								}`}
-							/>
-						</div>
-
-						<aside
-							aria-label="Inspector sidebar"
-							className="relative h-full shrink-0 overflow-hidden bg-app-sidebar"
-							style={{ width: `${inspectorWidth}px` }}
-						>
-							<WorkspaceInspectorSidebar
-								workspaceRootPath={workspaceRootPath}
-								editorMode={workspaceViewMode === "editor"}
-								activeEditorPath={editorSession?.path ?? null}
-								onOpenEditorFile={handleOpenEditorFile}
-							/>
-						</aside>
-					</div>
-				</main>
-			)}
-			<ToastViewport />
-			{workspaceToasts.map((toast) => (
-				<Toast
-					key={toast.id}
-					open
-					variant={toast.variant ?? "destructive"}
-					duration={toast.persistent ? 999999999 : 4200}
-					onOpenChange={(open: boolean) => {
-						if (!open) {
-							dismissWorkspaceToast(toast.id);
-						}
-					}}
-					className={
-						toast.action
-							? "flex-col items-stretch gap-0 rounded-xl border border-app-border bg-app-sidebar p-0 shadow-xl"
-							: undefined
-					}
-				>
-					{toast.action ? (
-						<>
-							<div className="px-4 pt-4 pb-3">
-								<ToastTitle className="text-[13px] font-semibold text-app-foreground">
-									{toast.title}
-								</ToastTitle>
-								<ToastDescription className="mt-1.5 text-[12px] leading-relaxed text-app-muted">
-									{toast.description}
-								</ToastDescription>
-							</div>
-							<div className="flex items-center justify-end gap-2 border-t border-app-border/50 px-3 py-2.5">
-								<button
-									type="button"
-									onClick={() => dismissWorkspaceToast(toast.id)}
-									className="rounded-md px-3 py-1.5 text-[12px] font-medium text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.06]"
+								<div
+									aria-label="Workspace viewport"
+									className="flex min-h-0 flex-1 flex-col bg-app-elevated"
 								>
-									Dismiss
-								</button>
-								<button
-									type="button"
-									onClick={() => {
-										toast.action?.onClick();
-										dismissWorkspaceToast(toast.id);
-									}}
-									className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors ${
-										toast.action.destructive
-											? "bg-red-500 text-white hover:bg-red-600"
-											: "bg-app-foreground/10 text-app-foreground hover:bg-app-foreground/20"
+									{workspaceViewMode === "editor" && editorSession ? (
+										<WorkspaceEditorSurface
+											editorSession={editorSession}
+											workspaceRootPath={workspaceRootPath}
+											onChangeSession={handleEditorSessionChange}
+											onExit={handleExitEditorMode}
+											onError={handleEditorSurfaceError}
+										/>
+									) : (
+										<WorkspaceConversationContainer
+											selectedWorkspaceId={selectedWorkspaceId}
+											displayedWorkspaceId={displayedWorkspaceId}
+											selectedSessionId={selectedSessionId}
+											displayedSessionId={displayedSessionId}
+											onSelectSession={handleSelectSession}
+											onResolveDisplayedSession={handleResolveDisplayedSession}
+											onSendingWorkspacesChange={setSendingWorkspaceIds}
+											headerLeading={
+												sidebarCollapsed ? (
+													<button
+														type="button"
+														aria-label="Expand sidebar"
+														onClick={() => setSidebarCollapsed(false)}
+														className="flex size-5 items-center justify-center rounded text-app-muted transition-colors hover:text-app-foreground"
+													>
+														<PanelLeftOpen
+															className="size-3.5"
+															strokeWidth={1.8}
+														/>
+													</button>
+												) : undefined
+											}
+											headerActions={
+												selectedWorkspaceId && preferredEditor ? (
+													<DropdownMenu>
+														<DropdownMenuTrigger className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] font-medium text-app-muted transition-colors hover:text-app-foreground focus-visible:outline-none">
+															<EditorIcon
+																editorId={preferredEditor.id}
+																className="size-3.5"
+															/>
+															<span>{preferredEditor.name}</span>
+															<ChevronDown
+																className="size-2.5 opacity-50"
+																strokeWidth={2}
+															/>
+														</DropdownMenuTrigger>
+														<DropdownMenuContent
+															side="bottom"
+															align="end"
+															sideOffset={6}
+															className="min-w-[11rem]"
+														>
+															{ALL_EDITORS.map((editor) => (
+																<DropdownMenuItem
+																	key={editor.id}
+																	onClick={() => {
+																		setPreferredEditorId(editor.id);
+																		void openWorkspaceInEditor(
+																			selectedWorkspaceId,
+																			editor.id,
+																		).catch((e) =>
+																			pushWorkspaceToast(
+																				String(e),
+																				`Failed to open ${editor.name}`,
+																			),
+																		);
+																	}}
+																	className="flex items-center gap-2"
+																>
+																	<EditorIcon
+																		editorId={editor.id}
+																		className="size-3.5 shrink-0"
+																	/>
+																	<span className="flex-1 font-medium">
+																		{editor.name}
+																	</span>
+																	{editor.id === preferredEditor.id && (
+																		<Check className="ml-auto size-3 text-app-foreground-soft" />
+																	)}
+																</DropdownMenuItem>
+															))}
+														</DropdownMenuContent>
+													</DropdownMenu>
+												) : undefined
+											}
+										/>
+									)}
+								</div>
+								{workspaceViewMode === "conversation" && <ChatCacheDebugHud />}
+							</section>
+
+							<div
+								role="separator"
+								tabIndex={0}
+								aria-label="Resize inspector sidebar"
+								aria-orientation="vertical"
+								aria-valuemin={MIN_SIDEBAR_WIDTH}
+								aria-valuemax={MAX_SIDEBAR_WIDTH}
+								aria-valuenow={inspectorWidth}
+								onMouseDown={handleResizeStart("inspector")}
+								onKeyDown={handleResizeKeyDown("inspector")}
+								className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+								style={{
+									right: `${inspectorWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
+									width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
+								}}
+							>
+								<span
+									aria-hidden="true"
+									className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
+										isInspectorResizing
+											? "w-[2px] bg-app-foreground/80 shadow-[0_0_12px_rgba(250,249,246,0.2)]"
+											: "w-px bg-app-border group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
 									}`}
-								>
-									{toast.action.label}
-								</button>
+								/>
 							</div>
-							<ToastClose
-								aria-label="Dismiss notification"
-								className="absolute right-2 top-2"
-							/>
-						</>
-					) : (
-						<>
-							<div className="grid gap-1">
-								<ToastTitle>{toast.title}</ToastTitle>
-								<ToastDescription>{toast.description}</ToastDescription>
-							</div>
-							<ToastClose aria-label="Dismiss notification" />
-						</>
-					)}
-				</Toast>
-			))}
-		</ToastProvider>
+
+							<aside
+								aria-label="Inspector sidebar"
+								className="relative h-full shrink-0 overflow-hidden bg-app-sidebar"
+								style={{ width: `${inspectorWidth}px` }}
+							>
+								<WorkspaceInspectorSidebar
+									workspaceRootPath={workspaceRootPath}
+									editorMode={workspaceViewMode === "editor"}
+									activeEditorPath={editorSession?.path ?? null}
+									onOpenEditorFile={handleOpenEditorFile}
+								/>
+							</aside>
+						</div>
+					</main>
+				)}
+				<ToastViewport />
+				{workspaceToasts.map((toast) => (
+					<Toast
+						key={toast.id}
+						open
+						variant={toast.variant ?? "destructive"}
+						duration={toast.persistent ? 999999999 : 4200}
+						onOpenChange={(open: boolean) => {
+							if (!open) {
+								dismissWorkspaceToast(toast.id);
+							}
+						}}
+						className={
+							toast.action
+								? "flex-col items-stretch gap-0 rounded-xl border border-app-border bg-app-sidebar p-0 shadow-xl"
+								: undefined
+						}
+					>
+						{toast.action ? (
+							<>
+								<div className="px-4 pt-4 pb-3">
+									<ToastTitle className="text-[13px] font-semibold text-app-foreground">
+										{toast.title}
+									</ToastTitle>
+									<ToastDescription className="mt-1.5 text-[12px] leading-relaxed text-app-muted">
+										{toast.description}
+									</ToastDescription>
+								</div>
+								<div className="flex items-center justify-end gap-2 border-t border-app-border/50 px-3 py-2.5">
+									<button
+										type="button"
+										onClick={() => dismissWorkspaceToast(toast.id)}
+										className="rounded-md px-3 py-1.5 text-[12px] font-medium text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.06]"
+									>
+										Dismiss
+									</button>
+									<button
+										type="button"
+										onClick={() => {
+											toast.action?.onClick();
+											dismissWorkspaceToast(toast.id);
+										}}
+										className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors ${
+											toast.action.destructive
+												? "bg-red-500 text-white hover:bg-red-600"
+												: "bg-app-foreground/10 text-app-foreground hover:bg-app-foreground/20"
+										}`}
+									>
+										{toast.action.label}
+									</button>
+								</div>
+								<ToastClose
+									aria-label="Dismiss notification"
+									className="absolute right-2 top-2"
+								/>
+							</>
+						) : (
+							<>
+								<div className="grid gap-1">
+									<ToastTitle>{toast.title}</ToastTitle>
+									<ToastDescription>{toast.description}</ToastDescription>
+								</div>
+								<ToastClose aria-label="Dismiss notification" />
+							</>
+						)}
+					</Toast>
+				))}
+			</ToastProvider>
+		</TooltipProvider>
 	);
 }
 
