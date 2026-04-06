@@ -416,7 +416,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 														);
 													if (
 														textEl &&
-														textEl.scrollWidth > textEl.clientWidth
+														textEl.scrollWidth > textEl.clientWidth - 2
 													) {
 														e.currentTarget.title =
 															displaySessionTitle(session);
@@ -430,7 +430,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 												onFocus={() => {
 													onPrefetchSession?.(session.id);
 												}}
-												className="group/tab relative w-[10rem] shrink-0 justify-start gap-1.5 overflow-hidden pr-5 text-app-foreground-soft data-[state=active]:text-app-foreground"
+												className="group/tab relative w-[7rem] shrink-0 justify-start gap-1.5 overflow-hidden pr-5 text-app-foreground-soft data-[state=active]:text-app-foreground"
 											>
 												<SessionProviderIcon
 													agentType={
