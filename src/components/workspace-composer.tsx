@@ -23,6 +23,7 @@ import {
 	ImageBadgeNode,
 } from "./composer-editor/image-badge-node";
 import { AutoResizePlugin } from "./composer-editor/plugins/auto-resize-plugin";
+import { DropFilePlugin } from "./composer-editor/plugins/drop-file-plugin";
 import { EditablePlugin } from "./composer-editor/plugins/editable-plugin";
 import { EditorRefPlugin } from "./composer-editor/plugins/editor-ref-plugin";
 import { HasContentPlugin } from "./composer-editor/plugins/has-content-plugin";
@@ -239,6 +240,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				<HistoryPlugin />
 				<SubmitPlugin onSubmit={handleSubmit} disabled={sendDisabled} />
 				<PasteImagePlugin />
+				<DropFilePlugin />
 				<AutoResizePlugin minHeight={64} maxHeight={240} />
 				<EditorRefPlugin editorRef={editorRef} />
 				<EditablePlugin disabled={disabled} />

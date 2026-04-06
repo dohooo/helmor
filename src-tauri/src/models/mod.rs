@@ -526,6 +526,41 @@ pub fn stat_editor_file(path: String) -> CmdResult<editor_files::EditorFileStatR
     Ok(editor_files::stat_editor_file(&path)?)
 }
 
+/// Save base64-encoded image data from clipboard paste to a temporary file.
+/// Returns the absolute path to the saved file.
+#[tauri::command]
+pub fn save_pasted_image(data: String, media_type: String) -> CmdResult<String> {
+    use std::fs;
+    use uuid::Uuid;
+
+    let ext = match media_type.as_str() {
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => "png",
+    };
+
+    let paste_dir = crate::data_dir::data_dir()?.join("paste-cache");
+    fs::create_dir_all(&paste_dir).context("Failed to create paste-cache directory")?;
+
+    let filename = format!("paste-{}.{}", Uuid::new_v4(), ext);
+    let filepath = paste_dir.join(&filename);
+
+    let bytes = base64_decode(&data).context("Invalid base64 data")?;
+
+    fs::write(&filepath, &bytes)
+        .with_context(|| format!("Failed to write pasted image to {}", filepath.display()))?;
+
+    Ok(filepath.to_string_lossy().to_string())
+}
+
+fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(input)
+        .map_err(|e| anyhow::anyhow!("base64 decode error: {e}"))
+}
+
 #[tauri::command]
 pub fn update_session_settings(
     session_id: String,
