@@ -29,3 +29,4 @@ dist-ssr
 sidecar/dist/
 helmor.db
 *.bun-build
+autoresearch-results.tsv
