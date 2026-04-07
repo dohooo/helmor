@@ -1,0 +1,34 @@
+---
+source: tests/pipeline_streams.rs
+expression: snapshot
+input_file: tests/fixtures/streams/stream-thinking-text.jsonl
+---
+line_count: 25
+checkpoint_count: 3
+checkpoints:
+  - line_index: 13
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+  - line_index: 19
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+  - line_index: 24
+    event_type: result
+    roles:
+      - assistant
+      - system
+    last_part_types:
+      - text
+final_state:
+  message_count: 2
+  roles:
+    - assistant
+    - system
+  total_parts: 3

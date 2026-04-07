@@ -1,0 +1,12 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: system
+  id: r1
+  content_length: 1
+  content:
+    - type: text
+      text: 1.5s
+  status: ~
+  streaming: ~

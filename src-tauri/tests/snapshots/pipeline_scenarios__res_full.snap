@@ -1,0 +1,12 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: system
+  id: r1
+  content_length: 1
+  content:
+    - type: text
+      text: "4.5s • in 1,234 • out 567 • $0.0123"
+  status: ~
+  streaming: ~

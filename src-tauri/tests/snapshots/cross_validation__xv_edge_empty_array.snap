@@ -1,5 +1,0 @@
----
-source: tests/cross_validation.rs
-expression: "run(vec![])"
----
-[]

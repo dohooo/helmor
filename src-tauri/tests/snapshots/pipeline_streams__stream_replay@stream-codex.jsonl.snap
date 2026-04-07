@@ -1,0 +1,14 @@
+---
+source: tests/pipeline_streams.rs
+expression: snapshot
+input_file: tests/fixtures/streams/stream-codex.jsonl
+---
+line_count: 4
+checkpoint_count: 0
+checkpoints: []
+final_state:
+  message_count: 2
+  roles:
+    - assistant
+    - system
+  total_parts: 4

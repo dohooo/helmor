@@ -1,0 +1,32 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: a1
+  content_length: 1
+  content:
+    - type: text
+      text: hello
+  status:
+    type: complete
+    reason: stop
+  streaming: ~
+- role: user
+  id: u1
+  content_length: 1
+  content:
+    - type: text
+      text: more please
+  status: ~
+  streaming: ~
+- role: assistant
+  id: a2
+  content_length: 1
+  content:
+    - type: text
+      text: world
+  status:
+    type: complete
+    reason: stop
+  streaming: ~
