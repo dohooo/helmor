@@ -102,11 +102,7 @@ impl MessagePipeline {
                 id: r.id.clone(),
                 role: r.role.clone(),
                 raw_json: r.content.clone(),
-                parsed: if r.content_is_json {
-                    r.parsed_content.clone()
-                } else {
-                    None
-                },
+                parsed: r.parsed_content.clone(),
                 created_at: r.created_at.clone(),
                 is_streaming: false,
             })

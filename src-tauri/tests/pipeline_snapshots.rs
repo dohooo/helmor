@@ -41,24 +41,35 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Serializable form of `HistoricalRecord` (the producer-side input).
+///
+/// Accepts the legacy `content_is_json` field for fixtures generated before
+/// the user_prompt migration; the field is ignored on read since we now
+/// always derive parsed_content from content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct HistoricalRecordFixture {
     id: String,
     role: String,
     content: String,
-    content_is_json: bool,
+    #[serde(default)]
     parsed_content: Option<serde_json::Value>,
     created_at: String,
+    /// Legacy field — kept for deserialization of old fixtures, ignored.
+    #[serde(default, rename = "content_is_json")]
+    _legacy_content_is_json: Option<bool>,
 }
 
 impl HistoricalRecordFixture {
     fn into_record(self) -> HistoricalRecord {
+        // If the fixture didn't pre-compute parsed_content, derive it from
+        // content (matches the production loader's behavior).
+        let parsed_content = self
+            .parsed_content
+            .or_else(|| serde_json::from_str(&self.content).ok());
         HistoricalRecord {
             id: self.id,
             role: self.role,
             content: self.content,
-            content_is_json: self.content_is_json,
-            parsed_content: self.parsed_content,
+            parsed_content,
             created_at: self.created_at,
         }
     }

@@ -28,7 +28,6 @@ struct HistoricalRecordFixture {
     id: String,
     role: String,
     content: String,
-    content_is_json: bool,
     parsed_content: Option<Value>,
     created_at: String,
 }
@@ -110,7 +109,6 @@ fn run(session_id: &str, fixture_name: &str, limit: Option<usize>) -> Result<()>
             id: r.id.clone(),
             role: r.role.clone(),
             content: r.content.clone(),
-            content_is_json: r.content_is_json,
             parsed_content: r.parsed_content.clone(),
             created_at: r.created_at.clone(),
         })
@@ -162,25 +160,15 @@ fn load_session_records(session_id: &str) -> Result<Vec<HistoricalRecord>> {
     let mut records = Vec::new();
     for row in rows {
         let (id, role, content, created_at) = row?;
-        let parsed_content = parse_json_content(&content);
-        let content_is_json = parsed_content.is_some();
+        let parsed_content = serde_json::from_str(&content).ok();
         records.push(HistoricalRecord {
             id,
             role,
             content,
-            content_is_json,
             parsed_content,
             created_at,
         });
     }
 
     Ok(records)
-}
-
-fn parse_json_content(content: &str) -> Option<Value> {
-    let first_byte = content.bytes().find(|b| !b.is_ascii_whitespace())?;
-    if !matches!(first_byte, b'{' | b'[') {
-        return None;
-    }
-    serde_json::from_str(content).ok()
 }

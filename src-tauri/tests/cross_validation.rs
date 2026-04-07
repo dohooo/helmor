@@ -232,22 +232,16 @@ fn normalize_all(msgs: &[ThreadMessageLike]) -> Vec<NormThreadMessage> {
 }
 
 // ============================================================================
-// Builders — produce HistoricalRecord with parsed_content pre-computed
-// (the production loader in `sessions.rs` does the same parse upstream).
+// Builders — produce HistoricalRecord with parsed_content auto-derived from
+// content. Mirrors the production loader in `sessions.rs::list_session_*`.
 // ============================================================================
 
-fn make_record(id: &str, role: &str, content: &str, content_is_json: bool) -> HistoricalRecord {
-    let parsed_content = if content_is_json {
-        serde_json::from_str::<Value>(content).ok()
-    } else {
-        None
-    };
+fn make_record(id: &str, role: &str, content: &str) -> HistoricalRecord {
     HistoricalRecord {
         id: id.to_string(),
         role: role.to_string(),
         content: content.to_string(),
-        content_is_json,
-        parsed_content,
+        parsed_content: serde_json::from_str::<Value>(content).ok(),
         created_at: "2026-04-06T00:00:00.000Z".to_string(),
     }
 }
@@ -264,12 +258,7 @@ fn assistant_json(id: &str, blocks: Value, extra: Option<Value>) -> HistoricalRe
             }
         }
     }
-    make_record(
-        id,
-        "assistant",
-        &serde_json::to_string(&parsed).unwrap(),
-        true,
-    )
+    make_record(id, "assistant", &serde_json::to_string(&parsed).unwrap())
 }
 
 fn user_json(id: &str, blocks: Value) -> HistoricalRecord {
@@ -277,7 +266,14 @@ fn user_json(id: &str, blocks: Value) -> HistoricalRecord {
         "type": "user",
         "message": { "role": "user", "content": blocks },
     });
-    make_record(id, "user", &serde_json::to_string(&parsed).unwrap(), true)
+    make_record(id, "user", &serde_json::to_string(&parsed).unwrap())
+}
+
+/// New post-migration form for real human prompts:
+/// `{"type":"user_prompt","text":"..."}`
+fn user_prompt(id: &str, text: &str) -> HistoricalRecord {
+    let parsed = json!({ "type": "user_prompt", "text": text });
+    make_record(id, "user", &serde_json::to_string(&parsed).unwrap())
 }
 
 fn system_json(id: &str, extra: Value) -> HistoricalRecord {
@@ -287,7 +283,7 @@ fn system_json(id: &str, extra: Value) -> HistoricalRecord {
             parsed[k] = v.clone();
         }
     }
-    make_record(id, "system", &serde_json::to_string(&parsed).unwrap(), true)
+    make_record(id, "system", &serde_json::to_string(&parsed).unwrap())
 }
 
 fn result_json(id: &str, extra: Value) -> HistoricalRecord {
@@ -297,12 +293,7 @@ fn result_json(id: &str, extra: Value) -> HistoricalRecord {
             parsed[k] = v.clone();
         }
     }
-    make_record(
-        id,
-        "assistant",
-        &serde_json::to_string(&parsed).unwrap(),
-        true,
-    )
+    make_record(id, "assistant", &serde_json::to_string(&parsed).unwrap())
 }
 
 fn run(msgs: Vec<HistoricalRecord>) -> Vec<NormThreadMessage> {
@@ -320,7 +311,6 @@ fn xv_err_content_string() {
         "e1",
         "error",
         &serde_json::to_string(&parsed).unwrap(),
-        true,
     )];
     assert_yaml_snapshot!(run(msgs));
 }
@@ -332,21 +322,20 @@ fn xv_err_message_string() {
         "e1",
         "error",
         &serde_json::to_string(&parsed).unwrap(),
-        true,
     )];
     assert_yaml_snapshot!(run(msgs));
 }
 
 #[test]
 fn xv_err_role_plain_text() {
-    let msgs = vec![make_record("e1", "error", "crash!", false)];
+    let msgs = vec![make_record("e1", "error", "crash!")];
     assert_yaml_snapshot!(run(msgs));
 }
 
 #[test]
 fn xv_err_raw_json_content() {
     let raw = serde_json::to_string(&json!({ "content": "inner error" })).unwrap();
-    let msgs = vec![make_record("e1", "error", &raw, false)];
+    let msgs = vec![make_record("e1", "error", &raw)];
     assert_yaml_snapshot!(run(msgs));
 }
 
@@ -357,7 +346,6 @@ fn xv_err_empty() {
         "e1",
         "error",
         &serde_json::to_string(&parsed).unwrap(),
-        true,
     )];
     assert_yaml_snapshot!(run(msgs));
 }
@@ -368,7 +356,28 @@ fn xv_err_empty() {
 
 #[test]
 fn xv_user_plain_text() {
-    let msgs = vec![make_record("u1", "user", "hello assistant", false)];
+    // Legacy / unmigrated row form. After the user_prompt migration the
+    // production write path uses `user_prompt(...)` instead, but the loader
+    // still tolerates a corrupted row by leaving parsed_content = None.
+    let msgs = vec![make_record("u1", "user", "hello assistant")];
+    assert_yaml_snapshot!(run(msgs));
+}
+
+#[test]
+fn xv_user_prompt_wrapped() {
+    // Post-migration form: real human prompt wrapped as
+    // {"type":"user_prompt","text":"..."}.
+    let msgs = vec![user_prompt("u1", "hello assistant")];
+    assert_yaml_snapshot!(run(msgs));
+}
+
+#[test]
+fn xv_user_prompt_with_brace_content() {
+    // Latent-bug regression: prompts that happened to start with `{` were
+    // mis-rendered as system "Event" because the sniff classified them as
+    // JSON but they had no `type` field. After wrapping, the literal text
+    // is preserved verbatim inside `text`.
+    let msgs = vec![user_prompt("u1", r#"{"foo":"bar"}"#)];
     assert_yaml_snapshot!(run(msgs));
 }
 
@@ -407,8 +416,8 @@ fn xv_user_mixed_text_and_tool_result() {
 #[test]
 fn xv_user_multi_plain_text() {
     let msgs = vec![
-        make_record("u1", "user", "first", false),
-        make_record("u2", "user", "second", false),
+        make_record("u1", "user", "first"),
+        make_record("u2", "user", "second"),
     ];
     assert_yaml_snapshot!(run(msgs));
 }
@@ -490,12 +499,7 @@ fn xv_edge_100_alternating() {
     let mut msgs: Vec<HistoricalRecord> = Vec::new();
     for i in 0..100 {
         if i % 2 == 0 {
-            msgs.push(make_record(
-                &format!("u{i}"),
-                "user",
-                &format!("msg {i}"),
-                false,
-            ));
+            msgs.push(user_prompt(&format!("u{i}"), &format!("msg {i}")));
         } else {
             msgs.push(assistant_json(
                 &format!("a{i}"),
@@ -531,7 +535,6 @@ fn xv_edge_unknown_type() {
         "x1",
         "assistant",
         &serde_json::to_string(&parsed).unwrap(),
-        true,
     )];
     assert_yaml_snapshot!(run(msgs));
 }
@@ -543,19 +546,16 @@ fn xv_edge_no_type_no_role_match() {
         "x1",
         "assistant",
         &serde_json::to_string(&parsed).unwrap(),
-        true,
     )];
     assert_yaml_snapshot!(run(msgs));
 }
 
 #[test]
 fn xv_edge_non_json_assistant_fallback() {
-    let msgs = vec![make_record(
-        "a1",
-        "assistant",
-        "plain-text streaming",
-        false,
-    )];
+    // Legacy / corrupted row: assistant role with non-JSON content. The
+    // production write path always serializes assistant turns as JSON, but
+    // the loader still tolerates this case by falling back to plain text.
+    let msgs = vec![make_record("a1", "assistant", "plain-text streaming")];
     assert_yaml_snapshot!(run(msgs));
 }
 
@@ -571,8 +571,9 @@ fn xv_edge_streaming_flag() {
 
 #[test]
 fn xv_edge_non_json_content_with_malformed_json() {
-    // content looks like JSON but content_is_json=false → treated as plain text
-    let msgs = vec![make_record("a1", "assistant", "{not really json", false)];
+    // Content looks like JSON but isn't parseable → parsed_content stays
+    // None and the adapter falls back to the plain-text rendering path.
+    let msgs = vec![make_record("a1", "assistant", "{not really json")];
     assert_yaml_snapshot!(run(msgs));
 }
 
@@ -645,7 +646,6 @@ fn xv_asst_empty_content_fallback() {
         "a1",
         "assistant",
         &serde_json::to_string(&parsed).unwrap(),
-        true,
     )];
     assert_yaml_snapshot!(run(msgs));
 }
@@ -674,7 +674,7 @@ fn xv_sys_no_subtype() {
 fn xv_merge_broken_by_real_user() {
     let msgs = vec![
         assistant_json("a1", json!([{ "type": "text", "text": "hello" }]), None),
-        make_record("u1", "user", "more please", false),
+        user_prompt("u1", "more please"),
         assistant_json("a2", json!([{ "type": "text", "text": "world" }]), None),
     ];
     assert_yaml_snapshot!(run(msgs));

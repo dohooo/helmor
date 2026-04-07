@@ -148,31 +148,22 @@ fn list_session_historical_records_with_connection(
 
     let rows = statement.query_map([session_id], |row| {
         let content: String = row.get(2)?;
-        let parsed_content = parse_session_message_content(&content);
+        // After the user_prompt migration the column is JSON-only. We still
+        // try-parse instead of unwrapping so a corrupted row can't bring the
+        // whole load down — `None` flows through to the adapter which renders
+        // a system "Event" placeholder.
+        let parsed_content = serde_json::from_str::<Value>(&content).ok();
 
         Ok(HistoricalRecord {
             id: row.get(0)?,
             role: row.get(1)?,
             content,
-            content_is_json: parsed_content.is_some(),
             parsed_content,
             created_at: row.get(3)?,
         })
     })?;
 
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
-}
-
-fn parse_session_message_content(content: &str) -> Option<Value> {
-    if !content
-        .bytes()
-        .find(|byte| !byte.is_ascii_whitespace())
-        .is_some_and(|byte| matches!(byte, b'{' | b'['))
-    {
-        return None;
-    }
-
-    serde_json::from_str::<Value>(content).ok()
 }
 
 pub fn list_session_attachments(session_id: &str) -> Result<Vec<SessionAttachmentRecord>> {
@@ -625,7 +616,11 @@ mod tests {
     }
 
     #[test]
-    fn message_json_detection() {
+    fn loader_parses_json_content_and_tolerates_unparseable_rows() {
+        // After the user_prompt migration, every new row holds JSON. The
+        // loader still try-parses (vs unwrap) so a corrupted/legacy row
+        // can't bring the whole load down — it falls through with
+        // parsed_content = None and the adapter renders a placeholder.
         let (conn, _dir) = test_db();
         seed(&conn);
         conn.execute(
@@ -636,32 +631,19 @@ mod tests {
             "INSERT INTO session_messages (id, session_id, role, content) VALUES ('m2', 's1', 'user', 'plain text')",
             [],
         ).unwrap();
-        let content: String = conn
-            .query_row(
-                "SELECT content FROM session_messages WHERE id = 'm1'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        let parsed: Result<serde_json::Value, _> = serde_json::from_str(&content);
-        assert!(parsed.is_ok());
-
-        let content2: String = conn
-            .query_row(
-                "SELECT content FROM session_messages WHERE id = 'm2'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        let parsed2: Result<serde_json::Value, _> = serde_json::from_str(&content2);
-        assert!(parsed2.is_err());
 
         let records = list_session_historical_records_with_connection(&conn, "s1").unwrap();
-        let json_record = records.iter().find(|record| record.id == "m1").unwrap();
-        let text_record = records.iter().find(|record| record.id == "m2").unwrap();
+        let json_record = records.iter().find(|r| r.id == "m1").unwrap();
+        let text_record = records.iter().find(|r| r.id == "m2").unwrap();
 
-        assert!(json_record.content_is_json);
-        assert!(!text_record.content_is_json);
+        assert!(
+            json_record.parsed_content.is_some(),
+            "valid JSON content should parse"
+        );
+        assert!(
+            text_record.parsed_content.is_none(),
+            "non-JSON content should leave parsed_content None instead of erroring"
+        );
     }
 
     #[test]

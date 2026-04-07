@@ -35,11 +35,7 @@ pub fn convert_historical(records: &[HistoricalRecord]) -> Vec<ThreadMessageLike
             id: r.id.clone(),
             role: r.role.clone(),
             raw_json: r.content.clone(),
-            parsed: if r.content_is_json {
-                r.parsed_content.clone()
-            } else {
-                None
-            },
+            parsed: r.parsed_content.clone(),
             created_at: r.created_at.clone(),
             is_streaming: false,
         })
@@ -147,6 +143,26 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
                     reason: Some("stop".to_string()),
                 }),
                 streaming: if is_streaming { Some(true) } else { None },
+            });
+            i += 1;
+            continue;
+        }
+
+        // user_prompt — a real human-typed prompt (post-migration form).
+        // Distinct from `type=user`, which is the SDK's tool_result wrapper.
+        if msg_type == Some("user_prompt") {
+            let text = parsed
+                .and_then(|p| p.get("text"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            result.push(ThreadMessageLike {
+                role: MessageRole::User,
+                id: Some(msg.id.clone()),
+                created_at: Some(msg.created_at.clone()),
+                content: vec![ExtendedMessagePart::Basic(MessagePart::Text { text })],
+                status: None,
+                streaming: None,
             });
             i += 1;
             continue;

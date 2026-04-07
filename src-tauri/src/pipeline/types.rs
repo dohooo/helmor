@@ -183,12 +183,16 @@ pub struct CollectedTurn {
 
 /// Input record for converting historical (DB-persisted) messages through
 /// the adapter pipeline. Mirrors the subset of DB fields needed for rendering.
+///
+/// `parsed_content` is always populated when the row holds valid JSON. After
+/// the user_prompt migration the `content` column is JSON-only, so the only
+/// way `parsed_content` can be `None` is a corrupted row — the adapter falls
+/// back to a system "Event" placeholder in that case.
 #[derive(Debug, Clone)]
 pub struct HistoricalRecord {
     pub id: String,
     pub role: String,
     pub content: String,
-    pub content_is_json: bool,
     pub parsed_content: Option<Value>,
     pub created_at: String,
 }

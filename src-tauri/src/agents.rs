@@ -837,22 +837,34 @@ pub(crate) fn resolve_working_directory(provided: Option<&str>) -> Result<PathBu
 
 /// Persist the user's prompt as the first message of the exchange.
 /// Called once at stream start, before entering the event loop.
+///
+/// The prompt is wrapped as `{"type":"user_prompt","text":"..."}` so the
+/// `content` column always holds JSON. This:
+/// - removes the "is content JSON or plain text" union type from the schema
+/// - distinguishes a real human prompt from the SDK's tool_result-as-user
+///   wrappers (which use `type=user`), so the adapter can handle each
+///   without sniffing the first byte.
 fn persist_user_message(conn: &Connection, ctx: &ExchangeContext, prompt: &str) -> Result<()> {
     let now = current_timestamp_string()?;
     let user_message_id = ctx.user_message_id.clone();
+    let content = serde_json::json!({
+        "type": "user_prompt",
+        "text": prompt,
+    })
+    .to_string();
 
     conn.execute(
         r#"
             INSERT INTO session_messages (
               id, session_id, role, content, created_at, sent_at,
-              full_message, model, last_assistant_message_id, turn_id,
+              model, last_assistant_message_id, turn_id,
               is_resumable_message
-            ) VALUES (?1, ?2, 'user', ?3, ?4, ?4, ?3, ?5, ?6, ?7, 0)
+            ) VALUES (?1, ?2, 'user', ?3, ?4, ?4, ?5, ?6, ?7, 0)
             "#,
         params![
             user_message_id,
             ctx.helmor_session_id,
-            prompt,
+            content,
             now,
             ctx.model_id,
             ctx.assistant_sdk_message_id,
@@ -878,8 +890,8 @@ fn persist_turn_message(
         r#"
             INSERT INTO session_messages (
               id, session_id, role, content, created_at, sent_at,
-              full_message, model, turn_id, is_resumable_message
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?4, ?6, ?7, 0)
+              model, turn_id, is_resumable_message
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, 0)
             "#,
         params![
             msg_id,
@@ -932,9 +944,9 @@ fn persist_result_and_finalize(
         r#"
             INSERT INTO session_messages (
               id, session_id, role, content, created_at, sent_at,
-              full_message, model, sdk_message_id, turn_id,
+              model, sdk_message_id, turn_id,
               is_resumable_message
-            ) VALUES (?1, ?2, 'assistant', ?3, ?4, ?4, ?3, ?5, ?6, ?7, 0)
+            ) VALUES (?1, ?2, 'assistant', ?3, ?4, ?4, ?5, ?6, ?7, 0)
             "#,
         params![
             result_message_id,
