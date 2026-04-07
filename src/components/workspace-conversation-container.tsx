@@ -23,6 +23,8 @@ import {
 import { WorkspaceComposerContainer } from "./workspace-composer-container";
 import { WorkspacePanelContainer } from "./workspace-panel-container";
 
+const EMPTY_IMAGES: string[] = [];
+
 type WorkspaceConversationContainerProps = {
 	selectedWorkspaceId: string | null;
 	displayedWorkspaceId: string | null;
@@ -516,6 +518,48 @@ export const WorkspaceConversationContainer = memo(
 			],
 		);
 
+		const handleSelectModel = useCallback(
+			(contextKey: string, modelId: string) => {
+				setComposerModelSelections((current) => ({
+					...current,
+					[contextKey]: modelId,
+				}));
+			},
+			[],
+		);
+
+		const handleSelectEffort = useCallback(
+			(contextKey: string, level: string) => {
+				setComposerEffortLevels((current) => ({
+					...current,
+					[contextKey]: level,
+				}));
+			},
+			[],
+		);
+
+		const handleTogglePlanMode = useCallback((contextKey: string) => {
+			setComposerPermissionModes((current) => ({
+				...current,
+				[contextKey]: current[contextKey] === "plan" ? "acceptEdits" : "plan",
+			}));
+		}, []);
+
+		const handleComposerSubmitWrapper = useCallback(
+			(payload: Parameters<typeof handleComposerSubmit>[0]) => {
+				void handleComposerSubmit(payload);
+			},
+			[handleComposerSubmit],
+		);
+
+		const restoreActive =
+			composerRestoreState?.contextKey === composerContextKey;
+		const restoreDraft = restoreActive ? composerRestoreState.draft : null;
+		const restoreImages = restoreActive
+			? composerRestoreState.images
+			: EMPTY_IMAGES;
+		const restoreNonce = restoreActive ? composerRestoreState.nonce : 0;
+
 		return (
 			<>
 				<WorkspacePanelContainer
@@ -541,47 +585,17 @@ export const WorkspaceConversationContainer = memo(
 							disabled={selectionPending}
 							sending={isSending}
 							sendError={activeSendError}
-							restoreDraft={
-								composerRestoreState?.contextKey === composerContextKey
-									? composerRestoreState.draft
-									: null
-							}
-							restoreImages={
-								composerRestoreState?.contextKey === composerContextKey
-									? composerRestoreState.images
-									: []
-							}
-							restoreNonce={
-								composerRestoreState?.contextKey === composerContextKey
-									? composerRestoreState.nonce
-									: 0
-							}
+							restoreDraft={restoreDraft}
+							restoreImages={restoreImages}
+							restoreNonce={restoreNonce}
 							modelSelections={composerModelSelections}
 							effortLevels={composerEffortLevels}
 							permissionModes={composerPermissionModes}
-							onSelectModel={(contextKey, modelId) => {
-								setComposerModelSelections((current) => ({
-									...current,
-									[contextKey]: modelId,
-								}));
-							}}
-							onSelectEffort={(contextKey, level) => {
-								setComposerEffortLevels((current) => ({
-									...current,
-									[contextKey]: level,
-								}));
-							}}
-							onTogglePlanMode={(contextKey) => {
-								setComposerPermissionModes((current) => ({
-									...current,
-									[contextKey]:
-										current[contextKey] === "plan" ? "acceptEdits" : "plan",
-								}));
-							}}
+							onSelectModel={handleSelectModel}
+							onSelectEffort={handleSelectEffort}
+							onTogglePlanMode={handleTogglePlanMode}
 							onSwitchSession={onSelectSession}
-							onSubmit={(payload) => {
-								void handleComposerSubmit(payload);
-							}}
+							onSubmit={handleComposerSubmitWrapper}
 							onStop={handleStopStream}
 						/>
 					</div>

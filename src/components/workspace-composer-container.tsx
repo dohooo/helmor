@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useMemo } from "react";
-import type { AgentModelOption } from "@/lib/api";
+import type { AgentModelOption, AgentModelSection } from "@/lib/api";
 import { createSession } from "@/lib/api";
 import {
 	agentModelSectionsQueryOptions,
@@ -15,6 +15,8 @@ import {
 	inferDefaultModelId,
 } from "@/lib/workspace-helpers";
 import { WorkspaceComposer } from "./workspace-composer";
+
+const EMPTY_MODEL_SECTIONS: AgentModelSection[] = [];
 
 type WorkspaceComposerContainerProps = {
 	displayedWorkspaceId: string | null;
@@ -74,7 +76,7 @@ export const WorkspaceComposerContainer = memo(
 			enabled: Boolean(displayedWorkspaceId),
 		});
 
-		const modelSections = modelSectionsQuery.data ?? [];
+		const modelSections = modelSectionsQuery.data ?? EMPTY_MODEL_SECTIONS;
 		const currentSession =
 			(sessionsQuery.data ?? []).find(
 				(session) => session.id === displayedSessionId,
@@ -157,41 +159,58 @@ export const WorkspaceComposerContainer = memo(
 			],
 		);
 
+		const workingDirectory = workspaceDetailQuery.data?.rootPath ?? null;
+		const handleComposerSubmit = useCallback(
+			(prompt: string, imagePaths: string[]) => {
+				if (!selectedModel) {
+					return;
+				}
+				onSubmit({
+					prompt,
+					imagePaths,
+					model: selectedModel,
+					workingDirectory,
+					effortLevel,
+					permissionMode,
+				});
+			},
+			[selectedModel, onSubmit, workingDirectory, effortLevel, permissionMode],
+		);
+
+		const handleSelectModelInner = useCallback(
+			(modelId: string) => {
+				void handleModelSelect(modelId);
+			},
+			[handleModelSelect],
+		);
+
+		const handleSelectEffortInner = useCallback(
+			(level: string) => {
+				onSelectEffort(composerContextKey, level);
+			},
+			[onSelectEffort, composerContextKey],
+		);
+
+		const handleTogglePlanModeInner = useCallback(() => {
+			onTogglePlanMode(composerContextKey);
+		}, [onTogglePlanMode, composerContextKey]);
+
 		return (
 			<WorkspaceComposer
 				contextKey={composerContextKey}
-				onSubmit={(prompt, imagePaths) => {
-					if (!selectedModel) {
-						return;
-					}
-
-					onSubmit({
-						prompt,
-						imagePaths,
-						model: selectedModel,
-						workingDirectory: workspaceDetailQuery.data?.rootPath ?? null,
-						effortLevel,
-						permissionMode,
-					});
-				}}
+				onSubmit={handleComposerSubmit}
 				disabled={displayedWorkspaceId === null}
 				submitDisabled={disabled || loadingConversationContext}
 				onStop={onStop}
 				sending={sending}
 				selectedModelId={selectedModelId}
 				modelSections={modelSections}
-				onSelectModel={(modelId) => {
-					void handleModelSelect(modelId);
-				}}
+				onSelectModel={handleSelectModelInner}
 				provider={provider}
 				effortLevel={effortLevel}
-				onSelectEffort={(level) => {
-					onSelectEffort(composerContextKey, level);
-				}}
+				onSelectEffort={handleSelectEffortInner}
 				permissionMode={permissionMode}
-				onTogglePlanMode={() => {
-					onTogglePlanMode(composerContextKey);
-				}}
+				onTogglePlanMode={handleTogglePlanModeInner}
 				sendError={sendError}
 				restoreDraft={restoreDraft}
 				restoreImages={restoreImages}
