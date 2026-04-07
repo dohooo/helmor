@@ -1,6 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type { ThreadMessageLike } from "@/lib/api";
+
+type DbSeenCache = {
+	db: ThreadMessageLike[];
+	ids: Set<string | undefined>;
+};
+
 import { generateSessionTitle } from "@/lib/api";
 import {
 	helmorQueryKeys,
@@ -117,13 +123,28 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		enabled: Boolean(threadSessionId),
 	});
 
+	// Cache the dedup Set across stream ticks. While the agent is streaming,
+	// the persistent `db` array reference is stable, so we should not rebuild
+	// the Set on every accumulator delta. The cache is invalidated whenever
+	// the underlying `db` reference changes.
+	const dbSeenCacheRef = useRef<DbSeenCache | null>(null);
 	const mergedMessages = useMemo(() => {
 		const db = messagesQuery.data ?? [];
 		if (liveMessages.length === 0) return db;
 		if (db.length === 0) return liveMessages;
-		// Dedup by ID when an error-path refetch briefly overlaps with live data.
-		const seen = new Set(db.map((message) => message.id));
-		const uniqueLive = liveMessages.filter((message) => !seen.has(message.id));
+		let cache = dbSeenCacheRef.current;
+		if (!cache || cache.db !== db) {
+			const ids = new Set<string | undefined>();
+			for (const message of db) {
+				ids.add(message.id);
+			}
+			cache = { db, ids };
+			dbSeenCacheRef.current = cache;
+		}
+		const uniqueLive = liveMessages.filter(
+			(message) => !cache.ids.has(message.id),
+		);
+		if (uniqueLive.length === 0) return db;
 		return [...db, ...uniqueLive];
 	}, [messagesQuery.data, liveMessages]);
 

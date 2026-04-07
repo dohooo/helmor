@@ -532,21 +532,41 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			return;
 		}
 
+		// Throttle width updates to once-per-frame via rAF. Without this, every
+		// pixel of mousemove (60+ Hz) triggers setSidebarWidth/setInspectorWidth
+		// → AppShell re-renders the entire workspace tree.
+		let pendingWidth: number | null = null;
+		let rafId: number | null = null;
+		const flush = () => {
+			rafId = null;
+			if (pendingWidth === null) return;
+			const nextWidth = pendingWidth;
+			pendingWidth = null;
+			if (resizeState.target === "sidebar") {
+				setSidebarWidth(nextWidth);
+			} else {
+				setInspectorWidth(nextWidth);
+			}
+		};
+
 		const handleMouseMove = (event: globalThis.MouseEvent) => {
 			const deltaX = event.clientX - resizeState.pointerX;
-			const nextWidth =
+			const rawWidth =
 				resizeState.target === "sidebar"
 					? resizeState.sidebarWidth + deltaX
 					: resizeState.sidebarWidth - deltaX;
-
-			if (resizeState.target === "sidebar") {
-				setSidebarWidth(clampSidebarWidth(nextWidth));
-				return;
+			pendingWidth = clampSidebarWidth(rawWidth);
+			if (rafId === null) {
+				rafId = window.requestAnimationFrame(flush);
 			}
-
-			setInspectorWidth(clampSidebarWidth(nextWidth));
 		};
 		const handleMouseUp = () => {
+			if (rafId !== null) {
+				window.cancelAnimationFrame(rafId);
+				rafId = null;
+			}
+			// Make sure the final width is committed before tearing down.
+			flush();
 			setResizeState(null);
 		};
 		const previousCursor = document.body.style.cursor;
@@ -559,6 +579,9 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		window.addEventListener("mouseup", handleMouseUp);
 
 		return () => {
+			if (rafId !== null) {
+				window.cancelAnimationFrame(rafId);
+			}
 			document.body.style.cursor = previousCursor;
 			document.body.style.userSelect = previousUserSelect;
 			window.removeEventListener("mousemove", handleMouseMove);
@@ -636,48 +659,52 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		}
 	}, []);
 
-	const handleResizeStart =
+	const handleResizeStart = useCallback(
 		(target: "sidebar" | "inspector") =>
-		(event: MouseEvent<HTMLDivElement>) => {
-			event.preventDefault();
-			setResizeState({
-				pointerX: event.clientX,
-				sidebarWidth: target === "sidebar" ? sidebarWidth : inspectorWidth,
-				target,
-			});
-		};
+			(event: MouseEvent<HTMLDivElement>) => {
+				event.preventDefault();
+				setResizeState({
+					pointerX: event.clientX,
+					sidebarWidth: target === "sidebar" ? sidebarWidth : inspectorWidth,
+					target,
+				});
+			},
+		[sidebarWidth, inspectorWidth],
+	);
 
-	const handleResizeKeyDown =
+	const handleResizeKeyDown = useCallback(
 		(target: "sidebar" | "inspector") =>
-		(event: KeyboardEvent<HTMLDivElement>) => {
-			if (event.key === "ArrowLeft") {
-				event.preventDefault();
-				if (target === "sidebar") {
-					setSidebarWidth((currentWidth) =>
-						clampSidebarWidth(currentWidth - SIDEBAR_RESIZE_STEP),
-					);
-					return;
-				}
+			(event: KeyboardEvent<HTMLDivElement>) => {
+				if (event.key === "ArrowLeft") {
+					event.preventDefault();
+					if (target === "sidebar") {
+						setSidebarWidth((currentWidth) =>
+							clampSidebarWidth(currentWidth - SIDEBAR_RESIZE_STEP),
+						);
+						return;
+					}
 
-				setInspectorWidth((currentWidth) =>
-					clampSidebarWidth(currentWidth + SIDEBAR_RESIZE_STEP),
-				);
-			}
-
-			if (event.key === "ArrowRight") {
-				event.preventDefault();
-				if (target === "sidebar") {
-					setSidebarWidth((currentWidth) =>
+					setInspectorWidth((currentWidth) =>
 						clampSidebarWidth(currentWidth + SIDEBAR_RESIZE_STEP),
 					);
-					return;
 				}
 
-				setInspectorWidth((currentWidth) =>
-					clampSidebarWidth(currentWidth - SIDEBAR_RESIZE_STEP),
-				);
-			}
-		};
+				if (event.key === "ArrowRight") {
+					event.preventDefault();
+					if (target === "sidebar") {
+						setSidebarWidth((currentWidth) =>
+							clampSidebarWidth(currentWidth + SIDEBAR_RESIZE_STEP),
+						);
+						return;
+					}
+
+					setInspectorWidth((currentWidth) =>
+						clampSidebarWidth(currentWidth - SIDEBAR_RESIZE_STEP),
+					);
+				}
+			},
+		[],
+	);
 
 	const confirmDiscardEditorChanges = useCallback(
 		(action: string) => {

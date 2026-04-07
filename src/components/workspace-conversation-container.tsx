@@ -24,6 +24,7 @@ import { WorkspaceComposerContainer } from "./workspace-composer-container";
 import { WorkspacePanelContainer } from "./workspace-panel-container";
 
 const EMPTY_IMAGES: string[] = [];
+const EMPTY_MESSAGES: ThreadMessageLike[] = [];
 
 type WorkspaceConversationContainerProps = {
 	selectedWorkspaceId: string | null;
@@ -103,7 +104,8 @@ export const WorkspaceConversationContainer = memo(
 				});
 			}
 		}
-		const liveMessages = liveMessagesByContext[composerContextKey] ?? [];
+		const liveMessages =
+			liveMessagesByContext[composerContextKey] ?? EMPTY_MESSAGES;
 		const activeSendError = sendErrorsByContext[composerContextKey] ?? null;
 		const isSending = sendingContextKeys.has(composerContextKey);
 

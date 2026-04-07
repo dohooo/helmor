@@ -81,6 +81,18 @@ const groupToneClasses: Record<GroupTone, string> = {
 };
 const ARCHIVED_SECTION_ID = "__archived__";
 
+const STATUS_OPTIONS: ReadonlyArray<{
+	value: string;
+	label: string;
+	tone: GroupTone;
+}> = [
+	{ value: "backlog", label: "Backlog", tone: "backlog" },
+	{ value: "in-progress", label: "In progress", tone: "progress" },
+	{ value: "review", label: "In review", tone: "review" },
+	{ value: "done", label: "Done", tone: "done" },
+	{ value: "canceled", label: "Canceled", tone: "canceled" },
+];
+
 function createInitialSectionOpenState(groups: WorkspaceGroup[]) {
 	return Object.fromEntries([
 		...groups.map((group) => [group.id, group.rows.length > 0]),
@@ -331,7 +343,9 @@ const WorkspaceRowItem = memo(
 		restoringWorkspaceId,
 		workspaceActionsDisabled,
 	}: WorkspaceRowItemProps) {
-		recordSidebarRowRender(row.id);
+		useEffect(() => {
+			recordSidebarRowRender(row.id);
+		});
 		const actionLabel =
 			row.state === "archived" ? "Restore workspace" : "Archive workspace";
 		const isArchiving = archivingWorkspaceId === row.id;
@@ -474,17 +488,6 @@ const WorkspaceRowItem = memo(
 		const isPinned = Boolean(row.pinnedAt);
 		const effectiveStatus =
 			row.manualStatus ?? row.derivedStatus ?? "in-progress";
-		const statusOptions: Array<{
-			value: string;
-			label: string;
-			tone: GroupTone;
-		}> = [
-			{ value: "backlog", label: "Backlog", tone: "backlog" },
-			{ value: "in-progress", label: "In progress", tone: "progress" },
-			{ value: "review", label: "In review", tone: "review" },
-			{ value: "done", label: "Done", tone: "done" },
-			{ value: "canceled", label: "Canceled", tone: "canceled" },
-		];
 
 		return (
 			<ContextMenu>
@@ -505,7 +508,7 @@ const WorkspaceRowItem = memo(
 							<span>Set status</span>
 						</ContextMenuSubTrigger>
 						<ContextMenuSubContent>
-							{statusOptions.map((opt) => (
+							{STATUS_OPTIONS.map((opt) => (
 								<ContextMenuItem
 									key={opt.value}
 									onClick={() => onSetManualStatus?.(row.id, opt.value)}
@@ -613,21 +616,31 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	} | null>(null);
 	const viewportRef = useRef<HTMLDivElement | null>(null);
 	const workspaceRowRefs = useRef(new Map<string, HTMLDivElement>());
+	// Cache one ref-callback per workspace id so React does not detach +
+	// re-attach the row DOM ref on every parent render. The previous version
+	// returned `(workspaceId) => (el) => {...}` which produced a brand-new
+	// closure for each row each render.
+	const rowRefCallbackCache = useRef(
+		new Map<string, (element: HTMLDivElement | null) => void>(),
+	);
 	const [sectionOpenState, setSectionOpenState] = useState(() =>
 		createInitialSectionOpenState(groups),
 	);
 
-	const setWorkspaceRowRef = useCallback(
-		(workspaceId: string) => (element: HTMLDivElement | null) => {
+	const setWorkspaceRowRef = useCallback((workspaceId: string) => {
+		const cache = rowRefCallbackCache.current;
+		const existing = cache.get(workspaceId);
+		if (existing) return existing;
+		const callback = (element: HTMLDivElement | null) => {
 			if (element) {
 				workspaceRowRefs.current.set(workspaceId, element);
 				return;
 			}
-
 			workspaceRowRefs.current.delete(workspaceId);
-		},
-		[],
-	);
+		};
+		cache.set(workspaceId, callback);
+		return callback;
+	}, []);
 
 	useEffect(() => {
 		setSectionOpenState((current) => {

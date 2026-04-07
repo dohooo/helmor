@@ -81,41 +81,44 @@ export function WorkspaceInspectorSidebar({
 
 	// Track which file paths should flash (new or stats changed).
 	// `null` means we haven't seen any data yet — skip flashing on first load.
+	// IMPORTANT: useMemo body must remain pure under React 19 / Strict Mode
+	// (memo cache may be discarded), so the snapshot is also computed via
+	// useMemo and the ref update happens in a useEffect committed alongside.
 	const prevChangesRef = useRef<Map<string, string> | null>(null);
 	const prevRootPathRef = useRef(workspaceRootPath);
 	if (prevRootPathRef.current !== workspaceRootPath) {
 		prevRootPathRef.current = workspaceRootPath;
 		prevChangesRef.current = null; // reset on workspace switch
 	}
+	const nextChangesSnapshot = useMemo(() => {
+		const map = new Map<string, string>();
+		for (const item of changes) {
+			map.set(item.path, `${item.insertions}:${item.deletions}:${item.status}`);
+		}
+		return map;
+	}, [changes]);
 	const flashingPaths = useMemo(() => {
 		const prevMap = prevChangesRef.current;
-
-		// Build snapshot for current data
-		const nextMap = new Map<string, string>();
-		for (const item of changes) {
-			nextMap.set(
-				item.path,
-				`${item.insertions}:${item.deletions}:${item.status}`,
-			);
-		}
-
-		// First load or workspace switch — seed the ref, don't flash
+		// First load or workspace switch — don't flash
 		if (prevMap === null) {
-			prevChangesRef.current = nextMap;
 			return new Set<string>();
 		}
 
 		const flashing = new Set<string>();
 		for (const item of changes) {
-			const key = nextMap.get(item.path)!;
+			const key = nextChangesSnapshot.get(item.path)!;
 			const prev = prevMap.get(item.path);
 			if (prev === undefined || prev !== key) {
 				flashing.add(item.path);
 			}
 		}
-		prevChangesRef.current = nextMap;
 		return flashing;
-	}, [changes]);
+	}, [changes, nextChangesSnapshot]);
+	useEffect(() => {
+		// Commit the latest snapshot AFTER render so subsequent renders see it
+		// as `prev`. This is the canonical "store the previous value" pattern.
+		prevChangesRef.current = nextChangesSnapshot;
+	}, [nextChangesSnapshot]);
 
 	// Pre-warm Monaco file cache when changes data arrives
 	useEffect(() => {
@@ -176,6 +179,26 @@ export function WorkspaceInspectorSidebar({
 	useEffect(() => {
 		if (!resizeState) return;
 
+		// Throttle setState to once-per-frame via rAF — every pixel of
+		// mousemove would otherwise re-render the entire inspector + Monaco
+		// subtree.
+		let pendingChanges: number | null = null;
+		let pendingActions: number | null = null;
+		let rafId: number | null = null;
+		const flush = () => {
+			rafId = null;
+			if (pendingChanges !== null) {
+				const next = pendingChanges;
+				pendingChanges = null;
+				setChangesHeight(next);
+			}
+			if (pendingActions !== null) {
+				const next = pendingActions;
+				pendingActions = null;
+				setActionsHeight(next);
+			}
+		};
+
 		const handleMouseMove = (event: globalThis.MouseEvent) => {
 			const deltaY = event.clientY - resizeState.pointerY;
 
@@ -189,19 +212,25 @@ export function WorkspaceInspectorSidebar({
 					MIN_SECTION_HEIGHT,
 					resizeState.initialActionsHeight - actualDelta,
 				);
-				setChangesHeight(nextChanges);
-				setActionsHeight(nextActions);
+				pendingChanges = nextChanges;
+				pendingActions = nextActions;
 			} else {
-				setActionsHeight(
-					Math.max(
-						MIN_SECTION_HEIGHT,
-						resizeState.initialActionsHeight + deltaY,
-					),
+				pendingActions = Math.max(
+					MIN_SECTION_HEIGHT,
+					resizeState.initialActionsHeight + deltaY,
 				);
+			}
+			if (rafId === null) {
+				rafId = window.requestAnimationFrame(flush);
 			}
 		};
 
 		const handleMouseUp = () => {
+			if (rafId !== null) {
+				window.cancelAnimationFrame(rafId);
+				rafId = null;
+			}
+			flush();
 			setResizeState(null);
 		};
 
@@ -214,6 +243,9 @@ export function WorkspaceInspectorSidebar({
 		window.addEventListener("mouseup", handleMouseUp);
 
 		return () => {
+			if (rafId !== null) {
+				window.cancelAnimationFrame(rafId);
+			}
 			document.body.style.cursor = previousCursor;
 			document.body.style.userSelect = previousUserSelect;
 			window.removeEventListener("mousemove", handleMouseMove);

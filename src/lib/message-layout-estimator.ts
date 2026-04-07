@@ -25,7 +25,34 @@ const USER_BUBBLE_HORIZONTAL_PADDING = 24;
 const USER_BUBBLE_WIDTH_RATIO = 0.75;
 const MIN_TEXT_WIDTH = 64;
 
+/**
+ * Bounded LRU cache for `prepare()` results. Without a cap this Map grows
+ * forever in long-lived desktop sessions, since each new font/text combination
+ * (including streaming partials) becomes a new entry. JS Map preserves
+ * insertion order, so we can implement LRU by deleting + re-inserting on hit
+ * and trimming the oldest entries when over capacity.
+ */
+const PREPARED_TEXT_CACHE_LIMIT = 2000;
 const preparedTextCache = new Map<string, PreparedText>();
+
+/**
+ * Per-message height memoization keyed by message reference. Static messages
+ * keep the same reference across stream ticks, so a cache hit lets us skip the
+ * `prepare()`/`layout()` traversal entirely. The streaming message gets a new
+ * reference every tick — cache misses for that one are correct.
+ *
+ * WeakMap so the entry is garbage collected when the message object is dropped
+ * (e.g. user switches sessions and the old thread snapshot is released).
+ */
+type MessageHeightCacheEntry = {
+	fontSize: number;
+	contentWidth: number;
+	height: number;
+};
+const messageHeightCache = new WeakMap<
+	ThreadMessageLike,
+	MessageHeightCacheEntry
+>();
 
 export function estimateThreadRowHeights(
 	messages: ThreadMessageLike[],
@@ -33,12 +60,26 @@ export function estimateThreadRowHeights(
 ): number[] {
 	const contentWidth = Math.max(MIN_TEXT_WIDTH, options.paneWidth - 40);
 
-	return messages.map((message) =>
-		estimateMessageRowHeight(message, {
+	return messages.map((message) => {
+		const cached = messageHeightCache.get(message);
+		if (
+			cached &&
+			cached.fontSize === options.fontSize &&
+			cached.contentWidth === contentWidth
+		) {
+			return cached.height;
+		}
+		const height = estimateMessageRowHeight(message, {
 			fontSize: options.fontSize,
 			contentWidth,
-		}),
-	);
+		});
+		messageHeightCache.set(message, {
+			fontSize: options.fontSize,
+			contentWidth,
+			height,
+		});
+		return height;
+	});
 }
 
 function estimateMessageRowHeight(
@@ -196,11 +237,25 @@ function getPreparedText(
 	const cacheKey = `${font}\u0000${whiteSpace}\u0000${text}`;
 	const cached = preparedTextCache.get(cacheKey);
 	if (cached) {
+		// LRU bump: re-insert moves the entry to the most-recent position.
+		preparedTextCache.delete(cacheKey);
+		preparedTextCache.set(cacheKey, cached);
 		return cached;
 	}
 
 	const prepared = prepare(text, font, { whiteSpace });
 	preparedTextCache.set(cacheKey, prepared);
+	if (preparedTextCache.size > PREPARED_TEXT_CACHE_LIMIT) {
+		// Trim oldest entries (insertion order). Drop ~10% at once so the
+		// trim cost amortizes nicely instead of running on every insert.
+		const dropCount = Math.ceil(PREPARED_TEXT_CACHE_LIMIT * 0.1);
+		const iterator = preparedTextCache.keys();
+		for (let i = 0; i < dropCount; i += 1) {
+			const next = iterator.next();
+			if (next.done) break;
+			preparedTextCache.delete(next.value);
+		}
+	}
 	return prepared;
 }
 

@@ -404,7 +404,11 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 													/>
 													{isEditing ? (
 														<input
-															ref={(element) => element?.focus()}
+															// Mounted only when entering edit mode, so autoFocus
+															// fires exactly once instead of refocusing on every
+															// parent re-render (e.g. during streaming).
+															// biome-ignore lint/a11y/noAutofocus: contextual rename input
+															autoFocus
 															value={editingTitle}
 															onChange={(event) =>
 																setEditingTitle(event.target.value)
@@ -863,15 +867,31 @@ function ProgressiveConversationViewport({
 	scrollParent: HTMLDivElement | null;
 	sessionId: string;
 }) {
-	const [scrollTop, setScrollTop] = useState(0);
-	const [viewportHeight, setViewportHeight] = useState(0);
+	// Scroll/viewport are intentionally tracked with two layers:
+	//   1. `committedScrollTopRef` / `committedViewportRef` — the values React
+	//      currently rendered with. Used to compute the visible window.
+	//   2. `setCommittedScrollState` — only invoked when the scroll position
+	//      has crossed half of our overscan buffer (or the viewport size has
+	//      changed), so smooth in-window scrolling does NOT trigger any
+	//      React renders or `visibleRows` recomputation.
+	const [committedScrollState, setCommittedScrollState] = useState<{
+		scrollTop: number;
+		viewportHeight: number;
+	}>({ scrollTop: 0, viewportHeight: 0 });
+	const { scrollTop, viewportHeight } = committedScrollState;
 	const [measuredHeights, setMeasuredHeights] = useState<
 		Record<string, number>
 	>({});
 	const initialScrollAppliedRef = useRef(false);
 	const pendingScrollAdjustmentRef = useRef(0);
-	const measuredHeightsRef = useRef<Record<string, number>>({});
-	measuredHeightsRef.current = measuredHeights;
+	// Mirror of `measuredHeights` for synchronous reads inside the
+	// `handleHeightChange` callback. The mirror is updated in a layout effect
+	// (after commit) instead of during render to keep render pure under
+	// Strict Mode / concurrent rendering.
+	const measuredHeightsRef = useRef<Record<string, number>>(measuredHeights);
+	useLayoutEffect(() => {
+		measuredHeightsRef.current = measuredHeights;
+	}, [measuredHeights]);
 
 	useEffect(() => {
 		setMeasuredHeights({});
@@ -883,23 +903,57 @@ function ProgressiveConversationViewport({
 			return;
 		}
 
-		const syncViewportState = () => {
-			setScrollTop(scrollParent.scrollTop);
-			setViewportHeight(scrollParent.clientHeight);
+		let rafId: number | null = null;
+		const commitFromDom = () => {
+			rafId = null;
+			const nextScrollTop = scrollParent.scrollTop;
+			const nextViewportHeight = scrollParent.clientHeight;
+			setCommittedScrollState((current) => {
+				const buffer =
+					current.viewportHeight || PROGRESSIVE_VIEWPORT_DEFAULT_HEIGHT;
+				const scrollDelta = Math.abs(nextScrollTop - current.scrollTop);
+				const viewportDelta = Math.abs(
+					nextViewportHeight - current.viewportHeight,
+				);
+				// We render with `buffer = effectiveViewportHeight` of overscan
+				// above and below the visible window, so any scroll movement
+				// smaller than half the buffer is guaranteed to keep the same
+				// rows in view. In that case we skip the state update entirely
+				// to avoid re-running visibleRows / re-rendering rows.
+				if (scrollDelta < buffer / 2 && viewportDelta < 8) {
+					return current;
+				}
+				return {
+					scrollTop: nextScrollTop,
+					viewportHeight: nextViewportHeight,
+				};
+			});
 		};
 
-		syncViewportState();
-		scrollParent.addEventListener("scroll", syncViewportState, {
+		const scheduleCommit = () => {
+			if (rafId !== null) return;
+			rafId = window.requestAnimationFrame(commitFromDom);
+		};
+
+		// Always commit the first observation so we know the actual viewport.
+		setCommittedScrollState({
+			scrollTop: scrollParent.scrollTop,
+			viewportHeight: scrollParent.clientHeight,
+		});
+		scrollParent.addEventListener("scroll", scheduleCommit, {
 			passive: true,
 		});
 		let observer: ResizeObserver | null = null;
 		if (typeof ResizeObserver !== "undefined") {
-			observer = new ResizeObserver(syncViewportState);
+			observer = new ResizeObserver(scheduleCommit);
 			observer.observe(scrollParent);
 		}
 
 		return () => {
-			scrollParent.removeEventListener("scroll", syncViewportState);
+			if (rafId !== null) {
+				window.cancelAnimationFrame(rafId);
+			}
+			scrollParent.removeEventListener("scroll", scheduleCommit);
 			observer?.disconnect();
 		};
 	}, [scrollParent]);
@@ -952,16 +1006,30 @@ function ProgressiveConversationViewport({
 			return inWindow;
 		}
 
+		// `rows` is already index-ordered, so the tail (last 2 rows) sits at
+		// indices [rows.length - 2, rows.length - 1]. We avoid the previous
+		// `Map(...).sort(...)` (O(n log n) on every stream tick) by appending
+		// only the tail rows that are not already at the end of `inWindow`.
 		const tailStartIndex = Math.max(0, rows.length - 2);
-		const rowMap = new Map(inWindow.map((row) => [row.key, row]));
-		for (const row of rows.slice(tailStartIndex)) {
-			rowMap.set(row.key, row);
+		const lastVisibleIndex =
+			inWindow.length > 0 ? inWindow[inWindow.length - 1]!.index : -1;
+		if (lastVisibleIndex >= rows.length - 1) {
+			return inWindow;
 		}
-		return Array.from(rowMap.values()).sort((a, b) => a.index - b.index);
+		const result = inWindow.slice();
+		const appendStart = Math.max(tailStartIndex, lastVisibleIndex + 1);
+		for (let i = appendStart; i < rows.length; i += 1) {
+			result.push(rows[i]!);
+		}
+		return result;
 	}, [pinTailRows, rows, windowBottom, windowTop]);
 	const totalContentHeight = headerHeight + totalRowsHeight + footerHeight;
+	// Mirror of `rows` for synchronous reads inside `handleHeightChange`,
+	// updated in a layout effect rather than during render.
 	const rowsRef = useRef(rows);
-	rowsRef.current = rows;
+	useLayoutEffect(() => {
+		rowsRef.current = rows;
+	}, [rows]);
 
 	useLayoutEffect(() => {
 		if (!scrollParent || initialScrollAppliedRef.current) {
@@ -973,8 +1041,10 @@ function ProgressiveConversationViewport({
 			totalContentHeight - scrollParent.clientHeight,
 		);
 		scrollParent.scrollTop = targetScrollTop;
-		setScrollTop(targetScrollTop);
-		setViewportHeight(scrollParent.clientHeight);
+		setCommittedScrollState({
+			scrollTop: targetScrollTop,
+			viewportHeight: scrollParent.clientHeight,
+		});
 		initialScrollAppliedRef.current = true;
 	}, [scrollParent, totalContentHeight]);
 
@@ -1172,7 +1242,10 @@ function ConversationMessage({
 	sessionId: string;
 	itemIndex: number;
 }) {
-	recordMessageRender(sessionId, message.id ?? `${message.role}:${itemIndex}`);
+	const messageKey = message.id ?? `${message.role}:${itemIndex}`;
+	useEffect(() => {
+		recordMessageRender(sessionId, messageKey);
+	});
 
 	// Only the actual streaming partial carries `streaming: true` (set by
 	// the accumulator's __streaming flag).  Completed intermediate messages
@@ -1318,34 +1391,37 @@ type UserContentSegment =
 	| { type: "image"; value: string }
 	| { type: "file"; value: string };
 
-/** Split user text into interleaved text, image, and file segments. */
+/**
+ * Split user text into interleaved text, image, and file segments.
+ *
+ * Uses `text.matchAll()` instead of `regex.exec()` so the function does not
+ * mutate `USER_FILE_RE.lastIndex`. The shared regex would otherwise race
+ * across concurrent renders under React 19.
+ */
 function splitUserContent(text: string): UserContentSegment[] {
 	const segments: UserContentSegment[] = [];
 	let lastIndex = 0;
-	USER_FILE_RE.lastIndex = 0;
-	for (
-		let match = USER_FILE_RE.exec(text);
-		match !== null;
-		match = USER_FILE_RE.exec(text)
-	) {
-		const before = text.slice(lastIndex, match.index);
+	for (const match of text.matchAll(USER_FILE_RE)) {
+		const matchIndex = match.index ?? 0;
+		const before = text.slice(lastIndex, matchIndex);
 		if (before) segments.push({ type: "text", value: before });
 		const filePath = match[1];
 		segments.push({
 			type: IMAGE_EXT_RE.test(filePath) ? "image" : "file",
 			value: filePath,
 		});
-		lastIndex = match.index + match[0].length;
+		lastIndex = matchIndex + match[0].length;
 	}
 	const after = text.slice(lastIndex);
 	if (after) segments.push({ type: "text", value: after });
 	return segments;
 }
 
-function UserText({ text }: { text: string }) {
-	const segments = splitUserContent(text);
-	const hasAttachments = segments.some(
-		(s) => s.type === "image" || s.type === "file",
+const UserText = memo(function UserText({ text }: { text: string }) {
+	const segments = useMemo(() => splitUserContent(text), [text]);
+	const hasAttachments = useMemo(
+		() => segments.some((s) => s.type === "image" || s.type === "file"),
+		[segments],
 	);
 
 	if (!hasAttachments) {
@@ -1369,7 +1445,7 @@ function UserText({ text }: { text: string }) {
 			})}
 		</p>
 	);
-}
+});
 
 /** Inline file badge for non-image files in chat messages. */
 function FileBadgeInline({ path }: { path: string }) {
@@ -1488,13 +1564,12 @@ const AssistantToolCall = memo(
 			streamingStatus === "pending" ||
 			streamingStatus === "streaming_input" ||
 			streamingStatus === "running";
+		// Default expanded state is captured once at mount via useState init —
+		// no effect needed because tool calls only progress forward (live tools
+		// stay live until completion, completed tools never go back to live).
+		// `isLiveTool || isOpen` in the open prop below still forces open while
+		// streaming regardless of user toggles.
 		const [isOpen, setIsOpen] = useState(isLiveTool);
-
-		useEffect(() => {
-			if (isLiveTool) {
-				setIsOpen(true);
-			}
-		}, [isLiveTool]);
 
 		// Streaming status indicator
 		const statusIndicator =
@@ -1620,16 +1695,27 @@ const AssistantToolCall = memo(
 		prev.toolName === next.toolName &&
 		prev.streamingStatus === next.streamingStatus &&
 		prev.result === next.result &&
-		argsEqual(prev.args, next.args),
+		shallowArgsEqual(prev.args, next.args),
 );
 
-/** Deep-compare tool call args via JSON serialization. */
-function argsEqual(
+/**
+ * Shallow-compare tool call args. The accumulator either reuses the same args
+ * object reference or only mutates a single field (streaming input), so a
+ * shallow key/value === check is sufficient and avoids serializing large
+ * Edit/Bash payloads on every render.
+ */
+function shallowArgsEqual(
 	a: Record<string, unknown>,
 	b: Record<string, unknown>,
 ): boolean {
 	if (a === b) return true;
-	return JSON.stringify(a) === JSON.stringify(b);
+	const keysA = Object.keys(a);
+	const keysB = Object.keys(b);
+	if (keysA.length !== keysB.length) return false;
+	for (const key of keysA) {
+		if (a[key] !== b[key]) return false;
+	}
+	return true;
 }
 
 /** Number of recent children steps to show by default. */
@@ -1735,13 +1821,18 @@ function AgentChildrenBlock({
 }
 
 function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
-	const [isOpen, setIsOpen] = useState(group.active);
-
-	useEffect(() => {
-		if (group.active) {
-			setIsOpen(true);
-		}
-	}, [group.active]);
+	// Groups can transition inactive → active when a new tool is appended to a
+	// previously-completed group. We track "ever active" with a monotonic ref
+	// (write happens only on the first true observation, which is safe even
+	// under Strict Mode double-render) plus a single state for the user's
+	// explicit collapse preference. This eliminates the previous derived-state
+	// useEffect anti-pattern.
+	const wasActiveRef = useRef(group.active);
+	if (group.active && !wasActiveRef.current) {
+		wasActiveRef.current = true;
+	}
+	const [userClosed, setUserClosed] = useState(false);
+	const isOpen = group.active || (wasActiveRef.current && !userClosed);
 
 	const icon =
 		group.category === "search" ? (
@@ -1754,9 +1845,9 @@ function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 		<details
 			className="group/collapse flex flex-col"
 			onToggle={(event) => {
-				setIsOpen(event.currentTarget.open);
+				setUserClosed(!event.currentTarget.open);
 			}}
-			open={group.active || isOpen}
+			open={isOpen}
 		>
 			<summary className="flex max-w-full cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
 				<span className="shrink-0">{icon}</span>
