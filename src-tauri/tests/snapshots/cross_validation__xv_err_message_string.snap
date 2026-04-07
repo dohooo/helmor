@@ -1,0 +1,12 @@
+---
+source: tests/cross_validation.rs
+expression: run(msgs)
+---
+- role: system
+  id: e1
+  content_length: 1
+  content:
+    - type: text
+      text: "Error: Boom"
+  status: ~
+  streaming: ~

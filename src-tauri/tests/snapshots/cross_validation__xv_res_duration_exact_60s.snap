@@ -1,0 +1,12 @@
+---
+source: tests/cross_validation.rs
+expression: run(msgs)
+---
+- role: system
+  id: r1
+  content_length: 1
+  content:
+    - type: text
+      text: 1m
+  status: ~
+  streaming: ~

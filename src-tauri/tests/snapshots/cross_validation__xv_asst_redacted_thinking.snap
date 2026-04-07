@@ -1,0 +1,16 @@
+---
+source: tests/cross_validation.rs
+expression: run(msgs)
+---
+- role: assistant
+  id: a1
+  content_length: 1
+  content:
+    - type: reasoning
+      text_length: 19
+      text_preview: "[Thinking redacted]"
+      streaming: ~
+  status:
+    type: complete
+    reason: stop
+  streaming: ~
