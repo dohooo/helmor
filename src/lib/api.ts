@@ -1258,30 +1258,35 @@ export async function savePastedImage(
 	return inv<string>("save_pasted_image", { data, mediaType });
 }
 
+/**
+ * Start an agent message stream.
+ *
+ * Tauri mode: uses `ipc::Channel<T>` for point-to-point streaming so events
+ * emitted by the backend are guaranteed to reach us (no race between `invoke`
+ * and a global event listener).
+ *
+ * Browser mode: POSTs to the dev server, then opens an SSE connection and
+ * dispatches events to the same callback.
+ *
+ * The returned promise resolves when the stream has been successfully
+ * handed off (Tauri) or the SSE connection has been opened (browser). The
+ * callback continues to fire until a `done` or `error` event arrives.
+ */
 export async function startAgentMessageStream(
 	request: AgentSendRequest,
-): Promise<AgentStreamStartResponse> {
+	callback: (event: AgentStreamEvent) => void,
+): Promise<void> {
 	const inv = await getTauriInvoke();
 	if (!inv) {
-		return devFetch<AgentStreamStartResponse>(
+		// Browser mode: start via REST, then listen via SSE
+		const response = await devFetch<AgentStreamStartResponse>(
 			"send_agent_message_stream",
 			undefined,
 			{ method: "POST", body: { request } },
 		);
-	}
-	return inv<AgentStreamStartResponse>("send_agent_message_stream", {
-		request,
-	});
-}
 
-export async function listenAgentStream(
-	streamId: string,
-	callback: (event: AgentStreamEvent) => void,
-): Promise<UnlistenFn> {
-	if (!hasTauriRuntime()) {
-		// Browser mode: use SSE instead of Tauri event listener
 		const url = new URL("/api/agent_stream_sse", window.location.origin);
-		url.searchParams.set("streamId", streamId);
+		url.searchParams.set("streamId", response.streamId);
 		const eventSource = new EventSource(url.toString());
 
 		eventSource.onmessage = (msg) => {
@@ -1301,15 +1306,14 @@ export async function listenAgentStream(
 			eventSource.close();
 		};
 
-		// Return an unlisten function compatible with the Tauri API
-		return () => {
-			eventSource.close();
-		};
+		return;
 	}
 
-	return listen<AgentStreamEvent>(`agent-stream:${streamId}`, (tauriEvent) => {
-		callback(tauriEvent.payload);
-	});
+	// Tauri mode: use Channel<T> for point-to-point streaming
+	const { Channel } = await import("@tauri-apps/api/core");
+	const onEvent = new Channel<AgentStreamEvent>();
+	onEvent.onmessage = (event) => callback(event);
+	await inv("send_agent_message_stream", { request, onEvent });
 }
 
 export async function stopAgentStream(

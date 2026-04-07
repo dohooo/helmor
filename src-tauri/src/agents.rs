@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{ipc::Channel, AppHandle, Manager};
 use uuid::Uuid;
 
 use crate::error::CommandError;
@@ -214,7 +214,8 @@ pub async fn send_agent_message_stream(
     app: AppHandle,
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
     request: AgentSendRequest,
-) -> CmdResult<AgentStreamStartResponse> {
+    on_event: Channel<AgentStreamEvent>,
+) -> CmdResult<()> {
     let prompt = request.prompt.trim().to_string();
     if prompt.is_empty() {
         return Err(anyhow::anyhow!("Prompt cannot be empty.").into());
@@ -238,6 +239,7 @@ pub async fn send_agent_message_stream(
     // All providers go through the sidecar
     stream_via_sidecar(
         app,
+        on_event,
         &sidecar,
         &stream_id,
         model,
@@ -459,15 +461,17 @@ fn sidecar_debug_enabled() -> bool {
         .unwrap_or(false)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stream_via_sidecar(
     app: AppHandle,
+    on_event: Channel<AgentStreamEvent>,
     sidecar: &crate::sidecar::ManagedSidecar,
     stream_id: &str,
     model: &AgentModelDefinition,
     prompt: &str,
     request: &AgentSendRequest,
     working_directory: &Path,
-) -> CmdResult<AgentStreamStartResponse> {
+) -> CmdResult<()> {
     let request_id = stream_id.to_string();
     let debug = sidecar_debug_enabled();
 
@@ -554,8 +558,7 @@ fn stream_via_sidecar(
         return Err(anyhow::anyhow!("Sidecar send failed: {e}").into());
     }
 
-    // Read events in background and forward to frontend
-    let event_name = format!("agent-stream:{request_id}");
+    // Read events in background and forward to frontend via Channel
     let model_id = model.id.to_string();
     let provider = model.provider.to_string();
     let model_copy = *model;
@@ -694,17 +697,14 @@ fn stream_via_sidecar(
                         }
                     }
 
-                    let _ = app.emit(
-                        &event_name,
-                        AgentStreamEvent::Done {
-                            provider: provider.clone(),
-                            model_id: model_id.clone(),
-                            resolved_model,
-                            session_id: resolved_session_id.clone(),
-                            working_directory: working_dir_str.clone(),
-                            persisted,
-                        },
-                    );
+                    let _ = on_event.send(AgentStreamEvent::Done {
+                        provider: provider.clone(),
+                        model_id: model_id.clone(),
+                        resolved_model,
+                        session_id: resolved_session_id.clone(),
+                        working_directory: working_dir_str.clone(),
+                        persisted,
+                    });
                     break;
                 }
                 "error" => {
@@ -717,13 +717,10 @@ fn stream_via_sidecar(
                     if debug {
                         eprintln!("[agents:debug] [{rid}] Sidecar error: {msg}");
                     }
-                    let _ = app.emit(
-                        &event_name,
-                        AgentStreamEvent::Error {
-                            message: msg,
-                            persisted: exchange_ctx.is_some(),
-                        },
-                    );
+                    let _ = on_event.send(AgentStreamEvent::Error {
+                        message: msg,
+                        persisted: exchange_ctx.is_some(),
+                    });
                     break;
                 }
                 _ => {
@@ -758,14 +755,11 @@ fn stream_via_sidecar(
                             // Emit based on pipeline output type
                             match emit {
                                 crate::pipeline::PipelineEmit::Full(messages) => {
-                                    let _ = app
-                                        .emit(&event_name, AgentStreamEvent::Update { messages });
+                                    let _ = on_event.send(AgentStreamEvent::Update { messages });
                                 }
                                 crate::pipeline::PipelineEmit::Partial(message) => {
-                                    let _ = app.emit(
-                                        &event_name,
-                                        AgentStreamEvent::StreamingPartial { message },
-                                    );
+                                    let _ = on_event
+                                        .send(AgentStreamEvent::StreamingPartial { message });
                                 }
                                 crate::pipeline::PipelineEmit::None => {}
                             }
@@ -781,9 +775,7 @@ fn stream_via_sidecar(
         sidecar_state.unsubscribe(&rid);
     });
 
-    Ok(AgentStreamStartResponse {
-        stream_id: request_id,
-    })
+    Ok(())
 }
 // Test helpers using the new pipeline accumulator
 #[cfg(test)]
