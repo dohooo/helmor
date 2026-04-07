@@ -53,7 +53,7 @@ vi.mock("./lib/api", async (importOriginal) => {
 		listRepositories: apiMocks.listRepositories,
 		loadWorkspaceDetail: apiMocks.loadWorkspaceDetail,
 		loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
-		loadSessionMessages: apiMocks.loadSessionMessages,
+		loadSessionMessages: apiMocks.loadSessionThreadMessages,
 		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 		loadSessionAttachments: apiMocks.loadSessionAttachments,
 	};
@@ -181,6 +181,12 @@ describe("App GitHub identity states", () => {
 	beforeEach(() => {
 		installTauriRuntime();
 		identityListener = null;
+		Object.defineProperty(navigator, "clipboard", {
+			configurable: true,
+			value: {
+				writeText: vi.fn(async () => undefined),
+			},
+		});
 
 		apiMocks.loadGithubIdentitySession.mockReset();
 		apiMocks.startGithubIdentityConnect.mockReset();
@@ -269,6 +275,9 @@ describe("App GitHub identity states", () => {
 			).toBeInTheDocument();
 		});
 		screen.getByRole("button", { name: "Continue with GitHub" }).click();
+		await userEvent
+			.setup()
+			.click(await screen.findByRole("button", { name: "Copy one-time code" }));
 
 		await waitFor(() => {
 			expect(openerMocks.openUrl).toHaveBeenCalledWith(

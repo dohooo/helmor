@@ -523,6 +523,18 @@ const WorkspaceRowItem = memo(
 						</ContextMenuSubContent>
 					</ContextMenuSub>
 
+					{_onMarkWorkspaceUnread ? (
+						<ContextMenuItem
+							disabled={
+								row.hasUnread || isBusy || Boolean(workspaceActionsDisabled)
+							}
+							onClick={() => _onMarkWorkspaceUnread(row.id)}
+						>
+							<Circle className="size-4 shrink-0" strokeWidth={1.6} />
+							<span>Mark as unread</span>
+						</ContextMenuItem>
+					) : null}
+
 					<ContextMenuSeparator />
 
 					{isRestoreAction ? (

@@ -8,7 +8,7 @@ const apiMocks = vi.hoisted(() => ({
 	loadAgentModelSections: vi.fn(),
 	loadWorkspaceDetail: vi.fn(),
 	loadWorkspaceSessions: vi.fn(),
-	loadSessionMessages: vi.fn(),
+	loadSessionThreadMessages: vi.fn(),
 	loadSessionAttachments: vi.fn(),
 	listRepositories: vi.fn(),
 	createWorkspaceFromRepo: vi.fn(),
@@ -33,7 +33,8 @@ vi.mock("./lib/api", async (importOriginal) => {
 		loadAgentModelSections: apiMocks.loadAgentModelSections,
 		loadWorkspaceDetail: apiMocks.loadWorkspaceDetail,
 		loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
-		loadSessionMessages: apiMocks.loadSessionMessages,
+		loadSessionMessages: apiMocks.loadSessionThreadMessages,
+		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 		loadSessionAttachments: apiMocks.loadSessionAttachments,
 		listRepositories: apiMocks.listRepositories,
 		createWorkspaceFromRepo: apiMocks.createWorkspaceFromRepo,
@@ -51,7 +52,7 @@ describe("App create workspace flow", () => {
 		apiMocks.loadAgentModelSections.mockReset();
 		apiMocks.loadWorkspaceDetail.mockReset();
 		apiMocks.loadWorkspaceSessions.mockReset();
-		apiMocks.loadSessionMessages.mockReset();
+		apiMocks.loadSessionThreadMessages.mockReset();
 		apiMocks.loadSessionAttachments.mockReset();
 		apiMocks.listRepositories.mockReset();
 		apiMocks.createWorkspaceFromRepo.mockReset();
@@ -221,7 +222,7 @@ describe("App create workspace flow", () => {
 				];
 			},
 		);
-		apiMocks.loadSessionMessages.mockResolvedValue([]);
+		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
 		apiMocks.loadSessionAttachments.mockResolvedValue([]);
 		apiMocks.createWorkspaceFromRepo.mockImplementation(async () => {
 			createRuntime.created = true;
@@ -262,7 +263,7 @@ describe("App create workspace flow", () => {
 			);
 		});
 		await waitFor(() => {
-			expect(apiMocks.loadSessionMessages).toHaveBeenCalledWith(
+			expect(apiMocks.loadSessionThreadMessages).toHaveBeenCalledWith(
 				"session-created",
 			);
 		});
