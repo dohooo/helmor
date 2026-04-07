@@ -11,6 +11,7 @@ import App from "./App";
 import { WorkspacePanel } from "./components/workspace-panel";
 import { WorkspacesSidebar } from "./components/workspaces-sidebar";
 import type { RepositoryCreateOption, WorkspaceGroup } from "./lib/api";
+import { renderWithProviders } from "./test/render-with-providers";
 
 vi.mock("./App.css", () => ({}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -627,7 +628,7 @@ describe("App", () => {
 	});
 
 	it("shows unread indicators in session tabs", () => {
-		render(
+		renderWithProviders(
 			<WorkspacePanel
 				workspace={null}
 				sessions={[
@@ -650,7 +651,6 @@ describe("App", () => {
 					},
 				]}
 				selectedSessionId="session-1"
-				visibleSessionId="session-1"
 				sessionPanes={[
 					{
 						sessionId: "session-1",

@@ -289,7 +289,7 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		).toEqual(createMessages("session-2"));
 	});
 
-	it("reuses a kept-alive pane across workspace switches even after query cache eviction", async () => {
+	it("falls back to loading when revisiting a session after query cache eviction", async () => {
 		const queryClient = createHelmorQueryClient();
 		const workspace1Sessions = createWorkspaceSessions("workspace-1", [
 			"session-1",
@@ -389,13 +389,18 @@ describe("WorkspacePanelContainer loading semantics", () => {
 			/>,
 		);
 
-		expect(getLatestPanelProps().loadingSession).toBe(false);
-		expect(getSessionPaneIds()).toContain("session-1");
+		expect(getLatestPanelProps().loadingSession).toBe(true);
+		expect(getSessionPaneIds()).not.toContain("session-1");
 
 		deferredMessages.resolve(createMessages("session-1"));
+
+		await waitFor(() => {
+			expect(getLatestPanelProps().loadingSession).toBe(false);
+			expect(getSessionPaneIds()).toContain("session-1");
+		});
 	});
 
-	it("does not retain empty sessions in the keep-alive pane registry", async () => {
+	it("renders only the active session pane when switching between sessions", async () => {
 		const queryClient = createHelmorQueryClient();
 		queryClient.setQueryData(
 			helmorQueryKeys.workspaceDetail("workspace-1"),
@@ -448,10 +453,11 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		await waitFor(() => {
 			expect(getSessionPaneIds()).toContain("session-1");
 			expect(getSessionPaneIds()).not.toContain("session-2");
+			expect(getSessionPaneIds()).toHaveLength(1);
 		});
 	});
 
-	it("promotes the target session immediately when the previous visible pane was dropped", async () => {
+	it("shows an empty session immediately without a prepare phase", async () => {
 		const queryClient = createHelmorQueryClient();
 		queryClient.setQueryData(
 			helmorQueryKeys.workspaceDetail("workspace-1"),
@@ -498,9 +504,8 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		);
 
 		await waitFor(() => {
-			expect(getLatestPanelProps().visibleSessionId).toBe("session-1");
-			expect(getLatestPanelProps().preparingSessionId).toBeNull();
-			expect(getSessionPaneIds()).toContain("session-1");
+			expect(getSessionPaneIds()).toEqual(["session-1"]);
+			expect(getLatestPanelProps().loadingSession).toBe(false);
 		});
 	});
 });
