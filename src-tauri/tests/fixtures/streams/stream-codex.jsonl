@@ -1,4 +1,4 @@
-{"type":"item.completed","item":{"type":"agent_message","text":"I'll help you list the files in the current directory."},"sequence_number":1}
-{"type":"item.completed","item":{"type":"command_execution","command":"ls -la","output":"total 48\ndrwxr-xr-x  8 user group  256 Apr  7 10:00 .\ndrwxr-xr-x 12 user group  384 Apr  7 09:00 ..\n-rw-r--r--  1 user group 1234 Apr  7 10:00 README.md\n-rw-r--r--  1 user group 5678 Apr  7 10:00 package.json\n","exit_code":0},"sequence_number":2}
-{"type":"item.completed","item":{"type":"agent_message","text":"Here are the files in the current directory:\n- README.md\n- package.json\n\nThe directory contains 2 files."},"sequence_number":3}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I'll help you list the files in the current directory."},"sequence_number":1}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"ls -la","aggregated_output":"total 48\ndrwxr-xr-x  8 user group  256 Apr  7 10:00 .\ndrwxr-xr-x 12 user group  384 Apr  7 09:00 ..\n-rw-r--r--  1 user group 1234 Apr  7 10:00 README.md\n-rw-r--r--  1 user group 5678 Apr  7 10:00 package.json\n","status":"completed","exit_code":0},"sequence_number":2}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Here are the files in the current directory:\n- README.md\n- package.json\n\nThe directory contains 2 files."},"sequence_number":3}
 {"type":"turn.completed","usage":{"input_tokens":150,"output_tokens":75,"total_tokens":225},"sequence_number":4}

@@ -629,7 +629,14 @@ impl StreamAccumulator {
 
         if item_type == Some("command_execution") {
             let command = item.get("command").and_then(Value::as_str).unwrap_or("");
-            let output = item.get("output").and_then(Value::as_str).unwrap_or("");
+            // Real Codex SDK sends `aggregated_output`. The legacy fixture
+            // (and possibly an older SDK build) used `output`. Read both so
+            // both shapes work.
+            let output = item
+                .get("aggregated_output")
+                .or_else(|| item.get("output"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let exit_code = item.get("exit_code").and_then(Value::as_i64).unwrap_or(0);
             let synthetic_id = format!("codex-cmd-{}", self.line_count);
 

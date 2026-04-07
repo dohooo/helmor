@@ -202,18 +202,74 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
             continue;
         }
 
-        // Codex: item.completed with agent_message
+        // Codex: item.completed — has two flavors
+        //
+        //   item.type=agent_message    → assistant text reply
+        //   item.type=command_execution → Bash tool call (synthesized)
+        //
+        // Both must render in the historical-load path. Before this branch
+        // existed, command_execution rows were silently dropped on reload,
+        // so the user saw a wall of agent_message text with no tool
+        // boundaries, even though the streaming render had shown them
+        // correctly via the accumulator's synthetic events.
         if msg_type == Some("item.completed") {
             let item = parsed.and_then(|p| p.get("item"));
             if let Some(item_obj) = item {
-                if item_obj.get("type").and_then(Value::as_str) == Some("agent_message") {
-                    if let Some(text) = item_obj.get("text").and_then(Value::as_str) {
+                let item_type = item_obj.get("type").and_then(Value::as_str);
+                match item_type {
+                    Some("agent_message") => {
+                        if let Some(text) = item_obj.get("text").and_then(Value::as_str) {
+                            result.push(ThreadMessageLike {
+                                role: MessageRole::Assistant,
+                                id: Some(msg.id.clone()),
+                                created_at: Some(msg.created_at.clone()),
+                                content: vec![ExtendedMessagePart::Basic(MessagePart::Text {
+                                    text: text.to_string(),
+                                })],
+                                status: Some(MessageStatus {
+                                    status_type: "complete".to_string(),
+                                    reason: Some("stop".to_string()),
+                                }),
+                                streaming: None,
+                            });
+                        }
+                    }
+                    Some("command_execution") => {
+                        let command = item_obj
+                            .get("command")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        // Real Codex SDK sends `aggregated_output`. The
+                        // legacy fixture/older builds used `output`. Read
+                        // both, prefer the new name.
+                        let output = item_obj
+                            .get("aggregated_output")
+                            .or_else(|| item_obj.get("output"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        let exit_code = item_obj
+                            .get("exit_code")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0);
+                        let result_text = if exit_code == 0 {
+                            output.to_string()
+                        } else {
+                            format!("Exit code: {exit_code}\n{output}")
+                        };
+                        let args = serde_json::json!({"command": command});
+                        let args_text = serde_json::to_string(&args).unwrap_or_default();
+
                         result.push(ThreadMessageLike {
                             role: MessageRole::Assistant,
                             id: Some(msg.id.clone()),
                             created_at: Some(msg.created_at.clone()),
-                            content: vec![ExtendedMessagePart::Basic(MessagePart::Text {
-                                text: text.to_string(),
+                            content: vec![ExtendedMessagePart::Basic(MessagePart::ToolCall {
+                                tool_call_id: format!("codex-cmd-{}", msg.id),
+                                tool_name: "Bash".to_string(),
+                                args,
+                                args_text,
+                                result: Some(Value::String(result_text)),
+                                streaming_status: None,
                             })],
                             status: Some(MessageStatus {
                                 status_type: "complete".to_string(),
@@ -222,6 +278,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
                             streaming: None,
                         });
                     }
+                    _ => {}
                 }
             }
             i += 1;

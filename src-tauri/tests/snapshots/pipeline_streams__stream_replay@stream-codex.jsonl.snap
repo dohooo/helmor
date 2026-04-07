@@ -22,3 +22,11 @@ persisted_turns:
       block_types: []
     - role: assistant
       block_types: []
+historical_render:
+  message_count: 1
+  messages:
+    - role: assistant
+      part_types:
+        - text
+        - tool-call
+        - text

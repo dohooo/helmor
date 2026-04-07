@@ -430,3 +430,128 @@ fn merge_streaming_flag_from_latest() {
     ];
     assert_yaml_snapshot!(run_normalized(msgs));
 }
+
+// ============================================================================
+// 8. Codex item.completed historical loading
+// ============================================================================
+//
+// The Codex SDK persists each `item.completed` event as its own DB row.
+// item.type=agent_message → assistant text, item.type=command_execution →
+// Bash tool call. Both must render in the historical-load path. Before
+// 2026-04-08 the adapter only handled agent_message — every command_execution
+// row got silently dropped on reload, leaving the user with a wall of text
+// and no visible tool calls.
+
+#[test]
+fn codex_item_command_execution_renders_as_bash_tool_call() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "item_1",
+            "type": "command_execution",
+            "command": "ls -la",
+            "aggregated_output": "total 4\n.\n..\nREADME.md",
+            "status": "completed",
+            "exit_code": 0
+        }
+    });
+    let msgs = vec![make_record(
+        "c1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn codex_item_command_execution_failed_includes_exit_code() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "item_2",
+            "type": "command_execution",
+            "command": "false",
+            "aggregated_output": "stderr line",
+            "status": "failed",
+            "exit_code": 1
+        }
+    });
+    let msgs = vec![make_record(
+        "c2",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn codex_item_command_execution_legacy_output_field() {
+    // Older fixtures (and possibly older SDK builds) used `output` instead
+    // of `aggregated_output`. Both must work — pin the fallback so a future
+    // cleanup doesn't accidentally drop the legacy reader.
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "item_3",
+            "type": "command_execution",
+            "command": "echo hello",
+            "output": "hello",
+            "exit_code": 0
+        }
+    });
+    let msgs = vec![make_record(
+        "c3",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn codex_item_completed_full_session_with_text_and_commands() {
+    // Realistic Codex session pattern: text → command → text. The middle
+    // command_execution must NOT be dropped (the original bug); the merge
+    // pass should fold all three into a single assistant turn with three
+    // content parts in the original order.
+    let agent_message_1 = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "item_0",
+            "type": "agent_message",
+            "text": "Let me check the directory."
+        }
+    });
+    let command = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "item_1",
+            "type": "command_execution",
+            "command": "ls",
+            "aggregated_output": "README.md",
+            "status": "completed",
+            "exit_code": 0
+        }
+    });
+    let agent_message_2 = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "item_2",
+            "type": "agent_message",
+            "text": "There's only README.md."
+        }
+    });
+    let msgs = vec![
+        make_record(
+            "c1",
+            "assistant",
+            &serde_json::to_string(&agent_message_1).unwrap(),
+        ),
+        make_record("c2", "assistant", &serde_json::to_string(&command).unwrap()),
+        make_record(
+            "c3",
+            "assistant",
+            &serde_json::to_string(&agent_message_2).unwrap(),
+        ),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}

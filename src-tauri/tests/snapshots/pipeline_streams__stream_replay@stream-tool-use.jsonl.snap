@@ -830,3 +830,30 @@ persisted_turns:
       block_types:
         - thinking
         - text
+historical_render:
+  message_count: 1
+  messages:
+    - role: assistant
+      part_types:
+        - reasoning
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - reasoning
+        - text

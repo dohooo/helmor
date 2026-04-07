@@ -49,20 +49,25 @@ use serde::Serialize;
 use serde_json::Value;
 use std::fs;
 
-/// One snapshot per stream fixture, covering BOTH halves of the pipeline:
+/// One snapshot per stream fixture, covering THREE stages of the pipeline:
 ///
-/// - **Rendering side** (`checkpoints` + `final_state`): mid-stream Full()
+/// - **Streaming render** (`checkpoints` + `final_state`): mid-stream Full()
 ///   emissions and the post-`finish()` ThreadMessageLike snapshot. Catches
-///   adapter/collapse drift.
+///   adapter/collapse drift on the live path.
 ///
-/// - **Persistence side** (`persisted_turns`): the `turns` vec exposed by
+/// - **Persistence layout** (`persisted_turns`): the `turns` vec exposed by
 ///   the accumulator AFTER `finish_output()`, with each turn's role and
 ///   content block types. Catches accumulator-level bugs that drop blocks
-///   from `cur_asst_*` before they reach `self.turns` — most importantly
-///   the "thinking gets clobbered by the next same-msg_id event" regression
-///   that lived from the pipeline migration through e0d6253. Without that
-///   fix the snapshots show every assistant turn with a single block;
-///   with the fix, thinking + tool_use / thinking + text get merged.
+///   from `cur_asst_*` before they reach `self.turns` (e.g. the "thinking
+///   gets clobbered by the next same-msg_id event" regression).
+///
+/// - **Historical reload** (`historical_render`): feed the persisted turns
+///   back through `convert_historical` and snapshot the rendered output.
+///   This is the round-trip — streaming → persist → reload → render — that
+///   would have caught BOTH the "command_execution dropped on reload" bug
+///   AND the silent symmetry-break between the streaming render path
+///   (which synthesizes tool_use/tool_result) and the historical render
+///   path (which uses item.completed branches in the adapter).
 ///
 /// We don't snapshot the full content (the jsonl can produce thousands of
 /// lines after pretty-print) — just the structural shape that meaningfully
@@ -74,6 +79,25 @@ struct StreamReplaySnapshot {
     checkpoints: Vec<StreamCheckpoint>,
     final_state: FinalState,
     persisted_turns: PersistedTurnsSnapshot,
+    historical_render: HistoricalRenderSnapshot,
+}
+
+/// Historical-side snapshot — what `convert_historical` produces when the
+/// persisted turns are loaded back from the DB. This is the path the user
+/// hits every time they reopen a session.
+#[derive(Debug, Serialize)]
+struct HistoricalRenderSnapshot {
+    message_count: usize,
+    /// Per-message: role + content part types in order. Mirrors the
+    /// streaming render's `checkpoints[*].last_part_types` but applied to
+    /// the full historical reload.
+    messages: Vec<HistoricalRenderedMessage>,
+}
+
+#[derive(Debug, Serialize)]
+struct HistoricalRenderedMessage {
+    role: String,
+    part_types: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -137,6 +161,37 @@ fn collect_part_types(msg: &ThreadMessageLike) -> Vec<String> {
         .iter()
         .map(|p| part_type(p).to_string())
         .collect()
+}
+
+/// Build HistoricalRecords from the accumulator's persisted turns and run
+/// them through `convert_historical`. Mirrors what happens when a user
+/// closes the app and reopens a session — DB rows → loader → adapter →
+/// rendered ThreadMessageLikes.
+fn build_historical_snapshot(pipeline: &MessagePipeline) -> HistoricalRenderSnapshot {
+    let acc = &pipeline.accumulator;
+    let records: Vec<HistoricalRecord> = (0..acc.turns_len())
+        .map(|i| {
+            let turn = acc.turn_at(i);
+            HistoricalRecord {
+                id: format!("hist-{i}"),
+                role: turn.role.clone(),
+                content: turn.content_json.clone(),
+                parsed_content: serde_json::from_str(&turn.content_json).ok(),
+                created_at: "2026-04-08T00:00:00.000Z".to_string(),
+            }
+        })
+        .collect();
+    let rendered = MessagePipeline::convert_historical(&records);
+    HistoricalRenderSnapshot {
+        message_count: rendered.len(),
+        messages: rendered
+            .iter()
+            .map(|m| HistoricalRenderedMessage {
+                role: role_str(&m.role),
+                part_types: collect_part_types(m),
+            })
+            .collect(),
+    }
 }
 
 /// Extract the persisted-turn fingerprint by parsing each turn's JSON
@@ -245,6 +300,7 @@ fn stream_replay() {
             .finish_output(Some("test-session"))
             .ok();
         let persisted_turns = build_persisted_snapshot(&pipeline);
+        let historical_render = build_historical_snapshot(&pipeline);
 
         let snapshot = StreamReplaySnapshot {
             line_count: lines.len(),
@@ -252,6 +308,7 @@ fn stream_replay() {
             checkpoints,
             final_state,
             persisted_turns,
+            historical_render,
         };
 
         assert_yaml_snapshot!(snapshot);
