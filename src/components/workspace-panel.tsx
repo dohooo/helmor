@@ -860,7 +860,11 @@ function ConversationViewport({
 
 	return (
 		<ScrollArea
-			className="relative min-h-0 flex-1"
+			// Remount on session switch so the CSS fade-in animation on
+			// `.conversation-scroll-area [data-slot=scroll-area-scrollbar]`
+			// re-fires each time the user lands on a new thread.
+			key={sessionId}
+			className="conversation-scroll-area relative min-h-0 flex-1"
 			viewportRef={viewportRef}
 			viewportClassName="conversation-scroll-viewport"
 			overlay={children}
