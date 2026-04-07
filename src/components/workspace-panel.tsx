@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import {
 	createElement,
+	forwardRef,
 	lazy,
 	memo,
 	type ReactNode,
@@ -163,6 +164,47 @@ const sessionViewportStateBySession = new Map<string, StateSnapshot>();
 const sessionPlainScrollTopBySession = new Map<string, number>();
 const CHAT_LAYOUT_CACHE_VERSION = "chat-layout-v1";
 const NON_VIRTUALIZED_THREAD_MESSAGE_LIMIT = 12;
+
+/**
+ * Context object Virtuoso passes through to our custom Scroller. Used to wire
+ * the inner scroller DOM element to use-stick-to-bottom's `contentRef` so the
+ * library can ResizeObserver it (its height equals the virtual list's
+ * `totalListHeight` in customScrollParent mode).
+ */
+type StickyScrollerContext = {
+	contentRef: (element: HTMLElement | null) => void;
+};
+
+/**
+ * Custom Scroller component for Virtuoso. In `customScrollParent` mode the
+ * Scroller element is the wrapper that receives an inline
+ * `height: totalListHeight + deviation` style — exactly the element whose
+ * resize signal use-stick-to-bottom needs to drive its stick-to-bottom logic.
+ *
+ * Defined at module scope (Virtuoso recreates a fresh instance if the
+ * component identity changes between renders, which would re-mount the entire
+ * list). Dynamic state is threaded in through Virtuoso's `context` prop.
+ */
+const StickyScroller: NonNullable<
+	VirtuosoComponents<RenderedMessage, StickyScrollerContext>["Scroller"]
+> = forwardRef(function StickyScroller({ context, children, ...rest }, ref) {
+	const handleRef = useCallback(
+		(element: HTMLDivElement | null) => {
+			if (typeof ref === "function") {
+				ref(element);
+			} else if (ref) {
+				(ref as { current: HTMLDivElement | null }).current = element;
+			}
+			context.contentRef(element);
+		},
+		[ref, context],
+	);
+	return (
+		<div {...rest} ref={handleRef}>
+			{children}
+		</div>
+	);
+});
 
 function preloadStreamdown() {
 	if (hasPreloadedStreamdown) return;
@@ -751,10 +793,25 @@ function ChatThread({
 		threadMessages.length <= NON_VIRTUALIZED_THREAD_MESSAGE_LIMIT;
 	const virtuosoRef = useRef<VirtuosoHandle | null>(null);
 	const scrollParentRef = useRef<HTMLElement | null>(null);
+	const restoredViewportState = useMemo(
+		() => initialSnapshot ?? sessionViewportStateBySession.get(sessionId),
+		[initialSnapshot, sessionId],
+	);
+	// When restoring a previous viewport snapshot, do NOT auto-scroll to
+	// bottom on mount — that would clobber the restored mid-thread position.
+	// Captured once on mount via lazy useState; the value only matters for
+	// the first render of useStickToBottom.
+	const [initialStickBehavior] = useState<"instant" | false>(() =>
+		restoredViewportState ? false : "instant",
+	);
 	const { contentRef, scrollRef, scrollToBottom, isAtBottom } =
 		useStickToBottom({
-			initial: "instant",
+			initial: initialStickBehavior,
 		});
+	const stickyScrollerContext = useMemo<StickyScrollerContext>(
+		() => ({ contentRef }),
+		[contentRef],
+	);
 	const handleScrollRef = useCallback(
 		(element: HTMLElement | null) => {
 			scrollParentRef.current = element;
@@ -767,10 +824,6 @@ function ChatThread({
 	const preparePhaseRef = useRef<"idle" | "waiting-bottom">("idle");
 	const prepareRunIdRef = useRef(0);
 	const prepareFinishRef = useRef<(() => void) | null>(null);
-	const restoredViewportState = useMemo(
-		() => initialSnapshot ?? sessionViewportStateBySession.get(sessionId),
-		[initialSnapshot, sessionId],
-	);
 	const previousSendingRef = useRef(sending);
 	const sendingJustStarted = sending && !previousSendingRef.current;
 	const sendingRef = useRef(sending);
@@ -1014,11 +1067,14 @@ function ChatThread({
 		scrollParent.scrollTop = scrollParent.scrollHeight;
 	}, [mode, sessionId, usePlainThread]);
 
-	const virtuosoComponents = useMemo<VirtuosoComponents<RenderedMessage>>(
+	const virtuosoComponents = useMemo<
+		VirtuosoComponents<RenderedMessage, StickyScrollerContext>
+	>(
 		() => ({
 			Header: ConversationHeaderSpacer,
 			Item: ConversationItem,
 			Footer: sending ? StreamingFooter : ConversationFooterSpacer,
+			Scroller: StickyScroller,
 			EmptyPlaceholder: () => (
 				<div className="flex min-h-full flex-1 flex-col">
 					<EmptyState hasSession={hasSession} />
@@ -1042,9 +1098,8 @@ function ChatThread({
 	return (
 		<ConversationViewport
 			components={virtuosoComponents}
-			contentRef={usePlainThread ? contentRef : undefined}
+			stickyScrollerContext={stickyScrollerContext}
 			data={threadMessages}
-			isAtBottom={isAtBottom}
 			itemContent={itemContent}
 			restoredViewportState={restoredViewportState}
 			scrollRef={handleScrollRef}
@@ -1072,9 +1127,8 @@ function ChatThread({
 function ConversationViewport({
 	children,
 	components,
-	contentRef,
+	stickyScrollerContext,
 	data,
-	isAtBottom,
 	itemContent,
 	restoredViewportState,
 	scrollRef,
@@ -1082,10 +1136,9 @@ function ConversationViewport({
 	virtuosoRef,
 }: {
 	children?: ReactNode;
-	components: VirtuosoComponents<RenderedMessage>;
-	contentRef?: React.RefCallback<HTMLElement>;
+	components: VirtuosoComponents<RenderedMessage, StickyScrollerContext>;
+	stickyScrollerContext: StickyScrollerContext;
 	data: RenderedMessage[];
-	isAtBottom: boolean;
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
 	restoredViewportState?: StateSnapshot;
 	scrollRef: React.RefCallback<HTMLElement>;
@@ -1115,7 +1168,7 @@ function ConversationViewport({
 			type="always"
 		>
 			{usePlainThread ? (
-				<div ref={contentRef}>
+				<div ref={stickyScrollerContext.contentRef}>
 					{Header ? createElement(Header) : null}
 					{data.length === 0
 						? EmptyPlaceholder
@@ -1139,10 +1192,10 @@ function ConversationViewport({
 					computeItemKey={(index, message) =>
 						message.id ?? `${message.role}:${index}`
 					}
+					context={stickyScrollerContext}
 					customScrollParent={scrollParent}
 					data={data}
 					defaultItemHeight={92}
-					followOutput={isAtBottom ? "smooth" : false}
 					initialTopMostItemIndex={
 						restoredViewportState ? undefined : { index: "LAST", align: "end" }
 					}
