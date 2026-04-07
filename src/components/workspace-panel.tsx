@@ -753,7 +753,7 @@ function ChatThread({
 	}, [sendingJustStarted, scrollToBottom]);
 
 	useLayoutEffect(() => {
-		if (!usePlainThread || typeof window === "undefined") {
+		if (typeof window === "undefined") {
 			return;
 		}
 
@@ -762,8 +762,13 @@ function ChatThread({
 			return;
 		}
 
+		// Snap to bottom on session switch for both plain and progressive
+		// thread paths. The progressive viewport used to rely on a forced
+		// `<ScrollArea key={sessionId}>` remount to re-fire useStickToBottom's
+		// initial-instant jump; that remount also re-rendered every visible
+		// row on every navigation.
 		scrollParent.scrollTop = scrollParent.scrollHeight;
-	}, [sessionId, usePlainThread]);
+	}, [sessionId]);
 
 	const itemContent = useCallback(
 		(index: number, message: RenderedMessage) => (
@@ -860,10 +865,11 @@ function ConversationViewport({
 
 	return (
 		<ScrollArea
-			// Remount on session switch so the CSS fade-in animation on
-			// `.conversation-scroll-area [data-slot=scroll-area-scrollbar]`
-			// re-fires each time the user lands on a new thread.
-			key={sessionId}
+			// Intentionally NOT keyed on sessionId. The previous remount-on-
+			// switch (originally to re-fire the scrollbar fade-in animation)
+			// forced every visible row to re-render on each navigation; the
+			// bottom-anchor that the remount provided is now done explicitly
+			// via a useLayoutEffect on `sessionId` in ChatThread above.
 			className="conversation-scroll-area relative min-h-0 flex-1"
 			viewportRef={viewportRef}
 			viewportClassName="conversation-scroll-viewport"
@@ -944,12 +950,28 @@ function ProgressiveConversationViewport({
 		scrollTop: number;
 		viewportHeight: number;
 	}>({ scrollTop: 0, viewportHeight: 0 });
-	const { scrollTop, viewportHeight } = committedScrollState;
 	const [measuredHeights, setMeasuredHeights] = useState<
 		Record<string, number>
 	>({});
 	const initialScrollAppliedRef = useRef(false);
 	const pendingScrollAdjustmentRef = useRef(0);
+
+	// Reset transient viewport state synchronously when the layout key (i.e.
+	// the active session) changes. We used to rely on `<ScrollArea
+	// key={sessionId}>` to throw this state away on every switch via a
+	// remount, but the remount also re-rendered every visible row. The "set
+	// state during render to reset on prop change" pattern lets React discard
+	// the in-progress render and immediately retry with fresh state, so a
+	// single render replaces the previous render → useEffect → 2x setState →
+	// extra render chain.
+	const [lastLayoutCacheKey, setLastLayoutCacheKey] = useState(layoutCacheKey);
+	if (lastLayoutCacheKey !== layoutCacheKey) {
+		setLastLayoutCacheKey(layoutCacheKey);
+		setCommittedScrollState({ scrollTop: 0, viewportHeight: 0 });
+		setMeasuredHeights({});
+		initialScrollAppliedRef.current = false;
+	}
+	const { scrollTop, viewportHeight } = committedScrollState;
 	// Mirror of `measuredHeights` for synchronous reads inside the
 	// `handleHeightChange` callback. The mirror is updated in a layout effect
 	// (after commit) instead of during render to keep render pure under
@@ -959,10 +981,8 @@ function ProgressiveConversationViewport({
 		measuredHeightsRef.current = measuredHeights;
 	}, [measuredHeights]);
 
-	useEffect(() => {
-		setMeasuredHeights({});
-		initialScrollAppliedRef.current = false;
-	}, [layoutCacheKey]);
+	// Note: the post-commit reset that used to live here for layoutCacheKey
+	// changes is now handled by the synchronous reset block above.
 
 	useEffect(() => {
 		if (!scrollParent) {
