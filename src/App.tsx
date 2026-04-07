@@ -61,14 +61,13 @@ import {
 	type WorkspaceRow,
 	type WorkspaceSessionSummary,
 } from "./lib/api";
-import { shouldTrackDevCacheStats } from "./lib/dev-render-debug";
 import type { EditorSessionState } from "./lib/editor-session";
 import { isPathWithinRoot } from "./lib/editor-session";
 import {
 	archivedWorkspacesQueryOptions,
 	createHelmorQueryClient,
 	helmorQueryKeys,
-	sessionMessagesQueryOptions,
+	sessionThreadMessagesQueryOptions,
 	workspaceDetailQueryOptions,
 	workspaceGroupsQueryOptions,
 	workspaceSessionsQueryOptions,
@@ -533,21 +532,41 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			return;
 		}
 
+		// Throttle width updates to once-per-frame via rAF. Without this, every
+		// pixel of mousemove (60+ Hz) triggers setSidebarWidth/setInspectorWidth
+		// → AppShell re-renders the entire workspace tree.
+		let pendingWidth: number | null = null;
+		let rafId: number | null = null;
+		const flush = () => {
+			rafId = null;
+			if (pendingWidth === null) return;
+			const nextWidth = pendingWidth;
+			pendingWidth = null;
+			if (resizeState.target === "sidebar") {
+				setSidebarWidth(nextWidth);
+			} else {
+				setInspectorWidth(nextWidth);
+			}
+		};
+
 		const handleMouseMove = (event: globalThis.MouseEvent) => {
 			const deltaX = event.clientX - resizeState.pointerX;
-			const nextWidth =
+			const rawWidth =
 				resizeState.target === "sidebar"
 					? resizeState.sidebarWidth + deltaX
 					: resizeState.sidebarWidth - deltaX;
-
-			if (resizeState.target === "sidebar") {
-				setSidebarWidth(clampSidebarWidth(nextWidth));
-				return;
+			pendingWidth = clampSidebarWidth(rawWidth);
+			if (rafId === null) {
+				rafId = window.requestAnimationFrame(flush);
 			}
-
-			setInspectorWidth(clampSidebarWidth(nextWidth));
 		};
 		const handleMouseUp = () => {
+			if (rafId !== null) {
+				window.cancelAnimationFrame(rafId);
+				rafId = null;
+			}
+			// Make sure the final width is committed before tearing down.
+			flush();
 			setResizeState(null);
 		};
 		const previousCursor = document.body.style.cursor;
@@ -560,6 +579,9 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		window.addEventListener("mouseup", handleMouseUp);
 
 		return () => {
+			if (rafId !== null) {
+				window.cancelAnimationFrame(rafId);
+			}
 			document.body.style.cursor = previousCursor;
 			document.body.style.userSelect = previousUserSelect;
 			window.removeEventListener("mousemove", handleMouseMove);
@@ -637,48 +659,52 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		}
 	}, []);
 
-	const handleResizeStart =
+	const handleResizeStart = useCallback(
 		(target: "sidebar" | "inspector") =>
-		(event: MouseEvent<HTMLDivElement>) => {
-			event.preventDefault();
-			setResizeState({
-				pointerX: event.clientX,
-				sidebarWidth: target === "sidebar" ? sidebarWidth : inspectorWidth,
-				target,
-			});
-		};
+			(event: MouseEvent<HTMLDivElement>) => {
+				event.preventDefault();
+				setResizeState({
+					pointerX: event.clientX,
+					sidebarWidth: target === "sidebar" ? sidebarWidth : inspectorWidth,
+					target,
+				});
+			},
+		[sidebarWidth, inspectorWidth],
+	);
 
-	const handleResizeKeyDown =
+	const handleResizeKeyDown = useCallback(
 		(target: "sidebar" | "inspector") =>
-		(event: KeyboardEvent<HTMLDivElement>) => {
-			if (event.key === "ArrowLeft") {
-				event.preventDefault();
-				if (target === "sidebar") {
-					setSidebarWidth((currentWidth) =>
-						clampSidebarWidth(currentWidth - SIDEBAR_RESIZE_STEP),
-					);
-					return;
-				}
+			(event: KeyboardEvent<HTMLDivElement>) => {
+				if (event.key === "ArrowLeft") {
+					event.preventDefault();
+					if (target === "sidebar") {
+						setSidebarWidth((currentWidth) =>
+							clampSidebarWidth(currentWidth - SIDEBAR_RESIZE_STEP),
+						);
+						return;
+					}
 
-				setInspectorWidth((currentWidth) =>
-					clampSidebarWidth(currentWidth + SIDEBAR_RESIZE_STEP),
-				);
-			}
-
-			if (event.key === "ArrowRight") {
-				event.preventDefault();
-				if (target === "sidebar") {
-					setSidebarWidth((currentWidth) =>
+					setInspectorWidth((currentWidth) =>
 						clampSidebarWidth(currentWidth + SIDEBAR_RESIZE_STEP),
 					);
-					return;
 				}
 
-				setInspectorWidth((currentWidth) =>
-					clampSidebarWidth(currentWidth - SIDEBAR_RESIZE_STEP),
-				);
-			}
-		};
+				if (event.key === "ArrowRight") {
+					event.preventDefault();
+					if (target === "sidebar") {
+						setSidebarWidth((currentWidth) =>
+							clampSidebarWidth(currentWidth + SIDEBAR_RESIZE_STEP),
+						);
+						return;
+					}
+
+					setInspectorWidth((currentWidth) =>
+						clampSidebarWidth(currentWidth - SIDEBAR_RESIZE_STEP),
+					);
+				}
+			},
+		[],
+	);
 
 	const confirmDiscardEditorChanges = useCallback(
 		(action: string) => {
@@ -769,7 +795,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 			if (resolvedSessionId) {
 				await queryClient.ensureQueryData(
-					sessionMessagesQueryOptions(resolvedSessionId),
+					sessionThreadMessagesQueryOptions(resolvedSessionId),
 				);
 			}
 
@@ -801,8 +827,10 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 				null;
 			const hasSessionMessages =
 				sessionId === null ||
-				queryClient.getQueryData(helmorQueryKeys.sessionMessages(sessionId)) !==
-					undefined;
+				queryClient.getQueryData([
+					...helmorQueryKeys.sessionMessages(sessionId),
+					"thread",
+				]) !== undefined;
 
 			if (!hasSessionMessages) {
 				return null;
@@ -884,7 +912,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 				);
 				if (cachedWorkspaceDisplay.sessionId) {
 					void queryClient.prefetchQuery(
-						sessionMessagesQueryOptions(cachedWorkspaceDisplay.sessionId),
+						sessionThreadMessagesQueryOptions(cachedWorkspaceDisplay.sessionId),
 					);
 				}
 				return;
@@ -954,8 +982,10 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			}
 
 			if (
-				queryClient.getQueryData(helmorQueryKeys.sessionMessages(sessionId)) !==
-				undefined
+				queryClient.getQueryData([
+					...helmorQueryKeys.sessionMessages(sessionId),
+					"thread",
+				]) !== undefined
 			) {
 				startTransition(() => {
 					if (sessionSelectionRequestRef.current !== requestId) {
@@ -964,12 +994,14 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 					setDisplayedSessionId(sessionId);
 				});
-				void queryClient.prefetchQuery(sessionMessagesQueryOptions(sessionId));
+				void queryClient.prefetchQuery(
+					sessionThreadMessagesQueryOptions(sessionId),
+				);
 				return;
 			}
 
 			void queryClient
-				.ensureQueryData(sessionMessagesQueryOptions(sessionId))
+				.ensureQueryData(sessionThreadMessagesQueryOptions(sessionId))
 				.then(() => {
 					if (sessionSelectionRequestRef.current !== requestId) {
 						return;
@@ -1310,7 +1342,6 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 										/>
 									)}
 								</div>
-								{workspaceViewMode === "conversation" && <ChatCacheDebugHud />}
 							</section>
 
 							<div
@@ -1478,125 +1509,6 @@ function EditorIcon({
 		default:
 			return <ExternalLink className={className} strokeWidth={1.8} />;
 	}
-}
-
-function ChatCacheDebugHud() {
-	const [tick, setTick] = useState(0);
-
-	useEffect(() => {
-		if (!shouldTrackDevCacheStats() || typeof window === "undefined") {
-			return;
-		}
-
-		const intervalId = window.setInterval(() => {
-			setTick((current) => current + 1);
-		}, 750);
-
-		return () => {
-			window.clearInterval(intervalId);
-		};
-	}, []);
-
-	if (!shouldTrackDevCacheStats() || typeof window === "undefined") {
-		return null;
-	}
-
-	const snapshot = window.__HELMOR_DEV_CACHE_STATS__?.latest;
-
-	if (!snapshot) {
-		return (
-			<div className="pointer-events-none absolute bottom-4 right-4 z-40 w-56 rounded-[14px] border border-app-border/70 bg-app-sidebar/92 px-3 py-2 text-[11px] text-app-muted shadow-[0_12px_32px_rgba(0,0,0,0.28)] backdrop-blur-sm">
-				<div className="text-[10px] uppercase tracking-[0.18em] text-app-muted/70">
-					Cache Debug
-				</div>
-				<div className="mt-1">Waiting for chat cache stats…</div>
-			</div>
-		);
-	}
-
-	const heapUsed = snapshot.heapStats
-		? formatBytes(snapshot.heapStats.usedJSHeapSize)
-		: "n/a";
-	const heapTotal = snapshot.heapStats
-		? formatBytes(snapshot.heapStats.totalJSHeapSize)
-		: "n/a";
-	const retainedBytes = formatBytes(snapshot.totalEstimatedMessageBytes);
-	const retainedMessages = snapshot.totalRetainedMessages.toLocaleString();
-	const queryMessages =
-		snapshot.querySessionMessageDataMessages.toLocaleString();
-	const sessionLine = snapshot.visibleSessionId
-		? snapshot.visibleSessionId
-		: "none";
-	void tick;
-
-	return (
-		<div className="absolute bottom-4 right-4 z-40 w-64 rounded-[14px] border border-app-border/70 bg-app-sidebar/92 px-3 py-3 text-[11px] text-app-foreground shadow-[0_12px_32px_rgba(0,0,0,0.28)] backdrop-blur-sm">
-			<div className="flex items-center justify-between gap-2">
-				<div className="text-[10px] uppercase tracking-[0.18em] text-app-muted/70">
-					Cache Debug
-				</div>
-				<div className="truncate text-[10px] text-app-muted">{sessionLine}</div>
-			</div>
-
-			<div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-app-foreground-soft">
-				<DebugMetric
-					label="Hot"
-					value={`${snapshot.hotPaneCount}/${snapshot.paneLimit}`}
-				/>
-				<DebugMetric label="Warm" value={String(snapshot.warmEntryCount)} />
-				<DebugMetric label="Retained" value={retainedMessages} />
-				<DebugMetric label="Retained MB" value={retainedBytes} />
-				<DebugMetric
-					label="Query sessions"
-					value={String(snapshot.querySessionMessageCount)}
-				/>
-				<DebugMetric label="Query msgs" value={queryMessages} />
-				<DebugMetric
-					label="Observers"
-					value={String(snapshot.querySessionMessageObserverCount)}
-				/>
-				<DebugMetric label="Heap" value={`${heapUsed} / ${heapTotal}`} />
-			</div>
-
-			<div className="mt-3 flex items-center gap-2">
-				<button
-					type="button"
-					onClick={() => {
-						window.__HELMOR_DEV_CACHE_STATS__?.printLatest();
-					}}
-					className="rounded-full bg-app-toolbar px-2.5 py-1 text-[10px] font-medium text-app-foreground-soft transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
-				>
-					Print
-				</button>
-				<button
-					type="button"
-					onClick={() => {
-						window.__HELMOR_DEV_CACHE_STATS__?.resetHistory();
-						setTick((current) => current + 1);
-					}}
-					className="rounded-full bg-app-toolbar px-2.5 py-1 text-[10px] font-medium text-app-foreground-soft transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
-				>
-					Reset
-				</button>
-			</div>
-		</div>
-	);
-}
-
-function DebugMetric({ label, value }: { label: string; value: string }) {
-	return (
-		<div className="min-w-0">
-			<div className="text-[10px] uppercase tracking-[0.14em] text-app-muted/60">
-				{label}
-			</div>
-			<div className="truncate text-[11px] text-app-foreground">{value}</div>
-		</div>
-	);
-}
-
-function formatBytes(bytes: number) {
-	const megabytes = bytes / (1024 * 1024);
-	return `${megabytes.toFixed(megabytes >= 100 ? 0 : 1)} MB`;
 }
 
 function GithubIdentityGate({

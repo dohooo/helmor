@@ -1,0 +1,26 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: c1
+  content_length: 3
+  content:
+    - type: text
+      text: Let me check the directory.
+    - type: tool-call
+      tool_name: Bash
+      tool_call_id: codex-cmd-c2
+      args_keys:
+        - command
+      args_text_length: 16
+      has_result: true
+      result_kind: string
+      result_preview: README.md
+      streaming_status: ~
+    - type: text
+      text: "There's only README.md."
+  status:
+    type: complete
+    reason: stop
+  streaming: ~

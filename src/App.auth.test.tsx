@@ -21,6 +21,7 @@ const apiMocks = vi.hoisted(() => ({
 	loadWorkspaceDetail: vi.fn(),
 	loadWorkspaceSessions: vi.fn(),
 	loadSessionMessages: vi.fn(),
+	loadSessionThreadMessages: vi.fn(),
 	loadSessionAttachments: vi.fn(),
 }));
 
@@ -52,7 +53,8 @@ vi.mock("./lib/api", async (importOriginal) => {
 		listRepositories: apiMocks.listRepositories,
 		loadWorkspaceDetail: apiMocks.loadWorkspaceDetail,
 		loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
-		loadSessionMessages: apiMocks.loadSessionMessages,
+		loadSessionMessages: apiMocks.loadSessionThreadMessages,
+		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 		loadSessionAttachments: apiMocks.loadSessionAttachments,
 	};
 });
@@ -156,6 +158,7 @@ function mockWorkspaceData() {
 		},
 	]);
 	apiMocks.loadSessionMessages.mockResolvedValue([]);
+	apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
 	apiMocks.loadSessionAttachments.mockResolvedValue([]);
 }
 
@@ -178,6 +181,12 @@ describe("App GitHub identity states", () => {
 	beforeEach(() => {
 		installTauriRuntime();
 		identityListener = null;
+		Object.defineProperty(navigator, "clipboard", {
+			configurable: true,
+			value: {
+				writeText: vi.fn(async () => undefined),
+			},
+		});
 
 		apiMocks.loadGithubIdentitySession.mockReset();
 		apiMocks.startGithubIdentityConnect.mockReset();
@@ -191,6 +200,7 @@ describe("App GitHub identity states", () => {
 		apiMocks.loadWorkspaceDetail.mockReset();
 		apiMocks.loadWorkspaceSessions.mockReset();
 		apiMocks.loadSessionMessages.mockReset();
+		apiMocks.loadSessionThreadMessages.mockReset();
 		apiMocks.loadSessionAttachments.mockReset();
 		openerMocks.openUrl.mockReset();
 
@@ -265,6 +275,9 @@ describe("App GitHub identity states", () => {
 			).toBeInTheDocument();
 		});
 		screen.getByRole("button", { name: "Continue with GitHub" }).click();
+		await userEvent
+			.setup()
+			.click(await screen.findByRole("button", { name: "Copy one-time code" }));
 
 		await waitFor(() => {
 			expect(openerMocks.openUrl).toHaveBeenCalledWith(

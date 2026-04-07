@@ -12,6 +12,7 @@ import {
 	type ReactNode,
 	useCallback,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -140,11 +141,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
 	);
-	recordComposerRender(contextKey, instanceIdRef.current);
+	useEffect(() => {
+		recordComposerRender(contextKey, instanceIdRef.current);
+	});
 	const editorRef = useRef<LexicalEditor | null>(null);
 	const [hasContent, setHasContent] = useState(false);
 	const isOpus = selectedModelId === "opus-1m" || selectedModelId === "opus";
-	const effectiveEffort = (() => {
+	const effectiveEffort = useMemo(() => {
 		let level = effortLevel;
 		if (provider === "codex") {
 			if (level === "max") level = "xhigh";
@@ -154,11 +157,15 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			if (level === "max" && !isOpus) level = "high";
 		}
 		return level;
-	})();
-	const selectedModel =
-		modelSections
-			.flatMap((section) => section.options)
-			.find((option) => option.id === selectedModelId) ?? null;
+	}, [effortLevel, isOpus, provider]);
+	const selectedModel = useMemo(() => {
+		for (const section of modelSections) {
+			for (const option of section.options) {
+				if (option.id === selectedModelId) return option;
+			}
+		}
+		return null;
+	}, [modelSections, selectedModelId]);
 	const sendDisabled =
 		disabled || submitDisabled || sending || !selectedModel || !hasContent;
 

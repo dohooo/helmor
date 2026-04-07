@@ -10,7 +10,7 @@ const apiMocks = vi.hoisted(() => ({
 	loadAgentModelSections: vi.fn(),
 	loadWorkspaceDetail: vi.fn(),
 	loadWorkspaceSessions: vi.fn(),
-	loadSessionMessages: vi.fn(),
+	loadSessionThreadMessages: vi.fn(),
 	loadSessionAttachments: vi.fn(),
 	listRepositories: vi.fn(),
 }));
@@ -40,7 +40,8 @@ vi.mock("./lib/api", async (importOriginal) => {
 		loadAgentModelSections: apiMocks.loadAgentModelSections,
 		loadWorkspaceDetail: apiMocks.loadWorkspaceDetail,
 		loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
-		loadSessionMessages: apiMocks.loadSessionMessages,
+		loadSessionMessages: apiMocks.loadSessionThreadMessages,
+		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 		loadSessionAttachments: apiMocks.loadSessionAttachments,
 		listRepositories: apiMocks.listRepositories,
 	};
@@ -59,7 +60,7 @@ describe("App add repository flow", () => {
 		apiMocks.loadAgentModelSections.mockReset();
 		apiMocks.loadWorkspaceDetail.mockReset();
 		apiMocks.loadWorkspaceSessions.mockReset();
-		apiMocks.loadSessionMessages.mockReset();
+		apiMocks.loadSessionThreadMessages.mockReset();
 		apiMocks.loadSessionAttachments.mockReset();
 		apiMocks.listRepositories.mockReset();
 		dialogMocks.open.mockReset();
@@ -250,7 +251,7 @@ describe("App add repository flow", () => {
 				];
 			},
 		);
-		apiMocks.loadSessionMessages.mockResolvedValue([]);
+		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
 		apiMocks.loadSessionAttachments.mockResolvedValue([]);
 		apiMocks.addRepositoryFromLocalPath.mockImplementation(async () => {
 			addRepoRuntime.added = true;
@@ -294,7 +295,7 @@ describe("App add repository flow", () => {
 			);
 		});
 		await waitFor(() => {
-			expect(apiMocks.loadSessionMessages).toHaveBeenCalledWith(
+			expect(apiMocks.loadSessionThreadMessages).toHaveBeenCalledWith(
 				"session-added",
 			);
 		});

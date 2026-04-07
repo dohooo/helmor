@@ -1,7 +1,7 @@
 import type {
 	AgentModelOption,
 	AgentModelSection,
-	SessionMessageRecord,
+	ThreadMessageLike,
 	WorkspaceGroup,
 	WorkspaceRow,
 	WorkspaceSessionSummary,
@@ -191,43 +191,30 @@ export function findModelOption(
 	);
 }
 
-export function createLiveMessage({
+/** Create a live ThreadMessageLike for optimistic rendering. */
+export function createLiveThreadMessage({
 	id,
-	sessionId,
 	role,
-	content,
+	text,
 	createdAt,
-	model,
 }: {
 	id: string;
-	sessionId: string;
-	role: string;
-	content: string;
+	role: "user" | "assistant" | "system";
+	text: string;
 	createdAt: string;
-	model: string;
-}): SessionMessageRecord {
+}): ThreadMessageLike {
 	return {
-		id,
-		sessionId,
 		role,
-		content,
-		contentIsJson: false,
+		id,
 		createdAt,
-		sentAt: createdAt,
-		cancelledAt: null,
-		model,
-		sdkMessageId: null,
-		lastAssistantMessageId: null,
-		turnId: null,
-		isResumableMessage: null,
-		attachmentCount: 0,
+		content: [{ type: "text", text }],
 	};
 }
 
-export function appendLiveMessage(
-	current: Record<string, SessionMessageRecord[]>,
+export function appendLiveThreadMessage(
+	current: Record<string, ThreadMessageLike[]>,
 	contextKey: string,
-	message: SessionMessageRecord,
+	message: ThreadMessageLike,
 ) {
 	return {
 		...current,
@@ -271,23 +258,8 @@ export function clampEffortToModel(
 	const minRank = Math.min(...ranked.map((a) => a.rank));
 	const maxRank = Math.max(...ranked.map((a) => a.rank));
 	const clamped = Math.max(minRank, Math.min(maxRank, rank));
-	return ranked.find((a) => a.rank === clamped)?.level ?? available.at(-1)!;
-}
-
-export function haveSameLiveMessages(
-	current: SessionMessageRecord[] | undefined,
-	next: SessionMessageRecord[],
-) {
-	if (!current || current.length !== next.length) return false;
-
-	return current.every((message, index) => {
-		const nextMessage = next[index];
-		return (
-			message.id === nextMessage.id &&
-			message.role === nextMessage.role &&
-			message.content === nextMessage.content &&
-			message.contentIsJson === nextMessage.contentIsJson &&
-			message.createdAt === nextMessage.createdAt
-		);
-	});
+	return (
+		ranked.find((a) => a.rank === clamped)?.level ??
+		available[available.length - 1]!
+	);
 }

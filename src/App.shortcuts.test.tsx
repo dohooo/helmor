@@ -14,7 +14,7 @@ const apiMocks = vi.hoisted(() => ({
 	loadAgentModelSections: vi.fn(),
 	loadWorkspaceDetail: vi.fn(),
 	loadWorkspaceSessions: vi.fn(),
-	loadSessionMessages: vi.fn(),
+	loadSessionThreadMessages: vi.fn(),
 }));
 
 vi.mock("./App.css", () => ({}));
@@ -32,7 +32,8 @@ vi.mock("./lib/api", async (importOriginal) => {
 		loadAgentModelSections: apiMocks.loadAgentModelSections,
 		loadWorkspaceDetail: apiMocks.loadWorkspaceDetail,
 		loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
-		loadSessionMessages: apiMocks.loadSessionMessages,
+		loadSessionMessages: apiMocks.loadSessionThreadMessages,
+		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 	};
 });
 
@@ -208,7 +209,7 @@ describe("App global navigation shortcuts", () => {
 		apiMocks.loadAgentModelSections.mockReset();
 		apiMocks.loadWorkspaceDetail.mockReset();
 		apiMocks.loadWorkspaceSessions.mockReset();
-		apiMocks.loadSessionMessages.mockReset();
+		apiMocks.loadSessionThreadMessages.mockReset();
 
 		apiMocks.loadWorkspaceGroups.mockResolvedValue([
 			{
@@ -322,7 +323,7 @@ describe("App global navigation shortcuts", () => {
 			async (workspaceId: string) =>
 				createWorkspaceSessions(workspaceId as WorkspaceFixtureId),
 		);
-		apiMocks.loadSessionMessages.mockResolvedValue([]);
+		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
 	});
 
 	afterEach(() => {
@@ -482,7 +483,7 @@ describe("App global navigation shortcuts", () => {
 		expect(apiMocks.loadWorkspaceDetail).not.toHaveBeenCalledWith(
 			WORKSPACE_IDS.review,
 		);
-		expect(apiMocks.loadSessionMessages).not.toHaveBeenCalledWith(
+		expect(apiMocks.loadSessionThreadMessages).not.toHaveBeenCalledWith(
 			"session-done-2",
 		);
 	});

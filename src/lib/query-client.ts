@@ -7,7 +7,7 @@ import {
 	loadAgentModelSections,
 	loadArchivedWorkspaces,
 	loadSessionAttachments,
-	loadSessionMessages,
+	loadSessionThreadMessages,
 	loadWorkspaceDetail,
 	loadWorkspaceGroups,
 	loadWorkspaceSessions,
@@ -107,10 +107,11 @@ export function workspaceSessionsQueryOptions(workspaceId: string) {
 	});
 }
 
-export function sessionMessagesQueryOptions(sessionId: string) {
+/** Pipeline-rendered thread messages — ready for direct rendering. */
+export function sessionThreadMessagesQueryOptions(sessionId: string) {
 	return queryOptions({
-		queryKey: helmorQueryKeys.sessionMessages(sessionId),
-		queryFn: () => loadSessionMessages(sessionId),
+		queryKey: [...helmorQueryKeys.sessionMessages(sessionId), "thread"],
+		queryFn: () => loadSessionThreadMessages(sessionId),
 		gcTime: SESSION_GC_TIME,
 		staleTime: SESSION_STALE_TIME,
 	});

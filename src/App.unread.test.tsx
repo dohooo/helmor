@@ -7,7 +7,7 @@ const apiMocks = vi.hoisted(() => ({
 	loadAgentModelSections: vi.fn(),
 	loadWorkspaceDetail: vi.fn(),
 	loadWorkspaceSessions: vi.fn(),
-	loadSessionMessages: vi.fn(),
+	loadSessionThreadMessages: vi.fn(),
 	loadSessionAttachments: vi.fn(),
 	markWorkspaceRead: vi.fn(),
 }));
@@ -31,7 +31,8 @@ vi.mock("./lib/api", async (importOriginal) => {
 		loadAgentModelSections: apiMocks.loadAgentModelSections,
 		loadWorkspaceDetail: apiMocks.loadWorkspaceDetail,
 		loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
-		loadSessionMessages: apiMocks.loadSessionMessages,
+		loadSessionMessages: apiMocks.loadSessionThreadMessages,
+		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 		loadSessionAttachments: apiMocks.loadSessionAttachments,
 		markWorkspaceRead: apiMocks.markWorkspaceRead,
 	};
@@ -51,7 +52,7 @@ describe("App unread lifecycle", () => {
 		apiMocks.loadAgentModelSections.mockReset();
 		apiMocks.loadWorkspaceDetail.mockReset();
 		apiMocks.loadWorkspaceSessions.mockReset();
-		apiMocks.loadSessionMessages.mockReset();
+		apiMocks.loadSessionThreadMessages.mockReset();
 		apiMocks.loadSessionAttachments.mockReset();
 		apiMocks.markWorkspaceRead.mockReset();
 
@@ -135,7 +136,7 @@ describe("App unread lifecycle", () => {
 				active: true,
 			},
 		]);
-		apiMocks.loadSessionMessages.mockResolvedValue([]);
+		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
 		apiMocks.loadSessionAttachments.mockResolvedValue([]);
 		apiMocks.markWorkspaceRead.mockImplementation(async () => {
 			unreadRuntime.workspaceUnread = 0;

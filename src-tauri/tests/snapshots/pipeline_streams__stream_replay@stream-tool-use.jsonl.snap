@@ -1,0 +1,859 @@
+---
+source: tests/pipeline_streams.rs
+expression: snapshot
+input_file: tests/fixtures/streams/stream-tool-use.jsonl
+---
+line_count: 777
+checkpoint_count: 43
+checkpoints:
+  - line_index: 8
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+  - line_index: 86
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+  - line_index: 89
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+  - line_index: 94
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+  - line_index: 111
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+  - line_index: 115
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+  - line_index: 136
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 141
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 155
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 160
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 179
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 183
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 235
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 240
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 277
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 281
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 313
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 318
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 350
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 355
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 376
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 380
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 415
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 420
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 468
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 473
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 518
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 522
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 541
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 546
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 590
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 595
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 629
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 633
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 653
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 658
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 676
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 681
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 696
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 700
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 734
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - reasoning
+  - line_index: 772
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - tool-call
+      - reasoning
+      - text
+  - line_index: 776
+    event_type: result
+    roles:
+      - assistant
+      - system
+    last_part_types:
+      - text
+final_state:
+  message_count: 2
+  roles:
+    - assistant
+    - system
+  total_parts: 23
+persisted_turns:
+  turn_count: 40
+  total_blocks: 42
+  turns:
+    - role: assistant
+      block_types:
+        - thinking
+        - tool_use
+    - role: user
+      block_types:
+        - text
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - thinking
+        - text
+historical_render:
+  message_count: 1
+  messages:
+    - role: assistant
+      part_types:
+        - reasoning
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - tool-call
+        - reasoning
+        - text

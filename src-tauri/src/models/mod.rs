@@ -207,9 +207,16 @@ pub fn list_workspace_sessions(
     Ok(sessions::list_workspace_sessions(&workspace_id)?)
 }
 
+/// Return pipeline-rendered ThreadMessageLike[] for a session.
+/// The frontend can render these directly without any conversion.
 #[tauri::command]
-pub fn list_session_messages(session_id: String) -> CmdResult<Vec<sessions::SessionMessageRecord>> {
-    Ok(sessions::list_session_messages(&session_id)?)
+pub fn list_session_thread_messages(
+    session_id: String,
+) -> CmdResult<Vec<crate::pipeline::types::ThreadMessageLike>> {
+    let historical = sessions::list_session_historical_records(&session_id)?;
+    Ok(crate::pipeline::MessagePipeline::convert_historical(
+        &historical,
+    ))
 }
 
 #[tauri::command]

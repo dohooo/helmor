@@ -50,6 +50,50 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .ok();
     }
 
+    // Migration: drop dead `full_message` column from session_messages.
+    // It was only ever written (always with the same value as `content`),
+    // never read. Cleared up to remove confusion about which column to query.
+    let has_full_message: bool = connection
+        .prepare("SELECT 1 FROM pragma_table_info('session_messages') WHERE name = 'full_message'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+
+    if has_full_message {
+        connection
+            .execute_batch("ALTER TABLE session_messages DROP COLUMN full_message")
+            .context("Failed to drop full_message column")?;
+    }
+
+    // Migration: wrap plain-text user prompts as JSON.
+    //
+    // Pre-migration, the `content` column held a union type: assistant/system/
+    // result rows stored a JSON string, but real human prompts stored raw text.
+    // The adapter sniffed the first byte to decide which path to take, which
+    // misclassified any prompt that happened to start with `{` or `[`.
+    //
+    // Post-migration: every user prompt is wrapped as
+    //   {"type":"user_prompt","text":"..."}
+    // and the column always holds JSON. The new `user_prompt` discriminator
+    // also distinguishes real prompts from the SDK's tool_result-as-user
+    // wrappers (`type=user`), so the adapter no longer needs the sniff.
+    //
+    // Idempotent: only touches user rows whose content isn't already a JSON
+    // object with a `type` field. Already-wrapped rows (type=user_prompt) and
+    // SDK tool_result wrappers (type=user) are skipped.
+    connection
+        .execute_batch(
+            r#"
+            UPDATE session_messages
+            SET content = json_object('type', 'user_prompt', 'text', content)
+            WHERE role = 'user'
+              AND (
+                NOT json_valid(content)
+                OR json_extract(content, '$.type') IS NULL
+              );
+            "#,
+        )
+        .context("Failed to wrap plain-text user prompts as JSON")?;
+
     Ok(())
 }
 
@@ -149,7 +193,6 @@ CREATE TABLE IF NOT EXISTS session_messages (
     role TEXT,
     content TEXT,
     sent_at TEXT,
-    full_message TEXT,
     cancelled_at TEXT,
     model TEXT,
     sdk_message_id TEXT,
@@ -271,7 +314,9 @@ mod tests {
     fn migration_renames_claude_session_id_to_provider_session_id() {
         let (connection, _dir) = open_test_db();
 
-        // Simulate old schema with claude_session_id
+        // Simulate old schema with claude_session_id.
+        // session_messages must also exist because the wrap-user-prompts
+        // migration runs unconditionally and would otherwise fail.
         connection
             .execute_batch(
                 r#"
@@ -286,6 +331,12 @@ mod tests {
                     last_user_message_at TEXT,
                     created_at TEXT DEFAULT (datetime('now')),
                     updated_at TEXT DEFAULT (datetime('now'))
+                );
+                CREATE TABLE session_messages (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    role TEXT,
+                    content TEXT
                 );
                 INSERT INTO sessions (id, claude_session_id) VALUES ('s1', 'old-uuid-123');
                 "#,
@@ -341,5 +392,156 @@ mod tests {
             .exists([])
             .unwrap();
         assert!(has_new);
+    }
+
+    #[test]
+    fn migration_wraps_plain_text_user_prompts_as_json() {
+        let (connection, _dir) = open_test_db();
+
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    effort_level TEXT
+                );
+                CREATE TABLE session_messages (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    role TEXT,
+                    content TEXT,
+                    created_at TEXT
+                );
+
+                -- Plain-text user prompt — needs wrapping.
+                INSERT INTO session_messages VALUES
+                  ('m1', 's1', 'user', 'hello world', '2026-01-01');
+
+                -- User prompt that starts with `{` (latent-bug case) — also wraps.
+                INSERT INTO session_messages VALUES
+                  ('m2', 's1', 'user', '{"foo":"bar"}', '2026-01-01');
+
+                -- Already-wrapped user_prompt — must be skipped.
+                INSERT INTO session_messages VALUES
+                  ('m3', 's1', 'user',
+                   '{"type":"user_prompt","text":"already done"}',
+                   '2026-01-01');
+
+                -- SDK tool_result wrapped as user (type=user) — must be skipped.
+                INSERT INTO session_messages VALUES
+                  ('m4', 's1', 'user',
+                   '{"type":"user","message":{"role":"user","content":[]}}',
+                   '2026-01-01');
+
+                -- Assistant row — never touched.
+                INSERT INTO session_messages VALUES
+                  ('m5', 's1', 'assistant',
+                   '{"type":"assistant","message":{}}',
+                   '2026-01-01');
+                "#,
+            )
+            .unwrap();
+
+        run_migrations(&connection).unwrap();
+
+        let read = |id: &str| -> String {
+            connection
+                .query_row(
+                    "SELECT content FROM session_messages WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+
+        // m1: plain text wrapped
+        assert_eq!(read("m1"), r#"{"type":"user_prompt","text":"hello world"}"#);
+
+        // m2: literal `{"foo":"bar"}` preserved as a string inside the wrapper.
+        // This is the latent-bug fix — pre-migration this row would have been
+        // miscategorized as a system "Event" because it parses as JSON but
+        // lacks a `type` field.
+        assert_eq!(
+            read("m2"),
+            r#"{"type":"user_prompt","text":"{\"foo\":\"bar\"}"}"#
+        );
+
+        // m3: already-wrapped, untouched
+        assert_eq!(
+            read("m3"),
+            r#"{"type":"user_prompt","text":"already done"}"#
+        );
+
+        // m4: SDK tool_result wrapper, untouched
+        assert_eq!(
+            read("m4"),
+            r#"{"type":"user","message":{"role":"user","content":[]}}"#
+        );
+
+        // m5: assistant row, untouched
+        assert_eq!(read("m5"), r#"{"type":"assistant","message":{}}"#);
+
+        // Idempotent on second run
+        run_migrations(&connection).unwrap();
+        assert_eq!(read("m1"), r#"{"type":"user_prompt","text":"hello world"}"#);
+        assert_eq!(
+            read("m2"),
+            r#"{"type":"user_prompt","text":"{\"foo\":\"bar\"}"}"#
+        );
+    }
+
+    #[test]
+    fn migration_drops_full_message_column() {
+        let (connection, _dir) = open_test_db();
+
+        // Simulate an existing DB whose schema predates the full_message
+        // drop. The other migrations need a sessions table to exist, so we
+        // create both tables with the older shape.
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    effort_level TEXT
+                );
+                CREATE TABLE session_messages (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    role TEXT,
+                    content TEXT,
+                    full_message TEXT,
+                    created_at TEXT
+                );
+                INSERT INTO session_messages (id, session_id, role, content, full_message)
+                VALUES ('m1', 's1', 'user', 'kept', 'should-be-dropped');
+                "#,
+            )
+            .unwrap();
+
+        run_migrations(&connection).unwrap();
+
+        // full_message column is gone
+        let has_full_message: bool = connection
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('session_messages') WHERE name = 'full_message'",
+            )
+            .unwrap()
+            .exists([])
+            .unwrap();
+        assert!(!has_full_message, "full_message column should be dropped");
+
+        // Data in `content` is preserved (now wrapped by the user_prompt
+        // migration that also runs in this batch).
+        let content: String = connection
+            .query_row(
+                "SELECT content FROM session_messages WHERE id = 'm1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(content, r#"{"type":"user_prompt","text":"kept"}"#);
+
+        // Idempotent on second run
+        run_migrations(&connection).unwrap();
     }
 }

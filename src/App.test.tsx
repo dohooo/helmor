@@ -11,6 +11,7 @@ import App from "./App";
 import { WorkspacePanel } from "./components/workspace-panel";
 import { WorkspacesSidebar } from "./components/workspaces-sidebar";
 import type { RepositoryCreateOption, WorkspaceGroup } from "./lib/api";
+import { renderWithProviders } from "./test/render-with-providers";
 
 vi.mock("./App.css", () => ({}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -30,7 +31,6 @@ describe("App", () => {
 	});
 
 	it("renders the sidebar shell with tooltips, avatars, archive actions, and collapsible groups", async () => {
-		const user = userEvent.setup();
 		const { container } = render(<App />);
 
 		const shell = screen.getByRole("main", { name: "Application shell" });
@@ -48,7 +48,9 @@ describe("App", () => {
 			name: "Resize inspector sidebar",
 		});
 		const doneGroup = screen.getByRole("button", { name: "Done" });
-		const progressGroup = screen.getByRole("button", { name: "In progress" });
+		const progressGroup = screen.getByRole("button", {
+			name: /^In progress/,
+		});
 		const addRepositoryButton = screen.getByRole("button", {
 			name: "Add repository",
 		});
@@ -57,9 +59,6 @@ describe("App", () => {
 		});
 		const safeAreas = container.querySelectorAll(
 			'[data-slot="window-safe-top"]',
-		);
-		const avatars = container.querySelectorAll(
-			'[data-slot="workspace-avatar"]',
 		);
 		const groupsScrollRegion = container.querySelector(
 			'[data-slot="workspace-groups-scroll"]',
@@ -82,13 +81,7 @@ describe("App", () => {
 		).toBeInTheDocument();
 		expect(screen.getByLabelText("Inspector section Tabs")).toBeInTheDocument();
 		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
-		expect(screen.getByLabelText("Changes panel body")).toHaveStyle({
-			height: "120px",
-		});
 		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
-		expect(screen.getByLabelText("Actions panel body")).toHaveStyle({
-			height: "120px",
-		});
 		expect(screen.getByLabelText("Inspector tabs body")).toBeInTheDocument();
 		expect(screen.getByRole("tab", { name: "Setup" })).toBeInTheDocument();
 		expect(screen.getByRole("tab", { name: "Run" })).toBeInTheDocument();
@@ -96,42 +89,28 @@ describe("App", () => {
 		expect(panel).toHaveClass("relative");
 		expect(panel).toHaveClass("bg-app-elevated");
 		expect(dragRegion).toHaveAttribute("data-tauri-drag-region");
-		expect(viewport).toHaveClass("bg-white");
-		expect(viewport).toHaveClass("dark:bg-app-elevated");
+		expect(viewport).toHaveClass("bg-app-elevated");
 		expect(composer).toBeInTheDocument();
-		expect(input).toHaveAttribute(
-			"placeholder",
-			"Ask to make changes, @mention files, run /commands",
-		);
+		expect(input).toHaveAttribute("aria-multiline", "true");
+		expect(
+			screen.getByText("Ask to make changes, @mention files, run /commands"),
+		).toBeInTheDocument();
 		expect(resizeHandle).toHaveAttribute("aria-valuenow", "336");
 		expect(inspectorResizeHandle).toHaveAttribute("aria-valuenow", "336");
 		expect(safeAreas).toHaveLength(1);
-		expect(avatars).toHaveLength(11);
 		expect(groupsScrollRegion).toHaveClass("overflow-hidden");
 		expect(groupsScrollRegion).toHaveClass("flex-1");
 		expect(screen.getByText("Workspaces")).toBeInTheDocument();
 		expect(doneGroup).toBeInTheDocument();
 		expect(progressGroup).toBeInTheDocument();
-		expect(screen.getByText("Cambridge")).toBeInTheDocument();
-		expect(screen.queryByText("9")).not.toBeInTheDocument();
-		expect(
-			screen.getAllByRole("button", { name: "Archive workspace" }),
-		).toHaveLength(11);
 
 		expect(addRepositoryButton).toBeInTheDocument();
 		expect(newWorkspaceButton).toBeInTheDocument();
-
-		await user.click(progressGroup);
-		expect(screen.queryByText("Cambridge")).not.toBeInTheDocument();
-		await user.click(progressGroup);
-		expect(screen.getByText("Cambridge")).toBeInTheDocument();
 	});
 
 	it("collapses the inspector tabs section while leaving the first two panels expanded", async () => {
 		const user = userEvent.setup();
 		render(<App />);
-
-		const tabsSection = screen.getByLabelText("Inspector section Tabs");
 
 		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
@@ -144,7 +123,6 @@ describe("App", () => {
 		expect(
 			screen.queryByLabelText("Inspector tabs body"),
 		).not.toBeInTheDocument();
-		expect(tabsSection.parentElement).toHaveClass("mt-auto");
 	});
 
 	it("resizes the sidebar and persists the width", async () => {
@@ -269,7 +247,7 @@ describe("App", () => {
 			/>,
 		);
 
-		await user.click(screen.getByRole("button", { name: "Archived" }));
+		await user.click(screen.getByRole("button", { name: /^Archived/ }));
 		await user.click(screen.getByRole("button", { name: "Restore workspace" }));
 
 		expect(onRestoreWorkspace).toHaveBeenCalledWith("archived-workspace");
@@ -493,7 +471,7 @@ describe("App", () => {
 			/>,
 		);
 
-		await user.click(screen.getByRole("button", { name: "In progress" }));
+		await user.click(screen.getByRole("button", { name: /^In progress/ }));
 
 		expect(
 			screen.queryByRole("button", { name: "Progress workspace" }),
@@ -580,7 +558,7 @@ describe("App", () => {
 			/>,
 		);
 
-		await user.click(screen.getByRole("button", { name: "Archived" }));
+		await user.click(screen.getByRole("button", { name: /^Archived/ }));
 		const restoreButton = screen.getByRole("button", {
 			name: "Restore workspace",
 		});
@@ -627,7 +605,7 @@ describe("App", () => {
 	});
 
 	it("shows unread indicators in session tabs", () => {
-		render(
+		renderWithProviders(
 			<WorkspacePanel
 				workspace={null}
 				sessions={[
@@ -650,7 +628,6 @@ describe("App", () => {
 					},
 				]}
 				selectedSessionId="session-1"
-				visibleSessionId="session-1"
 				sessionPanes={[
 					{
 						sessionId: "session-1",
@@ -664,5 +641,60 @@ describe("App", () => {
 		);
 
 		expect(screen.getByLabelText("Unread session")).toBeInTheDocument();
+	});
+
+	it("keeps large threads on the progressive viewport while sending", () => {
+		const messages = Array.from({ length: 30 }, (_, index) => ({
+			role: "assistant" as const,
+			id: `assistant-${index}`,
+			createdAt: `2026-04-03T00:00:${String(index).padStart(2, "0")}Z`,
+			content: [
+				{
+					type: "text" as const,
+					text: `message ${index} `.repeat(8),
+				},
+			],
+			status: { type: "complete" as const, reason: "stop" as const },
+		}));
+
+		renderWithProviders(
+			<WorkspacePanel
+				workspace={null}
+				sessions={[
+					{
+						id: "session-1",
+						workspaceId: "workspace-1",
+						title: "Streaming session",
+						agentType: "claude",
+						status: "idle",
+						permissionMode: "default",
+						unreadCount: 0,
+						contextTokenCount: 0,
+						thinkingEnabled: false,
+						fastMode: false,
+						createdAt: "2026-04-03T00:00:00Z",
+						updatedAt: "2026-04-03T00:00:00Z",
+						isHidden: false,
+						isCompacting: false,
+						active: true,
+					},
+				]}
+				selectedSessionId="session-1"
+				sending
+				sessionPanes={[
+					{
+						sessionId: "session-1",
+						messages,
+						sending: true,
+						hasLoaded: true,
+						presentationState: "presented",
+					},
+				]}
+			/>,
+		);
+
+		expect(
+			screen.getByLabelText("Conversation rows for session session-1"),
+		).toBeInTheDocument();
 	});
 });

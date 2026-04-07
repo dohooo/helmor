@@ -59,5 +59,10 @@ name = "helmor-dev-server"
 path = "src/bin/dev_server.rs"
 required-features = ["dev-server"]
 
+[[bin]]
+name = "gen_pipeline_fixture"
+path = "src/bin/gen_pipeline_fixture.rs"
+
 [dev-dependencies]
+insta = { version = "1", features = ["yaml", "glob"] }
 tempfile = "3"

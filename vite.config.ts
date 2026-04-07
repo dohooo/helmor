@@ -40,6 +40,10 @@ export default defineConfig(async () => ({
 			"react/jsx-runtime",
 			"react/jsx-dev-runtime",
 			"@tanstack/react-query",
+			// Pre-bundle lucide-react so Vite does not have to crawl the
+			// per-icon ESM modules on every cold dev start. Production builds
+			// already tree-shake to only the icons we actually use.
+			"lucide-react",
 		],
 	},
 

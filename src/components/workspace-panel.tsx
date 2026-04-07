@@ -25,11 +25,13 @@ import {
 	X,
 } from "lucide-react";
 import {
+	type ComponentType,
 	createElement,
 	lazy,
 	memo,
 	type ReactNode,
 	Suspense,
+	startTransition,
 	useCallback,
 	useEffect,
 	useLayoutEffect,
@@ -38,36 +40,27 @@ import {
 	useState,
 } from "react";
 import { createPortal } from "react-dom";
-import {
-	type StateSnapshot,
-	Virtuoso,
-	type Components as VirtuosoComponents,
-	type VirtuosoHandle,
-	type ItemProps as VirtuosoItemProps,
-} from "react-virtuoso";
 import { useStickToBottom } from "use-stick-to-bottom";
 import {
+	type CollapsedGroupPart,
 	createSession,
 	deleteSession,
+	type ExtendedMessagePart,
 	hideSession,
 	listRemoteBranches,
 	loadHiddenSessions,
+	type MessagePart,
 	renameSession,
 	type SessionAttachmentRecord,
-	type SessionMessageRecord,
+	type ThreadMessageLike,
+	type ToolCallPart,
 	unhideSession,
 	updateIntendedTargetBranch,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
 import { recordMessageRender } from "@/lib/dev-render-debug";
-import {
-	type CollapsedGroupPart,
-	convertMessages,
-	type ExtendedMessagePart,
-	type MessagePart,
-	type ToolCallPart,
-} from "@/lib/message-adapter";
+import { estimateThreadRowHeights } from "@/lib/message-layout-estimator";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "./ai/reasoning";
@@ -90,19 +83,12 @@ type WorkspacePanelProps = {
 	sessions: WorkspaceSessionSummary[];
 	selectedSessionId: string | null;
 	selectedProvider?: string | null;
-	visibleSessionId?: string | null;
-	preparingSessionId?: string | null;
-	coldRevealSessionId?: string | null;
 	sessionPanes: Array<{
 		sessionId: string;
-		messages: SessionMessageRecord[];
+		messages: ThreadMessageLike[];
 		sending: boolean;
 		hasLoaded: boolean;
-		presentationState: "cold-unpresented" | "presented";
-		viewportSnapshot?: StateSnapshot;
-		plainScrollTop?: number;
-		layoutCacheKey?: string | null;
-		lastMeasuredAt?: number;
+		presentationState: "presented";
 	}>;
 	attachments?: SessionAttachmentRecord[];
 	loadingWorkspace?: boolean;
@@ -116,29 +102,11 @@ type WorkspacePanelProps = {
 	onSessionsChanged?: () => void;
 	onSessionRenamed?: (sessionId: string, title: string) => void;
 	onWorkspaceChanged?: () => void;
-	onSessionMeasurements?: (
-		sessionId: string,
-		payload: {
-			viewportSnapshot?: StateSnapshot;
-			plainScrollTop?: number;
-			layoutCacheKey?: string | null;
-			lastMeasuredAt?: number;
-		},
-	) => void;
-	onSessionPrepared?: (
-		sessionId: string,
-		payload: {
-			viewportSnapshot?: StateSnapshot;
-			plainScrollTop?: number;
-			layoutCacheKey?: string | null;
-			lastMeasuredAt?: number;
-		},
-	) => void;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
 };
 
-type RenderedMessage = ReturnType<typeof convertMessages>[number];
+type RenderedMessage = ThreadMessageLike;
 type StreamdownMode = "static" | "streaming";
 
 const LazyStreamdown = lazy(async () => {
@@ -162,10 +130,13 @@ const LazyStreamdown = lazy(async () => {
 });
 
 let hasPreloadedStreamdown = false;
-const sessionViewportStateBySession = new Map<string, StateSnapshot>();
-const sessionPlainScrollTopBySession = new Map<string, number>();
 const CHAT_LAYOUT_CACHE_VERSION = "chat-layout-v1";
 const NON_VIRTUALIZED_THREAD_MESSAGE_LIMIT = 12;
+const PROGRESSIVE_VIEWPORT_DEFAULT_HEIGHT = 900;
+const PROGRESSIVE_VIEWPORT_HEADER_HEIGHT = 24;
+const PROGRESSIVE_VIEWPORT_FOOTER_HEIGHT = 20;
+
+type ThreadViewportSlot = ComponentType<Record<string, never>>;
 
 function preloadStreamdown() {
 	if (hasPreloadedStreamdown) return;
@@ -179,9 +150,6 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	sessions,
 	selectedSessionId,
 	selectedProvider,
-	visibleSessionId = selectedSessionId,
-	preparingSessionId = null,
-	coldRevealSessionId = null,
 	sessionPanes,
 	attachments: _attachments,
 	loadingWorkspace = false,
@@ -195,15 +163,120 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	onSessionsChanged,
 	onSessionRenamed,
 	onWorkspaceChanged,
-	onSessionMeasurements,
-	onSessionPrepared,
 	headerActions,
 	headerLeading,
 }: WorkspacePanelProps) {
 	const selectedSession =
 		sessions.find((s) => s.id === selectedSessionId) ?? null;
-	const visiblePane =
-		sessionPanes.find((pane) => pane.sessionId === visibleSessionId) ?? null;
+	const activePane = sessionPanes[0] ?? null;
+
+	useEffect(() => {
+		if (typeof window === "undefined") return;
+
+		const idleCallbackId =
+			"requestIdleCallback" in window
+				? window.requestIdleCallback(() => preloadStreamdown(), {
+						timeout: 1200,
+					})
+				: null;
+		const timeoutId =
+			idleCallbackId === null
+				? window.setTimeout(() => preloadStreamdown(), 180)
+				: null;
+
+		return () => {
+			if (idleCallbackId !== null && "cancelIdleCallback" in window) {
+				window.cancelIdleCallback(idleCallbackId);
+			}
+			if (timeoutId !== null) {
+				window.clearTimeout(timeoutId);
+			}
+		};
+	}, []);
+
+	return (
+		<div className="flex min-h-0 flex-1 flex-col bg-transparent">
+			<WorkspacePanelHeader
+				workspace={workspace}
+				sessions={sessions}
+				selectedSessionId={selectedSessionId}
+				selectedProvider={selectedProvider}
+				sending={sending}
+				sendingSessionIds={sendingSessionIds}
+				loadingWorkspace={loadingWorkspace}
+				headerActions={headerActions}
+				headerLeading={headerLeading}
+				onSelectSession={onSelectSession}
+				onPrefetchSession={onPrefetchSession}
+				onSessionsChanged={onSessionsChanged}
+				onSessionRenamed={onSessionRenamed}
+				onWorkspaceChanged={onWorkspaceChanged}
+			/>
+
+			{/* --- Timeline --- */}
+			<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+				{loadingWorkspace || loadingSession ? (
+					<ConversationColdPlaceholder />
+				) : activePane?.hasLoaded ? (
+					<ActiveThreadViewport
+						hasSession={!!selectedSession}
+						pane={activePane}
+					/>
+				) : (
+					<EmptyState hasSession={!!selectedSession} />
+				)}
+			</div>
+		</div>
+	);
+});
+
+// ---------------------------------------------------------------------------
+// Memoized header
+//
+// The header is intentionally a SEPARATE memoed component so that streaming
+// re-renders of <WorkspacePanel> (driven by the new sessionPanes / messages
+// reference each tick) do NOT cascade into the branch picker, session tabs,
+// new-session button, or history dropdown. Its props are only:
+//   - stable react-query data (workspace, sessions)
+//   - selection state that changes only on user navigation
+//   - callback refs that the container memoizes via useCallback
+// As long as none of those change, the header bails out via React.memo and
+// every icon under it stops re-rendering during streaming.
+// ---------------------------------------------------------------------------
+
+type WorkspacePanelHeaderProps = {
+	workspace: WorkspaceDetail | null;
+	sessions: WorkspaceSessionSummary[];
+	selectedSessionId: string | null;
+	selectedProvider?: string | null;
+	sending: boolean;
+	sendingSessionIds?: Set<string>;
+	loadingWorkspace: boolean;
+	headerActions?: React.ReactNode;
+	headerLeading?: React.ReactNode;
+	onSelectSession?: (sessionId: string) => void;
+	onPrefetchSession?: (sessionId: string) => void;
+	onSessionsChanged?: () => void;
+	onSessionRenamed?: (sessionId: string, title: string) => void;
+	onWorkspaceChanged?: () => void;
+};
+
+const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
+	workspace,
+	sessions,
+	selectedSessionId,
+	selectedProvider,
+	sending,
+	sendingSessionIds,
+	loadingWorkspace,
+	headerActions,
+	headerLeading,
+	onSelectSession,
+	onPrefetchSession,
+	onSessionsChanged,
+	onSessionRenamed,
+	onWorkspaceChanged,
+}: WorkspacePanelHeaderProps) {
 	const [showHistory, setShowHistory] = useState(false);
 	const [hiddenSessions, setHiddenSessions] = useState<
 		WorkspaceSessionSummary[]
@@ -229,17 +302,15 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 		} catch (error) {
 			console.error("Failed to create session:", error);
 		}
-	}, [workspace, onSessionsChanged, onSelectSession, visibleSessionId]);
+	}, [workspace, onSessionsChanged, onSelectSession]);
 
 	const handleHideSession = useCallback(
 		async (sessionId: string, e: React.MouseEvent) => {
 			e.stopPropagation();
 			await hideSession(sessionId);
-			// The container invalidates workspace/session queries so selection can
-			// reconcile against the refreshed visible-session list.
 			onSessionsChanged?.();
 		},
-		[onSessionsChanged, selectedSessionId, visibleSessionId],
+		[onSessionsChanged],
 	);
 
 	const handleToggleHistory = useCallback(async () => {
@@ -302,340 +373,282 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 		setEditingTitle("");
 	}, []);
 
-	useEffect(() => {
-		if (typeof window === "undefined") return;
-
-		const idleCallbackId =
-			"requestIdleCallback" in window
-				? window.requestIdleCallback(() => preloadStreamdown(), {
-						timeout: 1200,
-					})
-				: null;
-		const timeoutId =
-			idleCallbackId === null
-				? window.setTimeout(() => preloadStreamdown(), 180)
-				: null;
-
-		return () => {
-			if (idleCallbackId !== null && "cancelIdleCallback" in window) {
-				window.cancelIdleCallback(idleCallbackId);
-			}
-			if (timeoutId !== null) {
-				window.clearTimeout(timeoutId);
-			}
-		};
-	}, []);
-
 	return (
-		<div className="flex min-h-0 flex-1 flex-col bg-transparent">
-			{/* --- Header --- */}
-			<header className="relative z-20">
-				<div
-					aria-label="Workspace header"
-					className="flex h-9 items-center justify-between gap-3 px-[18px]"
-					data-tauri-drag-region
-				>
-					<div className="flex min-w-0 items-center gap-2 text-[12.5px]">
-						{headerLeading}
-						<span className="inline-flex items-center gap-1 px-1 py-0.5 font-medium text-app-foreground">
-							<GitBranch className="size-3.5 text-app-warm" strokeWidth={1.9} />
-							<span className="truncate">
-								{workspace?.branch ?? "No branch"}
-							</span>
-						</span>
-						{workspace?.intendedTargetBranch ? (
-							<>
-								<ArrowRight
-									className="size-3 shrink-0 text-app-muted"
-									strokeWidth={1.8}
-								/>
-								{workspace.state === "archived" ? (
-									<span className="px-1 py-0.5 font-medium text-app-foreground-soft">
-										{workspace.intendedTargetBranch}
-									</span>
-								) : (
-									<BranchPicker
-										currentBranch={workspace.intendedTargetBranch ?? ""}
-										branches={remoteBranches}
-										loading={loadingBranches}
-										onOpen={() => branchesQuery.refetch()}
-										onSelect={(branch: string) => {
-											if (branch === workspace.intendedTargetBranch) return;
-											void updateIntendedTargetBranch(
-												workspace.id,
-												branch,
-											).then(() => {
+		<header className="relative z-20">
+			<div
+				aria-label="Workspace header"
+				className="flex h-9 items-center justify-between gap-3 px-[18px]"
+				data-tauri-drag-region
+			>
+				<div className="flex min-w-0 items-center gap-2 text-[12.5px]">
+					{headerLeading}
+					<span className="inline-flex items-center gap-1 px-1 py-0.5 font-medium text-app-foreground">
+						<GitBranch className="size-3.5 text-app-warm" strokeWidth={1.9} />
+						<span className="truncate">{workspace?.branch ?? "No branch"}</span>
+					</span>
+					{workspace?.intendedTargetBranch ? (
+						<>
+							<ArrowRight
+								className="size-3 shrink-0 text-app-muted"
+								strokeWidth={1.8}
+							/>
+							{workspace.state === "archived" ? (
+								<span className="px-1 py-0.5 font-medium text-app-foreground-soft">
+									{workspace.intendedTargetBranch}
+								</span>
+							) : (
+								<BranchPicker
+									currentBranch={workspace.intendedTargetBranch ?? ""}
+									branches={remoteBranches}
+									loading={loadingBranches}
+									onOpen={() => branchesQuery.refetch()}
+									onSelect={(branch: string) => {
+										if (branch === workspace.intendedTargetBranch) return;
+										void updateIntendedTargetBranch(workspace.id, branch).then(
+											() => {
 												onWorkspaceChanged?.();
-											});
-										}}
-									/>
-								)}
-							</>
-						) : null}
-						{workspace?.state === "archived" ? (
-							<span className="px-1 py-0.5 font-medium text-app-muted">
-								Archived
-							</span>
-						) : null}
+											},
+										);
+									}}
+								/>
+							)}
+						</>
+					) : null}
+					{workspace?.state === "archived" ? (
+						<span className="px-1 py-0.5 font-medium text-app-muted">
+							Archived
+						</span>
+					) : null}
+				</div>
+				{headerActions && (
+					<div className="flex shrink-0 items-center gap-1">
+						{headerActions}
 					</div>
-					{headerActions && (
-						<div className="flex shrink-0 items-center gap-1">
-							{headerActions}
+				)}
+			</div>
+
+			{/* --- Session tabs row --- */}
+			<div className="flex items-center px-4 pb-1">
+				<div className="scrollbar-none min-w-0 flex-1 overflow-x-auto">
+					{loadingWorkspace ? (
+						<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-app-muted">
+							<Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
+							Loading
+						</div>
+					) : sessions.length > 0 ? (
+						<Tabs
+							value={selectedSessionId ?? sessions[0]?.id}
+							onValueChange={(value) => {
+								onSelectSession?.(value);
+							}}
+							className="min-w-max gap-0"
+						>
+							<TabsList
+								aria-label="Sessions"
+								className="inline-flex w-auto justify-start bg-app-sidebar"
+							>
+								{sessions.map((session) => {
+									const selected = session.id === selectedSessionId;
+									const isActive = sendingSessionIds
+										? sendingSessionIds.has(session.id)
+										: selected && sending;
+									const hasUnread = session.unreadCount > 0;
+									const isEditing = editingSessionId === session.id;
+
+									return (
+										<BaseTooltip
+											key={session.id}
+											side="bottom"
+											content={<span>{displaySessionTitle(session)}</span>}
+										>
+											<TabsTrigger
+												value={session.id}
+												onMouseEnter={() => {
+													onPrefetchSession?.(session.id);
+												}}
+												onFocus={() => {
+													onPrefetchSession?.(session.id);
+												}}
+												className="group/tab relative w-[7rem] shrink-0 justify-start gap-1.5 overflow-hidden pr-5 text-app-foreground-soft data-[state=active]:text-app-foreground"
+											>
+												<SessionProviderIcon
+													agentType={
+														selected
+															? (selectedProvider ?? session.agentType)
+															: session.agentType
+													}
+													active={isActive}
+												/>
+												{isEditing ? (
+													<input
+														// Mounted only when entering edit mode, so autoFocus
+														// fires exactly once instead of refocusing on every
+														// parent re-render (e.g. during streaming).
+														// biome-ignore lint/a11y/noAutofocus: contextual rename input
+														autoFocus
+														value={editingTitle}
+														onChange={(event) =>
+															setEditingTitle(event.target.value)
+														}
+														onKeyDown={(event) => {
+															if (event.key === "Enter") {
+																event.preventDefault();
+																void handleCommitRename();
+															} else if (event.key === "Escape") {
+																handleCancelRename();
+															}
+														}}
+														onBlur={() => void handleCommitRename()}
+														onClick={(event) => event.stopPropagation()}
+														className="w-20 truncate rounded border border-app-border bg-app-base px-1 py-0 text-[13px] font-medium text-app-foreground outline-none focus:border-app-border-strong"
+													/>
+												) : (
+													<span
+														className={cn(
+															"truncate font-medium",
+															hasUnread && !selected
+																? "text-app-foreground"
+																: undefined,
+														)}
+													>
+														{displaySessionTitle(session)}
+													</span>
+												)}
+												{hasUnread && !isEditing ? (
+													<span
+														aria-label="Unread session"
+														className="size-1.5 shrink-0 rounded-full bg-app-progress"
+													/>
+												) : null}
+												{!isEditing ? (
+													<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-gradient-to-r from-transparent via-muted via-[35%] to-muted pl-5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible group-data-[state=active]/tab:via-background group-data-[state=active]/tab:to-background">
+														<span
+															role="button"
+															aria-label="Rename session"
+															onClick={(event) =>
+																handleStartRename(session, event)
+															}
+															className="flex items-center justify-center rounded-sm p-0.5 hover:bg-app-toolbar-hover"
+														>
+															<Pencil className="size-2.5" strokeWidth={2} />
+														</span>
+														<span
+															role="button"
+															aria-label="Close session"
+															onClick={(event) =>
+																handleHideSession(session.id, event)
+															}
+															className="flex items-center justify-center rounded-sm p-0.5 hover:bg-app-toolbar-hover"
+														>
+															<X className="size-2.5" strokeWidth={2} />
+														</span>
+													</span>
+												) : null}
+											</TabsTrigger>
+										</BaseTooltip>
+									);
+								})}
+							</TabsList>
+						</Tabs>
+					) : (
+						<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-app-muted">
+							<AlertCircle className="size-3" strokeWidth={1.8} />
+							No sessions
 						</div>
 					)}
 				</div>
 
-				{/* --- Session tabs row --- */}
-				<div className="flex items-center px-4 pb-1">
-					<div className="scrollbar-none min-w-0 flex-1 overflow-x-auto">
-						{loadingWorkspace ? (
-							<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-app-muted">
-								<Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
-								Loading
-							</div>
-						) : sessions.length > 0 ? (
-							<Tabs
-								value={selectedSessionId ?? sessions[0]?.id}
-								onValueChange={(value) => {
-									onSelectSession?.(value);
-								}}
-								className="min-w-max gap-0"
-							>
-								<TabsList
-									aria-label="Sessions"
-									className="inline-flex w-auto justify-start bg-app-sidebar"
-								>
-									{sessions.map((session) => {
-										const selected = session.id === selectedSessionId;
-										const isActive = sendingSessionIds
-											? sendingSessionIds.has(session.id)
-											: selected && sending;
-										const hasUnread = session.unreadCount > 0;
-										const isEditing = editingSessionId === session.id;
+				{/* New session button */}
+				<button
+					type="button"
+					aria-label="New session"
+					onClick={handleCreateSession}
+					className="ml-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground-soft"
+				>
+					<Plus className="size-3.5" strokeWidth={1.8} />
+				</button>
 
-										return (
-											<BaseTooltip
-												key={session.id}
-												side="bottom"
-												content={<span>{displaySessionTitle(session)}</span>}
-											>
-												<TabsTrigger
-													value={session.id}
-													onMouseEnter={() => {
-														onPrefetchSession?.(session.id);
-													}}
-													onFocus={() => {
-														onPrefetchSession?.(session.id);
-													}}
-													className="group/tab relative w-[7rem] shrink-0 justify-start gap-1.5 overflow-hidden pr-5 text-app-foreground-soft data-[state=active]:text-app-foreground"
-												>
-													<SessionProviderIcon
-														agentType={
-															selected
-																? (selectedProvider ?? session.agentType)
-																: session.agentType
-														}
-														active={isActive}
-													/>
-													{isEditing ? (
-														<input
-															ref={(element) => element?.focus()}
-															value={editingTitle}
-															onChange={(event) =>
-																setEditingTitle(event.target.value)
-															}
-															onKeyDown={(event) => {
-																if (event.key === "Enter") {
-																	event.preventDefault();
-																	void handleCommitRename();
-																} else if (event.key === "Escape") {
-																	handleCancelRename();
-																}
-															}}
-															onBlur={() => void handleCommitRename()}
-															onClick={(event) => event.stopPropagation()}
-															className="w-20 truncate rounded border border-app-border bg-app-base px-1 py-0 text-[13px] font-medium text-app-foreground outline-none focus:border-app-border-strong"
-														/>
-													) : (
-														<span
-															className={cn(
-																"truncate font-medium",
-																hasUnread && !selected
-																	? "text-app-foreground"
-																	: undefined,
-															)}
-														>
-															{displaySessionTitle(session)}
-														</span>
-													)}
-													{hasUnread && !isEditing ? (
-														<span
-															aria-label="Unread session"
-															className="size-1.5 shrink-0 rounded-full bg-app-progress"
-														/>
-													) : null}
-													{!isEditing ? (
-														<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-gradient-to-r from-transparent via-muted via-[35%] to-muted pl-5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible group-data-[state=active]/tab:via-background group-data-[state=active]/tab:to-background">
-															<span
-																role="button"
-																aria-label="Rename session"
-																onClick={(event) =>
-																	handleStartRename(session, event)
-																}
-																className="flex items-center justify-center rounded-sm p-0.5 hover:bg-app-toolbar-hover"
-															>
-																<Pencil className="size-2.5" strokeWidth={2} />
-															</span>
-															<span
-																role="button"
-																aria-label="Close session"
-																onClick={(event) =>
-																	handleHideSession(session.id, event)
-																}
-																className="flex items-center justify-center rounded-sm p-0.5 hover:bg-app-toolbar-hover"
-															>
-																<X className="size-2.5" strokeWidth={2} />
-															</span>
-														</span>
-													) : null}
-												</TabsTrigger>
-											</BaseTooltip>
-										);
-									})}
-								</TabsList>
-							</Tabs>
-						) : (
-							<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-app-muted">
-								<AlertCircle className="size-3" strokeWidth={1.8} />
-								No sessions
-							</div>
-						)}
-					</div>
-
-					{/* New session button */}
+				{/* History button — right end of tab bar */}
+				<div className="relative ml-1 shrink-0">
 					<button
 						type="button"
-						aria-label="New session"
-						onClick={handleCreateSession}
-						className="ml-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground-soft"
+						aria-label="Session history"
+						onClick={handleToggleHistory}
+						className={cn(
+							"flex size-7 items-center justify-center rounded-lg text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground-soft",
+							showHistory && "bg-app-toolbar-hover text-app-foreground-soft",
+						)}
 					>
-						<Plus className="size-3.5" strokeWidth={1.8} />
+						<History className="size-3.5" strokeWidth={1.8} />
 					</button>
 
-					{/* History button — right end of tab bar */}
-					<div className="relative ml-1 shrink-0">
-						<button
-							type="button"
-							aria-label="Session history"
-							onClick={handleToggleHistory}
-							className={cn(
-								"flex size-7 items-center justify-center rounded-lg text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground-soft",
-								showHistory && "bg-app-toolbar-hover text-app-foreground-soft",
-							)}
-						>
-							<History className="size-3.5" strokeWidth={1.8} />
-						</button>
-
-						{/* Dropdown menu */}
-						{showHistory ? (
-							<div className="absolute right-0 top-full z-30 mt-1 w-56 rounded-lg border border-app-border bg-app-sidebar py-1 shadow-lg">
-								{hiddenSessions.length > 0 ? (
-									hiddenSessions.map((session) => (
-										<div
-											key={session.id}
-											className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-[12px] text-app-foreground-soft hover:bg-app-toolbar-hover"
-										>
-											<div className="flex min-w-0 items-center gap-1.5">
-												<SessionProviderIcon
-													agentType={session.agentType}
-													active={false}
-												/>
-												<span className="truncate">
-													{displaySessionTitle(session)}
-												</span>
-											</div>
-											<div className="flex shrink-0 items-center gap-0.5">
-												<button
-													type="button"
-													aria-label="Restore session"
-													onClick={() => handleUnhide(session.id)}
-													className="rounded-sm p-1 text-app-muted transition-colors hover:text-app-foreground-soft"
-												>
-													<RotateCcw className="size-3" strokeWidth={1.8} />
-												</button>
-												<button
-													type="button"
-													aria-label="Delete session permanently"
-													onClick={() => handleDelete(session.id)}
-													className="rounded-sm p-1 text-app-muted transition-colors hover:text-red-400"
-												>
-													<Trash2 className="size-3" strokeWidth={1.8} />
-												</button>
-											</div>
+					{/* Dropdown menu */}
+					{showHistory ? (
+						<div className="absolute right-0 top-full z-30 mt-1 w-56 rounded-lg border border-app-border bg-app-sidebar py-1 shadow-lg">
+							{hiddenSessions.length > 0 ? (
+								hiddenSessions.map((session) => (
+									<div
+										key={session.id}
+										className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-[12px] text-app-foreground-soft hover:bg-app-toolbar-hover"
+									>
+										<div className="flex min-w-0 items-center gap-1.5">
+											<SessionProviderIcon
+												agentType={session.agentType}
+												active={false}
+											/>
+											<span className="truncate">
+												{displaySessionTitle(session)}
+											</span>
 										</div>
-									))
-								) : (
-									<div className="px-2.5 py-1.5 text-[11px] text-app-muted">
-										No hidden sessions
+										<div className="flex shrink-0 items-center gap-0.5">
+											<button
+												type="button"
+												aria-label="Restore session"
+												onClick={() => handleUnhide(session.id)}
+												className="rounded-sm p-1 text-app-muted transition-colors hover:text-app-foreground-soft"
+											>
+												<RotateCcw className="size-3" strokeWidth={1.8} />
+											</button>
+											<button
+												type="button"
+												aria-label="Delete session permanently"
+												onClick={() => handleDelete(session.id)}
+												className="rounded-sm p-1 text-app-muted transition-colors hover:text-red-400"
+											>
+												<Trash2 className="size-3" strokeWidth={1.8} />
+											</button>
+										</div>
 									</div>
-								)}
-							</div>
-						) : null}
-					</div>
+								))
+							) : (
+								<div className="px-2.5 py-1.5 text-[11px] text-app-muted">
+									No hidden sessions
+								</div>
+							)}
+						</div>
+					) : null}
 				</div>
-			</header>
-
-			{/* --- Timeline --- */}
-			<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-				{loadingWorkspace || loadingSession ? (
-					<ConversationColdPlaceholder />
-				) : visibleSessionId && visiblePane?.hasLoaded ? (
-					<KeepAliveThreadStack
-						coldRevealSessionId={coldRevealSessionId}
-						visibleSessionId={visibleSessionId}
-						preparingSessionId={preparingSessionId}
-						hasSession={!!selectedSession}
-						sessionPanes={sessionPanes}
-						onSessionMeasurements={onSessionMeasurements}
-						onSessionPrepared={onSessionPrepared}
-					/>
-				) : (
-					<EmptyState hasSession={!!selectedSession} />
-				)}
 			</div>
-		</div>
+		</header>
 	);
 });
 
-function KeepAliveThreadStack({
-	coldRevealSessionId,
-	visibleSessionId,
-	preparingSessionId,
+function ActiveThreadViewport({
 	hasSession,
-	sessionPanes,
-	onSessionMeasurements,
-	onSessionPrepared,
+	pane,
 }: {
-	coldRevealSessionId: string | null;
-	visibleSessionId: string;
-	preparingSessionId: string | null;
 	hasSession: boolean;
-	sessionPanes: Array<{
+	pane: {
 		sessionId: string;
-		messages: SessionMessageRecord[];
+		messages: ThreadMessageLike[];
 		sending: boolean;
 		hasLoaded: boolean;
-		presentationState: "cold-unpresented" | "presented";
-		viewportSnapshot?: StateSnapshot;
-		plainScrollTop?: number;
-		layoutCacheKey?: string | null;
-		lastMeasuredAt?: number;
-	}>;
-	onSessionMeasurements?: WorkspacePanelProps["onSessionMeasurements"];
-	onSessionPrepared?: WorkspacePanelProps["onSessionPrepared"];
+		presentationState: "presented";
+	};
 }) {
 	const stackRef = useRef<HTMLDivElement | null>(null);
 	const [widthBucket, setWidthBucket] = useState(0);
+	const [paneWidth, setPaneWidth] = useState(0);
 
 	useLayoutEffect(() => {
 		if (
@@ -652,6 +665,7 @@ function KeepAliveThreadStack({
 
 		const updateWidthBucket = () => {
 			const width = stack.clientWidth;
+			setPaneWidth(width);
 			setWidthBucket(width > 0 ? Math.max(1, Math.round(width / 32)) : 0);
 		};
 
@@ -671,54 +685,16 @@ function KeepAliveThreadStack({
 			ref={stackRef}
 			className="relative flex min-h-0 flex-1 overflow-hidden"
 		>
-			{sessionPanes.map((pane) => {
-				const mode =
-					pane.sessionId === visibleSessionId
-						? "visible"
-						: pane.sessionId === preparingSessionId
-							? "preparing"
-							: "parked";
-				const layoutCacheKey = getSessionLayoutCacheKey(
-					pane.sessionId,
-					pane.messages,
-					widthBucket,
-				);
-				const initialSnapshot =
-					pane.layoutCacheKey === layoutCacheKey
-						? pane.viewportSnapshot
-						: undefined;
-				return (
-					<div
-						key={pane.sessionId}
-						aria-hidden={mode === "visible" ? undefined : true}
-						className={cn(
-							"min-h-0",
-							mode === "visible"
-								? "relative z-10 flex flex-1"
-								: "absolute inset-0 flex pointer-events-none",
-							mode === "visible" && pane.sessionId === coldRevealSessionId
-								? "conversation-thread-enter"
-								: null,
-						)}
-						style={{
-							opacity: mode === "preparing" ? 0 : 1,
-							visibility: mode === "parked" ? "hidden" : "visible",
-						}}
-					>
-						<ChatThread
-							initialSnapshot={initialSnapshot}
-							layoutCacheKey={layoutCacheKey}
-							messages={pane.messages}
-							mode={mode}
-							hasSession={hasSession}
-							onPrepared={onSessionPrepared}
-							onViewportSnapshot={onSessionMeasurements}
-							sessionId={pane.sessionId}
-							sending={pane.sending}
-						/>
-					</div>
-				);
-			})}
+			<div className="relative z-10 flex min-h-0 flex-1">
+				<ChatThread
+					hasSession={hasSession}
+					layoutCacheKey={getSessionLayoutCacheKey(pane.sessionId, widthBucket)}
+					messages={pane.messages}
+					paneWidth={paneWidth}
+					sessionId={pane.sessionId}
+					sending={pane.sending}
+				/>
+			</div>
 		</div>
 	);
 }
@@ -728,33 +704,29 @@ function KeepAliveThreadStack({
 // ---------------------------------------------------------------------------
 
 function ChatThread({
-	initialSnapshot,
 	layoutCacheKey,
 	messages,
-	mode,
 	hasSession,
-	onPrepared,
-	onViewportSnapshot,
+	paneWidth,
 	sessionId,
 	sending,
 }: {
-	initialSnapshot?: StateSnapshot;
 	layoutCacheKey: string;
-	messages: SessionMessageRecord[];
-	mode: "visible" | "preparing" | "parked";
+	messages: ThreadMessageLike[];
 	hasSession: boolean;
-	onPrepared?: WorkspacePanelProps["onSessionPrepared"];
-	onViewportSnapshot?: WorkspacePanelProps["onSessionMeasurements"];
+	paneWidth: number;
 	sessionId: string;
 	sending: boolean;
 }) {
-	const threadMessages = useMemo(
-		() => convertMessages(messages, sessionId, { collapse: true }),
-		[messages, sessionId],
-	);
+	// Messages are already pipeline-rendered ThreadMessageLike[] from Rust.
+	const threadMessages = messages;
+	const { settings } = useSettings();
 	const usePlainThread =
 		threadMessages.length <= NON_VIRTUALIZED_THREAD_MESSAGE_LIMIT;
-	const virtuosoRef = useRef<VirtuosoHandle | null>(null);
+	const hasStreamingMessage = threadMessages.some(
+		(message) => message.streaming === true,
+	);
+	const pinTailRows = sending || hasStreamingMessage;
 	const scrollParentRef = useRef<HTMLElement | null>(null);
 	const { contentRef, scrollRef, scrollToBottom, isAtBottom } =
 		useStickToBottom({
@@ -767,80 +739,12 @@ function ChatThread({
 		},
 		[scrollRef],
 	);
-	const isAtBottomRef = useRef(isAtBottom);
-	isAtBottomRef.current = isAtBottom;
-	const preparePhaseRef = useRef<"idle" | "waiting-bottom">("idle");
-	const prepareRunIdRef = useRef(0);
-	const prepareFinishRef = useRef<(() => void) | null>(null);
-	const restoredViewportState = useMemo(
-		() => initialSnapshot ?? sessionViewportStateBySession.get(sessionId),
-		[initialSnapshot, sessionId],
-	);
 	const previousSendingRef = useRef(sending);
 	const sendingJustStarted = sending && !previousSendingRef.current;
-	const sendingRef = useRef(sending);
-	sendingRef.current = sending;
 
 	useEffect(() => {
 		previousSendingRef.current = sending;
 	}, [sending]);
-
-	useEffect(() => {
-		return () => {
-			const plainScrollTop = scrollParentRef.current?.scrollTop;
-			if (plainScrollTop !== undefined) {
-				sessionPlainScrollTopBySession.set(sessionId, plainScrollTop);
-			}
-
-			const virtuoso = virtuosoRef.current;
-			if (!virtuoso) return;
-			virtuoso.getState((snapshot) => {
-				sessionViewportStateBySession.set(sessionId, snapshot);
-			});
-		};
-	}, [sessionId]);
-
-	const captureViewportSnapshot = useCallback(
-		(
-			callback?: (payload: {
-				viewportSnapshot?: StateSnapshot;
-				plainScrollTop?: number;
-				layoutCacheKey?: string | null;
-				lastMeasuredAt?: number;
-			}) => void,
-		) => {
-			const plainScrollTop = scrollParentRef.current?.scrollTop;
-			if (plainScrollTop !== undefined) {
-				sessionPlainScrollTopBySession.set(sessionId, plainScrollTop);
-			}
-
-			const virtuoso = !usePlainThread ? virtuosoRef.current : null;
-			if (!virtuoso) {
-				const payload = {
-					viewportSnapshot: undefined,
-					plainScrollTop,
-					layoutCacheKey,
-					lastMeasuredAt: Date.now(),
-				};
-				onViewportSnapshot?.(sessionId, payload);
-				callback?.(payload);
-				return;
-			}
-
-			virtuoso.getState((snapshot) => {
-				sessionViewportStateBySession.set(sessionId, snapshot);
-				const payload = {
-					viewportSnapshot: snapshot,
-					plainScrollTop,
-					layoutCacheKey,
-					lastMeasuredAt: Date.now(),
-				};
-				onViewportSnapshot?.(sessionId, payload);
-				callback?.(payload);
-			});
-		},
-		[layoutCacheKey, onViewportSnapshot, sessionId, usePlainThread],
-	);
 
 	useEffect(() => {
 		if (sendingJustStarted) {
@@ -848,166 +752,8 @@ function ChatThread({
 		}
 	}, [sendingJustStarted, scrollToBottom]);
 
-	// When a parked pane becomes directly visible (skipping the prepare phase,
-	// e.g. after session deletion), Virtuoso may have stale measurements from
-	// when it was hidden. Force a scroll so it re-renders the correct items.
-	const prevModeRef = useRef(mode);
-	useEffect(() => {
-		const prevMode = prevModeRef.current;
-		prevModeRef.current = mode;
-		if (usePlainThread) {
-			return;
-		}
-
-		if (mode === "visible" && prevMode === "parked") {
-			window.requestAnimationFrame(() => {
-				void scrollToBottom("instant");
-			});
-		}
-	}, [mode, scrollToBottom, usePlainThread]);
-
-	useEffect(() => {
-		return () => {
-			if (mode === "visible" || mode === "preparing") {
-				captureViewportSnapshot();
-			}
-		};
-	}, [captureViewportSnapshot, mode]);
-
-	useEffect(() => {
-		if (mode !== "preparing" || typeof window === "undefined") {
-			preparePhaseRef.current = "idle";
-			prepareFinishRef.current = null;
-			return;
-		}
-
-		prepareRunIdRef.current += 1;
-		const runId = prepareRunIdRef.current;
-
-		if (usePlainThread) {
-			let frameId = 0;
-			let nestedFrameId = 0;
-			const finishPrepare = () => {
-				if (prepareRunIdRef.current !== runId) {
-					return;
-				}
-
-				preparePhaseRef.current = "idle";
-				captureViewportSnapshot((payload) => {
-					if (prepareRunIdRef.current !== runId) {
-						return;
-					}
-					onPrepared?.(sessionId, payload);
-				});
-			};
-
-			prepareFinishRef.current = finishPrepare;
-			frameId = window.requestAnimationFrame(() => {
-				const scrollParent = scrollParentRef.current;
-				if (scrollParent) {
-					scrollParent.scrollTop = scrollParent.scrollHeight;
-				}
-
-				nestedFrameId = window.requestAnimationFrame(() => {
-					finishPrepare();
-				});
-			});
-
-			return () => {
-				if (frameId !== 0) {
-					window.cancelAnimationFrame(frameId);
-				}
-				if (nestedFrameId !== 0) {
-					window.cancelAnimationFrame(nestedFrameId);
-				}
-				if (prepareRunIdRef.current === runId) {
-					preparePhaseRef.current = "idle";
-					prepareFinishRef.current = null;
-				}
-			};
-		}
-
-		let frameId = 0;
-		let nestedFrameId = 0;
-		let settleFrameId = 0;
-		let timeoutId = 0;
-		const finishPrepare = () => {
-			if (prepareRunIdRef.current !== runId) {
-				return;
-			}
-
-			preparePhaseRef.current = "idle";
-			captureViewportSnapshot((payload) => {
-				if (prepareRunIdRef.current !== runId) {
-					return;
-				}
-				onPrepared?.(sessionId, payload);
-			});
-		};
-
-		prepareFinishRef.current = finishPrepare;
-		frameId = window.requestAnimationFrame(() => {
-			nestedFrameId = window.requestAnimationFrame(() => {
-				void scrollToBottom("instant");
-				preparePhaseRef.current = "waiting-bottom";
-				settleFrameId = window.requestAnimationFrame(() => {
-					if (isAtBottomRef.current) {
-						finishPrepare();
-						return;
-					}
-
-					timeoutId = window.setTimeout(() => {
-						finishPrepare();
-					}, 64);
-				});
-			});
-		});
-
-		return () => {
-			if (frameId !== 0) {
-				window.cancelAnimationFrame(frameId);
-			}
-			if (nestedFrameId !== 0) {
-				window.cancelAnimationFrame(nestedFrameId);
-			}
-			if (settleFrameId !== 0) {
-				window.cancelAnimationFrame(settleFrameId);
-			}
-			if (timeoutId !== 0) {
-				window.clearTimeout(timeoutId);
-			}
-			if (prepareRunIdRef.current === runId) {
-				preparePhaseRef.current = "idle";
-				prepareFinishRef.current = null;
-			}
-		};
-	}, [
-		captureViewportSnapshot,
-		mode,
-		onPrepared,
-		scrollToBottom,
-		sessionId,
-		usePlainThread,
-	]);
-
-	useEffect(() => {
-		if (
-			mode === "preparing" &&
-			preparePhaseRef.current === "waiting-bottom" &&
-			isAtBottom
-		) {
-			prepareFinishRef.current?.();
-		}
-	}, [isAtBottom, mode, sessionId]);
-
 	useLayoutEffect(() => {
-		const prevMode = prevModeRef.current;
-		if (
-			!usePlainThread ||
-			mode !== "visible" ||
-			prevMode === "visible" ||
-			typeof window === "undefined"
-		) {
+		if (!usePlainThread || typeof window === "undefined") {
 			return;
 		}
 
@@ -1017,21 +763,7 @@ function ChatThread({
 		}
 
 		scrollParent.scrollTop = scrollParent.scrollHeight;
-	}, [mode, sessionId, usePlainThread]);
-
-	const virtuosoComponents = useMemo<VirtuosoComponents<RenderedMessage>>(
-		() => ({
-			Header: ConversationHeaderSpacer,
-			Item: ConversationItem,
-			Footer: sending ? StreamingFooter : ConversationFooterSpacer,
-			EmptyPlaceholder: () => (
-				<div className="flex min-h-full flex-1 flex-col">
-					<EmptyState hasSession={hasSession} />
-				</div>
-			),
-		}),
-		[sending, hasSession],
-	);
+	}, [sessionId, usePlainThread]);
 
 	const itemContent = useCallback(
 		(index: number, message: RenderedMessage) => (
@@ -1046,15 +778,18 @@ function ChatThread({
 
 	return (
 		<ConversationViewport
-			components={virtuosoComponents}
-			contentRef={usePlainThread ? contentRef : undefined}
 			data={threadMessages}
-			isAtBottom={isAtBottom}
+			fontSize={settings.fontSize}
+			hasSession={hasSession}
 			itemContent={itemContent}
-			restoredViewportState={restoredViewportState}
+			layoutCacheKey={layoutCacheKey}
+			paneWidth={paneWidth}
+			pinTailRows={pinTailRows}
 			scrollRef={handleScrollRef}
+			sessionId={sessionId}
+			sending={sending}
 			usePlainThread={usePlainThread}
-			virtuosoRef={virtuosoRef}
+			contentRef={contentRef}
 		>
 			<button
 				type="button"
@@ -1076,26 +811,32 @@ function ChatThread({
 
 function ConversationViewport({
 	children,
-	components,
 	contentRef,
 	data,
-	isAtBottom,
+	fontSize,
+	hasSession,
 	itemContent,
-	restoredViewportState,
+	layoutCacheKey,
+	paneWidth,
+	pinTailRows,
 	scrollRef,
+	sessionId,
+	sending,
 	usePlainThread,
-	virtuosoRef,
 }: {
 	children?: ReactNode;
-	components: VirtuosoComponents<RenderedMessage>;
-	contentRef?: React.RefCallback<HTMLElement>;
+	contentRef: React.RefCallback<HTMLElement>;
 	data: RenderedMessage[];
-	isAtBottom: boolean;
+	fontSize: number;
+	hasSession: boolean;
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
-	restoredViewportState?: StateSnapshot;
+	layoutCacheKey: string;
+	paneWidth: number;
+	pinTailRows: boolean;
 	scrollRef: React.RefCallback<HTMLElement>;
+	sessionId: string;
+	sending: boolean;
 	usePlainThread: boolean;
-	virtuosoRef: React.RefObject<VirtuosoHandle | null>;
 }) {
 	const [scrollParent, setScrollParent] = useState<HTMLDivElement | null>(null);
 
@@ -1107,13 +848,23 @@ function ConversationViewport({
 		[scrollRef],
 	);
 
-	const Header = components.Header;
-	const Footer = components.Footer;
-	const EmptyPlaceholder = components.EmptyPlaceholder;
+	const Header: ThreadViewportSlot = ConversationHeaderSpacer;
+	const Footer: ThreadViewportSlot = sending
+		? StreamingFooter
+		: ConversationFooterSpacer;
+	const EmptyPlaceholder: ThreadViewportSlot = () => (
+		<div className="flex min-h-full flex-1 flex-col">
+			<EmptyState hasSession={hasSession} />
+		</div>
+	);
 
 	return (
 		<ScrollArea
-			className="relative min-h-0 flex-1"
+			// Remount on session switch so the CSS fade-in animation on
+			// `.conversation-scroll-area [data-slot=scroll-area-scrollbar]`
+			// re-fires each time the user lands on a new thread.
+			key={sessionId}
+			className="conversation-scroll-area relative min-h-0 flex-1"
 			viewportRef={viewportRef}
 			viewportClassName="conversation-scroll-viewport"
 			overlay={children}
@@ -1135,31 +886,351 @@ function ConversationViewport({
 							))}
 					{Footer ? createElement(Footer) : null}
 				</div>
-			) : scrollParent ? (
-				<Virtuoso
-					ref={virtuosoRef}
-					alignToBottom
-					atBottomThreshold={48}
-					components={components}
-					computeItemKey={(index, message) =>
-						message.id ?? `${message.role}:${index}`
-					}
-					customScrollParent={scrollParent}
+			) : (
+				<ProgressiveConversationViewport
 					data={data}
-					defaultItemHeight={92}
-					followOutput={isAtBottom ? "smooth" : false}
-					initialTopMostItemIndex={
-						restoredViewportState ? undefined : { index: "LAST", align: "end" }
-					}
-					increaseViewportBy={{ bottom: 720, top: 360 }}
+					emptyPlaceholder={EmptyPlaceholder}
+					footer={Footer}
+					fontSize={fontSize}
+					header={Header}
 					itemContent={itemContent}
-					minOverscanItemCount={{ top: 8, bottom: 4 }}
-					overscan={{ main: 600, reverse: 300 }}
-					restoreStateFrom={restoredViewportState}
-					skipAnimationFrameInResizeObserver
+					layoutCacheKey={layoutCacheKey}
+					paneWidth={paneWidth}
+					pinTailRows={pinTailRows}
+					scrollParent={scrollParent}
+					sessionId={sessionId}
+					contentRef={contentRef}
 				/>
-			) : null}
+			)}
 		</ScrollArea>
+	);
+}
+
+function ProgressiveConversationViewport({
+	contentRef,
+	data,
+	emptyPlaceholder: EmptyPlaceholder,
+	footer: Footer,
+	fontSize,
+	header: Header,
+	itemContent,
+	layoutCacheKey,
+	paneWidth,
+	pinTailRows,
+	scrollParent,
+	sessionId,
+}: {
+	contentRef?: React.RefCallback<HTMLElement>;
+	data: RenderedMessage[];
+	emptyPlaceholder?: ThreadViewportSlot;
+	footer?: ThreadViewportSlot;
+	fontSize: number;
+	header?: ThreadViewportSlot;
+	itemContent: (index: number, message: RenderedMessage) => ReactNode;
+	layoutCacheKey: string;
+	paneWidth: number;
+	pinTailRows: boolean;
+	scrollParent: HTMLDivElement | null;
+	sessionId: string;
+}) {
+	// Scroll/viewport are intentionally tracked with two layers:
+	//   1. `committedScrollTopRef` / `committedViewportRef` — the values React
+	//      currently rendered with. Used to compute the visible window.
+	//   2. `setCommittedScrollState` — only invoked when the scroll position
+	//      has crossed half of our overscan buffer (or the viewport size has
+	//      changed), so smooth in-window scrolling does NOT trigger any
+	//      React renders or `visibleRows` recomputation.
+	const [committedScrollState, setCommittedScrollState] = useState<{
+		scrollTop: number;
+		viewportHeight: number;
+	}>({ scrollTop: 0, viewportHeight: 0 });
+	const { scrollTop, viewportHeight } = committedScrollState;
+	const [measuredHeights, setMeasuredHeights] = useState<
+		Record<string, number>
+	>({});
+	const initialScrollAppliedRef = useRef(false);
+	const pendingScrollAdjustmentRef = useRef(0);
+	// Mirror of `measuredHeights` for synchronous reads inside the
+	// `handleHeightChange` callback. The mirror is updated in a layout effect
+	// (after commit) instead of during render to keep render pure under
+	// Strict Mode / concurrent rendering.
+	const measuredHeightsRef = useRef<Record<string, number>>(measuredHeights);
+	useLayoutEffect(() => {
+		measuredHeightsRef.current = measuredHeights;
+	}, [measuredHeights]);
+
+	useEffect(() => {
+		setMeasuredHeights({});
+		initialScrollAppliedRef.current = false;
+	}, [layoutCacheKey]);
+
+	useEffect(() => {
+		if (!scrollParent) {
+			return;
+		}
+
+		let rafId: number | null = null;
+		const commitFromDom = () => {
+			rafId = null;
+			const nextScrollTop = scrollParent.scrollTop;
+			const nextViewportHeight = scrollParent.clientHeight;
+			setCommittedScrollState((current) => {
+				const buffer =
+					current.viewportHeight || PROGRESSIVE_VIEWPORT_DEFAULT_HEIGHT;
+				const scrollDelta = Math.abs(nextScrollTop - current.scrollTop);
+				const viewportDelta = Math.abs(
+					nextViewportHeight - current.viewportHeight,
+				);
+				// We render with `buffer = effectiveViewportHeight` of overscan
+				// above and below the visible window, so any scroll movement
+				// smaller than half the buffer is guaranteed to keep the same
+				// rows in view. In that case we skip the state update entirely
+				// to avoid re-running visibleRows / re-rendering rows.
+				if (scrollDelta < buffer / 2 && viewportDelta < 8) {
+					return current;
+				}
+				return {
+					scrollTop: nextScrollTop,
+					viewportHeight: nextViewportHeight,
+				};
+			});
+		};
+
+		const scheduleCommit = () => {
+			if (rafId !== null) return;
+			rafId = window.requestAnimationFrame(commitFromDom);
+		};
+
+		// Always commit the first observation so we know the actual viewport.
+		setCommittedScrollState({
+			scrollTop: scrollParent.scrollTop,
+			viewportHeight: scrollParent.clientHeight,
+		});
+		scrollParent.addEventListener("scroll", scheduleCommit, {
+			passive: true,
+		});
+		let observer: ResizeObserver | null = null;
+		if (typeof ResizeObserver !== "undefined") {
+			observer = new ResizeObserver(scheduleCommit);
+			observer.observe(scrollParent);
+		}
+
+		return () => {
+			if (rafId !== null) {
+				window.cancelAnimationFrame(rafId);
+			}
+			scrollParent.removeEventListener("scroll", scheduleCommit);
+			observer?.disconnect();
+		};
+	}, [scrollParent]);
+
+	const estimatedHeights = useMemo(
+		() => estimateThreadRowHeights(data, { fontSize, paneWidth }),
+		[data, fontSize, paneWidth],
+	);
+	const rows = useMemo(() => {
+		let top = 0;
+		return data.map((message, index) => {
+			const key = message.id ?? `${message.role}:${index}`;
+			const estimatedHeight = estimatedHeights[index] ?? 72;
+			const measuredHeight = measuredHeights[key];
+			const height =
+				measuredHeight !== undefined ? measuredHeight : estimatedHeight;
+			const row = {
+				height,
+				index,
+				key,
+				message,
+				top,
+			};
+			top += height;
+			return row;
+		});
+	}, [data, estimatedHeights, measuredHeights]);
+	const totalRowsHeight =
+		rows.length > 0
+			? rows[rows.length - 1]!.top + rows[rows.length - 1]!.height
+			: 0;
+	const headerHeight = Header ? PROGRESSIVE_VIEWPORT_HEADER_HEIGHT : 0;
+	const footerHeight = Footer ? PROGRESSIVE_VIEWPORT_FOOTER_HEIGHT : 0;
+	const effectiveViewportHeight =
+		viewportHeight > 0 ? viewportHeight : PROGRESSIVE_VIEWPORT_DEFAULT_HEIGHT;
+	const effectiveScrollTop =
+		(scrollParent && initialScrollAppliedRef.current
+			? scrollTop
+			: Math.max(0, headerHeight + totalRowsHeight - effectiveViewportHeight)) -
+		headerHeight;
+	const buffer = effectiveViewportHeight;
+	const windowTop = Math.max(0, effectiveScrollTop - buffer);
+	const windowBottom = effectiveScrollTop + effectiveViewportHeight + buffer;
+	const visibleRows = useMemo(() => {
+		const inWindow = rows.filter((row) => {
+			const rowBottom = row.top + row.height;
+			return rowBottom >= windowTop && row.top <= windowBottom;
+		});
+		if (!pinTailRows || rows.length === 0) {
+			return inWindow;
+		}
+
+		// `rows` is already index-ordered, so the tail (last 2 rows) sits at
+		// indices [rows.length - 2, rows.length - 1]. We avoid the previous
+		// `Map(...).sort(...)` (O(n log n) on every stream tick) by appending
+		// only the tail rows that are not already at the end of `inWindow`.
+		const tailStartIndex = Math.max(0, rows.length - 2);
+		const lastVisibleIndex =
+			inWindow.length > 0 ? inWindow[inWindow.length - 1]!.index : -1;
+		if (lastVisibleIndex >= rows.length - 1) {
+			return inWindow;
+		}
+		const result = inWindow.slice();
+		const appendStart = Math.max(tailStartIndex, lastVisibleIndex + 1);
+		for (let i = appendStart; i < rows.length; i += 1) {
+			result.push(rows[i]!);
+		}
+		return result;
+	}, [pinTailRows, rows, windowBottom, windowTop]);
+	const totalContentHeight = headerHeight + totalRowsHeight + footerHeight;
+	// Mirror of `rows` for synchronous reads inside `handleHeightChange`,
+	// updated in a layout effect rather than during render.
+	const rowsRef = useRef(rows);
+	useLayoutEffect(() => {
+		rowsRef.current = rows;
+	}, [rows]);
+
+	useLayoutEffect(() => {
+		if (!scrollParent || initialScrollAppliedRef.current) {
+			return;
+		}
+
+		const targetScrollTop = Math.max(
+			0,
+			totalContentHeight - scrollParent.clientHeight,
+		);
+		scrollParent.scrollTop = targetScrollTop;
+		setCommittedScrollState({
+			scrollTop: targetScrollTop,
+			viewportHeight: scrollParent.clientHeight,
+		});
+		initialScrollAppliedRef.current = true;
+	}, [scrollParent, totalContentHeight]);
+
+	useLayoutEffect(() => {
+		if (!scrollParent || pendingScrollAdjustmentRef.current === 0) {
+			return;
+		}
+
+		scrollParent.scrollTop += pendingScrollAdjustmentRef.current;
+		pendingScrollAdjustmentRef.current = 0;
+	}, [rows, scrollParent]);
+
+	const handleHeightChange = useCallback(
+		(rowKey: string, nextHeight: number) => {
+			const roundedHeight = Math.max(24, Math.ceil(nextHeight));
+			const row = rowsRef.current.find((entry) => entry.key === rowKey);
+			if (!row) {
+				return;
+			}
+
+			const previousHeight = measuredHeightsRef.current[rowKey] ?? row.height;
+			if (Math.abs(previousHeight - roundedHeight) < 2) {
+				return;
+			}
+
+			if (scrollParent && row.top + headerHeight < scrollParent.scrollTop) {
+				pendingScrollAdjustmentRef.current += roundedHeight - previousHeight;
+			}
+			startTransition(() => {
+				setMeasuredHeights((current) => ({
+					...current,
+					[rowKey]: roundedHeight,
+				}));
+			});
+		},
+		[headerHeight, scrollParent],
+	);
+
+	if (data.length === 0) {
+		return (
+			<div ref={contentRef}>
+				{Header ? createElement(Header) : null}
+				{EmptyPlaceholder ? createElement(EmptyPlaceholder) : null}
+				{Footer ? createElement(Footer) : null}
+			</div>
+		);
+	}
+
+	return (
+		<div ref={contentRef} style={{ minHeight: totalContentHeight }}>
+			{Header ? createElement(Header) : null}
+			<div
+				aria-label={`Conversation rows for session ${sessionId}`}
+				style={{ height: totalRowsHeight, position: "relative" }}
+			>
+				{visibleRows.map((row) => (
+					<MeasuredConversationRow
+						key={row.key}
+						onHeightChange={handleHeightChange}
+						rowKey={row.key}
+						top={row.top}
+					>
+						{itemContent(row.index, row.message)}
+					</MeasuredConversationRow>
+				))}
+			</div>
+			{Footer ? createElement(Footer) : null}
+		</div>
+	);
+}
+
+function MeasuredConversationRow({
+	children,
+	onHeightChange,
+	rowKey,
+	top,
+}: {
+	children: ReactNode;
+	onHeightChange: (rowKey: string, nextHeight: number) => void;
+	rowKey: string;
+	top: number;
+}) {
+	const rowRef = useRef<HTMLDivElement | null>(null);
+
+	useLayoutEffect(() => {
+		const node = rowRef.current;
+		if (!node) {
+			return;
+		}
+
+		const reportHeight = () => {
+			onHeightChange(rowKey, node.offsetHeight);
+		};
+
+		reportHeight();
+		if (typeof ResizeObserver === "undefined") {
+			return;
+		}
+
+		const observer = new ResizeObserver(reportHeight);
+		observer.observe(node);
+		return () => {
+			observer.disconnect();
+		};
+	}, [onHeightChange, rowKey]);
+
+	return (
+		<div
+			ref={rowRef}
+			style={{
+				...conversationRowIsolationStyle,
+				left: 0,
+				position: "absolute",
+				right: 0,
+				top,
+			}}
+			className="flow-root px-5 pb-1.5"
+		>
+			{children}
+		</div>
 	);
 }
 
@@ -1171,6 +1242,12 @@ const conversationRowIsolationStyle = {
 	isolation: "isolate",
 } as const;
 
+// NOTE: this stays as a plain function (no React.memo) on purpose — its
+// `children` prop is a fresh React element on every parent render, so
+// memoing here would never bail out. The bail-out happens one level deeper
+// inside `MemoConversationMessage` whose props (message reference,
+// sessionId, itemIndex) are stable thanks to the structural sharing layer
+// in workspace-panel-container.tsx.
 function ConversationRowShell({ children }: { children: ReactNode }) {
 	return (
 		<div
@@ -1182,56 +1259,11 @@ function ConversationRowShell({ children }: { children: ReactNode }) {
 	);
 }
 
-function getSessionLayoutCacheKey(
-	sessionId: string,
-	messages: SessionMessageRecord[],
-	widthBucket: number,
-) {
-	let hash = 0;
-
-	for (const message of messages) {
-		const signature = [
-			message.id,
-			message.role,
-			message.createdAt,
-			message.contentIsJson ? "json" : "text",
-			String(message.content.length),
-			String(message.attachmentCount ?? 0),
-		].join("|");
-
-		for (let index = 0; index < signature.length; index += 1) {
-			hash = (hash * 31 + signature.charCodeAt(index)) >>> 0;
-		}
-	}
-
-	return [
-		CHAT_LAYOUT_CACHE_VERSION,
-		sessionId,
-		String(widthBucket),
-		String(messages.length),
-		String(hash),
-	].join(":");
+function getSessionLayoutCacheKey(sessionId: string, widthBucket: number) {
+	// Keep progressive viewport measurements stable across live appends and
+	// streaming token growth. Width changes still reset the cache.
+	return [CHAT_LAYOUT_CACHE_VERSION, sessionId, String(widthBucket)].join(":");
 }
-
-const ConversationItem = memo(function ConversationItem({
-	children,
-	style,
-	item: _item,
-	...props
-}: VirtuosoItemProps<RenderedMessage>) {
-	return (
-		<div
-			{...props}
-			style={{
-				...style,
-				...conversationRowIsolationStyle,
-			}}
-			className="flow-root px-5 pb-1.5"
-		>
-			{children}
-		</div>
-	);
-});
 
 function ConversationColdPlaceholder() {
 	return <div className="flex min-h-0 flex-1" aria-hidden="true" />;
@@ -1282,7 +1314,10 @@ function ConversationMessage({
 	sessionId: string;
 	itemIndex: number;
 }) {
-	recordMessageRender(sessionId, message.id ?? `${message.role}:${itemIndex}`);
+	const messageKey = message.id ?? `${message.role}:${itemIndex}`;
+	useEffect(() => {
+		recordMessageRender(sessionId, messageKey);
+	});
 
 	// Only the actual streaming partial carries `streaming: true` (set by
 	// the accumulator's __streaming flag).  Completed intermediate messages
@@ -1428,34 +1463,37 @@ type UserContentSegment =
 	| { type: "image"; value: string }
 	| { type: "file"; value: string };
 
-/** Split user text into interleaved text, image, and file segments. */
+/**
+ * Split user text into interleaved text, image, and file segments.
+ *
+ * Uses `text.matchAll()` instead of `regex.exec()` so the function does not
+ * mutate `USER_FILE_RE.lastIndex`. The shared regex would otherwise race
+ * across concurrent renders under React 19.
+ */
 function splitUserContent(text: string): UserContentSegment[] {
 	const segments: UserContentSegment[] = [];
 	let lastIndex = 0;
-	USER_FILE_RE.lastIndex = 0;
-	for (
-		let match = USER_FILE_RE.exec(text);
-		match !== null;
-		match = USER_FILE_RE.exec(text)
-	) {
-		const before = text.slice(lastIndex, match.index);
+	for (const match of text.matchAll(USER_FILE_RE)) {
+		const matchIndex = match.index ?? 0;
+		const before = text.slice(lastIndex, matchIndex);
 		if (before) segments.push({ type: "text", value: before });
 		const filePath = match[1];
 		segments.push({
 			type: IMAGE_EXT_RE.test(filePath) ? "image" : "file",
 			value: filePath,
 		});
-		lastIndex = match.index + match[0].length;
+		lastIndex = matchIndex + match[0].length;
 	}
 	const after = text.slice(lastIndex);
 	if (after) segments.push({ type: "text", value: after });
 	return segments;
 }
 
-function UserText({ text }: { text: string }) {
-	const segments = splitUserContent(text);
-	const hasAttachments = segments.some(
-		(s) => s.type === "image" || s.type === "file",
+const UserText = memo(function UserText({ text }: { text: string }) {
+	const segments = useMemo(() => splitUserContent(text), [text]);
+	const hasAttachments = useMemo(
+		() => segments.some((s) => s.type === "image" || s.type === "file"),
+		[segments],
 	);
 
 	if (!hasAttachments) {
@@ -1479,7 +1517,7 @@ function UserText({ text }: { text: string }) {
 			})}
 		</p>
 	);
-}
+});
 
 /** Inline file badge for non-image files in chat messages. */
 function FileBadgeInline({ path }: { path: string }) {
@@ -1594,6 +1632,16 @@ const AssistantToolCall = memo(
 			: null;
 		const resultText = isChildrenResult ? null : resultStr;
 		const hasOutput = resultText != null && resultText.length > 5;
+		const isLiveTool =
+			streamingStatus === "pending" ||
+			streamingStatus === "streaming_input" ||
+			streamingStatus === "running";
+		// Default expanded state is captured once at mount via useState init —
+		// no effect needed because tool calls only progress forward (live tools
+		// stay live until completion, completed tools never go back to live).
+		// `isLiveTool || isOpen` in the open prop below still forces open while
+		// streaming regardless of user toggles.
+		const [isOpen, setIsOpen] = useState(isLiveTool);
 
 		// Streaming status indicator
 		const statusIndicator =
@@ -1664,8 +1712,19 @@ const AssistantToolCall = memo(
 
 		// Normal tool call with optional output
 		return (
-			<details className="group/out flex flex-col">
-				<summary className="flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
+			<details
+				className="group/out flex flex-col"
+				onToggle={(event) => {
+					setIsOpen(event.currentTarget.open);
+				}}
+				open={isLiveTool || isOpen}
+			>
+				<summary
+					className={cn(
+						"flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden",
+						hasOutput ? "cursor-pointer" : "cursor-default",
+					)}
+				>
 					{toolLine}
 					{hasOutput ? (
 						<span className="shrink-0 cursor-pointer text-app-muted/40 hover:text-app-muted">
@@ -1685,7 +1744,7 @@ const AssistantToolCall = memo(
 						</span>
 					) : null}
 				</summary>
-				{hasOutput ? (
+				{hasOutput && (isLiveTool || isOpen) ? (
 					<div className="max-h-[16rem] overflow-auto rounded-md bg-app-foreground/[0.02] text-[11px] leading-5">
 						{info.fullCommand ? (
 							<div className="border-b border-app-border/20 px-2 py-1.5">
@@ -1708,16 +1767,27 @@ const AssistantToolCall = memo(
 		prev.toolName === next.toolName &&
 		prev.streamingStatus === next.streamingStatus &&
 		prev.result === next.result &&
-		argsEqual(prev.args, next.args),
+		shallowArgsEqual(prev.args, next.args),
 );
 
-/** Deep-compare tool call args via JSON serialization. */
-function argsEqual(
+/**
+ * Shallow-compare tool call args. The accumulator either reuses the same args
+ * object reference or only mutates a single field (streaming input), so a
+ * shallow key/value === check is sufficient and avoids serializing large
+ * Edit/Bash payloads on every render.
+ */
+function shallowArgsEqual(
 	a: Record<string, unknown>,
 	b: Record<string, unknown>,
 ): boolean {
 	if (a === b) return true;
-	return JSON.stringify(a) === JSON.stringify(b);
+	const keysA = Object.keys(a);
+	const keysB = Object.keys(b);
+	if (keysA.length !== keysB.length) return false;
+	for (const key of keysA) {
+		if (a[key] !== b[key]) return false;
+	}
+	return true;
 }
 
 /** Number of recent children steps to show by default. */
@@ -1823,6 +1893,19 @@ function AgentChildrenBlock({
 }
 
 function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
+	// Groups can transition inactive → active when a new tool is appended to a
+	// previously-completed group. We track "ever active" with a monotonic ref
+	// (write happens only on the first true observation, which is safe even
+	// under Strict Mode double-render) plus a single state for the user's
+	// explicit collapse preference. This eliminates the previous derived-state
+	// useEffect anti-pattern.
+	const wasActiveRef = useRef(group.active);
+	if (group.active && !wasActiveRef.current) {
+		wasActiveRef.current = true;
+	}
+	const [userClosed, setUserClosed] = useState(false);
+	const isOpen = group.active || (wasActiveRef.current && !userClosed);
+
 	const icon =
 		group.category === "search" ? (
 			<Search className="size-3.5 text-app-info" strokeWidth={1.8} />
@@ -1831,8 +1914,14 @@ function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 		);
 
 	return (
-		<details className="group/collapse flex flex-col">
-			<summary className="flex max-w-full cursor-default items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
+		<details
+			className="group/collapse flex flex-col"
+			onToggle={(event) => {
+				setUserClosed(!event.currentTarget.open);
+			}}
+			open={isOpen}
+		>
+			<summary className="flex max-w-full cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
 				<span className="shrink-0">{icon}</span>
 				<span className="font-medium">{group.summary}</span>
 				{group.active ? (
@@ -1862,16 +1951,18 @@ function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 					{group.tools.length} tools
 				</span>
 			</summary>
-			<div className="ml-5 flex flex-col gap-0.5 border-l border-app-border/30 pl-3 pt-1">
-				{group.tools.map((tool, idx) => (
-					<AssistantToolCall
-						key={tool.toolCallId ?? `${tool.toolName}:${idx}`}
-						toolName={tool.toolName}
-						args={tool.args}
-						result={tool.result}
-					/>
-				))}
-			</div>
+			{group.active || isOpen ? (
+				<div className="ml-5 flex flex-col gap-0.5 border-l border-app-border/30 pl-3 pt-1">
+					{group.tools.map((tool, idx) => (
+						<AssistantToolCall
+							key={tool.toolCallId ?? `${tool.toolName}:${idx}`}
+							toolName={tool.toolName}
+							args={tool.args}
+							result={tool.result}
+						/>
+					))}
+				</div>
+			) : null}
 		</details>
 	);
 }

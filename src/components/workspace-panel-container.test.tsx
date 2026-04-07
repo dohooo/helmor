@@ -8,6 +8,7 @@ const apiMocks = vi.hoisted(() => ({
 	loadWorkspaceDetail: vi.fn(),
 	loadWorkspaceSessions: vi.fn(),
 	loadSessionMessages: vi.fn(),
+	loadSessionThreadMessages: vi.fn(),
 }));
 
 const panelRenderSpy = vi.hoisted(() => vi.fn());
@@ -19,7 +20,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		...actual,
 		loadWorkspaceDetail: apiMocks.loadWorkspaceDetail,
 		loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
-		loadSessionMessages: apiMocks.loadSessionMessages,
+		loadSessionMessages: apiMocks.loadSessionThreadMessages,
+		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 	};
 });
 
@@ -158,20 +160,11 @@ function createWorkspaceSessions(
 function createMessages(sessionId: string) {
 	return [
 		{
+			role: "assistant" as const,
 			id: `${sessionId}-assistant`,
-			sessionId,
-			role: "assistant",
-			content: "hello",
-			contentIsJson: false,
 			createdAt: "2026-04-05T00:00:00Z",
-			sentAt: "2026-04-05T00:00:00Z",
-			cancelledAt: null,
-			model: "opus-1m",
-			sdkMessageId: null,
-			lastAssistantMessageId: null,
-			turnId: null,
-			isResumableMessage: null,
-			attachmentCount: 0,
+			content: [{ type: "text" as const, text: "hello" }],
+			status: { type: "complete", reason: "stop" },
 		},
 	];
 }
@@ -199,7 +192,7 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		panelRenderSpy.mockReset();
 		apiMocks.loadWorkspaceDetail.mockReset();
 		apiMocks.loadWorkspaceSessions.mockReset();
-		apiMocks.loadSessionMessages.mockReset();
+		apiMocks.loadSessionThreadMessages.mockReset();
 
 		apiMocks.loadWorkspaceDetail.mockImplementation((workspaceId?: string) =>
 			Promise.resolve(createWorkspaceDetail(workspaceId)),
@@ -226,7 +219,9 @@ describe("WorkspacePanelContainer loading semantics", () => {
 
 		const deferredMessages =
 			createDeferred<ReturnType<typeof createMessages>>();
-		apiMocks.loadSessionMessages.mockReturnValue(deferredMessages.promise);
+		apiMocks.loadSessionThreadMessages.mockReturnValue(
+			deferredMessages.promise,
+		);
 
 		renderWithProviders(
 			<WorkspacePanelContainer
@@ -260,10 +255,12 @@ describe("WorkspacePanelContainer loading semantics", () => {
 			createWorkspaceSessions("workspace-1"),
 		);
 		queryClient.setQueryData(
-			helmorQueryKeys.sessionMessages("session-2"),
+			[...helmorQueryKeys.sessionMessages("session-2"), "thread"],
 			createMessages("session-2"),
 		);
-		apiMocks.loadSessionMessages.mockResolvedValue(createMessages("session-2"));
+		apiMocks.loadSessionThreadMessages.mockResolvedValue(
+			createMessages("session-2"),
+		);
 
 		renderWithProviders(
 			<WorkspacePanelContainer
@@ -292,7 +289,7 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		).toEqual(createMessages("session-2"));
 	});
 
-	it("reuses a kept-alive pane across workspace switches even after query cache eviction", async () => {
+	it("falls back to loading when revisiting a session after query cache eviction", async () => {
 		const queryClient = createHelmorQueryClient();
 		const workspace1Sessions = createWorkspaceSessions("workspace-1", [
 			"session-1",
@@ -312,7 +309,7 @@ describe("WorkspacePanelContainer loading semantics", () => {
 			workspace1Sessions,
 		);
 		queryClient.setQueryData(
-			helmorQueryKeys.sessionMessages("session-1"),
+			[...helmorQueryKeys.sessionMessages("session-1"), "thread"],
 			createMessages("session-1"),
 		);
 		queryClient.setQueryData(
@@ -324,7 +321,7 @@ describe("WorkspacePanelContainer loading semantics", () => {
 			workspace2Sessions,
 		);
 		queryClient.setQueryData(
-			helmorQueryKeys.sessionMessages("session-3"),
+			[...helmorQueryKeys.sessionMessages("session-3"), "thread"],
 			createMessages("session-3"),
 		);
 
@@ -347,7 +344,7 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		});
 
 		queryClient.removeQueries({
-			queryKey: helmorQueryKeys.sessionMessages("session-1"),
+			queryKey: [...helmorQueryKeys.sessionMessages("session-1"), "thread"],
 		});
 
 		rendered.rerender(
@@ -369,13 +366,15 @@ describe("WorkspacePanelContainer loading semantics", () => {
 
 		const deferredMessages =
 			createDeferred<ReturnType<typeof createMessages>>();
-		apiMocks.loadSessionMessages.mockImplementation((sessionId?: string) => {
-			if (sessionId === "session-1") {
-				return deferredMessages.promise;
-			}
+		apiMocks.loadSessionThreadMessages.mockImplementation(
+			(sessionId?: string) => {
+				if (sessionId === "session-1") {
+					return deferredMessages.promise;
+				}
 
-			return Promise.resolve(createMessages(sessionId ?? "session-unknown"));
-		});
+				return Promise.resolve(createMessages(sessionId ?? "session-unknown"));
+			},
+		);
 
 		rendered.rerender(
 			<WorkspacePanelContainer
@@ -390,13 +389,18 @@ describe("WorkspacePanelContainer loading semantics", () => {
 			/>,
 		);
 
-		expect(getLatestPanelProps().loadingSession).toBe(false);
-		expect(getSessionPaneIds()).toContain("session-1");
+		expect(getLatestPanelProps().loadingSession).toBe(true);
+		expect(getSessionPaneIds()).not.toContain("session-1");
 
 		deferredMessages.resolve(createMessages("session-1"));
+
+		await waitFor(() => {
+			expect(getLatestPanelProps().loadingSession).toBe(false);
+			expect(getSessionPaneIds()).toContain("session-1");
+		});
 	});
 
-	it("does not retain empty sessions in the keep-alive pane registry", async () => {
+	it("renders only the active session pane when switching between sessions", async () => {
 		const queryClient = createHelmorQueryClient();
 		queryClient.setQueryData(
 			helmorQueryKeys.workspaceDetail("workspace-1"),
@@ -406,9 +410,12 @@ describe("WorkspacePanelContainer loading semantics", () => {
 			helmorQueryKeys.workspaceSessions("workspace-1"),
 			createWorkspaceSessions("workspace-1"),
 		);
-		queryClient.setQueryData(helmorQueryKeys.sessionMessages("session-2"), []);
 		queryClient.setQueryData(
-			helmorQueryKeys.sessionMessages("session-1"),
+			[...helmorQueryKeys.sessionMessages("session-2"), "thread"],
+			[],
+		);
+		queryClient.setQueryData(
+			[...helmorQueryKeys.sessionMessages("session-1"), "thread"],
 			createMessages("session-1"),
 		);
 
@@ -446,10 +453,11 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		await waitFor(() => {
 			expect(getSessionPaneIds()).toContain("session-1");
 			expect(getSessionPaneIds()).not.toContain("session-2");
+			expect(getSessionPaneIds()).toHaveLength(1);
 		});
 	});
 
-	it("promotes the target session immediately when the previous visible pane was dropped", async () => {
+	it("shows an empty session immediately without a prepare phase", async () => {
 		const queryClient = createHelmorQueryClient();
 		queryClient.setQueryData(
 			helmorQueryKeys.workspaceDetail("workspace-1"),
@@ -459,9 +467,12 @@ describe("WorkspacePanelContainer loading semantics", () => {
 			helmorQueryKeys.workspaceSessions("workspace-1"),
 			createWorkspaceSessions("workspace-1"),
 		);
-		queryClient.setQueryData(helmorQueryKeys.sessionMessages("session-2"), []);
 		queryClient.setQueryData(
-			helmorQueryKeys.sessionMessages("session-1"),
+			[...helmorQueryKeys.sessionMessages("session-2"), "thread"],
+			[],
+		);
+		queryClient.setQueryData(
+			[...helmorQueryKeys.sessionMessages("session-1"), "thread"],
 			createMessages("session-1"),
 		);
 
@@ -493,9 +504,8 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		);
 
 		await waitFor(() => {
-			expect(getLatestPanelProps().visibleSessionId).toBe("session-1");
-			expect(getLatestPanelProps().preparingSessionId).toBeNull();
-			expect(getSessionPaneIds()).toContain("session-1");
+			expect(getSessionPaneIds()).toEqual(["session-1"]);
+			expect(getLatestPanelProps().loadingSession).toBe(false);
 		});
 	});
 });

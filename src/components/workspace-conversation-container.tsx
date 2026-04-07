@@ -7,24 +7,24 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { AgentModelOption, SessionMessageRecord } from "@/lib/api";
+import type { AgentModelOption, ThreadMessageLike } from "@/lib/api";
 import {
 	generateSessionTitle,
-	listenAgentStream,
 	startAgentMessageStream,
 	stopAgentStream,
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
-import { StreamAccumulator } from "@/lib/stream-accumulator";
 import {
-	appendLiveMessage,
-	createLiveMessage,
+	appendLiveThreadMessage,
+	createLiveThreadMessage,
 	describeUnknownError,
 	getComposerContextKey,
-	haveSameLiveMessages,
 } from "@/lib/workspace-helpers";
 import { WorkspaceComposerContainer } from "./workspace-composer-container";
 import { WorkspacePanelContainer } from "./workspace-panel-container";
+
+const EMPTY_IMAGES: string[] = [];
+const EMPTY_MESSAGES: ThreadMessageLike[] = [];
 
 type WorkspaceConversationContainerProps = {
 	selectedWorkspaceId: string | null;
@@ -69,7 +69,7 @@ export const WorkspaceConversationContainer = memo(
 			nonce: number;
 		} | null>(null);
 		const [liveMessagesByContext, setLiveMessagesByContext] = useState<
-			Record<string, SessionMessageRecord[]>
+			Record<string, ThreadMessageLike[]>
 		>({});
 		const [liveSessionsByContext, setLiveSessionsByContext] = useState<
 			Record<string, { provider: string; sessionId?: string | null }>
@@ -104,7 +104,8 @@ export const WorkspaceConversationContainer = memo(
 				});
 			}
 		}
-		const liveMessages = liveMessagesByContext[composerContextKey] ?? [];
+		const liveMessages =
+			liveMessagesByContext[composerContextKey] ?? EMPTY_MESSAGES;
 		const activeSendError = sendErrorsByContext[composerContextKey] ?? null;
 		const isSending = sendingContextKeys.has(composerContextKey);
 
@@ -165,7 +166,10 @@ export const WorkspaceConversationContainer = memo(
 				if (sessionId) {
 					invalidations.push(
 						queryClient.invalidateQueries({
-							queryKey: helmorQueryKeys.sessionMessages(sessionId),
+							queryKey: [
+								...helmorQueryKeys.sessionMessages(sessionId),
+								"thread",
+							],
 						}),
 					);
 				}
@@ -221,16 +225,14 @@ export const WorkspaceConversationContainer = memo(
 
 				const contextKey = composerContextKey;
 				const now = new Date().toISOString();
-				// Pre-generate user message ID so it matches the DB primary key.
-				// AI message IDs come from the Rust backend via persistedIds.
+				// Pre-generate the user message ID so the optimistic row already
+				// matches the eventual persisted record.
 				const userMessageId = crypto.randomUUID();
-				const optimisticUserMessage = createLiveMessage({
+				const optimisticUserMessage = createLiveThreadMessage({
 					id: userMessageId,
-					sessionId: displayedSessionId ?? contextKey,
 					role: "user",
-					content: trimmedPrompt,
+					text: trimmedPrompt,
 					createdAt: now,
-					model: model.id,
 				});
 				const previousLiveSession = liveSessionsByContext[contextKey];
 				const providerSessionId =
@@ -239,7 +241,7 @@ export const WorkspaceConversationContainer = memo(
 						: undefined;
 
 				setLiveMessagesByContext((current) =>
-					appendLiveMessage(current, contextKey, optimisticUserMessage),
+					appendLiveThreadMessage(current, contextKey, optimisticUserMessage),
 				);
 				setComposerRestoreState(null);
 				setSendErrorsByContext((current) => ({
@@ -289,18 +291,7 @@ export const WorkspaceConversationContainer = memo(
 						);
 					}
 
-					const { streamId } = await startAgentMessageStream({
-						provider: model.provider,
-						modelId: model.id,
-						prompt: trimmedPrompt,
-						sessionId: providerSessionId,
-						helmorSessionId: displayedSessionId,
-						workingDirectory,
-						effortLevel,
-						permissionMode,
-						userMessageId,
-					});
-					const sidecarSessionId = displayedSessionId ?? `tmp-${streamId}`;
+					const sidecarSessionId = displayedSessionId ?? `tmp-${contextKey}`;
 					setActiveSessionByContext((current) => ({
 						...current,
 						[contextKey]: {
@@ -309,9 +300,12 @@ export const WorkspaceConversationContainer = memo(
 						},
 					}));
 
-					const accumulator = new StreamAccumulator();
-					let unlistenFn: (() => void) | null = null;
 					let frameId: number | null = null;
+					// Full snapshot from the last finalization event.
+					let baseMessages: ThreadMessageLike[] = [];
+					// Latest streaming partial (replaces trailing message).
+					let pendingPartial: ThreadMessageLike | null = null;
+					let needsFlush = false;
 
 					// Periodically refresh file changes while the agent is streaming
 					const changesRefreshInterval = window.setInterval(() => {
@@ -320,165 +314,174 @@ export const WorkspaceConversationContainer = memo(
 						});
 					}, 3_000);
 
+					const flushStreamMessages = () => {
+						frameId = null;
+						if (!needsFlush) return;
+						needsFlush = false;
+
+						const rendered = pendingPartial
+							? [...baseMessages, pendingPartial]
+							: baseMessages;
+						const nextMessages = [optimisticUserMessage, ...rendered];
+						setLiveMessagesByContext((current) => ({
+							...current,
+							[contextKey]: nextMessages,
+						}));
+					};
+
+					const scheduleFlush = () => {
+						needsFlush = true;
+						if (frameId !== null) return;
+						frameId = window.requestAnimationFrame(() => flushStreamMessages());
+					};
+
 					const cleanup = () => {
 						window.clearInterval(changesRefreshInterval);
 						if (frameId !== null) {
 							window.cancelAnimationFrame(frameId);
 							frameId = null;
 						}
-						if (unlistenFn) {
-							unlistenFn();
-							unlistenFn = null;
-						}
 					};
 
-					const flushStreamMessages = () => {
-						frameId = null;
-						const streamMessages = accumulator.toMessages(
-							contextKey,
-							displayedSessionId ?? contextKey,
-						);
-						const nextMessages = [optimisticUserMessage, ...streamMessages];
-						const doFlush = () => {
-							setLiveMessagesByContext((current) => {
-								if (haveSameLiveMessages(current[contextKey], nextMessages)) {
-									return current;
-								}
-
-								return {
-									...current,
-									[contextKey]: nextMessages,
-								};
-							});
-						};
-						// Always flush synchronously to avoid deferred/split rendering
-						// that can cause visual flicker between transition frames.
-						doFlush();
-					};
-
-					const scheduleFlush = () => {
-						if (frameId !== null) {
-							return;
-						}
-
-						frameId = window.requestAnimationFrame(() => flushStreamMessages());
-					};
-
-					unlistenFn = await listenAgentStream(streamId, (event) => {
-						if (event.kind === "line") {
-							accumulator.addLine(event.line, event.persistedIds);
-							scheduleFlush();
-							return;
-						}
-
-						if (event.kind === "done") {
-							if (frameId !== null) {
-								window.cancelAnimationFrame(frameId);
-								frameId = null;
-							}
-							flushStreamMessages();
-							cleanup();
-
-							// Refresh file changes — agent likely modified files
-							void queryClient.invalidateQueries({
-								queryKey: ["workspaceChanges"],
-							});
-
-							setLiveSessionsByContext((current) => ({
-								...current,
-								[contextKey]: {
-									provider: event.provider,
-									sessionId:
-										event.sessionId ?? current[contextKey]?.sessionId ?? null,
-								},
-							}));
-							setActiveSessionByContext((current) => {
-								if (!(contextKey in current)) {
-									return current;
-								}
-
-								const next = { ...current };
-								delete next[contextKey];
-								return next;
-							});
-
-							if (event.persisted) {
-								// Only refresh sidebar metadata (groups, session list).
-								// Do NOT invalidate sessionMessages or clear live
-								// messages — the live data IS the complete conversation.
-								// It stays until the user navigates away from this session.
-								void invalidateSidebarQueries(displayedWorkspaceId);
+					// Single call: Channel<T> in Tauri, SSE in browser — no race.
+					await startAgentMessageStream(
+						{
+							provider: model.provider,
+							modelId: model.id,
+							prompt: trimmedPrompt,
+							sessionId: providerSessionId,
+							helmorSessionId: displayedSessionId,
+							workingDirectory,
+							effortLevel,
+							permissionMode,
+							userMessageId,
+						},
+						(event) => {
+							if (event.kind === "update") {
+								// Full snapshot from finalization — replace base
+								baseMessages = event.messages;
+								pendingPartial = null;
+								scheduleFlush();
+								return;
 							}
 
-							sendingWorkspaceMapRef.current.delete(contextKey);
-							setSendingContextKeys((current) => {
-								const next = new Set(current);
-								next.delete(contextKey);
-								return next;
-							});
-							return;
-						}
+							if (event.kind === "streamingPartial") {
+								// Only the streaming partial changed — lightweight
+								pendingPartial = event.message;
+								scheduleFlush();
+								return;
+							}
 
-						if (event.kind === "error") {
-							cleanup();
-							// Don't show abort errors — the user triggered the stop
-							const isAbort =
-								event.message?.includes("aborted") ||
-								event.message?.includes("abort") ||
-								event.message?.includes("cancel");
-							if (!isAbort) {
-								setSendErrorsByContext((current) => ({
+							if (event.kind === "done") {
+								// Flush any buffered messages immediately
+								if (frameId !== null) {
+									window.cancelAnimationFrame(frameId);
+									frameId = null;
+								}
+								flushStreamMessages();
+								cleanup();
+
+								// Refresh file changes — agent likely modified files
+								void queryClient.invalidateQueries({
+									queryKey: ["workspaceChanges"],
+								});
+
+								setLiveSessionsByContext((current) => ({
 									...current,
-									[contextKey]: event.message,
+									[contextKey]: {
+										provider: event.provider,
+										sessionId:
+											event.sessionId ?? current[contextKey]?.sessionId ?? null,
+									},
 								}));
-							}
-							setActiveSessionByContext((current) => {
-								if (!(contextKey in current)) {
-									return current;
+								setActiveSessionByContext((current) => {
+									if (!(contextKey in current)) {
+										return current;
+									}
+
+									const next = { ...current };
+									delete next[contextKey];
+									return next;
+								});
+
+								if (event.persisted) {
+									// Only refresh sidebar metadata (groups, session list).
+									// Do NOT invalidate the thread query or clear live
+									// messages — the live data IS the complete conversation.
+									// It stays until the user navigates away from this session.
+									void invalidateSidebarQueries(displayedWorkspaceId);
 								}
 
-								const next = { ...current };
-								delete next[contextKey];
-								return next;
-							});
+								sendingWorkspaceMapRef.current.delete(contextKey);
+								setSendingContextKeys((current) => {
+									const next = new Set(current);
+									next.delete(contextKey);
+									return next;
+								});
+								return;
+							}
 
-							if (event.persisted) {
-								// Messages were persisted incrementally — reload from DB
-								void invalidateConversationQueries(
-									displayedWorkspaceId,
-									displayedSessionId,
-								).then(() => {
-									setLiveMessagesByContext((current) => {
-										if (!current[contextKey]?.length) return current;
-										const next = { ...current };
-										delete next[contextKey];
-										return next;
+							if (event.kind === "error") {
+								cleanup();
+								// Don't show abort errors — the user triggered the stop
+								const isAbort =
+									event.message?.includes("aborted") ||
+									event.message?.includes("abort") ||
+									event.message?.includes("cancel");
+								if (!isAbort) {
+									setSendErrorsByContext((current) => ({
+										...current,
+										[contextKey]: event.message,
+									}));
+								}
+								setActiveSessionByContext((current) => {
+									if (!(contextKey in current)) {
+										return current;
+									}
+
+									const next = { ...current };
+									delete next[contextKey];
+									return next;
+								});
+
+								if (event.persisted) {
+									// Messages were persisted incrementally — reload from DB
+									void invalidateConversationQueries(
+										displayedWorkspaceId,
+										displayedSessionId,
+									).then(() => {
+										setLiveMessagesByContext((current) => {
+											if (!current[contextKey]?.length) return current;
+											const next = { ...current };
+											delete next[contextKey];
+											return next;
+										});
 									});
-								});
-							} else {
-								// Nothing was persisted — restore the draft
-								setComposerRestoreState({
-									contextKey,
-									draft: trimmedPrompt,
-									images: imagePaths,
-									nonce: Date.now(),
-								});
-								setLiveMessagesByContext((current) => ({
-									...current,
-									[contextKey]: (current[contextKey] ?? []).filter(
-										(message) => message.id !== optimisticUserMessage.id,
-									),
-								}));
-							}
+								} else {
+									// Nothing was persisted — restore the draft
+									setComposerRestoreState({
+										contextKey,
+										draft: trimmedPrompt,
+										images: imagePaths,
+										nonce: Date.now(),
+									});
+									setLiveMessagesByContext((current) => ({
+										...current,
+										[contextKey]: (current[contextKey] ?? []).filter(
+											(message) => message.id !== optimisticUserMessage.id,
+										),
+									}));
+								}
 
-							sendingWorkspaceMapRef.current.delete(contextKey);
-							setSendingContextKeys((current) => {
-								const next = new Set(current);
-								next.delete(contextKey);
-								return next;
-							});
-						}
-					});
+								sendingWorkspaceMapRef.current.delete(contextKey);
+								setSendingContextKeys((current) => {
+									const next = new Set(current);
+									next.delete(contextKey);
+									return next;
+								});
+							}
+						},
+					);
 				} catch (error) {
 					setSendErrorsByContext((current) => ({
 						...current,
@@ -517,6 +520,48 @@ export const WorkspaceConversationContainer = memo(
 			],
 		);
 
+		const handleSelectModel = useCallback(
+			(contextKey: string, modelId: string) => {
+				setComposerModelSelections((current) => ({
+					...current,
+					[contextKey]: modelId,
+				}));
+			},
+			[],
+		);
+
+		const handleSelectEffort = useCallback(
+			(contextKey: string, level: string) => {
+				setComposerEffortLevels((current) => ({
+					...current,
+					[contextKey]: level,
+				}));
+			},
+			[],
+		);
+
+		const handleTogglePlanMode = useCallback((contextKey: string) => {
+			setComposerPermissionModes((current) => ({
+				...current,
+				[contextKey]: current[contextKey] === "plan" ? "acceptEdits" : "plan",
+			}));
+		}, []);
+
+		const handleComposerSubmitWrapper = useCallback(
+			(payload: Parameters<typeof handleComposerSubmit>[0]) => {
+				void handleComposerSubmit(payload);
+			},
+			[handleComposerSubmit],
+		);
+
+		const restoreActive =
+			composerRestoreState?.contextKey === composerContextKey;
+		const restoreDraft = restoreActive ? composerRestoreState.draft : null;
+		const restoreImages = restoreActive
+			? composerRestoreState.images
+			: EMPTY_IMAGES;
+		const restoreNonce = restoreActive ? composerRestoreState.nonce : 0;
+
 		return (
 			<>
 				<WorkspacePanelContainer
@@ -542,47 +587,17 @@ export const WorkspaceConversationContainer = memo(
 							disabled={selectionPending}
 							sending={isSending}
 							sendError={activeSendError}
-							restoreDraft={
-								composerRestoreState?.contextKey === composerContextKey
-									? composerRestoreState.draft
-									: null
-							}
-							restoreImages={
-								composerRestoreState?.contextKey === composerContextKey
-									? composerRestoreState.images
-									: []
-							}
-							restoreNonce={
-								composerRestoreState?.contextKey === composerContextKey
-									? composerRestoreState.nonce
-									: 0
-							}
+							restoreDraft={restoreDraft}
+							restoreImages={restoreImages}
+							restoreNonce={restoreNonce}
 							modelSelections={composerModelSelections}
 							effortLevels={composerEffortLevels}
 							permissionModes={composerPermissionModes}
-							onSelectModel={(contextKey, modelId) => {
-								setComposerModelSelections((current) => ({
-									...current,
-									[contextKey]: modelId,
-								}));
-							}}
-							onSelectEffort={(contextKey, level) => {
-								setComposerEffortLevels((current) => ({
-									...current,
-									[contextKey]: level,
-								}));
-							}}
-							onTogglePlanMode={(contextKey) => {
-								setComposerPermissionModes((current) => ({
-									...current,
-									[contextKey]:
-										current[contextKey] === "plan" ? "acceptEdits" : "plan",
-								}));
-							}}
+							onSelectModel={handleSelectModel}
+							onSelectEffort={handleSelectEffort}
+							onTogglePlanMode={handleTogglePlanMode}
 							onSwitchSession={onSelectSession}
-							onSubmit={(payload) => {
-								void handleComposerSubmit(payload);
-							}}
+							onSubmit={handleComposerSubmitWrapper}
 							onStop={handleStopStream}
 						/>
 					</div>

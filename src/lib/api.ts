@@ -274,24 +274,6 @@ export type CreateWorkspaceResponse = {
 
 export type MarkWorkspaceReadResponse = undefined;
 
-export type SessionMessageRecord = {
-	id: string;
-	sessionId: string;
-	role: string;
-	content: string;
-	contentIsJson: boolean;
-	parsedContent?: unknown;
-	createdAt: string;
-	sentAt?: string | null;
-	cancelledAt?: string | null;
-	model?: string | null;
-	sdkMessageId?: string | null;
-	lastAssistantMessageId?: string | null;
-	turnId?: string | null;
-	isResumableMessage?: boolean | null;
-	attachmentCount: number;
-};
-
 export type SessionAttachmentRecord = {
 	id: string;
 	sessionId: string;
@@ -788,24 +770,28 @@ export async function loadWorkspaceSessions(
 	}
 }
 
-export async function loadSessionMessages(
+/**
+ * Load session messages as pipeline-rendered ThreadMessageLike[].
+ * The frontend can render these directly without any conversion.
+ */
+export async function loadSessionThreadMessages(
 	sessionId: string,
-): Promise<SessionMessageRecord[]> {
+): Promise<ThreadMessageLike[]> {
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		return devFetch<SessionMessageRecord[]>("list_session_messages", {
+		return devFetch<ThreadMessageLike[]>("list_session_thread_messages", {
 			id: sessionId,
 		});
 	}
 
 	try {
-		return await invoke<SessionMessageRecord[]>("list_session_messages", {
+		return await invoke<ThreadMessageLike[]>("list_session_thread_messages", {
 			sessionId,
 		});
 	} catch (error) {
 		throw new Error(
-			describeInvokeError(error, "Unable to load session messages."),
+			describeInvokeError(error, "Unable to load session thread messages."),
 		);
 	}
 }
@@ -1186,8 +1172,67 @@ export type AgentStreamStartResponse = {
 	streamId: string;
 };
 
+// ---------------------------------------------------------------------------
+// Pipeline output types — match Rust pipeline::types serde output exactly
+// ---------------------------------------------------------------------------
+
+export type StreamingStatus =
+	| "pending"
+	| "streaming_input"
+	| "running"
+	| "done"
+	| "error";
+
+export type TextPart = { type: "text"; text: string };
+export type ReasoningPart = {
+	type: "reasoning";
+	text: string;
+	/** Per-part streaming state — only the active thinking block is streaming. */
+	streaming?: boolean;
+};
+export type ToolCallPart = {
+	type: "tool-call";
+	toolCallId: string;
+	toolName: string;
+	args: Record<string, unknown>;
+	argsText: string;
+	result?: unknown;
+	streamingStatus?: StreamingStatus;
+};
+export type MessagePart = TextPart | ReasoningPart | ToolCallPart;
+
+export type CollapsedGroupPart = {
+	type: "collapsed-group";
+	category: "search" | "read" | "mixed";
+	tools: ToolCallPart[];
+	active: boolean;
+	summary: string;
+};
+
+export type ExtendedMessagePart = MessagePart | CollapsedGroupPart;
+
+export type ThreadMessageLike = {
+	role: "assistant" | "system" | "user";
+	id?: string;
+	createdAt?: string;
+	content: ExtendedMessagePart[];
+	status?: { type: string; reason?: string };
+	streaming?: boolean;
+};
+
+// ---------------------------------------------------------------------------
+// Agent stream events
+// ---------------------------------------------------------------------------
+
 export type AgentStreamEvent =
-	| { kind: "line"; line: string; persistedIds?: string[] }
+	| {
+			kind: "update";
+			messages: ThreadMessageLike[];
+	  }
+	| {
+			kind: "streamingPartial";
+			message: ThreadMessageLike;
+	  }
 	| {
 			kind: "done";
 			provider: AgentProvider;
@@ -1213,30 +1258,35 @@ export async function savePastedImage(
 	return inv<string>("save_pasted_image", { data, mediaType });
 }
 
+/**
+ * Start an agent message stream.
+ *
+ * Tauri mode: uses `ipc::Channel<T>` for point-to-point streaming so events
+ * emitted by the backend are guaranteed to reach us (no race between `invoke`
+ * and a global event listener).
+ *
+ * Browser mode: POSTs to the dev server, then opens an SSE connection and
+ * dispatches events to the same callback.
+ *
+ * The returned promise resolves when the stream has been successfully
+ * handed off (Tauri) or the SSE connection has been opened (browser). The
+ * callback continues to fire until a `done` or `error` event arrives.
+ */
 export async function startAgentMessageStream(
 	request: AgentSendRequest,
-): Promise<AgentStreamStartResponse> {
+	callback: (event: AgentStreamEvent) => void,
+): Promise<void> {
 	const inv = await getTauriInvoke();
 	if (!inv) {
-		return devFetch<AgentStreamStartResponse>(
+		// Browser mode: start via REST, then listen via SSE
+		const response = await devFetch<AgentStreamStartResponse>(
 			"send_agent_message_stream",
 			undefined,
 			{ method: "POST", body: { request } },
 		);
-	}
-	return inv<AgentStreamStartResponse>("send_agent_message_stream", {
-		request,
-	});
-}
 
-export async function listenAgentStream(
-	streamId: string,
-	callback: (event: AgentStreamEvent) => void,
-): Promise<UnlistenFn> {
-	if (!hasTauriRuntime()) {
-		// Browser mode: use SSE instead of Tauri event listener
 		const url = new URL("/api/agent_stream_sse", window.location.origin);
-		url.searchParams.set("streamId", streamId);
+		url.searchParams.set("streamId", response.streamId);
 		const eventSource = new EventSource(url.toString());
 
 		eventSource.onmessage = (msg) => {
@@ -1256,15 +1306,14 @@ export async function listenAgentStream(
 			eventSource.close();
 		};
 
-		// Return an unlisten function compatible with the Tauri API
-		return () => {
-			eventSource.close();
-		};
+		return;
 	}
 
-	return listen<AgentStreamEvent>(`agent-stream:${streamId}`, (tauriEvent) => {
-		callback(tauriEvent.payload);
-	});
+	// Tauri mode: use Channel<T> for point-to-point streaming
+	const { Channel } = await import("@tauri-apps/api/core");
+	const onEvent = new Channel<AgentStreamEvent>();
+	onEvent.onmessage = (event) => callback(event);
+	await inv("send_agent_message_stream", { request, onEvent });
 }
 
 export async function stopAgentStream(

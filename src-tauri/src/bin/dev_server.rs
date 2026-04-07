@@ -195,8 +195,8 @@ mod handlers {
         }
     }
 
-    pub async fn list_session_messages(Query(q): Query<IdQuery>) -> impl IntoResponse {
-        match helmor_lib::dev_api::list_session_messages(&q.id) {
+    pub async fn list_session_thread_messages(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::list_session_thread_messages(&q.id) {
             Ok(v) => Json(v).into_response(),
             Err(e) => cmd_err(e).into_response(),
         }
@@ -555,8 +555,8 @@ async fn main() {
             get(handlers::list_workspace_sessions),
         )
         .route(
-            "/api/list_session_messages",
-            get(handlers::list_session_messages),
+            "/api/list_session_thread_messages",
+            get(handlers::list_session_thread_messages),
         )
         .route(
             "/api/list_session_attachments",

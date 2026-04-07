@@ -44,6 +44,32 @@ body {
 	overflow-anchor: none;
 }
 
+/*
+ * Conversation scrollbar entry animation.
+ *
+ * The chat <ScrollArea> uses `type="always"`, so the scrollbar is in the
+ * tree from the very first frame after a session switch — but we don't want
+ * the user to see it during the layout-settling phase (which can briefly
+ * place the thumb at a bogus size while measured heights converge). Instead
+ * we hold it invisible for 1s, then fade it in gently.
+ *
+ * The animation re-fires on every session switch because <ScrollArea>
+ * itself is keyed by sessionId in workspace-panel.tsx.
+ */
+.conversation-scroll-area [data-slot="scroll-area-scrollbar"] {
+	animation: conversation-scrollbar-fade-in 300ms ease-out 400ms both;
+}
+
+@keyframes conversation-scrollbar-fade-in {
+	from {
+		opacity: 0;
+	}
+
+	to {
+		opacity: 1;
+	}
+}
+
 .conversation-thread-enter {
 	animation: conversation-fade-in 70ms ease-out;
 }
@@ -375,4 +401,25 @@ body {
 /* Lexical composer: remove default paragraph margins */
 .composer-paragraph {
 	margin: 0;
+}
+
+/* Accessibility: respect prefers-reduced-motion (WCAG 2.3.3).
+   Suppresses animations and transitions for users with vestibular
+   disorders, motion sensitivity, or migraine triggers. Smooth
+   scrolling is also disabled to avoid kinetic motion. */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
+
+	/* Skip the 1s delayed fade-in entirely so the conversation scrollbar
+	   does not appear to "blink in" for users who opt out of motion. */
+	.conversation-scroll-area [data-slot="scroll-area-scrollbar"] {
+		animation: none !important;
+	}
 }

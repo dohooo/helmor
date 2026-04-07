@@ -14,6 +14,8 @@ const apiMocks = vi.hoisted(() => ({
 	loadWorkspaceDetail: vi.fn(),
 	loadWorkspaceSessions: vi.fn(),
 	loadSessionMessages: vi.fn(),
+	loadSessionThreadMessages: vi.fn(),
+	listWorkspaceChangesWithContent: vi.fn(),
 }));
 
 vi.mock("./App.css", () => ({}));
@@ -30,7 +32,9 @@ vi.mock("./lib/api", async (importOriginal) => {
 		loadArchivedWorkspaces: apiMocks.loadArchivedWorkspaces,
 		loadWorkspaceDetail: apiMocks.loadWorkspaceDetail,
 		loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
-		loadSessionMessages: apiMocks.loadSessionMessages,
+		loadSessionMessages: apiMocks.loadSessionThreadMessages,
+		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
+		listWorkspaceChangesWithContent: apiMocks.listWorkspaceChangesWithContent,
 	};
 });
 
@@ -159,6 +163,7 @@ async function renderReadyApp() {
 	await waitFor(() => {
 		expect(screen.getByRole("button", { name: "Workspace One" })).toBeVisible();
 	});
+	screen.getByRole("button", { name: "Workspace One" }).click();
 
 	await waitFor(() => {
 		expect(
@@ -175,6 +180,8 @@ describe("App editor mode", () => {
 		apiMocks.loadWorkspaceDetail.mockReset();
 		apiMocks.loadWorkspaceSessions.mockReset();
 		apiMocks.loadSessionMessages.mockReset();
+		apiMocks.loadSessionThreadMessages.mockReset();
+		apiMocks.listWorkspaceChangesWithContent.mockReset();
 
 		apiMocks.loadWorkspaceGroups.mockResolvedValue([
 			{
@@ -219,6 +226,28 @@ describe("App editor mode", () => {
 		apiMocks.loadWorkspaceDetail.mockResolvedValue(createWorkspaceDetail());
 		apiMocks.loadWorkspaceSessions.mockResolvedValue(createWorkspaceSessions());
 		apiMocks.loadSessionMessages.mockResolvedValue(createMessages());
+		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
+		apiMocks.listWorkspaceChangesWithContent.mockResolvedValue({
+			items: [
+				{
+					path: "src/App.tsx",
+					absolutePath: "/tmp/helmor-workspace/src/App.tsx",
+					name: "App.tsx",
+					status: "M",
+					insertions: 3,
+					deletions: 1,
+				},
+				{
+					path: "src/lib/api.ts",
+					absolutePath: "/tmp/helmor-workspace/src/lib/api.ts",
+					name: "api.ts",
+					status: "M",
+					insertions: 2,
+					deletions: 0,
+				},
+			],
+			prefetched: [],
+		});
 	});
 
 	afterEach(() => {

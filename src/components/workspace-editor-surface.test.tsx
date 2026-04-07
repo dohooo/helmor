@@ -171,7 +171,10 @@ describe("WorkspaceEditorSurface", () => {
 
 		await waitFor(() => {
 			expect(onError).toHaveBeenCalledWith("No such file", "File open failed");
-			expect(screen.getByText("Editor unavailable")).toBeInTheDocument();
+			expect(
+				screen.getByLabelText("Workspace editor surface"),
+			).toBeInTheDocument();
+			expect(screen.getByLabelText("Editor canvas")).toBeInTheDocument();
 			expect(screen.getByText("No such file")).toBeInTheDocument();
 		});
 	});
