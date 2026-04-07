@@ -704,3 +704,129 @@ final_state:
     - assistant
     - system
   total_parts: 23
+persisted_turns:
+  turn_count: 40
+  total_blocks: 42
+  turns:
+    - role: assistant
+      block_types:
+        - thinking
+        - tool_use
+    - role: user
+      block_types:
+        - text
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - thinking
+        - text

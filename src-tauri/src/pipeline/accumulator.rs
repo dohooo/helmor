@@ -525,11 +525,12 @@ impl StreamAccumulator {
             .and_then(|m| m.get("id"))
             .and_then(Value::as_str);
 
-        if self
+        // If we're already batching a different msg_id, flush it first.
+        let same_msg_id = self
             .cur_asst_id
             .as_deref()
-            .is_some_and(|current| Some(current) != msg_id)
-        {
+            .is_some_and(|current| Some(current) == msg_id);
+        if self.cur_asst_id.is_some() && !same_msg_id {
             self.flush_assistant();
         }
 
@@ -540,8 +541,23 @@ impl StreamAccumulator {
             .and_then(|m| m.get("content"))
             .and_then(Value::as_array)
         {
-            // Replace (not extend) — each event carries all blocks for this turn.
-            self.cur_asst_blocks = blocks.clone();
+            // The Claude SDK sends each finalized content block as its own
+            // `assistant` event with the SAME msg_id — i.e., delta-style,
+            // not cumulative snapshot. Append, don't replace, so prior
+            // blocks (e.g. a thinking block immediately before a tool_use)
+            // survive into the persisted turn.
+            //
+            // The original code used `cur_asst_blocks = blocks.clone()`
+            // assuming each event carried a complete turn snapshot. That
+            // assumption was wrong, and silently dropped every thinking
+            // block followed by another block of the same turn — DB
+            // inspection from 2026-04 onwards showed zero thinking
+            // blocks in any persisted assistant row.
+            if same_msg_id {
+                self.cur_asst_blocks.extend_from_slice(blocks);
+            } else {
+                self.cur_asst_blocks = blocks.clone();
+            }
         }
 
         // === Rendering ===
@@ -1392,5 +1408,142 @@ mod tests {
 
         // ParsedAgentOutput should also expose the assistant text.
         assert!(output.assistant_text.contains("Here's the answer."));
+    }
+
+    /// Regression for the "thinking blocks silently dropped" bug.
+    ///
+    /// The Claude SDK delivers each finalized content block as its OWN
+    /// `assistant` event with the same `msg_id` — i.e., delta-style, not
+    /// cumulative snapshot. The buggy code in `handle_assistant` did
+    /// `cur_asst_blocks = blocks.clone()` on every event, which clobbered
+    /// any prior block of the same turn.
+    ///
+    /// In production this manifested as: every `thinking` block immediately
+    /// followed by a `tool_use` (or `text`) block of the same msg_id was
+    /// silently dropped before persistence. DB inspection from 2026-04
+    /// onward showed zero `thinking`-containing assistant rows in any
+    /// post-migration session.
+    ///
+    /// Fix: when the new event has the same `msg_id` as the currently
+    /// batching turn, append blocks to `cur_asst_blocks` instead of
+    /// replacing them. This test pins the contract.
+    #[test]
+    fn delta_assistant_events_with_same_msg_id_append_blocks() {
+        let mut acc = StreamAccumulator::new("claude", "opus");
+
+        // Mirror the real Claude SDK pattern: thinking → tool_use → tool_result.
+        // Both assistant events share the same msg_id; each contains a
+        // single delta block.
+        let asst_thinking = json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_shared",
+                "role": "assistant",
+                "content": [{
+                    "type": "thinking",
+                    "thinking": "Let me read the file first."
+                }]
+            }
+        });
+        acc.push_event(&asst_thinking, &asst_thinking.to_string());
+
+        let asst_tool = json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_shared",
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tool_1",
+                    "name": "Read",
+                    "input": {"file_path": "/x"}
+                }]
+            }
+        });
+        acc.push_event(&asst_tool, &asst_tool.to_string());
+
+        // tool_result triggers the flush of the batched assistant turn.
+        let user_tool_result = json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "tool_1",
+                    "content": "file contents"
+                }]
+            }
+        });
+        acc.push_event(&user_tool_result, &user_tool_result.to_string());
+
+        // After flush: 1 assistant turn + 1 user turn = 2.
+        assert_eq!(acc.turns_len(), 2);
+
+        // The flushed assistant turn must contain BOTH the thinking AND
+        // the tool_use blocks. Buggy code dropped the thinking entirely,
+        // persisting only [tool_use].
+        let asst_turn = acc.turn_at(0);
+        assert_eq!(asst_turn.role, "assistant");
+        let parsed: serde_json::Value = serde_json::from_str(&asst_turn.content_json).unwrap();
+        let blocks = parsed["message"]["content"].as_array().unwrap();
+        assert_eq!(
+            blocks.len(),
+            2,
+            "delta-style same-msg_id events should be merged into one turn with both blocks"
+        );
+        assert_eq!(blocks[0]["type"].as_str(), Some("thinking"));
+        assert_eq!(blocks[1]["type"].as_str(), Some("tool_use"));
+        assert_eq!(
+            blocks[0]["thinking"].as_str(),
+            Some("Let me read the file first.")
+        );
+        assert_eq!(blocks[1]["id"].as_str(), Some("tool_1"));
+    }
+
+    /// Different msg_id should still REPLACE, not append. Pins the boundary
+    /// case so a future "always append" mistake gets caught.
+    #[test]
+    fn delta_assistant_events_with_different_msg_id_flush_then_replace() {
+        let mut acc = StreamAccumulator::new("claude", "opus");
+
+        let asst_a = json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_A",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "first turn"}]
+            }
+        });
+        acc.push_event(&asst_a, &asst_a.to_string());
+
+        // Different msg_id triggers flush of msg_A first, then starts msg_B fresh.
+        let asst_b = json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_B",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "second turn"}]
+            }
+        });
+        acc.push_event(&asst_b, &asst_b.to_string());
+
+        // msg_A flushed → 1 turn so far. msg_B is still staged.
+        assert_eq!(acc.turns_len(), 1);
+        let first_turn: serde_json::Value =
+            serde_json::from_str(&acc.turn_at(0).content_json).unwrap();
+        assert_eq!(first_turn["message"]["id"].as_str(), Some("msg_A"));
+        let first_blocks = first_turn["message"]["content"].as_array().unwrap();
+        assert_eq!(first_blocks.len(), 1);
+        assert_eq!(first_blocks[0]["text"].as_str(), Some("first turn"));
+
+        // finish_output flushes msg_B into turns.
+        acc.finish_output(None).unwrap();
+        assert_eq!(acc.turns_len(), 2);
+        let second_turn: serde_json::Value =
+            serde_json::from_str(&acc.turn_at(1).content_json).unwrap();
+        assert_eq!(second_turn["message"]["id"].as_str(), Some("msg_B"));
+        let second_blocks = second_turn["message"]["content"].as_array().unwrap();
+        assert_eq!(second_blocks.len(), 1);
+        assert_eq!(second_blocks[0]["text"].as_str(), Some("second turn"));
     }
 }

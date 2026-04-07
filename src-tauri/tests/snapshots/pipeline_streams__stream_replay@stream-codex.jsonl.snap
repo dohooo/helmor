@@ -12,3 +12,13 @@ final_state:
     - assistant
     - system
   total_parts: 4
+persisted_turns:
+  turn_count: 3
+  total_blocks: 0
+  turns:
+    - role: assistant
+      block_types: []
+    - role: assistant
+      block_types: []
+    - role: assistant
+      block_types: []

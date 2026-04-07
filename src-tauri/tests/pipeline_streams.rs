@@ -49,17 +49,31 @@ use serde::Serialize;
 use serde_json::Value;
 use std::fs;
 
-/// One snapshot per stream fixture: a series of mid-stream "checkpoints"
-/// captured at every Full() emission, plus the final state. We don't
-/// snapshot the full content (the jsonl can produce hundreds of messages
-/// after collapse) — just the structural shape that meaningfully drifts
-/// when accumulator/adapter behavior changes.
+/// One snapshot per stream fixture, covering BOTH halves of the pipeline:
+///
+/// - **Rendering side** (`checkpoints` + `final_state`): mid-stream Full()
+///   emissions and the post-`finish()` ThreadMessageLike snapshot. Catches
+///   adapter/collapse drift.
+///
+/// - **Persistence side** (`persisted_turns`): the `turns` vec exposed by
+///   the accumulator AFTER `finish_output()`, with each turn's role and
+///   content block types. Catches accumulator-level bugs that drop blocks
+///   from `cur_asst_*` before they reach `self.turns` — most importantly
+///   the "thinking gets clobbered by the next same-msg_id event" regression
+///   that lived from the pipeline migration through e0d6253. Without that
+///   fix the snapshots show every assistant turn with a single block;
+///   with the fix, thinking + tool_use / thinking + text get merged.
+///
+/// We don't snapshot the full content (the jsonl can produce thousands of
+/// lines after pretty-print) — just the structural shape that meaningfully
+/// drifts when behavior changes.
 #[derive(Debug, Serialize)]
 struct StreamReplaySnapshot {
     line_count: usize,
     checkpoint_count: usize,
     checkpoints: Vec<StreamCheckpoint>,
     final_state: FinalState,
+    persisted_turns: PersistedTurnsSnapshot,
 }
 
 #[derive(Debug, Serialize)]
@@ -82,6 +96,32 @@ struct FinalState {
     total_parts: usize,
 }
 
+/// Persistence-side snapshot — what the accumulator would write to the DB.
+///
+/// `turn_count` and the per-turn block-type list collectively pin the bug
+/// surface area for accumulator-level drops: any change in how delta-style
+/// assistant events are batched into turns shows up here.
+#[derive(Debug, Serialize)]
+struct PersistedTurnsSnapshot {
+    turn_count: usize,
+    /// Total number of content blocks across all turns. The most blunt
+    /// fingerprint of the "thinking dropped" bug — without the fix this
+    /// number is artificially low because thinking blocks never make it
+    /// into self.turns.
+    total_blocks: usize,
+    turns: Vec<PersistedTurn>,
+}
+
+#[derive(Debug, Serialize)]
+struct PersistedTurn {
+    role: String,
+    /// Content block types in the order they appear in the persisted JSON.
+    /// `["thinking", "tool_use"]` is what a healthy Claude turn with
+    /// thinking + tool call looks like; `["tool_use"]` alone is the
+    /// pre-fix bug fingerprint.
+    block_types: Vec<String>,
+}
+
 fn part_type(part: &helmor_lib::pipeline::types::ExtendedMessagePart) -> &'static str {
     use helmor_lib::pipeline::types::{ExtendedMessagePart, MessagePart};
     match part {
@@ -97,6 +137,46 @@ fn collect_part_types(msg: &ThreadMessageLike) -> Vec<String> {
         .iter()
         .map(|p| part_type(p).to_string())
         .collect()
+}
+
+/// Extract the persisted-turn fingerprint by parsing each turn's JSON
+/// content. Reads the persistence-side state of the accumulator that
+/// `agents.rs::persist_turn_message` would write to the DB.
+fn build_persisted_snapshot(pipeline: &MessagePipeline) -> PersistedTurnsSnapshot {
+    let acc = &pipeline.accumulator;
+    let turn_count = acc.turns_len();
+    let mut turns = Vec::with_capacity(turn_count);
+    let mut total_blocks = 0usize;
+
+    for i in 0..turn_count {
+        let turn = acc.turn_at(i);
+        // Each turn's content_json is the raw `assistant`/`user` event
+        // payload (or, for batched assistant turns, the template with
+        // `message.content` rewritten from cur_asst_blocks).
+        let parsed: Value = serde_json::from_str(&turn.content_json).unwrap_or(Value::Null);
+        let block_types: Vec<String> = parsed
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(Value::as_array)
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .filter_map(|b| b.get("type").and_then(Value::as_str).map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        total_blocks += block_types.len();
+        turns.push(PersistedTurn {
+            role: turn.role.clone(),
+            block_types,
+        });
+    }
+
+    PersistedTurnsSnapshot {
+        turn_count,
+        total_blocks,
+        turns,
+    }
 }
 
 #[test]
@@ -155,11 +235,23 @@ fn stream_replay() {
             total_parts: final_messages.iter().map(|m| m.content.len()).sum(),
         };
 
+        // Drive the persistence-side finalization that agents.rs end branch
+        // would run after the stream loop. This is what populates the
+        // accumulator's `turns` vec with the FINAL staged assistant turn
+        // (regression test for e0d6253) and what surfaces accumulator-level
+        // block-batching bugs (regression test for the same-msg_id append fix).
+        let _ = pipeline
+            .accumulator
+            .finish_output(Some("test-session"))
+            .ok();
+        let persisted_turns = build_persisted_snapshot(&pipeline);
+
         let snapshot = StreamReplaySnapshot {
             line_count: lines.len(),
             checkpoint_count: checkpoints.len(),
             checkpoints,
             final_state,
+            persisted_turns,
         };
 
         assert_yaml_snapshot!(snapshot);
