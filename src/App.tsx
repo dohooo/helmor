@@ -61,7 +61,6 @@ import {
 	type WorkspaceRow,
 	type WorkspaceSessionSummary,
 } from "./lib/api";
-import { shouldTrackDevCacheStats } from "./lib/dev-render-debug";
 import type { EditorSessionState } from "./lib/editor-session";
 import { isPathWithinRoot } from "./lib/editor-session";
 import {
@@ -1316,7 +1315,6 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 										/>
 									)}
 								</div>
-								{workspaceViewMode === "conversation" && <ChatCacheDebugHud />}
 							</section>
 
 							<div
@@ -1484,125 +1482,6 @@ function EditorIcon({
 		default:
 			return <ExternalLink className={className} strokeWidth={1.8} />;
 	}
-}
-
-function ChatCacheDebugHud() {
-	const [tick, setTick] = useState(0);
-
-	useEffect(() => {
-		if (!shouldTrackDevCacheStats() || typeof window === "undefined") {
-			return;
-		}
-
-		const intervalId = window.setInterval(() => {
-			setTick((current) => current + 1);
-		}, 750);
-
-		return () => {
-			window.clearInterval(intervalId);
-		};
-	}, []);
-
-	if (!shouldTrackDevCacheStats() || typeof window === "undefined") {
-		return null;
-	}
-
-	const snapshot = window.__HELMOR_DEV_CACHE_STATS__?.latest;
-
-	if (!snapshot) {
-		return (
-			<div className="pointer-events-none absolute bottom-4 right-4 z-40 w-56 rounded-[14px] border border-app-border/70 bg-app-sidebar/92 px-3 py-2 text-[11px] text-app-muted shadow-[0_12px_32px_rgba(0,0,0,0.28)] backdrop-blur-sm">
-				<div className="text-[10px] uppercase tracking-[0.18em] text-app-muted/70">
-					Cache Debug
-				</div>
-				<div className="mt-1">Waiting for chat cache stats…</div>
-			</div>
-		);
-	}
-
-	const heapUsed = snapshot.heapStats
-		? formatBytes(snapshot.heapStats.usedJSHeapSize)
-		: "n/a";
-	const heapTotal = snapshot.heapStats
-		? formatBytes(snapshot.heapStats.totalJSHeapSize)
-		: "n/a";
-	const retainedBytes = formatBytes(snapshot.totalEstimatedMessageBytes);
-	const retainedMessages = snapshot.totalRetainedMessages.toLocaleString();
-	const queryMessages =
-		snapshot.querySessionMessageDataMessages.toLocaleString();
-	const sessionLine = snapshot.visibleSessionId
-		? snapshot.visibleSessionId
-		: "none";
-	void tick;
-
-	return (
-		<div className="absolute bottom-4 right-4 z-40 w-64 rounded-[14px] border border-app-border/70 bg-app-sidebar/92 px-3 py-3 text-[11px] text-app-foreground shadow-[0_12px_32px_rgba(0,0,0,0.28)] backdrop-blur-sm">
-			<div className="flex items-center justify-between gap-2">
-				<div className="text-[10px] uppercase tracking-[0.18em] text-app-muted/70">
-					Cache Debug
-				</div>
-				<div className="truncate text-[10px] text-app-muted">{sessionLine}</div>
-			</div>
-
-			<div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-app-foreground-soft">
-				<DebugMetric
-					label="Hot"
-					value={`${snapshot.hotPaneCount}/${snapshot.paneLimit}`}
-				/>
-				<DebugMetric label="Warm" value={String(snapshot.warmEntryCount)} />
-				<DebugMetric label="Retained" value={retainedMessages} />
-				<DebugMetric label="Retained MB" value={retainedBytes} />
-				<DebugMetric
-					label="Query sessions"
-					value={String(snapshot.querySessionMessageCount)}
-				/>
-				<DebugMetric label="Query msgs" value={queryMessages} />
-				<DebugMetric
-					label="Observers"
-					value={String(snapshot.querySessionMessageObserverCount)}
-				/>
-				<DebugMetric label="Heap" value={`${heapUsed} / ${heapTotal}`} />
-			</div>
-
-			<div className="mt-3 flex items-center gap-2">
-				<button
-					type="button"
-					onClick={() => {
-						window.__HELMOR_DEV_CACHE_STATS__?.printLatest();
-					}}
-					className="rounded-full bg-app-toolbar px-2.5 py-1 text-[10px] font-medium text-app-foreground-soft transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
-				>
-					Print
-				</button>
-				<button
-					type="button"
-					onClick={() => {
-						window.__HELMOR_DEV_CACHE_STATS__?.resetHistory();
-						setTick((current) => current + 1);
-					}}
-					className="rounded-full bg-app-toolbar px-2.5 py-1 text-[10px] font-medium text-app-foreground-soft transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
-				>
-					Reset
-				</button>
-			</div>
-		</div>
-	);
-}
-
-function DebugMetric({ label, value }: { label: string; value: string }) {
-	return (
-		<div className="min-w-0">
-			<div className="text-[10px] uppercase tracking-[0.14em] text-app-muted/60">
-				{label}
-			</div>
-			<div className="truncate text-[11px] text-app-foreground">{value}</div>
-		</div>
-	);
-}
-
-function formatBytes(bytes: number) {
-	const megabytes = bytes / (1024 * 1024);
-	return `${megabytes.toFixed(megabytes >= 100 ? 0 : 1)} MB`;
 }
 
 function GithubIdentityGate({

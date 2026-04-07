@@ -3,10 +3,6 @@ import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type { ThreadMessageLike } from "@/lib/api";
 import { generateSessionTitle } from "@/lib/api";
 import {
-	publishChatCacheSnapshot,
-	shouldTrackDevCacheStats,
-} from "@/lib/dev-render-debug";
-import {
 	helmorQueryKeys,
 	sessionThreadMessagesQueryOptions,
 	workspaceDetailQueryOptions,
@@ -28,20 +24,6 @@ type WorkspacePanelContainerProps = {
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
 };
-
-function estimateMessageBytes(messages: ThreadMessageLike[]) {
-	let total = 0;
-
-	for (const message of messages) {
-		total += 160;
-		total += (message.id?.length ?? 0) * 2;
-		total += message.role.length * 2;
-		total += message.content.length * 40;
-		total += (message.createdAt?.length ?? 0) * 2;
-	}
-
-	return total;
-}
 
 export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	selectedWorkspaceId,
@@ -315,79 +297,6 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		},
 		[queryClient],
 	);
-
-	useEffect(() => {
-		if (!shouldTrackDevCacheStats()) {
-			return;
-		}
-
-		const panesBySession = Object.fromEntries(
-			sessionPanes.map((pane) => [
-				pane.sessionId,
-				{
-					workspaceId: displayedWorkspaceId,
-					messageCount: pane.messages.length,
-					estimatedMessageBytes: estimateMessageBytes(pane.messages),
-					sending: pane.sending,
-					hasLoaded: pane.hasLoaded,
-					presentationState: pane.presentationState,
-					hasViewportSnapshot: false,
-					layoutCacheKey: null,
-					lastMeasuredAt: undefined,
-				},
-			]),
-		);
-		const sessionMessageKeyPrefix =
-			helmorQueryKeys.sessionMessages("__debug__")[0];
-		const querySessionEntries = queryClient
-			.getQueryCache()
-			.getAll()
-			.filter(
-				(query) =>
-					Array.isArray(query.queryKey) &&
-					query.queryKey[0] === sessionMessageKeyPrefix,
-			);
-
-		publishChatCacheSnapshot({
-			paneLimit: 1,
-			visibleSessionId,
-			preparingSessionId: null,
-			threadSessionId,
-			hotPaneCount: sessionPanes.length,
-			warmEntryCount: 0,
-			totalRetainedMessages: sessionPanes.reduce(
-				(sum, pane) => sum + pane.messages.length,
-				0,
-			),
-			totalEstimatedMessageBytes: Object.values(panesBySession).reduce(
-				(sum, pane) => sum + pane.estimatedMessageBytes,
-				0,
-			),
-			querySessionMessageCount: querySessionEntries.length,
-			querySessionMessageObserverCount: querySessionEntries.reduce(
-				(sum, query) =>
-					sum +
-					(typeof query.getObserversCount === "function"
-						? query.getObserversCount()
-						: 0),
-				0,
-			),
-			querySessionMessageDataMessages: querySessionEntries.reduce(
-				(sum, query) =>
-					sum + (Array.isArray(query.state.data) ? query.state.data.length : 0),
-				0,
-			),
-			paneOrder: sessionPanes.map((pane) => pane.sessionId),
-			warmSessionIds: [],
-			panesBySession,
-		});
-	}, [
-		displayedWorkspaceId,
-		queryClient,
-		sessionPanes,
-		threadSessionId,
-		visibleSessionId,
-	]);
 
 	return (
 		<WorkspacePanel
