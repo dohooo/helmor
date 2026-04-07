@@ -1,0 +1,20 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: user
+  id: u1
+  content_length: 1
+  content:
+    - type: text
+      text: first
+  status: ~
+  streaming: ~
+- role: user
+  id: u2
+  content_length: 1
+  content:
+    - type: text
+      text: second
+  status: ~
+  streaming: ~

@@ -690,7 +690,7 @@ mod tests {
 
     #[test]
     fn workspace_names_list_is_not_empty() {
-        assert!(!WORKSPACE_NAMES.is_empty());
+        assert!(WORKSPACE_NAMES.iter().all(|name| !name.is_empty()));
     }
 
     #[test]

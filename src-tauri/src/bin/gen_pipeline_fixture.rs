@@ -3,9 +3,11 @@
 //! Usage:
 //!   cargo run --bin gen_pipeline_fixture -- <session_id> <fixture_name> [--limit N]
 //!
-//! This reads `session_messages` rows for the given session, writes them
-//! to `tests/fixtures/pipeline/<fixture_name>/input.json`, runs the
-//! current pipeline, and writes the output to `expected.json`.
+//! Reads `session_messages` rows for the given session and writes them to
+//! `tests/fixtures/pipeline/<fixture_name>/input.json`. The expected output
+//! is captured separately by `pipeline_fixtures.rs` via insta snapshots
+//! (`tests/snapshots/pipeline_fixtures__*.snap`) — this binary only
+//! produces the input side.
 //!
 //! Use `--limit N` to truncate the input to the first N records, useful
 //! for keeping fixture files small while still testing realistic data.
@@ -19,7 +21,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use helmor_lib::pipeline::{types::HistoricalRecord, MessagePipeline};
+use helmor_lib::pipeline::types::HistoricalRecord;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -28,7 +30,6 @@ struct HistoricalRecordFixture {
     id: String,
     role: String,
     content: String,
-    content_is_json: bool,
     parsed_content: Option<Value>,
     created_at: String,
 }
@@ -110,7 +111,6 @@ fn run(session_id: &str, fixture_name: &str, limit: Option<usize>) -> Result<()>
             id: r.id.clone(),
             role: r.role.clone(),
             content: r.content.clone(),
-            content_is_json: r.content_is_json,
             parsed_content: r.parsed_content.clone(),
             created_at: r.created_at.clone(),
         })
@@ -118,23 +118,20 @@ fn run(session_id: &str, fixture_name: &str, limit: Option<usize>) -> Result<()>
     let input_json = serde_json::to_string_pretty(&input_fixtures)?;
     fs::write(fixtures_dir.join("input.json"), input_json).with_context(|| "write input.json")?;
 
-    // Run the pipeline and write expected.json (consumer-side ground truth)
-    let messages = MessagePipeline::convert_historical(&records);
-    let expected_json = serde_json::to_string_pretty(&messages)?;
-    fs::write(fixtures_dir.join("expected.json"), expected_json)
-        .with_context(|| "write expected.json")?;
-
     let suffix = if limit.is_some() {
         format!(" (truncated from {original_len})")
     } else {
         String::new()
     };
     println!(
-        "Wrote fixture `{fixture_name}` with {} input records{suffix} → {} ThreadMessageLike",
-        records.len(),
-        messages.len()
+        "Wrote fixture `{fixture_name}` with {} input records{suffix}",
+        records.len()
     );
     println!("  {}", fixtures_dir.display());
+    println!(
+        "Next: run `INSTA_UPDATE=always cargo test --test pipeline_fixtures` \
+         to capture the snapshot, then `cargo insta review` to confirm."
+    );
 
     Ok(())
 }
@@ -162,25 +159,15 @@ fn load_session_records(session_id: &str) -> Result<Vec<HistoricalRecord>> {
     let mut records = Vec::new();
     for row in rows {
         let (id, role, content, created_at) = row?;
-        let parsed_content = parse_json_content(&content);
-        let content_is_json = parsed_content.is_some();
+        let parsed_content = serde_json::from_str(&content).ok();
         records.push(HistoricalRecord {
             id,
             role,
             content,
-            content_is_json,
             parsed_content,
             created_at,
         });
     }
 
     Ok(records)
-}
-
-fn parse_json_content(content: &str) -> Option<Value> {
-    let first_byte = content.bytes().find(|b| !b.is_ascii_whitespace())?;
-    if !matches!(first_byte, b'{' | b'[') {
-        return None;
-    }
-    serde_json::from_str(content).ok()
 }

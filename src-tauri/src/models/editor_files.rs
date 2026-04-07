@@ -855,7 +855,7 @@ mod tests {
         let expected_app_file = app_file.canonicalize().unwrap();
         assert!(files
             .iter()
-            .any(|file| PathBuf::from(&file.absolute_path) == expected_app_file));
+            .any(|file| Path::new(&file.absolute_path) == expected_app_file.as_path()));
         assert!(files
             .iter()
             .all(|file| Path::new(&file.absolute_path).is_file()));

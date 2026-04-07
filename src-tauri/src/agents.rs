@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{ipc::Channel, AppHandle, Manager};
 use uuid::Uuid;
 
 use crate::error::CommandError;
@@ -214,7 +214,8 @@ pub async fn send_agent_message_stream(
     app: AppHandle,
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
     request: AgentSendRequest,
-) -> CmdResult<AgentStreamStartResponse> {
+    on_event: Channel<AgentStreamEvent>,
+) -> CmdResult<()> {
     let prompt = request.prompt.trim().to_string();
     if prompt.is_empty() {
         return Err(anyhow::anyhow!("Prompt cannot be empty.").into());
@@ -238,6 +239,7 @@ pub async fn send_agent_message_stream(
     // All providers go through the sidecar
     stream_via_sidecar(
         app,
+        on_event,
         &sidecar,
         &stream_id,
         model,
@@ -459,15 +461,17 @@ fn sidecar_debug_enabled() -> bool {
         .unwrap_or(false)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stream_via_sidecar(
     app: AppHandle,
+    on_event: Channel<AgentStreamEvent>,
     sidecar: &crate::sidecar::ManagedSidecar,
     stream_id: &str,
     model: &AgentModelDefinition,
     prompt: &str,
     request: &AgentSendRequest,
     working_directory: &Path,
-) -> CmdResult<AgentStreamStartResponse> {
+) -> CmdResult<()> {
     let request_id = stream_id.to_string();
     let debug = sidecar_debug_enabled();
 
@@ -554,8 +558,7 @@ fn stream_via_sidecar(
         return Err(anyhow::anyhow!("Sidecar send failed: {e}").into());
     }
 
-    // Read events in background and forward to frontend
-    let event_name = format!("agent-stream:{request_id}");
+    // Read events in background and forward to frontend via Channel
     let model_id = model.id.to_string();
     let provider = model.provider.to_string();
     let model_copy = *model;
@@ -648,16 +651,33 @@ fn stream_via_sidecar(
                     let persisted = exchange_ctx.is_some();
                     let mut resolved_model = model_copy.cli_model.to_string();
 
-                    if let Some(pl) = pipeline.take() {
-                        // Persist any remaining turns via the pipeline's accumulator
+                    if let Some(mut pl) = pipeline.take() {
+                        // STEP 1: finalize the accumulator FIRST.
+                        //
+                        // This is the critical ordering — finish_output()
+                        // internally calls flush_assistant(), which moves
+                        // the staged final assistant turn (cur_asst_*) into
+                        // self.turns. If we read turns_len() before this
+                        // call, we miss that final turn entirely (the
+                        // bug regressed in 25cc03f when finish_output went
+                        // from `mut self` to streaming-incremental but the
+                        // post-flush turn read was lost).
+                        let output_result =
+                            pl.accumulator.finish_output(resolved_session_id.as_deref());
+
+                        // STEP 2: persist all collected turns.
+                        // Now `turns_len()` includes the final staged turn
+                        // that finish_output just flushed, so the persist
+                        // loop catches it on the same pass that previously
+                        // dropped it.
                         if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
-                            let model_str = pl.accumulator.resolved_model();
+                            let model_str = pl.accumulator.resolved_model().to_string();
                             while persisted_turn_count < pl.accumulator.turns_len() {
                                 match persist_turn_message(
                                     conn,
                                     ctx,
                                     pl.accumulator.turn_at(persisted_turn_count),
-                                    model_str,
+                                    &model_str,
                                 ) {
                                     Ok(_) => persisted_turn_count += 1,
                                     Err(e) => {
@@ -670,10 +690,8 @@ fn stream_via_sidecar(
                             }
                         }
 
-                        // Finalize the accumulator for persistence output
-                        if let Ok(output) =
-                            pl.accumulator.finish_output(resolved_session_id.as_deref())
-                        {
+                        // STEP 3: write the result row + finalize session metadata.
+                        if let Ok(output) = output_result {
                             resolved_model = output.resolved_model.clone();
 
                             if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
@@ -694,17 +712,14 @@ fn stream_via_sidecar(
                         }
                     }
 
-                    let _ = app.emit(
-                        &event_name,
-                        AgentStreamEvent::Done {
-                            provider: provider.clone(),
-                            model_id: model_id.clone(),
-                            resolved_model,
-                            session_id: resolved_session_id.clone(),
-                            working_directory: working_dir_str.clone(),
-                            persisted,
-                        },
-                    );
+                    let _ = on_event.send(AgentStreamEvent::Done {
+                        provider: provider.clone(),
+                        model_id: model_id.clone(),
+                        resolved_model,
+                        session_id: resolved_session_id.clone(),
+                        working_directory: working_dir_str.clone(),
+                        persisted,
+                    });
                     break;
                 }
                 "error" => {
@@ -717,13 +732,10 @@ fn stream_via_sidecar(
                     if debug {
                         eprintln!("[agents:debug] [{rid}] Sidecar error: {msg}");
                     }
-                    let _ = app.emit(
-                        &event_name,
-                        AgentStreamEvent::Error {
-                            message: msg,
-                            persisted: exchange_ctx.is_some(),
-                        },
-                    );
+                    let _ = on_event.send(AgentStreamEvent::Error {
+                        message: msg,
+                        persisted: exchange_ctx.is_some(),
+                    });
                     break;
                 }
                 _ => {
@@ -758,14 +770,11 @@ fn stream_via_sidecar(
                             // Emit based on pipeline output type
                             match emit {
                                 crate::pipeline::PipelineEmit::Full(messages) => {
-                                    let _ = app
-                                        .emit(&event_name, AgentStreamEvent::Update { messages });
+                                    let _ = on_event.send(AgentStreamEvent::Update { messages });
                                 }
                                 crate::pipeline::PipelineEmit::Partial(message) => {
-                                    let _ = app.emit(
-                                        &event_name,
-                                        AgentStreamEvent::StreamingPartial { message },
-                                    );
+                                    let _ = on_event
+                                        .send(AgentStreamEvent::StreamingPartial { message });
                                 }
                                 crate::pipeline::PipelineEmit::None => {}
                             }
@@ -781,9 +790,7 @@ fn stream_via_sidecar(
         sidecar_state.unsubscribe(&rid);
     });
 
-    Ok(AgentStreamStartResponse {
-        stream_id: request_id,
-    })
+    Ok(())
 }
 // Test helpers using the new pipeline accumulator
 #[cfg(test)]
@@ -845,22 +852,34 @@ pub(crate) fn resolve_working_directory(provided: Option<&str>) -> Result<PathBu
 
 /// Persist the user's prompt as the first message of the exchange.
 /// Called once at stream start, before entering the event loop.
+///
+/// The prompt is wrapped as `{"type":"user_prompt","text":"..."}` so the
+/// `content` column always holds JSON. This:
+/// - removes the "is content JSON or plain text" union type from the schema
+/// - distinguishes a real human prompt from the SDK's tool_result-as-user
+///   wrappers (which use `type=user`), so the adapter can handle each
+///   without sniffing the first byte.
 fn persist_user_message(conn: &Connection, ctx: &ExchangeContext, prompt: &str) -> Result<()> {
     let now = current_timestamp_string()?;
     let user_message_id = ctx.user_message_id.clone();
+    let content = serde_json::json!({
+        "type": "user_prompt",
+        "text": prompt,
+    })
+    .to_string();
 
     conn.execute(
         r#"
             INSERT INTO session_messages (
               id, session_id, role, content, created_at, sent_at,
-              full_message, model, last_assistant_message_id, turn_id,
+              model, last_assistant_message_id, turn_id,
               is_resumable_message
-            ) VALUES (?1, ?2, 'user', ?3, ?4, ?4, ?3, ?5, ?6, ?7, 0)
+            ) VALUES (?1, ?2, 'user', ?3, ?4, ?4, ?5, ?6, ?7, 0)
             "#,
         params![
             user_message_id,
             ctx.helmor_session_id,
-            prompt,
+            content,
             now,
             ctx.model_id,
             ctx.assistant_sdk_message_id,
@@ -886,8 +905,8 @@ fn persist_turn_message(
         r#"
             INSERT INTO session_messages (
               id, session_id, role, content, created_at, sent_at,
-              full_message, model, turn_id, is_resumable_message
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?4, ?6, ?7, 0)
+              model, turn_id, is_resumable_message
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, 0)
             "#,
         params![
             msg_id,
@@ -940,9 +959,9 @@ fn persist_result_and_finalize(
         r#"
             INSERT INTO session_messages (
               id, session_id, role, content, created_at, sent_at,
-              full_message, model, sdk_message_id, turn_id,
+              model, sdk_message_id, turn_id,
               is_resumable_message
-            ) VALUES (?1, ?2, 'assistant', ?3, ?4, ?4, ?3, ?5, ?6, ?7, 0)
+            ) VALUES (?1, ?2, 'assistant', ?3, ?4, ?4, ?5, ?6, ?7, 0)
             "#,
         params![
             result_message_id,
