@@ -1,11 +1,131 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
-import type { ThreadMessageLike } from "@/lib/api";
+import type {
+	CollapsedGroupPart,
+	ExtendedMessagePart,
+	MessagePart,
+	ThreadMessageLike,
+	ToolCallPart,
+} from "@/lib/api";
 
 type DbSeenCache = {
 	db: ThreadMessageLike[];
 	ids: Set<string | undefined>;
 };
+
+// ---------------------------------------------------------------------------
+// Structural sharing
+//
+// The Tauri stream pipeline emits two flavours of events:
+//   - `streamingPartial` — only the trailing message changed.
+//   - `update`           — full snapshot replay (every message gets a NEW
+//                          object reference, even if its content is byte-for-
+//                          byte identical to what we already had).
+//
+// Without structural sharing, every `update` invalidates the
+// `MemoConversationMessage` `prev.message === next.message` bail-out and the
+// entire message list re-renders. The helpers below walk the new array,
+// reuse the previous message object whenever the message id matches AND its
+// content is structurally equivalent, and finally fall back to the previous
+// outer array reference if nothing changed at all.
+// ---------------------------------------------------------------------------
+
+function partsStructurallyEqual(
+	a: ExtendedMessagePart[],
+	b: ExtendedMessagePart[],
+): boolean {
+	if (a === b) return true;
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i += 1) {
+		if (!partStructurallyEqual(a[i]!, b[i]!)) return false;
+	}
+	return true;
+}
+
+function partStructurallyEqual(
+	a: ExtendedMessagePart,
+	b: ExtendedMessagePart,
+): boolean {
+	if (a === b) return true;
+	if (a.type !== b.type) return false;
+	switch (a.type) {
+		case "text": {
+			const tb = b as Extract<MessagePart, { type: "text" }>;
+			return a.text === tb.text;
+		}
+		case "reasoning": {
+			const rb = b as Extract<MessagePart, { type: "reasoning" }>;
+			return a.text === rb.text && a.streaming === rb.streaming;
+		}
+		case "tool-call": {
+			const tb = b as ToolCallPart;
+			if (a.toolCallId !== tb.toolCallId) return false;
+			if (a.toolName !== tb.toolName) return false;
+			if (a.streamingStatus !== tb.streamingStatus) return false;
+			if (a.argsText !== tb.argsText) return false;
+			// `result` is intentionally not compared by reference — backend
+			// snapshot `update` events allocate new wrapper objects for the
+			// same logical result, which would otherwise defeat the cache.
+			// `(toolCallId, streamingStatus, argsText)` is enough to identify a
+			// stable rendered state.
+			return true;
+		}
+		case "collapsed-group": {
+			const gb = b as CollapsedGroupPart;
+			if (a.active !== gb.active) return false;
+			if (a.category !== gb.category) return false;
+			if (a.summary !== gb.summary) return false;
+			if (a.tools.length !== gb.tools.length) return false;
+			for (let i = 0; i < a.tools.length; i += 1) {
+				if (!partStructurallyEqual(a.tools[i]!, gb.tools[i]!)) return false;
+			}
+			return true;
+		}
+		default:
+			return false;
+	}
+}
+
+function messagesStructurallyEqual(
+	a: ThreadMessageLike,
+	b: ThreadMessageLike,
+): boolean {
+	if (a === b) return true;
+	if (a.id !== b.id) return false;
+	if (a.role !== b.role) return false;
+	if (a.streaming !== b.streaming) return false;
+	if (a.createdAt !== b.createdAt) return false;
+	if (a.status !== b.status) {
+		if (!a.status || !b.status) return false;
+		if (a.status.type !== b.status.type) return false;
+		if (a.status.reason !== b.status.reason) return false;
+	}
+	return partsStructurallyEqual(a.content, b.content);
+}
+
+function shareMessages(
+	prev: ThreadMessageLike[],
+	next: ThreadMessageLike[],
+): ThreadMessageLike[] {
+	if (prev === next) return next;
+	const prevById = new Map<string, ThreadMessageLike>();
+	for (const message of prev) {
+		if (message.id != null) prevById.set(message.id, message);
+	}
+	let allReused = next.length === prev.length;
+	const shared = next.map((message, index) => {
+		const candidate = message.id != null ? prevById.get(message.id) : undefined;
+		if (candidate && messagesStructurallyEqual(candidate, message)) {
+			if (allReused && prev[index] !== candidate) {
+				allReused = false;
+			}
+			return candidate;
+		}
+		allReused = false;
+		return message;
+	});
+	return allReused ? prev : shared;
+}
 
 import { generateSessionTitle } from "@/lib/api";
 import {
@@ -128,24 +248,35 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	// the Set on every accumulator delta. The cache is invalidated whenever
 	// the underlying `db` reference changes.
 	const dbSeenCacheRef = useRef<DbSeenCache | null>(null);
+	// Previous mergedMessages output, used by `shareMessages` for structural
+	// reference reuse so historical messages keep the same identity across
+	// stream ticks (and across backend `update` snapshots).
+	const prevMergedRef = useRef<ThreadMessageLike[]>([]);
 	const mergedMessages = useMemo(() => {
 		const db = messagesQuery.data ?? [];
-		if (liveMessages.length === 0) return db;
-		if (db.length === 0) return liveMessages;
-		let cache = dbSeenCacheRef.current;
-		if (!cache || cache.db !== db) {
-			const ids = new Set<string | undefined>();
-			for (const message of db) {
-				ids.add(message.id);
+		let next: ThreadMessageLike[];
+		if (liveMessages.length === 0) {
+			next = db;
+		} else if (db.length === 0) {
+			next = liveMessages;
+		} else {
+			let cache = dbSeenCacheRef.current;
+			if (!cache || cache.db !== db) {
+				const ids = new Set<string | undefined>();
+				for (const message of db) {
+					ids.add(message.id);
+				}
+				cache = { db, ids };
+				dbSeenCacheRef.current = cache;
 			}
-			cache = { db, ids };
-			dbSeenCacheRef.current = cache;
+			const uniqueLive = liveMessages.filter(
+				(message) => !cache.ids.has(message.id),
+			);
+			next = uniqueLive.length === 0 ? db : [...db, ...uniqueLive];
 		}
-		const uniqueLive = liveMessages.filter(
-			(message) => !cache.ids.has(message.id),
-		);
-		if (uniqueLive.length === 0) return db;
-		return [...db, ...uniqueLive];
+		const shared = shareMessages(prevMergedRef.current, next);
+		prevMergedRef.current = shared;
+		return shared;
 	}, [messagesQuery.data, liveMessages]);
 
 	const hasWorkspaceDetail = workspace !== null;
@@ -319,11 +450,28 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		[queryClient],
 	);
 
+	// All callback props that go into <WorkspacePanel> must be reference
+	// stable so that the memoed header sub-component bails out across stream
+	// ticks. We capture the latest `onSelectSession` in a ref and route the
+	// stable handler through it.
+	const onSelectSessionRef = useRef(onSelectSession);
+	onSelectSessionRef.current = onSelectSession;
+	const handleSelectSession = useCallback((sessionId: string) => {
+		onSelectSessionRef.current(sessionId);
+	}, []);
+	const handleSessionsChanged = useCallback(() => {
+		void invalidateSessionQueries();
+	}, [invalidateSessionQueries]);
+	const handleWorkspaceChanged = useCallback(() => {
+		void invalidateWorkspaceQueries();
+	}, [invalidateWorkspaceQueries]);
+	const selectedSessionIdForPanel = selectedSessionId ?? threadSessionId;
+
 	return (
 		<WorkspacePanel
 			workspace={workspace}
 			sessions={sessions}
-			selectedSessionId={selectedSessionId ?? threadSessionId}
+			selectedSessionId={selectedSessionIdForPanel}
 			sessionPanes={sessionPanes}
 			loadingWorkspace={loadingWorkspace}
 			loadingSession={loadingSession}
@@ -331,17 +479,11 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			refreshingSession={refreshingSession}
 			sending={sending}
 			sendingSessionIds={sendingSessionIds}
-			onSelectSession={(sessionId) => {
-				onSelectSession(sessionId);
-			}}
+			onSelectSession={handleSelectSession}
 			onPrefetchSession={handlePrefetchSession}
-			onSessionsChanged={() => {
-				void invalidateSessionQueries();
-			}}
+			onSessionsChanged={handleSessionsChanged}
 			onSessionRenamed={handleSessionRenamed}
-			onWorkspaceChanged={() => {
-				void invalidateWorkspaceQueries();
-			}}
+			onWorkspaceChanged={handleWorkspaceChanged}
 			headerActions={headerActions}
 			headerLeading={headerLeading}
 		/>
