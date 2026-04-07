@@ -33,6 +33,37 @@ if (typeof window !== "undefined") {
 	(
 		window as unknown as { __HELMOR_DEV_RENDER_STATS__?: unknown }
 	).__HELMOR_DEV_RENDER_STATS__ = undefined;
+
+	// jsdom returns 0 for every layout-derived measurement, which makes
+	// ProgressiveConversationViewport's visible-window calculation degenerate
+	// (no rows are excluded, ResizeObserver never settles paneWidth, etc).
+	// We patch the prototypes to return a realistic desktop-pane size so the
+	// perf harness exercises the same window-trim path real users hit.
+	const PANE_WIDTH = 800;
+	const PANE_HEIGHT = 720;
+	const ALL_LAYOUT_HOST = HTMLElement.prototype;
+	Object.defineProperty(ALL_LAYOUT_HOST, "clientWidth", {
+		configurable: true,
+		get() {
+			return PANE_WIDTH;
+		},
+	});
+	Object.defineProperty(ALL_LAYOUT_HOST, "clientHeight", {
+		configurable: true,
+		get() {
+			return PANE_HEIGHT;
+		},
+	});
+	Object.defineProperty(ALL_LAYOUT_HOST, "scrollHeight", {
+		configurable: true,
+		get() {
+			// `scrollHeight` is read by the panel's session-switch snap-to-bottom
+			// effect (`scrollParent.scrollTop = scrollParent.scrollHeight`).
+			// Returning a number larger than the viewport keeps it from
+			// degenerating to 0.
+			return 4096;
+		},
+	});
 }
 
 import { QueryClientProvider } from "@tanstack/react-query";
