@@ -263,7 +263,14 @@ describe("conversation render perf", () => {
 		const sessions = [sessionA, sessionB];
 
 		const initialThread = makeThread(30);
-		let streamingThread = makeThread(30);
+		// Mirror production's structural sharing (see `shareMessages` in
+		// workspace-panel-container.tsx): when streaming starts, all of the
+		// historical messages keep their previous identity so
+		// MemoConversationMessage's `prev.message === next.message` bail-out
+		// fires for everything except the actively-changing tail. Without this,
+		// the test would invent a fan-out on the first chunk that the real
+		// container never produces.
+		let streamingThread: ThreadMessageLike[] = initialThread.slice();
 
 		const queryClient = createHelmorQueryClient();
 		queryClient.setDefaultOptions({
