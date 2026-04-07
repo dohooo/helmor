@@ -1,7 +1,7 @@
 ---
 source: tests/pipeline_streams.rs
 expression: snapshot
-input_file: tests/fixtures/streams/stream-thinking-text.jsonl
+input_file: tests/fixtures/streams/claude/thinking-text.jsonl
 ---
 line_count: 25
 checkpoint_count: 3

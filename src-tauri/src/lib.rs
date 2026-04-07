@@ -9,6 +9,18 @@ pub mod pipeline;
 mod schema;
 pub mod sidecar;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::Manager;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+
+/// Set once the user has confirmed quitting. Short-circuits the
+/// `CloseRequested` handler on the second pass so it skips the dialog.
+static SHUTDOWN_CONFIRMED: AtomicBool = AtomicBool::new(false);
+
+/// Set while the shutdown confirmation dialog is on screen. Prevents
+/// stacking duplicates from rapid-fire `CloseRequested` events.
+static SHUTDOWN_DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
+
 /// Initialise the database schema (call once at startup).
 pub fn schema_init(conn: &rusqlite::Connection) {
     schema::ensure_schema(conn).expect("Failed to initialize database schema");
@@ -16,11 +28,12 @@ pub fn schema_init(conn: &rusqlite::Connection) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(models::auth::GithubIdentityFlowRuntime::default())
         .manage(sidecar::ManagedSidecar::new())
+        .manage(agents::ActiveStreams::new())
         .setup(|_app| {
             // Ensure data directory structure exists
             data_dir::ensure_directory_structure().expect("Failed to create Helmor data directory");
@@ -96,6 +109,85 @@ pub fn run() {
             models::update_session_settings,
             models::write_editor_file
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // Hook `WindowEvent::CloseRequested` — not `ExitRequested`, which only
+    // fires after all windows are destroyed. The dialog is dispatched via
+    // the async `show(callback)` form; `blocking_show()` would freeze the
+    // app when called from the main thread.
+    app.run(|app_handle, event| {
+        let tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::CloseRequested { api, .. },
+            ..
+        } = &event
+        else {
+            return;
+        };
+
+        // Second pass after the user confirmed — don't re-prompt.
+        if SHUTDOWN_CONFIRMED.load(Ordering::Acquire) {
+            eprintln!("[shutdown] CloseRequested[{label}] — confirmed, letting through");
+            return;
+        }
+
+        let active = app_handle.state::<agents::ActiveStreams>();
+        let count = active.len();
+        eprintln!("[shutdown] CloseRequested[{label}] — {count} active stream(s)");
+
+        if count == 0 {
+            // Fast path: nothing in flight, let the close proceed normally.
+            return;
+        }
+
+        // Streams in flight — keep the window open and ask the user.
+        api.prevent_close();
+
+        // Guard against duplicate dialogs from rapid-fire CloseRequested
+        // events (multiple windows, double Cmd+Q, etc.).
+        if SHUTDOWN_DIALOG_OPEN.swap(true, Ordering::AcqRel) {
+            eprintln!("[shutdown] Dialog already on screen, swallowing duplicate");
+            return;
+        }
+
+        let app_handle_clone = app_handle.clone();
+        let message = if count == 1 {
+            "There is 1 task in progress. Quitting now will cancel it.".to_string()
+        } else {
+            format!("There are {count} tasks in progress. Quitting now will cancel them.")
+        };
+
+        eprintln!("[shutdown] Showing confirmation dialog");
+        app_handle
+            .dialog()
+            .message(message)
+            .title("Quit Helmor?")
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Quit anyway".to_string(),
+                "Cancel".to_string(),
+            ))
+            .show(move |confirmed| {
+                SHUTDOWN_DIALOG_OPEN.store(false, Ordering::Release);
+
+                if !confirmed {
+                    eprintln!("[shutdown] User cancelled — staying running");
+                    return;
+                }
+
+                eprintln!("[shutdown] User confirmed — aborting active streams");
+                // We're on a worker thread now, so the blocking helper is
+                // safe to call.
+                let sidecar = app_handle_clone.state::<sidecar::ManagedSidecar>();
+                let active = app_handle_clone.state::<agents::ActiveStreams>();
+                agents::abort_all_active_streams_blocking(
+                    &sidecar,
+                    &active,
+                    std::time::Duration::from_millis(1500),
+                );
+                SHUTDOWN_CONFIRMED.store(true, Ordering::Release);
+                eprintln!("[shutdown] Cleanup done, calling exit(0)");
+                app_handle_clone.exit(0);
+            });
+    });
 }

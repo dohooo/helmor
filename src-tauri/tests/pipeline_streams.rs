@@ -1,36 +1,24 @@
 //! Raw stream-event replay tests for the message pipeline.
 //!
-//! Each `.jsonl` fixture under `tests/fixtures/streams/` is a sequence of
-//! sidecar stream events (one JSON object per line) captured from a real
-//! Claude Code / Codex CLI session. We replay each line through
-//! `MessagePipeline::push_event` and snapshot:
+//! Each `.jsonl` fixture under `tests/fixtures/streams/<provider>/` is a
+//! sequence of sidecar stream events (one JSON object per line) from a
+//! real Claude Code / Codex CLI session. The parent directory name
+//! (`claude` or `codex`) IS the provider — the accumulator picks its
+//! parser branch from that. We replay each line through
+//! `MessagePipeline::push_event` and snapshot the live render, the
+//! post-finalize persisted turns, and the historical reload round-trip.
 //!
-//! - the role sequence at every finalization checkpoint (assistant/user/result/error)
-//! - the final state after `finish()` (role sequence + count)
-//!
-//! # Why this exists
-//!
-//! `pipeline_fixtures.rs` exercises the `convert_historical` adapter path
-//! using DB-captured `HistoricalRecord`s — i.e., **post-accumulator** data.
-//! That covers adapter + collapse, but it bypasses the accumulator entirely.
-//!
-//! The accumulator is the part that:
-//! - merges streaming text deltas into a single text block
-//! - assembles `tool_use` blocks across `content_block_start` / delta /
-//!   `content_block_stop` events
-//! - keeps partial-id stable across deltas so the frontend doesn't re-key
-//! - resets blocks when a final `assistant` event arrives
-//!
-//! None of this is exercised by historical fixtures. The handful of
-//! handcrafted `pipeline::accumulator::tests` cover individual mechanisms
-//! but no end-to-end real stream replay. These jsonl fixtures fill that gap.
+//! This covers the accumulator layer specifically — delta merging,
+//! `tool_use` block assembly across `content_block_*` events,
+//! partial-id stability — which `pipeline_fixtures.rs` skips by working
+//! directly on post-accumulator `HistoricalRecord`s.
 //!
 //! # Adding a new stream fixture
 //!
-//! Capture a session via the temporary `__capturedStreamLines` debug hook
-//! in `workspace-conversation-container.tsx` (set `__captureStreamName` and
-//! POST to `/api/capture_stream`), then drop the file under
-//! `tests/fixtures/streams/`.
+//! For Codex: `bun run scripts/capture-codex-fixture.ts
+//! <output-path> [prompt]` drives `CodexSessionManager` against the live
+//! SDK and writes the result. Drop the output under
+//! `tests/fixtures/streams/codex/`.
 //!
 //! # Updating snapshots
 //!
@@ -49,29 +37,25 @@ use serde::Serialize;
 use serde_json::Value;
 use std::fs;
 
-/// One snapshot per stream fixture, covering THREE stages of the pipeline:
+/// One snapshot per stream fixture, covering three stages of the pipeline:
 ///
 /// - **Streaming render** (`checkpoints` + `final_state`): mid-stream Full()
 ///   emissions and the post-`finish()` ThreadMessageLike snapshot. Catches
-///   adapter/collapse drift on the live path.
+///   adapter / collapse drift on the live path.
 ///
 /// - **Persistence layout** (`persisted_turns`): the `turns` vec exposed by
-///   the accumulator AFTER `finish_output()`, with each turn's role and
-///   content block types. Catches accumulator-level bugs that drop blocks
-///   from `cur_asst_*` before they reach `self.turns` (e.g. the "thinking
-///   gets clobbered by the next same-msg_id event" regression).
+///   the accumulator after `finish_output()`, with each turn's role and
+///   content block types. Catches accumulator-level drops that lose blocks
+///   before they reach `self.turns`.
 ///
 /// - **Historical reload** (`historical_render`): feed the persisted turns
 ///   back through `convert_historical` and snapshot the rendered output.
-///   This is the round-trip — streaming → persist → reload → render — that
-///   would have caught BOTH the "command_execution dropped on reload" bug
-///   AND the silent symmetry-break between the streaming render path
-///   (which synthesizes tool_use/tool_result) and the historical render
-///   path (which uses item.completed branches in the adapter).
+///   The full round-trip — streaming → persist → reload → render — closes
+///   the symmetry gap between the live path and the historical path.
 ///
-/// We don't snapshot the full content (the jsonl can produce thousands of
-/// lines after pretty-print) — just the structural shape that meaningfully
-/// drifts when behavior changes.
+/// We only snapshot structural shape (roles, part types, block types),
+/// not full content — the jsonl can produce thousands of lines after
+/// pretty-print and the shape is what meaningfully drifts.
 #[derive(Debug, Serialize)]
 struct StreamReplaySnapshot {
     line_count: usize,
@@ -121,17 +105,14 @@ struct FinalState {
 }
 
 /// Persistence-side snapshot — what the accumulator would write to the DB.
-///
-/// `turn_count` and the per-turn block-type list collectively pin the bug
-/// surface area for accumulator-level drops: any change in how delta-style
-/// assistant events are batched into turns shows up here.
+/// `turn_count` and the per-turn block-type list collectively pin the
+/// accumulator's delta-batching behavior.
 #[derive(Debug, Serialize)]
 struct PersistedTurnsSnapshot {
     turn_count: usize,
-    /// Total number of content blocks across all turns. The most blunt
-    /// fingerprint of the "thinking dropped" bug — without the fix this
-    /// number is artificially low because thinking blocks never make it
-    /// into self.turns.
+    /// Total number of content blocks across all turns. A blunt
+    /// fingerprint of accumulator block drops — any change in the
+    /// delta-merge path shifts this count.
     total_blocks: usize,
     turns: Vec<PersistedTurn>,
 }
@@ -140,9 +121,6 @@ struct PersistedTurnsSnapshot {
 struct PersistedTurn {
     role: String,
     /// Content block types in the order they appear in the persisted JSON.
-    /// `["thinking", "tool_use"]` is what a healthy Claude turn with
-    /// thinking + tool call looks like; `["tool_use"]` alone is the
-    /// pre-fix bug fingerprint.
     block_types: Vec<String>,
 }
 
@@ -236,7 +214,11 @@ fn build_persisted_snapshot(pipeline: &MessagePipeline) -> PersistedTurnsSnapsho
 
 #[test]
 fn stream_replay() {
-    glob!("fixtures/streams/*.jsonl", |path| {
+    // Fixtures live under `tests/fixtures/streams/<provider>/<name>.jsonl`.
+    // The parent directory name IS the provider — no filename sniffing,
+    // no implicit conventions. Adding a new provider means adding a new
+    // subdirectory.
+    glob!("fixtures/streams/*/*.jsonl", |path| {
         let raw = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
         let lines: Vec<&str> = raw
             .lines()
@@ -244,17 +226,15 @@ fn stream_replay() {
             .filter(|l| !l.is_empty())
             .collect();
 
-        // Pick provider hint from the filename so the accumulator picks the
-        // right parser branch (claude vs codex). Falls back to "claude".
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default();
-        let provider = if stem.contains("codex") {
-            "codex"
-        } else {
-            "claude"
-        };
+        let provider = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or_else(|| panic!("fixture {path:?} is missing a provider parent dir"));
+        assert!(
+            matches!(provider, "claude" | "codex"),
+            "fixture {path:?} is under unknown provider directory {provider:?}"
+        );
 
         let mut pipeline = MessagePipeline::new(provider, "test-model", "ctx", "sess");
         let mut checkpoints: Vec<StreamCheckpoint> = Vec::new();
@@ -290,11 +270,9 @@ fn stream_replay() {
             total_parts: final_messages.iter().map(|m| m.content.len()).sum(),
         };
 
-        // Drive the persistence-side finalization that agents.rs end branch
-        // would run after the stream loop. This is what populates the
-        // accumulator's `turns` vec with the FINAL staged assistant turn
-        // (regression test for e0d6253) and what surfaces accumulator-level
-        // block-batching bugs (regression test for the same-msg_id append fix).
+        // Mirror the persistence-side finalization that agents.rs runs after
+        // the stream loop — this flushes the staged final assistant turn
+        // into `accumulator.turns`, which the snapshot below reads.
         let _ = pipeline
             .accumulator
             .finish_output(Some("test-session"))
@@ -311,6 +289,11 @@ fn stream_replay() {
             historical_render,
         };
 
+        // insta's glob! uses the full matched path (relative to the glob
+        // base) as the snapshot's `@suffix`, with `/` → `__`. Under
+        // `*/*.jsonl` that becomes e.g. `claude__thinking-text.jsonl` or
+        // `codex__list-files.jsonl` — provider already embedded, no
+        // collision between `claude/tool-use` and `codex/tool-use`.
         assert_yaml_snapshot!(snapshot);
     });
 }

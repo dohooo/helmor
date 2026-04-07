@@ -1,7 +1,7 @@
 ---
 source: tests/pipeline_streams.rs
 expression: snapshot
-input_file: tests/fixtures/streams/stream-tool-use.jsonl
+input_file: tests/fixtures/streams/claude/tool-use.jsonl
 ---
 line_count: 777
 checkpoint_count: 43

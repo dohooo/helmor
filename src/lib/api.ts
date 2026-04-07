@@ -1242,6 +1242,16 @@ export type AgentStreamEvent =
 			workingDirectory: string;
 			persisted: boolean;
 	  }
+	| {
+			kind: "aborted";
+			provider: AgentProvider;
+			modelId: string;
+			resolvedModel: string;
+			sessionId?: string | null;
+			workingDirectory: string;
+			persisted: boolean;
+			reason: string;
+	  }
 	| { kind: "error"; message: string; persisted: boolean };
 
 /**
@@ -1294,7 +1304,11 @@ export async function startAgentMessageStream(
 				const event = JSON.parse(msg.data) as AgentStreamEvent;
 				callback(event);
 				// Close SSE on terminal events
-				if (event.kind === "done" || event.kind === "error") {
+				if (
+					event.kind === "done" ||
+					event.kind === "aborted" ||
+					event.kind === "error"
+				) {
 					eventSource.close();
 				}
 			} catch {

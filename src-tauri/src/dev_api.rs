@@ -277,7 +277,6 @@ pub fn start_agent_stream(
     let working_directory = resolve_working_directory(request.working_directory.as_deref())?;
     let stream_id = uuid::Uuid::new_v4().to_string();
 
-    // Resolve session ID for resume
     let resume_session_id = request.session_id.clone().or_else(|| {
         request.helmor_session_id.as_deref().and_then(|hsid| {
             let conn = db::open_connection(false).ok()?;
@@ -289,8 +288,7 @@ pub fn start_agent_stream(
                 )
                 .ok()?;
             let sid = stored_sid?;
-            let stored_provider = stored_provider.unwrap_or_default();
-            if stored_provider == model.provider {
+            if stored_provider.unwrap_or_default() == model.provider {
                 Some(sid)
             } else {
                 None
@@ -356,6 +354,24 @@ pub fn start_agent_stream(
                             session_id: event.session_id().map(str::to_string),
                             working_directory: working_dir_str.clone(),
                             persisted: false,
+                        });
+                        break;
+                    }
+                    "aborted" => {
+                        let reason = event
+                            .raw
+                            .get("reason")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("user_requested")
+                            .to_string();
+                        let _ = tx.send(AgentStreamEvent::Aborted {
+                            provider: provider.clone(),
+                            model_id: model_id.clone(),
+                            resolved_model: model_id.clone(),
+                            session_id: event.session_id().map(str::to_string),
+                            working_directory: working_dir_str.clone(),
+                            persisted: false,
+                            reason,
                         });
                         break;
                     }

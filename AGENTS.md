@@ -37,6 +37,8 @@ Rust backend (from `src-tauri/`):
 ```bash
 cargo build                  # Build Tauri backend
 cargo check                  # Type-check without building
+cargo test                   # Run all Rust tests (lib + integration)
+cargo clippy -- -D warnings  # Lint (must pass before committing)
 ```
 
 ## Architecture
@@ -48,43 +50,69 @@ cargo check                  # Type-check without building
 
 ### Frontend structure
 
-| Path                                    | Role                                                                                                                                                                                                                                                                                                     |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/App.tsx`                           | Root component. Owns all application state (workspaces, sessions, messages, sidebar width, theme, sending state). Orchestrates data loading and agent message flow.                                                                                                                                      |
-| `src/lib/api.ts`                        | **IPC bridge**. Every Tauri `invoke()` call is here. Exports typed async functions (`loadWorkspaceGroups`, `sendAgentMessage`, `startAgentMessageStream`, `mergeFromConductor`, etc.) and all shared TypeScript types. Falls back to hardcoded defaults when Tauri runtime is absent (pure browser dev). |
-| `src/lib/stream-accumulator.ts`         | Accumulates Claude CLI JSON stream lines into renderable `SessionMessageRecord[]` snapshots for real-time UI updates during streaming.                                                                                                                                                                   |
-| `src/lib/message-adapter.ts`            | Converts `SessionMessageRecord[]` into chat-renderable message structures for the workspace panel. Handles JSON-encoded messages (tool calls, thinking, results, errors) and plain text.                                                                                                                 |
-| `src/lib/utils.ts`                      | `cn()` helper (clsx + tailwind-merge).                                                                                                                                                                                                                                                                   |
-| `src/components/workspace-panel.tsx`    | Chat/message display area with session tabs. Uses `@assistant-ui/react` for message rendering with `@assistant-ui/react-markdown` for markdown.                                                                                                                                                          |
-| `src/components/workspace-composer.tsx` | Message input with model selector and image attachment support.                                                                                                                                                                                                                                          |
-| `src/components/workspaces-sidebar.tsx` | Sidebar listing workspace groups (done/review/progress/backlog/canceled) with collapsible sections, archive/restore actions.                                                                                                                                                                             |
-| `src/components/ui/`                    | shadcn/ui primitives (base-nova style, Tailwind v4 CSS variables).                                                                                                                                                                                                                                       |
+The frontend is a thin renderer — there is **no** TypeScript stream accumulator or message adapter. Both live in Rust (`src-tauri/src/pipeline/`); the frontend receives ready-to-render `ThreadMessageLike[]` and paints it.
+
+| Path                                    | Role                                                                                                              |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `src/App.tsx`                           | Root component. Owns all application state via `useState`.                                                        |
+| `src/lib/api.ts`                        | IPC bridge — every Tauri `invoke()` call. Falls back to `devFetch(...)` against the dev API server in browser dev. |
+| `src/lib/query-client.ts`               | React Query keys + query options factories.                                                                       |
+| `src/components/workspace-panel.tsx`    | Chat thread + tabs. `@assistant-ui/react` + `react-virtuoso` + `use-stick-to-bottom`.                             |
+| `src/components/workspace-composer.tsx` | Message input with model selector + image attachments.                                                            |
+| `src/components/workspaces-sidebar.tsx` | Sidebar workspace groups (done/review/progress/backlog/canceled).                                                 |
+| `src/components/ui/`                    | shadcn/ui primitives (base-nova).                                                                                 |
 
 ### Backend structure (`src-tauri/src/`)
 
-| File                   | Role                                                                                                                                                                                                 |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lib.rs`               | Tauri app builder. Registers all commands, manages `RunningAgentProcesses` state, runs setup hook (directory + schema init).                                                                         |
-| `data_dir.rs`          | Resolves the Helmor data directory (`~/helmor` or `~/helmor-dev`). Supports `HELMOR_DATA_DIR` env var override.                                                                                      |
-| `schema.rs`            | Database schema initialization — creates all tables/indexes/triggers if not present.                                                                                                                 |
-| `import.rs`            | Optional merge-import of data from a local Conductor installation via SQLite `ATTACH DATABASE` + `INSERT OR IGNORE`. Atomic (transaction-wrapped), non-destructive (existing Helmor data preserved). |
-| `error.rs`             | `CommandError` wrapper — bridges `anyhow::Error` to Tauri-serializable errors for IPC.                                                                                                               |
-| `models/mod.rs`        | Tauri command handlers — thin wrappers calling sub-modules.                                                                                                                                          |
-| `models/db.rs`         | Database connection opening via `data_dir::db_path()`.                                                                                                                                               |
-| `models/repos.rs`      | Repos table CRUD + git repository resolution.                                                                                                                                                        |
-| `models/workspaces.rs` | Workspaces table CRUD + archive/restore + workspace creation.                                                                                                                                        |
-| `models/sessions.rs`   | Sessions/messages/attachments queries + read/unread marking.                                                                                                                                         |
-| `models/settings.rs`   | Settings key-value store.                                                                                                                                                                            |
-| `models/git_ops.rs`    | Git mirror, worktree, and branch management.                                                                                                                                                         |
-| `models/helpers.rs`    | Display helpers, naming, filesystem copy, icon resolution.                                                                                                                                           |
-| `agents.rs`            | Spawns Claude Code / Codex CLI subprocesses, streams stdout line-by-line back to the frontend via Tauri events (`agent-stream:{streamId}`). Manages running process PIDs.                            |
+| File                               | Role                                                                                                                                              |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lib.rs`                           | Tauri app builder. Registers commands, runs setup hook (data dir + schema init + migrations).                                                    |
+| `data_dir.rs`                      | Resolves `~/helmor` (release) or `~/helmor-dev` (debug). `HELMOR_DATA_DIR` env override.                                                         |
+| `schema.rs`                        | Schema + idempotent migrations.                                                                                                                  |
+| `import.rs`                        | Optional Conductor merge-import via SQLite `ATTACH DATABASE` + `INSERT OR IGNORE`.                                                               |
+| `error.rs`                         | `CommandError` — bridges `anyhow::Error` to Tauri IPC.                                                                                           |
+| `sidecar.rs`                       | Long-running TS sidecar process manager. Pub/sub of sidecar events keyed by request id.                                                          |
+| `dev_api.rs` + `bin/dev_server.rs` | axum dev server on :3001 mirroring every Tauri command for browser mode. **New commands MUST be wired here too.**                                |
+| `models/`                          | Tauri command handlers split by domain (`repos`, `workspaces`, `sessions`, `settings`, `git_ops`).                                               |
+| `agents.rs`                        | Streaming + persistence. `send_agent_message_stream` takes a `tauri::ipc::Channel<AgentStreamEvent>` and pushes pipeline output through it.      |
+| `pipeline/`                        | Message pipeline: `accumulator` → `adapter` + `collapse` → `ThreadMessageLike[]`. Shared by streaming and historical reload paths.               |
 
-### Data flow
+### Message data flow
 
-1. Frontend calls `api.ts` functions (e.g., `loadWorkspaceGroups()`)
-2. These call `invoke("list_workspace_groups")` via Tauri IPC
-3. Rust handler queries SQLite and returns serialized JSON
-4. For agent messages: frontend calls `startAgentMessageStream()` → Rust spawns CLI process → emits `AgentStreamEvent`s → frontend listens via `listenAgentStream()` → `StreamAccumulator` builds partial messages → `message-adapter.ts` converts for rendering
+```
+Live streaming      sidecar events ──push_event──┐
+                                                 ▼
+                                      IntermediateMessage[] ──▶ adapter + collapse ──▶ ThreadMessageLike[]
+                                                 ▲
+Historical reload   session_messages rows ──convert_historical──┘
+```
+
+Both paths converge at `IntermediateMessage[]` and share the adapter + collapse stages, so any rendering bug shows up in both.
+
+**Storage shape**: `session_messages.content` always holds JSON. The top-level `type` discriminates: `user_prompt` (real human input), `user` (SDK tool_result wrapped as user), `assistant`, `system`, `error`, `result`, `item.completed` (Codex — `agent_message` or `command_execution`), `turn.completed`. The DB stores **post-accumulator** form (one row per logical turn). The Claude SDK delivers blocks **delta-style** — multiple `assistant` events with the same `msg_id`, each carrying one new block — and the accumulator APPENDs them.
+
+**🚨 Any change touching `pipeline/`, `agents.rs` persistence, `schema.rs` migrations, or the storage shape MUST be covered by a snapshot test in `src-tauri/tests/`.** See "Pipeline tests" below.
+
+### Pipeline tests (`src-tauri/tests/`)
+
+Three insta-based test targets sharing `tests/common/mod.rs` (builders, normalization, fixture loaders):
+
+| Target                  | What it covers                                                                                                  |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `pipeline_scenarios.rs` | Handcrafted edge cases (35+ tests). Normalized snapshots — strips ids/timestamps, focuses on structural shape.  |
+| `pipeline_fixtures.rs`  | Real DB sessions in `tests/fixtures/pipeline/<name>/input.json`, auto-discovered via `insta::glob!`. Raw snapshots for full fidelity. |
+| `pipeline_streams.rs`   | Raw SDK stream-event jsonl in `tests/fixtures/streams/` (also read by the sidecar tests via `../../src-tauri/tests/fixtures/streams/`). Three-stage round-trip: streaming render → persistence → historical reload. |
+
+**Workflow**:
+
+```bash
+cargo test --tests                                   # Run all integration tests
+INSTA_UPDATE=always cargo test --tests               # Accept new/changed snapshots
+cargo insta review                                   # Interactive accept/reject (recommended)
+cargo run --bin gen_pipeline_fixture -- <session_id> <name>   # Capture a new real fixture
+```
+
+When a snapshot drifts: stop. Look at the diff. Decide whether the new shape is the **intended** behavior or a regression. Only accept after triage. The `.snap` files in git are the source of truth for "what each pipeline scenario currently produces" — reviewers see them in PR diffs.
 
 ### Key conventions
 
@@ -92,7 +120,8 @@ cargo check                  # Type-check without building
 - **Styling**: Tailwind CSS v4 with semantic color tokens (`bg-app-base`, `bg-app-sidebar`, `bg-app-elevated`, `text-app-foreground`, etc.) defined in `App.css` using oklch
 - **UI components**: shadcn/ui (base-nova style, `components.json` configured, no RSC)
 - **Chat rendering**: `@assistant-ui/react` with `ExternalStoreRuntime` for message display, `@assistant-ui/react-markdown` + `remark-gfm` for markdown
-- **Testing**: Vitest + jsdom + @testing-library/react. Setup in `src/test/setup.ts`. Tests co-located with source (e.g., `App.test.tsx`).
+- **Frontend testing**: Vitest + jsdom + @testing-library/react. Setup in `src/test/setup.ts`. Tests co-located with source.
+- **Rust testing**: lib unit tests inline + insta integration tests under `src-tauri/tests/`. Pipeline changes need snapshot coverage (see above).
 - **Data directory**: `~/helmor/` (release) or `~/helmor-dev/` (debug). Override with `HELMOR_DATA_DIR` env var. Database auto-created on first startup.
 - **macOS window chrome**: Overlay title bar with traffic lights at (16, 24). Drag region via `data-tauri-drag-region`.
 - **Serde convention**: Rust structs use `#[serde(rename_all = "camelCase")]` so JSON fields match TypeScript types directly.

@@ -1,0 +1,121 @@
+---
+source: tests/pipeline_streams.rs
+expression: snapshot
+input_file: tests/fixtures/streams/claude/bash-and-edit.jsonl
+---
+line_count: 74
+checkpoint_count: 9
+checkpoints:
+  - line_index: 7
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+  - line_index: 23
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+  - line_index: 28
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+  - line_index: 38
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+  - line_index: 41
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+  - line_index: 59
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 63
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+  - line_index: 68
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+      - tool-call
+      - tool-call
+      - text
+  - line_index: 72
+    event_type: result
+    roles:
+      - assistant
+      - system
+    last_part_types:
+      - text
+final_state:
+  message_count: 2
+  roles:
+    - assistant
+    - system
+  total_parts: 6
+persisted_turns:
+  turn_count: 7
+  total_blocks: 8
+  turns:
+    - role: assistant
+      block_types:
+        - thinking
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - text
+historical_render:
+  message_count: 1
+  messages:
+    - role: assistant
+      part_types:
+        - reasoning
+        - tool-call
+        - tool-call
+        - tool-call
+        - text

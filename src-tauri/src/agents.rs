@@ -1,5 +1,8 @@
 use crate::models::sessions::mark_session_read_in_transaction;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
@@ -38,10 +41,135 @@ pub enum AgentStreamEvent {
         working_directory: String,
         persisted: bool,
     },
+    /// User-initiated termination (stop button or app shutdown). The UI
+    /// treats this as a non-error state. Persisted state includes the
+    /// flushed turns and sets `sessions.status = 'aborted'`.
+    Aborted {
+        provider: String,
+        model_id: String,
+        resolved_model: String,
+        session_id: Option<String>,
+        working_directory: String,
+        persisted: bool,
+        reason: String,
+    },
     Error {
         message: String,
         persisted: bool,
     },
+}
+
+// ---------------------------------------------------------------------------
+// Active streams registry — tracks in-flight sendMessage requests so that
+// graceful shutdown can iterate them and send a stopSession to each.
+// ---------------------------------------------------------------------------
+
+/// Identifying info for an in-flight stream, kept in `ActiveStreams`.
+#[derive(Debug, Clone)]
+pub struct ActiveStreamHandle {
+    /// Sidecar request id (also the listener key in `ManagedSidecar`).
+    pub request_id: String,
+    /// The id passed as `sessionId` in the sidecar `sendMessage` params.
+    /// `stopSession` needs this to find the right `AbortController` inside
+    /// the sidecar's session manager.
+    pub sidecar_session_id: String,
+    /// Provider tag — picks the right session manager on the sidecar side.
+    pub provider: String,
+}
+
+/// Tauri-managed registry of in-flight streams. Cheap to clone the handles;
+/// the lock is held only briefly inside register/unregister/snapshot.
+#[derive(Default)]
+pub struct ActiveStreams {
+    inner: Arc<Mutex<HashMap<String, ActiveStreamHandle>>>,
+}
+
+impl ActiveStreams {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register(&self, handle: ActiveStreamHandle) {
+        if let Ok(mut map) = self.inner.lock() {
+            map.insert(handle.request_id.clone(), handle);
+        }
+    }
+
+    pub fn unregister(&self, request_id: &str) {
+        if let Ok(mut map) = self.inner.lock() {
+            map.remove(request_id);
+        }
+    }
+
+    pub fn snapshot(&self) -> Vec<ActiveStreamHandle> {
+        self.inner
+            .lock()
+            .map(|map| map.values().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.lock().map(|map| map.len()).unwrap_or(0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// Abort all active streams and wait (up to `timeout`) for them to drain.
+/// Sends a `stopSession` for each in-flight request, then polls
+/// `ActiveStreams` until every entry unregisters itself. If the timeout
+/// fires first, the sidecar process's Drop impl SIGKILLs it.
+pub fn abort_all_active_streams_blocking(
+    sidecar: &crate::sidecar::ManagedSidecar,
+    active: &ActiveStreams,
+    timeout: Duration,
+) {
+    let handles = active.snapshot();
+    if handles.is_empty() {
+        return;
+    }
+
+    eprintln!(
+        "[agents] Graceful shutdown — aborting {} active stream(s)",
+        handles.len()
+    );
+
+    for handle in &handles {
+        let stop_req = crate::sidecar::SidecarRequest {
+            id: Uuid::new_v4().to_string(),
+            method: "stopSession".to_string(),
+            params: serde_json::json!({
+                "sessionId": handle.sidecar_session_id,
+                "provider": handle.provider,
+            }),
+        };
+        if let Err(e) = sidecar.send(&stop_req) {
+            eprintln!(
+                "[agents] Failed to send stopSession during shutdown for {}: {e}",
+                handle.request_id
+            );
+        }
+    }
+
+    // Poll until all streams have unregistered themselves (each per-request
+    // event loop unregisters as soon as it processes the aborted event and
+    // returns from the spawn_blocking closure).
+    let start = Instant::now();
+    let poll = Duration::from_millis(50);
+    while !active.is_empty() && start.elapsed() < timeout {
+        std::thread::sleep(poll);
+    }
+
+    let remaining = active.len();
+    if remaining == 0 {
+        eprintln!("[agents] Graceful shutdown — all streams drained cleanly");
+    } else {
+        eprintln!(
+            "[agents] Graceful shutdown — timeout reached, {remaining} stream(s) still active (sidecar will be killed by Drop)"
+        );
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -236,11 +364,14 @@ pub async fn send_agent_message_stream(
     let working_directory = resolve_working_directory(request.working_directory.as_deref())?;
     let stream_id = Uuid::new_v4().to_string();
 
+    let active_streams = app.state::<ActiveStreams>();
+
     // All providers go through the sidecar
     stream_via_sidecar(
-        app,
+        app.clone(),
         on_event,
         &sidecar,
+        &active_streams,
         &stream_id,
         model,
         &prompt,
@@ -466,6 +597,7 @@ fn stream_via_sidecar(
     app: AppHandle,
     on_event: Channel<AgentStreamEvent>,
     sidecar: &crate::sidecar::ManagedSidecar,
+    active_streams: &ActiveStreams,
     stream_id: &str,
     model: &AgentModelDefinition,
     prompt: &str,
@@ -485,39 +617,27 @@ fn stream_via_sidecar(
         );
     }
 
-    // Resolve session ID for resume from DB if not provided by frontend.
-    // Only resume if the stored session was created by the SAME provider —
-    // Claude session IDs are incompatible with Codex thread IDs.
-    let resume_session_id = request
-        .session_id
-        .clone()
-        .or_else(|| {
-            request.helmor_session_id.as_deref().and_then(|hsid| {
-                let conn = open_write_connection().ok()?;
-                let (stored_sid, stored_provider): (Option<String>, Option<String>) = conn
-                    .query_row(
-                        "SELECT provider_session_id, agent_type FROM sessions WHERE id = ?1",
-                        [hsid],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
-                    )
-                    .ok()?;
-
-                let sid = stored_sid?;
-                let stored_provider = stored_provider.unwrap_or_default();
-
-                if stored_provider == model.provider {
-                    Some(sid)
-                } else {
-                    if debug {
-                        eprintln!(
-                            "[agents:debug] Skipping resume — stored provider={stored_provider}, requested={}",
-                            model.provider
-                        );
-                    }
-                    None
-                }
-            })
-        });
+    // Resume id: prefer the one the frontend passed, otherwise look it up
+    // in the DB. Provider isolation only — passing a Codex thread id to
+    // Claude (or vice versa) is the only thing we filter out.
+    let resume_session_id = request.session_id.clone().or_else(|| {
+        request.helmor_session_id.as_deref().and_then(|hsid| {
+            let conn = open_write_connection().ok()?;
+            let (stored_sid, stored_provider): (Option<String>, Option<String>) = conn
+                .query_row(
+                    "SELECT provider_session_id, agent_type FROM sessions WHERE id = ?1",
+                    [hsid],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .ok()?;
+            let sid = stored_sid?;
+            if stored_provider.unwrap_or_default() == model.provider {
+                Some(sid)
+            } else {
+                None
+            }
+        })
+    });
 
     if debug {
         eprintln!(
@@ -526,15 +646,14 @@ fn stream_via_sidecar(
         );
     }
 
-    // Keep as Option — only persist if a real session exists
     let helmor_session_id = request.helmor_session_id.clone();
 
-    // The sidecar needs a session ID for the SDK; use the real one or a temporary UUID
+    // Sidecar needs a string session id; fall back to a throwaway UUID
+    // when the frontend didn't attach one (e.g. pre-persistence calls).
     let sidecar_session_id = helmor_session_id
         .clone()
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-    // Send request to sidecar
     let sidecar_req = crate::sidecar::SidecarRequest {
         id: request_id.clone(),
         method: "sendMessage".to_string(),
@@ -558,6 +677,15 @@ fn stream_via_sidecar(
         return Err(anyhow::anyhow!("Sidecar send failed: {e}").into());
     }
 
+    // Register in the active-streams registry so graceful shutdown can find
+    // and abort us. Unregistration happens at the end of the spawn_blocking
+    // closure below — covering all exit paths (end / aborted / error / EOF).
+    active_streams.register(ActiveStreamHandle {
+        request_id: request_id.clone(),
+        sidecar_session_id: sidecar_session_id.clone(),
+        provider: model.provider.to_string(),
+    });
+
     // Read events in background and forward to frontend via Channel
     let model_id = model.id.to_string();
     let provider = model.provider.to_string();
@@ -572,9 +700,10 @@ fn stream_via_sidecar(
 
     tauri::async_runtime::spawn_blocking(move || {
         let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
+        let active_streams_state: tauri::State<'_, ActiveStreams> = app.state();
         let mut resolved_session_id: Option<String> = None;
-        // Pipeline: replaces StreamOutputAccumulator — produces ThreadMessageLike[]
-        // directly, with hash-based change detection.
+        // Pipeline produces `ThreadMessageLike[]` directly, with hash-based
+        // change detection to skip redundant emits.
         let context_key = rid.clone();
         let pipeline_session_id = hsid_copy.clone().unwrap_or_else(|| context_key.clone());
         let mut pipeline = hsid_copy.as_ref().map(|_| {
@@ -630,46 +759,51 @@ fn stream_via_sidecar(
         for event in rx.iter() {
             event_count += 1;
 
-            // Capture session ID
+            // Sole writer of `provider_session_id`. The first event with a
+            // session_id wins; everything after is a no-op. If no event ever
+            // carries one, the row stays untouched.
             if let Some(sid) = event.session_id() {
-                if debug && resolved_session_id.is_none() {
-                    eprintln!("[agents:debug] [{rid}] Provider session resolved: {sid}");
+                if resolved_session_id.is_none() {
+                    resolved_session_id = Some(sid.to_string());
+                    if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
+                        if let Err(e) = conn.execute(
+                            "UPDATE sessions SET provider_session_id = ?2, agent_type = ?3 WHERE id = ?1",
+                            params![ctx.helmor_session_id, sid, ctx.model_provider],
+                        ) {
+                            eprintln!("[agents] Failed to persist session id: {e}");
+                        } else if debug {
+                            eprintln!("[agents:debug] [{rid}] provider_session_id = {sid}");
+                        }
+                    }
                 }
-                resolved_session_id = Some(sid.to_string());
             }
 
             match event.event_type() {
-                "end" => {
-                    if debug {
-                        eprintln!(
-                            "[agents:debug] [{rid}] End — {event_count} events, session={:?}",
-                            resolved_session_id
-                        );
-                    }
+                "end" | "aborted" => {
+                    let is_aborted = event.event_type() == "aborted";
+                    let reason = if is_aborted {
+                        Some(
+                            event
+                                .raw
+                                .get("reason")
+                                .and_then(Value::as_str)
+                                .unwrap_or("user_requested")
+                                .to_string(),
+                        )
+                    } else {
+                        None
+                    };
+                    let status = if is_aborted { "aborted" } else { "idle" };
 
-                    // Finalize persistence: flush remaining turns + result + metadata
                     let persisted = exchange_ctx.is_some();
                     let mut resolved_model = model_copy.cli_model.to_string();
 
                     if let Some(mut pl) = pipeline.take() {
-                        // STEP 1: finalize the accumulator FIRST.
-                        //
-                        // This is the critical ordering — finish_output()
-                        // internally calls flush_assistant(), which moves
-                        // the staged final assistant turn (cur_asst_*) into
-                        // self.turns. If we read turns_len() before this
-                        // call, we miss that final turn entirely (the
-                        // bug regressed in 25cc03f when finish_output went
-                        // from `mut self` to streaming-incremental but the
-                        // post-flush turn read was lost).
+                        // Must finalize accumulator BEFORE reading turns_len —
+                        // finish_output flushes the staged final assistant turn.
                         let output_result =
                             pl.accumulator.finish_output(resolved_session_id.as_deref());
 
-                        // STEP 2: persist all collected turns.
-                        // Now `turns_len()` includes the final staged turn
-                        // that finish_output just flushed, so the persist
-                        // loop catches it on the same pass that previously
-                        // dropped it.
                         if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
                             let model_str = pl.accumulator.resolved_model().to_string();
                             while persisted_turn_count < pl.accumulator.turns_len() {
@@ -690,21 +824,19 @@ fn stream_via_sidecar(
                             }
                         }
 
-                        // STEP 3: write the result row + finalize session metadata.
                         if let Ok(output) = output_result {
                             resolved_model = output.resolved_model.clone();
-
                             if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
                                 if let Err(e) = persist_result_and_finalize(
                                     conn,
                                     ctx,
                                     &output.resolved_model,
                                     &output.assistant_text,
-                                    output.session_id.as_deref(),
                                     effort_copy.as_deref(),
                                     permission_mode_copy.as_deref(),
                                     &output.usage,
                                     output.result_json.as_deref(),
+                                    status,
                                 ) {
                                     eprintln!("[agents] Failed to finalize exchange: {e}");
                                 }
@@ -712,14 +844,26 @@ fn stream_via_sidecar(
                         }
                     }
 
-                    let _ = on_event.send(AgentStreamEvent::Done {
-                        provider: provider.clone(),
-                        model_id: model_id.clone(),
-                        resolved_model,
-                        session_id: resolved_session_id.clone(),
-                        working_directory: working_dir_str.clone(),
-                        persisted,
-                    });
+                    let _ = if let Some(reason) = reason {
+                        on_event.send(AgentStreamEvent::Aborted {
+                            provider: provider.clone(),
+                            model_id: model_id.clone(),
+                            resolved_model,
+                            session_id: resolved_session_id.clone(),
+                            working_directory: working_dir_str.clone(),
+                            persisted,
+                            reason,
+                        })
+                    } else {
+                        on_event.send(AgentStreamEvent::Done {
+                            provider: provider.clone(),
+                            model_id: model_id.clone(),
+                            resolved_model,
+                            session_id: resolved_session_id.clone(),
+                            working_directory: working_dir_str.clone(),
+                            persisted,
+                        })
+                    };
                     break;
                 }
                 "error" => {
@@ -788,11 +932,15 @@ fn stream_via_sidecar(
             eprintln!("[agents:debug] [{rid}] Event loop exited after {event_count} events");
         }
         sidecar_state.unsubscribe(&rid);
+        // Always unregister — covers all exit paths (end / aborted / error /
+        // sidecar EOF / channel close on shutdown). The graceful-shutdown
+        // poller in abort_all_active_streams_blocking is waiting for this.
+        active_streams_state.unregister(&rid);
     });
 
     Ok(())
 }
-// Test helpers using the new pipeline accumulator
+// Test helpers driving the pipeline accumulator directly.
 #[cfg(test)]
 fn parse_claude_output(
     stdout: &str,
@@ -889,9 +1037,9 @@ fn persist_user_message(conn: &Connection, ctx: &ExchangeContext, prompt: &str) 
     Ok(())
 }
 
-/// Persist a single intermediate turn (assistant message or user tool result).
-/// Called each time the accumulator produces a complete turn during streaming.
-/// Persist a single intermediate turn. Returns the DB message ID.
+/// Persist a single intermediate turn (assistant message or user tool
+/// result). Called each time the accumulator produces a complete turn
+/// during streaming. Returns the DB message ID.
 fn persist_turn_message(
     conn: &Connection,
     ctx: &ExchangeContext,
@@ -921,19 +1069,20 @@ fn persist_turn_message(
     Ok(msg_id)
 }
 
-/// Persist the result summary and finalize session/workspace metadata.
-/// Called once on the "end" event after all turns have been persisted.
+/// Persist the result summary and finalize session/workspace metadata at
+/// stream termination. Does **not** touch `provider_session_id` — that's
+/// written incrementally in the event loop on the first session_id event.
 #[allow(clippy::too_many_arguments)]
 fn persist_result_and_finalize(
     conn: &Connection,
     ctx: &ExchangeContext,
     resolved_model: &str,
     assistant_text: &str,
-    provider_session_id: Option<&str>,
     effort_level: Option<&str>,
     permission_mode: Option<&str>,
     usage: &AgentUsage,
     raw_result_json: Option<&str>,
+    status: &str,
 ) -> Result<()> {
     let now = current_timestamp_string()?;
     let result_message_id = Uuid::new_v4().to_string();
@@ -941,9 +1090,8 @@ fn persist_result_and_finalize(
     let result_payload = raw_result_json.map(str::to_string).unwrap_or_else(|| {
         serde_json::json!({
             "type": "result",
-            "subtype": "success",
+            "subtype": if status == "aborted" { "aborted" } else { "success" },
             "result": assistant_text,
-            "session_id": provider_session_id,
             "usage": {
                 "input_tokens": usage.input_tokens,
                 "output_tokens": usage.output_tokens,
@@ -954,7 +1102,6 @@ fn persist_result_and_finalize(
 
     let transaction = conn.unchecked_transaction()?;
 
-    // Insert result summary.
     transaction.execute(
         r#"
             INSERT INTO session_messages (
@@ -974,19 +1121,14 @@ fn persist_result_and_finalize(
         ],
     )?;
 
-    // Update session and workspace metadata.
     transaction.execute(
         r#"
             UPDATE sessions
             SET
-              status = 'idle',
+              status = ?5,
               model = ?2,
               agent_type = ?3,
               last_user_message_at = ?4,
-              provider_session_id = CASE
-                WHEN ?5 IS NOT NULL THEN ?5
-                ELSE provider_session_id
-              END,
               effort_level = COALESCE(?6, effort_level),
               permission_mode = COALESCE(?7, permission_mode)
             WHERE id = ?1
@@ -996,7 +1138,7 @@ fn persist_result_and_finalize(
             ctx.model_id,
             ctx.model_provider,
             now,
-            provider_session_id,
+            status,
             effort_level,
             permission_mode
         ],
@@ -1262,13 +1404,11 @@ mod tests {
         // 1. Persist user message
         persist_user_message(&conn, &ctx, "Hello").unwrap();
 
-        // 2. Persist result and finalize with effort + permission_mode
         persist_result_and_finalize(
             &conn,
             &ctx,
             "claude-opus-4-20250514",
             "Response text",
-            Some("sdk-session-123"),
             Some("max"),
             Some("plan"),
             &AgentUsage {
@@ -1276,6 +1416,7 @@ mod tests {
                 output_tokens: Some(50),
             },
             None,
+            "idle",
         )
         .unwrap();
 
@@ -1340,7 +1481,6 @@ mod tests {
             &ctx,
             "opus",
             "Reply",
-            None,
             None, // effort_level = None → should keep 'high'
             None, // permission_mode = None → should keep 'acceptEdits'
             &AgentUsage {
@@ -1348,6 +1488,7 @@ mod tests {
                 output_tokens: None,
             },
             None,
+            "idle",
         )
         .unwrap();
 

@@ -372,8 +372,9 @@ export const WorkspaceConversationContainer = memo(
 								return;
 							}
 
-							if (event.kind === "done") {
-								// Flush any buffered messages immediately
+							if (event.kind === "done" || event.kind === "aborted") {
+								// Shared terminal teardown. `aborted` skips the error
+								// toast below because the user triggered the stop.
 								if (frameId !== null) {
 									window.cancelAnimationFrame(frameId);
 									frameId = null;
@@ -423,17 +424,10 @@ export const WorkspaceConversationContainer = memo(
 
 							if (event.kind === "error") {
 								cleanup();
-								// Don't show abort errors — the user triggered the stop
-								const isAbort =
-									event.message?.includes("aborted") ||
-									event.message?.includes("abort") ||
-									event.message?.includes("cancel");
-								if (!isAbort) {
-									setSendErrorsByContext((current) => ({
-										...current,
-										[contextKey]: event.message,
-									}));
-								}
+								setSendErrorsByContext((current) => ({
+									...current,
+									[contextKey]: event.message,
+								}));
 								setActiveSessionByContext((current) => {
 									if (!(contextKey in current)) {
 										return current;

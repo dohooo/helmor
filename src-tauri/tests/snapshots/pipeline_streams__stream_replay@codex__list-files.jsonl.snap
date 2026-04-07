@@ -1,9 +1,9 @@
 ---
 source: tests/pipeline_streams.rs
 expression: snapshot
-input_file: tests/fixtures/streams/stream-codex.jsonl
+input_file: tests/fixtures/streams/codex/list-files.jsonl
 ---
-line_count: 4
+line_count: 8
 checkpoint_count: 0
 checkpoints: []
 final_state:

@@ -1,0 +1,99 @@
+/**
+ * Strict types for the sidecar's wire protocol + the typed emitter that
+ * produces them.
+ *
+ * Control events (ready/end/aborted/error/stopped/pong/titleGenerated) are
+ * fully typed. SDK passthrough events carry arbitrary fields from the
+ * underlying provider SDK and go through `SidecarEmitter.passthrough`,
+ * which guarantees `id` is always our request id (never overridden by an
+ * SDK-supplied field of the same name).
+ */
+
+export type ReadyEvent = { readonly type: "ready"; readonly version: number };
+
+export type EndEvent = { readonly id: string; readonly type: "end" };
+
+export type AbortedEvent = {
+	readonly id: string;
+	readonly type: "aborted";
+	readonly reason: string;
+};
+
+export type ErrorEvent =
+	| { readonly id: string; readonly type: "error"; readonly message: string }
+	| { readonly type: "error"; readonly message: string };
+
+export type StoppedEvent = {
+	readonly id: string;
+	readonly type: "stopped";
+	readonly sessionId: string;
+};
+
+export type PongEvent = { readonly id: string; readonly type: "pong" };
+
+export type TitleGeneratedEvent = {
+	readonly id: string;
+	readonly type: "titleGenerated";
+	readonly title: string;
+	readonly branchName: string | undefined;
+};
+
+export type SidecarControlEvent =
+	| ReadyEvent
+	| EndEvent
+	| AbortedEvent
+	| ErrorEvent
+	| StoppedEvent
+	| PongEvent
+	| TitleGeneratedEvent;
+
+/**
+ * Typed emitter for the sidecar's stdout protocol.
+ *
+ * One method per control-event type so callers can't typo a field name or
+ * forget a required one. `passthrough` is the single escape hatch for
+ * forwarding raw provider SDK messages.
+ */
+export interface SidecarEmitter {
+	ready(version: number): void;
+	end(requestId: string): void;
+	aborted(requestId: string, reason: string): void;
+	error(requestId: string | null, message: string): void;
+	stopped(requestId: string, sessionId: string): void;
+	pong(requestId: string): void;
+	titleGenerated(
+		requestId: string,
+		title: string,
+		branchName: string | undefined,
+	): void;
+	/**
+	 * Forward a raw provider SDK message. `id` is appended LAST so an SDK
+	 * field named `id` can never override our request id.
+	 */
+	passthrough(requestId: string, message: object): void;
+}
+
+/** Build a `SidecarEmitter` that pushes events through `write`. */
+export function createSidecarEmitter(
+	write: (event: object) => void,
+): SidecarEmitter {
+	return {
+		ready: (version) => write({ type: "ready", version }),
+		end: (requestId) => write({ id: requestId, type: "end" }),
+		aborted: (requestId, reason) =>
+			write({ id: requestId, type: "aborted", reason }),
+		error: (requestId, message) =>
+			write(
+				requestId === null
+					? { type: "error", message }
+					: { id: requestId, type: "error", message },
+			),
+		stopped: (requestId, sessionId) =>
+			write({ id: requestId, type: "stopped", sessionId }),
+		pong: (requestId) => write({ id: requestId, type: "pong" }),
+		titleGenerated: (requestId, title, branchName) =>
+			write({ id: requestId, type: "titleGenerated", title, branchName }),
+		passthrough: (requestId, message) =>
+			write({ ...(message as Record<string, unknown>), id: requestId }),
+	};
+}

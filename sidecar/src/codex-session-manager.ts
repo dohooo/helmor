@@ -1,8 +1,5 @@
 /**
- * Manages active Codex SDK sessions.
- *
- * Mirrors the Claude SessionManager pattern: each session wraps a
- * Codex Thread that streams ThreadEvents back to the caller.
+ * `SessionManager` implementation backed by the Codex SDK.
  */
 
 import {
@@ -11,65 +8,48 @@ import {
 	type ThreadOptions,
 	type UserInput,
 } from "@openai/codex-sdk";
+import { isAbortError } from "./abort.js";
+import type { SidecarEmitter } from "./emitter.js";
+import { parseImageRefs } from "./images.js";
+import type { SendMessageParams, SessionManager } from "./session-manager.js";
+import {
+	buildTitlePrompt,
+	parseTitleAndBranch,
+	TITLE_GENERATION_TIMEOUT_MS,
+} from "./title.js";
 
-type EmitFn = (data: Record<string, unknown>) => void;
+const VALID_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"] as const;
+type CodexEffort = (typeof VALID_EFFORTS)[number];
 
-/** Regex matching @/absolute/path.ext image references in a prompt. */
-const IMAGE_REF_RE = /@(\/\S+\.(?:png|jpe?g|gif|webp|svg|bmp|ico))/gi;
-
-/**
- * Parse a prompt string, extract image refs, and return Codex Input.
- * If images found, returns UserInput[] with text + local_image entries;
- * otherwise returns the original string.
- */
-function buildCodexInput(prompt: string): Input {
-	const imagePaths: string[] = [];
-	IMAGE_REF_RE.lastIndex = 0;
-	for (
-		let match = IMAGE_REF_RE.exec(prompt);
-		match !== null;
-		match = IMAGE_REF_RE.exec(prompt)
-	) {
-		imagePaths.push(match[1]);
+function parseEffort(value: string | undefined): CodexEffort | undefined {
+	if (value && (VALID_EFFORTS as readonly string[]).includes(value)) {
+		return value as CodexEffort;
 	}
+	return undefined;
+}
+
+function buildCodexInput(prompt: string): Input {
+	const { text, imagePaths } = parseImageRefs(prompt);
 	if (imagePaths.length === 0) {
 		return prompt;
 	}
-	let text = prompt;
-	for (const p of imagePaths) {
-		text = text.replace(`@${p}`, "");
-	}
-	text = text.replace(/ {2,}/g, " ").trim();
-
 	const parts: UserInput[] = [];
 	if (text) {
 		parts.push({ type: "text", text });
 	}
-	for (const p of [...new Set(imagePaths)]) {
+	for (const p of imagePaths) {
 		parts.push({ type: "local_image", path: p });
 	}
 	return parts;
 }
 
-export class CodexSessionManager {
-	private abortControllers = new Map<string, AbortController>();
+export class CodexSessionManager implements SessionManager {
+	private readonly abortControllers = new Map<string, AbortController>();
 
-	/**
-	 * Send a message in a Codex session.
-	 * Creates a new thread or resumes an existing one, then streams events.
-	 */
 	async sendMessage(
 		requestId: string,
-		params: {
-			sessionId: string;
-			prompt: string;
-			model?: string;
-			cwd?: string;
-			resume?: string;
-			effortLevel?: string;
-			permissionMode?: string;
-		},
-		emit: EmitFn,
+		params: SendMessageParams,
+		emitter: SidecarEmitter,
 	): Promise<void> {
 		const {
 			sessionId,
@@ -80,28 +60,17 @@ export class CodexSessionManager {
 			effortLevel,
 			permissionMode,
 		} = params;
-
 		const abortController = new AbortController();
 		this.abortControllers.set(sessionId, abortController);
 
 		try {
 			const codex = new Codex();
-
-			// model and workingDirectory belong on ThreadOptions, not TurnOptions
+			const effort = parseEffort(effortLevel);
 			const threadOpts: ThreadOptions = {
 				...(model ? { model } : {}),
 				...(cwd ? { workingDirectory: cwd } : {}),
 				skipGitRepoCheck: true,
-				...(effortLevel
-					? {
-							modelReasoningEffort: effortLevel as
-								| "minimal"
-								| "low"
-								| "medium"
-								| "high"
-								| "xhigh",
-						}
-					: {}),
+				...(effort ? { modelReasoningEffort: effort } : {}),
 				...(permissionMode === "plan"
 					? { approvalPolicy: "never" as const }
 					: {}),
@@ -111,129 +80,66 @@ export class CodexSessionManager {
 				? codex.resumeThread(resume, threadOpts)
 				: codex.startThread(threadOpts);
 
-			// Parse image references and build appropriate input
-			const input = buildCodexInput(prompt);
-
-			// runStreamed returns { events: AsyncGenerator<ThreadEvent> }
-			const streamedTurn = await thread.runStreamed(input, {
+			const streamedTurn = await thread.runStreamed(buildCodexInput(prompt), {
 				signal: abortController.signal,
 			});
 
-			let threadId: string | null = null;
-
+			// Codex events don't carry the thread id natively. Inject it as
+			// `session_id` (snake_case) so the on-the-wire format matches Claude.
 			for await (const event of streamedTurn.events) {
-				// Capture thread ID
-				if (!threadId) {
-					threadId = thread.id;
-				}
-
-				// Emit raw Codex events — Rust persistence and frontend parse them
-				emit({
-					id: requestId,
-					...(event as unknown as Record<string, unknown>),
-					...(threadId ? { sessionId: threadId } : {}),
-				});
+				const threadId = thread.id;
+				const enriched: object = threadId
+					? { ...(event as object), session_id: threadId }
+					: (event as object);
+				emitter.passthrough(requestId, enriched);
 			}
 
-			// Final thread ID
-			threadId = thread.id;
-
-			emit({
-				id: requestId,
-				type: "end",
-				sessionId: threadId ?? sessionId,
-			});
+			emitter.end(requestId);
+		} catch (err) {
+			if (isAbortError(err)) {
+				emitter.aborted(requestId, "user_requested");
+				return;
+			}
+			throw err;
 		} finally {
 			this.abortControllers.delete(sessionId);
 		}
 	}
 
-	/**
-	 * Generate a short title + branch name for a session.
-	 * Uses the cheapest/fastest model available.
-	 */
 	async generateTitle(
 		requestId: string,
 		userMessage: string,
-		emit: EmitFn,
+		emitter: SidecarEmitter,
 	): Promise<void> {
-		const titlePrompt = [
-			"Based on the following user message, generate TWO things:",
-			"1. A concise session title (use the same language as the user message, max 8 words)",
-			"2. A git branch name segment (English only, lowercase, hyphens for spaces, max 4 words, no prefix)",
-			"",
-			"Output EXACTLY in this format (two lines, nothing else):",
-			"title: <the title>",
-			"branch: <the-branch-name>",
-			"",
-			"User message:",
-			userMessage,
-		].join("\n");
-
 		const codex = new Codex();
 		const abortController = new AbortController();
-		const timeout = setTimeout(() => abortController.abort(), 15_000);
+		const timeout = setTimeout(
+			() => abortController.abort(),
+			TITLE_GENERATION_TIMEOUT_MS,
+		);
 
 		try {
-			const thread = codex.startThread({
-				model: "gpt-5.3-codex-spark",
-			});
+			const thread = codex.startThread({ model: "gpt-5.3-codex-spark" });
+			const streamedTurn = await thread.runStreamed(
+				buildTitlePrompt(userMessage),
+				{ signal: abortController.signal },
+			);
 
-			const streamedTurn = await thread.runStreamed(titlePrompt, {
-				signal: abortController.signal,
-			});
-
-			let resultText = "";
+			let raw = "";
 			for await (const event of streamedTurn.events) {
-				const ev = event as unknown as Record<string, unknown>;
-				if (ev.type === "item.completed") {
-					const item = ev.item as Record<string, unknown> | undefined;
-					if (item?.type === "agent_message" && typeof item.text === "string") {
-						resultText += item.text;
-					}
+				const text = extractAgentMessageText(event);
+				if (text !== undefined) {
+					raw += text;
 				}
 			}
 
-			let parsedTitle = "";
-			let parsedBranch = "";
-			for (const line of resultText.split("\n")) {
-				const trimmed = line.trim();
-				if (trimmed.toLowerCase().startsWith("title:")) {
-					parsedTitle = trimmed
-						.slice(6)
-						.trim()
-						.replace(/^["'""'']+|["'""'']+$/g, "")
-						.trim();
-				} else if (trimmed.toLowerCase().startsWith("branch:")) {
-					parsedBranch = trimmed
-						.slice(7)
-						.trim()
-						.replace(/[^a-z0-9-]/g, "")
-						.replace(/-+/g, "-")
-						.replace(/^-|-$/g, "");
-				}
-			}
-			if (!parsedTitle && resultText.trim()) {
-				parsedTitle = resultText
-					.trim()
-					.replace(/^["'""'']+|["'""'']+$/g, "")
-					.trim();
-			}
-
-			emit({
-				id: requestId,
-				type: "titleGenerated",
-				title: parsedTitle,
-				branchName: parsedBranch || undefined,
-			});
+			const { title, branchName } = parseTitleAndBranch(raw);
+			emitter.titleGenerated(requestId, title, branchName);
 		} finally {
 			clearTimeout(timeout);
 		}
 	}
 
-	/**
-	 * Stop an active session.
-	 */
 	async stopSession(sessionId: string): Promise<void> {
 		const controller = this.abortControllers.get(sessionId);
 		if (controller) {
@@ -241,4 +147,20 @@ export class CodexSessionManager {
 			this.abortControllers.delete(sessionId);
 		}
 	}
+}
+
+/**
+ * Narrow a Codex `ThreadEvent` to the `agent_message` text payload, if any.
+ * The Codex SDK doesn't export the discriminated event types, so we do a
+ * structural check rather than relying on type narrowing.
+ */
+function extractAgentMessageText(event: unknown): string | undefined {
+	if (typeof event !== "object" || event === null) return undefined;
+	const ev = event as { type?: unknown; item?: unknown };
+	if (ev.type !== "item.completed") return undefined;
+	if (typeof ev.item !== "object" || ev.item === null) return undefined;
+	const item = ev.item as { type?: unknown; text?: unknown };
+	if (item.type !== "agent_message") return undefined;
+	if (typeof item.text !== "string") return undefined;
+	return item.text;
 }

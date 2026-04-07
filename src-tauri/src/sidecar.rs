@@ -69,7 +69,7 @@ impl SidecarEvent {
     }
 
     pub fn session_id(&self) -> Option<&str> {
-        self.raw.get("sessionId")?.as_str()
+        self.raw.get("session_id")?.as_str()
     }
 }
 
@@ -419,7 +419,7 @@ mod tests {
         let raw = serde_json::json!({
             "id": "req-1",
             "type": "assistant",
-            "sessionId": "sess-abc",
+            "session_id": "sess-abc",
             "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
         });
         let event = SidecarEvent { raw };
