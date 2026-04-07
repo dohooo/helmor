@@ -665,4 +665,59 @@ describe("App", () => {
 
 		expect(screen.getByLabelText("Unread session")).toBeInTheDocument();
 	});
+
+	it("keeps large threads on the progressive viewport while sending", () => {
+		const messages = Array.from({ length: 30 }, (_, index) => ({
+			role: "assistant" as const,
+			id: `assistant-${index}`,
+			createdAt: `2026-04-03T00:00:${String(index).padStart(2, "0")}Z`,
+			content: [
+				{
+					type: "text" as const,
+					text: `message ${index} `.repeat(8),
+				},
+			],
+			status: { type: "complete" as const, reason: "stop" as const },
+		}));
+
+		renderWithProviders(
+			<WorkspacePanel
+				workspace={null}
+				sessions={[
+					{
+						id: "session-1",
+						workspaceId: "workspace-1",
+						title: "Streaming session",
+						agentType: "claude",
+						status: "idle",
+						permissionMode: "default",
+						unreadCount: 0,
+						contextTokenCount: 0,
+						thinkingEnabled: false,
+						fastMode: false,
+						createdAt: "2026-04-03T00:00:00Z",
+						updatedAt: "2026-04-03T00:00:00Z",
+						isHidden: false,
+						isCompacting: false,
+						active: true,
+					},
+				]}
+				selectedSessionId="session-1"
+				sending
+				sessionPanes={[
+					{
+						sessionId: "session-1",
+						messages,
+						sending: true,
+						hasLoaded: true,
+						presentationState: "presented",
+					},
+				]}
+			/>,
+		);
+
+		expect(
+			screen.getByLabelText("Conversation rows for session session-1"),
+		).toBeInTheDocument();
+	});
 });

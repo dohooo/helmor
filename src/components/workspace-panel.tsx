@@ -672,11 +672,7 @@ function ActiveThreadViewport({
 			<div className="relative z-10 flex min-h-0 flex-1">
 				<ChatThread
 					hasSession={hasSession}
-					layoutCacheKey={getSessionLayoutCacheKey(
-						pane.sessionId,
-						pane.messages,
-						widthBucket,
-					)}
+					layoutCacheKey={getSessionLayoutCacheKey(pane.sessionId, widthBucket)}
 					messages={pane.messages}
 					paneWidth={paneWidth}
 					sessionId={pane.sessionId}
@@ -716,10 +712,9 @@ function ChatThread({
 	);
 	const useProgressiveThread =
 		!usePlainThread &&
-		!sending &&
-		!hasStreamingMessage &&
 		threadMessages.length >= PROGRESSIVE_THREAD_MESSAGE_LIMIT;
 	const useSimpleThread = usePlainThread || useProgressiveThread;
+	const pinTailRows = sending || hasStreamingMessage;
 	const virtuosoRef = useRef<VirtuosoHandle | null>(null);
 	const scrollParentRef = useRef<HTMLElement | null>(null);
 	const { contentRef, scrollRef, scrollToBottom, isAtBottom } =
@@ -798,6 +793,7 @@ function ChatThread({
 			itemContent={itemContent}
 			layoutCacheKey={layoutCacheKey}
 			paneWidth={paneWidth}
+			pinTailRows={pinTailRows}
 			scrollRef={handleScrollRef}
 			sessionId={sessionId}
 			usePlainThread={usePlainThread}
@@ -831,6 +827,7 @@ function ConversationViewport({
 	itemContent,
 	layoutCacheKey,
 	paneWidth,
+	pinTailRows,
 	scrollRef,
 	sessionId,
 	usePlainThread,
@@ -845,6 +842,7 @@ function ConversationViewport({
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
 	layoutCacheKey: string;
 	paneWidth: number;
+	pinTailRows: boolean;
 	scrollRef: React.RefCallback<HTMLElement>;
 	sessionId: string;
 	usePlainThread: boolean;
@@ -899,6 +897,7 @@ function ConversationViewport({
 					itemContent={itemContent}
 					layoutCacheKey={layoutCacheKey}
 					paneWidth={paneWidth}
+					pinTailRows={pinTailRows}
 					scrollParent={scrollParent}
 					sessionId={sessionId}
 					contentRef={stickyScrollerContext.contentRef}
@@ -938,6 +937,7 @@ function ProgressiveConversationViewport({
 	itemContent,
 	layoutCacheKey,
 	paneWidth,
+	pinTailRows,
 	scrollParent,
 	sessionId,
 }: {
@@ -950,6 +950,7 @@ function ProgressiveConversationViewport({
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
 	layoutCacheKey: string;
 	paneWidth: number;
+	pinTailRows: boolean;
 	scrollParent: HTMLDivElement | null;
 	sessionId: string;
 }) {
@@ -1033,10 +1034,22 @@ function ProgressiveConversationViewport({
 	const buffer = effectiveViewportHeight;
 	const windowTop = Math.max(0, effectiveScrollTop - buffer);
 	const windowBottom = effectiveScrollTop + effectiveViewportHeight + buffer;
-	const visibleRows = rows.filter((row) => {
-		const rowBottom = row.top + row.height;
-		return rowBottom >= windowTop && row.top <= windowBottom;
-	});
+	const visibleRows = useMemo(() => {
+		const inWindow = rows.filter((row) => {
+			const rowBottom = row.top + row.height;
+			return rowBottom >= windowTop && row.top <= windowBottom;
+		});
+		if (!pinTailRows || rows.length === 0) {
+			return inWindow;
+		}
+
+		const tailStartIndex = Math.max(0, rows.length - 2);
+		const rowMap = new Map(inWindow.map((row) => [row.key, row]));
+		for (const row of rows.slice(tailStartIndex)) {
+			rowMap.set(row.key, row);
+		}
+		return Array.from(rowMap.values()).sort((a, b) => a.index - b.index);
+	}, [pinTailRows, rows, windowBottom, windowTop]);
 	const totalContentHeight = headerHeight + totalRowsHeight + footerHeight;
 	const rowsRef = useRef(rows);
 	rowsRef.current = rows;
@@ -1195,33 +1208,10 @@ function ConversationRowShell({ children }: { children: ReactNode }) {
 	);
 }
 
-function getSessionLayoutCacheKey(
-	sessionId: string,
-	messages: ThreadMessageLike[],
-	widthBucket: number,
-) {
-	let hash = 0;
-
-	for (const message of messages) {
-		const signature = [
-			message.id ?? "",
-			message.role,
-			message.createdAt ?? "",
-			String(message.content.length),
-		].join("|");
-
-		for (let index = 0; index < signature.length; index += 1) {
-			hash = (hash * 31 + signature.charCodeAt(index)) >>> 0;
-		}
-	}
-
-	return [
-		CHAT_LAYOUT_CACHE_VERSION,
-		sessionId,
-		String(widthBucket),
-		String(messages.length),
-		String(hash),
-	].join(":");
+function getSessionLayoutCacheKey(sessionId: string, widthBucket: number) {
+	// Keep progressive viewport measurements stable across live appends and
+	// streaming token growth. Width changes still reset the cache.
+	return [CHAT_LAYOUT_CACHE_VERSION, sessionId, String(widthBucket)].join(":");
 }
 
 const ConversationItem = memo(function ConversationItem({
