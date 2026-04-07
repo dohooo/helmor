@@ -651,16 +651,33 @@ fn stream_via_sidecar(
                     let persisted = exchange_ctx.is_some();
                     let mut resolved_model = model_copy.cli_model.to_string();
 
-                    if let Some(pl) = pipeline.take() {
-                        // Persist any remaining turns via the pipeline's accumulator
+                    if let Some(mut pl) = pipeline.take() {
+                        // STEP 1: finalize the accumulator FIRST.
+                        //
+                        // This is the critical ordering — finish_output()
+                        // internally calls flush_assistant(), which moves
+                        // the staged final assistant turn (cur_asst_*) into
+                        // self.turns. If we read turns_len() before this
+                        // call, we miss that final turn entirely (the
+                        // bug regressed in 25cc03f when finish_output went
+                        // from `mut self` to streaming-incremental but the
+                        // post-flush turn read was lost).
+                        let output_result =
+                            pl.accumulator.finish_output(resolved_session_id.as_deref());
+
+                        // STEP 2: persist all collected turns.
+                        // Now `turns_len()` includes the final staged turn
+                        // that finish_output just flushed, so the persist
+                        // loop catches it on the same pass that previously
+                        // dropped it.
                         if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
-                            let model_str = pl.accumulator.resolved_model();
+                            let model_str = pl.accumulator.resolved_model().to_string();
                             while persisted_turn_count < pl.accumulator.turns_len() {
                                 match persist_turn_message(
                                     conn,
                                     ctx,
                                     pl.accumulator.turn_at(persisted_turn_count),
-                                    model_str,
+                                    &model_str,
                                 ) {
                                     Ok(_) => persisted_turn_count += 1,
                                     Err(e) => {
@@ -673,10 +690,8 @@ fn stream_via_sidecar(
                             }
                         }
 
-                        // Finalize the accumulator for persistence output
-                        if let Ok(output) =
-                            pl.accumulator.finish_output(resolved_session_id.as_deref())
-                        {
+                        // STEP 3: write the result row + finalize session metadata.
+                        if let Ok(output) = output_result {
                             resolved_model = output.resolved_model.clone();
 
                             if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {

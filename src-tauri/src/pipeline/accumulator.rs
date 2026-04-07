@@ -241,7 +241,23 @@ impl StreamAccumulator {
     }
 
     /// Finalize the accumulator and return persistence output.
-    pub fn finish_output(mut self, fallback_session_id: Option<&str>) -> Result<ParsedAgentOutput> {
+    ///
+    /// Takes `&mut self` (not `mut self`) so the caller can read additional
+    /// state from the accumulator AFTER finalization — most importantly,
+    /// `turns_len()` and `turn_at(...)` to persist the turn that
+    /// `flush_assistant()` just appended for the final staged assistant
+    /// message. Consuming `self` here used to silently drop that turn,
+    /// because `flush_assistant` ran AFTER the caller had already read
+    /// `turns_len()`.
+    ///
+    /// Drains owned `Option<String>` and `AgentUsage` fields via
+    /// `take()`/`mem::take`. `resolved_model` is cloned (not drained) so
+    /// the persistence loop in agents.rs can still call
+    /// `accumulator.resolved_model()` to label the turns it just flushed.
+    pub fn finish_output(
+        &mut self,
+        fallback_session_id: Option<&str>,
+    ) -> Result<ParsedAgentOutput> {
         self.flush_assistant();
 
         let assistant_text = self.assistant_text.trim().to_string();
@@ -268,10 +284,11 @@ impl StreamAccumulator {
             thinking_text,
             session_id: self
                 .session_id
+                .take()
                 .or_else(|| fallback_session_id.map(str::to_string)),
-            resolved_model: self.resolved_model,
-            usage: self.usage,
-            result_json: self.result_json,
+            resolved_model: self.resolved_model.clone(),
+            usage: std::mem::take(&mut self.usage),
+            result_json: self.result_json.take(),
         })
     }
 
@@ -1249,5 +1266,131 @@ mod tests {
         // Should have thinking + text blocks
         let content = parsed["message"]["content"].as_array().unwrap();
         assert_eq!(content.len(), 2);
+    }
+
+    /// Regression for the "final assistant turn lost on stream end" bug.
+    ///
+    /// `handle_assistant` does NOT push to `self.turns` directly — it stages
+    /// the message into `cur_asst_*` and only flushes when (a) the next
+    /// assistant has a different msg_id, (b) a user/tool_result event
+    /// arrives, or (c) `flush_assistant` is called explicitly.
+    ///
+    /// In a typical Claude session the **final** assistant turn never hits
+    /// any of those triggers — it's followed by a `result` event and then
+    /// the stream `end`. Until this fix, agents.rs read `turns_len()`
+    /// BEFORE calling `finish_output(mut self)`, so the staged final
+    /// assistant turn was missed; the subsequent `flush_assistant` inside
+    /// `finish_output` happened on a `self` that was about to be consumed,
+    /// so the freshly-pushed turn was unreachable to the persistence loop.
+    ///
+    /// This test pins the contract that finish_output makes the final
+    /// assistant turn observable on the still-alive accumulator.
+    #[test]
+    fn finish_output_flushes_final_assistant_into_turns() {
+        let mut acc = StreamAccumulator::new("claude", "opus");
+
+        // 1. A complete tool_use turn — this one DOES get flushed at the
+        //    moment the next assistant arrives, because the next assistant
+        //    has a different msg_id. Mirrors a typical "Claude calls a
+        //    tool, gets the result, then writes a final reply" sequence.
+        let asst_with_tool = json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_tool",
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "t1",
+                    "name": "Read",
+                    "input": {"file_path": "/x"}
+                }]
+            }
+        });
+        acc.push_event(&asst_with_tool, &asst_with_tool.to_string());
+
+        // 2. A user tool_result — flushes the previous assistant into turns.
+        let user_tool_result = json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "t1",
+                    "content": "file contents"
+                }]
+            }
+        });
+        acc.push_event(&user_tool_result, &user_tool_result.to_string());
+
+        // After step 2: tool turn + user turn = 2 turns
+        assert_eq!(
+            acc.turns_len(),
+            2,
+            "tool_use assistant + tool_result user should both be flushed"
+        );
+
+        // 3. The final assistant reply with text + thinking blocks.
+        //    Stays staged in cur_asst_* — NO flush trigger fires for it.
+        let asst_final = json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_final",
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "let me summarize"},
+                    {"type": "text", "text": "Here's the answer."}
+                ]
+            }
+        });
+        acc.push_event(&asst_final, &asst_final.to_string());
+
+        // 4. result event — does NOT flush.
+        let result = json!({
+            "type": "result",
+            "subtype": "success",
+            "result": "Here's the answer.",
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        });
+        acc.push_event(&result, &result.to_string());
+
+        // Pre-finalize state: the final assistant turn is still staged,
+        // turns_len() reports only the 2 already-flushed turns.
+        assert_eq!(
+            acc.turns_len(),
+            2,
+            "final assistant turn should still be staged in cur_asst_*"
+        );
+
+        // The fix: finish_output must flush the staged turn AND leave the
+        // accumulator alive so the caller can read it.
+        let output = acc
+            .finish_output(Some("sess-xyz"))
+            .expect("finish_output should succeed");
+
+        // Post-finalize: the staged turn is now in self.turns, observable
+        // on the SAME accumulator instance the caller still owns.
+        assert_eq!(
+            acc.turns_len(),
+            3,
+            "finish_output should flush the staged final assistant into self.turns"
+        );
+
+        // The flushed turn is the final assistant message, with both
+        // thinking and text blocks intact.
+        let final_turn = acc.turn_at(2);
+        assert_eq!(final_turn.role, "assistant");
+        let parsed: serde_json::Value = serde_json::from_str(&final_turn.content_json).unwrap();
+        let blocks = parsed["message"]["content"].as_array().unwrap();
+        assert_eq!(
+            blocks.len(),
+            2,
+            "final turn should preserve both thinking and text blocks"
+        );
+        assert_eq!(blocks[0]["type"].as_str(), Some("thinking"));
+        assert_eq!(blocks[1]["type"].as_str(), Some("text"));
+        assert_eq!(blocks[1]["text"].as_str(), Some("Here's the answer."));
+
+        // ParsedAgentOutput should also expose the assistant text.
+        assert!(output.assistant_text.contains("Here's the answer."));
     }
 }
