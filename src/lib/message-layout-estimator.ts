@@ -6,6 +6,7 @@ import type {
 	ThreadMessageLike,
 	ToolCallPart,
 } from "./api";
+import { measureSync } from "./perf-marks";
 
 type EstimateOptions = {
 	fontSize: number;
@@ -58,29 +59,49 @@ export function estimateThreadRowHeights(
 	messages: ThreadMessageLike[],
 	options: EstimateOptions,
 ): number[] {
-	const contentWidth = Math.max(MIN_TEXT_WIDTH, options.paneWidth - 40);
+	return measureSync(
+		"estimator:thread-heights",
+		() => {
+			const contentWidth = Math.max(MIN_TEXT_WIDTH, options.paneWidth - 40);
+			let cacheHits = 0;
+			let cacheMisses = 0;
 
-	return messages.map((message) => {
-		const cached = messageHeightCache.get(message);
-		if (
-			cached &&
-			cached.fontSize === options.fontSize &&
-			cached.contentWidth === contentWidth
-		) {
-			return cached.height;
-		}
-		const height = estimateMessageRowHeight(message, {
-			fontSize: options.fontSize,
-			contentWidth,
-		});
-		messageHeightCache.set(message, {
-			fontSize: options.fontSize,
-			contentWidth,
-			height,
-		});
-		return height;
-	});
+			const heights = messages.map((message) => {
+				const cached = messageHeightCache.get(message);
+				if (
+					cached &&
+					cached.fontSize === options.fontSize &&
+					cached.contentWidth === contentWidth
+				) {
+					cacheHits += 1;
+					return cached.height;
+				}
+				cacheMisses += 1;
+				const height = estimateMessageRowHeight(message, {
+					fontSize: options.fontSize,
+					contentWidth,
+				});
+				messageHeightCache.set(message, {
+					fontSize: options.fontSize,
+					contentWidth,
+					height,
+				});
+				return height;
+			});
+
+			// Stash the most recent hit/miss tally on the function so the perf
+			// dashboard can read it without re-running. (Cheap, dev-only path.)
+			estimateThreadRowHeights.lastCacheHits = cacheHits;
+			estimateThreadRowHeights.lastCacheMisses = cacheMisses;
+
+			return heights;
+		},
+		{ messageCount: messages.length },
+	);
 }
+
+estimateThreadRowHeights.lastCacheHits = 0;
+estimateThreadRowHeights.lastCacheMisses = 0;
 
 function estimateMessageRowHeight(
 	message: ThreadMessageLike,

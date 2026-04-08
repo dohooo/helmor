@@ -128,6 +128,7 @@ function shareMessages(
 }
 
 import { generateSessionTitle } from "@/lib/api";
+import { measureSync } from "@/lib/perf-marks";
 import {
 	helmorQueryKeys,
 	sessionThreadMessagesQueryOptions,
@@ -253,30 +254,46 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	// stream ticks (and across backend `update` snapshots).
 	const prevMergedRef = useRef<ThreadMessageLike[]>([]);
 	const mergedMessages = useMemo(() => {
-		const db = messagesQuery.data ?? [];
-		let next: ThreadMessageLike[];
-		if (liveMessages.length === 0) {
-			next = db;
-		} else if (db.length === 0) {
-			next = liveMessages;
-		} else {
-			let cache = dbSeenCacheRef.current;
-			if (!cache || cache.db !== db) {
-				const ids = new Set<string | undefined>();
-				for (const message of db) {
-					ids.add(message.id);
+		return measureSync(
+			"container:merged-messages",
+			() => {
+				const db = messagesQuery.data ?? [];
+				let next: ThreadMessageLike[];
+				if (liveMessages.length === 0) {
+					next = db;
+				} else if (db.length === 0) {
+					next = liveMessages;
+				} else {
+					let cache = dbSeenCacheRef.current;
+					if (!cache || cache.db !== db) {
+						const ids = new Set<string | undefined>();
+						for (const message of db) {
+							ids.add(message.id);
+						}
+						cache = { db, ids };
+						dbSeenCacheRef.current = cache;
+					}
+					const uniqueLive = liveMessages.filter(
+						(message) => !cache.ids.has(message.id),
+					);
+					next = uniqueLive.length === 0 ? db : [...db, ...uniqueLive];
 				}
-				cache = { db, ids };
-				dbSeenCacheRef.current = cache;
-			}
-			const uniqueLive = liveMessages.filter(
-				(message) => !cache.ids.has(message.id),
-			);
-			next = uniqueLive.length === 0 ? db : [...db, ...uniqueLive];
-		}
-		const shared = shareMessages(prevMergedRef.current, next);
-		prevMergedRef.current = shared;
-		return shared;
+				const shared = measureSync(
+					"container:share-messages",
+					() => shareMessages(prevMergedRef.current, next),
+					{
+						prevLength: prevMergedRef.current.length,
+						nextLength: next.length,
+					},
+				);
+				prevMergedRef.current = shared;
+				return shared;
+			},
+			{
+				dbLength: messagesQuery.data?.length ?? 0,
+				liveLength: liveMessages.length,
+			},
+		);
 	}, [messagesQuery.data, liveMessages]);
 
 	const hasWorkspaceDetail = workspace !== null;

@@ -30,3 +30,10 @@ sidecar/dist/
 helmor.db
 *.bun-build
 autoresearch-results.tsv
+# Raw chrome-devtools traces are ~250MB each; keep them local.
+# The aggregated *-trace-summary.json is small and IS committed.
+docs/perf/*-trace-workspace-*.json
+docs/perf/*-trace-session-*.json
+docs/perf/*-trace-streaming-*.json
+docs/perf/*-trace-confirm*.json
+docs/perf/iter*-after-switch.png
