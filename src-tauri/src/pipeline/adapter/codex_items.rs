@@ -81,6 +81,19 @@ fn render_command_execution(
     };
     let args = serde_json::json!({"command": command});
     let args_text = serde_json::to_string(&args).unwrap_or_default();
+    // Codex has no `is_error`; derive from exit_code. Synthesize a Bash-shaped
+    // tool_use_result so the frontend's stderr fallback path picks it up.
+    let failed = exit_code != 0;
+    let tool_use_result_value = if failed {
+        Some(serde_json::json!({
+            "exit_code": exit_code,
+            "stdout": "",
+            "stderr": output,
+            "aggregated_output": output,
+        }))
+    } else {
+        None
+    };
 
     result.push(ThreadMessageLike {
         role: MessageRole::Assistant,
@@ -92,6 +105,8 @@ fn render_command_execution(
             args,
             args_text,
             result: Some(Value::String(result_text)),
+            is_error: if failed { Some(true) } else { None },
+            tool_use_result: tool_use_result_value,
             streaming_status: None,
             children: Vec::new(),
         })],
@@ -158,6 +173,7 @@ fn render_file_change(
         "failed" => "Patch failed".to_string(),
         other => format!("Patch {other}"),
     };
+    let failed = status == "failed";
     let args = serde_json::json!({"changes": changes});
     let args_text = serde_json::to_string(&args).unwrap_or_default();
     result.push(ThreadMessageLike {
@@ -170,6 +186,8 @@ fn render_file_change(
             args,
             args_text,
             result: Some(Value::String(result_text)),
+            is_error: if failed { Some(true) } else { None },
+            tool_use_result: None,
             streaming_status: None,
             children: Vec::new(),
         })],
@@ -195,6 +213,8 @@ fn render_web_search(msg: &IntermediateMessage, item: &Value, result: &mut Vec<T
             args,
             args_text,
             result: Some(Value::String("Search completed".to_string())),
+            is_error: None,
+            tool_use_result: None,
             streaming_status: None,
             children: Vec::new(),
         })],
@@ -218,7 +238,8 @@ fn render_mcp_tool_call(
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("completed");
-    let result_text = if status == "failed" {
+    let failed = status == "failed";
+    let result_text = if failed {
         let m = item
             .get("error")
             .and_then(|e| e.get("message"))
@@ -241,6 +262,8 @@ fn render_mcp_tool_call(
             args: arguments,
             args_text,
             result: Some(Value::String(result_text)),
+            is_error: if failed { Some(true) } else { None },
+            tool_use_result: None,
             streaming_status: None,
             children: Vec::new(),
         })],

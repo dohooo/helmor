@@ -89,6 +89,7 @@ input_file: tests/fixtures/pipeline/codex_commits/input.json
         command: "push \"已总结最近3条提交内容\""
       argsText: "{\"command\":\"push \\\"已总结最近3条提交内容\\\"\"}"
       result: "zsh:1: command not found: push\n"
+      isError: true
     - type: text
       text: "通知命令没有直接进环境，我补一次显式加载 `~/.zshrc` 后再发通知。"
     - type: tool-call

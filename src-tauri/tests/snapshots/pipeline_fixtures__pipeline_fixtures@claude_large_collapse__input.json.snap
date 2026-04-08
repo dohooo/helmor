@@ -34,6 +34,8 @@ input_file: tests/fixtures/pipeline/claude_large_collapse/input.json
             file_path: /Users/liangeqiang/.conductor/workspaces/hdcode/brasilia/AI_PARTNER_CONTEXT.md
           argsText: "{\"file_path\":\"/Users/liangeqiang/.conductor/workspaces/hdcode/brasilia/AI_PARTNER_CONTEXT.md\"}"
           result: "File content (13499 tokens) exceeds maximum allowed tokens (10000). Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file."
+          isError: true
+          toolUseResult: "Error: File content (13499 tokens) exceeds maximum allowed tokens (10000). Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file."
         - type: tool-call
           toolCallId: toolu_015qL7VZwnbPR4GTQSTNV4NX
           toolName: Read
@@ -116,6 +118,8 @@ input_file: tests/fixtures/pipeline/claude_large_collapse/input.json
             file_path: /Users/liangeqiang/.conductor/workspaces/hdcode/brasilia/.claude/skills/autoresearch/references/autonomous-loop-protocol.md
           argsText: "{\"file_path\":\"/Users/liangeqiang/.conductor/workspaces/hdcode/brasilia/.claude/skills/autoresearch/references/autonomous-loop-protocol.md\"}"
           result: "File does not exist. Note: your current working directory is /Users/liangeqiang/.conductor/workspaces/hdcode/brasilia."
+          isError: true
+          toolUseResult: "Error: File does not exist. Note: your current working directory is /Users/liangeqiang/.conductor/workspaces/hdcode/brasilia."
         - type: tool-call
           toolCallId: toolu_01SdkK4kyCRQg6phBFbGX2qB
           toolName: Read
@@ -123,6 +127,8 @@ input_file: tests/fixtures/pipeline/claude_large_collapse/input.json
             file_path: /Users/liangeqiang/.conductor/workspaces/hdcode/brasilia/.claude/skills/autoresearch/references/results-logging.md
           argsText: "{\"file_path\":\"/Users/liangeqiang/.conductor/workspaces/hdcode/brasilia/.claude/skills/autoresearch/references/results-logging.md\"}"
           result: "File does not exist. Note: your current working directory is /Users/liangeqiang/.conductor/workspaces/hdcode/brasilia."
+          isError: true
+          toolUseResult: "Error: File does not exist. Note: your current working directory is /Users/liangeqiang/.conductor/workspaces/hdcode/brasilia."
         - type: tool-call
           toolCallId: toolu_01AyghHUFdeC3btPkEQWLYVg
           toolName: Glob

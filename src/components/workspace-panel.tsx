@@ -1833,6 +1833,8 @@ function ChatAssistantMessage({
 							toolName={part.toolName}
 							args={part.args}
 							result={part.result}
+							isError={(part as ToolCallPart).isError}
+							toolUseResult={(part as ToolCallPart).toolUseResult}
 							streamingStatus={(part as ToolCallPart).streamingStatus}
 							childParts={(part as ToolCallPart).children}
 						/>
@@ -2130,6 +2132,8 @@ type AssistantToolCallProps = {
 	toolName: string;
 	args: Record<string, unknown>;
 	result?: unknown;
+	isError?: boolean;
+	toolUseResult?: unknown;
 	streamingStatus?: string;
 	/** Compact mode — used by `AgentChildrenBlock`'s tail preview.
 	 *  Strips the `<details>` wrapper and output panel so every row
@@ -2160,6 +2164,8 @@ export function assistantToolCallPropsEqual(
 		prev.toolName === next.toolName &&
 		prev.streamingStatus === next.streamingStatus &&
 		prev.result === next.result &&
+		prev.isError === next.isError &&
+		prev.toolUseResult === next.toolUseResult &&
 		prev.compact === next.compact &&
 		// `childParts` MUST be in the comparator. When a sibling subagent's
 		// children grow, `shareMessages` rebuilds the parent message ref and
@@ -2187,6 +2193,8 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 	toolName,
 	args,
 	result,
+	isError,
+	toolUseResult,
 	streamingStatus,
 	compact = false,
 	childParts,
@@ -2249,7 +2257,9 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 	const toolLine = (
 		<>
 			<span className="shrink-0">{info.icon}</span>
-			<span className="font-medium">{info.action}</span>
+			<span className="shrink-0 whitespace-nowrap font-medium">
+				{info.action}
+			</span>
 			{info.file ? (
 				hasDiff ? (
 					<EditDiffTrigger
@@ -2274,11 +2284,14 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 				</span>
 			) : null}
 			{info.command ? (
-				<code className="truncate rounded bg-app-foreground/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-app-foreground-soft">
+				// `min-w-0` overrides flex-item default `min-width: auto` so `truncate` can shrink the chip.
+				<code className="inline-block min-w-0 truncate rounded bg-app-foreground/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-app-foreground-soft">
 					{info.command}
 				</code>
 			) : info.detail ? (
-				<span className="truncate text-app-muted/60">{info.detail}</span>
+				<span className="min-w-0 truncate text-app-muted/60">
+					{info.detail}
+				</span>
 			) : null}
 			{statusIndicator}
 		</>
@@ -2329,59 +2342,116 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 		);
 	}
 
-	// Normal tool call with optional output
 	return (
-		<details
-			className="group/out flex flex-col"
-			onToggle={(event) => {
-				setIsOpen(event.currentTarget.open);
-			}}
-			open={isLiveTool || isOpen}
-		>
-			<summary
-				className={cn(
-					"flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden",
-					hasOutput ? "cursor-pointer" : "cursor-default",
-				)}
+		<>
+			<details
+				className="group/out flex flex-col"
+				onToggle={(event) => {
+					setIsOpen(event.currentTarget.open);
+				}}
+				open={isLiveTool || isOpen}
 			>
-				{toolLine}
-				{hasOutput ? (
-					<span className="shrink-0 cursor-pointer text-app-muted/40 hover:text-app-muted">
-						<svg
-							className="size-2.5 group-open/out:rotate-90"
-							viewBox="0 0 12 12"
-							fill="none"
-						>
-							<path
-								d="M4.5 2.5L8.5 6L4.5 9.5"
-								stroke="currentColor"
-								strokeWidth="1.5"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-							/>
-						</svg>
-					</span>
-				) : null}
-			</summary>
-			{hasOutput && (isLiveTool || isOpen) ? (
-				<div className="max-h-[16rem] overflow-auto rounded-md bg-app-foreground/[0.02] text-[11px] leading-5">
-					{info.fullCommand ? (
-						<div className="border-b border-app-border/20 px-2 py-1.5">
-							<span className="mr-1.5 text-app-project/60">$</span>
-							<code className="font-mono text-app-foreground-soft">
-								{info.fullCommand}
-							</code>
-						</div>
+				<summary
+					className={cn(
+						"flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden",
+						hasOutput ? "cursor-pointer" : "cursor-default",
+					)}
+				>
+					{toolLine}
+					{hasOutput ? (
+						<span className="shrink-0 cursor-pointer text-app-muted/40 hover:text-app-muted">
+							<svg
+								className="size-2.5 group-open/out:rotate-90"
+								viewBox="0 0 12 12"
+								fill="none"
+							>
+								<path
+									d="M4.5 2.5L8.5 6L4.5 9.5"
+									stroke="currentColor"
+									strokeWidth="1.5"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+								/>
+							</svg>
+						</span>
 					) : null}
-					<pre className="whitespace-pre-wrap break-words p-1.5 text-app-muted/70">
-						{resultText!.slice(0, 2000)}
-						{resultText!.length > 2000 ? "…" : ""}
-					</pre>
-				</div>
+				</summary>
+				{hasOutput && (isLiveTool || isOpen) ? (
+					<div className="max-h-[16rem] overflow-auto rounded-md bg-app-foreground/[0.02] text-[11px] leading-5">
+						{info.fullCommand ? (
+							<div className="border-b border-app-border/20 px-2 py-1.5">
+								<span className="mr-1.5 text-app-project/60">$</span>
+								<code className="font-mono text-app-foreground-soft">
+									{info.fullCommand}
+								</code>
+							</div>
+						) : null}
+						<pre className="whitespace-pre-wrap break-words p-1.5 text-app-muted/70">
+							{resultText!.slice(0, 2000)}
+							{resultText!.length > 2000 ? "…" : ""}
+						</pre>
+					</div>
+				) : null}
+			</details>
+			{isError === true ? (
+				<ToolCallErrorRow result={result} toolUseResult={toolUseResult} />
 			) : null}
-		</details>
+		</>
 	);
 }, assistantToolCallPropsEqual);
+
+function ToolCallErrorRow({
+	result,
+	toolUseResult,
+}: {
+	result: unknown;
+	toolUseResult: unknown;
+}) {
+	const body = useMemo(
+		() => extractToolErrorBody(toolUseResult, result),
+		[toolUseResult, result],
+	);
+	if (!body) return null;
+	return (
+		<div className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-negative">
+			<AlertCircle className="size-3.5 shrink-0" strokeWidth={1.8} />
+			<span className="shrink-0 font-medium">Error</span>
+			<code className="truncate rounded bg-app-negative/10 px-1.5 py-0.5 font-mono text-[11px]">
+				{body}
+			</code>
+		</div>
+	);
+}
+
+function extractToolErrorBody(
+	toolUseResult: unknown,
+	result: unknown,
+): string | null {
+	let prefix: string | null = null;
+	let body: string | null = null;
+	if (isObj(toolUseResult)) {
+		const ec = toolUseResult.exit_code;
+		if (typeof ec === "number" && ec !== 0) {
+			prefix = `Exit code ${ec}`;
+		}
+		body =
+			str(toolUseResult.stderr) ??
+			str(toolUseResult.error) ??
+			str(toolUseResult.stdout) ??
+			null;
+	} else if (typeof toolUseResult === "string") {
+		body = toolUseResult.trim() || null;
+	}
+	if (!body && typeof result === "string") {
+		body = result.trim() || null;
+	}
+	const combined = prefix && body ? `${prefix} ${body}` : (prefix ?? body);
+	if (!combined) return null;
+	// Strip leading "Error:" so we don't render "Error  Error: File not found".
+	const cleaned = combined.replace(/^Error:\s*/i, "");
+	const oneLine = cleaned.split("\n", 2)[0] ?? cleaned;
+	return truncate(oneLine, 120);
+}
 
 /**
  * Shallow-compare tool call args. The accumulator either reuses the same args
@@ -2566,6 +2636,8 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 									toolName={part.toolName ?? "unknown"}
 									args={part.args ?? {}}
 									result={part.result}
+									isError={part.isError}
+									toolUseResult={part.toolUseResult}
 									compact={!expanded}
 									childParts={part.children}
 								/>
@@ -2603,18 +2675,11 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 }, agentChildrenBlockPropsEqual);
 
 function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
-	// Groups can transition inactive → active when a new tool is appended to a
-	// previously-completed group. We track "ever active" with a monotonic ref
-	// (write happens only on the first true observation, which is safe even
-	// under Strict Mode double-render) plus a single state for the user's
-	// explicit collapse preference. This eliminates the previous derived-state
-	// useEffect anti-pattern.
-	const wasActiveRef = useRef(group.active);
-	if (group.active && !wasActiveRef.current) {
-		wasActiveRef.current = true;
-	}
-	const [userClosed, setUserClosed] = useState(false);
-	const isOpen = group.active || (wasActiveRef.current && !userClosed);
+	const [open, setOpen] = useState(group.active);
+	// Re-open when a settled group becomes active again (new streaming tool appended).
+	useEffect(() => {
+		if (group.active) setOpen(true);
+	}, [group.active]);
 
 	const icon =
 		group.category === "search" ? (
@@ -2627,9 +2692,9 @@ function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 		<details
 			className="group/collapse flex flex-col"
 			onToggle={(event) => {
-				setUserClosed(!event.currentTarget.open);
+				setOpen(event.currentTarget.open);
 			}}
-			open={isOpen}
+			open={open}
 		>
 			<summary className="flex max-w-full cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
 				<span className="shrink-0">{icon}</span>
@@ -2661,7 +2726,7 @@ function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 					{group.tools.length} tools
 				</span>
 			</summary>
-			{group.active || isOpen ? (
+			{open ? (
 				<div className="ml-5 flex flex-col gap-0.5 border-l border-app-border/30 pl-3 pt-1">
 					{group.tools.map((tool, idx) => (
 						<AssistantToolCall
@@ -2669,6 +2734,8 @@ function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 							toolName={tool.toolName}
 							args={tool.args}
 							result={tool.result}
+							isError={tool.isError}
+							toolUseResult={tool.toolUseResult}
 						/>
 					))}
 				</div>
@@ -2959,8 +3026,10 @@ function getToolInfo(
 
 	if (name === "Bash") {
 		const cmd = str(input.command);
+		// Claude Bash tool's `description` is a 5-10 word human label of the command.
+		const desc = str(input.description);
 		return {
-			action: "Run",
+			action: desc ?? "Run",
 			icon: (
 				<SquareTerminal
 					className="size-3.5 text-app-foreground-soft"

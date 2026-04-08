@@ -368,6 +368,8 @@ fn convert_user_type_msg(
                     args,
                     args_text,
                     result: None,
+                    is_error: None,
+                    tool_use_result: None,
                     streaming_status: None,
                     children: Vec::new(),
                 })],

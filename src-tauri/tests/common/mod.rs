@@ -161,6 +161,8 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
             result,
             streaming_status,
             children,
+            // is_error / tool_use_result kept out of the normalized form on purpose.
+            ..
         } => {
             let mut keys: Vec<String> = args
                 .as_object()

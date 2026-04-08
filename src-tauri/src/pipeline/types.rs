@@ -62,6 +62,14 @@ pub enum MessagePart {
         /// Tool execution result (set when user tool_result is merged back).
         #[serde(skip_serializing_if = "Option::is_none")]
         result: Option<Value>,
+        /// Only `Some(true)`; success cases collapse to None.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        is_error: Option<bool>,
+        /// `SDKUserMessage.tool_use_result` — opaque per-tool shape (Bash:
+        /// `{stdout, stderr, exit_code, ...}`, Read: error string, etc.).
+        /// Only attached on the failure path.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tool_use_result: Option<Value>,
         /// Streaming execution progress indicator.
         #[serde(skip_serializing_if = "Option::is_none")]
         streaming_status: Option<StreamingStatus>,

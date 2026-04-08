@@ -129,6 +129,8 @@ pub(super) fn parse_assistant_parts(parsed: Option<&Value>) -> Vec<MessagePart> 
                     args,
                     args_text,
                     result: None,
+                    is_error: None,
+                    tool_use_result: None,
                     streaming_status: stream_status,
                     children: Vec::new(),
                 });
@@ -155,10 +157,19 @@ fn parse_streaming_status(s: &str) -> Option<StreamingStatus> {
 // Merge tool_result user messages into preceding tool-call parts
 // ---------------------------------------------------------------------------
 
+struct ToolResultEntry {
+    tool_use_id: String,
+    content: String,
+    is_error: Option<bool>,
+    tool_use_result: Option<Value>,
+}
+
 /// Parse tool_result blocks from a `type=user` payload. Returns None if the
 /// payload is not a pure tool_result message.
-fn extract_tool_results(parsed: Option<&Value>) -> Option<Vec<(String, String)>> {
+fn extract_tool_results(parsed: Option<&Value>) -> Option<Vec<ToolResultEntry>> {
     let parsed = parsed?;
+    // `tool_use_result` lives on the SDKUserMessage envelope, not inside content[].
+    let envelope_tool_use_result = parsed.get("tool_use_result").cloned();
     let msg = parsed.get("message").and_then(|v| v.as_object());
     let blocks = msg.and_then(|m| m.get("content")).and_then(Value::as_array);
     let blocks = match blocks {
@@ -167,7 +178,7 @@ fn extract_tool_results(parsed: Option<&Value>) -> Option<Vec<(String, String)>>
     };
 
     let mut all_tool_result = true;
-    let mut results: Vec<(String, String)> = Vec::new();
+    let mut results: Vec<ToolResultEntry> = Vec::new();
 
     for b in blocks {
         let obj = match b.as_object() {
@@ -183,7 +194,23 @@ fn extract_tool_results(parsed: Option<&Value>) -> Option<Vec<(String, String)>>
                 .unwrap_or("")
                 .to_string();
             let content = extract_tool_result_content(obj.get("content"));
-            results.push((tool_use_id, content));
+            // Collapse `is_error: false` to None so the field is a positive failure signal.
+            let is_error = match obj.get("is_error").and_then(Value::as_bool) {
+                Some(true) => Some(true),
+                _ => None,
+            };
+            // Skip the envelope on success — it duplicates `content` as kilobytes of stdout.
+            let tool_use_result = if is_error.is_some() {
+                envelope_tool_use_result.clone()
+            } else {
+                None
+            };
+            results.push(ToolResultEntry {
+                tool_use_id,
+                content,
+                is_error,
+                tool_use_result,
+            });
         } else if block_type == "text" {
             let text = obj.get("text").and_then(Value::as_str).unwrap_or("");
             if !text.trim().is_empty() {
@@ -205,16 +232,20 @@ pub(super) fn merge_tool_results(parsed: Option<&Value>, target_parts: &mut [Mes
         Some(r) => r,
         None => return false,
     };
-    for (tool_use_id, content) in results {
+    for entry in results {
         for part in target_parts.iter_mut() {
             if let MessagePart::ToolCall {
                 tool_call_id,
                 result,
+                is_error,
+                tool_use_result,
                 ..
             } = part
             {
-                if *tool_call_id == tool_use_id {
-                    *result = Some(Value::String(content));
+                if *tool_call_id == entry.tool_use_id {
+                    *result = Some(Value::String(entry.content));
+                    *is_error = entry.is_error;
+                    *tool_use_result = entry.tool_use_result;
                     break;
                 }
             }
@@ -234,16 +265,20 @@ pub(super) fn merge_tool_results_extended(
         Some(r) => r,
         None => return false,
     };
-    for (tool_use_id, content) in results {
+    for entry in results {
         for part in target.iter_mut() {
             if let ExtendedMessagePart::Basic(MessagePart::ToolCall {
                 tool_call_id,
                 result,
+                is_error,
+                tool_use_result,
                 ..
             }) = part
             {
-                if *tool_call_id == tool_use_id {
-                    *result = Some(Value::String(content));
+                if *tool_call_id == entry.tool_use_id {
+                    *result = Some(Value::String(entry.content));
+                    *is_error = entry.is_error;
+                    *tool_use_result = entry.tool_use_result;
                     break;
                 }
             }
