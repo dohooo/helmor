@@ -8,8 +8,15 @@
  *
  * @see https://streamdown.ai/docs/components
  */
-import type { ReactNode } from "react";
+import {
+	type ComponentType,
+	cloneElement,
+	isValidElement,
+	type ReactElement,
+	type ReactNode,
+} from "react";
 import { TableCopyDropdown, TableDownloadDropdown } from "streamdown";
+import { CodeBlock, CodeBlockCopyButton } from "@/components/ai/code-block";
 import {
 	Table,
 	TableBody,
@@ -107,15 +114,56 @@ export function StreamdownTableCell({
 	);
 }
 
+function childrenToText(children: ReactNode): string {
+	if (typeof children === "string" || typeof children === "number") {
+		return String(children);
+	}
+	if (Array.isArray(children)) {
+		return children.map(childrenToText).join("");
+	}
+	if (isValidElement(children)) {
+		return childrenToText(children.props.children as ReactNode);
+	}
+	return "";
+}
+
+export function StreamdownPre({ children }: { children?: ReactNode }) {
+	if (!isValidElement(children)) {
+		return children;
+	}
+
+	const child = children as ReactElement<{
+		children?: ReactNode;
+		className?: string;
+	}>;
+	const className =
+		typeof child.props.className === "string" ? child.props.className : "";
+	const languageMatch = className.match(/language-([^\s]+)/);
+	const language = languageMatch?.[1] ?? "";
+
+	// Keep Streamdown's built-in Mermaid / special handling path intact.
+	if (language.toLowerCase() === "mermaid") {
+		return cloneElement(child, { "data-block": "true" });
+	}
+
+	const code = childrenToText(child.props.children);
+	return (
+		<CodeBlock code={code} language={language}>
+			<CodeBlockCopyButton />
+		</CodeBlock>
+	);
+}
+
 // ---------------------------------------------------------------------------
 // Aggregated components map
 // ---------------------------------------------------------------------------
 
 export const streamdownComponents = {
+	pre: StreamdownPre,
 	table: StreamdownTable,
 	thead: StreamdownTableHeader,
 	tbody: StreamdownTableBody,
 	tr: StreamdownTableRow,
 	th: StreamdownTableHead,
 	td: StreamdownTableCell,
-} as Record<string, React.ComponentType<Record<string, unknown>>>;
+} as Record<string, ComponentType<Record<string, unknown>>>;
