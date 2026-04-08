@@ -21,6 +21,7 @@ pub mod types;
 
 use serde_json::Value;
 
+use accumulator::PushOutcome;
 use types::{HistoricalRecord, IntermediateMessage, ThreadMessageLike};
 
 // ---------------------------------------------------------------------------
@@ -72,33 +73,19 @@ impl MessagePipeline {
     }
 
     /// Feed a raw sidecar JSON event.
+    ///
+    /// The accumulator classifies its own state change via `PushOutcome`,
+    /// which decides between a full re-render, a partial render, or a
+    /// no-op. A new SDK event type only has ONE place to land — the
+    /// dispatch in `StreamAccumulator::push_event`.
     pub fn push_event(&mut self, value: &Value, raw_line: &str) -> PipelineEmit {
-        self.accumulator.push_event(value, raw_line);
+        let outcome = self.accumulator.push_event(value, raw_line);
         self.generation += 1;
 
-        let event_type = value.get("type").and_then(Value::as_str);
-        let is_finalizing = matches!(
-            event_type,
-            Some(
-                "assistant"
-                    | "user"
-                    | "result"
-                    | "error"
-                    | "rate_limit_event"
-                    | "prompt_suggestion"
-                    | "system"
-                    | "item.started"
-                    | "item.updated"
-                    | "item.completed"
-                    | "turn.completed"
-                    | "turn.failed"
-            )
-        );
-
-        if is_finalizing {
-            self.emit_full()
-        } else {
-            self.emit_partial()
+        match outcome {
+            PushOutcome::Finalized => self.emit_full(),
+            PushOutcome::StreamingDelta => self.emit_partial(),
+            PushOutcome::NoOp => PipelineEmit::None,
         }
     }
 

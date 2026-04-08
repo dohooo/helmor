@@ -2,8 +2,10 @@
 //! reach into the private `labels::format_count` and
 //! `labels::build_result_label` helpers via `super::labels::*`.
 
+use super::blocks::parse_assistant_parts;
 use super::labels::{build_result_label, format_count};
 use super::*;
+use crate::pipeline::types::{NoticeSeverity, TodoStatus};
 use serde_json::json;
 
 fn im(id: &str, role: &str, content: Value) -> IntermediateMessage {
@@ -44,6 +46,7 @@ fn claude_server_tool_result_attaches_to_previous_tool_use() {
                     },
                     {
                         "type": "web_search_tool_result",
+                        "tool_use_id": "stu_1",
                         "content": [{"type": "web_search_result", "url": "https://rust-lang.org", "title": "Rust"}],
                     }
                 ]
@@ -465,42 +468,656 @@ fn interleaved_subagent_children_attach_to_correct_parent() {
             ExtendedMessagePart::Basic(MessagePart::ToolCall {
                 tool_call_id,
                 tool_name,
-                result,
+                children,
                 ..
-            }) if tool_name == "Task" => Some((tool_call_id.clone(), result.clone())),
+            }) if tool_name == "Task" => Some((tool_call_id.clone(), children.clone())),
             _ => None,
         })
         .collect();
     assert_eq!(parts.len(), 2, "expected two Task tool-calls");
 
-    // Each Task's __children__ payload should contain ONLY its own
-    // children's text, not the other subagent's.
-    for (id, result_value) in parts {
-        let children_json = match result_value {
-            Some(Value::String(s)) => s,
-            _ => panic!("expected __children__ result on Task {id}"),
-        };
+    // Each Task's `children` Vec should contain ONLY its own
+    // sub-agent's text parts, not the other subagent's.
+    fn collect_text(parts: &[ExtendedMessagePart]) -> Vec<String> {
+        parts
+            .iter()
+            .filter_map(|p| match p {
+                ExtendedMessagePart::Basic(MessagePart::Text { text }) => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    for (id, children) in parts {
         assert!(
-            children_json.starts_with("__children__"),
-            "Task {id} result should be __children__, got: {children_json}"
+            !children.is_empty(),
+            "Task {id} should have children attached, got empty"
         );
+        let texts = collect_text(&children);
         let expected_letter = if id == "task_a" { "A" } else { "B" };
         let unexpected_letter = if id == "task_a" { "B" } else { "A" };
         assert!(
-            children_json.contains(&format!("\"{expected_letter}1\"")),
-            "Task {id} should contain own child {expected_letter}1, got: {children_json}"
+            texts.iter().any(|t| t == &format!("{expected_letter}1")),
+            "Task {id} should contain own child {expected_letter}1, got: {texts:?}"
         );
         assert!(
-            children_json.contains(&format!("\"{expected_letter}2\"")),
-            "Task {id} should contain own child {expected_letter}2, got: {children_json}"
+            texts.iter().any(|t| t == &format!("{expected_letter}2")),
+            "Task {id} should contain own child {expected_letter}2, got: {texts:?}"
         );
         assert!(
-            !children_json.contains(&format!("\"{unexpected_letter}1\"")),
-            "Task {id} should NOT contain other subagent's child {unexpected_letter}1, got: {children_json}"
+            !texts.iter().any(|t| t == &format!("{unexpected_letter}1")),
+            "Task {id} should NOT contain other subagent's child {unexpected_letter}1, got: {texts:?}"
         );
         assert!(
-            !children_json.contains(&format!("\"{unexpected_letter}2\"")),
-            "Task {id} should NOT contain other subagent's child {unexpected_letter}2, got: {children_json}"
+            !texts.iter().any(|t| t == &format!("{unexpected_letter}2")),
+            "Task {id} should NOT contain other subagent's child {unexpected_letter}2, got: {texts:?}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// R5: strict tool_use_id matching for server tool results
+// ---------------------------------------------------------------------------
+
+/// Pin the strict-id behavior: when a server_tool_use is followed by an
+/// unrelated tool_use AND THEN the matching *_tool_result, the result
+/// must still attach to the server tool by id, not to the most recent
+/// ToolCall in the parts list.
+#[test]
+fn server_tool_result_attaches_by_id_skipping_intervening_toolcall() {
+    let messages = vec![im(
+        "1",
+        "assistant",
+        json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "stu_search",
+                        "name": "web_search",
+                        "input": {"query": "rust"},
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "tc_other",
+                        "name": "Bash",
+                        "input": {"command": "ls"},
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "stu_search",
+                        "content": [{"type": "web_search_result", "url": "https://r.org"}],
+                    }
+                ]
+            }
+        }),
+    )];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    let parts: Vec<_> = result[0]
+        .content
+        .iter()
+        .filter_map(|p| {
+            if let ExtendedMessagePart::Basic(MessagePart::ToolCall {
+                tool_call_id,
+                result,
+                ..
+            }) = p
+            {
+                Some((tool_call_id.clone(), result.clone()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(parts.len(), 2, "expected two ToolCalls (web_search + Bash)");
+    let by_id: std::collections::HashMap<_, _> = parts.into_iter().collect();
+    assert!(
+        by_id.get("stu_search").and_then(|r| r.as_ref()).is_some(),
+        "web_search tool should have its result attached"
+    );
+    assert!(
+        by_id.get("tc_other").and_then(|r| r.as_ref()).is_none(),
+        "Bash tool should NOT have anything attached — id mismatch"
+    );
+}
+
+/// Result block missing `tool_use_id` is dropped silently (we don't
+/// want to misroute it onto an arbitrary recent ToolCall).
+#[test]
+fn server_tool_result_without_id_is_dropped() {
+    let messages = vec![im(
+        "1",
+        "assistant",
+        json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "stu_1",
+                        "name": "web_search",
+                        "input": {"query": "rust"},
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "content": [{"type": "web_search_result", "url": "https://r.org"}],
+                    }
+                ]
+            }
+        }),
+    )];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    if let ExtendedMessagePart::Basic(MessagePart::ToolCall { result, .. }) = &result[0].content[0]
+    {
+        assert!(
+            result.is_none(),
+            "id-less result block must be dropped, not attached to most-recent tool"
+        );
+    } else {
+        panic!("expected single ToolCall");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// R2: non-tool_result user payloads
+// ---------------------------------------------------------------------------
+
+/// A `type=user` event whose content is plain text (no tool_result
+/// blocks) following an assistant turn must render as a real user
+/// message — dropping it on the `parsed.is_some()` branch would
+/// silently swallow mid-conversation user turns.
+#[test]
+fn user_text_event_after_assistant_renders_as_user_message() {
+    let messages = vec![
+        im(
+            "a1",
+            "assistant",
+            json!({
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "What's next?"}]
+                }
+            }),
+        ),
+        im(
+            "u1",
+            "user",
+            json!({
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "do the thing"}]
+                }
+            }),
+        ),
+    ];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[1].role, MessageRole::User);
+    if let ExtendedMessagePart::Basic(MessagePart::Text { text }) = &result[1].content[0] {
+        assert_eq!(text, "do the thing");
+    } else {
+        panic!("expected user text part");
+    }
+}
+
+/// Drop rule: a non-tool_result user payload with no preceding
+/// assistant context is dropped (likely a stray SDK wrapper).
+#[test]
+fn user_text_event_with_no_preceding_assistant_is_dropped() {
+    let messages = vec![im(
+        "u1",
+        "user",
+        json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "stray"}]
+            }
+        }),
+    )];
+    let result = convert(&messages);
+    assert!(
+        result.is_empty(),
+        "stray user wrapper with no context should be dropped, got {result:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// R6: prompt_suggestion
+// ---------------------------------------------------------------------------
+
+#[test]
+fn prompt_suggestion_renders_as_system_part() {
+    let messages = vec![im(
+        "ps1",
+        "assistant",
+        json!({
+            "type": "prompt_suggestion",
+            "suggestion": "Try running the tests",
+        }),
+    )];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].role, MessageRole::System);
+    match &result[0].content[0] {
+        ExtendedMessagePart::Basic(MessagePart::PromptSuggestion { text }) => {
+            assert_eq!(text, "Try running the tests");
+        }
+        other => panic!("expected PromptSuggestion, got {other:?}"),
+    }
+}
+
+#[test]
+fn prompt_suggestion_empty_is_silent() {
+    let messages = vec![im(
+        "ps1",
+        "assistant",
+        json!({
+            "type": "prompt_suggestion",
+            "suggestion": "",
+        }),
+    )];
+    let result = convert(&messages);
+    assert!(result.is_empty(), "empty suggestion must produce nothing");
+}
+
+// ---------------------------------------------------------------------------
+// R6: rate_limit_event
+// ---------------------------------------------------------------------------
+
+/// The "allowed" status fires on every user turn as a usage gauge —
+/// the adapter must hide it. This was a deliberate quiet path; without
+/// the test it could regress silently.
+#[test]
+fn rate_limit_allowed_is_silent() {
+    let messages = vec![im(
+        "rl1",
+        "assistant",
+        json!({
+            "type": "rate_limit_event",
+            "rate_limit_info": {
+                "status": "allowed",
+                "rateLimitType": "five_hour",
+            }
+        }),
+    )];
+    let result = convert(&messages);
+    assert!(
+        result.is_empty(),
+        "rate_limit_event with status=allowed must be hidden"
+    );
+}
+
+/// Throttled rate-limit events DO render as a SystemNotice.
+#[test]
+fn rate_limit_throttled_renders_warning_notice() {
+    let messages = vec![im(
+        "rl1",
+        "assistant",
+        json!({
+            "type": "rate_limit_event",
+            "rate_limit_info": {
+                "status": "queued",
+                "rateLimitType": "five_hour",
+            }
+        }),
+    )];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    match &result[0].content[0] {
+        ExtendedMessagePart::Basic(MessagePart::SystemNotice {
+            severity, label, ..
+        }) => {
+            assert_eq!(*severity, NoticeSeverity::Warning);
+            assert!(
+                label.contains("queued"),
+                "label should mention status, got {label:?}"
+            );
+        }
+        other => panic!("expected SystemNotice, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// R6: TodoWrite collapse — both convert() end-to-end and direct
+// parse_assistant_parts coverage per request.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn claude_todowrite_collapses_to_todolist_via_convert() {
+    let messages = vec![im(
+        "1",
+        "assistant",
+        json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tc_todo",
+                    "name": "TodoWrite",
+                    "input": {"todos": [
+                        {"content": "Step A", "status": "completed"},
+                        {"content": "Step B", "status": "in_progress"},
+                        {"content": "Step C", "status": "pending"},
+                    ]}
+                }]
+            }
+        }),
+    )];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    match &result[0].content[0] {
+        ExtendedMessagePart::Basic(MessagePart::TodoList { items }) => {
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0].text, "Step A");
+            assert_eq!(items[0].status, TodoStatus::Completed);
+            assert_eq!(items[1].status, TodoStatus::InProgress);
+            assert_eq!(items[2].status, TodoStatus::Pending);
+        }
+        other => panic!("expected TodoList, got {other:?}"),
+    }
+}
+
+#[test]
+fn claude_todowrite_streaming_falls_back_to_toolcall() {
+    // Mid-stream tool_use: input is still empty (input_json_delta
+    // hasn't landed yet), so we should fall back to a regular ToolCall
+    // instead of collapsing into a TodoList.
+    let parsed = json!({
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "content": [{
+                "type": "tool_use",
+                "id": "tc_todo",
+                "name": "TodoWrite",
+                "input": {},
+                "__streaming_status": "streaming_input"
+            }]
+        }
+    });
+    let parts = parse_assistant_parts(Some(&parsed));
+    assert_eq!(parts.len(), 1);
+    match &parts[0] {
+        MessagePart::ToolCall { tool_name, .. } => assert_eq!(tool_name, "TodoWrite"),
+        MessagePart::TodoList { .. } => {
+            panic!("streaming TodoWrite must NOT collapse — fall back to ToolCall")
+        }
+        other => panic!("unexpected part {other:?}"),
+    }
+}
+
+/// Direct unit test of parse_assistant_parts so the collapse logic is
+/// pinned without going through `convert` + `merge_adjacent_assistants`.
+#[test]
+fn parse_assistant_parts_collapses_todowrite() {
+    let parsed = json!({
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "content": [{
+                "type": "tool_use",
+                "id": "tc_todo",
+                "name": "TodoWrite",
+                "input": {"todos": [
+                    {"content": "X", "status": "pending"},
+                ]}
+            }]
+        }
+    });
+    let parts = parse_assistant_parts(Some(&parsed));
+    assert_eq!(parts.len(), 1);
+    match &parts[0] {
+        MessagePart::TodoList { items } => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].text, "X");
+            assert_eq!(items[0].status, TodoStatus::Pending);
+        }
+        other => panic!("expected TodoList, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// R6: SystemNotice for subagent task_started — verify the child:* id
+// encoding so the grouping pass can attach it to the parent Task tool.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn subagent_task_started_renders_as_notice_with_child_id() {
+    let messages = vec![im(
+        "sn1",
+        "assistant",
+        json!({
+            "type": "system",
+            "subtype": "task_started",
+            "tool_use_id": "task_xyz",
+            "description": "scanning files",
+        }),
+    )];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].role, MessageRole::System);
+    match &result[0].content[0] {
+        ExtendedMessagePart::Basic(MessagePart::SystemNotice {
+            severity,
+            label,
+            body,
+        }) => {
+            assert_eq!(*severity, NoticeSeverity::Info);
+            assert_eq!(label, "Subagent started");
+            assert_eq!(body.as_deref(), Some("scanning files"));
+        }
+        other => panic!("expected SystemNotice, got {other:?}"),
+    }
+    assert_eq!(result[0].id.as_deref(), Some("child:task_xyz:sn1"));
+}
+
+// ---------------------------------------------------------------------------
+// Subagent prompt — `type=user` with `parent_tool_use_id` is folded
+// into the parent Task tool call's `children` as a synthesized
+// `ToolCall` whose `tool_name` is `"Prompt"`. The frontend renders
+// it through the same code path as every other child tool call —
+// no special MessagePart variant, no extra rendering branch.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn subagent_prompt_folds_into_parent_task_as_prompt_tool_call() {
+    let messages = vec![
+        // Parent assistant emits the Task tool_use.
+        im(
+            "a1",
+            "assistant",
+            json!({
+                "type": "assistant",
+                "message": {
+                    "id": "msg_parent",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "tu_subagent_1",
+                        "name": "Task",
+                        "input": {
+                            "description": "explore repo",
+                            "subagent_type": "Explore",
+                            "prompt": "look at the codebase",
+                        }
+                    }]
+                }
+            }),
+        ),
+        // Subagent's initial prompt — text wrapped as a `type=user`
+        // event with `parent_tool_use_id` pointing back at the Task.
+        im(
+            "u_prompt",
+            "user",
+            json!({
+                "type": "user",
+                "parent_tool_use_id": "tu_subagent_1",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "look at the codebase"}],
+                }
+            }),
+        ),
+        // Subagent runs a tool inside its session.
+        im(
+            "a_child",
+            "assistant",
+            json!({
+                "type": "assistant",
+                "parent_tool_use_id": "tu_subagent_1",
+                "message": {
+                    "id": "msg_child",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "tu_glob",
+                        "name": "Glob",
+                        "input": {"pattern": "**/*.rs"}
+                    }]
+                }
+            }),
+        ),
+    ];
+
+    let result = convert(&messages);
+
+    // Find the parent Task tool call and inspect its children.
+    let task_children = result
+        .iter()
+        .find_map(|m| {
+            m.content.iter().find_map(|p| {
+                if let ExtendedMessagePart::Basic(MessagePart::ToolCall {
+                    tool_name,
+                    children,
+                    ..
+                }) = p
+                {
+                    if tool_name == "Task" {
+                        return Some(children.clone());
+                    }
+                }
+                None
+            })
+        })
+        .expect("expected a Task tool call in the result");
+
+    // children should contain BOTH the synthesized "Prompt" ToolCall
+    // and the subagent's real Glob tool_use folded by the existing
+    // assistant grouping pass.
+    let prompt_args_text = task_children.iter().find_map(|p| {
+        if let ExtendedMessagePart::Basic(MessagePart::ToolCall {
+            tool_name, args, ..
+        }) = p
+        {
+            if tool_name == "Prompt" {
+                return args
+                    .get("text")
+                    .and_then(|t| t.as_str())
+                    .map(str::to_string);
+            }
+        }
+        None
+    });
+    assert_eq!(
+        prompt_args_text.as_deref(),
+        Some("look at the codebase"),
+        "expected synthesized Prompt ToolCall folded into parent Task children"
+    );
+
+    let glob_id = task_children.iter().find_map(|p| {
+        if let ExtendedMessagePart::Basic(MessagePart::ToolCall {
+            tool_name,
+            tool_call_id,
+            ..
+        }) = p
+        {
+            if tool_name == "Glob" {
+                return Some(tool_call_id.clone());
+            }
+        }
+        None
+    });
+    assert_eq!(
+        glob_id.as_deref(),
+        Some("tu_glob"),
+        "expected subagent's Glob tool call also folded into parent Task children"
+    );
+}
+
+#[test]
+fn subagent_prompt_with_no_text_content_is_dropped() {
+    // A `type=user` payload with `parent_tool_use_id` but no text
+    // blocks (e.g. an image-only continuation) shouldn't push an
+    // empty Prompt tool call.
+    let messages = vec![
+        im(
+            "a1",
+            "assistant",
+            json!({
+                "type": "assistant",
+                "message": {
+                    "id": "msg_parent",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "tu_2",
+                        "name": "Task",
+                        "input": {"description": "x", "subagent_type": "Explore"}
+                    }]
+                }
+            }),
+        ),
+        im(
+            "u_empty",
+            "user",
+            json!({
+                "type": "user",
+                "parent_tool_use_id": "tu_2",
+                "message": {
+                    "role": "user",
+                    "content": [],
+                }
+            }),
+        ),
+    ];
+
+    let result = convert(&messages);
+    let task_children = result
+        .iter()
+        .find_map(|m| {
+            m.content.iter().find_map(|p| {
+                if let ExtendedMessagePart::Basic(MessagePart::ToolCall {
+                    tool_name,
+                    children,
+                    ..
+                }) = p
+                {
+                    if tool_name == "Task" {
+                        return Some(children.clone());
+                    }
+                }
+                None
+            })
+        })
+        .expect("expected a Task tool call in the result");
+    let has_prompt = task_children.iter().any(|p| {
+        matches!(
+            p,
+            ExtendedMessagePart::Basic(MessagePart::ToolCall { tool_name, .. })
+                if tool_name == "Prompt"
+        )
+    });
+    assert!(
+        !has_prompt,
+        "empty user payload should not produce a Prompt tool call"
+    );
 }

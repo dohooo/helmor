@@ -72,6 +72,7 @@ import { recordMessageRender } from "@/lib/dev-render-debug";
 import { estimateThreadRowHeights } from "@/lib/message-layout-estimator";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
+import { childrenStructurallyEqual } from "@/lib/structural-equality";
 import { cn } from "@/lib/utils";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "./ai/reasoning";
@@ -806,20 +807,13 @@ function ChatThread({
 	const pinTailRows = sending || hasStreamingMessage;
 	const scrollParentRef = useRef<HTMLElement | null>(null);
 	// `resize: "instant"` is critical for multi-subagent streaming. When a
-	// Task tool call is accumulating its `__children__` payload, the
-	// content div grows on every pipeline Full() emit. Without this
-	// option, `use-stick-to-bottom` would kick off a spring animation on
-	// every growth event — each new resize interrupts the in-flight
-	// animation, leaving the scroll position oscillating mid-spring and
-	// causing a visible flicker localized to the streaming row. `initial`
-	// stays instant so landing on a thread doesn't smooth-scroll.
-	//
-	// Regression history: 1e5168d removed `contentRef` from the Virtuoso
-	// wrapper to dodge the same fight; when Virtuoso was ripped out in
-	// 7f3dae1, `contentRef` got reattached to the plain-thread /
-	// progressive-viewport wrapper and the spring animation reappeared.
-	// Pinning both `initial` and `resize` to instant is the
-	// library-supported alternative now that the hook exposes them.
+	// Task tool call is accumulating children, the content div grows on
+	// every pipeline Full() emit. Without this option,
+	// `use-stick-to-bottom` would kick off a spring animation on every
+	// growth event — each new resize interrupts the in-flight animation,
+	// leaving the scroll position oscillating mid-spring and causing a
+	// visible flicker localized to the streaming row. `initial` stays
+	// instant so landing on a thread doesn't smooth-scroll.
 	const { contentRef, scrollRef, scrollToBottom, isAtBottom } =
 		useStickToBottom({
 			initial: "instant",
@@ -1513,6 +1507,7 @@ function ChatAssistantMessage({
 							args={part.args}
 							result={part.result}
 							streamingStatus={(part as ToolCallPart).streamingStatus}
+							childParts={(part as ToolCallPart).children}
 						/>
 					);
 				}
@@ -1804,235 +1799,262 @@ function AssistantTextFallback({
 	);
 }
 
-const AssistantToolCall = memo(
-	function AssistantToolCall({
-		toolName,
-		args,
-		result,
-		streamingStatus,
-		compact = false,
-	}: {
-		toolName: string;
-		args: Record<string, unknown>;
-		result?: unknown;
-		streamingStatus?: string;
-		/** Compact mode — used by `AgentChildrenBlock`'s tail preview.
-		 *  Strips the `<details>` wrapper and output panel so every row
-		 *  renders as a single fixed-height summary line. This keeps the
-		 *  preview container's height constant while a subagent streams
-		 *  in, and prevents users from expanding individual rows inside
-		 *  the preview (expand the whole subagent via "Show N more steps"
-		 *  for the full trace). */
-		compact?: boolean;
-	}) {
-		const info = getToolInfo(toolName, args);
-		const isEdit = toolName === "Edit";
-		const oldStr =
-			isEdit && typeof args.old_string === "string" ? args.old_string : null;
-		const newStr =
-			isEdit && typeof args.new_string === "string" ? args.new_string : null;
-		const hasDiff = oldStr != null || newStr != null;
+type AssistantToolCallProps = {
+	toolName: string;
+	args: Record<string, unknown>;
+	result?: unknown;
+	streamingStatus?: string;
+	/** Compact mode — used by `AgentChildrenBlock`'s tail preview.
+	 *  Strips the `<details>` wrapper and output panel so every row
+	 *  renders as a single fixed-height summary line. This keeps the
+	 *  preview container's height constant while a subagent streams
+	 *  in, and prevents users from expanding individual rows inside
+	 *  the preview (expand the whole subagent via "Show N more steps"
+	 *  for the full trace). */
+	compact?: boolean;
+	/** Sub-agent work folded in by the Rust grouping pass. Only set
+	 *  for `Task` / `Agent` tool calls. */
+	childParts?: ExtendedMessagePart[];
+};
 
-		// Detect __children__ encoded in result (sub-agent steps).
-		// The parse is memoized on `resultStr` so re-renders that don't
-		// change the string (most memo bail-outs) reuse the same parsed
-		// object, keeping the referential identity of `childrenData.parts`
-		// stable for AgentChildrenBlock and letting React skip work on
-		// siblings that only re-ran because the parent reference changed.
-		const resultStr = useMemo(
-			() =>
-				result != null
-					? typeof result === "string"
-						? result
-						: JSON.stringify(result, null, 2)
-					: null,
-			[result],
-		);
-		const isChildrenResult = resultStr?.startsWith("__children__") ?? false;
-		const childrenData = useMemo(() => {
-			if (!isChildrenResult || !resultStr) return null;
-			try {
-				return JSON.parse(resultStr.slice("__children__".length)) as {
-					parts: Array<Record<string, unknown>>;
-				};
-			} catch {
-				return null;
-			}
-		}, [isChildrenResult, resultStr]);
-		const resultText = isChildrenResult ? null : resultStr;
-		const hasOutput = resultText != null && resultText.length > 5;
-		const isLiveTool =
-			streamingStatus === "pending" ||
-			streamingStatus === "streaming_input" ||
-			streamingStatus === "running";
-		// Default expanded state is captured once at mount via useState init —
-		// no effect needed because tool calls only progress forward (live tools
-		// stay live until completion, completed tools never go back to live).
-		// `isLiveTool || isOpen` in the open prop below still forces open while
-		// streaming regardless of user toggles.
-		const [isOpen, setIsOpen] = useState(isLiveTool);
-
-		// Streaming status indicator
-		const statusIndicator =
-			streamingStatus === "pending" || streamingStatus === "streaming_input" ? (
-				<LoaderCircle
-					className="size-3 animate-spin text-app-muted/50"
-					strokeWidth={2}
-				/>
-			) : streamingStatus === "running" ? (
-				<LoaderCircle
-					className="size-3 animate-spin text-app-progress"
-					strokeWidth={2}
-				/>
-			) : streamingStatus === "error" ? (
-				<AlertCircle className="size-3 text-app-negative" strokeWidth={2} />
-			) : null;
-
-		const toolLine = (
-			<>
-				<span className="shrink-0">{info.icon}</span>
-				<span className="font-medium">{info.action}</span>
-				{info.file ? (
-					hasDiff ? (
-						<EditDiffTrigger
-							file={info.file}
-							diffAdd={info.diffAdd}
-							diffDel={info.diffDel}
-							oldStr={oldStr}
-							newStr={newStr}
-						/>
-					) : (
-						<span className="truncate text-app-foreground-soft">
-							{info.file}
-						</span>
-					)
-				) : null}
-				{!hasDiff && (info.diffAdd != null || info.diffDel != null) ? (
-					<span className="flex items-center gap-1 text-[11px]">
-						{info.diffAdd != null ? (
-							<span className="text-app-positive">+{info.diffAdd}</span>
-						) : null}
-						{info.diffDel != null ? (
-							<span className="text-app-negative">-{info.diffDel}</span>
-						) : null}
-					</span>
-				) : null}
-				{info.command ? (
-					<code className="truncate rounded bg-app-foreground/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-app-foreground-soft">
-						{info.command}
-					</code>
-				) : info.detail ? (
-					<span className="truncate text-app-muted/60">{info.detail}</span>
-				) : null}
-				{statusIndicator}
-			</>
-		);
-
-		// Sub-agent children: show last N steps with "show more" toggle.
-		// Pass primitive props (not the `toolLine` element) so the memo
-		// on `AgentChildrenBlock` can actually bail out — a fresh React
-		// element reference every render would defeat it and cascade
-		// into re-rendering all the expanded children for every sibling
-		// subagent's streaming tick. `AgentChildrenBlock` reconstructs
-		// its own header from `toolName`/`toolArgs` internally.
-		if (childrenData) {
-			return (
-				<AgentChildrenBlock
-					toolName={toolName}
-					toolArgs={args}
-					streamingStatus={streamingStatus}
-					parts={childrenData.parts}
-				/>
-			);
-		}
-
-		// Compact render for tail previews inside AgentChildrenBlock.
-		//
-		// Key property: every compact row has IDENTICAL structure, so
-		// the natural line height is the same regardless of tool type.
-		// No `<code>` chip (which has padding + rounded + bg, adds
-		// ~4px), no `EditDiffTrigger` button (has its own padding),
-		// no diffAdd/diffDel badge with `text-[11px]`. Just three
-		// flex children: icon, bolded action, and a truncated detail
-		// span. Bash/Read/Grep/Edit/Glob all collapse to the same
-		// visual shape, which is what keeps the preview container's
-		// height stable as the tail window swaps one tool-call out
-		// for another on every streaming tick — no CSS height lock,
-		// no measured-max tracker, fully responsive to font size and
-		// pane width.
-		if (compact) {
-			const detail = info.file ?? info.command ?? info.detail ?? null;
-			return (
-				<div className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-muted">
-					<span className="shrink-0">{info.icon}</span>
-					<span className="shrink-0 font-medium">{info.action}</span>
-					{detail ? (
-						<span className="truncate text-app-foreground-soft">{detail}</span>
-					) : null}
-				</div>
-			);
-		}
-
-		// Normal tool call with optional output
-		return (
-			<details
-				className="group/out flex flex-col"
-				onToggle={(event) => {
-					setIsOpen(event.currentTarget.open);
-				}}
-				open={isLiveTool || isOpen}
-			>
-				<summary
-					className={cn(
-						"flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden",
-						hasOutput ? "cursor-pointer" : "cursor-default",
-					)}
-				>
-					{toolLine}
-					{hasOutput ? (
-						<span className="shrink-0 cursor-pointer text-app-muted/40 hover:text-app-muted">
-							<svg
-								className="size-2.5 group-open/out:rotate-90"
-								viewBox="0 0 12 12"
-								fill="none"
-							>
-								<path
-									d="M4.5 2.5L8.5 6L4.5 9.5"
-									stroke="currentColor"
-									strokeWidth="1.5"
-									strokeLinecap="round"
-									strokeLinejoin="round"
-								/>
-							</svg>
-						</span>
-					) : null}
-				</summary>
-				{hasOutput && (isLiveTool || isOpen) ? (
-					<div className="max-h-[16rem] overflow-auto rounded-md bg-app-foreground/[0.02] text-[11px] leading-5">
-						{info.fullCommand ? (
-							<div className="border-b border-app-border/20 px-2 py-1.5">
-								<span className="mr-1.5 text-app-project/60">$</span>
-								<code className="font-mono text-app-foreground-soft">
-									{info.fullCommand}
-								</code>
-							</div>
-						) : null}
-						<pre className="whitespace-pre-wrap break-words p-1.5 text-app-muted/70">
-							{resultText!.slice(0, 2000)}
-							{resultText!.length > 2000 ? "…" : ""}
-						</pre>
-					</div>
-				) : null}
-			</details>
-		);
-	},
-	(prev, next) =>
+/**
+ * Memo comparator for `AssistantToolCall`. Extracted as a named
+ * exported function so unit tests can pin the truth table directly,
+ * not just the rendered DOM consequences. Direct tests guarantee the
+ * comparator's bail-out vs invalidation decisions even when both
+ * choices happen to produce the same DOM (e.g. content-identical-but-
+ * different-reference `childParts`).
+ */
+export function assistantToolCallPropsEqual(
+	prev: AssistantToolCallProps,
+	next: AssistantToolCallProps,
+): boolean {
+	return (
 		prev.toolName === next.toolName &&
 		prev.streamingStatus === next.streamingStatus &&
 		prev.result === next.result &&
 		prev.compact === next.compact &&
-		shallowArgsEqual(prev.args, next.args),
-);
+		// `childParts` MUST be in the comparator. When a sibling subagent's
+		// children grow, `shareMessages` rebuilds the parent message ref and
+		// every tool-call inside it gets a fresh `children` array reference,
+		// even unchanged ones. Without this check the memo bails out
+		// (toolName/result/args all equal by value) and the rendered
+		// subagent children would drift from the actual state.
+		// `childrenStructurallyEqual` (not reference equality) lets
+		// content-identical children bail out cheaply, so a busy sibling
+		// doesn't cascade re-renders into every finished subagent's tree.
+		childrenStructurallyEqual(prev.childParts, next.childParts) &&
+		shallowArgsEqual(prev.args, next.args)
+	);
+}
+
+/**
+ * Exported for the component-level tests in
+ * `workspace-panel.subagent.test.tsx` — those tests mount the
+ * component and exercise the actual React memo bail-out path at
+ * render time, which neither the Rust pipeline tests nor the
+ * structural-equality unit tests can reach. Don't import this from
+ * non-test code.
+ */
+export const AssistantToolCall = memo(function AssistantToolCall({
+	toolName,
+	args,
+	result,
+	streamingStatus,
+	compact = false,
+	childParts,
+}: AssistantToolCallProps) {
+	const info = getToolInfo(toolName, args);
+	const isEdit = toolName === "Edit";
+	const oldStr =
+		isEdit && typeof args.old_string === "string" ? args.old_string : null;
+	const newStr =
+		isEdit && typeof args.new_string === "string" ? args.new_string : null;
+	const hasDiff = oldStr != null || newStr != null;
+
+	const resultStr = useMemo(
+		() =>
+			result != null
+				? typeof result === "string"
+					? result
+					: JSON.stringify(result, null, 2)
+				: null,
+		[result],
+	);
+	const hasChildren = (childParts?.length ?? 0) > 0;
+	// Tools whose payload lives in `args` (currently the synthetic
+	// Prompt tool) feed `info.body` into the same `<pre>` panel
+	// the `result`-based tools use, so the user gets identical
+	// click-to-expand behavior with no per-tool render branches.
+	// `info.body` overrides the result-derived text so a Prompt
+	// tool — which has no `result` — still gets the expandable
+	// affordance. `getToolInfo` is the gatekeeper here; only one
+	// branch returns `body`, so there's no precedence ambiguity.
+	const resultText = hasChildren ? null : (info.body ?? resultStr);
+	const hasOutput = resultText != null && resultText.length > 5;
+	const isLiveTool =
+		streamingStatus === "pending" ||
+		streamingStatus === "streaming_input" ||
+		streamingStatus === "running";
+	// Default expanded state is captured once at mount via useState init —
+	// no effect needed because tool calls only progress forward (live tools
+	// stay live until completion, completed tools never go back to live).
+	// `isLiveTool || isOpen` in the open prop below still forces open while
+	// streaming regardless of user toggles.
+	const [isOpen, setIsOpen] = useState(isLiveTool);
+
+	// Streaming status indicator
+	const statusIndicator =
+		streamingStatus === "pending" || streamingStatus === "streaming_input" ? (
+			<LoaderCircle
+				className="size-3 animate-spin text-app-muted/50"
+				strokeWidth={2}
+			/>
+		) : streamingStatus === "running" ? (
+			<LoaderCircle
+				className="size-3 animate-spin text-app-progress"
+				strokeWidth={2}
+			/>
+		) : streamingStatus === "error" ? (
+			<AlertCircle className="size-3 text-app-negative" strokeWidth={2} />
+		) : null;
+
+	const toolLine = (
+		<>
+			<span className="shrink-0">{info.icon}</span>
+			<span className="font-medium">{info.action}</span>
+			{info.file ? (
+				hasDiff ? (
+					<EditDiffTrigger
+						file={info.file}
+						diffAdd={info.diffAdd}
+						diffDel={info.diffDel}
+						oldStr={oldStr}
+						newStr={newStr}
+					/>
+				) : (
+					<span className="truncate text-app-foreground-soft">{info.file}</span>
+				)
+			) : null}
+			{!hasDiff && (info.diffAdd != null || info.diffDel != null) ? (
+				<span className="flex items-center gap-1 text-[11px]">
+					{info.diffAdd != null ? (
+						<span className="text-app-positive">+{info.diffAdd}</span>
+					) : null}
+					{info.diffDel != null ? (
+						<span className="text-app-negative">-{info.diffDel}</span>
+					) : null}
+				</span>
+			) : null}
+			{info.command ? (
+				<code className="truncate rounded bg-app-foreground/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-app-foreground-soft">
+					{info.command}
+				</code>
+			) : info.detail ? (
+				<span className="truncate text-app-muted/60">{info.detail}</span>
+			) : null}
+			{statusIndicator}
+		</>
+	);
+
+	// Sub-agent children: show last N steps with "show more" toggle.
+	// Pass primitive props (not the `toolLine` element) so the memo
+	// on `AgentChildrenBlock` can actually bail out — a fresh React
+	// element reference every render would defeat it and cascade
+	// into re-rendering all the expanded children for every sibling
+	// subagent's streaming tick. `AgentChildrenBlock` reconstructs
+	// its own header from `toolName`/`toolArgs` internally.
+	if (hasChildren && childParts) {
+		return (
+			<AgentChildrenBlock
+				toolName={toolName}
+				toolArgs={args}
+				streamingStatus={streamingStatus}
+				parts={childParts}
+			/>
+		);
+	}
+
+	// Compact render for tail previews inside AgentChildrenBlock.
+	//
+	// Key property: every compact row has IDENTICAL structure, so
+	// the natural line height is the same regardless of tool type.
+	// No `<code>` chip (which has padding + rounded + bg, adds
+	// ~4px), no `EditDiffTrigger` button (has its own padding),
+	// no diffAdd/diffDel badge with `text-[11px]`. Just three
+	// flex children: icon, bolded action, and a truncated detail
+	// span. Bash/Read/Grep/Edit/Glob all collapse to the same
+	// visual shape, which is what keeps the preview container's
+	// height stable as the tail window swaps one tool-call out
+	// for another on every streaming tick — no CSS height lock,
+	// no measured-max tracker, fully responsive to font size and
+	// pane width.
+	if (compact) {
+		const detail = info.file ?? info.command ?? info.detail ?? null;
+		return (
+			<div className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-muted">
+				<span className="shrink-0">{info.icon}</span>
+				<span className="shrink-0 font-medium">{info.action}</span>
+				{detail ? (
+					<span className="truncate text-app-foreground-soft">{detail}</span>
+				) : null}
+			</div>
+		);
+	}
+
+	// Normal tool call with optional output
+	return (
+		<details
+			className="group/out flex flex-col"
+			onToggle={(event) => {
+				setIsOpen(event.currentTarget.open);
+			}}
+			open={isLiveTool || isOpen}
+		>
+			<summary
+				className={cn(
+					"flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden",
+					hasOutput ? "cursor-pointer" : "cursor-default",
+				)}
+			>
+				{toolLine}
+				{hasOutput ? (
+					<span className="shrink-0 cursor-pointer text-app-muted/40 hover:text-app-muted">
+						<svg
+							className="size-2.5 group-open/out:rotate-90"
+							viewBox="0 0 12 12"
+							fill="none"
+						>
+							<path
+								d="M4.5 2.5L8.5 6L4.5 9.5"
+								stroke="currentColor"
+								strokeWidth="1.5"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+							/>
+						</svg>
+					</span>
+				) : null}
+			</summary>
+			{hasOutput && (isLiveTool || isOpen) ? (
+				<div className="max-h-[16rem] overflow-auto rounded-md bg-app-foreground/[0.02] text-[11px] leading-5">
+					{info.fullCommand ? (
+						<div className="border-b border-app-border/20 px-2 py-1.5">
+							<span className="mr-1.5 text-app-project/60">$</span>
+							<code className="font-mono text-app-foreground-soft">
+								{info.fullCommand}
+							</code>
+						</div>
+					) : null}
+					<pre className="whitespace-pre-wrap break-words p-1.5 text-app-muted/70">
+						{resultText!.slice(0, 2000)}
+						{resultText!.length > 2000 ? "…" : ""}
+					</pre>
+				</div>
+			) : null}
+		</details>
+	);
+}, assistantToolCallPropsEqual);
 
 /**
  * Shallow-compare tool call args. The accumulator either reuses the same args
@@ -2057,10 +2079,46 @@ function shallowArgsEqual(
 /** Number of recent children steps to show by default. */
 const AGENT_PREVIEW_STEPS = 3;
 
+type AgentChildrenBlockProps = {
+	toolName: string;
+	toolArgs: Record<string, unknown>;
+	streamingStatus?: string;
+	parts: ExtendedMessagePart[];
+};
+
+/**
+ * Memo comparator for `AgentChildrenBlock`. Extracted as a named
+ * exported function so unit tests can pin the bail-out contract
+ * directly. The component-level subagent tests verify that re-renders
+ * happen when content changes, but they can't isolate the
+ * "structurally-equal-but-different-reference" bail-out path that
+ * matters for performance — that path is what stops a busy sibling
+ * subagent from cascading re-renders into every finished one.
+ */
+export function agentChildrenBlockPropsEqual(
+	prev: AgentChildrenBlockProps,
+	next: AgentChildrenBlockProps,
+): boolean {
+	return (
+		prev.toolName === next.toolName &&
+		prev.streamingStatus === next.streamingStatus &&
+		// Content-aware compare so a parent message rebuild that produces
+		// a fresh-but-content-identical `parts` reference doesn't cascade
+		// into a useless re-render of all visible compact tool-calls.
+		// Reference comparison alone is too strict — `shareMessages`
+		// reuses message refs only at the message level, so when ANY
+		// sibling subagent emits new children every other Task tool-call
+		// gets a fresh `parts` array reference that needs the structural
+		// shortcut.
+		childrenStructurallyEqual(prev.parts, next.parts) &&
+		shallowArgsEqual(prev.toolArgs, next.toolArgs)
+	);
+}
+
 /**
  * Children block for Task/Agent tool calls. Rendered inside
- * `AssistantToolCall` whenever its `result` is a `__children__{...}`
- * payload (sub-agent work folded in by the Rust pipeline).
+ * `AssistantToolCall` whenever its `children` array is non-empty
+ * (sub-agent work folded in by the Rust pipeline grouping pass).
  *
  * Memoized — accepts only primitive / stable-reference props so the
  * default shallow compare plus our custom `shallowArgsEqual` on
@@ -2072,162 +2130,150 @@ const AGENT_PREVIEW_STEPS = 3;
  *
  * Bail-out matters here because the containing assistant message gets
  * a new reference whenever ANY sibling subagent's Task tool emits new
- * `__children__` data — without the memo, that cascades into a full
- * re-render of every finished subagent's expanded children (dozens of
- * Reasoning/text/ToolCall subtrees), which is exactly the "expanded
- * state still flickers" symptom the user reported.
+ * children — without the memo, that cascades into a full re-render of
+ * every finished subagent's expanded children (dozens of Reasoning/
+ * text/ToolCall subtrees), which shows up as flicker in the expanded
+ * state of already-completed siblings.
  */
-const AgentChildrenBlock = memo(
-	function AgentChildrenBlock({
-		toolName,
-		toolArgs,
-		streamingStatus,
-		parts,
-	}: {
-		toolName: string;
-		toolArgs: Record<string, unknown>;
-		streamingStatus?: string;
-		parts: Array<Record<string, unknown>>;
-	}) {
-		const [expanded, setExpanded] = useState(false);
-		const streaming = !!streamingStatus;
-		const info = getToolInfo(toolName, toolArgs);
+const AgentChildrenBlock = memo(function AgentChildrenBlock({
+	toolName,
+	toolArgs,
+	streamingStatus,
+	parts,
+}: AgentChildrenBlockProps) {
+	const [expanded, setExpanded] = useState(false);
+	const streaming = !!streamingStatus;
+	const info = getToolInfo(toolName, toolArgs);
 
-		// Filter down to tool-call parts so text/reasoning/todo don't
-		// drift into the tail preview.
-		const toolCallParts = useMemo(
-			() => parts.filter((p) => p.type === "tool-call"),
-			[parts],
-		);
-		const toolUseCount = toolCallParts.length;
+	// Filter down to tool-call parts so text/reasoning/todo don't
+	// drift into the tail preview.
+	const toolCallParts = useMemo(
+		() => parts.filter((p): p is ToolCallPart => p.type === "tool-call"),
+		[parts],
+	);
+	const toolUseCount = toolCallParts.length;
 
-		// Tail window — the preview always shows the LAST N tool-calls
-		// so users see what the subagent is doing right now.
-		const visibleParts = expanded
-			? parts
-			: toolCallParts.slice(-AGENT_PREVIEW_STEPS);
+	// Tail window — the preview always shows the LAST N tool-calls
+	// so users see what the subagent is doing right now.
+	const visibleParts: ExtendedMessagePart[] = expanded
+		? parts
+		: toolCallParts.slice(-AGENT_PREVIEW_STEPS);
 
-		// `hasMore` is derived from the INVARIANT collapsed layout (the
-		// visible count a user WOULD see if they collapsed right now),
-		// not from `visibleParts`. Otherwise toggling into expanded mode
-		// sets `hiddenCount = 0` → `hasMore = false` → the button
-		// disappears → user has no way to collapse back.
-		//
-		// The toggle only surfaces once the tail window is actually
-		// FULL — i.e. the subagent has emitted at least AGENT_PREVIEW_STEPS
-		// tool-calls. Before that, 1 or 2 tool-calls render directly
-		// with no "Show more" chrome, because there's nothing the user
-		// couldn't see just by scrolling one line; a toggle on a
-		// half-filled preview would be visual noise.
-		const collapsedVisibleCount = Math.min(
-			toolCallParts.length,
-			AGENT_PREVIEW_STEPS,
-		);
-		const hiddenCount = parts.length - collapsedVisibleCount;
-		const hasMore =
-			toolCallParts.length >= AGENT_PREVIEW_STEPS && hiddenCount > 0;
+	// `hasMore` is derived from the INVARIANT collapsed layout (the
+	// visible count a user WOULD see if they collapsed right now),
+	// not from `visibleParts`. Otherwise toggling into expanded mode
+	// sets `hiddenCount = 0` → `hasMore = false` → the button
+	// disappears → user has no way to collapse back.
+	//
+	// The toggle only surfaces once the tail window is actually
+	// FULL — i.e. the subagent has emitted at least AGENT_PREVIEW_STEPS
+	// tool-calls. Before that, 1 or 2 tool-calls render directly
+	// with no "Show more" chrome, because there's nothing the user
+	// couldn't see just by scrolling one line; a toggle on a
+	// half-filled preview would be visual noise.
+	const collapsedVisibleCount = Math.min(
+		toolCallParts.length,
+		AGENT_PREVIEW_STEPS,
+	);
+	const hiddenCount = parts.length - collapsedVisibleCount;
+	const hasMore =
+		toolCallParts.length >= AGENT_PREVIEW_STEPS && hiddenCount > 0;
 
-		// Toggle button visibility:
-		//   - `expanded` state: always allow collapsing (even mid-stream)
-		//   - collapsed state: only allow expanding when not streaming
-		//     (expanding mid-stream would show a flickery live trace)
-		const canToggle = hasMore && (expanded || !streaming);
+	// Toggle button visibility:
+	//   - `expanded` state: always allow collapsing (even mid-stream)
+	//   - collapsed state: only allow expanding when not streaming
+	//     (expanding mid-stream would show a flickery live trace)
+	const canToggle = hasMore && (expanded || !streaming);
 
-		return (
-			<div className="flex flex-col">
-				{/* Header line: icon + subagent_type + description + summary */}
-				<div className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-muted">
-					<span className="shrink-0">{info.icon}</span>
-					<span className="font-medium">{info.action}</span>
-					{info.detail ? (
-						<span className="truncate text-app-muted/60">{info.detail}</span>
-					) : null}
-					{streaming ? (
-						<LoaderCircle
-							className="size-3 animate-spin text-app-progress"
-							strokeWidth={2}
+	return (
+		<div className="flex flex-col">
+			{/* Header line: icon + subagent_type + description + summary */}
+			<div className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-muted">
+				<span className="shrink-0">{info.icon}</span>
+				<span className="font-medium">{info.action}</span>
+				{info.detail ? (
+					<span className="truncate text-app-muted/60">{info.detail}</span>
+				) : null}
+				{streaming ? (
+					<LoaderCircle
+						className="size-3 animate-spin text-app-progress"
+						strokeWidth={2}
+					/>
+				) : null}
+				<span className="shrink-0 text-[11px] text-app-muted/40">
+					{toolUseCount > 0
+						? `${toolUseCount} tool ${toolUseCount === 1 ? "use" : "uses"}`
+						: `${parts.length} steps`}
+				</span>
+			</div>
+
+			{/* Children steps */}
+			<div className="ml-5 flex flex-col gap-0.5 border-l border-app-border/30 pl-3 pt-1">
+				{/* "Show more" / "Collapse" toggle */}
+				{canToggle ? (
+					<button
+						type="button"
+						onClick={() => setExpanded((v) => !v)}
+						className="mb-0.5 flex items-center gap-1 text-[11px] text-app-muted/50 transition-colors hover:text-app-muted"
+					>
+						<ChevronDown
+							className={cn(
+								"size-3 transition-transform",
+								expanded && "rotate-180",
+							)}
+							strokeWidth={1.5}
 						/>
-					) : null}
-					<span className="shrink-0 text-[11px] text-app-muted/40">
-						{toolUseCount > 0
-							? `${toolUseCount} tool ${toolUseCount === 1 ? "use" : "uses"}`
-							: `${parts.length} steps`}
-					</span>
-				</div>
+						{expanded
+							? "Collapse"
+							: `Show ${hiddenCount} more step${hiddenCount > 1 ? "s" : ""}`}
+					</button>
+				) : null}
 
-				{/* Children steps */}
-				<div className="ml-5 flex flex-col gap-0.5 border-l border-app-border/30 pl-3 pt-1">
-					{/* "Show more" / "Collapse" toggle */}
-					{canToggle ? (
-						<button
-							type="button"
-							onClick={() => setExpanded((v) => !v)}
-							className="mb-0.5 flex items-center gap-1 text-[11px] text-app-muted/50 transition-colors hover:text-app-muted"
-						>
-							<ChevronDown
-								className={cn(
-									"size-3 transition-transform",
-									expanded && "rotate-180",
-								)}
-								strokeWidth={1.5}
-							/>
-							{expanded
-								? "Collapse"
-								: `Show ${hiddenCount} more step${hiddenCount > 1 ? "s" : ""}`}
-						</button>
-					) : null}
-
-					<div className="flex flex-col gap-0.5">
-						{visibleParts.map((part, idx) => {
-							if (part.type === "tool-call") {
-								// Stable key per logical tool invocation.
-								const toolCallId = part.toolCallId as string | undefined;
-								return (
-									<AssistantToolCall
-										key={toolCallId ?? `tool-${idx}`}
-										toolName={(part.toolName as string) ?? "unknown"}
-										args={(part.args as Record<string, unknown>) ?? {}}
-										result={part.result}
-										compact={!expanded}
-									/>
-								);
-							}
-							// text / reasoning / todo-list only render in expanded mode.
-							if (part.type === "text" && part.text) {
-								return (
-									<div
-										key={`text-${idx}`}
-										className="text-[13px] leading-6 text-app-foreground-soft"
-									>
-										{(part.text as string).slice(0, 300)}
-										{(part.text as string).length > 300 ? "\u2026" : ""}
-									</div>
-								);
-							}
-							if (part.type === "reasoning" && part.text) {
-								return (
-									<Reasoning key={`reason-${idx}`}>
-										<ReasoningTrigger />
-										<ReasoningContent>{part.text as string}</ReasoningContent>
-									</Reasoning>
-								);
-							}
-							if (isTodoListPart(part)) {
-								return <TodoList key={`todo-${idx}`} part={part} />;
-							}
-							return null;
-						})}
-					</div>
+				<div className="flex flex-col gap-0.5">
+					{visibleParts.map((part, idx) => {
+						if (isToolCallPart(part)) {
+							// Stable key per logical tool invocation.
+							return (
+								<AssistantToolCall
+									key={part.toolCallId ?? `tool-${idx}`}
+									toolName={part.toolName ?? "unknown"}
+									args={part.args ?? {}}
+									result={part.result}
+									compact={!expanded}
+									childParts={part.children}
+								/>
+							);
+						}
+						// text / reasoning / todo-list only render in expanded mode.
+						if (part.type === "text" && part.text) {
+							return (
+								<div
+									key={`text-${idx}`}
+									className="text-[13px] leading-6 text-app-foreground-soft"
+								>
+									{part.text.slice(0, 300)}
+									{part.text.length > 300 ? "\u2026" : ""}
+								</div>
+							);
+						}
+						if (part.type === "reasoning" && part.text) {
+							return (
+								<Reasoning key={`reason-${idx}`}>
+									<ReasoningTrigger />
+									<ReasoningContent>{part.text}</ReasoningContent>
+								</Reasoning>
+							);
+						}
+						if (isTodoListPart(part)) {
+							return <TodoList key={`todo-${idx}`} part={part} />;
+						}
+						return null;
+					})}
 				</div>
 			</div>
-		);
-	},
-	(prev, next) =>
-		prev.toolName === next.toolName &&
-		prev.streamingStatus === next.streamingStatus &&
-		prev.parts === next.parts &&
-		shallowArgsEqual(prev.toolArgs, next.toolArgs),
-);
+		</div>
+	);
+}, agentChildrenBlockPropsEqual);
 
 function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 	// Groups can transition inactive → active when a new tool is appended to a
@@ -2529,6 +2575,14 @@ type ToolInfo = {
 	icon: React.ReactNode;
 	diffAdd?: number;
 	diffDel?: number;
+	/** Plain-text body to show in the expandable details panel for tools
+	 *  whose payload lives in `args` rather than `result` (e.g. the
+	 *  synthetic Prompt tool that wraps a subagent's instructions —
+	 *  there's no "result" because the prompt IS the input). When set,
+	 *  `AssistantToolCall` treats it the same as a tool's stdout: the
+	 *  details twist appears, click to expand, content renders in the
+	 *  same `<pre>` block. */
+	body?: string;
 };
 
 function getToolInfo(
@@ -2649,6 +2703,27 @@ function getToolInfo(
 			action: subagentType ?? name,
 			icon: <Bot className="size-3.5 text-app-info" strokeWidth={1.8} />,
 			detail: d ? truncate(d, 60) : undefined,
+		};
+	}
+
+	if (name === "Prompt") {
+		// Synthesized by the Rust pipeline (`adapter/mod.rs`) for the
+		// initial instruction text the parent assistant sends to a
+		// subagent. The text lives in `args.text` (not `result`), so
+		// we surface it via the new `body` field — `AssistantToolCall`
+		// then renders it in the same expandable details panel every
+		// other tool uses for its stdout. Click to twist open, same
+		// chevron, same `<pre>` block, same affordance.
+		const text = str(input.text);
+		return {
+			action: "Prompt",
+			icon: (
+				<MessageSquareText
+					className="size-3.5 text-app-info"
+					strokeWidth={1.8}
+				/>
+			),
+			body: text ?? undefined,
 		};
 	}
 

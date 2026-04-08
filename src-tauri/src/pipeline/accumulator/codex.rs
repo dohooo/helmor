@@ -198,10 +198,12 @@ fn handle_web_search(
         .map(|id| format!("codex-search-{id}"))
         .unwrap_or_else(|| format!("codex-search-{}", acc.line_count));
 
-    // Codex never marks web_search items as failed in the SDK type;
-    // they're either pre-completion (item.started/updated, no
-    // result yet) or completed.
-    let is_running = !persist && item.get("query").is_some();
+    // Codex's web_search item exposes no status field — unlike
+    // command_execution (uses exit_code) or mcp_tool_call (uses
+    // status). The only signal we have is whether the snapshot is
+    // a started/updated event (persist=false) or the completed
+    // event (persist=true).
+    let is_running = !persist;
     let mut tool_use = serde_json::json!({
         "type": "tool_use",
         "id": synthetic_id,

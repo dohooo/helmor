@@ -59,7 +59,7 @@ async function handleSendMessage(
 		const sendParams = parseSendMessageParams(params);
 		if (DEBUG) {
 			debug(
-				`  prompt="${sendParams.prompt.slice(0, 80)}..." model=${sendParams.model ?? "(default)"} cwd=${sendParams.cwd ?? "(none)"} resume=${sendParams.resume ?? "(none)"}`,
+				`  prompt=${JSON.stringify(sendParams.prompt)} model=${sendParams.model ?? "(default)"} cwd=${sendParams.cwd ?? "(none)"} resume=${sendParams.resume ?? "(none)"}`,
 			);
 		}
 		await managers[provider].sendMessage(id, sendParams, emitter);
@@ -77,7 +77,7 @@ async function handleGenerateTitle(
 ): Promise<void> {
 	try {
 		const userMessage = requireString(params, "userMessage");
-		debug(`[${id}] generateTitle — "${userMessage.slice(0, 60)}..."`);
+		debug(`[${id}] generateTitle — userMessage=${JSON.stringify(userMessage)}`);
 
 		// Try Claude (cheap haiku) first; fall back to Codex if Claude is
 		// unavailable. Both implementations emit `titleGenerated` in the

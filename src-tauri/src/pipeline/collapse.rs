@@ -275,6 +275,7 @@ mod tests {
             args_text: serde_json::to_string(&args).unwrap(),
             result,
             streaming_status: None,
+            children: Vec::new(),
         })
     }
 
@@ -392,6 +393,7 @@ mod tests {
                 args_text: "{}".to_string(),
                 result: Some(json!("content")),
                 streaming_status: None,
+                children: Vec::new(),
             },
             MessagePart::ToolCall {
                 tool_call_id: "2".to_string(),
@@ -400,6 +402,7 @@ mod tests {
                 args_text: "{}".to_string(),
                 result: Some(json!("content")),
                 streaming_status: None,
+                children: Vec::new(),
             },
             MessagePart::ToolCall {
                 tool_call_id: "3".to_string(),
@@ -408,6 +411,7 @@ mod tests {
                 args_text: "{}".to_string(),
                 result: Some(json!("content")),
                 streaming_status: None,
+                children: Vec::new(),
             },
         ];
         let summary = build_group_summary(&tools, false);

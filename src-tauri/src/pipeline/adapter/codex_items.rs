@@ -93,6 +93,7 @@ fn render_command_execution(
             args_text,
             result: Some(Value::String(result_text)),
             streaming_status: None,
+            children: Vec::new(),
         })],
         status: Some(MessageStatus {
             status_type: "complete".to_string(),
@@ -170,6 +171,7 @@ fn render_file_change(
             args_text,
             result: Some(Value::String(result_text)),
             streaming_status: None,
+            children: Vec::new(),
         })],
         status: Some(MessageStatus {
             status_type: "complete".to_string(),
@@ -194,6 +196,7 @@ fn render_web_search(msg: &IntermediateMessage, item: &Value, result: &mut Vec<T
             args_text,
             result: Some(Value::String("Search completed".to_string())),
             streaming_status: None,
+            children: Vec::new(),
         })],
         status: Some(MessageStatus {
             status_type: "complete".to_string(),
@@ -239,6 +242,7 @@ fn render_mcp_tool_call(
             args_text,
             result: Some(Value::String(result_text)),
             streaming_status: None,
+            children: Vec::new(),
         })],
         status: Some(MessageStatus {
             status_type: "complete".to_string(),

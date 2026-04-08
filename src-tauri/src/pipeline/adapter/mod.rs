@@ -80,51 +80,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
         // render as SystemNotice banners; the rest fall through to the
         // generic system label.
         if msg_type == Some("system") {
-            let sub = parsed
-                .and_then(|p| p.get("subtype"))
-                .and_then(Value::as_str);
-            if let Some(part) = build_subagent_notice(sub, parsed) {
-                // Mark with `child:<tool_use_id>:<msg_id>` so the
-                // parent-grouping pass folds these notices into the
-                // corresponding Task tool call's children block. The
-                // tool_use_id field on the SDK system event is the id
-                // of the Task tool that spawned the subagent.
-                let mut notice = make_system_notice(msg, part);
-                if let Some(tool_use_id) = parsed
-                    .and_then(|p| p.get("tool_use_id"))
-                    .and_then(Value::as_str)
-                {
-                    notice.id = Some(format!("child:{tool_use_id}:{}", msg.id));
-                }
-                result.push(notice);
-                i += 1;
-                continue;
-            }
-            // `init` is the session-start banner — kept silent because
-            // the frontend already shows the model picker.
-            if sub == Some("init") {
-                i += 1;
-                continue;
-            }
-            // local_command_output: a hook command's stdout/stderr.
-            // Render as an Info notice with the captured content as body.
-            if sub == Some("local_command_output") {
-                let content = parsed
-                    .and_then(|p| p.get("content"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                result.push(make_system_notice(
-                    msg,
-                    MessagePart::SystemNotice {
-                        severity: NoticeSeverity::Info,
-                        label: "Local command output".to_string(),
-                        body: content,
-                    },
-                ));
-                i += 1;
-                continue;
-            }
-            result.push(make_system(msg, &build_system_label(parsed)));
+            convert_system_msg(msg, &mut result);
             i += 1;
             continue;
         }
@@ -142,16 +98,8 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
         // surfacing "you're fine" on every message is just noise.
         // Only render when the user is actually throttled and needs to
         // wait (any non-allowed status: `queued`, `rejected`, etc.).
-        // The `build_rate_limit_notice` helper stays in place so the
-        // throttled rendering still works untouched.
         if msg_type == Some("rate_limit_event") {
-            let status = parsed
-                .and_then(|p| p.get("rate_limit_info"))
-                .and_then(|i| i.get("status"))
-                .and_then(Value::as_str);
-            if status != Some("allowed") {
-                result.push(make_system_notice(msg, build_rate_limit_notice(parsed)));
-            }
+            convert_rate_limit_msg(msg, &mut result);
             i += 1;
             continue;
         }
@@ -261,11 +209,23 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
             // Re-emit any system messages we skipped over so they still
             // render in the conversation. They appear right after the
             // owning assistant turn, which keeps the visual order
-            // (assistant action → SDK status update) intact.
-            if !deferred_system.is_empty() {
-                let owned: Vec<IntermediateMessage> =
-                    deferred_system.into_iter().cloned().collect();
-                result.extend(convert_flat(&owned));
+            // (assistant action → SDK status update) intact. Inline
+            // (no recursion, no clone) — `deferred_system` is by
+            // construction a closed set of {system, rate_limit_event}
+            // events, both of which have their own dedicated helpers.
+            for deferred in deferred_system {
+                let dtype = deferred
+                    .parsed
+                    .as_ref()
+                    .and_then(|p| p.get("type"))
+                    .and_then(Value::as_str);
+                match dtype {
+                    Some("system") => convert_system_msg(deferred, &mut result),
+                    Some("rate_limit_event") => convert_rate_limit_msg(deferred, &mut result),
+                    // The lookahead loop above only ever appends these
+                    // two types — anything else would be a bug.
+                    _ => debug_assert!(false, "deferred event with unexpected type: {dtype:?}"),
+                }
             }
 
             i += 1;
@@ -292,8 +252,11 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
             continue;
         }
 
-        // user — tool_result messages: merge into previous assistant or skip
+        // user — tool_result wrappers fold into the preceding assistant;
+        // anything else either renders as a normal user message or is
+        // dropped (see drop rule below).
         if msg_type == Some("user") {
+            let mut merged = false;
             if let Some(prev) = result.last_mut() {
                 if prev.role == MessageRole::Assistant {
                     // Extract basic parts for merging
@@ -313,11 +276,66 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
                             .into_iter()
                             .map(ExtendedMessagePart::Basic)
                             .collect();
+                        merged = true;
                     }
                 }
             }
-            // Never render user tool_result messages standalone
-            if parsed.is_some() {
+            if merged {
+                i += 1;
+                continue;
+            }
+            // Subagent prompt — `parent_tool_use_id` is set. The
+            // Claude SDK emits the subagent's initial prompt as a
+            // `type=user` text wrapper inside the parent's stream.
+            // Fold it into the parent Task's `children` list as a
+            // synthesized `ToolCall` with `tool_name = "Prompt"` so
+            // the frontend renders it identically to every other
+            // child entry — same row layout, same preview filter,
+            // same structural sharing path. No new MessagePart
+            // variant needed.
+            //
+            // The grouping pass picks up the
+            // `child:<parent_tool_id>:<msg_id>` id below and appends
+            // this synthetic ToolCall to the parent Task's children.
+            if let Some(parent_tool_id) = parsed
+                .and_then(|p| p.get("parent_tool_use_id"))
+                .and_then(Value::as_str)
+            {
+                let text = extract_user_text(parsed);
+                if !text.is_empty() {
+                    let args = serde_json::json!({ "text": text });
+                    let args_text = args.to_string();
+                    result.push(ThreadMessageLike {
+                        role: MessageRole::User,
+                        id: Some(format!("child:{parent_tool_id}:{}", msg.id)),
+                        created_at: Some(msg.created_at.clone()),
+                        content: vec![ExtendedMessagePart::Basic(MessagePart::ToolCall {
+                            tool_call_id: format!("prompt-{}", msg.id),
+                            tool_name: "Prompt".to_string(),
+                            args,
+                            args_text,
+                            result: None,
+                            streaming_status: None,
+                            children: Vec::new(),
+                        })],
+                        status: None,
+                        streaming: None,
+                    });
+                }
+                i += 1;
+                continue;
+            }
+            // Stray top-level user wrapper — non-tool_result with no
+            // preceding assistant to attach context to. Treated as a
+            // malformed SDK event and dropped.
+            //
+            // Anything else (non-tool_result with a preceding
+            // assistant, no parent_tool_use_id) is a real user turn
+            // and renders normally.
+            let has_prev_assistant = result
+                .last()
+                .is_some_and(|m| m.role == MessageRole::Assistant);
+            if parsed.is_some() && !has_prev_assistant {
                 i += 1;
                 continue;
             }
@@ -371,4 +389,100 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
     }
 
     result
+}
+
+// ---------------------------------------------------------------------------
+// Per-event helpers shared by the main loop and the deferred-flush path
+// ---------------------------------------------------------------------------
+
+/// Convert a single `system` event into zero or one ThreadMessageLike,
+/// pushing the result onto `out`. Used by the main `convert_flat` loop
+/// AND by the post-assistant deferred flush so neither has to recurse.
+fn convert_system_msg(msg: &IntermediateMessage, out: &mut Vec<ThreadMessageLike>) {
+    let parsed = msg.parsed.as_ref();
+    let sub = parsed
+        .and_then(|p| p.get("subtype"))
+        .and_then(Value::as_str);
+    if let Some(part) = build_subagent_notice(sub, parsed) {
+        // Mark with `child:<tool_use_id>:<msg_id>` so the parent-grouping
+        // pass folds these notices into the corresponding Task tool
+        // call's children block. The tool_use_id field on the SDK
+        // system event is the id of the Task tool that spawned the
+        // subagent.
+        let mut notice = make_system_notice(msg, part);
+        if let Some(tool_use_id) = parsed
+            .and_then(|p| p.get("tool_use_id"))
+            .and_then(Value::as_str)
+        {
+            notice.id = Some(format!("child:{tool_use_id}:{}", msg.id));
+        }
+        out.push(notice);
+        return;
+    }
+    // `init` is the session-start banner — kept silent because the
+    // frontend already shows the model picker.
+    if sub == Some("init") {
+        return;
+    }
+    // local_command_output: a hook command's stdout/stderr. Render
+    // as an Info notice with the captured content as body.
+    if sub == Some("local_command_output") {
+        let content = parsed
+            .and_then(|p| p.get("content"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        out.push(make_system_notice(
+            msg,
+            MessagePart::SystemNotice {
+                severity: NoticeSeverity::Info,
+                label: "Local command output".to_string(),
+                body: content,
+            },
+        ));
+        return;
+    }
+    out.push(make_system(msg, &build_system_label(parsed)));
+}
+
+/// Concatenate every `text` block from a `type=user` payload's
+/// `message.content` array. Used by the subagent-prompt fold path —
+/// the SDK wraps the prompt as `{message: {content: [{type: "text",
+/// text: "..."}]}}` and we collapse all text blocks into a single
+/// string (joined with newlines if there are multiple).
+fn extract_user_text(parsed: Option<&Value>) -> String {
+    let Some(content) = parsed
+        .and_then(|p| p.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(Value::as_array)
+    else {
+        return String::new();
+    };
+    content
+        .iter()
+        .filter_map(|c| {
+            if c.get("type").and_then(Value::as_str) == Some("text") {
+                c.get("text").and_then(Value::as_str).map(str::to_string)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Convert a single `rate_limit_event` into zero or one
+/// ThreadMessageLike. The SDK fires this on every user turn with
+/// `status = "allowed"` to report current 5h/24h utilization, which
+/// is just a usage gauge — we hide it. Anything else (`queued`,
+/// `rejected`, etc.) means the user is actually throttled, so we
+/// surface a notice.
+fn convert_rate_limit_msg(msg: &IntermediateMessage, out: &mut Vec<ThreadMessageLike>) {
+    let parsed = msg.parsed.as_ref();
+    let status = parsed
+        .and_then(|p| p.get("rate_limit_info"))
+        .and_then(|i| i.get("status"))
+        .and_then(Value::as_str);
+    if status != Some("allowed") {
+        out.push(make_system_notice(msg, build_rate_limit_notice(parsed)));
+    }
 }

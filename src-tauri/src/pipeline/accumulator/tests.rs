@@ -561,3 +561,95 @@ fn delta_assistant_events_with_different_msg_id_flush_then_replace() {
     assert_eq!(second_blocks.len(), 1);
     assert_eq!(second_blocks[0]["text"].as_str(), Some("second turn"));
 }
+
+// ---------------------------------------------------------------------------
+// R6: Codex todo_list synthesis — push an item.completed of type
+// todo_list and verify the accumulator synthesizes a Claude-shaped
+// `TodoWrite` tool_use intermediate so the adapter can collapse it
+// uniformly with Claude's TodoWrite.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn codex_todo_list_synthesizes_claude_todowrite_tool_use() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+    let event = json!({
+        "type": "item.completed",
+        "item": {
+            "type": "todo_list",
+            "id": "todo_evt_1",
+            "items": [
+                {"text": "Plan the work", "completed": true},
+                {"text": "Write tests", "completed": false},
+            ]
+        }
+    });
+    acc.push_event(&event, &event.to_string());
+
+    let snapshot = acc.snapshot("ctx", "sess");
+    assert_eq!(
+        snapshot.len(),
+        1,
+        "expected one synthesized assistant intermediate"
+    );
+    assert_eq!(snapshot[0].role, "assistant");
+    let parsed = snapshot[0].parsed.as_ref().unwrap();
+    let block = &parsed["message"]["content"][0];
+    assert_eq!(block["type"].as_str(), Some("tool_use"));
+    assert_eq!(block["name"].as_str(), Some("TodoWrite"));
+    let todos = block["input"]["todos"].as_array().unwrap();
+    assert_eq!(todos.len(), 2);
+    assert_eq!(todos[0]["content"].as_str(), Some("Plan the work"));
+    assert_eq!(todos[0]["status"].as_str(), Some("completed"));
+    assert_eq!(todos[1]["content"].as_str(), Some("Write tests"));
+    assert_eq!(todos[1]["status"].as_str(), Some("pending"));
+}
+
+// ---------------------------------------------------------------------------
+// R6: prompt_suggestion routing — verify that a top-level
+// prompt_suggestion event lands in the snapshot as a system-role
+// intermediate so the adapter can render it.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn prompt_suggestion_routed_into_collected_snapshot() {
+    let mut acc = StreamAccumulator::new("claude", "opus");
+    let event = json!({
+        "type": "prompt_suggestion",
+        "suggestion": "Try cargo test --tests",
+    });
+    acc.push_event(&event, &event.to_string());
+
+    let snapshot = acc.snapshot("ctx", "sess");
+    assert_eq!(snapshot.len(), 1);
+    assert_eq!(snapshot[0].role, "system");
+    let parsed = snapshot[0].parsed.as_ref().unwrap();
+    assert_eq!(parsed["type"].as_str(), Some("prompt_suggestion"));
+    assert_eq!(
+        parsed["suggestion"].as_str(),
+        Some("Try cargo test --tests")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// R6: rate_limit_event routing — same idea, pin the routing layer.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rate_limit_event_routed_into_collected_snapshot() {
+    let mut acc = StreamAccumulator::new("claude", "opus");
+    let event = json!({
+        "type": "rate_limit_event",
+        "rate_limit_info": {
+            "status": "queued",
+            "rateLimitType": "five_hour",
+        }
+    });
+    acc.push_event(&event, &event.to_string());
+
+    let snapshot = acc.snapshot("ctx", "sess");
+    assert_eq!(snapshot.len(), 1);
+    assert_eq!(snapshot[0].role, "system");
+    let parsed = snapshot[0].parsed.as_ref().unwrap();
+    assert_eq!(parsed["type"].as_str(), Some("rate_limit_event"));
+    assert_eq!(parsed["rate_limit_info"]["status"].as_str(), Some("queued"));
+}

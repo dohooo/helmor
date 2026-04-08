@@ -27,6 +27,34 @@ use streaming::StreamingBlock;
 mod tests;
 
 // ---------------------------------------------------------------------------
+// PushOutcome
+// ---------------------------------------------------------------------------
+
+/// Classifies the effect a single `push_event` call had on accumulator
+/// state. The pipeline uses this to decide whether the next emit should be
+/// a `Full` snapshot, a `Partial` streaming update, or `None`.
+///
+/// Keeping the classification next to the handlers makes it impossible
+/// for a new SDK event type to land without an explicit rendering-tier
+/// decision: the dispatch in `push_event` MUST return a variant, which
+/// forces the author to think about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushOutcome {
+    /// A fully-formed message landed in `collected[]` (or one was replaced
+    /// in place by `collect_or_replace`). The pipeline must run the full
+    /// adapter + collapse pipeline because the change can affect any part
+    /// of the rendered output, not just the trailing partial.
+    Finalized,
+    /// Only the streaming buffer (`blocks` / `fallback_text` /
+    /// `fallback_thinking`) changed. The pipeline can build just the
+    /// trailing partial message and emit a `Partial`, skipping collapse.
+    StreamingDelta,
+    /// Control event with no rendering effect (sidecar framing markers,
+    /// SDK turn-lifecycle pings, etc.). The pipeline emits nothing.
+    NoOp,
+}
+
+// ---------------------------------------------------------------------------
 // StreamAccumulator
 // ---------------------------------------------------------------------------
 
@@ -126,8 +154,11 @@ impl StreamAccumulator {
     // Public API
     // =====================================================================
 
-    /// Feed a raw sidecar JSON event into the accumulator.
-    pub fn push_event(&mut self, value: &Value, raw_line: &str) {
+    /// Feed a raw sidecar JSON event into the accumulator and report what
+    /// kind of state change it produced. The caller (`MessagePipeline`)
+    /// uses the returned `PushOutcome` to decide between a full re-render,
+    /// a partial render, or skipping emission entirely.
+    pub fn push_event(&mut self, value: &Value, raw_line: &str) -> PushOutcome {
         self.line_count += 1;
 
         // Extract session ID
@@ -149,35 +180,94 @@ impl StreamAccumulator {
         let event_type = value.get("type").and_then(Value::as_str);
 
         match event_type {
-            Some("stream_event") => streaming::handle_stream_event(self, value),
-            Some("tool_progress") => streaming::handle_tool_progress(self, value),
-            Some("assistant") => self.handle_assistant(value, raw_line),
-            Some("user") => self.handle_user(raw_line, value),
-            Some("result") => self.handle_result(value, raw_line),
-            Some("error") => self.handle_error(raw_line, value),
-            Some("item.completed") => codex::handle_item_completed(self, raw_line, value),
-            Some("turn.completed") => self.handle_turn_completed(value, raw_line),
-            Some("turn.failed") => self.handle_codex_turn_failed(raw_line, value),
+            // ── Claude streaming deltas ────────────────────────────────
+            // These mutate `blocks`/`fallback_text`/`fallback_thinking`
+            // and the pipeline can render them via `build_partial`.
+            Some("stream_event") => {
+                streaming::handle_stream_event(self, value);
+                PushOutcome::StreamingDelta
+            }
+            Some("tool_progress") => {
+                streaming::handle_tool_progress(self, value);
+                PushOutcome::StreamingDelta
+            }
+
+            // ── Claude finalized full messages ─────────────────────────
+            Some("assistant") => {
+                self.handle_assistant(value, raw_line);
+                PushOutcome::Finalized
+            }
+            Some("user") => {
+                self.handle_user(raw_line, value);
+                PushOutcome::Finalized
+            }
+            Some("result") => {
+                self.handle_result(value, raw_line);
+                PushOutcome::Finalized
+            }
+            Some("error") => {
+                self.handle_error(raw_line, value);
+                PushOutcome::Finalized
+            }
+            Some("rate_limit_event") => {
+                self.handle_rate_limit_event(raw_line, value);
+                PushOutcome::Finalized
+            }
+            Some("prompt_suggestion") => {
+                self.handle_prompt_suggestion(raw_line, value);
+                PushOutcome::Finalized
+            }
+            Some("system") => {
+                self.handle_claude_system(raw_line, value);
+                PushOutcome::Finalized
+            }
+
+            // ── Codex item / turn events ───────────────────────────────
+            // Codex items go through `collect_or_replace` which mutates
+            // `collected[]` directly — they don't touch the streaming
+            // `blocks` buffer, so the partial-render path can't surface
+            // them. They're also free to update non-trailing entries
+            // (multiple items can be in flight when subagents fan out),
+            // so a "render the trailing partial only" optimization would
+            // miss updates. Routing them through `Finalized` means each
+            // delta runs the full adapter + collapse pass; that cost is
+            // structurally tied to Codex's per-item snapshot model rather
+            // than something we can shave with the current pipeline.
+            // If this ever becomes a profile hot spot the right fix is
+            // to extend `build_partial` to render an arbitrary trailing
+            // collected entry (and have `collect_or_replace` report which
+            // index it touched), not to silently downgrade these to
+            // `StreamingDelta` here.
+            Some("item.completed") => {
+                codex::handle_item_completed(self, raw_line, value);
+                PushOutcome::Finalized
+            }
+            Some("item.started") | Some("item.updated") => {
+                codex::handle_item_snapshot(self, raw_line, value, false);
+                PushOutcome::Finalized
+            }
+            Some("turn.completed") => {
+                self.handle_turn_completed(value, raw_line);
+                PushOutcome::Finalized
+            }
+            Some("turn.failed") => {
+                self.handle_codex_turn_failed(raw_line, value);
+                PushOutcome::Finalized
+            }
+
+            // ── No-op control / lifecycle markers ──────────────────────
+            // Codex turn-lifecycle marker. The SDK emits this immediately
+            // before the first item.* event; it carries no rendering
+            // content (the assistant text comes from item.completed
+            // /agent_message). Pure no-op.
+            Some("turn.started") => PushOutcome::NoOp,
+            // Codex thread lifecycle: only updates session_id (already
+            // captured above). No render impact.
             Some("thread.started") | Some("thread.resumed") => {
                 if let Some(tid) = value.get("thread_id").and_then(Value::as_str) {
                     self.session_id = Some(tid.to_string());
                 }
-            }
-            Some("rate_limit_event") => self.handle_rate_limit_event(raw_line, value),
-            Some("prompt_suggestion") => self.handle_prompt_suggestion(raw_line, value),
-            Some("system") => self.handle_claude_system(raw_line, value),
-            // Codex turn-lifecycle marker. The SDK emits this immediately
-            // before the first item.* event; it carries no rendering content
-            // (the assistant text comes from item.completed/agent_message).
-            // Pure no-op.
-            Some("turn.started") => {}
-            // Codex item-lifecycle markers. Items are full snapshots, so
-            // item.started/updated route through the same handler as
-            // item.completed but without persistence — the streaming
-            // render uses the latest snapshot, persistence happens once
-            // on completed.
-            Some("item.started") | Some("item.updated") => {
-                codex::handle_item_snapshot(self, raw_line, value, false);
+                PushOutcome::NoOp
             }
             // Sidecar protocol control events. These are NOT SDK messages —
             // they're framing markers the sidecar emits to signal terminal
@@ -188,7 +278,8 @@ impl StreamAccumulator {
             | Some("ready")
             | Some("pong")
             | Some("stopped")
-            | Some("titleGenerated") => {}
+            | Some("titleGenerated") => PushOutcome::NoOp,
+
             other => {
                 // Coverage guard: any unhandled top-level event type is
                 // recorded so `pipeline_streams.rs` can fail the test if a
@@ -198,6 +289,7 @@ impl StreamAccumulator {
                 if !self.dropped_event_types.contains(&label) {
                     self.dropped_event_types.push(label);
                 }
+                PushOutcome::NoOp
             }
         }
     }

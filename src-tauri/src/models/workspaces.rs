@@ -423,8 +423,14 @@ pub struct UpdateIntendedTargetBranchInternal {
 }
 
 /// Tauri-facing entry point. Performs the fast local realignment synchronously,
-/// then spawns a background thread to fetch from `origin` and silently re-align
-/// to the freshest tip if it is still safe.
+/// then schedules a background fetch from `origin` to silently re-align to the
+/// freshest tip if it is still safe.
+///
+/// The background fetch is dispatched via `tauri::async_runtime::spawn_blocking`
+/// rather than `std::thread::spawn` so it runs on Tokio's bounded blocking
+/// pool. Combined with the `GIT_NETWORK_TIMEOUT` cap inside `fetch_remote_branch`,
+/// this guarantees that even pathological hangs only ever consume
+/// `pool_size × timeout` threads before draining — no unbounded OS-thread leak.
 pub fn update_intended_target_branch(
     workspace_id: &str,
     target_branch: &str,
@@ -434,7 +440,7 @@ pub fn update_intended_target_branch(
     if let Some(post_reset_sha) = internal.post_reset_sha.clone() {
         let workspace_id_owned = workspace_id.to_string();
         let target_branch_owned = internal.target_branch.clone();
-        std::thread::spawn(move || {
+        tauri::async_runtime::spawn_blocking(move || {
             let _ = refresh_remote_and_realign(
                 &workspace_id_owned,
                 &target_branch_owned,
@@ -615,9 +621,11 @@ pub fn refresh_remote_and_realign(
     // race with another command (e.g. another switch, archive, restore).
     //
     // We use `blocking_lock()` instead of `.lock().await` because this function
-    // is called from a background `std::thread::spawn`'d worker — there is no
-    // Tokio runtime context here. `blocking_lock()` would panic if called from
-    // a runtime worker thread, but it works correctly from a vanilla std thread.
+    // is dispatched via `tauri::async_runtime::spawn_blocking` (or, in tests,
+    // called directly from a sync test body). `spawn_blocking` runs the closure
+    // on Tokio's *blocking* pool, which is NOT a runtime worker thread, so
+    // `blocking_lock()` is safe — it would only panic if called from one of
+    // the async-driving worker threads.
     let _lock = db::WORKSPACE_MUTATION_LOCK.blocking_lock();
 
     // Re-load record under the lock; abort if state changed.
@@ -1251,17 +1259,48 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
 
     git_ops::create_worktree(&repo_root, &workspace_dir, &actual_branch)?;
 
-    // Update branch name in DB if it changed
+    // Update branch name in DB if it changed.
+    //
+    // CRITICAL: this update MUST succeed before we proceed. The worktree is
+    // already on `actual_branch` (e.g. `feature/foo-v1`), but the DB still
+    // points at the old `branch` (e.g. `feature/foo`). If we let a swallowed
+    // DB error slip through, every later archive deletes the wrong branch and
+    // every later restore picks the wrong commit. Roll back via the same
+    // cleanup helper used by the rest of this function on error paths — note
+    // that the staged archive dir does not exist yet, so cleanup_failed_restore's
+    // `staged_archive_dir.exists()` guard correctly skips the rename-back step.
+    let staged_archive_dir = helpers::staged_archive_context_dir(&archived_context_dir);
     if actual_branch != branch {
-        let conn = db::open_connection(true)?;
+        let conn = db::open_connection(true).map_err(|error| {
+            cleanup_failed_restore(
+                &repo_root,
+                &workspace_dir,
+                None,
+                &staged_archive_dir,
+                &archived_context_dir,
+                &actual_branch,
+                &original_branch_commit,
+            );
+            error.context("Failed to open DB to persist restored branch name")
+        })?;
         conn.execute(
             "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
             rusqlite::params![actual_branch, workspace_id],
         )
-        .ok();
+        .map_err(|error| {
+            cleanup_failed_restore(
+                &repo_root,
+                &workspace_dir,
+                None,
+                &staged_archive_dir,
+                &archived_context_dir,
+                &actual_branch,
+                &original_branch_commit,
+            );
+            anyhow::anyhow!("Failed to persist restored branch name in DB: {error}")
+        })?;
     }
 
-    let staged_archive_dir = helpers::staged_archive_context_dir(&archived_context_dir);
     fs::rename(&archived_context_dir, &staged_archive_dir).map_err(|error| {
         cleanup_failed_restore(
             &repo_root,

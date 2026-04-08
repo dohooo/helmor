@@ -25,6 +25,16 @@ import {
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "./title.js";
 
+/**
+ * Hard upper bound on how long `listSlashCommands` will wait for the SDK's
+ * control-protocol response. The slash-command popup is interactive (the user
+ * just opened a dropdown), so anything longer than a few seconds is worse
+ * than just showing an empty list. Without this bound, a missing or
+ * unresponsive `claude-code` binary parks the request forever and the popup
+ * spinner never resolves.
+ */
+const SLASH_COMMANDS_TIMEOUT_MS = 5_000;
+
 interface LiveSession {
 	readonly query: Query;
 	readonly abortController: AbortController;
@@ -253,15 +263,17 @@ export class ClaudeSessionManager implements SessionManager {
 		// Streaming-input mode requires an `AsyncIterable<SDKUserMessage>`.
 		// Awaiting `donePromise` here parks the iterator until teardown
 		// signals it to return — it never yields a user message, so no turn
-		// is ever fired. Casting through `unknown` keeps strict typing happy
-		// without smuggling in a bogus message shape.
-		const promptIter = (async function* () {
-			await donePromise;
-			// Unreachable in practice (donePromise resolves only on teardown,
-			// after which the iterator returns), but biome's `useYield` rule
-			// requires generators to contain at least one `yield` expression.
-			yield* [];
-		})() as unknown as AsyncIterable<SDKUserMessage>;
+		// is ever fired. Typing the generator as `AsyncGenerator<never>` lets
+		// it widen into `AsyncIterable<SDKUserMessage>` covariantly without a
+		// `as unknown as` smuggle.
+		const promptIter: AsyncIterable<SDKUserMessage> =
+			(async function* (): AsyncGenerator<never> {
+				await donePromise;
+				// Unreachable in practice (donePromise resolves only on teardown,
+				// after which the iterator returns), but biome's `useYield` rule
+				// requires generators to contain at least one `yield` expression.
+				yield* [];
+			})();
 
 		const q = query({
 			prompt: promptIter,
@@ -291,6 +303,22 @@ export class ClaudeSessionManager implements SessionManager {
 			}
 		})();
 
+		// Bound the supportedCommands() call so a missing or unresponsive
+		// `claude-code` binary cannot park this promise forever. On timeout
+		// we abort the controller — the SDK observes the abort signal and
+		// rejects the supportedCommands() promise — and we convert the
+		// resulting error into a friendly, actionable message via the
+		// `timedOut` flag below.
+		let timedOut = false;
+		const timeoutHandle = setTimeout(() => {
+			timedOut = true;
+			try {
+				abortController.abort();
+			} catch {
+				// best-effort
+			}
+		}, SLASH_COMMANDS_TIMEOUT_MS);
+
 		try {
 			const commands = await q.supportedCommands();
 			// Dedupe by name. The SDK can return the same command twice when
@@ -310,7 +338,15 @@ export class ClaudeSessionManager implements SessionManager {
 				});
 			}
 			return out;
+		} catch (err) {
+			if (timedOut) {
+				throw new Error(
+					`listSlashCommands timed out after ${SLASH_COMMANDS_TIMEOUT_MS}ms — claude-code may be missing or unresponsive`,
+				);
+			}
+			throw err;
 		} finally {
+			clearTimeout(timeoutHandle);
 			resolveDone();
 			try {
 				abortController.abort();

@@ -68,6 +68,10 @@ pub enum NormPart {
         result_kind: Option<String>,
         result_preview: Option<String>,
         streaming_status: Option<String>,
+        /// Number of sub-agent child parts attached to this tool call by
+        /// the grouping pass. Always 0 for non-Task/Agent tools.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        children_count: usize,
     },
     /// Collapsed group placeholder. Most scenarios shouldn't trigger collapse,
     /// but if one does we want a clear marker rather than a panic.
@@ -94,6 +98,10 @@ pub enum NormPart {
         text_length: usize,
         text_preview: String,
     },
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 pub fn truncate(s: &str) -> String {
@@ -149,6 +157,7 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
             args_text,
             result,
             streaming_status,
+            children,
         } => {
             let mut keys: Vec<String> = args
                 .as_object()
@@ -159,12 +168,7 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
                 None => (false, None, None),
                 Some(v) => {
                     if let Some(s) = v.as_str() {
-                        let kind = if s.starts_with("__children__") {
-                            "children-marker"
-                        } else {
-                            "string"
-                        };
-                        (true, Some(kind.to_string()), Some(truncate(s)))
+                        (true, Some("string".to_string()), Some(truncate(s)))
                     } else {
                         let kind = match v {
                             Value::Number(_) => "number",
@@ -187,6 +191,7 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
                 result_kind,
                 result_preview,
                 streaming_status: streaming_status.as_ref().map(streaming_status_str),
+                children_count: children.len(),
             }
         }
         MessagePart::SystemNotice {

@@ -1,5 +1,19 @@
 use anyhow::{bail, Context, Result};
-use std::{ffi::OsStr, fs, path::Path, process::Command};
+use std::{
+    ffi::OsStr,
+    fs,
+    path::Path,
+    process::{Command, Output, Stdio},
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
+
+/// Hard upper bound on any `git` command that touches the network. Long
+/// enough to tolerate a slow connection but short enough that a stalled
+/// remote (or a credential prompt that we forgot to suppress) cannot park
+/// the calling blocking-pool worker indefinitely.
+pub const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn run_git<I, S>(args: I, current_dir: Option<&Path>) -> Result<String>
 where
@@ -17,7 +31,121 @@ where
     }
 
     let output = command.output().context("Failed to run git")?;
+    handle_git_output(output)
+}
 
+/// Run `git` with a hard wall-clock timeout and an environment that locks
+/// down every interactive prompt path. Use this for any command that may
+/// contact a remote (`fetch`, `pull`, `push`, `ls-remote`, …) — without it,
+/// a hung remote or an unexpected credential prompt will park the calling
+/// thread forever, eventually saturating Tokio's blocking pool and freezing
+/// the entire app.
+///
+/// On timeout the child is killed via `SIGKILL` (Unix) — matching the
+/// existing pattern in `sidecar.rs::send_sigterm` — and a "git command
+/// timed out" error is returned to the caller.
+pub fn run_git_with_timeout<I, S>(
+    args: I,
+    current_dir: Option<&Path>,
+    timeout: Duration,
+) -> Result<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut command = Command::new("git");
+    for arg in args {
+        command.arg(arg.as_ref());
+    }
+    if let Some(current_dir) = current_dir {
+        command.current_dir(current_dir);
+    }
+
+    // Lock down every interactive-prompt path:
+    //
+    // - `GIT_TERMINAL_PROMPT=0` makes git fail fast instead of asking for
+    //   credentials on stdin.
+    // - `GCM_INTERACTIVE=Never` tells the Git Credential Manager to never
+    //   pop a GUI prompt.
+    // - Clearing `*_ASKPASS` prevents OS-level helpers (Keychain prompts,
+    //   GUI dialogs) from rescuing git either — failure here MUST surface
+    //   so callers can choose to retry rather than hanging forever.
+    // - `GIT_SSH_COMMAND` forces ssh into batch mode with a 10s connect
+    //   timeout, so a dead host or missing key fails fast instead of
+    //   parking on the TCP handshake.
+    command.env("GIT_TERMINAL_PROMPT", "0");
+    command.env("GCM_INTERACTIVE", "Never");
+    command.env_remove("GIT_ASKPASS");
+    command.env_remove("SSH_ASKPASS");
+    command.env(
+        "GIT_SSH_COMMAND",
+        "ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new",
+    );
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+
+    let child = command.spawn().context("Failed to spawn git")?;
+    let child_pid = child.id();
+
+    // The waiter thread owns `wait_with_output` and ferries the result back
+    // through a oneshot channel. The main thread does `recv_timeout` so we
+    // can cap the wall-clock wait without polling.
+    //
+    // (`wait_with_output` consumes `child`, so there's no clean way to
+    // wait on the Child from one thread and kill it from another in std
+    // alone — killing via `libc::kill` on the saved PID is the workaround,
+    // mirroring the existing pattern in `sidecar.rs::send_sigterm`.)
+    let (tx, rx) = mpsc::channel();
+    let waiter = thread::spawn(move || {
+        let result = child.wait_with_output();
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(output)) => {
+            // Waiter completed naturally; reap it so the OS thread is freed.
+            let _ = waiter.join();
+            handle_git_output(output)
+        }
+        Ok(Err(io_err)) => {
+            let _ = waiter.join();
+            Err(anyhow::Error::from(io_err).context("Failed to wait for git"))
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            // Kill the child so the waiter thread observes the death and
+            // exits — otherwise we'd leak the OS thread until git decided
+            // to give up on its own. There is a small PID-reuse race here
+            // (the child may have exited just before we send the signal),
+            // but this matches `sidecar.rs::send_sigterm` and is the best
+            // option without pulling in a helper crate.
+            #[cfg(unix)]
+            // SAFETY: `child_pid` is the PID of the child we spawned. Even
+            // if the kernel has already reaped the process, `libc::kill`
+            // returns ESRCH harmlessly — it cannot corrupt our address
+            // space.
+            unsafe {
+                libc::kill(child_pid as libc::pid_t, libc::SIGKILL);
+            }
+            #[cfg(not(unix))]
+            {
+                // No portable PID-only kill on Windows. The waiter will
+                // exit eventually when the child does — accept the leak
+                // for now (Helmor's primary target is macOS).
+                let _ = child_pid;
+            }
+            let _ = waiter.join();
+            bail!(
+                "git command timed out after {timeout:?} (likely a stalled remote or credential prompt)"
+            )
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            let _ = waiter.join();
+            bail!("git waiter thread crashed before sending result")
+        }
+    }
+}
+
+fn handle_git_output(output: Output) -> Result<String> {
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
     }
@@ -392,22 +520,30 @@ pub fn commits_ahead_of(workspace_dir: &Path, base_ref: &str) -> Result<u32> {
 }
 
 /// Fetch a specific branch from `origin` into the workspace's repo.
+///
+/// Bounded by `GIT_NETWORK_TIMEOUT` and runs in a no-prompt environment so
+/// a stalled remote or credential prompt cannot park the calling thread.
 pub fn fetch_remote_branch(workspace_dir: &Path, branch: &str) -> Result<()> {
     let workspace_dir = workspace_dir.display().to_string();
-    run_git(
+    run_git_with_timeout(
         ["-C", workspace_dir.as_str(), "fetch", "origin", branch],
         None,
+        GIT_NETWORK_TIMEOUT,
     )
     .map(|_| ())
     .with_context(|| format!("Failed to fetch origin/{} into {}", branch, workspace_dir))
 }
 
 /// Fetch all branches from `origin`, pruning deleted remote refs.
+///
+/// Bounded by `GIT_NETWORK_TIMEOUT` and runs in a no-prompt environment so
+/// a stalled remote or credential prompt cannot park the calling thread.
 pub fn fetch_all_remote(workspace_dir: &Path) -> Result<()> {
     let workspace_dir = workspace_dir.display().to_string();
-    run_git(
+    run_git_with_timeout(
         ["-C", workspace_dir.as_str(), "fetch", "--prune", "origin"],
         None,
+        GIT_NETWORK_TIMEOUT,
     )
     .map(|_| ())
     .with_context(|| format!("Failed to fetch all from origin in {}", workspace_dir))

@@ -65,6 +65,12 @@ pub enum MessagePart {
         /// Streaming execution progress indicator.
         #[serde(skip_serializing_if = "Option::is_none")]
         streaming_status: Option<StreamingStatus>,
+        /// Sub-agent work folded in by `grouping::group_child_messages`.
+        /// Only `Task` / `Agent` tool calls populate this; everything else
+        /// leaves it empty and `skip_serializing_if = "Vec::is_empty"`
+        /// keeps the JSON shape unchanged for non-subagent tool calls.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        children: Vec<ExtendedMessagePart>,
     },
 
     /// Inline notice from the SDK (rate limit, status update, etc.) — a

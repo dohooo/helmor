@@ -1,12 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
-import type {
-	CollapsedGroupPart,
-	ExtendedMessagePart,
-	MessagePart,
-	ThreadMessageLike,
-	ToolCallPart,
-} from "@/lib/api";
+import type { ThreadMessageLike } from "@/lib/api";
+import { messagesStructurallyEqual } from "@/lib/structural-equality";
 
 type DbSeenCache = {
 	db: ThreadMessageLike[];
@@ -24,107 +19,23 @@ type DbSeenCache = {
 //
 // Without structural sharing, every `update` invalidates the
 // `MemoConversationMessage` `prev.message === next.message` bail-out and the
-// entire message list re-renders. The helpers below walk the new array,
-// reuse the previous message object whenever the message id matches AND its
-// content is structurally equivalent, and finally fall back to the previous
-// outer array reference if nothing changed at all.
+// entire message list re-renders. `shareMessages` walks the new array,
+// reuses the previous message object whenever the message id matches AND
+// its content is structurally equivalent (via `messagesStructurallyEqual`
+// from `@/lib/structural-equality`, shared with the per-component memo
+// comparators in `workspace-panel.tsx`), and finally falls back to the
+// previous outer array reference if nothing changed at all.
 // ---------------------------------------------------------------------------
 
-function partsStructurallyEqual(
-	a: ExtendedMessagePart[],
-	b: ExtendedMessagePart[],
-): boolean {
-	if (a === b) return true;
-	if (a.length !== b.length) return false;
-	for (let i = 0; i < a.length; i += 1) {
-		if (!partStructurallyEqual(a[i]!, b[i]!)) return false;
-	}
-	return true;
-}
-
-function partStructurallyEqual(
-	a: ExtendedMessagePart,
-	b: ExtendedMessagePart,
-): boolean {
-	if (a === b) return true;
-	if (a.type !== b.type) return false;
-	switch (a.type) {
-		case "text": {
-			const tb = b as Extract<MessagePart, { type: "text" }>;
-			return a.text === tb.text;
-		}
-		case "reasoning": {
-			const rb = b as Extract<MessagePart, { type: "reasoning" }>;
-			return a.text === rb.text && a.streaming === rb.streaming;
-		}
-		case "tool-call": {
-			const tb = b as ToolCallPart;
-			if (a.toolCallId !== tb.toolCallId) return false;
-			if (a.toolName !== tb.toolName) return false;
-			if (a.streamingStatus !== tb.streamingStatus) return false;
-			if (a.argsText !== tb.argsText) return false;
-			// `result` MUST be compared because Task/Agent tool calls
-			// carry their subagent children inside it as a `__children__`
-			// payload (a JSON-encoded string) that grows as the subagent
-			// streams more events. If we skipped this check (the previous
-			// behavior), structural sharing would reuse the prior tool-
-			// call reference, the parent message would also share its
-			// reference, MemoConversationMessage would bail out, and the
-			// live render of an in-progress subagent would freeze on the
-			// last full snapshot — the user sees a Task header with no
-			// children, even though the pipeline is busy attaching them.
-			//
-			// Strings compare by value in JS so this stays cheap for the
-			// common case (`__children__{...}` payloads, plain text
-			// outputs). Non-string results (undefined / wrapped Value /
-			// arrays) fall back to reference equality, which matches the
-			// original concern about backend wrapper allocations.
-			if (typeof a.result === "string" || typeof tb.result === "string") {
-				if (a.result !== tb.result) return false;
-			} else if (a.result !== tb.result) {
-				return false;
-			}
-			return true;
-		}
-		case "collapsed-group": {
-			const gb = b as CollapsedGroupPart;
-			if (a.active !== gb.active) return false;
-			if (a.category !== gb.category) return false;
-			if (a.summary !== gb.summary) return false;
-			if (a.tools.length !== gb.tools.length) return false;
-			for (let i = 0; i < a.tools.length; i += 1) {
-				if (!partStructurallyEqual(a.tools[i]!, gb.tools[i]!)) return false;
-			}
-			return true;
-		}
-		default:
-			return false;
-	}
-}
-
-/** Exported for tests only — equality predicate that powers
- *  `shareMessages`. Pinning its behavior in unit tests prevents
- *  "looks the same, but isn't" regressions like the Task __children__
- *  freeze (where dropping `result` from the tool-call diff caused
- *  in-progress subagent renders to stall on the last full snapshot). */
-export function messagesStructurallyEqual(
-	a: ThreadMessageLike,
-	b: ThreadMessageLike,
-): boolean {
-	if (a === b) return true;
-	if (a.id !== b.id) return false;
-	if (a.role !== b.role) return false;
-	if (a.streaming !== b.streaming) return false;
-	if (a.createdAt !== b.createdAt) return false;
-	if (a.status !== b.status) {
-		if (!a.status || !b.status) return false;
-		if (a.status.type !== b.status.type) return false;
-		if (a.status.reason !== b.status.reason) return false;
-	}
-	return partsStructurallyEqual(a.content, b.content);
-}
-
-function shareMessages(
+/**
+ * Exported for direct unit testing of the structural-sharing algorithm.
+ * The helper itself is what keeps `MemoConversationMessage`'s
+ * `prev.message === next.message` bail-out alive across `update`
+ * snapshots — its truth table (when to reuse vs. allocate, and when
+ * to fall back to the previous outer array reference entirely) is
+ * pinned by tests in `workspace-panel-container.share.test.ts`.
+ */
+export function shareMessages(
 	prev: ThreadMessageLike[],
 	next: ThreadMessageLike[],
 ): ThreadMessageLike[] {

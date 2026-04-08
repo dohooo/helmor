@@ -67,18 +67,22 @@ pub(super) fn parse_assistant_parts(parsed: Option<&Value>) -> Vec<MessagePart> 
                     parts.push(MessagePart::Text { text });
                 }
             }
-            // All Claude server-tool *_tool_result blocks. The block sits
-            // immediately after a `server_tool_use` block; we attach its
-            // serialized payload to the previous ToolCall part as the
-            // result so the frontend's existing tool card renders the
-            // output without per-block code paths.
+            // All Claude server-tool *_tool_result blocks. The block
+            // carries a `tool_use_id` pointing back at the matching
+            // `server_tool_use` — we attach its serialized payload to
+            // the ToolCall part with that exact id so the frontend's
+            // existing tool card renders the output without per-block
+            // code paths. Strict id matching only — matching "the most
+            // recent ToolCall" would misroute the result whenever the
+            // SDK interleaves an unrelated block (text/thinking)
+            // between the server_tool_use and its result.
             "web_search_tool_result"
             | "web_fetch_tool_result"
             | "code_execution_tool_result"
             | "bash_code_execution_tool_result"
             | "text_editor_code_execution_tool_result"
             | "tool_search_tool_result" => {
-                attach_server_tool_result_to_previous(&mut parts, obj);
+                attach_server_tool_result(&mut parts, obj);
             }
             "tool_use" | "server_tool_use" => {
                 let args = obj
@@ -124,6 +128,7 @@ pub(super) fn parse_assistant_parts(parsed: Option<&Value>) -> Vec<MessagePart> 
                     args_text,
                     result: None,
                     streaming_status: stream_status,
+                    children: Vec::new(),
                 });
             }
             _ => {}
@@ -251,22 +256,32 @@ fn parse_document_block(obj: &serde_json::Map<String, Value>) -> Option<String> 
     }
 }
 
-/// Attach a Claude server-tool *_tool_result block to the most recent
-/// ToolCall part by serializing the block as the tool's `result`.
-/// Newer SDKs add new variants — those keep flowing through the
-/// `_` arm in `parse_assistant_parts` and get dropped, which is fine
-/// because the drop guard is at the event-type level, not per block.
-fn attach_server_tool_result_to_previous(
-    parts: &mut [MessagePart],
-    obj: &serde_json::Map<String, Value>,
-) {
+/// Attach a Claude server-tool *_tool_result block to the matching
+/// ToolCall by `tool_use_id`. The result block carries the id of the
+/// `server_tool_use` it belongs to; we look it up exactly so a result
+/// block can never misroute even if the SDK interleaves unrelated
+/// blocks between the tool use and its result. If the result block
+/// has no `tool_use_id`, or no matching ToolCall exists in `parts`,
+/// the block is dropped silently — same as the `_` arm in
+/// `parse_assistant_parts`.
+fn attach_server_tool_result(parts: &mut [MessagePart], obj: &serde_json::Map<String, Value>) {
+    let target_id = match obj.get("tool_use_id").and_then(Value::as_str) {
+        Some(id) => id,
+        None => return,
+    };
     let result_value = Value::Object(obj.clone());
-    if let Some(MessagePart::ToolCall { result, .. }) = parts
-        .iter_mut()
-        .rev()
-        .find(|p| matches!(p, MessagePart::ToolCall { .. }))
-    {
-        *result = Some(result_value);
+    for part in parts.iter_mut().rev() {
+        if let MessagePart::ToolCall {
+            tool_call_id,
+            result,
+            ..
+        } = part
+        {
+            if tool_call_id == target_id {
+                *result = Some(result_value);
+                return;
+            }
+        }
     }
 }
 

@@ -1324,6 +1324,12 @@ export type ToolCallPart = {
 	argsText: string;
 	result?: unknown;
 	streamingStatus?: StreamingStatus;
+	/**
+	 * Sub-agent work folded in by the Rust pipeline's grouping pass for
+	 * `Task` / `Agent` tool calls. Empty / absent for normal tool calls
+	 * (the Rust serializer skips it when empty).
+	 */
+	children?: ExtendedMessagePart[];
 };
 export type NoticeSeverity = "info" | "warning" | "error";
 export type SystemNoticePart = {
