@@ -558,24 +558,71 @@ pub async fn generate_session_title(
                 crate::models::helpers::branch_name_for_directory(branch_segment, &branch_settings);
 
             if old_branch.as_deref() != Some(new_branch.as_str()) {
-                // Rename the actual git branch
-                if let (Some(ref old_name), Some(ref repo_root)) = (&old_branch, &root_path) {
+                // Rename the workspace's branch on disk and in the DB.
+                //
+                // Both must succeed (or both must be skipped) — otherwise the
+                // worktree's actual branch and `workspaces.branch` drift, and
+                // the next archive/restore deletes/restores the wrong branch.
+                //
+                // The whole rename is best-effort cosmetics for the title-
+                // generation flow, so any failure is logged and swallowed
+                // — but never partial.
+                let fs_rename_attempted = matches!(
+                    (&old_branch, &root_path),
+                    (Some(_), Some(repo_root)) if std::path::Path::new(repo_root).is_dir()
+                );
+
+                let fs_rename_ok = if let (Some(ref old_name), Some(ref repo_root)) =
+                    (&old_branch, &root_path)
+                {
                     if std::path::Path::new(repo_root).is_dir() {
-                        crate::models::git_ops::run_git(
+                        match crate::models::git_ops::run_git(
                             ["-C", repo_root, "branch", "-m", old_name, &new_branch],
                             None,
-                        )
-                        .ok();
+                        ) {
+                            Ok(_) => true,
+                            Err(error) => {
+                                eprintln!(
+                                    "[generate_session_title] git branch -m {old_name} {new_branch} failed: {error:#}; leaving branch unchanged"
+                                );
+                                false
+                            }
+                        }
+                    } else {
+                        true
                     }
-                }
+                } else {
+                    true
+                };
 
-                // Update branch in DB
-                connection
-                    .execute(
+                // Only touch the DB if the FS side either succeeded or was
+                // skipped entirely (no repo). Skipping the DB update on FS
+                // failure keeps the two sides consistent at the OLD name.
+                if fs_rename_ok {
+                    if let Err(error) = connection.execute(
                         "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
                         (&new_branch, &workspace_id),
-                    )
-                    .ok();
+                    ) {
+                        eprintln!(
+                            "[generate_session_title] DB UPDATE workspaces.branch failed for {workspace_id}: {error:#}"
+                        );
+                        // Roll back the FS rename so the two sides agree.
+                        if fs_rename_attempted {
+                            if let (Some(ref old_name), Some(ref repo_root)) =
+                                (&old_branch, &root_path)
+                            {
+                                if let Err(rb_err) = crate::models::git_ops::run_git(
+                                    ["-C", repo_root, "branch", "-m", &new_branch, old_name],
+                                    None,
+                                ) {
+                                    eprintln!(
+                                        "[generate_session_title] FS rollback git branch -m {new_branch} {old_name} also failed: {rb_err:#}; FS={new_branch}, DB={old_name} — manual reconciliation required"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -652,12 +699,9 @@ pub async fn list_slash_commands(
                 match rx.recv_timeout(timeout) {
                     Ok(event) => match event.event_type() {
                         "slashCommandsListed" => {
-                            if let Some(arr) =
-                                event.raw.get("commands").and_then(Value::as_array)
-                            {
+                            if let Some(arr) = event.raw.get("commands").and_then(Value::as_array) {
                                 for entry in arr {
-                                    let Some(name) =
-                                        entry.get("name").and_then(Value::as_str)
+                                    let Some(name) = entry.get("name").and_then(Value::as_str)
                                     else {
                                         continue;
                                     };
