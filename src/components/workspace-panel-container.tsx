@@ -15,6 +15,7 @@ import type {
 	ThreadMessageLike,
 	ToolCallPart,
 } from "@/lib/api";
+import { hasTauriRuntime } from "@/lib/api";
 
 type DbSeenCache = {
 	db: ThreadMessageLike[];
@@ -306,7 +307,16 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	// us something, which is long sessions (>50 msgs).
 	const A1_SKIP_THRESHOLD = 50;
 	const dbTotalLength = messagesQuery.data?.length ?? 0;
-	const a1Enabled = dbTotalLength > A1_SKIP_THRESHOLD;
+	const isTauri = hasTauriRuntime();
+	// Tauri/WKWebView is already sensitive to the progressive viewport's dynamic
+	// height corrections. Layering A1' on top of that — "render the last 30
+	// messages now, then swap in the full thread 1500ms later" — causes an
+	// obvious whole-panel flash and scrollbar thumb resize on long sessions.
+	//
+	// The progressive viewport itself already virtualizes realized rows, so in
+	// Tauri we prefer a single stable full-thread model from first paint instead
+	// of a deferred second hydration wave.
+	const a1Enabled = !isTauri && dbTotalLength > A1_SKIP_THRESHOLD;
 	const [hydratedMessageCount, setHydratedMessageCount] = useState(
 		INITIAL_HYDRATION_COUNT,
 	);
