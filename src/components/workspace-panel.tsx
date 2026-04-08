@@ -90,7 +90,6 @@ import {
 	CommandList,
 } from "./ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
-import { ScrollArea } from "./ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 type WorkspacePanelProps = {
@@ -977,52 +976,47 @@ function ConversationViewport({
 	);
 
 	return (
-		<ScrollArea
-			// Intentionally NOT keyed on sessionId. The previous remount-on-
-			// switch (originally to re-fire the scrollbar fade-in animation)
-			// forced every visible row to re-render on each navigation; the
-			// bottom-anchor that the remount provided is now done explicitly
-			// via a useLayoutEffect on `sessionId` in ChatThread above.
-			className="conversation-scroll-area relative min-h-0 flex-1"
-			viewportRef={viewportRef}
-			viewportClassName="conversation-scroll-viewport"
-			overlay={children}
-			type="always"
-		>
-			{usePlainThread ? (
-				<div ref={contentRef}>
-					{Header ? createElement(Header) : null}
-					{data.length === 0
-						? EmptyPlaceholder
-							? createElement(EmptyPlaceholder)
-							: null
-						: data.map((message, index) => (
-								<ConversationRowShell
-									key={message.id ?? `${message.role}:${index}`}
-								>
-									{itemContent(index, message)}
-								</ConversationRowShell>
-							))}
-					{Footer ? createElement(Footer) : null}
-				</div>
-			) : (
-				<ProgressiveConversationViewport
-					data={data}
-					emptyPlaceholder={EmptyPlaceholder}
-					footer={Footer}
-					fontSize={fontSize}
-					header={Header}
-					itemContent={itemContent}
-					layoutCacheKey={layoutCacheKey}
-					paneWidth={paneWidth}
-					pinTailRows={pinTailRows}
-					scrollParent={scrollParent}
-					sessionId={sessionId}
-					stopScroll={stopScroll}
-					contentRef={contentRef}
-				/>
-			)}
-		</ScrollArea>
+		<div className="conversation-scroll-area relative min-h-0 flex-1 overflow-hidden">
+			<div
+				ref={viewportRef}
+				className="conversation-scroll-viewport h-full w-full overflow-x-hidden overflow-y-auto"
+			>
+				{usePlainThread ? (
+					<div ref={contentRef}>
+						{Header ? createElement(Header) : null}
+						{data.length === 0
+							? EmptyPlaceholder
+								? createElement(EmptyPlaceholder)
+								: null
+							: data.map((message, index) => (
+									<ConversationRowShell
+										key={message.id ?? `${message.role}:${index}`}
+									>
+										{itemContent(index, message)}
+									</ConversationRowShell>
+								))}
+						{Footer ? createElement(Footer) : null}
+					</div>
+				) : (
+					<ProgressiveConversationViewport
+						data={data}
+						emptyPlaceholder={EmptyPlaceholder}
+						footer={Footer}
+						fontSize={fontSize}
+						header={Header}
+						itemContent={itemContent}
+						layoutCacheKey={layoutCacheKey}
+						paneWidth={paneWidth}
+						pinTailRows={pinTailRows}
+						scrollParent={scrollParent}
+						sessionId={sessionId}
+						stopScroll={stopScroll}
+						contentRef={contentRef}
+					/>
+				)}
+			</div>
+			{children}
+		</div>
 	);
 }
 
@@ -1158,8 +1152,11 @@ function ProgressiveConversationViewport({
 				const viewportDelta = Math.abs(
 					nextViewportHeight - current.viewportHeight,
 				);
+				const isScrollingUp = nextScrollTop < current.scrollTop;
 				const commitThreshold = isTauri
-					? Math.max(24, Math.floor(buffer / 8))
+					? isScrollingUp
+						? Math.max(24, Math.floor(buffer / 8))
+						: Math.max(96, Math.floor(buffer / 3))
 					: buffer / 2;
 				// We render with `buffer = effectiveViewportHeight` of overscan
 				// above and below the visible window, so any scroll movement
@@ -1171,8 +1168,12 @@ function ProgressiveConversationViewport({
 				// window advances in big batches, then newly-entering rows swap from
 				// estimator height to measured height in one go, which shows up as the
 				// user-visible “scroll a bit, then slightly snap back” artifact in
-				// long archived sessions. Commit much more frequently in Tauri so the
-				// virtual window moves continuously instead of in half-viewport jumps.
+				// long archived sessions. Commit much more frequently in Tauri when the
+				// user scrolls UP through history so the virtual window moves
+				// continuously instead of in half-viewport jumps. When the user scrolls
+				// back DOWN toward the bottom, however, overly-frequent commits just
+				// cause realized rows to churn in small batches and feel “sticky”, so we
+				// deliberately relax the threshold in that direction.
 				if (scrollDelta < commitThreshold && viewportDelta < 8) {
 					return current;
 				}
@@ -1354,11 +1355,25 @@ function ProgressiveConversationViewport({
 	const buffer = effectiveViewportHeight;
 	const windowTop = Math.max(0, effectiveScrollTop - buffer);
 	const windowBottom = effectiveScrollTop + effectiveViewportHeight + buffer;
+	const distanceFromBottom = Math.max(
+		0,
+		totalRowsHeight - (effectiveScrollTop + effectiveViewportHeight),
+	);
+	const tauriStableBottomZoneHeight = effectiveViewportHeight * 4;
+	const tauriStableBottomTailHeight = effectiveViewportHeight * 6;
 	const visibleRows = useMemo(
 		() =>
 			measureSync(
 				"viewport:visible-rows",
 				() => {
+					if (isTauri && distanceFromBottom <= tauriStableBottomZoneHeight) {
+						const tailWindowTop = Math.max(
+							0,
+							totalRowsHeight - tauriStableBottomTailHeight,
+						);
+						return rows.filter((row) => row.top + row.height >= tailWindowTop);
+					}
+
 					const inWindow = rows.filter((row) => {
 						const rowBottom = row.top + row.height;
 						return rowBottom >= windowTop && row.top <= windowBottom;
@@ -1387,7 +1402,16 @@ function ProgressiveConversationViewport({
 				},
 				{ totalRows: rows.length },
 			),
-		[pinTailRows, rows, windowBottom, windowTop],
+		[
+			distanceFromBottom,
+			effectiveViewportHeight,
+			isTauri,
+			pinTailRows,
+			rows,
+			totalRowsHeight,
+			windowBottom,
+			windowTop,
+		],
 	);
 	const totalContentHeight = headerHeight + totalRowsHeight + footerHeight;
 	// Mirror of `rows` for synchronous reads inside `handleHeightChange`,
