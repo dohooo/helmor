@@ -37,9 +37,9 @@ function resolveLanguage(language?: string): BundledLanguage | null {
 	if (lower in bundledLanguages) {
 		return lower as BundledLanguage;
 	}
-	const alias = (bundledLanguagesAlias as Record<string, string | undefined>)[
-		lower
-	];
+	const alias = (
+		bundledLanguagesAlias as unknown as Record<string, string | undefined>
+	)[lower];
 	if (alias && alias in bundledLanguages) {
 		return alias as BundledLanguage;
 	}
@@ -48,11 +48,11 @@ function resolveLanguage(language?: string): BundledLanguage | null {
 
 function escapeHtml(input: string): string {
 	return input
-		.replaceAll("&", "&amp;")
-		.replaceAll("<", "&lt;")
-		.replaceAll(">", "&gt;")
-		.replaceAll('"', "&quot;")
-		.replaceAll("'", "&#39;");
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;");
 }
 
 function plainHtml(code: string) {

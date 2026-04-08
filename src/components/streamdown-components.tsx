@@ -122,7 +122,8 @@ function childrenToText(children: ReactNode): string {
 		return children.map(childrenToText).join("");
 	}
 	if (isValidElement(children)) {
-		return childrenToText(children.props.children as ReactNode);
+		const props = children.props as { children?: ReactNode };
+		return childrenToText(props.children);
 	}
 	return "";
 }
@@ -143,7 +144,9 @@ export function StreamdownPre({ children }: { children?: ReactNode }) {
 
 	// Keep Streamdown's built-in Mermaid / special handling path intact.
 	if (language.toLowerCase() === "mermaid") {
-		return cloneElement(child, { "data-block": "true" });
+		return cloneElement(child as ReactElement<Record<string, unknown>>, {
+			"data-block": "true",
+		});
 	}
 
 	const code = childrenToText(child.props.children);
