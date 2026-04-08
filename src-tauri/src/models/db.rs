@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
+
 use anyhow::Result;
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{Connection, OpenFlags};
@@ -14,7 +17,36 @@ use tauri::async_runtime::Mutex;
 /// acquisition in `spawn_blocking`. The background `refresh_remote_and_realign`
 /// thread (spawned via `std::thread::spawn`, NOT a Tokio runtime worker)
 /// uses `.blocking_lock()` instead.
+///
+/// Retained for commands that don't target a specific existing workspace
+/// (e.g. `add_repository_from_local_path`, `create_workspace_from_repo`).
+/// Commands that operate on a known workspace should prefer the per-workspace
+/// lock from [`workspace_mutation_lock`].
 pub static WORKSPACE_MUTATION_LOCK: Mutex<()> = Mutex::const_new(());
+
+/// Per-workspace mutation lock map. Each workspace gets its own
+/// `tokio::sync::Mutex` so that heavy git operations on one workspace
+/// (e.g. `git reset --hard` inside `update_intended_target_branch`) do not
+/// block unrelated commands on other workspaces.
+///
+/// The outer `std::sync::Mutex` protects the `HashMap` itself and is held
+/// only for the brief map lookup / insertion — never across I/O.
+fn per_workspace_locks() -> &'static std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>> {
+    static MAP: OnceLock<std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+    MAP.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Return a shareable handle to the per-workspace mutation lock for
+/// `workspace_id`. The returned `Arc<Mutex<()>>` can be `.lock().await`-ed
+/// from async Tauri commands or `.blocking_lock()`-ed from std threads.
+pub fn workspace_mutation_lock(workspace_id: &str) -> Arc<Mutex<()>> {
+    let mut map = per_workspace_locks()
+        .lock()
+        .expect("per-workspace lock map poisoned");
+    map.entry(workspace_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
 
 /// Open a connection to the Helmor database.
 pub fn open_connection(writable: bool) -> Result<Connection> {

@@ -291,25 +291,29 @@ pub async fn mark_session_read(session_id: String) -> CmdResult<()> {
 
 #[tauri::command]
 pub async fn mark_workspace_read(workspace_id: String) -> CmdResult<()> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
+    let ws_lock = db::workspace_mutation_lock(&workspace_id);
+    let _lock = ws_lock.lock().await;
     Ok(workspaces::mark_workspace_read(&workspace_id)?)
 }
 
 #[tauri::command]
 pub async fn mark_workspace_unread(workspace_id: String) -> CmdResult<()> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
+    let ws_lock = db::workspace_mutation_lock(&workspace_id);
+    let _lock = ws_lock.lock().await;
     Ok(workspaces::mark_workspace_unread(&workspace_id)?)
 }
 
 #[tauri::command]
 pub async fn pin_workspace(workspace_id: String) -> CmdResult<()> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
+    let ws_lock = db::workspace_mutation_lock(&workspace_id);
+    let _lock = ws_lock.lock().await;
     Ok(workspaces::pin_workspace(&workspace_id)?)
 }
 
 #[tauri::command]
 pub async fn unpin_workspace(workspace_id: String) -> CmdResult<()> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
+    let ws_lock = db::workspace_mutation_lock(&workspace_id);
+    let _lock = ws_lock.lock().await;
     Ok(workspaces::unpin_workspace(&workspace_id)?)
 }
 
@@ -318,7 +322,8 @@ pub async fn set_workspace_manual_status(
     workspace_id: String,
     status: Option<String>,
 ) -> CmdResult<()> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
+    let ws_lock = db::workspace_mutation_lock(&workspace_id);
+    let _lock = ws_lock.lock().await;
     Ok(workspaces::set_workspace_manual_status(
         &workspace_id,
         status.as_deref(),
@@ -335,7 +340,8 @@ pub async fn update_intended_target_branch(
     workspace_id: String,
     target_branch: String,
 ) -> CmdResult<workspaces::UpdateIntendedTargetBranchResponse> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
+    let ws_lock = db::workspace_mutation_lock(&workspace_id);
+    let _lock = ws_lock.lock().await;
     run_blocking(move || workspaces::update_intended_target_branch(&workspace_id, &target_branch))
         .await
 }
@@ -351,7 +357,8 @@ pub async fn prefetch_workspace_remote_refs(
 pub async fn restore_workspace(
     workspace_id: String,
 ) -> CmdResult<workspaces::RestoreWorkspaceResponse> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
+    let ws_lock = db::workspace_mutation_lock(&workspace_id);
+    let _lock = ws_lock.lock().await;
     run_blocking(move || workspaces::restore_workspace_impl(&workspace_id)).await
 }
 
@@ -369,7 +376,8 @@ pub async fn validate_restore_workspace(workspace_id: String) -> CmdResult<()> {
 pub async fn archive_workspace(
     workspace_id: String,
 ) -> CmdResult<workspaces::ArchiveWorkspaceResponse> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
+    let ws_lock = db::workspace_mutation_lock(&workspace_id);
+    let _lock = ws_lock.lock().await;
     run_blocking(move || workspaces::archive_workspace_impl(&workspace_id)).await
 }
 
@@ -381,7 +389,8 @@ pub async fn validate_archive_workspace(workspace_id: String) -> CmdResult<()> {
 
 #[tauri::command]
 pub async fn permanently_delete_workspace(workspace_id: String) -> CmdResult<()> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
+    let ws_lock = db::workspace_mutation_lock(&workspace_id);
+    let _lock = ws_lock.lock().await;
     run_blocking(move || workspaces::permanently_delete_workspace(&workspace_id)).await
 }
 

@@ -38,8 +38,12 @@ export const helmorQueryKeys = {
 		["sessionAttachments", sessionId] as const,
 	workspaceChanges: (workspaceRootPath: string) =>
 		["workspaceChanges", workspaceRootPath] as const,
-	slashCommands: (provider: AgentProvider, workingDirectory: string | null) =>
-		["slashCommands", provider, workingDirectory ?? ""] as const,
+	slashCommands: (
+		provider: AgentProvider,
+		workingDirectory: string | null,
+		modelId: string | null,
+	) =>
+		["slashCommands", provider, workingDirectory ?? "", modelId ?? ""] as const,
 };
 
 export function createHelmorQueryClient() {
@@ -136,7 +140,11 @@ export function slashCommandsQueryOptions(
 	modelId: string | null,
 ) {
 	return queryOptions({
-		queryKey: helmorQueryKeys.slashCommands(provider, workingDirectory),
+		queryKey: helmorQueryKeys.slashCommands(
+			provider,
+			workingDirectory,
+			modelId,
+		),
 		queryFn: () =>
 			listSlashCommands({
 				provider,

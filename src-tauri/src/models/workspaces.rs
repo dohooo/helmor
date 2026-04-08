@@ -617,16 +617,8 @@ pub fn refresh_remote_and_realign(
         return Ok(false);
     }
 
-    // Now hold the mutation lock for the re-verification + reset, so we don't
-    // race with another command (e.g. another switch, archive, restore).
-    //
-    // We use `blocking_lock()` instead of `.lock().await` because this function
-    // is dispatched via `tauri::async_runtime::spawn_blocking` (or, in tests,
-    // called directly from a sync test body). `spawn_blocking` runs the closure
-    // on Tokio's *blocking* pool, which is NOT a runtime worker thread, so
-    // `blocking_lock()` is safe — it would only panic if called from one of
-    // the async-driving worker threads.
-    let _lock = db::WORKSPACE_MUTATION_LOCK.blocking_lock();
+    let ws_lock = db::workspace_mutation_lock(workspace_id);
+    let _lock = ws_lock.blocking_lock();
 
     // Re-load record under the lock; abort if state changed.
     let Some(fresh_record) = load_workspace_record_by_id(workspace_id)? else {
