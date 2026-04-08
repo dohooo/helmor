@@ -1245,18 +1245,6 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
     )
     .with_context(|| format!("Failed to create branch {actual_branch} from {base_ref}"))?;
 
-    // Save the branch commit for cleanup on failure
-    let original_branch_commit = git_ops::run_git(
-        [
-            "-C",
-            &repo_root.display().to_string(),
-            "rev-parse",
-            &format!("refs/heads/{actual_branch}"),
-        ],
-        None,
-    )
-    .context("Failed to read branch commit")?;
-
     git_ops::create_worktree(&repo_root, &workspace_dir, &actual_branch)?;
 
     // Update branch name in DB if it changed.
@@ -1279,7 +1267,6 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
                 &staged_archive_dir,
                 &archived_context_dir,
                 &actual_branch,
-                &original_branch_commit,
             );
             error.context("Failed to open DB to persist restored branch name")
         })?;
@@ -1295,7 +1282,6 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
                 &staged_archive_dir,
                 &archived_context_dir,
                 &actual_branch,
-                &original_branch_commit,
             );
             anyhow::anyhow!("Failed to persist restored branch name in DB: {error}")
         })?;
@@ -1309,7 +1295,6 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
             &staged_archive_dir,
             &archived_context_dir,
             &actual_branch,
-            &original_branch_commit,
         );
         anyhow::anyhow!(
             "Failed to stage archived context {}: {error}",
@@ -1326,7 +1311,6 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
             &staged_archive_dir,
             &archived_context_dir,
             &actual_branch,
-            &original_branch_commit,
         );
         return Err(error);
     }
@@ -1341,7 +1325,6 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
             &staged_archive_dir,
             &archived_context_dir,
             &actual_branch,
-            &original_branch_commit,
         );
         return Err(error);
     }
@@ -1821,7 +1804,6 @@ fn cleanup_failed_restore(
     staged_archive_dir: &Path,
     archived_context_dir: &Path,
     branch: &str,
-    original_commit: &str,
 ) {
     if let Some(context_dir) = workspace_context_dir {
         let _ = fs::remove_dir_all(context_dir);
@@ -1830,8 +1812,9 @@ fn cleanup_failed_restore(
     let _ = git_ops::remove_worktree(repo_root, workspace_dir);
     let _ = fs::remove_dir_all(workspace_dir);
 
-    // Restore the branch ref to its original commit
-    let _ = git_ops::point_branch_to_commit(repo_root, branch, original_commit);
+    // The branch was newly created by restore_workspace; delete it entirely
+    // to avoid leaking -v1, -v2, … branches on repeated failures.
+    let _ = git_ops::remove_branch(repo_root, branch);
 
     if staged_archive_dir.exists() && !archived_context_dir.exists() {
         let _ = fs::rename(staged_archive_dir, archived_context_dir);

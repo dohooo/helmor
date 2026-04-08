@@ -468,52 +468,63 @@ pub fn list_slash_commands(
 
     let mut commands: Vec<crate::agents::SlashCommandEntry> = Vec::new();
     let mut error: Option<String> = None;
+    let timeout = std::time::Duration::from_secs(10);
 
-    for event in rx.iter() {
-        match event.event_type() {
-            "slashCommandsListed" => {
-                if let Some(arr) = event.raw.get("commands").and_then(|v| v.as_array()) {
-                    for entry in arr {
-                        let Some(name) = entry.get("name").and_then(|v| v.as_str()) else {
-                            continue;
-                        };
-                        let description = entry
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let argument_hint = entry
-                            .get("argumentHint")
-                            .and_then(|v| v.as_str())
-                            .filter(|s| !s.is_empty())
-                            .map(str::to_string);
-                        let source = entry
-                            .get("source")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("builtin")
-                            .to_string();
-                        commands.push(crate::agents::SlashCommandEntry {
-                            name: name.to_string(),
-                            description,
-                            argument_hint,
-                            source,
-                        });
+    loop {
+        match rx.recv_timeout(timeout) {
+            Ok(event) => match event.event_type() {
+                "slashCommandsListed" => {
+                    if let Some(arr) = event.raw.get("commands").and_then(|v| v.as_array()) {
+                        for entry in arr {
+                            let Some(name) = entry.get("name").and_then(|v| v.as_str()) else {
+                                continue;
+                            };
+                            let description = entry
+                                .get("description")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let argument_hint = entry
+                                .get("argumentHint")
+                                .and_then(|v| v.as_str())
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_string);
+                            let source = entry
+                                .get("source")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("builtin")
+                                .to_string();
+                            commands.push(crate::agents::SlashCommandEntry {
+                                name: name.to_string(),
+                                description,
+                                argument_hint,
+                                source,
+                            });
+                        }
                     }
+                    break;
                 }
+                "error" => {
+                    error = Some(
+                        event
+                            .raw
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Unknown error")
+                            .to_string(),
+                    );
+                    break;
+                }
+                _ => {}
+            },
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                error = Some("listSlashCommands timed out after 10s".to_string());
                 break;
             }
-            "error" => {
-                error = Some(
-                    event
-                        .raw
-                        .get("message")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("Unknown error")
-                        .to_string(),
-                );
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                error = Some("Sidecar disconnected while waiting for slash commands".to_string());
                 break;
             }
-            _ => {}
         }
     }
 

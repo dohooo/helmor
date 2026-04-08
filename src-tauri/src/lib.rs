@@ -141,7 +141,14 @@ pub fn run() {
         eprintln!("[shutdown] CloseRequested[{label}] — {count} active stream(s)");
 
         if count == 0 {
-            // Fast path: nothing in flight, let the close proceed normally.
+            // No active streams, but still shut down the sidecar cooperatively
+            // so Bun and any child CLIs get a chance to exit cleanly instead of
+            // being SIGKILL'd by the Drop impl.
+            let sidecar = app_handle.state::<sidecar::ManagedSidecar>();
+            sidecar.shutdown(
+                std::time::Duration::from_millis(500),
+                std::time::Duration::from_millis(200),
+            );
             return;
         }
 

@@ -110,6 +110,15 @@ impl SidecarProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
 
+        // Put the sidecar in its own process group so SIGTERM/SIGKILL
+        // reaches all child processes (Claude CLI, Codex CLI) instead
+        // of only hitting the Bun parent.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+
         if debug {
             cmd.env("HELMOR_SIDECAR_DEBUG", "1");
         }
@@ -191,9 +200,16 @@ impl SidecarProcess {
         self.child.id()
     }
 
-    /// Force-kill (SIGKILL) the child. Last-resort cleanup; the cooperative
-    /// shutdown ladder lives in `ManagedSidecar::shutdown`.
+    /// Force-kill (SIGKILL) the sidecar and its entire process group.
+    /// Last-resort cleanup; the cooperative shutdown ladder lives in
+    /// `ManagedSidecar::shutdown`.
     fn kill(&mut self) {
+        // On Unix, kill the whole process group first so child CLIs
+        // don't get reparented to launchd as orphans.
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(-(self.pid() as libc::pid_t), libc::SIGKILL);
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -216,16 +232,16 @@ impl SidecarProcess {
         }
     }
 
-    /// Send SIGTERM to the child. Unix only; on other platforms this is a
-    /// no-op (the SIGKILL fallback in `kill()` still applies).
+    /// Send SIGTERM to the sidecar's process group. Unix only; on other
+    /// platforms this is a no-op (the SIGKILL fallback in `kill()` still
+    /// applies). Targeting the group (negative PID) ensures child CLIs
+    /// spawned by Bun also receive the signal.
     #[cfg(unix)]
     fn send_sigterm(&self) {
-        // SAFETY: `pid()` is the live child's PID owned by `self.child`.
-        // `libc::kill` with SIGTERM cannot corrupt our address space; the
-        // worst-case is the signal is delivered after the child already
-        // exited, in which case we get ESRCH and ignore it.
+        // SAFETY: `pid()` is the live child's PID (== PGID since we set
+        // process_group(0) at spawn). Negative PID targets the whole group.
         unsafe {
-            libc::kill(self.pid() as libc::pid_t, libc::SIGTERM);
+            libc::kill(-(self.pid() as libc::pid_t), libc::SIGTERM);
         }
     }
 
@@ -237,7 +253,13 @@ impl SidecarProcess {
 
 impl Drop for SidecarProcess {
     fn drop(&mut self) {
-        self.kill();
+        // Prefer cooperative teardown: SIGTERM → short wait → SIGKILL.
+        // The full shutdown ladder lives in ManagedSidecar::shutdown(); this
+        // is the last-resort fallback for unexpected drops.
+        self.send_sigterm();
+        if !self.wait_with_timeout(Duration::from_millis(200)) {
+            self.kill();
+        }
     }
 }
 
