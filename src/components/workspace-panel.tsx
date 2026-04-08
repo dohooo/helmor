@@ -78,7 +78,6 @@ import {
 	CommandList,
 } from "./ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
-import { ScrollArea } from "./ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 type WorkspacePanelProps = {
@@ -891,52 +890,47 @@ function ConversationViewport({
 	);
 
 	return (
-		<ScrollArea
-			// Intentionally NOT keyed on sessionId. The previous remount-on-
-			// switch (originally to re-fire the scrollbar fade-in animation)
-			// forced every visible row to re-render on each navigation; the
-			// bottom-anchor that the remount provided is now done explicitly
-			// via a useLayoutEffect on `sessionId` in ChatThread above.
-			className="conversation-scroll-area relative min-h-0 flex-1"
-			viewportRef={viewportRef}
-			viewportClassName="conversation-scroll-viewport"
-			overlay={children}
-			type="always"
-		>
-			{usePlainThread ? (
-				<div ref={contentRef}>
-					{Header ? createElement(Header) : null}
-					{data.length === 0
-						? EmptyPlaceholder
-							? createElement(EmptyPlaceholder)
-							: null
-						: data.map((message, index) => (
-								<ConversationRowShell
-									key={message.id ?? `${message.role}:${index}`}
-								>
-									{itemContent(index, message)}
-								</ConversationRowShell>
-							))}
-					{Footer ? createElement(Footer) : null}
-				</div>
-			) : (
-				<ProgressiveConversationViewport
-					data={data}
-					emptyPlaceholder={EmptyPlaceholder}
-					footer={Footer}
-					fontSize={fontSize}
-					header={Header}
-					itemContent={itemContent}
-					layoutCacheKey={layoutCacheKey}
-					paneWidth={paneWidth}
-					pinTailRows={pinTailRows}
-					scrollParent={scrollParent}
-					sessionId={sessionId}
-					stopScroll={stopScroll}
-					contentRef={contentRef}
-				/>
-			)}
-		</ScrollArea>
+		<div className="conversation-scroll-area relative min-h-0 flex-1 overflow-hidden">
+			<div
+				ref={viewportRef}
+				className="conversation-scroll-viewport h-full w-full overflow-x-hidden overflow-y-auto"
+			>
+				{usePlainThread ? (
+					<div ref={contentRef}>
+						{Header ? createElement(Header) : null}
+						{data.length === 0
+							? EmptyPlaceholder
+								? createElement(EmptyPlaceholder)
+								: null
+							: data.map((message, index) => (
+									<ConversationRowShell
+										key={message.id ?? `${message.role}:${index}`}
+									>
+										{itemContent(index, message)}
+									</ConversationRowShell>
+								))}
+						{Footer ? createElement(Footer) : null}
+					</div>
+				) : (
+					<ProgressiveConversationViewport
+						data={data}
+						emptyPlaceholder={EmptyPlaceholder}
+						footer={Footer}
+						fontSize={fontSize}
+						header={Header}
+						itemContent={itemContent}
+						layoutCacheKey={layoutCacheKey}
+						paneWidth={paneWidth}
+						pinTailRows={pinTailRows}
+						scrollParent={scrollParent}
+						sessionId={sessionId}
+						stopScroll={stopScroll}
+						contentRef={contentRef}
+					/>
+				)}
+			</div>
+			{children}
+		</div>
 	);
 }
 
