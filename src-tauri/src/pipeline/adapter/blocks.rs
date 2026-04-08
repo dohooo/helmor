@@ -8,7 +8,9 @@
 
 use serde_json::Value;
 
-use crate::pipeline::types::{ImageSource, MessagePart, StreamingStatus, TodoItem, TodoStatus};
+use crate::pipeline::types::{
+    ExtendedMessagePart, ImageSource, MessagePart, StreamingStatus, TodoItem, TodoStatus,
+};
 
 pub(super) fn parse_assistant_parts(parsed: Option<&Value>) -> Vec<MessagePart> {
     let parsed = match parsed {
@@ -153,20 +155,19 @@ fn parse_streaming_status(s: &str) -> Option<StreamingStatus> {
 // Merge tool_result user messages into preceding tool-call parts
 // ---------------------------------------------------------------------------
 
-pub(super) fn merge_tool_results(parsed: Option<&Value>, target_parts: &mut [MessagePart]) -> bool {
-    let parsed = match parsed {
-        Some(p) => p,
-        None => return false,
-    };
+/// Parse tool_result blocks from a `type=user` payload. Returns None if the
+/// payload is not a pure tool_result message.
+fn extract_tool_results(parsed: Option<&Value>) -> Option<Vec<(String, String)>> {
+    let parsed = parsed?;
     let msg = parsed.get("message").and_then(|v| v.as_object());
     let blocks = msg.and_then(|m| m.get("content")).and_then(Value::as_array);
     let blocks = match blocks {
         Some(b) if !b.is_empty() => b,
-        _ => return false,
+        _ => return None,
     };
 
     let mut all_tool_result = true;
-    let mut results: Vec<(String, String)> = Vec::new(); // (tool_use_id, content)
+    let mut results: Vec<(String, String)> = Vec::new();
 
     for b in blocks {
         let obj = match b.as_object() {
@@ -194,10 +195,16 @@ pub(super) fn merge_tool_results(parsed: Option<&Value>, target_parts: &mut [Mes
     }
 
     if !all_tool_result || results.is_empty() {
-        return false;
+        return None;
     }
+    Some(results)
+}
 
-    // Attach results to matching tool-call parts
+pub(super) fn merge_tool_results(parsed: Option<&Value>, target_parts: &mut [MessagePart]) -> bool {
+    let results = match extract_tool_results(parsed) {
+        Some(r) => r,
+        None => return false,
+    };
     for (tool_use_id, content) in results {
         for part in target_parts.iter_mut() {
             if let MessagePart::ToolCall {
@@ -207,13 +214,41 @@ pub(super) fn merge_tool_results(parsed: Option<&Value>, target_parts: &mut [Mes
             } = part
             {
                 if *tool_call_id == tool_use_id {
-                    *result = Some(Value::String(content.clone()));
+                    *result = Some(Value::String(content));
                     break;
                 }
             }
         }
     }
+    true
+}
 
+/// Like `merge_tool_results` but operates directly on `ExtendedMessagePart`
+/// slices, avoiding the clone-out / clone-back round-trip that the
+/// `type=user` late-merge path previously required.
+pub(super) fn merge_tool_results_extended(
+    parsed: Option<&Value>,
+    target: &mut [ExtendedMessagePart],
+) -> bool {
+    let results = match extract_tool_results(parsed) {
+        Some(r) => r,
+        None => return false,
+    };
+    for (tool_use_id, content) in results {
+        for part in target.iter_mut() {
+            if let ExtendedMessagePart::Basic(MessagePart::ToolCall {
+                tool_call_id,
+                result,
+                ..
+            }) = part
+            {
+                if *tool_call_id == tool_use_id {
+                    *result = Some(Value::String(content));
+                    break;
+                }
+            }
+        }
+    }
     true
 }
 

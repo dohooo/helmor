@@ -125,7 +125,7 @@ fn group_child_messages_under_parent(msgs: Vec<ThreadMessageLike>) -> Vec<Thread
                     ..
                 }) = part
                 {
-                    if tool_name == "Agent" || tool_name == "Task" {
+                    if super::AGENT_TOOL_NAMES.contains(&tool_name.as_str()) {
                         index.insert(tool_call_id.clone(), (new_idx, cidx));
                     }
                 }

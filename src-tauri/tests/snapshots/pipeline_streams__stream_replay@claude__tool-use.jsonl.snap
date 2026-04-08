@@ -882,3 +882,5 @@ historical_render:
         - tool-call
         - reasoning
         - text
+      children_tool_names:
+        - Prompt
