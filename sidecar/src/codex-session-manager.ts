@@ -9,6 +9,26 @@ import {
 	type UserInput,
 } from "@openai/codex-sdk";
 import { isAbortError } from "./abort.js";
+
+/**
+ * Optional override for the Codex Rust binary path.
+ *
+ * - In release builds the Tauri host sets `HELMOR_CODEX_BIN_PATH` to the
+ *   bundled resource copy under `Helmor.app/Contents/Resources/vendor/
+ *   codex/codex`, which we pass to `new Codex({ codexPathOverride })`.
+ * - When unset (dev / `bun test`) we let the Codex SDK fall back to its
+ *   own `findCodexPath()` logic, which walks `node_modules/@openai/
+ *   codex-<platform>-<arch>/vendor/` — that works as long as `@openai/
+ *   codex` is installed as a sidecar dep, which it is.
+ */
+const CODEX_BIN_OVERRIDE = process.env.HELMOR_CODEX_BIN_PATH || undefined;
+
+function newCodex(): Codex {
+	return new Codex(
+		CODEX_BIN_OVERRIDE ? { codexPathOverride: CODEX_BIN_OVERRIDE } : {},
+	);
+}
+
 import { scanCodexSkills } from "./codex-skill-scanner.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { parseImageRefs } from "./images.js";
@@ -70,7 +90,7 @@ export class CodexSessionManager implements SessionManager {
 		this.abortControllers.set(sessionId, abortController);
 
 		try {
-			const codex = new Codex();
+			const codex = newCodex();
 			const effort = parseEffort(effortLevel);
 			const threadOpts: ThreadOptions = {
 				...(model ? { model } : {}),
@@ -117,7 +137,7 @@ export class CodexSessionManager implements SessionManager {
 		userMessage: string,
 		emitter: SidecarEmitter,
 	): Promise<void> {
-		const codex = new Codex();
+		const codex = newCodex();
 		const abortController = new AbortController();
 		const timeout = setTimeout(
 			() => abortController.abort(),

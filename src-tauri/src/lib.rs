@@ -1,7 +1,5 @@
 pub mod agents;
 pub mod data_dir;
-#[cfg(feature = "dev-server")]
-pub mod dev_api;
 pub mod error;
 mod import;
 mod models;
@@ -10,6 +8,7 @@ mod schema;
 pub mod sidecar;
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::path::BaseDirectory;
 use tauri::Manager;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
@@ -26,6 +25,71 @@ pub fn schema_init(conn: &rusqlite::Connection) {
     schema::ensure_schema(conn).expect("Failed to initialize database schema");
 }
 
+/// Resolve bundled Claude Code / Codex CLI resource paths (as declared in
+/// `tauri.conf.json > bundle.resources`) and set them as env vars so the
+/// sidecar subprocess inherits them on spawn.
+///
+/// This runs unconditionally in `setup`, but is a no-op in dev because the
+/// `vendor/` resource layout only exists inside bundled `.app` / installer
+/// builds. When the resolved path is missing we leave the env var unset and
+/// the sidecar falls back to its own `node_modules` lookup.
+fn export_bundled_agent_paths(handle: &tauri::AppHandle) {
+    let cli_js = handle
+        .path()
+        .resolve("vendor/claude-code/cli.js", BaseDirectory::Resource)
+        .ok()
+        .filter(|p| p.is_file());
+    if let Some(path) = cli_js {
+        eprintln!(
+            "[setup] Claude Code CLI → {} (bundled resource)",
+            path.display()
+        );
+        // SAFETY: set_var is `unsafe` in Rust 2024 editions; we're in setup
+        // before any threads spawn that would race with env reads.
+        unsafe {
+            std::env::set_var("HELMOR_CLAUDE_CODE_CLI_PATH", path);
+        }
+    }
+
+    let codex_bin_name = if cfg!(windows) { "codex.exe" } else { "codex" };
+    let codex_bin = handle
+        .path()
+        .resolve(
+            format!("vendor/codex/{codex_bin_name}"),
+            BaseDirectory::Resource,
+        )
+        .ok()
+        .filter(|p| p.is_file());
+    if let Some(path) = codex_bin {
+        eprintln!("[setup] Codex CLI → {} (bundled resource)", path.display());
+        unsafe {
+            std::env::set_var("HELMOR_CODEX_BIN_PATH", path);
+        }
+    }
+
+    // Bundled bun — the JS runtime the Claude Agent SDK spawns cli.js through.
+    // Without this the SDK does `spawn("bun", ...)` which fails inside a
+    // Finder-launched `.app` bundle (PATH = /usr/bin:/bin:/usr/sbin:/sbin).
+    let bun_bin_name = if cfg!(windows) { "bun.exe" } else { "bun" };
+    let bun_bin = handle
+        .path()
+        .resolve(
+            format!("vendor/bun/{bun_bin_name}"),
+            BaseDirectory::Resource,
+        )
+        .ok()
+        .filter(|p| p.is_file());
+    if let Some(path) = bun_bin {
+        eprintln!(
+            "[setup] bun runtime → {} (bundled resource)",
+            path.display()
+        );
+        unsafe {
+            std::env::set_var("HELMOR_BUN_PATH", path);
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -39,7 +103,7 @@ pub fn run() {
         .manage(models::auth::GithubIdentityFlowRuntime::default())
         .manage(sidecar::ManagedSidecar::new())
         .manage(agents::ActiveStreams::new())
-        .setup(|_app| {
+        .setup(|app| {
             // Ensure data directory structure exists
             data_dir::ensure_directory_structure().expect("Failed to create Helmor data directory");
 
@@ -53,6 +117,18 @@ pub fn run() {
                 data_dir::data_mode_label(),
                 db_path.display()
             );
+
+            // Resolve bundled Claude Code + Codex CLI resources and publish
+            // them to the sidecar via env vars before it ever spawns. The
+            // sidecar reads `HELMOR_CLAUDE_CODE_CLI_PATH` /
+            // `HELMOR_CODEX_BIN_PATH` at module load and passes them through
+            // to the SDKs' explicit path options.
+            //
+            // In dev (no `bundle.resources` in play) `resolve(..., Resource)`
+            // returns a path that doesn't exist — skip silently so the
+            // sidecar falls back to its own `createRequire` / SDK lookup
+            // against `node_modules`.
+            export_bundled_agent_paths(app.handle());
 
             Ok(())
         })

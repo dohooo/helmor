@@ -4,20 +4,20 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"build": "bun build --compile src/index.ts --outfile dist/helmor-sidecar",
+		"build": "bun run scripts/stage-vendor.ts && bun build --compile src/index.ts --outfile dist/helmor-sidecar",
+		"stage-vendor": "bun run scripts/stage-vendor.ts",
 		"dev": "bun run src/index.ts",
 		"test": "bun test",
 		"typecheck": "bunx tsc --noEmit"
 	},
 	"dependencies": {
 		"@anthropic-ai/claude-agent-sdk": "^0.2.92",
+		"@anthropic-ai/claude-code": "2.1.96",
+		"@openai/codex": "0.118.0",
 		"@openai/codex-sdk": "^0.118.0"
 	},
 	"devDependencies": {
 		"@types/bun": "^1.3.11",
 		"@types/node": "^25.5.2"
-	},
-	"patchedDependencies": {
-		"@anthropic-ai/claude-agent-sdk@0.2.92": "patches/@anthropic-ai%2Fclaude-agent-sdk@0.2.92.patch"
 	}
 }

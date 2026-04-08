@@ -50,7 +50,6 @@ import {
 	disconnectGithubIdentity,
 	type GithubIdentityDeviceFlowStart,
 	type GithubIdentitySnapshot,
-	hasTauriRuntime,
 	listenGithubIdentityChanged,
 	loadGithubIdentitySession,
 	openWorkspaceInEditor,
@@ -130,17 +129,6 @@ type GithubIdentityState =
 	| { status: "pending"; flow: GithubIdentityDeviceFlowStart }
 	| GithubIdentitySnapshot;
 
-const BROWSER_DEV_GITHUB_IDENTITY_SESSION = {
-	provider: "browser-dev",
-	githubUserId: 0,
-	login: "browser-dev",
-	name: "Browser Dev",
-	avatarUrl: null,
-	primaryEmail: null,
-	tokenExpiresAt: null,
-	refreshTokenExpiresAt: null,
-} as const;
-
 function clampSidebarWidth(width: number) {
 	return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width));
 }
@@ -168,13 +156,6 @@ function getInitialSidebarWidth(storageKey = SIDEBAR_WIDTH_STORAGE_KEY) {
 }
 
 function getInitialGithubIdentityState(): GithubIdentityState {
-	if (!hasTauriRuntime()) {
-		return {
-			status: "connected",
-			session: BROWSER_DEV_GITHUB_IDENTITY_SESSION,
-		};
-	}
-
 	return { status: "checking" };
 }
 
@@ -470,28 +451,22 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			}
 		});
 
-		if (hasTauriRuntime()) {
-			void listenGithubIdentityChanged((snapshot) => {
-				if (!disposed) {
-					setGithubIdentityState(snapshot);
-				}
-			}).then((unlisten) => {
-				if (disposed) {
-					unlisten();
-					return;
-				}
+		void listenGithubIdentityChanged((snapshot) => {
+			if (!disposed) {
+				setGithubIdentityState(snapshot);
+			}
+		}).then((unlisten) => {
+			if (disposed) {
+				unlisten();
+				return;
+			}
 
-				unlistenIdentity = unlisten;
-			});
-
-			return () => {
-				disposed = true;
-				unlistenIdentity?.();
-			};
-		}
+			unlistenIdentity = unlisten;
+		});
 
 		return () => {
 			disposed = true;
+			unlistenIdentity?.();
 		};
 	}, []);
 

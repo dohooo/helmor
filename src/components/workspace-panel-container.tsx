@@ -8,7 +8,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { hasTauriRuntime, type ThreadMessageLike } from "@/lib/api";
+import type { ThreadMessageLike } from "@/lib/api";
 import { messagesStructurallyEqual } from "@/lib/structural-equality";
 
 type DbSeenCache = {
@@ -238,18 +238,17 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	// A1' state reset + useEffect + setTimeout + transition handling is a
 	// pure regression. We only pay that overhead when it's actually buying
 	// us something, which is long sessions (>50 msgs).
-	const A1_SKIP_THRESHOLD = 50;
-	const dbTotalLength = messagesQuery.data?.length ?? 0;
-	const isTauri = hasTauriRuntime();
 	// Tauri/WKWebView is already sensitive to the progressive viewport's dynamic
 	// height corrections. Layering A1' on top of that — "render the last 30
 	// messages now, then swap in the full thread 1500ms later" — causes an
 	// obvious whole-panel flash and scrollbar thumb resize on long sessions.
 	//
 	// The progressive viewport itself already virtualizes realized rows, so in
-	// Tauri we prefer a single stable full-thread model from first paint instead
-	// of a deferred second hydration wave.
-	const a1Enabled = !isTauri && dbTotalLength > A1_SKIP_THRESHOLD;
+	// Tauri we prefer a single stable full-thread model from first paint. Helmor
+	// is Tauri-only now, so A1' is always disabled — keep the variable so the
+	// surrounding hydration code can be simplified in a follow-up pass without
+	// interleaving it with this cleanup.
+	const a1Enabled = false;
 	const [hydratedMessageCount, setHydratedMessageCount] = useState(
 		INITIAL_HYDRATION_COUNT,
 	);

@@ -274,6 +274,7 @@ describe("App add repository flow", () => {
 		const user = userEvent.setup();
 
 		render(<App />);
+		await screen.findByRole("main", { name: "Application shell" });
 
 		await user.click(screen.getByRole("button", { name: "Add repository" }));
 
@@ -308,6 +309,7 @@ describe("App add repository flow", () => {
 		dialogMocks.open.mockResolvedValueOnce(null);
 
 		render(<App />);
+		await screen.findByRole("main", { name: "Application shell" });
 
 		await user.click(screen.getByRole("button", { name: "Add repository" }));
 
@@ -329,6 +331,7 @@ describe("App add repository flow", () => {
 		});
 
 		render(<App />);
+		await screen.findByRole("main", { name: "Application shell" });
 
 		await user.click(screen.getByRole("button", { name: "Add repository" }));
 
@@ -348,6 +351,7 @@ describe("App add repository flow", () => {
 		);
 
 		render(<App />);
+		await screen.findByRole("main", { name: "Application shell" });
 
 		await user.click(screen.getByRole("button", { name: "Add repository" }));
 

@@ -50,7 +50,6 @@ import {
 	createSession,
 	deleteSession,
 	type ExtendedMessagePart,
-	hasTauriRuntime,
 	hideSession,
 	type ImagePart,
 	listRemoteBranches,
@@ -1049,7 +1048,11 @@ function ProgressiveConversationViewport({
 	sessionId: string;
 	stopScroll: () => void;
 }) {
-	const isTauri = hasTauriRuntime();
+	// Helmor only runs in the Tauri webview now; kept as a local constant so the
+	// surrounding scroll/virtualization logic that branches on `isTauri` can
+	// continue to read naturally. Follow-up cleanup can constant-fold the
+	// `isTauri ? X : Y` call sites in a focused pass.
+	const isTauri = true;
 	// Scroll/viewport are intentionally tracked with two layers:
 	//   1. `committedScrollTopRef` / `committedViewportRef` — the values React
 	//      currently rendered with. Used to compute the visible window.

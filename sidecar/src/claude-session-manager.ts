@@ -3,6 +3,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { extname } from "node:path";
 import {
 	type Query,
@@ -10,15 +11,6 @@ import {
 	type SDKMessage,
 	type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-// `@anthropic-ai/claude-agent-sdk/embed` is the SDK's bun-standalone-binary
-// helper. In dev (`bun run src/index.ts`) it returns the real on-disk path
-// to `cli.js` inside `node_modules`. After `bun build --compile` Bun embeds
-// `cli.js` into the binary's `$bunfs` virtual FS, and the helper extracts it
-// to a tmpdir at module load time so it can be spawned as a subprocess —
-// child processes have no access to the parent's `$bunfs`. Without this
-// the release sidecar fails every `query()` with
-// "Claude Code executable not found at /$bunfs/root/cli.js".
-import claudeCliPath from "@anthropic-ai/claude-agent-sdk/embed";
 import { isAbortError } from "./abort.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { parseImageRefs } from "./images.js";
@@ -43,6 +35,67 @@ import {
  * spinner never resolves.
  */
 const SLASH_COMMANDS_TIMEOUT_MS = 5_000;
+
+/**
+ * Resolve the path to `@anthropic-ai/claude-code`'s `cli.js`, used as the
+ * explicit `pathToClaudeCodeExecutable` for every SDK `query()` call.
+ *
+ * Resolution order:
+ *   1. `HELMOR_CLAUDE_CODE_CLI_PATH` — set by the Tauri host process in
+ *      release builds, pointing at the bundled resource copy inside
+ *      `Helmor.app/Contents/Resources/vendor/claude-code/cli.js`.
+ *   2. `createRequire` lookup against `node_modules` — used in dev
+ *      (`bun run src/index.ts`) and in `bun test`, where `@anthropic-ai/
+ *      claude-code` is a direct sidecar dep.
+ *
+ * We never fall back to the SDK's bundled cli.js: that version is pinned
+ * to whatever `@anthropic-ai/claude-agent-sdk` shipped and can drift from
+ * what we ship via `sidecar/dist/vendor/`. Failing loudly here surfaces
+ * install-state problems at sidecar startup instead of mid-conversation.
+ */
+function resolveClaudeCliPath(): string {
+	const override = process.env.HELMOR_CLAUDE_CODE_CLI_PATH;
+	if (override) {
+		return override;
+	}
+	const require = createRequire(import.meta.url);
+	return require.resolve("@anthropic-ai/claude-code/cli.js");
+}
+
+const CLAUDE_CLI_PATH = resolveClaudeCliPath();
+
+/**
+ * Optional absolute path to a bundled `bun` binary, used as the SDK's
+ * `executable` option when set.
+ *
+ * Background: the Claude Agent SDK spawns `cli.js` through a JS interpreter
+ * (`bun` or `node`) resolved off `PATH`. Inside a Finder-launched `.app`
+ * bundle, `PATH = /usr/bin:/bin:/usr/sbin:/sbin` — neither `bun` nor `node`
+ * are there, so the spawn fails with ENOENT and the SDK misreports it as
+ * "Claude Code executable not found at …/cli.js". To fix this for release
+ * builds, Tauri stages the host's bun binary under `vendor/bun/bun` and
+ * `lib.rs` exports `HELMOR_BUN_PATH` before spawning us.
+ *
+ * Dev mode leaves the env unset — `bun run src/index.ts` is already running
+ * under a bun instance that's on the developer's PATH, so the SDK's default
+ * `"bun"` lookup succeeds.
+ */
+const CLAUDE_EXECUTABLE_OVERRIDE = process.env.HELMOR_BUN_PATH || undefined;
+
+/**
+ * Build the `executable` / `executableArgs` half of a query() options bag.
+ * Returned as a plain object so callers can spread it inline and the SDK's
+ * type narrowing still applies. The `as "bun"` cast is deliberate: at
+ * runtime the SDK passes `executable` straight to `child_process.spawn`,
+ * which accepts absolute paths — but the TS declaration narrows it to the
+ * literal `"bun" | "deno" | "node"`. See `sdk.d.ts` line 987.
+ */
+function executableOptions(): {
+	executable?: "bun" | "deno" | "node";
+} {
+	if (!CLAUDE_EXECUTABLE_OVERRIDE) return {};
+	return { executable: CLAUDE_EXECUTABLE_OVERRIDE as "bun" };
+}
 
 interface LiveSession {
 	readonly query: Query;
@@ -169,7 +222,8 @@ export class ClaudeSessionManager implements SessionManager {
 			prompt: promptValue,
 			options: {
 				abortController,
-				pathToClaudeCodeExecutable: claudeCliPath,
+				pathToClaudeCodeExecutable: CLAUDE_CLI_PATH,
+				...executableOptions(),
 				cwd: cwd || undefined,
 				model: model || undefined,
 				...(resume ? { resume } : {}),
@@ -225,7 +279,8 @@ export class ClaudeSessionManager implements SessionManager {
 			prompt: buildTitlePrompt(userMessage),
 			options: {
 				abortController,
-				pathToClaudeCodeExecutable: claudeCliPath,
+				pathToClaudeCodeExecutable: CLAUDE_CLI_PATH,
+				...executableOptions(),
 				model: "haiku",
 				permissionMode: "plan",
 				allowDangerouslySkipPermissions: true,
@@ -290,7 +345,8 @@ export class ClaudeSessionManager implements SessionManager {
 			prompt: promptIter,
 			options: {
 				abortController,
-				pathToClaudeCodeExecutable: claudeCliPath,
+				pathToClaudeCodeExecutable: CLAUDE_CLI_PATH,
+				...executableOptions(),
 				cwd: cwd || undefined,
 				model: model || undefined,
 				permissionMode: "bypassPermissions",

@@ -33,7 +33,12 @@ describe("App", () => {
 	it("renders the sidebar shell with tooltips, avatars, archive actions, and collapsible groups", async () => {
 		const { container } = render(<App />);
 
-		const shell = screen.getByRole("main", { name: "Application shell" });
+		// App boots with githubIdentityState = "checking" and flips to
+		// "connected" on the next microtask via the mocked invoke. Wait for
+		// the real shell before running sync queries.
+		const shell = await screen.findByRole("main", {
+			name: "Application shell",
+		});
 		const sidebar = screen.getByLabelText("Workspace sidebar");
 		const inspector = screen.getByLabelText("Inspector sidebar");
 		const panel = screen.getByLabelText("Workspace panel");
@@ -111,6 +116,7 @@ describe("App", () => {
 	it("collapses the inspector tabs section while leaving the first two panels expanded", async () => {
 		const user = userEvent.setup();
 		render(<App />);
+		await screen.findByRole("main", { name: "Application shell" });
 
 		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
@@ -127,6 +133,7 @@ describe("App", () => {
 
 	it("resizes the sidebar and persists the width", async () => {
 		render(<App />);
+		await screen.findByRole("main", { name: "Application shell" });
 
 		const sidebar = screen.getByLabelText("Workspace sidebar");
 		const resizeHandle = screen.getByRole("separator", {
@@ -157,6 +164,7 @@ describe("App", () => {
 
 	it("resizes the inspector sidebar and persists the width", async () => {
 		render(<App />);
+		await screen.findByRole("main", { name: "Application shell" });
 
 		const inspector = screen.getByLabelText("Inspector sidebar");
 		const resizeHandle = screen.getByRole("separator", {
@@ -187,11 +195,12 @@ describe("App", () => {
 		);
 	});
 
-	it("restores the saved sidebar width from localStorage", () => {
+	it("restores the saved sidebar width from localStorage", async () => {
 		window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, "404");
 		window.localStorage.setItem(INSPECTOR_WIDTH_STORAGE_KEY, "388");
 
 		render(<App />);
+		await screen.findByRole("main", { name: "Application shell" });
 
 		expect(screen.getByLabelText("Workspace sidebar")).toHaveStyle({
 			width: "404px",

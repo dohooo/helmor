@@ -245,6 +245,7 @@ describe("App create workspace flow", () => {
 		const user = userEvent.setup();
 
 		render(<App />);
+		await screen.findByRole("main", { name: "Application shell" });
 
 		await user.click(screen.getByRole("button", { name: "New workspace" }));
 		await user.click(await screen.findByText("dosu-cli"));

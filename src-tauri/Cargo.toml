@@ -40,32 +40,6 @@ tauri-plugin-mcp-bridge = "0.11.0"
 tauri-plugin-opener = "2"
 uuid = { version = "1", features = ["v4"] }
 
-[features]
-dev-server = ["dep:axum", "dep:futures-core", "dep:tokio", "dep:tower-http"]
-
-[dependencies.axum]
-version = "0.8"
-optional = true
-
-[dependencies.futures-core]
-version = "0.3"
-optional = true
-
-[dependencies.tokio]
-version = "1"
-features = ["full"]
-optional = true
-
-[dependencies.tower-http]
-version = "0.6"
-features = ["cors"]
-optional = true
-
-[[bin]]
-name = "helmor-dev-server"
-path = "src/dev_server_bin.rs"
-required-features = ["dev-server"]
-
 [[bin]]
 name = "gen_pipeline_fixture"
 path = "src/bin/gen_pipeline_fixture.rs"
