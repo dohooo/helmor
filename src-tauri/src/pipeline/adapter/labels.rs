@@ -39,9 +39,10 @@ pub(super) fn make_system_notice(
     }
 }
 
-/// Render a Claude `rate_limit_event` into a `SystemNotice` part. The
-/// severity tracks `rate_limit_info.status` — "allowed" stays Info because
-/// the user isn't actually throttled, anything else becomes Warning.
+/// Render a Claude `rate_limit_event` into a `SystemNotice` part. Only
+/// invoked for `status = "rejected"` (the caller hides every other
+/// status), so the output is always a Warning notice describing which
+/// bucket was hit and when it resets.
 pub(super) fn build_rate_limit_notice(parsed: Option<&Value>) -> MessagePart {
     let info = parsed.and_then(|p| p.get("rate_limit_info"));
     let status = info

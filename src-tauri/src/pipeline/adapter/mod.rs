@@ -465,18 +465,18 @@ fn extract_user_text(parsed: Option<&Value>) -> String {
 }
 
 /// Convert a single `rate_limit_event` into zero or one
-/// ThreadMessageLike. The SDK fires this on every user turn with
-/// `status = "allowed"` to report current 5h/24h utilization, which
-/// is just a usage gauge — we hide it. Anything else (`queued`,
-/// `rejected`, etc.) means the user is actually throttled, so we
-/// surface a notice.
+/// ThreadMessageLike. The SDK fires this on every user turn to report
+/// current 5h/24h utilization with statuses like `allowed`,
+/// `allowed_warning`, `queued`, `rejected`, etc. Only `rejected`
+/// actually means the request was blocked — everything else is a
+/// usage gauge and we hide it.
 fn convert_rate_limit_msg(msg: &IntermediateMessage, out: &mut Vec<ThreadMessageLike>) {
     let parsed = msg.parsed.as_ref();
     let status = parsed
         .and_then(|p| p.get("rate_limit_info"))
         .and_then(|i| i.get("status"))
         .and_then(Value::as_str);
-    if status != Some("allowed") {
+    if status == Some("rejected") {
         out.push(make_system_notice(msg, build_rate_limit_notice(parsed)));
     }
 }

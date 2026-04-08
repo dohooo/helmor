@@ -732,39 +732,42 @@ fn prompt_suggestion_empty_is_silent() {
 // R6: rate_limit_event
 // ---------------------------------------------------------------------------
 
-/// The "allowed" status fires on every user turn as a usage gauge —
-/// the adapter must hide it. This was a deliberate quiet path; without
-/// the test it could regress silently.
+/// Every status OTHER than `rejected` is a usage gauge — the adapter
+/// must hide it. This covers `allowed` (the common per-turn gauge) as
+/// well as warning variants like `allowed_warning` and `queued`, which
+/// the SDK emits before the bucket is actually full.
 #[test]
-fn rate_limit_allowed_is_silent() {
-    let messages = vec![im(
-        "rl1",
-        "assistant",
-        json!({
-            "type": "rate_limit_event",
-            "rate_limit_info": {
-                "status": "allowed",
-                "rateLimitType": "five_hour",
-            }
-        }),
-    )];
-    let result = convert(&messages);
-    assert!(
-        result.is_empty(),
-        "rate_limit_event with status=allowed must be hidden"
-    );
+fn rate_limit_non_rejected_is_silent() {
+    for status in ["allowed", "allowed_warning", "queued"] {
+        let messages = vec![im(
+            "rl1",
+            "assistant",
+            json!({
+                "type": "rate_limit_event",
+                "rate_limit_info": {
+                    "status": status,
+                    "rateLimitType": "five_hour",
+                }
+            }),
+        )];
+        let result = convert(&messages);
+        assert!(
+            result.is_empty(),
+            "rate_limit_event with status={status} must be hidden"
+        );
+    }
 }
 
-/// Throttled rate-limit events DO render as a SystemNotice.
+/// Only `rejected` rate-limit events render as a SystemNotice.
 #[test]
-fn rate_limit_throttled_renders_warning_notice() {
+fn rate_limit_rejected_renders_warning_notice() {
     let messages = vec![im(
         "rl1",
         "assistant",
         json!({
             "type": "rate_limit_event",
             "rate_limit_info": {
-                "status": "queued",
+                "status": "rejected",
                 "rateLimitType": "five_hour",
             }
         }),
@@ -777,7 +780,7 @@ fn rate_limit_throttled_renders_warning_notice() {
         }) => {
             assert_eq!(*severity, NoticeSeverity::Warning);
             assert!(
-                label.contains("queued"),
+                label.contains("rejected"),
                 "label should mention status, got {label:?}"
             );
         }
