@@ -1132,15 +1132,112 @@ mod tests {
         )
         .unwrap();
 
-        let result = workspaces::restore_workspace_impl(&harness.workspace_id);
-        assert!(
-            result.is_ok(),
-            "Restore should succeed by recreating branch: {:?}",
-            result.err()
-        );
+        let response = workspaces::restore_workspace_impl(&harness.workspace_id)
+            .expect("Restore should succeed by recreating branch");
         assert!(
             harness.workspace_dir().exists(),
             "Worktree should be created"
+        );
+        // The original branch was free, so no rename should be reported.
+        assert!(
+            response.branch_rename.is_none(),
+            "Expected no branch rename when original branch was free, got {:?}",
+            response.branch_rename
+        );
+    }
+
+    #[test]
+    fn restore_workspace_returns_branch_rename_when_original_taken() {
+        // Regression test for the previously-silent `-vN` rename path: when
+        // the originally archived branch name is already in use at restore
+        // time, the response must surface the rename so the frontend can tell
+        // the user. The harness leaves `feature/restore-target` in place
+        // after init_git_repo, so the rename path fires without any extra
+        // setup.
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = RestoreTestHarness::new(true);
+
+        let response = workspaces::restore_workspace_impl(&harness.workspace_id)
+            .expect("Restore should succeed on a renamed branch");
+
+        let rename = response
+            .branch_rename
+            .expect("branch_rename should be populated when original branch was taken");
+        assert_eq!(rename.original, harness.branch);
+        assert_eq!(rename.actual, format!("{}-v1", harness.branch));
+
+        // The DB should now point at the renamed branch so future
+        // archive/restore cycles operate on the right ref.
+        let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+        let stored_branch: String = connection
+            .query_row(
+                "SELECT branch FROM workspaces WHERE id = ?1",
+                [&harness.workspace_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_branch, format!("{}-v1", harness.branch));
+        // Worktree should exist on the renamed branch.
+        assert!(harness.workspace_dir().join(".git").exists());
+    }
+
+    #[test]
+    fn restore_workspace_fails_when_archive_commit_missing() {
+        // Regression test for the previously-silent fallback to
+        // parent_branch when the archive commit is unreachable (e.g. it was
+        // garbage-collected after archival). Restore must fail loudly so
+        // the frontend can offer a "Permanently Delete" recovery action
+        // instead of materializing a workspace at the wrong commit.
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = RestoreTestHarness::new(true);
+
+        // Simulate the GC: corrupt the DB-stored archive_commit to a hash
+        // that doesn't exist in the repo. This is exactly what the user
+        // would observe if git GC pruned the original commit.
+        let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+        connection
+            .execute(
+                "UPDATE workspaces SET archive_commit = ?1 WHERE id = ?2",
+                (
+                    "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+                    &harness.workspace_id,
+                ),
+            )
+            .unwrap();
+        drop(connection);
+
+        let error = workspaces::restore_workspace_impl(&harness.workspace_id).unwrap_err();
+        let error_text = format!("{error:#}");
+        assert!(
+            error_text.contains("Commit not found")
+                || error_text.contains("no longer exists")
+                || error_text.contains("Cannot restore"),
+            "Expected a clear missing-commit error, got: {error_text}"
+        );
+
+        // Workspace state must remain `archived` (no DB transition) and
+        // the archived context directory must stay intact so the user can
+        // still permanently delete it via the recovery toast.
+        let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+        let state: String = connection
+            .query_row(
+                "SELECT state FROM workspaces WHERE id = ?1",
+                [&harness.workspace_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "archived");
+        assert!(
+            harness.archived_context_dir().exists(),
+            "Archived context dir should be untouched on bail-out"
+        );
+        assert!(
+            !harness.workspace_dir().exists(),
+            "Workspace dir should not be materialized when restore bails"
         );
     }
 

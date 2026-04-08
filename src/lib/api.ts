@@ -257,6 +257,11 @@ export type RestoreWorkspaceResponse = {
 	restoredWorkspaceId: string;
 	restoredState: string;
 	selectedWorkspaceId: string;
+	/** Set when the originally archived branch was already taken at restore
+	 * time and the workspace was checked out on a `-vN`-suffixed branch
+	 * instead. The frontend uses this to surface an informational toast so
+	 * the rename never happens silently. */
+	branchRename: { original: string; actual: string } | null;
 };
 
 export type ArchiveWorkspaceResponse = {

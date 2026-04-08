@@ -791,6 +791,22 @@ export const WorkspacesSidebarContainer = memo(
 			[handleDeleteWorkspace, pushWorkspaceToast],
 		);
 
+		// ─── Branch-rename notification helper ──────────────────────────────
+		// When restore lands on a `-vN`-suffixed branch because the original
+		// branch name was already taken, the backend returns the rename in
+		// the response. Surface it as a non-destructive informational toast
+		// so the user is never confused about why their workspace is on a
+		// different branch than they remember.
+		const notifyBranchRename = useCallback(
+			(rename: { original: string; actual: string }) => {
+				pushWorkspaceToast(
+					`Branch "${rename.original}" was already taken. Restored on "${rename.actual}" instead.`,
+					"Branch renamed",
+				);
+			},
+			[pushWorkspaceToast],
+		);
+
 		// ─── Optimistic archive (with preflight) ────────────────────────────
 		// 1. Run a fast read-only preflight (DB load + filesystem checks +
 		//    git rev-parse). If it fails, the workspace is in a state where
@@ -975,9 +991,12 @@ export const WorkspacesSidebarContainer = memo(
 						// Not in archived for some reason — fall back to plain IPC.
 						beginSidebarMutation();
 						void restoreWorkspace(workspaceId)
-							.then(() => {
+							.then((response) => {
 								prefetchWorkspace(workspaceId);
 								onSelectWorkspace(workspaceId);
+								if (response.branchRename) {
+									notifyBranchRename(response.branchRename);
+								}
 							})
 							.catch((error) => {
 								pushPermanentDeleteRecoveryToast(
@@ -1033,19 +1052,22 @@ export const WorkspacesSidebarContainer = memo(
 
 					beginSidebarMutation();
 					void restoreWorkspace(workspaceId)
-						.then(() =>
+						.then(async (response) => {
 							// Per-workspace caches refresh immediately — they're not
 							// part of the deferred sidebar batch and downstream UI
 							// (panel, sessions list) needs the latest record.
-							Promise.all([
+							await Promise.all([
 								queryClient.invalidateQueries({
 									queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
 								}),
 								queryClient.invalidateQueries({
 									queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
 								}),
-							]),
-						)
+							]);
+							if (response.branchRename) {
+								notifyBranchRename(response.branchRename);
+							}
+						})
 						.catch((error) => {
 							queryClient.setQueryData(
 								helmorQueryKeys.workspaceGroups,
@@ -1068,6 +1090,7 @@ export const WorkspacesSidebarContainer = memo(
 			[
 				beginSidebarMutation,
 				endSidebarMutation,
+				notifyBranchRename,
 				onSelectWorkspace,
 				prefetchWorkspace,
 				pushPermanentDeleteRecoveryToast,

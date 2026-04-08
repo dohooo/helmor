@@ -19,6 +19,18 @@ pub struct RestoreWorkspaceResponse {
     pub restored_workspace_id: String,
     pub restored_state: String,
     pub selected_workspace_id: String,
+    /// Set when the originally archived branch name was already taken at
+    /// restore time and the workspace had to be checked out on a `-vN`
+    /// suffixed branch instead. The frontend uses this to surface an
+    /// informational toast so the rename never happens silently.
+    pub branch_rename: Option<BranchRename>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchRename {
+    pub original: String,
+    pub actual: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1109,7 +1121,6 @@ pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResp
 /// and `restore_workspace_impl`. Carries the data the apply phase needs so we
 /// don't reload/rederive it.
 struct RestorePreflightData {
-    record: WorkspaceRecord,
     repo_root: PathBuf,
     branch: String,
     archive_commit: String,
@@ -1153,7 +1164,6 @@ fn restore_workspace_preflight(workspace_id: &str) -> Result<RestorePreflightDat
     git_ops::verify_commit_exists(&repo_root, &archive_commit)?;
 
     Ok(RestorePreflightData {
-        record,
         repo_root,
         branch,
         archive_commit,
@@ -1172,7 +1182,6 @@ pub fn validate_restore_workspace(workspace_id: &str) -> Result<()> {
 
 pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResponse> {
     let RestorePreflightData {
-        record,
         repo_root,
         branch,
         archive_commit,
@@ -1217,18 +1226,21 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
         branch.clone()
     };
 
-    // Create the branch from the archive commit (or the parent branch as fallback)
-    // Prefer intended_target_branch (user may have changed it),
-    // fall back to initialization_parent_branch, then "main"
-    let parent_branch = helpers::non_empty(&record.intended_target_branch)
-        .or_else(|| helpers::non_empty(&record.initialization_parent_branch))
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| "main".to_string());
-    let base_ref = if git_ops::verify_commit_exists(&repo_root, &archive_commit).is_ok() {
-        archive_commit.clone()
-    } else {
-        parent_branch.clone()
-    };
+    // Create the branch from the archive commit. We do NOT fall back to a
+    // parent branch on failure: if the archive commit was garbage-collected
+    // between preflight and apply, restoring against `main` (or any other
+    // ref) would silently materialize a workspace at a different commit
+    // than the one the user archived. Bail loudly instead — the frontend
+    // catches this and surfaces a recovery toast with a "Permanently
+    // Delete" action so the user can clean up the now-unrestoreable
+    // workspace.
+    git_ops::verify_commit_exists(&repo_root, &archive_commit).with_context(|| {
+        format!(
+            "Archive commit {archive_commit} no longer exists in {} \
+             (likely garbage-collected). Cannot restore.",
+            repo_root.display()
+        )
+    })?;
 
     git_ops::run_git(
         [
@@ -1236,11 +1248,11 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
             &repo_root.display().to_string(),
             "branch",
             &actual_branch,
-            &base_ref,
+            &archive_commit,
         ],
         None,
     )
-    .with_context(|| format!("Failed to create branch {actual_branch} from {base_ref}"))?;
+    .with_context(|| format!("Failed to create branch {actual_branch} from {archive_commit}"))?;
 
     git_ops::create_worktree(&repo_root, &workspace_dir, &actual_branch)?;
 
@@ -1334,10 +1346,20 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
         );
     }
 
+    let branch_rename = if actual_branch != branch {
+        Some(BranchRename {
+            original: branch,
+            actual: actual_branch,
+        })
+    } else {
+        None
+    };
+
     Ok(RestoreWorkspaceResponse {
         restored_workspace_id: workspace_id.to_string(),
         restored_state: "ready".to_string(),
         selected_workspace_id: workspace_id.to_string(),
+        branch_rename,
     })
 }
 
