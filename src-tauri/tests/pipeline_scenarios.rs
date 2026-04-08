@@ -432,7 +432,180 @@ fn merge_streaming_flag_from_latest() {
 }
 
 // ============================================================================
-// 8. Codex item.completed historical loading
+// 8. Collapse recursion into sub-agent children
+// ============================================================================
+
+#[test]
+fn collapse_agent_children_reads() {
+    // An Agent tool whose children contain 3 consecutive Read calls. The
+    // collapse pass must recurse into children and fold them into a single
+    // CollapsedGroup, not leave them as 3 separate parts.
+    let msgs = vec![
+        user_prompt("u1", "find and read the pipeline files"),
+        assistant_json(
+            "a1",
+            json!([{
+                "type": "tool_use",
+                "id": "agent-1",
+                "name": "Agent",
+                "input": { "description": "explore pipeline" }
+            }]),
+            None,
+        ),
+        // Child assistant messages — grouped under agent-1 by ID prefix
+        assistant_json(
+            "child:agent-1:c1",
+            json!([{
+                "type": "tool_use",
+                "id": "r1",
+                "name": "Read",
+                "input": { "file_path": "/src/pipeline/mod.rs" }
+            }]),
+            None,
+        ),
+        // Simulate tool result for first Read
+        user_json(
+            "child:agent-1:c2",
+            json!([{ "type": "tool_result", "tool_use_id": "r1", "content": "mod pipeline;" }]),
+        ),
+        assistant_json(
+            "child:agent-1:c3",
+            json!([{
+                "type": "tool_use",
+                "id": "r2",
+                "name": "Read",
+                "input": { "file_path": "/src/pipeline/types.rs" }
+            }]),
+            None,
+        ),
+        user_json(
+            "child:agent-1:c4",
+            json!([{ "type": "tool_result", "tool_use_id": "r2", "content": "pub struct..." }]),
+        ),
+        assistant_json(
+            "child:agent-1:c5",
+            json!([{
+                "type": "tool_use",
+                "id": "r3",
+                "name": "Read",
+                "input": { "file_path": "/src/pipeline/collapse.rs" }
+            }]),
+            None,
+        ),
+        user_json(
+            "child:agent-1:c6",
+            json!([{ "type": "tool_result", "tool_use_id": "r3", "content": "pub fn collapse..." }]),
+        ),
+        // Agent result comes back on the main assistant
+        user_json(
+            "u2",
+            json!([{ "type": "tool_result", "tool_use_id": "agent-1", "content": "done" }]),
+        ),
+        assistant_json(
+            "a2",
+            json!([{ "type": "text", "text": "I've read all three pipeline files." }]),
+            None,
+        ),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn collapse_agent_children_mixed_with_text() {
+    // Agent children with searches, then text, then reads. The text should
+    // break the groups just like at the top level.
+    let msgs = vec![
+        user_prompt("u1", "investigate the bug"),
+        assistant_json(
+            "a1",
+            json!([{
+                "type": "tool_use",
+                "id": "agent-2",
+                "name": "Agent",
+                "input": { "description": "debug issue" }
+            }]),
+            None,
+        ),
+        // Two Grep children
+        assistant_json(
+            "child:agent-2:c1",
+            json!([{
+                "type": "tool_use",
+                "id": "g1",
+                "name": "Grep",
+                "input": { "pattern": "collapse_pass" }
+            }]),
+            None,
+        ),
+        user_json(
+            "child:agent-2:c2",
+            json!([{ "type": "tool_result", "tool_use_id": "g1", "content": "found 3 matches" }]),
+        ),
+        assistant_json(
+            "child:agent-2:c3",
+            json!([{
+                "type": "tool_use",
+                "id": "g2",
+                "name": "Grep",
+                "input": { "pattern": "children" }
+            }]),
+            None,
+        ),
+        user_json(
+            "child:agent-2:c4",
+            json!([{ "type": "tool_result", "tool_use_id": "g2", "content": "found 5 matches" }]),
+        ),
+        // Text analysis in the middle
+        assistant_json(
+            "child:agent-2:c5",
+            json!([{ "type": "text", "text": "Now let me read the relevant files." }]),
+            None,
+        ),
+        // Two Read children
+        assistant_json(
+            "child:agent-2:c6",
+            json!([{
+                "type": "tool_use",
+                "id": "r1",
+                "name": "Read",
+                "input": { "file_path": "/src/collapse.rs" }
+            }]),
+            None,
+        ),
+        user_json(
+            "child:agent-2:c7",
+            json!([{ "type": "tool_result", "tool_use_id": "r1", "content": "fn collapse..." }]),
+        ),
+        assistant_json(
+            "child:agent-2:c8",
+            json!([{
+                "type": "tool_use",
+                "id": "r2",
+                "name": "Read",
+                "input": { "file_path": "/src/types.rs" }
+            }]),
+            None,
+        ),
+        user_json(
+            "child:agent-2:c9",
+            json!([{ "type": "tool_result", "tool_use_id": "r2", "content": "struct Types..." }]),
+        ),
+        // Agent wraps up
+        user_json(
+            "u2",
+            json!([{ "type": "tool_result", "tool_use_id": "agent-2", "content": "analysis complete" }]),
+        ),
+        assistant_json(
+            "a2",
+            json!([{ "type": "text", "text": "Found the bug in the collapse pass." }]),
+            None,
+        ),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+// ============================================================================
+// 9. Codex item.completed historical loading
 // ============================================================================
 //
 // The Codex SDK persists each `item.completed` event as its own DB row.

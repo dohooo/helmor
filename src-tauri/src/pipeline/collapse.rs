@@ -243,6 +243,21 @@ fn collapse_tool_calls_in_parts(
     // Flush trailing group (common during streaming)
     flush_group(&mut current_group, &mut result, is_streaming);
 
+    // Recurse into children of non-collapsible tool-calls (Agent, Task, etc.)
+    for part in &mut result {
+        if let ExtendedMessagePart::Basic(MessagePart::ToolCall {
+            children,
+            tool_name,
+            ..
+        }) = part
+        {
+            if !children.is_empty() && !is_collapsible(tool_name) {
+                let child_parts = std::mem::take(children);
+                *children = collapse_tool_calls_in_parts(child_parts, is_streaming);
+            }
+        }
+    }
+
     result
 }
 
@@ -416,5 +431,220 @@ mod tests {
         ];
         let summary = build_group_summary(&tools, false);
         assert_eq!(summary, "Read 3 files");
+    }
+
+    // -- Helpers for children tests ------------------------------------------
+
+    fn tc_with_children(
+        name: &str,
+        args: Value,
+        result: Option<Value>,
+        children: Vec<ExtendedMessagePart>,
+    ) -> ExtendedMessagePart {
+        ExtendedMessagePart::Basic(MessagePart::ToolCall {
+            tool_call_id: format!("tc_{name}"),
+            tool_name: name.to_string(),
+            args: args.clone(),
+            args_text: serde_json::to_string(&args).unwrap(),
+            result,
+            streaming_status: None,
+            children,
+        })
+    }
+
+    fn unwrap_children(part: &ExtendedMessagePart) -> &Vec<ExtendedMessagePart> {
+        match part {
+            ExtendedMessagePart::Basic(MessagePart::ToolCall { children, .. }) => children,
+            _ => panic!("expected ToolCall with children"),
+        }
+    }
+
+    // -- Children collapse tests ---------------------------------------------
+
+    #[test]
+    fn agent_children_consecutive_reads_collapsed() {
+        let children = vec![
+            tc("Read", json!({"file_path": "/a.rs"}), Some(json!("a"))),
+            tc("Read", json!({"file_path": "/b.rs"}), Some(json!("b"))),
+            tc("Read", json!({"file_path": "/c.rs"}), Some(json!("c"))),
+        ];
+        let parts = vec![tc_with_children(
+            "Agent",
+            json!({"description": "explore"}),
+            Some(json!("done")),
+            children,
+        )];
+        let result = collapse_tool_calls_in_parts(parts, false);
+        assert_eq!(result.len(), 1);
+        let kids = unwrap_children(&result[0]);
+        assert_eq!(kids.len(), 1);
+        if let ExtendedMessagePart::CollapsedGroup(g) = &kids[0] {
+            assert_eq!(g.category, CollapseCategory::Read);
+            assert_eq!(g.tools.len(), 3);
+            assert_eq!(g.summary, "Read 3 files");
+        } else {
+            panic!("expected collapsed group in children");
+        }
+    }
+
+    #[test]
+    fn agent_children_consecutive_searches_collapsed() {
+        let children = vec![
+            tc("Grep", json!({"pattern": "foo"}), Some(json!("r1"))),
+            tc("Grep", json!({"pattern": "bar"}), Some(json!("r2"))),
+        ];
+        let parts = vec![tc_with_children(
+            "Agent",
+            json!({"description": "search"}),
+            Some(json!("done")),
+            children,
+        )];
+        let result = collapse_tool_calls_in_parts(parts, false);
+        let kids = unwrap_children(&result[0]);
+        assert_eq!(kids.len(), 1);
+        if let ExtendedMessagePart::CollapsedGroup(g) = &kids[0] {
+            assert_eq!(g.category, CollapseCategory::Search);
+            assert_eq!(g.tools.len(), 2);
+            assert!(g.summary.contains("Searched 2 patterns"));
+        } else {
+            panic!("expected collapsed group in children");
+        }
+    }
+
+    #[test]
+    fn agent_children_mixed_with_text_breaks_groups() {
+        let children = vec![
+            tc("Grep", json!({"pattern": "a"}), Some(json!("r1"))),
+            tc("Grep", json!({"pattern": "b"}), Some(json!("r2"))),
+            text("analyzing results..."),
+            tc("Read", json!({"file_path": "/x.rs"}), Some(json!("x"))),
+            tc("Read", json!({"file_path": "/y.rs"}), Some(json!("y"))),
+        ];
+        let parts = vec![tc_with_children(
+            "Task",
+            json!({"description": "work"}),
+            Some(json!("done")),
+            children,
+        )];
+        let result = collapse_tool_calls_in_parts(parts, false);
+        let kids = unwrap_children(&result[0]);
+        // collapsed search group + text + collapsed read group
+        assert_eq!(kids.len(), 3);
+        assert!(matches!(kids[0], ExtendedMessagePart::CollapsedGroup(_)));
+        assert!(matches!(
+            kids[1],
+            ExtendedMessagePart::Basic(MessagePart::Text { .. })
+        ));
+        assert!(matches!(kids[2], ExtendedMessagePart::CollapsedGroup(_)));
+    }
+
+    #[test]
+    fn agent_children_single_tool_not_collapsed() {
+        let children = vec![tc(
+            "Read",
+            json!({"file_path": "/a.rs"}),
+            Some(json!("a")),
+        )];
+        let parts = vec![tc_with_children(
+            "Agent",
+            json!({"description": "read"}),
+            Some(json!("done")),
+            children,
+        )];
+        let result = collapse_tool_calls_in_parts(parts, false);
+        let kids = unwrap_children(&result[0]);
+        assert_eq!(kids.len(), 1);
+        assert!(matches!(kids[0], ExtendedMessagePart::Basic(_)));
+    }
+
+    #[test]
+    fn agent_children_streaming_active() {
+        let children = vec![
+            tc("Read", json!({"file_path": "/a.rs"}), Some(json!("a"))),
+            tc("Read", json!({"file_path": "/b.rs"}), None), // no result yet
+        ];
+        let parts = vec![tc_with_children(
+            "Agent",
+            json!({"description": "read"}),
+            None,
+            children,
+        )];
+        let result = collapse_tool_calls_in_parts(parts, true);
+        let kids = unwrap_children(&result[0]);
+        assert_eq!(kids.len(), 1);
+        if let ExtendedMessagePart::CollapsedGroup(g) = &kids[0] {
+            assert!(g.active);
+            assert!(g.summary.ends_with("..."));
+        } else {
+            panic!("expected active collapsed group in children");
+        }
+    }
+
+    #[test]
+    fn empty_children_untouched() {
+        let parts = vec![tc(
+            "Agent",
+            json!({"description": "noop"}),
+            Some(json!("done")),
+        )];
+        let result = collapse_tool_calls_in_parts(parts, false);
+        assert_eq!(result.len(), 1);
+        let kids = unwrap_children(&result[0]);
+        assert!(kids.is_empty());
+    }
+
+    #[test]
+    fn collapsible_tool_children_not_recursed() {
+        // Collapsible tools (Read, Grep) don't have meaningful children in
+        // practice, but verify we don't recurse into them even if they did.
+        let child_with_kids = tc_with_children(
+            "Read",
+            json!({"file_path": "/a.rs"}),
+            Some(json!("a")),
+            vec![
+                tc("Read", json!({"file_path": "/nested1.rs"}), Some(json!("n1"))),
+                tc("Read", json!({"file_path": "/nested2.rs"}), Some(json!("n2"))),
+            ],
+        );
+        let parts = vec![
+            child_with_kids,
+            tc("Read", json!({"file_path": "/b.rs"}), Some(json!("b"))),
+        ];
+        let result = collapse_tool_calls_in_parts(parts, false);
+        // Both reads collapse into a group; children inside Read are not touched
+        assert_eq!(result.len(), 1);
+        assert!(matches!(result[0], ExtendedMessagePart::CollapsedGroup(_)));
+    }
+
+    #[test]
+    fn collapse_pass_recurses_children() {
+        let children = vec![
+            tc("Grep", json!({"pattern": "todo"}), Some(json!("r1"))),
+            tc("Grep", json!({"pattern": "fixme"}), Some(json!("r2"))),
+            tc("Read", json!({"file_path": "/c.rs"}), Some(json!("c"))),
+        ];
+        let mut messages = vec![ThreadMessageLike {
+            role: MessageRole::Assistant,
+            id: Some("m1".to_string()),
+            created_at: None,
+            content: vec![
+                text("Let me investigate..."),
+                tc_with_children(
+                    "Agent",
+                    json!({"description": "explore"}),
+                    Some(json!("done")),
+                    children,
+                ),
+                text("Found the issue."),
+            ],
+            status: None,
+            streaming: None,
+        }];
+        collapse_pass(&mut messages);
+        assert_eq!(messages[0].content.len(), 3); // text + Agent + text
+        let kids = unwrap_children(&messages[0].content[1]);
+        // 3 tools → collapsed group (Grep+Grep+Read ≥ 2 consecutive collapsible)
+        assert_eq!(kids.len(), 1);
+        assert!(matches!(kids[0], ExtendedMessagePart::CollapsedGroup(_)));
     }
 }

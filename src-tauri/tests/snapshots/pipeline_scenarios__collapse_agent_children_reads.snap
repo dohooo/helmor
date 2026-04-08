@@ -1,0 +1,39 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: user
+  id: u1
+  content_length: 1
+  content:
+    - type: text
+      text: find and read the pipeline files
+  status: ~
+  streaming: ~
+- role: assistant
+  id: a1
+  content_length: 2
+  content:
+    - type: tool-call
+      tool_name: Agent
+      tool_call_id: agent-1
+      args_keys:
+        - description
+      args_text_length: 34
+      has_result: false
+      result_kind: ~
+      result_preview: ~
+      streaming_status: ~
+      children_count: 1
+      children:
+        - type: collapsed-group
+          category: read
+          tools_count: 3
+          active: false
+          summary: Read 3 files
+    - type: text
+      text: "I've read all three pipeline files."
+  status:
+    type: complete
+    reason: stop
+  streaming: ~
