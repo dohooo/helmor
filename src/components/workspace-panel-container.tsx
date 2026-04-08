@@ -455,28 +455,21 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			return [];
 		}
 
-		return sessionPaneOrderRef.current
-			.map((sessionId) => {
-				const pane = sessionPaneCacheRef.current.get(sessionId);
-				if (!pane) {
-					return null;
-				}
-				return {
-					sessionId,
-					messages:
-						sessionId === threadSessionId && hasFreshThreadSnapshot
-							? mergedMessages
-							: pane.messages,
-					sending: sessionId === threadSessionId ? sending : pane.sending,
-					hasLoaded: pane.hasLoaded,
-					presentationState:
-						sessionId === preferredPaneSessionId
-							? ("presented" as const)
-							: ("background" as const),
-				};
-			})
-			.filter((pane) => pane !== null)
-			.slice(0, SESSION_PANE_CACHE_LIMIT);
+		return [
+			{
+				sessionId: preferredPaneSessionId,
+				messages:
+					preferredPaneSessionId === threadSessionId && hasFreshThreadSnapshot
+						? mergedMessages
+						: preferredPane.messages,
+				sending:
+					preferredPaneSessionId === threadSessionId
+						? sending
+						: preferredPane.sending,
+				hasLoaded: preferredPane.hasLoaded,
+				presentationState: "presented" as const,
+			},
+		];
 	}, [
 		hasFreshThreadSnapshot,
 		mergedMessages,
@@ -484,12 +477,8 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		sending,
 		threadSessionId,
 	]);
-	const visibleSessionId =
-		sessionPanes.find((pane) => pane.presentationState === "presented")
-			?.sessionId ?? null;
-	const hasPresentedPane = sessionPanes.some(
-		(pane) => pane.presentationState === "presented" && pane.hasLoaded,
-	);
+	const visibleSessionId = sessionPanes[0]?.sessionId ?? null;
+	const hasPresentedPane = Boolean(sessionPanes[0]?.hasLoaded);
 
 	const loadingWorkspace =
 		Boolean(displayedWorkspaceId) &&

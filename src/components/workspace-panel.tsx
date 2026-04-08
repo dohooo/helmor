@@ -222,24 +222,10 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 				{/* --- Timeline --- */}
 				<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
 					{activePane?.hasLoaded ? (
-						sessionPanes.map((pane) => (
-							<div
-								key={pane.sessionId}
-								className={
-									pane.presentationState === "presented"
-										? "absolute inset-0 z-10 flex min-h-0 flex-col"
-										: "pointer-events-none absolute inset-0 z-0 flex min-h-0 flex-col invisible"
-								}
-								aria-hidden={
-									pane.presentationState === "presented" ? undefined : true
-								}
-							>
-								<ActiveThreadViewport
-									hasSession={!!selectedSession}
-									pane={pane}
-								/>
-							</div>
-						))
+						<ActiveThreadViewport
+							hasSession={!!selectedSession}
+							pane={activePane}
+						/>
 					) : loadingWorkspace || loadingSession ? (
 						<ConversationColdPlaceholder />
 					) : (
@@ -749,7 +735,7 @@ function ChatThread({
 	);
 	const pinTailRows = sending || hasStreamingMessage;
 	const scrollParentRef = useRef<HTMLElement | null>(null);
-	const { contentRef, scrollRef, scrollToBottom, isAtBottom } =
+	const { contentRef, scrollRef, scrollToBottom, stopScroll, isAtBottom } =
 		useStickToBottom({
 			initial: "instant",
 			resize: "instant",
@@ -793,8 +779,17 @@ function ChatThread({
 		// switch feel delayed.
 		if (usePlainThread) {
 			scrollParent.scrollTop = scrollParent.scrollHeight;
+			return;
 		}
-	}, [sessionId, usePlainThread]);
+
+		// Re-arm useStickToBottom on session switch. Once a user has scrolled up in
+		// one session we intentionally call `stopScroll()`, which leaves the hook
+		// escaped from its bottom lock. Without an explicit re-arm here that escaped
+		// state carries into the next session because <ScrollArea> no longer
+		// remounts, and progressive threads can miss their initial bottom-locked
+		// resize handling.
+		void scrollToBottom("instant");
+	}, [scrollToBottom, sessionId, usePlainThread]);
 
 	const itemContent = useCallback(
 		(index: number, message: RenderedMessage) => (
@@ -820,6 +815,7 @@ function ChatThread({
 				scrollRef={handleScrollRef}
 				sessionId={sessionId}
 				sending={sending}
+				stopScroll={stopScroll}
 				usePlainThread={usePlainThread}
 				contentRef={contentRef}
 			>
@@ -855,6 +851,7 @@ function ConversationViewport({
 	scrollRef,
 	sessionId,
 	sending,
+	stopScroll,
 	usePlainThread,
 }: {
 	children?: ReactNode;
@@ -869,6 +866,7 @@ function ConversationViewport({
 	scrollRef: React.RefCallback<HTMLElement>;
 	sessionId: string;
 	sending: boolean;
+	stopScroll: () => void;
 	usePlainThread: boolean;
 }) {
 	const [scrollParent, setScrollParent] = useState<HTMLDivElement | null>(null);
@@ -933,6 +931,7 @@ function ConversationViewport({
 					pinTailRows={pinTailRows}
 					scrollParent={scrollParent}
 					sessionId={sessionId}
+					stopScroll={stopScroll}
 					contentRef={contentRef}
 				/>
 			)}
@@ -953,6 +952,7 @@ function ProgressiveConversationViewport({
 	pinTailRows,
 	scrollParent,
 	sessionId,
+	stopScroll,
 }: {
 	contentRef?: React.RefCallback<HTMLElement>;
 	data: RenderedMessage[];
@@ -966,6 +966,7 @@ function ProgressiveConversationViewport({
 	pinTailRows: boolean;
 	scrollParent: HTMLDivElement | null;
 	sessionId: string;
+	stopScroll: () => void;
 }) {
 	// Scroll/viewport are intentionally tracked with two layers:
 	//   1. `committedScrollTopRef` / `committedViewportRef` — the values React
@@ -1096,6 +1097,25 @@ function ProgressiveConversationViewport({
 	// untouched from the browser's scroll fastpath perspective.
 	useEffect(() => {
 		if (!scrollParent || typeof window === "undefined") return;
+		const STICK_TO_BOTTOM_ESCAPE_OFFSET_PX = 24;
+		const escapeBottomLock = () => {
+			hasUserScrolledRef.current = true;
+			stopScroll();
+		};
+		const markScrolledAwayFromBottom = () => {
+			const distanceFromBottom =
+				scrollParent.scrollHeight -
+				scrollParent.clientHeight -
+				scrollParent.scrollTop;
+			// `use-stick-to-bottom` keeps itself engaged while `scrollDifference <= 70`.
+			// In WKWebView that threshold is too forgiving for our progressively
+			// measured virtual list: once the user starts to leave the bottom, a stream
+			// of small height corrections can keep re-pulling the viewport downward and
+			// create the observed oscillation. Escape the hook earlier and explicitly.
+			if (distanceFromBottom > STICK_TO_BOTTOM_ESCAPE_OFFSET_PX) {
+				escapeBottomLock();
+			}
+		};
 		const inScrollParent = (target: EventTarget | null) => {
 			return (
 				target instanceof Node &&
@@ -1104,7 +1124,7 @@ function ProgressiveConversationViewport({
 		};
 		const onWheel = (event: WheelEvent) => {
 			if (event.deltaY < -2 && inScrollParent(event.target)) {
-				hasUserScrolledRef.current = true;
+				escapeBottomLock();
 			}
 		};
 		const onKeyDown = (event: KeyboardEvent) => {
@@ -1114,12 +1134,12 @@ function ProgressiveConversationViewport({
 					event.key === "Home") &&
 				inScrollParent(event.target)
 			) {
-				hasUserScrolledRef.current = true;
+				escapeBottomLock();
 			}
 		};
 		const onTouchMove = (event: TouchEvent) => {
 			if (inScrollParent(event.target)) {
-				hasUserScrolledRef.current = true;
+				escapeBottomLock();
 			}
 		};
 		window.addEventListener("wheel", onWheel as EventListener, {
@@ -1133,6 +1153,9 @@ function ProgressiveConversationViewport({
 			onTouchMove as unknown as EventListener,
 			{ passive: true },
 		);
+		scrollParent.addEventListener("scroll", markScrolledAwayFromBottom, {
+			passive: true,
+		});
 		return () => {
 			window.removeEventListener("wheel", onWheel as EventListener);
 			window.removeEventListener(
@@ -1143,8 +1166,9 @@ function ProgressiveConversationViewport({
 				"touchmove",
 				onTouchMove as unknown as EventListener,
 			);
+			scrollParent.removeEventListener("scroll", markScrolledAwayFromBottom);
 		};
-	}, [scrollParent]);
+	}, [scrollParent, stopScroll]);
 
 	const estimatedHeights = useMemo(
 		() => estimateThreadRowHeights(data, { fontSize, paneWidth }),
