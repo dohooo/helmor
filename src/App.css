@@ -351,6 +351,19 @@ body {
 		color-mix(in oklch, var(--color-app-border) 90%, transparent);
 }
 
+/*
+ * Inline code font-size.
+ *
+ * Streamdown hard-codes `text-sm` (14px absolute) on inline `<code>` elements,
+ * which ignores the user's settings.fontSize and visibly bulges when the
+ * surrounding text is smaller (e.g. 13px). Force inline code (not the
+ * pre-wrapped block code, which uses our CodeBlock) to inherit the parent
+ * font-size so it always matches the surrounding text.
+ */
+.conversation-streamdown :not(pre) > code {
+	font-size: inherit;
+}
+
 /* Table layout for assistant markdown */
 .aui-md-table table {
 	width: 100%;
