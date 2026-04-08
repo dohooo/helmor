@@ -1,6 +1,7 @@
 import type {
 	AgentModelOption,
 	AgentModelSection,
+	MessagePart,
 	ThreadMessageLike,
 	WorkspaceGroup,
 	WorkspaceRow,
@@ -257,23 +258,69 @@ export function findModelOption(
 	);
 }
 
+/**
+ * Split `text` on `@<path>` substrings (longer paths win on overlap),
+ * returning interleaved Text and FileMention parts. Mirrors the Rust
+ * `split_user_text_with_files` so optimistic and persisted renders match.
+ */
+export function splitTextWithFiles(
+	text: string,
+	files: readonly string[],
+): MessagePart[] {
+	if (files.length === 0 || text.length === 0) {
+		return [{ type: "text", text }];
+	}
+	const sorted = [...files].sort((a, b) => b.length - a.length);
+	const matches: { start: number; end: number; path: string }[] = [];
+	for (const file of sorted) {
+		if (!file) continue;
+		const needle = `@${file}`;
+		let searchStart = 0;
+		while (true) {
+			const idx = text.indexOf(needle, searchStart);
+			if (idx === -1) break;
+			const end = idx + needle.length;
+			const overlaps = matches.some((m) => !(end <= m.start || idx >= m.end));
+			if (!overlaps) matches.push({ start: idx, end, path: file });
+			searchStart = end;
+		}
+	}
+	if (matches.length === 0) return [{ type: "text", text }];
+	matches.sort((a, b) => a.start - b.start);
+	const parts: MessagePart[] = [];
+	let cursor = 0;
+	for (const m of matches) {
+		if (cursor < m.start) {
+			parts.push({ type: "text", text: text.slice(cursor, m.start) });
+		}
+		parts.push({ type: "file-mention", path: m.path });
+		cursor = m.end;
+	}
+	if (cursor < text.length) {
+		parts.push({ type: "text", text: text.slice(cursor) });
+	}
+	return parts;
+}
+
 /** Create a live ThreadMessageLike for optimistic rendering. */
 export function createLiveThreadMessage({
 	id,
 	role,
 	text,
 	createdAt,
+	files = [],
 }: {
 	id: string;
 	role: "user" | "assistant" | "system";
 	text: string;
 	createdAt: string;
+	files?: readonly string[];
 }): ThreadMessageLike {
 	return {
 		role,
 		id,
 		createdAt,
-		content: [{ type: "text", text }],
+		content: splitTextWithFiles(text, files),
 	};
 }
 

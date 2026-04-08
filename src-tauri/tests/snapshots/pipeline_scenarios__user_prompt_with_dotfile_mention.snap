@@ -1,0 +1,14 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: user
+  id: u1
+  content_length: 2
+  content:
+    - type: text
+      text: "fix "
+    - type: file-mention
+      path: ".clang-format"
+  status: ~
+  streaming: ~

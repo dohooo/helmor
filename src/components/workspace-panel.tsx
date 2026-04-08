@@ -50,6 +50,7 @@ import {
 	createSession,
 	deleteSession,
 	type ExtendedMessagePart,
+	type FileMentionPart,
 	hideSession,
 	type ImagePart,
 	listRemoteBranches,
@@ -1761,6 +1762,10 @@ function ChatUserMessage({ message }: { message: RenderedMessage }) {
 	const parts = message.content as MessagePart[];
 	const { settings } = useSettings();
 
+	// Group consecutive non-text parts (FileMention) with their neighboring
+	// text into a single paragraph so the badges flow inline with the text.
+	// Each text segment still goes through `UserText` so legacy `@/abs/path`
+	// references in old DB rows continue to render via the regex fallback.
 	return (
 		<div
 			data-message-id={message.id}
@@ -1771,9 +1776,17 @@ function ChatUserMessage({ message }: { message: RenderedMessage }) {
 				className="max-w-[75%] overflow-hidden rounded-md bg-app-foreground/[0.03] px-3 py-2 leading-7 text-app-foreground"
 				style={{ fontSize: `${settings.fontSize}px` }}
 			>
-				{parts.map((part, idx) =>
-					isTextPart(part) ? <UserText key={idx} text={part.text} /> : null,
-				)}
+				<p className="whitespace-pre-wrap break-words">
+					{parts.map((part, idx) => {
+						if (isTextPart(part)) {
+							return <UserTextInline key={idx} text={part.text} />;
+						}
+						if (isFileMentionPart(part)) {
+							return <FileBadgeInline key={idx} path={part.path} />;
+						}
+						return null;
+					})}
+				</p>
 			</div>
 		</div>
 	);
@@ -2026,19 +2039,23 @@ function splitUserContent(text: string): UserContentSegment[] {
 	return segments;
 }
 
-const UserText = memo(function UserText({ text }: { text: string }) {
+/**
+ * Inline-only renderer for a TextPart inside a user message bubble. Returns
+ * fragments (no `<p>` wrapper) so it can sit alongside FileMention badges
+ * within the bubble's single paragraph. The regex split handles legacy
+ * `@/abs/path` references in old DB rows that predate structured FileMention.
+ */
+const UserTextInline = memo(function UserTextInline({
+	text,
+}: {
+	text: string;
+}) {
 	const segments = useMemo(() => splitUserContent(text), [text]);
-	const hasAttachments = useMemo(
-		() => segments.some((s) => s.type === "image" || s.type === "file"),
-		[segments],
-	);
-
-	if (!hasAttachments) {
-		return <p className="whitespace-pre-wrap break-words">{text}</p>;
+	if (!segments.some((s) => s.type === "image" || s.type === "file")) {
+		return <>{text}</>;
 	}
-
 	return (
-		<p className="whitespace-pre-wrap break-words">
+		<>
 			{segments.map((seg, idx) => {
 				if (seg.type === "image") {
 					return (
@@ -2052,7 +2069,7 @@ const UserText = memo(function UserText({ text }: { text: string }) {
 				}
 				return <span key={idx}>{seg.value}</span>;
 			})}
-		</p>
+		</>
 	);
 });
 
@@ -2941,6 +2958,12 @@ function isPromptSuggestionPart(part: unknown): part is PromptSuggestionPart {
 		isObj(part) &&
 		part.type === "prompt-suggestion" &&
 		typeof part.text === "string"
+	);
+}
+
+function isFileMentionPart(part: unknown): part is FileMentionPart {
+	return (
+		isObj(part) && part.type === "file-mention" && typeof part.path === "string"
 	);
 }
 

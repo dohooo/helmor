@@ -101,6 +101,9 @@ pub enum NormPart {
         text_length: usize,
         text_preview: String,
     },
+    FileMention {
+        path: String,
+    },
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -227,6 +230,7 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
             text_length: utf16_len(text),
             text_preview: truncate(text),
         },
+        MessagePart::FileMention { path } => NormPart::FileMention { path: path.clone() },
     }
 }
 
@@ -302,6 +306,16 @@ pub fn user_json(id: &str, blocks: Value) -> HistoricalRecord {
 /// `{"type":"user_prompt","text":"..."}`
 pub fn user_prompt(id: &str, text: &str) -> HistoricalRecord {
     let parsed = json!({ "type": "user_prompt", "text": text });
+    make_record(id, "user", &serde_json::to_string(&parsed).unwrap())
+}
+
+/// Post-migration user prompt with @-mention file paths attached.
+pub fn user_prompt_with_files(id: &str, text: &str, files: &[&str]) -> HistoricalRecord {
+    let parsed = json!({
+        "type": "user_prompt",
+        "text": text,
+        "files": files,
+    });
     make_record(id, "user", &serde_json::to_string(&parsed).unwrap())
 }
 

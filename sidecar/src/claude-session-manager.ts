@@ -33,8 +33,12 @@ import {
  * than just showing an empty list. Without this bound, a missing or
  * unresponsive `claude-code` binary parks the request forever and the popup
  * spinner never resolves.
+ *
+ * 8s gives a cold-start `claude-code` child enough room to bind without
+ * making the user wait noticeably long. The frontend retries twice on top
+ * of this with backoff, so a transient hiccup self-recovers.
  */
-const SLASH_COMMANDS_TIMEOUT_MS = 5_000;
+const SLASH_COMMANDS_TIMEOUT_MS = 8_000;
 
 /**
  * Resolve the path to `@anthropic-ai/claude-code`'s `cli.js`, used as the

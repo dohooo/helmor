@@ -1,0 +1,16 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: user
+  id: u1
+  content_length: 3
+  content:
+    - type: file-mention
+      path: src/foo.ts
+    - type: text
+      text: " and again "
+    - type: file-mention
+      path: src/foo.ts
+  status: ~
+  streaming: ~

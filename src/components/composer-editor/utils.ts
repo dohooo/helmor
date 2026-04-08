@@ -16,8 +16,10 @@ import { $isImageBadgeNode } from "./image-badge-node";
 export function $extractComposerContent(): {
 	text: string;
 	images: string[];
+	files: string[];
 } {
 	const images: string[] = [];
+	const files: string[] = [];
 	const textParts: string[] = [];
 	const root = $getRoot();
 
@@ -41,11 +43,13 @@ export function $extractComposerContent(): {
 					}
 					textParts.push(`@${path}`);
 				} else if ($isFileBadgeNode(child)) {
+					const path = child.getFilePath();
+					files.push(path);
 					const last = textParts[textParts.length - 1];
 					if (last && !last.endsWith(" ") && !last.endsWith("\n")) {
 						textParts.push(" ");
 					}
-					textParts.push(`@${child.getFilePath()}`);
+					textParts.push(`@${path}`);
 				} else if ($isLineBreakNode(child)) {
 					textParts.push("\n");
 				}
@@ -61,5 +65,6 @@ export function $extractComposerContent(): {
 			.replace(/\n{3,}/g, "\n\n")
 			.trim(),
 		images: [...new Set(images)],
+		files: [...new Set(files)],
 	};
 }

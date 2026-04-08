@@ -534,6 +534,13 @@ pub async fn list_editor_files(
 }
 
 #[tauri::command]
+pub async fn list_workspace_files(
+    workspace_root_path: String,
+) -> CmdResult<Vec<editor_files::EditorFileListItem>> {
+    run_blocking(move || editor_files::list_workspace_files(&workspace_root_path)).await
+}
+
+#[tauri::command]
 pub async fn list_editor_files_with_content(
     workspace_root_path: String,
 ) -> CmdResult<editor_files::EditorFilesWithContentResponse> {

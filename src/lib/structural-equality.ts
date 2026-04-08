@@ -24,6 +24,7 @@
 import type {
 	CollapsedGroupPart,
 	ExtendedMessagePart,
+	FileMentionPart,
 	ImagePart,
 	MessagePart,
 	PromptSuggestionPart,
@@ -127,6 +128,10 @@ export function partStructurallyEqual(
 		case "prompt-suggestion": {
 			const pb = b as PromptSuggestionPart;
 			return a.text === pb.text;
+		}
+		case "file-mention": {
+			const fb = b as FileMentionPart;
+			return a.path === fb.path;
 		}
 		default: {
 			const _exhaustive: never = a;

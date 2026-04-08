@@ -32,11 +32,11 @@ import {
 	useBasicTypeaheadTriggerMatch,
 } from "@lexical/react/LexicalTypeaheadMenuPlugin";
 import type { TextNode } from "lexical";
-import { useCallback, useMemo, useState } from "react";
+import { Loader2, RefreshCw } from "lucide-react";
+import { type ReactNode, useCallback, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
 	Command,
-	CommandEmpty,
 	CommandGroup,
 	CommandItem,
 	CommandList,
@@ -89,8 +89,17 @@ function filterCommands(
 
 export function SlashCommandPlugin({
 	commands,
+	isLoading = false,
+	isError = false,
+	onRetry,
 }: {
 	commands: readonly SlashCommandEntry[];
+	/** True while the slash-command query is in flight (initial fetch or retry). */
+	isLoading?: boolean;
+	/** True when the query rejected (sidecar timeout, missing CLI, etc). */
+	isError?: boolean;
+	/** Click handler for the "retry" row in the error state. */
+	onRetry?: () => void;
 }) {
 	const [editor] = useLexicalComposerContext();
 	const [query, setQuery] = useState<string | null>(null);
@@ -147,7 +156,49 @@ export function SlashCommandPlugin({
 				{ selectedIndex, selectOptionAndCleanUp, setHighlightedIndex },
 			) => {
 				if (!anchorElementRef.current) return null;
-				if (options.length === 0) return null;
+
+				// Resolve the popup state. We always render *something* now —
+				// returning null when `options.length === 0` used to make the
+				// popup silently invisible during a slow/failed slash-commands
+				// fetch, which looked like "/ doesn't work" to the user.
+				const hasOptions = options.length > 0;
+				const queryActive = (query ?? "").length > 0;
+
+				let stateRow: ReactNode = null;
+				if (!hasOptions) {
+					if (isLoading) {
+						stateRow = (
+							<div className="flex items-center gap-2 px-3 py-2 text-[13px] text-app-muted">
+								<Loader2 className="size-3.5 shrink-0 animate-spin" />
+								<span>Loading commands…</span>
+							</div>
+						);
+					} else if (isError) {
+						stateRow = (
+							<button
+								type="button"
+								onPointerDown={(event) => event.preventDefault()}
+								onClick={() => onRetry?.()}
+								className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-app-muted hover:bg-muted hover:text-foreground"
+							>
+								<RefreshCw className="size-3.5 shrink-0" />
+								<span>Failed to load commands · click to retry</span>
+							</button>
+						);
+					} else if (queryActive) {
+						stateRow = (
+							<div className="px-3 py-2 text-[13px] text-app-muted">
+								No matches
+							</div>
+						);
+					} else {
+						stateRow = (
+							<div className="px-3 py-2 text-[13px] text-app-muted">
+								No commands available
+							</div>
+						);
+					}
+				}
 
 				const highlightValue = options[selectedIndex ?? 0]?.entry.name ?? "";
 
@@ -172,42 +223,46 @@ export function SlashCommandPlugin({
 							className="rounded-xl border border-app-border/60 bg-app-elevated text-app-foreground shadow-2xl ring-1 ring-black/5"
 						>
 							<CommandList className="max-h-72">
-								<CommandEmpty>No commands</CommandEmpty>
-								<CommandGroup>
-									{options.map((opt, index) => {
-										const cmd = opt.entry;
-										const isSelected = index === selectedIndex;
-										return (
-											<CommandItem
-												key={opt.key}
-												value={cmd.name}
-												// Lexical's scroll-into-view dispatcher reads
-												// the DOM node from this ref to keep the active
-												// row in view as the user navigates.
-												ref={(el) => opt.setRefElement(el)}
-												onSelect={() => selectOptionAndCleanUp(opt)}
-												onMouseEnter={() => setHighlightedIndex(index)}
-												// Don't steal focus from the editor on click —
-												// we want the caret to stay so users can keep
-												// typing.
-												onPointerDown={(event) => event.preventDefault()}
-												className={cn(
-													"flex min-w-0 items-center gap-2 px-3 py-2 text-[13px]",
-													isSelected && "bg-muted text-foreground",
-												)}
-											>
-												<span className="shrink-0 text-app-muted">/</span>
-												<span className="shrink-0 font-medium">{cmd.name}</span>
-												<span
-													className="min-w-0 flex-1 truncate whitespace-nowrap text-app-muted"
-													title={cmd.description}
+								{stateRow}
+								{hasOptions ? (
+									<CommandGroup>
+										{options.map((opt, index) => {
+											const cmd = opt.entry;
+											const isSelected = index === selectedIndex;
+											return (
+												<CommandItem
+													key={opt.key}
+													value={cmd.name}
+													// Lexical's scroll-into-view dispatcher reads
+													// the DOM node from this ref to keep the active
+													// row in view as the user navigates.
+													ref={(el) => opt.setRefElement(el)}
+													onSelect={() => selectOptionAndCleanUp(opt)}
+													onMouseEnter={() => setHighlightedIndex(index)}
+													// Don't steal focus from the editor on click —
+													// we want the caret to stay so users can keep
+													// typing.
+													onPointerDown={(event) => event.preventDefault()}
+													className={cn(
+														"flex min-w-0 items-center gap-2 px-3 py-2 text-[13px]",
+														isSelected && "bg-muted text-foreground",
+													)}
 												>
-													{cmd.description}
-												</span>
-											</CommandItem>
-										);
-									})}
-								</CommandGroup>
+													<span className="shrink-0 text-app-muted">/</span>
+													<span className="shrink-0 font-medium">
+														{cmd.name}
+													</span>
+													<span
+														className="min-w-0 flex-1 truncate whitespace-nowrap text-app-muted"
+														title={cmd.description}
+													>
+														{cmd.description}
+													</span>
+												</CommandItem>
+											);
+										})}
+									</CommandGroup>
+								) : null}
 							</CommandList>
 						</Command>
 					</div>,

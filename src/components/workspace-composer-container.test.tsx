@@ -184,6 +184,7 @@ describe("WorkspaceComposerContainer", () => {
 					sendError={null}
 					restoreDraft={null}
 					restoreImages={[]}
+					restoreFiles={[]}
 					restoreNonce={0}
 					modelSelections={{}}
 					effortLevels={{}}

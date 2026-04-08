@@ -251,11 +251,21 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
+            let files: Vec<String> = parsed
+                .and_then(|p| p.get("files"))
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let parts = grouping::split_user_text_with_files(&text, &files);
             result.push(ThreadMessageLike {
                 role: MessageRole::User,
                 id: Some(msg.id.clone()),
                 created_at: Some(msg.created_at.clone()),
-                content: vec![ExtendedMessagePart::Basic(MessagePart::Text { text })],
+                content: parts.into_iter().map(ExtendedMessagePart::Basic).collect(),
                 status: None,
                 streaming: None,
             });

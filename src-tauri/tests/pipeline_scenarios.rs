@@ -118,6 +118,72 @@ fn user_prompt_with_brace_content() {
 }
 
 #[test]
+fn user_prompt_with_file_mentions() {
+    // @-mention picker output: text contains `@<path>` substrings and the
+    // `files` array carries the same paths. The pipeline should split the
+    // text on each match and emit interleaved Text + FileMention parts.
+    let msgs = vec![user_prompt_with_files(
+        "u1",
+        "Please review @src/foo.ts and also @README.md for issues",
+        &["src/foo.ts", "README.md"],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_prompt_with_file_mention_at_start() {
+    let msgs = vec![user_prompt_with_files(
+        "u1",
+        "@src/App.tsx is the entry point",
+        &["src/App.tsx"],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_prompt_with_dotfile_mention() {
+    // Dotfile (no `/`) — the picker can produce these from workspace root.
+    let msgs = vec![user_prompt_with_files(
+        "u1",
+        "fix @.clang-format",
+        &[".clang-format"],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_prompt_with_repeated_file_mention() {
+    // Same file mentioned twice — both occurrences become badges.
+    let msgs = vec![user_prompt_with_files(
+        "u1",
+        "@src/foo.ts and again @src/foo.ts",
+        &["src/foo.ts"],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_prompt_with_overlapping_file_paths() {
+    // Longer path should win at overlapping positions: `@src/foo.ts` must
+    // produce ONE FileMention("src/foo.ts"), not a FileMention("src/foo")
+    // followed by ".ts" plain text.
+    let msgs = vec![user_prompt_with_files(
+        "u1",
+        "see @src/foo.ts",
+        &["src/foo", "src/foo.ts"],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_prompt_files_array_present_but_empty() {
+    // `files: []` should behave identically to no files field — single
+    // Text part with the prompt verbatim.
+    let msgs = vec![user_prompt_with_files("u1", "no mentions here", &[])];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
 fn user_json_text_swallowed() {
     // JSON user message with pure text content is dropped (the assistant
     // already has the prompt; this avoids double-rendering).

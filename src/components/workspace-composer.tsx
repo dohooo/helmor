@@ -19,7 +19,10 @@ import {
 import type { AgentModelSection, SlashCommandEntry } from "@/lib/api";
 import { recordComposerRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
-import { FileBadgeNode } from "./composer-editor/file-badge-node";
+import {
+	$createFileBadgeNode,
+	FileBadgeNode,
+} from "./composer-editor/file-badge-node";
 import {
 	$createImageBadgeNode,
 	ImageBadgeNode,
@@ -28,6 +31,7 @@ import { AutoResizePlugin } from "./composer-editor/plugins/auto-resize-plugin";
 import { DropFilePlugin } from "./composer-editor/plugins/drop-file-plugin";
 import { EditablePlugin } from "./composer-editor/plugins/editable-plugin";
 import { EditorRefPlugin } from "./composer-editor/plugins/editor-ref-plugin";
+import { FileMentionPlugin } from "./composer-editor/plugins/file-mention-plugin";
 import { HasContentPlugin } from "./composer-editor/plugins/has-content-plugin";
 import { PasteImagePlugin } from "./composer-editor/plugins/paste-image-plugin";
 import { SlashCommandPlugin } from "./composer-editor/plugins/slash-command-plugin";
@@ -47,7 +51,7 @@ import {
 
 type WorkspaceComposerProps = {
 	contextKey: string;
-	onSubmit: (prompt: string, imagePaths: string[]) => void;
+	onSubmit: (prompt: string, imagePaths: string[], filePaths: string[]) => void;
 	disabled?: boolean;
 	submitDisabled?: boolean;
 	onStop?: () => void;
@@ -63,8 +67,13 @@ type WorkspaceComposerProps = {
 	sendError?: string | null;
 	restoreDraft?: string | null;
 	restoreImages?: string[];
+	restoreFiles?: string[];
 	restoreNonce?: number;
 	slashCommands?: readonly SlashCommandEntry[];
+	slashCommandsLoading?: boolean;
+	slashCommandsError?: boolean;
+	onRetrySlashCommands?: () => void;
+	workspaceRootPath?: string | null;
 };
 
 const EMPTY_SLASH_COMMANDS: readonly SlashCommandEntry[] = [];
@@ -105,8 +114,8 @@ function onEditorError(error: Error) {
 	console.error("[Composer Lexical]", error);
 }
 
-/** Imperatively set Lexical editor content from draft text + image paths. */
-function $setEditorContent(draft: string, images: string[]) {
+/** Imperatively set Lexical editor content from draft text + attachment paths. */
+function $setEditorContent(draft: string, images: string[], files: string[]) {
 	const root = $getRoot();
 	root.clear();
 	const paragraph = $createParagraphNode();
@@ -118,6 +127,12 @@ function $setEditorContent(draft: string, images: string[]) {
 			paragraph.append($createTextNode(" "));
 		}
 		paragraph.append($createImageBadgeNode(path));
+	}
+	for (const path of files) {
+		if (draft || paragraph.getChildrenSize() > 0) {
+			paragraph.append($createTextNode(" "));
+		}
+		paragraph.append($createFileBadgeNode(path));
 	}
 	root.append(paragraph);
 }
@@ -140,8 +155,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	sendError,
 	restoreDraft,
 	restoreImages = [],
+	restoreFiles = [],
 	restoreNonce = 0,
 	slashCommands = EMPTY_SLASH_COMMANDS,
+	slashCommandsLoading = false,
+	slashCommandsError = false,
+	onRetrySlashCommands,
+	workspaceRootPath = null,
 }: WorkspaceComposerProps) {
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
@@ -188,34 +208,41 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		if (prevContextKeyRef.current !== contextKey) {
 			prevContextKeyRef.current = contextKey;
 			editorRef.current?.update(() => {
-				$setEditorContent(restoreDraft ?? "", restoreImages);
+				$setEditorContent(restoreDraft ?? "", restoreImages, restoreFiles);
 			});
 		}
-	}, [contextKey, restoreDraft, restoreImages]);
+	}, [contextKey, restoreDraft, restoreImages, restoreFiles]);
 
 	// Restore on nonce change (error restore / draft restore)
 	const prevNonceRef = useRef(restoreNonce);
 	useEffect(() => {
 		if (restoreNonce === prevNonceRef.current) return;
 		prevNonceRef.current = restoreNonce;
-		if (!restoreDraft && restoreImages.length === 0) return;
+		if (
+			!restoreDraft &&
+			restoreImages.length === 0 &&
+			restoreFiles.length === 0
+		)
+			return;
 		editorRef.current?.update(() => {
-			$setEditorContent(restoreDraft ?? "", restoreImages);
+			$setEditorContent(restoreDraft ?? "", restoreImages, restoreFiles);
 		});
-	}, [restoreNonce, restoreDraft, restoreImages]);
+	}, [restoreNonce, restoreDraft, restoreImages, restoreFiles]);
 
 	const handleSubmit = useCallback(() => {
 		const editor = editorRef.current;
 		if (!editor) return;
 		let prompt = "";
 		let images: string[] = [];
+		let files: string[] = [];
 		editor.read(() => {
 			const result = $extractComposerContent();
 			prompt = result.text;
 			images = result.images;
+			files = result.files;
 		});
 		if (!prompt && images.length === 0) return;
-		onSubmit(prompt, images);
+		onSubmit(prompt, images, files);
 		editor.update(() => {
 			$getRoot().clear();
 		});
@@ -251,7 +278,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 					/>
 				</div>
 				<HistoryPlugin />
-				<SlashCommandPlugin commands={slashCommands} />
+				<SlashCommandPlugin
+					commands={slashCommands}
+					isLoading={slashCommandsLoading}
+					isError={slashCommandsError}
+					onRetry={onRetrySlashCommands}
+				/>
+				<FileMentionPlugin workspaceRootPath={workspaceRootPath} />
 				<SubmitPlugin onSubmit={handleSubmit} disabled={sendDisabled} />
 				<PasteImagePlugin />
 				<DropFilePlugin />

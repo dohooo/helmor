@@ -175,6 +175,7 @@ pub fn run() {
             models::unpin_workspace,
             models::list_editor_files,
             models::list_editor_files_with_content,
+            models::list_workspace_files,
             models::list_workspace_changes,
             models::list_workspace_changes_with_content,
             models::read_editor_file,

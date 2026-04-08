@@ -113,6 +113,10 @@ pub enum MessagePart {
     /// composer.
     #[serde(rename = "prompt-suggestion", rename_all = "camelCase")]
     PromptSuggestion { text: String },
+
+    /// Inline file reference from the composer's @-mention picker.
+    #[serde(rename = "file-mention", rename_all = "camelCase")]
+    FileMention { path: String },
 }
 
 /// Image payload variants. `Base64` carries the raw blob (no `data:` URI

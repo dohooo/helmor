@@ -34,6 +34,7 @@ type WorkspaceComposerContainerProps = {
 	sendError: string | null;
 	restoreDraft: string | null;
 	restoreImages: string[];
+	restoreFiles: string[];
 	restoreNonce: number;
 	modelSelections: Record<string, string>;
 	effortLevels: Record<string, string>;
@@ -45,6 +46,7 @@ type WorkspaceComposerContainerProps = {
 	onSubmit: (payload: {
 		prompt: string;
 		imagePaths: string[];
+		filePaths: string[];
 		model: AgentModelOption;
 		workingDirectory: string | null;
 		effortLevel: string;
@@ -62,6 +64,7 @@ export const WorkspaceComposerContainer = memo(
 		sendError,
 		restoreDraft,
 		restoreImages,
+		restoreFiles,
 		restoreNonce,
 		modelSelections,
 		effortLevels = {},
@@ -185,14 +188,27 @@ export const WorkspaceComposerContainer = memo(
 			enabled: Boolean(workingDirectory),
 		});
 		const slashCommands = slashCommandsQuery.data ?? EMPTY_SLASH_COMMANDS;
+		// Pending only (`isPending`) covers the very first fetch with no data
+		// yet; once we have data, `isFetching` covers background refetches but
+		// users don't need a spinner for those — the cached list is fine.
+		const slashCommandsLoading =
+			Boolean(workingDirectory) &&
+			slashCommandsQuery.isPending &&
+			!slashCommandsQuery.isError;
+		const slashCommandsError =
+			Boolean(workingDirectory) && slashCommandsQuery.isError;
+		const refetchSlashCommands = useCallback(() => {
+			void slashCommandsQuery.refetch();
+		}, [slashCommandsQuery]);
 		const handleComposerSubmit = useCallback(
-			(prompt: string, imagePaths: string[]) => {
+			(prompt: string, imagePaths: string[], filePaths: string[]) => {
 				if (!selectedModel) {
 					return;
 				}
 				onSubmit({
 					prompt,
 					imagePaths,
+					filePaths,
 					model: selectedModel,
 					workingDirectory,
 					effortLevel,
@@ -239,8 +255,13 @@ export const WorkspaceComposerContainer = memo(
 				sendError={sendError}
 				restoreDraft={restoreDraft}
 				restoreImages={restoreImages}
+				restoreFiles={restoreFiles}
 				restoreNonce={restoreNonce}
 				slashCommands={slashCommands}
+				slashCommandsLoading={slashCommandsLoading}
+				slashCommandsError={slashCommandsError}
+				onRetrySlashCommands={refetchSlashCommands}
+				workspaceRootPath={workingDirectory}
 			/>
 		);
 	},

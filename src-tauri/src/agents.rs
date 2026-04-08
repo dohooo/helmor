@@ -208,6 +208,9 @@ pub struct AgentSendRequest {
     pub effort_level: Option<String>,
     pub permission_mode: Option<String>,
     pub user_message_id: Option<String>,
+    /// Workspace-relative paths from the @-mention picker.
+    #[serde(default)]
+    pub files: Option<Vec<String>>,
 }
 
 // Re-export pipeline types used by persistence functions in this file.
@@ -880,6 +883,7 @@ fn stream_via_sidecar(
     let effort_copy = request.effort_level.clone();
     let permission_mode_copy = request.permission_mode.clone();
     let user_message_id_copy = request.user_message_id.clone();
+    let files_copy = request.files.clone().unwrap_or_default();
     let rid = request_id.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -922,7 +926,7 @@ fn stream_via_sidecar(
                     .unwrap_or_else(|| Uuid::new_v4().to_string()),
             };
 
-            match persist_user_message(conn, &ctx, &prompt_copy) {
+            match persist_user_message(conn, &ctx, &prompt_copy, &files_copy) {
                 Ok(()) => {
                     if debug {
                         eprintln!("[agents:debug] [{rid}] User message persisted to DB");
@@ -1183,22 +1187,28 @@ pub(crate) fn resolve_working_directory(provided: Option<&str>) -> Result<PathBu
 // ---------------------------------------------------------------------------
 
 /// Persist the user's prompt as the first message of the exchange.
-/// Called once at stream start, before entering the event loop.
-///
-/// The prompt is wrapped as `{"type":"user_prompt","text":"..."}` so the
-/// `content` column always holds JSON. This:
-/// - removes the "is content JSON or plain text" union type from the schema
-/// - distinguishes a real human prompt from the SDK's tool_result-as-user
-///   wrappers (which use `type=user`), so the adapter can handle each
-///   without sniffing the first byte.
-fn persist_user_message(conn: &Connection, ctx: &ExchangeContext, prompt: &str) -> Result<()> {
+/// Wraps as `{"type":"user_prompt","text":"...","files":[...]}`.
+fn persist_user_message(
+    conn: &Connection,
+    ctx: &ExchangeContext,
+    prompt: &str,
+    files: &[String],
+) -> Result<()> {
     let now = current_timestamp_string()?;
     let user_message_id = ctx.user_message_id.clone();
-    let content = serde_json::json!({
+    let mut payload = serde_json::json!({
         "type": "user_prompt",
         "text": prompt,
-    })
-    .to_string();
+    });
+    if !files.is_empty() {
+        payload["files"] = serde_json::Value::Array(
+            files
+                .iter()
+                .map(|p| serde_json::Value::String(p.clone()))
+                .collect(),
+        );
+    }
+    let content = payload.to_string();
 
     conn.execute(
         r#"
@@ -1586,7 +1596,7 @@ mod tests {
         };
 
         // 1. Persist user message
-        persist_user_message(&conn, &ctx, "Hello").unwrap();
+        persist_user_message(&conn, &ctx, "Hello", &[]).unwrap();
 
         persist_result_and_finalize(
             &conn,
@@ -1659,7 +1669,7 @@ mod tests {
             user_message_id: Uuid::new_v4().to_string(),
         };
 
-        persist_user_message(&conn, &ctx, "Hi").unwrap();
+        persist_user_message(&conn, &ctx, "Hi", &[]).unwrap();
         persist_result_and_finalize(
             &conn,
             &ctx,
@@ -1719,7 +1729,7 @@ mod tests {
         };
 
         // Persist user message
-        persist_user_message(&conn, &ctx, "Do something").unwrap();
+        persist_user_message(&conn, &ctx, "Do something", &[]).unwrap();
 
         // Persist two intermediate turns
         let turn1 = CollectedTurn {

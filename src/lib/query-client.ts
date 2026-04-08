@@ -6,6 +6,7 @@ import {
 	listRepositories,
 	listSlashCommands,
 	listWorkspaceChangesWithContent,
+	listWorkspaceFiles,
 	loadAgentModelSections,
 	loadArchivedWorkspaces,
 	loadSessionAttachments,
@@ -38,6 +39,8 @@ export const helmorQueryKeys = {
 		["sessionAttachments", sessionId] as const,
 	workspaceChanges: (workspaceRootPath: string) =>
 		["workspaceChanges", workspaceRootPath] as const,
+	workspaceFiles: (workspaceRootPath: string) =>
+		["workspaceFiles", workspaceRootPath] as const,
 	slashCommands: (
 		provider: AgentProvider,
 		workingDirectory: string | null,
@@ -154,9 +157,17 @@ export function slashCommandsQueryOptions(
 		// Slash commands rarely change within a workspace; cache aggressively.
 		staleTime: 5 * 60_000,
 		gcTime: DEFAULT_GC_TIME,
-		// An empty list is a sane fallback if discovery fails (the popup
-		// just won't surface) — never block the composer on errors here.
-		retry: 0,
+		// Retry on transient sidecar failures (cold-start `claude-code`,
+		// control-protocol timeouts). Without this a single timeout would
+		// lock the popup empty until the staleTime window expires, which
+		// the user perceives as "/ doesn't open the menu anymore". Errors
+		// are surfaced through `isError` so the popup can show a retry
+		// affordance instead of silently failing.
+		retry: 2,
+		retryDelay: (attempt) => Math.min(1_000 * 2 ** attempt, 4_000),
+		// Refetch on mount so re-opening a workspace tab gets a fresh shot
+		// at recovery without waiting out staleTime.
+		refetchOnMount: "always",
 	});
 }
 
@@ -167,5 +178,22 @@ export function workspaceChangesQueryOptions(workspaceRootPath: string) {
 		staleTime: CHANGES_STALE_TIME,
 		refetchOnWindowFocus: true,
 		refetchInterval: CHANGES_REFETCH_INTERVAL,
+	});
+}
+
+/**
+ * Full workspace file list for the @-mention picker. The popup is hidden
+ * until this resolves; on error we fall back to an empty list and the
+ * popup never opens (no UI breakage). Cached aggressively because the
+ * walk is bounded but not free, and the file set rarely changes within
+ * a single composer session.
+ */
+export function workspaceFilesQueryOptions(workspaceRootPath: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.workspaceFiles(workspaceRootPath),
+		queryFn: () => listWorkspaceFiles(workspaceRootPath),
+		staleTime: 60_000,
+		gcTime: DEFAULT_GC_TIME,
+		retry: 0,
 	});
 }

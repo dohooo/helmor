@@ -59,6 +59,73 @@ pub(super) fn convert_user_message(
     }
 }
 
+/// Split `text` on `@<path>` substrings (longer paths win on overlap),
+/// returning interleaved Text and FileMention parts.
+pub(crate) fn split_user_text_with_files(text: &str, files: &[String]) -> Vec<MessagePart> {
+    if files.is_empty() || text.is_empty() {
+        return vec![MessagePart::Text {
+            text: text.to_string(),
+        }];
+    }
+
+    let mut sorted_files: Vec<&String> = files.iter().collect();
+    sorted_files.sort_by_key(|f| std::cmp::Reverse(f.len()));
+
+    // (start_byte, end_byte, path) — kept non-overlapping by construction.
+    let mut matches: Vec<(usize, usize, String)> = Vec::new();
+    for file in &sorted_files {
+        if file.is_empty() {
+            continue;
+        }
+        let needle = format!("@{file}");
+        let mut search_start = 0usize;
+        while let Some(rel) = text[search_start..].find(&needle) {
+            let abs_start = search_start + rel;
+            let abs_end = abs_start + needle.len();
+            let overlaps = matches
+                .iter()
+                .any(|(s, e, _)| !(abs_end <= *s || abs_start >= *e));
+            if !overlaps {
+                matches.push((abs_start, abs_end, (*file).clone()));
+            }
+            search_start = abs_end;
+        }
+    }
+
+    if matches.is_empty() {
+        return vec![MessagePart::Text {
+            text: text.to_string(),
+        }];
+    }
+
+    matches.sort_by_key(|(s, _, _)| *s);
+
+    let mut parts: Vec<MessagePart> = Vec::new();
+    let mut cursor = 0usize;
+    for (start, end, path) in matches {
+        if cursor < start {
+            let chunk = &text[cursor..start];
+            if !chunk.is_empty() {
+                parts.push(MessagePart::Text {
+                    text: chunk.to_string(),
+                });
+            }
+        }
+        parts.push(MessagePart::FileMention { path });
+        cursor = end;
+    }
+    if cursor < text.len() {
+        let tail = &text[cursor..];
+        if !tail.is_empty() {
+            parts.push(MessagePart::Text {
+                text: tail.to_string(),
+            });
+        }
+    }
+
+    parts
+}
+
 pub(super) fn group_child_messages(msgs: Vec<ThreadMessageLike>) -> Vec<ThreadMessageLike> {
     let has_children = msgs
         .iter()

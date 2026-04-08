@@ -170,6 +170,48 @@ pub fn list_editor_files(workspace_root_path: &str) -> Result<Vec<EditorFileList
         .collect())
 }
 
+/// List ALL workspace files (no 24-cap), filtered by the same skip/include
+/// rules as `list_editor_files`. Used by the @-mention picker in the composer:
+/// the frontend caches the result and does fuzzy filtering as the user types.
+///
+/// The walk is bounded by `MAX_WORKSPACE_FILES_FOR_MENTION` so a runaway
+/// monorepo can't blow out memory or stall the IPC thread; sane projects fit
+/// well under that ceiling once node_modules/dist/etc. are excluded.
+pub fn list_workspace_files(workspace_root_path: &str) -> Result<Vec<EditorFileListItem>> {
+    let workspace_root = resolve_allowed_path(Path::new(workspace_root_path), true)?;
+    let metadata = fs::metadata(&workspace_root)
+        .with_context(|| format!("Failed to stat workspace root {}", workspace_root.display()))?;
+
+    if !metadata.is_dir() {
+        bail!(
+            "Workspace root is not a directory: {}",
+            workspace_root.display()
+        );
+    }
+
+    let mut discovered_files = Vec::<PathBuf>::new();
+    collect_workspace_files_for_mention(&workspace_root, &mut discovered_files)?;
+    discovered_files.sort_by(|left, right| {
+        editor_file_sort_key(&workspace_root, left)
+            .cmp(&editor_file_sort_key(&workspace_root, right))
+    });
+
+    Ok(discovered_files
+        .into_iter()
+        .filter_map(|path| {
+            let relative_path = path.strip_prefix(&workspace_root).ok()?;
+            Some(EditorFileListItem {
+                path: relative_path.to_string_lossy().replace('\\', "/"),
+                absolute_path: path.display().to_string(),
+                name: path.file_name()?.to_string_lossy().to_string(),
+                status: "M".to_string(),
+                insertions: 0,
+                deletions: 0,
+            })
+        })
+        .collect())
+}
+
 /// List workspace files and eagerly read their contents in a single IPC call.
 /// Files larger than 1 MB or non-UTF-8 files are skipped in the prefetch list.
 pub fn list_editor_files_with_content(
@@ -486,6 +528,147 @@ fn allowed_workspace_roots() -> Result<Vec<PathBuf>> {
     workspace_roots.dedup();
 
     Ok(workspace_roots)
+}
+
+/// Upper bound for the @-mention file list. The composer caches and
+/// fuzzy-filters this in the frontend, so we want it big enough that real
+/// projects (a few thousand source files) come back complete, but small
+/// enough that a freak monorepo doesn't OOM the IPC thread.
+const MAX_WORKSPACE_FILES_FOR_MENTION: usize = 5000;
+
+fn collect_workspace_files_for_mention(
+    current_dir: &Path,
+    discovered_files: &mut Vec<PathBuf>,
+) -> Result<()> {
+    if discovered_files.len() >= MAX_WORKSPACE_FILES_FOR_MENTION {
+        return Ok(());
+    }
+
+    let mut entries = fs::read_dir(current_dir)
+        .with_context(|| {
+            format!(
+                "Failed to read workspace directory {}",
+                current_dir.display()
+            )
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .with_context(|| {
+            format!(
+                "Failed to iterate workspace directory {}",
+                current_dir.display()
+            )
+        })?;
+
+    entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in entries {
+        if discovered_files.len() >= MAX_WORKSPACE_FILES_FOR_MENTION {
+            break;
+        }
+
+        let entry_path = entry.path();
+        let file_type = entry.file_type().with_context(|| {
+            format!("Failed to inspect workspace entry {}", entry_path.display())
+        })?;
+
+        if file_type.is_dir() {
+            if should_skip_workspace_dir_for_mention(&entry_path) {
+                continue;
+            }
+
+            collect_workspace_files_for_mention(&entry_path, discovered_files)?;
+            continue;
+        }
+
+        if file_type.is_file() && should_include_workspace_file_for_mention(&entry_path) {
+            discovered_files.push(entry_path);
+        }
+    }
+
+    Ok(())
+}
+
+/// Directory skip list for the @-mention picker.
+///
+/// Unlike `should_skip_editor_dir` (the inspector view), this does NOT skip
+/// every dot-directory by default — `.github`, `.vscode`, `.husky` etc. are
+/// often the targets of legitimate mentions ("review @.github/workflows/ci.yml").
+/// Only the explicit set of build/cache/dependency dirs is excluded.
+fn should_skip_workspace_dir_for_mention(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+        return true;
+    };
+
+    matches!(
+        name,
+        ".git"
+            | "node_modules"
+            | "dist"
+            | "build"
+            | "coverage"
+            | "target"
+            | ".next"
+            | ".turbo"
+            | ".cache"
+            | ".venv"
+            | "__pycache__"
+    )
+}
+
+/// File inclusion rule for the @-mention picker.
+///
+/// Uses a binary-extension **blacklist** rather than the inspector's text/code
+/// extension whitelist. The mention picker should surface anything an agent
+/// could plausibly read as text — Shell scripts, SQL, Protobuf, Dockerfile,
+/// LICENSE, dotfiles like `.gitignore`, etc. — and only filter out obviously
+/// binary blobs (images, audio, video, archives, executables, fonts, office
+/// docs, databases, disk images).
+///
+/// PDFs and SVGs are intentionally allowed: PDFs are common mention targets
+/// (specs, RFCs) and the agent can extract text; SVGs are XML and editable.
+///
+/// Files without an extension (Makefile, Dockerfile, LICENSE, Procfile, ...)
+/// are allowed — they're almost always text in a code workspace.
+fn should_include_workspace_file_for_mention(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+
+    // OS metadata files we never want in the picker, regardless of extension.
+    if matches!(file_name, ".DS_Store" | "Thumbs.db" | "desktop.ini") {
+        return false;
+    }
+
+    // No extension → almost always a text/config file in a code workspace.
+    let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
+        return true;
+    };
+
+    let lower = extension.to_ascii_lowercase();
+    !matches!(
+        lower.as_str(),
+        // Raster images (SVG is XML — allowed)
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "tiff" | "tif"
+            | "avif" | "heic" | "heif"
+        // Audio
+        | "mp3" | "wav" | "flac" | "ogg" | "m4a" | "aac" | "wma" | "opus"
+        // Video
+        | "mp4" | "mov" | "avi" | "mkv" | "webm" | "m4v" | "wmv" | "flv"
+        // Archives
+        | "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar" | "tgz" | "tbz2" | "zst" | "lz" | "lzma"
+        // Compiled binaries / object files
+        | "exe" | "dll" | "so" | "dylib" | "o" | "a" | "class" | "jar" | "war" | "ear" | "pyc" | "pyo" | "wasm" | "node"
+        // Fonts
+        | "ttf" | "otf" | "woff" | "woff2" | "eot"
+        // Office docs (PDF intentionally allowed above)
+        | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odt" | "ods" | "odp"
+        // Databases
+        | "db" | "sqlite" | "sqlite3" | "mdb"
+        // Disk images / installer packages
+        | "iso" | "dmg" | "pkg" | "deb" | "rpm" | "msi" | "apk" | "ipa"
+        // Misc binary blobs
+        | "bin" | "dat"
+    )
 }
 
 fn collect_editor_files(
@@ -859,5 +1042,195 @@ mod tests {
         assert!(files
             .iter()
             .all(|file| Path::new(&file.absolute_path).is_file()));
+    }
+
+    #[test]
+    fn list_workspace_files_uses_blacklist_filter_for_mention_picker() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let harness = EditorFilesHarness::new();
+
+        // Allowed by the blacklist but EXCLUDED by the inspector's whitelist —
+        // this is the whole point of switching to a blacklist.
+        let allowed_extras = [
+            "deploy.sh",
+            "schema.sql",
+            "api.proto",
+            "service.graphql",
+            "main.cpp",
+            "header.h",
+            "app.lua",
+            "site.scss",
+            "Dockerfile", // no extension
+            "Makefile",   // no extension
+            "LICENSE",    // no extension
+            ".gitignore", // dotfile
+            ".editorconfig",
+            "diagram.svg", // SVG is XML, allowed
+            "spec.pdf",    // PDFs are valid mention targets
+        ];
+        for name in allowed_extras {
+            fs::write(harness.workspace_dir.join(name), b"contents\n").unwrap();
+        }
+
+        // Hidden config DIRECTORIES the mention picker should walk into
+        // (unlike the inspector's stricter rule, which skips all dot-dirs).
+        let github_workflows = harness.workspace_dir.join(".github").join("workflows");
+        fs::create_dir_all(&github_workflows).unwrap();
+        fs::write(github_workflows.join("ci.yml"), b"name: ci\n").unwrap();
+        let vscode_dir = harness.workspace_dir.join(".vscode");
+        fs::create_dir_all(&vscode_dir).unwrap();
+        fs::write(vscode_dir.join("settings.json"), b"{}\n").unwrap();
+
+        // Blacklisted binaries — must NOT appear in the result.
+        let blacklisted_binaries = [
+            "logo.png",
+            "song.mp3",
+            "clip.mp4",
+            "bundle.zip",
+            "tool.exe",
+            "lib.so",
+            "font.woff2",
+            "report.docx",
+            "data.sqlite3",
+            "image.dmg",
+        ];
+        for name in blacklisted_binaries {
+            fs::write(harness.workspace_dir.join(name), b"\x00\x01\x02").unwrap();
+        }
+
+        // OS metadata noise — never surfaced even though it has no extension.
+        fs::write(harness.workspace_dir.join(".DS_Store"), b"meta").unwrap();
+
+        // Excluded directories — still skipped.
+        let node_modules = harness.workspace_dir.join("node_modules").join("react");
+        fs::create_dir_all(&node_modules).unwrap();
+        fs::write(node_modules.join("index.js"), b"vendor\n").unwrap();
+        let git_dir = harness.workspace_dir.join(".git");
+        fs::create_dir_all(&git_dir).unwrap();
+        fs::write(git_dir.join("HEAD"), b"ref: refs/heads/main\n").unwrap();
+
+        let files = list_workspace_files(harness.workspace_dir.to_str().unwrap()).unwrap();
+        let result_paths: std::collections::HashSet<String> =
+            files.iter().map(|f| f.path.clone()).collect();
+
+        // Every blacklist-allowed file should be present.
+        for name in allowed_extras {
+            assert!(
+                result_paths.contains(name),
+                "expected blacklist-allowed file {name} to appear, got {result_paths:?}",
+            );
+        }
+        assert!(
+            result_paths.contains(".github/workflows/ci.yml"),
+            "expected .github/workflows/ci.yml in result, got {result_paths:?}",
+        );
+        assert!(
+            result_paths.contains(".vscode/settings.json"),
+            "expected .vscode/settings.json in result, got {result_paths:?}",
+        );
+
+        // No blacklisted binary should leak through.
+        for name in blacklisted_binaries {
+            assert!(
+                !result_paths.contains(name),
+                "binary {name} should be excluded by the blacklist",
+            );
+        }
+        assert!(
+            !result_paths.contains(".DS_Store"),
+            "OS metadata .DS_Store should be excluded",
+        );
+
+        // Excluded directories must not leak.
+        for path in &result_paths {
+            assert!(
+                !path.contains("node_modules"),
+                "node_modules leaked: {path}",
+            );
+            assert!(!path.starts_with(".git/"), "git dir leaked: {path}");
+        }
+    }
+
+    #[test]
+    fn list_workspace_files_returns_all_files_without_24_cap_and_skips_excluded_dirs() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let harness = EditorFilesHarness::new();
+
+        // Create 30 source files across nested directories — well past the
+        // 24-file truncation `list_editor_files` enforces. The mention picker
+        // must see all of them so the user can search the full workspace.
+        let src_dir = harness.workspace_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        for index in 0..15 {
+            fs::write(
+                src_dir.join(format!("file_{index:02}.ts")),
+                "export const x = true;\n",
+            )
+            .unwrap();
+        }
+        let nested_dir = src_dir.join("components").join("widgets");
+        fs::create_dir_all(&nested_dir).unwrap();
+        for index in 0..15 {
+            fs::write(
+                nested_dir.join(format!("widget_{index:02}.tsx")),
+                "export const w = true;\n",
+            )
+            .unwrap();
+        }
+
+        // Drop a file inside each excluded directory; none should appear.
+        let node_modules = harness.workspace_dir.join("node_modules").join("react");
+        fs::create_dir_all(&node_modules).unwrap();
+        fs::write(node_modules.join("index.js"), "/* vendor */\n").unwrap();
+        let git_dir = harness.workspace_dir.join(".git");
+        fs::create_dir_all(&git_dir).unwrap();
+        fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        let dist_dir = harness.workspace_dir.join("dist");
+        fs::create_dir_all(&dist_dir).unwrap();
+        fs::write(dist_dir.join("bundle.js"), "/* built */\n").unwrap();
+
+        // Also drop a binary-ish file with an unsupported extension — it
+        // should be filtered out by `should_include_editor_file`.
+        fs::write(harness.workspace_dir.join("logo.png"), b"\x89PNG").unwrap();
+
+        let files = list_workspace_files(harness.workspace_dir.to_str().unwrap()).unwrap();
+
+        // 30 source files, no truncation.
+        assert_eq!(
+            files.len(),
+            30,
+            "expected all 30 source files, got {} (paths: {:?})",
+            files.len(),
+            files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        );
+
+        // Excluded directories must not leak into the result.
+        for file in &files {
+            assert!(
+                !file.path.contains("node_modules"),
+                "node_modules leaked: {}",
+                file.path
+            );
+            assert!(
+                !file.path.starts_with(".git"),
+                "git dir leaked: {}",
+                file.path
+            );
+            assert!(
+                !file.path.starts_with("dist/"),
+                "dist leaked: {}",
+                file.path
+            );
+            assert!(!file.path.ends_with(".png"), "binary leaked: {}", file.path);
+        }
+
+        // Sanity: nested files are reported with forward-slash relative paths
+        // and the corresponding absolute path resolves to a real file.
+        let nested_match = files
+            .iter()
+            .find(|f| f.path == "src/components/widgets/widget_00.tsx")
+            .expect("expected nested widget in result");
+        assert!(Path::new(&nested_match.absolute_path).is_file());
+        assert_eq!(nested_match.name, "widget_00.tsx");
     }
 }

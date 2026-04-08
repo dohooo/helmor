@@ -77,6 +77,8 @@ export type AgentSendRequest = {
 	effortLevel?: string | null;
 	permissionMode?: string | null;
 	userMessageId?: string | null;
+	/** Workspace-relative paths from the @-mention picker. */
+	files?: string[] | null;
 };
 
 export type WorkspaceSummary = {
@@ -781,6 +783,26 @@ export async function listEditorFiles(
 	}
 }
 
+/**
+ * Full workspace file listing for the @-mention picker. Walks the same skip
+ * rules as `listEditorFiles` but without the 24-file cap. The result is
+ * cached per workspace root via React Query and fuzzy-filtered in the frontend
+ * as the user types.
+ */
+export async function listWorkspaceFiles(
+	workspaceRootPath: string,
+): Promise<InspectorFileItem[]> {
+	try {
+		return await invoke<InspectorFileItem[]>("list_workspace_files", {
+			workspaceRootPath,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to list workspace files."),
+		);
+	}
+}
+
 export async function listEditorFilesWithContent(
 	workspaceRootPath: string,
 ): Promise<EditorFilesWithContentResponse> {
@@ -949,6 +971,10 @@ export type PromptSuggestionPart = {
 	type: "prompt-suggestion";
 	text: string;
 };
+export type FileMentionPart = {
+	type: "file-mention";
+	path: string;
+};
 export type MessagePart =
 	| TextPart
 	| ReasoningPart
@@ -956,7 +982,8 @@ export type MessagePart =
 	| SystemNoticePart
 	| TodoListPart
 	| ImagePart
-	| PromptSuggestionPart;
+	| PromptSuggestionPart
+	| FileMentionPart;
 
 export type CollapsedGroupPart = {
 	type: "collapsed-group";

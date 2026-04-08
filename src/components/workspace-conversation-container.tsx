@@ -28,6 +28,7 @@ import { WorkspaceComposerContainer } from "./workspace-composer-container";
 import { WorkspacePanelContainer } from "./workspace-panel-container";
 
 const EMPTY_IMAGES: string[] = [];
+const EMPTY_FILES: string[] = [];
 const EMPTY_MESSAGES: ThreadMessageLike[] = [];
 
 type WorkspaceConversationContainerProps = {
@@ -70,6 +71,7 @@ export const WorkspaceConversationContainer = memo(
 			contextKey: string;
 			draft: string;
 			images: string[];
+			files: string[];
 			nonce: number;
 		} | null>(null);
 		const [liveMessagesByContext, setLiveMessagesByContext] = useState<
@@ -231,6 +233,7 @@ export const WorkspaceConversationContainer = memo(
 			async ({
 				prompt,
 				imagePaths,
+				filePaths,
 				model,
 				workingDirectory,
 				effortLevel,
@@ -238,6 +241,7 @@ export const WorkspaceConversationContainer = memo(
 			}: {
 				prompt: string;
 				imagePaths: string[];
+				filePaths: string[];
 				model: AgentModelOption;
 				workingDirectory: string | null;
 				effortLevel: string;
@@ -258,6 +262,7 @@ export const WorkspaceConversationContainer = memo(
 					role: "user",
 					text: trimmedPrompt,
 					createdAt: now,
+					files: filePaths,
 				});
 				const previousLiveSession = liveSessionsByContext[contextKey];
 				const providerSessionId =
@@ -380,6 +385,7 @@ export const WorkspaceConversationContainer = memo(
 							effortLevel,
 							permissionMode,
 							userMessageId,
+							files: filePaths,
 						},
 						(event) => {
 							if (event.kind === "update") {
@@ -482,6 +488,7 @@ export const WorkspaceConversationContainer = memo(
 										contextKey,
 										draft: trimmedPrompt,
 										images: imagePaths,
+										files: filePaths,
 										nonce: Date.now(),
 									});
 									setLiveMessagesByContext((current) => ({
@@ -513,6 +520,7 @@ export const WorkspaceConversationContainer = memo(
 						contextKey,
 						draft: trimmedPrompt,
 						images: imagePaths,
+						files: filePaths,
 						nonce: Date.now(),
 					});
 					setLiveMessagesByContext((current) => ({
@@ -579,6 +587,9 @@ export const WorkspaceConversationContainer = memo(
 		const restoreImages = restoreActive
 			? composerRestoreState.images
 			: EMPTY_IMAGES;
+		const restoreFiles = restoreActive
+			? composerRestoreState.files
+			: EMPTY_FILES;
 		const restoreNonce = restoreActive ? composerRestoreState.nonce : 0;
 
 		return (
@@ -609,6 +620,7 @@ export const WorkspaceConversationContainer = memo(
 							sendError={activeSendError}
 							restoreDraft={restoreDraft}
 							restoreImages={restoreImages}
+							restoreFiles={restoreFiles}
 							restoreNonce={restoreNonce}
 							modelSelections={composerModelSelections}
 							effortLevels={composerEffortLevels}
