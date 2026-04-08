@@ -4,7 +4,7 @@
 	"version": "0.1.0",
 	"identifier": "build.helmor.app",
 	"build": {
-		"beforeDevCommand": "pnpm run dev:api & pnpm run dev:vite",
+		"beforeDevCommand": "pnpm exec vite",
 		"devUrl": "http://localhost:1420",
 		"beforeBuildCommand": "cd sidecar && bun install --frozen-lockfile && bun run build && cp dist/helmor-sidecar dist/helmor-sidecar-$(rustc -vV | grep host | cut -d' ' -f2) && cd .. && pnpm run build",
 		"frontendDist": "../dist"
