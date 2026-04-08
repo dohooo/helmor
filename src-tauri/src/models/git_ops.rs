@@ -83,6 +83,11 @@ where
     );
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
 
     let child = command.spawn().context("Failed to spawn git")?;
     let child_pid = child.id();
@@ -112,23 +117,21 @@ where
             Err(anyhow::Error::from(io_err).context("Failed to wait for git"))
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
-            // Kill the child so the waiter thread observes the death and
-            // exits — otherwise we'd leak the OS thread until git decided
-            // to give up on its own. There is a small PID-reuse race here
-            // (the child may have exited just before we send the signal),
-            // but this matches `sidecar.rs::send_sigterm` and is the best
-            // option without pulling in a helper crate.
+            // Kill the child's entire process group so the waiter thread
+            // observes the death and exits — otherwise we'd leak the OS
+            // thread until git decided to give up on its own. Using the
+            // negative PGID (== child PID because we set process_group(0)
+            // at spawn) ensures child processes like ssh are also killed.
             #[cfg(unix)]
-            // SAFETY: `child_pid` is the PID of the child we spawned. Even
-            // if the kernel has already reaped the process, `libc::kill`
-            // returns ESRCH harmlessly — it cannot corrupt our address
-            // space.
+            // SAFETY: `child_pid` == PGID (we set process_group(0) at
+            // spawn). Negative PID targets the whole group. If the group
+            // has already exited, `libc::kill` returns ESRCH harmlessly.
             unsafe {
-                libc::kill(child_pid as libc::pid_t, libc::SIGKILL);
+                libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
             }
             #[cfg(not(unix))]
             {
-                // No portable PID-only kill on Windows. The waiter will
+                // No portable PGID kill on Windows. The waiter will
                 // exit eventually when the child does — accept the leak
                 // for now (Helmor's primary target is macOS).
                 let _ = child_pid;
