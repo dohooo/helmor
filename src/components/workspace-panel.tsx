@@ -46,6 +46,7 @@ import {
 	createSession,
 	deleteSession,
 	type ExtendedMessagePart,
+	hasTauriRuntime,
 	hideSession,
 	listRemoteBranches,
 	loadHiddenSessions,
@@ -968,6 +969,7 @@ function ProgressiveConversationViewport({
 	sessionId: string;
 	stopScroll: () => void;
 }) {
+	const isTauri = hasTauriRuntime();
 	// Scroll/viewport are intentionally tracked with two layers:
 	//   1. `committedScrollTopRef` / `committedViewportRef` — the values React
 	//      currently rendered with. Used to compute the visible window.
@@ -984,6 +986,11 @@ function ProgressiveConversationViewport({
 	>({});
 	const initialScrollAppliedRef = useRef(false);
 	const pendingScrollAdjustmentRef = useRef(0);
+	const isUserScrollingRef = useRef(false);
+	const scrollIdleTimerRef = useRef<ReturnType<
+		typeof window.setTimeout
+	> | null>(null);
+	const deferredMeasuredHeightsRef = useRef<Record<string, number>>({});
 	// Phase 2 / Goal #1.5 / iter 5:
 	// Has the user actively scrolled UP at any point in this session? Set
 	// the first time the user produces a real upward gesture (wheel up,
@@ -1013,6 +1020,12 @@ function ProgressiveConversationViewport({
 		setMeasuredHeights({});
 		initialScrollAppliedRef.current = false;
 		hasUserScrolledRef.current = false;
+		isUserScrollingRef.current = false;
+		deferredMeasuredHeightsRef.current = {};
+		if (scrollIdleTimerRef.current !== null) {
+			window.clearTimeout(scrollIdleTimerRef.current);
+			scrollIdleTimerRef.current = null;
+		}
 	}
 	const { scrollTop, viewportHeight } = committedScrollState;
 	// Mirror of `measuredHeights` for synchronous reads inside the
@@ -1023,6 +1036,21 @@ function ProgressiveConversationViewport({
 	useLayoutEffect(() => {
 		measuredHeightsRef.current = measuredHeights;
 	}, [measuredHeights]);
+
+	const flushDeferredMeasuredHeights = useCallback(() => {
+		const pending = deferredMeasuredHeightsRef.current;
+		const entries = Object.entries(pending);
+		if (entries.length === 0) {
+			return;
+		}
+		deferredMeasuredHeightsRef.current = {};
+		startTransition(() => {
+			setMeasuredHeights((current) => ({
+				...current,
+				...Object.fromEntries(entries),
+			}));
+		});
+	}, []);
 
 	// Note: the post-commit reset that used to live here for layoutCacheKey
 	// changes is now handled by the synchronous reset block above.
@@ -1044,12 +1072,22 @@ function ProgressiveConversationViewport({
 				const viewportDelta = Math.abs(
 					nextViewportHeight - current.viewportHeight,
 				);
+				const commitThreshold = isTauri
+					? Math.max(24, Math.floor(buffer / 8))
+					: buffer / 2;
 				// We render with `buffer = effectiveViewportHeight` of overscan
 				// above and below the visible window, so any scroll movement
 				// smaller than half the buffer is guaranteed to keep the same
 				// rows in view. In that case we skip the state update entirely
 				// to avoid re-running visibleRows / re-rendering rows.
-				if (scrollDelta < buffer / 2 && viewportDelta < 8) {
+				//
+				// WKWebView does not like the large step size here: the visible
+				// window advances in big batches, then newly-entering rows swap from
+				// estimator height to measured height in one go, which shows up as the
+				// user-visible “scroll a bit, then slightly snap back” artifact in
+				// long archived sessions. Commit much more frequently in Tauri so the
+				// virtual window moves continuously instead of in half-viewport jumps.
+				if (scrollDelta < commitThreshold && viewportDelta < 8) {
 					return current;
 				}
 				return {
@@ -1062,6 +1100,15 @@ function ProgressiveConversationViewport({
 		const scheduleCommit = () => {
 			if (rafId !== null) return;
 			rafId = window.requestAnimationFrame(commitFromDom);
+			isUserScrollingRef.current = true;
+			if (scrollIdleTimerRef.current !== null) {
+				window.clearTimeout(scrollIdleTimerRef.current);
+			}
+			scrollIdleTimerRef.current = window.setTimeout(() => {
+				isUserScrollingRef.current = false;
+				scrollIdleTimerRef.current = null;
+				flushDeferredMeasuredHeights();
+			}, 120);
 		};
 
 		// Always commit the first observation so we know the actual viewport.
@@ -1082,10 +1129,14 @@ function ProgressiveConversationViewport({
 			if (rafId !== null) {
 				window.cancelAnimationFrame(rafId);
 			}
+			if (scrollIdleTimerRef.current !== null) {
+				window.clearTimeout(scrollIdleTimerRef.current);
+				scrollIdleTimerRef.current = null;
+			}
 			scrollParent.removeEventListener("scroll", scheduleCommit);
 			observer?.disconnect();
 		};
-	}, [scrollParent]);
+	}, [flushDeferredMeasuredHeights, isTauri, scrollParent]);
 
 	// Phase 2 / Goal #1.5 / iter 5:
 	// Detect user-initiated upward scroll via wheel/keyboard/touch input
@@ -1321,6 +1372,17 @@ function ProgressiveConversationViewport({
 				return;
 			}
 
+			// WKWebView makes row-height corrections visible when they land during an
+			// active upward scroll: the viewport keeps moving, but rows above and
+			// inside the realized window get recomputed mid-gesture, which shows up as
+			// periodic “mini snap-backs”. Keep the newest measured heights buffered
+			// while the user is actively scrolling through history, then flush them
+			// once scroll has been idle for a short moment.
+			if (isTauri && hasUserScrolledRef.current && isUserScrollingRef.current) {
+				deferredMeasuredHeightsRef.current[rowKey] = roundedHeight;
+				return;
+			}
+
 			if (scrollParent && row.top + headerHeight < scrollParent.scrollTop) {
 				pendingScrollAdjustmentRef.current += roundedHeight - previousHeight;
 			}
@@ -1331,7 +1393,7 @@ function ProgressiveConversationViewport({
 				}));
 			});
 		},
-		[headerHeight, scrollParent],
+		[headerHeight, isTauri, scrollParent],
 	);
 
 	if (data.length === 0) {
@@ -1354,6 +1416,7 @@ function ProgressiveConversationViewport({
 				{visibleRows.map((row) => (
 					<MeasuredConversationRow
 						key={row.key}
+						disableContentVisibility={isTauri}
 						onHeightChange={handleHeightChange}
 						rowKey={row.key}
 						top={row.top}
@@ -1370,12 +1433,14 @@ function ProgressiveConversationViewport({
 
 function MeasuredConversationRow({
 	children,
+	disableContentVisibility,
 	estimatedHeight,
 	onHeightChange,
 	rowKey,
 	top,
 }: {
 	children: ReactNode;
+	disableContentVisibility: boolean;
 	estimatedHeight: number;
 	onHeightChange: (rowKey: string, nextHeight: number) => void;
 	rowKey: string;
@@ -1423,7 +1488,9 @@ function MeasuredConversationRow({
 		<div
 			ref={rowRef}
 			style={{
-				...measuredRowIsolationStyle,
+				...(disableContentVisibility
+					? conversationRowIsolationStyle
+					: measuredRowIsolationStyle),
 				containIntrinsicSize: intrinsicSize,
 				left: 0,
 				position: "absolute",
