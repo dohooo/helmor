@@ -1,0 +1,121 @@
+{
+	"string_table": [
+		"UNKNOWN",
+		"start",
+		"pthread_mutex_lock",
+		"pthread_mutex_unlock",
+		"cthread_yield",
+		"_pthread_start",
+		"_pthread_cond_wait",
+		"swtch_pri",
+		"mach_absolute_time",
+		"__open",
+		"fcntl",
+		"__fcntl",
+		"pread",
+		"__psynch_cvwait",
+		"writev",
+		"shutdown",
+		"kevent",
+		"posix_spawn",
+		"__posix_spawn",
+		"__accept",
+		"poll",
+		"open",
+		"_platform_memcmp",
+		"_platform_memmove"
+	],
+	"data": [
+		{
+			"debug_name": "dyld",
+			"debug_id": "9f682dcf-340c-3bfa-bcdd-dd702f30313e",
+			"code_id": "9F682DCF340C3BFABCDDDD702F30313E",
+			"symbol_table": [{ "rva": 123476, "size": 7096, "symbol": 1 }],
+			"known_addresses": [[130467, 0]]
+		},
+		{
+			"debug_name": "libsystem_pthread.dylib",
+			"debug_id": "e7a73008-0c09-31e3-9dd9-0c61652f0e85",
+			"code_id": "E7A730080C0931E39DD90C61652F0E85",
+			"symbol_table": [
+				{ "rva": 5116, "size": 264, "symbol": 2 },
+				{ "rva": 6468, "size": 208, "symbol": 3 },
+				{ "rva": 15364, "size": 56, "symbol": 4 },
+				{ "rva": 27600, "size": 320, "symbol": 5 },
+				{ "rva": 27988, "size": 1420, "symbol": 6 }
+			],
+			"known_addresses": [
+				[5252, 0],
+				[6480, 1],
+				[6536, 1],
+				[15399, 2],
+				[27735, 3],
+				[28967, 4]
+			]
+		},
+		{
+			"debug_name": "libsystem_kernel.dylib",
+			"debug_id": "51565b39-f595-3e96-a217-fef29815057a",
+			"code_id": "51565B39F5953E96A217FEF29815057A",
+			"symbol_table": [
+				{ "rva": 3200, "size": 12, "symbol": 7 },
+				{ "rva": 4256, "size": 132, "symbol": 8 },
+				{ "rva": 5772, "size": 44, "symbol": 9 },
+				{ "rva": 5908, "size": 132, "symbol": 10 },
+				{ "rva": 6332, "size": 44, "symbol": 11 },
+				{ "rva": 9800, "size": 44, "symbol": 12 },
+				{ "rva": 17668, "size": 44, "symbol": 13 },
+				{ "rva": 19332, "size": 44, "symbol": 14 },
+				{ "rva": 21560, "size": 44, "symbol": 15 },
+				{ "rva": 28604, "size": 44, "symbol": 16 },
+				{ "rva": 32400, "size": 580, "symbol": 17 },
+				{ "rva": 32980, "size": 44, "symbol": 18 },
+				{ "rva": 38596, "size": 44, "symbol": 19 },
+				{ "rva": 38640, "size": 44, "symbol": 20 },
+				{ "rva": 51376, "size": 200, "symbol": 21 }
+			],
+			"known_addresses": [
+				[3208, 0],
+				[4256, 1],
+				[4364, 1],
+				[5780, 2],
+				[5995, 3],
+				[6340, 4],
+				[9804, 5],
+				[9808, 5],
+				[17676, 6],
+				[19340, 7],
+				[21568, 8],
+				[28612, 9],
+				[32895, 10],
+				[32988, 11],
+				[38604, 12],
+				[38648, 13],
+				[51439, 14]
+			]
+		},
+		{
+			"debug_name": "libsystem_platform.dylib",
+			"debug_id": "d93ec420-f465-3a3a-916d-a04af9b023eb",
+			"code_id": "D93EC420F4653A3A916DA04AF9B023EB",
+			"symbol_table": [
+				{ "rva": 3888, "size": 288, "symbol": 22 },
+				{ "rva": 13248, "size": 736, "symbol": 23 }
+			],
+			"known_addresses": [
+				[3896, 0],
+				[3936, 0],
+				[3952, 0],
+				[3956, 0],
+				[3984, 0],
+				[13248, 1],
+				[13276, 1],
+				[13428, 1],
+				[13452, 1],
+				[13668, 1],
+				[13700, 1],
+				[13708, 1]
+			]
+		}
+	]
+}

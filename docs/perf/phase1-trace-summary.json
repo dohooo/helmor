@@ -1,0 +1,162 @@
+{
+	"capturedAt": "2026-04-08T00:03:56.719Z",
+	"scenario": "5 workspace switches via chrome-devtools MCP on dev:vite + dev:api at localhost:1420",
+	"workspacesVisited": [
+		"caspian/simplify-success-page (2nd archived)",
+		"caspian/fix-auth-redirect-url (3rd archived)",
+		"caspian/simplify-success-page (warm rerun)",
+		"caspian/hamburg-v2 (the original HELMOR_PERF_CLICK_MS workspace)",
+		"MIdohooo/greeting (active workspace)"
+	],
+	"fps": 123.88,
+	"longFramesSummary": {
+		"count": 31,
+		"maxMs": 303.6,
+		"p50Ms": 97.3,
+		"p95Ms": 297.6,
+		"sumMs": 4545,
+		"topThree": [
+			{
+				"source": "loaf",
+				"durationMs": 303.6,
+				"blockingDurationMs": 245.4,
+				"scriptDurationMs": 293,
+				"forcedStyleAndLayoutDurationMs": 120,
+				"invoker": "MessagePort.onmessage (React 19 scheduler)"
+			},
+			{
+				"source": "loaf",
+				"durationMs": 284.9,
+				"blockingDurationMs": 232.1,
+				"scriptDurationMs": 280,
+				"forcedStyleAndLayoutDurationMs": 126,
+				"invoker": "MessagePort.onmessage (React 19 scheduler)"
+			},
+			{
+				"source": "loaf",
+				"durationMs": 256.6,
+				"blockingDurationMs": 202.3,
+				"scriptDurationMs": 250,
+				"forcedStyleAndLayoutDurationMs": 127,
+				"invoker": "MessagePort.onmessage (React 19 scheduler)"
+			}
+		]
+	},
+	"perfMarksAggregateMs": {
+		"estimator:thread-heights": {
+			"count": 6,
+			"totalMs": 38.3,
+			"avgMs": 6.38,
+			"maxMs": 20.0
+		},
+		"container:merged-messages": {
+			"count": 12,
+			"totalMs": 0.4,
+			"avgMs": 0.03,
+			"maxMs": 0.1
+		},
+		"container:share-messages": {
+			"count": 12,
+			"totalMs": 0.2,
+			"avgMs": 0.02,
+			"maxMs": 0.1
+		},
+		"viewport:visible-rows": {
+			"count": 31,
+			"totalMs": 0.1,
+			"avgMs": 0.003,
+			"maxMs": 0.1
+		},
+		"viewport:rows": { "count": 17, "totalMs": 0.0, "avgMs": 0.0, "maxMs": 0.0 }
+	},
+	"reactProfilerMs": {
+		"WorkspacePanel": {
+			"updateCount": 61,
+			"totalActualMs": 725.7,
+			"totalBaseMs": 3715.3,
+			"maxActualMs": 131.7,
+			"maxBaseMs": 125.7
+		},
+		"ChatThread": {
+			"updateCount": 60,
+			"totalActualMs": 613.8,
+			"totalBaseMs": 3108.6,
+			"maxActualMs": 122.9,
+			"maxBaseMs": 117.4
+		}
+	},
+	"devRenderCounters": {
+		"totalMessageRenders": 124,
+		"totalComposerRenders": 10,
+		"totalSidebarRenders": 10,
+		"rendersByVisitedSession": {
+			"0f47c652-...": 28,
+			"02a843bd-...": 30,
+			"ffcf91a7-...": 40,
+			"59e6e717-...": 26
+		}
+	},
+	"forcedReflowInsight": {
+		"totalReflowMs": 387,
+		"topCallStacks": [
+			{
+				"function": "MeasuredConversationRow.reportHeight",
+				"file": "src/components/workspace-panel.tsx:1114",
+				"totalMs": 286,
+				"comment": "useLayoutEffect calls node.offsetHeight per visible row -> O(n) forced layout flushes per render"
+			},
+			{
+				"function": "ChatThread useLayoutEffect (snap-to-bottom)",
+				"file": "src/components/workspace-panel.tsx:714",
+				"totalMs": 101,
+				"comment": "scrollParent.scrollTop = scrollParent.scrollHeight reads scrollHeight after a DOM mutation, forcing layout"
+			},
+			{
+				"function": "Lexical updateDOMSelection",
+				"file": "node_modules/.vite/deps/lexical.js:5753",
+				"totalMs": 1.0
+			},
+			{
+				"function": "auto-resize-plugin",
+				"file": "src/components/composer-editor/plugins/auto-resize-plugin.tsx:15-17",
+				"totalMs": 0.8
+			}
+		]
+	},
+	"domSizeInsight": {
+		"totalElements": 1423,
+		"domDepth": 22,
+		"maxChildren": 24,
+		"maxChildrenParent": "div.space-y-0.5",
+		"largeStyleRecalcs": [
+			{ "durationMs": 124, "elementsAffected": 930 },
+			{ "durationMs": 114, "elementsAffected": 782 },
+			{ "durationMs": 47, "elementsAffected": 476 },
+			{ "durationMs": 47, "elementsAffected": 473 }
+		]
+	},
+	"interpretationKeyFindings": [
+		"The 250-300ms long frames during workspace switches are NOT JS-bound. They split roughly 50/50 between JS work (~150ms) and forcedStyleAndLayout (~120ms).",
+		"The single biggest forced reflow source is MeasuredConversationRow.reportHeight (286ms total across the 5 switches): every visible row reads node.offsetHeight inside useLayoutEffect, forcing an immediate layout flush that the next row also pays for.",
+		"ChatThread's snap-to-bottom useLayoutEffect contributes another 101ms of forced reflow by reading scrollHeight imperatively after each switch.",
+		"estimator:thread-heights is the only JS-side perf mark with a measurable cost (max 20ms, avg 6.4ms). All other perf marks (shareMessages, mergedMessages, visible-rows, rows) are sub-millisecond — they are NOT bottlenecks despite 21 prior optimization iterations targeting them.",
+		"Style recalc events of 114-124ms each affect 782-930 elements per recalc. With a 1423-element DOM, that means style invalidation is propagating to ~65% of the page on a single switch. This is likely caused by a className change near the panel root invalidating descendants — the cure is either CSS containment, content-visibility:auto on rows, or fewer global CSS variables in the cascade."
+	],
+	"phase2Implications": {
+		"high_value_fixes": [
+			"Batch / debounce MeasuredConversationRow height reads via a single ResizeObserver instead of per-row useLayoutEffect (eliminates the O(n) forced reflow chain)",
+			"Defer ChatThread's snap-to-bottom scrollTop write to a microtask after the next paint, OR use scroll-anchoring CSS (overflow-anchor) instead of imperative scroll",
+			"Add `content-visibility: auto` + `contain-intrinsic-size` to MeasuredConversationRow so off-screen rows skip layout/style entirely",
+			"Investigate which CSS class change is invalidating 930 elements on a single workspace switch — narrow the style scope or add `contain: style` on the panel root"
+		],
+		"low_value_fixes_to_skip": [
+			"Any further optimization of shareMessages, mergedMessages, viewport:rows, viewport:visible-rows — they're all sub-millisecond and the surgical iterations of the past 21 rounds were targeting noise",
+			"Direct DOM updates for streaming markdown (A4 research) — Streamdown is the right choice, that path is already optimal",
+			"ContextMenu lazy mount and Lucide icon hoisting — sidebar memo bail-out works correctly during workspace switches (only 10 row renders across 5 switches)"
+		],
+		"medium_value_fixes": [
+			"Web Worker for estimateThreadRowHeights (A2) — saves up to 20ms per switch on cold render but won't move the long-frame distribution by much",
+			"A1' deferred hydration: render only the last N messages on initial mount, hydrate the rest after a microtask. Cuts the React reconciliation cost (~150ms JS) by reducing the number of MemoConversationMessage commits per frame"
+		]
+	}
+}
