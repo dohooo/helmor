@@ -70,16 +70,18 @@ where
     // - Clearing `*_ASKPASS` prevents OS-level helpers (Keychain prompts,
     //   GUI dialogs) from rescuing git either — failure here MUST surface
     //   so callers can choose to retry rather than hanging forever.
-    // - `GIT_SSH_COMMAND` forces ssh into batch mode with a 10s connect
-    //   timeout, so a dead host or missing key fails fast instead of
-    //   parking on the TCP handshake.
+    // - `GIT_SSH_COMMAND` appends batch mode, a 10s connect timeout, and
+    //   strict host-key checking to the user's existing SSH command (or
+    //   plain `ssh` if unset), so a dead host or missing key fails fast
+    //   without clobbering custom identity files or agent settings.
     command.env("GIT_TERMINAL_PROMPT", "0");
     command.env("GCM_INTERACTIVE", "Never");
     command.env_remove("GIT_ASKPASS");
     command.env_remove("SSH_ASKPASS");
+    let base_ssh = std::env::var("GIT_SSH_COMMAND").unwrap_or_else(|_| "ssh".to_string());
     command.env(
         "GIT_SSH_COMMAND",
-        "ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new",
+        format!("{base_ssh} -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes"),
     );
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
