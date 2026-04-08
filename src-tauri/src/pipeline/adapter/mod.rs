@@ -382,9 +382,7 @@ fn convert_user_type_msg(
     //    assistant to attach context to. Treated as a malformed SDK event
     //    and dropped. Anything else is a real user turn and renders
     //    normally.
-    let has_prev_assistant = out
-        .last()
-        .is_some_and(|m| m.role == MessageRole::Assistant);
+    let has_prev_assistant = out.last().is_some_and(|m| m.role == MessageRole::Assistant);
     if parsed.is_some() && !has_prev_assistant {
         return;
     }

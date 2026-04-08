@@ -165,8 +165,7 @@ fn collect_children_tool_names(msg: &ThreadMessageLike) -> Vec<String> {
     for part in &msg.content {
         if let ExtendedMessagePart::Basic(MessagePart::ToolCall { children, .. }) = part {
             for child in children {
-                if let ExtendedMessagePart::Basic(MessagePart::ToolCall { tool_name, .. }) = child
-                {
+                if let ExtendedMessagePart::Basic(MessagePart::ToolCall { tool_name, .. }) = child {
                     names.push(tool_name.clone());
                 }
             }

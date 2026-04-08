@@ -540,11 +540,7 @@ mod tests {
 
     #[test]
     fn agent_children_single_tool_not_collapsed() {
-        let children = vec![tc(
-            "Read",
-            json!({"file_path": "/a.rs"}),
-            Some(json!("a")),
-        )];
+        let children = vec![tc("Read", json!({"file_path": "/a.rs"}), Some(json!("a")))];
         let parts = vec![tc_with_children(
             "Agent",
             json!({"description": "read"}),
@@ -602,8 +598,16 @@ mod tests {
             json!({"file_path": "/a.rs"}),
             Some(json!("a")),
             vec![
-                tc("Read", json!({"file_path": "/nested1.rs"}), Some(json!("n1"))),
-                tc("Read", json!({"file_path": "/nested2.rs"}), Some(json!("n2"))),
+                tc(
+                    "Read",
+                    json!({"file_path": "/nested1.rs"}),
+                    Some(json!("n1")),
+                ),
+                tc(
+                    "Read",
+                    json!({"file_path": "/nested2.rs"}),
+                    Some(json!("n2")),
+                ),
             ],
         );
         let parts = vec![
