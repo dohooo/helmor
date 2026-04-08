@@ -170,7 +170,10 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 }: WorkspacePanelProps) {
 	const selectedSession =
 		sessions.find((s) => s.id === selectedSessionId) ?? null;
-	const activePane = sessionPanes[0] ?? null;
+	const activePane =
+		sessionPanes.find((pane) => pane.presentationState === "presented") ??
+		sessionPanes[0] ??
+		null;
 
 	useEffect(() => {
 		if (typeof window === "undefined") return;
@@ -218,13 +221,27 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 
 				{/* --- Timeline --- */}
 				<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-					{loadingWorkspace || loadingSession ? (
+					{activePane?.hasLoaded ? (
+						sessionPanes.map((pane) => (
+							<div
+								key={pane.sessionId}
+								className={
+									pane.presentationState === "presented"
+										? "absolute inset-0 z-10 flex min-h-0 flex-col"
+										: "pointer-events-none absolute inset-0 z-0 flex min-h-0 flex-col invisible"
+								}
+								aria-hidden={
+									pane.presentationState === "presented" ? undefined : true
+								}
+							>
+								<ActiveThreadViewport
+									hasSession={!!selectedSession}
+									pane={pane}
+								/>
+							</div>
+						))
+					) : loadingWorkspace || loadingSession ? (
 						<ConversationColdPlaceholder />
-					) : activePane?.hasLoaded ? (
-						<ActiveThreadViewport
-							hasSession={!!selectedSession}
-							pane={activePane}
-						/>
 					) : (
 						<EmptyState hasSession={!!selectedSession} />
 					)}
@@ -746,7 +763,6 @@ function ChatThread({
 	);
 	const previousSendingRef = useRef(sending);
 	const sendingJustStarted = sending && !previousSendingRef.current;
-	const [isSessionSettling, setIsSessionSettling] = useState(false);
 
 	useEffect(() => {
 		previousSendingRef.current = sending;
@@ -768,95 +784,17 @@ function ChatThread({
 			return;
 		}
 
-		// Phase 3 / iter 1: session-switch stabilization shield.
-		//
-		// Replaces the previous buggy `scrollTop = scrollHeight` snap (which
-		// set scrollTop to the then-current incomplete scrollHeight — clamped
-		// by the browser to a value far above the real bottom — and then let
-		// `pendingScrollAdjustment` catch up over the next several frames,
-		// producing the visible "scroll-from-top-to-bottom" cascade reported
-		// in docs/perf/phase3-flicker-analysis.md issues #1/#3/#4).
-		//
-		// New behaviour: hide the viewport (the ScrollArea root drops to
-		// `opacity: 0`) and let the existing `pendingScrollAdjustment`
-		// effect in `ProgressiveConversationViewport` handle scrollTop
-		// updates as rows mount and report measured heights. We watch the
-		// scroll parent with a ResizeObserver and reveal as soon as its
-		// inner size has been stable for `STABLE_DEBOUNCE_MS` ms (or after
-		// a hard `MAX_MS` upper bound).
-		//
-		// This is event-driven (no per-frame polling), so the only added
-		// per-switch cost is two scroll-position writes: one immediate
-		// snap to bottom (so the very first commit lands bottom-pinned),
-		// and one final snap right before reveal (in case
-		// pendingScrollAdjustment was disabled because the user previously
-		// scrolled and we have not yet reset the gate). Long-frame sumMs
-		// stays close to the Phase 2 baseline (457 ms / 5 switches).
-		setIsSessionSettling(true);
-		(
-			window as Window & { __HELMOR_STABILIZING__?: boolean }
-		).__HELMOR_STABILIZING__ = true;
-
-		const snapToBottom = () => {
-			const sH = scrollParent.scrollHeight;
-			const cH = scrollParent.clientHeight;
-			scrollParent.scrollTop = Math.max(0, sH - cH);
-		};
-		// Initial snap so the first hidden frame already covers the bottom
-		// of whatever content is currently mounted.
-		snapToBottom();
-
-		const STABLE_DEBOUNCE_MS = 80;
-		const MAX_MS = 600;
-		let stableTimer = 0;
-		let hardTimer = 0;
-		let observer: ResizeObserver | null = null;
-		let finished = false;
-
-		const finish = () => {
-			if (finished) return;
-			finished = true;
-			// One final snap with the now-stable scrollHeight before we
-			// reveal — covers the case where the user scrolled away mid-
-			// session and pendingScrollAdjustment was suppressed.
-			snapToBottom();
-			setIsSessionSettling(false);
-			(
-				window as Window & { __HELMOR_STABILIZING__?: boolean }
-			).__HELMOR_STABILIZING__ = false;
-		};
-
-		const armStableTimer = () => {
-			if (stableTimer) window.clearTimeout(stableTimer);
-			stableTimer = window.setTimeout(finish, STABLE_DEBOUNCE_MS);
-		};
-
-		// First armed timer covers the cached-target case (no resize at
-		// all — e.g., switching to an already-loaded session).
-		armStableTimer();
-
-		if (typeof ResizeObserver !== "undefined") {
-			observer = new ResizeObserver(() => armStableTimer());
-			// Observe the inner scroll content. The first child of the
-			// scroll parent is the ScrollArea viewport's wrapper div; its
-			// own first child is the contentRef'd container that grows as
-			// rows mount.
-			const inner =
-				(scrollParent.firstElementChild as HTMLElement | null) ?? null;
-			if (inner) observer.observe(inner);
+		// Plain threads do not have ProgressiveConversationViewport's
+		// layout-key reset path, so when ScrollArea stopped remounting on
+		// session switch they kept the previous session's scroll position.
+		// Keep the fix narrowly scoped to the plain-thread path: progressive
+		// threads already compute their first paint from estimated total
+		// height, and forcing an extra hide/reveal step here makes the
+		// switch feel delayed.
+		if (usePlainThread) {
+			scrollParent.scrollTop = scrollParent.scrollHeight;
 		}
-
-		// Hard upper bound so we always reveal even if the inner content
-		// keeps growing (long sessions with continuous Streamdown loads).
-		hardTimer = window.setTimeout(finish, MAX_MS);
-
-		return () => {
-			if (observer) observer.disconnect();
-			if (stableTimer) window.clearTimeout(stableTimer);
-			if (hardTimer) window.clearTimeout(hardTimer);
-			finish();
-		};
-	}, [sessionId]);
+	}, [sessionId, usePlainThread]);
 
 	const itemContent = useCallback(
 		(index: number, message: RenderedMessage) => (
@@ -875,7 +813,6 @@ function ChatThread({
 				data={threadMessages}
 				fontSize={settings.fontSize}
 				hasSession={hasSession}
-				isSessionSettling={isSessionSettling}
 				itemContent={itemContent}
 				layoutCacheKey={layoutCacheKey}
 				paneWidth={paneWidth}
@@ -911,7 +848,6 @@ function ConversationViewport({
 	data,
 	fontSize,
 	hasSession,
-	isSessionSettling,
 	itemContent,
 	layoutCacheKey,
 	paneWidth,
@@ -926,7 +862,6 @@ function ConversationViewport({
 	data: RenderedMessage[];
 	fontSize: number;
 	hasSession: boolean;
-	isSessionSettling: boolean;
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
 	layoutCacheKey: string;
 	paneWidth: number;
@@ -963,23 +898,7 @@ function ConversationViewport({
 			// forced every visible row to re-render on each navigation; the
 			// bottom-anchor that the remount provided is now done explicitly
 			// via a useLayoutEffect on `sessionId` in ChatThread above.
-			//
-			// Phase 3 / iter 1: while `isSessionSettling` is true, ChatThread
-			// is running a rAF loop that re-snaps scrollTop to the bottom
-			// across the Streamdown hydration + estimator-correction cascade.
-			// We hide the entire ScrollArea (viewport + scrollbar + overlay)
-			// via inline opacity so the intermediate scroll positions are
-			// never visible to the user, then fade back in once scrollHeight
-			// has been stable for several frames.
 			className="conversation-scroll-area relative min-h-0 flex-1"
-			style={{
-				opacity: isSessionSettling ? 0 : 1,
-				// Asymmetric transition: hide is INSTANT (so the cascade is
-				// never visible at fractional opacity), reveal fades in over
-				// 120 ms (so the swap from blank to bottom-pinned content is
-				// not jarring).
-				transition: isSessionSettling ? "none" : "opacity 120ms ease-out",
-			}}
 			viewportRef={viewportRef}
 			viewportClassName="conversation-scroll-viewport"
 			overlay={children}

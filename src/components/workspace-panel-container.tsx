@@ -176,6 +176,19 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 }: WorkspacePanelContainerProps) {
 	const queryClient = useQueryClient();
 	const autoTitleAttemptedRef = useRef<Set<string>>(new Set());
+	const sessionPaneCacheRef = useRef<
+		Map<
+			string,
+			{
+				sessionId: string;
+				messages: ThreadMessageLike[];
+				sending: boolean;
+				hasLoaded: boolean;
+			}
+		>
+	>(new Map());
+	const sessionPaneOrderRef = useRef<string[]>([]);
+	const SESSION_PANE_CACHE_LIMIT = 3;
 
 	const detailQuery = useQuery({
 		...workspaceDetailQueryOptions(displayedWorkspaceId ?? "__none__"),
@@ -398,6 +411,31 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		a1Enabled,
 	]);
 
+	const preferredPaneSessionId = selectedSessionId ?? threadSessionId;
+	const hasFreshThreadSnapshot =
+		Boolean(threadSessionId) &&
+		(messagesQuery.data !== undefined || liveMessages.length > 0);
+	if (threadSessionId && hasFreshThreadSnapshot) {
+		sessionPaneCacheRef.current.set(threadSessionId, {
+			sessionId: threadSessionId,
+			messages: mergedMessages,
+			sending,
+			hasLoaded: true,
+		});
+		sessionPaneOrderRef.current = [
+			threadSessionId,
+			...sessionPaneOrderRef.current.filter((id) => id !== threadSessionId),
+		].slice(0, SESSION_PANE_CACHE_LIMIT);
+	}
+	if (preferredPaneSessionId) {
+		sessionPaneOrderRef.current = [
+			preferredPaneSessionId,
+			...sessionPaneOrderRef.current.filter(
+				(id) => id !== preferredPaneSessionId,
+			),
+		].slice(0, SESSION_PANE_CACHE_LIMIT);
+	}
+
 	const hasWorkspaceDetail = workspace !== null;
 	const hasWorkspaceSessions = sessionsQuery.data !== undefined;
 	const hasWorkspaceContent = hasWorkspaceDetail || sessions.length > 0;
@@ -407,21 +445,51 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		Boolean(threadSessionId) &&
 		(hasResolvedSessionMessages || liveMessages.length > 0);
 	const sessionPanes = useMemo(() => {
-		if (!threadSessionId || !hasSessionSnapshot) {
+		if (!preferredPaneSessionId) {
 			return [];
 		}
 
-		return [
-			{
-				sessionId: threadSessionId,
-				messages: mergedMessages,
-				sending,
-				hasLoaded: true,
-				presentationState: "presented" as const,
-			},
-		];
-	}, [hasSessionSnapshot, mergedMessages, sending, threadSessionId]);
-	const visibleSessionId = sessionPanes[0]?.sessionId ?? null;
+		const preferredPane =
+			sessionPaneCacheRef.current.get(preferredPaneSessionId) ?? null;
+		if (!preferredPane) {
+			return [];
+		}
+
+		return sessionPaneOrderRef.current
+			.map((sessionId) => {
+				const pane = sessionPaneCacheRef.current.get(sessionId);
+				if (!pane) {
+					return null;
+				}
+				return {
+					sessionId,
+					messages:
+						sessionId === threadSessionId && hasFreshThreadSnapshot
+							? mergedMessages
+							: pane.messages,
+					sending: sessionId === threadSessionId ? sending : pane.sending,
+					hasLoaded: pane.hasLoaded,
+					presentationState:
+						sessionId === preferredPaneSessionId
+							? ("presented" as const)
+							: ("background" as const),
+				};
+			})
+			.filter((pane) => pane !== null)
+			.slice(0, SESSION_PANE_CACHE_LIMIT);
+	}, [
+		hasFreshThreadSnapshot,
+		mergedMessages,
+		preferredPaneSessionId,
+		sending,
+		threadSessionId,
+	]);
+	const visibleSessionId =
+		sessionPanes.find((pane) => pane.presentationState === "presented")
+			?.sessionId ?? null;
+	const hasPresentedPane = sessionPanes.some(
+		(pane) => pane.presentationState === "presented" && pane.hasLoaded,
+	);
 
 	const loadingWorkspace =
 		Boolean(displayedWorkspaceId) &&
@@ -437,6 +505,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		Boolean(threadSessionId) &&
 		!refreshingWorkspace &&
 		!hasSessionSnapshot &&
+		!hasPresentedPane &&
 		messagesQuery.isPending &&
 		liveMessages.length === 0;
 	const refreshingSession =
