@@ -88,6 +88,11 @@ struct HistoricalRenderSnapshot {
 struct HistoricalRenderedMessage {
     role: String,
     part_types: Vec<String>,
+    /// Tool names of children attached to ToolCall parts (via grouping).
+    /// Empty when no ToolCall has children — `skip_serializing_if` keeps
+    /// existing snapshots unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    children_tool_names: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -151,6 +156,25 @@ fn collect_part_types(msg: &ThreadMessageLike) -> Vec<String> {
         .collect()
 }
 
+/// Collect tool names of children inside ToolCall parts. Returns an empty
+/// vec when no ToolCall has children — the `skip_serializing_if` on the
+/// struct field keeps existing snapshots unchanged.
+fn collect_children_tool_names(msg: &ThreadMessageLike) -> Vec<String> {
+    use helmor_lib::pipeline::types::{ExtendedMessagePart, MessagePart};
+    let mut names = Vec::new();
+    for part in &msg.content {
+        if let ExtendedMessagePart::Basic(MessagePart::ToolCall { children, .. }) = part {
+            for child in children {
+                if let ExtendedMessagePart::Basic(MessagePart::ToolCall { tool_name, .. }) = child
+                {
+                    names.push(tool_name.clone());
+                }
+            }
+        }
+    }
+    names
+}
+
 /// Build HistoricalRecords from the accumulator's persisted turns and run
 /// them through `convert_historical`. Mirrors what happens when a user
 /// closes the app and reopens a session — DB rows → loader → adapter →
@@ -177,6 +201,7 @@ fn build_historical_snapshot(pipeline: &MessagePipeline) -> HistoricalRenderSnap
             .map(|m| HistoricalRenderedMessage {
                 role: role_str(&m.role),
                 part_types: collect_part_types(m),
+                children_tool_names: collect_children_tool_names(m),
             })
             .collect(),
     }

@@ -24,7 +24,11 @@ mod tests;
 
 use serde_json::Value;
 
-use blocks::{merge_tool_results, parse_assistant_parts};
+// Canonical tool names shared across adapter submodules.
+pub(crate) const PROMPT_TOOL_NAME: &str = "Prompt";
+pub(crate) const AGENT_TOOL_NAMES: &[&str] = &["Agent", "Task"];
+
+use blocks::{merge_tool_results, merge_tool_results_extended, parse_assistant_parts};
 use grouping::{convert_user_message, group_child_messages, merge_adjacent_assistants};
 use labels::{
     build_error_label, build_rate_limit_notice, build_result_label, build_subagent_notice,
@@ -43,6 +47,13 @@ use super::types::{
 /// Convert intermediate messages into rendered thread messages.
 pub fn convert(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
     let flat = convert_flat(messages);
+    // Fast path: a single message can't have children to group or
+    // adjacent assistants to merge — skip both passes and their
+    // allocations.  Hot during streaming (emit_partial calls us with
+    // exactly one message ~100 times/sec).
+    if flat.len() <= 1 {
+        return flat;
+    }
     let grouped = group_child_messages(flat);
     merge_adjacent_assistants(grouped)
 }
@@ -256,90 +267,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
         // anything else either renders as a normal user message or is
         // dropped (see drop rule below).
         if msg_type == Some("user") {
-            let mut merged = false;
-            if let Some(prev) = result.last_mut() {
-                if prev.role == MessageRole::Assistant {
-                    // Extract basic parts for merging
-                    let mut basic_parts: Vec<MessagePart> = prev
-                        .content
-                        .iter()
-                        .filter_map(|p| {
-                            if let ExtendedMessagePart::Basic(mp) = p {
-                                Some(mp.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    if merge_tool_results(parsed, &mut basic_parts) {
-                        prev.content = basic_parts
-                            .into_iter()
-                            .map(ExtendedMessagePart::Basic)
-                            .collect();
-                        merged = true;
-                    }
-                }
-            }
-            if merged {
-                i += 1;
-                continue;
-            }
-            // Subagent prompt — `parent_tool_use_id` is set. The
-            // Claude SDK emits the subagent's initial prompt as a
-            // `type=user` text wrapper inside the parent's stream.
-            // Fold it into the parent Task's `children` list as a
-            // synthesized `ToolCall` with `tool_name = "Prompt"` so
-            // the frontend renders it identically to every other
-            // child entry — same row layout, same preview filter,
-            // same structural sharing path. No new MessagePart
-            // variant needed.
-            //
-            // The grouping pass picks up the
-            // `child:<parent_tool_id>:<msg_id>` id below and appends
-            // this synthetic ToolCall to the parent Task's children.
-            if let Some(parent_tool_id) = parsed
-                .and_then(|p| p.get("parent_tool_use_id"))
-                .and_then(Value::as_str)
-            {
-                let text = extract_user_text(parsed);
-                if !text.is_empty() {
-                    let args = serde_json::json!({ "text": text });
-                    let args_text = args.to_string();
-                    result.push(ThreadMessageLike {
-                        role: MessageRole::User,
-                        id: Some(format!("child:{parent_tool_id}:{}", msg.id)),
-                        created_at: Some(msg.created_at.clone()),
-                        content: vec![ExtendedMessagePart::Basic(MessagePart::ToolCall {
-                            tool_call_id: format!("prompt-{}", msg.id),
-                            tool_name: "Prompt".to_string(),
-                            args,
-                            args_text,
-                            result: None,
-                            streaming_status: None,
-                            children: Vec::new(),
-                        })],
-                        status: None,
-                        streaming: None,
-                    });
-                }
-                i += 1;
-                continue;
-            }
-            // Stray top-level user wrapper — non-tool_result with no
-            // preceding assistant to attach context to. Treated as a
-            // malformed SDK event and dropped.
-            //
-            // Anything else (non-tool_result with a preceding
-            // assistant, no parent_tool_use_id) is a real user turn
-            // and renders normally.
-            let has_prev_assistant = result
-                .last()
-                .is_some_and(|m| m.role == MessageRole::Assistant);
-            if parsed.is_some() && !has_prev_assistant {
-                i += 1;
-                continue;
-            }
-            result.push(convert_user_message(msg, parsed));
+            convert_user_type_msg(msg, parsed, &mut result);
             i += 1;
             continue;
         }
@@ -394,6 +322,74 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
 // ---------------------------------------------------------------------------
 // Per-event helpers shared by the main loop and the deferred-flush path
 // ---------------------------------------------------------------------------
+
+/// Handle a `type=user` message. Three sub-paths:
+/// 1. **Merge tool_result** — fold into the preceding assistant in-place.
+/// 2. **Prompt fold** — subagent prompt (`parent_tool_use_id` set) becomes
+///    a synthesized `Prompt` ToolCall for the grouping pass.
+/// 3. **Stray / normal** — drop malformed wrappers, render the rest.
+fn convert_user_type_msg(
+    msg: &IntermediateMessage,
+    parsed: Option<&Value>,
+    out: &mut Vec<ThreadMessageLike>,
+) {
+    // 1. Try merging tool_result blocks into the preceding assistant.
+    let merged = out
+        .last_mut()
+        .filter(|prev| prev.role == MessageRole::Assistant)
+        .is_some_and(|prev| merge_tool_results_extended(parsed, &mut prev.content));
+    if merged {
+        return;
+    }
+
+    // 2. Subagent prompt — `parent_tool_use_id` is set. The Claude SDK
+    //    emits the subagent's initial prompt as a `type=user` text wrapper
+    //    inside the parent's stream. Fold it into the parent Task's
+    //    `children` list as a synthesized `ToolCall` with `tool_name =
+    //    "Prompt"` so the frontend renders it identically to every other
+    //    child entry. The grouping pass picks up the
+    //    `child:<parent_tool_id>:<msg_id>` id and appends this synthetic
+    //    ToolCall to the parent Task's children.
+    if let Some(parent_tool_id) = parsed
+        .and_then(|p| p.get("parent_tool_use_id"))
+        .and_then(Value::as_str)
+    {
+        let text = extract_user_text(parsed);
+        if !text.is_empty() {
+            let args = serde_json::json!({ "text": text });
+            let args_text = args.to_string();
+            out.push(ThreadMessageLike {
+                role: MessageRole::User,
+                id: Some(format!("child:{parent_tool_id}:{}", msg.id)),
+                created_at: Some(msg.created_at.clone()),
+                content: vec![ExtendedMessagePart::Basic(MessagePart::ToolCall {
+                    tool_call_id: format!("prompt-{}", msg.id),
+                    tool_name: PROMPT_TOOL_NAME.to_string(),
+                    args,
+                    args_text,
+                    result: None,
+                    streaming_status: None,
+                    children: Vec::new(),
+                })],
+                status: None,
+                streaming: None,
+            });
+        }
+        return;
+    }
+
+    // 3. Stray top-level user wrapper — non-tool_result with no preceding
+    //    assistant to attach context to. Treated as a malformed SDK event
+    //    and dropped. Anything else is a real user turn and renders
+    //    normally.
+    let has_prev_assistant = out
+        .last()
+        .is_some_and(|m| m.role == MessageRole::Assistant);
+    if parsed.is_some() && !has_prev_assistant {
+        return;
+    }
+    out.push(convert_user_message(msg, parsed));
+}
 
 /// Convert a single `system` event into zero or one ThreadMessageLike,
 /// pushing the result onto `out`. Used by the main `convert_flat` loop
