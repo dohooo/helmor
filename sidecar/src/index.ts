@@ -144,9 +144,10 @@ async function handleStopSession(
  */
 async function handleShutdown(id: string): Promise<void> {
 	debug(`[${id}] shutdown — tearing down all sessions`);
-	const results = await Promise.allSettled(
-		Object.values(managers).map((m) => m.shutdown()),
-	);
+	const results = await Promise.allSettled([
+		...Object.values(managers).map((m) => m.shutdown()),
+		...inflightHandlers,
+	]);
 	for (const r of results) {
 		if (r.status === "rejected") {
 			debug(`  shutdown: manager rejected: ${errorMessage(r.reason)}`);
@@ -156,6 +157,17 @@ async function handleShutdown(id: string): Promise<void> {
 	debug("shutdown ack sent — exiting in next tick");
 	// Give the stdout pipe a tick to flush the pong before exit.
 	setImmediate(() => process.exit(0));
+}
+
+// ---------------------------------------------------------------------------
+// In-flight handler tracking — so shutdown can await pending work.
+// ---------------------------------------------------------------------------
+
+const inflightHandlers = new Set<Promise<void>>();
+
+function trackHandler(p: Promise<void>): void {
+	inflightHandlers.add(p);
+	p.finally(() => inflightHandlers.delete(p));
 }
 
 // ---------------------------------------------------------------------------
@@ -189,13 +201,13 @@ for await (const line of rl) {
 
 	switch (method) {
 		case "sendMessage":
-			void handleSendMessage(id, params);
+			trackHandler(handleSendMessage(id, params));
 			break;
 		case "generateTitle":
-			void handleGenerateTitle(id, params);
+			trackHandler(handleGenerateTitle(id, params));
 			break;
 		case "listSlashCommands":
-			void handleListSlashCommands(id, params);
+			trackHandler(handleListSlashCommands(id, params));
 			break;
 		case "stopSession":
 			await handleStopSession(id, params);
