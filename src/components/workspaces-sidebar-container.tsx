@@ -756,27 +756,65 @@ export const WorkspacesSidebarContainer = memo(
 			],
 		);
 
+		// ─── Recovery toast helper ──────────────────────────────────────────
+		// Archive and restore can both fail in ways the user can only resolve
+		// by tearing the workspace down: the source worktree is missing, the
+		// archived context directory is gone, the DB record is missing a
+		// branch / archive commit, etc. In every one of those cases the only
+		// forward motion is `permanently_delete_workspace`. Surface that as a
+		// persistent destructive toast with a Permanently Delete action so
+		// the user is never stranded with a workspace they can neither
+		// archive, restore, nor get rid of.
+		const pushPermanentDeleteRecoveryToast = useCallback(
+			(
+				workspaceId: string,
+				title: string,
+				error: unknown,
+				fallbackMessage: string,
+			) => {
+				pushWorkspaceToast(
+					describeUnknownError(error, fallbackMessage),
+					title,
+					"destructive",
+					{
+						persistent: true,
+						action: {
+							label: "Permanently Delete",
+							destructive: true,
+							onClick: () => {
+								handleDeleteWorkspace(workspaceId);
+							},
+						},
+					},
+				);
+			},
+			[handleDeleteWorkspace, pushWorkspaceToast],
+		);
+
 		// ─── Optimistic archive (with preflight) ────────────────────────────
 		// 1. Run a fast read-only preflight (DB load + filesystem checks +
-		//    git rev-parse). If it fails, show an error toast and return —
-		//    the UI never moves, so the row never flickers between buckets.
+		//    git rev-parse). If it fails, the workspace is in a state where
+		//    archive can never succeed (broken on disk, missing DB fields,
+		//    etc.) — surface the recovery toast so the user can permanently
+		//    delete it instead of being stuck.
 		// 2. If preflight passes, optimistically remove the row from its
 		//    current group, insert a placeholder into the archived list,
 		//    navigate to the next visible workspace, and fire the slow IPC
 		//    fire-and-forget.
 		// 3. The slow apply still has its own catch path (rare race: state
 		//    changed between preflight and apply, disk full mid-write, etc.)
-		//    that rolls back and offers "Permanently Delete" as a recovery.
+		//    that rolls back and uses the same recovery toast.
 		const handleArchiveWorkspace = useCallback(
 			(workspaceId: string) => {
 				void (async () => {
 					try {
 						await validateArchiveWorkspace(workspaceId);
 					} catch (error) {
-						pushWorkspaceToast(
-							describeUnknownError(error, "Unable to archive workspace."),
+						pushPermanentDeleteRecoveryToast(
+							workspaceId,
 							"Archive failed",
-							"destructive",
+							error,
+							"Unable to archive workspace.",
 						);
 						return;
 					}
@@ -814,8 +852,11 @@ export const WorkspacesSidebarContainer = memo(
 						beginSidebarMutation();
 						void archiveWorkspace(workspaceId)
 							.catch((error) => {
-								pushWorkspaceToast(
-									describeUnknownError(error, "Unable to archive workspace."),
+								pushPermanentDeleteRecoveryToast(
+									workspaceId,
+									"Archive failed",
+									error,
+									"Unable to archive workspace.",
 								);
 							})
 							.finally(endSidebarMutation);
@@ -870,20 +911,12 @@ export const WorkspacesSidebarContainer = memo(
 								helmorQueryKeys.archivedWorkspaces,
 								previousArchived,
 							);
-							const msg = describeUnknownError(
+							pushPermanentDeleteRecoveryToast(
+								workspaceId,
+								"Archive failed",
 								error,
 								"Unable to archive workspace.",
 							);
-							pushWorkspaceToast(msg, "Archive failed", "destructive", {
-								persistent: true,
-								action: {
-									label: "Permanently Delete",
-									destructive: true,
-									onClick: () => {
-										handleDeleteWorkspace(workspaceId);
-									},
-								},
-							});
 						})
 						.finally(endSidebarMutation);
 				})();
@@ -891,10 +924,9 @@ export const WorkspacesSidebarContainer = memo(
 			[
 				beginSidebarMutation,
 				endSidebarMutation,
-				handleDeleteWorkspace,
 				onSelectWorkspace,
 				prefetchWorkspace,
-				pushWorkspaceToast,
+				pushPermanentDeleteRecoveryToast,
 				queryClient,
 				selectedWorkspaceId,
 			],
@@ -906,17 +938,21 @@ export const WorkspacesSidebarContainer = memo(
 		// then optimistic UI move + slow IPC. The preflight catches the
 		// common "Commit not found" / "Archived context directory missing"
 		// failure modes BEFORE the row jumps groups, so the user never sees
-		// the workspace flicker between archived and progress.
+		// the workspace flicker between archived and progress. Both the
+		// preflight and the slow apply use the shared recovery toast so an
+		// archived workspace whose on-disk state is broken can still be
+		// permanently deleted.
 		const handleRestoreWorkspace = useCallback(
 			(workspaceId: string) => {
 				void (async () => {
 					try {
 						await validateRestoreWorkspace(workspaceId);
 					} catch (error) {
-						pushWorkspaceToast(
-							describeUnknownError(error, "Unable to restore workspace."),
+						pushPermanentDeleteRecoveryToast(
+							workspaceId,
 							"Restore failed",
-							"destructive",
+							error,
+							"Unable to restore workspace.",
 						);
 						return;
 					}
@@ -944,8 +980,11 @@ export const WorkspacesSidebarContainer = memo(
 								onSelectWorkspace(workspaceId);
 							})
 							.catch((error) => {
-								pushWorkspaceToast(
-									describeUnknownError(error, "Unable to restore workspace."),
+								pushPermanentDeleteRecoveryToast(
+									workspaceId,
+									"Restore failed",
+									error,
+									"Unable to restore workspace.",
 								);
 							})
 							.finally(endSidebarMutation);
@@ -1016,10 +1055,11 @@ export const WorkspacesSidebarContainer = memo(
 								helmorQueryKeys.archivedWorkspaces,
 								previousArchived,
 							);
-							pushWorkspaceToast(
-								describeUnknownError(error, "Unable to restore workspace."),
+							pushPermanentDeleteRecoveryToast(
+								workspaceId,
 								"Restore failed",
-								"destructive",
+								error,
+								"Unable to restore workspace.",
 							);
 						})
 						.finally(endSidebarMutation);
@@ -1030,9 +1070,8 @@ export const WorkspacesSidebarContainer = memo(
 				endSidebarMutation,
 				onSelectWorkspace,
 				prefetchWorkspace,
-				pushWorkspaceToast,
+				pushPermanentDeleteRecoveryToast,
 				queryClient,
-				refetchNavigation,
 			],
 		);
 
