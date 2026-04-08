@@ -111,7 +111,7 @@ cargo check                  # Type-check without building
 When adding a new Tauri command that does file I/O or data queries:
 
 1. Add a wrapper function in `src-tauri/src/dev_api.rs` calling the underlying model function.
-2. Add a route + handler in `src-tauri/src/bin/dev_server.rs` (GET for reads, POST for writes).
+2. Add a route + handler in `src-tauri/src/dev_server_bin.rs` (GET for reads, POST for writes).
 3. In `src/lib/api.ts`, the `if (!inv)` branch must call `devFetch(...)` instead of throwing or returning hardcoded fallback.
 
 Never throw "only available in Tauri" for any command that has a dev server counterpart.

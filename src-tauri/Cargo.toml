@@ -56,7 +56,7 @@ optional = true
 
 [[bin]]
 name = "helmor-dev-server"
-path = "src/bin/dev_server.rs"
+path = "src/dev_server_bin.rs"
 required-features = ["dev-server"]
 
 [[bin]]
