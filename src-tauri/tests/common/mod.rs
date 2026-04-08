@@ -72,6 +72,9 @@ pub enum NormPart {
         /// the grouping pass. Always 0 for non-Task/Agent tools.
         #[serde(default, skip_serializing_if = "is_zero")]
         children_count: usize,
+        /// Normalized child parts — only present when children_count > 0.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        children: Vec<NormPart>,
     },
     /// Collapsed group placeholder. Most scenarios shouldn't trigger collapse,
     /// but if one does we want a clear marker rather than a panic.
@@ -192,6 +195,7 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
                 result_preview,
                 streaming_status: streaming_status.as_ref().map(streaming_status_str),
                 children_count: children.len(),
+                children: children.iter().map(normalize_part).collect(),
             }
         }
         MessagePart::SystemNotice {
