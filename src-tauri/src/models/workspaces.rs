@@ -1181,7 +1181,12 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
     } = restore_workspace_preflight(workspace_id)?;
 
     if workspace_dir.exists() {
-        std::fs::remove_dir_all(&workspace_dir).ok();
+        std::fs::remove_dir_all(&workspace_dir).with_context(|| {
+            format!(
+                "Failed to remove existing workspace directory: {}",
+                workspace_dir.display()
+            )
+        })?;
     }
 
     fs::create_dir_all(workspace_dir.parent().with_context(|| {

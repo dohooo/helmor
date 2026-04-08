@@ -97,6 +97,10 @@ export const WorkspaceConversationContainer = memo(
 		const prevContextKeyRef = useRef(composerContextKey);
 		// Clear live messages from the previous context when user switches session.
 		// This ensures we fall back to DB data when returning to a session.
+		// NOTE: setState during render is an intentional React pattern for
+		// synchronously responding to prop changes without an extra commit.
+		// StrictMode double-render is safe — the ref check makes the second
+		// invocation a no-op.
 		if (prevContextKeyRef.current !== composerContextKey) {
 			const prevKey = prevContextKeyRef.current;
 			prevContextKeyRef.current = composerContextKey;
