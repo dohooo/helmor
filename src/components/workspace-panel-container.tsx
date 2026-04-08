@@ -1,5 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import {
+	memo,
+	startTransition,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import type {
 	CollapsedGroupPart,
 	ExtendedMessagePart,
@@ -253,11 +261,76 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	// reference reuse so historical messages keep the same identity across
 	// stream ticks (and across backend `update` snapshots).
 	const prevMergedRef = useRef<ThreadMessageLike[]>([]);
+
+	// Phase 2 / Goal #2 — A1' progressive deferred hydration:
+	//
+	// On a fresh session mount we render only the LAST `INITIAL_HYDRATION_COUNT`
+	// messages. After a short dwell time, we silently expand to the full
+	// thread in the background. The user sees the bottom of the conversation
+	// almost immediately even on long sessions, and the older messages
+	// "appear" above without any visible flicker because:
+	//   1. The first frame anchors to the bottom of the partial render.
+	//   2. When the rest hydrates, every newly-mounted row above the viewport
+	//      lands inside the existing pendingScrollAdjustment compensation
+	//      path (Goal #1) — scrollTop is bumped up by the height of the
+	//      newly added rows so the visible content stays put.
+	//   3. The user's hasUserScrolledRef gate (Goal #1.5) ensures that if
+	//      the user happens to start scrolling during the hydration window,
+	//      the compensation is suppressed and their scroll position is
+	//      preserved instead.
+	//
+	// Streaming sessions (sending=true) bypass slicing entirely — the
+	// streaming tail must always be visible.
+	const INITIAL_HYDRATION_COUNT = 30;
+	const HYDRATION_DELAY_MS = 1500;
+	const [hydratedMessageCount, setHydratedMessageCount] = useState(
+		INITIAL_HYDRATION_COUNT,
+	);
+
+	// Reset hydration count when the active session changes so each fresh
+	// session walks through the partial → full hydration phases on its own.
+	const lastHydratedSessionRef = useRef<string | null>(null);
+	if (lastHydratedSessionRef.current !== threadSessionId) {
+		lastHydratedSessionRef.current = threadSessionId;
+		// Setting state during render is the React-recommended way to
+		// "reset state on prop change" — React discards the in-progress
+		// render and immediately retries with the new state, avoiding the
+		// extra render → useEffect → setState chain.
+		// eslint-disable-next-line react-hooks/rules-of-hooks
+		setHydratedMessageCount(INITIAL_HYDRATION_COUNT);
+	}
+
+	// After the dwell time, expand to the full thread inside a transition
+	// so React can interleave the heavy reconciliation with browser
+	// rendering work and bail out if the user does anything (e.g. starts
+	// scrolling). startTransition marks the state update as non-urgent;
+	// React 19 will spread the commit across multiple frames if needed
+	// rather than firing a single 200+ ms blocking commit.
+	useEffect(() => {
+		if (!threadSessionId) return;
+		if (hydratedMessageCount === Number.POSITIVE_INFINITY) return;
+		const handle = window.setTimeout(() => {
+			startTransition(() => {
+				setHydratedMessageCount(Number.POSITIVE_INFINITY);
+			});
+		}, HYDRATION_DELAY_MS);
+		return () => window.clearTimeout(handle);
+	}, [threadSessionId, hydratedMessageCount]);
+
 	const mergedMessages = useMemo(() => {
 		return measureSync(
 			"container:merged-messages",
 			() => {
-				const db = messagesQuery.data ?? [];
+				const dbAll = messagesQuery.data ?? [];
+				// Only clip the historical (db) tail when not actively streaming.
+				// Streaming sessions need every message visible because the
+				// liveMessages tail must extend the dbAll tail seamlessly.
+				const db =
+					sending ||
+					hydratedMessageCount === Number.POSITIVE_INFINITY ||
+					dbAll.length <= hydratedMessageCount
+						? dbAll
+						: dbAll.slice(dbAll.length - hydratedMessageCount);
 				let next: ThreadMessageLike[];
 				if (liveMessages.length === 0) {
 					next = db;
@@ -292,9 +365,13 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			{
 				dbLength: messagesQuery.data?.length ?? 0,
 				liveLength: liveMessages.length,
+				hydratedCount:
+					hydratedMessageCount === Number.POSITIVE_INFINITY
+						? -1
+						: hydratedMessageCount,
 			},
 		);
-	}, [messagesQuery.data, liveMessages]);
+	}, [messagesQuery.data, liveMessages, hydratedMessageCount, sending]);
 
 	const hasWorkspaceDetail = workspace !== null;
 	const hasWorkspaceSessions = sessionsQuery.data !== undefined;
