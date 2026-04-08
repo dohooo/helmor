@@ -1670,6 +1670,12 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
         .commit()
         .context("Failed to commit delete workspace transaction")?;
 
+    // Clean up in-memory caches for the deleted workspace.
+    if let Ok(mut map) = prefetch_rate_limit_map().lock() {
+        map.remove(workspace_id);
+    }
+    db::remove_workspace_lock(workspace_id);
+
     // Filesystem cleanup (best-effort)
     if let Some((repo_name, directory_name, state)) = record {
         // Remove worktree directory

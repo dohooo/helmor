@@ -48,6 +48,14 @@ pub fn workspace_mutation_lock(workspace_id: &str) -> Arc<Mutex<()>> {
         .clone()
 }
 
+/// Remove the per-workspace mutation lock for a deleted workspace so the
+/// static map does not grow unboundedly.
+pub fn remove_workspace_lock(workspace_id: &str) {
+    if let Ok(mut map) = per_workspace_locks().lock() {
+        map.remove(workspace_id);
+    }
+}
+
 /// Open a connection to the Helmor database.
 pub fn open_connection(writable: bool) -> Result<Connection> {
     let db_path = crate::data_dir::db_path()?;
