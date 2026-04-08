@@ -37,3 +37,8 @@ docs/perf/*-trace-session-*.json
 docs/perf/*-trace-streaming-*.json
 docs/perf/*-trace-confirm*.json
 docs/perf/iter*-after-switch.png
+# Per-goal diagnostic traces — exclude anything that ends in -trace.json.
+# phase1-trace-summary.json and iter*-trace-summary.json are small and
+# whitelisted above the broader pattern.
+docs/perf/*-trace.json
+docs/perf/goal*-style-*.json

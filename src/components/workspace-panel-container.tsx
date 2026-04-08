@@ -283,6 +283,17 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	// streaming tail must always be visible.
 	const INITIAL_HYDRATION_COUNT = 30;
 	const HYDRATION_DELAY_MS = 1500;
+	// Phase 2 / Goal #2 refinement (iter 1):
+	// Sessions at or below this threshold skip A1' entirely — they render
+	// the full thread on mount with no state machine, no transition, no
+	// extra re-renders. Reasoning: for a session of (say) 12 messages, the
+	// initial mount cost is already tiny, and the 3-5 ms overhead of the
+	// A1' state reset + useEffect + setTimeout + transition handling is a
+	// pure regression. We only pay that overhead when it's actually buying
+	// us something, which is long sessions (>50 msgs).
+	const A1_SKIP_THRESHOLD = 50;
+	const dbTotalLength = messagesQuery.data?.length ?? 0;
+	const a1Enabled = dbTotalLength > A1_SKIP_THRESHOLD;
 	const [hydratedMessageCount, setHydratedMessageCount] = useState(
 		INITIAL_HYDRATION_COUNT,
 	);
@@ -305,9 +316,11 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	// rendering work and bail out if the user does anything (e.g. starts
 	// scrolling). startTransition marks the state update as non-urgent;
 	// React 19 will spread the commit across multiple frames if needed
-	// rather than firing a single 200+ ms blocking commit.
+	// rather than firing a single 200+ ms blocking commit. We only arm
+	// the timer for sessions where A1' is actually doing any clipping.
 	useEffect(() => {
 		if (!threadSessionId) return;
+		if (!a1Enabled) return;
 		if (hydratedMessageCount === Number.POSITIVE_INFINITY) return;
 		const handle = window.setTimeout(() => {
 			startTransition(() => {
@@ -315,17 +328,23 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			});
 		}, HYDRATION_DELAY_MS);
 		return () => window.clearTimeout(handle);
-	}, [threadSessionId, hydratedMessageCount]);
+	}, [threadSessionId, hydratedMessageCount, a1Enabled]);
 
 	const mergedMessages = useMemo(() => {
 		return measureSync(
 			"container:merged-messages",
 			() => {
 				const dbAll = messagesQuery.data ?? [];
-				// Only clip the historical (db) tail when not actively streaming.
-				// Streaming sessions need every message visible because the
-				// liveMessages tail must extend the dbAll tail seamlessly.
+				// Only clip the historical (db) tail when:
+				//   1. A1' is actually enabled for this session (large enough
+				//      to benefit, not streaming), AND
+				//   2. the full hydration transition hasn't landed yet, AND
+				//   3. the session is actually larger than the current
+				//      hydrated count.
+				// Small sessions (≤ 50 msgs) bypass the slicing completely so
+				// there's zero A1' overhead on the common-case fast path.
 				const db =
+					!a1Enabled ||
 					sending ||
 					hydratedMessageCount === Number.POSITIVE_INFINITY ||
 					dbAll.length <= hydratedMessageCount
@@ -371,7 +390,13 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 						: hydratedMessageCount,
 			},
 		);
-	}, [messagesQuery.data, liveMessages, hydratedMessageCount, sending]);
+	}, [
+		messagesQuery.data,
+		liveMessages,
+		hydratedMessageCount,
+		sending,
+		a1Enabled,
+	]);
 
 	const hasWorkspaceDetail = workspace !== null;
 	const hasWorkspaceSessions = sessionsQuery.data !== undefined;

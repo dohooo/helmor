@@ -1219,14 +1219,19 @@ function ProgressiveConversationViewport({
 			return;
 		}
 
-		const targetScrollTop = Math.max(
-			0,
-			totalContentHeight - scrollParent.clientHeight,
-		);
+		// Phase 2 / Goal #3b / iter 1:
+		// Read clientHeight ONCE and reuse. The previous implementation read
+		// it twice: once to compute targetScrollTop and again inside the
+		// setCommittedScrollState object literal. Between the two reads we
+		// write `scrollTop = targetScrollTop`, which invalidates the layout
+		// cache — so the second read becomes a NEW forced layout flush on
+		// top of the first. Caching the value eliminates the second flush.
+		const clientHeight = scrollParent.clientHeight;
+		const targetScrollTop = Math.max(0, totalContentHeight - clientHeight);
 		scrollParent.scrollTop = targetScrollTop;
 		setCommittedScrollState({
 			scrollTop: targetScrollTop,
-			viewportHeight: scrollParent.clientHeight,
+			viewportHeight: clientHeight,
 		});
 		initialScrollAppliedRef.current = true;
 	}, [scrollParent, totalContentHeight]);
@@ -1306,6 +1311,7 @@ function ProgressiveConversationViewport({
 						onHeightChange={handleHeightChange}
 						rowKey={row.key}
 						top={row.top}
+						estimatedHeight={row.height}
 					>
 						{itemContent(row.index, row.message)}
 					</MeasuredConversationRow>
@@ -1318,11 +1324,13 @@ function ProgressiveConversationViewport({
 
 function MeasuredConversationRow({
 	children,
+	estimatedHeight,
 	onHeightChange,
 	rowKey,
 	top,
 }: {
 	children: ReactNode;
+	estimatedHeight: number;
 	onHeightChange: (rowKey: string, nextHeight: number) => void;
 	rowKey: string;
 	top: number;
@@ -1359,11 +1367,18 @@ function MeasuredConversationRow({
 		};
 	}, [onHeightChange, rowKey]);
 
+	// Phase 2 / Goal #3a / iter 3:
+	// Per-row contain-intrinsic-size based on the estimator's predicted
+	// height, not a static 100px placeholder. Static 100px caused CLS=0.37
+	// because the browser laid out offscreen rows as 100px tall and then
+	// shifted everything when the real content took ~280 px.
+	const intrinsicSize = `auto ${Math.max(24, Math.round(estimatedHeight))}px`;
 	return (
 		<div
 			ref={rowRef}
 			style={{
-				...conversationRowIsolationStyle,
+				...measuredRowIsolationStyle,
+				containIntrinsicSize: intrinsicSize,
 				left: 0,
 				position: "absolute",
 				right: 0,
@@ -1382,6 +1397,37 @@ function MeasuredConversationRow({
 const conversationRowIsolationStyle = {
 	contain: "paint",
 	isolation: "isolate",
+} as const;
+
+// Phase 2 / Goal #3a / iter 2: re-attempt content-visibility: auto.
+//
+// Goal #3a iter 1 (transform: translateY) targeted the wrong cause — the
+// 800-element style recalc on workspace switch is driven by INITIAL style
+// computation of newly-mounted descendants, not by re-applying inline style
+// on existing rows. The right tool is `content-visibility: auto`, which
+// tells the browser to skip layout/paint/style recalc for off-screen
+// descendants entirely.
+//
+// We previously tried this in Phase 2 Goal #1 iter 4 v2 and had to revert
+// because the off-screen → on-screen transition caused apparent scroll
+// jitter. That jitter came from pendingScrollAdjustment firing on the
+// height-correction cascade as newly-mounted rows reported their
+// measurements. Goal #1.5 iter 5 v7 now gates pendingScrollAdjustment by
+// `hasUserScrolledRef` — once the user has done anything, height-correction
+// snap-back is suppressed. The content-visibility jitter should now stay
+// within the narrow pre-interaction window where auto-snap is exactly
+// what the user wants.
+//
+// `contain-intrinsic-size: auto 100px` gives the browser a placeholder
+// height while the row is offscreen. The `auto` keyword remembers the last
+// rendered size, so once a row has been measured at least once, re-visits
+// use the real size. First-time visits use the 100px fallback — matching
+// this against the estimator avoids the large layout shifts we saw with a
+// tiny placeholder in iter4 v1.
+const measuredRowIsolationStyle = {
+	...conversationRowIsolationStyle,
+	contentVisibility: "auto",
+	containIntrinsicSize: "auto 100px",
 } as const;
 
 // NOTE: this stays as a plain function (no React.memo) on purpose — its
