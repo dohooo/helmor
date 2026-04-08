@@ -6,6 +6,7 @@ import type {
 	ThreadMessageLike,
 	ToolCallPart,
 } from "./api";
+import { measureSync } from "./perf-marks";
 
 type EstimateOptions = {
 	fontSize: number;
@@ -24,6 +25,14 @@ const USER_BUBBLE_VERTICAL_PADDING = 16;
 const USER_BUBBLE_HORIZONTAL_PADDING = 24;
 const USER_BUBBLE_WIDTH_RATIO = 0.75;
 const MIN_TEXT_WIDTH = 64;
+const MARKDOWN_BLOCK_GAP = 12;
+const MARKDOWN_HEADING_MARGIN_TOP = 10;
+const MARKDOWN_HEADING_MARGIN_BOTTOM = 8;
+const MARKDOWN_CODE_BLOCK_PADDING = 28;
+const MARKDOWN_CODE_LINE_HEIGHT = 22;
+const MARKDOWN_TABLE_TOOLBAR_HEIGHT = 32;
+const MARKDOWN_TABLE_ROW_HEIGHT = 40;
+const MARKDOWN_QUOTE_PADDING = 12;
 
 /**
  * Bounded LRU cache for `prepare()` results. Without a cap this Map grows
@@ -58,29 +67,49 @@ export function estimateThreadRowHeights(
 	messages: ThreadMessageLike[],
 	options: EstimateOptions,
 ): number[] {
-	const contentWidth = Math.max(MIN_TEXT_WIDTH, options.paneWidth - 40);
+	return measureSync(
+		"estimator:thread-heights",
+		() => {
+			const contentWidth = Math.max(MIN_TEXT_WIDTH, options.paneWidth - 40);
+			let cacheHits = 0;
+			let cacheMisses = 0;
 
-	return messages.map((message) => {
-		const cached = messageHeightCache.get(message);
-		if (
-			cached &&
-			cached.fontSize === options.fontSize &&
-			cached.contentWidth === contentWidth
-		) {
-			return cached.height;
-		}
-		const height = estimateMessageRowHeight(message, {
-			fontSize: options.fontSize,
-			contentWidth,
-		});
-		messageHeightCache.set(message, {
-			fontSize: options.fontSize,
-			contentWidth,
-			height,
-		});
-		return height;
-	});
+			const heights = messages.map((message) => {
+				const cached = messageHeightCache.get(message);
+				if (
+					cached &&
+					cached.fontSize === options.fontSize &&
+					cached.contentWidth === contentWidth
+				) {
+					cacheHits += 1;
+					return cached.height;
+				}
+				cacheMisses += 1;
+				const height = estimateMessageRowHeight(message, {
+					fontSize: options.fontSize,
+					contentWidth,
+				});
+				messageHeightCache.set(message, {
+					fontSize: options.fontSize,
+					contentWidth,
+					height,
+				});
+				return height;
+			});
+
+			// Stash the most recent hit/miss tally on the function so the perf
+			// dashboard can read it without re-running. (Cheap, dev-only path.)
+			estimateThreadRowHeights.lastCacheHits = cacheHits;
+			estimateThreadRowHeights.lastCacheMisses = cacheMisses;
+
+			return heights;
+		},
+		{ messageCount: messages.length },
+	);
 }
+
+estimateThreadRowHeights.lastCacheHits = 0;
+estimateThreadRowHeights.lastCacheMisses = 0;
 
 function estimateMessageRowHeight(
 	message: ThreadMessageLike,
@@ -120,12 +149,7 @@ function estimateAssistantPartHeight(
 ) {
 	switch (part.type) {
 		case "text":
-			return measureTextHeight(part.text, {
-				fontSize: options.fontSize,
-				lineHeight: ASSISTANT_LINE_HEIGHT,
-				maxWidth: options.contentWidth,
-				whiteSpace: "normal",
-			});
+			return estimateAssistantTextHeight(part.text, options);
 		case "reasoning":
 			return REASONING_SUMMARY_HEIGHT;
 		case "tool-call":
@@ -141,6 +165,173 @@ function estimateAssistantPartHeight(
 		default:
 			return TOOL_SUMMARY_HEIGHT;
 	}
+}
+
+function estimateAssistantTextHeight(
+	text: string,
+	options: { fontSize: number; contentWidth: number },
+) {
+	if (!looksLikeStructuredMarkdown(text)) {
+		return measureTextHeight(text, {
+			fontSize: options.fontSize,
+			lineHeight: ASSISTANT_LINE_HEIGHT,
+			maxWidth: options.contentWidth,
+			whiteSpace: "normal",
+		});
+	}
+
+	const lines = text.split("\n");
+	let totalHeight = 0;
+	let paragraphLines: string[] = [];
+
+	const appendBlock = (height: number) => {
+		if (height <= 0) return;
+		totalHeight += height;
+		if (totalHeight > 0) {
+			totalHeight += MARKDOWN_BLOCK_GAP;
+		}
+	};
+
+	const flushParagraph = () => {
+		const paragraph = paragraphLines.join(" ").trim();
+		paragraphLines = [];
+		if (paragraph.length === 0) {
+			return;
+		}
+		appendBlock(
+			measureTextHeight(paragraph, {
+				fontSize: options.fontSize,
+				lineHeight: ASSISTANT_LINE_HEIGHT,
+				maxWidth: options.contentWidth,
+				whiteSpace: "normal",
+			}),
+		);
+	};
+
+	for (let index = 0; index < lines.length; index += 1) {
+		const rawLine = lines[index] ?? "";
+		const trimmed = rawLine.trim();
+
+		if (trimmed.length === 0) {
+			flushParagraph();
+			continue;
+		}
+
+		if (trimmed.startsWith("```")) {
+			flushParagraph();
+			let codeLineCount = 0;
+			index += 1;
+			while (
+				index < lines.length &&
+				!(lines[index] ?? "").trim().startsWith("```")
+			) {
+				codeLineCount += 1;
+				index += 1;
+			}
+			appendBlock(
+				MARKDOWN_CODE_BLOCK_PADDING +
+					Math.max(1, codeLineCount) * MARKDOWN_CODE_LINE_HEIGHT,
+			);
+			continue;
+		}
+
+		const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+		if (headingMatch) {
+			flushParagraph();
+			const headingLevel = headingMatch[1].length;
+			const headingLineHeight =
+				headingLevel <= 2 ? 34 : headingLevel === 3 ? 30 : 26;
+			appendBlock(
+				measureTextHeight(headingMatch[2], {
+					fontSize: options.fontSize,
+					lineHeight: headingLineHeight,
+					maxWidth: options.contentWidth,
+					whiteSpace: "normal",
+				}) +
+					MARKDOWN_HEADING_MARGIN_TOP +
+					MARKDOWN_HEADING_MARGIN_BOTTOM,
+			);
+			continue;
+		}
+
+		if (
+			isMarkdownTableLine(trimmed) &&
+			index + 1 < lines.length &&
+			isMarkdownTableSeparator((lines[index + 1] ?? "").trim())
+		) {
+			flushParagraph();
+			let rowCount = 1;
+			index += 2;
+			while (index < lines.length) {
+				const rowLine = (lines[index] ?? "").trim();
+				if (!isMarkdownTableLine(rowLine) || rowLine.length === 0) {
+					index -= 1;
+					break;
+				}
+				rowCount += 1;
+				index += 1;
+			}
+			if (index >= lines.length) {
+				index = lines.length - 1;
+			}
+			appendBlock(
+				MARKDOWN_TABLE_TOOLBAR_HEIGHT + rowCount * MARKDOWN_TABLE_ROW_HEIGHT,
+			);
+			continue;
+		}
+
+		if (isMarkdownListLine(trimmed)) {
+			flushParagraph();
+			const listLines = [trimmed];
+			while (index + 1 < lines.length) {
+				const nextLine = lines[index + 1] ?? "";
+				const nextTrimmed = nextLine.trim();
+				if (
+					nextTrimmed.length === 0 ||
+					(!isMarkdownListLine(nextTrimmed) && !/^\s{2,}\S/.test(nextLine))
+				) {
+					break;
+				}
+				listLines.push(nextLine);
+				index += 1;
+			}
+			appendBlock(
+				measureTextHeight(listLines.join("\n"), {
+					fontSize: options.fontSize,
+					lineHeight: ASSISTANT_LINE_HEIGHT,
+					maxWidth: options.contentWidth,
+					whiteSpace: "pre-wrap",
+				}),
+			);
+			continue;
+		}
+
+		if (trimmed.startsWith(">")) {
+			flushParagraph();
+			const quoteLines = [trimmed.replace(/^>\s?/, "")];
+			while (
+				index + 1 < lines.length &&
+				(lines[index + 1] ?? "").trim().startsWith(">")
+			) {
+				quoteLines.push((lines[index + 1] ?? "").trim().replace(/^>\s?/, ""));
+				index += 1;
+			}
+			appendBlock(
+				measureTextHeight(quoteLines.join("\n"), {
+					fontSize: options.fontSize,
+					lineHeight: ASSISTANT_LINE_HEIGHT,
+					maxWidth: options.contentWidth,
+					whiteSpace: "pre-wrap",
+				}) + MARKDOWN_QUOTE_PADDING,
+			);
+			continue;
+		}
+
+		paragraphLines.push(trimmed);
+	}
+
+	flushParagraph();
+	return Math.max(ASSISTANT_LINE_HEIGHT, totalHeight - MARKDOWN_BLOCK_GAP);
 }
 
 function estimateUserMessageHeight(
@@ -203,6 +394,30 @@ function estimateToolCallHeight(part: ToolCallPart) {
 
 function estimateCollapsedGroupHeight(group: CollapsedGroupPart) {
 	return group.active ? COLLAPSED_GROUP_HEIGHT + 4 : COLLAPSED_GROUP_HEIGHT;
+}
+
+function looksLikeStructuredMarkdown(text: string) {
+	return (
+		text.includes("```") ||
+		/\n#{1,6}\s/.test(text) ||
+		/\n\s*[-*+]\s+/.test(text) ||
+		/\n\s*\d+\.\s+/.test(text) ||
+		/\n>/.test(text) ||
+		/\n\n/.test(text) ||
+		/\|/.test(text)
+	);
+}
+
+function isMarkdownListLine(line: string) {
+	return /^([-*+]|\d+\.)\s+/.test(line);
+}
+
+function isMarkdownTableLine(line: string) {
+	return line.includes("|");
+}
+
+function isMarkdownTableSeparator(line: string) {
+	return /^\|?(?:\s*:?-{3,}:?\s*\|)+(?:\s*:?-{3,}:?\s*)?$/.test(line);
 }
 
 function measureTextHeight(

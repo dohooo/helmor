@@ -1,6 +1,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
-import type { ThreadMessageLike } from "@/lib/api";
+import {
+	memo,
+	startTransition,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
+import { hasTauriRuntime, type ThreadMessageLike } from "@/lib/api";
 import { messagesStructurallyEqual } from "@/lib/structural-equality";
 
 type DbSeenCache = {
@@ -60,6 +68,7 @@ export function shareMessages(
 }
 
 import { generateSessionTitle } from "@/lib/api";
+import { measureSync } from "@/lib/perf-marks";
 import {
 	helmorQueryKeys,
 	sessionThreadMessagesQueryOptions,
@@ -101,6 +110,19 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 }: WorkspacePanelContainerProps) {
 	const queryClient = useQueryClient();
 	const autoTitleAttemptedRef = useRef<Set<string>>(new Set());
+	const sessionPaneCacheRef = useRef<
+		Map<
+			string,
+			{
+				sessionId: string;
+				messages: ThreadMessageLike[];
+				sending: boolean;
+				hasLoaded: boolean;
+			}
+		>
+	>(new Map());
+	const sessionPaneOrderRef = useRef<string[]>([]);
+	const SESSION_PANE_CACHE_LIMIT = 3;
 
 	const detailQuery = useQuery({
 		...workspaceDetailQueryOptions(displayedWorkspaceId ?? "__none__"),
@@ -186,32 +208,176 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	// reference reuse so historical messages keep the same identity across
 	// stream ticks (and across backend `update` snapshots).
 	const prevMergedRef = useRef<ThreadMessageLike[]>([]);
+
+	// Phase 2 / Goal #2 — A1' progressive deferred hydration:
+	//
+	// On a fresh session mount we render only the LAST `INITIAL_HYDRATION_COUNT`
+	// messages. After a short dwell time, we silently expand to the full
+	// thread in the background. The user sees the bottom of the conversation
+	// almost immediately even on long sessions, and the older messages
+	// "appear" above without any visible flicker because:
+	//   1. The first frame anchors to the bottom of the partial render.
+	//   2. When the rest hydrates, every newly-mounted row above the viewport
+	//      lands inside the existing pendingScrollAdjustment compensation
+	//      path (Goal #1) — scrollTop is bumped up by the height of the
+	//      newly added rows so the visible content stays put.
+	//   3. The user's hasUserScrolledRef gate (Goal #1.5) ensures that if
+	//      the user happens to start scrolling during the hydration window,
+	//      the compensation is suppressed and their scroll position is
+	//      preserved instead.
+	//
+	// Streaming sessions (sending=true) bypass slicing entirely — the
+	// streaming tail must always be visible.
+	const INITIAL_HYDRATION_COUNT = 30;
+	const HYDRATION_DELAY_MS = 1500;
+	// Phase 2 / Goal #2 refinement (iter 1):
+	// Sessions at or below this threshold skip A1' entirely — they render
+	// the full thread on mount with no state machine, no transition, no
+	// extra re-renders. Reasoning: for a session of (say) 12 messages, the
+	// initial mount cost is already tiny, and the 3-5 ms overhead of the
+	// A1' state reset + useEffect + setTimeout + transition handling is a
+	// pure regression. We only pay that overhead when it's actually buying
+	// us something, which is long sessions (>50 msgs).
+	const A1_SKIP_THRESHOLD = 50;
+	const dbTotalLength = messagesQuery.data?.length ?? 0;
+	const isTauri = hasTauriRuntime();
+	// Tauri/WKWebView is already sensitive to the progressive viewport's dynamic
+	// height corrections. Layering A1' on top of that — "render the last 30
+	// messages now, then swap in the full thread 1500ms later" — causes an
+	// obvious whole-panel flash and scrollbar thumb resize on long sessions.
+	//
+	// The progressive viewport itself already virtualizes realized rows, so in
+	// Tauri we prefer a single stable full-thread model from first paint instead
+	// of a deferred second hydration wave.
+	const a1Enabled = !isTauri && dbTotalLength > A1_SKIP_THRESHOLD;
+	const [hydratedMessageCount, setHydratedMessageCount] = useState(
+		INITIAL_HYDRATION_COUNT,
+	);
+
+	// Reset hydration count when the active session changes so each fresh
+	// session walks through the partial → full hydration phases on its own.
+	const lastHydratedSessionRef = useRef<string | null>(null);
+	if (lastHydratedSessionRef.current !== threadSessionId) {
+		lastHydratedSessionRef.current = threadSessionId;
+		// Setting state during render is the React-recommended way to
+		// "reset state on prop change" — React discards the in-progress
+		// render and immediately retries with the new state, avoiding the
+		// extra render → useEffect → setState chain.
+		// eslint-disable-next-line react-hooks/rules-of-hooks
+		setHydratedMessageCount(INITIAL_HYDRATION_COUNT);
+	}
+
+	// After the dwell time, expand to the full thread inside a transition
+	// so React can interleave the heavy reconciliation with browser
+	// rendering work and bail out if the user does anything (e.g. starts
+	// scrolling). startTransition marks the state update as non-urgent;
+	// React 19 will spread the commit across multiple frames if needed
+	// rather than firing a single 200+ ms blocking commit. We only arm
+	// the timer for sessions where A1' is actually doing any clipping.
+	useEffect(() => {
+		if (!threadSessionId) return;
+		if (!a1Enabled) return;
+		if (hydratedMessageCount === Number.POSITIVE_INFINITY) return;
+		const handle = window.setTimeout(() => {
+			startTransition(() => {
+				setHydratedMessageCount(Number.POSITIVE_INFINITY);
+			});
+		}, HYDRATION_DELAY_MS);
+		return () => window.clearTimeout(handle);
+	}, [threadSessionId, hydratedMessageCount, a1Enabled]);
+
 	const mergedMessages = useMemo(() => {
-		const db = messagesQuery.data ?? [];
-		let next: ThreadMessageLike[];
-		if (liveMessages.length === 0) {
-			next = db;
-		} else if (db.length === 0) {
-			next = liveMessages;
-		} else {
-			let cache = dbSeenCacheRef.current;
-			if (!cache || cache.db !== db) {
-				const ids = new Set<string | undefined>();
-				for (const message of db) {
-					ids.add(message.id);
+		return measureSync(
+			"container:merged-messages",
+			() => {
+				const dbAll = messagesQuery.data ?? [];
+				// Only clip the historical (db) tail when:
+				//   1. A1' is actually enabled for this session (large enough
+				//      to benefit, not streaming), AND
+				//   2. the full hydration transition hasn't landed yet, AND
+				//   3. the session is actually larger than the current
+				//      hydrated count.
+				// Small sessions (≤ 50 msgs) bypass the slicing completely so
+				// there's zero A1' overhead on the common-case fast path.
+				const db =
+					!a1Enabled ||
+					sending ||
+					hydratedMessageCount === Number.POSITIVE_INFINITY ||
+					dbAll.length <= hydratedMessageCount
+						? dbAll
+						: dbAll.slice(dbAll.length - hydratedMessageCount);
+				let next: ThreadMessageLike[];
+				if (liveMessages.length === 0) {
+					next = db;
+				} else if (db.length === 0) {
+					next = liveMessages;
+				} else {
+					let cache = dbSeenCacheRef.current;
+					if (!cache || cache.db !== db) {
+						const ids = new Set<string | undefined>();
+						for (const message of db) {
+							ids.add(message.id);
+						}
+						cache = { db, ids };
+						dbSeenCacheRef.current = cache;
+					}
+					const uniqueLive = liveMessages.filter(
+						(message) => !cache.ids.has(message.id),
+					);
+					next = uniqueLive.length === 0 ? db : [...db, ...uniqueLive];
 				}
-				cache = { db, ids };
-				dbSeenCacheRef.current = cache;
-			}
-			const uniqueLive = liveMessages.filter(
-				(message) => !cache.ids.has(message.id),
-			);
-			next = uniqueLive.length === 0 ? db : [...db, ...uniqueLive];
-		}
-		const shared = shareMessages(prevMergedRef.current, next);
-		prevMergedRef.current = shared;
-		return shared;
-	}, [messagesQuery.data, liveMessages]);
+				const shared = measureSync(
+					"container:share-messages",
+					() => shareMessages(prevMergedRef.current, next),
+					{
+						prevLength: prevMergedRef.current.length,
+						nextLength: next.length,
+					},
+				);
+				prevMergedRef.current = shared;
+				return shared;
+			},
+			{
+				dbLength: messagesQuery.data?.length ?? 0,
+				liveLength: liveMessages.length,
+				hydratedCount:
+					hydratedMessageCount === Number.POSITIVE_INFINITY
+						? -1
+						: hydratedMessageCount,
+			},
+		);
+	}, [
+		messagesQuery.data,
+		liveMessages,
+		hydratedMessageCount,
+		sending,
+		a1Enabled,
+	]);
+
+	const preferredPaneSessionId = selectedSessionId ?? threadSessionId;
+	const hasFreshThreadSnapshot =
+		Boolean(threadSessionId) &&
+		(messagesQuery.data !== undefined || liveMessages.length > 0);
+	if (threadSessionId && hasFreshThreadSnapshot) {
+		sessionPaneCacheRef.current.set(threadSessionId, {
+			sessionId: threadSessionId,
+			messages: mergedMessages,
+			sending,
+			hasLoaded: true,
+		});
+		sessionPaneOrderRef.current = [
+			threadSessionId,
+			...sessionPaneOrderRef.current.filter((id) => id !== threadSessionId),
+		].slice(0, SESSION_PANE_CACHE_LIMIT);
+	}
+	if (preferredPaneSessionId) {
+		sessionPaneOrderRef.current = [
+			preferredPaneSessionId,
+			...sessionPaneOrderRef.current.filter(
+				(id) => id !== preferredPaneSessionId,
+			),
+		].slice(0, SESSION_PANE_CACHE_LIMIT);
+	}
 
 	const hasWorkspaceDetail = workspace !== null;
 	const hasWorkspaceSessions = sessionsQuery.data !== undefined;
@@ -222,21 +388,40 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		Boolean(threadSessionId) &&
 		(hasResolvedSessionMessages || liveMessages.length > 0);
 	const sessionPanes = useMemo(() => {
-		if (!threadSessionId || !hasSessionSnapshot) {
+		if (!preferredPaneSessionId) {
+			return [];
+		}
+
+		const preferredPane =
+			sessionPaneCacheRef.current.get(preferredPaneSessionId) ?? null;
+		if (!preferredPane) {
 			return [];
 		}
 
 		return [
 			{
-				sessionId: threadSessionId,
-				messages: mergedMessages,
-				sending,
-				hasLoaded: true,
+				sessionId: preferredPaneSessionId,
+				messages:
+					preferredPaneSessionId === threadSessionId && hasFreshThreadSnapshot
+						? mergedMessages
+						: preferredPane.messages,
+				sending:
+					preferredPaneSessionId === threadSessionId
+						? sending
+						: preferredPane.sending,
+				hasLoaded: preferredPane.hasLoaded,
 				presentationState: "presented" as const,
 			},
 		];
-	}, [hasSessionSnapshot, mergedMessages, sending, threadSessionId]);
+	}, [
+		hasFreshThreadSnapshot,
+		mergedMessages,
+		preferredPaneSessionId,
+		sending,
+		threadSessionId,
+	]);
 	const visibleSessionId = sessionPanes[0]?.sessionId ?? null;
+	const hasPresentedPane = Boolean(sessionPanes[0]?.hasLoaded);
 
 	const loadingWorkspace =
 		Boolean(displayedWorkspaceId) &&
@@ -252,6 +437,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		Boolean(threadSessionId) &&
 		!refreshingWorkspace &&
 		!hasSessionSnapshot &&
+		!hasPresentedPane &&
 		messagesQuery.isPending &&
 		liveMessages.length === 0;
 	const refreshingSession =

@@ -50,6 +50,7 @@ import {
 	createSession,
 	deleteSession,
 	type ExtendedMessagePart,
+	hasTauriRuntime,
 	hideSession,
 	type ImagePart,
 	listRemoteBranches,
@@ -68,8 +69,10 @@ import {
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
+import { HelmorProfiler } from "@/lib/dev-react-profiler";
 import { recordMessageRender } from "@/lib/dev-render-debug";
 import { estimateThreadRowHeights } from "@/lib/message-layout-estimator";
+import { measureSync } from "@/lib/perf-marks";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { childrenStructurallyEqual } from "@/lib/structural-equality";
@@ -180,7 +183,10 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 }: WorkspacePanelProps) {
 	const selectedSession =
 		sessions.find((s) => s.id === selectedSessionId) ?? null;
-	const activePane = sessionPanes[0] ?? null;
+	const activePane =
+		sessionPanes.find((pane) => pane.presentationState === "presented") ??
+		sessionPanes[0] ??
+		null;
 
 	useEffect(() => {
 		if (typeof window === "undefined") return;
@@ -207,38 +213,40 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	}, []);
 
 	return (
-		<div className="flex min-h-0 flex-1 flex-col bg-transparent">
-			<WorkspacePanelHeader
-				workspace={workspace}
-				sessions={sessions}
-				selectedSessionId={selectedSessionId}
-				selectedProvider={selectedProvider}
-				sending={sending}
-				sendingSessionIds={sendingSessionIds}
-				loadingWorkspace={loadingWorkspace}
-				headerActions={headerActions}
-				headerLeading={headerLeading}
-				onSelectSession={onSelectSession}
-				onPrefetchSession={onPrefetchSession}
-				onSessionsChanged={onSessionsChanged}
-				onSessionRenamed={onSessionRenamed}
-				onWorkspaceChanged={onWorkspaceChanged}
-			/>
+		<HelmorProfiler id="WorkspacePanel">
+			<div className="flex min-h-0 flex-1 flex-col bg-transparent">
+				<WorkspacePanelHeader
+					workspace={workspace}
+					sessions={sessions}
+					selectedSessionId={selectedSessionId}
+					selectedProvider={selectedProvider}
+					sending={sending}
+					sendingSessionIds={sendingSessionIds}
+					loadingWorkspace={loadingWorkspace}
+					headerActions={headerActions}
+					headerLeading={headerLeading}
+					onSelectSession={onSelectSession}
+					onPrefetchSession={onPrefetchSession}
+					onSessionsChanged={onSessionsChanged}
+					onSessionRenamed={onSessionRenamed}
+					onWorkspaceChanged={onWorkspaceChanged}
+				/>
 
-			{/* --- Timeline --- */}
-			<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-				{loadingWorkspace || loadingSession ? (
-					<ConversationColdPlaceholder />
-				) : activePane?.hasLoaded ? (
-					<ActiveThreadViewport
-						hasSession={!!selectedSession}
-						pane={activePane}
-					/>
-				) : (
-					<EmptyState hasSession={!!selectedSession} />
-				)}
+				{/* --- Timeline --- */}
+				<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+					{activePane?.hasLoaded ? (
+						<ActiveThreadViewport
+							hasSession={!!selectedSession}
+							pane={activePane}
+						/>
+					) : loadingWorkspace || loadingSession ? (
+						<ConversationColdPlaceholder />
+					) : (
+						<EmptyState hasSession={!!selectedSession} />
+					)}
+				</div>
 			</div>
-		</div>
+		</HelmorProfiler>
 	);
 });
 
@@ -814,7 +822,7 @@ function ChatThread({
 	// leaving the scroll position oscillating mid-spring and causing a
 	// visible flicker localized to the streaming row. `initial` stays
 	// instant so landing on a thread doesn't smooth-scroll.
-	const { contentRef, scrollRef, scrollToBottom, isAtBottom } =
+	const { contentRef, scrollRef, scrollToBottom, stopScroll, isAtBottom } =
 		useStickToBottom({
 			initial: "instant",
 			resize: "instant",
@@ -840,7 +848,7 @@ function ChatThread({
 	}, [sendingJustStarted, scrollToBottom]);
 
 	useLayoutEffect(() => {
-		if (!usePlainThread || typeof window === "undefined") {
+		if (typeof window === "undefined") {
 			return;
 		}
 
@@ -849,8 +857,26 @@ function ChatThread({
 			return;
 		}
 
-		scrollParent.scrollTop = scrollParent.scrollHeight;
-	}, [sessionId, usePlainThread]);
+		// Plain threads do not have ProgressiveConversationViewport's
+		// layout-key reset path, so when ScrollArea stopped remounting on
+		// session switch they kept the previous session's scroll position.
+		// Keep the fix narrowly scoped to the plain-thread path: progressive
+		// threads already compute their first paint from estimated total
+		// height, and forcing an extra hide/reveal step here makes the
+		// switch feel delayed.
+		if (usePlainThread) {
+			scrollParent.scrollTop = scrollParent.scrollHeight;
+			return;
+		}
+
+		// Re-arm useStickToBottom on session switch. Once a user has scrolled up in
+		// one session we intentionally call `stopScroll()`, which leaves the hook
+		// escaped from its bottom lock. Without an explicit re-arm here that escaped
+		// state carries into the next session because <ScrollArea> no longer
+		// remounts, and progressive threads can miss their initial bottom-locked
+		// resize handling.
+		void scrollToBottom("instant");
+	}, [scrollToBottom, sessionId, usePlainThread]);
 
 	const itemContent = useCallback(
 		(index: number, message: RenderedMessage) => (
@@ -864,31 +890,34 @@ function ChatThread({
 	);
 
 	return (
-		<ConversationViewport
-			data={threadMessages}
-			fontSize={settings.fontSize}
-			hasSession={hasSession}
-			itemContent={itemContent}
-			layoutCacheKey={layoutCacheKey}
-			paneWidth={paneWidth}
-			pinTailRows={pinTailRows}
-			scrollRef={handleScrollRef}
-			sessionId={sessionId}
-			sending={sending}
-			usePlainThread={usePlainThread}
-			contentRef={contentRef}
-		>
-			<button
-				type="button"
-				onClick={() => {
-					scrollToBottom();
-				}}
-				className={`conversation-scroll-button ${isAtBottom || sendingJustStarted ? "conversation-scroll-button-hidden" : ""}`}
-				aria-label="Scroll to latest message"
+		<HelmorProfiler id="ChatThread">
+			<ConversationViewport
+				data={threadMessages}
+				fontSize={settings.fontSize}
+				hasSession={hasSession}
+				itemContent={itemContent}
+				layoutCacheKey={layoutCacheKey}
+				paneWidth={paneWidth}
+				pinTailRows={pinTailRows}
+				scrollRef={handleScrollRef}
+				sessionId={sessionId}
+				sending={sending}
+				stopScroll={stopScroll}
+				usePlainThread={usePlainThread}
+				contentRef={contentRef}
 			>
-				<ArrowDown className="size-4" strokeWidth={2} />
-			</button>
-		</ConversationViewport>
+				<button
+					type="button"
+					onClick={() => {
+						scrollToBottom();
+					}}
+					className={`conversation-scroll-button ${isAtBottom || sendingJustStarted ? "conversation-scroll-button-hidden" : ""}`}
+					aria-label="Scroll to latest message"
+				>
+					<ArrowDown className="size-4" strokeWidth={2} />
+				</button>
+			</ConversationViewport>
+		</HelmorProfiler>
 	);
 }
 
@@ -909,6 +938,7 @@ function ConversationViewport({
 	scrollRef,
 	sessionId,
 	sending,
+	stopScroll,
 	usePlainThread,
 }: {
 	children?: ReactNode;
@@ -923,6 +953,7 @@ function ConversationViewport({
 	scrollRef: React.RefCallback<HTMLElement>;
 	sessionId: string;
 	sending: boolean;
+	stopScroll: () => void;
 	usePlainThread: boolean;
 }) {
 	const [scrollParent, setScrollParent] = useState<HTMLDivElement | null>(null);
@@ -947,10 +978,11 @@ function ConversationViewport({
 
 	return (
 		<ScrollArea
-			// Remount on session switch so the CSS fade-in animation on
-			// `.conversation-scroll-area [data-slot=scroll-area-scrollbar]`
-			// re-fires each time the user lands on a new thread.
-			key={sessionId}
+			// Intentionally NOT keyed on sessionId. The previous remount-on-
+			// switch (originally to re-fire the scrollbar fade-in animation)
+			// forced every visible row to re-render on each navigation; the
+			// bottom-anchor that the remount provided is now done explicitly
+			// via a useLayoutEffect on `sessionId` in ChatThread above.
 			className="conversation-scroll-area relative min-h-0 flex-1"
 			viewportRef={viewportRef}
 			viewportClassName="conversation-scroll-viewport"
@@ -986,6 +1018,7 @@ function ConversationViewport({
 					pinTailRows={pinTailRows}
 					scrollParent={scrollParent}
 					sessionId={sessionId}
+					stopScroll={stopScroll}
 					contentRef={contentRef}
 				/>
 			)}
@@ -1006,6 +1039,7 @@ function ProgressiveConversationViewport({
 	pinTailRows,
 	scrollParent,
 	sessionId,
+	stopScroll,
 }: {
 	contentRef?: React.RefCallback<HTMLElement>;
 	data: RenderedMessage[];
@@ -1019,7 +1053,9 @@ function ProgressiveConversationViewport({
 	pinTailRows: boolean;
 	scrollParent: HTMLDivElement | null;
 	sessionId: string;
+	stopScroll: () => void;
 }) {
+	const isTauri = hasTauriRuntime();
 	// Scroll/viewport are intentionally tracked with two layers:
 	//   1. `committedScrollTopRef` / `committedViewportRef` — the values React
 	//      currently rendered with. Used to compute the visible window.
@@ -1031,12 +1067,53 @@ function ProgressiveConversationViewport({
 		scrollTop: number;
 		viewportHeight: number;
 	}>({ scrollTop: 0, viewportHeight: 0 });
-	const { scrollTop, viewportHeight } = committedScrollState;
 	const [measuredHeights, setMeasuredHeights] = useState<
 		Record<string, number>
 	>({});
 	const initialScrollAppliedRef = useRef(false);
 	const pendingScrollAdjustmentRef = useRef(0);
+	const isUserScrollingRef = useRef(false);
+	const scrollIdleTimerRef = useRef<ReturnType<
+		typeof window.setTimeout
+	> | null>(null);
+	const deferredMeasuredHeightsRef = useRef<Record<string, number>>({});
+	// Phase 2 / Goal #1.5 / iter 5:
+	// Has the user actively scrolled UP at any point in this session? Set
+	// the first time the user produces a real upward gesture (wheel up,
+	// touch swipe down, ArrowUp/PageUp/Home keys). Used to gate
+	// `pendingScrollAdjustmentRef` so height-correction "snap-back" only
+	// happens while the user is intent on staying pinned to the bottom
+	// (initial mount or freshly switched session). Once the user scrolls
+	// up to view history, height corrections to rows in the overscan
+	// buffer NO LONGER push the scroll position back down — eliminates
+	// the user-visible "scrollbar moves up then snaps back" jitter.
+	// Reset on layoutCacheKey change so each session switch re-arms
+	// the auto-bottom-pin behaviour.
+	const hasUserScrolledRef = useRef(false);
+
+	// Reset transient viewport state synchronously when the layout key (i.e.
+	// the active session) changes. We used to rely on `<ScrollArea
+	// key={sessionId}>` to throw this state away on every switch via a
+	// remount, but the remount also re-rendered every visible row. The "set
+	// state during render to reset on prop change" pattern lets React discard
+	// the in-progress render and immediately retry with fresh state, so a
+	// single render replaces the previous render → useEffect → 2x setState →
+	// extra render chain.
+	const [lastLayoutCacheKey, setLastLayoutCacheKey] = useState(layoutCacheKey);
+	if (lastLayoutCacheKey !== layoutCacheKey) {
+		setLastLayoutCacheKey(layoutCacheKey);
+		setCommittedScrollState({ scrollTop: 0, viewportHeight: 0 });
+		setMeasuredHeights({});
+		initialScrollAppliedRef.current = false;
+		hasUserScrolledRef.current = false;
+		isUserScrollingRef.current = false;
+		deferredMeasuredHeightsRef.current = {};
+		if (scrollIdleTimerRef.current !== null) {
+			window.clearTimeout(scrollIdleTimerRef.current);
+			scrollIdleTimerRef.current = null;
+		}
+	}
+	const { scrollTop, viewportHeight } = committedScrollState;
 	// Mirror of `measuredHeights` for synchronous reads inside the
 	// `handleHeightChange` callback. The mirror is updated in a layout effect
 	// (after commit) instead of during render to keep render pure under
@@ -1046,10 +1123,23 @@ function ProgressiveConversationViewport({
 		measuredHeightsRef.current = measuredHeights;
 	}, [measuredHeights]);
 
-	useEffect(() => {
-		setMeasuredHeights({});
-		initialScrollAppliedRef.current = false;
-	}, [layoutCacheKey]);
+	const flushDeferredMeasuredHeights = useCallback(() => {
+		const pending = deferredMeasuredHeightsRef.current;
+		const entries = Object.entries(pending);
+		if (entries.length === 0) {
+			return;
+		}
+		deferredMeasuredHeightsRef.current = {};
+		startTransition(() => {
+			setMeasuredHeights((current) => ({
+				...current,
+				...Object.fromEntries(entries),
+			}));
+		});
+	}, []);
+
+	// Note: the post-commit reset that used to live here for layoutCacheKey
+	// changes is now handled by the synchronous reset block above.
 
 	useEffect(() => {
 		if (!scrollParent) {
@@ -1068,12 +1158,22 @@ function ProgressiveConversationViewport({
 				const viewportDelta = Math.abs(
 					nextViewportHeight - current.viewportHeight,
 				);
+				const commitThreshold = isTauri
+					? Math.max(24, Math.floor(buffer / 8))
+					: buffer / 2;
 				// We render with `buffer = effectiveViewportHeight` of overscan
 				// above and below the visible window, so any scroll movement
 				// smaller than half the buffer is guaranteed to keep the same
 				// rows in view. In that case we skip the state update entirely
 				// to avoid re-running visibleRows / re-rendering rows.
-				if (scrollDelta < buffer / 2 && viewportDelta < 8) {
+				//
+				// WKWebView does not like the large step size here: the visible
+				// window advances in big batches, then newly-entering rows swap from
+				// estimator height to measured height in one go, which shows up as the
+				// user-visible “scroll a bit, then slightly snap back” artifact in
+				// long archived sessions. Commit much more frequently in Tauri so the
+				// virtual window moves continuously instead of in half-viewport jumps.
+				if (scrollDelta < commitThreshold && viewportDelta < 8) {
 					return current;
 				}
 				return {
@@ -1086,6 +1186,15 @@ function ProgressiveConversationViewport({
 		const scheduleCommit = () => {
 			if (rafId !== null) return;
 			rafId = window.requestAnimationFrame(commitFromDom);
+			isUserScrollingRef.current = true;
+			if (scrollIdleTimerRef.current !== null) {
+				window.clearTimeout(scrollIdleTimerRef.current);
+			}
+			scrollIdleTimerRef.current = window.setTimeout(() => {
+				isUserScrollingRef.current = false;
+				scrollIdleTimerRef.current = null;
+				flushDeferredMeasuredHeights();
+			}, 120);
 		};
 
 		// Always commit the first observation so we know the actual viewport.
@@ -1106,34 +1215,129 @@ function ProgressiveConversationViewport({
 			if (rafId !== null) {
 				window.cancelAnimationFrame(rafId);
 			}
+			if (scrollIdleTimerRef.current !== null) {
+				window.clearTimeout(scrollIdleTimerRef.current);
+				scrollIdleTimerRef.current = null;
+			}
 			scrollParent.removeEventListener("scroll", scheduleCommit);
 			observer?.disconnect();
 		};
-	}, [scrollParent]);
+	}, [flushDeferredMeasuredHeights, isTauri, scrollParent]);
+
+	// Phase 2 / Goal #1.5 / iter 5:
+	// Detect user-initiated upward scroll via wheel/keyboard/touch input
+	// by listening on `window` with target filtering. Attaching wheel
+	// listeners directly to a scroll container can prevent Chrome's fast
+	// scroll path in some configurations (we saw a +20-30 % workspace-
+	// switch perf regression with direct attachment, even with
+	// `passive: true`). Listening on window keeps the scroll container
+	// untouched from the browser's scroll fastpath perspective.
+	useEffect(() => {
+		if (!scrollParent || typeof window === "undefined") return;
+		const STICK_TO_BOTTOM_ESCAPE_OFFSET_PX = 24;
+		const escapeBottomLock = () => {
+			hasUserScrolledRef.current = true;
+			stopScroll();
+		};
+		const markScrolledAwayFromBottom = () => {
+			const distanceFromBottom =
+				scrollParent.scrollHeight -
+				scrollParent.clientHeight -
+				scrollParent.scrollTop;
+			// `use-stick-to-bottom` keeps itself engaged while `scrollDifference <= 70`.
+			// In WKWebView that threshold is too forgiving for our progressively
+			// measured virtual list: once the user starts to leave the bottom, a stream
+			// of small height corrections can keep re-pulling the viewport downward and
+			// create the observed oscillation. Escape the hook earlier and explicitly.
+			if (distanceFromBottom > STICK_TO_BOTTOM_ESCAPE_OFFSET_PX) {
+				escapeBottomLock();
+			}
+		};
+		const inScrollParent = (target: EventTarget | null) => {
+			return (
+				target instanceof Node &&
+				(scrollParent === target || scrollParent.contains(target))
+			);
+		};
+		const onWheel = (event: WheelEvent) => {
+			if (event.deltaY < -2 && inScrollParent(event.target)) {
+				escapeBottomLock();
+			}
+		};
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (
+				(event.key === "ArrowUp" ||
+					event.key === "PageUp" ||
+					event.key === "Home") &&
+				inScrollParent(event.target)
+			) {
+				escapeBottomLock();
+			}
+		};
+		const onTouchMove = (event: TouchEvent) => {
+			if (inScrollParent(event.target)) {
+				escapeBottomLock();
+			}
+		};
+		window.addEventListener("wheel", onWheel as EventListener, {
+			passive: true,
+		});
+		window.addEventListener("keydown", onKeyDown as unknown as EventListener, {
+			passive: true,
+		});
+		window.addEventListener(
+			"touchmove",
+			onTouchMove as unknown as EventListener,
+			{ passive: true },
+		);
+		scrollParent.addEventListener("scroll", markScrolledAwayFromBottom, {
+			passive: true,
+		});
+		return () => {
+			window.removeEventListener("wheel", onWheel as EventListener);
+			window.removeEventListener(
+				"keydown",
+				onKeyDown as unknown as EventListener,
+			);
+			window.removeEventListener(
+				"touchmove",
+				onTouchMove as unknown as EventListener,
+			);
+			scrollParent.removeEventListener("scroll", markScrolledAwayFromBottom);
+		};
+	}, [scrollParent, stopScroll]);
 
 	const estimatedHeights = useMemo(
 		() => estimateThreadRowHeights(data, { fontSize, paneWidth }),
 		[data, fontSize, paneWidth],
 	);
-	const rows = useMemo(() => {
-		let top = 0;
-		return data.map((message, index) => {
-			const key = message.id ?? `${message.role}:${index}`;
-			const estimatedHeight = estimatedHeights[index] ?? 72;
-			const measuredHeight = measuredHeights[key];
-			const height =
-				measuredHeight !== undefined ? measuredHeight : estimatedHeight;
-			const row = {
-				height,
-				index,
-				key,
-				message,
-				top,
-			};
-			top += height;
-			return row;
-		});
-	}, [data, estimatedHeights, measuredHeights]);
+	const rows = useMemo(
+		() =>
+			measureSync(
+				"viewport:rows",
+				() => {
+					let top = 0;
+					return data.map((message, index) => {
+						const key = message.id ?? `${message.role}:${index}`;
+						const estimatedHeight = estimatedHeights[index] ?? 72;
+						const measuredHeight = measuredHeights[key];
+						const height =
+							measuredHeight !== undefined ? measuredHeight : estimatedHeight;
+						const row = {
+							height,
+							index,
+							key,
+							message,
+							top,
+						};
+						top += height;
+						return row;
+					});
+				},
+				{ count: data.length },
+			),
+		[data, estimatedHeights, measuredHeights],
+	);
 	const totalRowsHeight =
 		rows.length > 0
 			? rows[rows.length - 1]!.top + rows[rows.length - 1]!.height
@@ -1150,32 +1354,41 @@ function ProgressiveConversationViewport({
 	const buffer = effectiveViewportHeight;
 	const windowTop = Math.max(0, effectiveScrollTop - buffer);
 	const windowBottom = effectiveScrollTop + effectiveViewportHeight + buffer;
-	const visibleRows = useMemo(() => {
-		const inWindow = rows.filter((row) => {
-			const rowBottom = row.top + row.height;
-			return rowBottom >= windowTop && row.top <= windowBottom;
-		});
-		if (!pinTailRows || rows.length === 0) {
-			return inWindow;
-		}
+	const visibleRows = useMemo(
+		() =>
+			measureSync(
+				"viewport:visible-rows",
+				() => {
+					const inWindow = rows.filter((row) => {
+						const rowBottom = row.top + row.height;
+						return rowBottom >= windowTop && row.top <= windowBottom;
+					});
+					if (!pinTailRows || rows.length === 0) {
+						return inWindow;
+					}
 
-		// `rows` is already index-ordered, so the tail (last 2 rows) sits at
-		// indices [rows.length - 2, rows.length - 1]. We avoid the previous
-		// `Map(...).sort(...)` (O(n log n) on every stream tick) by appending
-		// only the tail rows that are not already at the end of `inWindow`.
-		const tailStartIndex = Math.max(0, rows.length - 2);
-		const lastVisibleIndex =
-			inWindow.length > 0 ? inWindow[inWindow.length - 1]!.index : -1;
-		if (lastVisibleIndex >= rows.length - 1) {
-			return inWindow;
-		}
-		const result = inWindow.slice();
-		const appendStart = Math.max(tailStartIndex, lastVisibleIndex + 1);
-		for (let i = appendStart; i < rows.length; i += 1) {
-			result.push(rows[i]!);
-		}
-		return result;
-	}, [pinTailRows, rows, windowBottom, windowTop]);
+					// `rows` is already index-ordered, so the tail (last 2 rows) sits
+					// at indices [rows.length - 2, rows.length - 1]. We avoid the
+					// previous `Map(...).sort(...)` (O(n log n) on every stream tick)
+					// by appending only the tail rows that are not already at the
+					// end of `inWindow`.
+					const tailStartIndex = Math.max(0, rows.length - 2);
+					const lastVisibleIndex =
+						inWindow.length > 0 ? inWindow[inWindow.length - 1]!.index : -1;
+					if (lastVisibleIndex >= rows.length - 1) {
+						return inWindow;
+					}
+					const result = inWindow.slice();
+					const appendStart = Math.max(tailStartIndex, lastVisibleIndex + 1);
+					for (let i = appendStart; i < rows.length; i += 1) {
+						result.push(rows[i]!);
+					}
+					return result;
+				},
+				{ totalRows: rows.length },
+			),
+		[pinTailRows, rows, windowBottom, windowTop],
+	);
 	const totalContentHeight = headerHeight + totalRowsHeight + footerHeight;
 	// Mirror of `rows` for synchronous reads inside `handleHeightChange`,
 	// updated in a layout effect rather than during render.
@@ -1189,14 +1402,19 @@ function ProgressiveConversationViewport({
 			return;
 		}
 
-		const targetScrollTop = Math.max(
-			0,
-			totalContentHeight - scrollParent.clientHeight,
-		);
+		// Phase 2 / Goal #3b / iter 1:
+		// Read clientHeight ONCE and reuse. The previous implementation read
+		// it twice: once to compute targetScrollTop and again inside the
+		// setCommittedScrollState object literal. Between the two reads we
+		// write `scrollTop = targetScrollTop`, which invalidates the layout
+		// cache — so the second read becomes a NEW forced layout flush on
+		// top of the first. Caching the value eliminates the second flush.
+		const clientHeight = scrollParent.clientHeight;
+		const targetScrollTop = Math.max(0, totalContentHeight - clientHeight);
 		scrollParent.scrollTop = targetScrollTop;
 		setCommittedScrollState({
 			scrollTop: targetScrollTop,
-			viewportHeight: scrollParent.clientHeight,
+			viewportHeight: clientHeight,
 		});
 		initialScrollAppliedRef.current = true;
 	}, [scrollParent, totalContentHeight]);
@@ -1206,7 +1424,24 @@ function ProgressiveConversationViewport({
 			return;
 		}
 
-		scrollParent.scrollTop += pendingScrollAdjustmentRef.current;
+		// Phase 2 / Goal #1.5 / iter 5:
+		// `pendingScrollAdjustment` was originally written to compensate for
+		// height corrections to rows above the viewport, so visible content
+		// stayed put as estimator → measured deltas applied. The problem:
+		// when the user has scrolled UP to view history, those same height
+		// corrections (firing for newly-mounted rows in the overscan buffer
+		// above the visible window) snap the scroll position back DOWN —
+		// the user-visible "scrollbar moves up then snaps back" jitter
+		// captured in the Phase 1.5 jitter detector.
+		//
+		// Fix: only apply the accumulated adjustment if the user has NOT
+		// actively scrolled away from the bottom in this session. Once the
+		// user has scrolled up, accumulated adjustments are discarded —
+		// visible content may shift slightly as out-of-view rows resize, but
+		// the user's chosen scroll position is preserved.
+		if (!hasUserScrolledRef.current) {
+			scrollParent.scrollTop += pendingScrollAdjustmentRef.current;
+		}
 		pendingScrollAdjustmentRef.current = 0;
 	}, [rows, scrollParent]);
 
@@ -1223,6 +1458,17 @@ function ProgressiveConversationViewport({
 				return;
 			}
 
+			// WKWebView makes row-height corrections visible when they land during an
+			// active upward scroll: the viewport keeps moving, but rows above and
+			// inside the realized window get recomputed mid-gesture, which shows up as
+			// periodic “mini snap-backs”. Keep the newest measured heights buffered
+			// while the user is actively scrolling through history, then flush them
+			// once scroll has been idle for a short moment.
+			if (isTauri && hasUserScrolledRef.current && isUserScrollingRef.current) {
+				deferredMeasuredHeightsRef.current[rowKey] = roundedHeight;
+				return;
+			}
+
 			if (scrollParent && row.top + headerHeight < scrollParent.scrollTop) {
 				pendingScrollAdjustmentRef.current += roundedHeight - previousHeight;
 			}
@@ -1233,7 +1479,7 @@ function ProgressiveConversationViewport({
 				}));
 			});
 		},
-		[headerHeight, scrollParent],
+		[headerHeight, isTauri, scrollParent],
 	);
 
 	if (data.length === 0) {
@@ -1256,9 +1502,11 @@ function ProgressiveConversationViewport({
 				{visibleRows.map((row) => (
 					<MeasuredConversationRow
 						key={row.key}
+						disableContentVisibility={isTauri}
 						onHeightChange={handleHeightChange}
 						rowKey={row.key}
 						top={row.top}
+						estimatedHeight={row.height}
 					>
 						{itemContent(row.index, row.message)}
 					</MeasuredConversationRow>
@@ -1271,11 +1519,15 @@ function ProgressiveConversationViewport({
 
 function MeasuredConversationRow({
 	children,
+	disableContentVisibility,
+	estimatedHeight,
 	onHeightChange,
 	rowKey,
 	top,
 }: {
 	children: ReactNode;
+	disableContentVisibility: boolean;
+	estimatedHeight: number;
 	onHeightChange: (rowKey: string, nextHeight: number) => void;
 	rowKey: string;
 	top: number;
@@ -1288,27 +1540,44 @@ function MeasuredConversationRow({
 			return;
 		}
 
-		const reportHeight = () => {
-			onHeightChange(rowKey, node.offsetHeight);
-		};
+		// Phase 2 / Goal #1 / iter 1 (variant A — re-applied after Goal #1.5):
+		// Mount-time sync read keeps the initial snap-to-bottom correct. The
+		// RO callback uses borderBoxSize to avoid the per-fire forced reflow
+		// that dominated the Phase 1 trace.
+		onHeightChange(rowKey, node.offsetHeight);
 
-		reportHeight();
 		if (typeof ResizeObserver === "undefined") {
 			return;
 		}
 
-		const observer = new ResizeObserver(reportHeight);
+		const observer = new ResizeObserver((entries) => {
+			for (const entry of entries) {
+				const box = entry.borderBoxSize?.[0];
+				const height = box ? box.blockSize : entry.contentRect.height;
+				if (height < 1) continue;
+				onHeightChange(rowKey, height);
+			}
+		});
 		observer.observe(node);
 		return () => {
 			observer.disconnect();
 		};
 	}, [onHeightChange, rowKey]);
 
+	// Phase 2 / Goal #3a / iter 3:
+	// Per-row contain-intrinsic-size based on the estimator's predicted
+	// height, not a static 100px placeholder. Static 100px caused CLS=0.37
+	// because the browser laid out offscreen rows as 100px tall and then
+	// shifted everything when the real content took ~280 px.
+	const intrinsicSize = `auto ${Math.max(24, Math.round(estimatedHeight))}px`;
 	return (
 		<div
 			ref={rowRef}
 			style={{
-				...conversationRowIsolationStyle,
+				...(disableContentVisibility
+					? conversationRowIsolationStyle
+					: measuredRowIsolationStyle),
+				containIntrinsicSize: intrinsicSize,
 				left: 0,
 				position: "absolute",
 				right: 0,
@@ -1327,6 +1596,37 @@ function MeasuredConversationRow({
 const conversationRowIsolationStyle = {
 	contain: "paint",
 	isolation: "isolate",
+} as const;
+
+// Phase 2 / Goal #3a / iter 2: re-attempt content-visibility: auto.
+//
+// Goal #3a iter 1 (transform: translateY) targeted the wrong cause — the
+// 800-element style recalc on workspace switch is driven by INITIAL style
+// computation of newly-mounted descendants, not by re-applying inline style
+// on existing rows. The right tool is `content-visibility: auto`, which
+// tells the browser to skip layout/paint/style recalc for off-screen
+// descendants entirely.
+//
+// We previously tried this in Phase 2 Goal #1 iter 4 v2 and had to revert
+// because the off-screen → on-screen transition caused apparent scroll
+// jitter. That jitter came from pendingScrollAdjustment firing on the
+// height-correction cascade as newly-mounted rows reported their
+// measurements. Goal #1.5 iter 5 v7 now gates pendingScrollAdjustment by
+// `hasUserScrolledRef` — once the user has done anything, height-correction
+// snap-back is suppressed. The content-visibility jitter should now stay
+// within the narrow pre-interaction window where auto-snap is exactly
+// what the user wants.
+//
+// `contain-intrinsic-size: auto 100px` gives the browser a placeholder
+// height while the row is offscreen. The `auto` keyword remembers the last
+// rendered size, so once a row has been measured at least once, re-visits
+// use the real size. First-time visits use the 100px fallback — matching
+// this against the estimator avoids the large layout shifts we saw with a
+// tiny placeholder in iter4 v1.
+const measuredRowIsolationStyle = {
+	...conversationRowIsolationStyle,
+	contentVisibility: "auto",
+	containIntrinsicSize: "auto 100px",
 } as const;
 
 // NOTE: this stays as a plain function (no React.memo) on purpose — its

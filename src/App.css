@@ -45,16 +45,15 @@ body {
 }
 
 /*
- * Conversation scrollbar entry animation.
+ * Conversation scrollbar entry animation — fires once per app load.
  *
  * The chat <ScrollArea> uses `type="always"`, so the scrollbar is in the
- * tree from the very first frame after a session switch — but we don't want
- * the user to see it during the layout-settling phase (which can briefly
- * place the thumb at a bogus size while measured heights converge). Instead
- * we hold it invisible for 1s, then fade it in gently.
+ * tree from the very first frame. We hold it invisible briefly then fade it
+ * in gently so the user doesn't see the thumb placed at a bogus size while
+ * initial measured heights converge.
  *
- * The animation re-fires on every session switch because <ScrollArea>
- * itself is keyed by sessionId in workspace-panel.tsx.
+ * Note: Phase 2 iter 8 (`09df3fd`) removed the `key={sessionId}` on
+ * <ScrollArea>, so this animation no longer re-fires per session switch.
  */
 .conversation-scroll-area [data-slot="scroll-area-scrollbar"] {
 	animation: conversation-scrollbar-fade-in 300ms ease-out 400ms both;

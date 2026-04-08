@@ -18,7 +18,6 @@ import {
 import {
 	type KeyboardEvent,
 	type MouseEvent,
-	startTransition,
 	useCallback,
 	useEffect,
 	useMemo,
@@ -289,6 +288,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const workspaceSelectionRequestRef = useRef(0);
 	const sessionSelectionRequestRef = useRef(0);
 	const startupPrefetchedWorkspaceRef = useRef<string | null>(null);
+	const warmedWorkspaceIdsRef = useRef<Set<string>>(new Set());
 	const selectedWorkspaceIdRef = useRef<string | null>(null);
 	const selectedSessionIdRef = useRef<string | null>(null);
 	const sessionSelectionHistoryByWorkspaceRef = useRef<
@@ -845,6 +845,44 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		[queryClient],
 	);
 
+	const resolvePreferredSessionId = useCallback(
+		(workspaceId: string) => {
+			const sessionHistory =
+				sessionSelectionHistoryByWorkspaceRef.current[workspaceId] ?? [];
+			const workspaceDetail = queryClient.getQueryData<WorkspaceDetail | null>(
+				helmorQueryKeys.workspaceDetail(workspaceId),
+			);
+			const workspaceSessions =
+				queryClient.getQueryData<WorkspaceSessionSummary[] | undefined>(
+					helmorQueryKeys.workspaceSessions(workspaceId),
+				) ?? [];
+
+			if (workspaceSessions.length > 0) {
+				const sessionIds = new Set(
+					workspaceSessions.map((session) => session.id),
+				);
+				for (let i = sessionHistory.length - 1; i >= 0; i -= 1) {
+					const sessionId = sessionHistory[i];
+					if (sessionIds.has(sessionId)) {
+						return sessionId;
+					}
+				}
+			}
+
+			if (sessionHistory.length > 0) {
+				return sessionHistory[sessionHistory.length - 1] ?? null;
+			}
+
+			return (
+				workspaceDetail?.activeSessionId ??
+				workspaceSessions.find((session) => session.active)?.id ??
+				workspaceSessions[0]?.id ??
+				null
+			);
+		},
+		[queryClient],
+	);
+
 	const primeInitialWorkspaceDisplay = useCallback(
 		async (workspaceId: string) => {
 			await primeWorkspaceDisplay(workspaceId);
@@ -867,6 +905,69 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		});
 	}, [displayedWorkspaceId, primeInitialWorkspaceDisplay, selectedWorkspaceId]);
 
+	useEffect(() => {
+		if (!isIdentityConnected) {
+			return;
+		}
+
+		const candidateWorkspaceIds = flattenWorkspaceRows(
+			workspaceGroups,
+			archivedRows,
+		)
+			.map((row) => row.id)
+			.filter((workspaceId) => workspaceId !== selectedWorkspaceId)
+			.slice(0, 4);
+
+		if (candidateWorkspaceIds.length === 0) {
+			return;
+		}
+
+		let cancelled = false;
+		let timeoutId: number | null = null;
+
+		const warmNext = async (index: number) => {
+			if (cancelled || index >= candidateWorkspaceIds.length) {
+				return;
+			}
+
+			const workspaceId = candidateWorkspaceIds[index];
+			if (!workspaceId || warmedWorkspaceIdsRef.current.has(workspaceId)) {
+				void warmNext(index + 1);
+				return;
+			}
+
+			warmedWorkspaceIdsRef.current.add(workspaceId);
+			try {
+				await primeWorkspaceDisplay(workspaceId);
+			} catch {
+				// Best-effort background warmup only.
+			}
+
+			if (!cancelled) {
+				timeoutId = window.setTimeout(() => {
+					void warmNext(index + 1);
+				}, 150);
+			}
+		};
+
+		timeoutId = window.setTimeout(() => {
+			void warmNext(0);
+		}, 400);
+
+		return () => {
+			cancelled = true;
+			if (timeoutId !== null) {
+				window.clearTimeout(timeoutId);
+			}
+		};
+	}, [
+		archivedRows,
+		isIdentityConnected,
+		primeWorkspaceDisplay,
+		selectedWorkspaceId,
+		workspaceGroups,
+	]);
+
 	const handleSelectWorkspace = useCallback(
 		(workspaceId: string | null) => {
 			if (workspaceId === selectedWorkspaceIdRef.current) {
@@ -877,34 +978,34 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			workspaceSelectionRequestRef.current = requestId;
 			sessionSelectionRequestRef.current += 1;
 			selectedWorkspaceIdRef.current = workspaceId;
-			selectedSessionIdRef.current = null;
+			const immediateSessionId = workspaceId
+				? resolvePreferredSessionId(workspaceId)
+				: null;
+			selectedSessionIdRef.current = immediateSessionId;
 			setSelectedWorkspaceId(workspaceId);
-			setSelectedSessionId(null);
+			setSelectedSessionId(immediateSessionId);
 			if (workspaceId === null) {
-				startTransition(() => {
-					if (workspaceSelectionRequestRef.current !== requestId) {
-						return;
-					}
-
-					setDisplayedWorkspaceId(null);
-					setDisplayedSessionId(null);
-				});
+				if (workspaceSelectionRequestRef.current !== requestId) {
+					return;
+				}
+				setDisplayedWorkspaceId(null);
+				setDisplayedSessionId(null);
 				return;
 			}
+
+			setDisplayedWorkspaceId(workspaceId);
+			setDisplayedSessionId(immediateSessionId);
 
 			const cachedWorkspaceDisplay = resolveCachedWorkspaceDisplay(workspaceId);
 			if (cachedWorkspaceDisplay) {
 				selectedSessionIdRef.current = cachedWorkspaceDisplay.sessionId;
 				rememberSessionSelection(workspaceId, cachedWorkspaceDisplay.sessionId);
 				setSelectedSessionId(cachedWorkspaceDisplay.sessionId);
-				startTransition(() => {
-					if (workspaceSelectionRequestRef.current !== requestId) {
-						return;
-					}
-
-					setDisplayedWorkspaceId(cachedWorkspaceDisplay.workspaceId);
-					setDisplayedSessionId(cachedWorkspaceDisplay.sessionId);
-				});
+				if (workspaceSelectionRequestRef.current !== requestId) {
+					return;
+				}
+				setDisplayedWorkspaceId(cachedWorkspaceDisplay.workspaceId);
+				setDisplayedSessionId(cachedWorkspaceDisplay.sessionId);
 				void queryClient.prefetchQuery(
 					workspaceDetailQueryOptions(workspaceId),
 				);
@@ -925,31 +1026,19 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 						return;
 					}
 
-					startTransition(() => {
-						if (workspaceSelectionRequestRef.current !== requestId) {
-							return;
-						}
-
-						selectedSessionIdRef.current = sessionId;
-						rememberSessionSelection(workspaceId, sessionId);
-						setSelectedSessionId(sessionId);
-						setDisplayedWorkspaceId(workspaceId);
-						setDisplayedSessionId(sessionId);
-					});
+					selectedSessionIdRef.current = sessionId;
+					rememberSessionSelection(workspaceId, sessionId);
+					setSelectedSessionId(sessionId);
+					setDisplayedWorkspaceId(workspaceId);
+					setDisplayedSessionId(sessionId);
 				})
 				.catch(() => {
 					if (workspaceSelectionRequestRef.current !== requestId) {
 						return;
 					}
 
-					startTransition(() => {
-						if (workspaceSelectionRequestRef.current !== requestId) {
-							return;
-						}
-
-						setDisplayedWorkspaceId(workspaceId);
-						setDisplayedSessionId(null);
-					});
+					setDisplayedWorkspaceId(workspaceId);
+					setDisplayedSessionId(null);
 				});
 		},
 		[
@@ -957,6 +1046,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			queryClient,
 			rememberSessionSelection,
 			resolveCachedWorkspaceDisplay,
+			resolvePreferredSessionId,
 		],
 	);
 
@@ -972,13 +1062,10 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			selectedSessionIdRef.current = sessionId;
 			setSelectedSessionId(sessionId);
 			if (sessionId === null) {
-				startTransition(() => {
-					if (sessionSelectionRequestRef.current !== requestId) {
-						return;
-					}
-
-					setDisplayedSessionId(null);
-				});
+				if (sessionSelectionRequestRef.current !== requestId) {
+					return;
+				}
+				setDisplayedSessionId(null);
 				return;
 			}
 
@@ -988,13 +1075,10 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 					"thread",
 				]) !== undefined
 			) {
-				startTransition(() => {
-					if (sessionSelectionRequestRef.current !== requestId) {
-						return;
-					}
-
-					setDisplayedSessionId(sessionId);
-				});
+				if (sessionSelectionRequestRef.current !== requestId) {
+					return;
+				}
+				setDisplayedSessionId(sessionId);
 				void queryClient.prefetchQuery(
 					sessionThreadMessagesQueryOptions(sessionId),
 				);
@@ -1008,26 +1092,14 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 						return;
 					}
 
-					startTransition(() => {
-						if (sessionSelectionRequestRef.current !== requestId) {
-							return;
-						}
-
-						setDisplayedSessionId(sessionId);
-					});
+					setDisplayedSessionId(sessionId);
 				})
 				.catch(() => {
 					if (sessionSelectionRequestRef.current !== requestId) {
 						return;
 					}
 
-					startTransition(() => {
-						if (sessionSelectionRequestRef.current !== requestId) {
-							return;
-						}
-
-						setDisplayedSessionId(sessionId);
-					});
+					setDisplayedSessionId(sessionId);
 				});
 		},
 		[queryClient, rememberSessionSelection],
@@ -1084,11 +1156,9 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			setSelectedSessionId((current) =>
 				current === sessionId ? current : sessionId,
 			);
-			startTransition(() => {
-				setDisplayedSessionId((current) =>
-					current === sessionId ? current : sessionId,
-				);
-			});
+			setDisplayedSessionId((current) =>
+				current === sessionId ? current : sessionId,
+			);
 		},
 		[rememberSessionSelection],
 	);
