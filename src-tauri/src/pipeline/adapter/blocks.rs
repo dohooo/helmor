@@ -6,10 +6,13 @@
 //! document parsing, server-tool result attachment, and the lookahead
 //! merge that pairs `tool_result` payloads with their owning `tool_use`.
 
+use std::collections::HashMap;
+
 use serde_json::Value;
 
 use crate::pipeline::types::{
-    ExtendedMessagePart, ImageSource, MessagePart, StreamingStatus, TodoItem, TodoStatus,
+    ExtendedMessagePart, ImageSource, IntermediateMessage, MessagePart, StreamingStatus,
+    ThreadMessageLike, TodoItem, TodoStatus,
 };
 
 pub(super) fn parse_assistant_parts(parsed: Option<&Value>) -> Vec<MessagePart> {
@@ -130,7 +133,6 @@ pub(super) fn parse_assistant_parts(parsed: Option<&Value>) -> Vec<MessagePart> 
                     args_text,
                     result: None,
                     is_error: None,
-                    tool_use_result: None,
                     streaming_status: stream_status,
                     children: Vec::new(),
                 });
@@ -161,15 +163,12 @@ struct ToolResultEntry {
     tool_use_id: String,
     content: String,
     is_error: Option<bool>,
-    tool_use_result: Option<Value>,
 }
 
 /// Parse tool_result blocks from a `type=user` payload. Returns None if the
 /// payload is not a pure tool_result message.
 fn extract_tool_results(parsed: Option<&Value>) -> Option<Vec<ToolResultEntry>> {
     let parsed = parsed?;
-    // `tool_use_result` lives on the SDKUserMessage envelope, not inside content[].
-    let envelope_tool_use_result = parsed.get("tool_use_result").cloned();
     let msg = parsed.get("message").and_then(|v| v.as_object());
     let blocks = msg.and_then(|m| m.get("content")).and_then(Value::as_array);
     let blocks = match blocks {
@@ -199,17 +198,10 @@ fn extract_tool_results(parsed: Option<&Value>) -> Option<Vec<ToolResultEntry>> 
                 Some(true) => Some(true),
                 _ => None,
             };
-            // Skip the envelope on success — it duplicates `content` as kilobytes of stdout.
-            let tool_use_result = if is_error.is_some() {
-                envelope_tool_use_result.clone()
-            } else {
-                None
-            };
             results.push(ToolResultEntry {
                 tool_use_id,
                 content,
                 is_error,
-                tool_use_result,
             });
         } else if block_type == "text" {
             let text = obj.get("text").and_then(Value::as_str).unwrap_or("");
@@ -238,14 +230,12 @@ pub(super) fn merge_tool_results(parsed: Option<&Value>, target_parts: &mut [Mes
                 tool_call_id,
                 result,
                 is_error,
-                tool_use_result,
                 ..
             } = part
             {
                 if *tool_call_id == entry.tool_use_id {
                     *result = Some(Value::String(entry.content));
                     *is_error = entry.is_error;
-                    *tool_use_result = entry.tool_use_result;
                     break;
                 }
             }
@@ -271,20 +261,108 @@ pub(super) fn merge_tool_results_extended(
                 tool_call_id,
                 result,
                 is_error,
-                tool_use_result,
                 ..
             }) = part
             {
                 if *tool_call_id == entry.tool_use_id {
                     *result = Some(Value::String(entry.content));
                     *is_error = entry.is_error;
-                    *tool_use_result = entry.tool_use_result;
                     break;
                 }
             }
         }
     }
     true
+}
+
+/// Late-merge any unresolved ToolCalls in `out` against tool_result blocks
+/// scattered anywhere in the input. The lookahead-based merge in
+/// `convert_flat` only walks forward from the parent assistant until it
+/// hits a non-system non-user message — which means a parent Task tool's
+/// `tool_result` (delivered AFTER all subagent child messages) never gets
+/// merged. This pass closes that gap by indexing every tool_result by
+/// `tool_use_id` and patching any ToolCall that's still missing a `result`.
+pub(super) fn late_merge_unresolved_tool_results(
+    messages: &[IntermediateMessage],
+    out: &mut [ThreadMessageLike],
+) {
+    // Cheap precheck — if every ToolCall already has a result, skip the
+    // input scan entirely. This is the streaming hot path: most ticks
+    // touch one short message with all tool_results already merged inline.
+    let any_unresolved = out.iter().any(|m| {
+        m.content.iter().any(|p| {
+            matches!(
+                p,
+                ExtendedMessagePart::Basic(MessagePart::ToolCall { result: None, .. })
+            )
+        })
+    });
+    if !any_unresolved {
+        return;
+    }
+
+    let mut index: HashMap<String, ToolResultPatch> = HashMap::new();
+    for msg in messages {
+        let Some(parsed) = msg.parsed.as_ref() else {
+            continue;
+        };
+        let Some(blocks) = parsed
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        for b in blocks {
+            let Some(obj) = b.as_object() else { continue };
+            if obj.get("type").and_then(Value::as_str) != Some("tool_result") {
+                continue;
+            }
+            let Some(id) = obj.get("tool_use_id").and_then(Value::as_str) else {
+                continue;
+            };
+            let content = extract_tool_result_content(obj.get("content"));
+            let is_error = match obj.get("is_error").and_then(Value::as_bool) {
+                Some(true) => Some(true),
+                _ => None,
+            };
+            // First-write wins — the SDK occasionally re-emits the same
+            // tool_use_id (retries, partial replays); the earliest entry
+            // matches the chronological tool_use the user actually saw.
+            index
+                .entry(id.to_string())
+                .or_insert(ToolResultPatch { content, is_error });
+        }
+    }
+
+    if index.is_empty() {
+        return;
+    }
+
+    for msg in out.iter_mut() {
+        for part in msg.content.iter_mut() {
+            if let ExtendedMessagePart::Basic(MessagePart::ToolCall {
+                tool_call_id,
+                result,
+                is_error,
+                ..
+            }) = part
+            {
+                if result.is_some() {
+                    continue;
+                }
+                if let Some(patch) = index.get(tool_call_id) {
+                    *result = Some(Value::String(patch.content.clone()));
+                    *is_error = patch.is_error;
+                }
+            }
+        }
+    }
+}
+
+struct ToolResultPatch {
+    content: String,
+    is_error: Option<bool>,
 }
 
 fn extract_tool_result_content(content: Option<&Value>) -> String {

@@ -937,7 +937,6 @@ export type ToolCallPart = {
 	argsText: string;
 	result?: unknown;
 	isError?: boolean;
-	toolUseResult?: unknown;
 	streamingStatus?: StreamingStatus;
 	/**
 	 * Sub-agent work folded in by the Rust pipeline's grouping pass for

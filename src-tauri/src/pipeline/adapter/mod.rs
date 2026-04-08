@@ -28,7 +28,10 @@ use serde_json::Value;
 pub(crate) const PROMPT_TOOL_NAME: &str = "Prompt";
 pub(crate) const AGENT_TOOL_NAMES: &[&str] = &["Agent", "Task"];
 
-use blocks::{merge_tool_results, merge_tool_results_extended, parse_assistant_parts};
+use blocks::{
+    late_merge_unresolved_tool_results, merge_tool_results, merge_tool_results_extended,
+    parse_assistant_parts,
+};
 use grouping::{convert_user_message, group_child_messages, merge_adjacent_assistants};
 use labels::{
     build_error_label, build_rate_limit_notice, build_result_label, build_subagent_notice,
@@ -326,6 +329,12 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
         i += 1;
     }
 
+    // Late-merge: parent Task/Agent tool_results live AFTER all subagent
+    // child messages, so the per-message lookahead above breaks before
+    // reaching them. This pass walks the input one more time and patches
+    // any ToolCall still missing a `result`.
+    late_merge_unresolved_tool_results(messages, &mut result);
+
     result
 }
 
@@ -379,7 +388,6 @@ fn convert_user_type_msg(
                     args_text,
                     result: None,
                     is_error: None,
-                    tool_use_result: None,
                     streaming_status: None,
                     children: Vec::new(),
                 })],

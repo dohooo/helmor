@@ -89,7 +89,6 @@ input_file: tests/fixtures/pipeline/schedule_fetch/input.json
           argsText: "{\"file_path\":\"/Users/liangeqiang/.conductor/workspaces/hdcode/austin/hd-ai-center/apis/aicenterapi/api/chat/chat.api\"}"
           result: "File content (15259 tokens) exceeds maximum allowed tokens (10000). Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file."
           isError: true
-          toolUseResult: "Error: File content (15259 tokens) exceeds maximum allowed tokens (10000). Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file."
         - type: system-notice
           severity: info
           label: Subagent progress

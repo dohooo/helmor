@@ -20,9 +20,9 @@ expression: run_normalized(msgs)
       args_keys:
         - description
       args_text_length: 34
-      has_result: false
-      result_kind: ~
-      result_preview: ~
+      has_result: true
+      result_kind: string
+      result_preview: done
       streaming_status: ~
       children_count: 1
       children:

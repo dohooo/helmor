@@ -1847,7 +1847,6 @@ function ChatAssistantMessage({
 							args={part.args}
 							result={part.result}
 							isError={(part as ToolCallPart).isError}
-							toolUseResult={(part as ToolCallPart).toolUseResult}
 							streamingStatus={(part as ToolCallPart).streamingStatus}
 							childParts={(part as ToolCallPart).children}
 						/>
@@ -2150,7 +2149,6 @@ type AssistantToolCallProps = {
 	args: Record<string, unknown>;
 	result?: unknown;
 	isError?: boolean;
-	toolUseResult?: unknown;
 	streamingStatus?: string;
 	/** Compact mode — used by `AgentChildrenBlock`'s tail preview.
 	 *  Strips the `<details>` wrapper and output panel so every row
@@ -2182,7 +2180,6 @@ export function assistantToolCallPropsEqual(
 		prev.streamingStatus === next.streamingStatus &&
 		prev.result === next.result &&
 		prev.isError === next.isError &&
-		prev.toolUseResult === next.toolUseResult &&
 		prev.compact === next.compact &&
 		// `childParts` MUST be in the comparator. When a sibling subagent's
 		// children grow, `shareMessages` rebuilds the parent message ref and
@@ -2211,7 +2208,6 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 	args,
 	result,
 	isError,
-	toolUseResult,
 	streamingStatus,
 	compact = false,
 	childParts,
@@ -2327,6 +2323,7 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 				toolName={toolName}
 				toolArgs={args}
 				streamingStatus={streamingStatus}
+				isRunning={result == null}
 				parts={childParts}
 			/>
 		);
@@ -2410,64 +2407,135 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 					</div>
 				) : null}
 			</details>
-			{isError === true ? (
-				<ToolCallErrorRow result={result} toolUseResult={toolUseResult} />
-			) : null}
+			{isError === true ? <ToolCallErrorRow result={result} /> : null}
 		</>
 	);
 }, assistantToolCallPropsEqual);
 
-function ToolCallErrorRow({
-	result,
-	toolUseResult,
-}: {
-	result: unknown;
-	toolUseResult: unknown;
-}) {
-	const body = useMemo(
-		() => extractToolErrorBody(toolUseResult, result),
-		[toolUseResult, result],
-	);
-	if (!body) return null;
+function ToolCallErrorRow({ result }: { result: unknown }) {
+	const error = useMemo(() => extractToolError(result), [result]);
+	const [open, setOpen] = useState(false);
+	if (!error) return null;
+	const { exitCode, preview, full } = error;
+	const expandable = full != null;
 	return (
-		<div className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-negative">
-			<AlertCircle className="size-3.5 shrink-0" strokeWidth={1.8} />
-			<span className="shrink-0 font-medium">Error</span>
-			<code className="truncate rounded bg-app-negative/10 px-1.5 py-0.5 font-mono text-[11px]">
-				{body}
-			</code>
-		</div>
+		<details
+			className="group/err flex flex-col"
+			onToggle={(event) => {
+				setOpen(event.currentTarget.open);
+			}}
+			open={open}
+		>
+			<summary
+				className={cn(
+					"flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-negative [&::-webkit-details-marker]:hidden",
+					expandable ? "cursor-pointer" : "cursor-default",
+				)}
+			>
+				<AlertCircle className="size-3.5 shrink-0" strokeWidth={1.8} />
+				<span className="shrink-0 font-medium">Error</span>
+				{exitCode != null ? (
+					<code className="shrink-0 rounded bg-app-negative/10 px-1.5 py-0.5 font-mono text-[11px]">
+						Exit code {exitCode}
+					</code>
+				) : null}
+				{preview ? (
+					<span className="min-w-0 truncate font-mono text-[11px] text-app-negative/80">
+						{preview}
+					</span>
+				) : null}
+				{expandable ? (
+					<span className="shrink-0 cursor-pointer text-app-negative/40 hover:text-app-negative">
+						<svg
+							className="size-2.5 group-open/err:rotate-90"
+							viewBox="0 0 12 12"
+							fill="none"
+						>
+							<path
+								d="M4.5 2.5L8.5 6L4.5 9.5"
+								stroke="currentColor"
+								strokeWidth="1.5"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+							/>
+						</svg>
+					</span>
+				) : null}
+			</summary>
+			{expandable && open ? (
+				<div className="mt-0.5 max-h-[16rem] overflow-auto rounded-md border border-app-negative/15 bg-app-negative/[0.05] text-[11px] leading-5">
+					<pre className="whitespace-pre-wrap break-words p-1.5 text-app-negative/80">
+						{full!.slice(0, 4000)}
+						{full!.length > 4000 ? "…" : ""}
+					</pre>
+				</div>
+			) : null}
+		</details>
 	);
 }
 
-function extractToolErrorBody(
-	toolUseResult: unknown,
-	result: unknown,
-): string | null {
-	let prefix: string | null = null;
-	let body: string | null = null;
-	if (isObj(toolUseResult)) {
-		const ec = toolUseResult.exit_code;
-		if (typeof ec === "number" && ec !== 0) {
-			prefix = `Exit code ${ec}`;
+type ToolError = {
+	/** Non-zero exit code parsed from a leading `Exit code N` line (Bash). */
+	exitCode: number | null;
+	/** First non-empty line of the error body, capped to ~120 chars. */
+	preview: string | null;
+	/** Full error body for the expanded panel; null when there's nothing to drill into. */
+	full: string | null;
+};
+
+// Matches Claude's `Exit code 128\n...` and Codex's `Exit code: 128\n...`.
+const EXIT_CODE_RE = /^Exit code:?\s+(\d+)\s*\n?/;
+// Some Read/Edit failures wrap the error text in <tool_use_error>...</tool_use_error>.
+const TOOL_USE_ERROR_RE = /^<tool_use_error>([\s\S]*)<\/tool_use_error>$/;
+
+/**
+ * Pull a structured error out of `MessagePart::ToolCall.result` (Rust side).
+ *
+ * `result` is always a string in the error path — it's the verbatim
+ * `tool_result.content` from the SDK, which is exactly what the model sees.
+ * We parse two embedded affordances:
+ *   1. Bash failures prefix the body with `Exit code N\n` — pulled out as a chip.
+ *   2. Read/Edit/etc. SDK errors sometimes wrap the body in
+ *      `<tool_use_error>...</tool_use_error>` — strip that wrapper.
+ */
+function extractToolError(result: unknown): ToolError | null {
+	if (typeof result !== "string") return null;
+	let body = result.trim();
+	if (!body) return null;
+
+	let exitCode: number | null = null;
+	const exitMatch = body.match(EXIT_CODE_RE);
+	if (exitMatch) {
+		const parsed = Number.parseInt(exitMatch[1], 10);
+		if (Number.isFinite(parsed) && parsed !== 0) {
+			exitCode = parsed;
 		}
-		body =
-			str(toolUseResult.stderr) ??
-			str(toolUseResult.error) ??
-			str(toolUseResult.stdout) ??
-			null;
-	} else if (typeof toolUseResult === "string") {
-		body = toolUseResult.trim() || null;
+		body = body.slice(exitMatch[0].length).trim();
 	}
-	if (!body && typeof result === "string") {
-		body = result.trim() || null;
+
+	const wrapMatch = body.match(TOOL_USE_ERROR_RE);
+	if (wrapMatch) {
+		body = wrapMatch[1].trim();
 	}
-	const combined = prefix && body ? `${prefix} ${body}` : (prefix ?? body);
-	if (!combined) return null;
-	// Strip leading "Error:" so we don't render "Error  Error: File not found".
-	const cleaned = combined.replace(/^Error:\s*/i, "");
-	const oneLine = cleaned.split("\n", 2)[0] ?? cleaned;
-	return truncate(oneLine, 120);
+
+	// Defensive: strip a leading `Error:` so we don't render "Error  Error: ...".
+	body = body.replace(/^Error:\s*/i, "").trim();
+
+	if (exitCode == null && !body) return null;
+	const preview = body ? previewLine(body) : null;
+	return {
+		exitCode,
+		preview,
+		full: body.length > 0 ? body : null,
+	};
+}
+
+function previewLine(text: string): string {
+	for (const line of text.split("\n")) {
+		const trimmed = line.trim();
+		if (trimmed) return truncate(trimmed, 120);
+	}
+	return truncate(text, 120);
 }
 
 /**
@@ -2497,6 +2565,9 @@ type AgentChildrenBlockProps = {
 	toolName: string;
 	toolArgs: Record<string, unknown>;
 	streamingStatus?: string;
+	// True until the Task tool's tool_result arrives. Distinct from
+	// `streamingStatus` (which only covers the input-streaming phase).
+	isRunning?: boolean;
 	parts: ExtendedMessagePart[];
 };
 
@@ -2516,6 +2587,7 @@ export function agentChildrenBlockPropsEqual(
 	return (
 		prev.toolName === next.toolName &&
 		prev.streamingStatus === next.streamingStatus &&
+		prev.isRunning === next.isRunning &&
 		// Content-aware compare so a parent message rebuild that produces
 		// a fresh-but-content-identical `parts` reference doesn't cascade
 		// into a useless re-render of all visible compact tool-calls.
@@ -2553,10 +2625,11 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 	toolName,
 	toolArgs,
 	streamingStatus,
+	isRunning,
 	parts,
 }: AgentChildrenBlockProps) {
 	const [expanded, setExpanded] = useState(false);
-	const streaming = !!streamingStatus;
+	const streaming = !!streamingStatus || !!isRunning;
 	const info = getToolInfo(toolName, toolArgs);
 
 	// Filter down to tool-call parts so text/reasoning/todo don't
@@ -2654,7 +2727,6 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 									args={part.args ?? {}}
 									result={part.result}
 									isError={part.isError}
-									toolUseResult={part.toolUseResult}
 									compact={!expanded}
 									childParts={part.children}
 								/>
@@ -2752,7 +2824,6 @@ function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 							args={tool.args}
 							result={tool.result}
 							isError={tool.isError}
-							toolUseResult={tool.toolUseResult}
 						/>
 					))}
 				</div>

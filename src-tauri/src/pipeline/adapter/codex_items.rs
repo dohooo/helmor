@@ -81,19 +81,9 @@ fn render_command_execution(
     };
     let args = serde_json::json!({"command": command});
     let args_text = serde_json::to_string(&args).unwrap_or_default();
-    // Codex has no `is_error`; derive from exit_code. Synthesize a Bash-shaped
-    // tool_use_result so the frontend's stderr fallback path picks it up.
+    // Codex has no `is_error`; derive from exit_code. The frontend parses
+    // `Exit code N\n...` out of `result` directly.
     let failed = exit_code != 0;
-    let tool_use_result_value = if failed {
-        Some(serde_json::json!({
-            "exit_code": exit_code,
-            "stdout": "",
-            "stderr": output,
-            "aggregated_output": output,
-        }))
-    } else {
-        None
-    };
 
     result.push(ThreadMessageLike {
         role: MessageRole::Assistant,
@@ -106,7 +96,6 @@ fn render_command_execution(
             args_text,
             result: Some(Value::String(result_text)),
             is_error: if failed { Some(true) } else { None },
-            tool_use_result: tool_use_result_value,
             streaming_status: None,
             children: Vec::new(),
         })],
@@ -187,7 +176,6 @@ fn render_file_change(
             args_text,
             result: Some(Value::String(result_text)),
             is_error: if failed { Some(true) } else { None },
-            tool_use_result: None,
             streaming_status: None,
             children: Vec::new(),
         })],
@@ -214,7 +202,6 @@ fn render_web_search(msg: &IntermediateMessage, item: &Value, result: &mut Vec<T
             args_text,
             result: Some(Value::String("Search completed".to_string())),
             is_error: None,
-            tool_use_result: None,
             streaming_status: None,
             children: Vec::new(),
         })],
@@ -263,7 +250,6 @@ fn render_mcp_tool_call(
             args_text,
             result: Some(Value::String(result_text)),
             is_error: if failed { Some(true) } else { None },
-            tool_use_result: None,
             streaming_status: None,
             children: Vec::new(),
         })],
