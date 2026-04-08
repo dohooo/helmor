@@ -611,14 +611,16 @@ pub fn refresh_remote_and_realign(
         return Ok(false);
     }
 
-    // Now hold the mutation lock for the re-verification + reset, so we don't
-    // race with another command (e.g. another switch, archive, restore).
+    // Now hold the per-workspace mutation lock for the re-verification + reset,
+    // so we don't race with another command on the same workspace (e.g. another
+    // switch, archive, restore).
     //
     // We use `blocking_lock()` instead of `.lock().await` because this function
     // is called from a background `std::thread::spawn`'d worker — there is no
     // Tokio runtime context here. `blocking_lock()` would panic if called from
     // a runtime worker thread, but it works correctly from a vanilla std thread.
-    let _lock = db::WORKSPACE_MUTATION_LOCK.blocking_lock();
+    let ws_lock = db::workspace_mutation_lock(workspace_id);
+    let _lock = ws_lock.blocking_lock();
 
     // Re-load record under the lock; abort if state changed.
     let Some(fresh_record) = load_workspace_record_by_id(workspace_id)? else {

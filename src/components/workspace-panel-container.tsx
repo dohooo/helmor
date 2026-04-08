@@ -3,8 +3,12 @@ import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type {
 	CollapsedGroupPart,
 	ExtendedMessagePart,
+	ImagePart,
 	MessagePart,
+	PromptSuggestionPart,
+	SystemNoticePart,
 	ThreadMessageLike,
+	TodoListPart,
 	ToolCallPart,
 } from "@/lib/api";
 
@@ -97,8 +101,46 @@ function partStructurallyEqual(
 			}
 			return true;
 		}
-		default:
-			return false;
+		case "system-notice": {
+			const sb = b as SystemNoticePart;
+			return (
+				a.severity === sb.severity && a.label === sb.label && a.body === sb.body
+			);
+		}
+		case "todo-list": {
+			const tb = b as TodoListPart;
+			if (a.items.length !== tb.items.length) return false;
+			for (let i = 0; i < a.items.length; i += 1) {
+				if (
+					a.items[i]!.text !== tb.items[i]!.text ||
+					a.items[i]!.status !== tb.items[i]!.status
+				)
+					return false;
+			}
+			return true;
+		}
+		case "image": {
+			const ib = b as ImagePart;
+			if (a.mediaType !== ib.mediaType) return false;
+			if (a.source.kind !== ib.source.kind) return false;
+			if (a.source.kind === "base64") {
+				return a.source.data === (ib.source as typeof a.source).data;
+			}
+			return (
+				(a.source as { url: string }).url === (ib.source as { url: string }).url
+			);
+		}
+		case "prompt-suggestion": {
+			const pb = b as PromptSuggestionPart;
+			return a.text === pb.text;
+		}
+		default: {
+			// Exhaustiveness check — if a new part type is added to
+			// ExtendedMessagePart but not handled here, TypeScript will
+			// error on the following line.
+			const _exhaustive: never = a;
+			return _exhaustive === b;
+		}
 	}
 }
 
