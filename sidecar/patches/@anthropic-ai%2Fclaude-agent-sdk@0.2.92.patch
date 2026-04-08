@@ -1,0 +1,15 @@
+diff --git a/node_modules/@anthropic-ai/claude-agent-sdk/tempfile.js b/tempfile.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..a73f6dd9471a726aaa3fd648d0f87b2074dcfe76
+--- /dev/null
++++ b/tempfile.js
+@@ -0,0 +1,9 @@
++// Restored stub for `extractFromBunfs.js` — `@anthropic-ai/claude-agent-sdk`
++// 0.2.92 (and 0.2.96) ship `extractFromBunfs.js` which references this file
++// via `import { tmpdir } from './tempfile.js'`, but the package's `files`
++// list omits it, so the import fails at runtime as soon as anything pulls in
++// the SDK's bun-standalone-binary embed helper.
++//
++// The function only needs to return a writable directory path; Node's
++// `os.tmpdir()` matches what the SDK's own implementation does.
++export { tmpdir } from "node:os";

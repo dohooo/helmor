@@ -10,6 +10,15 @@ import {
 	type SDKMessage,
 	type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+// `@anthropic-ai/claude-agent-sdk/embed` is the SDK's bun-standalone-binary
+// helper. In dev (`bun run src/index.ts`) it returns the real on-disk path
+// to `cli.js` inside `node_modules`. After `bun build --compile` Bun embeds
+// `cli.js` into the binary's `$bunfs` virtual FS, and the helper extracts it
+// to a tmpdir at module load time so it can be spawned as a subprocess —
+// child processes have no access to the parent's `$bunfs`. Without this
+// the release sidecar fails every `query()` with
+// "Claude Code executable not found at /$bunfs/root/cli.js".
+import claudeCliPath from "@anthropic-ai/claude-agent-sdk/embed";
 import { isAbortError } from "./abort.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { parseImageRefs } from "./images.js";
@@ -160,6 +169,7 @@ export class ClaudeSessionManager implements SessionManager {
 			prompt: promptValue,
 			options: {
 				abortController,
+				pathToClaudeCodeExecutable: claudeCliPath,
 				cwd: cwd || undefined,
 				model: model || undefined,
 				...(resume ? { resume } : {}),
@@ -215,6 +225,7 @@ export class ClaudeSessionManager implements SessionManager {
 			prompt: buildTitlePrompt(userMessage),
 			options: {
 				abortController,
+				pathToClaudeCodeExecutable: claudeCliPath,
 				model: "haiku",
 				permissionMode: "plan",
 				allowDangerouslySkipPermissions: true,
@@ -279,6 +290,7 @@ export class ClaudeSessionManager implements SessionManager {
 			prompt: promptIter,
 			options: {
 				abortController,
+				pathToClaudeCodeExecutable: claudeCliPath,
 				cwd: cwd || undefined,
 				model: model || undefined,
 				permissionMode: "bypassPermissions",
