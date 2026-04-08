@@ -45,16 +45,18 @@ body {
 }
 
 /*
- * Conversation scrollbar entry animation.
+ * Conversation scrollbar entry animation — fires once per app load.
  *
  * The chat <ScrollArea> uses `type="always"`, so the scrollbar is in the
- * tree from the very first frame after a session switch — but we don't want
- * the user to see it during the layout-settling phase (which can briefly
- * place the thumb at a bogus size while measured heights converge). Instead
- * we hold it invisible for 1s, then fade it in gently.
+ * tree from the very first frame. We hold it invisible briefly then fade it
+ * in gently so the user doesn't see the thumb placed at a bogus size while
+ * initial measured heights converge.
  *
- * The animation re-fires on every session switch because <ScrollArea>
- * itself is keyed by sessionId in workspace-panel.tsx.
+ * Note: Phase 2 iter 8 (`09df3fd`) removed the `key={sessionId}` on
+ * <ScrollArea>, so this animation no longer re-fires per session switch.
+ * The per-switch scrollbar hide is handled instead by the
+ * `.is-session-settling` class below, which is toggled for the duration of
+ * the Phase 3 stabilization rAF loop in ChatThread.
  */
 .conversation-scroll-area [data-slot="scroll-area-scrollbar"] {
 	animation: conversation-scrollbar-fade-in 300ms ease-out 400ms both;
@@ -69,6 +71,23 @@ body {
 		opacity: 1;
 	}
 }
+
+/*
+ * Phase 3 / iter 1: session-switch stabilization shield.
+ *
+ * The shield itself is applied via an inline style on the ScrollArea root
+ * (see `isSessionSettling` in `ChatThread`) — the whole ScrollArea goes to
+ * `opacity: 0` while ChatThread's rAF loop re-snaps `scrollTop` to the
+ * bottom across the Streamdown lazy-hydration + estimator-correction
+ * cascade, then fades back to `opacity: 1` once scrollHeight has been
+ * stable for several frames. We keep the transition in inline style so the
+ * fade-in has a predictable 120 ms hand-off regardless of CSS layer order.
+ *
+ * Using inline style (instead of a `.is-session-settling` CSS class)
+ * deliberately avoids the biome `noDescendingSpecificity` cascade
+ * interaction with the `@media (prefers-reduced-motion)` universal
+ * selectors lower in this file.
+ */
 
 .conversation-thread-enter {
 	animation: conversation-fade-in 70ms ease-out;
