@@ -21,7 +21,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { type Dirent, readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { SlashCommandInfo } from "./session-manager.js";
@@ -189,24 +189,16 @@ export async function scanCodexSkills(
 	const seen = new Set<string>();
 
 	for (const root of skillRoots(cwd)) {
-		let entries: string[];
+		let dirents: Dirent[];
 		try {
-			const st = await stat(root);
-			if (!st.isDirectory()) continue;
-			entries = await readdir(root);
+			dirents = await readdir(root, { withFileTypes: true });
 		} catch {
 			continue;
 		}
 
-		for (const entry of entries) {
-			const skillDir = path.join(root, entry);
-			let isDir = false;
-			try {
-				isDir = (await stat(skillDir)).isDirectory();
-			} catch {
-				continue;
-			}
-			if (!isDir) continue;
+		for (const dirent of dirents) {
+			if (!dirent.isDirectory()) continue;
+			const skillDir = path.join(root, dirent.name);
 
 			const info = await readSkillDir(skillDir);
 			if (!info) continue;

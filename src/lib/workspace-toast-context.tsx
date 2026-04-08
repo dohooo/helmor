@@ -14,7 +14,14 @@ export type PushWorkspaceToast = (
 	opts?: WorkspaceToastOptions,
 ) => void;
 
-const noop: PushWorkspaceToast = () => {};
+const noop: PushWorkspaceToast = import.meta.env.DEV
+	? (description) => {
+			console.warn(
+				"useWorkspaceToast() called outside <WorkspaceToastProvider>. Toast silently dropped:",
+				description,
+			);
+		}
+	: () => {};
 
 const WorkspaceToastContext = createContext<PushWorkspaceToast>(noop);
 
