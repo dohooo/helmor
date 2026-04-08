@@ -132,6 +132,14 @@ struct StreamIdQuery {
     stream_id: String,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListSlashCommandsQuery {
+    provider: String,
+    working_directory: Option<String>,
+    model_id: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // SSE stream wrapper
 // ---------------------------------------------------------------------------
@@ -409,9 +417,23 @@ mod handlers {
         }
     }
 
+    pub async fn validate_archive_workspace(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::validate_archive_workspace(&q.id) {
+            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
     pub async fn restore_workspace(Query(q): Query<IdQuery>) -> impl IntoResponse {
         match helmor_lib::dev_api::restore_workspace(&q.id) {
             Ok(v) => Json(v).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn validate_restore_workspace(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::validate_restore_workspace(&q.id) {
+            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
             Err(e) => cmd_err(e).into_response(),
         }
     }
@@ -437,7 +459,14 @@ mod handlers {
             &body.workspace_id,
             &body.target_branch,
         ) {
-            Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            Ok(response) => Json(response).into_response(),
+            Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn prefetch_workspace_remote_refs(Query(q): Query<IdQuery>) -> impl IntoResponse {
+        match helmor_lib::dev_api::prefetch_workspace_remote_refs(&q.id) {
+            Ok(response) => Json(response).into_response(),
             Err(e) => cmd_err(e).into_response(),
         }
     }
@@ -511,6 +540,32 @@ mod handlers {
         ) {
             Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
             Err(e) => cmd_err(e).into_response(),
+        }
+    }
+
+    pub async fn list_slash_commands(
+        State(state): State<SharedState>,
+        Query(q): Query<ListSlashCommandsQuery>,
+    ) -> impl IntoResponse {
+        // The sidecar call is blocking on a sync mpsc, so park it on the
+        // blocking pool to keep the axum worker free.
+        let sidecar_ptr = Arc::clone(&state);
+        let result = tokio::task::spawn_blocking(move || {
+            helmor_lib::dev_api::list_slash_commands(
+                &sidecar_ptr.sidecar,
+                &q.provider,
+                q.working_directory.as_deref(),
+                q.model_id.as_deref(),
+            )
+        })
+        .await;
+        match result {
+            Ok(Ok(v)) => Json(v).into_response(),
+            Ok(Err(e)) => cmd_err(e).into_response(),
+            Err(join_err) => cmd_err(anyhow::anyhow!(
+                "listSlashCommands task panicked: {join_err}"
+            ))
+            .into_response(),
         }
     }
 }
@@ -621,7 +676,15 @@ async fn main() {
             post(handlers::set_workspace_manual_status),
         )
         .route("/api/archive_workspace", post(handlers::archive_workspace))
+        .route(
+            "/api/validate_archive_workspace",
+            post(handlers::validate_archive_workspace),
+        )
         .route("/api/restore_workspace", post(handlers::restore_workspace))
+        .route(
+            "/api/validate_restore_workspace",
+            post(handlers::validate_restore_workspace),
+        )
         .route(
             "/api/create_workspace_from_repo",
             post(handlers::create_workspace_from_repo),
@@ -635,6 +698,10 @@ async fn main() {
             post(handlers::update_intended_target_branch),
         )
         .route(
+            "/api/prefetch_workspace_remote_refs",
+            post(handlers::prefetch_workspace_remote_refs),
+        )
+        .route(
             "/api/update_app_settings",
             post(handlers::update_app_settings),
         )
@@ -645,6 +712,10 @@ async fn main() {
         )
         .route("/api/agent_stream_sse", get(handlers::agent_stream_sse))
         .route("/api/stop_agent_stream", post(handlers::stop_agent_stream))
+        .route(
+            "/api/list_slash_commands",
+            get(handlers::list_slash_commands),
+        )
         .layer(CorsLayer::permissive())
         .with_state(state);
 

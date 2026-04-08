@@ -1,7 +1,10 @@
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context, Result};
@@ -241,7 +244,24 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
 
 pub fn load_workspace_records() -> Result<Vec<WorkspaceRecord>> {
     let connection = db::open_connection(false)?;
-    let mut statement = connection.prepare(WORKSPACE_RECORD_SQL)?;
+    // Sort by `updated_at DESC`. This column doubles as a "most recent
+    // user-driven workspace action" timestamp because of how it's maintained:
+    //
+    //   - Bumped by:  create / archive / restore / pin / unpin /
+    //                 set_workspace_manual_status / setup metadata writes.
+    //   - NOT bumped: mark_read / mark_unread, update_intended_target_branch,
+    //                 branch rename, session UPDATE, session_messages INSERT
+    //                 (we have no auto-update triggers on workspaces, so
+    //                 background activity is invisible to it).
+    //
+    // The net effect is: the sidebar order is stable for a workspace until
+    // the user takes a structural action on it, at which point the workspace
+    // floats to the top of its group. Concretely this means an unarchived
+    // workspace appears at the top of its destination group — matching the
+    // optimistic-placement we do on the frontend, so there's no jump after
+    // canonical invalidation.
+    let sql = format!("{WORKSPACE_RECORD_SQL} ORDER BY w.updated_at DESC");
+    let mut statement = connection.prepare(&sql)?;
 
     let rows = statement.query_map([], helpers::workspace_record_from_row)?;
 
@@ -271,6 +291,10 @@ pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
     let mut backlog = Vec::new();
     let mut canceled = Vec::new();
 
+    // `load_workspace_records` already returns rows in `created_at DESC` order
+    // (newest first). Iterating in that order and bucketing into status groups
+    // means each group naturally inherits the same stable order, no per-group
+    // re-sort needed.
     for record in load_workspace_records()? {
         if record.state == "archived" {
             continue;
@@ -289,13 +313,6 @@ pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
             }
         }
     }
-
-    helpers::sort_sidebar_rows(&mut pinned);
-    helpers::sort_sidebar_rows(&mut done);
-    helpers::sort_sidebar_rows(&mut review);
-    helpers::sort_sidebar_rows(&mut progress);
-    helpers::sort_sidebar_rows(&mut backlog);
-    helpers::sort_sidebar_rows(&mut canceled);
 
     Ok(vec![
         WorkspaceSidebarGroup {
@@ -341,6 +358,11 @@ pub fn list_archived_workspaces() -> Result<Vec<WorkspaceSummary>> {
     let connection = db::open_connection(false)?;
     let mut statement = connection
         .prepare(&format!(
+            // Archived list sorts by `updated_at DESC` so the most recently
+            // archived workspace shows at the top — `archive_workspace_impl`
+            // explicitly bumps `updated_at` to `now` when transitioning the
+            // state to 'archived', so this column doubles as "archived at"
+            // for ordering purposes (no separate column needed).
             "{WORKSPACE_RECORD_SQL} WHERE w.state = 'archived' ORDER BY w.updated_at DESC"
         ))
         .context("Failed to prepare archived workspaces query")?;
@@ -379,22 +401,324 @@ pub fn list_remote_branches(workspace_id: &str) -> Result<Vec<String>> {
 
 // ---- Update intended target branch ----
 
-pub fn update_intended_target_branch(workspace_id: &str, target_branch: &str) -> Result<()> {
-    let connection = db::open_connection(true)?;
-    let updated_rows = connection
-        .execute(
-            "UPDATE workspaces SET intended_target_branch = ?2 WHERE id = ?1 AND state = 'ready'",
-            (workspace_id, target_branch),
-        )
-        .context("Failed to update intended target branch")?;
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateIntendedTargetBranchResponse {
+    /// `true` if the workspace's local branch was hard-reset to `origin/<target>`.
+    /// `false` if only the stored intent was updated (worktree dirty, branch
+    /// already has user commits, baseline missing, etc.).
+    pub reset: bool,
+    pub target_branch: String,
+}
 
-    if updated_rows != 1 {
-        bail!(
-            "Cannot update target branch: workspace {workspace_id} not found or not in ready state"
-        );
+/// Internal result of the synchronous (local-only) phase of a branch switch.
+/// Carries the post-reset HEAD SHA so the caller can chain a background
+/// remote-refresh against it.
+#[derive(Debug)]
+pub struct UpdateIntendedTargetBranchInternal {
+    pub reset: bool,
+    pub target_branch: String,
+    /// `Some(sha)` only when a local reset actually happened.
+    pub post_reset_sha: Option<String>,
+}
+
+/// Tauri-facing entry point. Performs the fast local realignment synchronously,
+/// then spawns a background thread to fetch from `origin` and silently re-align
+/// to the freshest tip if it is still safe.
+pub fn update_intended_target_branch(
+    workspace_id: &str,
+    target_branch: &str,
+) -> Result<UpdateIntendedTargetBranchResponse> {
+    let internal = update_intended_target_branch_local(workspace_id, target_branch)?;
+
+    if let Some(post_reset_sha) = internal.post_reset_sha.clone() {
+        let workspace_id_owned = workspace_id.to_string();
+        let target_branch_owned = internal.target_branch.clone();
+        std::thread::spawn(move || {
+            let _ = refresh_remote_and_realign(
+                &workspace_id_owned,
+                &target_branch_owned,
+                &post_reset_sha,
+            );
+        });
     }
 
-    Ok(())
+    Ok(UpdateIntendedTargetBranchResponse {
+        reset: internal.reset,
+        target_branch: internal.target_branch,
+    })
+}
+
+/// Synchronous local-only phase of a branch switch. Always updates the DB
+/// `intended_target_branch`, then attempts a fast local reset to the cached
+/// `origin/<target>` if all safety checks pass. Never hits the network.
+///
+/// Exposed (without spawning the background thread) so tests can drive the
+/// local phase deterministically.
+pub fn update_intended_target_branch_local(
+    workspace_id: &str,
+    target_branch: &str,
+) -> Result<UpdateIntendedTargetBranchInternal> {
+    // Step 1 — always persist the user's intent. The dropdown is, semantically,
+    // "the branch this workspace eventually wants to merge into", so the
+    // selection itself should never be blocked by local state.
+    {
+        let connection = db::open_connection(true)?;
+        let updated_rows = connection
+            .execute(
+                "UPDATE workspaces SET intended_target_branch = ?2 WHERE id = ?1 AND state = 'ready'",
+                (workspace_id, target_branch),
+            )
+            .context("Failed to update intended target branch")?;
+
+        if updated_rows != 1 {
+            bail!(
+                "Cannot update target branch: workspace {workspace_id} not found or not in ready state"
+            );
+        }
+    }
+
+    // Step 2 — re-read the record and try to realign the local branch to the
+    // new target if it is safe to do so.
+    let record = load_workspace_record_by_id(workspace_id)?
+        .with_context(|| format!("Workspace not found after intent update: {workspace_id}"))?;
+
+    let post_reset_sha = try_realign_local_branch(&record, target_branch)?;
+
+    if post_reset_sha.is_some() {
+        // Update the baseline so future "fresh branch" checks compare against
+        // the new starting point rather than the original parent.
+        let connection = db::open_connection(true)?;
+        connection
+            .execute(
+                "UPDATE workspaces SET initialization_parent_branch = ?2 WHERE id = ?1",
+                (workspace_id, target_branch),
+            )
+            .context("Failed to update initialization parent branch after reset")?;
+    }
+
+    Ok(UpdateIntendedTargetBranchInternal {
+        reset: post_reset_sha.is_some(),
+        target_branch: target_branch.to_string(),
+        post_reset_sha,
+    })
+}
+
+/// Try to hard-reset the workspace's currently checked-out branch onto the
+/// locally cached `refs/remotes/origin/<target_branch>`. Never fetches.
+///
+/// Returns:
+/// - `Ok(Some(post_reset_sha))` — reset was performed; carries the new HEAD SHA.
+/// - `Ok(None)` — workspace is not in a state where realignment is safe;
+///   silent fallback (not an error).
+/// - `Err(_)` — the reset was attempted but the underlying git command failed;
+///   surfaced to the caller so the user is informed.
+fn try_realign_local_branch(
+    record: &WorkspaceRecord,
+    target_branch: &str,
+) -> Result<Option<String>> {
+    if record.state != "ready" {
+        return Ok(None);
+    }
+    if helpers::non_empty(&record.root_path).is_none() {
+        return Ok(None);
+    }
+    if helpers::non_empty(&record.branch).is_none() {
+        return Ok(None);
+    }
+    let Some(init_parent) = helpers::non_empty(&record.initialization_parent_branch) else {
+        // No baseline recorded → cannot tell whether the branch is "fresh".
+        return Ok(None);
+    };
+
+    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+    if !workspace_dir.is_dir() {
+        return Ok(None);
+    }
+
+    // Precheck: the cached `origin/<target>` ref must already exist locally.
+    // Since the dropdown only lists branches present under `refs/remotes/origin/`,
+    // this should normally pass — but a manual prune could remove it between
+    // dropdown open and click, in which case we silently fall back.
+    if !matches!(
+        git_ops::verify_remote_ref_exists(&workspace_dir, target_branch),
+        Ok(true)
+    ) {
+        return Ok(None);
+    }
+
+    // Safety check 1: working tree must be completely clean (no staged,
+    // unstaged, or untracked files).
+    if !matches!(git_ops::working_tree_clean(&workspace_dir), Ok(true)) {
+        return Ok(None);
+    }
+
+    // Safety check 2: HEAD must have zero commits beyond origin/<init_parent>.
+    // If origin/<init_parent> no longer exists or rev-list otherwise errors,
+    // we treat that as "cannot determine" and skip the realignment.
+    let baseline_ref = format!("origin/{init_parent}");
+    if !matches!(
+        git_ops::commits_ahead_of(&workspace_dir, &baseline_ref),
+        Ok(0)
+    ) {
+        return Ok(None);
+    }
+
+    // All preconditions satisfied — perform the realignment. Pure local op,
+    // no fetch. From here on, any git error propagates back so the user sees
+    // a failure toast and knows the worktree may have been touched.
+    let target_ref = format!("origin/{target_branch}");
+    git_ops::reset_current_branch_hard(&workspace_dir, &target_ref)?;
+
+    let post_reset_sha = git_ops::current_workspace_head_commit(&workspace_dir)?;
+    Ok(Some(post_reset_sha))
+}
+
+/// Background phase of a branch switch. Fetches `origin/<target_branch>`,
+/// then performs a silent re-reset to the freshest tip — but only when ALL
+/// of these invariants still hold:
+///
+/// 1. Workspace state is still `ready`
+/// 2. Working tree is still completely clean
+/// 3. HEAD is still exactly `post_reset_sha` (the user hasn't moved the branch
+///    or switched workspaces in the meantime)
+/// 4. The freshly fetched `origin/<target>` actually advanced past `post_reset_sha`
+///
+/// If any check fails, the function exits silently (`Ok(false)`), guaranteeing
+/// the user's in-progress work is never overwritten by a background race.
+///
+/// Public so tests can drive it deterministically without spawning a thread.
+pub fn refresh_remote_and_realign(
+    workspace_id: &str,
+    target_branch: &str,
+    post_reset_sha: &str,
+) -> Result<bool> {
+    // Load the record (without holding the mutation lock) to find the workspace
+    // dir. The fetch is slow, so we don't want to hold the lock across it.
+    let Some(record) = load_workspace_record_by_id(workspace_id)? else {
+        return Ok(false);
+    };
+    if record.state != "ready" {
+        return Ok(false);
+    }
+    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+    if !workspace_dir.is_dir() {
+        return Ok(false);
+    }
+
+    // Slow part: fetch from origin. Failures (network, SSH, etc.) → silent.
+    if git_ops::fetch_remote_branch(&workspace_dir, target_branch).is_err() {
+        return Ok(false);
+    }
+
+    // Now hold the mutation lock for the re-verification + reset, so we don't
+    // race with another command (e.g. another switch, archive, restore).
+    //
+    // We use `blocking_lock()` instead of `.lock().await` because this function
+    // is called from a background `std::thread::spawn`'d worker — there is no
+    // Tokio runtime context here. `blocking_lock()` would panic if called from
+    // a runtime worker thread, but it works correctly from a vanilla std thread.
+    let _lock = db::WORKSPACE_MUTATION_LOCK.blocking_lock();
+
+    // Re-load record under the lock; abort if state changed.
+    let Some(fresh_record) = load_workspace_record_by_id(workspace_id)? else {
+        return Ok(false);
+    };
+    if fresh_record.state != "ready" {
+        return Ok(false);
+    }
+
+    // Invariant: working tree still clean.
+    if !matches!(git_ops::working_tree_clean(&workspace_dir), Ok(true)) {
+        return Ok(false);
+    }
+
+    // Invariant: HEAD still pinned at post_reset_sha (user hasn't committed
+    // or done another reset).
+    let current_head = match git_ops::current_workspace_head_commit(&workspace_dir) {
+        Ok(sha) => sha,
+        Err(_) => return Ok(false),
+    };
+    if current_head != post_reset_sha {
+        return Ok(false);
+    }
+
+    // Invariant: the fresh remote actually advanced past post_reset_sha.
+    let new_remote_sha = match git_ops::remote_ref_sha(&workspace_dir, target_branch) {
+        Ok(sha) => sha,
+        Err(_) => return Ok(false),
+    };
+    if new_remote_sha == post_reset_sha {
+        return Ok(false);
+    }
+
+    // All four invariants hold — silently re-align to the freshest tip.
+    let target_ref = format!("origin/{target_branch}");
+    git_ops::reset_current_branch_hard(&workspace_dir, &target_ref)?;
+    Ok(true)
+}
+
+// ---- Prefetch remote refs (background freshness for the branch picker) ----
+
+/// How long to wait between successive `git fetch --prune origin` calls for
+/// the same workspace. Prevents storms when the user opens/closes the dropdown
+/// rapidly.
+const PREFETCH_RATE_LIMIT: Duration = Duration::from_secs(10);
+
+fn prefetch_rate_limit_map() -> &'static Mutex<HashMap<String, Instant>> {
+    static MAP: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrefetchWorkspaceRemoteRefsResponse {
+    /// `true` if a fetch was actually performed, `false` if it was rate-limited
+    /// (a recent fetch is still considered fresh).
+    pub fetched: bool,
+}
+
+/// Fetch every branch from `origin` for this workspace's repo, pruning stale
+/// remote refs. Rate-limited per workspace so callers can fire it freely
+/// (e.g. on dropdown open) without thrashing the network.
+pub fn prefetch_workspace_remote_refs(
+    workspace_id: &str,
+) -> Result<PrefetchWorkspaceRemoteRefsResponse> {
+    // Rate-limit check.
+    {
+        let mut map = prefetch_rate_limit_map()
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Prefetch rate-limit lock poisoned"))?;
+        let now = Instant::now();
+        if let Some(last) = map.get(workspace_id) {
+            if now.duration_since(*last) < PREFETCH_RATE_LIMIT {
+                return Ok(PrefetchWorkspaceRemoteRefsResponse { fetched: false });
+            }
+        }
+        map.insert(workspace_id.to_string(), now);
+    }
+
+    let record = load_workspace_record_by_id(workspace_id)?
+        .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+    if record.state != "ready" {
+        return Ok(PrefetchWorkspaceRemoteRefsResponse { fetched: false });
+    }
+    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+    if !workspace_dir.is_dir() {
+        return Ok(PrefetchWorkspaceRemoteRefsResponse { fetched: false });
+    }
+
+    git_ops::fetch_all_remote(&workspace_dir)?;
+    Ok(PrefetchWorkspaceRemoteRefsResponse { fetched: true })
+}
+
+/// Test-only escape hatch — clears the rate-limit map so successive calls in
+/// the same test run don't get suppressed.
+#[doc(hidden)]
+pub fn _reset_prefetch_rate_limit() {
+    if let Ok(mut map) = prefetch_rate_limit_map().lock() {
+        map.clear();
+    }
 }
 
 // ---- Mark read / unread ----
@@ -636,7 +960,20 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
 
 // ---- Archive workspace ----
 
-pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResponse> {
+/// Snapshot of the read-only checks shared between `validate_archive_workspace`
+/// and `archive_workspace_impl`. Carries the data the apply phase needs.
+struct ArchivePreflightData {
+    repo_root: PathBuf,
+    branch: String,
+    workspace_dir: PathBuf,
+    archived_context_dir: PathBuf,
+    archive_commit: String,
+}
+
+/// Read-only validation for archive: every check that can fail without
+/// touching the filesystem destructively. Side-effect-free; safe to call from
+/// the frontend before optimistically updating the UI.
+fn archive_workspace_preflight(workspace_id: &str) -> Result<ArchivePreflightData> {
     let record = load_workspace_record_by_id(workspace_id)?
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
 
@@ -668,6 +1005,34 @@ pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResp
         );
     }
 
+    let archive_commit = git_ops::current_workspace_head_commit(&workspace_dir)?;
+    git_ops::verify_commit_exists(&repo_root, &archive_commit)?;
+
+    Ok(ArchivePreflightData {
+        repo_root,
+        branch,
+        workspace_dir,
+        archived_context_dir,
+        archive_commit,
+    })
+}
+
+/// Tauri-callable read-only check. Returns `Ok(())` if archive will succeed
+/// (filesystem state, git state, db state all valid right now). Use from the
+/// frontend before applying an optimistic UI update.
+pub fn validate_archive_workspace(workspace_id: &str) -> Result<()> {
+    archive_workspace_preflight(workspace_id).map(|_| ())
+}
+
+pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResponse> {
+    let ArchivePreflightData {
+        repo_root,
+        branch,
+        workspace_dir,
+        archived_context_dir,
+        archive_commit,
+    } = archive_workspace_preflight(workspace_id)?;
+
     fs::create_dir_all(archived_context_dir.parent().with_context(|| {
         format!(
             "Archived context target has no parent: {}",
@@ -680,9 +1045,6 @@ pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResp
             archived_context_dir.display()
         )
     })?;
-
-    let archive_commit = git_ops::current_workspace_head_commit(&workspace_dir)?;
-    git_ops::verify_commit_exists(&repo_root, &archive_commit)?;
 
     let workspace_context_dir = workspace_dir.join(".context");
     let staged_archive_dir = helpers::staged_archive_context_dir(&archived_context_dir);
@@ -743,7 +1105,23 @@ pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResp
 
 // ---- Restore workspace ----
 
-pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResponse> {
+/// Snapshot of the read-only checks shared between `validate_restore_workspace`
+/// and `restore_workspace_impl`. Carries the data the apply phase needs so we
+/// don't reload/rederive it.
+struct RestorePreflightData {
+    record: WorkspaceRecord,
+    repo_root: PathBuf,
+    branch: String,
+    archive_commit: String,
+    workspace_dir: PathBuf,
+    archived_context_dir: PathBuf,
+}
+
+/// Read-only validation: every check that can fail without touching the
+/// filesystem in a destructive way. Returns the gathered data so the apply
+/// path can reuse it. Side-effect-free — safe to call from a "can the user
+/// even attempt this?" pre-check before optimistically updating the UI.
+fn restore_workspace_preflight(workspace_id: &str) -> Result<RestorePreflightData> {
     let record = load_workspace_record_by_id(workspace_id)?
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
 
@@ -762,10 +1140,6 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
         .with_context(|| format!("Workspace {workspace_id} is missing archive_commit"))?;
 
     let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
-    if workspace_dir.exists() {
-        std::fs::remove_dir_all(&workspace_dir).ok();
-    }
-
     let archived_context_dir =
         crate::data_dir::archived_context_dir(&record.repo_name, &record.directory_name)?;
     if !archived_context_dir.is_dir() {
@@ -773,6 +1147,41 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
             "Archived context directory is missing at {}",
             archived_context_dir.display()
         );
+    }
+
+    git_ops::ensure_git_repository(&repo_root)?;
+    git_ops::verify_commit_exists(&repo_root, &archive_commit)?;
+
+    Ok(RestorePreflightData {
+        record,
+        repo_root,
+        branch,
+        archive_commit,
+        workspace_dir,
+        archived_context_dir,
+    })
+}
+
+/// Tauri-callable read-only check: returns `Ok(())` if the workspace can be
+/// restored right now, `Err(...)` with a user-facing message if not. Use this
+/// from the frontend BEFORE applying an optimistic UI update so the dropdown
+/// row doesn't flicker on a guaranteed failure.
+pub fn validate_restore_workspace(workspace_id: &str) -> Result<()> {
+    restore_workspace_preflight(workspace_id).map(|_| ())
+}
+
+pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResponse> {
+    let RestorePreflightData {
+        record,
+        repo_root,
+        branch,
+        archive_commit,
+        workspace_dir,
+        archived_context_dir,
+    } = restore_workspace_preflight(workspace_id)?;
+
+    if workspace_dir.exists() {
+        std::fs::remove_dir_all(&workspace_dir).ok();
     }
 
     fs::create_dir_all(workspace_dir.parent().with_context(|| {
@@ -787,9 +1196,6 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
             workspace_dir.display()
         )
     })?;
-
-    git_ops::ensure_git_repository(&repo_root)?;
-    git_ops::verify_commit_exists(&repo_root, &archive_commit)?;
 
     // Resolve the branch name — if it already exists, find an available -v{N} variant
     let actual_branch = if git_ops::verify_branch_exists(&repo_root, &branch).is_ok() {

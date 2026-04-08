@@ -25,9 +25,32 @@ pub struct DataInfo {
     pub db_path: String,
 }
 
+/// Run a blocking closure on Tokio's blocking thread pool and surface its
+/// `anyhow::Result` as a Tauri `CmdResult`. Use this to wrap any synchronous
+/// I/O work (DB, filesystem, subprocess, git) inside an `async fn` Tauri
+/// command, so the work doesn't pin the main runtime thread or any of Tokio's
+/// scheduling workers.
+async fn run_blocking<F, T>(f: F) -> CmdResult<T>
+where
+    F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    let result = tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))?;
+    Ok(result?)
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands — thin wrappers calling into sub-modules
 // ---------------------------------------------------------------------------
+//
+// All non-trivial commands are declared as `async fn` and route their
+// synchronous body through `run_blocking()`. This is required because Tauri 2
+// runs `pub fn` commands on the main runtime thread, which serializes them and
+// makes any slow command (git, subprocess, large query) block subsequent IPC
+// calls. Truly trivial commands that touch nothing — pure constants, struct
+// reads — are left as `pub fn` for simplicity.
 
 #[tauri::command]
 pub fn get_data_info() -> CmdResult<DataInfo> {
@@ -42,35 +65,43 @@ pub fn get_data_info() -> CmdResult<DataInfo> {
 }
 
 #[tauri::command]
-pub fn get_app_settings() -> CmdResult<std::collections::HashMap<String, String>> {
-    let conn = db::open_connection(false)?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT key, value FROM settings WHERE key LIKE 'app.%' OR key LIKE 'branch_prefix_%'",
-        )
-        .context("Failed to query app settings")?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .context("Failed to iterate app settings")?;
+pub async fn get_app_settings() -> CmdResult<std::collections::HashMap<String, String>> {
+    run_blocking(|| {
+        let conn = db::open_connection(false)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT key, value FROM settings WHERE key LIKE 'app.%' OR key LIKE 'branch_prefix_%'",
+            )
+            .context("Failed to query app settings")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .context("Failed to iterate app settings")?;
 
-    let mut map = std::collections::HashMap::new();
-    for row in rows.flatten() {
-        map.insert(row.0, row.1);
-    }
-    Ok(map)
+        let mut map = std::collections::HashMap::new();
+        for row in rows.flatten() {
+            map.insert(row.0, row.1);
+        }
+        Ok(map)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_app_settings(settings: std::collections::HashMap<String, String>) -> CmdResult<()> {
-    for (key, value) in &settings {
-        if !key.starts_with("app.") && !key.starts_with("branch_prefix_") {
-            continue;
+pub async fn update_app_settings(
+    settings: std::collections::HashMap<String, String>,
+) -> CmdResult<()> {
+    run_blocking(move || {
+        for (key, value) in &settings {
+            if !key.starts_with("app.") && !key.starts_with("branch_prefix_") {
+                continue;
+            }
+            crate::models::settings::upsert_setting_value(key, value)?;
         }
-        settings::upsert_setting_value(key, value)?;
-    }
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -79,236 +110,215 @@ pub fn conductor_source_available() -> bool {
 }
 
 #[tauri::command]
-pub fn get_github_identity_session() -> CmdResult<auth::GithubIdentitySnapshot> {
-    Ok(auth::get_github_identity_session()?)
+pub async fn get_github_identity_session() -> CmdResult<auth::GithubIdentitySnapshot> {
+    run_blocking(auth::get_github_identity_session).await
 }
 
 #[tauri::command]
-pub fn start_github_identity_connect(
+pub async fn start_github_identity_connect(
     app: AppHandle,
     runtime: State<'_, auth::GithubIdentityFlowRuntime>,
 ) -> CmdResult<auth::GithubIdentityDeviceFlowStart> {
-    Ok(auth::start_github_identity_connect(
-        app,
-        runtime.inner().clone(),
-    )?)
+    let runtime_inner = runtime.inner().clone();
+    run_blocking(move || auth::start_github_identity_connect(app, runtime_inner)).await
 }
 
 #[tauri::command]
-pub fn cancel_github_identity_connect(
+pub async fn cancel_github_identity_connect(
     app: AppHandle,
     runtime: State<'_, auth::GithubIdentityFlowRuntime>,
 ) -> CmdResult<()> {
-    Ok(auth::cancel_github_identity_connect(
-        app,
-        runtime.inner().clone(),
-    )?)
+    let runtime_inner = runtime.inner().clone();
+    run_blocking(move || auth::cancel_github_identity_connect(app, runtime_inner)).await
 }
 
 #[tauri::command]
-pub fn disconnect_github_identity(
+pub async fn disconnect_github_identity(
     app: AppHandle,
     runtime: State<'_, auth::GithubIdentityFlowRuntime>,
 ) -> CmdResult<()> {
-    Ok(auth::disconnect_github_identity(
-        app,
-        runtime.inner().clone(),
-    )?)
+    let runtime_inner = runtime.inner().clone();
+    run_blocking(move || auth::disconnect_github_identity(app, runtime_inner)).await
 }
 
 #[tauri::command]
-pub fn get_github_cli_status() -> CmdResult<github_cli::GithubCliStatus> {
-    Ok(github_cli::get_github_cli_status()?)
+pub async fn get_github_cli_status() -> CmdResult<github_cli::GithubCliStatus> {
+    run_blocking(github_cli::get_github_cli_status).await
 }
 
 #[tauri::command]
-pub fn get_github_cli_user() -> CmdResult<Option<github_cli::GithubCliUser>> {
-    Ok(github_cli::get_github_cli_user()?)
+pub async fn get_github_cli_user() -> CmdResult<Option<github_cli::GithubCliUser>> {
+    run_blocking(github_cli::get_github_cli_user).await
 }
 
 #[tauri::command]
-pub fn list_github_accessible_repositories() -> CmdResult<Vec<github_cli::GithubRepositorySummary>>
-{
-    Ok(github_cli::list_github_accessible_repositories()?)
+pub async fn list_github_accessible_repositories(
+) -> CmdResult<Vec<github_cli::GithubRepositorySummary>> {
+    run_blocking(github_cli::list_github_accessible_repositories).await
 }
 
 #[tauri::command]
-pub fn list_conductor_repos() -> CmdResult<Vec<crate::import::ConductorRepo>> {
-    Ok(crate::import::list_conductor_repos()?)
+pub async fn list_conductor_repos() -> CmdResult<Vec<crate::import::ConductorRepo>> {
+    run_blocking(crate::import::list_conductor_repos).await
 }
 
 #[tauri::command]
-pub fn list_conductor_workspaces(
+pub async fn list_conductor_workspaces(
     repo_id: String,
 ) -> CmdResult<Vec<crate::import::ConductorWorkspace>> {
-    Ok(crate::import::list_conductor_workspaces(&repo_id)?)
+    run_blocking(move || crate::import::list_conductor_workspaces(&repo_id)).await
 }
 
 #[tauri::command]
-pub fn import_conductor_workspaces(
+pub async fn import_conductor_workspaces(
     workspace_ids: Vec<String>,
 ) -> CmdResult<crate::import::ImportWorkspacesResult> {
-    Ok(crate::import::import_conductor_workspaces(&workspace_ids)?)
+    run_blocking(move || crate::import::import_conductor_workspaces(&workspace_ids)).await
 }
 
 #[tauri::command]
-pub fn list_repositories() -> CmdResult<Vec<repos::RepositoryCreateOption>> {
-    Ok(repos::list_repositories()?)
+pub async fn list_repositories() -> CmdResult<Vec<repos::RepositoryCreateOption>> {
+    run_blocking(repos::list_repositories).await
 }
 
 #[tauri::command]
-pub fn get_add_repository_defaults() -> CmdResult<repos::AddRepositoryDefaults> {
-    Ok(repos::AddRepositoryDefaults {
-        last_clone_directory: settings::load_setting_value("last_clone_directory")?,
+pub async fn get_add_repository_defaults() -> CmdResult<repos::AddRepositoryDefaults> {
+    run_blocking(|| {
+        Ok(repos::AddRepositoryDefaults {
+            last_clone_directory: settings::load_setting_value("last_clone_directory")?,
+        })
     })
+    .await
 }
 
 #[tauri::command]
-pub fn add_repository_from_local_path(
+pub async fn add_repository_from_local_path(
     folder_path: String,
 ) -> CmdResult<repos::AddRepositoryResponse> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
-
-    Ok(repos::add_repository_from_local_path(&folder_path)?)
+    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
+    run_blocking(move || repos::add_repository_from_local_path(&folder_path)).await
 }
 
 #[tauri::command]
-pub fn create_workspace_from_repo(
+pub async fn create_workspace_from_repo(
     repo_id: String,
 ) -> CmdResult<workspaces::CreateWorkspaceResponse> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
-
-    Ok(workspaces::create_workspace_from_repo_impl(&repo_id)?)
+    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
+    run_blocking(move || workspaces::create_workspace_from_repo_impl(&repo_id)).await
 }
 
 #[tauri::command]
-pub fn list_workspace_groups() -> CmdResult<Vec<workspaces::WorkspaceSidebarGroup>> {
-    Ok(workspaces::list_workspace_groups()?)
+pub async fn list_workspace_groups() -> CmdResult<Vec<workspaces::WorkspaceSidebarGroup>> {
+    run_blocking(workspaces::list_workspace_groups).await
 }
 
 #[tauri::command]
-pub fn list_archived_workspaces() -> CmdResult<Vec<workspaces::WorkspaceSummary>> {
-    Ok(workspaces::list_archived_workspaces()?)
+pub async fn list_archived_workspaces() -> CmdResult<Vec<workspaces::WorkspaceSummary>> {
+    run_blocking(workspaces::list_archived_workspaces).await
 }
 
 #[tauri::command]
-pub fn get_workspace(workspace_id: String) -> CmdResult<workspaces::WorkspaceDetail> {
-    Ok(workspaces::get_workspace(&workspace_id)?)
+pub async fn get_workspace(workspace_id: String) -> CmdResult<workspaces::WorkspaceDetail> {
+    run_blocking(move || workspaces::get_workspace(&workspace_id)).await
 }
 
 #[tauri::command]
-pub fn list_workspace_sessions(
+pub async fn list_workspace_sessions(
     workspace_id: String,
 ) -> CmdResult<Vec<sessions::WorkspaceSessionSummary>> {
-    Ok(sessions::list_workspace_sessions(&workspace_id)?)
+    run_blocking(move || sessions::list_workspace_sessions(&workspace_id)).await
 }
 
 /// Return pipeline-rendered ThreadMessageLike[] for a session.
 /// The frontend can render these directly without any conversion.
 #[tauri::command]
-pub fn list_session_thread_messages(
+pub async fn list_session_thread_messages(
     session_id: String,
 ) -> CmdResult<Vec<crate::pipeline::types::ThreadMessageLike>> {
-    let historical = sessions::list_session_historical_records(&session_id)?;
-    Ok(crate::pipeline::MessagePipeline::convert_historical(
-        &historical,
-    ))
+    run_blocking(move || {
+        let historical = sessions::list_session_historical_records(&session_id)?;
+        Ok(crate::pipeline::MessagePipeline::convert_historical(
+            &historical,
+        ))
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn list_session_attachments(
+pub async fn list_session_attachments(
     session_id: String,
 ) -> CmdResult<Vec<sessions::SessionAttachmentRecord>> {
-    Ok(sessions::list_session_attachments(&session_id)?)
+    run_blocking(move || sessions::list_session_attachments(&session_id)).await
 }
 
 #[tauri::command]
-pub fn create_session(workspace_id: String) -> CmdResult<sessions::CreateSessionResponse> {
-    Ok(sessions::create_session(&workspace_id)?)
+pub async fn create_session(workspace_id: String) -> CmdResult<sessions::CreateSessionResponse> {
+    run_blocking(move || sessions::create_session(&workspace_id)).await
 }
 
 #[tauri::command]
-pub fn rename_session(session_id: String, title: String) -> CmdResult<()> {
-    Ok(sessions::rename_session(&session_id, &title)?)
+pub async fn rename_session(session_id: String, title: String) -> CmdResult<()> {
+    run_blocking(move || sessions::rename_session(&session_id, &title)).await
 }
 
 #[tauri::command]
-pub fn hide_session(session_id: String) -> CmdResult<()> {
-    Ok(sessions::hide_session(&session_id)?)
+pub async fn hide_session(session_id: String) -> CmdResult<()> {
+    run_blocking(move || sessions::hide_session(&session_id)).await
 }
 
 #[tauri::command]
-pub fn unhide_session(session_id: String) -> CmdResult<()> {
-    Ok(sessions::unhide_session(&session_id)?)
+pub async fn unhide_session(session_id: String) -> CmdResult<()> {
+    run_blocking(move || sessions::unhide_session(&session_id)).await
 }
 
 #[tauri::command]
-pub fn delete_session(session_id: String) -> CmdResult<()> {
-    Ok(sessions::delete_session(&session_id)?)
+pub async fn delete_session(session_id: String) -> CmdResult<()> {
+    run_blocking(move || sessions::delete_session(&session_id)).await
 }
 
 #[tauri::command]
-pub fn list_hidden_sessions(
+pub async fn list_hidden_sessions(
     workspace_id: String,
 ) -> CmdResult<Vec<sessions::WorkspaceSessionSummary>> {
-    Ok(sessions::list_hidden_sessions(&workspace_id)?)
+    run_blocking(move || sessions::list_hidden_sessions(&workspace_id)).await
 }
 
 #[tauri::command]
-pub fn mark_session_read(session_id: String) -> CmdResult<()> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
-
+pub async fn mark_session_read(session_id: String) -> CmdResult<()> {
+    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
     Ok(sessions::mark_session_read(&session_id)?)
 }
 
 #[tauri::command]
-pub fn mark_workspace_read(workspace_id: String) -> CmdResult<()> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
-
+pub async fn mark_workspace_read(workspace_id: String) -> CmdResult<()> {
+    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
     Ok(workspaces::mark_workspace_read(&workspace_id)?)
 }
 
 #[tauri::command]
-pub fn mark_workspace_unread(workspace_id: String) -> CmdResult<()> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
-
+pub async fn mark_workspace_unread(workspace_id: String) -> CmdResult<()> {
+    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
     Ok(workspaces::mark_workspace_unread(&workspace_id)?)
 }
 
 #[tauri::command]
-pub fn pin_workspace(workspace_id: String) -> CmdResult<()> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
-
+pub async fn pin_workspace(workspace_id: String) -> CmdResult<()> {
+    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
     Ok(workspaces::pin_workspace(&workspace_id)?)
 }
 
 #[tauri::command]
-pub fn unpin_workspace(workspace_id: String) -> CmdResult<()> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
-
+pub async fn unpin_workspace(workspace_id: String) -> CmdResult<()> {
+    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
     Ok(workspaces::unpin_workspace(&workspace_id)?)
 }
 
 #[tauri::command]
-pub fn set_workspace_manual_status(workspace_id: String, status: Option<String>) -> CmdResult<()> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
-
+pub async fn set_workspace_manual_status(
+    workspace_id: String,
+    status: Option<String>,
+) -> CmdResult<()> {
+    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
     Ok(workspaces::set_workspace_manual_status(
         &workspace_id,
         status.as_deref(),
@@ -316,47 +326,63 @@ pub fn set_workspace_manual_status(workspace_id: String, status: Option<String>)
 }
 
 #[tauri::command]
-pub fn list_remote_branches(workspace_id: String) -> CmdResult<Vec<String>> {
-    Ok(workspaces::list_remote_branches(&workspace_id)?)
+pub async fn list_remote_branches(workspace_id: String) -> CmdResult<Vec<String>> {
+    run_blocking(move || workspaces::list_remote_branches(&workspace_id)).await
 }
 
 #[tauri::command]
-pub fn update_intended_target_branch(workspace_id: String, target_branch: String) -> CmdResult<()> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
-
-    Ok(workspaces::update_intended_target_branch(
-        &workspace_id,
-        &target_branch,
-    )?)
+pub async fn update_intended_target_branch(
+    workspace_id: String,
+    target_branch: String,
+) -> CmdResult<workspaces::UpdateIntendedTargetBranchResponse> {
+    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
+    run_blocking(move || workspaces::update_intended_target_branch(&workspace_id, &target_branch))
+        .await
 }
 
 #[tauri::command]
-pub fn restore_workspace(workspace_id: String) -> CmdResult<workspaces::RestoreWorkspaceResponse> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Restore lock poisoned"))?;
-
-    Ok(workspaces::restore_workspace_impl(&workspace_id)?)
+pub async fn prefetch_workspace_remote_refs(
+    workspace_id: String,
+) -> CmdResult<workspaces::PrefetchWorkspaceRemoteRefsResponse> {
+    run_blocking(move || workspaces::prefetch_workspace_remote_refs(&workspace_id)).await
 }
 
 #[tauri::command]
-pub fn archive_workspace(workspace_id: String) -> CmdResult<workspaces::ArchiveWorkspaceResponse> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
+pub async fn restore_workspace(
+    workspace_id: String,
+) -> CmdResult<workspaces::RestoreWorkspaceResponse> {
+    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
+    run_blocking(move || workspaces::restore_workspace_impl(&workspace_id)).await
+}
 
-    Ok(workspaces::archive_workspace_impl(&workspace_id)?)
+/// Read-only preflight: returns Ok(()) only if `restore_workspace` is going to
+/// succeed right now (workspace exists, archived state, archive_commit valid,
+/// etc.). Cheap. Frontend calls this BEFORE applying the optimistic UI move
+/// so that a guaranteed-failure restore (e.g. commit GC'd) never causes the
+/// row to flicker between archived and progress.
+#[tauri::command]
+pub async fn validate_restore_workspace(workspace_id: String) -> CmdResult<()> {
+    run_blocking(move || workspaces::validate_restore_workspace(&workspace_id)).await
 }
 
 #[tauri::command]
-pub fn permanently_delete_workspace(workspace_id: String) -> CmdResult<()> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Workspace mutation lock poisoned"))?;
+pub async fn archive_workspace(
+    workspace_id: String,
+) -> CmdResult<workspaces::ArchiveWorkspaceResponse> {
+    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
+    run_blocking(move || workspaces::archive_workspace_impl(&workspace_id)).await
+}
 
-    Ok(workspaces::permanently_delete_workspace(&workspace_id)?)
+/// Read-only preflight for archive — see `validate_restore_workspace` doc.
+#[tauri::command]
+pub async fn validate_archive_workspace(workspace_id: String) -> CmdResult<()> {
+    run_blocking(move || workspaces::validate_archive_workspace(&workspace_id)).await
+}
+
+#[tauri::command]
+pub async fn permanently_delete_workspace(workspace_id: String) -> CmdResult<()> {
+    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
+    run_blocking(move || workspaces::permanently_delete_workspace(&workspace_id)).await
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -368,7 +394,11 @@ pub struct DetectedEditor {
 }
 
 #[tauri::command]
-pub fn detect_installed_editors() -> CmdResult<Vec<DetectedEditor>> {
+pub async fn detect_installed_editors() -> CmdResult<Vec<DetectedEditor>> {
+    run_blocking(detect_installed_editors_blocking).await
+}
+
+fn detect_installed_editors_blocking() -> anyhow::Result<Vec<DetectedEditor>> {
     let mut editors = Vec::new();
 
     // macOS application paths to check
@@ -445,120 +475,119 @@ pub fn detect_installed_editors() -> CmdResult<Vec<DetectedEditor>> {
 }
 
 #[tauri::command]
-pub fn open_workspace_in_editor(workspace_id: String, editor: String) -> CmdResult<()> {
-    let record = workspaces::load_workspace_record_by_id(&workspace_id)?
-        .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+pub async fn open_workspace_in_editor(workspace_id: String, editor: String) -> CmdResult<()> {
+    run_blocking(move || {
+        let record = workspaces::load_workspace_record_by_id(&workspace_id)?
+            .with_context(|| format!("Workspace not found: {workspace_id}"))?;
 
-    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
-    if !workspace_dir.is_dir() {
-        Err(anyhow::anyhow!(
-            "Workspace directory not found: {}",
-            workspace_dir.display()
-        ))?;
-    }
-
-    let home = std::env::var("HOME").unwrap_or_default();
-    let dir_str = workspace_dir.display().to_string();
-
-    // Try to open via macOS `open -a` first, then fall back to CLI
-    let app_name = match editor.as_str() {
-        "cursor" => "Cursor",
-        "vscode" => "Visual Studio Code",
-        "vscode-insiders" => "Visual Studio Code - Insiders",
-        "windsurf" => "Windsurf",
-        "zed" => "Zed",
-        "webstorm" => "WebStorm",
-        "sublime" => "Sublime Text",
-        _ => {
-            Err(anyhow::anyhow!("Unsupported editor: {editor}"))?;
-            unreachable!()
+        let workspace_dir =
+            crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+        if !workspace_dir.is_dir() {
+            return Err(anyhow::anyhow!(
+                "Workspace directory not found: {}",
+                workspace_dir.display()
+            ));
         }
-    };
-    let result = std::process::Command::new("open")
-        .args(["-a", app_name, &dir_str])
-        .spawn();
 
-    let _ = home; // suppress unused warning
-    result.with_context(|| format!("Failed to open {editor}"))?;
-    Ok(())
+        let dir_str = workspace_dir.display().to_string();
+
+        // Try to open via macOS `open -a` first, then fall back to CLI
+        let app_name = match editor.as_str() {
+            "cursor" => "Cursor",
+            "vscode" => "Visual Studio Code",
+            "vscode-insiders" => "Visual Studio Code - Insiders",
+            "windsurf" => "Windsurf",
+            "zed" => "Zed",
+            "webstorm" => "WebStorm",
+            "sublime" => "Sublime Text",
+            _ => return Err(anyhow::anyhow!("Unsupported editor: {editor}")),
+        };
+
+        std::process::Command::new("open")
+            .args(["-a", app_name, &dir_str])
+            .spawn()
+            .with_context(|| format!("Failed to open {editor}"))?;
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn read_editor_file(path: String) -> CmdResult<editor_files::EditorFileReadResponse> {
-    Ok(editor_files::read_editor_file(&path)?)
+pub async fn read_editor_file(path: String) -> CmdResult<editor_files::EditorFileReadResponse> {
+    run_blocking(move || editor_files::read_editor_file(&path)).await
 }
 
 #[tauri::command]
-pub fn list_editor_files(
+pub async fn list_editor_files(
     workspace_root_path: String,
 ) -> CmdResult<Vec<editor_files::EditorFileListItem>> {
-    Ok(editor_files::list_editor_files(&workspace_root_path)?)
+    run_blocking(move || editor_files::list_editor_files(&workspace_root_path)).await
 }
 
 #[tauri::command]
-pub fn list_editor_files_with_content(
+pub async fn list_editor_files_with_content(
     workspace_root_path: String,
 ) -> CmdResult<editor_files::EditorFilesWithContentResponse> {
-    Ok(editor_files::list_editor_files_with_content(
-        &workspace_root_path,
-    )?)
+    run_blocking(move || editor_files::list_editor_files_with_content(&workspace_root_path)).await
 }
 
 #[tauri::command]
-pub fn list_workspace_changes(
+pub async fn list_workspace_changes(
     workspace_root_path: String,
 ) -> CmdResult<Vec<editor_files::EditorFileListItem>> {
-    Ok(editor_files::list_workspace_changes(&workspace_root_path)?)
+    run_blocking(move || editor_files::list_workspace_changes(&workspace_root_path)).await
 }
 
 #[tauri::command]
-pub fn list_workspace_changes_with_content(
+pub async fn list_workspace_changes_with_content(
     workspace_root_path: String,
 ) -> CmdResult<editor_files::EditorFilesWithContentResponse> {
-    Ok(editor_files::list_workspace_changes_with_content(
-        &workspace_root_path,
-    )?)
+    run_blocking(move || editor_files::list_workspace_changes_with_content(&workspace_root_path))
+        .await
 }
 
 #[tauri::command]
-pub fn write_editor_file(
+pub async fn write_editor_file(
     path: String,
     content: String,
 ) -> CmdResult<editor_files::EditorFileWriteResponse> {
-    Ok(editor_files::write_editor_file(&path, &content)?)
+    run_blocking(move || editor_files::write_editor_file(&path, &content)).await
 }
 
 #[tauri::command]
-pub fn stat_editor_file(path: String) -> CmdResult<editor_files::EditorFileStatResponse> {
-    Ok(editor_files::stat_editor_file(&path)?)
+pub async fn stat_editor_file(path: String) -> CmdResult<editor_files::EditorFileStatResponse> {
+    run_blocking(move || editor_files::stat_editor_file(&path)).await
 }
 
 /// Save base64-encoded image data from clipboard paste to a temporary file.
 /// Returns the absolute path to the saved file.
 #[tauri::command]
-pub fn save_pasted_image(data: String, media_type: String) -> CmdResult<String> {
-    use std::fs;
-    use uuid::Uuid;
+pub async fn save_pasted_image(data: String, media_type: String) -> CmdResult<String> {
+    run_blocking(move || {
+        use std::fs;
+        use uuid::Uuid;
 
-    let ext = match media_type.as_str() {
-        "image/jpeg" | "image/jpg" => "jpg",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        _ => "png",
-    };
+        let ext = match media_type.as_str() {
+            "image/jpeg" | "image/jpg" => "jpg",
+            "image/gif" => "gif",
+            "image/webp" => "webp",
+            _ => "png",
+        };
 
-    let paste_dir = crate::data_dir::data_dir()?.join("paste-cache");
-    fs::create_dir_all(&paste_dir).context("Failed to create paste-cache directory")?;
+        let paste_dir = crate::data_dir::data_dir()?.join("paste-cache");
+        fs::create_dir_all(&paste_dir).context("Failed to create paste-cache directory")?;
 
-    let filename = format!("paste-{}.{}", Uuid::new_v4(), ext);
-    let filepath = paste_dir.join(&filename);
+        let filename = format!("paste-{}.{}", Uuid::new_v4(), ext);
+        let filepath = paste_dir.join(&filename);
 
-    let bytes = base64_decode(&data).context("Invalid base64 data")?;
+        let bytes = base64_decode(&data).context("Invalid base64 data")?;
 
-    fs::write(&filepath, &bytes)
-        .with_context(|| format!("Failed to write pasted image to {}", filepath.display()))?;
+        fs::write(&filepath, &bytes)
+            .with_context(|| format!("Failed to write pasted image to {}", filepath.display()))?;
 
-    Ok(filepath.to_string_lossy().to_string())
+        Ok(filepath.to_string_lossy().to_string())
+    })
+    .await
 }
 
 fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
@@ -569,24 +598,27 @@ fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
 }
 
 #[tauri::command]
-pub fn update_session_settings(
+pub async fn update_session_settings(
     session_id: String,
     effort_level: Option<String>,
     permission_mode: Option<String>,
 ) -> CmdResult<()> {
-    let connection = db::open_connection(true)?;
-    connection
-        .execute(
-            r#"
-            UPDATE sessions SET
-              effort_level = COALESCE(?2, effort_level),
-              permission_mode = COALESCE(?3, permission_mode)
-            WHERE id = ?1
-            "#,
-            rusqlite::params![session_id, effort_level, permission_mode],
-        )
-        .context("Failed to update session settings")?;
-    Ok(())
+    run_blocking(move || {
+        let connection = db::open_connection(true)?;
+        connection
+            .execute(
+                r#"
+                UPDATE sessions SET
+                  effort_level = COALESCE(?2, effort_level),
+                  permission_mode = COALESCE(?3, permission_mode)
+                WHERE id = ?1
+                "#,
+                rusqlite::params![session_id, effort_level, permission_mode],
+            )
+            .context("Failed to update session settings")?;
+        Ok(())
+    })
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -1972,5 +2004,582 @@ mod tests {
             CREATE TABLE attachments (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, session_message_id TEXT, type TEXT, original_name TEXT, path TEXT, is_loading INTEGER DEFAULT 0, is_draft INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
             "#
         )
+    }
+
+    // ---- Branch-switch test harness ----
+
+    /// Test harness for the "switch branch" workflow:
+    ///
+    /// - `upstream_repo` plays the role of the network remote (`origin`).
+    ///   Branches we add commits to here simulate "remote advanced".
+    /// - `source_repo` is `git clone` of upstream — its `origin` points at
+    ///   upstream's filesystem path, so `git fetch` from any worktree of source
+    ///   actually picks up upstream changes.
+    /// - The workspace is a worktree of source on a brand-new branch cut from
+    ///   `origin/main`, mirroring the production "create workspace" path.
+    struct BranchSwitchTestHarness {
+        _test_dir: TestDataDir,
+        upstream_repo: PathBuf,
+        #[allow(dead_code)]
+        source_repo: PathBuf,
+        workspace_id: String,
+        repo_name: String,
+        directory_name: String,
+        #[allow(dead_code)]
+        workspace_branch: String,
+    }
+
+    impl BranchSwitchTestHarness {
+        fn new() -> Self {
+            let test_dir = TestDataDir::new("branch-switch");
+            let root = test_dir.root.clone();
+
+            // 1. Build upstream with main + dev + feature/work, all advanced
+            //    one commit beyond their origin point.
+            let upstream_repo = root.join("upstream");
+            fs::create_dir_all(&upstream_repo).unwrap();
+            init_branch_switch_repo(&upstream_repo);
+
+            // dev branch
+            run_in_repo(&upstream_repo, &["checkout", "-b", "dev"]);
+            commit_file(&upstream_repo, "dev1.txt", "dev one", "add dev1");
+
+            // feature/work branch from main
+            run_in_repo(&upstream_repo, &["checkout", "main"]);
+            run_in_repo(&upstream_repo, &["checkout", "-b", "feature/work"]);
+            commit_file(
+                &upstream_repo,
+                "feature1.txt",
+                "feature one",
+                "add feature1",
+            );
+
+            // Leave upstream on main so worktree creation later doesn't conflict.
+            run_in_repo(&upstream_repo, &["checkout", "main"]);
+
+            // 2. Clone upstream → source (`origin` is set automatically).
+            let source_repo = root.join("source");
+            git_ops::run_git(
+                [
+                    "clone",
+                    upstream_repo.to_str().unwrap(),
+                    source_repo.to_str().unwrap(),
+                ],
+                None,
+            )
+            .unwrap();
+            // Configure identity in the clone so any commits we make from
+            // worktrees (used by tests) succeed without requiring the test
+            // runner's git config.
+            run_in_repo(
+                &source_repo,
+                &["config", "user.email", "helmor@example.com"],
+            );
+            run_in_repo(&source_repo, &["config", "user.name", "Helmor"]);
+            run_in_repo(&source_repo, &["config", "commit.gpgsign", "false"]);
+
+            // 3. Materialize the workspace as a worktree of source on a brand
+            //    new branch off origin/main.
+            let repo_name = "demo-repo".to_string();
+            let directory_name = "branch-switch-ws".to_string();
+            let workspace_id = "branch-switch-1".to_string();
+            let workspace_branch = "test/switch-branch".to_string();
+
+            let workspace_dir =
+                crate::data_dir::workspace_dir(&repo_name, &directory_name).unwrap();
+            fs::create_dir_all(workspace_dir.parent().unwrap()).unwrap();
+
+            git_ops::create_worktree_from_start_point(
+                &source_repo,
+                &workspace_dir,
+                &workspace_branch,
+                "origin/main",
+            )
+            .unwrap();
+
+            // 4. Insert DB record. init_parent / intended_target both start at "main".
+            create_branch_switch_fixture_db(
+                &test_dir.db_path(),
+                &source_repo,
+                &repo_name,
+                &directory_name,
+                &workspace_id,
+                &workspace_branch,
+            );
+
+            // Wipe rate limiter so each test starts clean.
+            workspaces::_reset_prefetch_rate_limit();
+
+            Self {
+                _test_dir: test_dir,
+                upstream_repo,
+                source_repo,
+                workspace_id,
+                repo_name,
+                directory_name,
+                workspace_branch,
+            }
+        }
+
+        fn workspace_dir(&self) -> PathBuf {
+            crate::data_dir::workspace_dir(&self.repo_name, &self.directory_name).unwrap()
+        }
+
+        fn workspace_head(&self) -> String {
+            git_ops::current_workspace_head_commit(&self.workspace_dir()).unwrap()
+        }
+
+        fn workspace_remote_ref_sha(&self, branch: &str) -> String {
+            git_ops::remote_ref_sha(&self.workspace_dir(), branch).unwrap()
+        }
+
+        fn intent_in_db(&self) -> String {
+            let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+            connection
+                .query_row(
+                    "SELECT intended_target_branch FROM workspaces WHERE id = ?1",
+                    [&self.workspace_id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        }
+
+        fn init_parent_in_db(&self) -> Option<String> {
+            let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+            connection
+                .query_row(
+                    "SELECT initialization_parent_branch FROM workspaces WHERE id = ?1",
+                    [&self.workspace_id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        }
+
+        fn set_state(&self, state: &str) {
+            let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+            connection
+                .execute(
+                    "UPDATE workspaces SET state = ?2 WHERE id = ?1",
+                    (&self.workspace_id, state),
+                )
+                .unwrap();
+        }
+
+        fn set_init_parent(&self, init_parent: Option<&str>) {
+            let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+            connection
+                .execute(
+                    "UPDATE workspaces SET initialization_parent_branch = ?2 WHERE id = ?1",
+                    rusqlite::params![&self.workspace_id, init_parent],
+                )
+                .unwrap();
+        }
+
+        /// Add a commit to upstream's `branch`, simulating "remote advanced".
+        /// Source repo's local `refs/remotes/origin/<branch>` is NOT updated
+        /// until something does an explicit fetch.
+        fn upstream_advance(&self, branch: &str, file: &str, contents: &str, msg: &str) {
+            run_in_repo(&self.upstream_repo, &["checkout", branch]);
+            fs::write(self.upstream_repo.join(file), contents).unwrap();
+            run_in_repo(&self.upstream_repo, &["add", file]);
+            run_in_repo(&self.upstream_repo, &["commit", "-m", msg]);
+            run_in_repo(&self.upstream_repo, &["checkout", "main"]);
+        }
+
+        /// Modify a tracked file in the workspace (does not stage/commit).
+        fn dirty_tracked_file(&self) {
+            fs::write(self.workspace_dir().join("README.md"), "user edits").unwrap();
+        }
+
+        /// Add an untracked file in the workspace.
+        fn add_untracked_file(&self) {
+            fs::write(self.workspace_dir().join("scratch.txt"), "scratchpad").unwrap();
+        }
+
+        /// Make a real commit in the workspace, leaving the worktree clean.
+        fn commit_in_workspace(&self, file: &str, contents: &str, msg: &str) {
+            let dir = self.workspace_dir();
+            fs::write(dir.join(file), contents).unwrap();
+            run_in_repo(&dir, &["add", file]);
+            run_in_repo(&dir, &["commit", "-m", msg]);
+        }
+    }
+
+    fn init_branch_switch_repo(repo: &Path) {
+        git_ops::run_git(["init", "-b", "main", repo.to_str().unwrap()], None).unwrap();
+        run_in_repo(repo, &["config", "user.email", "helmor@example.com"]);
+        run_in_repo(repo, &["config", "user.name", "Helmor"]);
+        run_in_repo(repo, &["config", "commit.gpgsign", "false"]);
+        fs::write(repo.join("README.md"), "main initial").unwrap();
+        run_in_repo(repo, &["add", "README.md"]);
+        run_in_repo(repo, &["commit", "-m", "initial"]);
+    }
+
+    fn run_in_repo(repo: &Path, args: &[&str]) {
+        let repo_str = repo.display().to_string();
+        let mut full: Vec<&str> = vec!["-C", repo_str.as_str()];
+        full.extend_from_slice(args);
+        git_ops::run_git(full, None).unwrap();
+    }
+
+    fn commit_file(repo: &Path, file: &str, contents: &str, msg: &str) {
+        fs::write(repo.join(file), contents).unwrap();
+        run_in_repo(repo, &["add", file]);
+        run_in_repo(repo, &["commit", "-m", msg]);
+    }
+
+    fn create_branch_switch_fixture_db(
+        db_path: &Path,
+        source_repo: &Path,
+        repo_name: &str,
+        directory_name: &str,
+        workspace_id: &str,
+        branch: &str,
+    ) {
+        let connection = Connection::open(db_path).unwrap();
+        connection.execute_batch(&fixture_schema_sql(true)).unwrap();
+        connection
+            .execute(
+                "INSERT INTO repos (id, name, remote_url, default_branch, root_path) VALUES (?1, ?2, NULL, 'main', ?3)",
+                ["repo-1", repo_name, source_repo.to_str().unwrap()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                r#"INSERT INTO workspaces (
+                    id, repository_id, directory_name, state, derived_status,
+                    manual_status, unread, branch, initialization_parent_branch,
+                    intended_target_branch, notes, pinned_at, active_session_id,
+                    pr_title, pr_description, archive_commit, created_at, updated_at
+                  ) VALUES (
+                    ?1, 'repo-1', ?2, 'ready', 'in-progress',
+                    NULL, 0, ?3, 'main',
+                    'main', NULL, NULL, NULL,
+                    NULL, NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                  )"#,
+                (workspace_id, directory_name, branch),
+            )
+            .unwrap();
+    }
+
+    // ---- Branch-switch tests ----
+
+    #[test]
+    fn branch_switch_clean_fresh_resets_to_target() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = BranchSwitchTestHarness::new();
+        let target_dev_sha = harness.workspace_remote_ref_sha("dev");
+
+        let result =
+            workspaces::update_intended_target_branch_local(&harness.workspace_id, "dev").unwrap();
+
+        assert!(result.reset, "expected a local reset");
+        assert_eq!(result.target_branch, "dev");
+        assert_eq!(
+            result.post_reset_sha.as_deref(),
+            Some(target_dev_sha.as_str())
+        );
+        assert_eq!(harness.workspace_head(), target_dev_sha);
+        assert_eq!(harness.intent_in_db(), "dev");
+        assert_eq!(harness.init_parent_in_db().as_deref(), Some("dev"));
+    }
+
+    #[test]
+    fn branch_switch_dirty_modified_skips_reset_but_keeps_intent() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = BranchSwitchTestHarness::new();
+        let head_before = harness.workspace_head();
+        harness.dirty_tracked_file();
+
+        let result =
+            workspaces::update_intended_target_branch_local(&harness.workspace_id, "dev").unwrap();
+
+        assert!(!result.reset, "dirty worktree must not be reset");
+        assert!(result.post_reset_sha.is_none());
+        assert_eq!(harness.workspace_head(), head_before, "HEAD must not move");
+        assert_eq!(
+            harness.intent_in_db(),
+            "dev",
+            "intent should still be updated"
+        );
+        assert_eq!(
+            harness.init_parent_in_db().as_deref(),
+            Some("main"),
+            "init_parent must remain at the original baseline"
+        );
+    }
+
+    #[test]
+    fn branch_switch_dirty_untracked_skips_reset() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = BranchSwitchTestHarness::new();
+        let head_before = harness.workspace_head();
+        harness.add_untracked_file();
+
+        let result =
+            workspaces::update_intended_target_branch_local(&harness.workspace_id, "dev").unwrap();
+
+        assert!(!result.reset, "untracked files must block the reset");
+        assert_eq!(harness.workspace_head(), head_before);
+        assert_eq!(harness.intent_in_db(), "dev");
+        assert_eq!(harness.init_parent_in_db().as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn branch_switch_user_commit_skips_reset() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = BranchSwitchTestHarness::new();
+        harness.commit_in_workspace("user.txt", "user work", "user commit");
+        let head_after_commit = harness.workspace_head();
+
+        let result =
+            workspaces::update_intended_target_branch_local(&harness.workspace_id, "dev").unwrap();
+
+        assert!(
+            !result.reset,
+            "branch with user commits must never be reset"
+        );
+        assert_eq!(
+            harness.workspace_head(),
+            head_after_commit,
+            "user's commit must be preserved"
+        );
+        assert_eq!(harness.intent_in_db(), "dev");
+        assert_eq!(harness.init_parent_in_db().as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn branch_switch_no_init_parent_skips_reset() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = BranchSwitchTestHarness::new();
+        harness.set_init_parent(None);
+        let head_before = harness.workspace_head();
+
+        let result =
+            workspaces::update_intended_target_branch_local(&harness.workspace_id, "dev").unwrap();
+
+        assert!(
+            !result.reset,
+            "no baseline → cannot prove the branch is fresh"
+        );
+        assert_eq!(harness.workspace_head(), head_before);
+        assert_eq!(harness.intent_in_db(), "dev");
+        assert_eq!(harness.init_parent_in_db(), None);
+    }
+
+    #[test]
+    fn branch_switch_missing_remote_ref_silent_fallback() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = BranchSwitchTestHarness::new();
+        let head_before = harness.workspace_head();
+
+        // Switch to a branch the dropdown might offer (in real life via stale
+        // cache) but that doesn't exist in refs/remotes/origin/.
+        let result = workspaces::update_intended_target_branch_local(
+            &harness.workspace_id,
+            "no-such-branch",
+        )
+        .unwrap();
+
+        assert!(
+            !result.reset,
+            "missing origin/<target> must silent-fallback, not error"
+        );
+        assert_eq!(harness.workspace_head(), head_before);
+        assert_eq!(harness.intent_in_db(), "no-such-branch");
+        assert_eq!(harness.init_parent_in_db().as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn branch_switch_archived_state_bails() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = BranchSwitchTestHarness::new();
+        harness.set_state("archived");
+
+        let err = workspaces::update_intended_target_branch_local(&harness.workspace_id, "dev")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("not in ready state"),
+            "expected 'not in ready state' error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn branch_switch_round_trip_baseline_tracking() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = BranchSwitchTestHarness::new();
+
+        // Step 1: main → dev (clean & fresh, should reset)
+        let r1 =
+            workspaces::update_intended_target_branch_local(&harness.workspace_id, "dev").unwrap();
+        assert!(r1.reset);
+        assert_eq!(harness.init_parent_in_db().as_deref(), Some("dev"));
+        let head_on_dev = harness.workspace_head();
+        assert_eq!(head_on_dev, harness.workspace_remote_ref_sha("dev"));
+
+        // Step 2: user commits something on dev
+        harness.commit_in_workspace("more.txt", "more", "more work");
+        let head_after_commit = harness.workspace_head();
+        assert_ne!(head_after_commit, head_on_dev);
+
+        // Step 3: user tries to switch to feature/work — must NOT reset, since
+        // the baseline is now dev and HEAD has commits beyond origin/dev.
+        let r2 =
+            workspaces::update_intended_target_branch_local(&harness.workspace_id, "feature/work")
+                .unwrap();
+        assert!(
+            !r2.reset,
+            "user commit on dev must block the next realignment"
+        );
+        assert_eq!(
+            harness.workspace_head(),
+            head_after_commit,
+            "the user's commit must be preserved across the switch"
+        );
+        assert_eq!(harness.intent_in_db(), "feature/work");
+        // Baseline must NOT have moved to feature/work, since no reset happened.
+        assert_eq!(harness.init_parent_in_db().as_deref(), Some("dev"));
+    }
+
+    #[test]
+    fn branch_switch_silent_re_reset_when_remote_advances() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = BranchSwitchTestHarness::new();
+
+        // Initial fast switch — workspace is now on whatever cached origin/dev
+        // points at.
+        let r =
+            workspaces::update_intended_target_branch_local(&harness.workspace_id, "dev").unwrap();
+        let post_reset_sha = r.post_reset_sha.unwrap();
+        assert_eq!(harness.workspace_head(), post_reset_sha);
+
+        // Simulate "remote advanced" while user was clicking.
+        harness.upstream_advance("dev", "newdev.txt", "fresh", "advance dev");
+
+        // Background phase: fetch + re-reset.
+        let re_reset =
+            workspaces::refresh_remote_and_realign(&harness.workspace_id, "dev", &post_reset_sha)
+                .unwrap();
+
+        assert!(re_reset, "remote moved + clean tree → silent re-reset");
+        let new_head = harness.workspace_head();
+        assert_ne!(new_head, post_reset_sha, "HEAD should have advanced");
+        assert_eq!(
+            new_head,
+            harness.workspace_remote_ref_sha("dev"),
+            "HEAD must be the freshly fetched origin/dev"
+        );
+    }
+
+    #[test]
+    fn branch_switch_silent_re_reset_skipped_when_dirty() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = BranchSwitchTestHarness::new();
+
+        let r =
+            workspaces::update_intended_target_branch_local(&harness.workspace_id, "dev").unwrap();
+        let post_reset_sha = r.post_reset_sha.unwrap();
+
+        // User starts editing immediately after the switch.
+        harness.dirty_tracked_file();
+
+        // Remote advances (e.g. teammate pushed).
+        harness.upstream_advance("dev", "newdev.txt", "fresh", "advance dev");
+
+        let re_reset =
+            workspaces::refresh_remote_and_realign(&harness.workspace_id, "dev", &post_reset_sha)
+                .unwrap();
+
+        assert!(
+            !re_reset,
+            "dirty worktree must veto the silent re-reset, no matter what"
+        );
+        assert_eq!(
+            harness.workspace_head(),
+            post_reset_sha,
+            "HEAD must NOT have moved — user's edits would be at risk"
+        );
+        // The user's modification must still be on disk.
+        let readme = fs::read_to_string(harness.workspace_dir().join("README.md")).unwrap();
+        assert_eq!(readme, "user edits");
+    }
+
+    #[test]
+    fn branch_switch_silent_re_reset_skipped_when_head_moved() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = BranchSwitchTestHarness::new();
+
+        let r =
+            workspaces::update_intended_target_branch_local(&harness.workspace_id, "dev").unwrap();
+        let post_reset_sha = r.post_reset_sha.unwrap();
+
+        // User commits in the workspace right after the switch (clean tree, but
+        // HEAD has moved).
+        harness.commit_in_workspace("user.txt", "user content", "user commit");
+        let head_after_commit = harness.workspace_head();
+        assert_ne!(head_after_commit, post_reset_sha);
+
+        // Remote advances.
+        harness.upstream_advance("dev", "newdev.txt", "fresh", "advance dev");
+
+        let re_reset =
+            workspaces::refresh_remote_and_realign(&harness.workspace_id, "dev", &post_reset_sha)
+                .unwrap();
+
+        assert!(
+            !re_reset,
+            "HEAD moved away from post_reset_sha → veto re-reset"
+        );
+        assert_eq!(
+            harness.workspace_head(),
+            head_after_commit,
+            "user's commit must be preserved untouched"
+        );
+    }
+
+    #[test]
+    fn prefetch_workspace_remote_refs_rate_limit() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let harness = BranchSwitchTestHarness::new();
+
+        // First call: should actually fetch.
+        let first = workspaces::prefetch_workspace_remote_refs(&harness.workspace_id).unwrap();
+        assert!(first.fetched, "first call should perform a real fetch");
+
+        // Immediate second call: rate-limited.
+        let second = workspaces::prefetch_workspace_remote_refs(&harness.workspace_id).unwrap();
+        assert!(
+            !second.fetched,
+            "back-to-back call within the 10s window must be suppressed"
+        );
+
+        // After the explicit reset, fetching is allowed again.
+        workspaces::_reset_prefetch_rate_limit();
+        let third = workspaces::prefetch_workspace_remote_refs(&harness.workspace_id).unwrap();
+        assert!(third.fetched, "rate limiter should re-enable after reset");
     }
 }

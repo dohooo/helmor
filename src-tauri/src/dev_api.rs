@@ -211,8 +211,16 @@ pub fn archive_workspace(workspace_id: &str) -> Result<workspaces::ArchiveWorksp
     workspaces::archive_workspace_impl(workspace_id)
 }
 
+pub fn validate_archive_workspace(workspace_id: &str) -> Result<()> {
+    workspaces::validate_archive_workspace(workspace_id)
+}
+
 pub fn restore_workspace(workspace_id: &str) -> Result<workspaces::RestoreWorkspaceResponse> {
     workspaces::restore_workspace_impl(workspace_id)
+}
+
+pub fn validate_restore_workspace(workspace_id: &str) -> Result<()> {
+    workspaces::validate_restore_workspace(workspace_id)
 }
 
 pub fn create_workspace_from_repo(repo_id: &str) -> Result<workspaces::CreateWorkspaceResponse> {
@@ -223,8 +231,17 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
     workspaces::permanently_delete_workspace(workspace_id)
 }
 
-pub fn update_intended_target_branch(workspace_id: &str, target_branch: &str) -> Result<()> {
+pub fn update_intended_target_branch(
+    workspace_id: &str,
+    target_branch: &str,
+) -> Result<workspaces::UpdateIntendedTargetBranchResponse> {
     workspaces::update_intended_target_branch(workspace_id, target_branch)
+}
+
+pub fn prefetch_workspace_remote_refs(
+    workspace_id: &str,
+) -> Result<workspaces::PrefetchWorkspaceRemoteRefsResponse> {
+    workspaces::prefetch_workspace_remote_refs(workspace_id)
 }
 
 pub fn update_app_settings(updates: HashMap<String, String>) -> Result<()> {
@@ -410,6 +427,102 @@ pub fn start_agent_stream(
         .context("Failed to spawn dev stream reader thread")?;
 
     Ok((AgentStreamStartResponse { stream_id }, rx))
+}
+
+/// Browser-mode counterpart of `agents::list_slash_commands`.
+///
+/// Sends a `listSlashCommands` request to the sidecar and blocks the
+/// current thread until either a `slashCommandsListed` event arrives or
+/// the sidecar reports an error.
+pub fn list_slash_commands(
+    sidecar: &ManagedSidecar,
+    provider: &str,
+    working_directory: Option<&str>,
+    model_id: Option<&str>,
+) -> Result<Vec<crate::agents::SlashCommandEntry>> {
+    let request_id = uuid::Uuid::new_v4().to_string();
+
+    let mut params = serde_json::Map::new();
+    params.insert(
+        "provider".into(),
+        serde_json::Value::String(provider.to_string()),
+    );
+    if let Some(cwd) = working_directory {
+        params.insert("cwd".into(), serde_json::Value::String(cwd.to_string()));
+    }
+    if let Some(model) = model_id {
+        params.insert("model".into(), serde_json::Value::String(model.to_string()));
+    }
+
+    let req = SidecarRequest {
+        id: request_id.clone(),
+        method: "listSlashCommands".to_string(),
+        params: serde_json::Value::Object(params),
+    };
+
+    let rx = sidecar.subscribe(&request_id);
+    if let Err(e) = sidecar.send(&req) {
+        sidecar.unsubscribe(&request_id);
+        anyhow::bail!("Sidecar send failed: {e}");
+    }
+
+    let mut commands: Vec<crate::agents::SlashCommandEntry> = Vec::new();
+    let mut error: Option<String> = None;
+
+    for event in rx.iter() {
+        match event.event_type() {
+            "slashCommandsListed" => {
+                if let Some(arr) = event.raw.get("commands").and_then(|v| v.as_array()) {
+                    for entry in arr {
+                        let Some(name) = entry.get("name").and_then(|v| v.as_str()) else {
+                            continue;
+                        };
+                        let description = entry
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let argument_hint = entry
+                            .get("argumentHint")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string);
+                        let source = entry
+                            .get("source")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("builtin")
+                            .to_string();
+                        commands.push(crate::agents::SlashCommandEntry {
+                            name: name.to_string(),
+                            description,
+                            argument_hint,
+                            source,
+                        });
+                    }
+                }
+                break;
+            }
+            "error" => {
+                error = Some(
+                    event
+                        .raw
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown error")
+                        .to_string(),
+                );
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    sidecar.unsubscribe(&request_id);
+
+    if let Some(msg) = error {
+        anyhow::bail!("listSlashCommands failed: {msg}");
+    }
+    Ok(commands)
 }
 
 pub fn stop_agent_stream(

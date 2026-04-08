@@ -4,18 +4,249 @@ expression: snapshot
 input_file: tests/fixtures/streams/codex/multi-step.jsonl
 ---
 line_count: 23
-checkpoint_count: 0
-checkpoints: []
+checkpoint_count: 20
+checkpoints:
+  - line_index: 2
+    event_type: item.completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+  - line_index: 3
+    event_type: item.started
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+  - line_index: 4
+    event_type: item.completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+      - text
+  - line_index: 5
+    event_type: item.started
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+      - text
+      - tool-call
+  - line_index: 6
+    event_type: item.completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+      - text
+      - tool-call
+  - line_index: 7
+    event_type: item.completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+      - text
+      - tool-call
+      - text
+  - line_index: 8
+    event_type: item.updated
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+      - text
+      - tool-call
+      - text
+  - line_index: 9
+    event_type: item.started
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+      - text
+      - tool-call
+      - text
+      - tool-call
+  - line_index: 10
+    event_type: item.completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+      - text
+      - tool-call
+      - text
+      - tool-call
+  - line_index: 11
+    event_type: item.completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+  - line_index: 12
+    event_type: item.updated
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+  - line_index: 13
+    event_type: item.started
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+      - tool-call
+  - line_index: 14
+    event_type: item.completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+      - tool-call
+  - line_index: 15
+    event_type: item.completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+  - line_index: 16
+    event_type: item.started
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+      - tool-call
+  - line_index: 17
+    event_type: item.completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+      - tool-call
+  - line_index: 18
+    event_type: item.updated
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+      - tool-call
+  - line_index: 19
+    event_type: item.completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+  - line_index: 20
+    event_type: item.completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - todo-list
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+      - tool-call
+      - text
+  - line_index: 21
+    event_type: turn.completed
+    roles:
+      - assistant
+      - system
+    last_part_types:
+      - text
 final_state:
   message_count: 2
   roles:
     - assistant
     - system
-  total_parts: 11
+  total_parts: 12
 persisted_turns:
-  turn_count: 10
+  turn_count: 11
   total_blocks: 0
   turns:
+    - role: assistant
+      block_types: []
     - role: assistant
       block_types: []
     - role: assistant
@@ -51,3 +282,4 @@ historical_render:
         - text
         - tool-call
         - text
+        - todo-list

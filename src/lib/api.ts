@@ -694,6 +694,49 @@ export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 	}
 }
 
+export type SlashCommandEntry = {
+	name: string;
+	description: string;
+	argumentHint?: string | null;
+	source: "builtin" | "skill";
+};
+
+/**
+ * Fetch the slash commands the composer popup should display for the given
+ * provider + workspace. The Rust side dispatches to the sidecar which uses
+ * either the Claude SDK control protocol or a Codex skill-directory scan,
+ * but the frontend gets the same shape either way.
+ */
+export async function listSlashCommands(input: {
+	provider: AgentProvider;
+	workingDirectory?: string | null;
+	modelId?: string | null;
+}): Promise<SlashCommandEntry[]> {
+	const invoke = await getTauriInvoke();
+
+	if (!invoke) {
+		const params: Record<string, string> = { provider: input.provider };
+		if (input.workingDirectory)
+			params.workingDirectory = input.workingDirectory;
+		if (input.modelId) params.modelId = input.modelId;
+		return devFetch<SlashCommandEntry[]>("list_slash_commands", params);
+	}
+
+	try {
+		return await invoke<SlashCommandEntry[]>("list_slash_commands", {
+			request: {
+				provider: input.provider,
+				workingDirectory: input.workingDirectory ?? null,
+				modelId: input.modelId ?? null,
+			},
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load slash commands."),
+		);
+	}
+}
+
 export async function loadWorkspaceDetail(
 	workspaceId: string,
 ): Promise<WorkspaceDetail | null> {
@@ -728,24 +771,65 @@ export async function listRemoteBranches(
 	}
 }
 
+export type UpdateIntendedTargetBranchResponse = {
+	/** True if the workspace's local branch was hard-reset to origin/<target>. */
+	reset: boolean;
+	targetBranch: string;
+};
+
 export async function updateIntendedTargetBranch(
 	workspaceId: string,
 	targetBranch: string,
-): Promise<void> {
+): Promise<UpdateIntendedTargetBranchResponse> {
 	const invoke = await getTauriInvoke();
 
 	if (!invoke) {
-		await devFetch("update_intended_target_branch", undefined, {
-			method: "POST",
-			body: { workspaceId, targetBranch },
-		});
-		return;
+		return devFetch<UpdateIntendedTargetBranchResponse>(
+			"update_intended_target_branch",
+			undefined,
+			{
+				method: "POST",
+				body: { workspaceId, targetBranch },
+			},
+		);
 	}
 
-	return invoke<void>("update_intended_target_branch", {
-		workspaceId,
-		targetBranch,
-	});
+	return invoke<UpdateIntendedTargetBranchResponse>(
+		"update_intended_target_branch",
+		{
+			workspaceId,
+			targetBranch,
+		},
+	);
+}
+
+export type PrefetchWorkspaceRemoteRefsResponse = {
+	/** True if a fetch was performed; false if the call was rate-limited. */
+	fetched: boolean;
+};
+
+/**
+ * Best-effort `git fetch --prune origin` for the workspace's repo. Rate-limited
+ * to once every 10 seconds per workspace on the backend, so callers can fire
+ * this freely (e.g. on dropdown open) without worrying about thrashing.
+ */
+export async function prefetchWorkspaceRemoteRefs(
+	workspaceId: string,
+): Promise<PrefetchWorkspaceRemoteRefsResponse> {
+	const invoke = await getTauriInvoke();
+
+	if (!invoke) {
+		return devFetch<PrefetchWorkspaceRemoteRefsResponse>(
+			"prefetch_workspace_remote_refs",
+			{ id: workspaceId },
+			{ method: "POST" },
+		);
+	}
+
+	return invoke<PrefetchWorkspaceRemoteRefsResponse>(
+		"prefetch_workspace_remote_refs",
+		{ workspaceId },
+	);
 }
 
 export async function loadWorkspaceSessions(
@@ -836,6 +920,28 @@ export async function restoreWorkspace(
 	});
 }
 
+/**
+ * Read-only preflight: throws with the same error the slow `restoreWorkspace`
+ * call would, so callers can validate cheaply BEFORE applying optimistic UI
+ * updates. ~10-50ms (one DB read + a couple of `git rev-parse` calls).
+ */
+export async function validateRestoreWorkspace(
+	workspaceId: string,
+): Promise<void> {
+	const invoke = await getTauriInvoke();
+
+	if (!invoke) {
+		await devFetch<{ ok: boolean }>(
+			"validate_restore_workspace",
+			{ id: workspaceId },
+			{ method: "POST" },
+		);
+		return;
+	}
+
+	await invoke<void>("validate_restore_workspace", { workspaceId });
+}
+
 export async function archiveWorkspace(
 	workspaceId: string,
 ): Promise<ArchiveWorkspaceResponse> {
@@ -852,6 +958,26 @@ export async function archiveWorkspace(
 	return invoke<ArchiveWorkspaceResponse>("archive_workspace", {
 		workspaceId,
 	});
+}
+
+/**
+ * Read-only preflight for archive — see `validateRestoreWorkspace`.
+ */
+export async function validateArchiveWorkspace(
+	workspaceId: string,
+): Promise<void> {
+	const invoke = await getTauriInvoke();
+
+	if (!invoke) {
+		await devFetch<{ ok: boolean }>(
+			"validate_archive_workspace",
+			{ id: workspaceId },
+			{ method: "POST" },
+		);
+		return;
+	}
+
+	await invoke<void>("validate_archive_workspace", { workspaceId });
 }
 
 export type DetectedEditor = {
@@ -1199,7 +1325,39 @@ export type ToolCallPart = {
 	result?: unknown;
 	streamingStatus?: StreamingStatus;
 };
-export type MessagePart = TextPart | ReasoningPart | ToolCallPart;
+export type NoticeSeverity = "info" | "warning" | "error";
+export type SystemNoticePart = {
+	type: "system-notice";
+	severity: NoticeSeverity;
+	label: string;
+	body?: string;
+};
+export type TodoStatus = "pending" | "in_progress" | "completed";
+export type TodoItem = { text: string; status: TodoStatus };
+export type TodoListPart = {
+	type: "todo-list";
+	items: TodoItem[];
+};
+export type ImageSource =
+	| { kind: "base64"; data: string }
+	| { kind: "url"; url: string };
+export type ImagePart = {
+	type: "image";
+	source: ImageSource;
+	mediaType?: string;
+};
+export type PromptSuggestionPart = {
+	type: "prompt-suggestion";
+	text: string;
+};
+export type MessagePart =
+	| TextPart
+	| ReasoningPart
+	| ToolCallPart
+	| SystemNoticePart
+	| TodoListPart
+	| ImagePart
+	| PromptSuggestionPart;
 
 export type CollapsedGroupPart = {
 	type: "collapsed-group";

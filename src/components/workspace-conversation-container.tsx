@@ -1,4 +1,4 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	memo,
 	useCallback,
@@ -13,11 +13,15 @@ import {
 	startAgentMessageStream,
 	stopAgentStream,
 } from "@/lib/api";
-import { helmorQueryKeys } from "@/lib/query-client";
+import {
+	agentModelSectionsQueryOptions,
+	helmorQueryKeys,
+} from "@/lib/query-client";
 import {
 	appendLiveThreadMessage,
 	createLiveThreadMessage,
 	describeUnknownError,
+	findModelOption,
 	getComposerContextKey,
 } from "@/lib/workspace-helpers";
 import { WorkspaceComposerContainer } from "./workspace-composer-container";
@@ -108,6 +112,23 @@ export const WorkspaceConversationContainer = memo(
 			liveMessagesByContext[composerContextKey] ?? EMPTY_MESSAGES;
 		const activeSendError = sendErrorsByContext[composerContextKey] ?? null;
 		const isSending = sendingContextKeys.has(composerContextKey);
+
+		// Resolve the provider implied by the user's current model pick for the
+		// displayed session, so the tab icon can reflect a freshly-switched
+		// provider before the first message is persisted (which is when
+		// session.agentType becomes the source of truth). Stays null when the
+		// user hasn't overridden the model — in that case the panel falls back
+		// to session.agentType.
+		const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
+		const displayedSelectedModelId =
+			composerModelSelections[composerContextKey] ?? null;
+		const selectedProvider = useMemo(() => {
+			if (!displayedSelectedModelId) return null;
+			const sections = modelSectionsQuery.data ?? [];
+			return (
+				findModelOption(sections, displayedSelectedModelId)?.provider ?? null
+			);
+		}, [displayedSelectedModelId, modelSectionsQuery.data]);
 
 		// Derive sending session IDs for tab indicators
 		const sendingSessionIds = useMemo(() => {
@@ -567,6 +588,7 @@ export const WorkspaceConversationContainer = memo(
 					liveMessages={liveMessages}
 					sending={isSending}
 					sendingSessionIds={sendingSessionIds}
+					selectedProvider={selectedProvider}
 					onSelectSession={onSelectSession}
 					onResolveDisplayedSession={onResolveDisplayedSession}
 					headerActions={headerActions}

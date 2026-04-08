@@ -45,15 +45,6 @@ pub fn ensure_git_repository(repo_root: &Path) -> Result<()> {
     .context("Repository source is invalid")
 }
 
-/// Fetch latest refs from the remote into the source repo.
-#[allow(dead_code)]
-pub fn fetch_remote(repo_root: &Path) -> Result<()> {
-    let repo_root = repo_root.display().to_string();
-    run_git(["-C", repo_root.as_str(), "fetch", "--prune"], None)
-        .map(|_| ())
-        .context("Failed to fetch from remote")
-}
-
 /// List remote-tracking branches in the source repo.
 pub fn list_remote_branches(repo_root: &Path) -> Result<Vec<String>> {
     let repo_root = repo_root.display().to_string();
@@ -350,4 +341,126 @@ pub fn tracked_file_count(workspace_dir: &Path) -> Result<i64> {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .count() as i64)
+}
+
+/// Returns true if the workspace's working tree has no uncommitted changes
+/// (no staged, unstaged, or untracked files).
+pub fn working_tree_clean(workspace_dir: &Path) -> Result<bool> {
+    let workspace_dir = workspace_dir.display().to_string();
+    let output = run_git(
+        [
+            "-C",
+            workspace_dir.as_str(),
+            "status",
+            "--porcelain",
+            "--untracked-files=normal",
+        ],
+        None,
+    )
+    .with_context(|| format!("Failed to read working tree status for {}", workspace_dir))?;
+
+    Ok(output.trim().is_empty())
+}
+
+/// Counts how many commits are reachable from HEAD but not from `base_ref`.
+/// Returns 0 if HEAD is fully contained in `base_ref` (i.e. no user commits
+/// beyond the baseline).
+pub fn commits_ahead_of(workspace_dir: &Path, base_ref: &str) -> Result<u32> {
+    let workspace_dir = workspace_dir.display().to_string();
+    let range = format!("{base_ref}..HEAD");
+    let output = run_git(
+        [
+            "-C",
+            workspace_dir.as_str(),
+            "rev-list",
+            "--count",
+            range.as_str(),
+        ],
+        None,
+    )
+    .with_context(|| {
+        format!(
+            "Failed to count commits ahead of {} in {}",
+            base_ref, workspace_dir
+        )
+    })?;
+
+    output
+        .trim()
+        .parse::<u32>()
+        .with_context(|| format!("Unexpected rev-list count output: {}", output))
+}
+
+/// Fetch a specific branch from `origin` into the workspace's repo.
+pub fn fetch_remote_branch(workspace_dir: &Path, branch: &str) -> Result<()> {
+    let workspace_dir = workspace_dir.display().to_string();
+    run_git(
+        ["-C", workspace_dir.as_str(), "fetch", "origin", branch],
+        None,
+    )
+    .map(|_| ())
+    .with_context(|| format!("Failed to fetch origin/{} into {}", branch, workspace_dir))
+}
+
+/// Fetch all branches from `origin`, pruning deleted remote refs.
+pub fn fetch_all_remote(workspace_dir: &Path) -> Result<()> {
+    let workspace_dir = workspace_dir.display().to_string();
+    run_git(
+        ["-C", workspace_dir.as_str(), "fetch", "--prune", "origin"],
+        None,
+    )
+    .map(|_| ())
+    .with_context(|| format!("Failed to fetch all from origin in {}", workspace_dir))
+}
+
+/// Returns true if `refs/remotes/origin/<branch>` exists locally (no network).
+pub fn verify_remote_ref_exists(workspace_dir: &Path, branch: &str) -> Result<bool> {
+    let workspace_dir = workspace_dir.display().to_string();
+    let ref_name = format!("refs/remotes/origin/{branch}");
+    match run_git(
+        [
+            "-C",
+            workspace_dir.as_str(),
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            ref_name.as_str(),
+        ],
+        None,
+    ) {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
+/// Resolve `refs/remotes/origin/<branch>` to its current commit SHA.
+pub fn remote_ref_sha(workspace_dir: &Path, branch: &str) -> Result<String> {
+    let workspace_dir = workspace_dir.display().to_string();
+    let ref_name = format!("refs/remotes/origin/{branch}");
+    let sha = run_git(
+        ["-C", workspace_dir.as_str(), "rev-parse", ref_name.as_str()],
+        None,
+    )
+    .with_context(|| format!("Failed to resolve {} in {}", ref_name, workspace_dir))?;
+    if sha.trim().is_empty() {
+        bail!("Empty SHA for {} in {}", ref_name, workspace_dir);
+    }
+    Ok(sha.trim().to_string())
+}
+
+/// Hard-reset the currently checked-out branch in the workspace to `target_ref`.
+/// Caller is responsible for ensuring this is safe (clean tree, no user commits).
+pub fn reset_current_branch_hard(workspace_dir: &Path, target_ref: &str) -> Result<()> {
+    let workspace_dir = workspace_dir.display().to_string();
+    run_git(
+        ["-C", workspace_dir.as_str(), "reset", "--hard", target_ref],
+        None,
+    )
+    .map(|_| ())
+    .with_context(|| {
+        format!(
+            "Failed to reset workspace {} to {}",
+            workspace_dir, target_ref
+        )
+    })
 }

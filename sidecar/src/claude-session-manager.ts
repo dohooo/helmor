@@ -13,7 +13,12 @@ import {
 import { isAbortError } from "./abort.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { parseImageRefs } from "./images.js";
-import type { SendMessageParams, SessionManager } from "./session-manager.js";
+import type {
+	ListSlashCommandsParams,
+	SendMessageParams,
+	SessionManager,
+	SlashCommandInfo,
+} from "./session-manager.js";
 import {
 	buildTitlePrompt,
 	parseTitleAndBranch,
@@ -170,6 +175,17 @@ export class ClaudeSessionManager implements SessionManager {
 			}
 			throw err;
 		} finally {
+			// `abortController.abort()` alone leaves Node-level exit listeners,
+			// pending control/MCP promises, and the SDK's internal child handle
+			// dangling. `Query.close()` is the documented hard cleanup —
+			// always call it, including on the natural-completion path so the
+			// per-request `process.on("exit", ...)` listener gets removed.
+			try {
+				q.close();
+			} catch (closeErr) {
+				// Best-effort cleanup; never let this mask the original error.
+				void closeErr;
+			}
 			this.sessions.delete(sessionId);
 		}
 	}
@@ -185,17 +201,17 @@ export class ClaudeSessionManager implements SessionManager {
 			TITLE_GENERATION_TIMEOUT_MS,
 		);
 
-		try {
-			const q = query({
-				prompt: buildTitlePrompt(userMessage),
-				options: {
-					abortController,
-					model: "haiku",
-					permissionMode: "plan",
-					allowDangerouslySkipPermissions: true,
-				},
-			});
+		const q = query({
+			prompt: buildTitlePrompt(userMessage),
+			options: {
+				abortController,
+				model: "haiku",
+				permissionMode: "plan",
+				allowDangerouslySkipPermissions: true,
+			},
+		});
 
+		try {
 			let raw = "";
 			for await (const message of q) {
 				if (isResultMessage(message)) {
@@ -207,6 +223,106 @@ export class ClaudeSessionManager implements SessionManager {
 			emitter.titleGenerated(requestId, title, branchName);
 		} finally {
 			clearTimeout(timeout);
+			try {
+				q.close();
+			} catch (closeErr) {
+				void closeErr;
+			}
+		}
+	}
+
+	/**
+	 * Fetch the list of slash commands the Claude SDK currently exposes for
+	 * the given workspace. The SDK only surfaces commands via a live `Query`
+	 * (control protocol), so we spin up a transient query whose prompt is a
+	 * never-yielding async iterator. That keeps the underlying `claude-code`
+	 * child alive long enough to answer the control request without ever
+	 * sending a turn to the model — `donePromise` is resolved in `finally`
+	 * which lets the iterator return naturally as part of teardown.
+	 */
+	async listSlashCommands(
+		params: ListSlashCommandsParams,
+	): Promise<readonly SlashCommandInfo[]> {
+		const { cwd, model } = params;
+		const abortController = new AbortController();
+
+		let resolveDone: () => void = () => undefined;
+		const donePromise = new Promise<void>((resolve) => {
+			resolveDone = resolve;
+		});
+		// Streaming-input mode requires an `AsyncIterable<SDKUserMessage>`.
+		// Awaiting `donePromise` here parks the iterator until teardown
+		// signals it to return — it never yields a user message, so no turn
+		// is ever fired. Casting through `unknown` keeps strict typing happy
+		// without smuggling in a bogus message shape.
+		const promptIter = (async function* () {
+			await donePromise;
+			// Unreachable in practice (donePromise resolves only on teardown,
+			// after which the iterator returns), but biome's `useYield` rule
+			// requires generators to contain at least one `yield` expression.
+			yield* [];
+		})() as unknown as AsyncIterable<SDKUserMessage>;
+
+		const q = query({
+			prompt: promptIter,
+			options: {
+				abortController,
+				cwd: cwd || undefined,
+				model: model || undefined,
+				permissionMode: "bypassPermissions",
+				allowDangerouslySkipPermissions: true,
+				includePartialMessages: false,
+				settingSources: ["user", "project", "local"],
+			},
+		});
+
+		// Drain the message iterator in the background so the SDK's internal
+		// state machine progresses past init. We don't care about any events
+		// it produces — only the control-protocol response from
+		// `supportedCommands()`. Errors here are intentionally swallowed;
+		// the real error path is the `await` below.
+		const drain = (async () => {
+			try {
+				for await (const _ of q) {
+					void _;
+				}
+			} catch {
+				// ignored — teardown path handles errors via the outer await
+			}
+		})();
+
+		try {
+			const commands = await q.supportedCommands();
+			// Dedupe by name. The SDK can return the same command twice when
+			// the same skill is registered through multiple sources (e.g., a
+			// plugin marketplace AND `~/.claude/skills/`). First occurrence
+			// wins to match Claude Code's own popup behavior.
+			const seen = new Set<string>();
+			const out: SlashCommandInfo[] = [];
+			for (const c of commands) {
+				if (seen.has(c.name)) continue;
+				seen.add(c.name);
+				out.push({
+					name: c.name,
+					description: c.description,
+					argumentHint: c.argumentHint || undefined,
+					source: "builtin",
+				});
+			}
+			return out;
+		} finally {
+			resolveDone();
+			try {
+				abortController.abort();
+			} catch {
+				// best-effort
+			}
+			try {
+				q.close();
+			} catch {
+				// best-effort
+			}
+			await drain.catch(() => undefined);
 		}
 	}
 
@@ -216,6 +332,20 @@ export class ClaudeSessionManager implements SessionManager {
 			session.abortController.abort();
 			this.sessions.delete(sessionId);
 		}
+	}
+
+	async shutdown(): Promise<void> {
+		// Snapshot first — `query.close()` triggers the finally block in
+		// sendMessage which mutates `this.sessions`.
+		const snapshot = Array.from(this.sessions.values());
+		for (const session of snapshot) {
+			try {
+				session.query.close();
+			} catch {
+				// best-effort
+			}
+		}
+		this.sessions.clear();
 	}
 }
 

@@ -4,8 +4,12 @@ expression: snapshot
 input_file: tests/fixtures/streams/claude/todo-plan.jsonl
 ---
 line_count: 118
-checkpoint_count: 7
+checkpoint_count: 9
 checkpoints:
+  - line_index: 0
+    event_type: system
+    roles: []
+    last_part_types: []
   - line_index: 7
     event_type: assistant
     roles:
@@ -26,6 +30,13 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
+  - line_index: 25
+    event_type: rate_limit_event
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
   - line_index: 103
     event_type: assistant
     roles:
@@ -33,7 +44,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
+      - todo-list
   - line_index: 106
     event_type: user
     roles:
@@ -41,7 +52,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
+      - todo-list
   - line_index: 112
     event_type: assistant
     roles:
@@ -49,7 +60,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
+      - todo-list
       - text
   - line_index: 116
     event_type: result
@@ -91,5 +102,5 @@ historical_render:
       part_types:
         - reasoning
         - tool-call
-        - tool-call
+        - todo-list
         - text

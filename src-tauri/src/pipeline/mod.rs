@@ -77,7 +77,23 @@ impl MessagePipeline {
         self.generation += 1;
 
         let event_type = value.get("type").and_then(Value::as_str);
-        let is_finalizing = matches!(event_type, Some("assistant" | "user" | "result" | "error"));
+        let is_finalizing = matches!(
+            event_type,
+            Some(
+                "assistant"
+                    | "user"
+                    | "result"
+                    | "error"
+                    | "rate_limit_event"
+                    | "prompt_suggestion"
+                    | "system"
+                    | "item.started"
+                    | "item.updated"
+                    | "item.completed"
+                    | "turn.completed"
+                    | "turn.failed"
+            )
+        );
 
         if is_finalizing {
             self.emit_full()

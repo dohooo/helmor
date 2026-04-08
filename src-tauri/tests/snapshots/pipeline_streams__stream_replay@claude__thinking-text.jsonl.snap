@@ -4,8 +4,12 @@ expression: snapshot
 input_file: tests/fixtures/streams/claude/thinking-text.jsonl
 ---
 line_count: 25
-checkpoint_count: 3
+checkpoint_count: 5
 checkpoints:
+  - line_index: 0
+    event_type: system
+    roles: []
+    last_part_types: []
   - line_index: 13
     event_type: assistant
     roles:
@@ -14,6 +18,13 @@ checkpoints:
       - reasoning
   - line_index: 19
     event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+  - line_index: 23
+    event_type: rate_limit_event
     roles:
       - assistant
     last_part_types:

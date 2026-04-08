@@ -586,6 +586,129 @@ pub async fn generate_session_title(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Slash command discovery — unified across providers.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListSlashCommandsRequest {
+    pub provider: String,
+    pub working_directory: Option<String>,
+    pub model_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlashCommandEntry {
+    pub name: String,
+    pub description: String,
+    pub argument_hint: Option<String>,
+    pub source: String,
+}
+
+/// Look up the slash commands the composer popup should show. The Claude
+/// path uses the SDK's `Query.supportedCommands()` control protocol; the
+/// Codex path scans the documented Codex skill directories on disk. Both
+/// produce the same shape so the frontend can render either uniformly.
+#[tauri::command]
+pub async fn list_slash_commands(
+    app: AppHandle,
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    request: ListSlashCommandsRequest,
+) -> CmdResult<Vec<SlashCommandEntry>> {
+    let request_id = Uuid::new_v4().to_string();
+
+    let mut params = serde_json::Map::new();
+    params.insert("provider".into(), Value::String(request.provider.clone()));
+    if let Some(cwd) = request.working_directory.as_ref() {
+        params.insert("cwd".into(), Value::String(cwd.clone()));
+    }
+    if let Some(model) = request.model_id.as_ref() {
+        params.insert("model".into(), Value::String(model.clone()));
+    }
+
+    let sidecar_req = crate::sidecar::SidecarRequest {
+        id: request_id.clone(),
+        method: "listSlashCommands".to_string(),
+        params: Value::Object(params),
+    };
+
+    let rx = sidecar.subscribe(&request_id);
+    if let Err(e) = sidecar.send(&sidecar_req) {
+        sidecar.unsubscribe(&request_id);
+        return Err(anyhow::anyhow!("Sidecar send failed: {e}").into());
+    }
+
+    let result: CmdResult<Vec<SlashCommandEntry>> = tauri::async_runtime::spawn_blocking({
+        let rid = request_id.clone();
+        move || {
+            let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
+            let mut commands: Vec<SlashCommandEntry> = Vec::new();
+            let mut error: Option<String> = None;
+
+            for event in rx.iter() {
+                match event.event_type() {
+                    "slashCommandsListed" => {
+                        if let Some(arr) = event.raw.get("commands").and_then(Value::as_array) {
+                            for entry in arr {
+                                let Some(name) = entry.get("name").and_then(Value::as_str) else {
+                                    continue;
+                                };
+                                let description = entry
+                                    .get("description")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .to_string();
+                                let argument_hint = entry
+                                    .get("argumentHint")
+                                    .and_then(Value::as_str)
+                                    .filter(|s| !s.is_empty())
+                                    .map(str::to_string);
+                                let source = entry
+                                    .get("source")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("builtin")
+                                    .to_string();
+                                commands.push(SlashCommandEntry {
+                                    name: name.to_string(),
+                                    description,
+                                    argument_hint,
+                                    source,
+                                });
+                            }
+                        }
+                        break;
+                    }
+                    "error" => {
+                        error = Some(
+                            event
+                                .raw
+                                .get("message")
+                                .and_then(Value::as_str)
+                                .unwrap_or("Unknown error")
+                                .to_string(),
+                        );
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
+            sidecar_state.unsubscribe(&rid);
+            if let Some(msg) = error {
+                Err(anyhow::anyhow!("listSlashCommands failed: {msg}").into())
+            } else {
+                Ok(commands)
+            }
+        }
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("listSlashCommands task failed: {e}"))?;
+
+    result
+}
+
 fn sidecar_debug_enabled() -> bool {
     std::env::var("HELMOR_SIDECAR_DEBUG")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))

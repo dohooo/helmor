@@ -1,10 +1,20 @@
-use std::sync::Mutex;
-
 use anyhow::Result;
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{Connection, OpenFlags};
+use tauri::async_runtime::Mutex;
 
-pub static WORKSPACE_MUTATION_LOCK: Mutex<()> = Mutex::new(());
+/// Serializes any operation that mutates a workspace's filesystem state
+/// (worktree creation/removal/reset) along with its DB row, so concurrent
+/// commands can't interleave a half-applied filesystem change with a DB
+/// update.
+///
+/// This is a `tokio::sync::Mutex` (re-exported via `tauri::async_runtime`)
+/// rather than `std::sync::Mutex` so that it can be `.lock().await`-ed
+/// directly inside async Tauri commands without needing to wrap the
+/// acquisition in `spawn_blocking`. The background `refresh_remote_and_realign`
+/// thread (spawned via `std::thread::spawn`, NOT a Tokio runtime worker)
+/// uses `.blocking_lock()` instead.
+pub static WORKSPACE_MUTATION_LOCK: Mutex<()> = Mutex::const_new(());
 
 /// Open a connection to the Helmor database.
 pub fn open_connection(writable: bool) -> Result<Connection> {

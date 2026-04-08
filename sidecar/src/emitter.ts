@@ -38,6 +38,19 @@ export type TitleGeneratedEvent = {
 	readonly branchName: string | undefined;
 };
 
+export type SlashCommandEntry = {
+	readonly name: string;
+	readonly description: string;
+	readonly argumentHint: string | undefined;
+	readonly source: "builtin" | "skill";
+};
+
+export type SlashCommandsListedEvent = {
+	readonly id: string;
+	readonly type: "slashCommandsListed";
+	readonly commands: readonly SlashCommandEntry[];
+};
+
 export type SidecarControlEvent =
 	| ReadyEvent
 	| EndEvent
@@ -45,7 +58,8 @@ export type SidecarControlEvent =
 	| ErrorEvent
 	| StoppedEvent
 	| PongEvent
-	| TitleGeneratedEvent;
+	| TitleGeneratedEvent
+	| SlashCommandsListedEvent;
 
 /**
  * Typed emitter for the sidecar's stdout protocol.
@@ -65,6 +79,10 @@ export interface SidecarEmitter {
 		requestId: string,
 		title: string,
 		branchName: string | undefined,
+	): void;
+	slashCommandsListed(
+		requestId: string,
+		commands: readonly SlashCommandEntry[],
 	): void;
 	/**
 	 * Forward a raw provider SDK message. `id` is appended LAST so an SDK
@@ -93,6 +111,8 @@ export function createSidecarEmitter(
 		pong: (requestId) => write({ id: requestId, type: "pong" }),
 		titleGenerated: (requestId, title, branchName) =>
 			write({ id: requestId, type: "titleGenerated", title, branchName }),
+		slashCommandsListed: (requestId, commands) =>
+			write({ id: requestId, type: "slashCommandsListed", commands }),
 		passthrough: (requestId, message) =>
 			write({ ...(message as Record<string, unknown>), id: requestId }),
 	};

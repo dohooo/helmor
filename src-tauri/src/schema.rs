@@ -267,6 +267,7 @@ CREATE TRIGGER IF NOT EXISTS update_sessions_updated_at
         UPDATE sessions SET updated_at = datetime('now')
         WHERE id = NEW.id;
     END;
+
 "#;
 
 #[cfg(test)]

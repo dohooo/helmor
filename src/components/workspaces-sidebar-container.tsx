@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { open } from "@tauri-apps/plugin-dialog";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	addRepositoryFromLocalPath,
 	archiveWorkspace,
@@ -13,6 +13,8 @@ import {
 	restoreWorkspace,
 	setWorkspaceManualStatus,
 	unpinWorkspace,
+	validateArchiveWorkspace,
+	validateRestoreWorkspace,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
 import {
@@ -31,7 +33,9 @@ import {
 	findInitialWorkspaceId,
 	findWorkspaceRowById,
 	hasWorkspaceId,
+	rowToWorkspaceSummary,
 	summaryToArchivedRow,
+	workspaceGroupIdFromStatus,
 } from "@/lib/workspace-helpers";
 import { WorkspacesSidebar } from "./workspaces-sidebar";
 
@@ -60,17 +64,14 @@ export const WorkspacesSidebarContainer = memo(
 		pushWorkspaceToast,
 	}: WorkspacesSidebarContainerProps) {
 		const queryClient = useQueryClient();
+		// `addingRepository` is the only operation kept gated at the UI level —
+		// it opens a system file dialog (one-at-a-time semantic). Every other
+		// workspace mutation (archive / restore / delete / mark unread) is
+		// optimistic and fire-and-forget; the backend mutation lock serializes
+		// concurrent IPCs naturally, so we no longer need to disable the UI
+		// while one is in flight.
 		const [addingRepository, setAddingRepository] = useState(false);
 		const [creatingWorkspaceRepoId, setCreatingWorkspaceRepoId] = useState<
-			string | null
-		>(null);
-		const [archivingWorkspaceId, setArchivingWorkspaceId] = useState<
-			string | null
-		>(null);
-		const [restoringWorkspaceId, setRestoringWorkspaceId] = useState<
-			string | null
-		>(null);
-		const [markingUnreadWorkspaceId, setMarkingUnreadWorkspaceId] = useState<
 			string | null
 		>(null);
 		const [markingReadWorkspaceId, setMarkingReadWorkspaceId] = useState<
@@ -79,6 +80,38 @@ export const WorkspacesSidebarContainer = memo(
 		const [suppressedWorkspaceReadId, setSuppressedWorkspaceReadId] = useState<
 			string | null
 		>(null);
+
+		// Number of in-flight optimistic mutations whose state lives in the
+		// sidebar query caches (workspaceGroups + archivedWorkspaces). While
+		// this counter is > 0, ANY refresh of those two queries is deferred —
+		// otherwise the canonical data returned by an early-completing mutation
+		// would wipe out the optimistic state of a still-flying neighbor.
+		// The last mutation to settle is responsible for triggering the single
+		// final invalidation.
+		const sidebarMutationCountRef = useRef(0);
+
+		const flushSidebarLists = useCallback(() => {
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceGroups,
+			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.archivedWorkspaces,
+			});
+		}, [queryClient]);
+
+		const beginSidebarMutation = useCallback(() => {
+			sidebarMutationCountRef.current += 1;
+		}, []);
+
+		const endSidebarMutation = useCallback(() => {
+			sidebarMutationCountRef.current = Math.max(
+				0,
+				sidebarMutationCountRef.current - 1,
+			);
+			if (sidebarMutationCountRef.current === 0) {
+				flushSidebarLists();
+			}
+		}, [flushSidebarLists]);
 
 		const groupsQuery = useQuery(workspaceGroupsQueryOptions());
 		const archivedQuery = useQuery(archivedWorkspacesQueryOptions());
@@ -183,13 +216,9 @@ export const WorkspacesSidebarContainer = memo(
 
 		const invalidateWorkspaceSummary = useCallback(
 			async (workspaceId: string) => {
+				// Per-workspace queries are independent of any sidebar optimistic
+				// state, so they always refresh immediately.
 				await Promise.all([
-					queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceGroups,
-					}),
-					queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.archivedWorkspaces,
-					}),
 					queryClient.invalidateQueries({
 						queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
 					}),
@@ -197,8 +226,14 @@ export const WorkspacesSidebarContainer = memo(
 						queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
 					}),
 				]);
+				// Sidebar lists: only refresh if no optimistic mutation is still
+				// in flight. Otherwise the in-flight mutation's `endSidebarMutation`
+				// will trigger the refresh once everything has settled.
+				if (sidebarMutationCountRef.current === 0) {
+					flushSidebarLists();
+				}
 			},
-			[queryClient],
+			[flushSidebarLists, queryClient],
 		);
 
 		const markWorkspaceReadOptimistically = useCallback(
@@ -341,17 +376,7 @@ export const WorkspacesSidebarContainer = memo(
 		}, [markWorkspaceReadOptimistically, selectedWorkspaceId]);
 
 		const handleMarkWorkspaceUnread = useCallback(
-			async (workspaceId: string) => {
-				if (
-					markingUnreadWorkspaceId ||
-					archivingWorkspaceId ||
-					restoringWorkspaceId
-				) {
-					return;
-				}
-
-				setMarkingUnreadWorkspaceId(workspaceId);
-
+			(workspaceId: string) => {
 				const previousGroups = queryClient.getQueryData(
 					helmorQueryKeys.workspaceGroups,
 				);
@@ -414,41 +439,38 @@ export const WorkspacesSidebarContainer = memo(
 							: current,
 				);
 
-				try {
-					await markWorkspaceUnread(workspaceId);
-					if (selectedWorkspaceId === workspaceId) {
-						setSuppressedWorkspaceReadId(workspaceId);
-					}
-					await invalidateWorkspaceSummary(workspaceId);
-				} catch (error) {
-					queryClient.setQueryData(
-						helmorQueryKeys.workspaceGroups,
-						previousGroups,
-					);
-					queryClient.setQueryData(
-						helmorQueryKeys.archivedWorkspaces,
-						previousArchived,
-					);
-					queryClient.setQueryData(
-						helmorQueryKeys.workspaceDetail(workspaceId),
-						previousDetail,
-					);
-					pushWorkspaceToast(
-						describeUnknownError(error, "Unable to mark workspace as unread."),
-					);
-				} finally {
-					setMarkingUnreadWorkspaceId(null);
+				if (selectedWorkspaceId === workspaceId) {
+					setSuppressedWorkspaceReadId(workspaceId);
 				}
+
+				void markWorkspaceUnread(workspaceId)
+					.then(() => invalidateWorkspaceSummary(workspaceId))
+					.catch((error) => {
+						queryClient.setQueryData(
+							helmorQueryKeys.workspaceGroups,
+							previousGroups,
+						);
+						queryClient.setQueryData(
+							helmorQueryKeys.archivedWorkspaces,
+							previousArchived,
+						);
+						queryClient.setQueryData(
+							helmorQueryKeys.workspaceDetail(workspaceId),
+							previousDetail,
+						);
+						pushWorkspaceToast(
+							describeUnknownError(
+								error,
+								"Unable to mark workspace as unread.",
+							),
+						);
+					});
 			},
 			[
-				archivedSummaries,
-				archivingWorkspaceId,
-				groups,
 				invalidateWorkspaceSummary,
-				markingUnreadWorkspaceId,
 				pushWorkspaceToast,
 				queryClient,
-				restoringWorkspaceId,
+				selectedWorkspaceId,
 			],
 		);
 
@@ -582,13 +604,7 @@ export const WorkspacesSidebarContainer = memo(
 
 		const handleCreateWorkspaceFromRepo = useCallback(
 			async (repoId: string) => {
-				if (
-					addingRepository ||
-					creatingWorkspaceRepoId ||
-					archivingWorkspaceId ||
-					restoringWorkspaceId ||
-					markingUnreadWorkspaceId
-				) {
+				if (creatingWorkspaceRepoId) {
 					return;
 				}
 
@@ -608,26 +624,16 @@ export const WorkspacesSidebarContainer = memo(
 				}
 			},
 			[
-				addingRepository,
-				archivingWorkspaceId,
 				creatingWorkspaceRepoId,
-				markingUnreadWorkspaceId,
 				onSelectWorkspace,
 				prefetchWorkspace,
 				pushWorkspaceToast,
 				refetchNavigation,
-				restoringWorkspaceId,
 			],
 		);
 
 		const handleAddRepository = useCallback(async () => {
-			if (
-				addingRepository ||
-				creatingWorkspaceRepoId ||
-				archivingWorkspaceId ||
-				restoringWorkspaceId ||
-				markingUnreadWorkspaceId
-			) {
+			if (addingRepository) {
 				return;
 			}
 
@@ -661,163 +667,372 @@ export const WorkspacesSidebarContainer = memo(
 			}
 		}, [
 			addingRepository,
-			archivingWorkspaceId,
-			creatingWorkspaceRepoId,
-			markingUnreadWorkspaceId,
 			onSelectWorkspace,
 			prefetchWorkspace,
 			pushWorkspaceToast,
 			refetchNavigation,
-			restoringWorkspaceId,
 		]);
 
-		const handleArchiveWorkspace = useCallback(
-			async (workspaceId: string) => {
-				if (addingRepository || archivingWorkspaceId || restoringWorkspaceId) {
-					return;
-				}
+		// ─── Optimistic delete ──────────────────────────────────────────────
+		// Immediately removes the workspace from whichever list (groups OR
+		// archived) currently holds it, navigates to the next visible
+		// workspace if necessary, then fires the IPC fire-and-forget. On
+		// failure, both lists roll back to their previous state and an error
+		// toast is shown.
+		const handleDeleteWorkspace = useCallback(
+			(workspaceId: string) => {
+				const previousGroups = queryClient.getQueryData(
+					helmorQueryKeys.workspaceGroups,
+				);
+				const previousArchived = queryClient.getQueryData(
+					helmorQueryKeys.archivedWorkspaces,
+				);
 
-				setArchivingWorkspaceId(workspaceId);
-
-				try {
-					await archiveWorkspace(workspaceId);
-					const { loadedGroups, loadedArchived } = await refetchNavigation();
-					const nextWorkspaceId =
-						selectedWorkspaceId && selectedWorkspaceId !== workspaceId
-							? hasWorkspaceId(
-									selectedWorkspaceId,
-									loadedGroups,
-									loadedArchived,
+				// Remove from groups
+				queryClient.setQueryData(helmorQueryKeys.workspaceGroups, (current) =>
+					Array.isArray(current)
+						? (current as typeof groups).map((group) => ({
+								...group,
+								rows: group.rows.filter((row) => row.id !== workspaceId),
+							}))
+						: current,
+				);
+				// Remove from archived
+				queryClient.setQueryData(
+					helmorQueryKeys.archivedWorkspaces,
+					(current) =>
+						Array.isArray(current)
+							? (current as typeof archivedSummaries).filter(
+									(summary) => summary.id !== workspaceId,
 								)
-								? selectedWorkspaceId
-								: (findInitialWorkspaceId(loadedGroups) ??
-									loadedArchived[0]?.id ??
-									null)
-							: (findInitialWorkspaceId(loadedGroups) ??
-								loadedArchived[0]?.id ??
-								null);
+							: current,
+				);
 
+				// Navigate away if we were viewing the deleted workspace
+				if (selectedWorkspaceId === workspaceId) {
+					const optimisticGroups =
+						(queryClient.getQueryData(
+							helmorQueryKeys.workspaceGroups,
+						) as typeof groups) ?? [];
+					const optimisticArchived =
+						(queryClient.getQueryData(
+							helmorQueryKeys.archivedWorkspaces,
+						) as typeof archivedSummaries) ?? [];
+					const nextWorkspaceId =
+						findInitialWorkspaceId(optimisticGroups) ??
+						optimisticArchived[0]?.id ??
+						null;
 					if (nextWorkspaceId) {
 						prefetchWorkspace(nextWorkspaceId);
 					}
 					onSelectWorkspace(nextWorkspaceId);
-				} catch (error) {
-					const msg = describeUnknownError(
-						error,
-						"Unable to archive workspace.",
-					);
-					pushWorkspaceToast(msg, "Archive failed", "destructive", {
-						persistent: true,
-						action: {
-							label: "Permanently Delete",
-							destructive: true,
-							onClick: () => {
-								void (async () => {
-									try {
-										await permanentlyDeleteWorkspace(workspaceId);
-										const { loadedGroups, loadedArchived } =
-											await refetchNavigation();
-										const nextWorkspaceId =
-											findInitialWorkspaceId(loadedGroups) ??
-											loadedArchived[0]?.id ??
-											null;
-										onSelectWorkspace(nextWorkspaceId);
-										pushWorkspaceToast(
-											"Workspace permanently deleted.",
-											"Done",
-											"default",
-										);
-									} catch (deleteError) {
-										pushWorkspaceToast(
-											describeUnknownError(
-												deleteError,
-												"Unable to delete workspace.",
-											),
-										);
-									}
-								})();
-							},
-						},
-					});
-				} finally {
-					setArchivingWorkspaceId(null);
 				}
+
+				beginSidebarMutation();
+				void permanentlyDeleteWorkspace(workspaceId)
+					.catch((error) => {
+						queryClient.setQueryData(
+							helmorQueryKeys.workspaceGroups,
+							previousGroups,
+						);
+						queryClient.setQueryData(
+							helmorQueryKeys.archivedWorkspaces,
+							previousArchived,
+						);
+						pushWorkspaceToast(
+							describeUnknownError(error, "Unable to delete workspace."),
+						);
+					})
+					.finally(endSidebarMutation);
 			},
 			[
-				addingRepository,
-				archivingWorkspaceId,
+				beginSidebarMutation,
+				endSidebarMutation,
 				onSelectWorkspace,
 				prefetchWorkspace,
 				pushWorkspaceToast,
-				refetchNavigation,
-				restoringWorkspaceId,
+				queryClient,
 				selectedWorkspaceId,
 			],
 		);
 
-		const handleRestoreWorkspace = useCallback(
-			async (workspaceId: string) => {
-				if (addingRepository || archivingWorkspaceId || restoringWorkspaceId) {
-					return;
-				}
+		// ─── Optimistic archive (with preflight) ────────────────────────────
+		// 1. Run a fast read-only preflight (DB load + filesystem checks +
+		//    git rev-parse). If it fails, show an error toast and return —
+		//    the UI never moves, so the row never flickers between buckets.
+		// 2. If preflight passes, optimistically remove the row from its
+		//    current group, insert a placeholder into the archived list,
+		//    navigate to the next visible workspace, and fire the slow IPC
+		//    fire-and-forget.
+		// 3. The slow apply still has its own catch path (rare race: state
+		//    changed between preflight and apply, disk full mid-write, etc.)
+		//    that rolls back and offers "Permanently Delete" as a recovery.
+		const handleArchiveWorkspace = useCallback(
+			(workspaceId: string) => {
+				void (async () => {
+					try {
+						await validateArchiveWorkspace(workspaceId);
+					} catch (error) {
+						pushWorkspaceToast(
+							describeUnknownError(error, "Unable to archive workspace."),
+							"Archive failed",
+							"destructive",
+						);
+						return;
+					}
 
-				setRestoringWorkspaceId(workspaceId);
-
-				try {
-					const response = await restoreWorkspace(workspaceId);
-					await Promise.all([
-						refetchNavigation(),
-						queryClient.invalidateQueries({
-							queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
-						}),
-						queryClient.invalidateQueries({
-							queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
-						}),
-					]);
-					prefetchWorkspace(response.selectedWorkspaceId);
-					onSelectWorkspace(response.selectedWorkspaceId);
-				} catch (error) {
-					pushWorkspaceToast(
-						describeUnknownError(error, "Unable to restore workspace."),
+					const previousGroups = queryClient.getQueryData(
+						helmorQueryKeys.workspaceGroups,
 					);
-				} finally {
-					setRestoringWorkspaceId(null);
-				}
-			},
-			[
-				addingRepository,
-				archivingWorkspaceId,
-				onSelectWorkspace,
-				prefetchWorkspace,
-				pushWorkspaceToast,
-				refetchNavigation,
-				restoringWorkspaceId,
-			],
-		);
+					const previousArchived = queryClient.getQueryData(
+						helmorQueryKeys.archivedWorkspaces,
+					);
 
-		const handleDeleteWorkspace = useCallback(
-			async (workspaceId: string) => {
-				try {
-					await permanentlyDeleteWorkspace(workspaceId);
-					const { loadedGroups, loadedArchived } = await refetchNavigation();
-					if (selectedWorkspaceId === workspaceId) {
+					// Find the row in groups so we can move it to archived.
+					let movedRow: (typeof groups)[number]["rows"][number] | null = null;
+					const optimisticGroups = Array.isArray(previousGroups)
+						? (previousGroups as typeof groups).map((group) => {
+								const idx = group.rows.findIndex(
+									(row) => row.id === workspaceId,
+								);
+								if (idx === -1) return group;
+								movedRow = group.rows[idx];
+								return {
+									...group,
+									rows: [
+										...group.rows.slice(0, idx),
+										...group.rows.slice(idx + 1),
+									],
+								};
+							})
+						: undefined;
+
+					if (!movedRow || !optimisticGroups) {
+						// Row not found in groups — nothing to optimistically remove.
+						// Just fire the IPC; the in-flight counter will trigger a
+						// single sidebar refresh once everything settles.
+						beginSidebarMutation();
+						void archiveWorkspace(workspaceId)
+							.catch((error) => {
+								pushWorkspaceToast(
+									describeUnknownError(error, "Unable to archive workspace."),
+								);
+							})
+							.finally(endSidebarMutation);
+						return;
+					}
+
+					queryClient.setQueryData(
+						helmorQueryKeys.workspaceGroups,
+						optimisticGroups,
+					);
+
+					const archivedPlaceholder = rowToWorkspaceSummary(movedRow, {
+						state: "archived",
+					});
+					queryClient.setQueryData(
+						helmorQueryKeys.archivedWorkspaces,
+						(current) =>
+							Array.isArray(current)
+								? [
+										archivedPlaceholder,
+										...(current as typeof archivedSummaries),
+									]
+								: [archivedPlaceholder],
+					);
+
+					// Compute next workspace from the optimistic state.
+					const optimisticArchived =
+						(queryClient.getQueryData(
+							helmorQueryKeys.archivedWorkspaces,
+						) as typeof archivedSummaries) ?? [];
+					const shouldNavigate =
+						!selectedWorkspaceId || selectedWorkspaceId === workspaceId;
+					if (shouldNavigate) {
 						const nextWorkspaceId =
-							findInitialWorkspaceId(loadedGroups) ??
-							loadedArchived[0]?.id ??
+							findInitialWorkspaceId(optimisticGroups) ??
+							optimisticArchived.find((s) => s.id !== workspaceId)?.id ??
 							null;
+						if (nextWorkspaceId) {
+							prefetchWorkspace(nextWorkspaceId);
+						}
 						onSelectWorkspace(nextWorkspaceId);
 					}
-				} catch (error) {
-					pushWorkspaceToast(
-						describeUnknownError(error, "Unable to delete workspace."),
-					);
-				}
+
+					beginSidebarMutation();
+					void archiveWorkspace(workspaceId)
+						.catch((error) => {
+							queryClient.setQueryData(
+								helmorQueryKeys.workspaceGroups,
+								previousGroups,
+							);
+							queryClient.setQueryData(
+								helmorQueryKeys.archivedWorkspaces,
+								previousArchived,
+							);
+							const msg = describeUnknownError(
+								error,
+								"Unable to archive workspace.",
+							);
+							pushWorkspaceToast(msg, "Archive failed", "destructive", {
+								persistent: true,
+								action: {
+									label: "Permanently Delete",
+									destructive: true,
+									onClick: () => {
+										handleDeleteWorkspace(workspaceId);
+									},
+								},
+							});
+						})
+						.finally(endSidebarMutation);
+				})();
 			},
 			[
+				beginSidebarMutation,
+				endSidebarMutation,
+				handleDeleteWorkspace,
 				onSelectWorkspace,
+				prefetchWorkspace,
 				pushWorkspaceToast,
-				refetchNavigation,
+				queryClient,
 				selectedWorkspaceId,
+			],
+		);
+
+		// ─── Optimistic restore (with preflight) ────────────────────────────
+		// Same shape as archive: cheap preflight first (verifies the archive
+		// commit still exists in git, archived context dir is on disk, etc.),
+		// then optimistic UI move + slow IPC. The preflight catches the
+		// common "Commit not found" / "Archived context directory missing"
+		// failure modes BEFORE the row jumps groups, so the user never sees
+		// the workspace flicker between archived and progress.
+		const handleRestoreWorkspace = useCallback(
+			(workspaceId: string) => {
+				void (async () => {
+					try {
+						await validateRestoreWorkspace(workspaceId);
+					} catch (error) {
+						pushWorkspaceToast(
+							describeUnknownError(error, "Unable to restore workspace."),
+							"Restore failed",
+							"destructive",
+						);
+						return;
+					}
+
+					const previousGroups = queryClient.getQueryData(
+						helmorQueryKeys.workspaceGroups,
+					);
+					const previousArchived = queryClient.getQueryData(
+						helmorQueryKeys.archivedWorkspaces,
+					);
+
+					// Find the summary in archived.
+					const archivedSummary = Array.isArray(previousArchived)
+						? (previousArchived as typeof archivedSummaries).find(
+								(summary) => summary.id === workspaceId,
+							)
+						: undefined;
+
+					if (!archivedSummary) {
+						// Not in archived for some reason — fall back to plain IPC.
+						beginSidebarMutation();
+						void restoreWorkspace(workspaceId)
+							.then(() => {
+								prefetchWorkspace(workspaceId);
+								onSelectWorkspace(workspaceId);
+							})
+							.catch((error) => {
+								pushWorkspaceToast(
+									describeUnknownError(error, "Unable to restore workspace."),
+								);
+							})
+							.finally(endSidebarMutation);
+						return;
+					}
+
+					// Remove from archived.
+					queryClient.setQueryData(
+						helmorQueryKeys.archivedWorkspaces,
+						(current) =>
+							Array.isArray(current)
+								? (current as typeof archivedSummaries).filter(
+										(summary) => summary.id !== workspaceId,
+									)
+								: current,
+					);
+
+					// Insert into the SAME group the canonical query will put it in
+					// after invalidation. Computed from the workspace's existing
+					// manual_status / derived_status (preserved through archival), so
+					// the placeholder lands in its real bucket from the start — no
+					// visible jump as the optimistic row gets replaced by the real one.
+					const placeholderRow = summaryToArchivedRow({
+						...archivedSummary,
+						state: "ready",
+					});
+					const targetGroupId = workspaceGroupIdFromStatus(
+						archivedSummary.manualStatus,
+						archivedSummary.derivedStatus,
+					);
+					queryClient.setQueryData(
+						helmorQueryKeys.workspaceGroups,
+						(current) =>
+							Array.isArray(current)
+								? (current as typeof groups).map((group) =>
+										group.id === targetGroupId
+											? { ...group, rows: [placeholderRow, ...group.rows] }
+											: group,
+									)
+								: current,
+					);
+
+					// Navigate to the restored workspace.
+					prefetchWorkspace(workspaceId);
+					onSelectWorkspace(workspaceId);
+
+					beginSidebarMutation();
+					void restoreWorkspace(workspaceId)
+						.then(() =>
+							// Per-workspace caches refresh immediately — they're not
+							// part of the deferred sidebar batch and downstream UI
+							// (panel, sessions list) needs the latest record.
+							Promise.all([
+								queryClient.invalidateQueries({
+									queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+								}),
+								queryClient.invalidateQueries({
+									queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+								}),
+							]),
+						)
+						.catch((error) => {
+							queryClient.setQueryData(
+								helmorQueryKeys.workspaceGroups,
+								previousGroups,
+							);
+							queryClient.setQueryData(
+								helmorQueryKeys.archivedWorkspaces,
+								previousArchived,
+							);
+							pushWorkspaceToast(
+								describeUnknownError(error, "Unable to restore workspace."),
+								"Restore failed",
+								"destructive",
+							);
+						})
+						.finally(endSidebarMutation);
+				})();
+			},
+			[
+				beginSidebarMutation,
+				endSidebarMutation,
+				onSelectWorkspace,
+				prefetchWorkspace,
+				pushWorkspaceToast,
+				queryClient,
+				refetchNavigation,
 			],
 		);
 
@@ -838,27 +1053,16 @@ export const WorkspacesSidebarContainer = memo(
 				onCreateWorkspace={(repoId) => {
 					void handleCreateWorkspaceFromRepo(repoId);
 				}}
-				onArchiveWorkspace={(workspaceId) => {
-					void handleArchiveWorkspace(workspaceId);
-				}}
-				onMarkWorkspaceUnread={(workspaceId) => {
-					void handleMarkWorkspaceUnread(workspaceId);
-				}}
-				onRestoreWorkspace={(workspaceId) => {
-					void handleRestoreWorkspace(workspaceId);
-				}}
-				onDeleteWorkspace={(workspaceId) => {
-					void handleDeleteWorkspace(workspaceId);
-				}}
+				onArchiveWorkspace={handleArchiveWorkspace}
+				onMarkWorkspaceUnread={handleMarkWorkspaceUnread}
+				onRestoreWorkspace={handleRestoreWorkspace}
+				onDeleteWorkspace={handleDeleteWorkspace}
 				onTogglePin={(workspaceId, pinned) => {
 					void handleTogglePin(workspaceId, pinned);
 				}}
 				onSetManualStatus={(workspaceId, status) => {
 					void handleSetManualStatus(workspaceId, status);
 				}}
-				archivingWorkspaceId={archivingWorkspaceId}
-				markingUnreadWorkspaceId={markingUnreadWorkspaceId}
-				restoringWorkspaceId={restoringWorkspaceId}
 			/>
 		);
 	},

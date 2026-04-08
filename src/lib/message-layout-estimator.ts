@@ -132,6 +132,12 @@ function estimateAssistantPartHeight(
 			return estimateToolCallHeight(part);
 		case "collapsed-group":
 			return estimateCollapsedGroupHeight(part);
+		case "todo-list":
+			// Header (~22px) + per-row line-height (24px) + padding.
+			return 22 + part.items.length * 24 + 16;
+		case "image":
+			// Cap matches the rendered max-height; small slack for margin.
+			return 440;
 		default:
 			return TOOL_SUMMARY_HEIGHT;
 	}
@@ -170,11 +176,15 @@ function estimateSystemMessageHeight(
 ) {
 	const parts = message.content as MessagePart[];
 	const text = parts
-		.filter(
-			(part): part is Extract<MessagePart, { type: "text" }> =>
-				part.type === "text",
-		)
-		.map((part) => part.text)
+		.map((part) => {
+			if (part.type === "text") return part.text;
+			if (part.type === "system-notice") {
+				return part.body ? `${part.label} — ${part.body}` : part.label;
+			}
+			if (part.type === "prompt-suggestion") return part.text;
+			return "";
+		})
+		.filter((s) => s.length > 0)
 		.join("\n");
 	const textHeight = measureTextHeight(text, {
 		fontSize: Math.max(11, options.fontSize - 2),

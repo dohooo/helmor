@@ -74,10 +74,6 @@ pub fn group_id_from_status(manual_status: &Option<String>, derived_status: &str
     }
 }
 
-pub fn sort_sidebar_rows(rows: &mut [super::workspaces::WorkspaceSidebarRow]) {
-    rows.sort_by(|left, right| left.title.to_lowercase().cmp(&right.title.to_lowercase()));
-}
-
 pub fn sidebar_sort_rank(record: &WorkspaceRecord) -> usize {
     match group_id_from_status(&record.manual_status, &record.derived_status) {
         "done" => 0,

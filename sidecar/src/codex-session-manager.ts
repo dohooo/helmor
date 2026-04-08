@@ -9,9 +9,15 @@ import {
 	type UserInput,
 } from "@openai/codex-sdk";
 import { isAbortError } from "./abort.js";
+import { scanCodexSkills } from "./codex-skill-scanner.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { parseImageRefs } from "./images.js";
-import type { SendMessageParams, SessionManager } from "./session-manager.js";
+import type {
+	ListSlashCommandsParams,
+	SendMessageParams,
+	SessionManager,
+	SlashCommandInfo,
+} from "./session-manager.js";
 import {
 	buildTitlePrompt,
 	parseTitleAndBranch,
@@ -140,12 +146,39 @@ export class CodexSessionManager implements SessionManager {
 		}
 	}
 
+	/**
+	 * The Codex SDK exposes no command-discovery API, so we substitute by
+	 * scanning the documented Codex skill directories on disk and surfacing
+	 * each `SKILL.md` as a slash entry. This gives Codex sessions the same
+	 * unified popup experience as Claude.
+	 */
+	async listSlashCommands(
+		params: ListSlashCommandsParams,
+	): Promise<readonly SlashCommandInfo[]> {
+		return scanCodexSkills(params.cwd);
+	}
+
 	async stopSession(sessionId: string): Promise<void> {
 		const controller = this.abortControllers.get(sessionId);
 		if (controller) {
 			controller.abort();
 			this.abortControllers.delete(sessionId);
 		}
+	}
+
+	async shutdown(): Promise<void> {
+		// Codex SDK has no Query.close() / dispose() — abort is the only
+		// teardown primitive. The signal is forwarded to the spawned
+		// `codex exec` child via Node's child_process abort contract.
+		const snapshot = Array.from(this.abortControllers.values());
+		for (const controller of snapshot) {
+			try {
+				controller.abort();
+			} catch {
+				// best-effort
+			}
+		}
+		this.abortControllers.clear();
 	}
 }
 

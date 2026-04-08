@@ -4,8 +4,12 @@ expression: snapshot
 input_file: tests/fixtures/streams/claude/bash-and-edit.jsonl
 ---
 line_count: 74
-checkpoint_count: 9
+checkpoint_count: 11
 checkpoints:
+  - line_index: 0
+    event_type: system
+    roles: []
+    last_part_types: []
   - line_index: 7
     event_type: assistant
     roles:
@@ -14,6 +18,13 @@ checkpoints:
       - reasoning
   - line_index: 23
     event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+  - line_index: 27
+    event_type: rate_limit_event
     roles:
       - assistant
     last_part_types:

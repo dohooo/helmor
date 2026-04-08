@@ -1,10 +1,16 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useMemo } from "react";
-import type { AgentModelOption, AgentModelSection } from "@/lib/api";
+import type {
+	AgentModelOption,
+	AgentModelSection,
+	AgentProvider,
+	SlashCommandEntry,
+} from "@/lib/api";
 import { createSession } from "@/lib/api";
 import {
 	agentModelSectionsQueryOptions,
 	helmorQueryKeys,
+	slashCommandsQueryOptions,
 	workspaceDetailQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
@@ -17,6 +23,7 @@ import {
 import { WorkspaceComposer } from "./workspace-composer";
 
 const EMPTY_MODEL_SECTIONS: AgentModelSection[] = [];
+const EMPTY_SLASH_COMMANDS: SlashCommandEntry[] = [];
 
 type WorkspaceComposerContainerProps = {
 	displayedWorkspaceId: string | null;
@@ -160,6 +167,24 @@ export const WorkspaceComposerContainer = memo(
 		);
 
 		const workingDirectory = workspaceDetailQuery.data?.rootPath ?? null;
+
+		// Narrow `provider` (which can be the loosely-typed agentType from a
+		// historical session) to a real AgentProvider before keying the
+		// query — anything else degrades to claude so we never miss the popup.
+		const slashProvider: AgentProvider =
+			provider === "codex" ? "codex" : "claude";
+		// Slash command list — keyed by (provider, workingDirectory). The
+		// composer popup is hidden until this resolves; on error we fall back
+		// to an empty list and the popup never opens (no UI breakage).
+		const slashCommandsQuery = useQuery({
+			...slashCommandsQueryOptions(
+				slashProvider,
+				workingDirectory,
+				selectedModelId,
+			),
+			enabled: Boolean(workingDirectory),
+		});
+		const slashCommands = slashCommandsQuery.data ?? EMPTY_SLASH_COMMANDS;
 		const handleComposerSubmit = useCallback(
 			(prompt: string, imagePaths: string[]) => {
 				if (!selectedModel) {
@@ -215,6 +240,7 @@ export const WorkspaceComposerContainer = memo(
 				restoreDraft={restoreDraft}
 				restoreImages={restoreImages}
 				restoreNonce={restoreNonce}
+				slashCommands={slashCommands}
 			/>
 		);
 	},

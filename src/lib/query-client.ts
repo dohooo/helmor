@@ -1,8 +1,10 @@
 import { QueryClient, queryOptions } from "@tanstack/react-query";
 import {
+	type AgentProvider,
 	DEFAULT_AGENT_MODEL_SECTIONS,
 	DEFAULT_WORKSPACE_GROUPS,
 	listRepositories,
+	listSlashCommands,
 	listWorkspaceChangesWithContent,
 	loadAgentModelSections,
 	loadArchivedWorkspaces,
@@ -36,6 +38,8 @@ export const helmorQueryKeys = {
 		["sessionAttachments", sessionId] as const,
 	workspaceChanges: (workspaceRootPath: string) =>
 		["workspaceChanges", workspaceRootPath] as const,
+	slashCommands: (provider: AgentProvider, workingDirectory: string | null) =>
+		["slashCommands", provider, workingDirectory ?? ""] as const,
 };
 
 export function createHelmorQueryClient() {
@@ -123,6 +127,28 @@ export function sessionAttachmentsQueryOptions(sessionId: string) {
 		queryFn: () => loadSessionAttachments(sessionId),
 		gcTime: SESSION_GC_TIME,
 		staleTime: 60_000,
+	});
+}
+
+export function slashCommandsQueryOptions(
+	provider: AgentProvider,
+	workingDirectory: string | null,
+	modelId: string | null,
+) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.slashCommands(provider, workingDirectory),
+		queryFn: () =>
+			listSlashCommands({
+				provider,
+				workingDirectory,
+				modelId,
+			}),
+		// Slash commands rarely change within a workspace; cache aggressively.
+		staleTime: 5 * 60_000,
+		gcTime: DEFAULT_GC_TIME,
+		// An empty list is a sane fallback if discovery fails (the popup
+		// just won't surface) — never block the composer on errors here.
+		retry: 0,
 	});
 }
 

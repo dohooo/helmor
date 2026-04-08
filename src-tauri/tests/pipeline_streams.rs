@@ -64,6 +64,12 @@ struct StreamReplaySnapshot {
     final_state: FinalState,
     persisted_turns: PersistedTurnsSnapshot,
     historical_render: HistoricalRenderSnapshot,
+    /// Top-level event types `accumulator.push_event` had no handler for.
+    /// MUST be empty in steady state — the post-snapshot assertion enforces
+    /// it. Keeping the list in the snapshot makes drift visible in
+    /// `cargo insta review` even if you skip the assertion.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    dropped_event_types: Vec<String>,
 }
 
 /// Historical-side snapshot — what `convert_historical` produces when the
@@ -130,6 +136,10 @@ fn part_type(part: &helmor_lib::pipeline::types::ExtendedMessagePart) -> &'stati
         ExtendedMessagePart::Basic(MessagePart::Text { .. }) => "text",
         ExtendedMessagePart::Basic(MessagePart::Reasoning { .. }) => "reasoning",
         ExtendedMessagePart::Basic(MessagePart::ToolCall { .. }) => "tool-call",
+        ExtendedMessagePart::Basic(MessagePart::SystemNotice { .. }) => "system-notice",
+        ExtendedMessagePart::Basic(MessagePart::TodoList { .. }) => "todo-list",
+        ExtendedMessagePart::Basic(MessagePart::Image { .. }) => "image",
+        ExtendedMessagePart::Basic(MessagePart::PromptSuggestion { .. }) => "prompt-suggestion",
         ExtendedMessagePart::CollapsedGroup(_) => "collapsed-group",
     }
 }
@@ -280,6 +290,15 @@ fn stream_replay() {
         let persisted_turns = build_persisted_snapshot(&pipeline);
         let historical_render = build_historical_snapshot(&pipeline);
 
+        // Hard-zero coverage invariant: every top-level event type in this
+        // fixture must be handled by `accumulator.push_event`. Anything
+        // that falls through to the `_` arm is recorded in
+        // `dropped_event_types`. We embed the dropped list into the
+        // snapshot so it shows up in the .snap diff (and `cargo insta
+        // review` can review it), then assert empty so the test still
+        // hard-fails on any drop.
+        let dropped: Vec<String> = pipeline.accumulator.dropped_event_types().to_vec();
+
         let snapshot = StreamReplaySnapshot {
             line_count: lines.len(),
             checkpoint_count: checkpoints.len(),
@@ -287,6 +306,7 @@ fn stream_replay() {
             final_state,
             persisted_turns,
             historical_render,
+            dropped_event_types: dropped.clone(),
         };
 
         // insta's glob! uses the full matched path (relative to the glob
@@ -295,5 +315,15 @@ fn stream_replay() {
         // `codex__list-files.jsonl` — provider already embedded, no
         // collision between `claude/tool-use` and `codex/tool-use`.
         assert_yaml_snapshot!(snapshot);
+
+        // Hard-fail on any unhandled event type. Done AFTER the snapshot
+        // assertion so the .snap diff captures the drift before the test
+        // aborts — easier to triage from `cargo insta review`.
+        if std::env::var("HELMOR_INVENTORY").is_err() {
+            assert!(
+                dropped.is_empty(),
+                "fixture {path:?} dropped unhandled event types: {dropped:?}"
+            );
+        }
     });
 }

@@ -4,8 +4,21 @@ expression: snapshot
 input_file: tests/fixtures/streams/codex/reasoning.jsonl
 ---
 line_count: 5
-checkpoint_count: 0
-checkpoints: []
+checkpoint_count: 2
+checkpoints:
+  - line_index: 2
+    event_type: item.completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+  - line_index: 3
+    event_type: turn.completed
+    roles:
+      - assistant
+      - system
+    last_part_types:
+      - text
 final_state:
   message_count: 2
   roles:

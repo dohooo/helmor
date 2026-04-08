@@ -1643,6 +1643,7 @@ dependencies = [
  "dotenvy",
  "futures-core",
  "insta",
+ "libc",
  "rand 0.10.0",
  "reqwest 0.12.28",
  "rusqlite",

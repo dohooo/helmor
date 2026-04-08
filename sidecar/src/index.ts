@@ -14,6 +14,7 @@ import { CodexSessionManager } from "./codex-session-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
 import {
 	errorMessage,
+	parseListSlashCommandsParams,
 	parseProvider,
 	parseRequest,
 	parseSendMessageParams,
@@ -98,6 +99,26 @@ async function handleGenerateTitle(
 	}
 }
 
+async function handleListSlashCommands(
+	id: string,
+	params: Record<string, unknown>,
+): Promise<void> {
+	try {
+		const provider = parseProvider(params.provider);
+		const listParams = parseListSlashCommandsParams(params);
+		debug(
+			`[${id}] listSlashCommands provider=${provider} cwd=${listParams.cwd ?? "(none)"}`,
+		);
+		const commands = await managers[provider].listSlashCommands(listParams);
+		emitter.slashCommandsListed(id, commands);
+		debug(`[${id}] listSlashCommands → ${commands.length} entries`);
+	} catch (err) {
+		const msg = errorMessage(err);
+		debug(`[${id}] listSlashCommands FAILED: ${msg}`);
+		emitter.error(id, msg);
+	}
+}
+
 async function handleStopSession(
 	id: string,
 	params: Record<string, unknown>,
@@ -111,6 +132,30 @@ async function handleStopSession(
 	} catch (err) {
 		emitter.error(id, errorMessage(err));
 	}
+}
+
+/**
+ * Cooperative shutdown — closes every live session across all providers and
+ * exits the process. The Rust side calls this before escalating to SIGTERM /
+ * SIGKILL so the Claude SDK gets a chance to send `Query.close()` (which
+ * cleans up the claude-code child) and the Codex SDK gets a chance to abort
+ * its `codex exec` children. Acks via `pong` so the parent can wait on a
+ * known event before tearing down stdio.
+ */
+async function handleShutdown(id: string): Promise<void> {
+	debug(`[${id}] shutdown — tearing down all sessions`);
+	const results = await Promise.allSettled(
+		Object.values(managers).map((m) => m.shutdown()),
+	);
+	for (const r of results) {
+		if (r.status === "rejected") {
+			debug(`  shutdown: manager rejected: ${errorMessage(r.reason)}`);
+		}
+	}
+	emitter.pong(id);
+	debug("shutdown ack sent — exiting in next tick");
+	// Give the stdout pipe a tick to flush the pong before exit.
+	setImmediate(() => process.exit(0));
 }
 
 // ---------------------------------------------------------------------------
@@ -149,8 +194,14 @@ for await (const line of rl) {
 		case "generateTitle":
 			void handleGenerateTitle(id, params);
 			break;
+		case "listSlashCommands":
+			void handleListSlashCommands(id, params);
+			break;
 		case "stopSession":
 			await handleStopSession(id, params);
+			break;
+		case "shutdown":
+			await handleShutdown(id);
 			break;
 		case "ping":
 			emitter.pong(id);

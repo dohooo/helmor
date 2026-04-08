@@ -63,11 +63,27 @@ function partStructurallyEqual(
 			if (a.toolName !== tb.toolName) return false;
 			if (a.streamingStatus !== tb.streamingStatus) return false;
 			if (a.argsText !== tb.argsText) return false;
-			// `result` is intentionally not compared by reference — backend
-			// snapshot `update` events allocate new wrapper objects for the
-			// same logical result, which would otherwise defeat the cache.
-			// `(toolCallId, streamingStatus, argsText)` is enough to identify a
-			// stable rendered state.
+			// `result` MUST be compared because Task/Agent tool calls
+			// carry their subagent children inside it as a `__children__`
+			// payload (a JSON-encoded string) that grows as the subagent
+			// streams more events. If we skipped this check (the previous
+			// behavior), structural sharing would reuse the prior tool-
+			// call reference, the parent message would also share its
+			// reference, MemoConversationMessage would bail out, and the
+			// live render of an in-progress subagent would freeze on the
+			// last full snapshot — the user sees a Task header with no
+			// children, even though the pipeline is busy attaching them.
+			//
+			// Strings compare by value in JS so this stays cheap for the
+			// common case (`__children__{...}` payloads, plain text
+			// outputs). Non-string results (undefined / wrapped Value /
+			// arrays) fall back to reference equality, which matches the
+			// original concern about backend wrapper allocations.
+			if (typeof a.result === "string" || typeof tb.result === "string") {
+				if (a.result !== tb.result) return false;
+			} else if (a.result !== tb.result) {
+				return false;
+			}
 			return true;
 		}
 		case "collapsed-group": {
@@ -86,7 +102,12 @@ function partStructurallyEqual(
 	}
 }
 
-function messagesStructurallyEqual(
+/** Exported for tests only — equality predicate that powers
+ *  `shareMessages`. Pinning its behavior in unit tests prevents
+ *  "looks the same, but isn't" regressions like the Task __children__
+ *  freeze (where dropping `result` from the tool-call diff caused
+ *  in-progress subagent renders to stall on the last full snapshot). */
+export function messagesStructurallyEqual(
 	a: ThreadMessageLike,
 	b: ThreadMessageLike,
 ): boolean {
@@ -145,6 +166,7 @@ type WorkspacePanelContainerProps = {
 	liveMessages: ThreadMessageLike[];
 	sending: boolean;
 	sendingSessionIds?: Set<string>;
+	selectedProvider?: string | null;
 	onSelectSession: (sessionId: string | null) => void;
 	onResolveDisplayedSession: (sessionId: string | null) => void;
 	headerActions?: React.ReactNode;
@@ -160,6 +182,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	liveMessages,
 	sending,
 	sendingSessionIds,
+	selectedProvider = null,
 	onSelectSession,
 	onResolveDisplayedSession,
 	headerActions,
@@ -472,6 +495,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			workspace={workspace}
 			sessions={sessions}
 			selectedSessionId={selectedSessionIdForPanel}
+			selectedProvider={selectedProvider}
 			sessionPanes={sessionPanes}
 			loadingWorkspace={loadingWorkspace}
 			loadingSession={loadingSession}

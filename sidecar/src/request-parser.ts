@@ -4,7 +4,11 @@
  * missing or wrong-shaped field.
  */
 
-import type { Provider, SendMessageParams } from "./session-manager.js";
+import type {
+	ListSlashCommandsParams,
+	Provider,
+	SendMessageParams,
+} from "./session-manager.js";
 
 export interface RawRequest {
 	readonly id: string;
@@ -62,6 +66,15 @@ export function parseSendMessageParams(
 		resume: optionalString(params, "resume"),
 		permissionMode: optionalString(params, "permissionMode"),
 		effortLevel: optionalString(params, "effortLevel"),
+	};
+}
+
+export function parseListSlashCommandsParams(
+	params: Record<string, unknown>,
+): ListSlashCommandsParams {
+	return {
+		cwd: optionalString(params, "cwd"),
+		model: optionalString(params, "model"),
 	};
 }
 

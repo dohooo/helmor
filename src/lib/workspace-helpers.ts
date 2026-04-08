@@ -50,6 +50,34 @@ export function findWorkspaceRowById(
 	return archivedRows.find((row) => row.id === workspaceId) ?? null;
 }
 
+/**
+ * Map a workspace's status (manual takes precedence over derived) to the
+ * sidebar group id it belongs in. Mirrors `helpers::group_id_from_status`
+ * in the Rust backend so that optimistic UI placement matches what the
+ * canonical query will return on the next invalidation — no flicker as the
+ * row jumps groups when the real data lands.
+ */
+export function workspaceGroupIdFromStatus(
+	manualStatus: string | null | undefined,
+	derivedStatus: string | null | undefined,
+): "done" | "review" | "progress" | "backlog" | "canceled" {
+	const raw = (manualStatus ?? derivedStatus ?? "").trim().toLowerCase();
+	switch (raw) {
+		case "done":
+			return "done";
+		case "review":
+		case "in-review":
+			return "review";
+		case "backlog":
+			return "backlog";
+		case "cancelled":
+		case "canceled":
+			return "canceled";
+		default:
+			return "progress";
+	}
+}
+
 export function clearWorkspaceUnreadFromRow(row: WorkspaceRow): WorkspaceRow {
 	return {
 		...row,
@@ -113,6 +141,44 @@ export function summaryToArchivedRow(summary: WorkspaceSummary): WorkspaceRow {
 		sessionCount: summary.sessionCount,
 		messageCount: summary.messageCount,
 		attachmentCount: summary.attachmentCount,
+	};
+}
+
+/**
+ * Reverse of `summaryToArchivedRow` — used for optimistic archive updates,
+ * where we know a workspace is moving from the live groups into the archived
+ * list before the backend has confirmed. Optional row fields that are
+ * required on the summary fall back to safe defaults; the next query
+ * invalidation will replace this object with the canonical backend version.
+ */
+export function rowToWorkspaceSummary(
+	row: WorkspaceRow,
+	overrides: Partial<WorkspaceSummary> = {},
+): WorkspaceSummary {
+	return {
+		id: row.id,
+		title: row.title,
+		directoryName: row.directoryName ?? "",
+		repoName: row.repoName ?? "",
+		repoIconSrc: row.repoIconSrc ?? null,
+		repoInitials: row.repoInitials ?? null,
+		state: row.state ?? "archived",
+		hasUnread: row.hasUnread ?? false,
+		workspaceUnread: row.workspaceUnread ?? 0,
+		sessionUnreadTotal: row.sessionUnreadTotal ?? 0,
+		unreadSessionCount: row.unreadSessionCount ?? 0,
+		derivedStatus: row.derivedStatus ?? "in-progress",
+		manualStatus: row.manualStatus ?? null,
+		branch: row.branch ?? null,
+		activeSessionId: row.activeSessionId ?? null,
+		activeSessionTitle: row.activeSessionTitle ?? null,
+		activeSessionAgentType: row.activeSessionAgentType ?? null,
+		activeSessionStatus: row.activeSessionStatus ?? null,
+		prTitle: row.prTitle ?? null,
+		sessionCount: row.sessionCount,
+		messageCount: row.messageCount,
+		attachmentCount: row.attachmentCount,
+		...overrides,
 	};
 }
 

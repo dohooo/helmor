@@ -77,6 +77,23 @@ pub enum NormPart {
         active: bool,
         summary: String,
     },
+    SystemNotice {
+        severity: String,
+        label: String,
+        body: Option<String>,
+    },
+    TodoList {
+        item_count: usize,
+        statuses: Vec<String>,
+    },
+    Image {
+        kind: String,
+        media_type: Option<String>,
+    },
+    PromptSuggestion {
+        text_length: usize,
+        text_preview: String,
+    },
 }
 
 pub fn truncate(s: &str) -> String {
@@ -172,6 +189,33 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
                 streaming_status: streaming_status.as_ref().map(streaming_status_str),
             }
         }
+        MessagePart::SystemNotice {
+            severity,
+            label,
+            body,
+        } => NormPart::SystemNotice {
+            severity: format!("{severity:?}").to_lowercase(),
+            label: truncate(label),
+            body: body.as_deref().map(truncate),
+        },
+        MessagePart::TodoList { items } => NormPart::TodoList {
+            item_count: items.len(),
+            statuses: items
+                .iter()
+                .map(|i| format!("{:?}", i.status).to_lowercase())
+                .collect(),
+        },
+        MessagePart::Image { source, media_type } => NormPart::Image {
+            kind: match source {
+                helmor_lib::pipeline::types::ImageSource::Base64 { .. } => "base64".to_string(),
+                helmor_lib::pipeline::types::ImageSource::Url { .. } => "url".to_string(),
+            },
+            media_type: media_type.clone(),
+        },
+        MessagePart::PromptSuggestion { text } => NormPart::PromptSuggestion {
+            text_length: utf16_len(text),
+            text_preview: truncate(text),
+        },
     }
 }
 

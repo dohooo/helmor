@@ -66,6 +66,76 @@ pub enum MessagePart {
         #[serde(skip_serializing_if = "Option::is_none")]
         streaming_status: Option<StreamingStatus>,
     },
+
+    /// Inline notice from the SDK (rate limit, status update, etc.) — a
+    /// single-part system message that the frontend renders as a
+    /// styled banner.
+    #[serde(rename = "system-notice", rename_all = "camelCase")]
+    SystemNotice {
+        severity: NoticeSeverity,
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+    },
+
+    /// Unified todo-list block. Both Claude (`TodoWrite` tool_use) and
+    /// Codex (`item.completed` of `todo_list`) collapse into this single
+    /// shape so the frontend renders identically across providers.
+    #[serde(rename = "todo-list", rename_all = "camelCase")]
+    TodoList { items: Vec<TodoItem> },
+
+    /// Inline image emitted as a content block by the Claude SDK. The
+    /// payload is either a base64-encoded blob (with media type) or an
+    /// external URL — the frontend renders both with `<img>`.
+    #[serde(rename = "image", rename_all = "camelCase")]
+    Image {
+        source: ImageSource,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        media_type: Option<String>,
+    },
+
+    /// Pre-canned prompt the Claude SDK suggests to the user. Rendered
+    /// as a clickable chip — clicking copies the suggestion into the
+    /// composer.
+    #[serde(rename = "prompt-suggestion", rename_all = "camelCase")]
+    PromptSuggestion { text: String },
+}
+
+/// Image payload variants. `Base64` carries the raw blob (no `data:` URI
+/// prefix); the frontend reconstructs the data URL using `media_type`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ImageSource {
+    Base64 { data: String },
+    Url { url: String },
+}
+
+/// Severity tier for `MessagePart::SystemNotice`. The frontend picks the
+/// banner color and icon from this.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NoticeSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+/// Single row inside a `MessagePart::TodoList`. Both providers' source
+/// shapes (Claude `{content, status}`, Codex `{text, completed}`) are
+/// normalized to this struct in the adapter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TodoItem {
+    pub text: String,
+    pub status: TodoStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TodoStatus {
+    Pending,
+    InProgress,
+    Completed,
 }
 
 /// Category for a collapsed group of tool calls.

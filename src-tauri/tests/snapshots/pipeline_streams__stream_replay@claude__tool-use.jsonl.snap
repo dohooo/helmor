@@ -4,8 +4,12 @@ expression: snapshot
 input_file: tests/fixtures/streams/claude/tool-use.jsonl
 ---
 line_count: 777
-checkpoint_count: 43
+checkpoint_count: 47
 checkpoints:
+  - line_index: 0
+    event_type: system
+    roles: []
+    last_part_types: []
   - line_index: 8
     event_type: assistant
     roles:
@@ -19,8 +23,29 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
+  - line_index: 87
+    event_type: system
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
   - line_index: 89
     event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+  - line_index: 92
+    event_type: rate_limit_event
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+  - line_index: 93
+    event_type: system
     roles:
       - assistant
     last_part_types:

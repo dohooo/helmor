@@ -1,11 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	AlertCircle,
+	AlertTriangle,
 	ArrowDown,
 	ArrowRight,
 	Bot,
 	Check,
 	ChevronDown,
+	Circle,
+	CircleDot,
 	Clock3,
 	Copy,
 	FilePlus,
@@ -14,6 +17,7 @@ import {
 	GitBranch,
 	Globe,
 	History,
+	Info,
 	LoaderCircle,
 	MessageSquareText,
 	Pencil,
@@ -47,12 +51,17 @@ import {
 	deleteSession,
 	type ExtendedMessagePart,
 	hideSession,
+	type ImagePart,
 	listRemoteBranches,
 	loadHiddenSessions,
 	type MessagePart,
+	type PromptSuggestionPart,
+	prefetchWorkspaceRemoteRefs,
 	renameSession,
 	type SessionAttachmentRecord,
+	type SystemNoticePart,
 	type ThreadMessageLike,
+	type TodoListPart,
 	type ToolCallPart,
 	unhideSession,
 	updateIntendedTargetBranch,
@@ -61,8 +70,10 @@ import {
 } from "@/lib/api";
 import { recordMessageRender } from "@/lib/dev-render-debug";
 import { estimateThreadRowHeights } from "@/lib/message-layout-estimator";
+import { helmorQueryKeys } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
+import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "./ai/reasoning";
 import { ClaudeIcon, OpenAIIcon } from "./icons";
 import { ImagePreviewBadge } from "./image-preview";
@@ -281,6 +292,8 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	const [hiddenSessions, setHiddenSessions] = useState<
 		WorkspaceSessionSummary[]
 	>([]);
+	const pushToast = useWorkspaceToast();
+	const queryClient = useQueryClient();
 	const branchesQuery = useQuery({
 		queryKey: ["remoteBranches", workspace?.id],
 		queryFn: () => listRemoteBranches(workspace!.id),
@@ -401,14 +414,78 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 									currentBranch={workspace.intendedTargetBranch ?? ""}
 									branches={remoteBranches}
 									loading={loadingBranches}
-									onOpen={() => branchesQuery.refetch()}
+									onOpen={() => {
+										// Phase 1: show whatever's already cached locally,
+										// instantly.
+										void branchesQuery.refetch();
+										// Phase 2: kick off a background `git fetch --prune
+										// origin` (rate-limited to once per 10s on the backend).
+										// When it returns, refetch the local list so any new/
+										// removed branches show up. Errors are silent — the
+										// dropdown is still usable with the cached list.
+										void prefetchWorkspaceRemoteRefs(workspace.id)
+											.then((res) => {
+												if (res.fetched) {
+													void branchesQuery.refetch();
+												}
+											})
+											.catch(() => {});
+									}}
 									onSelect={(branch: string) => {
 										if (branch === workspace.intendedTargetBranch) return;
-										void updateIntendedTargetBranch(workspace.id, branch).then(
-											() => {
-												onWorkspaceChanged?.();
-											},
+										// Optimistic update: flip the header label *immediately*
+										// in the workspace-detail query cache so the user sees
+										// instant feedback. The IPC runs in the background, and
+										// on failure we roll back to the previous value.
+										const detailKey = helmorQueryKeys.workspaceDetail(
+											workspace.id,
 										);
+										const previousDetail =
+											queryClient.getQueryData<WorkspaceDetail | null>(
+												detailKey,
+											);
+										if (previousDetail) {
+											queryClient.setQueryData<WorkspaceDetail | null>(
+												detailKey,
+												{
+													...previousDetail,
+													intendedTargetBranch: branch,
+												},
+											);
+										}
+
+										void updateIntendedTargetBranch(workspace.id, branch)
+											.then(({ reset }) => {
+												onWorkspaceChanged?.();
+												if (reset) {
+													pushToast(
+														`Local branch reset to origin/${branch}`,
+														`Switched to ${branch}`,
+														"default",
+													);
+												} else {
+													pushToast(
+														`Target branch updated`,
+														`Switched to ${branch}`,
+														"default",
+													);
+												}
+											})
+											.catch((err: unknown) => {
+												// Roll back the optimistic update so the header
+												// stops lying.
+												if (previousDetail) {
+													queryClient.setQueryData<WorkspaceDetail | null>(
+														detailKey,
+														previousDetail,
+													);
+												}
+												pushToast(
+													err instanceof Error ? err.message : String(err),
+													"Branch switch failed",
+													"destructive",
+												);
+											});
 									}}
 								/>
 							)}
@@ -728,9 +805,25 @@ function ChatThread({
 	);
 	const pinTailRows = sending || hasStreamingMessage;
 	const scrollParentRef = useRef<HTMLElement | null>(null);
+	// `resize: "instant"` is critical for multi-subagent streaming. When a
+	// Task tool call is accumulating its `__children__` payload, the
+	// content div grows on every pipeline Full() emit. Without this
+	// option, `use-stick-to-bottom` would kick off a spring animation on
+	// every growth event — each new resize interrupts the in-flight
+	// animation, leaving the scroll position oscillating mid-spring and
+	// causing a visible flicker localized to the streaming row. `initial`
+	// stays instant so landing on a thread doesn't smooth-scroll.
+	//
+	// Regression history: 1e5168d removed `contentRef` from the Virtuoso
+	// wrapper to dodge the same fight; when Virtuoso was ripped out in
+	// 7f3dae1, `contentRef` got reattached to the plain-thread /
+	// progressive-viewport wrapper and the spring animation reappeared.
+	// Pinning both `initial` and `resize` to instant is the
+	// library-supported alternative now that the hook exposes them.
 	const { contentRef, scrollRef, scrollToBottom, isAtBottom } =
 		useStickToBottom({
 			initial: "instant",
+			resize: "instant",
 		});
 	const handleScrollRef = useCallback(
 		(element: HTMLElement | null) => {
@@ -1423,6 +1516,12 @@ function ChatAssistantMessage({
 						/>
 					);
 				}
+				if (isTodoListPart(part)) {
+					return <TodoList key={`todo:${idx}`} part={part} />;
+				}
+				if (isImagePart(part)) {
+					return <ImageBlock key={`img:${idx}`} part={part} />;
+				}
 				return null;
 			})}
 		</div>
@@ -1439,11 +1538,125 @@ function ChatSystemMessage({ message }: { message: RenderedMessage }) {
 			className="group/sys flex min-w-0 items-center gap-1.5"
 		>
 			<div className="py-1 text-[11px] text-app-muted">
-				{parts.map((part, idx) =>
-					isTextPart(part) ? <SystemText key={idx} text={part.text} /> : null,
-				)}
+				{parts.map((part, idx) => {
+					if (isSystemNoticePart(part)) {
+						return <SystemNotice key={idx} part={part} />;
+					}
+					if (isPromptSuggestionPart(part)) {
+						return <PromptSuggestion key={idx} part={part} />;
+					}
+					if (isTextPart(part)) {
+						return <SystemText key={idx} text={part.text} />;
+					}
+					return null;
+				})}
 			</div>
 			<CopyMessageButton />
+		</div>
+	);
+}
+
+function SystemNotice({ part }: { part: SystemNoticePart }) {
+	const Icon =
+		part.severity === "error"
+			? AlertCircle
+			: part.severity === "warning"
+				? AlertTriangle
+				: Info;
+	const iconClass =
+		part.severity === "error"
+			? "text-app-negative"
+			: part.severity === "warning"
+				? "text-app-warning"
+				: "text-app-info";
+	return (
+		<span className="inline-flex items-center gap-1">
+			<Icon className={cn("size-3 shrink-0", iconClass)} strokeWidth={1.8} />
+			<span>{part.label}</span>
+			{part.body ? (
+				<span className="ml-1 text-app-muted/70">— {part.body}</span>
+			) : null}
+		</span>
+	);
+}
+
+function PromptSuggestion({ part }: { part: PromptSuggestionPart }) {
+	return (
+		<BaseTooltip content={<span>Use this prompt</span>}>
+			<button
+				type="button"
+				className="my-1 inline-flex items-center gap-1 rounded-md border border-app-foreground/[0.08] bg-app-foreground/[0.02] px-2 py-1 text-[11px] text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.05]"
+				onClick={() => {
+					const composer = document.querySelector<HTMLTextAreaElement>(
+						"textarea[data-composer-input]",
+					);
+					if (composer) {
+						composer.value = part.text;
+						composer.dispatchEvent(new Event("input", { bubbles: true }));
+						composer.focus();
+					}
+				}}
+			>
+				<MessageSquareText className="size-3" strokeWidth={1.8} />
+				<span className="max-w-[420px] truncate">{part.text}</span>
+			</button>
+		</BaseTooltip>
+	);
+}
+
+function ImageBlock({ part }: { part: ImagePart }) {
+	const src =
+		part.source.kind === "url"
+			? part.source.url
+			: `data:${part.mediaType ?? "image/png"};base64,${part.source.data}`;
+	return (
+		<img
+			src={src}
+			alt=""
+			className="my-2 max-h-[420px] max-w-full rounded-md border border-app-foreground/[0.06]"
+		/>
+	);
+}
+
+function TodoList({ part }: { part: TodoListPart }) {
+	if (part.items.length === 0) return null;
+	const completed = part.items.filter((i) => i.status === "completed").length;
+	const total = part.items.length;
+	return (
+		<div className="my-1 flex flex-col gap-0.5 rounded-md border border-app-foreground/[0.06] bg-app-foreground/[0.02] px-3 py-2 text-[13px] leading-6 text-app-foreground-soft">
+			<div className="mb-0.5 flex items-center gap-1.5 text-[11px] text-app-muted">
+				<MessageSquareText className="size-3" strokeWidth={1.8} />
+				<span>
+					Plan — {completed}/{total} done
+				</span>
+			</div>
+			{part.items.map((todo, idx) => {
+				const Icon =
+					todo.status === "completed"
+						? Check
+						: todo.status === "in_progress"
+							? CircleDot
+							: Circle;
+				const iconClass =
+					todo.status === "completed"
+						? "text-app-positive"
+						: todo.status === "in_progress"
+							? "text-app-progress"
+							: "text-app-muted/60";
+				const textClass =
+					todo.status === "completed"
+						? "text-app-muted line-through"
+						: "text-app-foreground-soft";
+				return (
+					<div key={idx} className="flex items-center gap-1.5">
+						<Icon
+							className={cn("size-3 shrink-0", iconClass)}
+							strokeWidth={1.8}
+						/>
+						<span className={textClass}>{todo.text}</span>
+					</div>
+				);
+			})}
 		</div>
 	);
 }
@@ -1597,11 +1810,20 @@ const AssistantToolCall = memo(
 		args,
 		result,
 		streamingStatus,
+		compact = false,
 	}: {
 		toolName: string;
 		args: Record<string, unknown>;
 		result?: unknown;
 		streamingStatus?: string;
+		/** Compact mode — used by `AgentChildrenBlock`'s tail preview.
+		 *  Strips the `<details>` wrapper and output panel so every row
+		 *  renders as a single fixed-height summary line. This keeps the
+		 *  preview container's height constant while a subagent streams
+		 *  in, and prevents users from expanding individual rows inside
+		 *  the preview (expand the whole subagent via "Show N more steps"
+		 *  for the full trace). */
+		compact?: boolean;
 	}) {
 		const info = getToolInfo(toolName, args);
 		const isEdit = toolName === "Edit";
@@ -1611,25 +1833,32 @@ const AssistantToolCall = memo(
 			isEdit && typeof args.new_string === "string" ? args.new_string : null;
 		const hasDiff = oldStr != null || newStr != null;
 
-		// Detect __children__ encoded in result (sub-agent steps)
-		const resultStr =
-			result != null
-				? typeof result === "string"
-					? result
-					: JSON.stringify(result, null, 2)
-				: null;
+		// Detect __children__ encoded in result (sub-agent steps).
+		// The parse is memoized on `resultStr` so re-renders that don't
+		// change the string (most memo bail-outs) reuse the same parsed
+		// object, keeping the referential identity of `childrenData.parts`
+		// stable for AgentChildrenBlock and letting React skip work on
+		// siblings that only re-ran because the parent reference changed.
+		const resultStr = useMemo(
+			() =>
+				result != null
+					? typeof result === "string"
+						? result
+						: JSON.stringify(result, null, 2)
+					: null,
+			[result],
+		);
 		const isChildrenResult = resultStr?.startsWith("__children__") ?? false;
-		const childrenData = isChildrenResult
-			? (() => {
-					try {
-						return JSON.parse(resultStr!.slice("__children__".length)) as {
-							parts: Array<Record<string, unknown>>;
-						};
-					} catch {
-						return null;
-					}
-				})()
-			: null;
+		const childrenData = useMemo(() => {
+			if (!isChildrenResult || !resultStr) return null;
+			try {
+				return JSON.parse(resultStr.slice("__children__".length)) as {
+					parts: Array<Record<string, unknown>>;
+				};
+			} catch {
+				return null;
+			}
+		}, [isChildrenResult, resultStr]);
 		const resultText = isChildrenResult ? null : resultStr;
 		const hasOutput = resultText != null && resultText.length > 5;
 		const isLiveTool =
@@ -1699,14 +1928,48 @@ const AssistantToolCall = memo(
 			</>
 		);
 
-		// Sub-agent children: show last N steps with "show more" toggle
+		// Sub-agent children: show last N steps with "show more" toggle.
+		// Pass primitive props (not the `toolLine` element) so the memo
+		// on `AgentChildrenBlock` can actually bail out — a fresh React
+		// element reference every render would defeat it and cascade
+		// into re-rendering all the expanded children for every sibling
+		// subagent's streaming tick. `AgentChildrenBlock` reconstructs
+		// its own header from `toolName`/`toolArgs` internally.
 		if (childrenData) {
 			return (
 				<AgentChildrenBlock
-					toolLine={toolLine}
+					toolName={toolName}
+					toolArgs={args}
+					streamingStatus={streamingStatus}
 					parts={childrenData.parts}
-					streaming={!!streamingStatus}
 				/>
+			);
+		}
+
+		// Compact render for tail previews inside AgentChildrenBlock.
+		//
+		// Key property: every compact row has IDENTICAL structure, so
+		// the natural line height is the same regardless of tool type.
+		// No `<code>` chip (which has padding + rounded + bg, adds
+		// ~4px), no `EditDiffTrigger` button (has its own padding),
+		// no diffAdd/diffDel badge with `text-[11px]`. Just three
+		// flex children: icon, bolded action, and a truncated detail
+		// span. Bash/Read/Grep/Edit/Glob all collapse to the same
+		// visual shape, which is what keeps the preview container's
+		// height stable as the tail window swaps one tool-call out
+		// for another on every streaming tick — no CSS height lock,
+		// no measured-max tracker, fully responsive to font size and
+		// pane width.
+		if (compact) {
+			const detail = info.file ?? info.command ?? info.detail ?? null;
+			return (
+				<div className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-muted">
+					<span className="shrink-0">{info.icon}</span>
+					<span className="shrink-0 font-medium">{info.action}</span>
+					{detail ? (
+						<span className="truncate text-app-foreground-soft">{detail}</span>
+					) : null}
+				</div>
 			);
 		}
 
@@ -1767,6 +2030,7 @@ const AssistantToolCall = memo(
 		prev.toolName === next.toolName &&
 		prev.streamingStatus === next.streamingStatus &&
 		prev.result === next.result &&
+		prev.compact === next.compact &&
 		shallowArgsEqual(prev.args, next.args),
 );
 
@@ -1793,104 +2057,177 @@ function shallowArgsEqual(
 /** Number of recent children steps to show by default. */
 const AGENT_PREVIEW_STEPS = 3;
 
-function AgentChildrenBlock({
-	toolLine,
-	parts,
-	streaming,
-}: {
-	toolLine: React.ReactNode;
-	parts: Array<Record<string, unknown>>;
-	streaming: boolean;
-}) {
-	const [expanded, setExpanded] = useState(false);
-	const totalSteps = parts.length;
-	const hasMore = totalSteps > AGENT_PREVIEW_STEPS;
+/**
+ * Children block for Task/Agent tool calls. Rendered inside
+ * `AssistantToolCall` whenever its `result` is a `__children__{...}`
+ * payload (sub-agent work folded in by the Rust pipeline).
+ *
+ * Memoized — accepts only primitive / stable-reference props so the
+ * default shallow compare plus our custom `shallowArgsEqual` on
+ * `toolArgs` can bail out cleanly. Crucially, the tool-line header is
+ * NOT passed in as a React element (that would allocate a fresh
+ * element ref on every parent render and defeat the memo); we
+ * reconstruct it internally from `toolName`/`toolArgs` via
+ * `getToolInfo`, which is cheap and deterministic.
+ *
+ * Bail-out matters here because the containing assistant message gets
+ * a new reference whenever ANY sibling subagent's Task tool emits new
+ * `__children__` data — without the memo, that cascades into a full
+ * re-render of every finished subagent's expanded children (dozens of
+ * Reasoning/text/ToolCall subtrees), which is exactly the "expanded
+ * state still flickers" symptom the user reported.
+ */
+const AgentChildrenBlock = memo(
+	function AgentChildrenBlock({
+		toolName,
+		toolArgs,
+		streamingStatus,
+		parts,
+	}: {
+		toolName: string;
+		toolArgs: Record<string, unknown>;
+		streamingStatus?: string;
+		parts: Array<Record<string, unknown>>;
+	}) {
+		const [expanded, setExpanded] = useState(false);
+		const streaming = !!streamingStatus;
+		const info = getToolInfo(toolName, toolArgs);
 
-	// When streaming, always show the latest N steps (tail).
-	// When completed + not expanded, show last N steps.
-	// When expanded, show all.
-	const visibleParts =
-		expanded || !hasMore ? parts : parts.slice(-AGENT_PREVIEW_STEPS);
+		// Filter down to tool-call parts so text/reasoning/todo don't
+		// drift into the tail preview.
+		const toolCallParts = useMemo(
+			() => parts.filter((p) => p.type === "tool-call"),
+			[parts],
+		);
+		const toolUseCount = toolCallParts.length;
 
-	const hiddenCount = totalSteps - visibleParts.length;
+		// Tail window — the preview always shows the LAST N tool-calls
+		// so users see what the subagent is doing right now.
+		const visibleParts = expanded
+			? parts
+			: toolCallParts.slice(-AGENT_PREVIEW_STEPS);
 
-	return (
-		<div className="flex flex-col">
-			{/* Header line: icon + tool name + step count */}
-			<div className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-muted">
-				{toolLine}
-				{streaming ? (
-					<LoaderCircle
-						className="size-3 animate-spin text-app-progress"
-						strokeWidth={2}
-					/>
-				) : null}
-				<span className="shrink-0 text-[11px] text-app-muted/40">
-					{totalSteps} steps
-				</span>
-			</div>
+		// `hasMore` is derived from the INVARIANT collapsed layout (the
+		// visible count a user WOULD see if they collapsed right now),
+		// not from `visibleParts`. Otherwise toggling into expanded mode
+		// sets `hiddenCount = 0` → `hasMore = false` → the button
+		// disappears → user has no way to collapse back.
+		//
+		// The toggle only surfaces once the tail window is actually
+		// FULL — i.e. the subagent has emitted at least AGENT_PREVIEW_STEPS
+		// tool-calls. Before that, 1 or 2 tool-calls render directly
+		// with no "Show more" chrome, because there's nothing the user
+		// couldn't see just by scrolling one line; a toggle on a
+		// half-filled preview would be visual noise.
+		const collapsedVisibleCount = Math.min(
+			toolCallParts.length,
+			AGENT_PREVIEW_STEPS,
+		);
+		const hiddenCount = parts.length - collapsedVisibleCount;
+		const hasMore =
+			toolCallParts.length >= AGENT_PREVIEW_STEPS && hiddenCount > 0;
 
-			{/* Children steps */}
-			<div className="ml-5 flex flex-col gap-0.5 border-l border-app-border/30 pl-3 pt-1">
-				{/* "Show more" / "Collapse" toggle */}
-				{hasMore && !streaming ? (
-					<button
-						type="button"
-						onClick={() => setExpanded((v) => !v)}
-						className="mb-0.5 flex items-center gap-1 text-[11px] text-app-muted/50 transition-colors hover:text-app-muted"
-					>
-						<ChevronDown
-							className={cn(
-								"size-3 transition-transform",
-								expanded && "rotate-180",
-							)}
-							strokeWidth={1.5}
+		// Toggle button visibility:
+		//   - `expanded` state: always allow collapsing (even mid-stream)
+		//   - collapsed state: only allow expanding when not streaming
+		//     (expanding mid-stream would show a flickery live trace)
+		const canToggle = hasMore && (expanded || !streaming);
+
+		return (
+			<div className="flex flex-col">
+				{/* Header line: icon + subagent_type + description + summary */}
+				<div className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-muted">
+					<span className="shrink-0">{info.icon}</span>
+					<span className="font-medium">{info.action}</span>
+					{info.detail ? (
+						<span className="truncate text-app-muted/60">{info.detail}</span>
+					) : null}
+					{streaming ? (
+						<LoaderCircle
+							className="size-3 animate-spin text-app-progress"
+							strokeWidth={2}
 						/>
-						{expanded
-							? "Collapse"
-							: `Show ${hiddenCount} more step${hiddenCount > 1 ? "s" : ""}`}
-					</button>
-				) : null}
+					) : null}
+					<span className="shrink-0 text-[11px] text-app-muted/40">
+						{toolUseCount > 0
+							? `${toolUseCount} tool ${toolUseCount === 1 ? "use" : "uses"}`
+							: `${parts.length} steps`}
+					</span>
+				</div>
 
-				{visibleParts.map((part, idx) => {
-					const globalIdx =
-						expanded || !hasMore ? idx : totalSteps - AGENT_PREVIEW_STEPS + idx;
-
-					if (part.type === "tool-call") {
-						return (
-							<AssistantToolCall
-								key={globalIdx}
-								toolName={(part.toolName as string) ?? "unknown"}
-								args={(part.args as Record<string, unknown>) ?? {}}
-								result={part.result}
+				{/* Children steps */}
+				<div className="ml-5 flex flex-col gap-0.5 border-l border-app-border/30 pl-3 pt-1">
+					{/* "Show more" / "Collapse" toggle */}
+					{canToggle ? (
+						<button
+							type="button"
+							onClick={() => setExpanded((v) => !v)}
+							className="mb-0.5 flex items-center gap-1 text-[11px] text-app-muted/50 transition-colors hover:text-app-muted"
+						>
+							<ChevronDown
+								className={cn(
+									"size-3 transition-transform",
+									expanded && "rotate-180",
+								)}
+								strokeWidth={1.5}
 							/>
-						);
-					}
-					if (part.type === "text" && part.text) {
-						return (
-							<div
-								key={globalIdx}
-								className="text-[13px] leading-6 text-app-foreground-soft"
-							>
-								{(part.text as string).slice(0, 300)}
-								{(part.text as string).length > 300 ? "\u2026" : ""}
-							</div>
-						);
-					}
-					if (part.type === "reasoning" && part.text) {
-						return (
-							<Reasoning key={globalIdx}>
-								<ReasoningTrigger />
-								<ReasoningContent>{part.text as string}</ReasoningContent>
-							</Reasoning>
-						);
-					}
-					return null;
-				})}
+							{expanded
+								? "Collapse"
+								: `Show ${hiddenCount} more step${hiddenCount > 1 ? "s" : ""}`}
+						</button>
+					) : null}
+
+					<div className="flex flex-col gap-0.5">
+						{visibleParts.map((part, idx) => {
+							if (part.type === "tool-call") {
+								// Stable key per logical tool invocation.
+								const toolCallId = part.toolCallId as string | undefined;
+								return (
+									<AssistantToolCall
+										key={toolCallId ?? `tool-${idx}`}
+										toolName={(part.toolName as string) ?? "unknown"}
+										args={(part.args as Record<string, unknown>) ?? {}}
+										result={part.result}
+										compact={!expanded}
+									/>
+								);
+							}
+							// text / reasoning / todo-list only render in expanded mode.
+							if (part.type === "text" && part.text) {
+								return (
+									<div
+										key={`text-${idx}`}
+										className="text-[13px] leading-6 text-app-foreground-soft"
+									>
+										{(part.text as string).slice(0, 300)}
+										{(part.text as string).length > 300 ? "\u2026" : ""}
+									</div>
+								);
+							}
+							if (part.type === "reasoning" && part.text) {
+								return (
+									<Reasoning key={`reason-${idx}`}>
+										<ReasoningTrigger />
+										<ReasoningContent>{part.text as string}</ReasoningContent>
+									</Reasoning>
+								);
+							}
+							if (isTodoListPart(part)) {
+								return <TodoList key={`todo-${idx}`} part={part} />;
+							}
+							return null;
+						})}
+					</div>
+				</div>
 			</div>
-		</div>
-	);
-}
+		);
+	},
+	(prev, next) =>
+		prev.toolName === next.toolName &&
+		prev.streamingStatus === next.streamingStatus &&
+		prev.parts === next.parts &&
+		shallowArgsEqual(prev.toolArgs, next.toolArgs),
+);
 
 function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 	// Groups can transition inactive → active when a new tool is appended to a
@@ -2140,6 +2477,33 @@ function isCollapsedGroupPart(part: unknown): part is CollapsedGroupPart {
 	);
 }
 
+function isSystemNoticePart(part: unknown): part is SystemNoticePart {
+	return (
+		isObj(part) &&
+		part.type === "system-notice" &&
+		typeof part.label === "string" &&
+		(part.severity === "info" ||
+			part.severity === "warning" ||
+			part.severity === "error")
+	);
+}
+
+function isTodoListPart(part: unknown): part is TodoListPart {
+	return isObj(part) && part.type === "todo-list" && Array.isArray(part.items);
+}
+
+function isImagePart(part: unknown): part is ImagePart {
+	return isObj(part) && part.type === "image" && isObj(part.source);
+}
+
+function isPromptSuggestionPart(part: unknown): part is PromptSuggestionPart {
+	return (
+		isObj(part) &&
+		part.type === "prompt-suggestion" &&
+		typeof part.text === "string"
+	);
+}
+
 function SystemText({ text }: { text: string }) {
 	if (text.startsWith("Error:")) {
 		return (
@@ -2275,11 +2639,16 @@ function getToolInfo(
 	}
 
 	if (name === "Agent" || name === "Task") {
+		// Claude Code-style: prefer the subagent_type as the action label
+		// (e.g. "Explore", "Plan", "general-purpose"), with the
+		// description as the detail. Falls back to the generic "Agent" /
+		// "Task" if subagent_type is missing on older sessions.
+		const subagentType = str(input.subagent_type);
 		const d = str(input.description) ?? str(input.prompt);
 		return {
-			action: name,
+			action: subagentType ?? name,
 			icon: <Bot className="size-3.5 text-app-info" strokeWidth={1.8} />,
-			detail: d ? truncate(d, 50) : undefined,
+			detail: d ? truncate(d, 60) : undefined,
 		};
 	}
 

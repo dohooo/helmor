@@ -16,7 +16,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { AgentModelSection } from "@/lib/api";
+import type { AgentModelSection, SlashCommandEntry } from "@/lib/api";
 import { recordComposerRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
 import { FileBadgeNode } from "./composer-editor/file-badge-node";
@@ -30,6 +30,7 @@ import { EditablePlugin } from "./composer-editor/plugins/editable-plugin";
 import { EditorRefPlugin } from "./composer-editor/plugins/editor-ref-plugin";
 import { HasContentPlugin } from "./composer-editor/plugins/has-content-plugin";
 import { PasteImagePlugin } from "./composer-editor/plugins/paste-image-plugin";
+import { SlashCommandPlugin } from "./composer-editor/plugins/slash-command-plugin";
 import { SubmitPlugin } from "./composer-editor/plugins/submit-plugin";
 import { $extractComposerContent } from "./composer-editor/utils";
 import { ClaudeIcon, OpenAIIcon } from "./icons";
@@ -63,7 +64,10 @@ type WorkspaceComposerProps = {
 	restoreDraft?: string | null;
 	restoreImages?: string[];
 	restoreNonce?: number;
+	slashCommands?: readonly SlashCommandEntry[];
 };
+
+const EMPTY_SLASH_COMMANDS: readonly SlashCommandEntry[] = [];
 
 function ComposerButton({
 	children,
@@ -137,6 +141,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	restoreDraft,
 	restoreImages = [],
 	restoreNonce = 0,
+	slashCommands = EMPTY_SLASH_COMMANDS,
 }: WorkspaceComposerProps) {
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
@@ -246,6 +251,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 					/>
 				</div>
 				<HistoryPlugin />
+				<SlashCommandPlugin commands={slashCommands} />
 				<SubmitPlugin onSubmit={handleSubmit} disabled={sendDisabled} />
 				<PasteImagePlugin />
 				<DropFilePlugin />

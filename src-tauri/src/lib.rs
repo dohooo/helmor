@@ -56,7 +56,10 @@ pub fn run() {
             agents::send_agent_message_stream,
             agents::stop_agent_stream,
             agents::generate_session_title,
+            agents::list_slash_commands,
             models::archive_workspace,
+            models::validate_archive_workspace,
+            models::validate_restore_workspace,
             models::cancel_github_identity_connect,
             models::create_workspace_from_repo,
             models::disconnect_github_identity,
@@ -84,6 +87,7 @@ pub fn run() {
             models::mark_session_read,
             models::list_remote_branches,
             models::update_intended_target_branch,
+            models::prefetch_workspace_remote_refs,
             models::mark_workspace_read,
             models::mark_workspace_unread,
             models::pin_workspace,
@@ -176,7 +180,7 @@ pub fn run() {
                 }
 
                 eprintln!("[shutdown] User confirmed — aborting active streams");
-                // We're on a worker thread now, so the blocking helper is
+                // We're on a worker thread now, so the blocking helpers are
                 // safe to call.
                 let sidecar = app_handle_clone.state::<sidecar::ManagedSidecar>();
                 let active = app_handle_clone.state::<agents::ActiveStreams>();
@@ -184,6 +188,14 @@ pub fn run() {
                     &sidecar,
                     &active,
                     std::time::Duration::from_millis(1500),
+                );
+                // Cooperative sidecar teardown — let bun close every live
+                // SDK Query so the spawned claude-code / codex CLIs get a
+                // chance to exit on their own. Ladder: shutdown RPC (2s) →
+                // SIGTERM (500ms) → SIGKILL via Drop.
+                sidecar.shutdown(
+                    std::time::Duration::from_millis(2000),
+                    std::time::Duration::from_millis(500),
                 );
                 SHUTDOWN_CONFIRMED.store(true, Ordering::Release);
                 eprintln!("[shutdown] Cleanup done, calling exit(0)");
