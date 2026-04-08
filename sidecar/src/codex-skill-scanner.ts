@@ -20,8 +20,8 @@
  * here — they are not exposed on the filesystem.
  */
 
-import { existsSync } from "node:fs";
-import { type Dirent, readdir, readFile } from "node:fs/promises";
+import { type Dirent, existsSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { SlashCommandInfo } from "./session-manager.js";
