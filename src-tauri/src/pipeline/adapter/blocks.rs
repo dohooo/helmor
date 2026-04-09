@@ -11,9 +11,53 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::pipeline::types::{
-    ExtendedMessagePart, ImageSource, IntermediateMessage, MessagePart, StreamingStatus,
-    ThreadMessageLike, TodoItem, TodoStatus,
+    ExtendedMessagePart, ImageSource, IntermediateMessage, MessagePart, NoticeSeverity,
+    StreamingStatus, ThreadMessageLike, TodoItem, TodoStatus,
 };
+
+/// Returns true when an assistant message contains at least one
+/// content block whose `type` is in our known set. `convert_flat`
+/// uses this to suppress the text-fallback path when a message
+/// contained ONLY recognized-but-non-emitting blocks (e.g. an
+/// `mcp_tool_result` that attaches to a previous ToolCall via the
+/// late merge — its parts list is empty by design).
+pub(super) fn assistant_has_recognized_blocks(parsed: Option<&Value>) -> bool {
+    let Some(parsed) = parsed else {
+        return false;
+    };
+    let Some(blocks) = parsed
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    blocks.iter().any(|b| {
+        let Some(t) = b.get("type").and_then(Value::as_str) else {
+            return false;
+        };
+        matches!(
+            t,
+            "text"
+                | "thinking"
+                | "redacted_thinking"
+                | "tool_use"
+                | "server_tool_use"
+                | "mcp_tool_use"
+                | "mcp_tool_result"
+                | "image"
+                | "document"
+                | "container_upload"
+                | "compaction"
+                | "web_search_tool_result"
+                | "web_fetch_tool_result"
+                | "code_execution_tool_result"
+                | "bash_code_execution_tool_result"
+                | "text_editor_code_execution_tool_result"
+                | "tool_search_tool_result"
+        )
+    })
+}
 
 pub(super) fn parse_assistant_parts(parsed: Option<&Value>) -> Vec<MessagePart> {
     let parsed = match parsed {
@@ -89,59 +133,120 @@ pub(super) fn parse_assistant_parts(parsed: Option<&Value>) -> Vec<MessagePart> 
             | "tool_search_tool_result" => {
                 attach_server_tool_result(&mut parts, obj);
             }
-            "tool_use" | "server_tool_use" => {
-                let args = obj
-                    .get("input")
-                    .cloned()
-                    .unwrap_or_else(|| Value::Object(Default::default()));
-                let stream_status = obj
-                    .get("__streaming_status")
+            // MCP tool result lives inline in the assistant message (NOT
+            // a follow-up user tool_result block). Distinct from the
+            // server-tool results above because the content is plain
+            // text (string or text-block array) and the `is_error` flag
+            // routes through our existing ToolCallErrorRow renderer
+            // — we don't want to bury it inside a JSON-stringified
+            // payload like attach_server_tool_result does.
+            "mcp_tool_result" => {
+                attach_mcp_tool_result(&mut parts, obj);
+            }
+            // BetaMCPToolUseBlock { id, name, input, server_name }.
+            // Synthesize the tool_name as `mcp__{server}__{name}` so
+            // it converges with Codex's `handle_mcp_tool_call` — both
+            // providers reach the frontend's tool router with the same
+            // canonical shape.
+            "mcp_tool_use" => {
+                let server_name = obj.get("server_name").and_then(Value::as_str).unwrap_or("");
+                let mcp_tool_short = obj.get("name").and_then(Value::as_str).unwrap_or("");
+                let synthesized = format!("mcp__{server_name}__{mcp_tool_short}");
+                push_tool_use(&mut parts, obj, idx, Some(synthesized));
+            }
+            // BetaContainerUploadBlock { file_id }. The user explicitly
+            // asked us NOT to render these — model-side container file
+            // uploads are an internal step they don't want surfaced.
+            // Explicit no-op arm (rather than falling through to `_`)
+            // so a future "show me upload events" feature is a single
+            // search away.
+            "container_upload" => {}
+            // BetaCompactionBlock { content: string | null }. The
+            // model is reporting that it just compacted the previous
+            // turn's context to free up tokens. Render as a SystemNotice
+            // so it shows in the timeline alongside the corresponding
+            // `compact_boundary` system event (if any) — both share
+            // the same UI shell.
+            "compaction" => {
+                let body = obj
+                    .get("content")
                     .and_then(Value::as_str)
-                    .and_then(parse_streaming_status);
-                let raw_json_text = obj.get("__input_json_text").and_then(Value::as_str);
-                let args_text = raw_json_text
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| serde_json::to_string(&args).unwrap_or_default());
-                let tool_call_id = obj
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| format!("tc-{idx}"));
-                let tool_name = obj
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_string();
-
-                // Claude TodoWrite collapses into the unified TodoList
-                // part so the frontend renders it identically to Codex
-                // todo_list. We only do this once the input has been
-                // fully streamed — partial streaming arrives via stream
-                // events with no `todos` array yet, in which case we
-                // fall through to the regular ToolCall.
-                if tool_name == "TodoWrite" {
-                    if let Some(items) = parse_claude_todowrite_items(&args) {
-                        parts.push(MessagePart::TodoList { items });
-                        continue;
-                    }
-                }
-
-                parts.push(MessagePart::ToolCall {
-                    tool_call_id,
-                    tool_name,
-                    args,
-                    args_text,
-                    result: None,
-                    is_error: None,
-                    streaming_status: stream_status,
-                    children: Vec::new(),
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_string);
+                parts.push(MessagePart::SystemNotice {
+                    severity: NoticeSeverity::Info,
+                    label: "Context compacted".to_string(),
+                    body,
                 });
+            }
+            "tool_use" | "server_tool_use" => {
+                push_tool_use(&mut parts, obj, idx, None);
             }
             _ => {}
         }
     }
 
     parts
+}
+
+/// Push a `MessagePart::ToolCall` (or fold into `TodoList`) for a
+/// `tool_use` / `server_tool_use` / `mcp_tool_use` block. `name_override`
+/// is `Some` only for MCP, where the tool name is synthesized from
+/// `server_name + name`. Centralizing this avoids three near-identical
+/// match arms drifting apart and keeps Claude's three tool-use shapes
+/// converging on the same `MessagePart` shape.
+fn push_tool_use(
+    parts: &mut Vec<MessagePart>,
+    obj: &serde_json::Map<String, Value>,
+    idx: usize,
+    name_override: Option<String>,
+) {
+    let args = obj
+        .get("input")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(Default::default()));
+    let stream_status = obj
+        .get("__streaming_status")
+        .and_then(Value::as_str)
+        .and_then(parse_streaming_status);
+    let raw_json_text = obj.get("__input_json_text").and_then(Value::as_str);
+    let args_text = raw_json_text
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| serde_json::to_string(&args).unwrap_or_default());
+    let tool_call_id = obj
+        .get("id")
+        .and_then(Value::as_str)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("tc-{idx}"));
+    let tool_name = name_override.unwrap_or_else(|| {
+        obj.get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string()
+    });
+
+    // Claude TodoWrite collapses into the unified TodoList part so the
+    // frontend renders it identically to Codex todo_list. We only do
+    // this once the input has been fully streamed — partial streaming
+    // arrives via stream events with no `todos` array yet, in which
+    // case we fall through to the regular ToolCall.
+    if tool_name == "TodoWrite" {
+        if let Some(items) = parse_claude_todowrite_items(&args) {
+            parts.push(MessagePart::TodoList { items });
+            return;
+        }
+    }
+
+    parts.push(MessagePart::ToolCall {
+        tool_call_id,
+        tool_name,
+        args,
+        args_text,
+        result: None,
+        is_error: None,
+        streaming_status: stream_status,
+        children: Vec::new(),
+    });
 }
 
 fn parse_streaming_status(s: &str) -> Option<StreamingStatus> {
@@ -315,7 +420,16 @@ pub(super) fn late_merge_unresolved_tool_results(
         };
         for b in blocks {
             let Some(obj) = b.as_object() else { continue };
-            if obj.get("type").and_then(Value::as_str) != Some("tool_result") {
+            // Both shapes share the same `{tool_use_id, content, is_error?}`
+            // surface; the only difference is which side of the conversation
+            // the SDK delivers them on (`tool_result` lives inside a
+            // follow-up user message, `mcp_tool_result` lives inline in
+            // the same assistant message as the matching `mcp_tool_use`).
+            // Indexing both here means the unified late-merge handles
+            // BOTH the parent-Task lookahead gap AND the cross-event
+            // mcp result attach without two scan passes.
+            let block_type = obj.get("type").and_then(Value::as_str);
+            if block_type != Some("tool_result") && block_type != Some("mcp_tool_result") {
                 continue;
             }
             let Some(id) = obj.get("tool_use_id").and_then(Value::as_str) else {
@@ -427,6 +541,38 @@ fn attach_server_tool_result(parts: &mut [MessagePart], obj: &serde_json::Map<St
         {
             if tool_call_id == target_id {
                 *result = Some(result_value);
+                return;
+            }
+        }
+    }
+}
+
+/// Attach a `BetaMCPToolResultBlock` to its owning `mcp_tool_use`.
+/// `content` is `string | BetaTextBlock[]`; both forms collapse to a
+/// plain string. `is_error: true` is propagated so the frontend's
+/// existing `ToolCallErrorRow` lights up — the MCP error path reuses
+/// the same UI as Bash failures, no new components needed.
+fn attach_mcp_tool_result(parts: &mut [MessagePart], obj: &serde_json::Map<String, Value>) {
+    let target_id = match obj.get("tool_use_id").and_then(Value::as_str) {
+        Some(id) => id,
+        None => return,
+    };
+    let content_text = extract_tool_result_content(obj.get("content"));
+    let is_error_flag = match obj.get("is_error").and_then(Value::as_bool) {
+        Some(true) => Some(true),
+        _ => None,
+    };
+    for part in parts.iter_mut().rev() {
+        if let MessagePart::ToolCall {
+            tool_call_id,
+            result,
+            is_error,
+            ..
+        } = part
+        {
+            if tool_call_id == target_id {
+                *result = Some(Value::String(content_text));
+                *is_error = is_error_flag;
                 return;
             }
         }

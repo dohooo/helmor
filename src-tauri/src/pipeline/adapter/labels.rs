@@ -137,6 +137,126 @@ pub(super) fn build_subagent_notice(
     }
 }
 
+/// Convert a Claude `system` event into a structured `SystemNotice`
+/// for the subtypes that carry rich metadata. Returns None for the
+/// `task_*` family (handled by `build_subagent_notice`), `init`
+/// (intentionally silent), and any unknown subtype (caller falls
+/// through to the generic `build_system_label` string path).
+///
+/// Both Claude-only events (compact_boundary, api_retry) and
+/// reshape-target events (tool_use_summary, local_command_output)
+/// route through this single function so the frontend never has to
+/// distinguish between them.
+pub(super) fn build_system_notice(parsed: Option<&Value>) -> Option<MessagePart> {
+    let parsed = parsed?;
+    let sub = parsed.get("subtype").and_then(Value::as_str)?;
+    match sub {
+        "local_command_output" => {
+            let content = parsed
+                .get("content")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            Some(MessagePart::SystemNotice {
+                severity: NoticeSeverity::Info,
+                label: "Local command output".to_string(),
+                body: content,
+            })
+        }
+        "tool_use_summary" => {
+            let summary = parsed
+                .get("summary")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let count = parsed
+                .get("tool_use_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let label = if count > 1 {
+                format!("Tool output summarized ({count} calls)")
+            } else {
+                "Tool output summarized".to_string()
+            };
+            Some(MessagePart::SystemNotice {
+                severity: NoticeSeverity::Info,
+                label,
+                body: Some(summary),
+            })
+        }
+        "compact_boundary" => Some(build_compact_boundary_notice(parsed)),
+        "api_retry" => Some(build_api_retry_notice(parsed)),
+        _ => None,
+    }
+}
+
+/// `SDKCompactBoundaryMessage { compact_metadata: { trigger, pre_tokens } }`.
+/// Renders as an Info notice explaining why the conversation history
+/// just got shorter — Claude-only event, but the rendered shape is
+/// provider-agnostic so a future Codex equivalent can flow through
+/// the same UI.
+fn build_compact_boundary_notice(parsed: &Value) -> MessagePart {
+    let meta = parsed.get("compact_metadata");
+    let trigger = meta
+        .and_then(|m| m.get("trigger"))
+        .and_then(Value::as_str)
+        .unwrap_or("auto");
+    let pre_tokens = meta
+        .and_then(|m| m.get("pre_tokens"))
+        .and_then(Value::as_i64);
+    let body = match (trigger, pre_tokens) {
+        ("manual", Some(n)) => format!("Manual compaction · {} tokens compressed", format_count(n)),
+        ("manual", None) => "Manual compaction".to_string(),
+        ("auto", Some(n)) => format!(
+            "Auto-compacted at context limit · {} tokens compressed",
+            format_count(n)
+        ),
+        ("auto", None) => "Auto-compacted at context limit".to_string(),
+        (other, Some(n)) => format!("Compacted ({other}) · {} tokens", format_count(n)),
+        (other, None) => format!("Compacted ({other})"),
+    };
+    MessagePart::SystemNotice {
+        severity: NoticeSeverity::Info,
+        label: "Context compacted".to_string(),
+        body: Some(body),
+    }
+}
+
+/// `SDKAPIRetryMessage { attempt, max_retries, retry_delay_ms,
+/// error_status, error }`. Renders as a Warning notice during transient
+/// API failures — Claude-only at the source (Codex retries are
+/// SDK-internal and never surface).
+fn build_api_retry_notice(parsed: &Value) -> MessagePart {
+    let attempt = parsed.get("attempt").and_then(Value::as_i64).unwrap_or(0);
+    let max = parsed
+        .get("max_retries")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let delay_ms = parsed
+        .get("retry_delay_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let error = parsed
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or("server error");
+    let status = parsed.get("error_status").and_then(Value::as_i64);
+
+    let mut body = format!("Retry {attempt}/{max}");
+    if delay_ms > 0 {
+        body.push_str(&format!(" · waiting {:.1}s", delay_ms as f64 / 1000.0));
+    }
+    if let Some(s) = status {
+        body.push_str(&format!(" · HTTP {s}"));
+    }
+    body.push_str(&format!(" · {error}"));
+
+    MessagePart::SystemNotice {
+        severity: NoticeSeverity::Warning,
+        label: "Retrying".to_string(),
+        body: Some(body),
+    }
+}
+
 pub(super) fn build_system_label(parsed: Option<&Value>) -> String {
     let parsed = match parsed {
         Some(p) => p,

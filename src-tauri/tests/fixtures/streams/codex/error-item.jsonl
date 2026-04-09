@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"sess-codex-err-1","uuid":"u-thr-1"}
+{"type":"turn.started","thread_id":"sess-codex-err-1","uuid":"u-turn-1"}
+{"type":"item.completed","thread_id":"sess-codex-err-1","item":{"type":"agent_message","id":"item_msg_1","text":"Trying to fetch upstream..."}}
+{"type":"item.completed","thread_id":"sess-codex-err-1","item":{"type":"error","id":"item_err_1","message":"Network timeout while contacting upstream"}}
+{"type":"turn.completed","thread_id":"sess-codex-err-1","usage":{"input_tokens":50,"output_tokens":12,"cached_input_tokens":0},"uuid":"u-turn-2"}

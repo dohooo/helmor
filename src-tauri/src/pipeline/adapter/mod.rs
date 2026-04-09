@@ -29,18 +29,18 @@ pub(crate) const PROMPT_TOOL_NAME: &str = "Prompt";
 pub(crate) const AGENT_TOOL_NAMES: &[&str] = &["Agent", "Task"];
 
 use blocks::{
-    late_merge_unresolved_tool_results, merge_tool_results, merge_tool_results_extended,
-    parse_assistant_parts,
+    assistant_has_recognized_blocks, late_merge_unresolved_tool_results, merge_tool_results,
+    merge_tool_results_extended, parse_assistant_parts,
 };
 use grouping::{convert_user_message, group_child_messages, merge_adjacent_assistants};
 use labels::{
     build_error_label, build_rate_limit_notice, build_result_label, build_subagent_notice,
-    build_system_label, extract_fallback, make_system, make_system_notice,
+    build_system_label, build_system_notice, extract_fallback, make_system, make_system_notice,
 };
 
 use super::types::{
     ExtendedMessagePart, HistoricalRecord, IntermediateMessage, MessagePart, MessageRole,
-    MessageStatus, NoticeSeverity, ThreadMessageLike,
+    MessageStatus, ThreadMessageLike,
 };
 
 // ---------------------------------------------------------------------------
@@ -188,7 +188,13 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
                 i += 1;
             }
 
-            if parts.is_empty() {
+            // Suppress the text-fallback for messages whose content array
+            // contained only recognized-but-non-emitting blocks (e.g. an
+            // mcp_tool_result that's expected to attach to a previous
+            // ToolCall via late merge — its parts list is empty by design,
+            // but we DON'T want to inject the truncated raw JSON as a Text
+            // part because that produces ghost messages in the timeline).
+            if parts.is_empty() && !assistant_has_recognized_blocks(parsed) {
                 let fb = extract_fallback(msg);
                 if !fb.is_empty() {
                     parts.push(MessagePart::Text { text: fb });
@@ -213,10 +219,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
                 id,
                 created_at: Some(msg.created_at.clone()),
                 content: parts.into_iter().map(ExtendedMessagePart::Basic).collect(),
-                status: Some(MessageStatus {
-                    status_type: "complete".to_string(),
-                    reason: Some("stop".to_string()),
-                }),
+                status: Some(map_stop_reason(parsed)),
                 streaming: if is_streaming { Some(true) } else { None },
             });
 
@@ -338,6 +341,60 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
     result
 }
 
+/// Translate Claude's `BetaMessage.stop_reason` into a unified
+/// `MessageStatus`. Both providers' assistant messages flow through this:
+/// Claude carries the actual reason in `parsed.message.stop_reason`, Codex
+/// has no equivalent and falls into the `None` arm (always
+/// `complete / stop`). The frontend reads `status.reason` only — it never
+/// sees the underlying provider, and any new SDK reason added later just
+/// needs an arm here.
+fn map_stop_reason(parsed: Option<&Value>) -> MessageStatus {
+    let reason = parsed
+        .and_then(|p| p.get("message"))
+        .and_then(|m| m.get("stop_reason"))
+        .and_then(Value::as_str);
+    match reason {
+        // Normal completion variants — all map to "complete / stop" so
+        // the frontend doesn't need to distinguish them.
+        Some("end_turn") | Some("stop_sequence") | Some("tool_use") | Some("compaction") | None => {
+            MessageStatus {
+                status_type: "complete".to_string(),
+                reason: Some("stop".to_string()),
+            }
+        }
+        // Truncation by output budget — the assistant message is cut off
+        // mid-content. Distinguished from `assistant.error = max_output_tokens`
+        // (which uses the same `max_tokens` reason) so the frontend renders
+        // a single "truncated" badge regardless of which surface caused it.
+        Some("max_tokens") => MessageStatus {
+            status_type: "incomplete".to_string(),
+            reason: Some("max_tokens".to_string()),
+        },
+        // Model voluntarily paused mid-turn (rare).
+        Some("pause_turn") => MessageStatus {
+            status_type: "incomplete".to_string(),
+            reason: Some("pause_turn".to_string()),
+        },
+        // Claude refused to answer (safety / policy).
+        Some("refusal") => MessageStatus {
+            status_type: "incomplete".to_string(),
+            reason: Some("refusal".to_string()),
+        },
+        // Context window exhausted before the turn could finish.
+        Some("model_context_window_exceeded") => MessageStatus {
+            status_type: "incomplete".to_string(),
+            reason: Some("context_window_exceeded".to_string()),
+        },
+        // Forward-compat: a brand new SDK stop_reason gets passed through
+        // as-is. Better to surface "unknown" verbatim than silently coerce
+        // it to "stop" — the user's UI will at least show *something*.
+        Some(other) => MessageStatus {
+            status_type: "complete".to_string(),
+            reason: Some(other.to_string()),
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Per-event helpers shared by the main loop and the deferred-flush path
 // ---------------------------------------------------------------------------
@@ -438,21 +495,12 @@ fn convert_system_msg(msg: &IntermediateMessage, out: &mut Vec<ThreadMessageLike
     if sub == Some("init") {
         return;
     }
-    // local_command_output: a hook command's stdout/stderr. Render
-    // as an Info notice with the captured content as body.
-    if sub == Some("local_command_output") {
-        let content = parsed
-            .and_then(|p| p.get("content"))
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        out.push(make_system_notice(
-            msg,
-            MessagePart::SystemNotice {
-                severity: NoticeSeverity::Info,
-                label: "Local command output".to_string(),
-                body: content,
-            },
-        ));
+    // Subtypes with structured data (compact_boundary, api_retry,
+    // tool_use_summary, local_command_output) flow through a single
+    // dispatcher in `labels::build_system_notice`. Adding a new
+    // subtype is one match arm, no convert_system_msg edits.
+    if let Some(part) = build_system_notice(parsed) {
+        out.push(make_system_notice(msg, part));
         return;
     }
     out.push(make_system(msg, &build_system_label(parsed)));

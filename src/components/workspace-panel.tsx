@@ -21,6 +21,7 @@ import {
 	LoaderCircle,
 	MessageSquareText,
 	Pencil,
+	Plug,
 	Plus,
 	RotateCcw,
 	Search,
@@ -1860,8 +1861,76 @@ function ChatAssistantMessage({
 				}
 				return null;
 			})}
+			{!streaming && message.status?.type === "incomplete" ? (
+				<MessageStatusBadge reason={message.status.reason} />
+			) : null}
 		</div>
 	);
+}
+
+/**
+ * Status pill rendered after an assistant message that ended in an
+ * incomplete state. Reads from the unified `MessageStatus.reason` field
+ * which Rust derives from Claude's `BetaMessage.stop_reason` and (in the
+ * future) any equivalent Codex signal — frontend never branches on
+ * provider, only on the canonical reason string.
+ */
+function MessageStatusBadge({ reason }: { reason?: string }) {
+	if (!reason) return null;
+	const meta = statusBadgeMeta(reason);
+	if (!meta) return null;
+	return (
+		<div
+			className={cn(
+				"mt-1 inline-flex w-fit items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium",
+				meta.tone,
+			)}
+		>
+			{meta.icon}
+			<span>{meta.label}</span>
+		</div>
+	);
+}
+
+function statusBadgeMeta(
+	reason: string,
+): { label: string; tone: string; icon: React.ReactNode } | null {
+	const negativeTone = "bg-app-negative/10 text-app-negative";
+	const warmTone = "bg-app-warning/10 text-app-warning";
+	switch (reason) {
+		case "max_tokens":
+			return {
+				label: "Output truncated",
+				tone: warmTone,
+				icon: <AlertTriangle className="size-3" strokeWidth={1.8} />,
+			};
+		case "context_window_exceeded":
+			return {
+				label: "Context window exceeded",
+				tone: negativeTone,
+				icon: <AlertCircle className="size-3" strokeWidth={1.8} />,
+			};
+		case "refusal":
+			return {
+				label: "Model declined",
+				tone: warmTone,
+				icon: <Info className="size-3" strokeWidth={1.8} />,
+			};
+		case "pause_turn":
+			return {
+				label: "Paused",
+				tone: warmTone,
+				icon: <Clock3 className="size-3" strokeWidth={1.8} />,
+			};
+		default:
+			// Forward-compat: any unknown reason renders as a generic
+			// "incomplete" pill rather than getting silently swallowed.
+			return {
+				label: reason,
+				tone: negativeTone,
+				icon: <AlertCircle className="size-3" strokeWidth={1.8} />,
+			};
+	}
 }
 
 function ChatSystemMessage({ message }: { message: RenderedMessage }) {
@@ -3080,6 +3149,23 @@ function getToolInfo(
 	const fallbackIcon = (
 		<span className="size-3.5 rounded-full bg-app-foreground/15" />
 	);
+
+	// MCP tools — both providers converge on `mcp__{server}__{tool}` in the
+	// Rust pipeline (Codex synthesizes it in `accumulator/codex.rs`, Claude
+	// in `adapter/blocks.rs::push_tool_use`). Frontend stays provider-agnostic.
+	if (name.startsWith("mcp__")) {
+		const segments = name.split("__");
+		const server = segments[1] ?? "mcp";
+		const tool = segments.slice(2).join("__") || name;
+		return {
+			action: tool,
+			icon: (
+				<Plug className="size-3.5 text-app-accent-cyan" strokeWidth={1.8} />
+			),
+			detail: `via ${server}`,
+		};
+	}
+
 	if (!input) return { action: name, icon: fallbackIcon };
 
 	if (name === "Edit") {

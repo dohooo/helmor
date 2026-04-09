@@ -90,11 +90,47 @@ pub(super) fn handle_item_snapshot(
         return;
     }
 
+    if item_type == Some("error") {
+        handle_codex_error_item(acc, raw_line, item, persist);
+        return;
+    }
+
     // Unknown item type — record for the drop-guard test so adding a new
     // SDK item type fails the build until a handler lands here.
     let label = format!("codex/item:{}", item_type.unwrap_or("<missing-item-type>"));
     if !acc.dropped_event_types.contains(&label) {
         acc.dropped_event_types.push(label);
+    }
+}
+
+/// Codex `ErrorItem { type: "error", message: string }` — a non-fatal
+/// error report at item granularity. Reshape into the same `{type:
+/// error, message}` envelope `handle_codex_turn_failed` and Claude's
+/// own error path use, so the downstream renderer treats all three
+/// the same. The frontend never branches on provider.
+fn handle_codex_error_item(
+    acc: &mut StreamAccumulator,
+    raw_line: &str,
+    item: &Value,
+    persist: bool,
+) {
+    let message = item
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("Codex error")
+        .to_string();
+    let synthetic = serde_json::json!({
+        "type": "error",
+        "message": message,
+    });
+    let s = serde_json::to_string(&synthetic).unwrap_or_default();
+    acc.collect_message(&s, &synthetic, "error", None);
+
+    if persist {
+        acc.turns.push(CollectedTurn {
+            role: "error".to_string(),
+            content_json: raw_line.to_string(),
+        });
     }
 }
 

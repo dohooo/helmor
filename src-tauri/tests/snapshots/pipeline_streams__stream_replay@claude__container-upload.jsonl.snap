@@ -1,0 +1,48 @@
+---
+source: tests/pipeline_streams.rs
+expression: snapshot
+input_file: tests/fixtures/streams/claude/container-upload.jsonl
+---
+line_count: 3
+checkpoint_count: 3
+checkpoints:
+  - line_index: 0
+    event_type: system
+    roles: []
+    last_part_types: []
+  - line_index: 1
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - text
+  - line_index: 2
+    event_type: result
+    roles:
+      - assistant
+      - system
+    last_part_types:
+      - text
+final_state:
+  message_count: 2
+  roles:
+    - assistant
+    - system
+  total_parts: 3
+persisted_turns:
+  turn_count: 1
+  total_blocks: 3
+  turns:
+    - role: assistant
+      block_types:
+        - text
+        - container_upload
+        - text
+historical_render:
+  message_count: 1
+  messages:
+    - role: assistant
+      part_types:
+        - text
+        - text

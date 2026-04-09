@@ -121,6 +121,24 @@ pub struct StreamAccumulator {
     dropped_event_types: Vec<String>,
 }
 
+/// Map an `SDKAssistantMessageError` category string to a human-readable
+/// label. Both Claude `assistant.error` and (in the future) any other
+/// turn-level failure surface route through this — the rendered SystemNotice
+/// is the same shape across providers, so the frontend never branches.
+fn assistant_error_message(category: &str) -> String {
+    match category {
+        "rate_limit" => "Rate limited by Anthropic API",
+        "max_output_tokens" => "Output truncated: max output tokens reached",
+        "billing_error" => "Billing error: check your Anthropic account",
+        "authentication_failed" => "Authentication failed: please re-authenticate",
+        "invalid_request" => "Invalid request: malformed payload",
+        "server_error" => "Anthropic API server error (5xx)",
+        "unknown" => "Assistant turn ended in an unknown error state",
+        other => return format!("Assistant error: {other}"),
+    }
+    .to_string()
+}
+
 impl StreamAccumulator {
     pub fn new(provider: &str, fallback_model: &str) -> Self {
         Self {
@@ -219,6 +237,24 @@ impl StreamAccumulator {
             }
             Some("system") => {
                 self.handle_claude_system(raw_line, value);
+                PushOutcome::Finalized
+            }
+
+            // SDKAuthStatusMessage — fired during OAuth re-auth flows.
+            // Intentionally silent: the user explicitly opted out of
+            // surfacing these in the conversation. We still need this
+            // arm so the drop-guard test (`pipeline_streams.rs`) doesn't
+            // fail when the SDK emits one.
+            Some("auth_status") => PushOutcome::NoOp,
+
+            // SDKToolUseSummaryMessage — the SDK summarizes a long
+            // tool result so the model's context doesn't blow up. We
+            // surface it as a SystemNotice so the user knows the raw
+            // output was truncated; reshape into a Claude-style
+            // `{type: system, subtype: tool_use_summary}` envelope so
+            // the existing `convert_system_msg` path renders it.
+            Some("tool_use_summary") => {
+                self.handle_tool_use_summary(raw_line, value);
                 PushOutcome::Finalized
             }
 
@@ -494,6 +530,22 @@ impl StreamAccumulator {
         let partial_id = self.active_partial_id.clone();
         self.finalize_blocks();
         self.collect_message(raw_line, value, "assistant", partial_id.as_deref());
+
+        // SDKAssistantMessage.error: turn-level failure category. Reshape
+        // into the same `{type: error, message}` envelope `handle_error`
+        // and `handle_codex_turn_failed` use, so the rendered output is
+        // identical regardless of which provider produced the failure.
+        // Frontend never branches on provider — both Claude assistant
+        // errors and Codex turn.failed flow through the same SystemNotice.
+        if let Some(category) = value.get("error").and_then(Value::as_str) {
+            let label = assistant_error_message(category);
+            let synthetic = serde_json::json!({
+                "type": "error",
+                "message": label,
+            });
+            let s = serde_json::to_string(&synthetic).unwrap_or_default();
+            self.collect_message(&s, &synthetic, "error", None);
+        }
     }
 
     fn handle_user(&mut self, raw_line: &str, value: &Value) {
@@ -570,6 +622,35 @@ impl StreamAccumulator {
         // task_*). The adapter renders the appropriate banner from the
         // subtype.
         self.collect_message(raw_line, value, "system", None);
+    }
+
+    /// Reshape an `SDKToolUseSummaryMessage` into a synthetic
+    /// `{type: system, subtype: tool_use_summary}` envelope so the
+    /// existing system-message conversion path can render it. The
+    /// summary text and the count of preceding tool uses both flow
+    /// through `convert_system_msg`.
+    fn handle_tool_use_summary(&mut self, _raw_line: &str, value: &Value) {
+        let summary = value
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if summary.is_empty() {
+            return;
+        }
+        let count = value
+            .get("preceding_tool_use_ids")
+            .and_then(Value::as_array)
+            .map(|a| a.len())
+            .unwrap_or(0);
+        let synthetic = serde_json::json!({
+            "type": "system",
+            "subtype": "tool_use_summary",
+            "summary": summary,
+            "tool_use_count": count,
+        });
+        let s = serde_json::to_string(&synthetic).unwrap_or_default();
+        self.collect_message(&s, &synthetic, "system", None);
     }
 
     fn handle_turn_completed(&mut self, value: &Value, raw_line: &str) {

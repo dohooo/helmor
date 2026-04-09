@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"sess-ar-1","model":"claude-sonnet-4-6","uuid":"u-init-1"}
+{"type":"system","subtype":"api_retry","session_id":"sess-ar-1","attempt":1,"max_retries":5,"retry_delay_ms":1500,"error_status":503,"error":"server_error","uuid":"u-ar-1"}
+{"type":"system","subtype":"api_retry","session_id":"sess-ar-1","attempt":2,"max_retries":5,"retry_delay_ms":3000,"error_status":429,"error":"rate_limit","uuid":"u-ar-2"}
+{"type":"assistant","uuid":"u-1","session_id":"sess-ar-1","parent_tool_use_id":null,"message":{"id":"msg_ar_1","type":"message","role":"assistant","model":"claude-sonnet-4-6","stop_reason":"end_turn","stop_sequence":null,"content":[{"type":"text","text":"Retried successfully."}],"usage":{"input_tokens":3,"output_tokens":4}}}
+{"type":"result","subtype":"success","session_id":"sess-ar-1","duration_ms":5500,"total_cost_usd":0.0005,"usage":{"input_tokens":3,"output_tokens":4},"uuid":"u-res-1"}

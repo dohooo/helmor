@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"sess-auth-1","model":"claude-sonnet-4-6","uuid":"u-init-1"}
+{"type":"auth_status","isAuthenticating":true,"output":["Opening browser for OAuth flow..."],"uuid":"u-auth-1","session_id":"sess-auth-1"}
+{"type":"auth_status","isAuthenticating":false,"output":[],"uuid":"u-auth-2","session_id":"sess-auth-1"}
+{"type":"assistant","uuid":"u-1","session_id":"sess-auth-1","parent_tool_use_id":null,"message":{"id":"msg_a_1","type":"message","role":"assistant","model":"claude-sonnet-4-6","stop_reason":"end_turn","stop_sequence":null,"content":[{"type":"text","text":"Authenticated and ready."}],"usage":{"input_tokens":3,"output_tokens":4}}}
+{"type":"result","subtype":"success","session_id":"sess-auth-1","duration_ms":850,"total_cost_usd":0.0008,"usage":{"input_tokens":3,"output_tokens":4},"uuid":"u-res-1"}

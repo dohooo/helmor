@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"sess-aemt-1","model":"claude-sonnet-4-6","uuid":"u-init-1"}
+{"type":"assistant","uuid":"u-1","session_id":"sess-aemt-1","parent_tool_use_id":null,"error":"max_output_tokens","message":{"id":"msg_aemt_1","type":"message","role":"assistant","model":"claude-sonnet-4-6","stop_reason":"max_tokens","stop_sequence":null,"content":[{"type":"text","text":"Here is a long response that gets cut off mid-sentence because"}],"usage":{"input_tokens":3,"output_tokens":4096}}}

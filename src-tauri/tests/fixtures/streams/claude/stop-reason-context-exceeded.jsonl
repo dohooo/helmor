@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"sess-srce-1","model":"claude-sonnet-4-6","uuid":"u-init-1"}
+{"type":"assistant","uuid":"u-1","session_id":"sess-srce-1","parent_tool_use_id":null,"message":{"id":"msg_srce_1","type":"message","role":"assistant","model":"claude-sonnet-4-6","stop_reason":"model_context_window_exceeded","stop_sequence":null,"content":[{"type":"text","text":"I started replying but"}],"usage":{"input_tokens":195000,"output_tokens":12}}}

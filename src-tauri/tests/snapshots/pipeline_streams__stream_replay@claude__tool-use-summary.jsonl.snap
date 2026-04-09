@@ -1,0 +1,76 @@
+---
+source: tests/pipeline_streams.rs
+expression: snapshot
+input_file: tests/fixtures/streams/claude/tool-use-summary.jsonl
+---
+line_count: 6
+checkpoint_count: 6
+checkpoints:
+  - line_index: 0
+    event_type: system
+    roles: []
+    last_part_types: []
+  - line_index: 1
+    event_type: assistant
+    roles:
+      - assistant
+    last_part_types:
+      - tool-call
+  - line_index: 2
+    event_type: user
+    roles:
+      - assistant
+    last_part_types:
+      - tool-call
+  - line_index: 3
+    event_type: tool_use_summary
+    roles:
+      - assistant
+      - system
+    last_part_types:
+      - system-notice
+  - line_index: 4
+    event_type: assistant
+    roles:
+      - assistant
+      - system
+      - assistant
+    last_part_types:
+      - text
+  - line_index: 5
+    event_type: result
+    roles:
+      - assistant
+      - system
+      - assistant
+      - system
+    last_part_types:
+      - text
+final_state:
+  message_count: 4
+  roles:
+    - assistant
+    - system
+    - assistant
+    - system
+  total_parts: 4
+persisted_turns:
+  turn_count: 3
+  total_blocks: 3
+  turns:
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - text
+historical_render:
+  message_count: 1
+  messages:
+    - role: assistant
+      part_types:
+        - tool-call
+        - text
