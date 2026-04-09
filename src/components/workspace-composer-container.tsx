@@ -17,14 +17,13 @@ import {
 	workspaceDetailQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
-import { cn } from "@/lib/utils";
 import {
 	clampEffortToModel,
 	findModelOption,
 	getComposerContextKey,
 	inferDefaultModelId,
 } from "@/lib/workspace-helpers";
-import { Button } from "./ui/button";
+import { ActionRow, ActionRowButton } from "./action-row";
 import { ShimmerText } from "./ui/shimmer-text";
 import { ShineBorder } from "./ui/shine-border";
 import { WorkspaceComposer } from "./workspace-composer";
@@ -330,23 +329,26 @@ export const WorkspaceComposerContainer = memo(
 		return (
 			<div className="flex flex-col">
 				{isActionSession ? (
-					<div className="relative z-10 mx-auto -mb-px flex w-[90%] items-center justify-between overflow-hidden rounded-t-[14px] border border-app-border/40 bg-app-sidebar px-3 pb-1 pt-1.5">
-						{autoCloseEnabled ? (
-							<>
-								<ShineBorder
-									borderWidth={1}
-									duration={8}
-									shineColor={[
-										"oklch(0.88 0.08 98)",
-										"oklch(0.84 0.1 92)",
-										"oklch(0.8 0.09 84)",
-									]}
-								/>
-								<div className="pointer-events-none absolute inset-x-px bottom-0 z-[1] h-[2px] bg-app-sidebar" />
-							</>
-						) : null}
-						<div className="flex min-w-0 items-center gap-1.5">
-							{sending ? (
+					<ActionRow
+						className="relative z-10 mx-auto -mb-px w-[90%] rounded-t-[14px]"
+						overlay={
+							autoCloseEnabled ? (
+								<>
+									<ShineBorder
+										borderWidth={1}
+										duration={8}
+										shineColor={[
+											"oklch(0.88 0.08 98)",
+											"oklch(0.84 0.1 92)",
+											"oklch(0.8 0.09 84)",
+										]}
+									/>
+									<div className="pointer-events-none absolute inset-x-px bottom-0 z-[1] h-[2px] bg-app-sidebar" />
+								</>
+							) : null
+						}
+						leading={
+							sending ? (
 								<ShimmerText
 									durationMs={1900}
 									className="truncate text-[12px] font-medium tracking-[0.02em] text-app-foreground-soft/80"
@@ -364,13 +366,10 @@ export const WorkspaceComposerContainer = memo(
 										{autoCloseHelpText}
 									</span>
 								</>
-							)}
-						</div>
-						<div className="flex items-center gap-1.5">
-							<Button
-								type="button"
-								variant="ghost"
-								size="sm"
+							)
+						}
+						trailing={
+							<ActionRowButton
 								aria-label={
 									autoCloseEnabled ? "Disable Auto Close" : "Enable Auto Close"
 								}
@@ -379,12 +378,11 @@ export const WorkspaceComposerContainer = memo(
 								onClick={() => {
 									void handleToggleAutoClose();
 								}}
-								className={cn(
-									"h-7 items-center rounded-[3px] border border-app-border/45 bg-app-base/70 px-2.5 text-[12px] font-medium leading-none tracking-[0.02em] text-app-foreground-soft transition-colors hover:bg-app-base hover:text-app-foreground disabled:cursor-not-allowed disabled:opacity-60",
+								className={
 									autoCloseEnabled
 										? "border-[color:oklch(0.76_0.17_88_/_0.45)] bg-[color:oklch(0.76_0.17_88_/_0.12)] text-[color:oklch(0.84_0.11_96)] hover:bg-[color:oklch(0.76_0.17_88_/_0.16)] hover:text-[color:oklch(0.9_0.08_96)]"
-										: null,
-								)}
+										: undefined
+								}
 							>
 								<TimerReset
 									className="size-[13px] shrink-0"
@@ -393,9 +391,9 @@ export const WorkspaceComposerContainer = memo(
 								<span className="inline-flex items-center">
 									{autoCloseEnabled ? "Auto Close On" : "Enable Auto Close"}
 								</span>
-							</Button>
-						</div>
-					</div>
+							</ActionRowButton>
+						}
+					/>
 				) : null}
 
 				<WorkspaceComposer

@@ -141,6 +141,7 @@ pub fn run() {
             agents::list_agent_model_sections,
             agents::send_agent_message_stream,
             agents::stop_agent_stream,
+            agents::respond_to_permission_request,
             agents::generate_session_title,
             agents::list_slash_commands,
             models::archive_workspace,

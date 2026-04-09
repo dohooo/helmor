@@ -324,20 +324,161 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		if (!workspace) return;
 		try {
 			const result = await createSession(workspace.id);
+			const now = new Date().toISOString();
+
+			queryClient.setQueryData(
+				helmorQueryKeys.workspaceDetail(workspace.id),
+				(current: WorkspaceDetail | null | undefined) => {
+					const base = current ?? workspace;
+					if (!base) {
+						return base;
+					}
+
+					return {
+						...base,
+						activeSessionId: result.sessionId,
+						activeSessionTitle: "Untitled",
+						activeSessionAgentType: null,
+						activeSessionStatus: "idle",
+						sessionCount:
+							base.activeSessionId === result.sessionId
+								? base.sessionCount
+								: base.sessionCount + 1,
+					};
+				},
+			);
+			queryClient.setQueryData(
+				helmorQueryKeys.workspaceSessions(workspace.id),
+				(current: WorkspaceSessionSummary[] | undefined) => {
+					const existingSessions = current ?? sessions;
+					if (
+						existingSessions.some((session) => session.id === result.sessionId)
+					) {
+						return existingSessions.map((session) => ({
+							...session,
+							active: session.id === result.sessionId,
+						}));
+					}
+
+					return [
+						...existingSessions.map((session) => ({
+							...session,
+							active: false,
+						})),
+						{
+							id: result.sessionId,
+							workspaceId: workspace.id,
+							title: "Untitled",
+							agentType: null,
+							status: "idle",
+							model: null,
+							permissionMode: "default",
+							providerSessionId: null,
+							effortLevel: null,
+							unreadCount: 0,
+							contextTokenCount: 0,
+							contextUsedPercent: null,
+							thinkingEnabled: true,
+							fastMode: false,
+							agentPersonality: null,
+							createdAt: now,
+							updatedAt: now,
+							lastUserMessageAt: null,
+							resumeSessionAt: null,
+							isHidden: false,
+							isCompacting: false,
+							actionKind: null,
+							active: true,
+						},
+					];
+				},
+			);
+			queryClient.setQueryData(
+				[...helmorQueryKeys.sessionMessages(result.sessionId), "thread"],
+				[],
+			);
+
 			onSessionsChanged?.();
 			onSelectSession?.(result.sessionId);
 		} catch (error) {
 			console.error("Failed to create session:", error);
 		}
-	}, [workspace, onSessionsChanged, onSelectSession]);
+	}, [queryClient, sessions, workspace, onSessionsChanged, onSelectSession]);
 
 	const handleHideSession = useCallback(
 		async (sessionId: string, e: React.MouseEvent) => {
 			e.stopPropagation();
-			await hideSession(sessionId);
-			onSessionsChanged?.();
+			if (!workspace) {
+				return;
+			}
+
+			const isClosingLastVisibleSession = sessions.length === 1;
+
+			try {
+				if (isClosingLastVisibleSession) {
+					const { sessionId: replacementSessionId } = await createSession(
+						workspace.id,
+					);
+					const now = new Date().toISOString();
+					const optimisticSession = buildOptimisticSession(
+						workspace.id,
+						replacementSessionId,
+						now,
+					);
+
+					queryClient.setQueryData(
+						helmorQueryKeys.workspaceDetail(workspace.id),
+						(current: WorkspaceDetail | null | undefined) => {
+							const base = current ?? workspace;
+							if (!base) {
+								return base;
+							}
+
+							return {
+								...base,
+								activeSessionId: replacementSessionId,
+								activeSessionTitle: "Untitled",
+								activeSessionAgentType: null,
+								activeSessionStatus: "idle",
+								sessionCount: Math.max(1, base.sessionCount),
+							};
+						},
+					);
+					queryClient.setQueryData(
+						helmorQueryKeys.workspaceSessions(workspace.id),
+						() => [optimisticSession],
+					);
+					queryClient.setQueryData(
+						[
+							...helmorQueryKeys.sessionMessages(replacementSessionId),
+							"thread",
+						],
+						[],
+					);
+
+					onSelectSession?.(replacementSessionId);
+				}
+
+				await hideSession(sessionId);
+				onSessionsChanged?.();
+			} catch (error) {
+				console.error("Failed to close session:", error);
+				onSessionsChanged?.();
+				pushToast(
+					error instanceof Error ? error.message : String(error),
+					"Unable to close session",
+					"destructive",
+				);
+			}
 		},
-		[onSessionsChanged],
+		[
+			onSelectSession,
+			onSessionsChanged,
+			pushToast,
+			queryClient,
+			sessions.length,
+			workspace,
+		],
 	);
 
 	const handleToggleHistory = useCallback(async () => {
@@ -830,7 +971,7 @@ function ChatThread({
 	const { contentRef, scrollRef, scrollToBottom, stopScroll, isAtBottom } =
 		useStickToBottom({
 			initial: "instant",
-			resize: "instant",
+			resize: "smooth",
 		});
 	const handleScrollRef = useCallback(
 		(element: HTMLElement | null) => {
@@ -914,7 +1055,7 @@ function ChatThread({
 				<button
 					type="button"
 					onClick={() => {
-						scrollToBottom();
+						scrollToBottom("instant");
 					}}
 					className={`conversation-scroll-button ${isAtBottom || sendingJustStarted ? "conversation-scroll-button-hidden" : ""}`}
 					aria-label="Scroll to latest message"
@@ -976,7 +1117,7 @@ function ConversationViewport({
 		? StreamingFooter
 		: ConversationFooterSpacer;
 	const EmptyPlaceholder: ThreadViewportSlot = () => (
-		<div className="flex min-h-full flex-1 flex-col">
+		<div className="flex min-h-full flex-1 items-center justify-center px-8">
 			<EmptyState hasSession={hasSession} />
 		</div>
 	);
@@ -988,7 +1129,7 @@ function ConversationViewport({
 				className="conversation-scroll-viewport h-full w-full overflow-x-hidden overflow-y-auto"
 			>
 				{usePlainThread ? (
-					<div ref={contentRef}>
+					<div ref={contentRef} className="flex min-h-full flex-col">
 						{Header ? createElement(Header) : null}
 						{data.length === 0
 							? EmptyPlaceholder
@@ -1518,7 +1659,7 @@ function ProgressiveConversationViewport({
 
 	if (data.length === 0) {
 		return (
-			<div ref={contentRef}>
+			<div ref={contentRef} className="flex min-h-full flex-col">
 				{Header ? createElement(Header) : null}
 				{EmptyPlaceholder ? createElement(EmptyPlaceholder) : null}
 				{Footer ? createElement(Footer) : null}
@@ -2476,7 +2617,11 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 	);
 }, assistantToolCallPropsEqual);
 
-function ToolCallErrorRow({ result }: { result: unknown }) {
+const ToolCallErrorRow = memo(function ToolCallErrorRow({
+	result,
+}: {
+	result: unknown;
+}) {
 	const error = useMemo(() => extractToolError(result), [result]);
 	const [open, setOpen] = useState(false);
 	if (!error) return null;
@@ -2536,7 +2681,7 @@ function ToolCallErrorRow({ result }: { result: unknown }) {
 			) : null}
 		</details>
 	);
-}
+});
 
 type ToolError = {
 	/** Non-zero exit code parsed from a leading `Exit code N` line (Bash). */
@@ -3320,7 +3465,7 @@ function isObj(v: unknown): v is Record<string, unknown> {
 
 function EmptyState({ hasSession }: { hasSession: boolean }) {
 	return (
-		<div className="m-auto flex max-w-sm flex-col items-center px-8 text-center">
+		<div className="flex max-w-sm flex-col items-center text-center">
 			<MessageSquareText
 				className="size-7 text-app-muted/80"
 				strokeWidth={1.7}
@@ -3363,6 +3508,38 @@ function displaySessionTitle(session: WorkspaceSessionSummary): string {
 	return "Untitled";
 }
 
+function buildOptimisticSession(
+	workspaceId: string,
+	sessionId: string,
+	createdAt: string,
+): WorkspaceSessionSummary {
+	return {
+		id: sessionId,
+		workspaceId,
+		title: "Untitled",
+		agentType: null,
+		status: "idle",
+		model: null,
+		permissionMode: "default",
+		providerSessionId: null,
+		effortLevel: null,
+		unreadCount: 0,
+		contextTokenCount: 0,
+		contextUsedPercent: null,
+		thinkingEnabled: true,
+		fastMode: false,
+		agentPersonality: null,
+		createdAt,
+		updatedAt: createdAt,
+		lastUserMessageAt: null,
+		resumeSessionAt: null,
+		isHidden: false,
+		isCompacting: false,
+		actionKind: null,
+		active: true,
+	};
+}
+
 function BranchPicker({
 	currentBranch,
 	branches,
@@ -3390,12 +3567,12 @@ function BranchPicker({
 				<span className="truncate">{currentBranch}</span>
 				<ChevronDown className="size-3 shrink-0" strokeWidth={2} />
 			</PopoverTrigger>
-			<PopoverContent align="start" className="w-[280px] p-0">
-				<Command>
+			<PopoverContent align="start" className="w-[260px] p-0">
+				<Command className="rounded-lg! p-0.5">
 					<CommandInput placeholder="Search branches..." />
-					<CommandList className="max-h-56">
+					<CommandList className="max-h-52">
 						{loading && branches.length === 0 ? (
-							<div className="flex items-center justify-center gap-2 py-6 text-[13px] text-app-muted">
+							<div className="flex items-center justify-center gap-2 py-5 text-[12px] text-app-muted">
 								<LoaderCircle
 									className="size-3.5 animate-spin"
 									strokeWidth={2}
@@ -3412,7 +3589,7 @@ function BranchPicker({
 									onSelect(branch);
 									setOpen(false);
 								}}
-								className="flex items-center justify-between gap-2"
+								className="flex items-center justify-between gap-2 px-1.5 py-1 text-[12px]"
 							>
 								<span
 									className={cn(

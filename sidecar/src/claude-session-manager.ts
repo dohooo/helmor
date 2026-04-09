@@ -197,6 +197,18 @@ async function buildUserMessageWithImages(
 
 export class ClaudeSessionManager implements SessionManager {
 	private readonly sessions = new Map<string, LiveSession>();
+	private readonly pendingPermissions = new Map<
+		string,
+		(behavior: "allow" | "deny") => void
+	>();
+
+	resolvePermission(permissionId: string, behavior: "allow" | "deny"): void {
+		const resolve = this.pendingPermissions.get(permissionId);
+		if (resolve) {
+			this.pendingPermissions.delete(permissionId);
+			resolve(behavior);
+		}
+	}
 
 	async sendMessage(
 		requestId: string,
@@ -236,6 +248,36 @@ export class ClaudeSessionManager implements SessionManager {
 				effort: parseEffort(effortLevel),
 				includePartialMessages: true,
 				settingSources: ["user", "project", "local"],
+				canUseTool: async (_toolName, input, options) => {
+					const permissionId = options.toolUseID;
+					emitter.permissionRequest(
+						requestId,
+						permissionId,
+						_toolName,
+						input,
+						options.title,
+						options.description,
+					);
+					const behavior = await new Promise<"allow" | "deny">((resolve) => {
+						this.pendingPermissions.set(permissionId, resolve);
+						options.signal.addEventListener(
+							"abort",
+							() => {
+								this.pendingPermissions.delete(permissionId);
+								resolve("deny");
+							},
+							{ once: true },
+						);
+					});
+					if (behavior === "allow") {
+						return {
+							behavior: "allow" as const,
+							updatedInput: input,
+							updatedPermissions: options.suggestions,
+						};
+					}
+					return { behavior: "deny" as const, message: "User denied" };
+				},
 			},
 		});
 

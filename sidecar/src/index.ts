@@ -33,8 +33,9 @@ function debug(...args: unknown[]): void {
 	}
 }
 
+const claudeManager = new ClaudeSessionManager();
 const managers: Record<Provider, SessionManager> = {
-	claude: new ClaudeSessionManager(),
+	claude: claudeManager,
 	codex: new CodexSessionManager(),
 };
 
@@ -215,6 +216,15 @@ for await (const line of rl) {
 		case "shutdown":
 			await handleShutdown(id);
 			break;
+		case "permissionResponse": {
+			const permissionId = params.permissionId as string;
+			const behavior = params.behavior as "allow" | "deny";
+			debug(
+				`[${id}] permissionResponse permissionId=${permissionId} behavior=${behavior}`,
+			);
+			claudeManager.resolvePermission(permissionId, behavior);
+			break;
+		}
 		case "ping":
 			emitter.pong(id);
 			break;
