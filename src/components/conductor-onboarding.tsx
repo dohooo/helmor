@@ -159,10 +159,11 @@ function MultiBeam({
 			setBeams(newBeams);
 		}
 
-		// Beams fade in at 0.8s delay — measure at 400ms so layout is settled.
-		const tid = setTimeout(() => requestAnimationFrame(recalc), 400);
+		// Measure after layout + entrance animations have settled (beams fade in at 0.8s).
+		const tid = setTimeout(() => requestAnimationFrame(recalc), 650);
 		const ro = new ResizeObserver(recalc);
 		if (containerRef.current) ro.observe(containerRef.current);
+		if (helmorIconRef.current) ro.observe(helmorIconRef.current);
 		return () => {
 			clearTimeout(tid);
 			ro.disconnect();
@@ -586,14 +587,9 @@ export function ConductorOnboarding({
 						className="flex flex-col items-center gap-3"
 					>
 						<motion.div
-							layout
 							initial={{ opacity: 0 }}
 							animate={{ opacity: 1 }}
-							transition={{
-								layout: { duration: 0.9, ease: [0, 0, 0.2, 1] },
-								duration: 0.8,
-								delay: 0.35,
-							}}
+							transition={{ duration: 0.8, delay: 0.35 }}
 							className="flex flex-col items-center gap-2"
 						>
 							{/* helmorIconRef — beam endpoint is measured from here */}

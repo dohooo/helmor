@@ -17,6 +17,7 @@ import {
 	type MouseEvent,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -311,6 +312,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	} | null>(null);
 	// DEBUG: toggle onboarding screen
 	const [showOnboarding, setShowOnboarding] = useState(false);
+	const [onboardingPending, setOnboardingPending] = useState(false);
 	const [conductorWorkspaces, setConductorWorkspaces] = useState<
 		ConductorWorkspace[]
 	>([]);
@@ -388,15 +390,20 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const isInspectorResizing = resizeState?.target === "inspector";
 	const isIdentityConnected = githubIdentityState.status === "connected";
 
-	// Show onboarding automatically on first login if Conductor is available
-	useEffect(() => {
+	// Show onboarding automatically on first login if Conductor is available.
+	// useLayoutEffect runs before paint so the blank overlay is visible in the
+	// same frame that isIdentityConnected flips — no flash of the main UI.
+	useLayoutEffect(() => {
 		if (!isIdentityConnected) return;
-		const key = "helmor_onboarding_shown";
+		const key = "helmor_onboarding_completed";
 		if (localStorage.getItem(key)) return;
-		localStorage.setItem(key, "1");
-		isConductorAvailable().then((available) => {
-			if (available) setShowOnboarding(true);
-		});
+		setOnboardingPending(true);
+		isConductorAvailable()
+			.then((available) => {
+				if (available) setShowOnboarding(true);
+				setOnboardingPending(false);
+			})
+			.catch(() => setOnboardingPending(false));
 	}, [isIdentityConnected]);
 
 	const navigationGroupsQuery = useQuery({
@@ -1663,11 +1670,24 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 							aria-label="Application shell"
 							className="relative h-screen overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
 						>
+							{onboardingPending && (
+								<div className="fixed inset-0 z-[60] bg-app-base" />
+							)}
 							{showOnboarding && (
 								<ConductorOnboarding
 									onComplete={() => {
+										localStorage.setItem("helmor_onboarding_completed", "1");
 										setShowOnboarding(false);
 										setConductorWorkspaces([]);
+										void queryClient.invalidateQueries({
+											queryKey: helmorQueryKeys.workspaceGroups,
+										});
+										void queryClient.invalidateQueries({
+											queryKey: helmorQueryKeys.archivedWorkspaces,
+										});
+										void queryClient.invalidateQueries({
+											queryKey: helmorQueryKeys.repositories,
+										});
 									}}
 									workspaces={conductorWorkspaces}
 									isLoadingWorkspaces={isLoadingConductorWorkspaces}
@@ -1708,7 +1728,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 															title="Open onboarding (debug)"
 															onClick={() => {
 																localStorage.removeItem(
-																	"helmor_onboarding_shown",
+																	"helmor_onboarding_completed",
 																);
 																setShowOnboarding(true);
 															}}
@@ -2203,7 +2223,7 @@ function GithubIdentityGate({
 							<button
 								type="button"
 								disabled
-								className="inline-flex items-center gap-2 rounded-full bg-[#353534] px-4 py-2 text-[14px] font-medium text-app-foreground/55 opacity-70"
+								className="inline-flex items-center gap-2 rounded-full bg-[#353534] px-4 py-2 text-[14px] font-medium text-[#f0eeeb]/55 opacity-70"
 							>
 								<MarkGithubIcon size={16} />
 								Continue with GitHub
@@ -2219,7 +2239,7 @@ function GithubIdentityGate({
 							<button
 								type="button"
 								onClick={onConnectGithub}
-								className="inline-flex items-center gap-2 rounded-full bg-[#353534] px-4 py-2 text-[14px] font-medium text-app-foreground transition-colors hover:bg-[#424240]"
+								className="inline-flex items-center gap-2 rounded-full bg-[#353534] px-4 py-2 text-[14px] font-medium text-[#f0eeeb] transition-colors hover:bg-[#424240]"
 							>
 								<MarkGithubIcon size={16} />
 								{identityState.status === "error"
