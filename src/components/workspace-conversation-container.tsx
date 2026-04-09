@@ -18,7 +18,12 @@ import {
 	helmorQueryKeys,
 } from "@/lib/query-client";
 import {
-	appendLiveThreadMessage,
+	appendUserMessage,
+	replaceStreamingTail,
+	restoreSnapshot,
+	type SessionThreadSnapshot,
+} from "@/lib/session-thread-cache";
+import {
 	createLiveThreadMessage,
 	describeUnknownError,
 	findModelOption,
@@ -29,7 +34,6 @@ import { WorkspacePanelContainer } from "./workspace-panel-container";
 
 const EMPTY_IMAGES: string[] = [];
 const EMPTY_FILES: string[] = [];
-const EMPTY_MESSAGES: ThreadMessageLike[] = [];
 
 type WorkspaceConversationContainerProps = {
 	selectedWorkspaceId: string | null;
@@ -74,9 +78,6 @@ export const WorkspaceConversationContainer = memo(
 			files: string[];
 			nonce: number;
 		} | null>(null);
-		const [liveMessagesByContext, setLiveMessagesByContext] = useState<
-			Record<string, ThreadMessageLike[]>
-		>({});
 		const [liveSessionsByContext, setLiveSessionsByContext] = useState<
 			Record<string, { provider: string; sessionId?: string | null }>
 		>({});
@@ -96,26 +97,6 @@ export const WorkspaceConversationContainer = memo(
 			displayedWorkspaceId,
 			displayedSessionId,
 		);
-		const prevContextKeyRef = useRef(composerContextKey);
-		// Clear live messages from the previous context when user switches session.
-		// This ensures we fall back to DB data when returning to a session.
-		// NOTE: setState during render is an intentional React pattern for
-		// synchronously responding to prop changes without an extra commit.
-		// StrictMode double-render is safe — the ref check makes the second
-		// invocation a no-op.
-		if (prevContextKeyRef.current !== composerContextKey) {
-			const prevKey = prevContextKeyRef.current;
-			prevContextKeyRef.current = composerContextKey;
-			if (liveMessagesByContext[prevKey]?.length) {
-				setLiveMessagesByContext((current) => {
-					const next = { ...current };
-					delete next[prevKey];
-					return next;
-				});
-			}
-		}
-		const liveMessages =
-			liveMessagesByContext[composerContextKey] ?? EMPTY_MESSAGES;
 		const activeSendError = sendErrorsByContext[composerContextKey] ?? null;
 		const isSending = sendingContextKeys.has(composerContextKey);
 
@@ -270,8 +251,16 @@ export const WorkspaceConversationContainer = memo(
 						? (previousLiveSession.sessionId ?? undefined)
 						: undefined;
 
-				setLiveMessagesByContext((current) =>
-					appendLiveThreadMessage(current, contextKey, optimisticUserMessage),
+				// `displayedSessionId` may be null on the first send for a brand
+				// new tab — fall back to the composer context key as a stable
+				// stand-in for the cache key. The Rust backend will create the
+				// session row and the user follows up with a real id.
+				const cacheSessionId = displayedSessionId ?? contextKey;
+				// Snapshot the existing thread cache for rollback on error.
+				const rollbackSnapshot: SessionThreadSnapshot = appendUserMessage(
+					queryClient,
+					cacheSessionId,
+					optimisticUserMessage,
 				);
 				setComposerRestoreState(null);
 				setSendErrorsByContext((current) => ({
@@ -352,11 +341,13 @@ export const WorkspaceConversationContainer = memo(
 						const rendered = pendingPartial
 							? [...baseMessages, pendingPartial]
 							: baseMessages;
-						const nextMessages = [optimisticUserMessage, ...rendered];
-						setLiveMessagesByContext((current) => ({
-							...current,
-							[contextKey]: nextMessages,
-						}));
+						// Replace the streaming tail starting at the optimistic
+						// user message; everything before it stays structurally
+						// shared from the prior cache value.
+						replaceStreamingTail(queryClient, cacheSessionId, userMessageId, [
+							optimisticUserMessage,
+							...rendered,
+						]);
 					};
 
 					const scheduleFlush = () => {
@@ -437,10 +428,9 @@ export const WorkspaceConversationContainer = memo(
 								});
 
 								if (event.persisted) {
-									// Only refresh sidebar metadata (groups, session list).
-									// Do NOT invalidate the thread query or clear live
-									// messages — the live data IS the complete conversation.
-									// It stays until the user navigates away from this session.
+									// The cache already holds the full streamed turn —
+									// no thread query invalidation, no DB roundtrip,
+									// no flicker. Just refresh sidebar metadata.
 									void invalidateSidebarQueries(displayedWorkspaceId);
 								}
 
@@ -470,20 +460,21 @@ export const WorkspaceConversationContainer = memo(
 								});
 
 								if (event.persisted) {
-									// Messages were persisted incrementally — reload from DB
+									// Messages were persisted incrementally — reload
+									// from DB so the cache reflects whatever made it.
 									void invalidateConversationQueries(
 										displayedWorkspaceId,
 										displayedSessionId,
-									).then(() => {
-										setLiveMessagesByContext((current) => {
-											if (!current[contextKey]?.length) return current;
-											const next = { ...current };
-											delete next[contextKey];
-											return next;
-										});
-									});
+									);
 								} else {
-									// Nothing was persisted — restore the draft
+									// Nothing was persisted — full rollback to the
+									// pre-send snapshot and restore the draft so the
+									// user can retry.
+									restoreSnapshot(
+										queryClient,
+										cacheSessionId,
+										rollbackSnapshot,
+									);
 									setComposerRestoreState({
 										contextKey,
 										draft: trimmedPrompt,
@@ -491,12 +482,6 @@ export const WorkspaceConversationContainer = memo(
 										files: filePaths,
 										nonce: Date.now(),
 									});
-									setLiveMessagesByContext((current) => ({
-										...current,
-										[contextKey]: (current[contextKey] ?? []).filter(
-											(message) => message.id !== optimisticUserMessage.id,
-										),
-									}));
 								}
 
 								sendingWorkspaceMapRef.current.delete(contextKey);
@@ -523,12 +508,7 @@ export const WorkspaceConversationContainer = memo(
 						files: filePaths,
 						nonce: Date.now(),
 					});
-					setLiveMessagesByContext((current) => ({
-						...current,
-						[contextKey]: (current[contextKey] ?? []).filter(
-							(message) => message.id !== optimisticUserMessage.id,
-						),
-					}));
+					restoreSnapshot(queryClient, cacheSessionId, rollbackSnapshot);
 					sendingWorkspaceMapRef.current.delete(contextKey);
 					setSendingContextKeys((current) => {
 						const next = new Set(current);
@@ -600,7 +580,6 @@ export const WorkspaceConversationContainer = memo(
 					selectedSessionId={selectedSessionId}
 					displayedSessionId={displayedSessionId}
 					sessionSelectionHistory={sessionSelectionHistory}
-					liveMessages={liveMessages}
 					sending={isSending}
 					sendingSessionIds={sendingSessionIds}
 					selectedProvider={selectedProvider}

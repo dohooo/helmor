@@ -35,6 +35,7 @@ import type {
 	ThreadMessageLike,
 	ToolCallPart,
 } from "@/lib/api";
+import { shareMessages } from "@/lib/session-thread-cache";
 import {
 	childrenStructurallyEqual,
 	messagesStructurallyEqual,
@@ -44,7 +45,6 @@ import {
 	agentChildrenBlockPropsEqual,
 	assistantToolCallPropsEqual,
 } from "./workspace-panel";
-import { shareMessages } from "./workspace-panel-container";
 
 function taskCallMessage(
 	children: ExtendedMessagePart[] | undefined,

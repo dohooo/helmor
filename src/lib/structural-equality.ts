@@ -2,10 +2,11 @@
  * Structural equality helpers for `ThreadMessageLike` and its parts.
  *
  * Used by:
- * - `shareMessages` in `workspace-panel-container.tsx` — decides whether
- *   to reuse a previous message reference across `update` events,
- *   keeping the `MemoConversationMessage` `prev.message === next.message`
- *   bail-out alive.
+ * - `shareMessages` in `session-thread-cache.ts` — decides whether to
+ *   reuse a previous message reference when the streaming pipeline
+ *   writes a new turn into the React Query cache, keeping the
+ *   `MemoConversationMessage` `prev.message === next.message` bail-out
+ *   alive.
  * - `AssistantToolCall` and `AgentChildrenBlock` memo comparators in
  *   `workspace-panel.tsx` — decide whether a re-render can be skipped
  *   when the parent message gets a new reference for an unrelated reason

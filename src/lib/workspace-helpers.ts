@@ -324,17 +324,6 @@ export function createLiveThreadMessage({
 	};
 }
 
-export function appendLiveThreadMessage(
-	current: Record<string, ThreadMessageLike[]>,
-	contextKey: string,
-	message: ThreadMessageLike,
-) {
-	return {
-		...current,
-		[contextKey]: [...(current[contextKey] ?? []), message],
-	};
-}
-
 // ── Effort-level helpers ──────────────────────────────────────────────
 
 const EFFORT_RANK: Record<string, number> = {
