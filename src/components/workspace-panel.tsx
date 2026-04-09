@@ -416,7 +416,7 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					{workspace?.intendedTargetBranch ? (
 						<>
 							<ArrowRight
-								className="size-3 shrink-0 text-app-muted"
+								className="relative top-px size-3 shrink-0 self-center text-app-muted"
 								strokeWidth={1.8}
 							/>
 							{workspace.state === "archived" ? (
@@ -2185,7 +2185,7 @@ const AssistantText = memo(function AssistantText({
 
 	return (
 		<div
-			className="conversation-markdown prose prose-sm max-w-none break-words leading-6 text-app-foreground prose-headings:my-0 prose-headings:text-app-foreground prose-p:my-0 prose-p:text-app-foreground prose-li:my-0 prose-li:text-app-foreground prose-strong:text-app-foreground prose-em:text-app-foreground prose-pre:my-0 prose-pre:border prose-pre:border-app-border prose-pre:bg-app-sidebar prose-pre:text-[12px] prose-pre:text-app-foreground prose-ul:my-0 prose-ol:my-0 prose-blockquote:my-0 prose-blockquote:border-app-border prose-blockquote:text-app-muted prose-table:my-0 prose-table:text-[11px] prose-table:text-app-foreground prose-th:border-app-border prose-th:text-app-foreground prose-td:border-app-border prose-td:text-app-foreground prose-tr:border-app-border prose-a:text-app-project prose-a:underline prose-a:decoration-app-project/30 prose-code:rounded prose-code:border prose-code:border-app-border/50 prose-code:bg-app-sidebar prose-code:px-1 prose-code:py-px prose-code:text-app-foreground-soft"
+			className="conversation-markdown assistant-markdown-scale max-w-none break-words text-app-foreground"
 			style={{ fontSize: `${settings.fontSize}px` }}
 		>
 			<Suspense

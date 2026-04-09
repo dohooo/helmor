@@ -93,6 +93,7 @@ fn export_bundled_agent_paths(handle: &tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init());
 
@@ -129,6 +130,10 @@ pub fn run() {
             // sidecar falls back to its own `createRequire` / SDK lookup
             // against `node_modules`.
             export_bundled_agent_paths(app.handle());
+
+            // OAuth callback is now handled by a one-shot localhost HTTP
+            // server spun up inside `start_github_oauth_redirect`, so no
+            // deep-link `on_open_url` handler is needed here.
 
             Ok(())
         })
@@ -182,6 +187,8 @@ pub fn run() {
             models::stage_workspace_file,
             models::unstage_workspace_file,
             models::lookup_workspace_pr,
+            models::merge_workspace_pr,
+            models::close_workspace_pr,
             models::read_editor_file,
             models::set_workspace_manual_status,
             models::detect_installed_editors,
@@ -190,6 +197,7 @@ pub fn run() {
             models::restore_workspace,
             models::stat_editor_file,
             models::start_github_identity_connect,
+            models::start_github_oauth_redirect,
             models::conductor_source_available,
             models::list_conductor_repos,
             models::list_conductor_workspaces,

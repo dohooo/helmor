@@ -8,10 +8,13 @@
  *
  * @see https://streamdown.ai/docs/components
  */
+
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	type ComponentType,
 	cloneElement,
 	isValidElement,
+	type MouseEvent,
 	type ReactElement,
 	type ReactNode,
 } from "react";
@@ -157,11 +160,65 @@ export function StreamdownPre({ children }: { children?: ReactNode }) {
 	);
 }
 
+export function StreamdownAnchor({
+	children,
+	className,
+	href,
+	...props
+}: {
+	children?: ReactNode;
+	className?: string;
+	href?: string;
+} & Record<string, unknown>) {
+	const handleClick = async (event: MouseEvent<HTMLAnchorElement>) => {
+		if (!href) {
+			return;
+		}
+
+		// Let users keep standard browser-like affordances for selection and
+		// modifier-assisted clicks; only hijack the default left click path.
+		if (
+			event.defaultPrevented ||
+			event.button !== 0 ||
+			event.metaKey ||
+			event.ctrlKey ||
+			event.shiftKey ||
+			event.altKey
+		) {
+			return;
+		}
+
+		event.preventDefault();
+		try {
+			await openUrl(href);
+		} catch (error) {
+			console.error("[StreamdownAnchor] Failed to open URL", href, error);
+		}
+	};
+
+	return (
+		<a
+			{...(props as Omit<
+				React.AnchorHTMLAttributes<HTMLAnchorElement>,
+				"children" | "className" | "href"
+			>)}
+			href={href}
+			className={className}
+			onClick={handleClick}
+			rel="noreferrer"
+			target="_blank"
+		>
+			{children}
+		</a>
+	);
+}
+
 // ---------------------------------------------------------------------------
 // Aggregated components map
 // ---------------------------------------------------------------------------
 
 export const streamdownComponents = {
+	a: StreamdownAnchor,
 	pre: StreamdownPre,
 	table: StreamdownTable,
 	thead: StreamdownTableHeader,

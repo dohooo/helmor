@@ -446,6 +446,14 @@ export async function startGithubIdentityConnect(): Promise<GithubIdentityDevice
 	return invoke<GithubIdentityDeviceFlowStart>("start_github_identity_connect");
 }
 
+export type GithubOAuthRedirectStart = {
+	oauthUrl: string;
+};
+
+export async function startGithubOAuthRedirect(): Promise<GithubOAuthRedirectStart> {
+	return invoke<GithubOAuthRedirectStart>("start_github_oauth_redirect");
+}
+
 export async function cancelGithubIdentityConnect(): Promise<void> {
 	await invoke("cancel_github_identity_connect");
 }
@@ -909,6 +917,46 @@ export async function lookupWorkspacePr(
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to look up workspace PR."),
+		);
+	}
+}
+
+/**
+ * Merge the workspace's open PR via GitHub GraphQL `mergePullRequest`.
+ * Returns the refreshed PR info on success, `null` if no PR / not connected.
+ */
+export async function mergeWorkspacePr(
+	workspaceId: string,
+): Promise<PullRequestInfo | null> {
+	try {
+		return (
+			(await invoke<PullRequestInfo | null>("merge_workspace_pr", {
+				workspaceId,
+			})) ?? null
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to merge workspace PR."),
+		);
+	}
+}
+
+/**
+ * Close the workspace's open PR via GitHub GraphQL `closePullRequest`.
+ * Returns the refreshed PR info on success, `null` if no PR / not connected.
+ */
+export async function closeWorkspacePr(
+	workspaceId: string,
+): Promise<PullRequestInfo | null> {
+	try {
+		return (
+			(await invoke<PullRequestInfo | null>("close_workspace_pr", {
+				workspaceId,
+			})) ?? null
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to close workspace PR."),
 		);
 	}
 }

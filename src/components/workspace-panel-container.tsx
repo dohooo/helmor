@@ -1,7 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
-import type { ThreadMessageLike } from "@/lib/api";
-import { generateSessionTitle } from "@/lib/api";
+import type {
+	ThreadMessageLike,
+	WorkspaceDetail,
+	WorkspaceSessionSummary,
+} from "@/lib/api";
+import { createSession, generateSessionTitle } from "@/lib/api";
 import {
 	helmorQueryKeys,
 	sessionThreadMessagesQueryOptions,
@@ -70,6 +74,126 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 
 		return null;
 	}, [sessionSelectionHistory, sessions]);
+
+	const autoCreatingWorkspaceRef = useRef<Set<string>>(new Set());
+
+	useEffect(() => {
+		if (!displayedWorkspaceId || selectedWorkspaceId !== displayedWorkspaceId) {
+			return;
+		}
+
+		if (!workspace || sessionsQuery.data === undefined) {
+			return;
+		}
+
+		if (workspace.state === "archived" || sessions.length > 0) {
+			autoCreatingWorkspaceRef.current.delete(displayedWorkspaceId);
+			return;
+		}
+
+		if (autoCreatingWorkspaceRef.current.has(displayedWorkspaceId)) {
+			return;
+		}
+
+		let cancelled = false;
+		autoCreatingWorkspaceRef.current.add(displayedWorkspaceId);
+
+		void createSession(displayedWorkspaceId)
+			.then(async ({ sessionId }) => {
+				if (cancelled) {
+					return;
+				}
+
+				const now = new Date().toISOString();
+				queryClient.setQueryData(
+					helmorQueryKeys.workspaceDetail(displayedWorkspaceId),
+					(current: WorkspaceDetail | null | undefined) => {
+						if (!current) {
+							return current;
+						}
+
+						return {
+							...current,
+							activeSessionId: sessionId,
+							activeSessionTitle: "Untitled",
+							activeSessionAgentType: null,
+							activeSessionStatus: "idle",
+							sessionCount: Math.max(current.sessionCount, 1),
+						};
+					},
+				);
+				queryClient.setQueryData(
+					helmorQueryKeys.workspaceSessions(displayedWorkspaceId),
+					(current: WorkspaceSessionSummary[] | undefined) => {
+						if ((current ?? []).some((session) => session.id === sessionId)) {
+							return current;
+						}
+
+						return [
+							...(current ?? []),
+							{
+								id: sessionId,
+								workspaceId: displayedWorkspaceId,
+								title: "Untitled",
+								agentType: null,
+								status: "idle",
+								model: null,
+								permissionMode: "default",
+								providerSessionId: null,
+								effortLevel: null,
+								unreadCount: 0,
+								contextTokenCount: 0,
+								contextUsedPercent: null,
+								thinkingEnabled: true,
+								fastMode: false,
+								agentPersonality: null,
+								createdAt: now,
+								updatedAt: now,
+								lastUserMessageAt: null,
+								resumeSessionAt: null,
+								isHidden: false,
+								isCompacting: false,
+								actionKind: null,
+								active: true,
+							},
+						];
+					},
+				);
+				queryClient.setQueryData(
+					[...helmorQueryKeys.sessionMessages(sessionId), "thread"],
+					[],
+				);
+
+				await Promise.all([
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceDetail(displayedWorkspaceId),
+					}),
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceSessions(displayedWorkspaceId),
+					}),
+				]);
+			})
+			.catch((error) => {
+				console.error(
+					`Failed to auto-create a session for workspace ${displayedWorkspaceId}:`,
+					error,
+				);
+			})
+			.finally(() => {
+				autoCreatingWorkspaceRef.current.delete(displayedWorkspaceId);
+			});
+
+		return () => {
+			cancelled = true;
+		};
+	}, [
+		displayedWorkspaceId,
+		queryClient,
+		selectedWorkspaceId,
+		sessions.length,
+		sessionsQuery.data,
+		workspace,
+	]);
 
 	const threadSessionId = useMemo(() => {
 		if (!displayedWorkspaceId) {

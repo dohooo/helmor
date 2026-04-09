@@ -164,25 +164,25 @@ function semanticButtonVars(
 	role: "success" | "danger" | "attention" | "accent" | "done" | "closed",
 	variant: "filled" | "ghost",
 ): ButtonColorVars {
-	if (role === "closed" && variant === "ghost") {
-		return {
-			"--button-border": "transparent",
-			"--button-divider": "transparent",
-			"--button-bg": "transparent",
-			"--button-bg-hover": "transparent",
-			"--button-fg": "var(--color-app-foreground-soft)",
-			"--button-fg-hover": "var(--color-app-foreground-soft)",
-		};
-	}
-
 	const palette = {
 		success: "var(--color-app-progress)",
 		danger: "var(--color-app-canceled)",
 		attention: "var(--color-app-review)",
 		accent: "var(--color-app-project)",
-		done: "var(--color-app-done)",
+		done: "#8957E5",
 		closed: "var(--color-app-canceled)",
 	}[role];
+
+	if (role === "closed" && variant === "ghost") {
+		return {
+			"--button-border": `color-mix(in oklch, ${palette} 32%, var(--color-app-border) 68%)`,
+			"--button-divider": `color-mix(in oklch, ${palette} 18%, transparent)`,
+			"--button-bg": "transparent",
+			"--button-bg-hover": "transparent",
+			"--button-fg": `color-mix(in oklch, ${palette} 52%, var(--color-app-foreground-soft) 48%)`,
+			"--button-fg-hover": `color-mix(in oklch, ${palette} 52%, var(--color-app-foreground-soft) 48%)`,
+		};
+	}
 
 	if (variant === "ghost") {
 		return {
@@ -233,6 +233,17 @@ function getButtonColorVars(
 		};
 	}
 
+	if (mode === "merged" && state !== "disabled") {
+		return {
+			"--button-border": "transparent",
+			"--button-divider": "rgb(255 255 255 / 0.16)",
+			"--button-bg": "#8957E5",
+			"--button-bg-hover": "#7f4fda",
+			"--button-fg": "var(--color-app-foreground)",
+			"--button-fg-hover": "var(--color-app-foreground)",
+		};
+	}
+
 	if (state === "disabled") {
 		return {
 			"--button-border":
@@ -246,8 +257,6 @@ function getButtonColorVars(
 			"--button-fg-hover": "var(--color-app-muted)",
 		};
 	}
-
-	if (mode === "merged") return semanticButtonVars("done", "ghost");
 	if (mode === "closed") return semanticButtonVars("closed", "ghost");
 
 	if (mode === "fix") return semanticButtonVars("danger", "filled");
@@ -278,9 +287,7 @@ function getModeIcon(mode: WorkspaceCommitButtonMode) {
 			return <ArrowUpRightIcon size={11} className={BUTTON_ICON_CLASS} />;
 		case "closed":
 			return (
-				<span className="inline-flex text-[rgb(207,34,46)]">
-					<GitPullRequestClosedIcon size={11} className={BUTTON_ICON_CLASS} />
-				</span>
+				<GitPullRequestClosedIcon size={11} className={BUTTON_ICON_CLASS} />
 			);
 	}
 }
@@ -398,7 +405,9 @@ export function WorkspaceCommitButton({
 				type="button"
 				size="sm"
 				variant="outline"
-				disabled={isGhostMode || currentState === "disabled" || disabled}
+				disabled={
+					isGhostMode || isBusy || currentState === "disabled" || disabled
+				}
 				onClick={() => runAction(onCommit)}
 				className={cn(
 					BUTTON_STYLE,
@@ -417,7 +426,9 @@ export function WorkspaceCommitButton({
 					/>
 					<DropdownMenuTrigger
 						aria-label={optionsAriaLabel}
-						disabled={currentState === "disabled" || disabled || !hasMenuItems}
+						disabled={
+							isBusy || currentState === "disabled" || disabled || !hasMenuItems
+						}
 						className={cn(
 							BUTTON_STYLE,
 							"flex min-w-5 cursor-pointer items-center justify-center self-stretch rounded-[3px] border-0 bg-transparent px-0 leading-none text-[var(--button-fg)] shadow-none hover:bg-[var(--button-bg-hover)] hover:text-[var(--button-fg-hover)]",

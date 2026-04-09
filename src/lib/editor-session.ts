@@ -22,6 +22,10 @@ export type InspectorFileItem = {
 	/** Set when the file has unstaged changes (index vs working tree, or
 	 * untracked). */
 	unstagedStatus?: "M" | "A" | "D" | null;
+	/** Set when the file has committed changes on the current branch
+	 * relative to the target branch (merge-base..HEAD). Used by the
+	 * "Branch Changes" section. */
+	committedStatus?: "M" | "A" | "D" | null;
 };
 
 const DEFAULT_INSPECTOR_RELATIVE_FILES: Array<{

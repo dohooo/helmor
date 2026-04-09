@@ -24,7 +24,6 @@ import {
 	getComposerContextKey,
 	inferDefaultModelId,
 } from "@/lib/workspace-helpers";
-import { BaseTooltip } from "./ui/base-tooltip";
 import { Button } from "./ui/button";
 import { ShimmerText } from "./ui/shimmer-text";
 import { ShineBorder } from "./ui/shine-border";
@@ -324,9 +323,9 @@ export const WorkspaceComposerContainer = memo(
 		const actionDisplayName = sessionActionKind
 			? describeActionKind(sessionActionKind)
 			: null;
-		const infoTooltipText = autoCloseEnabled
-			? `${actionDisplayName ?? "This"} 任务完成后会自动收起 —— 你可以在 Session 列表的 History 视图里找回它们。点击按钮可以随时关闭此行为。`
-			: `打开后，此工作区里完成的 ${actionDisplayName ?? "action"} 任务将会在成功后自动收起到 History。点击按钮开启或关闭。`;
+		const autoCloseHelpText = autoCloseEnabled
+			? `Completed ${actionDisplayName ?? "action"} sessions are hidden automatically.`
+			: `Hide completed ${actionDisplayName ?? "action"} sessions in this workspace.`;
 
 		return (
 			<div className="flex flex-col">
@@ -346,35 +345,28 @@ export const WorkspaceComposerContainer = memo(
 								<div className="pointer-events-none absolute inset-x-px bottom-0 z-[1] h-[2px] bg-app-sidebar" />
 							</>
 						) : null}
-						<div className="flex items-center gap-2">
+						<div className="flex min-w-0 items-center gap-1.5">
 							{sending ? (
 								<ShimmerText
 									durationMs={1900}
-									className="text-[12px] font-medium tracking-[0.02em] text-app-foreground-soft/80"
+									className="truncate text-[12px] font-medium tracking-[0.02em] text-app-foreground-soft/80"
 								>
 									Working...
 								</ShimmerText>
-							) : null}
+							) : (
+								<>
+									<CircleAlert
+										className="size-3.5 shrink-0 text-app-foreground-soft/60"
+										strokeWidth={1.8}
+										aria-hidden="true"
+									/>
+									<span className="truncate text-[12px] font-medium tracking-[0.01em] text-app-foreground-soft/72">
+										{autoCloseHelpText}
+									</span>
+								</>
+							)}
 						</div>
 						<div className="flex items-center gap-1.5">
-							<BaseTooltip
-								side="top"
-								content={
-									<span className="block max-w-[260px] whitespace-normal text-[11px] leading-snug">
-										{infoTooltipText}
-									</span>
-								}
-							>
-								<Button
-									type="button"
-									variant="ghost"
-									size="icon-xs"
-									aria-label="Auto close information"
-									className="rounded-[3px] text-app-foreground-soft/65 hover:bg-app-base/70 hover:text-app-foreground-soft"
-								>
-									<CircleAlert className="size-3.5" strokeWidth={1.8} />
-								</Button>
-							</BaseTooltip>
 							<Button
 								type="button"
 								variant="ghost"
@@ -388,7 +380,7 @@ export const WorkspaceComposerContainer = memo(
 									void handleToggleAutoClose();
 								}}
 								className={cn(
-									"h-7 items-center rounded-[3px] border border-app-border/45 bg-app-base/70 px-2.5 text-[12px] font-medium leading-none tracking-[0.02em] text-app-foreground-soft transition-colors hover:bg-app-base hover:text-app-foreground",
+									"h-7 items-center rounded-[3px] border border-app-border/45 bg-app-base/70 px-2.5 text-[12px] font-medium leading-none tracking-[0.02em] text-app-foreground-soft transition-colors hover:bg-app-base hover:text-app-foreground disabled:cursor-not-allowed disabled:opacity-60",
 									autoCloseEnabled
 										? "border-[color:oklch(0.76_0.17_88_/_0.45)] bg-[color:oklch(0.76_0.17_88_/_0.12)] text-[color:oklch(0.84_0.11_96)] hover:bg-[color:oklch(0.76_0.17_88_/_0.16)] hover:text-[color:oklch(0.9_0.08_96)]"
 										: null,

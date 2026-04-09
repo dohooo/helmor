@@ -16,6 +16,7 @@ import {
 	loadWorkspaceDetail,
 	loadWorkspaceGroups,
 	loadWorkspaceSessions,
+	lookupWorkspacePr,
 } from "./api";
 
 const NAVIGATION_STALE_TIME = 15_000;
@@ -43,6 +44,7 @@ export const helmorQueryKeys = {
 		["workspaceChanges", workspaceRootPath] as const,
 	workspaceFiles: (workspaceRootPath: string) =>
 		["workspaceFiles", workspaceRootPath] as const,
+	workspacePr: (workspaceId: string) => ["workspacePr", workspaceId] as const,
 	autoCloseActionKinds: ["autoCloseActionKinds"] as const,
 	autoCloseOptInAsked: ["autoCloseOptInAsked"] as const,
 	slashCommands: (
@@ -192,6 +194,23 @@ export function autoCloseOptInAskedQueryOptions() {
 		initialData: [] as string[],
 		initialDataUpdatedAt: 0,
 		staleTime: 60_000,
+	});
+}
+
+/**
+ * Current PR for a workspace's branch. Drives the commit button's resting
+ * mode (create-pr → merge → merged) and the "Git · PR #xxx" header badge.
+ * Polls every 60 s so the badge stays fresh even when the user leaves the
+ * app open. Returns `null` when no PR is found or lookup is unavailable.
+ */
+export function workspacePrQueryOptions(workspaceId: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.workspacePr(workspaceId),
+		queryFn: () => lookupWorkspacePr(workspaceId),
+		staleTime: 30_000,
+		gcTime: DEFAULT_GC_TIME,
+		refetchInterval: 60_000,
+		retry: 0,
 	});
 }
 

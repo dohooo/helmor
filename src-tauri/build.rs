@@ -2,6 +2,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 const GITHUB_CLIENT_ID_KEY: &str = "HELMOR_GITHUB_CLIENT_ID";
+const GITHUB_CLIENT_SECRET_KEY: &str = "HELMOR_GITHUB_CLIENT_SECRET";
 
 fn main() {
     tauri_build::build();
@@ -10,7 +11,8 @@ fn main() {
 
     for env_path in candidate_env_paths() {
         println!("cargo:rerun-if-changed={}", env_path.display());
-        load_github_client_id(&env_path);
+        load_env_var(&env_path, GITHUB_CLIENT_ID_KEY);
+        load_env_var(&env_path, GITHUB_CLIENT_SECRET_KEY);
     }
 }
 
@@ -26,8 +28,8 @@ fn candidate_env_paths() -> Vec<PathBuf> {
     paths
 }
 
-fn load_github_client_id(path: &Path) {
-    if env::var_os(GITHUB_CLIENT_ID_KEY).is_some() || !path.exists() {
+fn load_env_var(path: &Path, key: &str) {
+    if env::var_os(key).is_some() || !path.exists() {
         return;
     }
 
@@ -36,7 +38,7 @@ fn load_github_client_id(path: &Path) {
     };
 
     for item in iter.flatten() {
-        if item.0 == GITHUB_CLIENT_ID_KEY {
+        if item.0 == key {
             println!("cargo:rustc-env={}={}", item.0, item.1);
             break;
         }

@@ -56,6 +56,13 @@ pub struct EditorFileListItem {
     /// inspector groups files into "Changes" based on this field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unstaged_status: Option<String>,
+    /// Merge-base-vs-HEAD status for this file (`Some` when the file has
+    /// committed changes on the current branch relative to the target
+    /// branch, `None` otherwise). The Git inspector shows these in the
+    /// "Branch Changes" section — the persistent view of "what does this
+    /// PR / branch contain".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub committed_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -177,6 +184,7 @@ pub fn list_editor_files(workspace_root_path: &str) -> Result<Vec<EditorFileList
                 deletions: 0,
                 staged_status: None,
                 unstaged_status: None,
+                committed_status: None,
             })
         })
         .collect())
@@ -221,6 +229,7 @@ pub fn list_workspace_files(workspace_root_path: &str) -> Result<Vec<EditorFileL
                 deletions: 0,
                 staged_status: None,
                 unstaged_status: None,
+                committed_status: None,
             })
         })
         .collect())
@@ -292,7 +301,11 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
     .unwrap_or_default();
 
     // Track each diff source separately so the inspector can split files into
-    // Staged Changes (HEAD vs index) and Changes (index vs working tree).
+    // Staged Changes (HEAD vs index), Changes (index vs working tree), and
+    // Branch Changes (merge-base vs HEAD — the committed PR diff).
+    let mut committed_map = std::collections::BTreeMap::<String, String>::new();
+    parse_name_status_into(&committed_output, &mut committed_map);
+
     let mut staged_map = std::collections::BTreeMap::<String, String>::new();
     parse_name_status_into(&staged_output, &mut staged_map);
 
@@ -312,7 +325,9 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
     let mut file_map = std::collections::BTreeMap::<String, String>::new();
 
     // Layer in order: committed first, then staged, then unstaged (latest wins)
-    parse_name_status_into(&committed_output, &mut file_map);
+    for (path, status) in &committed_map {
+        file_map.insert(path.clone(), status.clone());
+    }
     for (path, status) in &staged_map {
         file_map.insert(path.clone(), status.clone());
     }
@@ -355,6 +370,7 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
                 deletions,
                 staged_status: staged_map.get(&relative_path).cloned(),
                 unstaged_status: unstaged_map.get(&relative_path).cloned(),
+                committed_status: committed_map.get(&relative_path).cloned(),
             }
         })
         .collect())

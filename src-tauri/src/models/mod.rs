@@ -614,10 +614,33 @@ pub async fn unstage_workspace_file(
 }
 
 #[tauri::command]
+pub async fn start_github_oauth_redirect(
+    app: AppHandle,
+    runtime: State<'_, auth::GithubIdentityFlowRuntime>,
+) -> CmdResult<auth::GithubOAuthRedirectStart> {
+    let rt = runtime.inner().clone();
+    run_blocking(move || auth::start_github_oauth_redirect(app, rt)).await
+}
+
+#[tauri::command]
 pub async fn lookup_workspace_pr(
     workspace_id: String,
 ) -> CmdResult<Option<github_graphql::PullRequestInfo>> {
     run_blocking(move || github_graphql::lookup_workspace_pr(&workspace_id)).await
+}
+
+#[tauri::command]
+pub async fn merge_workspace_pr(
+    workspace_id: String,
+) -> CmdResult<Option<github_graphql::PullRequestInfo>> {
+    run_blocking(move || github_graphql::merge_workspace_pr(&workspace_id)).await
+}
+
+#[tauri::command]
+pub async fn close_workspace_pr(
+    workspace_id: String,
+) -> CmdResult<Option<github_graphql::PullRequestInfo>> {
+    run_blocking(move || github_graphql::close_workspace_pr(&workspace_id)).await
 }
 
 #[tauri::command]

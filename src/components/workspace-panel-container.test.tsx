@@ -5,6 +5,7 @@ import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
 import { renderWithProviders } from "@/test/render-with-providers";
 
 const apiMocks = vi.hoisted(() => ({
+	createSession: vi.fn(),
 	loadWorkspaceDetail: vi.fn(),
 	loadWorkspaceSessions: vi.fn(),
 	loadSessionMessages: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 	return {
 		...actual,
+		createSession: apiMocks.createSession,
 		loadWorkspaceDetail: apiMocks.loadWorkspaceDetail,
 		loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
 		loadSessionMessages: apiMocks.loadSessionThreadMessages,
@@ -67,7 +69,7 @@ function createDeferred<T>() {
 
 function createWorkspaceDetail(
 	workspaceId = "workspace-1",
-	activeSessionId = "session-1",
+	activeSessionId: string | null = "session-1",
 ) {
 	return {
 		id: workspaceId,
@@ -85,7 +87,7 @@ function createWorkspaceDetail(
 		activeSessionId,
 		activeSessionTitle: activeSessionId,
 		activeSessionAgentType: "claude",
-		activeSessionStatus: "idle",
+		activeSessionStatus: activeSessionId ? "idle" : null,
 		branch: "main",
 		initializationParentBranch: "main",
 		intendedTargetBranch: "main",
@@ -190,10 +192,12 @@ function getSessionPaneIds() {
 describe("WorkspacePanelContainer loading semantics", () => {
 	beforeEach(() => {
 		panelRenderSpy.mockReset();
+		apiMocks.createSession.mockReset();
 		apiMocks.loadWorkspaceDetail.mockReset();
 		apiMocks.loadWorkspaceSessions.mockReset();
 		apiMocks.loadSessionThreadMessages.mockReset();
 
+		apiMocks.createSession.mockResolvedValue({ sessionId: "session-created" });
 		apiMocks.loadWorkspaceDetail.mockImplementation((workspaceId?: string) =>
 			Promise.resolve(createWorkspaceDetail(workspaceId)),
 		);
@@ -497,6 +501,86 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		await waitFor(() => {
 			expect(getSessionPaneIds()).toEqual(["session-1"]);
 			expect(getLatestPanelProps().loadingSession).toBe(false);
+		});
+	});
+
+	it("auto-creates a session when the selected workspace has none", async () => {
+		const queryClient = createHelmorQueryClient();
+		let created = false;
+		const onResolveDisplayedSession = vi.fn();
+
+		apiMocks.createSession.mockImplementation(async () => {
+			created = true;
+			return { sessionId: "session-created" };
+		});
+		apiMocks.loadWorkspaceDetail.mockImplementation(
+			async (workspaceId?: string) =>
+				created
+					? {
+							...createWorkspaceDetail(workspaceId, "session-created"),
+							sessionCount: 1,
+							activeSessionTitle: "Untitled",
+						}
+					: {
+							...createWorkspaceDetail(workspaceId, null),
+							activeSessionAgentType: null,
+							sessionCount: 0,
+						},
+		);
+		apiMocks.loadWorkspaceSessions.mockImplementation(
+			async (workspaceId?: string) =>
+				created
+					? [
+							{
+								id: "session-created",
+								workspaceId: workspaceId ?? "workspace-1",
+								title: "Untitled",
+								agentType: null,
+								status: "idle",
+								model: null,
+								permissionMode: "default",
+								providerSessionId: null,
+								unreadCount: 0,
+								contextTokenCount: 0,
+								contextUsedPercent: null,
+								thinkingEnabled: true,
+								fastMode: false,
+								agentPersonality: null,
+								createdAt: "2026-04-05T00:00:00Z",
+								updatedAt: "2026-04-05T00:00:00Z",
+								lastUserMessageAt: null,
+								resumeSessionAt: null,
+								isHidden: false,
+								isCompacting: false,
+								actionKind: null,
+								active: true,
+							},
+						]
+					: [],
+		);
+		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
+
+		renderWithProviders(
+			<WorkspacePanelContainer
+				selectedWorkspaceId="workspace-1"
+				displayedWorkspaceId="workspace-1"
+				selectedSessionId={null}
+				displayedSessionId={null}
+				sending={false}
+				onSelectSession={vi.fn()}
+				onResolveDisplayedSession={onResolveDisplayedSession}
+			/>,
+			{ queryClient },
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1");
+		});
+		await waitFor(() => {
+			expect(onResolveDisplayedSession).toHaveBeenCalledWith("session-created");
+		});
+		await waitFor(() => {
+			expect(getSessionPaneIds()).toEqual(["session-created"]);
 		});
 	});
 });

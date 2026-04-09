@@ -9,6 +9,13 @@
 		"beforeBuildCommand": "cd sidecar && bun install --frozen-lockfile && bun run build && cp dist/helmor-sidecar dist/helmor-sidecar-$(rustc -vV | grep host | cut -d' ' -f2) && cd .. && pnpm run build",
 		"frontendDist": "../dist"
 	},
+	"plugins": {
+		"deep-link": {
+			"desktop": {
+				"schemes": ["helmor", "helmor-dev"]
+			}
+		}
+	},
 	"app": {
 		"windows": [
 			{

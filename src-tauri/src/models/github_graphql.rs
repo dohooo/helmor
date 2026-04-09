@@ -116,8 +116,20 @@ query($owner: String!, $name: String!, $head: String!) {
         .json()
         .context("Failed to decode GitHub GraphQL response")?;
 
-    if let Some(errors) = parsed.errors {
+    if let Some(errors) = &parsed.errors {
         if !errors.is_empty() {
+            // "Could not resolve to a Repository" means the token doesn't
+            // have access to this repo (private + insufficient scope) or the
+            // repo doesn't exist. Treat like "not connected" — return None
+            // so the caller degrades gracefully instead of surfacing an error.
+            let is_repo_not_found = errors.iter().any(|e| {
+                e.message.contains("Could not resolve to a Repository")
+                    || e.message.contains("NOT_FOUND")
+            });
+            if is_repo_not_found {
+                return Ok(None);
+            }
+            // Other GraphQL errors are unexpected — propagate.
             return Err(anyhow!(
                 "GitHub GraphQL errors: {}",
                 errors
@@ -147,6 +159,226 @@ query($owner: String!, $name: String!, $head: String!) {
         title: node.title,
         is_merged: node.merged,
     }))
+}
+
+/// Merge a workspace's open PR via the GitHub GraphQL `mergePullRequest`
+/// mutation. Returns the updated `PullRequestInfo` on success, or `None`
+/// when the PR can't be found / user isn't connected.
+pub fn merge_workspace_pr(workspace_id: &str) -> Result<Option<PullRequestInfo>> {
+    let pr = lookup_workspace_pr(workspace_id)?;
+    let Some(pr) = pr else {
+        return Ok(None);
+    };
+    if pr.state != "OPEN" {
+        bail!("PR #{} is not open (state: {})", pr.number, pr.state);
+    }
+
+    let access_token = auth::load_valid_github_access_token()?;
+    let Some(access_token) = access_token else {
+        return Ok(None);
+    };
+
+    // We need the PR's GraphQL node ID. Re-query with node ID included.
+    let Some(record) = workspaces::load_workspace_record_by_id(workspace_id)? else {
+        bail!("Workspace not found: {workspace_id}");
+    };
+    let Some(remote_url) = record.remote_url.as_deref() else {
+        return Ok(None);
+    };
+    let Some((owner, name)) = parse_github_remote(remote_url) else {
+        return Ok(None);
+    };
+    let Some(branch) = record.branch.as_deref().filter(|b| !b.is_empty()) else {
+        return Ok(None);
+    };
+
+    let client = Client::builder()
+        .build()
+        .context("Failed to build GitHub HTTP client")?;
+
+    // Fetch PR node ID
+    let id_query = r#"
+query($owner: String!, $name: String!, $head: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(headRefName: $head, states: [OPEN], first: 1) {
+      nodes { id, url, number, state, title, merged }
+    }
+  }
+}
+"#;
+    let id_body = json!({
+        "query": id_query,
+        "variables": { "owner": owner, "name": name, "head": branch },
+    });
+
+    let id_response: GraphqlEnvelope = client
+        .post("https://api.github.com/graphql")
+        .header(USER_AGENT, "Helmor")
+        .header(ACCEPT, "application/json")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, format!("Bearer {access_token}"))
+        .json(&id_body)
+        .send()
+        .context("Failed to reach GitHub GraphQL API")?
+        .json()
+        .context("Failed to decode GraphQL response")?;
+
+    let pr_node_id = id_response
+        .data
+        .and_then(|d| d.repository)
+        .and_then(|r| r.pull_requests.nodes.into_iter().next())
+        .map(|n| n.id);
+    let Some(pr_node_id) = pr_node_id.flatten() else {
+        bail!("Could not resolve PR node ID for #{}", pr.number);
+    };
+
+    // Execute merge mutation
+    let merge_mutation = r#"
+mutation($prId: ID!) {
+  mergePullRequest(input: { pullRequestId: $prId }) {
+    pullRequest { url, number, state, title, merged }
+  }
+}
+"#;
+    let merge_body = json!({
+        "query": merge_mutation,
+        "variables": { "prId": pr_node_id },
+    });
+
+    let merge_response: serde_json::Value = client
+        .post("https://api.github.com/graphql")
+        .header(USER_AGENT, "Helmor")
+        .header(ACCEPT, "application/json")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, format!("Bearer {access_token}"))
+        .json(&merge_body)
+        .send()
+        .context("Failed to call mergePullRequest")?
+        .json()
+        .context("Failed to decode merge response")?;
+
+    if let Some(errors) = merge_response.get("errors") {
+        if let Some(arr) = errors.as_array() {
+            if !arr.is_empty() {
+                let msgs: Vec<&str> = arr
+                    .iter()
+                    .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
+                    .collect();
+                bail!("mergePullRequest failed: {}", msgs.join("; "));
+            }
+        }
+    }
+
+    // Return refreshed PR info
+    lookup_workspace_pr(workspace_id)
+}
+
+/// Close a workspace's open PR via the GitHub GraphQL `closePullRequest`
+/// mutation. Returns the updated `PullRequestInfo` on success.
+pub fn close_workspace_pr(workspace_id: &str) -> Result<Option<PullRequestInfo>> {
+    let pr = lookup_workspace_pr(workspace_id)?;
+    let Some(pr) = pr else {
+        return Ok(None);
+    };
+    if pr.state != "OPEN" {
+        bail!("PR #{} is not open (state: {})", pr.number, pr.state);
+    }
+
+    let access_token = auth::load_valid_github_access_token()?;
+    let Some(access_token) = access_token else {
+        return Ok(None);
+    };
+
+    let Some(record) = workspaces::load_workspace_record_by_id(workspace_id)? else {
+        bail!("Workspace not found: {workspace_id}");
+    };
+    let Some(remote_url) = record.remote_url.as_deref() else {
+        return Ok(None);
+    };
+    let Some((owner, name)) = parse_github_remote(remote_url) else {
+        return Ok(None);
+    };
+    let Some(branch) = record.branch.as_deref().filter(|b| !b.is_empty()) else {
+        return Ok(None);
+    };
+
+    let client = Client::builder()
+        .build()
+        .context("Failed to build GitHub HTTP client")?;
+
+    // Fetch PR node ID
+    let id_query = r#"
+query($owner: String!, $name: String!, $head: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(headRefName: $head, states: [OPEN], first: 1) {
+      nodes { id, url, number, state, title, merged }
+    }
+  }
+}
+"#;
+    let id_body = json!({
+        "query": id_query,
+        "variables": { "owner": owner, "name": name, "head": branch },
+    });
+
+    let id_response: GraphqlEnvelope = client
+        .post("https://api.github.com/graphql")
+        .header(USER_AGENT, "Helmor")
+        .header(ACCEPT, "application/json")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, format!("Bearer {access_token}"))
+        .json(&id_body)
+        .send()
+        .context("Failed to reach GitHub GraphQL API")?
+        .json()
+        .context("Failed to decode GraphQL response")?;
+
+    let pr_node_id = id_response
+        .data
+        .and_then(|d| d.repository)
+        .and_then(|r| r.pull_requests.nodes.into_iter().next())
+        .map(|n| n.id);
+    let Some(pr_node_id) = pr_node_id.flatten() else {
+        bail!("Could not resolve PR node ID for #{}", pr.number);
+    };
+
+    let close_mutation = r#"
+mutation($prId: ID!) {
+  closePullRequest(input: { pullRequestId: $prId }) {
+    pullRequest { url, number, state, title, merged }
+  }
+}
+"#;
+    let close_body = json!({
+        "query": close_mutation,
+        "variables": { "prId": pr_node_id },
+    });
+
+    let close_response: serde_json::Value = client
+        .post("https://api.github.com/graphql")
+        .header(USER_AGENT, "Helmor")
+        .header(ACCEPT, "application/json")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, format!("Bearer {access_token}"))
+        .json(&close_body)
+        .send()
+        .context("Failed to call closePullRequest")?
+        .json()
+        .context("Failed to decode close response")?;
+
+    if let Some(errors) = close_response.get("errors") {
+        if let Some(arr) = errors.as_array() {
+            if !arr.is_empty() {
+                let msgs: Vec<&str> = arr
+                    .iter()
+                    .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
+                    .collect();
+                bail!("closePullRequest failed: {}", msgs.join("; "));
+            }
+        }
+    }
+
+    lookup_workspace_pr(workspace_id)
 }
 
 /// Parse `https://github.com/owner/repo(.git)` and `git@github.com:owner/repo(.git)`
@@ -206,6 +438,10 @@ struct PullRequestConnection {
 
 #[derive(Debug, Clone, Deserialize)]
 struct PullRequestNode {
+    /// GraphQL node ID (e.g. "PR_kwDO..."). Only populated when the query
+    /// explicitly selects `id`; the lookup query omits it so this is
+    /// `None` on the primary path.
+    id: Option<String>,
     url: String,
     number: i64,
     state: String,

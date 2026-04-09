@@ -1,5 +1,5 @@
 import { useControllableState } from "@radix-ui/react-use-controllable-state";
-import { BrainIcon, ChevronDownIcon } from "lucide-react";
+import { BrainIcon, ChevronRightIcon } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
 import { createContext, memo, useContext, useEffect, useState } from "react";
 import { useStickToBottom } from "use-stick-to-bottom";
@@ -117,17 +117,17 @@ export const ReasoningTrigger = memo(
 		return (
 			<CollapsibleTrigger
 				className={cn(
-					"flex w-full cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-app-muted transition-colors hover:text-app-foreground-soft [&::-webkit-details-marker]:hidden",
+					"group/reasoning inline-flex max-w-full cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-app-muted transition-colors hover:text-app-foreground-soft [&::-webkit-details-marker]:hidden",
 					className,
 				)}
 				{...props}
 			>
 				<BrainIcon className="size-3 shrink-0" strokeWidth={1.8} />
 				{children ?? getThinkingMessage(isStreaming, duration)}
-				<ChevronDownIcon
+				<ChevronRightIcon
 					className={cn(
-						"ml-auto size-3 shrink-0 transition-transform",
-						isOpen ? "rotate-180" : "rotate-0",
+						"size-3 shrink-0 text-[#444241] transition-[transform,color] group-hover/reasoning:text-[rgb(134,133,132)]",
+						isOpen ? "rotate-90" : "rotate-0",
 					)}
 					strokeWidth={1.8}
 				/>

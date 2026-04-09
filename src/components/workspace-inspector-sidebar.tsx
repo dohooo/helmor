@@ -10,6 +10,7 @@ import {
 	ChevronDown,
 	ChevronRightIcon,
 	CircleIcon,
+	GitBranchIcon,
 	MinusIcon,
 	PlusIcon,
 	TriangleIcon,
@@ -19,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
 	discardWorkspaceFile,
+	type PullRequestInfo,
 	stageWorkspaceFile,
 	unstageWorkspaceFile,
 } from "@/lib/api";
@@ -38,37 +40,38 @@ import {
 	type WorkspaceCommitButtonMode,
 } from "./workspace-commit-button";
 
-const DEFAULT_CHANGES_RATIO = 0.45;
-const DEFAULT_ACTIONS_RATIO = 0.3;
+const DEFAULT_CHANGES_RATIO = 0.6;
+const DEFAULT_ACTIONS_RATIO = 0.4;
 const MIN_SECTION_HEIGHT = 48;
 const RESIZE_HIT_AREA = 8;
 
 type WorkspaceInspectorSidebarProps = {
 	workspaceRootPath?: string | null;
+	workspaceBranch?: string | null;
+	workspaceTargetBranch?: string | null;
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile(path: string): void;
 	onOpenMockReview?: (path: string) => void;
-	/** Invoked when the Git section's commit button fires. Receives the
-	 * button mode so App can look up the matching prompt template and
-	 * dispatch it to a freshly-created session. */
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
-	/** Controlled button mode — App owns the current mode (e.g. rotates
-	 * create-pr → merge after successful PR creation). */
 	commitButtonMode?: WorkspaceCommitButtonMode;
-	/** Controlled button state — App drives the full busy → done / error
-	 * lifecycle across session creation, streaming, and PR verification. */
 	commitButtonState?: CommitButtonState;
+	/** Persistent PR info for the current workspace branch. Drives the
+	 * "Git · PR #xxx" badge in the Git section header. */
+	prInfo?: PullRequestInfo | null;
 };
 
 export function WorkspaceInspectorSidebar({
 	workspaceRootPath,
+	workspaceBranch,
+	workspaceTargetBranch,
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
 	onCommitAction,
 	commitButtonMode,
 	commitButtonState,
+	prInfo,
 }: WorkspaceInspectorSidebarProps) {
 	const [tabsOpen, setTabsOpen] = useState(false);
 	const [activeTab, setActiveTab] = useState("setup");
@@ -85,16 +88,24 @@ export function WorkspaceInspectorSidebar({
 	const tabsWrapperRef = useRef<HTMLDivElement>(null);
 	const actionsRef = useRef<HTMLElement>(null);
 
-	// Compute initial section heights from container size (45/30-ish ratio),
-	// with the remainder driven by tab section behavior.
+	// Compute initial section heights from container size. Default to a 50/50
+	// split between the top two sections; tabs still follow their own
+	// expand/collapse behavior.
 	useEffect(() => {
 		const el = containerRef.current;
 		if (!el || changesHeight > 0) return;
 		// 3 section headers (h-9 = 36px each) + 2 resize handles (~8px each)
 		const overhead = 36 * 3 + 8 * 2;
 		const available = Math.max(0, el.clientHeight - overhead);
-		setChangesHeight(Math.round(available * DEFAULT_CHANGES_RATIO));
-		setActionsHeight(Math.round(available * DEFAULT_ACTIONS_RATIO));
+		// Reserve a minimum body height for the tabs section so its expand /
+		// resize behavior remains intact, then split the remaining height 50/50
+		// between Git and Actions by default.
+		const resizableAvailable = Math.max(
+			MIN_SECTION_HEIGHT * 2,
+			available - MIN_SECTION_HEIGHT,
+		);
+		setChangesHeight(Math.round(resizableAvailable * DEFAULT_CHANGES_RATIO));
+		setActionsHeight(Math.round(resizableAvailable * DEFAULT_ACTIONS_RATIO));
 	}, [changesHeight]);
 
 	const isResizing = resizeState !== null;
@@ -306,6 +317,8 @@ export function WorkspaceInspectorSidebar({
 			<ChangesSection
 				bodyHeight={changesHeight}
 				workspaceRootPath={workspaceRootPath ?? null}
+				workspaceBranch={workspaceBranch ?? null}
+				workspaceTargetBranch={workspaceTargetBranch ?? null}
 				changes={changes}
 				editorMode={editorMode}
 				activeEditorPath={activeEditorPath}
@@ -314,6 +327,7 @@ export function WorkspaceInspectorSidebar({
 				onCommitAction={onCommitAction}
 				commitButtonMode={commitButtonMode}
 				commitButtonState={commitButtonState}
+				prInfo={prInfo ?? null}
 			/>
 
 			<HorizontalResizeHandle
@@ -749,6 +763,8 @@ const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
 function ChangesSection({
 	bodyHeight,
 	workspaceRootPath,
+	workspaceBranch,
+	workspaceTargetBranch,
 	changes,
 	editorMode,
 	activeEditorPath,
@@ -757,9 +773,12 @@ function ChangesSection({
 	onCommitAction,
 	commitButtonMode = "create-pr",
 	commitButtonState,
+	prInfo,
 }: {
 	bodyHeight: number;
 	workspaceRootPath: string | null;
+	workspaceBranch: string | null;
+	workspaceTargetBranch: string | null;
 	changes: InspectorFileItem[];
 	editorMode: boolean;
 	activeEditorPath?: string | null;
@@ -768,11 +787,13 @@ function ChangesSection({
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
 	commitButtonMode?: WorkspaceCommitButtonMode;
 	commitButtonState?: CommitButtonState;
+	prInfo: PullRequestInfo | null;
 }) {
 	const queryClient = useQueryClient();
 	const [treeView] = useState(true);
 	const [changesOpen, setChangesOpen] = useState(true);
 	const [stagedOpen, setStagedOpen] = useState(true);
+	const [branchDiffOpen, setBranchDiffOpen] = useState(true);
 
 	// Classify files into Staged Changes / Changes groups using the
 	// per-state status fields from the backend. A file with both staged and
@@ -791,7 +812,18 @@ function ChangesSection({
 				.map((c) => ({ ...c, status: c.unstagedStatus ?? c.status })),
 		[changes],
 	);
-	const hasChanges = stagedChanges.length > 0 || unstagedChanges.length > 0;
+	// Branch diff: files that have committed changes (merge-base..HEAD) —
+	// the persistent view of "what does this branch / PR contain?".
+	const committedChanges = useMemo(
+		() =>
+			changes
+				.filter((c) => c.committedStatus != null)
+				.map((c) => ({ ...c, status: c.committedStatus ?? c.status })),
+		[changes],
+	);
+	const hasUncommittedChanges =
+		stagedChanges.length > 0 || unstagedChanges.length > 0;
+	const hasChanges = hasUncommittedChanges || committedChanges.length > 0;
 	const invalidateChanges = useCallback(() => {
 		if (!workspaceRootPath) return;
 		queryClient.invalidateQueries({
@@ -878,26 +910,51 @@ function ChangesSection({
 			<div
 				className={cn(INSPECTOR_SECTION_HEADER_CLASS, gitHeaderHighlightClass)}
 			>
-				<span className={INSPECTOR_SECTION_TITLE_CLASS}>Git</span>
-				{hasChanges ? (
+				<div className="flex min-w-0 items-center gap-1.5">
+					<span className={INSPECTOR_SECTION_TITLE_CLASS}>Git</span>
+					{prInfo && (
+						<>
+							<button
+								type="button"
+								onClick={() => {
+									void import("@tauri-apps/plugin-opener").then(
+										({ openUrl }) => {
+											void openUrl(prInfo.url);
+										},
+									);
+								}}
+								className={cn(
+									"inline-flex h-5.5 items-center gap-0.5 rounded-[3px] border px-2 text-[11px] font-semibold leading-none tracking-[0.01em] transition-colors",
+									prInfo.isMerged
+										? "border-[#8957E5]/45 bg-transparent text-[#8957E5] hover:border-[#8957E5]/65 hover:text-[#8957E5]"
+										: prInfo.state === "OPEN"
+											? "border-[rgb(22_163_74)]/55 text-[rgb(22_163_74)] hover:border-[rgb(22_163_74)]/70 hover:text-[rgb(22_163_74)]"
+											: "border-app-muted/40 text-app-muted hover:border-app-muted/60",
+								)}
+							>
+								PR #{prInfo.number}
+							</button>
+						</>
+					)}
+				</div>
+				{(hasChanges ||
+					commitButtonState === "busy" ||
+					commitButtonMode !== "create-pr") && (
 					<WorkspaceCommitButton
 						mode={commitButtonMode}
 						state={commitButtonState}
 						className="my-0.5 ml-auto"
 						onCommit={handleCommitButtonClick}
 					/>
-				) : null}
+				)}
 			</div>
 
 			<ScrollArea
 				aria-label="Changes panel body"
 				className="bg-app-base/[0.16] font-mono text-[11.5px] flex-1 min-h-0"
 			>
-				{changes.length === 0 ? (
-					<div className="px-3 py-3 text-[11px] leading-5 text-app-muted">
-						Select a workspace with a root path to open files here.
-					</div>
-				) : (
+				{/* Uncommitted changes: staged + unstaged (auto-hide when empty) */}
+				{hasUncommittedChanges && (
 					<>
 						{stagedChanges.length > 0 && (
 							<ChangesGroup
@@ -935,6 +992,31 @@ function ChangesSection({
 							/>
 						)}
 					</>
+				)}
+
+				{/* Branch diff: committed changes (merge-base..HEAD).
+				    Always visible — this is the persistent "what does this PR contain?" view. */}
+				{committedChanges.length > 0 && (
+					<BranchDiffSection
+						branch={workspaceBranch}
+						targetBranch={workspaceTargetBranch}
+						count={committedChanges.length}
+						open={branchDiffOpen}
+						onToggle={() => setBranchDiffOpen((v) => !v)}
+						changes={committedChanges}
+						treeView={treeView}
+						editorMode={editorMode}
+						activeEditorPath={activeEditorPath}
+						onOpenEditorFile={onOpenEditorFile}
+						flashingPaths={flashingPaths}
+					/>
+				)}
+
+				{/* Empty state: no uncommitted changes AND no branch diff */}
+				{!hasChanges && (
+					<div className="px-3 py-3 text-[11px] leading-5 text-app-muted">
+						No changes on this branch yet.
+					</div>
 				)}
 			</ScrollArea>
 		</section>
@@ -1034,6 +1116,92 @@ function ChangesGroup({
 							action={action}
 							onStageAction={onStageAction}
 							onDiscard={onDiscard}
+						/>
+					)}
+				</div>
+			)}
+		</div>
+	);
+}
+
+/** Branch diff section — shows files changed on the current branch relative to
+ * the target branch (merge-base..HEAD). Always visible when there are committed
+ * changes, sits below the uncommitted Staged/Changes groups. */
+function BranchDiffSection({
+	branch,
+	targetBranch,
+	count,
+	open,
+	onToggle,
+	changes,
+	treeView,
+	editorMode,
+	activeEditorPath,
+	onOpenEditorFile,
+	flashingPaths,
+}: {
+	branch: string | null;
+	targetBranch: string | null;
+	count: number;
+	open: boolean;
+	onToggle: () => void;
+	changes: InspectorFileItem[];
+	treeView: boolean;
+	editorMode: boolean;
+	activeEditorPath?: string | null;
+	onOpenEditorFile: (path: string) => void;
+	flashingPaths: Set<string>;
+}) {
+	const branchLabel = branch ?? "HEAD";
+	const targetLabel = targetBranch ?? "main";
+
+	return (
+		<div>
+			<div className="group/header flex w-full items-center gap-1 py-1 pl-1 pr-2 text-[11.5px] font-semibold leading-none tracking-[-0.01em] text-app-foreground-soft">
+				<button
+					type="button"
+					onClick={onToggle}
+					aria-expanded={open}
+					className="flex min-w-0 flex-1 items-center gap-1 text-left leading-none transition-colors hover:text-app-foreground"
+				>
+					<ChevronRightIcon
+						className={cn(
+							"size-3 shrink-0 transition-transform",
+							open && "rotate-90",
+						)}
+						strokeWidth={2}
+					/>
+					<GitBranchIcon
+						className="size-3 shrink-0 text-app-muted"
+						strokeWidth={2}
+					/>
+					<span className="flex min-w-0 items-center truncate">
+						<span className="truncate">{branchLabel}</span>
+						<span className="mx-1 shrink-0 text-app-muted">→</span>
+						<span className="shrink-0">{targetLabel}</span>
+					</span>
+				</button>
+				<span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-app-row-selected px-1 text-[9.5px] font-semibold leading-none text-app-muted">
+					{count}
+				</span>
+			</div>
+			{open && (
+				<div className="pl-3">
+					{treeView ? (
+						<ChangesTreeView
+							changes={changes}
+							editorMode={editorMode}
+							activeEditorPath={activeEditorPath}
+							onOpenEditorFile={onOpenEditorFile}
+							flashingPaths={flashingPaths}
+						/>
+					) : (
+						<ChangesFlatView
+							changes={changes}
+							editorMode={editorMode}
+							activeEditorPath={activeEditorPath}
+							onOpenEditorFile={onOpenEditorFile}
+							flashingPaths={flashingPaths}
 						/>
 					)}
 				</div>

@@ -50,7 +50,9 @@ import { WorkspaceEditorSurface } from "./components/workspace-editor-surface";
 import { WorkspaceInspectorSidebar } from "./components/workspace-inspector-sidebar";
 import { WorkspacesSidebarContainer } from "./components/workspaces-sidebar-container";
 import {
+	archiveWorkspace,
 	cancelGithubIdentityConnect,
+	closeWorkspacePr,
 	createSession,
 	disconnectGithubIdentity,
 	type GithubIdentityDeviceFlowStart,
@@ -58,23 +60,19 @@ import {
 	hideSession,
 	listenGithubIdentityChanged,
 	loadAutoCloseActionKinds,
-	loadAutoCloseOptInAsked,
 	loadGithubIdentitySession,
 	lookupWorkspacePr,
+	mergeWorkspacePr,
 	openWorkspaceInEditor,
 	type PullRequestInfo,
-	saveAutoCloseActionKinds,
-	saveAutoCloseOptInAsked,
-	startGithubIdentityConnect,
+	setWorkspaceManualStatus,
+	startGithubOAuthRedirect,
 	type WorkspaceDetail,
 	type WorkspaceGroup,
 	type WorkspaceRow,
 	type WorkspaceSessionSummary,
 } from "./lib/api";
-import {
-	COMMIT_BUTTON_PROMPTS,
-	describeActionKind,
-} from "./lib/commit-button-prompts";
+import { COMMIT_BUTTON_PROMPTS } from "./lib/commit-button-prompts";
 import type { EditorSessionState } from "./lib/editor-session";
 import { isPathWithinRoot } from "./lib/editor-session";
 import {
@@ -84,6 +82,7 @@ import {
 	sessionThreadMessagesQueryOptions,
 	workspaceDetailQueryOptions,
 	workspaceGroupsQueryOptions,
+	workspacePrQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "./lib/query-client";
 import {
@@ -143,6 +142,7 @@ type WorkspaceToast = {
 type GithubIdentityState =
 	| { status: "checking" }
 	| { status: "pending"; flow: GithubIdentityDeviceFlowStart }
+	| { status: "awaiting-redirect" }
 	| GithubIdentitySnapshot;
 
 function clampSidebarWidth(width: number) {
@@ -384,6 +384,57 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			: null) ??
 		null;
 
+	// Persistent PR state for the current workspace's branch. Drives the
+	// commit button's resting mode and the "Git · PR #xxx" header badge.
+	const workspacePrQuery = useQuery({
+		...workspacePrQueryOptions(selectedWorkspaceId ?? "__none__"),
+		enabled: isIdentityConnected && selectedWorkspaceId !== null,
+	});
+	const workspacePrInfo = workspacePrQuery.data ?? null;
+
+	// Auto-archive the workspace when its PR has been closed (not merged).
+	// A closed PR signals the work is abandoned — archiving moves the
+	// workspace to the "Archived" section and frees the worktree on disk.
+	const autoArchiveTriggeredRef = useRef<string | null>(null);
+	const selectedWorkspaceState =
+		selectedWorkspaceDetailQuery.data?.state ?? null;
+	useEffect(() => {
+		if (
+			!selectedWorkspaceId ||
+			!workspacePrInfo ||
+			workspacePrInfo.state !== "CLOSED" ||
+			workspacePrInfo.isMerged ||
+			// Don't archive if the workspace is already archived or not active.
+			selectedWorkspaceState !== "active"
+		) {
+			autoArchiveTriggeredRef.current = null;
+			return;
+		}
+		// Only trigger once per workspace to avoid repeat archive attempts.
+		if (autoArchiveTriggeredRef.current === selectedWorkspaceId) return;
+		autoArchiveTriggeredRef.current = selectedWorkspaceId;
+
+		void (async () => {
+			try {
+				console.log(
+					"[commitButton] PR closed — auto-archiving workspace",
+					selectedWorkspaceId,
+				);
+				await archiveWorkspace(selectedWorkspaceId);
+				await Promise.all([
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceGroups,
+					}),
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceDetail(selectedWorkspaceId),
+					}),
+				]);
+			} catch (error) {
+				console.error("[commitButton] Auto-archive failed:", error);
+			}
+		})();
+	}, [selectedWorkspaceId, workspacePrInfo, queryClient]);
+
 	const pushWorkspaceToast = useCallback(
 		(
 			description: string,
@@ -604,20 +655,15 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		};
 	}, [resizeState]);
 
-	const handleStartGithubIdentityConnect = useCallback(async () => {
+	const handleStartGithubOAuthRedirect = useCallback(async () => {
 		try {
-			const flow = await startGithubIdentityConnect();
-			setGithubIdentityState({
-				status: "pending",
-				flow,
-			});
+			const { oauthUrl } = await startGithubOAuthRedirect();
+			setGithubIdentityState({ status: "awaiting-redirect" });
+			await openUrl(oauthUrl);
 		} catch (error) {
 			setGithubIdentityState({
 				status: "error",
-				message: describeUnknownError(
-					error,
-					"Unable to start GitHub account connection.",
-				),
+				message: describeUnknownError(error, "Unable to start GitHub sign-in."),
 			});
 		}
 	}, []);
@@ -1122,10 +1168,97 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const handleInspectorCommitAction = useCallback(
 		async (mode: WorkspaceCommitButtonMode) => {
 			const workspaceId = selectedWorkspaceIdRef.current;
-			if (!workspaceId) return;
+			if (!workspaceId) {
+				console.warn("[commitButton] action ignored: no selected workspace");
+				return;
+			}
 
+			console.log("[commitButton] begin", { mode, workspaceId });
+
+			// -----------------------------------------------------------
+			// Direct API actions with optimistic update.
+			// Merge / close are fast single-request operations — we
+			// optimistically flip the UI to the final state immediately
+			// and roll back if the API call fails.
+			// -----------------------------------------------------------
+			if (mode === "merge" || mode === "closed") {
+				const currentPr = queryClient.getQueryData<PullRequestInfo | null>(
+					helmorQueryKeys.workspacePr(workspaceId),
+				);
+				const optimisticPr: PullRequestInfo | null = currentPr
+					? {
+							...currentPr,
+							state: mode === "merge" ? "MERGED" : "CLOSED",
+							isMerged: mode === "merge",
+						}
+					: null;
+				const optimisticStatus = mode === "merge" ? "done" : "canceled";
+				const previousStatus =
+					selectedWorkspaceDetailQuery.data?.manualStatus ?? null;
+
+				// 1. Optimistically update UI — button, PR badge, sidebar group.
+				setCommitLifecycle({
+					workspaceId,
+					trackedSessionId: null,
+					mode,
+					phase: "done",
+					prInfo: optimisticPr,
+				});
+				queryClient.setQueryData(
+					helmorQueryKeys.workspacePr(workspaceId),
+					optimisticPr,
+				);
+				void setWorkspaceManualStatus(workspaceId, optimisticStatus).then(() =>
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceGroups,
+					}),
+				);
+
+				// 2. Fire the actual API call in the background.
+				void (async () => {
+					try {
+						const result =
+							mode === "merge"
+								? await mergeWorkspacePr(workspaceId)
+								: await closeWorkspacePr(workspaceId);
+						// Refresh with real data from GitHub.
+						queryClient.setQueryData(
+							helmorQueryKeys.workspacePr(workspaceId),
+							result,
+						);
+					} catch (error) {
+						console.error(`[commitButton] ${mode} failed:`, error);
+						// 3. Rollback — restore previous PR state + workspace status.
+						queryClient.setQueryData(
+							helmorQueryKeys.workspacePr(workspaceId),
+							currentPr,
+						);
+						void setWorkspaceManualStatus(workspaceId, previousStatus).then(
+							() =>
+								queryClient.invalidateQueries({
+									queryKey: helmorQueryKeys.workspaceGroups,
+								}),
+						);
+						setCommitLifecycle((prev) =>
+							prev
+								? { ...prev, phase: "error", prInfo: currentPr ?? null }
+								: prev,
+						);
+					}
+				})();
+				return;
+			}
+
+			// -----------------------------------------------------------
+			// Agent-session actions — create session + dispatch prompt.
+			// -----------------------------------------------------------
 			const prompt = COMMIT_BUTTON_PROMPTS[mode];
-			if (!prompt) return;
+			if (!prompt) {
+				console.warn(
+					`[commitButton] action ignored: no prompt for mode ${mode}`,
+				);
+				return;
+			}
 
 			// Enter the lifecycle immediately so the button flips to busy
 			// before we await anything. `trackedSessionId` fills in after the
@@ -1140,6 +1273,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 			try {
 				const { sessionId } = await createSession(workspaceId, mode);
+				console.log("[commitButton] session created", { sessionId });
 
 				// Refresh the workspace's session list so the new session
 				// becomes visible in the tab strip + sidebar before we switch.
@@ -1170,6 +1304,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	);
 
 	const handlePendingPromptConsumed = useCallback(() => {
+		console.log("[commitButton] pending prompt consumed by composer");
 		setPendingPromptForSession(null);
 		// The composer has handed the prompt off — the stream is now running.
 		setCommitLifecycle((current) =>
@@ -1191,11 +1326,19 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const hasObservedSendingRef = useRef(false);
 	useEffect(() => {
 		const current = commitLifecycleRef.current;
+		console.log("[commitButton] sendingSessionIds effect fired", {
+			sendingIds: Array.from(sendingSessionIds),
+			lifecyclePhase: current?.phase ?? null,
+			trackedSessionId: current?.trackedSessionId ?? null,
+			observedBefore: hasObservedSendingRef.current,
+		});
+
 		if (!current?.trackedSessionId) return;
 		if (current.phase !== "creating" && current.phase !== "streaming") return;
 
 		const isSending = sendingSessionIds.has(current.trackedSessionId);
 		if (isSending) {
+			console.log("[commitButton] tracked session is streaming");
 			hasObservedSendingRef.current = true;
 			return;
 		}
@@ -1203,9 +1346,17 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		// Wait until we've actually seen the session streaming before we
 		// interpret its absence as completion. This avoids a race where the
 		// effect fires before the composer submits.
-		if (!hasObservedSendingRef.current) return;
+		if (!hasObservedSendingRef.current) {
+			console.log(
+				"[commitButton] tracked session not yet observed streaming — waiting",
+			);
+			return;
+		}
 
 		// Stream has finished. Move to verification.
+		console.log(
+			"[commitButton] stream ended — transitioning to verifying phase",
+		);
 		hasObservedSendingRef.current = false;
 		setCommitLifecycle((prev) =>
 			prev ? { ...prev, phase: "verifying" } : prev,
@@ -1214,15 +1365,15 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		const workspaceId = current.workspaceId;
 		void (async () => {
 			try {
+				console.log("[commitButton] calling lookupWorkspacePr", workspaceId);
 				const pr = await lookupWorkspacePr(workspaceId);
+				console.log("[commitButton] lookupWorkspacePr result", pr);
 				setCommitLifecycle((prev) => {
 					if (!prev || prev.workspaceId !== workspaceId) return prev;
-					if (!pr) {
-						// Agent didn't create a PR — surface as error so the
-						// user can retry.
-						return { ...prev, phase: "error", prInfo: null };
-					}
-					return { ...prev, phase: "done", prInfo: pr };
+					// Even if PR is null (verifier couldn't find it), treat as
+					// "done" so the lifecycle dwell runs and the PR query's
+					// background poll can pick it up later.
+					return { ...prev, phase: "done", prInfo: pr ?? null };
 				});
 			} catch (error) {
 				console.error("[commitButton] PR lookup failed:", error);
@@ -1236,9 +1387,10 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	}, [sendingSessionIds]);
 
 	// After a short dwell in `done` / `error`, reset the lifecycle so the
-	// button returns to idle (possibly in a new mode). On `done` we also run
-	// the action-session auto-close side effects: hide the session if the
-	// user has opted-in, or show the first-time opt-in toast.
+	// button returns to idle (possibly in a new mode). On `done` we also
+	// auto-hide the session if the user has opted-in via the composer's
+	// "Enable Auto Close" toggle — no first-time prompt, user discovers the
+	// feature via the inline button in the composer header.
 	useEffect(() => {
 		if (!commitLifecycle) return;
 		if (commitLifecycle.phase !== "done" && commitLifecycle.phase !== "error") {
@@ -1247,89 +1399,52 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 		const { phase, mode, trackedSessionId, workspaceId } = commitLifecycle;
 
-		if (phase === "done" && trackedSessionId) {
+		if (phase === "done") {
+			// Merge/close use optimistic cache updates — don't refetch the
+			// PR query here or GitHub's propagation delay will briefly
+			// overwrite the optimistic value with the old state.
+			if (mode !== "merge" && mode !== "closed") {
+				queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspacePr(workspaceId),
+				});
+			}
+			// Refresh the file list so committed files disappear.
+			queryClient.invalidateQueries({
+				queryKey: ["workspaceChanges"],
+			});
+
 			void (async () => {
 				try {
-					const [optedIn, asked] = await Promise.all([
-						loadAutoCloseActionKinds(),
-						loadAutoCloseOptInAsked(),
+					// Transition workspace sidebar status based on what just
+					// completed:
+					// Merge/close already handle status optimistically in
+					// handleInspectorCommitAction — only create-pr needs it here.
+					if (mode === "create-pr") {
+						await setWorkspaceManualStatus(workspaceId, "review");
+						await queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceGroups,
+						});
+					}
+
+					if (!trackedSessionId) return;
+					const optedIn = await loadAutoCloseActionKinds();
+					if (!optedIn.includes(mode)) return;
+					await hideSession(trackedSessionId);
+					await Promise.all([
+						queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+						}),
+						queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+						}),
 					]);
-
-					if (optedIn.includes(mode)) {
-						// User already opted-in: hide the session + refresh the
-						// workspace's session list.
-						try {
-							await hideSession(trackedSessionId);
-							await queryClient.invalidateQueries({
-								queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
-							});
-						} catch (error) {
-							console.error(
-								"[commitButton] Failed to auto-hide session:",
-								error,
-							);
-						}
-						return;
-					}
-
-					// Not opted-in. If we've never asked about this action kind,
-					// surface the first-time opt-in toast.
-					if (!asked.includes(mode)) {
-						const kindLabel = describeActionKind(mode);
-						pushWorkspaceToast(
-							`完成后自动收起这类 "${kindLabel}" 任务？你随时可以在历史记录里找到它们。`,
-							"Enable Auto Close?",
-							"default",
-							{
-								persistent: true,
-								action: {
-									label: "一键开启",
-									onClick: () => {
-										void (async () => {
-											try {
-												const nextOptedIn = Array.from(
-													new Set([...optedIn, mode]),
-												);
-												await saveAutoCloseActionKinds(nextOptedIn);
-												await queryClient.invalidateQueries({
-													queryKey: helmorQueryKeys.autoCloseActionKinds,
-												});
-												// Hide this session right away now that
-												// the user opted in.
-												await hideSession(trackedSessionId);
-												await queryClient.invalidateQueries({
-													queryKey:
-														helmorQueryKeys.workspaceSessions(workspaceId),
-												});
-											} catch (error) {
-												console.error(
-													"[commitButton] Failed to enable auto-close:",
-													error,
-												);
-											}
-										})();
-									},
-								},
-							},
-						);
-
-						// Mark as asked regardless of user response so we don't nag.
-						try {
-							const nextAsked = Array.from(new Set([...asked, mode]));
-							await saveAutoCloseOptInAsked(nextAsked);
-							await queryClient.invalidateQueries({
-								queryKey: helmorQueryKeys.autoCloseOptInAsked,
-							});
-						} catch (error) {
-							console.error(
-								"[commitButton] Failed to record opt-in prompt:",
-								error,
-							);
-						}
-					}
+					const detail = queryClient.getQueryData<WorkspaceDetail>(
+						helmorQueryKeys.workspaceDetail(workspaceId),
+					);
+					handleSelectSession(detail?.activeSessionId ?? null);
 				} catch (error) {
 					console.error(
-						"[commitButton] Failed to run auto-close side effects:",
+						"[commitButton] done-phase side effects failed:",
 						error,
 					);
 				}
@@ -1343,18 +1458,26 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			phase === "done" ? 1200 : 1600,
 		);
 		return () => window.clearTimeout(timeoutId);
-	}, [commitLifecycle, pushWorkspaceToast, queryClient]);
+	}, [commitLifecycle, handleSelectSession, queryClient]);
 
 	// Derive the controlled button state + mode. When no lifecycle is
-	// active, the button shows its resting state ("create-pr" / idle).
+	// active, the resting mode comes from the persistent PR query so the
+	// button stays in "merge" / "merged" after a successful create-pr even
+	// across page reloads.
 	const commitButtonMode: WorkspaceCommitButtonMode = (() => {
-		if (!commitLifecycle) return "create-pr";
-		if (commitLifecycle.phase === "done" && commitLifecycle.prInfo) {
-			// After a successful create-pr, rotate to the "merge" mode so the
-			// button surfaces the next logical action.
-			return commitLifecycle.prInfo.isMerged ? "merged" : "merge";
+		if (commitLifecycle) {
+			if (commitLifecycle.phase === "done" && commitLifecycle.prInfo) {
+				return commitLifecycle.prInfo.isMerged ? "merged" : "merge";
+			}
+			return commitLifecycle.mode;
 		}
-		return commitLifecycle.mode;
+		// Resting state — derive from persisted PR query.
+		if (workspacePrInfo) {
+			if (workspacePrInfo.isMerged) return "merged";
+			if (workspacePrInfo.state === "OPEN") return "merge";
+			if (workspacePrInfo.state === "CLOSED") return "create-pr";
+		}
+		return "create-pr";
 	})();
 	const commitButtonState: CommitButtonState = (() => {
 		if (!commitLifecycle) return "idle";
@@ -1487,7 +1610,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 						<GithubIdentityGate
 							identityState={githubIdentityState}
 							onConnectGithub={() => {
-								void handleStartGithubIdentityConnect();
+								void handleStartGithubOAuthRedirect();
 							}}
 							onCopyGithubCode={(userCode) =>
 								handleCopyGithubDeviceCode(userCode)
@@ -1722,12 +1845,21 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 								>
 									<WorkspaceInspectorSidebar
 										workspaceRootPath={workspaceRootPath}
+										workspaceBranch={
+											selectedWorkspaceDetailQuery.data?.branch ?? null
+										}
+										workspaceTargetBranch={
+											selectedWorkspaceDetailQuery.data?.intendedTargetBranch ??
+											selectedWorkspaceDetailQuery.data?.defaultBranch ??
+											null
+										}
 										editorMode={workspaceViewMode === "editor"}
 										activeEditorPath={editorSession?.path ?? null}
 										onOpenEditorFile={handleOpenEditorFile}
 										onCommitAction={handleInspectorCommitAction}
 										commitButtonMode={commitButtonMode}
 										commitButtonState={commitButtonState}
+										prInfo={workspacePrInfo}
 									/>
 								</aside>
 							</div>
@@ -1876,23 +2008,27 @@ function GithubIdentityGate({
 	const title =
 		identityState.status === "checking"
 			? "Checking GitHub connection"
-			: identityState.status === "pending"
-				? "Finish sign-in on GitHub"
-				: identityState.status === "unconfigured"
-					? "GitHub account connection is not configured"
-					: identityState.status === "error"
-						? "GitHub connection failed"
-						: "Sign in with GitHub";
+			: identityState.status === "awaiting-redirect"
+				? "Waiting for GitHub authorization"
+				: identityState.status === "pending"
+					? "Finish sign-in on GitHub"
+					: identityState.status === "unconfigured"
+						? "GitHub account connection is not configured"
+						: identityState.status === "error"
+							? "GitHub connection failed"
+							: "Sign in with GitHub";
 	const description =
 		identityState.status === "checking"
 			? "Helmor is restoring your last GitHub account session."
-			: identityState.status === "pending"
-				? "Copy the code below, then you'll be redirected to GitHub to authorize."
-				: identityState.status === "unconfigured"
-					? identityState.message
-					: identityState.status === "error"
+			: identityState.status === "awaiting-redirect"
+				? "Complete the sign-in in your browser. Helmor will update automatically."
+				: identityState.status === "pending"
+					? "Copy the code below, then you'll be redirected to GitHub to authorize."
+					: identityState.status === "unconfigured"
 						? identityState.message
-						: "GitHub account connection is required before Helmor loads your workspaces.";
+						: identityState.status === "error"
+							? identityState.message
+							: "GitHub account connection is required before Helmor loads your workspaces.";
 
 	const handleCopyCodeThenRedirect = useCallback(async () => {
 		if (identityState.status !== "pending" || codeCopied) {
@@ -1942,7 +2078,21 @@ function GithubIdentityGate({
 						{description}
 					</p>
 
-					{identityState.status === "pending" ? (
+					{identityState.status === "awaiting-redirect" ? (
+						<div className="mt-8 flex flex-col items-center gap-4">
+							<div className="inline-flex items-center gap-2 text-[14px] text-app-foreground-soft/76">
+								<RefreshCw className="size-4 animate-spin" strokeWidth={1.8} />
+								Waiting for authorization
+							</div>
+							<button
+								type="button"
+								onClick={onCancelGithubConnect}
+								className="inline-flex items-center justify-center rounded-full px-4 py-2 text-[14px] font-medium text-app-foreground-soft/78 transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
+							>
+								Cancel
+							</button>
+						</div>
+					) : identityState.status === "pending" ? (
 						<div className="mt-8 flex flex-col items-center gap-5">
 							<button
 								type="button"
