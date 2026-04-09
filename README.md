@@ -16,5 +16,5 @@ Vitest.
 This first brush intentionally keeps the app simple:
 
 - one Tauri window
-- one minimal React application shell
 - one baseline test to lock the startup UI
+- one minimal React application shell
