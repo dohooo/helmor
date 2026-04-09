@@ -21,6 +21,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { ConductorOnboarding } from "./components/conductor-onboarding";
 import { SettingsButton, SettingsDialog } from "./components/settings-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "./components/ui/avatar";
 import {
@@ -48,6 +49,7 @@ import { WorkspaceInspectorSidebar } from "./components/workspace-inspector-side
 import { WorkspacesSidebarContainer } from "./components/workspaces-sidebar-container";
 import {
 	archiveWorkspace,
+	type ConductorWorkspace,
 	cancelGithubIdentityConnect,
 	closeWorkspacePr,
 	createSession,
@@ -55,6 +57,9 @@ import {
 	type GithubIdentityDeviceFlowStart,
 	type GithubIdentitySnapshot,
 	hideSession,
+	isConductorAvailable,
+	listConductorRepos,
+	listConductorWorkspaces,
 	listenGithubIdentityChanged,
 	loadAutoCloseActionKinds,
 	loadGithubIdentitySession,
@@ -304,6 +309,29 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		sidebarWidth: number;
 		target: "sidebar" | "inspector";
 	} | null>(null);
+	// DEBUG: toggle onboarding screen
+	const [showOnboarding, setShowOnboarding] = useState(false);
+	const [conductorWorkspaces, setConductorWorkspaces] = useState<
+		ConductorWorkspace[]
+	>([]);
+	const [isLoadingConductorWorkspaces, setIsLoadingConductorWorkspaces] =
+		useState(false);
+
+	// Preload conductor workspaces when onboarding is opened
+	useEffect(() => {
+		if (!showOnboarding) return;
+		setIsLoadingConductorWorkspaces(true);
+		listConductorRepos()
+			.then(async (repos) => {
+				const all = await Promise.all(
+					repos.map((r) => listConductorWorkspaces(r.id)),
+				);
+				setConductorWorkspaces(all.flat());
+			})
+			.catch(() => setConductorWorkspaces([]))
+			.finally(() => setIsLoadingConductorWorkspaces(false));
+	}, [showOnboarding]);
+
 	const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
 		null,
 	);
@@ -359,6 +387,18 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const isSidebarResizing = resizeState?.target === "sidebar";
 	const isInspectorResizing = resizeState?.target === "inspector";
 	const isIdentityConnected = githubIdentityState.status === "connected";
+
+	// Show onboarding automatically on first login if Conductor is available
+	useEffect(() => {
+		if (!isIdentityConnected) return;
+		const key = "helmor_onboarding_shown";
+		if (localStorage.getItem(key)) return;
+		localStorage.setItem(key, "1");
+		isConductorAvailable().then((available) => {
+			if (available) setShowOnboarding(true);
+		});
+	}, [isIdentityConnected]);
+
 	const navigationGroupsQuery = useQuery({
 		...workspaceGroupsQueryOptions(),
 		enabled: isIdentityConnected,
@@ -1623,6 +1663,16 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 							aria-label="Application shell"
 							className="relative h-screen overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
 						>
+							{showOnboarding && (
+								<ConductorOnboarding
+									onComplete={() => {
+										setShowOnboarding(false);
+										setConductorWorkspaces([]);
+									}}
+									workspaces={conductorWorkspaces}
+									isLoadingWorkspaces={isLoadingConductorWorkspaces}
+								/>
+							)}
 							<div className="relative flex h-full min-h-0 bg-app-sidebar">
 								{workspaceViewMode === "conversation" && (
 									<>
@@ -1650,7 +1700,23 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 													/>
 												</button>
 												<div className="absolute inset-x-3 bottom-3 z-20 flex items-center justify-between">
-													<SettingsButton onClick={onOpenSettings} />
+													<div className="flex items-center gap-1">
+														<SettingsButton onClick={onOpenSettings} />
+														{/* DEBUG: open onboarding */}
+														<button
+															type="button"
+															title="Open onboarding (debug)"
+															onClick={() => {
+																localStorage.removeItem(
+																	"helmor_onboarding_shown",
+																);
+																setShowOnboarding(true);
+															}}
+															className="flex h-7 items-center rounded px-1.5 text-[10px] font-medium text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground-soft"
+														>
+															OB
+														</button>
+													</div>
 													<GithubStatusMenu
 														identityState={githubIdentityState}
 														onDisconnectGithub={() => {
