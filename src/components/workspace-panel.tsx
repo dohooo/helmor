@@ -1780,7 +1780,7 @@ function ChatUserMessage({ message }: { message: RenderedMessage }) {
 		>
 			<div
 				className="max-w-[75%] overflow-hidden rounded-md bg-app-foreground/[0.03] px-3 py-2 leading-7 text-app-foreground"
-				style={{ fontSize: `${settings.fontSize}px` }}
+				style={{ fontSize: `${Math.max(settings.fontSize - 1, 12)}px` }}
 			>
 				<p className="whitespace-pre-wrap break-words">
 					{parts.map((part, idx) => {
@@ -2186,7 +2186,7 @@ const AssistantText = memo(function AssistantText({
 	return (
 		<div
 			className="conversation-markdown assistant-markdown-scale max-w-none break-words text-app-foreground"
-			style={{ fontSize: `${settings.fontSize}px` }}
+			style={{ fontSize: `${Math.max(settings.fontSize - 1, 12)}px` }}
 		>
 			<Suspense
 				fallback={<AssistantTextFallback text={text} streaming={streaming} />}
