@@ -1,10 +1,7 @@
 import "./App.css";
 import { MarkGithubIcon } from "@primer/octicons-react";
-import {
-	QueryClientProvider,
-	useQuery,
-	useQueryClient,
-} from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	Check,
@@ -79,6 +76,7 @@ import {
 	archivedWorkspacesQueryOptions,
 	createHelmorQueryClient,
 	helmorQueryKeys,
+	helmorQueryPersister,
 	sessionThreadMessagesQueryOptions,
 	workspaceDetailQueryOptions,
 	workspaceGroupsQueryOptions,
@@ -269,13 +267,16 @@ function App() {
 
 	return (
 		<SettingsContext.Provider value={settingsContextValue}>
-			<QueryClientProvider client={queryClient}>
+			<PersistQueryClientProvider
+				client={queryClient}
+				persistOptions={{ persister: helmorQueryPersister }}
+			>
 				<AppShell onOpenSettings={() => setSettingsOpen(true)} />
 				<SettingsDialog
 					open={settingsOpen}
 					onClose={() => setSettingsOpen(false)}
 				/>
-			</QueryClientProvider>
+			</PersistQueryClientProvider>
 		</SettingsContext.Provider>
 	);
 }

@@ -1,3 +1,4 @@
+import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
 import { QueryClient, queryOptions } from "@tanstack/react-query";
 import {
 	type AgentProvider,
@@ -26,6 +27,7 @@ const CHANGES_STALE_TIME = 3_000;
 const CHANGES_REFETCH_INTERVAL = 10_000;
 const DEFAULT_GC_TIME = 30 * 60_000;
 const SESSION_GC_TIME = 60 * 60_000;
+const PERSIST_GC_TIME = 24 * 60 * 60_000; // 24h — persisted entries live this long
 
 export const helmorQueryKeys = {
 	workspaceGroups: ["workspaceGroups"] as const,
@@ -59,7 +61,7 @@ export function createHelmorQueryClient() {
 	return new QueryClient({
 		defaultOptions: {
 			queries: {
-				gcTime: DEFAULT_GC_TIME,
+				gcTime: PERSIST_GC_TIME,
 				refetchOnReconnect: false,
 				refetchOnWindowFocus: false,
 				retry: 1,
@@ -67,6 +69,11 @@ export function createHelmorQueryClient() {
 		},
 	});
 }
+
+export const helmorQueryPersister = createAsyncStoragePersister({
+	storage: window.localStorage,
+	key: "helmor-query-cache",
+});
 
 export function workspaceGroupsQueryOptions() {
 	return queryOptions({
