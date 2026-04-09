@@ -15,9 +15,8 @@
 mod codex;
 mod streaming;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
-use anyhow::{bail, Result};
 use serde_json::Value;
 
 use super::types::{AgentUsage, CollectedTurn, IntermediateMessage, ParsedAgentOutput};
@@ -139,6 +138,48 @@ fn assistant_error_message(category: &str) -> String {
     .to_string()
 }
 
+/// Flip an in-flight tool_use block to `error` if its id has no
+/// matching tool_result. Returns `true` when mutated.
+fn patch_tool_use_block(block: &mut Value, resolved: &HashSet<String>) -> bool {
+    let Some(obj) = block.as_object_mut() else {
+        return false;
+    };
+    let block_type = obj.get("type").and_then(Value::as_str);
+    if !matches!(
+        block_type,
+        Some("tool_use") | Some("server_tool_use") | Some("mcp_tool_use")
+    ) {
+        return false;
+    }
+    if let Some(id) = obj.get("id").and_then(Value::as_str) {
+        if resolved.contains(id) {
+            return false;
+        }
+    }
+    let current = obj.get("__streaming_status").and_then(Value::as_str);
+    if !matches!(current, Some("pending" | "streaming_input" | "running")) {
+        return false;
+    }
+    obj.insert(
+        "__streaming_status".to_string(),
+        Value::String("error".to_string()),
+    );
+    true
+}
+
+fn collect_resolved_id(block: &Value, resolved: &mut HashSet<String>) {
+    let Some(obj) = block.as_object() else {
+        return;
+    };
+    let block_type = obj.get("type").and_then(Value::as_str);
+    if !matches!(block_type, Some("tool_result") | Some("mcp_tool_result")) {
+        return;
+    }
+    if let Some(id) = obj.get("tool_use_id").and_then(Value::as_str) {
+        resolved.insert(id.to_string());
+    }
+}
+
 impl StreamAccumulator {
     pub fn new(provider: &str, fallback_model: &str) -> Self {
         Self {
@@ -197,6 +238,15 @@ impl StreamAccumulator {
 
         let event_type = value.get("type").and_then(Value::as_str);
 
+        // Top-level noise filter — types listed in
+        // `pipeline::event_filter::SUPPRESSED_EVENT_TYPES` get dropped
+        // before any handler runs. Edit that file to toggle.
+        if let Some(t) = event_type {
+            if crate::pipeline::event_filter::is_suppressed_event_type(t) {
+                return PushOutcome::NoOp;
+            }
+        }
+
         match event_type {
             // ── Claude streaming deltas ────────────────────────────────
             // These mutate `blocks`/`fallback_text`/`fallback_thinking`
@@ -231,21 +281,19 @@ impl StreamAccumulator {
                 self.handle_rate_limit_event(raw_line, value);
                 PushOutcome::Finalized
             }
+            // `prompt_suggestion` and `auth_status` are normally caught
+            // by the noise filter above. The arms stay so uncommenting
+            // either entry in `event_filter.rs` reaches a real handler
+            // (or NoOp for auth_status, which has no body to render).
             Some("prompt_suggestion") => {
                 self.handle_prompt_suggestion(raw_line, value);
                 PushOutcome::Finalized
             }
+            Some("auth_status") => PushOutcome::NoOp,
             Some("system") => {
                 self.handle_claude_system(raw_line, value);
                 PushOutcome::Finalized
             }
-
-            // SDKAuthStatusMessage — fired during OAuth re-auth flows.
-            // Intentionally silent: the user explicitly opted out of
-            // surfacing these in the conversation. We still need this
-            // arm so the drop-guard test (`pipeline_streams.rs`) doesn't
-            // fail when the SDK emits one.
-            Some("auth_status") => PushOutcome::NoOp,
 
             // SDKToolUseSummaryMessage — the SDK summarizes a long
             // tool result so the model's context doesn't blow up. We
@@ -413,46 +461,103 @@ impl StreamAccumulator {
         self.result_json.as_deref()
     }
 
-    /// Finalize the accumulator and return persistence output.
-    ///
-    /// Takes `&mut self` (not `mut self`) so the caller can read additional
-    /// state from the accumulator AFTER finalization — most importantly,
-    /// `turns_len()` and `turn_at(...)` to persist the turn that
-    /// `flush_assistant()` just appended for the final staged assistant
-    /// message. Consuming `self` here used to silently drop that turn,
-    /// because `flush_assistant` ran AFTER the caller had already read
-    /// `turns_len()`.
-    ///
-    /// Drains owned `Option<String>` and `AgentUsage` fields via
-    /// `take()`/`mem::take`. `resolved_model` is cloned (not drained) so
-    /// the persistence loop in agents.rs can still call
-    /// `accumulator.resolved_model()` to label the turns it just flushed.
-    pub fn finish_output(
-        &mut self,
-        fallback_session_id: Option<&str>,
-    ) -> Result<ParsedAgentOutput> {
-        self.flush_assistant();
+    /// Reclassify any in-flight tool_use as `error` so the spinner stops
+    /// after a user abort. Walks live blocks, staged Claude blocks, and
+    /// collected[] (where Codex puts its in-flight items). Tool_uses with
+    /// a matching tool_result are left alone.
+    pub fn mark_pending_tools_aborted(&mut self) {
+        let resolved_ids = self.collect_resolved_tool_use_ids();
 
-        let assistant_text = self.assistant_text.trim().to_string();
-        if assistant_text.is_empty() {
-            bail!(
-                "{} returned no assistant text.",
-                if self.provider == "codex" {
-                    "Codex"
-                } else {
-                    "Claude"
+        for block in self.blocks.values_mut() {
+            if let StreamingBlock::ToolUse {
+                tool_use_id,
+                status,
+                ..
+            } = block
+            {
+                if resolved_ids.contains(tool_use_id.as_str()) {
+                    continue;
                 }
-            );
+                if matches!(*status, "pending" | "streaming_input" | "running") {
+                    *status = "error";
+                }
+            }
         }
 
-        let thinking_text = self.thinking_text.trim().to_string();
-        let thinking_text = if thinking_text.is_empty() {
-            None
-        } else {
-            Some(thinking_text)
+        for block in self.cur_asst_blocks.iter_mut() {
+            patch_tool_use_block(block, &resolved_ids);
+        }
+
+        for msg in self.collected.iter_mut() {
+            if msg.role != "assistant" {
+                continue;
+            }
+            let Some(parsed) = msg.parsed.as_mut() else {
+                continue;
+            };
+            let Some(blocks) = parsed
+                .get_mut("message")
+                .and_then(|m| m.get_mut("content"))
+                .and_then(Value::as_array_mut)
+            else {
+                continue;
+            };
+            let mut changed = false;
+            for block in blocks.iter_mut() {
+                if patch_tool_use_block(block, &resolved_ids) {
+                    changed = true;
+                }
+            }
+            if changed {
+                msg.raw_json =
+                    serde_json::to_string(parsed).unwrap_or_else(|_| msg.raw_json.clone());
+            }
+        }
+    }
+
+    fn collect_resolved_tool_use_ids(&self) -> HashSet<String> {
+        let mut ids = HashSet::new();
+        for msg in &self.collected {
+            let Some(parsed) = msg.parsed.as_ref() else {
+                continue;
+            };
+            let Some(blocks) = parsed
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(Value::as_array)
+            else {
+                continue;
+            };
+            for block in blocks {
+                collect_resolved_id(block, &mut ids);
+            }
+        }
+        // mcp_tool_result can live inline in the still-staged assistant message
+        for block in &self.cur_asst_blocks {
+            collect_resolved_id(block, &mut ids);
+        }
+        ids
+    }
+
+    /// Flush staged Claude assistant blocks into `self.turns`. Idempotent.
+    pub fn flush_pending(&mut self) {
+        self.flush_assistant();
+    }
+
+    /// Project accumulator state into `ParsedAgentOutput`. Always succeeds —
+    /// empty input yields empty output. Drains owned fields, single-call.
+    pub fn drain_output(&mut self, fallback_session_id: Option<&str>) -> ParsedAgentOutput {
+        let assistant_text = self.assistant_text.trim().to_string();
+        let thinking_text = {
+            let t = self.thinking_text.trim().to_string();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
         };
 
-        Ok(ParsedAgentOutput {
+        ParsedAgentOutput {
             assistant_text,
             thinking_text,
             session_id: self
@@ -462,7 +567,32 @@ impl StreamAccumulator {
             resolved_model: self.resolved_model.clone(),
             usage: std::mem::take(&mut self.usage),
             result_json: self.result_json.take(),
-        })
+        }
+    }
+
+    /// Push an `{type:"error",content:"aborted by user"}` row into both
+    /// `collected[]` (live render) and `turns` (persistence). Same shape
+    /// imported sessions use, so the existing adapter renders it.
+    pub fn append_aborted_notice(&mut self) {
+        const NOTICE_JSON: &str = r#"{"type":"error","content":"aborted by user"}"#;
+        let parsed = serde_json::json!({
+            "type": "error",
+            "content": "aborted by user",
+        });
+
+        self.line_count += 1;
+        self.collected.push(IntermediateMessage {
+            id: format!("abort:{}", self.line_count),
+            role: "error".to_string(),
+            raw_json: NOTICE_JSON.to_string(),
+            parsed: Some(parsed),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            is_streaming: false,
+        });
+        self.turns.push(CollectedTurn {
+            role: "error".to_string(),
+            content_json: NOTICE_JSON.to_string(),
+        });
     }
 
     // =====================================================================
@@ -618,9 +748,14 @@ impl StreamAccumulator {
     }
 
     fn handle_claude_system(&mut self, raw_line: &str, value: &Value) {
-        // Top-level Claude `system` event (subtype=init|compact_boundary|
-        // task_*). The adapter renders the appropriate banner from the
-        // subtype.
+        // Subtypes listed in `event_filter::SUPPRESSED_SYSTEM_SUBTYPES`
+        // never enter `collected[]` — they don't cross IPC, don't render,
+        // don't waste downstream work. Edit that file to toggle.
+        if let Some(subtype) = value.get("subtype").and_then(Value::as_str) {
+            if crate::pipeline::event_filter::is_suppressed_system_subtype(subtype) {
+                return;
+            }
+        }
         self.collect_message(raw_line, value, "system", None);
     }
 

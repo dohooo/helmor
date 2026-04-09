@@ -17,6 +17,7 @@ pub mod accumulator;
 pub mod adapter;
 pub mod classify;
 pub mod collapse;
+pub mod event_filter;
 pub mod types;
 
 use serde_json::Value;
@@ -48,15 +49,6 @@ pub struct MessagePipeline {
     pub accumulator: accumulator::StreamAccumulator,
     context_key: String,
     session_id: String,
-    /// Monotonic counter — incremented on every accumulator mutation.
-    generation: u64,
-    /// Generation at last full emission.
-    last_full_generation: u64,
-    /// Generation at last partial emission.
-    last_partial_generation: u64,
-    /// Cached full render from the last finalization event.
-    /// Re-used as the base for the next finalization.
-    cached_full: Vec<ThreadMessageLike>,
 }
 
 impl MessagePipeline {
@@ -65,10 +57,6 @@ impl MessagePipeline {
             accumulator: accumulator::StreamAccumulator::new(provider, fallback_model),
             context_key: context_key.to_string(),
             session_id: session_id.to_string(),
-            generation: 0,
-            last_full_generation: 0,
-            last_partial_generation: 0,
-            cached_full: Vec::new(),
         }
     }
 
@@ -80,21 +68,17 @@ impl MessagePipeline {
     /// dispatch in `StreamAccumulator::push_event`.
     pub fn push_event(&mut self, value: &Value, raw_line: &str) -> PipelineEmit {
         let outcome = self.accumulator.push_event(value, raw_line);
-        self.generation += 1;
 
         match outcome {
-            PushOutcome::Finalized => self.emit_full(),
+            PushOutcome::Finalized => PipelineEmit::Full(self.render_full()),
             PushOutcome::StreamingDelta => self.emit_partial(),
             PushOutcome::NoOp => PipelineEmit::None,
         }
     }
 
-    /// Finalize after stream end. Always returns the full snapshot.
+    /// Force a fresh full render. Called once at end-of-stream.
     pub fn finish(&mut self) -> Vec<ThreadMessageLike> {
-        match self.emit_full() {
-            PipelineEmit::Full(messages) => messages,
-            _ => self.cached_full.clone(),
-        }
+        self.render_full()
     }
 
     /// Convert historical DB records (static, no accumulator).
@@ -117,19 +101,13 @@ impl MessagePipeline {
     // Internal
     // -----------------------------------------------------------------
 
-    /// Full render: run adapter + collapse on ALL messages (collected + partial).
-    /// Sent on finalization events. Caches the result.
-    fn emit_full(&mut self) -> PipelineEmit {
-        if self.generation == self.last_full_generation {
-            return PipelineEmit::None;
-        }
-
+    fn render_full(&mut self) -> Vec<ThreadMessageLike> {
         let partial = self
             .accumulator
             .build_partial(&self.context_key, &self.session_id);
         let collected = self.accumulator.collected();
 
-        let messages = match partial {
+        match partial {
             Some(p) => {
                 let mut all = Vec::with_capacity(collected.len() + 1);
                 all.extend_from_slice(collected);
@@ -137,22 +115,12 @@ impl MessagePipeline {
                 render_pipeline(&all)
             }
             None => render_pipeline(collected),
-        };
-
-        self.cached_full = messages.clone();
-        self.last_full_generation = self.generation;
-        self.last_partial_generation = self.generation;
-
-        PipelineEmit::Full(messages)
+        }
     }
 
     /// Partial render: only build the trailing streaming message.
     /// Sent on stream deltas. Much cheaper than a full render.
     fn emit_partial(&mut self) -> PipelineEmit {
-        if self.generation == self.last_partial_generation {
-            return PipelineEmit::None;
-        }
-
         let partial = match self
             .accumulator
             .build_partial(&self.context_key, &self.session_id)
@@ -169,8 +137,6 @@ impl MessagePipeline {
             None => return PipelineEmit::None,
         };
         msg.streaming = Some(true);
-
-        self.last_partial_generation = self.generation;
 
         PipelineEmit::Partial(msg)
     }

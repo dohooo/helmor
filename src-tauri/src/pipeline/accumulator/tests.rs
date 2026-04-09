@@ -300,25 +300,10 @@ fn fallback_delta_accumulation() {
     assert_eq!(content.len(), 2);
 }
 
-/// Regression for the "final assistant turn lost on stream end" bug.
-///
-/// `handle_assistant` does NOT push to `self.turns` directly — it stages
-/// the message into `cur_asst_*` and only flushes when (a) the next
-/// assistant has a different msg_id, (b) a user/tool_result event
-/// arrives, or (c) `flush_assistant` is called explicitly.
-///
-/// In a typical Claude session the **final** assistant turn never hits
-/// any of those triggers — it's followed by a `result` event and then
-/// the stream `end`. Until this fix, agents.rs read `turns_len()`
-/// BEFORE calling `finish_output(mut self)`, so the staged final
-/// assistant turn was missed; the subsequent `flush_assistant` inside
-/// `finish_output` happened on a `self` that was about to be consumed,
-/// so the freshly-pushed turn was unreachable to the persistence loop.
-///
-/// This test pins the contract that finish_output makes the final
-/// assistant turn observable on the still-alive accumulator.
+/// Regression: the final assistant turn was silently dropped because
+/// agents.rs consumed the accumulator before flushing it.
 #[test]
-fn finish_output_flushes_final_assistant_into_turns() {
+fn flush_pending_flushes_final_assistant_into_turns() {
     let mut acc = StreamAccumulator::new("claude", "opus");
 
     // 1. A complete tool_use turn — this one DOES get flushed at the
@@ -393,18 +378,17 @@ fn finish_output_flushes_final_assistant_into_turns() {
         "final assistant turn should still be staged in cur_asst_*"
     );
 
-    // The fix: finish_output must flush the staged turn AND leave the
+    // The fix: flush_pending must flush the staged turn AND leave the
     // accumulator alive so the caller can read it.
-    let output = acc
-        .finish_output(Some("sess-xyz"))
-        .expect("finish_output should succeed");
+    acc.flush_pending();
+    let output = acc.drain_output(Some("sess-xyz"));
 
     // Post-finalize: the staged turn is now in self.turns, observable
     // on the SAME accumulator instance the caller still owns.
     assert_eq!(
         acc.turns_len(),
         3,
-        "finish_output should flush the staged final assistant into self.turns"
+        "flush_pending should flush the staged final assistant into self.turns"
     );
 
     // The flushed turn is the final assistant message, with both
@@ -551,8 +535,8 @@ fn delta_assistant_events_with_different_msg_id_flush_then_replace() {
     assert_eq!(first_blocks.len(), 1);
     assert_eq!(first_blocks[0]["text"].as_str(), Some("first turn"));
 
-    // finish_output flushes msg_B into turns.
-    acc.finish_output(None).unwrap();
+    // flush_pending flushes msg_B into turns.
+    acc.flush_pending();
     assert_eq!(acc.turns_len(), 2);
     let second_turn: serde_json::Value =
         serde_json::from_str(&acc.turn_at(1).content_json).unwrap();
@@ -605,29 +589,24 @@ fn codex_todo_list_synthesizes_claude_todowrite_tool_use() {
 }
 
 // ---------------------------------------------------------------------------
-// R6: prompt_suggestion routing — verify that a top-level
-// prompt_suggestion event lands in the snapshot as a system-role
-// intermediate so the adapter can render it.
+// R6: prompt_suggestion is on the default suppression list in
+// `event_filter::SUPPRESSED_EVENT_TYPES` — verify the noise filter
+// drops it before any handler runs.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn prompt_suggestion_routed_into_collected_snapshot() {
+fn prompt_suggestion_is_dropped_by_default_noise_filter() {
     let mut acc = StreamAccumulator::new("claude", "opus");
     let event = json!({
         "type": "prompt_suggestion",
         "suggestion": "Try cargo test --tests",
     });
-    acc.push_event(&event, &event.to_string());
+    let outcome = acc.push_event(&event, &event.to_string());
 
+    assert_eq!(outcome, PushOutcome::NoOp);
     let snapshot = acc.snapshot("ctx", "sess");
-    assert_eq!(snapshot.len(), 1);
-    assert_eq!(snapshot[0].role, "system");
-    let parsed = snapshot[0].parsed.as_ref().unwrap();
-    assert_eq!(parsed["type"].as_str(), Some("prompt_suggestion"));
-    assert_eq!(
-        parsed["suggestion"].as_str(),
-        Some("Try cargo test --tests")
-    );
+    assert_eq!(snapshot.len(), 0);
+    assert!(acc.dropped_event_types().is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -652,4 +631,273 @@ fn rate_limit_event_routed_into_collected_snapshot() {
     let parsed = snapshot[0].parsed.as_ref().unwrap();
     assert_eq!(parsed["type"].as_str(), Some("rate_limit_event"));
     assert_eq!(parsed["rate_limit_info"]["status"].as_str(), Some("queued"));
+}
+
+#[test]
+fn mark_pending_tools_aborted_flips_claude_live_block() {
+    let mut acc = StreamAccumulator::new("claude", "opus");
+    acc.push_event(
+        &json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "tc1", "name": "Write"}
+            }
+        }),
+        "",
+    );
+    acc.push_event(
+        &json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": "{\"file_path\":\"/a.txt\"}"}
+            }
+        }),
+        "",
+    );
+    acc.push_event(
+        &json!({
+            "type": "stream_event",
+            "event": {"type": "content_block_stop", "index": 0}
+        }),
+        "",
+    );
+    let pre = acc.snapshot("ctx", "sess");
+    assert_eq!(
+        pre[0].parsed.as_ref().unwrap()["message"]["content"][0]["__streaming_status"].as_str(),
+        Some("running"),
+    );
+
+    acc.mark_pending_tools_aborted();
+
+    let post = acc.snapshot("ctx", "sess");
+    assert_eq!(
+        post[0].parsed.as_ref().unwrap()["message"]["content"][0]["__streaming_status"].as_str(),
+        Some("error"),
+    );
+}
+
+#[test]
+fn mark_pending_tools_aborted_flips_codex_collected_tool_use() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+    let started = json!({
+        "type": "item.started",
+        "item": {
+            "type": "command_execution",
+            "id": "item1",
+            "command": "sleep 60",
+        }
+    });
+    acc.push_event(&started, &started.to_string());
+
+    let collected = acc.collected();
+    assert_eq!(collected.len(), 1);
+    let pre_block = &collected[0].parsed.as_ref().unwrap()["message"]["content"][0];
+    assert_eq!(pre_block["__streaming_status"].as_str(), Some("running"));
+
+    acc.mark_pending_tools_aborted();
+
+    let collected = acc.collected();
+    let post_block = &collected[0].parsed.as_ref().unwrap()["message"]["content"][0];
+    assert_eq!(post_block["__streaming_status"].as_str(), Some("error"));
+    // raw_json must be re-serialized to match parsed for historical reload
+    let reparsed: Value = serde_json::from_str(&collected[0].raw_json).unwrap();
+    assert_eq!(
+        reparsed["message"]["content"][0]["__streaming_status"].as_str(),
+        Some("error"),
+    );
+}
+
+#[test]
+fn mark_pending_tools_aborted_no_clobber_when_tool_result_present() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+    let completed = json!({
+        "type": "item.completed",
+        "item": {
+            "type": "command_execution",
+            "id": "item1",
+            "command": "ls",
+            "exit_code": 0,
+            "aggregated_output": "file.txt",
+        }
+    });
+    acc.push_event(&completed, &completed.to_string());
+
+    let running = json!({
+        "type": "item.started",
+        "item": {
+            "type": "command_execution",
+            "id": "item2",
+            "command": "sleep 60",
+        }
+    });
+    acc.push_event(&running, &running.to_string());
+
+    acc.mark_pending_tools_aborted();
+
+    let collected = acc.collected();
+    let asst: Vec<&IntermediateMessage> =
+        collected.iter().filter(|m| m.role == "assistant").collect();
+    assert_eq!(asst.len(), 2);
+
+    let completed_block = &asst[0].parsed.as_ref().unwrap()["message"]["content"][0];
+    assert!(completed_block.get("__streaming_status").is_none());
+
+    let running_block = &asst[1].parsed.as_ref().unwrap()["message"]["content"][0];
+    assert_eq!(running_block["__streaming_status"].as_str(), Some("error"));
+}
+
+#[test]
+fn mark_pending_tools_aborted_is_idempotent_and_safe_with_no_pending_work() {
+    let mut acc = StreamAccumulator::new("claude", "opus");
+
+    acc.mark_pending_tools_aborted();
+    assert_eq!(acc.collected().len(), 0);
+    assert!(acc.snapshot("ctx", "sess").is_empty());
+
+    acc.push_event(
+        &json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "tc1", "name": "Read"}
+            }
+        }),
+        "",
+    );
+    acc.push_event(
+        &json!({
+            "type": "stream_event",
+            "event": {"type": "content_block_stop", "index": 0}
+        }),
+        "",
+    );
+    acc.mark_pending_tools_aborted();
+    let after_first = acc.snapshot("ctx", "sess");
+    let status_after_first = after_first[0].parsed.as_ref().unwrap()["message"]["content"][0]
+        ["__streaming_status"]
+        .as_str()
+        .map(str::to_string);
+    assert_eq!(status_after_first.as_deref(), Some("error"));
+
+    acc.mark_pending_tools_aborted();
+    let after_second = acc.snapshot("ctx", "sess");
+    let status_after_second = after_second[0].parsed.as_ref().unwrap()["message"]["content"][0]
+        ["__streaming_status"]
+        .as_str()
+        .map(str::to_string);
+    assert_eq!(status_after_second, status_after_first);
+}
+
+#[test]
+fn abort_end_to_end_contract() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+
+    let started = json!({
+        "type": "item.started",
+        "item": {
+            "type": "command_execution",
+            "id": "item1",
+            "command": "sleep 60",
+        }
+    });
+    acc.push_event(&started, &started.to_string());
+
+    acc.mark_pending_tools_aborted();
+    acc.flush_pending();
+    acc.append_aborted_notice();
+    let output = acc.drain_output(Some("sess-fallback"));
+
+    let collected = acc.collected();
+    let asst_tool_use = collected
+        .iter()
+        .find(|m| m.role == "assistant")
+        .expect("synthetic Codex tool_use missing");
+    let block = &asst_tool_use.parsed.as_ref().unwrap()["message"]["content"][0];
+    assert_eq!(block["__streaming_status"].as_str(), Some("error"));
+
+    let abort_notice = collected
+        .iter()
+        .find(|m| m.role == "error")
+        .expect("abort notice missing from collected");
+    let parsed = abort_notice.parsed.as_ref().unwrap();
+    assert_eq!(parsed["type"].as_str(), Some("error"));
+    assert_eq!(parsed["content"].as_str(), Some("aborted by user"));
+
+    let found_notice_turn = (0..acc.turns_len()).any(|i| {
+        let t = acc.turn_at(i);
+        t.role == "error" && t.content_json.contains("aborted by user")
+    });
+    assert!(found_notice_turn, "abort notice missing from turns[]");
+
+    assert!(output.assistant_text.is_empty());
+    assert_eq!(output.session_id.as_deref(), Some("sess-fallback"));
+    assert_eq!(output.resolved_model, "gpt-5.4");
+}
+
+#[test]
+fn drain_output_returns_empty_output_when_no_assistant_text() {
+    let mut acc = StreamAccumulator::new("claude", "opus");
+    acc.flush_pending();
+    let output = acc.drain_output(Some("fallback-sess"));
+    assert!(output.assistant_text.is_empty());
+    assert!(output.thinking_text.is_none());
+    assert_eq!(output.session_id.as_deref(), Some("fallback-sess"));
+    assert!(output.result_json.is_none());
+}
+
+/// Regression: notice must land in turns[] AFTER the staged Claude
+/// assistant turn that flush_pending will push. Historical reload sorts
+/// by rowid so the wrong INSERT order surfaces as "aborted by user"
+/// floating above the in-progress assistant message it relates to.
+#[test]
+fn abort_notice_lands_after_flushed_assistant_in_turns() {
+    let mut acc = StreamAccumulator::new("claude", "opus");
+
+    let asst = json!({
+        "type": "assistant",
+        "message": {
+            "id": "msg_tool",
+            "role": "assistant",
+            "content": [{
+                "type": "tool_use",
+                "id": "t1",
+                "name": "Bash",
+                "input": {"command": "sleep 60"}
+            }]
+        }
+    });
+    acc.push_event(&asst, &asst.to_string());
+
+    // Caller's contract: flush BEFORE appending the notice
+    acc.mark_pending_tools_aborted();
+    acc.flush_pending();
+    acc.append_aborted_notice();
+
+    let last = acc.turns_len() - 1;
+    let last_turn = acc.turn_at(last);
+    assert_eq!(last_turn.role, "error");
+    assert!(last_turn.content_json.contains("aborted by user"));
+
+    let prev_turn = acc.turn_at(last - 1);
+    assert_eq!(prev_turn.role, "assistant");
+    assert!(prev_turn.content_json.contains("Bash"));
+}
+
+#[test]
+fn append_aborted_notice_appends_one_per_call() {
+    let mut acc = StreamAccumulator::new("claude", "opus");
+    acc.append_aborted_notice();
+
+    let count_after_one = acc.collected().iter().filter(|m| m.role == "error").count();
+    assert_eq!(count_after_one, 1);
+
+    let turns_after_one = (0..acc.turns_len())
+        .filter(|&i| acc.turn_at(i).role == "error")
+        .count();
+    assert_eq!(turns_after_one, 1);
 }

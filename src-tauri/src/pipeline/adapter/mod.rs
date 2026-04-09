@@ -474,6 +474,14 @@ fn convert_system_msg(msg: &IntermediateMessage, out: &mut Vec<ThreadMessageLike
     let sub = parsed
         .and_then(|p| p.get("subtype"))
         .and_then(Value::as_str);
+    // Apply the same noise filter live ingest uses, so old persisted
+    // rows from earlier code versions render with the new rules. Edit
+    // `pipeline::event_filter` to toggle.
+    if let Some(s) = sub {
+        if super::event_filter::is_suppressed_system_subtype(s) {
+            return;
+        }
+    }
     if let Some(part) = build_subagent_notice(sub, parsed) {
         // Mark with `child:<tool_use_id>:<msg_id>` so the parent-grouping
         // pass folds these notices into the corresponding Task tool
@@ -488,11 +496,6 @@ fn convert_system_msg(msg: &IntermediateMessage, out: &mut Vec<ThreadMessageLike
             notice.id = Some(format!("child:{tool_use_id}:{}", msg.id));
         }
         out.push(notice);
-        return;
-    }
-    // `init` is the session-start banner — kept silent because the
-    // frontend already shows the model picker.
-    if sub == Some("init") {
         return;
     }
     // Subtypes with structured data (compact_boundary, api_retry,
