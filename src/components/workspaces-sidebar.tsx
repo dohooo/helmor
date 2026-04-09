@@ -15,7 +15,6 @@ import {
 	PinOff,
 	Plus,
 	RotateCcw,
-	Search,
 	Trash2,
 } from "lucide-react";
 import {
@@ -44,6 +43,13 @@ import {
 	CollapsibleContent,
 	CollapsibleTrigger,
 } from "./ui/collapsible";
+import {
+	Command,
+	CommandEmpty,
+	CommandGroup,
+	CommandItem,
+	CommandList,
+} from "./ui/command";
 import {
 	ContextMenu,
 	ContextMenuContent,
@@ -626,7 +632,6 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		top: number;
 		left: number;
 	} | null>(null);
-	const viewportRef = useRef<HTMLDivElement | null>(null);
 	const workspaceRowRefs = useRef(new Map<string, HTMLDivElement>());
 	// Cache one ref-callback per workspace id so React does not detach +
 	// re-attach the row DOM ref on every parent render. The previous version
@@ -881,71 +886,52 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 					{isRepoPickerOpen && pickerPos
 						? createPortal(
-								<div
+								<Command
 									ref={repoPickerRef}
-									role="dialog"
 									aria-label="Create workspace from repository"
-									className="fixed z-[9999] w-64 rounded-lg border border-app-border bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10"
+									className="fixed z-[9999] h-auto w-64 rounded-lg border border-app-border bg-popover p-1 shadow-md ring-1 ring-foreground/10"
 									style={{ top: pickerPos.top, left: pickerPos.left }}
+									shouldFilter={false}
 								>
-									<div className="relative">
-										<Search
-											className="pointer-events-none absolute left-2.5 top-1/2 size-3 -translate-y-1/2 text-app-foreground-soft/60"
-											strokeWidth={1.9}
-										/>
-										<input
-											ref={repoSearchInputRef}
-											type="text"
-											value={repoSearchQuery}
-											aria-label="Search repositories"
-											placeholder="Search repositories"
-											onChange={(event) => {
-												setRepoSearchQuery(event.target.value);
-											}}
-											onKeyDown={(event) => {
-												event.stopPropagation();
-											}}
-											className="h-8 w-full rounded-md border border-app-border bg-app-toolbar px-8 text-[12px] font-medium text-app-foreground outline-none placeholder:text-app-foreground-soft/56 focus:border-app-border-strong"
-										/>
-									</div>
-
-									<div className="mt-1 max-h-64 space-y-0.5 overflow-y-auto">
-										{filteredRepositories.length > 0 ? (
-											filteredRepositories.map((repository) => (
-												<button
-													key={repository.id}
-													type="button"
-													className="flex w-full items-center gap-2 rounded-md px-1.5 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
-													onClick={() => {
-														setIsRepoPickerOpen(false);
-														onCreateWorkspace?.(repository.id);
-													}}
-												>
-													<WorkspaceAvatar
-														repoIconSrc={repository.repoIconSrc}
-														repoInitials={repository.repoInitials}
-														repoName={repository.name}
-														title={repository.name}
-													/>
-													<span className="min-w-0 flex-1">
-														<span className="block truncate text-[12px] font-medium text-app-foreground">
-															{repository.name}
-														</span>
-														{repository.defaultBranch ? (
-															<span className="block truncate text-[10px] uppercase tracking-[0.14em] text-app-foreground-soft/52">
-																{repository.defaultBranch}
-															</span>
-														) : null}
-													</span>
-												</button>
-											))
-										) : (
-											<p className="px-1.5 py-2 text-[11px] leading-snug text-app-foreground-soft/60">
+									<CommandList className="max-h-64">
+										{filteredRepositories.length === 0 ? (
+											<CommandEmpty className="py-3 text-[11px] text-app-foreground-soft/60">
 												No repositories found.
-											</p>
+											</CommandEmpty>
+										) : (
+											<CommandGroup>
+												{filteredRepositories.map((repository) => (
+													<CommandItem
+														key={repository.id}
+														value={repository.name}
+														onSelect={() => {
+															setIsRepoPickerOpen(false);
+															onCreateWorkspace?.(repository.id);
+														}}
+														className="gap-2 px-1.5 py-1.5"
+													>
+														<WorkspaceAvatar
+															repoIconSrc={repository.repoIconSrc}
+															repoInitials={repository.repoInitials}
+															repoName={repository.name}
+															title={repository.name}
+														/>
+														<span className="min-w-0 flex-1">
+															<span className="block truncate text-[12px] font-medium text-app-foreground">
+																{repository.name}
+															</span>
+															{repository.defaultBranch ? (
+																<span className="block truncate text-[10px] uppercase tracking-[0.14em] text-app-foreground-soft/52">
+																	{repository.defaultBranch}
+																</span>
+															) : null}
+														</span>
+													</CommandItem>
+												))}
+											</CommandGroup>
 										)}
-									</div>
-								</div>,
+									</CommandList>
+								</Command>,
 								document.body,
 							)
 						: null}
@@ -954,9 +940,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 			<ScrollArea
 				data-slot="workspace-groups-scroll"
-				className="relative mt-4 min-h-0 flex-1 overflow-hidden"
-				viewportRef={viewportRef}
-				viewportClassName="h-full min-w-0 w-full rounded-[inherit] px-2 pr-3"
+				className="relative mt-4 min-h-0 flex-1 overflow-hidden [&_[data-slot=scroll-area-viewport]]:h-full [&_[data-slot=scroll-area-viewport]]:min-w-0 [&_[data-slot=scroll-area-viewport]]:w-full [&_[data-slot=scroll-area-viewport]]:px-2 [&_[data-slot=scroll-area-viewport]]:pr-3"
 			>
 				<div className="flex min-h-full flex-col gap-4 pb-3">
 					{groups

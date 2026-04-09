@@ -21,12 +21,11 @@ export function BaseTooltip({
 }: BaseTooltipProps) {
 	return (
 		<Tooltip>
-			<TooltipTrigger render={children} />
+			<TooltipTrigger asChild>{children}</TooltipTrigger>
 			<TooltipContent
 				side={side}
 				sideOffset={sideOffset}
 				align={align}
-				arrow={false}
 				className={cn(
 					"flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none",
 					className,

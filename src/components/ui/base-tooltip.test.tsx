@@ -9,7 +9,7 @@ describe("BaseTooltip", () => {
 		const user = userEvent.setup();
 
 		render(
-			<TooltipProvider delay={0}>
+			<TooltipProvider delayDuration={0}>
 				<BaseTooltip content={<span>Add repository</span>}>
 					<button type="button">Trigger</button>
 				</BaseTooltip>

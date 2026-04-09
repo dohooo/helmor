@@ -55,6 +55,7 @@
 		"lucide-react": "^1.7.0",
 		"monaco-editor": "^0.55.1",
 		"motion": "^12.38.0",
+		"radix-ui": "^1.4.3",
 		"react": "19.2.0",
 		"react-dom": "19.2.0",
 		"react-loading-skeleton": "^3.5.0",

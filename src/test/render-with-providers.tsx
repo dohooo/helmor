@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
 import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { createHelmorQueryClient } from "@/lib/query-client";
 
 export function renderWithProviders(
@@ -17,7 +18,9 @@ export function renderWithProviders(
 	});
 
 	const wrap = (nextUi: ReactElement) => (
-		<QueryClientProvider client={queryClient}>{nextUi}</QueryClientProvider>
+		<QueryClientProvider client={queryClient}>
+			<TooltipProvider delayDuration={0}>{nextUi}</TooltipProvider>
+		</QueryClientProvider>
 	);
 	const rendered = render(wrap(ui));
 

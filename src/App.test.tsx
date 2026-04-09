@@ -244,7 +244,9 @@ describe("App", () => {
 			},
 		];
 
-		render(<WorkspacesSidebar groups={groups} archivedRows={[]} />);
+		renderWithProviders(
+			<WorkspacesSidebar groups={groups} archivedRows={[]} />,
+		);
 
 		expect(screen.getByText("HC")).toBeInTheDocument();
 	});
@@ -253,7 +255,7 @@ describe("App", () => {
 		const user = userEvent.setup();
 		const onRestoreWorkspace = vi.fn();
 
-		render(
+		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[]}
 				archivedRows={[
@@ -278,7 +280,7 @@ describe("App", () => {
 		const user = userEvent.setup();
 		const onArchiveWorkspace = vi.fn();
 
-		render(
+		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[
 					{
@@ -323,7 +325,7 @@ describe("App", () => {
 			},
 		];
 
-		render(
+		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[]}
 				archivedRows={[]}
@@ -335,10 +337,9 @@ describe("App", () => {
 		await user.click(screen.getByRole("button", { name: "New workspace" }));
 
 		expect(
-			screen.getByRole("dialog", { name: "Create workspace from repository" }),
+			screen.getByLabelText("Create workspace from repository"),
 		).toBeInTheDocument();
 
-		await user.type(screen.getByLabelText("Search repositories"), "dosu");
 		await user.click(screen.getByText("dosu-cli"));
 
 		expect(onCreateWorkspace).toHaveBeenCalledWith("repo-1");
@@ -348,7 +349,7 @@ describe("App", () => {
 		const user = userEvent.setup();
 		const onMarkWorkspaceUnread = vi.fn();
 
-		render(
+		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[
 					{
@@ -383,7 +384,7 @@ describe("App", () => {
 		const user = userEvent.setup();
 		const onMarkWorkspaceUnread = vi.fn();
 
-		render(
+		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[
 					{
@@ -416,7 +417,7 @@ describe("App", () => {
 	});
 
 	it("uses unread emphasis without treating ready rows as selected", () => {
-		render(
+		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[
 					{
@@ -484,7 +485,7 @@ describe("App", () => {
 				],
 			},
 		];
-		const { rerender } = render(
+		const { rerender } = renderWithProviders(
 			<WorkspacesSidebar
 				groups={groups}
 				archivedRows={[]}
@@ -531,7 +532,7 @@ describe("App", () => {
 		];
 
 		try {
-			const { rerender } = render(
+			const { rerender } = renderWithProviders(
 				<WorkspacesSidebar groups={[]} archivedRows={archivedRows} />,
 			);
 
@@ -563,7 +564,7 @@ describe("App", () => {
 		const user = userEvent.setup();
 		const onRestoreWorkspace = vi.fn();
 
-		render(
+		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[]}
 				archivedRows={[
@@ -593,7 +594,7 @@ describe("App", () => {
 		const user = userEvent.setup();
 		const onArchiveWorkspace = vi.fn();
 
-		render(
+		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[
 					{

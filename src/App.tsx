@@ -1604,7 +1604,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	]);
 
 	return (
-		<TooltipProvider delay={0}>
+		<TooltipProvider delayDuration={0}>
 			<ToastProvider swipeDirection="right">
 				<WorkspaceToastProvider value={pushWorkspaceToast}>
 					{!isIdentityConnected ? (

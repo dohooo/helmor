@@ -430,14 +430,12 @@ function InspectorTabsSection({
 						>
 							<TabsTrigger
 								value="setup"
-								variant="line"
 								className="h-9 w-auto gap-0 px-2.5 text-[12px] font-medium text-app-foreground-soft data-[state=active]:border-app-foreground-soft/80 data-[state=active]:bg-transparent data-[state=active]:text-app-foreground"
 							>
 								Setup
 							</TabsTrigger>
 							<TabsTrigger
 								value="run"
-								variant="line"
 								className="h-9 w-auto gap-0 px-2.5 text-[12px] font-medium text-app-foreground-soft data-[state=active]:border-app-foreground-soft/80 data-[state=active]:bg-transparent data-[state=active]:text-app-foreground"
 							>
 								Run
