@@ -51,6 +51,16 @@ export type SlashCommandsListedEvent = {
 	readonly commands: readonly SlashCommandEntry[];
 };
 
+export type PermissionRequestEvent = {
+	readonly id: string;
+	readonly type: "permissionRequest";
+	readonly permissionId: string;
+	readonly toolName: string;
+	readonly toolInput: Record<string, unknown>;
+	readonly title: string | undefined;
+	readonly description: string | undefined;
+};
+
 export type SidecarControlEvent =
 	| ReadyEvent
 	| EndEvent
@@ -59,7 +69,8 @@ export type SidecarControlEvent =
 	| StoppedEvent
 	| PongEvent
 	| TitleGeneratedEvent
-	| SlashCommandsListedEvent;
+	| SlashCommandsListedEvent
+	| PermissionRequestEvent;
 
 /**
  * Typed emitter for the sidecar's stdout protocol.
@@ -83,6 +94,14 @@ export interface SidecarEmitter {
 	slashCommandsListed(
 		requestId: string,
 		commands: readonly SlashCommandEntry[],
+	): void;
+	permissionRequest(
+		requestId: string,
+		permissionId: string,
+		toolName: string,
+		toolInput: Record<string, unknown>,
+		title: string | undefined,
+		description: string | undefined,
 	): void;
 	/**
 	 * Forward a raw provider SDK message. `id` is appended LAST so an SDK
@@ -113,6 +132,23 @@ export function createSidecarEmitter(
 			write({ id: requestId, type: "titleGenerated", title, branchName }),
 		slashCommandsListed: (requestId, commands) =>
 			write({ id: requestId, type: "slashCommandsListed", commands }),
+		permissionRequest: (
+			requestId,
+			permissionId,
+			toolName,
+			toolInput,
+			title,
+			description,
+		) =>
+			write({
+				id: requestId,
+				type: "permissionRequest",
+				permissionId,
+				toolName,
+				toolInput,
+				title,
+				description,
+			}),
 		passthrough: (requestId, message) =>
 			write({ ...(message as Record<string, unknown>), id: requestId }),
 	};

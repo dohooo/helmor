@@ -830,7 +830,7 @@ function ChatThread({
 	const { contentRef, scrollRef, scrollToBottom, stopScroll, isAtBottom } =
 		useStickToBottom({
 			initial: "instant",
-			resize: "instant",
+			resize: "smooth",
 		});
 	const handleScrollRef = useCallback(
 		(element: HTMLElement | null) => {
@@ -914,7 +914,7 @@ function ChatThread({
 				<button
 					type="button"
 					onClick={() => {
-						scrollToBottom();
+						scrollToBottom("instant");
 					}}
 					className={`conversation-scroll-button ${isAtBottom || sendingJustStarted ? "conversation-scroll-button-hidden" : ""}`}
 					aria-label="Scroll to latest message"
@@ -2476,7 +2476,11 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 	);
 }, assistantToolCallPropsEqual);
 
-function ToolCallErrorRow({ result }: { result: unknown }) {
+const ToolCallErrorRow = memo(function ToolCallErrorRow({
+	result,
+}: {
+	result: unknown;
+}) {
 	const error = useMemo(() => extractToolError(result), [result]);
 	const [open, setOpen] = useState(false);
 	if (!error) return null;
@@ -2536,7 +2540,7 @@ function ToolCallErrorRow({ result }: { result: unknown }) {
 			) : null}
 		</details>
 	);
-}
+});
 
 type ToolError = {
 	/** Non-zero exit code parsed from a leading `Exit code N` line (Bash). */

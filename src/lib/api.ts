@@ -1216,6 +1216,14 @@ export type AgentStreamEvent =
 			persisted: boolean;
 			reason: string;
 	  }
+	| {
+			kind: "permissionRequest";
+			permissionId: string;
+			toolName: string;
+			toolInput: Record<string, unknown>;
+			title?: string | null;
+			description?: string | null;
+	  }
 	| { kind: "error"; message: string; persisted: boolean };
 
 /**
@@ -1254,6 +1262,15 @@ export async function stopAgentStream(
 ): Promise<void> {
 	await invoke("stop_agent_stream", {
 		request: { sessionId, provider: provider ?? null },
+	});
+}
+
+export async function respondToPermissionRequest(
+	permissionId: string,
+	behavior: "allow" | "deny",
+): Promise<void> {
+	await invoke("respond_to_permission_request", {
+		request: { permissionId, behavior },
 	});
 }
 

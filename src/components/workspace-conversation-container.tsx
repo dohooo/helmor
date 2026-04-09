@@ -5,6 +5,7 @@
 "use no memo";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, ShieldQuestion, X } from "lucide-react";
 import {
 	memo,
 	useCallback,
@@ -16,6 +17,7 @@ import {
 import type { AgentModelOption, ThreadMessageLike } from "@/lib/api";
 import {
 	generateSessionTitle,
+	respondToPermissionRequest,
 	startAgentMessageStream,
 	stopAgentStream,
 } from "@/lib/api";
@@ -35,6 +37,7 @@ import {
 	findModelOption,
 	getComposerContextKey,
 } from "@/lib/workspace-helpers";
+import { ActionRow, ActionRowButton } from "./action-row";
 import { WorkspaceComposerContainer } from "./workspace-composer-container";
 import { WorkspacePanelContainer } from "./workspace-panel-container";
 
@@ -109,6 +112,15 @@ export const WorkspaceConversationContainer = memo(
 		const [sendingContextKeys, setSendingContextKeys] = useState<Set<string>>(
 			() => new Set(),
 		);
+		const [pendingPermissions, setPendingPermissions] = useState<
+			{
+				permissionId: string;
+				toolName: string;
+				toolInput: Record<string, unknown>;
+				title?: string | null;
+				description?: string | null;
+			}[]
+		>([]);
 		// Map context key → workspace ID so we can report sending workspaces
 		const sendingWorkspaceMapRef = useRef<Map<string, string>>(new Map());
 
@@ -173,6 +185,18 @@ export const WorkspaceConversationContainer = memo(
 
 			void stopAgentStream(activeSession.sessionId, activeSession.provider);
 		}, [activeSessionByContext, composerContextKey]);
+
+		const handlePermissionResponse = useCallback(
+			(permissionId: string, behavior: "allow" | "deny") => {
+				setPendingPermissions((prev) =>
+					prev.filter((p) => p.permissionId !== permissionId),
+				);
+				respondToPermissionRequest(permissionId, behavior).catch((err) =>
+					console.error("[helmor] permission response:", err),
+				);
+			},
+			[],
+		);
 
 		const invalidateConversationQueries = useCallback(
 			async (workspaceId: string | null, sessionId: string | null) => {
@@ -416,15 +440,28 @@ export const WorkspaceConversationContainer = memo(
 								return;
 							}
 
+							if (event.kind === "permissionRequest") {
+								setPendingPermissions((prev) => [
+									...prev,
+									{
+										permissionId: event.permissionId,
+										toolName: event.toolName,
+										toolInput: event.toolInput,
+										title: event.title,
+										description: event.description,
+									},
+								]);
+								return;
+							}
+
 							if (event.kind === "done" || event.kind === "aborted") {
-								// Shared terminal teardown. `aborted` skips the error
-								// toast below because the user triggered the stop.
 								if (frameId !== null) {
 									window.cancelAnimationFrame(frameId);
 									frameId = null;
 								}
 								flushStreamMessages();
 								cleanup();
+								setPendingPermissions([]);
 
 								// Refresh file changes — agent likely modified files
 								void queryClient.invalidateQueries({
@@ -467,6 +504,7 @@ export const WorkspaceConversationContainer = memo(
 
 							if (event.kind === "error") {
 								cleanup();
+								setPendingPermissions([]);
 								setSendErrorsByContext((current) => ({
 									...current,
 									[contextKey]: event.message,
@@ -613,6 +651,66 @@ export const WorkspaceConversationContainer = memo(
 
 				<div className="mt-auto px-4 pb-4 pt-0">
 					<div>
+						{pendingPermissions.map((perm) => {
+							const action = perm.toolName || "Tool";
+							const target =
+								typeof perm.toolInput?.file_path === "string"
+									? perm.toolInput.file_path
+									: typeof perm.toolInput?.command === "string"
+										? perm.toolInput.command
+										: null;
+							const label =
+								perm.title ??
+								(perm.description ? `${action}: ${perm.description}` : null);
+							return (
+								<ActionRow
+									key={perm.permissionId}
+									className="relative z-10 mx-auto -mb-px w-[90%] rounded-t-[14px]"
+									leading={
+										<>
+											<ShieldQuestion
+												className="size-3.5 shrink-0 text-app-foreground-soft/60"
+												strokeWidth={1.8}
+												aria-hidden="true"
+											/>
+											<span className="truncate text-[12px] font-medium tracking-[0.01em] text-app-foreground-soft/72">
+												{label ?? (
+													<>
+														<span className="font-semibold">{action}</span>
+														{target && (
+															<span className="ml-1.5 text-app-foreground-soft/50">
+																{target}
+															</span>
+														)}
+													</>
+												)}
+											</span>
+										</>
+									}
+									trailing={
+										<>
+											<ActionRowButton
+												onClick={() =>
+													handlePermissionResponse(perm.permissionId, "deny")
+												}
+											>
+												<X className="size-[11px]" strokeWidth={2} />
+												Deny
+											</ActionRowButton>
+											<ActionRowButton
+												active
+												onClick={() =>
+													handlePermissionResponse(perm.permissionId, "allow")
+												}
+											>
+												<Check className="size-[11px]" strokeWidth={2} />
+												Allow
+											</ActionRowButton>
+										</>
+									}
+								/>
+							);
+						})}
 						<WorkspaceComposerContainer
 							displayedWorkspaceId={displayedWorkspaceId}
 							displayedSessionId={displayedSessionId}

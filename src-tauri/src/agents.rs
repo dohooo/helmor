@@ -53,6 +53,16 @@ pub enum AgentStreamEvent {
         persisted: bool,
         reason: String,
     },
+    PermissionRequest {
+        #[serde(rename = "permissionId")]
+        permission_id: String,
+        #[serde(rename = "toolName")]
+        tool_name: String,
+        #[serde(rename = "toolInput")]
+        tool_input: Value,
+        title: Option<String>,
+        description: Option<String>,
+    },
     Error {
         message: String,
         persisted: bool,
@@ -406,6 +416,36 @@ pub async fn stop_agent_stream(
     sidecar
         .send(&stop_req)
         .map_err(|e| anyhow::anyhow!("Failed to stop session: {e}"))?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionResponseRequest {
+    pub permission_id: String,
+    pub behavior: String,
+}
+
+#[tauri::command]
+pub async fn respond_to_permission_request(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    request: PermissionResponseRequest,
+) -> CmdResult<()> {
+    eprintln!(
+        "[agents] Permission response: id={} behavior={}",
+        request.permission_id, request.behavior
+    );
+    let req = crate::sidecar::SidecarRequest {
+        id: Uuid::new_v4().to_string(),
+        method: "permissionResponse".to_string(),
+        params: serde_json::json!({
+            "permissionId": request.permission_id,
+            "behavior": request.behavior,
+        }),
+    };
+    sidecar
+        .send(&req)
+        .map_err(|e| anyhow::anyhow!("Failed to send permission response: {e}"))?;
     Ok(())
 }
 
@@ -1080,6 +1120,47 @@ fn stream_via_sidecar(
                         })
                     };
                     break;
+                }
+                "permissionRequest" => {
+                    let permission_id = event
+                        .raw
+                        .get("permissionId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let tool_name = event
+                        .raw
+                        .get("toolName")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let tool_input = event
+                        .raw
+                        .get("toolInput")
+                        .cloned()
+                        .unwrap_or(Value::Object(Default::default()));
+                    let title = event
+                        .raw
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let description = event
+                        .raw
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    if debug {
+                        eprintln!(
+                            "[agents:debug] [{rid}] Permission request: tool={tool_name} id={permission_id}"
+                        );
+                    }
+                    let _ = on_event.send(AgentStreamEvent::PermissionRequest {
+                        permission_id,
+                        tool_name,
+                        tool_input,
+                        title,
+                        description,
+                    });
                 }
                 "error" => {
                     let msg = event
