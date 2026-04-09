@@ -1,4 +1,5 @@
 import path from "node:path";
+import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
@@ -15,7 +16,13 @@ const WATCH_IGNORED = [
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-	plugins: [react(), tailwindcss()],
+	plugins: [
+		react(),
+		babel({
+			plugins: [["babel-plugin-react-compiler", {}]],
+		}),
+		tailwindcss(),
+	],
 	resolve: {
 		dedupe: ["react", "react-dom"],
 		alias: {

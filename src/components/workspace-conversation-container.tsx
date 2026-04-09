@@ -1,3 +1,9 @@
+// React Compiler opt-out: this file has an intentional render-phase ref
+// mutation + setState-during-render pattern (see ~line 117) that the
+// compiler's rules-of-react check rejects. The pattern is documented as
+// intentional and StrictMode-safe in situ.
+"use no memo";
+
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	memo,
