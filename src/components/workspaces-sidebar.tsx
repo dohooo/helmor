@@ -932,7 +932,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 															{repository.name}
 														</span>
 														{repository.defaultBranch ? (
-															<span className="block truncate text-[10px] uppercase tracking-[0.14em] text-app-foreground-soft/52">
+															<span className="block truncate text-[10px] text-app-foreground-soft/52">
 																{repository.defaultBranch}
 															</span>
 														) : null}

@@ -375,7 +375,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 									"capitalize",
 									effectiveEffort === "max" || effectiveEffort === "xhigh"
 										? "effort-max-text"
-										: "text-violet-400",
+										: "text-app-foreground-soft",
 								)}
 							>
 								{effectiveEffort === "xhigh" ? "Extra High" : effectiveEffort}
@@ -412,7 +412,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											</span>
 										</div>
 										{level === effectiveEffort ? (
-											<span className="text-[11px] text-violet-400">✓</span>
+											<span className="text-[11px] text-app-foreground">✓</span>
 										) : null}
 									</DropdownMenuItem>
 								))}
@@ -424,10 +424,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						aria-label="Plan mode"
 						disabled={disabled}
 						className={cn(
-							"gap-1.5 rounded-md px-2 py-0.5 text-[13px] font-medium transition-colors",
+							"gap-1.5 rounded-full px-2 py-0.5 text-[13px] font-medium transition-colors",
 							permissionMode === "plan"
-								? "text-[#48968c] ring-1 ring-[#48968c]/40 hover:text-[#48968c]"
-								: "text-app-muted/50 hover:text-app-muted",
+								? "bg-app-foreground/[0.08] text-app-foreground hover:bg-app-foreground/[0.12]"
+								: "text-app-muted/55 hover:bg-app-foreground/[0.04] hover:text-app-muted",
 						)}
 						onClick={onTogglePlanMode}
 					>
