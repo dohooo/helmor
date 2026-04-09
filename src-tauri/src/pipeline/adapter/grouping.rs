@@ -203,6 +203,46 @@ fn group_child_messages_under_parent(msgs: Vec<ThreadMessageLike>) -> Vec<Thread
     out
 }
 
+/// If the input contains an abort notice row, fill `result` on every
+/// unresolved Agent/Task ToolCall so frontend's `isRunning` is false.
+pub(super) fn settle_aborted_tool_calls(
+    input: &[IntermediateMessage],
+    out: &mut [ThreadMessageLike],
+) {
+    let aborted = input.iter().any(|m| {
+        m.role == "error"
+            && m.parsed
+                .as_ref()
+                .and_then(|p| p.get("content").and_then(Value::as_str))
+                .is_some_and(|c| c == "aborted by user")
+    });
+    if !aborted {
+        return;
+    }
+    for msg in out.iter_mut() {
+        settle_agent_results(&mut msg.content);
+    }
+}
+
+fn settle_agent_results(parts: &mut [ExtendedMessagePart]) {
+    for part in parts.iter_mut() {
+        let ExtendedMessagePart::Basic(MessagePart::ToolCall {
+            tool_name,
+            result,
+            children,
+            ..
+        }) = part
+        else {
+            continue;
+        };
+        if super::AGENT_TOOL_NAMES.contains(&tool_name.as_str()) && result.is_none() {
+            // Empty string makes isRunning=false without rendering text.
+            *result = Some(Value::String(String::new()));
+        }
+        settle_agent_results(children);
+    }
+}
+
 pub(super) fn merge_adjacent_assistants(msgs: Vec<ThreadMessageLike>) -> Vec<ThreadMessageLike> {
     let mut out: Vec<ThreadMessageLike> = Vec::new();
 

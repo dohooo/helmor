@@ -1124,3 +1124,118 @@ fn subagent_prompt_with_no_text_content_is_dropped() {
         "empty user payload should not produce a Prompt tool call"
     );
 }
+
+// settle detects abort_notice → fills Agent/Task result so isRunning=false
+#[test]
+fn settle_fills_agent_result_when_abort_notice_present() {
+    let asst = im(
+        "asst1",
+        "assistant",
+        json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tc1",
+                    "name": "Task",
+                    "input": {"description": "x", "subagent_type": "Explore"}
+                }]
+            }
+        }),
+    );
+    let notice = im(
+        "err1",
+        "error",
+        json!({"type": "error", "content": "aborted by user"}),
+    );
+
+    let out = convert(&[asst, notice]);
+    let result = out
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .find_map(|p| match p {
+            ExtendedMessagePart::Basic(MessagePart::ToolCall {
+                tool_name, result, ..
+            }) if tool_name == "Task" => Some(result.clone()),
+            _ => None,
+        })
+        .expect("expected a Task ToolCall");
+    assert!(
+        result.is_some(),
+        "Task result must be non-null after settle"
+    );
+}
+
+// settle does NOT touch non-Agent tools
+#[test]
+fn settle_leaves_regular_tools_alone() {
+    let asst = im(
+        "asst1",
+        "assistant",
+        json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tc1",
+                    "name": "Bash",
+                    "input": {"command": "sleep 60"}
+                }]
+            }
+        }),
+    );
+    let notice = im(
+        "err1",
+        "error",
+        json!({"type": "error", "content": "aborted by user"}),
+    );
+
+    let out = convert(&[asst, notice]);
+    let result = out
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .find_map(|p| match p {
+            ExtendedMessagePart::Basic(MessagePart::ToolCall { result, .. }) => {
+                Some(result.clone())
+            }
+            _ => None,
+        })
+        .expect("expected a ToolCall");
+    assert!(result.is_none(), "regular tool result must stay null");
+}
+
+// no abort_notice → settle is a no-op
+#[test]
+fn settle_noop_without_abort_notice() {
+    let asst = im(
+        "asst1",
+        "assistant",
+        json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tc1",
+                    "name": "Task",
+                    "input": {"description": "x"}
+                }]
+            }
+        }),
+    );
+
+    let out = convert(&[asst]);
+    let result = out
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .find_map(|p| match p {
+            ExtendedMessagePart::Basic(MessagePart::ToolCall { result, .. }) => {
+                Some(result.clone())
+            }
+            _ => None,
+        })
+        .expect("expected a ToolCall");
+    assert!(result.is_none(), "no abort → result stays null");
+}

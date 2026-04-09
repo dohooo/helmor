@@ -32,7 +32,10 @@ use blocks::{
     assistant_has_recognized_blocks, late_merge_unresolved_tool_results, merge_tool_results,
     merge_tool_results_extended, parse_assistant_parts,
 };
-use grouping::{convert_user_message, group_child_messages, merge_adjacent_assistants};
+use grouping::{
+    convert_user_message, group_child_messages, merge_adjacent_assistants,
+    settle_aborted_tool_calls,
+};
 use labels::{
     build_error_label, build_rate_limit_notice, build_result_label, build_subagent_notice,
     build_system_label, build_system_notice, extract_fallback, make_system, make_system_notice,
@@ -50,15 +53,13 @@ use super::types::{
 /// Convert intermediate messages into rendered thread messages.
 pub fn convert(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
     let flat = convert_flat(messages);
-    // Fast path: a single message can't have children to group or
-    // adjacent assistants to merge — skip both passes and their
-    // allocations.  Hot during streaming (emit_partial calls us with
-    // exactly one message ~100 times/sec).
     if flat.len() <= 1 {
         return flat;
     }
     let grouped = group_child_messages(flat);
-    merge_adjacent_assistants(grouped)
+    let mut merged = merge_adjacent_assistants(grouped);
+    settle_aborted_tool_calls(messages, &mut merged);
+    merged
 }
 
 /// Convert historical DB records into rendered thread messages.

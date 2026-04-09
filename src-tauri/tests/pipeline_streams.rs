@@ -308,10 +308,7 @@ fn stream_replay() {
         // Mirror the persistence-side finalization that agents.rs runs after
         // the stream loop — this flushes the staged final assistant turn
         // into `accumulator.turns`, which the snapshot below reads.
-        let _ = pipeline
-            .accumulator
-            .finish_output(Some("test-session"))
-            .ok();
+        pipeline.accumulator.flush_pending();
         let persisted_turns = build_persisted_snapshot(&pipeline);
         let historical_render = build_historical_snapshot(&pipeline);
 

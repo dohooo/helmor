@@ -834,6 +834,15 @@ fn abort_end_to_end_contract() {
     });
     assert!(found_notice_turn, "abort notice missing from turns[]");
 
+    // No synthetic user-role tool_result rows — we used to push these but
+    // they polluted adapter::convert_user_type_msg's lookahead. The
+    // adapter settle pass fills ToolCall.result downstream instead.
+    let synthetic_user_count = collected
+        .iter()
+        .filter(|m| m.role == "user" && m.id.starts_with("abort-tr:"))
+        .count();
+    assert_eq!(synthetic_user_count, 0);
+
     assert!(output.assistant_text.is_empty());
     assert_eq!(output.session_id.as_deref(), Some("sess-fallback"));
     assert_eq!(output.resolved_model, "gpt-5.4");

@@ -138,8 +138,6 @@ fn assistant_error_message(category: &str) -> String {
     .to_string()
 }
 
-/// Flip an in-flight tool_use block to `error` if its id has no
-/// matching tool_result. Returns `true` when mutated.
 fn patch_tool_use_block(block: &mut Value, resolved: &HashSet<String>) -> bool {
     let Some(obj) = block.as_object_mut() else {
         return false;
@@ -151,13 +149,14 @@ fn patch_tool_use_block(block: &mut Value, resolved: &HashSet<String>) -> bool {
     ) {
         return false;
     }
-    if let Some(id) = obj.get("id").and_then(Value::as_str) {
-        if resolved.contains(id) {
-            return false;
-        }
+    let Some(id) = obj.get("id").and_then(Value::as_str) else {
+        return false;
+    };
+    if resolved.contains(id) {
+        return false;
     }
     let current = obj.get("__streaming_status").and_then(Value::as_str);
-    if !matches!(current, Some("pending" | "streaming_input" | "running")) {
+    if matches!(current, Some("done" | "error")) {
         return false;
     }
     obj.insert(
@@ -461,10 +460,11 @@ impl StreamAccumulator {
         self.result_json.as_deref()
     }
 
-    /// Reclassify any in-flight tool_use as `error` so the spinner stops
-    /// after a user abort. Walks live blocks, staged Claude blocks, and
-    /// collected[] (where Codex puts its in-flight items). Tool_uses with
-    /// a matching tool_result are left alone.
+    /// Reclassify any in-flight tool_use as `error` so the adapter's
+    /// settle pass can fill `result = "aborted by user"` and the
+    /// frontend stops the spinner. Walks live Claude blocks, staged
+    /// blocks, and collected[] (where Codex synthetic items live).
+    /// Tool_uses with a matching tool_result are left alone.
     pub fn mark_pending_tools_aborted(&mut self) {
         let resolved_ids = self.collect_resolved_tool_use_ids();
 

@@ -70,6 +70,11 @@ import {
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
+
+function isLiveStreamingStatus(s: string | undefined): boolean {
+	return s === "pending" || s === "streaming_input" || s === "running";
+}
+
 import { HelmorProfiler } from "@/lib/dev-react-profiler";
 import { recordMessageRender } from "@/lib/dev-render-debug";
 import { estimateThreadRowHeights } from "@/lib/message-layout-estimator";
@@ -2309,10 +2314,7 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 	// branch returns `body`, so there's no precedence ambiguity.
 	const resultText = hasChildren ? null : (info.body ?? resultStr);
 	const hasOutput = resultText != null && resultText.length > 5;
-	const isLiveTool =
-		streamingStatus === "pending" ||
-		streamingStatus === "streaming_input" ||
-		streamingStatus === "running";
+	const isLiveTool = isLiveStreamingStatus(streamingStatus);
 	// Default expanded state is captured once at mount via useState init —
 	// no effect needed because tool calls only progress forward (live tools
 	// stay live until completion, completed tools never go back to live).
@@ -2320,21 +2322,14 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 	// streaming regardless of user toggles.
 	const [isOpen, setIsOpen] = useState(isLiveTool);
 
-	// Streaming status indicator
-	const statusIndicator =
-		streamingStatus === "pending" || streamingStatus === "streaming_input" ? (
-			<LoaderCircle
-				className="size-3 animate-spin text-app-muted/50"
-				strokeWidth={2}
-			/>
-		) : streamingStatus === "running" ? (
-			<LoaderCircle
-				className="size-3 animate-spin text-app-progress"
-				strokeWidth={2}
-			/>
-		) : streamingStatus === "error" ? (
-			<AlertCircle className="size-3 text-app-negative" strokeWidth={2} />
-		) : null;
+	const statusIndicator = isLiveTool ? (
+		<LoaderCircle
+			className="size-3 animate-spin text-app-muted/50"
+			strokeWidth={2}
+		/>
+	) : streamingStatus === "error" ? (
+		<AlertCircle className="size-3 text-app-negative" strokeWidth={2} />
+	) : null;
 
 	const toolLine = (
 		<>
@@ -2698,7 +2693,8 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 	parts,
 }: AgentChildrenBlockProps) {
 	const [expanded, setExpanded] = useState(false);
-	const streaming = !!streamingStatus || !!isRunning;
+	const isLive = isLiveStreamingStatus(streamingStatus);
+	const streaming = isLive || (!streamingStatus && !!isRunning);
 	const info = getToolInfo(toolName, toolArgs);
 
 	// Filter down to tool-call parts so text/reasoning/todo don't
@@ -2752,7 +2748,7 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 				) : null}
 				{streaming ? (
 					<LoaderCircle
-						className="size-3 animate-spin text-app-progress"
+						className="size-3 animate-spin text-app-muted/50"
 						strokeWidth={2}
 					/>
 				) : null}

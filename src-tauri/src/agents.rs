@@ -987,10 +987,17 @@ fn stream_via_sidecar(
                     let mut resolved_model = model_copy.cli_model.to_string();
 
                     if let Some(mut pl) = pipeline.take() {
-                        // Must finalize accumulator BEFORE reading turns_len —
-                        // finish_output flushes the staged final assistant turn.
-                        let output_result =
-                            pl.accumulator.finish_output(resolved_session_id.as_deref());
+                        if is_aborted {
+                            pl.accumulator.mark_pending_tools_aborted();
+                        }
+
+                        // flush BEFORE notice so historical reload (rowid order)
+                        // shows the notice after the in-progress assistant turn.
+                        pl.accumulator.flush_pending();
+
+                        if is_aborted {
+                            pl.accumulator.append_aborted_notice();
+                        }
 
                         if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
                             let model_str = pl.accumulator.resolved_model().to_string();
@@ -1012,10 +1019,29 @@ fn stream_via_sidecar(
                             }
                         }
 
-                        if let Ok(output) = output_result {
+                        if is_aborted {
+                            let final_messages = pl.finish();
+                            let _ = on_event.send(AgentStreamEvent::Update {
+                                messages: final_messages,
+                            });
+                        }
+
+                        let output = pl.accumulator.drain_output(resolved_session_id.as_deref());
+                        if !output.assistant_text.is_empty() {
                             resolved_model = output.resolved_model.clone();
-                            if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
-                                if let Err(e) = persist_result_and_finalize(
+                        }
+                        if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
+                            // abort skips the result row — no usage/duration to show
+                            let persistence_result = if is_aborted {
+                                finalize_session_metadata(
+                                    conn,
+                                    ctx,
+                                    status,
+                                    effort_copy.as_deref(),
+                                    permission_mode_copy.as_deref(),
+                                )
+                            } else {
+                                persist_result_and_finalize(
                                     conn,
                                     ctx,
                                     &output.resolved_model,
@@ -1025,9 +1051,10 @@ fn stream_via_sidecar(
                                     &output.usage,
                                     output.result_json.as_deref(),
                                     status,
-                                ) {
-                                    eprintln!("[agents] Failed to finalize exchange: {e}");
-                                }
+                                )
+                            };
+                            if let Err(e) = persistence_result {
+                                eprintln!("[agents] Failed to finalize exchange: {e}");
                             }
                         }
                     }
@@ -1134,7 +1161,7 @@ fn parse_claude_output(
     stdout: &str,
     fallback_session_id: Option<&str>,
     fallback_model: &str,
-) -> Result<crate::pipeline::types::ParsedAgentOutput> {
+) -> crate::pipeline::types::ParsedAgentOutput {
     let mut accumulator =
         crate::pipeline::accumulator::StreamAccumulator::new("claude", fallback_model);
     for line in stdout
@@ -1147,7 +1174,8 @@ fn parse_claude_output(
         };
         accumulator.push_event(&value, line);
     }
-    accumulator.finish_output(fallback_session_id)
+    accumulator.flush_pending();
+    accumulator.drain_output(fallback_session_id)
 }
 
 #[cfg(test)]
@@ -1155,7 +1183,7 @@ fn parse_codex_output(
     stdout: &str,
     fallback_session_id: Option<&str>,
     fallback_model: &str,
-) -> Result<crate::pipeline::types::ParsedAgentOutput> {
+) -> crate::pipeline::types::ParsedAgentOutput {
     let mut accumulator =
         crate::pipeline::accumulator::StreamAccumulator::new("codex", fallback_model);
     for line in stdout
@@ -1168,7 +1196,8 @@ fn parse_codex_output(
         };
         accumulator.push_event(&value, line);
     }
-    accumulator.finish_output(fallback_session_id)
+    accumulator.flush_pending();
+    accumulator.drain_output(fallback_session_id)
 }
 
 pub(crate) fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf> {
@@ -1263,9 +1292,8 @@ fn persist_turn_message(
     Ok(msg_id)
 }
 
-/// Persist the result summary and finalize session/workspace metadata at
-/// stream termination. Does **not** touch `provider_session_id` — that's
-/// written incrementally in the event loop on the first session_id event.
+/// Insert the result summary row + run the session/workspace metadata
+/// updates. Used by the normal completion path.
 #[allow(clippy::too_many_arguments)]
 fn persist_result_and_finalize(
     conn: &Connection,
@@ -1315,6 +1343,54 @@ fn persist_result_and_finalize(
         ],
     )?;
 
+    finalize_session_metadata_in_transaction(
+        &transaction,
+        ctx,
+        &now,
+        status,
+        effort_level,
+        permission_mode,
+    )?;
+
+    transaction
+        .commit()
+        .context("Failed to commit result and finalize transaction")
+}
+
+/// Update session.status / workspace / read marker without inserting a
+/// result row. Used by the abort path — abort doesn't have meaningful
+/// usage/duration data, so a result row would render as the misleading
+/// "Done" label via build_result_label.
+fn finalize_session_metadata(
+    conn: &Connection,
+    ctx: &ExchangeContext,
+    status: &str,
+    effort_level: Option<&str>,
+    permission_mode: Option<&str>,
+) -> Result<()> {
+    let now = current_timestamp_string()?;
+    let transaction = conn.unchecked_transaction()?;
+    finalize_session_metadata_in_transaction(
+        &transaction,
+        ctx,
+        &now,
+        status,
+        effort_level,
+        permission_mode,
+    )?;
+    transaction
+        .commit()
+        .context("Failed to commit finalize_session_metadata transaction")
+}
+
+fn finalize_session_metadata_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    ctx: &ExchangeContext,
+    now: &str,
+    status: &str,
+    effort_level: Option<&str>,
+    permission_mode: Option<&str>,
+) -> Result<()> {
     transaction.execute(
         r#"
             UPDATE sessions
@@ -1348,11 +1424,8 @@ fn persist_result_and_finalize(
         params![ctx.helmor_session_id, ctx.helmor_session_id],
     )?;
 
-    mark_session_read_in_transaction(&transaction, &ctx.helmor_session_id)?;
-
-    transaction
-        .commit()
-        .context("Failed to commit result and finalize transaction")
+    mark_session_read_in_transaction(transaction, &ctx.helmor_session_id)?;
+    Ok(())
 }
 
 fn open_write_connection() -> Result<Connection> {
@@ -1400,7 +1473,7 @@ mod tests {
             {"type":"result","result":"Hello world","session_id":"sess-123","usage":{"input_tokens":10,"output_tokens":5}}
         "#;
 
-        let output = parse_claude_output(stdout, None, "opus").unwrap();
+        let output = parse_claude_output(stdout, None, "opus");
         assert_eq!(output.assistant_text, "Hello world");
         assert_eq!(output.session_id.as_deref(), Some("sess-123"));
         assert_eq!(output.usage.input_tokens, Some(10));
@@ -1415,7 +1488,7 @@ mod tests {
             {"type":"result","result":"Answer","usage":{}}
         "#;
 
-        let output = parse_claude_output(stdout, None, "opus").unwrap();
+        let output = parse_claude_output(stdout, None, "opus");
         assert_eq!(output.assistant_text, "Answer");
         assert_eq!(output.thinking_text.as_deref(), Some("Let me think..."));
     }
@@ -1427,15 +1500,16 @@ mod tests {
             {"type":"result","result":"Hi","usage":{}}
         "#;
 
-        let output = parse_claude_output(stdout, Some("fallback-id"), "opus").unwrap();
+        let output = parse_claude_output(stdout, Some("fallback-id"), "opus");
         assert_eq!(output.session_id.as_deref(), Some("fallback-id"));
     }
 
     #[test]
-    fn parse_claude_output_fails_on_empty_text() {
+    fn parse_claude_output_returns_empty_text_on_no_assistant_content() {
         let stdout = r#"{"type":"result","result":"","usage":{}}"#;
-        let result = parse_claude_output(stdout, None, "opus");
-        assert!(result.is_err());
+        let output = parse_claude_output(stdout, None, "opus");
+        assert!(output.assistant_text.is_empty());
+        assert!(output.thinking_text.is_none());
     }
 
     #[test]
@@ -1445,7 +1519,7 @@ mod tests {
             {"type":"result","result":"Hi","usage":{}}
         "#;
 
-        let output = parse_claude_output(stdout, None, "opus").unwrap();
+        let output = parse_claude_output(stdout, None, "opus");
         assert_eq!(output.resolved_model, "claude-opus-4-20250514");
     }
 
@@ -1461,7 +1535,7 @@ mod tests {
             {"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":20}}
         "#;
 
-        let output = parse_codex_output(stdout, None, "gpt-5.4").unwrap();
+        let output = parse_codex_output(stdout, None, "gpt-5.4");
         assert_eq!(output.assistant_text, "Hello from Codex");
         assert_eq!(output.session_id.as_deref(), Some("thread-abc"));
         assert_eq!(output.usage.input_tokens, Some(100));
@@ -1476,15 +1550,16 @@ mod tests {
             {"type":"turn.completed","usage":{}}
         "#;
 
-        let output = parse_codex_output(stdout, None, "gpt-5.4").unwrap();
+        let output = parse_codex_output(stdout, None, "gpt-5.4");
         assert_eq!(output.session_id.as_deref(), Some("thread-xyz"));
     }
 
     #[test]
-    fn parse_codex_output_fails_on_empty() {
+    fn parse_codex_output_returns_empty_text_on_no_agent_message() {
         let stdout = r#"{"type":"thread.started","thread_id":"t1"}"#;
-        let result = parse_codex_output(stdout, None, "gpt-5.4");
-        assert!(result.is_err());
+        let output = parse_codex_output(stdout, None, "gpt-5.4");
+        assert!(output.assistant_text.is_empty());
+        assert_eq!(output.session_id.as_deref(), Some("t1"));
     }
 
     #[test]
@@ -1495,7 +1570,7 @@ mod tests {
             {"type":"turn.completed","usage":{}}
         "#;
 
-        let output = parse_codex_output(stdout, None, "gpt-5.4").unwrap();
+        let output = parse_codex_output(stdout, None, "gpt-5.4");
         assert!(output.assistant_text.contains("Part 1"));
         assert!(output.assistant_text.contains("Part 2"));
     }
@@ -1526,7 +1601,7 @@ mod tests {
             {"type":"turn.completed","usage":{"input_tokens":50,"output_tokens":10}}
         "#;
 
-        let output = parse_codex_output(stdout, None, "gpt-5.4").unwrap();
+        let output = parse_codex_output(stdout, None, "gpt-5.4");
         // Assistant text should combine all agent_message texts
         assert!(output.assistant_text.contains("Hello"));
         assert!(output.assistant_text.contains("Done"));
