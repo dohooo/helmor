@@ -142,7 +142,7 @@ function ToolbarButton({
 			type="button"
 			aria-label={label}
 			className={cn(
-				"flex size-7 cursor-pointer items-center justify-center bg-transparent text-app-foreground-soft/72 transition-colors hover:bg-transparent hover:text-app-foreground focus-visible:text-app-foreground",
+				"flex size-6 cursor-pointer items-center justify-center rounded-[3px] bg-transparent p-0 text-app-foreground-soft/72 transition-colors hover:bg-transparent hover:text-app-foreground focus-visible:text-app-foreground",
 				className,
 			)}
 		>
@@ -729,7 +729,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		const anchor = repoPickerAnchorRef.current;
 		if (!anchor) return;
 		const rect = anchor.getBoundingClientRect();
-		const popoverWidth = 296; // 18.5rem
+		const popoverWidth = 256;
 		let left = rect.right - popoverWidth;
 		if (left < 4) left = 4;
 		setPickerPos({ top: rect.bottom + 8, left });
@@ -839,11 +839,11 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						>
 							{addRepositoryBusy ? (
 								<LoaderCircle
-									className="size-3.5 animate-spin"
+									className="size-3 animate-spin"
 									strokeWidth={2.1}
 								/>
 							) : (
-								<FolderPlus className="size-3.5" strokeWidth={2} />
+								<FolderPlus className="size-3" strokeWidth={2} />
 							)}
 						</ToolbarButton>
 					</BaseTooltip>
@@ -870,11 +870,11 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						>
 							{createBusy ? (
 								<LoaderCircle
-									className="size-3.5 animate-spin"
+									className="size-3 animate-spin"
 									strokeWidth={2.1}
 								/>
 							) : (
-								<Plus className="size-3.5" strokeWidth={2.4} />
+								<Plus className="size-3" strokeWidth={2.4} />
 							)}
 						</ToolbarButton>
 					</BaseTooltip>
@@ -885,12 +885,12 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 									ref={repoPickerRef}
 									role="dialog"
 									aria-label="Create workspace from repository"
-									className="fixed z-[9999] w-[18.5rem] rounded-[14px] border border-app-border bg-app-sidebar px-2 py-2 shadow-[0_18px_48px_rgba(0,0,0,0.38)]"
+									className="fixed z-[9999] w-64 rounded-lg border border-app-border bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10"
 									style={{ top: pickerPos.top, left: pickerPos.left }}
 								>
 									<div className="relative">
 										<Search
-											className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-app-foreground-soft/60"
+											className="pointer-events-none absolute left-2.5 top-1/2 size-3 -translate-y-1/2 text-app-foreground-soft/60"
 											strokeWidth={1.9}
 										/>
 										<input
@@ -905,17 +905,17 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 											onKeyDown={(event) => {
 												event.stopPropagation();
 											}}
-											className="h-9 w-full rounded-full border border-app-border bg-app-toolbar px-9 text-[13px] font-medium text-app-foreground outline-none placeholder:text-app-foreground-soft/56 focus:border-app-border-strong"
+											className="h-8 w-full rounded-md border border-app-border bg-app-toolbar px-8 text-[12px] font-medium text-app-foreground outline-none placeholder:text-app-foreground-soft/56 focus:border-app-border-strong"
 										/>
 									</div>
 
-									<div className="mt-2 max-h-72 space-y-1 overflow-y-auto pr-1">
+									<div className="mt-1 max-h-64 space-y-0.5 overflow-y-auto">
 										{filteredRepositories.length > 0 ? (
 											filteredRepositories.map((repository) => (
 												<button
 													key={repository.id}
 													type="button"
-													className="flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition-colors hover:bg-app-row-hover"
+													className="flex w-full items-center gap-2 rounded-md px-1.5 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
 													onClick={() => {
 														setIsRepoPickerOpen(false);
 														onCreateWorkspace?.(repository.id);
@@ -928,11 +928,11 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 														title={repository.name}
 													/>
 													<span className="min-w-0 flex-1">
-														<span className="block truncate text-[13px] font-medium text-app-foreground">
+														<span className="block truncate text-[12px] font-medium text-app-foreground">
 															{repository.name}
 														</span>
 														{repository.defaultBranch ? (
-															<span className="block truncate text-[11px] uppercase tracking-[0.14em] text-app-foreground-soft/52">
+															<span className="block truncate text-[10px] uppercase tracking-[0.14em] text-app-foreground-soft/52">
 																{repository.defaultBranch}
 															</span>
 														) : null}
@@ -940,7 +940,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 												</button>
 											))
 										) : (
-											<p className="px-2 py-3 text-[12px] leading-snug text-app-foreground-soft/60">
+											<p className="px-1.5 py-2 text-[11px] leading-snug text-app-foreground-soft/60">
 												No repositories found.
 											</p>
 										)}

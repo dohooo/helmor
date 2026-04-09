@@ -70,6 +70,31 @@ pub fn upsert_setting_json<T: Serialize>(key: &str, value: &T) -> Result<()> {
     upsert_setting_value(key, &serialized)
 }
 
+const AUTO_CLOSE_ACTION_KINDS_KEY: &str = "auto_close_action_kinds";
+const AUTO_CLOSE_OPT_IN_ASKED_KEY: &str = "auto_close_opt_in_asked";
+
+/// Action kinds the user has opted-in to auto-close. Action sessions whose
+/// `action_kind` appears in this list are hidden automatically after their
+/// verifier reports `Success`.
+pub fn load_auto_close_action_kinds() -> Result<Vec<String>> {
+    load_setting_json::<Vec<String>>(AUTO_CLOSE_ACTION_KINDS_KEY).map(|opt| opt.unwrap_or_default())
+}
+
+pub fn save_auto_close_action_kinds(kinds: &[String]) -> Result<()> {
+    upsert_setting_json(AUTO_CLOSE_ACTION_KINDS_KEY, &kinds)
+}
+
+/// Action kinds for which we've already shown the first-time opt-in prompt.
+/// Separate from the opt-in list so "dismissed" and "enabled" are distinct
+/// states — a dismissed kind stays in this list so we don't nag.
+pub fn load_auto_close_opt_in_asked() -> Result<Vec<String>> {
+    load_setting_json::<Vec<String>>(AUTO_CLOSE_OPT_IN_ASKED_KEY).map(|opt| opt.unwrap_or_default())
+}
+
+pub fn save_auto_close_opt_in_asked(kinds: &[String]) -> Result<()> {
+    upsert_setting_json(AUTO_CLOSE_OPT_IN_ASKED_KEY, &kinds)
+}
+
 pub fn load_branch_prefix_settings() -> Result<BranchPrefixSettings> {
     let connection = db::open_connection(false)?;
     let mut statement = connection

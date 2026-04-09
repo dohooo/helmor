@@ -9,6 +9,8 @@ import {
 	listWorkspaceFiles,
 	loadAgentModelSections,
 	loadArchivedWorkspaces,
+	loadAutoCloseActionKinds,
+	loadAutoCloseOptInAsked,
 	loadSessionAttachments,
 	loadSessionThreadMessages,
 	loadWorkspaceDetail,
@@ -41,6 +43,8 @@ export const helmorQueryKeys = {
 		["workspaceChanges", workspaceRootPath] as const,
 	workspaceFiles: (workspaceRootPath: string) =>
 		["workspaceFiles", workspaceRootPath] as const,
+	autoCloseActionKinds: ["autoCloseActionKinds"] as const,
+	autoCloseOptInAsked: ["autoCloseOptInAsked"] as const,
 	slashCommands: (
 		provider: AgentProvider,
 		workingDirectory: string | null,
@@ -168,6 +172,26 @@ export function slashCommandsQueryOptions(
 		// Refetch on mount so re-opening a workspace tab gets a fresh shot
 		// at recovery without waiting out staleTime.
 		refetchOnMount: "always",
+	});
+}
+
+export function autoCloseActionKindsQueryOptions() {
+	return queryOptions({
+		queryKey: helmorQueryKeys.autoCloseActionKinds,
+		queryFn: loadAutoCloseActionKinds,
+		initialData: [] as string[],
+		initialDataUpdatedAt: 0,
+		staleTime: 60_000,
+	});
+}
+
+export function autoCloseOptInAskedQueryOptions() {
+	return queryOptions({
+		queryKey: helmorQueryKeys.autoCloseOptInAsked,
+		queryFn: loadAutoCloseOptInAsked,
+		initialData: [] as string[],
+		initialDataUpdatedAt: 0,
+		staleTime: 60_000,
 	});
 }
 

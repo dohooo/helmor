@@ -44,8 +44,18 @@ type WorkspaceConversationContainerProps = {
 	onSelectSession: (sessionId: string | null) => void;
 	onResolveDisplayedSession: (sessionId: string | null) => void;
 	onSendingWorkspacesChange?: (workspaceIds: Set<string>) => void;
+	/** Reports the set of session IDs currently streaming, so App can observe
+	 * session-level lifecycle events (e.g. the commit button driver needs to
+	 * know when its target session's stream has ended). */
+	onSendingSessionsChange?: (sessionIds: Set<string>) => void;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
+	/** Prompt queued by an external caller (e.g. the inspector Git commit
+	 * button) to be auto-submitted once the displayed session matches. */
+	pendingPromptForSession?: { sessionId: string; prompt: string } | null;
+	/** Called after the pending prompt has been handed off to the composer's
+	 * submit flow, so the caller can clear the queue. */
+	onPendingPromptConsumed?: () => void;
 };
 
 export const WorkspaceConversationContainer = memo(
@@ -58,8 +68,11 @@ export const WorkspaceConversationContainer = memo(
 		onSelectSession,
 		onResolveDisplayedSession,
 		onSendingWorkspacesChange,
+		onSendingSessionsChange,
 		headerActions,
 		headerLeading,
+		pendingPromptForSession = null,
+		onPendingPromptConsumed,
 	}: WorkspaceConversationContainerProps) {
 		const queryClient = useQueryClient();
 		const [composerModelSelections, setComposerModelSelections] = useState<
@@ -133,13 +146,16 @@ export const WorkspaceConversationContainer = memo(
 		// paint as the tab update, so both loading spinners appear together.
 		const onSendingWorkspacesChangeRef = useRef(onSendingWorkspacesChange);
 		onSendingWorkspacesChangeRef.current = onSendingWorkspacesChange;
+		const onSendingSessionsChangeRef = useRef(onSendingSessionsChange);
+		onSendingSessionsChangeRef.current = onSendingSessionsChange;
 		useLayoutEffect(() => {
 			const workspaceIds = new Set<string>();
 			for (const [, wsId] of sendingWorkspaceMapRef.current) {
 				workspaceIds.add(wsId);
 			}
 			onSendingWorkspacesChangeRef.current?.(workspaceIds);
-		}, [sendingContextKeys]);
+			onSendingSessionsChangeRef.current?.(sendingSessionIds);
+		}, [sendingContextKeys, sendingSessionIds]);
 		const selectionPending =
 			selectedWorkspaceId !== displayedWorkspaceId ||
 			selectedSessionId !== displayedSessionId;
@@ -610,6 +626,8 @@ export const WorkspaceConversationContainer = memo(
 							onSwitchSession={onSelectSession}
 							onSubmit={handleComposerSubmitWrapper}
 							onStop={handleStopStream}
+							pendingPromptForSession={pendingPromptForSession}
+							onPendingPromptConsumed={onPendingPromptConsumed}
 						/>
 					</div>
 				</div>

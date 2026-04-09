@@ -231,6 +231,59 @@ pub fn disconnect_github_identity(
     emit_github_identity_snapshot(&app, &GithubIdentitySnapshot::Disconnected)
 }
 
+/// Load the currently-valid GitHub access token, refreshing it on the fly if
+/// the stored copy has expired. Returns `Ok(None)` when the user is not
+/// connected, when the refresh token is missing / expired, or when the refresh
+/// call fails. Used by in-process features (e.g. the PR lookup GraphQL call)
+/// that need to make authenticated API requests without going through the
+/// snapshot API.
+pub(crate) fn load_valid_github_access_token() -> Result<Option<String>> {
+    let Some(client_id) = github_client_id() else {
+        return Ok(None);
+    };
+    let secret_store = active_secret_store();
+    let Some((_meta, mut secret)) = load_stored_identity(&secret_store)? else {
+        return Ok(None);
+    };
+
+    if !is_expired(secret.access_token_expires_at.as_deref()) {
+        return Ok(Some(secret.access_token));
+    }
+
+    if is_expired(secret.refresh_token_expires_at.as_deref()) || secret.refresh_token.is_none() {
+        clear_stored_identity(&secret_store)?;
+        return Ok(None);
+    }
+
+    let client = ReqwestGithubClient::new()?;
+    let Some(refresh_token) = secret.refresh_token.as_deref() else {
+        return Ok(None);
+    };
+
+    let refreshed = match client.refresh_user_token(client_id, refresh_token) {
+        Ok(response) => response,
+        Err(_) => {
+            clear_stored_identity(&secret_store)?;
+            return Ok(None);
+        }
+    };
+
+    secret.access_token = refreshed.access_token.clone();
+    secret.refresh_token = refreshed.refresh_token.or(secret.refresh_token);
+    secret.access_token_expires_at = refreshed.access_token_expires_at;
+    secret.refresh_token_expires_at = refreshed.refresh_token_expires_at;
+
+    // Persist the refreshed secret so subsequent calls don't have to refresh
+    // again within the same session.
+    let Some((mut meta, _)) = load_stored_identity(&secret_store)? else {
+        return Ok(Some(secret.access_token));
+    };
+    sync_meta_expiry_fields(&mut meta, &secret);
+    save_stored_identity(&meta, &secret, &secret_store)?;
+
+    Ok(Some(secret.access_token))
+}
+
 fn get_github_identity_session_with(
     client_id: Option<&str>,
     client: &impl GithubHttpClient,

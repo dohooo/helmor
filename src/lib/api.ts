@@ -252,6 +252,10 @@ export type WorkspaceSessionSummary = {
 	resumeSessionAt?: string | null;
 	isHidden: boolean;
 	isCompacting: boolean;
+	/** Set when the session was created as a one-off dispatch from the
+	 * inspector commit button (e.g. "create-pr", "commit-and-push"). Drives
+	 * post-stream verifiers and auto-close behavior. */
+	actionKind?: string | null;
 	active: boolean;
 };
 
@@ -831,10 +835,139 @@ export async function listWorkspaceChangesWithContent(
 	}
 }
 
+export async function discardWorkspaceFile(
+	workspaceRootPath: string,
+	relativePath: string,
+): Promise<void> {
+	try {
+		await invoke<void>("discard_workspace_file", {
+			workspaceRootPath,
+			relativePath,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to discard workspace file."),
+		);
+	}
+}
+
+export async function stageWorkspaceFile(
+	workspaceRootPath: string,
+	relativePath: string,
+): Promise<void> {
+	try {
+		await invoke<void>("stage_workspace_file", {
+			workspaceRootPath,
+			relativePath,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to stage workspace file."),
+		);
+	}
+}
+
+export async function unstageWorkspaceFile(
+	workspaceRootPath: string,
+	relativePath: string,
+): Promise<void> {
+	try {
+		await invoke<void>("unstage_workspace_file", {
+			workspaceRootPath,
+			relativePath,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to unstage workspace file."),
+		);
+	}
+}
+
+export type PullRequestInfo = {
+	url: string;
+	number: number;
+	state: "OPEN" | "CLOSED" | "MERGED" | string;
+	title: string;
+	isMerged: boolean;
+};
+
+/**
+ * Look up the most recent pull request on GitHub whose head ref matches the
+ * workspace's current branch. Returns `null` when there's no matching PR, the
+ * workspace has no github.com remote, the user isn't connected to GitHub, or
+ * the stored access token has been revoked. Only throws for unexpected
+ * transport / parse failures.
+ */
+export async function lookupWorkspacePr(
+	workspaceId: string,
+): Promise<PullRequestInfo | null> {
+	try {
+		const result = await invoke<PullRequestInfo | null>("lookup_workspace_pr", {
+			workspaceId,
+		});
+		return result ?? null;
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to look up workspace PR."),
+		);
+	}
+}
+
 export async function permanentlyDeleteWorkspace(
 	workspaceId: string,
 ): Promise<void> {
 	await invoke("permanently_delete_workspace", { workspaceId });
+}
+
+/**
+ * List of action kinds the user has opted-in to auto-close. Action sessions
+ * whose `actionKind` appears in this list are hidden automatically after
+ * their verifier reports success.
+ */
+export async function loadAutoCloseActionKinds(): Promise<string[]> {
+	try {
+		return await invoke<string[]>("load_auto_close_action_kinds");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load auto-close settings."),
+		);
+	}
+}
+
+export async function saveAutoCloseActionKinds(kinds: string[]): Promise<void> {
+	try {
+		await invoke<void>("save_auto_close_action_kinds", { kinds });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to save auto-close settings."),
+		);
+	}
+}
+
+/**
+ * Action kinds for which the first-time auto-close opt-in toast has already
+ * been shown (whether or not the user opted in). Used to suppress repeat
+ * prompts — separate from `loadAutoCloseActionKinds` so "dismissed" and
+ * "enabled" are distinct states.
+ */
+export async function loadAutoCloseOptInAsked(): Promise<string[]> {
+	try {
+		return await invoke<string[]>("load_auto_close_opt_in_asked");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load auto-close opt-in history."),
+		);
+	}
+}
+
+export async function saveAutoCloseOptInAsked(kinds: string[]): Promise<void> {
+	try {
+		await invoke<void>("save_auto_close_opt_in_asked", { kinds });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to save auto-close opt-in history."),
+		);
+	}
 }
 
 export async function updateSessionSettings(
@@ -1143,8 +1276,12 @@ export type CreateSessionResponse = {
 
 export async function createSession(
 	workspaceId: string,
+	actionKind?: string | null,
 ): Promise<CreateSessionResponse> {
-	return invoke<CreateSessionResponse>("create_session", { workspaceId });
+	return invoke<CreateSessionResponse>("create_session", {
+		workspaceId,
+		actionKind: actionKind ?? null,
+	});
 }
 
 export async function renameSession(

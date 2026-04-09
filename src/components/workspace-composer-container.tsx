@@ -1,25 +1,33 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { memo, useCallback, useMemo } from "react";
+import { CircleAlert, TimerReset } from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type {
 	AgentModelOption,
 	AgentModelSection,
 	AgentProvider,
 	SlashCommandEntry,
 } from "@/lib/api";
-import { createSession } from "@/lib/api";
+import { createSession, saveAutoCloseActionKinds } from "@/lib/api";
+import { describeActionKind } from "@/lib/commit-button-prompts";
 import {
 	agentModelSectionsQueryOptions,
+	autoCloseActionKindsQueryOptions,
 	helmorQueryKeys,
 	slashCommandsQueryOptions,
 	workspaceDetailQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
+import { cn } from "@/lib/utils";
 import {
 	clampEffortToModel,
 	findModelOption,
 	getComposerContextKey,
 	inferDefaultModelId,
 } from "@/lib/workspace-helpers";
+import { BaseTooltip } from "./ui/base-tooltip";
+import { Button } from "./ui/button";
+import { ShimmerText } from "./ui/shimmer-text";
+import { ShineBorder } from "./ui/shine-border";
 import { WorkspaceComposer } from "./workspace-composer";
 
 const EMPTY_MODEL_SECTIONS: AgentModelSection[] = [];
@@ -52,6 +60,12 @@ type WorkspaceComposerContainerProps = {
 		effortLevel: string;
 		permissionMode: string;
 	}) => void;
+	/** Prompt queued by an external caller to auto-submit once the displayed
+	 * session matches `sessionId`. */
+	pendingPromptForSession?: { sessionId: string; prompt: string } | null;
+	/** Called after the pending prompt has been dispatched, so the caller can
+	 * clear the queue. */
+	onPendingPromptConsumed?: () => void;
 };
 
 export const WorkspaceComposerContainer = memo(
@@ -74,6 +88,8 @@ export const WorkspaceComposerContainer = memo(
 		onTogglePlanMode,
 		onSwitchSession,
 		onSubmit,
+		pendingPromptForSession = null,
+		onPendingPromptConsumed,
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
 		const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
@@ -119,6 +135,41 @@ export const WorkspaceComposerContainer = memo(
 		const loadingConversationContext =
 			Boolean(displayedWorkspaceId) &&
 			(workspaceDetailQuery.isPending || sessionsQuery.isPending);
+		const composerDisabled = displayedWorkspaceId === null;
+
+		// Auto-close opt-in state comes from settings: `auto_close_action_kinds`
+		// is the persistent list of action kinds the user has enabled. A given
+		// session is "auto-close enabled" when its `actionKind` is in that set.
+		const autoCloseQuery = useQuery(autoCloseActionKindsQueryOptions());
+		const autoCloseActionKinds = useMemo(
+			() => new Set(autoCloseQuery.data ?? []),
+			[autoCloseQuery.data],
+		);
+		const sessionActionKind = currentSession?.actionKind ?? null;
+		const isActionSession = Boolean(sessionActionKind);
+		const autoCloseEnabled = sessionActionKind
+			? autoCloseActionKinds.has(sessionActionKind)
+			: false;
+
+		const handleToggleAutoClose = useCallback(async () => {
+			if (!sessionActionKind) return;
+			const currentKinds = Array.from(autoCloseActionKinds);
+			const nextKinds = autoCloseEnabled
+				? currentKinds.filter((kind) => kind !== sessionActionKind)
+				: [...currentKinds, sessionActionKind];
+			try {
+				await saveAutoCloseActionKinds(nextKinds);
+			} finally {
+				queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.autoCloseActionKinds,
+				});
+			}
+		}, [
+			sessionActionKind,
+			autoCloseActionKinds,
+			autoCloseEnabled,
+			queryClient,
+		]);
 
 		const handleModelSelect = useCallback(
 			async (modelId: string) => {
@@ -218,6 +269,40 @@ export const WorkspaceComposerContainer = memo(
 			[selectedModel, onSubmit, workingDirectory, effortLevel, permissionMode],
 		);
 
+		// Track which queued prompt we've already dispatched so a re-render
+		// (e.g. due to query invalidation refreshing the session list) can't
+		// resubmit the same prompt twice before the parent clears the queue.
+		const dispatchedPromptKeyRef = useRef<string | null>(null);
+
+		useEffect(() => {
+			if (!pendingPromptForSession) {
+				dispatchedPromptKeyRef.current = null;
+				return;
+			}
+			if (pendingPromptForSession.sessionId !== displayedSessionId) {
+				return;
+			}
+			if (!selectedModel) {
+				// Wait for the model sections query to resolve.
+				return;
+			}
+
+			const dispatchKey = `${pendingPromptForSession.sessionId}|${pendingPromptForSession.prompt}`;
+			if (dispatchedPromptKeyRef.current === dispatchKey) {
+				return;
+			}
+			dispatchedPromptKeyRef.current = dispatchKey;
+
+			handleComposerSubmit(pendingPromptForSession.prompt, [], []);
+			onPendingPromptConsumed?.();
+		}, [
+			pendingPromptForSession,
+			displayedSessionId,
+			selectedModel,
+			handleComposerSubmit,
+			onPendingPromptConsumed,
+		]);
+
 		const handleSelectModelInner = useCallback(
 			(modelId: string) => {
 				void handleModelSelect(modelId);
@@ -236,33 +321,118 @@ export const WorkspaceComposerContainer = memo(
 			onTogglePlanMode(composerContextKey);
 		}, [onTogglePlanMode, composerContextKey]);
 
+		const actionDisplayName = sessionActionKind
+			? describeActionKind(sessionActionKind)
+			: null;
+		const infoTooltipText = autoCloseEnabled
+			? `${actionDisplayName ?? "This"} 任务完成后会自动收起 —— 你可以在 Session 列表的 History 视图里找回它们。点击按钮可以随时关闭此行为。`
+			: `打开后，此工作区里完成的 ${actionDisplayName ?? "action"} 任务将会在成功后自动收起到 History。点击按钮开启或关闭。`;
+
 		return (
-			<WorkspaceComposer
-				contextKey={composerContextKey}
-				onSubmit={handleComposerSubmit}
-				disabled={displayedWorkspaceId === null}
-				submitDisabled={disabled || loadingConversationContext}
-				onStop={onStop}
-				sending={sending}
-				selectedModelId={selectedModelId}
-				modelSections={modelSections}
-				onSelectModel={handleSelectModelInner}
-				provider={provider}
-				effortLevel={effortLevel}
-				onSelectEffort={handleSelectEffortInner}
-				permissionMode={permissionMode}
-				onTogglePlanMode={handleTogglePlanModeInner}
-				sendError={sendError}
-				restoreDraft={restoreDraft}
-				restoreImages={restoreImages}
-				restoreFiles={restoreFiles}
-				restoreNonce={restoreNonce}
-				slashCommands={slashCommands}
-				slashCommandsLoading={slashCommandsLoading}
-				slashCommandsError={slashCommandsError}
-				onRetrySlashCommands={refetchSlashCommands}
-				workspaceRootPath={workingDirectory}
-			/>
+			<div className="flex flex-col">
+				{isActionSession ? (
+					<div className="relative z-10 mx-auto -mb-px flex w-[90%] items-center justify-between overflow-hidden rounded-t-[14px] border border-app-border/40 bg-app-sidebar px-3 pb-1 pt-1.5">
+						{autoCloseEnabled ? (
+							<>
+								<ShineBorder
+									borderWidth={1}
+									duration={8}
+									shineColor={[
+										"oklch(0.88 0.08 98)",
+										"oklch(0.84 0.1 92)",
+										"oklch(0.8 0.09 84)",
+									]}
+								/>
+								<div className="pointer-events-none absolute inset-x-px bottom-0 z-[1] h-[2px] bg-app-sidebar" />
+							</>
+						) : null}
+						<div className="flex items-center gap-2">
+							{sending ? (
+								<ShimmerText
+									durationMs={1900}
+									className="text-[12px] font-medium tracking-[0.02em] text-app-foreground-soft/80"
+								>
+									Working...
+								</ShimmerText>
+							) : null}
+						</div>
+						<div className="flex items-center gap-1.5">
+							<BaseTooltip
+								side="top"
+								content={
+									<span className="block max-w-[260px] whitespace-normal text-[11px] leading-snug">
+										{infoTooltipText}
+									</span>
+								}
+							>
+								<Button
+									type="button"
+									variant="ghost"
+									size="icon-xs"
+									aria-label="Auto close information"
+									className="rounded-[3px] text-app-foreground-soft/65 hover:bg-app-base/70 hover:text-app-foreground-soft"
+								>
+									<CircleAlert className="size-3.5" strokeWidth={1.8} />
+								</Button>
+							</BaseTooltip>
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								aria-label={
+									autoCloseEnabled ? "Disable Auto Close" : "Enable Auto Close"
+								}
+								aria-pressed={autoCloseEnabled}
+								disabled={composerDisabled}
+								onClick={() => {
+									void handleToggleAutoClose();
+								}}
+								className={cn(
+									"h-7 items-center rounded-[3px] border border-app-border/45 bg-app-base/70 px-2.5 text-[12px] font-medium leading-none tracking-[0.02em] text-app-foreground-soft transition-colors hover:bg-app-base hover:text-app-foreground",
+									autoCloseEnabled
+										? "border-[color:oklch(0.76_0.17_88_/_0.45)] bg-[color:oklch(0.76_0.17_88_/_0.12)] text-[color:oklch(0.84_0.11_96)] hover:bg-[color:oklch(0.76_0.17_88_/_0.16)] hover:text-[color:oklch(0.9_0.08_96)]"
+										: null,
+								)}
+							>
+								<TimerReset
+									className="size-[13px] shrink-0"
+									strokeWidth={1.8}
+								/>
+								<span className="inline-flex items-center">
+									{autoCloseEnabled ? "Auto Close On" : "Enable Auto Close"}
+								</span>
+							</Button>
+						</div>
+					</div>
+				) : null}
+
+				<WorkspaceComposer
+					contextKey={composerContextKey}
+					onSubmit={handleComposerSubmit}
+					disabled={composerDisabled}
+					submitDisabled={disabled || loadingConversationContext}
+					onStop={onStop}
+					sending={sending}
+					selectedModelId={selectedModelId}
+					modelSections={modelSections}
+					onSelectModel={handleSelectModelInner}
+					provider={provider}
+					effortLevel={effortLevel}
+					onSelectEffort={handleSelectEffortInner}
+					permissionMode={permissionMode}
+					onTogglePlanMode={handleTogglePlanModeInner}
+					sendError={sendError}
+					restoreDraft={restoreDraft}
+					restoreImages={restoreImages}
+					restoreFiles={restoreFiles}
+					restoreNonce={restoreNonce}
+					slashCommands={slashCommands}
+					slashCommandsLoading={slashCommandsLoading}
+					slashCommandsError={slashCommandsError}
+					onRetrySlashCommands={refetchSlashCommands}
+					workspaceRootPath={workingDirectory}
+				/>
+			</div>
 		);
 	},
 );

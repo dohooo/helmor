@@ -17,6 +17,11 @@ export type InspectorFileItem = {
 	status: "M" | "A" | "D";
 	insertions: number;
 	deletions: number;
+	/** Set when the file has staged changes (HEAD vs index). */
+	stagedStatus?: "M" | "A" | "D" | null;
+	/** Set when the file has unstaged changes (index vs working tree, or
+	 * untracked). */
+	unstagedStatus?: "M" | "A" | "D" | null;
 };
 
 const DEFAULT_INSPECTOR_RELATIVE_FILES: Array<{

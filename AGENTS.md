@@ -6,14 +6,6 @@ This file provides guidance to AI coding agents working with code in this reposi
 
 Helmor is a local-first desktop app built with **Tauri v2** (Rust backend) + **React 19** + **Vite** + **TypeScript**. It provides a workspace management UI with its own SQLite database (`~/helmor/` in release, `~/helmor-dev/` in debug), letting users browse workspaces/sessions/messages and send prompts to AI agents (Claude Code CLI, OpenAI Codex CLI) via streaming or blocking IPC. Data can be optionally imported from a local [Conductor](https://conductor.app) installation.
 
-## UI Design Source of Truth
-
-- `DESIGN.md` at the repository root is the source of truth for any user-facing visual change.
-- Before making any UI, styling, layout, typography, spacing, color, component, or motion change, read `DESIGN.md` and align the implementation with it.
-- Do not invent or apply a new visual direction for the product without first consulting `DESIGN.md`.
-- If a requested UI change conflicts with `DESIGN.md`, explicitly call out the conflict and ask whether to prioritize the request or the design system.
-- When finishing UI work, briefly state how the implementation follows `DESIGN.md`, or note any intentional deviation.
-
 ## Commands
 
 ```bash

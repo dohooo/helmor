@@ -264,7 +264,19 @@ body {
 	--color-app-info: var(--app-info);
 	--color-app-scrollbar-thumb: var(--app-scrollbar-thumb);
 	--color-app-scrollbar-thumb-hover: var(--app-scrollbar-thumb-hover);
+	--animate-shine: shine var(--duration) infinite linear;
 	--animate-shiny-text: shiny-text 8s infinite;
+	@keyframes shine {
+		0% {
+			background-position: 0% 0%;
+		}
+		50% {
+			background-position: 100% 100%;
+		}
+		100% {
+			background-position: 0% 0%;
+		}
+	}
 	@keyframes shiny-text {
 		0%,
 		90%,

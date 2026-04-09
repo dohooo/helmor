@@ -1,5 +1,5 @@
 import { MarkGithubIcon } from "@primer/octicons-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	getMaterialFileIcon,
 	getMaterialFolderIcon,
@@ -10,21 +10,35 @@ import {
 	ChevronDown,
 	ChevronRightIcon,
 	CircleIcon,
-	ListIcon,
-	ListTreeIcon,
+	MinusIcon,
+	PlusIcon,
 	TriangleIcon,
+	Undo2Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import {
+	discardWorkspaceFile,
+	stageWorkspaceFile,
+	unstageWorkspaceFile,
+} from "@/lib/api";
 import type { InspectorFileItem } from "@/lib/editor-session";
-import { workspaceChangesQueryOptions } from "@/lib/query-client";
+import {
+	helmorQueryKeys,
+	workspaceChangesQueryOptions,
+} from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import { AnimatedShinyText } from "./ui/animated-shiny-text";
 import { NumberTicker } from "./ui/number-ticker";
 import { ScrollArea } from "./ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
+import {
+	type CommitButtonState,
+	WorkspaceCommitButton,
+	type WorkspaceCommitButtonMode,
+} from "./workspace-commit-button";
 
-const DEFAULT_CHANGES_RATIO = 0.4;
+const DEFAULT_CHANGES_RATIO = 0.45;
 const DEFAULT_ACTIONS_RATIO = 0.3;
 const MIN_SECTION_HEIGHT = 48;
 const RESIZE_HIT_AREA = 8;
@@ -35,6 +49,16 @@ type WorkspaceInspectorSidebarProps = {
 	activeEditorPath?: string | null;
 	onOpenEditorFile(path: string): void;
 	onOpenMockReview?: (path: string) => void;
+	/** Invoked when the Git section's commit button fires. Receives the
+	 * button mode so App can look up the matching prompt template and
+	 * dispatch it to a freshly-created session. */
+	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
+	/** Controlled button mode — App owns the current mode (e.g. rotates
+	 * create-pr → merge after successful PR creation). */
+	commitButtonMode?: WorkspaceCommitButtonMode;
+	/** Controlled button state — App drives the full busy → done / error
+	 * lifecycle across session creation, streaming, and PR verification. */
+	commitButtonState?: CommitButtonState;
 };
 
 export function WorkspaceInspectorSidebar({
@@ -42,8 +66,11 @@ export function WorkspaceInspectorSidebar({
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
+	onCommitAction,
+	commitButtonMode,
+	commitButtonState,
 }: WorkspaceInspectorSidebarProps) {
-	const [tabsOpen, setTabsOpen] = useState(true);
+	const [tabsOpen, setTabsOpen] = useState(false);
 	const [activeTab, setActiveTab] = useState("setup");
 	const [changesHeight, setChangesHeight] = useState(0);
 	const [actionsHeight, setActionsHeight] = useState(0);
@@ -58,7 +85,8 @@ export function WorkspaceInspectorSidebar({
 	const tabsWrapperRef = useRef<HTMLDivElement>(null);
 	const actionsRef = useRef<HTMLElement>(null);
 
-	// Compute initial section heights from container size (40/30/30 ratio)
+	// Compute initial section heights from container size (45/30-ish ratio),
+	// with the remainder driven by tab section behavior.
 	useEffect(() => {
 		const el = containerRef.current;
 		if (!el || changesHeight > 0) return;
@@ -271,17 +299,21 @@ export function WorkspaceInspectorSidebar({
 		<div
 			ref={containerRef}
 			className={cn(
-				"flex h-full min-h-0 flex-col border-l border-app-border/70 bg-app-sidebar",
+				"flex h-full min-h-0 flex-col bg-app-sidebar",
 				isResizing && "select-none",
 			)}
 		>
 			<ChangesSection
 				bodyHeight={changesHeight}
+				workspaceRootPath={workspaceRootPath ?? null}
 				changes={changes}
 				editorMode={editorMode}
 				activeEditorPath={activeEditorPath}
 				onOpenEditorFile={onOpenEditorFile}
 				flashingPaths={flashingPaths}
+				onCommitAction={onCommitAction}
+				commitButtonMode={commitButtonMode}
+				commitButtonState={commitButtonState}
 			/>
 
 			<HorizontalResizeHandle
@@ -315,6 +347,24 @@ export function WorkspaceInspectorSidebar({
 
 const TABS_ANIMATION_MS = 350;
 const TABS_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
+
+const INSPECTOR_SECTION_HEADER_CLASS =
+	"flex h-9 min-w-0 shrink-0 items-center justify-between border-b border-app-border/60 bg-app-base/[0.3] px-3";
+const INSPECTOR_SECTION_TITLE_CLASS =
+	"inline-flex h-9 items-center text-[13px] font-medium tracking-[-0.01em] leading-none text-app-foreground-soft";
+
+function getGitSectionHeaderHighlightClass(mode: WorkspaceCommitButtonMode) {
+	switch (mode) {
+		case "fix":
+			return "bg-[color-mix(in_oklch,var(--color-app-canceled)_18%,var(--color-app-base)_82%)]";
+		case "resolve-conflicts":
+			return "bg-[color-mix(in_oklch,var(--color-app-review)_16%,var(--color-app-base)_84%)]";
+		case "merge":
+			return "bg-[rgb(20_57_35)]";
+		default:
+			return null;
+	}
+}
 
 function InspectorTabsSection({
 	wrapperRef,
@@ -562,10 +612,8 @@ function ActionsSection({
 				expanded && "flex-1",
 			)}
 		>
-			<div className="flex h-9 min-w-0 shrink-0 items-center border-b border-app-border/60 bg-app-base/[0.3] px-3">
-				<span className="inline-flex h-9 items-center text-[13px] font-medium tracking-[-0.01em] text-app-foreground-soft">
-					Actions
-				</span>
+			<div className={INSPECTOR_SECTION_HEADER_CLASS}>
+				<span className={INSPECTOR_SECTION_TITLE_CLASS}>Actions</span>
 			</div>
 
 			<ScrollArea
@@ -590,7 +638,7 @@ function ActionsSection({
 						/>
 						<span className="truncate">{item.label}</span>
 						{item.action && (
-							<span className="ml-auto shrink-0 cursor-pointer text-[10.5px] text-app-muted transition-colors hover:text-app-foreground">
+							<span className="ml-auto shrink-0 cursor-pointer text-[10.5px] text-[#4f8dff] transition-colors hover:text-[#7aa9ff]">
 								{item.action}
 							</span>
 						)}
@@ -613,7 +661,7 @@ function ActionsSection({
 						<span className="truncate">{item.name}</span>
 						{item.hasLink && (
 							<ArrowUpRightIcon
-								className="ml-auto size-3 shrink-0 text-app-muted"
+								className="ml-auto size-3 shrink-0 text-[#4f8dff] transition-colors hover:text-[#7aa9ff]"
 								strokeWidth={1.8}
 							/>
 						)}
@@ -642,7 +690,7 @@ function ActionsSection({
 						{item.hasLink && (
 							<ArrowUpRightIcon
 								className={cn(
-									"size-3 shrink-0 text-app-muted",
+									"size-3 shrink-0 text-[#4f8dff] transition-colors hover:text-[#7aa9ff]",
 									!item.duration && "ml-auto",
 								)}
 								strokeWidth={1.8}
@@ -700,58 +748,281 @@ const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
 
 function ChangesSection({
 	bodyHeight,
+	workspaceRootPath,
 	changes,
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
 	flashingPaths,
+	onCommitAction,
+	commitButtonMode = "create-pr",
+	commitButtonState,
 }: {
 	bodyHeight: number;
+	workspaceRootPath: string | null;
 	changes: InspectorFileItem[];
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string) => void;
 	flashingPaths: Set<string>;
+	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
+	commitButtonMode?: WorkspaceCommitButtonMode;
+	commitButtonState?: CommitButtonState;
 }) {
-	const [treeView, setTreeView] = useState(true);
+	const queryClient = useQueryClient();
+	const [treeView] = useState(true);
+	const [changesOpen, setChangesOpen] = useState(true);
+	const [stagedOpen, setStagedOpen] = useState(true);
+
+	// Classify files into Staged Changes / Changes groups using the
+	// per-state status fields from the backend. A file with both staged and
+	// unstaged modifications appears in both groups, mirroring git's view.
+	const stagedChanges = useMemo(
+		() =>
+			changes
+				.filter((c) => c.stagedStatus != null)
+				.map((c) => ({ ...c, status: c.stagedStatus ?? c.status })),
+		[changes],
+	);
+	const unstagedChanges = useMemo(
+		() =>
+			changes
+				.filter((c) => c.unstagedStatus != null)
+				.map((c) => ({ ...c, status: c.unstagedStatus ?? c.status })),
+		[changes],
+	);
+	const hasChanges = stagedChanges.length > 0 || unstagedChanges.length > 0;
+	const invalidateChanges = useCallback(() => {
+		if (!workspaceRootPath) return;
+		queryClient.invalidateQueries({
+			queryKey: helmorQueryKeys.workspaceChanges(workspaceRootPath),
+		});
+	}, [queryClient, workspaceRootPath]);
+
+	const stageFile = useCallback(
+		async (relativePath: string) => {
+			if (!workspaceRootPath) return;
+			try {
+				await stageWorkspaceFile(workspaceRootPath, relativePath);
+			} finally {
+				invalidateChanges();
+			}
+		},
+		[workspaceRootPath, invalidateChanges],
+	);
+	const unstageFile = useCallback(
+		async (relativePath: string) => {
+			if (!workspaceRootPath) return;
+			try {
+				await unstageWorkspaceFile(workspaceRootPath, relativePath);
+			} finally {
+				invalidateChanges();
+			}
+		},
+		[workspaceRootPath, invalidateChanges],
+	);
+
+	const stageAll = useCallback(async () => {
+		if (!workspaceRootPath) return;
+		const paths = unstagedChanges.map((c) => c.path);
+		try {
+			// Run sequentially to keep git index access serialized.
+			for (const p of paths) {
+				await stageWorkspaceFile(workspaceRootPath, p);
+			}
+		} finally {
+			invalidateChanges();
+		}
+	}, [workspaceRootPath, unstagedChanges, invalidateChanges]);
+	const unstageAll = useCallback(async () => {
+		if (!workspaceRootPath) return;
+		const paths = stagedChanges.map((c) => c.path);
+		try {
+			for (const p of paths) {
+				await unstageWorkspaceFile(workspaceRootPath, p);
+			}
+		} finally {
+			invalidateChanges();
+		}
+	}, [workspaceRootPath, stagedChanges, invalidateChanges]);
+
+	const discardFile = useCallback(
+		async (relativePath: string) => {
+			if (!workspaceRootPath) return;
+			try {
+				await discardWorkspaceFile(workspaceRootPath, relativePath);
+			} finally {
+				invalidateChanges();
+			}
+		},
+		[workspaceRootPath, invalidateChanges],
+	);
+
+	// Mode + state are owned by App's commit button lifecycle driver. It
+	// rotates the mode after a successful action (e.g. create-pr → merge)
+	// and drives the busy / done / error transitions across multiple phases.
+	const gitHeaderHighlightClass =
+		getGitSectionHeaderHighlightClass(commitButtonMode);
+
+	const handleCommitButtonClick = useCallback(async () => {
+		if (!onCommitAction) return;
+		await onCommitAction(commitButtonMode);
+	}, [onCommitAction, commitButtonMode]);
 
 	return (
 		<section
-			aria-label="Inspector section Changes"
+			aria-label="Inspector section Git"
 			className="flex min-h-0 flex-col border-b border-app-border/60 bg-app-sidebar"
+			style={{ height: `${bodyHeight}px` }}
 		>
-			<div className="flex h-9 min-w-0 items-center justify-between border-b border-app-border/60 bg-app-base/[0.3] px-3">
-				<span className="inline-flex h-9 items-center text-[13px] font-medium tracking-[-0.01em] text-app-foreground-soft">
-					Changes
-				</span>
-				{treeView ? (
-					<ListIcon
-						className="size-3.5 cursor-pointer text-app-foreground-soft transition-colors hover:text-app-foreground"
-						strokeWidth={1.8}
-						onClick={() => setTreeView(false)}
+			<div
+				className={cn(INSPECTOR_SECTION_HEADER_CLASS, gitHeaderHighlightClass)}
+			>
+				<span className={INSPECTOR_SECTION_TITLE_CLASS}>Git</span>
+				{hasChanges ? (
+					<WorkspaceCommitButton
+						mode={commitButtonMode}
+						state={commitButtonState}
+						className="my-0.5 ml-auto"
+						onCommit={handleCommitButtonClick}
 					/>
-				) : (
-					<ListTreeIcon
-						className="size-3.5 cursor-pointer text-app-foreground-soft transition-colors hover:text-app-foreground"
-						strokeWidth={1.8}
-						onClick={() => setTreeView(true)}
-					/>
-				)}
+				) : null}
 			</div>
 
 			<ScrollArea
 				aria-label="Changes panel body"
-				className="bg-app-base/[0.16] font-mono text-[11.5px]"
-				style={{ height: `${bodyHeight}px` }}
+				className="bg-app-base/[0.16] font-mono text-[11.5px] flex-1 min-h-0"
 			>
-				{changes.length > 0 ? (
-					treeView ? (
+				{changes.length === 0 ? (
+					<div className="px-3 py-3 text-[11px] leading-5 text-app-muted">
+						Select a workspace with a root path to open files here.
+					</div>
+				) : (
+					<>
+						{stagedChanges.length > 0 && (
+							<ChangesGroup
+								label="Staged Changes"
+								count={stagedChanges.length}
+								open={stagedOpen}
+								onToggle={() => setStagedOpen((v) => !v)}
+								changes={stagedChanges}
+								treeView={treeView}
+								action="unstage"
+								onStageAction={unstageFile}
+								onBatchAction={unstageAll}
+								editorMode={editorMode}
+								activeEditorPath={activeEditorPath}
+								onOpenEditorFile={onOpenEditorFile}
+								flashingPaths={flashingPaths}
+							/>
+						)}
+						{unstagedChanges.length > 0 && (
+							<ChangesGroup
+								label="Changes"
+								count={unstagedChanges.length}
+								open={changesOpen}
+								onToggle={() => setChangesOpen((v) => !v)}
+								changes={unstagedChanges}
+								treeView={treeView}
+								action="stage"
+								onStageAction={stageFile}
+								onBatchAction={stageAll}
+								onDiscard={discardFile}
+								editorMode={editorMode}
+								activeEditorPath={activeEditorPath}
+								onOpenEditorFile={onOpenEditorFile}
+								flashingPaths={flashingPaths}
+							/>
+						)}
+					</>
+				)}
+			</ScrollArea>
+		</section>
+	);
+}
+
+type StageActionKind = "stage" | "unstage";
+
+function ChangesGroup({
+	label,
+	count,
+	open,
+	onToggle,
+	changes,
+	treeView,
+	action,
+	onStageAction,
+	onBatchAction,
+	onDiscard,
+	editorMode,
+	activeEditorPath,
+	onOpenEditorFile,
+	flashingPaths,
+}: {
+	label: string;
+	count: number;
+	open: boolean;
+	onToggle: () => void;
+	changes: InspectorFileItem[];
+	treeView: boolean;
+	action: StageActionKind;
+	onStageAction: (path: string) => void;
+	onBatchAction?: () => void;
+	onDiscard?: (path: string) => void;
+	editorMode: boolean;
+	activeEditorPath?: string | null;
+	onOpenEditorFile: (path: string) => void;
+	flashingPaths: Set<string>;
+}) {
+	return (
+		<div>
+			<div className="group/header flex w-full items-center gap-1 py-1 pl-1 pr-2 text-[11.5px] font-semibold tracking-[-0.01em] text-app-foreground-soft">
+				<button
+					type="button"
+					onClick={onToggle}
+					aria-expanded={open}
+					className="flex min-w-0 flex-1 items-center gap-1 text-left transition-colors hover:text-app-foreground"
+				>
+					<ChevronRightIcon
+						className={cn(
+							"size-3 shrink-0 transition-transform",
+							open && "rotate-90",
+						)}
+						strokeWidth={2}
+					/>
+					<span className="truncate">{label}</span>
+				</button>
+				{onBatchAction && (
+					<RowIconButton
+						aria-label={
+							action === "stage" ? "Stage all changes" : "Unstage all changes"
+						}
+						onClick={onBatchAction}
+						className="opacity-0 transition-opacity group-hover/header:opacity-100 focus-visible:opacity-100"
+					>
+						{action === "stage" ? (
+							<PlusIcon className="size-3.5" strokeWidth={2} />
+						) : (
+							<MinusIcon className="size-3.5" strokeWidth={2} />
+						)}
+					</RowIconButton>
+				)}
+				<span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-app-elevated/60 px-1 text-[9.5px] font-semibold text-app-foreground-soft">
+					{count}
+				</span>
+			</div>
+			{open && (
+				<div className="pl-3">
+					{treeView ? (
 						<ChangesTreeView
 							changes={changes}
 							editorMode={editorMode}
 							activeEditorPath={activeEditorPath}
 							onOpenEditorFile={onOpenEditorFile}
 							flashingPaths={flashingPaths}
+							action={action}
+							onStageAction={onStageAction}
+							onDiscard={onDiscard}
 						/>
 					) : (
 						<ChangesFlatView
@@ -760,15 +1031,14 @@ function ChangesSection({
 							activeEditorPath={activeEditorPath}
 							onOpenEditorFile={onOpenEditorFile}
 							flashingPaths={flashingPaths}
+							action={action}
+							onStageAction={onStageAction}
+							onDiscard={onDiscard}
 						/>
-					)
-				) : (
-					<div className="px-3 py-3 text-[11px] leading-5 text-app-muted">
-						Select a workspace with a root path to open files here.
-					</div>
-				)}
-			</ScrollArea>
-		</section>
+					)}
+				</div>
+			)}
+		</div>
 	);
 }
 
@@ -778,12 +1048,18 @@ function ChangesTreeView({
 	activeEditorPath,
 	onOpenEditorFile,
 	flashingPaths,
+	action,
+	onStageAction,
+	onDiscard,
 }: {
 	changes: InspectorFileItem[];
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string) => void;
 	flashingPaths: Set<string>;
+	action?: StageActionKind;
+	onStageAction?: (path: string) => void;
+	onDiscard?: (path: string) => void;
 }) {
 	const tree = buildTree(changes);
 	const [expanded, setExpanded] = useState<Set<string>>(
@@ -810,6 +1086,9 @@ function ChangesTreeView({
 				activeEditorPath={activeEditorPath}
 				onOpenEditorFile={onOpenEditorFile}
 				flashingPaths={flashingPaths}
+				action={action}
+				onStageAction={onStageAction}
+				onDiscard={onDiscard}
 			/>
 		</div>
 	);
@@ -835,6 +1114,9 @@ function TreeNodeList({
 	activeEditorPath,
 	onOpenEditorFile,
 	flashingPaths,
+	action,
+	onStageAction,
+	onDiscard,
 }: {
 	nodes: Map<string, ReturnType<typeof buildTree>>;
 	expanded: Set<string>;
@@ -844,6 +1126,9 @@ function TreeNodeList({
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string) => void;
 	flashingPaths: Set<string>;
+	action?: StageActionKind;
+	onStageAction?: (path: string) => void;
+	onDiscard?: (path: string) => void;
 }) {
 	const sorted = [...nodes.values()].sort((a, b) => {
 		const aIsFolder = a.children.size > 0 && !a.file;
@@ -896,20 +1181,24 @@ function TreeNodeList({
 									activeEditorPath={activeEditorPath}
 									onOpenEditorFile={onOpenEditorFile}
 									flashingPaths={flashingPaths}
+									action={action}
+									onStageAction={onStageAction}
+									onDiscard={onDiscard}
 								/>
 							)}
 						</div>
 					);
 				}
 
-				const selected = node.file?.absolutePath === activeEditorPath;
-				const isFlashing = !!node.file && flashingPaths.has(node.file.path);
+				const file = node.file;
+				const selected = file?.absolutePath === activeEditorPath;
+				const isFlashing = !!file && flashingPaths.has(file.path);
 
 				return (
 					<div
 						key={node.path}
 						className={cn(
-							"flex cursor-pointer items-center gap-1 py-[1.5px] pr-2 text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.04]",
+							"group/row flex cursor-pointer items-center gap-1 py-[1.5px] pr-2 text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.04]",
 							selected &&
 								(editorMode
 									? "bg-app-row-selected text-app-foreground"
@@ -918,13 +1207,11 @@ function TreeNodeList({
 						style={{ paddingLeft: `${depth * 12 + 8 + 14}px` }}
 						role="treeitem"
 						tabIndex={0}
-						onClick={() =>
-							node.file && onOpenEditorFile(node.file.absolutePath)
-						}
+						onClick={() => file && onOpenEditorFile(file.absolutePath)}
 						onKeyDown={(event) => {
-							if ((event.key === "Enter" || event.key === " ") && node.file) {
+							if ((event.key === "Enter" || event.key === " ") && file) {
 								event.preventDefault();
-								onOpenEditorFile(node.file.absolutePath);
+								onOpenEditorFile(file.absolutePath);
 							}
 						}}
 					>
@@ -934,21 +1221,13 @@ function TreeNodeList({
 							className="size-4 shrink-0"
 						/>
 						<ShinyFlash active={isFlashing}>{node.name}</ShinyFlash>
-						{node.file && (
-							<span className="ml-auto flex shrink-0 items-center gap-1.5">
-								<LineStats
-									insertions={node.file.insertions}
-									deletions={node.file.deletions}
-								/>
-								<span
-									className={cn(
-										"text-[10px] font-semibold",
-										STATUS_COLORS[node.file.status],
-									)}
-								>
-									{node.file.status}
-								</span>
-							</span>
+						{file && (
+							<StageActionSlot
+								file={file}
+								action={action}
+								onStageAction={onStageAction}
+								onDiscard={onDiscard}
+							/>
 						)}
 					</div>
 				);
@@ -963,20 +1242,29 @@ function ChangesFlatView({
 	activeEditorPath,
 	onOpenEditorFile,
 	flashingPaths,
+	action,
+	onStageAction,
+	onDiscard,
 }: {
 	changes: InspectorFileItem[];
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string) => void;
 	flashingPaths: Set<string>;
+	action?: StageActionKind;
+	onStageAction?: (path: string) => void;
+	onDiscard?: (path: string) => void;
 }) {
+	const hasStage = !!action && !!onStageAction;
+	const hasDiscard = !!onDiscard;
+	const hasAction = hasStage || hasDiscard;
 	return (
 		<div className="py-0.5">
 			{changes.map((change) => (
 				<div
 					key={change.path}
 					className={cn(
-						"flex cursor-pointer items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.04]",
+						"group/row flex cursor-pointer items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.04]",
 						change.absolutePath === activeEditorPath &&
 							(editorMode
 								? "bg-app-row-selected text-app-foreground"
@@ -1000,24 +1288,158 @@ function ChangesFlatView({
 					<ShinyFlash active={flashingPaths.has(change.path)}>
 						{change.name}
 					</ShinyFlash>
-					<span className="ml-auto shrink-0 truncate text-[10px] text-app-muted">
-						{change.path.slice(0, change.path.lastIndexOf("/"))}
-					</span>
-					<LineStats
-						insertions={change.insertions}
-						deletions={change.deletions}
-					/>
 					<span
 						className={cn(
-							"shrink-0 text-[10px] font-semibold",
-							STATUS_COLORS[change.status],
+							"ml-auto shrink-0 truncate text-[10px] text-app-muted",
+							hasAction && "group-hover/row:hidden",
 						)}
 					>
-						{change.status}
+						{change.path.slice(0, change.path.lastIndexOf("/"))}
 					</span>
+					<span
+						className={cn(
+							"flex shrink-0 items-center gap-1.5",
+							hasAction && "group-hover/row:hidden",
+						)}
+					>
+						<LineStats
+							insertions={change.insertions}
+							deletions={change.deletions}
+						/>
+						<span
+							className={cn(
+								"inline-flex h-4 w-4 items-center justify-center text-[10px] font-semibold",
+								STATUS_COLORS[change.status],
+							)}
+						>
+							{change.status}
+						</span>
+					</span>
+					{hasAction && (
+						<RowHoverActions
+							path={change.path}
+							action={action}
+							onStageAction={onStageAction}
+							onDiscard={onDiscard}
+						/>
+					)}
 				</div>
 			))}
 		</div>
+	);
+}
+
+function StageActionSlot({
+	file,
+	action,
+	onStageAction,
+	onDiscard,
+}: {
+	file: InspectorFileItem;
+	action?: StageActionKind;
+	onStageAction?: (path: string) => void;
+	onDiscard?: (path: string) => void;
+}) {
+	const hasStage = !!action && !!onStageAction;
+	const hasDiscard = !!onDiscard;
+	const hasAction = hasStage || hasDiscard;
+
+	return (
+		<>
+			<span
+				className={cn(
+					"ml-auto flex shrink-0 items-center gap-1.5",
+					hasAction && "group-hover/row:hidden",
+				)}
+			>
+				<LineStats insertions={file.insertions} deletions={file.deletions} />
+				<span
+					className={cn(
+						"inline-flex h-4 w-4 items-center justify-center text-[10px] font-semibold",
+						STATUS_COLORS[file.status],
+					)}
+				>
+					{file.status}
+				</span>
+			</span>
+			{hasAction && (
+				<RowHoverActions
+					path={file.path}
+					action={action}
+					onStageAction={onStageAction}
+					onDiscard={onDiscard}
+				/>
+			)}
+		</>
+	);
+}
+
+function RowHoverActions({
+	path,
+	action,
+	onStageAction,
+	onDiscard,
+}: {
+	path: string;
+	action?: StageActionKind;
+	onStageAction?: (path: string) => void;
+	onDiscard?: (path: string) => void;
+}) {
+	return (
+		<span className="ml-auto hidden items-center gap-0.5 group-hover/row:inline-flex">
+			{onDiscard && (
+				<RowIconButton
+					aria-label="Discard file changes"
+					onClick={() => onDiscard(path)}
+					className="text-app-foreground-soft hover:bg-app-foreground/[0.08] hover:text-app-foreground"
+				>
+					<Undo2Icon className="size-3.5" strokeWidth={2} />
+				</RowIconButton>
+			)}
+			{action && onStageAction && (
+				<RowIconButton
+					aria-label={action === "stage" ? "Stage file" : "Unstage file"}
+					onClick={() => onStageAction(path)}
+					className="text-app-foreground-soft hover:bg-app-foreground/[0.08] hover:text-app-foreground"
+				>
+					{action === "stage" ? (
+						<PlusIcon className="size-3.5" strokeWidth={2} />
+					) : (
+						<MinusIcon className="size-3.5" strokeWidth={2} />
+					)}
+				</RowIconButton>
+			)}
+		</span>
+	);
+}
+
+function RowIconButton({
+	onClick,
+	children,
+	className,
+	"aria-label": ariaLabel,
+}: {
+	onClick: () => void;
+	children: React.ReactNode;
+	className?: string;
+	"aria-label": string;
+}) {
+	return (
+		<button
+			type="button"
+			aria-label={ariaLabel}
+			onClick={(event) => {
+				event.stopPropagation();
+				onClick();
+			}}
+			onKeyDown={(event) => event.stopPropagation()}
+			className={cn(
+				"inline-flex size-4 items-center justify-center rounded-sm transition-colors",
+				className,
+			)}
+		>
+			{children}
+		</button>
 	);
 }
 

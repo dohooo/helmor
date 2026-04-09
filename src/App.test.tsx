@@ -78,16 +78,17 @@ describe("App", () => {
 		expect(inspector).toHaveClass("bg-app-sidebar");
 		expect(inspector).toHaveClass("overflow-hidden");
 		expect(inspector).toHaveStyle({ width: "336px" });
-		expect(
-			screen.getByLabelText("Inspector section Changes"),
-		).toBeInTheDocument();
+		expect(screen.getByLabelText("Inspector section Git")).toBeInTheDocument();
 		expect(
 			screen.getByLabelText("Inspector section Actions"),
 		).toBeInTheDocument();
 		expect(screen.getByLabelText("Inspector section Tabs")).toBeInTheDocument();
 		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
-		expect(screen.getByLabelText("Inspector tabs body")).toBeInTheDocument();
+		// Inspector tabs section starts collapsed; body only mounts when opened.
+		expect(
+			screen.queryByLabelText("Inspector tabs body"),
+		).not.toBeInTheDocument();
 		expect(screen.getByRole("tab", { name: "Setup" })).toBeInTheDocument();
 		expect(screen.getByRole("tab", { name: "Run" })).toBeInTheDocument();
 		expect(screen.queryByText("Terminal")).not.toBeInTheDocument();
@@ -113,15 +114,26 @@ describe("App", () => {
 		expect(newWorkspaceButton).toBeInTheDocument();
 	});
 
-	it("collapses the inspector tabs section while leaving the first two panels expanded", async () => {
+	it("toggles the inspector tabs section while leaving the first two panels expanded", async () => {
 		const user = userEvent.setup();
 		render(<App />);
 		await screen.findByRole("main", { name: "Application shell" });
+
+		// Default: tabs section collapsed; changes + actions bodies present.
+		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
+		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
+		expect(
+			screen.queryByLabelText("Inspector tabs body"),
+		).not.toBeInTheDocument();
+
+		// Clicking the toggle expands the tabs body.
+		await user.click(screen.getByLabelText("Toggle inspector tabs section"));
 
 		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Inspector tabs body")).toBeInTheDocument();
 
+		// Clicking again collapses it back.
 		await user.click(screen.getByLabelText("Toggle inspector tabs section"));
 
 		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();

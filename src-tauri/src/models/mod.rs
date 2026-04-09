@@ -3,6 +3,7 @@ pub mod db;
 pub mod editor_files;
 pub mod git_ops;
 pub mod github_cli;
+pub mod github_graphql;
 pub mod helpers;
 pub mod repos;
 pub mod sessions;
@@ -102,6 +103,26 @@ pub async fn update_app_settings(
         Ok(())
     })
     .await
+}
+
+#[tauri::command]
+pub async fn load_auto_close_action_kinds() -> CmdResult<Vec<String>> {
+    run_blocking(settings::load_auto_close_action_kinds).await
+}
+
+#[tauri::command]
+pub async fn save_auto_close_action_kinds(kinds: Vec<String>) -> CmdResult<()> {
+    run_blocking(move || settings::save_auto_close_action_kinds(&kinds)).await
+}
+
+#[tauri::command]
+pub async fn load_auto_close_opt_in_asked() -> CmdResult<Vec<String>> {
+    run_blocking(settings::load_auto_close_opt_in_asked).await
+}
+
+#[tauri::command]
+pub async fn save_auto_close_opt_in_asked(kinds: Vec<String>) -> CmdResult<()> {
+    run_blocking(move || settings::save_auto_close_opt_in_asked(&kinds)).await
 }
 
 #[tauri::command]
@@ -252,8 +273,11 @@ pub async fn list_session_attachments(
 }
 
 #[tauri::command]
-pub async fn create_session(workspace_id: String) -> CmdResult<sessions::CreateSessionResponse> {
-    run_blocking(move || sessions::create_session(&workspace_id)).await
+pub async fn create_session(
+    workspace_id: String,
+    action_kind: Option<String>,
+) -> CmdResult<sessions::CreateSessionResponse> {
+    run_blocking(move || sessions::create_session(&workspace_id, action_kind.as_deref())).await
 }
 
 #[tauri::command]
@@ -560,6 +584,40 @@ pub async fn list_workspace_changes_with_content(
 ) -> CmdResult<editor_files::EditorFilesWithContentResponse> {
     run_blocking(move || editor_files::list_workspace_changes_with_content(&workspace_root_path))
         .await
+}
+
+#[tauri::command]
+pub async fn discard_workspace_file(
+    workspace_root_path: String,
+    relative_path: String,
+) -> CmdResult<()> {
+    run_blocking(move || editor_files::discard_workspace_file(&workspace_root_path, &relative_path))
+        .await
+}
+
+#[tauri::command]
+pub async fn stage_workspace_file(
+    workspace_root_path: String,
+    relative_path: String,
+) -> CmdResult<()> {
+    run_blocking(move || editor_files::stage_workspace_file(&workspace_root_path, &relative_path))
+        .await
+}
+
+#[tauri::command]
+pub async fn unstage_workspace_file(
+    workspace_root_path: String,
+    relative_path: String,
+) -> CmdResult<()> {
+    run_blocking(move || editor_files::unstage_workspace_file(&workspace_root_path, &relative_path))
+        .await
+}
+
+#[tauri::command]
+pub async fn lookup_workspace_pr(
+    workspace_id: String,
+) -> CmdResult<Option<github_graphql::PullRequestInfo>> {
+    run_blocking(move || github_graphql::lookup_workspace_pr(&workspace_id)).await
 }
 
 #[tauri::command]

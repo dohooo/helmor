@@ -64,6 +64,22 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to drop full_message column")?;
     }
 
+    // Migration: add action_kind column so we can distinguish one-off "action
+    // sessions" (e.g. create-pr, commit-and-push, resolve-conflicts, fix)
+    // from normal chat sessions. NULL = chat session; any string value marks
+    // the session as a dispatched action and unlocks post-stream verifiers,
+    // auto-hide behavior, and inspector badges.
+    let has_action_kind: bool = connection
+        .prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'action_kind'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+
+    if !has_action_kind {
+        connection
+            .execute_batch("ALTER TABLE sessions ADD COLUMN action_kind TEXT")
+            .context("Failed to add action_kind column")?;
+    }
+
     // Migration: wrap plain-text user prompts as JSON.
     //
     // Pre-migration, the `content` column held a union type: assistant/system/
@@ -183,6 +199,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     thinking_enabled INTEGER DEFAULT 1,
     fast_mode INTEGER DEFAULT 0,
     agent_personality TEXT,
+    action_kind TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

@@ -252,7 +252,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	return (
 		<div
 			aria-label="Workspace composer"
-			className="flex flex-col rounded-2xl border border-app-border/40 bg-app-sidebar px-4 pb-3 pt-3 shadow-[0_-4px_24px_rgba(0,0,0,0.12),0_0_0_1px_rgba(255,255,255,0.03)]"
+			className="flex flex-col rounded-2xl border border-app-border/40 bg-app-sidebar px-4 pb-3 pt-3 shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]"
 		>
 			<label htmlFor="workspace-input" className="sr-only">
 				Workspace input

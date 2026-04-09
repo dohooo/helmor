@@ -46,6 +46,16 @@ pub struct EditorFileListItem {
     pub status: String,
     pub insertions: u32,
     pub deletions: u32,
+    /// HEAD-vs-index status for this file (`Some` when the file has staged
+    /// changes, `None` otherwise). The Git inspector groups files into
+    /// "Staged Changes" based on this field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staged_status: Option<String>,
+    /// Index-vs-working-tree status for this file (`Some` when the file has
+    /// unstaged modifications or is untracked, `None` otherwise). The Git
+    /// inspector groups files into "Changes" based on this field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unstaged_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -165,6 +175,8 @@ pub fn list_editor_files(workspace_root_path: &str) -> Result<Vec<EditorFileList
                 status: "M".to_string(),
                 insertions: 0,
                 deletions: 0,
+                staged_status: None,
+                unstaged_status: None,
             })
         })
         .collect())
@@ -207,6 +219,8 @@ pub fn list_workspace_files(workspace_root_path: &str) -> Result<Vec<EditorFileL
                 status: "M".to_string(),
                 insertions: 0,
                 deletions: 0,
+                staged_status: None,
+                unstaged_status: None,
             })
         })
         .collect())
@@ -277,21 +291,33 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
     )
     .unwrap_or_default();
 
+    // Track each diff source separately so the inspector can split files into
+    // Staged Changes (HEAD vs index) and Changes (index vs working tree).
+    let mut staged_map = std::collections::BTreeMap::<String, String>::new();
+    parse_name_status_into(&staged_output, &mut staged_map);
+
+    let mut unstaged_map = std::collections::BTreeMap::<String, String>::new();
+    parse_name_status_into(&unstaged_output, &mut unstaged_map);
+
+    // Untracked files surface as unstaged "A" — they aren't in the index yet.
+    for line in untracked_output.lines() {
+        let path = line.trim();
+        if !path.is_empty() {
+            unstaged_map
+                .entry(path.to_string())
+                .or_insert_with(|| "A".to_string());
+        }
+    }
+
     let mut file_map = std::collections::BTreeMap::<String, String>::new();
 
     // Layer in order: committed first, then staged, then unstaged (latest wins)
     parse_name_status_into(&committed_output, &mut file_map);
-    parse_name_status_into(&staged_output, &mut file_map);
-    parse_name_status_into(&unstaged_output, &mut file_map);
-
-    // Untracked files are all "A" (added)
-    for line in untracked_output.lines() {
-        let path = line.trim();
-        if !path.is_empty() {
-            file_map
-                .entry(path.to_string())
-                .or_insert_with(|| "A".to_string());
-        }
+    for (path, status) in &staged_map {
+        file_map.insert(path.clone(), status.clone());
+    }
+    for (path, status) in &unstaged_map {
+        file_map.insert(path.clone(), status.clone());
     }
 
     // Collect line-level stats via --numstat (insertions/deletions per file).
@@ -321,12 +347,14 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
                 .unwrap_or_else(|| relative_path.clone());
             let (insertions, deletions) = stats_map.get(&relative_path).copied().unwrap_or((0, 0));
             EditorFileListItem {
-                path: relative_path,
+                path: relative_path.clone(),
                 absolute_path: absolute.display().to_string(),
                 name,
                 status,
                 insertions,
                 deletions,
+                staged_status: staged_map.get(&relative_path).cloned(),
+                unstaged_status: unstaged_map.get(&relative_path).cloned(),
             }
         })
         .collect())
@@ -359,6 +387,119 @@ pub fn list_workspace_changes_with_content(
         .collect();
 
     Ok(EditorFilesWithContentResponse { items, prefetched })
+}
+
+/// Validate that the workspace root + relative path target a real, registered
+/// helmor workspace and that the relative path can't escape it.
+fn validate_workspace_relative_path(
+    workspace_root_path: &str,
+    relative_path: &str,
+) -> Result<(PathBuf, PathBuf)> {
+    let workspace_root = PathBuf::from(workspace_root_path);
+    if !workspace_root.is_absolute() || !workspace_root.is_dir() {
+        bail!(
+            "Workspace root is not a valid directory: {}",
+            workspace_root.display()
+        );
+    }
+
+    if relative_path.is_empty() {
+        bail!("Relative path must not be empty");
+    }
+    let rel = Path::new(relative_path);
+    if rel.is_absolute() {
+        bail!("Relative path must not be absolute: {relative_path}");
+    }
+    if rel
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        bail!("Relative path must not contain parent traversal: {relative_path}");
+    }
+
+    let canonical_root = workspace_root.canonicalize().with_context(|| {
+        format!(
+            "Failed to canonicalize workspace root: {}",
+            workspace_root.display()
+        )
+    })?;
+    let workspace_roots = allowed_workspace_roots()?;
+    if !workspace_roots
+        .iter()
+        .any(|root| canonical_root.starts_with(root))
+    {
+        bail!(
+            "Workspace root is not registered as an editable location: {}",
+            workspace_root.display()
+        );
+    }
+
+    let absolute = workspace_root.join(rel);
+    Ok((workspace_root, absolute))
+}
+
+/// Discard uncommitted changes for a single file in a workspace.
+///
+/// - For tracked files, runs `git checkout HEAD -- <path>`, which restores the
+///   file from HEAD and throws away both staged and unstaged modifications.
+/// - For untracked files, removes the file from disk.
+///
+/// The path is guarded against traversal and against targeting workspaces
+/// outside the registered set.
+pub fn discard_workspace_file(workspace_root_path: &str, relative_path: &str) -> Result<()> {
+    let (workspace_root, absolute) =
+        validate_workspace_relative_path(workspace_root_path, relative_path)?;
+
+    // `git ls-files --error-unmatch` exits non-zero if the path isn't tracked
+    // (including untracked or nested-in-ignored cases).
+    let is_tracked = git_ops::run_git(
+        ["ls-files", "--error-unmatch", "--", relative_path],
+        Some(&workspace_root),
+    )
+    .is_ok();
+
+    if is_tracked {
+        git_ops::run_git(
+            ["checkout", "HEAD", "--", relative_path],
+            Some(&workspace_root),
+        )
+        .with_context(|| format!("Failed to discard changes for {relative_path}"))?;
+    } else if absolute.exists() {
+        fs::remove_file(&absolute)
+            .with_context(|| format!("Failed to remove untracked file: {}", absolute.display()))?;
+    }
+
+    Ok(())
+}
+
+/// Stage a single file in a workspace via `git add -- <path>`. Works for
+/// tracked, untracked, and deleted files alike.
+pub fn stage_workspace_file(workspace_root_path: &str, relative_path: &str) -> Result<()> {
+    let (workspace_root, _) = validate_workspace_relative_path(workspace_root_path, relative_path)?;
+
+    git_ops::run_git(["add", "--", relative_path], Some(&workspace_root))
+        .with_context(|| format!("Failed to stage {relative_path}"))?;
+
+    Ok(())
+}
+
+/// Unstage a single file in a workspace, returning its index entry to its
+/// HEAD state. Uses `git reset HEAD -- <path>` for portability across git
+/// versions (works even when HEAD has no commits via the empty-tree fallback).
+pub fn unstage_workspace_file(workspace_root_path: &str, relative_path: &str) -> Result<()> {
+    let (workspace_root, _) = validate_workspace_relative_path(workspace_root_path, relative_path)?;
+
+    // `git reset HEAD -- <path>` returns a non-zero exit code when there are
+    // index changes (which is the normal case here), but the operation still
+    // succeeds. Use `git restore --staged` instead, which is the modern
+    // equivalent and exits 0 on success.
+    git_ops::run_git(
+        ["restore", "--staged", "--", relative_path],
+        Some(&workspace_root),
+    )
+    .with_context(|| format!("Failed to unstage {relative_path}"))?;
+
+    Ok(())
 }
 
 /// Find the merge-base commit between HEAD and the default branch.
@@ -761,7 +902,6 @@ fn should_include_editor_file(path: &Path) -> bool {
             | "vite.config.ts"
             | "README.md"
             | "AGENTS.md"
-            | "DESIGN.md"
     ) {
         return true;
     }

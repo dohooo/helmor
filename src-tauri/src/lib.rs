@@ -178,6 +178,10 @@ pub fn run() {
             models::list_workspace_files,
             models::list_workspace_changes,
             models::list_workspace_changes_with_content,
+            models::discard_workspace_file,
+            models::stage_workspace_file,
+            models::unstage_workspace_file,
+            models::lookup_workspace_pr,
             models::read_editor_file,
             models::set_workspace_manual_status,
             models::detect_installed_editors,
@@ -193,6 +197,10 @@ pub fn run() {
             models::save_pasted_image,
             models::update_app_settings,
             models::update_session_settings,
+            models::load_auto_close_action_kinds,
+            models::save_auto_close_action_kinds,
+            models::load_auto_close_opt_in_asked,
+            models::save_auto_close_opt_in_asked,
             models::write_editor_file
         ])
         .build(tauri::generate_context!())

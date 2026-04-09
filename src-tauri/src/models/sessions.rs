@@ -33,6 +33,11 @@ pub struct WorkspaceSessionSummary {
     pub resume_session_at: Option<String>,
     pub is_hidden: bool,
     pub is_compacting: bool,
+    /// Non-null when the session was created as a one-off "action" dispatch
+    /// (e.g. "create-pr", "commit-and-push"). The inspector commit button
+    /// uses this to drive post-stream verifiers and the auto-close behavior.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_kind: Option<String>,
     pub active: bool,
 }
 
@@ -82,7 +87,8 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
               s.last_user_message_at,
               s.resume_session_at,
               s.is_hidden,
-              s.is_compacting
+              s.is_compacting,
+              s.action_kind
             FROM sessions s
             WHERE s.workspace_id = ?1 AND COALESCE(s.is_hidden, 0) = 0
             ORDER BY
@@ -116,6 +122,7 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
             resume_session_at: row.get(18)?,
             is_hidden: row.get::<_, i64>(19)? != 0,
             is_compacting: row.get::<_, i64>(20)? != 0,
+            action_kind: row.get(21)?,
         })
     })?;
 
@@ -330,7 +337,10 @@ pub struct CreateSessionResponse {
     pub session_id: String,
 }
 
-pub fn create_session(workspace_id: &str) -> Result<CreateSessionResponse> {
+pub fn create_session(
+    workspace_id: &str,
+    action_kind: Option<&str>,
+) -> Result<CreateSessionResponse> {
     let mut connection = db::open_connection(true)?;
     let transaction = connection
         .transaction()
@@ -355,10 +365,10 @@ pub fn create_session(workspace_id: &str) -> Result<CreateSessionResponse> {
     transaction
         .execute(
             r#"
-            INSERT INTO sessions (id, workspace_id, status, title, permission_mode)
-            VALUES (?1, ?2, 'idle', 'Untitled', 'default')
+            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind)
+            VALUES (?1, ?2, 'idle', 'Untitled', 'default', ?3)
             "#,
-            (&session_id, workspace_id),
+            (&session_id, workspace_id, action_kind),
         )
         .context("Failed to create session")?;
 
@@ -523,7 +533,7 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
               s.context_token_count, s.context_used_percent, s.thinking_enabled,
               s.fast_mode, s.agent_personality,
               s.created_at, s.updated_at, s.last_user_message_at,
-              s.resume_session_at, s.is_hidden, s.is_compacting
+              s.resume_session_at, s.is_hidden, s.is_compacting, s.action_kind
             FROM sessions s
             WHERE s.workspace_id = ?1 AND s.is_hidden = 1
             ORDER BY datetime(s.created_at) ASC
@@ -557,6 +567,7 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
                 resume_session_at: row.get(18)?,
                 is_hidden: row.get::<_, i64>(19)? != 0,
                 is_compacting: row.get::<_, i64>(20)? != 0,
+                action_kind: row.get(21)?,
             })
         })
         .context("Failed to query hidden sessions")?;

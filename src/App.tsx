@@ -41,24 +41,40 @@ import {
 	ToastViewport,
 } from "./components/ui/toast";
 import { TooltipProvider } from "./components/ui/tooltip";
+import type {
+	CommitButtonState,
+	WorkspaceCommitButtonMode,
+} from "./components/workspace-commit-button";
 import { WorkspaceConversationContainer } from "./components/workspace-conversation-container";
 import { WorkspaceEditorSurface } from "./components/workspace-editor-surface";
 import { WorkspaceInspectorSidebar } from "./components/workspace-inspector-sidebar";
 import { WorkspacesSidebarContainer } from "./components/workspaces-sidebar-container";
 import {
 	cancelGithubIdentityConnect,
+	createSession,
 	disconnectGithubIdentity,
 	type GithubIdentityDeviceFlowStart,
 	type GithubIdentitySnapshot,
+	hideSession,
 	listenGithubIdentityChanged,
+	loadAutoCloseActionKinds,
+	loadAutoCloseOptInAsked,
 	loadGithubIdentitySession,
+	lookupWorkspacePr,
 	openWorkspaceInEditor,
+	type PullRequestInfo,
+	saveAutoCloseActionKinds,
+	saveAutoCloseOptInAsked,
 	startGithubIdentityConnect,
 	type WorkspaceDetail,
 	type WorkspaceGroup,
 	type WorkspaceRow,
 	type WorkspaceSessionSummary,
 } from "./lib/api";
+import {
+	COMMIT_BUTTON_PROMPTS,
+	describeActionKind,
+} from "./lib/commit-button-prompts";
 import type { EditorSessionState } from "./lib/editor-session";
 import { isPathWithinRoot } from "./lib/editor-session";
 import {
@@ -307,6 +323,29 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	);
 	const [workspaceToasts, setWorkspaceToasts] = useState<WorkspaceToast[]>([]);
 	const [sendingWorkspaceIds, setSendingWorkspaceIds] = useState<Set<string>>(
+		() => new Set(),
+	);
+	// Queue used by the inspector Git section's commit button: when set, the
+	// conversation container auto-submits the prompt once its displayed
+	// session matches `sessionId`.
+	const [pendingPromptForSession, setPendingPromptForSession] = useState<{
+		sessionId: string;
+		prompt: string;
+	} | null>(null);
+	// Lifecycle driver for the inspector Git commit button. Owns the button's
+	// visible state across all phases (click → session created → streaming →
+	// stream ended → PR verification → next mode). See `handleInspector*` +
+	// the session-watching effect below for transitions.
+	const [commitLifecycle, setCommitLifecycle] = useState<{
+		workspaceId: string;
+		trackedSessionId: string | null;
+		mode: WorkspaceCommitButtonMode;
+		phase: "creating" | "streaming" | "verifying" | "done" | "error";
+		prInfo: PullRequestInfo | null;
+	} | null>(null);
+	// Session IDs currently streaming — reported by WorkspaceConversationContainer
+	// and consumed by the commit button driver to detect stream completion.
+	const [sendingSessionIds, setSendingSessionIds] = useState<Set<string>>(
 		() => new Set(),
 	);
 
@@ -1080,6 +1119,257 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		[queryClient, rememberSessionSelection],
 	);
 
+	const handleInspectorCommitAction = useCallback(
+		async (mode: WorkspaceCommitButtonMode) => {
+			const workspaceId = selectedWorkspaceIdRef.current;
+			if (!workspaceId) return;
+
+			const prompt = COMMIT_BUTTON_PROMPTS[mode];
+			if (!prompt) return;
+
+			// Enter the lifecycle immediately so the button flips to busy
+			// before we await anything. `trackedSessionId` fills in after the
+			// session has been created below.
+			setCommitLifecycle({
+				workspaceId,
+				trackedSessionId: null,
+				mode,
+				phase: "creating",
+				prInfo: null,
+			});
+
+			try {
+				const { sessionId } = await createSession(workspaceId, mode);
+
+				// Refresh the workspace's session list so the new session
+				// becomes visible in the tab strip + sidebar before we switch.
+				await queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+				});
+
+				setCommitLifecycle((current) =>
+					current && current.phase === "creating"
+						? { ...current, trackedSessionId: sessionId }
+						: current,
+				);
+
+				// Queue the prompt for the conversation container to dispatch
+				// once it's rendering this session. Setting state before
+				// selecting guarantees the container's submit effect sees the
+				// queue on the first render with the matching session.
+				setPendingPromptForSession({ sessionId, prompt });
+				handleSelectSession(sessionId);
+			} catch (error) {
+				console.error("[commitButton] Failed to start session:", error);
+				setCommitLifecycle((current) =>
+					current ? { ...current, phase: "error" } : current,
+				);
+			}
+		},
+		[handleSelectSession, queryClient],
+	);
+
+	const handlePendingPromptConsumed = useCallback(() => {
+		setPendingPromptForSession(null);
+		// The composer has handed the prompt off — the stream is now running.
+		setCommitLifecycle((current) =>
+			current && current.phase === "creating"
+				? { ...current, phase: "streaming" }
+				: current,
+		);
+	}, []);
+
+	// Watch the tracked session as it moves through the sending set. Once it
+	// exits (stream finished), verify whether a PR was created and rotate to
+	// the next button mode.
+	const commitLifecycleRef = useRef(commitLifecycle);
+	commitLifecycleRef.current = commitLifecycle;
+	// Remember whether the tracked session has been observed as "sending" at
+	// least once. Otherwise we might see an empty sendingSessionIds set before
+	// the composer even runs the submit and prematurely treat the absence as
+	// "stream ended".
+	const hasObservedSendingRef = useRef(false);
+	useEffect(() => {
+		const current = commitLifecycleRef.current;
+		if (!current?.trackedSessionId) return;
+		if (current.phase !== "creating" && current.phase !== "streaming") return;
+
+		const isSending = sendingSessionIds.has(current.trackedSessionId);
+		if (isSending) {
+			hasObservedSendingRef.current = true;
+			return;
+		}
+
+		// Wait until we've actually seen the session streaming before we
+		// interpret its absence as completion. This avoids a race where the
+		// effect fires before the composer submits.
+		if (!hasObservedSendingRef.current) return;
+
+		// Stream has finished. Move to verification.
+		hasObservedSendingRef.current = false;
+		setCommitLifecycle((prev) =>
+			prev ? { ...prev, phase: "verifying" } : prev,
+		);
+
+		const workspaceId = current.workspaceId;
+		void (async () => {
+			try {
+				const pr = await lookupWorkspacePr(workspaceId);
+				setCommitLifecycle((prev) => {
+					if (!prev || prev.workspaceId !== workspaceId) return prev;
+					if (!pr) {
+						// Agent didn't create a PR — surface as error so the
+						// user can retry.
+						return { ...prev, phase: "error", prInfo: null };
+					}
+					return { ...prev, phase: "done", prInfo: pr };
+				});
+			} catch (error) {
+				console.error("[commitButton] PR lookup failed:", error);
+				setCommitLifecycle((prev) =>
+					prev && prev.workspaceId === workspaceId
+						? { ...prev, phase: "error" }
+						: prev,
+				);
+			}
+		})();
+	}, [sendingSessionIds]);
+
+	// After a short dwell in `done` / `error`, reset the lifecycle so the
+	// button returns to idle (possibly in a new mode). On `done` we also run
+	// the action-session auto-close side effects: hide the session if the
+	// user has opted-in, or show the first-time opt-in toast.
+	useEffect(() => {
+		if (!commitLifecycle) return;
+		if (commitLifecycle.phase !== "done" && commitLifecycle.phase !== "error") {
+			return;
+		}
+
+		const { phase, mode, trackedSessionId, workspaceId } = commitLifecycle;
+
+		if (phase === "done" && trackedSessionId) {
+			void (async () => {
+				try {
+					const [optedIn, asked] = await Promise.all([
+						loadAutoCloseActionKinds(),
+						loadAutoCloseOptInAsked(),
+					]);
+
+					if (optedIn.includes(mode)) {
+						// User already opted-in: hide the session + refresh the
+						// workspace's session list.
+						try {
+							await hideSession(trackedSessionId);
+							await queryClient.invalidateQueries({
+								queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+							});
+						} catch (error) {
+							console.error(
+								"[commitButton] Failed to auto-hide session:",
+								error,
+							);
+						}
+						return;
+					}
+
+					// Not opted-in. If we've never asked about this action kind,
+					// surface the first-time opt-in toast.
+					if (!asked.includes(mode)) {
+						const kindLabel = describeActionKind(mode);
+						pushWorkspaceToast(
+							`完成后自动收起这类 "${kindLabel}" 任务？你随时可以在历史记录里找到它们。`,
+							"Enable Auto Close?",
+							"default",
+							{
+								persistent: true,
+								action: {
+									label: "一键开启",
+									onClick: () => {
+										void (async () => {
+											try {
+												const nextOptedIn = Array.from(
+													new Set([...optedIn, mode]),
+												);
+												await saveAutoCloseActionKinds(nextOptedIn);
+												await queryClient.invalidateQueries({
+													queryKey: helmorQueryKeys.autoCloseActionKinds,
+												});
+												// Hide this session right away now that
+												// the user opted in.
+												await hideSession(trackedSessionId);
+												await queryClient.invalidateQueries({
+													queryKey:
+														helmorQueryKeys.workspaceSessions(workspaceId),
+												});
+											} catch (error) {
+												console.error(
+													"[commitButton] Failed to enable auto-close:",
+													error,
+												);
+											}
+										})();
+									},
+								},
+							},
+						);
+
+						// Mark as asked regardless of user response so we don't nag.
+						try {
+							const nextAsked = Array.from(new Set([...asked, mode]));
+							await saveAutoCloseOptInAsked(nextAsked);
+							await queryClient.invalidateQueries({
+								queryKey: helmorQueryKeys.autoCloseOptInAsked,
+							});
+						} catch (error) {
+							console.error(
+								"[commitButton] Failed to record opt-in prompt:",
+								error,
+							);
+						}
+					}
+				} catch (error) {
+					console.error(
+						"[commitButton] Failed to run auto-close side effects:",
+						error,
+					);
+				}
+			})();
+		}
+
+		const timeoutId = window.setTimeout(
+			() => {
+				setCommitLifecycle(null);
+			},
+			phase === "done" ? 1200 : 1600,
+		);
+		return () => window.clearTimeout(timeoutId);
+	}, [commitLifecycle, pushWorkspaceToast, queryClient]);
+
+	// Derive the controlled button state + mode. When no lifecycle is
+	// active, the button shows its resting state ("create-pr" / idle).
+	const commitButtonMode: WorkspaceCommitButtonMode = (() => {
+		if (!commitLifecycle) return "create-pr";
+		if (commitLifecycle.phase === "done" && commitLifecycle.prInfo) {
+			// After a successful create-pr, rotate to the "merge" mode so the
+			// button surfaces the next logical action.
+			return commitLifecycle.prInfo.isMerged ? "merged" : "merge";
+		}
+		return commitLifecycle.mode;
+	})();
+	const commitButtonState: CommitButtonState = (() => {
+		if (!commitLifecycle) return "idle";
+		switch (commitLifecycle.phase) {
+			case "creating":
+			case "streaming":
+			case "verifying":
+				return "busy";
+			case "done":
+				return "done";
+			case "error":
+				return "error";
+		}
+	})();
+
 	const handleNavigateSessions = useCallback(
 		(offset: -1 | 1) => {
 			const workspaceId = selectedWorkspaceIdRef.current;
@@ -1269,7 +1559,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 													className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
 														isSidebarResizing
 															? "w-[2px] bg-app-foreground/80 shadow-[0_0_12px_rgba(250,249,246,0.2)]"
-															: "w-px bg-app-border group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
+															: "w-px bg-app-border/60 group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
 													}`}
 												/>
 											</div>
@@ -1319,6 +1609,9 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 													handleResolveDisplayedSession
 												}
 												onSendingWorkspacesChange={setSendingWorkspaceIds}
+												onSendingSessionsChange={setSendingSessionIds}
+												pendingPromptForSession={pendingPromptForSession}
+												onPendingPromptConsumed={handlePendingPromptConsumed}
 												headerLeading={
 													sidebarCollapsed ? (
 														<>
@@ -1416,8 +1709,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 										aria-hidden="true"
 										className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
 											isInspectorResizing
-												? "w-[2px] bg-app-foreground/80 shadow-[0_0_12px_rgba(250,249,246,0.2)]"
-												: "w-px bg-app-border group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
+												? "w-[2px] bg-transparent shadow-none"
+												: "w-px bg-app-border/60 group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
 										}`}
 									/>
 								</div>
@@ -1432,6 +1725,9 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 										editorMode={workspaceViewMode === "editor"}
 										activeEditorPath={editorSession?.path ?? null}
 										onOpenEditorFile={handleOpenEditorFile}
+										onCommitAction={handleInspectorCommitAction}
+										commitButtonMode={commitButtonMode}
+										commitButtonState={commitButtonState}
 									/>
 								</aside>
 							</div>
