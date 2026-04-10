@@ -61,6 +61,7 @@ import {
 	type PullRequestInfo,
 	prefetchRemoteRefs,
 	renameSession,
+	renameWorkspaceBranch,
 	type SessionAttachmentRecord,
 	type SystemNoticePart,
 	type ThreadMessageLike,
@@ -354,6 +355,47 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	const loadingBranches = branchesQuery.isFetching;
 	const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
 	const [editingTitle, setEditingTitle] = useState("");
+	const [editingBranch, setEditingBranch] = useState<string | null>(null);
+
+	const handleStartBranchRename = useCallback(() => {
+		if (!workspace?.branch) return;
+		setEditingBranch(workspace.branch);
+	}, [workspace?.branch]);
+
+	const handleCommitBranchRename = useCallback(async () => {
+		if (editingBranch === null || !workspace) return;
+		const trimmed = editingBranch.trim();
+		if (trimmed && trimmed !== workspace.branch) {
+			const detailKey = helmorQueryKeys.workspaceDetail(workspace.id);
+			const previous = queryClient.getQueryData<WorkspaceDetail | null>(
+				detailKey,
+			);
+			if (previous) {
+				queryClient.setQueryData<WorkspaceDetail | null>(detailKey, {
+					...previous,
+					branch: trimmed,
+				});
+			}
+			try {
+				await renameWorkspaceBranch(workspace.id, trimmed);
+				onWorkspaceChanged?.();
+			} catch (err: unknown) {
+				if (previous) {
+					queryClient.setQueryData<WorkspaceDetail | null>(detailKey, previous);
+				}
+				pushToast(
+					err instanceof Error ? err.message : String(err),
+					"Branch rename failed",
+					"destructive",
+				);
+			}
+		}
+		setEditingBranch(null);
+	}, [editingBranch, workspace, queryClient, onWorkspaceChanged]);
+
+	const handleCancelBranchRename = useCallback(() => {
+		setEditingBranch(null);
+	}, []);
 
 	const handleCreateSession = useCallback(async () => {
 		if (!workspace) return;
@@ -585,12 +627,45 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 			>
 				<div className="flex min-w-0 items-center gap-2 text-[12.5px]">
 					{headerLeading}
-					<span className="inline-flex items-center gap-1 px-1 py-0.5 font-medium text-foreground">
+					<span className="group/branch inline-flex items-center gap-1 px-1 py-0.5 font-medium text-foreground">
 						<GitBranch
 							className={cn("size-3.5", getBranchToneClassName(branchTone))}
 							strokeWidth={1.9}
 						/>
-						<span className="truncate">{workspace?.branch ?? "No branch"}</span>
+						{editingBranch !== null ? (
+							<Input
+								autoFocus
+								value={editingBranch}
+								onChange={(event) => setEditingBranch(event.target.value)}
+								onKeyDown={(event) => {
+									if (event.key === "Enter") {
+										event.preventDefault();
+										void handleCommitBranchRename();
+									} else if (event.key === "Escape") {
+										handleCancelBranchRename();
+									}
+								}}
+								onBlur={() => void handleCommitBranchRename()}
+								onClick={(event) => event.stopPropagation()}
+								className="h-5 w-32 truncate rounded-md border-border bg-background px-1.5 py-0 text-[12.5px] font-medium text-foreground"
+							/>
+						) : (
+							<>
+								<span className="truncate">
+									{workspace?.branch ?? "No branch"}
+								</span>
+								{workspace?.branch && workspace.state !== "archived" ? (
+									<span
+										role="button"
+										aria-label="Rename branch"
+										onClick={handleStartBranchRename}
+										className="invisible flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60 group-hover/branch:visible"
+									>
+										<Pencil className="size-2.5" strokeWidth={2} />
+									</span>
+								) : null}
+							</>
+						)}
 					</span>
 					{workspace?.intendedTargetBranch ? (
 						<>

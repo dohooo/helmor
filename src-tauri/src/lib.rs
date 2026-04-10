@@ -180,6 +180,7 @@ pub fn run() {
             models::list_hidden_sessions,
             models::mark_session_read,
             models::list_remote_branches,
+            models::rename_workspace_branch,
             models::update_intended_target_branch,
             models::prefetch_remote_refs,
             models::mark_workspace_read,

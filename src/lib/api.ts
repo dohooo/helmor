@@ -1407,6 +1407,13 @@ export async function renameSession(
 	await invoke("rename_session", { sessionId, title });
 }
 
+export async function renameWorkspaceBranch(
+	workspaceId: string,
+	newBranch: string,
+): Promise<void> {
+	await invoke("rename_workspace_branch", { workspaceId, newBranch });
+}
+
 export type GenerateSessionTitleResponse = {
 	title: string | null;
 	skipped: boolean;

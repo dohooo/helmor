@@ -451,6 +451,13 @@ pub async fn list_remote_branches(
 }
 
 #[tauri::command]
+pub async fn rename_workspace_branch(workspace_id: String, new_branch: String) -> CmdResult<()> {
+    let ws_lock = db::workspace_mutation_lock(&workspace_id);
+    let _lock = ws_lock.lock().await;
+    run_blocking(move || workspaces::rename_workspace_branch(&workspace_id, &new_branch)).await
+}
+
+#[tauri::command]
 pub async fn update_intended_target_branch(
     workspace_id: String,
     target_branch: String,
