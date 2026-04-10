@@ -1,7 +1,13 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHelmorQueryClient } from "@/lib/query-client";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -20,7 +26,19 @@ vi.mock("./composer-editor/plugins/slash-command-plugin", () => ({
 	SlashCommandPlugin: () => null,
 }));
 
+vi.mock("@/components/ai/code-block", () => ({
+	CodeBlock: ({ code, language }: { code: string; language?: string }) => (
+		<div data-testid="code-block">
+			{language ?? "code"}::{code}
+		</div>
+	),
+}));
+
 import { WorkspaceComposer } from "./workspace-composer";
+
+afterEach(() => {
+	cleanup();
+});
 
 const MODEL_SECTIONS = [
 	{
@@ -152,5 +170,64 @@ describe("WorkspaceComposer", () => {
 		expect(
 			await screen.findByRole("img", { name: "CleanShot.png" }),
 		).toHaveAttribute("src", "asset://localhost/tmp/CleanShot.png");
+	});
+
+	it("shows a code preview for inserted custom tag badges", async () => {
+		const user = userEvent.setup();
+		const queryClient = createHelmorQueryClient();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="acceptEdits"
+					onTogglePlanMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingInsertRequests={[
+						{
+							id: "insert-code-1",
+							workspaceId: "workspace-1",
+							sessionId: "session-1",
+							behavior: "append",
+							createdAt: 0,
+							items: [
+								{
+									kind: "custom-tag",
+									key: "tag-code-1",
+									label: "Failure log",
+									submitText: "Investigate the failure log.",
+									preview: {
+										kind: "code",
+										title: "Failure log",
+										language: "log",
+										code: "Error: request failed",
+									},
+								},
+							],
+						},
+					]}
+					onPendingInsertRequestsConsumed={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		const badge = await screen.findByText("Failure log");
+		await user.hover(badge);
+
+		expect(await screen.findByTestId("code-block")).toHaveTextContent(
+			"log::Error: request failed",
+		);
 	});
 });

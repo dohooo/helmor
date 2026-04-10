@@ -2005,6 +2005,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 									style={{ width: `${inspectorWidth}px` }}
 								>
 									<WorkspaceInspectorSidebar
+										workspaceId={selectedWorkspaceId}
 										workspaceRootPath={workspaceRootPath}
 										workspaceBranch={
 											selectedWorkspaceDetailQuery.data?.branch ?? null

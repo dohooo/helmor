@@ -13,6 +13,14 @@ vi.mock("@tauri-apps/api/core", () => ({
 	},
 }));
 
+vi.mock("@/components/ai/code-block", () => ({
+	CodeBlock: ({ code, language }: { code: string; language?: string }) => (
+		<div data-testid="code-block">
+			{language ?? "code"}::{code}
+		</div>
+	),
+}));
+
 afterEach(() => {
 	cleanup();
 });
@@ -63,5 +71,51 @@ describe("ComposerPreviewBadge", () => {
 		await user.hover(screen.getByText("Selection"));
 
 		expect(screen.queryByRole("img")).not.toBeInTheDocument();
+	});
+
+	it("shows a text preview on hover when text preview data is provided", async () => {
+		const user = userEvent.setup();
+
+		renderWithProviders(
+			<ComposerPreviewBadge
+				icon={<Tag className="size-3 shrink-0" strokeWidth={1.8} />}
+				label="CI summary"
+				preview={{
+					kind: "text",
+					title: "CI summary",
+					text: "Line one\nLine two",
+				}}
+			/>,
+		);
+
+		await user.hover(screen.getByText("CI summary"));
+
+		expect(await screen.findByRole("dialog")).toHaveTextContent(
+			/Line one\s+Line two/,
+		);
+	});
+
+	it("shows a code preview on hover when code preview data is provided", async () => {
+		const user = userEvent.setup();
+
+		renderWithProviders(
+			<ComposerPreviewBadge
+				icon={<Tag className="size-3 shrink-0" strokeWidth={1.8} />}
+				label="stack trace"
+				preview={{
+					kind: "code",
+					title: "stack trace",
+					language: "ts",
+					code: "const value = 1;",
+				}}
+			/>,
+		);
+
+		await user.hover(screen.getByText("stack trace"));
+
+		expect(await screen.findByRole("dialog")).toHaveTextContent("stack trace");
+		expect(await screen.findByTestId("code-block")).toHaveTextContent(
+			"ts::const value = 1;",
+		);
 	});
 });

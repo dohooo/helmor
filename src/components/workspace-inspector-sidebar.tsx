@@ -30,6 +30,7 @@ import {
 	type WorkspacePrActionItem,
 	type WorkspacePrActionStatus,
 } from "@/lib/api";
+import { buildComposerPreviewPayload } from "@/lib/composer-insert";
 import type { InspectorFileItem } from "@/lib/editor-session";
 import {
 	helmorQueryKeys,
@@ -692,6 +693,11 @@ function ActionsSection({
 				label: item.name,
 				submitText,
 				key: `pr-check:${item.id}`,
+				preview: buildComposerPreviewPayload({
+					title: item.name,
+					content: submitText,
+					preferredKind: "code",
+				}),
 			};
 		},
 		[workspaceId],

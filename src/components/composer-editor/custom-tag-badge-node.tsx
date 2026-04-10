@@ -11,7 +11,10 @@ import {
 } from "lexical";
 import { Tag } from "lucide-react";
 import type { ReactNode } from "react";
-import type { ComposerCustomTag } from "@/lib/composer-insert";
+import type {
+	ComposerCustomTag,
+	ComposerPreviewPayload,
+} from "@/lib/composer-insert";
 import { ComposerPreviewBadge } from "./composer-preview-badge";
 
 type SerializedCustomTagBadgeNode = Spread<
@@ -37,6 +40,7 @@ function ComposerCustomTagBadge({
 				/>
 			}
 			label={customTag.label}
+			preview={customTag.preview ?? null}
 			removeLabel="Remove tag"
 			onRemove={() => {
 				editor.update(() => {
@@ -52,6 +56,7 @@ export class CustomTagBadgeNode extends DecoratorNode<ReactNode> {
 	__id: string;
 	__label: string;
 	__submitText: string;
+	__preview: ComposerPreviewPayload | null;
 
 	static getType(): string {
 		return "custom-tag-badge";
@@ -63,6 +68,7 @@ export class CustomTagBadgeNode extends DecoratorNode<ReactNode> {
 				id: node.__id,
 				label: node.__label,
 				submitText: node.__submitText,
+				preview: node.__preview,
 			},
 			node.__key,
 		);
@@ -75,6 +81,7 @@ export class CustomTagBadgeNode extends DecoratorNode<ReactNode> {
 			id: serializedNode.id,
 			label: serializedNode.label,
 			submitText: serializedNode.submitText,
+			preview: serializedNode.preview,
 		});
 	}
 
@@ -83,6 +90,7 @@ export class CustomTagBadgeNode extends DecoratorNode<ReactNode> {
 		this.__id = customTag.id;
 		this.__label = customTag.label;
 		this.__submitText = customTag.submitText;
+		this.__preview = customTag.preview ?? null;
 	}
 
 	exportJSON(): SerializedCustomTagBadgeNode {
@@ -92,6 +100,7 @@ export class CustomTagBadgeNode extends DecoratorNode<ReactNode> {
 			id: this.__id,
 			label: this.__label,
 			submitText: this.__submitText,
+			...(this.__preview ? { preview: this.__preview } : {}),
 		};
 	}
 
@@ -120,6 +129,7 @@ export class CustomTagBadgeNode extends DecoratorNode<ReactNode> {
 			id: this.__id,
 			label: this.__label,
 			submitText: this.__submitText,
+			...(this.__preview ? { preview: this.__preview } : {}),
 		};
 	}
 

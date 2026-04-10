@@ -13,6 +13,7 @@ import {
 } from "./composer-preview-registry";
 
 const HOVER_PREVIEW_CLOSE_DELAY_MS = 100;
+const PREVIEW_POPOVER_WIDTH_CLASS = "w-[min(720px,calc(100vw-2rem))]";
 
 export type ComposerPreviewBadgeProps = {
 	icon: React.ReactNode;
@@ -124,7 +125,10 @@ export function ComposerPreviewBadge({
 				onCloseAutoFocus={(event) => event.preventDefault()}
 				onPointerEnter={openPreview}
 				onPointerLeave={scheduleClose}
-				className="w-[520px] max-w-[80vw] gap-0 overflow-hidden p-0"
+				className={cn(
+					PREVIEW_POPOVER_WIDTH_CLASS,
+					"max-w-[calc(100vw-2rem)] gap-0 overflow-hidden p-0",
+				)}
 			>
 				{previewContent}
 			</PopoverContent>

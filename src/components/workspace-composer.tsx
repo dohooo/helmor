@@ -138,7 +138,12 @@ function onEditorError(error: Error) {
 }
 
 // Draft cache — survives workspace switches within the same app session.
-type DraftEntry = { text: string; images: string[]; files: string[] };
+type DraftEntry = {
+	text: string;
+	images: string[];
+	files: string[];
+	customTags: ComposerCustomTag[];
+};
 const draftCache = new Map<string, DraftEntry>();
 
 /** Imperatively set Lexical editor content from draft text + attachment paths. */
@@ -244,6 +249,7 @@ function $appendComposerInsertItems(items: ComposerInsertItem[]) {
 					id: item.key ?? crypto.randomUUID(),
 					label: item.label,
 					submitText: item.submitText,
+					preview: item.preview ?? null,
 				}),
 			);
 		}
@@ -343,7 +349,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			if (editor) {
 				editor.read(() => {
 					const content = $extractComposerContent();
-					if (content.text || content.images.length || content.files.length) {
+					if (
+						content.text ||
+						content.images.length ||
+						content.files.length ||
+						content.customTags.length
+					) {
 						draftCache.set(prevKey, content);
 					} else {
 						draftCache.delete(prevKey);
@@ -357,7 +368,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 					cached?.text ?? restoreDraft ?? "",
 					cached?.images ?? restoreImages,
 					cached?.files ?? restoreFiles,
-					restoreCustomTags,
+					cached?.customTags ?? restoreCustomTags,
 				);
 			});
 		}

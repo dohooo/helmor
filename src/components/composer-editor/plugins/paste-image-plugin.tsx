@@ -2,6 +2,7 @@
  * Lexical plugin: intercept paste to handle:
  * 1. Clipboard image data (e.g. screenshot Cmd+Shift+4) → save to temp file → ImageBadgeNode
  * 2. Text image paths (e.g. /Users/x/screenshot.png) → ImageBadgeNode
+ * 3. Large plain text/code payloads → CustomTagBadgeNode with hover preview
  *
  * Uses CRITICAL priority to run before PlainTextPlugin's own paste handler.
  */
@@ -21,6 +22,8 @@ import {
 import { useEffect } from "react";
 import { isImagePath } from "@/components/image-preview";
 import { savePastedImage } from "@/lib/api";
+import { buildComposerPreviewInsertItem } from "@/lib/composer-insert";
+import { $createCustomTagBadgeNode } from "../custom-tag-badge-node";
 import { $createImageBadgeNode } from "../image-badge-node";
 
 /** Read a File/Blob as a base64 string (without the data: prefix). */
@@ -55,6 +58,23 @@ function $appendToEnd(...nodes: import("lexical").LexicalNode[]) {
 	spacer.select(1, 1);
 }
 
+function getClipboardData(event: unknown) {
+	if (!event || typeof event !== "object" || !("clipboardData" in event)) {
+		return null;
+	}
+
+	return (
+		(
+			event as {
+				clipboardData?: {
+					files?: File[] | FileList;
+					getData?: (format: string) => string;
+				} | null;
+			}
+		).clipboardData ?? null
+	);
+}
+
 export function PasteImagePlugin() {
 	const [editor] = useLexicalComposerContext();
 
@@ -62,14 +82,12 @@ export function PasteImagePlugin() {
 		return editor.registerCommand(
 			PASTE_COMMAND,
 			(event) => {
-				if (!(event instanceof ClipboardEvent)) return false;
-
-				const clipboardData = event.clipboardData;
+				const clipboardData = getClipboardData(event);
 				if (!clipboardData) return false;
 
 				// --- Case 1: Clipboard contains image file(s) (screenshot paste) ---
 				const imageFiles: File[] = [];
-				for (const file of clipboardData.files) {
+				for (const file of Array.from(clipboardData.files ?? [])) {
 					if (file.type.startsWith("image/")) {
 						imageFiles.push(file);
 					}
@@ -97,30 +115,60 @@ export function PasteImagePlugin() {
 				}
 
 				// --- Case 2: Clipboard contains text with image paths ---
-				const text = clipboardData.getData("text/plain");
+				const text = clipboardData.getData?.("text/plain") ?? "";
 				if (!text) return false;
 
 				const lines = text.split("\n");
 				const hasImages = lines.some((line) => isImagePath(line.trim()));
-				if (!hasImages) return false;
+				if (hasImages) {
+					event.preventDefault();
+
+					editor.update(() => {
+						const selection = $getSelection();
+						if (!$isRangeSelection(selection)) return;
+
+						for (let i = 0; i < lines.length; i++) {
+							const line = lines[i].trim();
+							if (isImagePath(line)) {
+								selection.insertNodes([$createImageBadgeNode(line)]);
+							} else if (line) {
+								selection.insertNodes([$createTextNode(line)]);
+							}
+							if (i < lines.length - 1 && (line || i === 0)) {
+								selection.insertNodes([$createLineBreakNode()]);
+							}
+						}
+					});
+
+					return true;
+				}
+
+				// --- Case 3: Clipboard contains large plain text/code ---
+				const previewInsertItem = buildComposerPreviewInsertItem({
+					content: text,
+				});
+				if (!previewInsertItem) {
+					return false;
+				}
 
 				event.preventDefault();
 
 				editor.update(() => {
 					const selection = $getSelection();
-					if (!$isRangeSelection(selection)) return;
+					const badgeNode = $createCustomTagBadgeNode({
+						id: previewInsertItem.key ?? crypto.randomUUID(),
+						label: previewInsertItem.label,
+						submitText: previewInsertItem.submitText,
+						preview: previewInsertItem.preview ?? null,
+					});
+					const spacer = $createTextNode(" ");
 
-					for (let i = 0; i < lines.length; i++) {
-						const line = lines[i].trim();
-						if (isImagePath(line)) {
-							selection.insertNodes([$createImageBadgeNode(line)]);
-						} else if (line) {
-							selection.insertNodes([$createTextNode(line)]);
-						}
-						if (i < lines.length - 1 && (line || i === 0)) {
-							selection.insertNodes([$createLineBreakNode()]);
-						}
+					if ($isRangeSelection(selection)) {
+						selection.insertNodes([badgeNode, spacer]);
+						return;
 					}
+
+					$appendToEnd(badgeNode);
 				});
 
 				return true;

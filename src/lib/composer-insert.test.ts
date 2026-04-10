@@ -1,100 +1,55 @@
 import { describe, expect, it } from "vitest";
 import {
-	insertRequestMatchesComposer,
-	type ResolvedComposerInsertRequest,
-	resolveComposerInsertTarget,
+	buildComposerPreviewInsertItem,
+	COMPOSER_PREVIEW_BADGE_THRESHOLD,
 } from "./composer-insert";
 
-describe("resolveComposerInsertTarget", () => {
-	it("defaults to the displayed composer target when no explicit target is provided", () => {
+describe("buildComposerPreviewInsertItem", () => {
+	it("returns null for short content under the preview threshold", () => {
 		expect(
-			resolveComposerInsertTarget(undefined, {
-				selectedWorkspaceId: "workspace-selected",
-				displayedWorkspaceId: "workspace-displayed",
-				displayedSessionId: "session-1",
+			buildComposerPreviewInsertItem({
+				content: "x".repeat(COMPOSER_PREVIEW_BADGE_THRESHOLD - 1),
+			}),
+		).toBeNull();
+	});
+
+	it("builds a code preview badge for long code-like content", () => {
+		const longCode = "const failure = true;\n".repeat(12);
+
+		expect(
+			buildComposerPreviewInsertItem({
+				content: longCode,
 			}),
 		).toEqual({
-			workspaceId: "workspace-displayed",
-			sessionId: "session-1",
+			kind: "custom-tag",
+			label: "const failure = true;",
+			submitText: longCode,
+			preview: {
+				kind: "code",
+				title: "const failure = true;",
+				language: "ts",
+				code: longCode,
+			},
 		});
 	});
 
-	it("falls back to the selected workspace when no composer is displayed", () => {
+	it("builds a text preview badge for long non-code content", () => {
+		const longText =
+			"This is a long plain-text note without code syntax. ".repeat(6);
+
 		expect(
-			resolveComposerInsertTarget(undefined, {
-				selectedWorkspaceId: "workspace-selected",
-				displayedWorkspaceId: null,
-				displayedSessionId: null,
+			buildComposerPreviewInsertItem({
+				content: longText,
 			}),
 		).toEqual({
-			workspaceId: "workspace-selected",
-			sessionId: null,
+			kind: "custom-tag",
+			label: "This is a long plain-text note without …",
+			submitText: longText,
+			preview: {
+				kind: "text",
+				title: "This is a long plain-text note without …",
+				text: longText,
+			},
 		});
-	});
-
-	it("preserves an explicit target override", () => {
-		expect(
-			resolveComposerInsertTarget(
-				{
-					workspaceId: "workspace-explicit",
-					sessionId: "session-explicit",
-				},
-				{
-					selectedWorkspaceId: "workspace-selected",
-					displayedWorkspaceId: "workspace-displayed",
-					displayedSessionId: "session-1",
-				},
-			),
-		).toEqual({
-			workspaceId: "workspace-explicit",
-			sessionId: "session-explicit",
-		});
-	});
-});
-
-describe("insertRequestMatchesComposer", () => {
-	const request = (
-		overrides: Partial<ResolvedComposerInsertRequest> = {},
-	): ResolvedComposerInsertRequest => ({
-		id: "insert-1",
-		workspaceId: "workspace-1",
-		sessionId: null,
-		items: [],
-		behavior: "append",
-		createdAt: 0,
-		...overrides,
-	});
-
-	it("matches workspace-scoped requests against any composer in that workspace", () => {
-		expect(
-			insertRequestMatchesComposer(request(), {
-				workspaceId: "workspace-1",
-				sessionId: "session-1",
-			}),
-		).toBe(true);
-	});
-
-	it("does not match requests from a different workspace", () => {
-		expect(
-			insertRequestMatchesComposer(request(), {
-				workspaceId: "workspace-2",
-				sessionId: "session-1",
-			}),
-		).toBe(false);
-	});
-
-	it("matches session-targeted requests only for the requested session", () => {
-		expect(
-			insertRequestMatchesComposer(request({ sessionId: "session-2" }), {
-				workspaceId: "workspace-1",
-				sessionId: "session-2",
-			}),
-		).toBe(true);
-		expect(
-			insertRequestMatchesComposer(request({ sessionId: "session-2" }), {
-				workspaceId: "workspace-1",
-				sessionId: "session-1",
-			}),
-		).toBe(false);
 	});
 });

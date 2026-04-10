@@ -261,9 +261,8 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 				],
 			}),
 		);
-		apiMocks.getWorkspacePrCheckInsertText.mockResolvedValue(
-			"Check: changes\n\nContent Log:\nStep failed",
-		);
+		const longCheckOutput = "const failure = true;\n".repeat(12);
+		apiMocks.getWorkspacePrCheckInsertText.mockResolvedValue(longCheckOutput);
 
 		renderWithProviders(
 			<ComposerInsertProvider value={insertIntoComposer}>
@@ -300,8 +299,14 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 				{
 					kind: "custom-tag",
 					label: "changes",
-					submitText: "Check: changes\n\nContent Log:\nStep failed",
+					submitText: longCheckOutput,
 					key: "pr-check:check-1",
+					preview: {
+						kind: "code",
+						title: "changes",
+						language: "ts",
+						code: longCheckOutput,
+					},
 				},
 			],
 			behavior: "append",

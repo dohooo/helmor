@@ -4,7 +4,9 @@ import type {
 	ComposerInsertItem,
 	ComposerInsertRequest,
 	ComposerInsertTarget,
+	ComposerPreviewPayload,
 } from "@/lib/composer-insert";
+import { buildComposerPreviewInsertItem } from "@/lib/composer-insert";
 import { useComposerInsert } from "@/lib/composer-insert-context";
 import { cn } from "@/lib/utils";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
@@ -15,6 +17,7 @@ export type AppendContextTagPayload = {
 	label: string;
 	submitText: string;
 	key?: string;
+	preview?: ComposerPreviewPayload | null;
 };
 
 export type AppendContextRequestPayload = {
@@ -58,16 +61,39 @@ function normalizeAppendContextPayload(
 		};
 	}
 
+	if (payload.preview) {
+		return {
+			target: payload.target,
+			items: [
+				{
+					kind: "custom-tag",
+					label: payload.label,
+					submitText: payload.submitText,
+					key: payload.key,
+					preview: payload.preview,
+				},
+			],
+			behavior: "append",
+		};
+	}
+
+	const previewInsertItem = buildComposerPreviewInsertItem({
+		content: payload.submitText,
+		label: payload.label,
+		key: payload.key,
+	});
+
+	if (!previewInsertItem) {
+		return {
+			target: payload.target,
+			items: [{ kind: "text", text: payload.submitText }],
+			behavior: "append",
+		};
+	}
+
 	return {
 		target: payload.target,
-		items: [
-			{
-				kind: "custom-tag",
-				label: payload.label,
-				submitText: payload.submitText,
-				key: payload.key,
-			},
-		],
+		items: [previewInsertItem],
 		behavior: "append",
 	};
 }
