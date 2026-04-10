@@ -312,6 +312,7 @@ pub fn send_message(
                 on_event(&AgentStreamEvent::Error {
                     message: msg,
                     persisted: true,
+                    internal: false,
                 });
                 break;
             }

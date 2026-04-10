@@ -2,6 +2,7 @@ import type {
 	AgentModelOption,
 	AgentModelSection,
 	MessagePart,
+	PullRequestInfo,
 	ThreadMessageLike,
 	WorkspaceGroup,
 	WorkspaceRow,
@@ -76,6 +77,57 @@ export function workspaceGroupIdFromStatus(
 			return "canceled";
 		default:
 			return "progress";
+	}
+}
+
+export type WorkspaceBranchTone =
+	| "working"
+	| "open"
+	| "merged"
+	| "closed"
+	| "inactive";
+
+export function getWorkspaceBranchTone({
+	workspaceState,
+	manualStatus,
+	derivedStatus,
+	prInfo,
+}: {
+	workspaceState?: string | null;
+	manualStatus?: string | null;
+	derivedStatus?: string | null;
+	prInfo?: Pick<PullRequestInfo, "state" | "isMerged"> | null;
+}): WorkspaceBranchTone {
+	if ((workspaceState ?? "").trim().toLowerCase() === "archived") {
+		return "inactive";
+	}
+
+	if (prInfo) {
+		if (prInfo.isMerged || prInfo.state === "MERGED") {
+			return "merged";
+		}
+
+		if (prInfo.state === "OPEN") {
+			return "open";
+		}
+
+		if (prInfo.state === "CLOSED") {
+			return "closed";
+		}
+	}
+
+	const raw = (manualStatus ?? derivedStatus ?? "").trim().toLowerCase();
+	switch (raw) {
+		case "done":
+			return "merged";
+		case "review":
+		case "in-review":
+			return "open";
+		case "cancelled":
+		case "canceled":
+			return "closed";
+		default:
+			return "working";
 	}
 }
 

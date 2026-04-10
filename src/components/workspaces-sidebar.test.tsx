@@ -1,6 +1,12 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
-import type { WorkspaceGroup, WorkspaceRow } from "@/lib/api";
+import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+	RepositoryCreateOption,
+	WorkspaceGroup,
+	WorkspaceRow,
+} from "@/lib/api";
+import { TooltipProvider } from "./ui/tooltip";
 import { WorkspacesSidebar } from "./workspaces-sidebar";
 
 const workspaceRow: WorkspaceRow = {
@@ -19,30 +25,84 @@ const workspaceGroups: WorkspaceGroup[] = [
 	},
 ];
 
+const repositories: RepositoryCreateOption[] = [
+	{
+		id: "repo-1",
+		name: "helmor",
+		defaultBranch: "main",
+		repoInitials: "HE",
+	},
+	{
+		id: "repo-2",
+		name: "dosu-cli",
+		defaultBranch: "develop",
+		repoInitials: "DO",
+	},
+];
+
+afterEach(() => {
+	cleanup();
+});
+
 describe("WorkspacesSidebar", () => {
 	it("updates the row icon immediately when a workspace enters sending state", () => {
 		const { rerender } = render(
-			<WorkspacesSidebar
-				groups={workspaceGroups}
-				archivedRows={[]}
-				selectedWorkspaceId="workspace-1"
-				sendingWorkspaceIds={new Set()}
-			/>,
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={workspaceGroups}
+					archivedRows={[]}
+					selectedWorkspaceId="workspace-1"
+					sendingWorkspaceIds={new Set()}
+				/>
+			</TooltipProvider>,
 		);
 
 		const initialRow = screen.getByRole("button", { name: "Workspace 1" });
 		expect(initialRow.querySelector(".animate-spin")).toBeNull();
 
 		rerender(
-			<WorkspacesSidebar
-				groups={workspaceGroups}
-				archivedRows={[]}
-				selectedWorkspaceId="workspace-1"
-				sendingWorkspaceIds={new Set(["workspace-1"])}
-			/>,
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={workspaceGroups}
+					archivedRows={[]}
+					selectedWorkspaceId="workspace-1"
+					sendingWorkspaceIds={new Set(["workspace-1"])}
+				/>
+			</TooltipProvider>,
 		);
 
 		const updatedRow = screen.getByRole("button", { name: "Workspace 1" });
 		expect(updatedRow.querySelector(".animate-spin")).not.toBeNull();
+	});
+
+	it("opens the repository picker and creates a workspace from the selected repository", async () => {
+		const user = userEvent.setup();
+		const onCreateWorkspace = vi.fn();
+
+		const { container } = render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={workspaceGroups}
+					archivedRows={[]}
+					availableRepositories={repositories}
+					onCreateWorkspace={onCreateWorkspace}
+				/>
+			</TooltipProvider>,
+		);
+
+		const [newWorkspaceButton] = within(container).getAllByRole("button", {
+			name: "New workspace",
+		});
+		await user.click(newWorkspaceButton);
+
+		expect(screen.queryByPlaceholderText("Search repositories")).toBeNull();
+		expect(screen.queryByText("Repositories")).toBeNull();
+		expect(screen.getByRole("option", { name: /helmor/i })).toBeInTheDocument();
+
+		const [firstRepositoryOption] = screen.getAllByRole("option");
+		await user.click(firstRepositoryOption);
+
+		expect(onCreateWorkspace).toHaveBeenCalledWith("repo-1");
+		expect(screen.queryByRole("option", { name: /helmor/i })).toBeNull();
 	});
 });

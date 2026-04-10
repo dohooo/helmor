@@ -22,7 +22,6 @@
 	-webkit-font-smoothing: antialiased;
 	-moz-osx-font-smoothing: grayscale;
 	-webkit-text-size-adjust: 100%;
-	--radius: 0.625rem;
 }
 
 html,
@@ -36,7 +35,7 @@ body,
 
 body {
 	min-height: 100vh;
-	background-color: var(--color-app-base);
+	background-color: var(--background);
 }
 
 .conversation-scroll-viewport {
@@ -95,8 +94,8 @@ body {
 	height: 2rem;
 	transform: translateX(-50%);
 	border: none;
-	background: var(--color-app-sidebar);
-	color: var(--color-app-muted);
+	background: var(--popover);
+	color: var(--muted-foreground);
 	border-radius: 9999px;
 	padding: 0;
 	cursor: pointer;
@@ -115,17 +114,17 @@ body {
 }
 
 .conversation-scroll-button:hover {
-	background: var(--color-app-sidebar-strong);
-	color: var(--color-app-foreground);
+	background: var(--accent);
+	color: var(--accent-foreground);
 }
 
 .helmor-shimmer-text {
 	color: transparent;
 	background-image: linear-gradient(
 		110deg,
-		color-mix(in oklch, var(--color-app-muted) 72%, transparent) 0%,
-		color-mix(in oklch, var(--color-app-foreground) 88%, transparent) 42%,
-		color-mix(in oklch, var(--color-app-muted) 72%, transparent) 68%
+		color-mix(in oklch, var(--muted-foreground) 72%, transparent) 0%,
+		color-mix(in oklch, var(--foreground) 88%, transparent) 42%,
+		color-mix(in oklch, var(--muted-foreground) 72%, transparent) 68%
 	);
 	background-size: 220% 100%;
 	background-position: 100% 50%;
@@ -150,7 +149,7 @@ body {
 .assistant-markdown-scale [data-streamdown="heading-5"],
 .assistant-markdown-scale [data-streamdown="heading-6"] {
 	margin: 0;
-	color: var(--color-app-foreground);
+	color: var(--foreground);
 }
 
 .assistant-markdown-scale [data-streamdown="heading-1"] {
@@ -181,7 +180,7 @@ body {
 
 .assistant-markdown-scale [data-streamdown="blockquote"] {
 	line-height: 1.45;
-	color: var(--color-app-muted);
+	color: var(--muted-foreground);
 }
 
 .assistant-markdown-scale [data-streamdown="inline-code"] {
@@ -204,7 +203,8 @@ body {
 
 * {
 	scrollbar-width: thin;
-	scrollbar-color: var(--color-app-scrollbar-thumb) transparent;
+	scrollbar-color: color-mix(in oklch, var(--foreground) 18%, transparent)
+		transparent;
 }
 
 *::-webkit-scrollbar {
@@ -220,12 +220,12 @@ body {
 *::-webkit-scrollbar-thumb {
 	border: 2px solid transparent;
 	border-radius: 999px;
-	background: var(--color-app-scrollbar-thumb);
+	background: color-mix(in oklch, var(--foreground) 18%, transparent);
 	background-clip: padding-box;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-	background: var(--color-app-scrollbar-thumb-hover);
+	background: color-mix(in oklch, var(--foreground) 30%, transparent);
 	background-clip: padding-box;
 }
 
@@ -288,40 +288,6 @@ body {
 	--radius-2xl: calc(var(--radius) * 1.8);
 	--radius-3xl: calc(var(--radius) * 2.2);
 	--radius-4xl: calc(var(--radius) * 2.6);
-
-	/* App semantic colors — dynamic via :root / .dark */
-	--color-app-base: var(--app-base);
-	--color-app-canvas: var(--app-canvas);
-	--color-app-elevated: var(--app-elevated);
-	--color-app-sidebar: var(--app-sidebar);
-	--color-app-sidebar-strong: var(--app-sidebar-strong);
-	--color-app-overlay: var(--app-overlay);
-	--color-app-row-hover: var(--app-row-hover);
-	--color-app-row-selected: var(--app-row-selected);
-	--color-app-toolbar-hover: var(--app-toolbar-hover);
-	--color-app-border: var(--app-border);
-	--color-app-border-strong: var(--app-border-strong);
-	--color-app-foreground: var(--app-foreground);
-	--color-app-foreground-soft: var(--app-foreground-soft);
-	--color-app-muted: var(--app-muted);
-	--color-app-tooltip: var(--app-tooltip);
-	--color-app-done: var(--app-done);
-	--color-app-review: var(--app-review);
-	--color-app-progress: var(--app-progress);
-	--color-app-backlog: var(--app-backlog);
-	--color-app-canceled: var(--app-canceled);
-	--color-app-project: var(--app-project);
-	--color-app-accent: var(--app-accent);
-	--color-app-accent-strong: var(--app-accent-strong);
-	--color-app-accent-cyan: var(--app-accent-cyan);
-	--color-app-accent-pink: var(--app-accent-pink);
-	--color-app-warm: var(--app-warm);
-	--color-app-positive: var(--app-positive);
-	--color-app-negative: var(--app-negative);
-	--color-app-warning: var(--app-warning);
-	--color-app-info: var(--app-info);
-	--color-app-scrollbar-thumb: var(--app-scrollbar-thumb);
-	--color-app-scrollbar-thumb-hover: var(--app-scrollbar-thumb-hover);
 	--animate-shine: shine var(--duration) infinite linear;
 	--animate-shiny-text: shiny-text 8s infinite;
 	@keyframes shine {
@@ -400,7 +366,7 @@ body {
 
 /* Streamdown theme overrides — minimal, no !important */
 .conversation-streamdown {
-	color: var(--color-app-foreground);
+	color: var(--foreground);
 }
 
 .conversation-streamdown [data-sd-animate] {
@@ -412,13 +378,12 @@ body {
 }
 
 .conversation-streamdown :where(a) {
-	color: var(--color-app-project);
+	color: var(--chart-3);
 }
 
 .conversation-streamdown :where(blockquote) {
-	color: var(--color-app-muted);
-	border-left: 0.25rem solid
-		color-mix(in oklch, var(--color-app-border) 90%, transparent);
+	color: var(--muted-foreground);
+	border-left: 0.25rem solid color-mix(in oklch, var(--border) 90%, transparent);
 }
 
 /*
@@ -441,8 +406,7 @@ body {
 	font-size: 11px;
 	line-height: 1.6;
 	margin: 0.75em 0;
-	border: 1px solid
-		color-mix(in oklch, var(--color-app-border) 92%, transparent);
+	border: 1px solid color-mix(in oklch, var(--border) 92%, transparent);
 	border-radius: 6px;
 	overflow: hidden;
 	background: transparent;
@@ -453,27 +417,23 @@ body {
 	text-align: left;
 	font-weight: 600;
 	white-space: nowrap;
-	color: var(--color-app-foreground);
-	background: var(--color-app-sidebar);
-	border-bottom: 1px solid
-		color-mix(in oklch, var(--color-app-border) 92%, transparent);
+	color: var(--foreground);
+	background: var(--muted);
+	border-bottom: 1px solid color-mix(in oklch, var(--border) 92%, transparent);
 }
 
 .aui-md-table thead th:not(:last-child) {
-	border-right: 1px solid
-		color-mix(in oklch, var(--color-app-border) 72%, transparent);
+	border-right: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
 }
 
 .aui-md-table tbody td {
 	padding: 7px 14px;
-	color: var(--color-app-foreground);
-	border-bottom: 1px solid
-		color-mix(in oklch, var(--color-app-border) 72%, transparent);
+	color: var(--foreground);
+	border-bottom: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
 }
 
 .aui-md-table tbody td:not(:last-child) {
-	border-right: 1px solid
-		color-mix(in oklch, var(--color-app-border) 72%, transparent);
+	border-right: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
 }
 
 .aui-md-table tbody tr:last-child td {

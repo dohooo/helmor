@@ -31,6 +31,8 @@ import {
 } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import { AnimatedShinyText } from "./ui/animated-shiny-text";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
 import { NumberTicker } from "./ui/number-ticker";
 import { ScrollArea } from "./ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
@@ -43,7 +45,7 @@ import {
 const DEFAULT_CHANGES_RATIO = 0.6;
 const DEFAULT_ACTIONS_RATIO = 0.4;
 const MIN_SECTION_HEIGHT = 48;
-const RESIZE_HIT_AREA = 8;
+const RESIZE_HIT_AREA = 10;
 
 type WorkspaceInspectorSidebarProps = {
 	workspaceRootPath?: string | null;
@@ -310,7 +312,7 @@ export function WorkspaceInspectorSidebar({
 		<div
 			ref={containerRef}
 			className={cn(
-				"flex h-full min-h-0 flex-col bg-app-sidebar",
+				"flex h-full min-h-0 flex-col bg-sidebar",
 				isResizing && "select-none",
 			)}
 		>
@@ -363,18 +365,18 @@ const TABS_ANIMATION_MS = 350;
 const TABS_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 
 const INSPECTOR_SECTION_HEADER_CLASS =
-	"flex h-9 min-w-0 shrink-0 items-center justify-between border-b border-app-border/60 bg-app-base/[0.3] px-3";
+	"flex h-9 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-muted/25 px-3";
 const INSPECTOR_SECTION_TITLE_CLASS =
-	"inline-flex h-9 items-center text-[13px] font-medium tracking-[-0.01em] leading-none text-app-foreground-soft";
+	"inline-flex h-9 items-center text-[13px] font-medium tracking-[-0.01em] leading-none text-muted-foreground";
 
 function getGitSectionHeaderHighlightClass(mode: WorkspaceCommitButtonMode) {
 	switch (mode) {
 		case "fix":
-			return "bg-[color-mix(in_oklch,var(--color-app-canceled)_18%,var(--color-app-base)_82%)]";
+			return "bg-[color-mix(in_oklch,var(--destructive)_14%,var(--background)_86%)]";
 		case "resolve-conflicts":
-			return "bg-[color-mix(in_oklch,var(--color-app-review)_16%,var(--color-app-base)_84%)]";
+			return "bg-[color-mix(in_oklch,var(--chart-4)_14%,var(--background)_86%)]";
 		case "merge":
-			return "bg-[rgb(20_57_35)]";
+			return "bg-[color-mix(in_oklch,var(--chart-2)_18%,var(--background)_82%)]";
 		default:
 			return null;
 	}
@@ -396,23 +398,45 @@ function InspectorTabsSection({
 	return (
 		<div
 			ref={wrapperRef}
-			className={cn("flex min-h-0 flex-col", open && "flex-1")}
+			className={cn("flex min-h-0 shrink-0 flex-col", open && "flex-1")}
 		>
 			<section
 				aria-label="Inspector section Tabs"
-				className="flex min-h-0 flex-1 flex-col border-b border-app-border/60 bg-app-sidebar"
+				className={cn(
+					"relative flex min-h-0 shrink-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar",
+					open && "flex-1",
+				)}
 			>
 				<Tabs
 					value={activeTab}
 					onValueChange={onTabChange}
-					className="flex min-h-0 flex-1 flex-col gap-0"
+					className={cn("flex min-h-0 flex-col gap-0", open && "flex-1")}
 				>
-					<div className="flex h-9 min-w-0 shrink-0 items-center border-b border-app-border/60 bg-app-base/[0.3] pl-1.5 pr-2">
-						<button
+					<div className={cn(INSPECTOR_SECTION_HEADER_CLASS, "relative z-10")}>
+						<TabsList
+							variant="line"
+							className="h-9 gap-4 border-none bg-transparent p-0"
+						>
+							<TabsTrigger
+								value="setup"
+								className="h-9 w-auto gap-0 px-0 text-[12px] font-medium text-muted-foreground data-[state=active]:border-muted-foreground/80 data-[state=active]:bg-transparent data-[state=active]:text-foreground"
+							>
+								Setup
+							</TabsTrigger>
+							<TabsTrigger
+								value="run"
+								className="h-9 w-auto gap-0 px-0 text-[12px] font-medium text-muted-foreground data-[state=active]:border-muted-foreground/80 data-[state=active]:bg-transparent data-[state=active]:text-foreground"
+							>
+								Run
+							</TabsTrigger>
+						</TabsList>
+						<Button
 							type="button"
 							aria-label="Toggle inspector tabs section"
 							onClick={onToggle}
-							className="mr-1 flex size-7 shrink-0 items-center justify-center rounded-md text-app-foreground-soft outline-none transition-colors hover:bg-app-foreground/[0.04]"
+							variant="ghost"
+							size="icon-sm"
+							className="ml-auto shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 						>
 							<ChevronDown
 								className="size-3.5"
@@ -422,33 +446,13 @@ function InspectorTabsSection({
 									transition: `transform ${TABS_ANIMATION_MS}ms ${TABS_EASING}`,
 								}}
 							/>
-						</button>
-
-						<TabsList
-							variant="line"
-							className="h-9 gap-0 border-none bg-transparent p-0"
-						>
-							<TabsTrigger
-								value="setup"
-								variant="line"
-								className="h-9 w-auto gap-0 px-2.5 text-[12px] font-medium text-app-foreground-soft data-[state=active]:border-app-foreground-soft/80 data-[state=active]:bg-transparent data-[state=active]:text-app-foreground"
-							>
-								Setup
-							</TabsTrigger>
-							<TabsTrigger
-								value="run"
-								variant="line"
-								className="h-9 w-auto gap-0 px-2.5 text-[12px] font-medium text-app-foreground-soft data-[state=active]:border-app-foreground-soft/80 data-[state=active]:bg-transparent data-[state=active]:text-app-foreground"
-							>
-								Run
-							</TabsTrigger>
-						</TabsList>
+						</Button>
 					</div>
 
 					{open && (
 						<div
 							aria-label="Inspector tabs body"
-							className="min-h-0 flex-1 bg-app-base/[0.16]"
+							className="min-h-0 flex-1 bg-sidebar"
 						/>
 					)}
 				</Tabs>
@@ -470,7 +474,7 @@ function HorizontalResizeHandle({
 			aria-orientation="horizontal"
 			aria-valuenow={0}
 			onMouseDown={onMouseDown}
-			className="group relative z-10 cursor-ns-resize touch-none"
+			className="group relative z-20 shrink-0 cursor-ns-resize touch-none"
 			style={{
 				height: `${RESIZE_HIT_AREA}px`,
 				marginTop: `-${RESIZE_HIT_AREA / 2}px`,
@@ -481,8 +485,8 @@ function HorizontalResizeHandle({
 				aria-hidden="true"
 				className={`pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 transition-[height,background-color,box-shadow] ${
 					isActive
-						? "h-[2px] bg-app-foreground/80 shadow-[0_0_12px_rgba(250,249,246,0.2)]"
-						: "h-px bg-transparent group-hover:h-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)]"
+						? "h-[2px] bg-foreground/80 shadow-[0_0_12px_rgba(0,0,0,0.12)] dark:shadow-[0_0_12px_rgba(255,255,255,0.16)]"
+						: "h-px bg-border/75 group-hover:h-[2px] group-hover:bg-muted-foreground/75"
 				}`}
 			/>
 		</div>
@@ -587,24 +591,27 @@ function ProviderIcon({ provider }: { provider: "github" | "vercel" }) {
 	if (provider === "vercel") {
 		return (
 			<TriangleIcon
-				className="size-3 shrink-0 fill-current text-app-foreground-soft"
+				className="size-3 shrink-0 fill-current text-muted-foreground"
 				strokeWidth={0}
 			/>
 		);
 	}
 	return (
-		<MarkGithubIcon size={12} className="shrink-0 text-app-foreground-soft" />
+		<MarkGithubIcon size={12} className="shrink-0 text-muted-foreground" />
 	);
 }
 
 function StatusIcon({ status }: { status: "success" | "pending" | "failure" }) {
 	if (status === "success") {
 		return (
-			<CheckIcon className="size-3 shrink-0 text-green-500" strokeWidth={2.2} />
+			<CheckIcon className="size-3 shrink-0 text-chart-2" strokeWidth={2.2} />
 		);
 	}
 	return (
-		<CircleIcon className="size-3 shrink-0 text-app-muted" strokeWidth={1.5} />
+		<CircleIcon
+			className="size-3 shrink-0 text-muted-foreground"
+			strokeWidth={1.5}
+		/>
 	);
 }
 
@@ -622,7 +629,7 @@ function ActionsSection({
 			ref={sectionRef}
 			aria-label="Inspector section Actions"
 			className={cn(
-				"flex min-h-0 flex-col border-b border-app-border/60 bg-app-sidebar",
+				"flex min-h-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar",
 				expanded && "flex-1",
 			)}
 		>
@@ -632,27 +639,27 @@ function ActionsSection({
 
 			<ScrollArea
 				aria-label="Actions panel body"
-				className={cn("bg-app-base/[0.16] text-[11.5px]", expanded && "flex-1")}
+				className={cn("bg-muted/18 text-[11.5px]", expanded && "flex-1")}
 				style={expanded ? undefined : { height: `${bodyHeight}px` }}
 			>
 				{/* Git status */}
 				<div className="px-2.5 pb-1 pt-2">
-					<span className="text-[10.5px] font-medium tracking-wide text-app-muted">
+					<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
 						Git status
 					</span>
 				</div>
 				{MOCK_GIT_STATUS.map((item) => (
 					<div
 						key={item.label}
-						className="flex items-center gap-1.5 px-2.5 py-[3px] text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.04]"
+						className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60"
 					>
 						<CircleIcon
-							className="size-3 shrink-0 text-app-muted"
+							className="size-3 shrink-0 text-muted-foreground"
 							strokeWidth={1.5}
 						/>
 						<span className="truncate">{item.label}</span>
 						{item.action && (
-							<span className="ml-auto shrink-0 cursor-pointer text-[10.5px] text-[#4f8dff] transition-colors hover:text-[#7aa9ff]">
+							<span className="ml-auto shrink-0 cursor-pointer text-[10.5px] text-primary transition-colors hover:text-primary/80">
 								{item.action}
 							</span>
 						)}
@@ -661,21 +668,21 @@ function ActionsSection({
 
 				{/* Deployments */}
 				<div className="px-2.5 pb-1 pt-2.5">
-					<span className="text-[10.5px] font-medium tracking-wide text-app-muted">
+					<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
 						Deployments
 					</span>
 				</div>
 				{MOCK_DEPLOYMENTS.map((item) => (
 					<div
 						key={item.name}
-						className="flex items-center gap-1.5 px-2.5 py-[3px] text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.04]"
+						className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60"
 					>
 						<StatusIcon status={item.status} />
 						<ProviderIcon provider={item.provider} />
 						<span className="truncate">{item.name}</span>
 						{item.hasLink && (
 							<ArrowUpRightIcon
-								className="ml-auto size-3 shrink-0 text-[#4f8dff] transition-colors hover:text-[#7aa9ff]"
+								className="ml-auto size-3 shrink-0 text-primary transition-colors hover:text-primary/80"
 								strokeWidth={1.8}
 							/>
 						)}
@@ -684,27 +691,27 @@ function ActionsSection({
 
 				{/* Checks */}
 				<div className="px-2.5 pb-1 pt-2.5">
-					<span className="text-[10.5px] font-medium tracking-wide text-app-muted">
+					<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
 						Checks
 					</span>
 				</div>
 				{MOCK_CHECKS.map((item) => (
 					<div
 						key={item.name}
-						className="flex items-center gap-1.5 px-2.5 py-[3px] text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.04]"
+						className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60"
 					>
 						<StatusIcon status={item.status} />
 						<ProviderIcon provider={item.provider} />
 						<span className="truncate">{item.name}</span>
 						{item.duration && (
-							<span className="shrink-0 text-[10.5px] text-app-muted">
+							<span className="shrink-0 text-[10.5px] text-muted-foreground">
 								{item.duration}
 							</span>
 						)}
 						{item.hasLink && (
 							<ArrowUpRightIcon
 								className={cn(
-									"size-3 shrink-0 text-[#4f8dff] transition-colors hover:text-[#7aa9ff]",
+									"size-3 shrink-0 text-primary transition-colors hover:text-primary/80",
 									!item.duration && "ml-auto",
 								)}
 								strokeWidth={1.8}
@@ -904,7 +911,7 @@ function ChangesSection({
 	return (
 		<section
 			aria-label="Inspector section Git"
-			className="flex min-h-0 flex-col border-b border-app-border/60 bg-app-sidebar"
+			className="flex min-h-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar"
 			style={{ height: `${bodyHeight}px` }}
 		>
 			<div
@@ -913,28 +920,26 @@ function ChangesSection({
 				<div className="flex min-w-0 items-center gap-1.5">
 					<span className={INSPECTOR_SECTION_TITLE_CLASS}>Git</span>
 					{prInfo && (
-						<>
-							<button
-								type="button"
-								onClick={() => {
-									void import("@tauri-apps/plugin-opener").then(
-										({ openUrl }) => {
-											void openUrl(prInfo.url);
-										},
-									);
-								}}
-								className={cn(
-									"inline-flex h-5.5 items-center gap-0.5 rounded-[3px] border px-2 text-[11px] font-semibold leading-none tracking-[0.01em] transition-colors",
-									prInfo.isMerged
-										? "border-[#8957E5]/45 bg-transparent text-[#8957E5] hover:border-[#8957E5]/65 hover:text-[#8957E5]"
-										: prInfo.state === "OPEN"
-											? "border-[rgb(22_163_74)]/55 text-[rgb(22_163_74)] hover:border-[rgb(22_163_74)]/70 hover:text-[rgb(22_163_74)]"
-											: "border-app-muted/40 text-app-muted hover:border-app-muted/60",
-								)}
-							>
-								PR #{prInfo.number}
-							</button>
-						</>
+						<Button
+							type="button"
+							variant="outline"
+							size="xs"
+							onClick={() => {
+								void import("@tauri-apps/plugin-opener").then(({ openUrl }) => {
+									void openUrl(prInfo.url);
+								});
+							}}
+							className={cn(
+								"h-5.5 gap-0.5 rounded-[3px] px-2 text-[11px] font-semibold leading-none tracking-[0.01em]",
+								prInfo.isMerged
+									? "border-[#8957E5]/45 bg-transparent text-[#8957E5] hover:border-[#8957E5]/65 hover:text-[#8957E5]"
+									: prInfo.state === "OPEN"
+										? "border-[rgb(22_163_74)]/55 text-[rgb(22_163_74)] hover:border-[rgb(22_163_74)]/70 hover:text-[rgb(22_163_74)]"
+										: "border-border/60 text-muted-foreground hover:border-border hover:text-foreground",
+							)}
+						>
+							PR #{prInfo.number}
+						</Button>
 					)}
 				</div>
 				{(hasChanges ||
@@ -951,7 +956,7 @@ function ChangesSection({
 
 			<ScrollArea
 				aria-label="Changes panel body"
-				className="bg-app-base/[0.16] font-mono text-[11.5px] flex-1 min-h-0"
+				className="bg-muted/20 font-mono text-[11.5px] flex-1 min-h-0"
 			>
 				{/* Uncommitted changes: staged + unstaged (auto-hide when empty) */}
 				{hasUncommittedChanges && (
@@ -1014,7 +1019,7 @@ function ChangesSection({
 
 				{/* Empty state: no uncommitted changes AND no branch diff */}
 				{!hasChanges && (
-					<div className="px-3 py-3 text-[11px] leading-5 text-app-muted">
+					<div className="px-3 py-3 text-[11px] leading-5 text-muted-foreground">
 						No changes on this branch yet.
 					</div>
 				)}
@@ -1058,14 +1063,17 @@ function ChangesGroup({
 }) {
 	return (
 		<div>
-			<div className="group/header flex w-full items-center gap-1 py-1 pl-1 pr-2 text-[11.5px] font-semibold tracking-[-0.01em] text-app-foreground-soft">
-				<button
+			<div className="group/header flex w-full items-center gap-1 py-1 pl-1 pr-2 text-[11.5px] font-semibold tracking-[-0.01em] text-muted-foreground">
+				<Button
 					type="button"
+					variant="ghost"
+					size="xs"
 					onClick={onToggle}
 					aria-expanded={open}
-					className="flex min-w-0 flex-1 items-center gap-1 text-left transition-colors hover:text-app-foreground"
+					className="h-auto min-w-0 flex-1 justify-start gap-1 rounded-none px-0 text-left hover:bg-transparent hover:text-foreground aria-expanded:bg-transparent aria-expanded:text-foreground"
 				>
 					<ChevronRightIcon
+						data-icon="inline-start"
 						className={cn(
 							"size-3 shrink-0 transition-transform",
 							open && "rotate-90",
@@ -1073,7 +1081,7 @@ function ChangesGroup({
 						strokeWidth={2}
 					/>
 					<span className="truncate">{label}</span>
-				</button>
+				</Button>
 				{onBatchAction && (
 					<RowIconButton
 						aria-label={
@@ -1089,9 +1097,12 @@ function ChangesGroup({
 						)}
 					</RowIconButton>
 				)}
-				<span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-app-elevated/60 px-1 text-[9.5px] font-semibold text-app-foreground-soft">
+				<Badge
+					variant="secondary"
+					className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] font-semibold"
+				>
 					{count}
-				</span>
+				</Badge>
 			</div>
 			{open && (
 				<div className="pl-3">
@@ -1157,14 +1168,17 @@ function BranchDiffSection({
 
 	return (
 		<div>
-			<div className="group/header flex w-full items-center gap-1 py-1 pl-1 pr-2 text-[11.5px] font-semibold leading-none tracking-[-0.01em] text-app-foreground-soft">
-				<button
+			<div className="group/header flex w-full items-center gap-1 py-1 pl-1 pr-2 text-[11.5px] font-semibold tracking-[-0.01em] text-muted-foreground">
+				<Button
 					type="button"
+					variant="ghost"
+					size="xs"
 					onClick={onToggle}
 					aria-expanded={open}
-					className="flex min-w-0 flex-1 items-center gap-1 text-left leading-none transition-colors hover:text-app-foreground"
+					className="h-auto min-w-0 flex-1 justify-start gap-1 rounded-none px-0 text-left hover:bg-transparent hover:text-foreground aria-expanded:bg-transparent aria-expanded:text-foreground"
 				>
 					<ChevronRightIcon
+						data-icon="inline-start"
 						className={cn(
 							"size-3 shrink-0 transition-transform",
 							open && "rotate-90",
@@ -1172,18 +1186,21 @@ function BranchDiffSection({
 						strokeWidth={2}
 					/>
 					<GitBranchIcon
-						className="size-3 shrink-0 text-app-muted"
+						className="size-3 shrink-0 text-muted-foreground"
 						strokeWidth={2}
 					/>
 					<span className="flex min-w-0 items-center truncate">
 						<span className="truncate">{branchLabel}</span>
-						<span className="mx-1 shrink-0 text-app-muted">→</span>
+						<span className="mx-1 shrink-0 text-muted-foreground">→</span>
 						<span className="shrink-0">{targetLabel}</span>
 					</span>
-				</button>
-				<span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-app-row-selected px-1 text-[9.5px] font-semibold leading-none text-app-muted">
+				</Button>
+				<Badge
+					variant="secondary"
+					className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none"
+				>
 					{count}
-				</span>
+				</Badge>
 			</div>
 			{open && (
 				<div className="pl-3">
@@ -1315,7 +1332,7 @@ function TreeNodeList({
 					return (
 						<div key={node.path}>
 							<div
-								className="flex cursor-pointer items-center gap-1 py-[1.5px] pr-2 text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.04]"
+								className="flex cursor-pointer items-center gap-1 py-[1.5px] pr-2 text-muted-foreground transition-colors hover:bg-accent/60"
 								style={{ paddingLeft: `${depth * 12 + 8}px` }}
 								onClick={() => onToggle(node.path)}
 								onKeyDown={(e) => {
@@ -1366,11 +1383,11 @@ function TreeNodeList({
 					<div
 						key={node.path}
 						className={cn(
-							"group/row flex cursor-pointer items-center gap-1 py-[1.5px] pr-2 text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.04]",
+							"group/row flex cursor-pointer items-center gap-1 py-[1.5px] pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
 							selected &&
 								(editorMode
-									? "bg-app-row-selected text-app-foreground"
-									: "bg-app-foreground/[0.05] text-app-foreground"),
+									? "bg-accent text-foreground"
+									: "bg-muted/60 text-foreground"),
 						)}
 						style={{ paddingLeft: `${depth * 12 + 8 + 14}px` }}
 						role="treeitem"
@@ -1432,11 +1449,11 @@ function ChangesFlatView({
 				<div
 					key={change.path}
 					className={cn(
-						"group/row flex cursor-pointer items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.04]",
+						"group/row flex cursor-pointer items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
 						change.absolutePath === activeEditorPath &&
 							(editorMode
-								? "bg-app-row-selected text-app-foreground"
-								: "bg-app-foreground/[0.05] text-app-foreground"),
+								? "bg-accent text-foreground"
+								: "bg-muted/60 text-foreground"),
 					)}
 					role="button"
 					tabIndex={0}
@@ -1458,7 +1475,7 @@ function ChangesFlatView({
 					</ShinyFlash>
 					<span
 						className={cn(
-							"ml-auto shrink-0 truncate text-[10px] text-app-muted",
+							"ml-auto shrink-0 truncate text-[10px] text-muted-foreground",
 							hasAction && "group-hover/row:hidden",
 						)}
 					>
@@ -1559,7 +1576,7 @@ function RowHoverActions({
 				<RowIconButton
 					aria-label="Discard file changes"
 					onClick={() => onDiscard(path)}
-					className="text-app-foreground-soft hover:bg-app-foreground/[0.08] hover:text-app-foreground"
+					className="text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 				>
 					<Undo2Icon className="size-3.5" strokeWidth={2} />
 				</RowIconButton>
@@ -1568,7 +1585,7 @@ function RowHoverActions({
 				<RowIconButton
 					aria-label={action === "stage" ? "Stage file" : "Unstage file"}
 					onClick={() => onStageAction(path)}
-					className="text-app-foreground-soft hover:bg-app-foreground/[0.08] hover:text-app-foreground"
+					className="text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 				>
 					{action === "stage" ? (
 						<PlusIcon className="size-3.5" strokeWidth={2} />
@@ -1593,21 +1610,20 @@ function RowIconButton({
 	"aria-label": string;
 }) {
 	return (
-		<button
+		<Button
 			type="button"
+			variant="ghost"
+			size="icon-xs"
 			aria-label={ariaLabel}
 			onClick={(event) => {
 				event.stopPropagation();
 				onClick();
 			}}
 			onKeyDown={(event) => event.stopPropagation()}
-			className={cn(
-				"inline-flex size-4 items-center justify-center rounded-sm transition-colors",
-				className,
-			)}
+			className={cn("size-4 rounded-sm transition-colors", className)}
 		>
 			{children}
-		</button>
+		</Button>
 	);
 }
 
@@ -1623,13 +1639,13 @@ function LineStats({
 	return (
 		<span className="flex shrink-0 items-center gap-1 text-[10px]">
 			{insertions > 0 && (
-				<span className="text-green-500">
-					+<NumberTicker value={insertions} className="text-green-500" />
+				<span className="text-chart-2">
+					+<NumberTicker value={insertions} className="text-chart-2" />
 				</span>
 			)}
 			{deletions > 0 && (
-				<span className="text-red-400">
-					−<NumberTicker value={deletions} className="text-red-400" />
+				<span className="text-destructive">
+					−<NumberTicker value={deletions} className="text-destructive" />
 				</span>
 			)}
 		</span>

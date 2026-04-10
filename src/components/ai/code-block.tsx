@@ -139,13 +139,13 @@ export const CodeBlock = ({
 		<CodeBlockContext.Provider value={{ code }}>
 			<div
 				className={cn(
-					"group relative my-4 w-full min-w-0 max-w-full overflow-hidden rounded-lg border border-app-border/70 bg-app-sidebar/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]",
+					"group relative my-4 w-full min-w-0 max-w-full overflow-hidden rounded-lg border border-border/70 bg-background/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]",
 					className,
 				)}
 				{...props}
 			>
-				<div className="flex items-center justify-between gap-2 border-b border-app-border/60 px-3 py-2">
-					<span className="truncate font-mono text-[10.5px] tracking-wide text-app-muted uppercase">
+				<div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
+					<span className="truncate font-mono text-[10.5px] tracking-wide text-muted-foreground uppercase">
 						{language || "code"}
 					</span>
 					<div className="flex items-center gap-1">{children}</div>
@@ -193,7 +193,7 @@ export const CodeBlockCopyButton = ({
 	return (
 		<Button
 			className={cn(
-				"h-7 w-7 rounded-md border border-app-border/60 bg-app-base/70 text-app-muted hover:bg-app-toolbar-hover hover:text-app-foreground",
+				"h-7 w-7 rounded-md border border-border/60 bg-background/70 text-muted-foreground hover:bg-accent/60 hover:text-foreground",
 				className,
 			)}
 			onClick={() => {

@@ -58,7 +58,8 @@ import {
 	loadHiddenSessions,
 	type MessagePart,
 	type PromptSuggestionPart,
-	prefetchWorkspaceRemoteRefs,
+	type PullRequestInfo,
+	prefetchRemoteRefs,
 	renameSession,
 	type SessionAttachmentRecord,
 	type SystemNoticePart,
@@ -83,23 +84,32 @@ import { helmorQueryKeys } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { childrenStructurallyEqual } from "@/lib/structural-equality";
 import { cn } from "@/lib/utils";
+import {
+	getWorkspaceBranchTone,
+	type WorkspaceBranchTone,
+} from "@/lib/workspace-helpers";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "./ai/reasoning";
 import { ClaudeIcon, OpenAIIcon } from "./icons";
 import { ImagePreviewBadge } from "./image-preview";
-import { BaseTooltip } from "./ui/base-tooltip";
+import { Button } from "./ui/button";
+import { Command, CommandEmpty, CommandItem, CommandList } from "./ui/command";
 import {
-	Command,
-	CommandEmpty,
-	CommandInput,
-	CommandItem,
-	CommandList,
-} from "./ui/command";
+	Empty,
+	EmptyDescription,
+	EmptyHeader,
+	EmptyMedia,
+	EmptyTitle,
+} from "./ui/empty";
+import { Input } from "./ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Separator } from "./ui/separator";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type WorkspacePanelProps = {
 	workspace: WorkspaceDetail | null;
+	prInfo?: PullRequestInfo | null;
 	sessions: WorkspaceSessionSummary[];
 	selectedSessionId: string | null;
 	selectedProvider?: string | null;
@@ -156,6 +166,21 @@ const PROGRESSIVE_VIEWPORT_DEFAULT_HEIGHT = 900;
 const PROGRESSIVE_VIEWPORT_HEADER_HEIGHT = 24;
 const PROGRESSIVE_VIEWPORT_FOOTER_HEIGHT = 20;
 
+function getBranchToneClassName(tone: WorkspaceBranchTone) {
+	switch (tone) {
+		case "open":
+			return "text-[var(--workspace-branch-status-open)]";
+		case "merged":
+			return "text-[var(--workspace-branch-status-merged)]";
+		case "closed":
+			return "text-[var(--workspace-branch-status-closed)]";
+		case "inactive":
+			return "text-[var(--workspace-branch-status-inactive)]";
+		default:
+			return "text-[var(--workspace-branch-status-working)]";
+	}
+}
+
 type ThreadViewportSlot = ComponentType<Record<string, never>>;
 
 function preloadStreamdown() {
@@ -167,6 +192,7 @@ function preloadStreamdown() {
 
 export const WorkspacePanel = memo(function WorkspacePanel({
 	workspace,
+	prInfo = null,
 	sessions,
 	selectedSessionId,
 	selectedProvider,
@@ -222,6 +248,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 			<div className="flex min-h-0 flex-1 flex-col bg-transparent">
 				<WorkspacePanelHeader
 					workspace={workspace}
+					prInfo={prInfo}
 					sessions={sessions}
 					selectedSessionId={selectedSessionId}
 					selectedProvider={selectedProvider}
@@ -271,6 +298,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 
 type WorkspacePanelHeaderProps = {
 	workspace: WorkspaceDetail | null;
+	prInfo?: PullRequestInfo | null;
 	sessions: WorkspaceSessionSummary[];
 	selectedSessionId: string | null;
 	selectedProvider?: string | null;
@@ -288,6 +316,7 @@ type WorkspacePanelHeaderProps = {
 
 const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	workspace,
+	prInfo = null,
 	sessions,
 	selectedSessionId,
 	selectedProvider,
@@ -302,6 +331,12 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	onSessionRenamed,
 	onWorkspaceChanged,
 }: WorkspacePanelHeaderProps) {
+	const branchTone = getWorkspaceBranchTone({
+		workspaceState: workspace?.state,
+		manualStatus: workspace?.manualStatus,
+		derivedStatus: workspace?.derivedStatus,
+		prInfo,
+	});
 	const [showHistory, setShowHistory] = useState(false);
 	const [hiddenSessions, setHiddenSessions] = useState<
 		WorkspaceSessionSummary[]
@@ -310,7 +345,7 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	const queryClient = useQueryClient();
 	const branchesQuery = useQuery({
 		queryKey: ["remoteBranches", workspace?.id],
-		queryFn: () => listRemoteBranches(workspace!.id),
+		queryFn: () => listRemoteBranches({ workspaceId: workspace!.id }),
 		enabled: false, // only fetch on demand
 		staleTime: 5 * 60 * 1000, // cache for 5 minutes
 		gcTime: 10 * 60 * 1000,
@@ -550,23 +585,28 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 			>
 				<div className="flex min-w-0 items-center gap-2 text-[12.5px]">
 					{headerLeading}
-					<span className="inline-flex items-center gap-1 px-1 py-0.5 font-medium text-app-foreground">
-						<GitBranch className="size-3.5 text-app-warm" strokeWidth={1.9} />
+					<span className="inline-flex items-center gap-1 px-1 py-0.5 font-medium text-foreground">
+						<GitBranch
+							className={cn("size-3.5", getBranchToneClassName(branchTone))}
+							strokeWidth={1.9}
+						/>
 						<span className="truncate">{workspace?.branch ?? "No branch"}</span>
 					</span>
 					{workspace?.intendedTargetBranch ? (
 						<>
 							<ArrowRight
-								className="relative top-px size-3 shrink-0 self-center text-app-muted"
+								className="relative top-px size-3 shrink-0 self-center text-muted-foreground"
 								strokeWidth={1.8}
 							/>
 							{workspace.state === "archived" ? (
-								<span className="px-1 py-0.5 font-medium text-app-foreground-soft">
+								<span className="px-1 py-0.5 font-medium text-muted-foreground">
+									{workspace.remote ?? "origin"}/
 									{workspace.intendedTargetBranch}
 								</span>
 							) : (
 								<BranchPicker
 									currentBranch={workspace.intendedTargetBranch ?? ""}
+									displayRemote={workspace.remote ?? "origin"}
 									branches={remoteBranches}
 									loading={loadingBranches}
 									onOpen={() => {
@@ -578,7 +618,7 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 										// When it returns, refetch the local list so any new/
 										// removed branches show up. Errors are silent — the
 										// dropdown is still usable with the cached list.
-										void prefetchWorkspaceRemoteRefs(workspace.id)
+										void prefetchRemoteRefs({ workspaceId: workspace.id })
 											.then((res) => {
 												if (res.fetched) {
 													void branchesQuery.refetch();
@@ -614,7 +654,7 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 												onWorkspaceChanged?.();
 												if (reset) {
 													pushToast(
-														`Local branch reset to origin/${branch}`,
+														`Local branch reset to ${workspace.remote ?? "origin"}/${branch}`,
 														`Switched to ${branch}`,
 														"default",
 													);
@@ -647,7 +687,7 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 						</>
 					) : null}
 					{workspace?.state === "archived" ? (
-						<span className="px-1 py-0.5 font-medium text-app-muted">
+						<span className="px-1 py-0.5 font-medium text-muted-foreground">
 							Archived
 						</span>
 					) : null}
@@ -663,7 +703,7 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 			<div className="flex items-center px-4 pb-1">
 				<div className="scrollbar-none min-w-0 flex-1 overflow-x-auto">
 					{loadingWorkspace ? (
-						<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-app-muted">
+						<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
 							<Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
 							Loading
 						</div>
@@ -677,7 +717,7 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 						>
 							<TabsList
 								aria-label="Sessions"
-								className="inline-flex w-auto justify-start bg-app-sidebar"
+								className="inline-flex min-w-full w-max justify-start self-start"
 							>
 								{sessions.map((session) => {
 									const selected = session.id === selectedSessionId;
@@ -688,102 +728,97 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 									const isEditing = editingSessionId === session.id;
 
 									return (
-										<BaseTooltip
+										<TabsTrigger
 											key={session.id}
-											side="bottom"
-											content={<span>{displaySessionTitle(session)}</span>}
+											value={session.id}
+											title={displaySessionTitle(session)}
+											onMouseEnter={() => {
+												onPrefetchSession?.(session.id);
+											}}
+											onFocus={() => {
+												onPrefetchSession?.(session.id);
+											}}
+											className="group/tab relative h-full w-auto max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-muted-foreground data-[state=active]:text-foreground"
 										>
-											<TabsTrigger
-												value={session.id}
-												onMouseEnter={() => {
-													onPrefetchSession?.(session.id);
-												}}
-												onFocus={() => {
-													onPrefetchSession?.(session.id);
-												}}
-												className="group/tab relative w-[7rem] shrink-0 justify-start gap-1.5 overflow-hidden pr-5 text-app-foreground-soft data-[state=active]:text-app-foreground"
-											>
-												<SessionProviderIcon
-													agentType={
-														selected
-															? (selectedProvider ?? session.agentType)
-															: session.agentType
+											<SessionProviderIcon
+												agentType={
+													selected
+														? (selectedProvider ?? session.agentType)
+														: session.agentType
+												}
+												active={isActive}
+											/>
+											{isEditing ? (
+												<Input
+													// Mounted only when entering edit mode, so autoFocus
+													// fires exactly once instead of refocusing on every
+													// parent re-render (e.g. during streaming).
+													autoFocus
+													value={editingTitle}
+													onChange={(event) =>
+														setEditingTitle(event.target.value)
 													}
-													active={isActive}
-												/>
-												{isEditing ? (
-													<input
-														// Mounted only when entering edit mode, so autoFocus
-														// fires exactly once instead of refocusing on every
-														// parent re-render (e.g. during streaming).
-														// biome-ignore lint/a11y/noAutofocus: contextual rename input
-														autoFocus
-														value={editingTitle}
-														onChange={(event) =>
-															setEditingTitle(event.target.value)
+													onKeyDown={(event) => {
+														if (event.key === "Enter") {
+															event.preventDefault();
+															void handleCommitRename();
+														} else if (event.key === "Escape") {
+															handleCancelRename();
 														}
-														onKeyDown={(event) => {
-															if (event.key === "Enter") {
-																event.preventDefault();
-																void handleCommitRename();
-															} else if (event.key === "Escape") {
-																handleCancelRename();
-															}
-														}}
-														onBlur={() => void handleCommitRename()}
-														onClick={(event) => event.stopPropagation()}
-														className="w-20 truncate rounded border border-app-border bg-app-base px-1 py-0 text-[13px] font-medium text-app-foreground outline-none focus:border-app-border-strong"
-													/>
-												) : (
+													}}
+													onBlur={() => void handleCommitRename()}
+													onClick={(event) => event.stopPropagation()}
+													className="h-6 w-20 truncate rounded-md border-border bg-background px-1.5 py-0 text-[13px] font-medium text-foreground"
+												/>
+											) : (
+												<span
+													className={cn(
+														"truncate font-medium",
+														hasUnread && !selected
+															? "text-foreground"
+															: undefined,
+													)}
+												>
+													{displaySessionTitle(session)}
+												</span>
+											)}
+											{hasUnread && !isEditing ? (
+												<span
+													aria-label="Unread session"
+													className="size-1.5 shrink-0 rounded-full bg-chart-2"
+												/>
+											) : null}
+											{!isEditing ? (
+												<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-[linear-gradient(to_right,transparent_0%,#2F2F2F_35%,#2F2F2F_100%)] pl-5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible">
 													<span
-														className={cn(
-															"truncate font-medium",
-															hasUnread && !selected
-																? "text-app-foreground"
-																: undefined,
-														)}
+														role="button"
+														aria-label="Rename session"
+														onClick={(event) =>
+															handleStartRename(session, event)
+														}
+														className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
 													>
-														{displaySessionTitle(session)}
+														<Pencil className="size-2.5" strokeWidth={2} />
 													</span>
-												)}
-												{hasUnread && !isEditing ? (
 													<span
-														aria-label="Unread session"
-														className="size-1.5 shrink-0 rounded-full bg-app-progress"
-													/>
-												) : null}
-												{!isEditing ? (
-													<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-gradient-to-r from-transparent via-muted via-[35%] to-muted pl-5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible group-data-[state=active]/tab:via-background group-data-[state=active]/tab:to-background">
-														<span
-															role="button"
-															aria-label="Rename session"
-															onClick={(event) =>
-																handleStartRename(session, event)
-															}
-															className="flex items-center justify-center rounded-sm p-0.5 hover:bg-app-toolbar-hover"
-														>
-															<Pencil className="size-2.5" strokeWidth={2} />
-														</span>
-														<span
-															role="button"
-															aria-label="Close session"
-															onClick={(event) =>
-																handleHideSession(session.id, event)
-															}
-															className="flex items-center justify-center rounded-sm p-0.5 hover:bg-app-toolbar-hover"
-														>
-															<X className="size-2.5" strokeWidth={2} />
-														</span>
+														role="button"
+														aria-label="Close session"
+														onClick={(event) =>
+															handleHideSession(session.id, event)
+														}
+														className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
+													>
+														<X className="size-2.5" strokeWidth={2} />
 													</span>
-												) : null}
-											</TabsTrigger>
-										</BaseTooltip>
+												</span>
+											) : null}
+										</TabsTrigger>
 									);
 								})}
 							</TabsList>
 						</Tabs>
 					) : (
-						<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-app-muted">
+						<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
 							<AlertCircle className="size-3" strokeWidth={1.8} />
 							No sessions
 						</div>
@@ -791,37 +826,39 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				</div>
 
 				{/* New session button */}
-				<button
-					type="button"
+				<Button
 					aria-label="New session"
 					onClick={handleCreateSession}
-					className="ml-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground-soft"
+					variant="ghost"
+					size="icon-sm"
+					className="ml-0.5 shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 				>
 					<Plus className="size-3.5" strokeWidth={1.8} />
-				</button>
+				</Button>
 
 				{/* History button — right end of tab bar */}
 				<div className="relative ml-1 shrink-0">
-					<button
-						type="button"
+					<Button
 						aria-label="Session history"
 						onClick={handleToggleHistory}
+						variant="ghost"
+						size="icon-sm"
 						className={cn(
-							"flex size-7 items-center justify-center rounded-lg text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground-soft",
-							showHistory && "bg-app-toolbar-hover text-app-foreground-soft",
+							"text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+							showHistory && "bg-accent/60 text-foreground",
 						)}
 					>
 						<History className="size-3.5" strokeWidth={1.8} />
-					</button>
+					</Button>
 
 					{/* Dropdown menu */}
 					{showHistory ? (
-						<div className="absolute right-0 top-full z-30 mt-1 w-56 rounded-lg border border-app-border bg-app-sidebar py-1 shadow-lg">
+						<div className="absolute right-0 top-full z-30 mt-1 w-56 rounded-lg border border-border bg-popover py-1 shadow-lg">
 							{hiddenSessions.length > 0 ? (
 								hiddenSessions.map((session) => (
 									<div
 										key={session.id}
-										className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-[12px] text-app-foreground-soft hover:bg-app-toolbar-hover"
+										className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-[12px] text-muted-foreground hover:bg-accent/60"
 									>
 										<div className="flex min-w-0 items-center gap-1.5">
 											<SessionProviderIcon
@@ -833,27 +870,29 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											</span>
 										</div>
 										<div className="flex shrink-0 items-center gap-0.5">
-											<button
-												type="button"
+											<Button
 												aria-label="Restore session"
 												onClick={() => handleUnhide(session.id)}
-												className="rounded-sm p-1 text-app-muted transition-colors hover:text-app-foreground-soft"
+												variant="ghost"
+												size="icon-xs"
+												className="text-muted-foreground hover:text-foreground"
 											>
 												<RotateCcw className="size-3" strokeWidth={1.8} />
-											</button>
-											<button
-												type="button"
+											</Button>
+											<Button
 												aria-label="Delete session permanently"
 												onClick={() => handleDelete(session.id)}
-												className="rounded-sm p-1 text-app-muted transition-colors hover:text-red-400"
+												variant="ghost"
+												size="icon-xs"
+												className="text-muted-foreground hover:text-destructive"
 											>
 												<Trash2 className="size-3" strokeWidth={1.8} />
-											</button>
+											</Button>
 										</div>
 									</div>
 								))
 							) : (
-								<div className="px-2.5 py-1.5 text-[11px] text-app-muted">
+								<div className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
 									No hidden sessions
 								</div>
 							)}
@@ -1052,8 +1091,10 @@ function ChatThread({
 				usePlainThread={usePlainThread}
 				contentRef={contentRef}
 			>
-				<button
+				<Button
 					type="button"
+					variant="ghost"
+					size="icon-sm"
 					onClick={() => {
 						scrollToBottom("instant");
 					}}
@@ -1061,7 +1102,7 @@ function ChatThread({
 					aria-label="Scroll to latest message"
 				>
 					<ArrowDown className="size-4" strokeWidth={2} />
-				</button>
+				</Button>
 			</ConversationViewport>
 		</HelmorProfiler>
 	);
@@ -1856,11 +1897,11 @@ function StreamingFooter() {
 			: `${Math.floor(elapsed / 60)}m ${(elapsed % 60).toString().padStart(2, "0")}s`;
 
 	return (
-		<div className="flex items-center gap-1.5 px-5 py-3 text-[12px] tabular-nums text-app-muted">
+		<div className="flex items-center gap-1.5 px-5 py-3 text-[12px] tabular-nums text-muted-foreground">
 			<span className="flex gap-[2px]">
-				<span className="inline-block size-[3px] animate-bounce rounded-full bg-app-muted [animation-delay:0ms]" />
-				<span className="inline-block size-[3px] animate-bounce rounded-full bg-app-muted [animation-delay:150ms]" />
-				<span className="inline-block size-[3px] animate-bounce rounded-full bg-app-muted [animation-delay:300ms]" />
+				<span className="inline-block size-[3px] animate-bounce rounded-full bg-muted-foreground [animation-delay:0ms]" />
+				<span className="inline-block size-[3px] animate-bounce rounded-full bg-muted-foreground [animation-delay:150ms]" />
+				<span className="inline-block size-[3px] animate-bounce rounded-full bg-muted-foreground [animation-delay:300ms]" />
 			</span>
 			{display}
 		</div>
@@ -1920,7 +1961,7 @@ function ChatUserMessage({ message }: { message: RenderedMessage }) {
 			className="flex min-w-0 justify-end"
 		>
 			<div
-				className="max-w-[75%] overflow-hidden rounded-md bg-app-foreground/[0.03] px-3 py-2 leading-7 text-app-foreground"
+				className="max-w-[75%] overflow-hidden rounded-md bg-accent/35 px-3 py-2 leading-7 text-foreground"
 				style={{ fontSize: `${Math.max(settings.fontSize - 1, 12)}px` }}
 			>
 				<p className="whitespace-pre-wrap break-words">
@@ -2041,8 +2082,8 @@ function MessageStatusBadge({ reason }: { reason?: string }) {
 function statusBadgeMeta(
 	reason: string,
 ): { label: string; tone: string; icon: React.ReactNode } | null {
-	const negativeTone = "bg-app-negative/10 text-app-negative";
-	const warmTone = "bg-app-warning/10 text-app-warning";
+	const negativeTone = "bg-destructive/10 text-destructive";
+	const warmTone = "bg-chart-5/10 text-chart-5";
 	switch (reason) {
 		case "max_tokens":
 			return {
@@ -2088,7 +2129,7 @@ function ChatSystemMessage({ message }: { message: RenderedMessage }) {
 			data-message-role="system"
 			className="group/sys flex min-w-0 items-center gap-1.5"
 		>
-			<div className="py-1 text-[11px] text-app-muted">
+			<div className="py-1 text-[11px] text-muted-foreground">
 				{parts.map((part, idx) => {
 					if (isSystemNoticePart(part)) {
 						return <SystemNotice key={idx} part={part} />;
@@ -2116,16 +2157,16 @@ function SystemNotice({ part }: { part: SystemNoticePart }) {
 				: Info;
 	const iconClass =
 		part.severity === "error"
-			? "text-app-negative"
+			? "text-destructive"
 			: part.severity === "warning"
-				? "text-app-warning"
-				: "text-app-info";
+				? "text-chart-5"
+				: "text-chart-3";
 	return (
 		<span className="inline-flex items-center gap-1">
 			<Icon className={cn("size-3 shrink-0", iconClass)} strokeWidth={1.8} />
 			<span>{part.label}</span>
 			{part.body ? (
-				<span className="ml-1 text-app-muted/70">— {part.body}</span>
+				<span className="ml-1 text-muted-foreground/70">— {part.body}</span>
 			) : null}
 		</span>
 	);
@@ -2133,25 +2174,39 @@ function SystemNotice({ part }: { part: SystemNoticePart }) {
 
 function PromptSuggestion({ part }: { part: PromptSuggestionPart }) {
 	return (
-		<BaseTooltip content={<span>Use this prompt</span>}>
-			<button
-				type="button"
-				className="my-1 inline-flex items-center gap-1 rounded-md border border-app-foreground/[0.08] bg-app-foreground/[0.02] px-2 py-1 text-[11px] text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.05]"
-				onClick={() => {
-					const composer = document.querySelector<HTMLTextAreaElement>(
-						"textarea[data-composer-input]",
-					);
-					if (composer) {
-						composer.value = part.text;
-						composer.dispatchEvent(new Event("input", { bubbles: true }));
-						composer.focus();
-					}
-				}}
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					type="button"
+					variant="outline"
+					size="xs"
+					className="my-1 h-auto rounded-md border-border/60 bg-accent/35 px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent/60"
+					onClick={() => {
+						const composer = document.querySelector<HTMLTextAreaElement>(
+							"textarea[data-composer-input]",
+						);
+						if (composer) {
+							composer.value = part.text;
+							composer.dispatchEvent(new Event("input", { bubbles: true }));
+							composer.focus();
+						}
+					}}
+				>
+					<MessageSquareText
+						data-icon="inline-start"
+						className="size-3"
+						strokeWidth={1.8}
+					/>
+					<span className="max-w-[420px] truncate">{part.text}</span>
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent
+				sideOffset={8}
+				className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
 			>
-				<MessageSquareText className="size-3" strokeWidth={1.8} />
-				<span className="max-w-[420px] truncate">{part.text}</span>
-			</button>
-		</BaseTooltip>
+				<span>Use this prompt</span>
+			</TooltipContent>
+		</Tooltip>
 	);
 }
 
@@ -2164,7 +2219,7 @@ function ImageBlock({ part }: { part: ImagePart }) {
 		<img
 			src={src}
 			alt=""
-			className="my-2 max-h-[420px] max-w-full rounded-md border border-app-foreground/[0.06]"
+			className="my-2 max-h-[420px] max-w-full rounded-md border border-border/40"
 		/>
 	);
 }
@@ -2174,8 +2229,8 @@ function TodoList({ part }: { part: TodoListPart }) {
 	const completed = part.items.filter((i) => i.status === "completed").length;
 	const total = part.items.length;
 	return (
-		<div className="my-1 flex flex-col gap-0.5 rounded-md border border-app-foreground/[0.06] bg-app-foreground/[0.02] px-3 py-2 text-[13px] leading-6 text-app-foreground-soft">
-			<div className="mb-0.5 flex items-center gap-1.5 text-[11px] text-app-muted">
+		<div className="my-1 flex flex-col gap-0.5 rounded-md border border-border/40 bg-accent/35 px-3 py-2 text-[13px] leading-6 text-muted-foreground">
+			<div className="mb-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
 				<MessageSquareText className="size-3" strokeWidth={1.8} />
 				<span>
 					Plan — {completed}/{total} done
@@ -2190,14 +2245,14 @@ function TodoList({ part }: { part: TodoListPart }) {
 							: Circle;
 				const iconClass =
 					todo.status === "completed"
-						? "text-app-positive"
+						? "text-chart-2"
 						: todo.status === "in_progress"
-							? "text-app-progress"
-							: "text-app-muted/60";
+							? "text-chart-2"
+							: "text-muted-foreground/60";
 				const textClass =
 					todo.status === "completed"
-						? "text-app-muted line-through"
-						: "text-app-foreground-soft";
+						? "text-muted-foreground line-through"
+						: "text-muted-foreground";
 				return (
 					<div key={idx} className="flex items-center gap-1.5">
 						<Icon
@@ -2291,13 +2346,13 @@ const UserTextInline = memo(function UserTextInline({
 function FileBadgeInline({ path }: { path: string }) {
 	const fileName = path.split("/").pop() ?? path;
 	return (
-		<span className="inline-flex items-center gap-1 rounded border border-app-border/60 text-[12px] mx-0.5 align-middle">
+		<span className="mx-0.5 inline-flex items-center gap-1 rounded border border-border/60 align-middle text-[12px]">
 			<span className="inline-flex items-center gap-1.5 px-1.5 py-0.5">
 				<FileText
-					className="size-3 shrink-0 text-app-muted"
+					className="size-3 shrink-0 text-muted-foreground"
 					strokeWidth={1.8}
 				/>
-				<span className="max-w-[200px] truncate text-app-foreground-soft">
+				<span className="max-w-[200px] truncate text-muted-foreground">
 					{fileName}
 				</span>
 			</span>
@@ -2326,7 +2381,7 @@ const AssistantText = memo(function AssistantText({
 
 	return (
 		<div
-			className="conversation-markdown assistant-markdown-scale max-w-none break-words text-app-foreground"
+			className="conversation-markdown assistant-markdown-scale max-w-none break-words text-foreground"
 			style={{ fontSize: `${Math.max(settings.fontSize - 1, 12)}px` }}
 		>
 			<Suspense
@@ -2465,11 +2520,11 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 
 	const statusIndicator = isLiveTool ? (
 		<LoaderCircle
-			className="size-3 animate-spin text-app-muted/50"
+			className="size-3 animate-spin text-muted-foreground/50"
 			strokeWidth={2}
 		/>
 	) : streamingStatus === "error" ? (
-		<AlertCircle className="size-3 text-app-negative" strokeWidth={2} />
+		<AlertCircle className="size-3 text-destructive" strokeWidth={2} />
 	) : null;
 
 	const toolLine = (
@@ -2488,26 +2543,26 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 						newStr={newStr}
 					/>
 				) : (
-					<span className="truncate text-app-foreground-soft">{info.file}</span>
+					<span className="truncate text-muted-foreground">{info.file}</span>
 				)
 			) : null}
 			{!hasDiff && (info.diffAdd != null || info.diffDel != null) ? (
 				<span className="flex items-center gap-1 text-[11px]">
 					{info.diffAdd != null ? (
-						<span className="text-app-positive">+{info.diffAdd}</span>
+						<span className="text-chart-2">+{info.diffAdd}</span>
 					) : null}
 					{info.diffDel != null ? (
-						<span className="text-app-negative">-{info.diffDel}</span>
+						<span className="text-destructive">-{info.diffDel}</span>
 					) : null}
 				</span>
 			) : null}
 			{info.command ? (
 				// `min-w-0` overrides flex-item default `min-width: auto` so `truncate` can shrink the chip.
-				<code className="inline-block min-w-0 truncate rounded bg-app-foreground/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-app-foreground-soft">
+				<code className="inline-block min-w-0 truncate rounded bg-accent/60 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
 					{info.command}
 				</code>
 			) : info.detail ? (
-				<span className="min-w-0 truncate text-app-muted/60">
+				<span className="min-w-0 truncate text-muted-foreground/60">
 					{info.detail}
 				</span>
 			) : null}
@@ -2551,11 +2606,11 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 	if (compact) {
 		const detail = info.file ?? info.command ?? info.detail ?? null;
 		return (
-			<div className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-muted">
+			<div className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground">
 				<span className="shrink-0">{info.icon}</span>
 				<span className="shrink-0 font-medium">{info.action}</span>
 				{detail ? (
-					<span className="truncate text-app-foreground-soft">{detail}</span>
+					<span className="truncate text-muted-foreground">{detail}</span>
 				) : null}
 			</div>
 		);
@@ -2572,13 +2627,13 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 			>
 				<summary
 					className={cn(
-						"flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden",
+						"flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground [&::-webkit-details-marker]:hidden",
 						hasOutput ? "cursor-pointer" : "cursor-default",
 					)}
 				>
 					{toolLine}
 					{hasOutput ? (
-						<span className="shrink-0 cursor-pointer text-app-muted/40 hover:text-app-muted">
+						<span className="shrink-0 cursor-pointer text-muted-foreground/40 hover:text-muted-foreground">
 							<svg
 								className="size-2.5 group-open/out:rotate-90"
 								viewBox="0 0 12 12"
@@ -2596,16 +2651,16 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 					) : null}
 				</summary>
 				{hasOutput && (isLiveTool || isOpen) ? (
-					<div className="max-h-[16rem] overflow-auto rounded-md bg-app-foreground/[0.02] text-[11px] leading-5">
+					<div className="max-h-[16rem] overflow-auto rounded-md bg-accent/35 text-[11px] leading-5">
 						{info.fullCommand ? (
-							<div className="border-b border-app-border/20 px-2 py-1.5">
-								<span className="mr-1.5 text-app-project/60">$</span>
-								<code className="font-mono text-app-foreground-soft">
+							<div className="border-b border-border/20 px-2 py-1.5">
+								<span className="mr-1.5 text-chart-3/70">$</span>
+								<code className="font-mono text-muted-foreground">
 									{info.fullCommand}
 								</code>
 							</div>
 						) : null}
-						<pre className="whitespace-pre-wrap break-words p-1.5 text-app-muted/70">
+						<pre className="whitespace-pre-wrap break-words p-1.5 text-muted-foreground/80">
 							{resultText!.slice(0, 2000)}
 							{resultText!.length > 2000 ? "…" : ""}
 						</pre>
@@ -2637,24 +2692,24 @@ const ToolCallErrorRow = memo(function ToolCallErrorRow({
 		>
 			<summary
 				className={cn(
-					"flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-negative [&::-webkit-details-marker]:hidden",
+					"flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-destructive [&::-webkit-details-marker]:hidden",
 					expandable ? "cursor-pointer" : "cursor-default",
 				)}
 			>
 				<AlertCircle className="size-3.5 shrink-0" strokeWidth={1.8} />
 				<span className="shrink-0 font-medium">Error</span>
 				{exitCode != null ? (
-					<code className="shrink-0 rounded bg-app-negative/10 px-1.5 py-0.5 font-mono text-[11px]">
+					<code className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 font-mono text-[11px]">
 						Exit code {exitCode}
 					</code>
 				) : null}
 				{preview ? (
-					<span className="min-w-0 truncate font-mono text-[11px] text-app-negative/80">
+					<span className="min-w-0 truncate font-mono text-[11px] text-destructive/80">
 						{preview}
 					</span>
 				) : null}
 				{expandable ? (
-					<span className="shrink-0 cursor-pointer text-app-negative/40 hover:text-app-negative">
+					<span className="shrink-0 cursor-pointer text-destructive/40 hover:text-destructive">
 						<svg
 							className="size-2.5 group-open/err:rotate-90"
 							viewBox="0 0 12 12"
@@ -2672,8 +2727,8 @@ const ToolCallErrorRow = memo(function ToolCallErrorRow({
 				) : null}
 			</summary>
 			{expandable && open ? (
-				<div className="mt-0.5 max-h-[16rem] overflow-auto rounded-md border border-app-negative/15 bg-app-negative/[0.05] text-[11px] leading-5">
-					<pre className="whitespace-pre-wrap break-words p-1.5 text-app-negative/80">
+				<div className="mt-0.5 max-h-[16rem] overflow-auto rounded-md border border-destructive/15 bg-destructive/[0.05] text-[11px] leading-5">
+					<pre className="whitespace-pre-wrap break-words p-1.5 text-destructive/80">
 						{full!.slice(0, 4000)}
 						{full!.length > 4000 ? "…" : ""}
 					</pre>
@@ -2885,19 +2940,21 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 	return (
 		<div className="flex flex-col">
 			{/* Header line: icon + subagent_type + description + summary */}
-			<div className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-app-muted">
+			<div className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground">
 				<span className="shrink-0">{info.icon}</span>
 				<span className="font-medium">{info.action}</span>
 				{info.detail ? (
-					<span className="truncate text-app-muted/60">{info.detail}</span>
+					<span className="truncate text-muted-foreground/60">
+						{info.detail}
+					</span>
 				) : null}
 				{streaming ? (
 					<LoaderCircle
-						className="size-3 animate-spin text-app-muted/50"
+						className="size-3 animate-spin text-muted-foreground/50"
 						strokeWidth={2}
 					/>
 				) : null}
-				<span className="shrink-0 text-[11px] text-app-muted/40">
+				<span className="shrink-0 text-[11px] text-muted-foreground/40">
 					{toolUseCount > 0
 						? `${toolUseCount} tool ${toolUseCount === 1 ? "use" : "uses"}`
 						: `${parts.length} steps`}
@@ -2905,13 +2962,15 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 			</div>
 
 			{/* Children steps */}
-			<div className="ml-5 flex flex-col gap-0.5 border-l border-app-border/30 pl-3 pt-1">
+			<div className="ml-5 flex flex-col gap-0.5 border-l border-border/30 pl-3 pt-1">
 				{/* "Show more" / "Collapse" toggle */}
 				{canToggle ? (
-					<button
+					<Button
 						type="button"
+						variant="ghost"
+						size="xs"
 						onClick={() => setExpanded((v) => !v)}
-						className="mb-0.5 flex items-center gap-1 text-[11px] text-app-muted/50 transition-colors hover:text-app-muted"
+						className="mb-0.5 h-auto items-center gap-1 px-0 text-[11px] text-muted-foreground/50 hover:bg-transparent hover:text-muted-foreground"
 					>
 						<ChevronDown
 							className={cn(
@@ -2923,7 +2982,7 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 						{expanded
 							? "Collapse"
 							: `Show ${hiddenCount} more step${hiddenCount > 1 ? "s" : ""}`}
-					</button>
+					</Button>
 				) : null}
 
 				<div className="flex flex-col gap-0.5">
@@ -2947,7 +3006,7 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 							return (
 								<div
 									key={`text-${idx}`}
-									className="text-[13px] leading-6 text-app-foreground-soft"
+									className="text-[13px] leading-6 text-muted-foreground"
 								>
 									{part.text.slice(0, 300)}
 									{part.text.length > 300 ? "\u2026" : ""}
@@ -2982,9 +3041,9 @@ function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 
 	const icon =
 		group.category === "search" ? (
-			<Search className="size-3.5 text-app-info" strokeWidth={1.8} />
+			<Search className="size-3.5 text-chart-3" strokeWidth={1.8} />
 		) : (
-			<FileText className="size-3.5 text-app-info" strokeWidth={1.8} />
+			<FileText className="size-3.5 text-chart-3" strokeWidth={1.8} />
 		);
 
 	return (
@@ -2995,18 +3054,18 @@ function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 			}}
 			open={open}
 		>
-			<summary className="flex max-w-full cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-app-muted [&::-webkit-details-marker]:hidden">
+			<summary className="flex max-w-full cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground [&::-webkit-details-marker]:hidden">
 				<span className="shrink-0">{icon}</span>
 				<span className="font-medium">{group.summary}</span>
 				{group.active ? (
 					<LoaderCircle
-						className="size-3 animate-spin text-app-progress"
+						className="size-3 animate-spin text-chart-2"
 						strokeWidth={2}
 					/>
 				) : (
-					<Check className="size-3 text-app-positive" strokeWidth={2} />
+					<Check className="size-3 text-chart-2" strokeWidth={2} />
 				)}
-				<span className="shrink-0 cursor-pointer text-app-muted/40 hover:text-app-muted">
+				<span className="shrink-0 cursor-pointer text-muted-foreground/40 hover:text-muted-foreground">
 					<svg
 						className="size-2.5 group-open/collapse:rotate-90"
 						viewBox="0 0 12 12"
@@ -3021,12 +3080,12 @@ function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 						/>
 					</svg>
 				</span>
-				<span className="shrink-0 text-[11px] text-app-muted/40">
+				<span className="shrink-0 text-[11px] text-muted-foreground/40">
 					{group.tools.length} tools
 				</span>
 			</summary>
 			{open ? (
-				<div className="ml-5 flex flex-col gap-0.5 border-l border-app-border/30 pl-3 pt-1">
+				<div className="ml-5 flex flex-col gap-0.5 border-l border-border/30 pl-3 pt-1">
 					{group.tools.map((tool, idx) => (
 						<AssistantToolCall
 							key={tool.toolCallId ?? `${tool.toolName}:${idx}`}
@@ -3058,18 +3117,20 @@ function CopyMessageButton() {
 	}, []);
 
 	return (
-		<button
+		<Button
 			ref={ref}
 			type="button"
+			variant="ghost"
+			size="icon-xs"
 			onClick={handleCopy}
-			className="flex size-5 shrink-0 items-center justify-center rounded text-app-muted/30 opacity-0 transition-all hover:text-app-muted group-hover/sys:opacity-100"
+			className="size-5 shrink-0 text-muted-foreground/30 opacity-0 transition-all hover:text-muted-foreground group-hover/sys:opacity-100"
 		>
 			{copied ? (
 				<Check className="size-3" strokeWidth={2} />
 			) : (
 				<Copy className="size-3" strokeWidth={1.8} />
 			)}
-		</button>
+		</Button>
 	);
 }
 
@@ -3110,16 +3171,16 @@ function EditDiffTrigger({
 				ref={triggerRef}
 				onMouseEnter={show}
 				onMouseLeave={hideDelayed}
-				className="inline-flex cursor-default items-center gap-1.5 rounded border border-app-border/60 px-1.5 py-0.5 transition-colors hover:border-app-foreground-soft/40 hover:bg-app-foreground/[0.03]"
+				className="inline-flex cursor-default items-center gap-1.5 rounded border border-border/60 px-1.5 py-0.5 transition-colors hover:border-muted-foreground/40 hover:bg-accent/40"
 			>
-				<span className="truncate text-app-foreground-soft">{file}</span>
+				<span className="truncate text-muted-foreground">{file}</span>
 				{diffAdd != null || diffDel != null ? (
 					<span className="flex items-center gap-1 text-[11px]">
 						{diffAdd != null ? (
-							<span className="text-app-positive">+{diffAdd}</span>
+							<span className="text-chart-2">+{diffAdd}</span>
 						) : null}
 						{diffDel != null ? (
-							<span className="text-app-negative">-{diffDel}</span>
+							<span className="text-destructive">-{diffDel}</span>
 						) : null}
 					</span>
 				) : null}
@@ -3129,10 +3190,10 @@ function EditDiffTrigger({
 						<div
 							onMouseEnter={show}
 							onMouseLeave={hideDelayed}
-							className="fixed z-[100] w-[min(40rem,90vw)] rounded-lg border border-app-border bg-app-tooltip shadow-xl"
+							className="fixed z-[100] w-[min(40rem,90vw)] rounded-lg border border-border bg-popover shadow-xl"
 							style={{ left: pos.x, top: pos.y }}
 						>
-							<div className="border-b border-app-border/50 px-3 py-1.5 text-[11px] text-app-muted">
+							<div className="border-b border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">
 								{file}
 							</div>
 							<div className="max-h-[24rem] overflow-auto font-mono text-[11px] leading-5">
@@ -3140,38 +3201,36 @@ function EditDiffTrigger({
 									? oldStr.split("\n").map((line, i) => (
 											<div
 												key={`d${i}`}
-												className="flex whitespace-pre-wrap bg-app-negative/10"
+												className="flex whitespace-pre-wrap bg-destructive/10"
 											>
-												<span className="w-8 shrink-0 select-none border-r border-app-border/20 pr-1 text-right text-app-negative/40">
+												<span className="w-8 shrink-0 select-none border-r border-border/20 pr-1 text-right text-destructive/40">
 													{i + 1}
 												</span>
-												<span className="w-4 shrink-0 select-none text-center text-app-negative/60">
+												<span className="w-4 shrink-0 select-none text-center text-destructive/60">
 													-
 												</span>
-												<span className="min-w-0 text-app-negative/80">
+												<span className="min-w-0 text-destructive/80">
 													{line}
 												</span>
 											</div>
 										))
 									: null}
 								{oldStr && newStr ? (
-									<div className="border-t border-app-border/30" />
+									<Separator className="my-0.5 bg-border/30" />
 								) : null}
 								{newStr
 									? newStr.split("\n").map((line, i) => (
 											<div
 												key={`a${i}`}
-												className="flex whitespace-pre-wrap bg-app-positive/10"
+												className="flex whitespace-pre-wrap bg-chart-2/10"
 											>
-												<span className="w-8 shrink-0 select-none border-r border-app-border/20 pr-1 text-right text-app-positive/40">
+												<span className="w-8 shrink-0 select-none border-r border-border/20 pr-1 text-right text-chart-2/50">
 													{i + 1}
 												</span>
-												<span className="w-4 shrink-0 select-none text-center text-app-positive/60">
+												<span className="w-4 shrink-0 select-none text-center text-chart-2/70">
 													+
 												</span>
-												<span className="min-w-0 text-app-positive/80">
-													{line}
-												</span>
+												<span className="min-w-0 text-chart-2">{line}</span>
 											</div>
 										))
 									: null}
@@ -3251,7 +3310,7 @@ function isFileMentionPart(part: unknown): part is FileMentionPart {
 function SystemText({ text }: { text: string }) {
 	if (text.startsWith("Error:")) {
 		return (
-			<span className="inline-flex items-center gap-1 text-app-negative">
+			<span className="inline-flex items-center gap-1 text-destructive">
 				<AlertCircle className="size-3 shrink-0" strokeWidth={1.8} />
 				{text.slice(7)}
 			</span>
@@ -3288,7 +3347,7 @@ function getToolInfo(
 	input: Record<string, unknown> | null,
 ): ToolInfo {
 	const fallbackIcon = (
-		<span className="size-3.5 rounded-full bg-app-foreground/15" />
+		<span className="size-3.5 rounded-full bg-foreground/15" />
 	);
 
 	// MCP tools — both providers converge on `mcp__{server}__{tool}` in the
@@ -3300,9 +3359,7 @@ function getToolInfo(
 		const tool = segments.slice(2).join("__") || name;
 		return {
 			action: tool,
-			icon: (
-				<Plug className="size-3.5 text-app-accent-cyan" strokeWidth={1.8} />
-			),
+			icon: <Plug className="size-3.5 text-chart-2" strokeWidth={1.8} />,
 			detail: `via ${server}`,
 		};
 	}
@@ -3318,7 +3375,7 @@ function getToolInfo(
 		return {
 			action: "Edit",
 			file: fp ? basename(fp) : undefined,
-			icon: <Pencil className="size-3.5 text-app-warning" strokeWidth={1.8} />,
+			icon: <Pencil className="size-3.5 text-chart-5" strokeWidth={1.8} />,
 			diffAdd: add,
 			diffDel: del,
 		};
@@ -3330,7 +3387,7 @@ function getToolInfo(
 		return {
 			action: limit ? `Read ${limit} lines` : "Read",
 			file: fp ? basename(fp) : undefined,
-			icon: <FileText className="size-3.5 text-app-info" strokeWidth={1.8} />,
+			icon: <FileText className="size-3.5 text-chart-3" strokeWidth={1.8} />,
 		};
 	}
 
@@ -3339,9 +3396,7 @@ function getToolInfo(
 		return {
 			action: "Write",
 			file: fp ? basename(fp) : undefined,
-			icon: (
-				<FilePlus className="size-3.5 text-app-positive" strokeWidth={1.8} />
-			),
+			icon: <FilePlus className="size-3.5 text-chart-2" strokeWidth={1.8} />,
 		};
 	}
 
@@ -3353,7 +3408,7 @@ function getToolInfo(
 			action: desc ?? "Run",
 			icon: (
 				<SquareTerminal
-					className="size-3.5 text-app-foreground-soft"
+					className="size-3.5 text-muted-foreground"
 					strokeWidth={1.8}
 				/>
 			),
@@ -3366,7 +3421,7 @@ function getToolInfo(
 		const p = str(input.pattern);
 		return {
 			action: "Grep",
-			icon: <Search className="size-3.5 text-app-info" strokeWidth={1.8} />,
+			icon: <Search className="size-3.5 text-chart-3" strokeWidth={1.8} />,
 			detail: p ?? undefined,
 		};
 	}
@@ -3376,7 +3431,7 @@ function getToolInfo(
 		return {
 			action: "Glob",
 			icon: (
-				<FolderSearch className="size-3.5 text-app-info" strokeWidth={1.8} />
+				<FolderSearch className="size-3.5 text-chart-3" strokeWidth={1.8} />
 			),
 			detail: p ?? undefined,
 		};
@@ -3386,7 +3441,7 @@ function getToolInfo(
 		const url = str(input.url);
 		return {
 			action: "WebFetch",
-			icon: <Globe className="size-3.5 text-app-project" strokeWidth={1.8} />,
+			icon: <Globe className="size-3.5 text-chart-3" strokeWidth={1.8} />,
 			detail: url ? truncate(url, 60) : undefined,
 		};
 	}
@@ -3395,7 +3450,7 @@ function getToolInfo(
 		const q = str(input.query);
 		return {
 			action: "WebSearch",
-			icon: <Globe className="size-3.5 text-app-project" strokeWidth={1.8} />,
+			icon: <Globe className="size-3.5 text-chart-3" strokeWidth={1.8} />,
 			detail: q ? truncate(q, 50) : undefined,
 		};
 	}
@@ -3404,7 +3459,7 @@ function getToolInfo(
 		const q = str(input.query);
 		return {
 			action: "ToolSearch",
-			icon: <Search className="size-3.5 text-app-info" strokeWidth={1.8} />,
+			icon: <Search className="size-3.5 text-chart-3" strokeWidth={1.8} />,
 			detail: q ? truncate(q, 50) : undefined,
 		};
 	}
@@ -3418,7 +3473,7 @@ function getToolInfo(
 		const d = str(input.description) ?? str(input.prompt);
 		return {
 			action: subagentType ?? name,
-			icon: <Bot className="size-3.5 text-app-info" strokeWidth={1.8} />,
+			icon: <Bot className="size-3.5 text-chart-3" strokeWidth={1.8} />,
 			detail: d ? truncate(d, 60) : undefined,
 		};
 	}
@@ -3436,7 +3491,7 @@ function getToolInfo(
 			action: "Prompt",
 			icon: (
 				<MessageSquareText
-					className="size-3.5 text-app-info"
+					className="size-3.5 text-chart-3"
 					strokeWidth={1.8}
 				/>
 			),
@@ -3465,20 +3520,21 @@ function isObj(v: unknown): v is Record<string, unknown> {
 
 function EmptyState({ hasSession }: { hasSession: boolean }) {
 	return (
-		<div className="flex max-w-sm flex-col items-center text-center">
-			<MessageSquareText
-				className="size-7 text-app-muted/80"
-				strokeWidth={1.7}
-			/>
-			<p className="mt-5 text-[15px] font-medium tracking-[-0.01em] text-app-foreground">
-				{hasSession ? "Nothing here yet" : "No session selected"}
-			</p>
-			<p className="mt-2 max-w-[30rem] text-[13px] leading-6 text-app-muted">
-				{hasSession
-					? "This session does not have any messages yet."
-					: "Choose a session from the header to inspect its timeline."}
-			</p>
-		</div>
+		<Empty className="max-w-sm">
+			<EmptyHeader>
+				<EmptyMedia className="mb-1 text-app-foreground-soft/72 [&_svg:not([class*='size-'])]:size-7">
+					<MessageSquareText strokeWidth={1.7} />
+				</EmptyMedia>
+				<EmptyTitle>
+					{hasSession ? "Nothing here yet" : "No session selected"}
+				</EmptyTitle>
+				<EmptyDescription>
+					{hasSession
+						? "This session does not have any messages yet."
+						: "Choose a session from the header to inspect its timeline."}
+				</EmptyDescription>
+			</EmptyHeader>
+		</Empty>
 	);
 }
 
@@ -3492,15 +3548,15 @@ function SessionProviderIcon({
 	if (active) {
 		return (
 			<span className="relative flex size-3.5 shrink-0 items-center justify-center">
-				<span className="absolute inset-0 animate-spin rounded-full border border-transparent border-t-app-progress" />
-				<span className="size-1.5 rounded-full bg-app-progress" />
+				<span className="absolute inset-0 animate-spin rounded-full border border-transparent border-t-chart-2" />
+				<span className="size-1.5 rounded-full bg-chart-2" />
 			</span>
 		);
 	}
 	if (agentType === "codex") {
-		return <OpenAIIcon className="size-3 shrink-0 text-app-foreground-soft" />;
+		return <OpenAIIcon className="size-3 shrink-0 text-muted-foreground" />;
 	}
-	return <ClaudeIcon className="size-3 shrink-0 text-app-foreground-soft" />;
+	return <ClaudeIcon className="size-3 shrink-0 text-muted-foreground" />;
 }
 
 function displaySessionTitle(session: WorkspaceSessionSummary): string {
@@ -3542,12 +3598,14 @@ function buildOptimisticSession(
 
 function BranchPicker({
 	currentBranch,
+	displayRemote,
 	branches,
 	loading,
 	onOpen,
 	onSelect,
 }: {
 	currentBranch: string;
+	displayRemote: string;
 	branches: string[];
 	loading: boolean;
 	onOpen: () => void;
@@ -3558,21 +3616,29 @@ function BranchPicker({
 	return (
 		<Popover
 			open={open}
-			onOpenChange={(next) => {
+			onOpenChange={(next: boolean) => {
 				setOpen(next);
 				if (next) onOpen();
 			}}
 		>
-			<PopoverTrigger className="inline-flex cursor-pointer items-center gap-0.5 rounded-md px-1 py-0.5 text-[13px] font-medium text-app-foreground-soft transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground focus-visible:outline-none">
-				<span className="truncate">{currentBranch}</span>
-				<ChevronDown className="size-3 shrink-0" strokeWidth={2} />
+			<PopoverTrigger asChild>
+				<Button
+					type="button"
+					variant="ghost"
+					size="xs"
+					className="h-6 max-w-[180px] gap-1 rounded-md px-1.5 text-[13px] font-medium text-muted-foreground hover:text-foreground"
+				>
+					<span className="truncate">
+						{displayRemote}/{currentBranch}
+					</span>
+					<ChevronDown data-icon="inline-end" strokeWidth={2} />
+				</Button>
 			</PopoverTrigger>
 			<PopoverContent align="start" className="w-[260px] p-0">
 				<Command className="rounded-lg! p-0.5">
-					<CommandInput placeholder="Search branches..." />
 					<CommandList className="max-h-52">
 						{loading && branches.length === 0 ? (
-							<div className="flex items-center justify-center gap-2 py-5 text-[12px] text-app-muted">
+							<div className="flex items-center justify-center gap-2 py-5 text-[12px] text-muted-foreground">
 								<LoaderCircle
 									className="size-3.5 animate-spin"
 									strokeWidth={2}
@@ -3585,23 +3651,21 @@ function BranchPicker({
 							<CommandItem
 								key={branch}
 								value={branch}
+								data-checked={branch === currentBranch ? "true" : undefined}
 								onSelect={() => {
 									onSelect(branch);
 									setOpen(false);
 								}}
-								className="flex items-center justify-between gap-2 px-1.5 py-1 text-[12px]"
+								className="rounded-lg text-[12px]"
 							>
 								<span
 									className={cn(
-										"truncate",
+										"min-w-0 flex-1 truncate",
 										branch === currentBranch && "font-semibold",
 									)}
 								>
 									{branch}
 								</span>
-								{branch === currentBranch && (
-									<Check className="size-3.5 shrink-0" strokeWidth={2} />
-								)}
 							</CommandItem>
 						))}
 					</CommandList>

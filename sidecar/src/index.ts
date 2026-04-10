@@ -43,6 +43,30 @@ const emitter = createSidecarEmitter((event) => {
 	process.stdout.write(`${JSON.stringify(event)}\n`);
 });
 
+// ---------------------------------------------------------------------------
+// Global error recovery — the sidecar must never crash from unhandled errors.
+// Log to stderr so Rust can capture it, emit a protocol error event so any
+// in-flight request gets notified, and keep the process alive.
+// ---------------------------------------------------------------------------
+
+process.on("uncaughtException", (err) => {
+	console.error("[sidecar:fatal] uncaughtException —", err);
+	try {
+		emitter.error(null, "Internal sidecar error", true);
+	} catch {
+		// stdout may be broken — nothing more we can do
+	}
+});
+
+process.on("unhandledRejection", (reason) => {
+	console.error("[sidecar:fatal] unhandledRejection —", reason);
+	try {
+		emitter.error(null, "Internal sidecar error", true);
+	} catch {
+		// stdout may be broken
+	}
+});
+
 debug("Sidecar starting, pid =", process.pid);
 emitter.ready(1);
 
@@ -200,36 +224,41 @@ for await (const line of rl) {
 		`← stdin [${id}] method=${method} provider=${params.provider ?? "(unset)"} (#${requestCount})`,
 	);
 
-	switch (method) {
-		case "sendMessage":
-			trackHandler(handleSendMessage(id, params));
-			break;
-		case "generateTitle":
-			trackHandler(handleGenerateTitle(id, params));
-			break;
-		case "listSlashCommands":
-			trackHandler(handleListSlashCommands(id, params));
-			break;
-		case "stopSession":
-			await handleStopSession(id, params);
-			break;
-		case "shutdown":
-			await handleShutdown(id);
-			break;
-		case "permissionResponse": {
-			const permissionId = params.permissionId as string;
-			const behavior = params.behavior as "allow" | "deny";
-			debug(
-				`[${id}] permissionResponse permissionId=${permissionId} behavior=${behavior}`,
-			);
-			claudeManager.resolvePermission(permissionId, behavior);
-			break;
+	try {
+		switch (method) {
+			case "sendMessage":
+				trackHandler(handleSendMessage(id, params));
+				break;
+			case "generateTitle":
+				trackHandler(handleGenerateTitle(id, params));
+				break;
+			case "listSlashCommands":
+				trackHandler(handleListSlashCommands(id, params));
+				break;
+			case "stopSession":
+				await handleStopSession(id, params);
+				break;
+			case "shutdown":
+				await handleShutdown(id);
+				break;
+			case "permissionResponse": {
+				const permissionId = params.permissionId as string;
+				const behavior = params.behavior as "allow" | "deny";
+				debug(
+					`[${id}] permissionResponse permissionId=${permissionId} behavior=${behavior}`,
+				);
+				claudeManager.resolvePermission(permissionId, behavior);
+				break;
+			}
+			case "ping":
+				emitter.pong(id);
+				break;
+			default:
+				emitter.error(id, `Unknown method: ${method}`);
 		}
-		case "ping":
-			emitter.pong(id);
-			break;
-		default:
-			emitter.error(id, `Unknown method: ${method}`);
+	} catch (err) {
+		console.error(`[sidecar:fatal] Dispatch error for [${id}] ${method}:`, err);
+		emitter.error(id, "Internal sidecar error", true);
 	}
 }
 

@@ -66,6 +66,9 @@ pub enum AgentStreamEvent {
     Error {
         message: String,
         persisted: bool,
+        /// True when the error is an unexpected internal failure (e.g. sidecar
+        /// crash). The frontend should show a generic message instead of details.
+        internal: bool,
     },
 }
 
@@ -1169,12 +1172,20 @@ fn stream_via_sidecar(
                         .and_then(Value::as_str)
                         .unwrap_or("Unknown sidecar error")
                         .to_string();
+                    let internal = event
+                        .raw
+                        .get("internal")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
                     if debug {
-                        eprintln!("[agents:debug] [{rid}] Sidecar error: {msg}");
+                        eprintln!(
+                            "[agents:debug] [{rid}] Sidecar error (internal={internal}): {msg}"
+                        );
                     }
                     let _ = on_event.send(AgentStreamEvent::Error {
                         message: msg,
                         persisted: exchange_ctx.is_some(),
+                        internal,
                     });
                     break;
                 }

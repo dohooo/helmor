@@ -124,6 +124,7 @@ pub struct WorkspaceDetail {
     pub repo_name: String,
     pub repo_icon_src: Option<String>,
     pub repo_initials: String,
+    pub remote: Option<String>,
     pub remote_url: Option<String>,
     pub default_branch: Option<String>,
     pub root_path: Option<String>,
@@ -183,6 +184,7 @@ pub struct WorkspaceRecord {
     pub session_count: i64,
     pub message_count: i64,
     pub attachment_count: i64,
+    pub remote: Option<String>,
 }
 
 pub const WORKSPACE_RECORD_SQL: &str = r#"
@@ -243,7 +245,8 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       w.archive_commit,
       COALESCE(ss.session_count, 0) AS session_count,
       COALESCE(ms.message_count, 0) AS message_count,
-      COALESCE(att.attachment_count, 0) AS attachment_count
+      COALESCE(att.attachment_count, 0) AS attachment_count,
+      r.remote
     FROM workspaces w
     JOIN repos r ON r.id = w.repository_id
     LEFT JOIN sessions s ON s.id = w.active_session_id
@@ -395,20 +398,47 @@ pub fn get_workspace(workspace_id: &str) -> Result<WorkspaceDetail> {
     Ok(record_to_detail(record))
 }
 
+// ---- Repo root resolution ----
+
+struct RepoContext {
+    root: PathBuf,
+    remote: String,
+}
+
+/// Resolve the repository root and remote from either a workspace_id or a repo_id.
+fn resolve_repo_context(workspace_id: Option<&str>, repo_id: Option<&str>) -> Result<RepoContext> {
+    match (workspace_id, repo_id) {
+        (Some(ws_id), _) => {
+            let record = load_workspace_record_by_id(ws_id)?
+                .with_context(|| format!("Workspace not found: {ws_id}"))?;
+            let root = helpers::non_empty(&record.root_path)
+                .map(PathBuf::from)
+                .with_context(|| format!("Workspace {ws_id} is missing repo root_path"))?;
+            let remote = record.remote.unwrap_or_else(|| "origin".to_string());
+            Ok(RepoContext { root, remote })
+        }
+        (_, Some(r_id)) => {
+            let repo = super::repos::load_repository_by_id(r_id)?
+                .with_context(|| format!("Repository not found: {r_id}"))?;
+            let remote = repo.remote.unwrap_or_else(|| "origin".to_string());
+            Ok(RepoContext {
+                root: PathBuf::from(repo.root_path.trim()),
+                remote,
+            })
+        }
+        (None, None) => bail!("Either workspace_id or repo_id must be provided"),
+    }
+}
+
 // ---- Remote branches ----
 
-pub fn list_remote_branches(workspace_id: &str) -> Result<Vec<String>> {
-    let record = load_workspace_record_by_id(workspace_id)?
-        .with_context(|| format!("Workspace not found: {workspace_id}"))?;
-
-    let repo_root = helpers::non_empty(&record.root_path)
-        .map(PathBuf::from)
-        .with_context(|| format!("Workspace {workspace_id} is missing repo root_path"))?;
-
-    git_ops::ensure_git_repository(&repo_root)?;
-    // Read cached remote branches (no network). A background fetch
-    // runs on workspace creation; users can also trigger a manual refresh.
-    git_ops::list_remote_branches(&repo_root)
+pub fn list_remote_branches(
+    workspace_id: Option<&str>,
+    repo_id: Option<&str>,
+) -> Result<Vec<String>> {
+    let ctx = resolve_repo_context(workspace_id, repo_id)?;
+    git_ops::ensure_git_repository(&ctx.root)?;
+    git_ops::list_remote_branches(&ctx.root, &ctx.remote)
 }
 
 // ---- Update intended target branch ----
@@ -554,27 +584,20 @@ fn try_realign_local_branch(
         return Ok(None);
     }
 
-    // Precheck: the cached `origin/<target>` ref must already exist locally.
-    // Since the dropdown only lists branches present under `refs/remotes/origin/`,
-    // this should normally pass — but a manual prune could remove it between
-    // dropdown open and click, in which case we silently fall back.
+    let remote = record.remote.as_deref().unwrap_or("origin");
+
     if !matches!(
-        git_ops::verify_remote_ref_exists(&workspace_dir, target_branch),
+        git_ops::verify_remote_ref_exists(&workspace_dir, remote, target_branch),
         Ok(true)
     ) {
         return Ok(None);
     }
 
-    // Safety check 1: working tree must be completely clean (no staged,
-    // unstaged, or untracked files).
     if !matches!(git_ops::working_tree_clean(&workspace_dir), Ok(true)) {
         return Ok(None);
     }
 
-    // Safety check 2: HEAD must have zero commits beyond origin/<init_parent>.
-    // If origin/<init_parent> no longer exists or rev-list otherwise errors,
-    // we treat that as "cannot determine" and skip the realignment.
-    let baseline_ref = format!("origin/{init_parent}");
+    let baseline_ref = format!("{remote}/{init_parent}");
     if !matches!(
         git_ops::commits_ahead_of(&workspace_dir, &baseline_ref),
         Ok(0)
@@ -582,10 +605,7 @@ fn try_realign_local_branch(
         return Ok(None);
     }
 
-    // All preconditions satisfied — perform the realignment. Pure local op,
-    // no fetch. From here on, any git error propagates back so the user sees
-    // a failure toast and knows the worktree may have been touched.
-    let target_ref = format!("origin/{target_branch}");
+    let target_ref = format!("{remote}/{target_branch}");
     git_ops::reset_current_branch_hard(&workspace_dir, &target_ref)?;
 
     let post_reset_sha = git_ops::current_workspace_head_commit(&workspace_dir)?;
@@ -624,8 +644,8 @@ pub fn refresh_remote_and_realign(
         return Ok(false);
     }
 
-    // Slow part: fetch from origin. Failures (network, SSH, etc.) → silent.
-    if git_ops::fetch_remote_branch(&workspace_dir, target_branch).is_err() {
+    let remote = record.remote.as_deref().unwrap_or("origin");
+    if git_ops::fetch_remote_branch(&workspace_dir, remote, target_branch).is_err() {
         return Ok(false);
     }
 
@@ -656,7 +676,7 @@ pub fn refresh_remote_and_realign(
     }
 
     // Invariant: the fresh remote actually advanced past post_reset_sha.
-    let new_remote_sha = match git_ops::remote_ref_sha(&workspace_dir, target_branch) {
+    let new_remote_sha = match git_ops::remote_ref_sha(&workspace_dir, remote, target_branch) {
         Ok(sha) => sha,
         Err(_) => return Ok(false),
     };
@@ -664,8 +684,8 @@ pub fn refresh_remote_and_realign(
         return Ok(false);
     }
 
-    // All four invariants hold — silently re-align to the freshest tip.
-    let target_ref = format!("origin/{target_branch}");
+    let remote = fresh_record.remote.as_deref().unwrap_or("origin");
+    let target_ref = format!("{remote}/{target_branch}");
     git_ops::reset_current_branch_hard(&workspace_dir, &target_ref)?;
     Ok(true)
 }
@@ -684,44 +704,57 @@ fn prefetch_rate_limit_map() -> &'static Mutex<HashMap<String, Instant>> {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PrefetchWorkspaceRemoteRefsResponse {
+pub struct PrefetchRemoteRefsResponse {
     /// `true` if a fetch was actually performed, `false` if it was rate-limited
     /// (a recent fetch is still considered fresh).
     pub fetched: bool,
 }
 
-/// Fetch every branch from `origin` for this workspace's repo, pruning stale
-/// remote refs. Rate-limited per workspace so callers can fire it freely
-/// (e.g. on dropdown open) without thrashing the network.
-pub fn prefetch_workspace_remote_refs(
-    workspace_id: &str,
-) -> Result<PrefetchWorkspaceRemoteRefsResponse> {
+/// Fetch every branch from `origin`, pruning stale remote refs. Accepts either
+/// a workspace_id or repo_id. Rate-limited so callers can fire freely.
+pub fn prefetch_remote_refs(
+    workspace_id: Option<&str>,
+    repo_id: Option<&str>,
+) -> Result<PrefetchRemoteRefsResponse> {
+    let rate_key = workspace_id
+        .or(repo_id)
+        .with_context(|| "Either workspace_id or repo_id must be provided")?;
+
     // Rate-limit check.
     {
         let mut map = prefetch_rate_limit_map()
             .lock()
             .map_err(|_| anyhow::anyhow!("Prefetch rate-limit lock poisoned"))?;
         let now = Instant::now();
-        if let Some(last) = map.get(workspace_id) {
+        if let Some(last) = map.get(rate_key) {
             if now.duration_since(*last) < PREFETCH_RATE_LIMIT {
-                return Ok(PrefetchWorkspaceRemoteRefsResponse { fetched: false });
+                return Ok(PrefetchRemoteRefsResponse { fetched: false });
             }
         }
-        map.insert(workspace_id.to_string(), now);
+        map.insert(rate_key.to_string(), now);
     }
 
-    let record = load_workspace_record_by_id(workspace_id)?
-        .with_context(|| format!("Workspace not found: {workspace_id}"))?;
-    if record.state != "ready" {
-        return Ok(PrefetchWorkspaceRemoteRefsResponse { fetched: false });
-    }
-    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
-    if !workspace_dir.is_dir() {
-        return Ok(PrefetchWorkspaceRemoteRefsResponse { fetched: false });
+    // When called with workspace_id, do the extra state/dir checks.
+    if let Some(ws_id) = workspace_id {
+        let record = load_workspace_record_by_id(ws_id)?
+            .with_context(|| format!("Workspace not found: {ws_id}"))?;
+        if record.state != "ready" {
+            return Ok(PrefetchRemoteRefsResponse { fetched: false });
+        }
+        let workspace_dir =
+            crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+        if !workspace_dir.is_dir() {
+            return Ok(PrefetchRemoteRefsResponse { fetched: false });
+        }
+        let remote = record.remote.unwrap_or_else(|| "origin".to_string());
+        git_ops::fetch_all_remote(&workspace_dir, &remote)?;
+    } else {
+        let ctx = resolve_repo_context(None, repo_id)?;
+        git_ops::ensure_git_repository(&ctx.root)?;
+        git_ops::fetch_all_remote(&ctx.root, &ctx.remote)?;
     }
 
-    git_ops::fetch_all_remote(&workspace_dir)?;
-    Ok(PrefetchWorkspaceRemoteRefsResponse { fetched: true })
+    Ok(PrefetchRemoteRefsResponse { fetched: true })
 }
 
 /// Test-only escape hatch — clears the rate-limit map so successive calls in
@@ -826,6 +859,18 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
     let repo_root = PathBuf::from(repository.root_path.trim());
     git_ops::ensure_git_repository(&repo_root)?;
 
+    let remote = repository
+        .remote
+        .clone()
+        .unwrap_or_else(|| "origin".to_string());
+
+    if !git_ops::has_remote(&repo_root, &remote)? {
+        bail!(
+            "Repository \"{}\" has no remote \"{remote}\". Workspaces require a remote to branch from.",
+            repository.name
+        );
+    }
+
     let directory_name = helpers::allocate_directory_name_for_repo(repo_id)?;
     let branch_settings = settings::load_branch_prefix_settings()?;
     let branch = helpers::branch_name_for_directory(&directory_name, &branch_settings);
@@ -877,7 +922,7 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
         }
 
         git_ops::ensure_git_repository(&repo_root)?;
-        let start_ref = git_ops::default_branch_ref(&default_branch);
+        let start_ref = git_ops::default_branch_ref(&remote, &default_branch);
         git_ops::verify_commitish_exists(
             &repo_root,
             &start_ref,
@@ -1172,15 +1217,73 @@ fn restore_workspace_preflight(workspace_id: &str) -> Result<RestorePreflightDat
     })
 }
 
-/// Tauri-callable read-only check: returns `Ok(())` if the workspace can be
-/// restored right now, `Err(...)` with a user-facing message if not. Use this
-/// from the frontend BEFORE applying an optimistic UI update so the dropdown
-/// row doesn't flicker on a guaranteed failure.
-pub fn validate_restore_workspace(workspace_id: &str) -> Result<()> {
-    restore_workspace_preflight(workspace_id).map(|_| ())
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidateRestoreResponse {
+    /// Set when the workspace's `intended_target_branch` no longer exists
+    /// on the repo's current remote. The frontend should confirm before
+    /// proceeding, offering `suggested_branch` as the replacement.
+    pub target_branch_conflict: Option<TargetBranchConflict>,
 }
 
-pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResponse> {
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetBranchConflict {
+    pub current_branch: String,
+    pub suggested_branch: String,
+    pub remote: String,
+}
+
+pub fn validate_restore_workspace(workspace_id: &str) -> Result<ValidateRestoreResponse> {
+    let preflight = restore_workspace_preflight(workspace_id)?;
+
+    let record = load_workspace_record_by_id(workspace_id)?
+        .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+    let remote = record.remote.unwrap_or_else(|| "origin".to_string());
+    let intended = record
+        .intended_target_branch
+        .filter(|v| !v.trim().is_empty());
+
+    let conflict = if let Some(ref target) = intended {
+        // Pure local check — no network. Restore is a local operation
+        // and must not block on a 30s fetch timeout. If the ref is
+        // missing locally it may just be stale cache, so we only flag
+        // a conflict when there ARE other refs for this remote (i.e.
+        // the remote has been fetched before, just this branch is gone).
+        let has_any_refs = !git_ops::list_remote_branches(&preflight.repo_root, &remote)
+            .unwrap_or_default()
+            .is_empty();
+
+        let exists = git_ops::verify_remote_ref_exists(&preflight.repo_root, &remote, target)
+            .unwrap_or(false);
+
+        if exists || !has_any_refs {
+            // Either the ref exists, or we have no cached refs at all
+            // (never fetched) — can't determine conflict, skip.
+            None
+        } else {
+            let repo = super::repos::load_repository_by_id(&record.repo_id)?
+                .with_context(|| format!("Repository not found: {}", record.repo_id))?;
+            let suggested = repo.default_branch.unwrap_or_else(|| "main".to_string());
+            Some(TargetBranchConflict {
+                current_branch: target.clone(),
+                suggested_branch: suggested,
+                remote,
+            })
+        }
+    } else {
+        None
+    };
+
+    Ok(ValidateRestoreResponse {
+        target_branch_conflict: conflict,
+    })
+}
+
+pub fn restore_workspace_impl(
+    workspace_id: &str,
+    target_branch_override: Option<&str>,
+) -> Result<RestoreWorkspaceResponse> {
     let RestorePreflightData {
         repo_root,
         branch,
@@ -1324,9 +1427,12 @@ pub fn restore_workspace_impl(workspace_id: &str) -> Result<RestoreWorkspaceResp
         return Err(error);
     }
 
-    if let Err(error) =
-        update_restored_workspace_state(workspace_id, &archived_context_dir, &workspace_context_dir)
-    {
+    if let Err(error) = update_restored_workspace_state(
+        workspace_id,
+        &archived_context_dir,
+        &workspace_context_dir,
+        target_branch_override,
+    ) {
         cleanup_failed_restore(
             &repo_root,
             &workspace_dir,
@@ -1450,6 +1556,7 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         repo_name: record.repo_name,
         repo_icon_src: helpers::repo_icon_src_for_root_path(record.root_path.as_deref()),
         repo_initials,
+        remote: record.remote,
         remote_url: record.remote_url,
         default_branch: record.default_branch,
         root_path: worktree_path,
@@ -1755,6 +1862,7 @@ fn update_restored_workspace_state(
     workspace_id: &str,
     archived_context_dir: &Path,
     workspace_context_dir: &Path,
+    target_branch_override: Option<&str>,
 ) -> Result<()> {
     let mut connection = db::open_connection(true)?;
     let transaction = connection
@@ -1797,6 +1905,15 @@ fn update_restored_workspace_state(
             ),
         )
         .context("Failed to update restored attachment paths")?;
+
+    if let Some(new_target) = target_branch_override {
+        transaction
+            .execute(
+                "UPDATE workspaces SET intended_target_branch = ?1 WHERE id = ?2",
+                [new_target, workspace_id],
+            )
+            .context("Failed to update intended_target_branch during restore")?;
+    }
 
     transaction
         .commit()

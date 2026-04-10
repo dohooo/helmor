@@ -14,7 +14,11 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { AgentModelOption, ThreadMessageLike } from "@/lib/api";
+import type {
+	AgentModelOption,
+	PullRequestInfo,
+	ThreadMessageLike,
+} from "@/lib/api";
 import {
 	generateSessionTitle,
 	respondToPermissionRequest,
@@ -33,10 +37,10 @@ import {
 } from "@/lib/session-thread-cache";
 import {
 	createLiveThreadMessage,
-	describeUnknownError,
 	findModelOption,
 	getComposerContextKey,
 } from "@/lib/workspace-helpers";
+import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { ActionRow, ActionRowButton } from "./action-row";
 import { WorkspaceComposerContainer } from "./workspace-composer-container";
 import { WorkspacePanelContainer } from "./workspace-panel-container";
@@ -57,6 +61,7 @@ type WorkspaceConversationContainerProps = {
 	 * session-level lifecycle events (e.g. the commit button driver needs to
 	 * know when its target session's stream has ended). */
 	onSendingSessionsChange?: (sessionIds: Set<string>) => void;
+	workspacePrInfo?: PullRequestInfo | null;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
 	/** Prompt queued by an external caller (e.g. the inspector Git commit
@@ -78,12 +83,14 @@ export const WorkspaceConversationContainer = memo(
 		onResolveDisplayedSession,
 		onSendingWorkspacesChange,
 		onSendingSessionsChange,
+		workspacePrInfo = null,
 		headerActions,
 		headerLeading,
 		pendingPromptForSession = null,
 		onPendingPromptConsumed,
 	}: WorkspaceConversationContainerProps) {
 		const queryClient = useQueryClient();
+		const pushToast = useWorkspaceToast();
 		const [composerModelSelections, setComposerModelSelections] = useState<
 			Record<string, string>
 		>({});
@@ -505,9 +512,18 @@ export const WorkspaceConversationContainer = memo(
 							if (event.kind === "error") {
 								cleanup();
 								setPendingPermissions([]);
+								if (event.internal) {
+									// Unexpected internal failure — show a generic
+									// toast instead of raw error details.
+									pushToast(
+										"Something went wrong. Please try again.",
+										"Error",
+										"destructive",
+									);
+								}
 								setSendErrorsByContext((current) => ({
 									...current,
-									[contextKey]: event.message,
+									[contextKey]: event.internal ? null : event.message,
 								}));
 								setActiveSessionByContext((current) => {
 									if (!(contextKey in current)) {
@@ -554,12 +570,12 @@ export const WorkspaceConversationContainer = memo(
 						},
 					);
 				} catch (error) {
+					console.error("[conversation] invoke error:", error);
+					const errorMsg =
+						error instanceof Error ? error.message : String(error);
 					setSendErrorsByContext((current) => ({
 						...current,
-						[contextKey]: describeUnknownError(
-							error,
-							"Unable to send message.",
-						),
+						[contextKey]: errorMsg,
 					}));
 					setComposerRestoreState({
 						contextKey,
@@ -643,6 +659,7 @@ export const WorkspaceConversationContainer = memo(
 					sending={isSending}
 					sendingSessionIds={sendingSessionIds}
 					selectedProvider={selectedProvider}
+					workspacePrInfo={workspacePrInfo}
 					onSelectSession={onSelectSession}
 					onResolveDisplayedSession={onResolveDisplayedSession}
 					headerActions={headerActions}
@@ -669,16 +686,16 @@ export const WorkspaceConversationContainer = memo(
 									leading={
 										<>
 											<ShieldQuestion
-												className="size-3.5 shrink-0 text-app-foreground-soft/60"
+												className="size-3.5 shrink-0 text-muted-foreground/60"
 												strokeWidth={1.8}
 												aria-hidden="true"
 											/>
-											<span className="truncate text-[12px] font-medium tracking-[0.01em] text-app-foreground-soft/72">
+											<span className="truncate text-[12px] font-medium tracking-[0.01em] text-muted-foreground">
 												{label ?? (
 													<>
 														<span className="font-semibold">{action}</span>
 														{target && (
-															<span className="ml-1.5 text-app-foreground-soft/50">
+															<span className="ml-1.5 text-muted-foreground/60">
 																{target}
 															</span>
 														)}

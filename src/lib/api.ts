@@ -109,6 +109,7 @@ export type WorkspaceSummary = {
 export type RepositoryCreateOption = {
 	id: string;
 	name: string;
+	remote?: string | null;
 	defaultBranch?: string | null;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
@@ -201,6 +202,7 @@ export type WorkspaceDetail = {
 	repoName: string;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
+	remote?: string | null;
 	remoteUrl?: string | null;
 	defaultBranch?: string | null;
 	rootPath?: string | null;
@@ -545,6 +547,38 @@ export async function listRepositories(): Promise<RepositoryCreateOption[]> {
 	}
 }
 
+export type UpdateRepositoryRemoteResponse = {
+	orphanedWorkspaceCount: number;
+};
+
+export async function updateRepositoryRemote(
+	repoId: string,
+	remote: string,
+): Promise<UpdateRepositoryRemoteResponse> {
+	return invoke<UpdateRepositoryRemoteResponse>("update_repository_remote", {
+		repoId,
+		remote,
+	});
+}
+
+export async function listRepoRemotes(repoId: string): Promise<string[]> {
+	try {
+		return await invoke<string[]>("list_repo_remotes", { repoId });
+	} catch {
+		return [];
+	}
+}
+
+export async function updateRepositoryDefaultBranch(
+	repoId: string,
+	defaultBranch: string,
+): Promise<void> {
+	await invoke<void>("update_repository_default_branch", {
+		repoId,
+		defaultBranch,
+	});
+}
+
 export async function loadAddRepositoryDefaults(): Promise<AddRepositoryDefaults> {
 	try {
 		return await invoke<AddRepositoryDefaults>("get_add_repository_defaults");
@@ -606,11 +640,12 @@ export async function loadWorkspaceDetail(
 	}
 }
 
-export async function listRemoteBranches(
-	workspaceId: string,
-): Promise<string[]> {
+export async function listRemoteBranches(opts: {
+	workspaceId?: string;
+	repoId?: string;
+}): Promise<string[]> {
 	try {
-		return await invoke<string[]>("list_remote_branches", { workspaceId });
+		return await invoke<string[]>("list_remote_branches", opts);
 	} catch {
 		return [];
 	}
@@ -635,23 +670,16 @@ export async function updateIntendedTargetBranch(
 	);
 }
 
-export type PrefetchWorkspaceRemoteRefsResponse = {
+export type PrefetchRemoteRefsResponse = {
 	/** True if a fetch was performed; false if the call was rate-limited. */
 	fetched: boolean;
 };
 
-/**
- * Best-effort `git fetch --prune origin` for the workspace's repo. Rate-limited
- * to once every 10 seconds per workspace on the backend, so callers can fire
- * this freely (e.g. on dropdown open) without worrying about thrashing.
- */
-export async function prefetchWorkspaceRemoteRefs(
-	workspaceId: string,
-): Promise<PrefetchWorkspaceRemoteRefsResponse> {
-	return invoke<PrefetchWorkspaceRemoteRefsResponse>(
-		"prefetch_workspace_remote_refs",
-		{ workspaceId },
-	);
+export async function prefetchRemoteRefs(opts: {
+	workspaceId?: string;
+	repoId?: string;
+}): Promise<PrefetchRemoteRefsResponse> {
+	return invoke<PrefetchRemoteRefsResponse>("prefetch_remote_refs", opts);
 }
 
 export async function loadWorkspaceSessions(
@@ -702,21 +730,30 @@ export async function loadSessionAttachments(
 
 export async function restoreWorkspace(
 	workspaceId: string,
+	targetBranchOverride?: string,
 ): Promise<RestoreWorkspaceResponse> {
 	return invoke<RestoreWorkspaceResponse>("restore_workspace", {
 		workspaceId,
+		targetBranchOverride,
 	});
 }
 
-/**
- * Read-only preflight: throws with the same error the slow `restoreWorkspace`
- * call would, so callers can validate cheaply BEFORE applying optimistic UI
- * updates. ~10-50ms (one DB read + a couple of `git rev-parse` calls).
- */
+export type TargetBranchConflict = {
+	currentBranch: string;
+	suggestedBranch: string;
+	remote: string;
+};
+
+export type ValidateRestoreResponse = {
+	targetBranchConflict?: TargetBranchConflict | null;
+};
+
 export async function validateRestoreWorkspace(
 	workspaceId: string,
-): Promise<void> {
-	await invoke<void>("validate_restore_workspace", { workspaceId });
+): Promise<ValidateRestoreResponse> {
+	return invoke<ValidateRestoreResponse>("validate_restore_workspace", {
+		workspaceId,
+	});
 }
 
 export async function archiveWorkspace(
@@ -1238,7 +1275,7 @@ export type AgentStreamEvent =
 			title?: string | null;
 			description?: string | null;
 	  }
-	| { kind: "error"; message: string; persisted: boolean };
+	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
 
 /**
  * Save a pasted clipboard image (base64) to a temp file and return its path.

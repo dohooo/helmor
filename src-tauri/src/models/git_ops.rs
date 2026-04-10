@@ -178,26 +178,56 @@ pub fn ensure_git_repository(repo_root: &Path) -> Result<()> {
     .context("Repository source is invalid")
 }
 
-/// List remote-tracking branches in the source repo.
-pub fn list_remote_branches(repo_root: &Path) -> Result<Vec<String>> {
+/// List all remote names in the repo.
+pub fn list_remotes(repo_root: &Path) -> Result<Vec<String>> {
     let repo_root = repo_root.display().to_string();
+    let output =
+        run_git(["-C", repo_root.as_str(), "remote"], None).context("Failed to list remotes")?;
+    let mut remotes: Vec<String> = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    remotes.sort();
+    Ok(remotes)
+}
+
+/// Check whether a named remote exists in the repo.
+pub fn has_remote(repo_root: &Path, remote: &str) -> Result<bool> {
+    let repo_root = repo_root.display().to_string();
+    let output =
+        run_git(["-C", repo_root.as_str(), "remote"], None).context("Failed to list remotes")?;
+    Ok(output.lines().any(|line| line.trim() == remote))
+}
+
+/// List remote-tracking branches for the given remote.
+pub fn list_remote_branches(repo_root: &Path, remote: &str) -> Result<Vec<String>> {
+    let repo_root = repo_root.display().to_string();
+    let ref_prefix = format!("refs/remotes/{remote}/");
     let output = run_git(
         [
             "-C",
             repo_root.as_str(),
             "for-each-ref",
             "--format=%(refname:short)",
-            "refs/remotes/origin/",
+            ref_prefix.as_str(),
         ],
         None,
     )
     .context("Failed to list remote branches")?;
 
+    let strip_prefix = format!("{remote}/");
+    let head_ref = format!("{remote}/HEAD");
     let branches: Vec<String> = output
         .lines()
         .map(|line| line.trim())
-        .filter(|line| !line.is_empty() && *line != "origin/HEAD" && *line != "origin")
-        .map(|line| line.strip_prefix("origin/").unwrap_or(line).to_string())
+        .filter(|line| !line.is_empty() && *line != head_ref && *line != remote)
+        .map(|line| {
+            line.strip_prefix(strip_prefix.as_str())
+                .unwrap_or(line)
+                .to_string()
+        })
         .filter(|name| !name.is_empty() && name != "HEAD")
         .collect();
 
@@ -457,8 +487,8 @@ pub fn current_workspace_head_commit(workspace_dir: &Path) -> Result<String> {
     Ok(commit)
 }
 
-pub fn default_branch_ref(default_branch: &str) -> String {
-    format!("refs/heads/{default_branch}")
+pub fn default_branch_ref(remote: &str, default_branch: &str) -> String {
+    format!("refs/remotes/{remote}/{default_branch}")
 }
 
 pub fn tracked_file_count(workspace_dir: &Path) -> Result<i64> {
@@ -528,36 +558,33 @@ pub fn commits_ahead_of(workspace_dir: &Path, base_ref: &str) -> Result<u32> {
 ///
 /// Bounded by `GIT_NETWORK_TIMEOUT` and runs in a no-prompt environment so
 /// a stalled remote or credential prompt cannot park the calling thread.
-pub fn fetch_remote_branch(workspace_dir: &Path, branch: &str) -> Result<()> {
+pub fn fetch_remote_branch(workspace_dir: &Path, remote: &str, branch: &str) -> Result<()> {
     let workspace_dir = workspace_dir.display().to_string();
     run_git_with_timeout(
-        ["-C", workspace_dir.as_str(), "fetch", "origin", branch],
+        ["-C", workspace_dir.as_str(), "fetch", remote, branch],
         None,
         GIT_NETWORK_TIMEOUT,
     )
     .map(|_| ())
-    .with_context(|| format!("Failed to fetch origin/{} into {}", branch, workspace_dir))
+    .with_context(|| format!("Failed to fetch {remote}/{branch} into {workspace_dir}"))
 }
 
-/// Fetch all branches from `origin`, pruning deleted remote refs.
-///
-/// Bounded by `GIT_NETWORK_TIMEOUT` and runs in a no-prompt environment so
-/// a stalled remote or credential prompt cannot park the calling thread.
-pub fn fetch_all_remote(workspace_dir: &Path) -> Result<()> {
+/// Fetch all branches from the given remote, pruning deleted remote refs.
+pub fn fetch_all_remote(workspace_dir: &Path, remote: &str) -> Result<()> {
     let workspace_dir = workspace_dir.display().to_string();
     run_git_with_timeout(
-        ["-C", workspace_dir.as_str(), "fetch", "--prune", "origin"],
+        ["-C", workspace_dir.as_str(), "fetch", "--prune", remote],
         None,
         GIT_NETWORK_TIMEOUT,
     )
     .map(|_| ())
-    .with_context(|| format!("Failed to fetch all from origin in {}", workspace_dir))
+    .with_context(|| format!("Failed to fetch all from {remote} in {workspace_dir}"))
 }
 
-/// Returns true if `refs/remotes/origin/<branch>` exists locally (no network).
-pub fn verify_remote_ref_exists(workspace_dir: &Path, branch: &str) -> Result<bool> {
+/// Returns true if `refs/remotes/<remote>/<branch>` exists locally (no network).
+pub fn verify_remote_ref_exists(workspace_dir: &Path, remote: &str, branch: &str) -> Result<bool> {
     let workspace_dir = workspace_dir.display().to_string();
-    let ref_name = format!("refs/remotes/origin/{branch}");
+    let ref_name = format!("refs/remotes/{remote}/{branch}");
     match run_git(
         [
             "-C",
@@ -574,10 +601,10 @@ pub fn verify_remote_ref_exists(workspace_dir: &Path, branch: &str) -> Result<bo
     }
 }
 
-/// Resolve `refs/remotes/origin/<branch>` to its current commit SHA.
-pub fn remote_ref_sha(workspace_dir: &Path, branch: &str) -> Result<String> {
+/// Resolve `refs/remotes/<remote>/<branch>` to its current commit SHA.
+pub fn remote_ref_sha(workspace_dir: &Path, remote: &str, branch: &str) -> Result<String> {
     let workspace_dir = workspace_dir.display().to_string();
-    let ref_name = format!("refs/remotes/origin/{branch}");
+    let ref_name = format!("refs/remotes/{remote}/{branch}");
     let sha = run_git(
         ["-C", workspace_dir.as_str(), "rev-parse", ref_name.as_str()],
         None,

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceDetail, WorkspaceSessionSummary } from "@/lib/api";
 import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
+import { TooltipProvider } from "./ui/tooltip";
 
 const apiMocks = vi.hoisted(() => ({
 	createSession: vi.fn(),
@@ -99,17 +100,19 @@ describe("WorkspacePanel", () => {
 		const onSelectSession = vi.fn();
 
 		render(
-			<QueryClientProvider client={queryClient}>
-				<WorkspacePanel
-					workspace={WORKSPACE}
-					sessions={SESSIONS}
-					selectedSessionId="session-1"
-					sessionPanes={[]}
-					sending={false}
-					onSelectSession={onSelectSession}
-					onSessionsChanged={vi.fn()}
-				/>
-			</QueryClientProvider>,
+			<TooltipProvider delayDuration={0}>
+				<QueryClientProvider client={queryClient}>
+					<WorkspacePanel
+						workspace={WORKSPACE}
+						sessions={SESSIONS}
+						selectedSessionId="session-1"
+						sessionPanes={[]}
+						sending={false}
+						onSelectSession={onSelectSession}
+						onSessionsChanged={vi.fn()}
+					/>
+				</QueryClientProvider>
+			</TooltipProvider>,
 		);
 
 		await user.click(screen.getByRole("button", { name: "New session" }));
@@ -159,17 +162,19 @@ describe("WorkspacePanel", () => {
 		});
 
 		const { container } = render(
-			<QueryClientProvider client={queryClient}>
-				<WorkspacePanel
-					workspace={WORKSPACE}
-					sessions={SESSIONS}
-					selectedSessionId="session-1"
-					sessionPanes={[]}
-					sending={false}
-					onSelectSession={onSelectSession}
-					onSessionsChanged={onSessionsChanged}
-				/>
-			</QueryClientProvider>,
+			<TooltipProvider delayDuration={0}>
+				<QueryClientProvider client={queryClient}>
+					<WorkspacePanel
+						workspace={WORKSPACE}
+						sessions={SESSIONS}
+						selectedSessionId="session-1"
+						sessionPanes={[]}
+						sending={false}
+						onSelectSession={onSelectSession}
+						onSessionsChanged={onSessionsChanged}
+					/>
+				</QueryClientProvider>
+			</TooltipProvider>,
 		);
 
 		const closeAction = container.querySelector(
@@ -209,23 +214,25 @@ describe("WorkspacePanel", () => {
 
 	it("wraps the empty session state in a full-size centered container", () => {
 		const { container } = render(
-			<QueryClientProvider client={createHelmorQueryClient()}>
-				<WorkspacePanel
-					workspace={WORKSPACE}
-					sessions={SESSIONS}
-					selectedSessionId="session-1"
-					sessionPanes={[
-						{
-							sessionId: "session-1",
-							messages: [],
-							sending: false,
-							hasLoaded: true,
-							presentationState: "presented",
-						},
-					]}
-					sending={false}
-				/>
-			</QueryClientProvider>,
+			<TooltipProvider delayDuration={0}>
+				<QueryClientProvider client={createHelmorQueryClient()}>
+					<WorkspacePanel
+						workspace={WORKSPACE}
+						sessions={SESSIONS}
+						selectedSessionId="session-1"
+						sessionPanes={[
+							{
+								sessionId: "session-1",
+								messages: [],
+								sending: false,
+								hasLoaded: true,
+								presentationState: "presented",
+							},
+						]}
+						sending={false}
+					/>
+				</QueryClientProvider>
+			</TooltipProvider>,
 		);
 
 		const centeredContainer = container.querySelector(
@@ -247,7 +254,7 @@ describe("WorkspacePanel", () => {
 			"max-w-sm",
 			"flex-col",
 			"items-center",
-			"text-center",
+			"gap-2",
 		);
 	});
 });

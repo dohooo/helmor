@@ -69,13 +69,13 @@ describe("App", () => {
 			'[data-slot="workspace-groups-scroll"]',
 		);
 
-		expect(shell).toHaveClass("bg-app-base");
+		expect(shell).toHaveClass("bg-background");
 		expect(shell).toHaveClass("h-screen");
 		expect(shell).toHaveClass("overflow-hidden");
-		expect(sidebar).toHaveClass("bg-app-sidebar");
+		expect(sidebar).toHaveClass("bg-sidebar");
 		expect(sidebar).toHaveClass("overflow-hidden");
 		expect(sidebar).toHaveStyle({ width: "336px" });
-		expect(inspector).toHaveClass("bg-app-sidebar");
+		expect(inspector).toHaveClass("bg-sidebar");
 		expect(inspector).toHaveClass("overflow-hidden");
 		expect(inspector).toHaveStyle({ width: "336px" });
 		expect(screen.getByLabelText("Inspector section Git")).toBeInTheDocument();
@@ -93,9 +93,9 @@ describe("App", () => {
 		expect(screen.getByRole("tab", { name: "Run" })).toBeInTheDocument();
 		expect(screen.queryByText("Terminal")).not.toBeInTheDocument();
 		expect(panel).toHaveClass("relative");
-		expect(panel).toHaveClass("bg-app-elevated");
+		expect(panel).toHaveClass("bg-background");
 		expect(dragRegion).toHaveAttribute("data-tauri-drag-region");
-		expect(viewport).toHaveClass("bg-app-elevated");
+		expect(viewport).toHaveClass("bg-background");
 		expect(composer).toBeInTheDocument();
 		expect(input).toHaveAttribute("aria-multiline", "true");
 		expect(
@@ -244,16 +244,24 @@ describe("App", () => {
 			},
 		];
 
-		render(<WorkspacesSidebar groups={groups} archivedRows={[]} />);
+		renderWithProviders(
+			<WorkspacesSidebar groups={groups} archivedRows={[]} />,
+		);
 
-		expect(screen.getByText("HC")).toBeInTheDocument();
+		const workspaceRow = screen.getByRole("button", {
+			name: "Investigate repo avatar fallback",
+		});
+		const workspaceAvatar = workspaceRow.querySelector(
+			'[data-slot="workspace-avatar"]',
+		);
+		expect(workspaceAvatar).toHaveAttribute("data-fallback", "HC");
 	});
 
 	it("calls restore for archived workspaces and shows restore errors", async () => {
 		const user = userEvent.setup();
 		const onRestoreWorkspace = vi.fn();
 
-		render(
+		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[]}
 				archivedRows={[
@@ -278,7 +286,7 @@ describe("App", () => {
 		const user = userEvent.setup();
 		const onArchiveWorkspace = vi.fn();
 
-		render(
+		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[
 					{
@@ -323,7 +331,7 @@ describe("App", () => {
 			},
 		];
 
-		render(
+		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[]}
 				archivedRows={[]}
@@ -334,11 +342,12 @@ describe("App", () => {
 
 		await user.click(screen.getByRole("button", { name: "New workspace" }));
 
+		expect(screen.queryByPlaceholderText("Search repositories")).toBeNull();
+		expect(screen.queryByText("Repositories")).toBeNull();
 		expect(
-			screen.getByRole("dialog", { name: "Create workspace from repository" }),
+			screen.getByRole("option", { name: /dosu-cli/i }),
 		).toBeInTheDocument();
 
-		await user.type(screen.getByLabelText("Search repositories"), "dosu");
 		await user.click(screen.getByText("dosu-cli"));
 
 		expect(onCreateWorkspace).toHaveBeenCalledWith("repo-1");
@@ -348,7 +357,7 @@ describe("App", () => {
 		const user = userEvent.setup();
 		const onMarkWorkspaceUnread = vi.fn();
 
-		render(
+		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[
 					{
@@ -383,7 +392,7 @@ describe("App", () => {
 		const user = userEvent.setup();
 		const onMarkWorkspaceUnread = vi.fn();
 
-		render(
+		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[
 					{
@@ -416,7 +425,7 @@ describe("App", () => {
 	});
 
 	it("uses unread emphasis without treating ready rows as selected", () => {
-		render(
+		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[
 					{
@@ -484,7 +493,7 @@ describe("App", () => {
 				],
 			},
 		];
-		const { rerender } = render(
+		const { rerender } = renderWithProviders(
 			<WorkspacesSidebar
 				groups={groups}
 				archivedRows={[]}
@@ -531,7 +540,7 @@ describe("App", () => {
 		];
 
 		try {
-			const { rerender } = render(
+			const { rerender } = renderWithProviders(
 				<WorkspacesSidebar groups={[]} archivedRows={archivedRows} />,
 			);
 
@@ -563,7 +572,7 @@ describe("App", () => {
 		const user = userEvent.setup();
 		const onRestoreWorkspace = vi.fn();
 
-		render(
+		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[]}
 				archivedRows={[
@@ -593,7 +602,7 @@ describe("App", () => {
 		const user = userEvent.setup();
 		const onArchiveWorkspace = vi.fn();
 
-		render(
+		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[
 					{
