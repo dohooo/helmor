@@ -15,7 +15,9 @@ import {
 	loadSessionAttachments,
 	loadSessionThreadMessages,
 	loadWorkspaceDetail,
+	loadWorkspaceGitActionStatus,
 	loadWorkspaceGroups,
+	loadWorkspacePrActionStatus,
 	loadWorkspaceSessions,
 	lookupWorkspacePr,
 } from "./api";
@@ -47,6 +49,10 @@ export const helmorQueryKeys = {
 	workspaceFiles: (workspaceRootPath: string) =>
 		["workspaceFiles", workspaceRootPath] as const,
 	workspacePr: (workspaceId: string) => ["workspacePr", workspaceId] as const,
+	workspaceGitActionStatus: (workspaceId: string) =>
+		["workspaceGitActionStatus", workspaceId] as const,
+	workspacePrActionStatus: (workspaceId: string) =>
+		["workspacePrActionStatus", workspaceId] as const,
 	autoCloseActionKinds: ["autoCloseActionKinds"] as const,
 	autoCloseOptInAsked: ["autoCloseOptInAsked"] as const,
 	slashCommands: (
@@ -214,6 +220,29 @@ export function workspacePrQueryOptions(workspaceId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspacePr(workspaceId),
 		queryFn: () => lookupWorkspacePr(workspaceId),
+		staleTime: 30_000,
+		gcTime: DEFAULT_GC_TIME,
+		refetchInterval: 60_000,
+		retry: 0,
+	});
+}
+
+export function workspaceGitActionStatusQueryOptions(workspaceId: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.workspaceGitActionStatus(workspaceId),
+		queryFn: () => loadWorkspaceGitActionStatus(workspaceId),
+		staleTime: CHANGES_STALE_TIME,
+		gcTime: DEFAULT_GC_TIME,
+		refetchOnWindowFocus: true,
+		refetchInterval: 10_000,
+		retry: 0,
+	});
+}
+
+export function workspacePrActionStatusQueryOptions(workspaceId: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.workspacePrActionStatus(workspaceId),
+		queryFn: () => loadWorkspacePrActionStatus(workspaceId),
 		staleTime: 30_000,
 		gcTime: DEFAULT_GC_TIME,
 		refetchInterval: 60_000,

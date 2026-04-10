@@ -1,5 +1,6 @@
 import { MarkGithubIcon } from "@primer/octicons-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	getMaterialFileIcon,
 	getMaterialFolderIcon,
@@ -9,7 +10,6 @@ import {
 	CheckIcon,
 	ChevronDown,
 	ChevronRightIcon,
-	CircleIcon,
 	GitBranchIcon,
 	MinusIcon,
 	PlusIcon,
@@ -19,15 +19,21 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
+	type ActionProvider,
+	type ActionStatusKind,
 	discardWorkspaceFile,
 	type PullRequestInfo,
 	stageWorkspaceFile,
 	unstageWorkspaceFile,
+	type WorkspaceGitActionStatus,
+	type WorkspacePrActionStatus,
 } from "@/lib/api";
 import type { InspectorFileItem } from "@/lib/editor-session";
 import {
 	helmorQueryKeys,
 	workspaceChangesQueryOptions,
+	workspaceGitActionStatusQueryOptions,
+	workspacePrActionStatusQueryOptions,
 } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import { AnimatedShinyText } from "./ui/animated-shiny-text";
@@ -48,6 +54,7 @@ const MIN_SECTION_HEIGHT = 48;
 const RESIZE_HIT_AREA = 10;
 
 type WorkspaceInspectorSidebarProps = {
+	workspaceId?: string | null;
 	workspaceRootPath?: string | null;
 	workspaceBranch?: string | null;
 	workspaceTargetBranch?: string | null;
@@ -64,6 +71,7 @@ type WorkspaceInspectorSidebarProps = {
 };
 
 export function WorkspaceInspectorSidebar({
+	workspaceId,
 	workspaceRootPath,
 	workspaceBranch,
 	workspaceTargetBranch,
@@ -318,6 +326,7 @@ export function WorkspaceInspectorSidebar({
 		>
 			<ChangesSection
 				bodyHeight={changesHeight}
+				workspaceId={workspaceId ?? null}
 				workspaceRootPath={workspaceRootPath ?? null}
 				workspaceBranch={workspaceBranch ?? null}
 				workspaceTargetBranch={workspaceTargetBranch ?? null}
@@ -338,9 +347,13 @@ export function WorkspaceInspectorSidebar({
 			/>
 
 			<ActionsSection
+				workspaceId={workspaceId ?? null}
 				sectionRef={actionsRef}
 				bodyHeight={actionsHeight}
 				expanded={!tabsOpen}
+				onCommitAction={onCommitAction}
+				commitButtonState={commitButtonState}
+				prInfo={prInfo ?? null}
 			/>
 
 			{tabsOpen && (
@@ -497,97 +510,29 @@ function HorizontalResizeHandle({
 
 interface GitStatusItem {
 	label: string;
-	action?: string;
+	status: ActionStatusKind;
+	action?: {
+		label: string;
+		mode: WorkspaceCommitButtonMode;
+	};
 }
 
-interface DeploymentItem {
-	name: string;
-	provider: "vercel";
-	status: "success" | "pending" | "failure";
-	hasLink?: boolean;
-}
+const EMPTY_GIT_ACTION_STATUS: WorkspaceGitActionStatus = {
+	uncommittedCount: 0,
+	conflictCount: 0,
+};
 
-interface CheckItem {
-	name: string;
-	provider: "github" | "vercel";
-	status: "success" | "pending" | "failure";
-	duration?: string;
-	hasLink?: boolean;
-}
+const EMPTY_PR_ACTION_STATUS: WorkspacePrActionStatus = {
+	pr: null,
+	reviewDecision: null,
+	mergeable: null,
+	deployments: [],
+	checks: [],
+	remoteState: "unavailable",
+	message: null,
+};
 
-const MOCK_GIT_STATUS: GitStatusItem[] = [
-	{ label: "1 uncommitted change", action: "Commit and push" },
-	{ label: "Merge conflicts detected", action: "Resolve" },
-	{ label: "Waiting for PR review" },
-];
-
-const MOCK_DEPLOYMENTS: DeploymentItem[] = [
-	{ name: "marketing", provider: "vercel", status: "success", hasLink: true },
-];
-
-const MOCK_CHECKS: CheckItem[] = [
-	{ name: "changes", provider: "github", status: "success", duration: "12s" },
-	{
-		name: "staging-locked",
-		provider: "github",
-		status: "success",
-		duration: "6s",
-	},
-	{ name: "Deploy to Staging", provider: "github", status: "success" },
-	{
-		name: "Vercel Agent Review",
-		provider: "vercel",
-		status: "success",
-		duration: "1s",
-		hasLink: true,
-	},
-	{
-		name: "Seer Code Review",
-		provider: "github",
-		status: "success",
-		duration: "2m",
-		hasLink: true,
-	},
-	{
-		name: "Vercel Preview Comments",
-		provider: "vercel",
-		status: "success",
-		duration: "0s",
-		hasLink: true,
-	},
-	{
-		name: "Vercel – app",
-		provider: "vercel",
-		status: "success",
-		hasLink: true,
-	},
-	{
-		name: "Vercel – app-emails-preview",
-		provider: "vercel",
-		status: "success",
-		hasLink: true,
-	},
-	{
-		name: "Vercel – design-system",
-		provider: "vercel",
-		status: "success",
-		hasLink: true,
-	},
-	{
-		name: "Vercel – knows",
-		provider: "vercel",
-		status: "success",
-		hasLink: true,
-	},
-	{
-		name: "Vercel – marketing",
-		provider: "vercel",
-		status: "success",
-		hasLink: true,
-	},
-];
-
-function ProviderIcon({ provider }: { provider: "github" | "vercel" }) {
+function ProviderIcon({ provider }: { provider: ActionProvider }) {
 	if (provider === "vercel") {
 		return (
 			<TriangleIcon
@@ -596,34 +541,140 @@ function ProviderIcon({ provider }: { provider: "github" | "vercel" }) {
 			/>
 		);
 	}
+	if (provider === "unknown") return null;
 	return (
 		<MarkGithubIcon size={12} className="shrink-0 text-muted-foreground" />
 	);
 }
 
-function StatusIcon({ status }: { status: "success" | "pending" | "failure" }) {
+function StatusIcon({ status }: { status: ActionStatusKind }) {
 	if (status === "success") {
 		return (
-			<CheckIcon className="size-3 shrink-0 text-chart-2" strokeWidth={2.2} />
+			<CheckIcon
+				aria-label="Passed"
+				className="size-3 shrink-0 text-chart-2"
+				strokeWidth={2.2}
+			/>
 		);
 	}
+
+	const label =
+		status === "running"
+			? "Running"
+			: status === "failure"
+				? "Failed"
+				: "Pending";
+	const color =
+		status === "running"
+			? "rgb(245, 158, 11)"
+			: status === "failure"
+				? "rgb(207, 34, 46)"
+				: undefined;
+
 	return (
-		<CircleIcon
-			className="size-3 shrink-0 text-muted-foreground"
-			strokeWidth={1.5}
-		/>
+		<span
+			aria-label={label}
+			className="inline-flex size-3 shrink-0 items-center justify-center rounded-full border border-current text-muted-foreground"
+			style={color ? { color } : undefined}
+		>
+			<span
+				className={cn(
+					"size-1.5 rounded-full",
+					status === "pending" && "bg-muted-foreground",
+				)}
+				style={color ? { backgroundColor: color } : undefined}
+			/>
+		</span>
 	);
 }
 
+function buildGitStatusRows(
+	gitStatus: WorkspaceGitActionStatus,
+	prStatus: WorkspacePrActionStatus,
+	prInfo: PullRequestInfo | null,
+): GitStatusItem[] {
+	const uncommittedCount = gitStatus.uncommittedCount;
+	const conflictCount = gitStatus.conflictCount;
+	const hasMergeConflict =
+		conflictCount > 0 || prStatus.mergeable === "CONFLICTING";
+	const pr = prStatus.pr ?? prInfo;
+	const isMerged = pr?.isMerged ?? false;
+
+	const rows: GitStatusItem[] = [
+		uncommittedCount === 0
+			? {
+					label: "No uncommitted changes",
+					status: "success",
+				}
+			: {
+					label:
+						uncommittedCount === 1
+							? "1 uncommitted change"
+							: `${uncommittedCount} uncommitted changes`,
+					status: "pending",
+					action: {
+						label: "Commit and push",
+						mode: "commit-and-push",
+					},
+				},
+		hasMergeConflict
+			? {
+					label: "Merge conflicts detected",
+					status: "failure",
+					action: {
+						label: "Resolve",
+						mode: "resolve-conflicts",
+					},
+				}
+			: {
+					label: "No merge conflicts",
+					status: "success",
+				},
+	];
+
+	if (isMerged || prStatus.reviewDecision === "APPROVED") {
+		rows.push({ label: "Review approved", status: "success" });
+	} else if (pr?.state === "CLOSED") {
+		rows.push({ label: "PR closed", status: "failure" });
+	} else if (prStatus.reviewDecision === "CHANGES_REQUESTED") {
+		rows.push({ label: "Changes requested", status: "failure" });
+	} else {
+		rows.push({ label: "Waiting for PR review", status: "pending" });
+	}
+
+	return rows;
+}
+
 function ActionsSection({
+	workspaceId,
 	sectionRef,
 	bodyHeight,
 	expanded,
+	onCommitAction,
+	commitButtonState,
+	prInfo,
 }: {
+	workspaceId: string | null;
 	sectionRef?: React.RefObject<HTMLElement | null>;
 	bodyHeight: number;
 	expanded: boolean;
+	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
+	commitButtonState?: CommitButtonState;
+	prInfo: PullRequestInfo | null;
 }) {
+	const gitStatusQuery = useQuery({
+		...workspaceGitActionStatusQueryOptions(workspaceId ?? "__none__"),
+		enabled: workspaceId !== null,
+	});
+	const prStatusQuery = useQuery({
+		...workspacePrActionStatusQueryOptions(workspaceId ?? "__none__"),
+		enabled: workspaceId !== null,
+	});
+	const gitStatus = gitStatusQuery.data ?? EMPTY_GIT_ACTION_STATUS;
+	const prStatus = prStatusQuery.data ?? EMPTY_PR_ACTION_STATUS;
+	const gitRows = buildGitStatusRows(gitStatus, prStatus, prInfo);
+	const actionDisabled = commitButtonState === "busy";
+
 	return (
 		<section
 			ref={sectionRef}
@@ -648,79 +699,93 @@ function ActionsSection({
 						Git status
 					</span>
 				</div>
-				{MOCK_GIT_STATUS.map((item) => (
-					<div
-						key={item.label}
-						className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60"
-					>
-						<CircleIcon
-							className="size-3 shrink-0 text-muted-foreground"
-							strokeWidth={1.5}
-						/>
-						<span className="truncate">{item.label}</span>
-						{item.action && (
-							<span className="ml-auto shrink-0 cursor-pointer text-[10.5px] text-primary transition-colors hover:text-primary/80">
-								{item.action}
-							</span>
-						)}
-					</div>
-				))}
+				{gitRows.map((item) => {
+					const action = item.action;
+					return (
+						<div
+							key={item.label}
+							className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60"
+						>
+							<StatusIcon status={item.status} />
+							<span className="truncate">{item.label}</span>
+							{action && (
+								<button
+									type="button"
+									disabled={actionDisabled}
+									onClick={() => {
+										if (actionDisabled) return;
+										void onCommitAction?.(action.mode);
+									}}
+									className="ml-auto shrink-0 cursor-pointer text-[10.5px] text-primary transition-colors hover:text-primary/80 disabled:cursor-not-allowed disabled:opacity-50"
+								>
+									{action.label}
+								</button>
+							)}
+						</div>
+					);
+				})}
 
 				{/* Deployments */}
-				<div className="px-2.5 pb-1 pt-2.5">
-					<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
-						Deployments
-					</span>
-				</div>
-				{MOCK_DEPLOYMENTS.map((item) => (
-					<div
-						key={item.name}
-						className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60"
-					>
-						<StatusIcon status={item.status} />
-						<ProviderIcon provider={item.provider} />
-						<span className="truncate">{item.name}</span>
-						{item.hasLink && (
-							<ArrowUpRightIcon
-								className="ml-auto size-3 shrink-0 text-primary transition-colors hover:text-primary/80"
-								strokeWidth={1.8}
-							/>
-						)}
-					</div>
-				))}
+				{prStatus.deployments.length > 0 && (
+					<>
+						<div className="px-2.5 pb-1 pt-2.5">
+							<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+								Deployments
+							</span>
+						</div>
+						{prStatus.deployments.map((item) => (
+							<ActionStatusRow key={item.id} item={item} />
+						))}
+					</>
+				)}
 
 				{/* Checks */}
-				<div className="px-2.5 pb-1 pt-2.5">
-					<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
-						Checks
-					</span>
-				</div>
-				{MOCK_CHECKS.map((item) => (
-					<div
-						key={item.name}
-						className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60"
-					>
-						<StatusIcon status={item.status} />
-						<ProviderIcon provider={item.provider} />
-						<span className="truncate">{item.name}</span>
-						{item.duration && (
-							<span className="shrink-0 text-[10.5px] text-muted-foreground">
-								{item.duration}
+				{prStatus.checks.length > 0 && (
+					<>
+						<div className="px-2.5 pb-1 pt-2.5">
+							<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+								Checks
 							</span>
-						)}
-						{item.hasLink && (
-							<ArrowUpRightIcon
-								className={cn(
-									"size-3 shrink-0 text-primary transition-colors hover:text-primary/80",
-									!item.duration && "ml-auto",
-								)}
-								strokeWidth={1.8}
-							/>
-						)}
-					</div>
-				))}
+						</div>
+						{prStatus.checks.map((item) => (
+							<ActionStatusRow key={item.id} item={item} />
+						))}
+					</>
+				)}
 			</ScrollArea>
 		</section>
+	);
+}
+
+function ActionStatusRow({
+	item,
+}: {
+	item: WorkspacePrActionStatus["checks"][number];
+}) {
+	return (
+		<div className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
+			<StatusIcon status={item.status} />
+			<ProviderIcon provider={item.provider} />
+			<span className="truncate">{item.name}</span>
+			{item.duration && (
+				<span className="shrink-0 text-[10.5px] text-muted-foreground">
+					{item.duration}
+				</span>
+			)}
+			{item.url && (
+				<button
+					type="button"
+					aria-label={`Open ${item.name}`}
+					onClick={() => void openUrl(item.url!)}
+					className={cn(
+						"size-3 shrink-0 text-primary transition-colors hover:text-primary/80",
+						!item.duration && "ml-auto",
+					)}
+				>
+					<ArrowUpRightIcon className="size-3" strokeWidth={1.8} />
+				</button>
+			)}
+		</div>
 	);
 }
 
@@ -769,6 +834,7 @@ const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
 
 function ChangesSection({
 	bodyHeight,
+	workspaceId,
 	workspaceRootPath,
 	workspaceBranch,
 	workspaceTargetBranch,
@@ -783,6 +849,7 @@ function ChangesSection({
 	prInfo,
 }: {
 	bodyHeight: number;
+	workspaceId: string | null;
 	workspaceRootPath: string | null;
 	workspaceBranch: string | null;
 	workspaceTargetBranch: string | null;
@@ -836,7 +903,12 @@ function ChangesSection({
 		queryClient.invalidateQueries({
 			queryKey: helmorQueryKeys.workspaceChanges(workspaceRootPath),
 		});
-	}, [queryClient, workspaceRootPath]);
+		if (workspaceId) {
+			queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceGitActionStatus(workspaceId),
+			});
+		}
+	}, [queryClient, workspaceId, workspaceRootPath]);
 
 	const stageFile = useCallback(
 		async (relativePath: string) => {
@@ -925,9 +997,7 @@ function ChangesSection({
 							variant="outline"
 							size="xs"
 							onClick={() => {
-								void import("@tauri-apps/plugin-opener").then(({ openUrl }) => {
-									void openUrl(prInfo.url);
-								});
+								void openUrl(prInfo.url);
 							}}
 							className={cn(
 								"h-5.5 gap-0.5 rounded-[3px] px-2 text-[11px] font-semibold leading-none tracking-[0.01em]",

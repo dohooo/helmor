@@ -1399,18 +1399,17 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		const { phase, mode, trackedSessionId, workspaceId } = commitLifecycle;
 
 		if (phase === "done") {
-			// Merge/close use optimistic cache updates — don't refetch the
-			// PR query here or GitHub's propagation delay will briefly
-			// overwrite the optimistic value with the old state.
-			if (mode !== "merge" && mode !== "closed") {
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspacePr(workspaceId),
-				});
-			}
-			// Refresh the file list so committed files disappear.
 			queryClient.invalidateQueries({
-				queryKey: ["workspaceChanges"],
+				queryKey: helmorQueryKeys.workspacePr(workspaceId),
 			});
+			queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspacePrActionStatus(workspaceId),
+			});
+			queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceGitActionStatus(workspaceId),
+			});
+			// Refresh the file list so committed files disappear.
+			queryClient.invalidateQueries({ queryKey: ["workspaceChanges"] });
 
 			void (async () => {
 				try {
@@ -1840,6 +1839,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 								style={{ width: `${inspectorWidth}px` }}
 							>
 								<WorkspaceInspectorSidebar
+									workspaceId={selectedWorkspaceId}
 									workspaceRootPath={workspaceRootPath}
 									workspaceBranch={
 										selectedWorkspaceDetailQuery.data?.branch ?? null
