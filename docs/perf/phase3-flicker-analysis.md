@@ -5,27 +5,27 @@
 ## The four user-reported issues
 
 ### Issue 1: Scrollbar flickers up/down on every session switch
-> 每一个session切换的时候右侧的滚动条都会上下的闪烁滚动我非常不喜欢
+> Every time I switch sessions, the scrollbar on the right side flickers up and down — I really dislike this
 
 The right-side scrollbar visibly moves/flickers on every session switch. User strongly dislikes this.
 
 ### Issue 2: Tauri first-load: low FPS + content area rapid jitter
-> 当我首次进入打开Tauri这个客户端然后加载我这个整体的页面的时候帧数都会非常低在Tauri里面帧数都会非常低我不知道为什么 / 第一次加载渲染的时候这个内容区会非常迅速的上下的抖动闪动
+> When I first open the Tauri client and load the page, the FPS is very low — I don't know why / During first-load rendering, the content area rapidly jitters and flashes up and down
 
 When opening the Tauri client for the first time:
 - FPS is very low during initial load (Tauri-only, not in dev:vite/Chromium)
 - The content area rapidly jitters/flashes up and down during initial render
 
 ### Issue 3: Long-session switch shows scroll-from-top-to-bottom animation
-> session一打开整体的列表居然还是动的它会是从上往下滚动然后到底部的这么一个缓慢的有这么一个滚动动画我根本不想要这么一个动画
+> When I open a session, the list is still moving — it scrolls from top to bottom with a slow scrolling animation. I don't want this animation at all
 
 When switching to a long session, the list visibly animates: it starts somewhere up top and slowly scrolls to the bottom. User wants:
 - First frame is at the actual bottom of the visible content
 - Every subsequent frame is the SAME (frozen) until user interacts
-- "干爽干脆" (clean, snappy)
+- "clean, snappy" (no residual animation)
 
 ### Issue 4: cambridge-v3 (and similar) — code blocks hydrate one-by-one + scroll cascades wrongly
-> 当我选择archive里面的左边的这个workspace的时候它就会出现更加明显的闪烁 / 看起来它的代码块是一个一个渲染出来的 / 它闪的方式是它又闪到了底部 / 一开始进来的时候没有任何一个代码块的渲染,并且我们测量位置也测量的不准
+> When I select a workspace from the archive on the left, the flickering becomes even more noticeable / It looks like code blocks are rendered one by one / The way it flickers is that it keeps jumping to the bottom / When first entering, none of the code blocks are rendered, and our position measurements are inaccurate
 
 User attached 4 screenshots showing the cambridge-v3 archived workspace switch sequence:
 - Frame 1: messages visible, code blocks NOT rendered yet (Streamdown lazy)

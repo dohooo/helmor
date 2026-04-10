@@ -605,7 +605,7 @@ mod tests {
                 stderr: String::new(),
             },
             MockRunnerResponse::Success {
-                stdout: r#"{"login":"dohooo","id":32405058,"name":"Caspian 東澔","avatar_url":"https://avatars.githubusercontent.com/u/32405058?v=4","email":"caspian.zhao@outlook.com"}"#
+                stdout: r#"{"login":"dohooo","id":32405058,"name":"Caspian Dongho","avatar_url":"https://avatars.githubusercontent.com/u/32405058?v=4","email":"caspian.zhao@outlook.com"}"#
                     .to_string(),
                 stderr: String::new(),
             },
@@ -618,7 +618,7 @@ mod tests {
             Some(GithubCliUser {
                 login: "dohooo".to_string(),
                 id: 32405058,
-                name: Some("Caspian 東澔".to_string()),
+                name: Some("Caspian Dongho".to_string()),
                 avatar_url: Some(
                     "https://avatars.githubusercontent.com/u/32405058?v=4".to_string()
                 ),
