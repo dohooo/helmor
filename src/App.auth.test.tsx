@@ -169,16 +169,8 @@ async function openGithubMenu() {
 }
 
 describe("App GitHub identity states", () => {
-	let _identityListener:
-		| ((snapshot: {
-				status: string;
-				session?: typeof CONNECTED_IDENTITY;
-		  }) => void)
-		| null;
-
 	beforeEach(() => {
 		installTauriRuntime();
-		_identityListener = null;
 		Object.defineProperty(navigator, "clipboard", {
 			configurable: true,
 			value: {
@@ -206,14 +198,9 @@ describe("App GitHub identity states", () => {
 		});
 		apiMocks.cancelGithubIdentityConnect.mockResolvedValue(undefined);
 		apiMocks.disconnectGithubIdentity.mockResolvedValue(undefined);
-		apiMocks.listenGithubIdentityChanged.mockImplementation(
-			async (callback) => {
-				_identityListener = callback;
-				return () => {
-					_identityListener = null;
-				};
-			},
-		);
+		apiMocks.listenGithubIdentityChanged.mockImplementation(async () => {
+			return () => {};
+		});
 
 		mockWorkspaceData();
 	});
