@@ -114,6 +114,10 @@ function onEditorError(error: Error) {
 	console.error("[Composer Lexical]", error);
 }
 
+// Draft cache — survives workspace switches within the same app session.
+type DraftEntry = { text: string; images: string[]; files: string[] };
+const draftCache = new Map<string, DraftEntry>();
+
 /** Imperatively set Lexical editor content from draft text + attachment paths. */
 function $setEditorContent(draft: string, images: string[], files: string[]) {
 	const root = $getRoot();
@@ -202,13 +206,32 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		onError: onEditorError,
 	}).current;
 
-	// Restore content on context switch
+	// Save & restore drafts on context switch
 	const prevContextKeyRef = useRef(contextKey);
 	useEffect(() => {
 		if (prevContextKeyRef.current !== contextKey) {
+			const prevKey = prevContextKeyRef.current;
 			prevContextKeyRef.current = contextKey;
-			editorRef.current?.update(() => {
-				$setEditorContent(restoreDraft ?? "", restoreImages, restoreFiles);
+			// Save outgoing draft
+			const editor = editorRef.current;
+			if (editor) {
+				editor.read(() => {
+					const content = $extractComposerContent();
+					if (content.text || content.images.length || content.files.length) {
+						draftCache.set(prevKey, content);
+					} else {
+						draftCache.delete(prevKey);
+					}
+				});
+			}
+			// Restore incoming draft (cache > error-restore > empty)
+			const cached = draftCache.get(contextKey);
+			editor?.update(() => {
+				$setEditorContent(
+					cached?.text ?? restoreDraft ?? "",
+					cached?.images ?? restoreImages,
+					cached?.files ?? restoreFiles,
+				);
 			});
 		}
 	}, [contextKey, restoreDraft, restoreImages, restoreFiles]);
@@ -246,8 +269,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		editor.update(() => {
 			$getRoot().clear();
 		});
+		draftCache.delete(contextKey);
 		setHasContent(false);
-	}, [onSubmit]);
+	}, [onSubmit, contextKey]);
 
 	return (
 		<div
