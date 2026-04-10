@@ -332,6 +332,20 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const [sendingSessionIds, setSendingSessionIds] = useState<Set<string>>(
 		() => new Set(),
 	);
+	// Sessions that finished streaming while the user was viewing a different
+	// session. Map of sessionId → workspaceId so we can derive both per-session
+	// and per-workspace red-dot indicators.
+	const [completedSessions, setCompletedSessions] = useState<
+		Map<string, string>
+	>(() => new Map());
+	const completedSessionIds = useMemo(
+		() => new Set(completedSessions.keys()),
+		[completedSessions],
+	);
+	const completedWorkspaceIds = useMemo(
+		() => new Set(completedSessions.values()),
+		[completedSessions],
+	);
 
 	const { settings: appSettings } = useSettings();
 	const [preferredEditorId, setPreferredEditorId] = useState<string | null>(
@@ -1120,6 +1134,15 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			rememberSessionSelection(selectedWorkspaceIdRef.current, sessionId);
 			selectedSessionIdRef.current = sessionId;
 			setSelectedSessionId(sessionId);
+			// Clear the "completed while away" dot for this session
+			if (sessionId) {
+				setCompletedSessions((prev) => {
+					if (!prev.has(sessionId)) return prev;
+					const next = new Map(prev);
+					next.delete(sessionId);
+					return next;
+				});
+			}
 			if (sessionId === null) {
 				if (sessionSelectionRequestRef.current !== requestId) {
 					return;
@@ -1162,6 +1185,18 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 				});
 		},
 		[queryClient, rememberSessionSelection],
+	);
+
+	const handleSessionCompleted = useCallback(
+		(sessionId: string, workspaceId: string) => {
+			if (sessionId === selectedSessionIdRef.current) return;
+			setCompletedSessions((prev) => {
+				const next = new Map(prev);
+				next.set(sessionId, workspaceId);
+				return next;
+			});
+		},
+		[],
 	);
 
 	const handleInspectorCommitAction = useCallback(
@@ -1632,6 +1667,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 											<WorkspacesSidebarContainer
 												selectedWorkspaceId={selectedWorkspaceId}
 												sendingWorkspaceIds={sendingWorkspaceIds}
+												completedWorkspaceIds={completedWorkspaceIds}
 												onSelectWorkspace={handleSelectWorkspace}
 												pushWorkspaceToast={pushWorkspaceToast}
 											/>
@@ -1727,6 +1763,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 											onResolveDisplayedSession={handleResolveDisplayedSession}
 											onSendingWorkspacesChange={setSendingWorkspaceIds}
 											onSendingSessionsChange={setSendingSessionIds}
+											completedSessionIds={completedSessionIds}
+											onSessionCompleted={handleSessionCompleted}
 											workspacePrInfo={workspacePrInfo}
 											pendingPromptForSession={pendingPromptForSession}
 											onPendingPromptConsumed={handlePendingPromptConsumed}

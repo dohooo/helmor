@@ -61,6 +61,8 @@ type WorkspaceConversationContainerProps = {
 	 * session-level lifecycle events (e.g. the commit button driver needs to
 	 * know when its target session's stream has ended). */
 	onSendingSessionsChange?: (sessionIds: Set<string>) => void;
+	completedSessionIds?: Set<string>;
+	onSessionCompleted?: (sessionId: string, workspaceId: string) => void;
 	workspacePrInfo?: PullRequestInfo | null;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
@@ -83,6 +85,8 @@ export const WorkspaceConversationContainer = memo(
 		onResolveDisplayedSession,
 		onSendingWorkspacesChange,
 		onSendingSessionsChange,
+		completedSessionIds,
+		onSessionCompleted,
 		workspacePrInfo = null,
 		headerActions,
 		headerLeading,
@@ -173,6 +177,8 @@ export const WorkspaceConversationContainer = memo(
 		onSendingWorkspacesChangeRef.current = onSendingWorkspacesChange;
 		const onSendingSessionsChangeRef = useRef(onSendingSessionsChange);
 		onSendingSessionsChangeRef.current = onSendingSessionsChange;
+		const onSessionCompletedRef = useRef(onSessionCompleted);
+		onSessionCompletedRef.current = onSessionCompleted;
 		useLayoutEffect(() => {
 			const workspaceIds = new Set<string>();
 			for (const [, wsId] of sendingWorkspaceMapRef.current) {
@@ -470,6 +476,15 @@ export const WorkspaceConversationContainer = memo(
 								cleanup();
 								setPendingPermissions([]);
 
+								// Notify parent so it can show a red-dot if the user
+								// navigated away while this session was working.
+								if (event.kind === "done") {
+									const sid = event.sessionId ?? displayedSessionId;
+									if (sid && displayedWorkspaceId) {
+										onSessionCompletedRef.current?.(sid, displayedWorkspaceId);
+									}
+								}
+
 								// Refresh file changes — agent likely modified files
 								void queryClient.invalidateQueries({
 									queryKey: ["workspaceChanges"],
@@ -658,6 +673,7 @@ export const WorkspaceConversationContainer = memo(
 					sessionSelectionHistory={sessionSelectionHistory}
 					sending={isSending}
 					sendingSessionIds={sendingSessionIds}
+					completedSessionIds={completedSessionIds}
 					selectedProvider={selectedProvider}
 					workspacePrInfo={workspacePrInfo}
 					onSelectSession={onSelectSession}

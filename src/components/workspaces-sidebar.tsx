@@ -313,6 +313,7 @@ type WorkspaceRowItemProps = {
 	row: WorkspaceRow;
 	selected: boolean;
 	isSending?: boolean;
+	isCompleted?: boolean;
 	rowRef?: (element: HTMLDivElement | null) => void;
 	onSelect?: (workspaceId: string) => void;
 	onPrefetch?: (workspaceId: string) => void;
@@ -333,6 +334,7 @@ const WorkspaceRowItem = memo(
 		row,
 		selected,
 		isSending,
+		isCompleted,
 		rowRef,
 		onSelect,
 		onPrefetch,
@@ -440,6 +442,12 @@ const WorkspaceRowItem = memo(
 					>
 						{row.branch ? humanizeBranch(row.branch) : row.title}
 					</span>
+					{isCompleted && !selected ? (
+						<span
+							aria-label="Session completed"
+							className="size-1.5 shrink-0 rounded-full bg-chart-2"
+						/>
+					) : null}
 				</div>
 
 				{hasActionHandler ? (
@@ -597,6 +605,7 @@ const WorkspaceRowItem = memo(
 			previous.row === next.row &&
 			previous.selected === next.selected &&
 			previous.isSending === next.isSending &&
+			previous.isCompleted === next.isCompleted &&
 			previous.archivingWorkspaceId === next.archivingWorkspaceId &&
 			previous.markingUnreadWorkspaceId === next.markingUnreadWorkspaceId &&
 			previous.restoringWorkspaceId === next.restoringWorkspaceId &&
@@ -612,6 +621,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	addingRepository,
 	selectedWorkspaceId,
 	sendingWorkspaceIds,
+	completedWorkspaceIds,
 	creatingWorkspaceRepoId,
 	onAddRepository,
 	onSelectWorkspace,
@@ -633,6 +643,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	addingRepository?: boolean;
 	selectedWorkspaceId?: string | null;
 	sendingWorkspaceIds?: Set<string>;
+	completedWorkspaceIds?: Set<string>;
 	creatingWorkspaceRepoId?: string | null;
 	onAddRepository?: () => void;
 	onSelectWorkspace?: (workspaceId: string) => void;
@@ -966,6 +977,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 															row={row}
 															selected={selectedWorkspaceId === row.id}
 															isSending={sendingWorkspaceIds?.has(row.id)}
+															isCompleted={completedWorkspaceIds?.has(row.id)}
 															rowRef={setWorkspaceRowRef(row.id)}
 															onSelect={onSelectWorkspace}
 															onPrefetch={onPrefetchWorkspace}

@@ -25,6 +25,7 @@ type WorkspacePanelContainerProps = {
 	sessionSelectionHistory?: string[];
 	sending: boolean;
 	sendingSessionIds?: Set<string>;
+	completedSessionIds?: Set<string>;
 	selectedProvider?: string | null;
 	workspacePrInfo?: PullRequestInfo | null;
 	onSelectSession: (sessionId: string | null) => void;
@@ -41,6 +42,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	sessionSelectionHistory = [],
 	sending,
 	sendingSessionIds,
+	completedSessionIds,
 	selectedProvider = null,
 	workspacePrInfo = null,
 	onSelectSession,
@@ -466,6 +468,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			refreshingSession={refreshingSession}
 			sending={sending}
 			sendingSessionIds={sendingSessionIds}
+			completedSessionIds={completedSessionIds}
 			onSelectSession={handleSelectSession}
 			onPrefetchSession={handlePrefetchSession}
 			onSessionsChanged={handleSessionsChanged}

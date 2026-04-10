@@ -128,6 +128,7 @@ type WorkspacePanelProps = {
 	refreshingSession?: boolean;
 	sending?: boolean;
 	sendingSessionIds?: Set<string>;
+	completedSessionIds?: Set<string>;
 	onSelectSession?: (sessionId: string) => void;
 	onPrefetchSession?: (sessionId: string) => void;
 	onSessionsChanged?: () => void;
@@ -205,6 +206,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	refreshingSession: _refreshingSession = false,
 	sending = false,
 	sendingSessionIds,
+	completedSessionIds,
 	onSelectSession,
 	onPrefetchSession,
 	onSessionsChanged,
@@ -255,6 +257,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 					selectedProvider={selectedProvider}
 					sending={sending}
 					sendingSessionIds={sendingSessionIds}
+					completedSessionIds={completedSessionIds}
 					loadingWorkspace={loadingWorkspace}
 					headerActions={headerActions}
 					headerLeading={headerLeading}
@@ -305,6 +308,7 @@ type WorkspacePanelHeaderProps = {
 	selectedProvider?: string | null;
 	sending: boolean;
 	sendingSessionIds?: Set<string>;
+	completedSessionIds?: Set<string>;
 	loadingWorkspace: boolean;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
@@ -323,6 +327,7 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	selectedProvider,
 	sending,
 	sendingSessionIds,
+	completedSessionIds,
 	loadingWorkspace,
 	headerActions,
 	headerLeading,
@@ -826,6 +831,8 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 										? sendingSessionIds.has(session.id)
 										: selected && sending;
 									const hasUnread = session.unreadCount > 0;
+									const isCompleted =
+										completedSessionIds?.has(session.id) ?? false;
 									const isEditing = editingSessionId === session.id;
 
 									return (
@@ -875,7 +882,7 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 												<span
 													className={cn(
 														"truncate font-medium",
-														hasUnread && !selected
+														(hasUnread || isCompleted) && !selected
 															? "text-foreground"
 															: undefined,
 													)}
@@ -883,9 +890,11 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 													{displaySessionTitle(session)}
 												</span>
 											)}
-											{hasUnread && !isEditing ? (
+											{(hasUnread || isCompleted) && !isEditing ? (
 												<span
-													aria-label="Unread session"
+													aria-label={
+														isCompleted ? "Session completed" : "Unread session"
+													}
 													className="size-1.5 shrink-0 rounded-full bg-chart-2"
 												/>
 											) : null}
