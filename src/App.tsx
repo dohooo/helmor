@@ -1761,7 +1761,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 													onClick={() => setSidebarCollapsed(true)}
 													variant="ghost"
 													size="icon-xs"
-													className="absolute right-[12px] top-[8px] z-20 text-muted-foreground hover:text-foreground"
+													className="absolute right-[12px] top-[6px] z-20 text-muted-foreground hover:text-foreground"
 												>
 													<PanelLeftClose
 														className="size-4"
