@@ -414,6 +414,8 @@ const WorkspaceRowItem = memo(
 			manualStatus: row.manualStatus,
 			derivedStatus: row.derivedStatus,
 		});
+		const actionOverlayWidthClassName =
+			isRestoreAction && onDeleteWorkspace ? "w-16" : "w-9";
 
 		const rowBody = (
 			<div
@@ -490,54 +492,26 @@ const WorkspaceRowItem = memo(
 				{hasActionHandler ? (
 					<span
 						className={cn(
-							"flex shrink-0 items-center gap-0.5",
-							isBusy ? "visible" : "invisible group-hover:visible",
+							"pointer-events-none absolute inset-y-0 right-0 z-10 flex items-center justify-end opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
+							actionOverlayWidthClassName,
+							isBusy && "pointer-events-auto opacity-100",
 						)}
 					>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									aria-label={actionLabel}
-									disabled={Boolean(workspaceActionsDisabled)}
-									onClick={(event) => {
-										event.stopPropagation();
-										if (workspaceActionsDisabled) return;
-										if (isRestoreAction) {
-											onRestoreWorkspace?.(row.id);
-										} else {
-											onArchiveWorkspace?.(row.id);
-										}
-									}}
-									variant="ghost"
-									size="icon-xs"
-									className={cn(
-										"size-5 rounded-md p-0 text-muted-foreground",
-										workspaceActionsDisabled
-											? "cursor-not-allowed opacity-60"
-											: "cursor-pointer hover:text-foreground",
-									)}
-								>
-									{actionIcon}
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent
-								side="top"
-								sideOffset={8}
-								className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
-							>
-								<span>{actionLabel}</span>
-							</TooltipContent>
-						</Tooltip>
-						{isRestoreAction && onDeleteWorkspace ? (
+						<span className="absolute inset-y-0 right-0 w-full rounded-r-md bg-[linear-gradient(to_right,transparent_0%,var(--sidebar)_38%,var(--sidebar)_100%)]" />
+						<span className="relative z-10 flex items-center gap-0.5 pr-1">
 							<Tooltip>
 								<TooltipTrigger asChild>
 									<Button
-										aria-label="Delete permanently"
+										aria-label={actionLabel}
 										disabled={Boolean(workspaceActionsDisabled)}
 										onClick={(event) => {
 											event.stopPropagation();
 											if (workspaceActionsDisabled) return;
-											onDeleteWorkspace(row.id);
+											if (isRestoreAction) {
+												onRestoreWorkspace?.(row.id);
+											} else {
+												onArchiveWorkspace?.(row.id);
+											}
 										}}
 										variant="ghost"
 										size="icon-xs"
@@ -545,10 +519,10 @@ const WorkspaceRowItem = memo(
 											"size-5 rounded-md p-0 text-muted-foreground",
 											workspaceActionsDisabled
 												? "cursor-not-allowed opacity-60"
-												: "cursor-pointer hover:text-destructive",
+												: "cursor-pointer hover:text-foreground",
 										)}
 									>
-										<Trash2 className="size-3.5" strokeWidth={2.1} />
+										{actionIcon}
 									</Button>
 								</TooltipTrigger>
 								<TooltipContent
@@ -556,10 +530,42 @@ const WorkspaceRowItem = memo(
 									sideOffset={8}
 									className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
 								>
-									<span>Delete permanently</span>
+									<span>{actionLabel}</span>
 								</TooltipContent>
 							</Tooltip>
-						) : null}
+							{isRestoreAction && onDeleteWorkspace ? (
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<Button
+											aria-label="Delete permanently"
+											disabled={Boolean(workspaceActionsDisabled)}
+											onClick={(event) => {
+												event.stopPropagation();
+												if (workspaceActionsDisabled) return;
+												onDeleteWorkspace(row.id);
+											}}
+											variant="ghost"
+											size="icon-xs"
+											className={cn(
+												"size-5 rounded-md p-0 text-muted-foreground",
+												workspaceActionsDisabled
+													? "cursor-not-allowed opacity-60"
+													: "cursor-pointer hover:text-destructive",
+											)}
+										>
+											<Trash2 className="size-3.5" strokeWidth={2.1} />
+										</Button>
+									</TooltipTrigger>
+									<TooltipContent
+										side="top"
+										sideOffset={8}
+										className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+									>
+										<span>Delete permanently</span>
+									</TooltipContent>
+								</Tooltip>
+							) : null}
+						</span>
 					</span>
 				) : null}
 			</div>

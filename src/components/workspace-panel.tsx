@@ -848,7 +848,7 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											onFocus={() => {
 												onPrefetchSession?.(session.id);
 											}}
-											className="group/tab relative h-full w-auto max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-muted-foreground data-[state=active]:text-foreground"
+											className="group/tab relative h-full w-auto max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
 										>
 											<SessionProviderIcon
 												agentType={
