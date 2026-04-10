@@ -37,6 +37,15 @@ import {
 	getWorkspaceBranchTone,
 	type WorkspaceBranchTone,
 } from "@/lib/workspace-helpers";
+
+/** Strip optional `prefix/` and humanize `kebab-case` → `Title Case`. */
+function humanizeBranch(branch: string): string {
+	const slug = branch.includes("/")
+		? branch.slice(branch.indexOf("/") + 1)
+		: branch;
+	return slug.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -429,7 +438,7 @@ const WorkspaceRowItem = memo(
 									: "font-medium",
 						)}
 					>
-						{row.branch ?? row.title}
+						{row.branch ? humanizeBranch(row.branch) : row.title}
 					</span>
 				</div>
 

@@ -182,14 +182,6 @@ function getBranchToneClassName(tone: WorkspaceBranchTone) {
 	}
 }
 
-/** Strip optional `prefix/` and humanize `kebab-case` → `Title Case`. */
-function humanizeBranch(branch: string): string {
-	const slug = branch.includes("/")
-		? branch.slice(branch.indexOf("/") + 1)
-		: branch;
-	return slug.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
 type ThreadViewportSlot = ComponentType<Record<string, never>>;
 
 function preloadStreamdown() {
@@ -662,22 +654,11 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 							/>
 						) : (
 							<>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<span className="truncate">
-											{workspace?.branch
-												? humanizeBranch(workspace.branch)
-												: "No branch"}
-										</span>
-									</TooltipTrigger>
-									{workspace?.branch ? (
-										<TooltipContent side="bottom">
-											{workspace.branch}
-										</TooltipContent>
-									) : null}
-								</Tooltip>
+								<span className="truncate">
+									{workspace?.branch ?? "No branch"}
+								</span>
 								{workspace?.branch && workspace.state !== "archived" ? (
-									<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 bg-[linear-gradient(to_right,transparent_0%,var(--app-base)_35%,var(--app-base)_100%)] pl-5 pr-1 group-hover/branch:pointer-events-auto group-hover/branch:visible">
+									<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 bg-[linear-gradient(to_right,transparent_0%,var(--background)_35%,var(--background)_100%)] pl-5 pr-1 group-hover/branch:pointer-events-auto group-hover/branch:visible">
 										<span
 											role="button"
 											aria-label="Rename branch"
