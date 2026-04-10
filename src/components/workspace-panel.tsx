@@ -182,6 +182,14 @@ function getBranchToneClassName(tone: WorkspaceBranchTone) {
 	}
 }
 
+/** Strip optional `prefix/` and humanize `kebab-case` → `Title Case`. */
+function humanizeBranch(branch: string): string {
+	const slug = branch.includes("/")
+		? branch.slice(branch.indexOf("/") + 1)
+		: branch;
+	return slug.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 type ThreadViewportSlot = ComponentType<Record<string, never>>;
 
 function preloadStreamdown() {
@@ -651,18 +659,42 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 							/>
 						) : (
 							<>
-								<span className="truncate">
-									{workspace?.branch ?? "No branch"}
-								</span>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<span className="truncate">
+											{workspace?.branch
+												? humanizeBranch(workspace.branch)
+												: "No branch"}
+										</span>
+									</TooltipTrigger>
+									{workspace?.branch ? (
+										<TooltipContent side="bottom">
+											{workspace.branch}
+										</TooltipContent>
+									) : null}
+								</Tooltip>
 								{workspace?.branch && workspace.state !== "archived" ? (
-									<span
-										role="button"
-										aria-label="Rename branch"
-										onClick={handleStartBranchRename}
-										className="invisible flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60 group-hover/branch:visible"
-									>
-										<Pencil className="size-2.5" strokeWidth={2} />
-									</span>
+									<>
+										<span
+											role="button"
+											aria-label="Rename branch"
+											onClick={handleStartBranchRename}
+											className="invisible flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60 group-hover/branch:visible"
+										>
+											<Pencil className="size-2.5" strokeWidth={2} />
+										</span>
+										<span
+											role="button"
+											aria-label="Copy branch name"
+											onClick={() => {
+												if (!workspace.branch) return;
+												void navigator.clipboard.writeText(workspace.branch);
+											}}
+											className="invisible flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60 group-hover/branch:visible"
+										>
+											<Copy className="size-2.5" strokeWidth={2} />
+										</span>
+									</>
 								) : null}
 							</>
 						)}
