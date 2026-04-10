@@ -11,6 +11,8 @@ import {
 	ChevronDown,
 	ChevronRightIcon,
 	GitBranchIcon,
+	LayersPlus,
+	LoaderCircle,
 	MinusIcon,
 	PlusIcon,
 	TriangleIcon,
@@ -22,12 +24,15 @@ import {
 	type ActionProvider,
 	type ActionStatusKind,
 	discardWorkspaceFile,
+	getWorkspacePrCheckInsertText,
 	type PullRequestInfo,
 	stageWorkspaceFile,
 	unstageWorkspaceFile,
 	type WorkspaceGitActionStatus,
+	type WorkspacePrActionItem,
 	type WorkspacePrActionStatus,
 } from "@/lib/api";
+import { useComposerInsert } from "@/lib/composer-insert-context";
 import type { InspectorFileItem } from "@/lib/editor-session";
 import {
 	helmorQueryKeys,
@@ -36,6 +41,7 @@ import {
 	workspacePrActionStatusQueryOptions,
 } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
+import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { AnimatedShinyText } from "./ui/animated-shiny-text";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -662,6 +668,11 @@ function ActionsSection({
 	commitButtonState?: CommitButtonState;
 	prInfo: PullRequestInfo | null;
 }) {
+	const insertIntoComposer = useComposerInsert();
+	const pushToast = useWorkspaceToast();
+	const [insertingCheckIds, setInsertingCheckIds] = useState<
+		Record<string, boolean>
+	>({});
 	const gitStatusQuery = useQuery({
 		...workspaceGitActionStatusQueryOptions(workspaceId ?? "__none__"),
 		enabled: workspaceId !== null,
@@ -674,6 +685,45 @@ function ActionsSection({
 	const prStatus = prStatusQuery.data ?? EMPTY_PR_ACTION_STATUS;
 	const gitRows = buildGitStatusRows(gitStatus, prStatus, prInfo);
 	const actionDisabled = commitButtonState === "busy";
+	const handleInsertCheck = useCallback(
+		async (item: WorkspacePrActionItem) => {
+			if (!workspaceId) return;
+
+			setInsertingCheckIds((prev) => ({ ...prev, [item.id]: true }));
+			try {
+				const submitText = await getWorkspacePrCheckInsertText(
+					workspaceId,
+					item.id,
+				);
+				insertIntoComposer({
+					target: { workspaceId },
+					items: [
+						{
+							kind: "custom-tag",
+							label: item.name,
+							submitText,
+							key: `pr-check:${item.id}`,
+						},
+					],
+				});
+			} catch (error) {
+				pushToast(
+					error instanceof Error
+						? error.message
+						: "Unable to load check details.",
+					"Couldn't insert check",
+					"destructive",
+				);
+			} finally {
+				setInsertingCheckIds((prev) => {
+					const next = { ...prev };
+					delete next[item.id];
+					return next;
+				});
+			}
+		},
+		[insertIntoComposer, pushToast, workspaceId],
+	);
 
 	return (
 		<section
@@ -748,7 +798,12 @@ function ActionsSection({
 							</span>
 						</div>
 						{prStatus.checks.map((item) => (
-							<ActionStatusRow key={item.id} item={item} />
+							<ActionStatusRow
+								key={item.id}
+								item={item}
+								onInsertToComposer={handleInsertCheck}
+								isInserting={Boolean(insertingCheckIds[item.id])}
+							/>
 						))}
 					</>
 				)}
@@ -759,14 +814,18 @@ function ActionsSection({
 
 function ActionStatusRow({
 	item,
+	onInsertToComposer,
+	isInserting = false,
 }: {
-	item: WorkspacePrActionStatus["checks"][number];
+	item: WorkspacePrActionItem;
+	onInsertToComposer?: (item: WorkspacePrActionItem) => void;
+	isInserting?: boolean;
 }) {
 	return (
-		<div className="flex items-center justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
+		<div className="group/check-row flex items-center justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
 			<div className="flex min-w-0 items-center gap-1.5">
 				<StatusIcon status={item.status} />
-				<ProviderIcon provider={item.provider} className="text-primary" />
+				<ProviderIcon provider={item.provider} />
 				<span className="truncate text-primary">{item.name}</span>
 				{item.duration && (
 					<span className="shrink-0 text-[10.5px] text-muted-foreground">
@@ -774,16 +833,37 @@ function ActionStatusRow({
 					</span>
 				)}
 			</div>
-			{item.url && (
-				<button
-					type="button"
-					aria-label={`Open ${item.name}`}
-					onClick={() => void openUrl(item.url!)}
-					className="shrink-0 text-muted-foreground transition-colors hover:text-primary"
-				>
-					<ArrowUpRightIcon className="size-3" strokeWidth={1.8} />
-				</button>
-			)}
+			<div className="flex shrink-0 items-center justify-end gap-1.5">
+				{onInsertToComposer && (
+					<RowIconButton
+						aria-label={`Insert ${item.name} into composer`}
+						disabled={isInserting}
+						onClick={() => onInsertToComposer(item)}
+						className={cn(
+							"text-primary hover:bg-accent/60 hover:text-primary",
+							isInserting
+								? "opacity-100"
+								: "opacity-0 group-hover/check-row:opacity-100 focus-visible:opacity-100",
+						)}
+					>
+						{isInserting ? (
+							<LoaderCircle className="size-3 animate-spin" strokeWidth={1.8} />
+						) : (
+							<LayersPlus className="size-3" strokeWidth={1.8} />
+						)}
+					</RowIconButton>
+				)}
+				{item.url && (
+					<button
+						type="button"
+						aria-label={`Open ${item.name}`}
+						onClick={() => void openUrl(item.url!)}
+						className="shrink-0 text-muted-foreground transition-colors hover:text-primary"
+					>
+						<ArrowUpRightIcon className="size-3" strokeWidth={1.8} />
+					</button>
+				)}
+			</div>
 		</div>
 	);
 }
@@ -1669,11 +1749,13 @@ function RowHoverActions({
 
 function RowIconButton({
 	onClick,
+	disabled = false,
 	children,
 	className,
 	"aria-label": ariaLabel,
 }: {
 	onClick: () => void;
+	disabled?: boolean;
 	children: React.ReactNode;
 	className?: string;
 	"aria-label": string;
@@ -1684,12 +1766,16 @@ function RowIconButton({
 			variant="ghost"
 			size="icon-xs"
 			aria-label={ariaLabel}
+			disabled={disabled}
 			onClick={(event) => {
 				event.stopPropagation();
 				onClick();
 			}}
 			onKeyDown={(event) => event.stopPropagation()}
-			className={cn("size-4 rounded-sm transition-colors", className)}
+			className={cn(
+				"size-4 rounded-sm transition-colors disabled:pointer-events-none disabled:opacity-60",
+				className,
+			)}
 		>
 			{children}
 		</Button>

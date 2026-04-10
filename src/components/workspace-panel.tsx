@@ -3038,12 +3038,13 @@ function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 	useEffect(() => {
 		if (group.active) setOpen(true);
 	}, [group.active]);
+	const collapsedGroupIconClassName = "size-3.5 text-muted-foreground";
 
 	const icon =
 		group.category === "search" ? (
-			<Search className="size-3.5 text-chart-3" strokeWidth={1.8} />
+			<Search className={collapsedGroupIconClassName} strokeWidth={1.8} />
 		) : (
-			<FileText className="size-3.5 text-chart-3" strokeWidth={1.8} />
+			<FileText className={collapsedGroupIconClassName} strokeWidth={1.8} />
 		);
 
 	return (
@@ -3349,6 +3350,7 @@ function getToolInfo(
 	const fallbackIcon = (
 		<span className="size-3.5 rounded-full bg-foreground/15" />
 	);
+	const neutralToolIconClassName = "size-3.5 text-muted-foreground";
 
 	// MCP tools — both providers converge on `mcp__{server}__{tool}` in the
 	// Rust pipeline (Codex synthesizes it in `accumulator/codex.rs`, Claude
@@ -3375,7 +3377,7 @@ function getToolInfo(
 		return {
 			action: "Edit",
 			file: fp ? basename(fp) : undefined,
-			icon: <Pencil className="size-3.5 text-chart-5" strokeWidth={1.8} />,
+			icon: <Pencil className={neutralToolIconClassName} strokeWidth={1.8} />,
 			diffAdd: add,
 			diffDel: del,
 		};
@@ -3387,7 +3389,7 @@ function getToolInfo(
 		return {
 			action: limit ? `Read ${limit} lines` : "Read",
 			file: fp ? basename(fp) : undefined,
-			icon: <FileText className="size-3.5 text-chart-3" strokeWidth={1.8} />,
+			icon: <FileText className={neutralToolIconClassName} strokeWidth={1.8} />,
 		};
 	}
 
@@ -3421,7 +3423,7 @@ function getToolInfo(
 		const p = str(input.pattern);
 		return {
 			action: "Grep",
-			icon: <Search className="size-3.5 text-chart-3" strokeWidth={1.8} />,
+			icon: <Search className={neutralToolIconClassName} strokeWidth={1.8} />,
 			detail: p ?? undefined,
 		};
 	}
@@ -3431,7 +3433,7 @@ function getToolInfo(
 		return {
 			action: "Glob",
 			icon: (
-				<FolderSearch className="size-3.5 text-chart-3" strokeWidth={1.8} />
+				<FolderSearch className={neutralToolIconClassName} strokeWidth={1.8} />
 			),
 			detail: p ?? undefined,
 		};
@@ -3441,7 +3443,7 @@ function getToolInfo(
 		const url = str(input.url);
 		return {
 			action: "WebFetch",
-			icon: <Globe className="size-3.5 text-chart-3" strokeWidth={1.8} />,
+			icon: <Globe className={neutralToolIconClassName} strokeWidth={1.8} />,
 			detail: url ? truncate(url, 60) : undefined,
 		};
 	}
@@ -3450,7 +3452,7 @@ function getToolInfo(
 		const q = str(input.query);
 		return {
 			action: "WebSearch",
-			icon: <Globe className="size-3.5 text-chart-3" strokeWidth={1.8} />,
+			icon: <Globe className={neutralToolIconClassName} strokeWidth={1.8} />,
 			detail: q ? truncate(q, 50) : undefined,
 		};
 	}
@@ -3459,7 +3461,7 @@ function getToolInfo(
 		const q = str(input.query);
 		return {
 			action: "ToolSearch",
-			icon: <Search className="size-3.5 text-chart-3" strokeWidth={1.8} />,
+			icon: <Search className={neutralToolIconClassName} strokeWidth={1.8} />,
 			detail: q ? truncate(q, 50) : undefined,
 		};
 	}
@@ -3473,7 +3475,7 @@ function getToolInfo(
 		const d = str(input.description) ?? str(input.prompt);
 		return {
 			action: subagentType ?? name,
-			icon: <Bot className="size-3.5 text-chart-3" strokeWidth={1.8} />,
+			icon: <Bot className={neutralToolIconClassName} strokeWidth={1.8} />,
 			detail: d ? truncate(d, 60) : undefined,
 		};
 	}
@@ -3491,7 +3493,7 @@ function getToolInfo(
 			action: "Prompt",
 			icon: (
 				<MessageSquareText
-					className="size-3.5 text-chart-3"
+					className={neutralToolIconClassName}
 					strokeWidth={1.8}
 				/>
 			),

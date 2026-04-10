@@ -197,6 +197,7 @@ pub fn run() {
             models::get_workspace_git_action_status,
             models::lookup_workspace_pr,
             models::get_workspace_pr_action_status,
+            models::get_workspace_pr_check_insert_text,
             models::merge_workspace_pr,
             models::close_workspace_pr,
             models::read_editor_file,

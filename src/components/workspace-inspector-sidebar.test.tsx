@@ -6,11 +6,13 @@ import type {
 	WorkspaceGitActionStatus,
 	WorkspacePrActionStatus,
 } from "@/lib/api";
+import { ComposerInsertProvider } from "@/lib/composer-insert-context";
 import { renderWithProviders } from "@/test/render-with-providers";
 import { WorkspaceInspectorSidebar } from "./workspace-inspector-sidebar";
 
 const apiMocks = vi.hoisted(() => ({
 	listWorkspaceChangesWithContent: vi.fn(),
+	getWorkspacePrCheckInsertText: vi.fn(),
 	loadWorkspaceGitActionStatus: vi.fn(),
 	loadWorkspacePrActionStatus: vi.fn(),
 }));
@@ -28,6 +30,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 	return {
 		...actual,
+		getWorkspacePrCheckInsertText: apiMocks.getWorkspacePrCheckInsertText,
 		listWorkspaceChangesWithContent: apiMocks.listWorkspaceChangesWithContent,
 		loadWorkspaceGitActionStatus: apiMocks.loadWorkspaceGitActionStatus,
 		loadWorkspacePrActionStatus: apiMocks.loadWorkspacePrActionStatus,
@@ -72,6 +75,7 @@ function renderInspector(
 describe("WorkspaceInspectorSidebar Actions section", () => {
 	beforeEach(() => {
 		apiMocks.listWorkspaceChangesWithContent.mockReset();
+		apiMocks.getWorkspacePrCheckInsertText.mockReset();
 		apiMocks.loadWorkspaceGitActionStatus.mockReset();
 		apiMocks.loadWorkspacePrActionStatus.mockReset();
 		openerMocks.openUrl.mockReset();
@@ -80,6 +84,9 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 			items: [],
 			prefetched: [],
 		});
+		apiMocks.getWorkspacePrCheckInsertText.mockResolvedValue(
+			"Content Log:\ncheck output",
+		);
 		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue(cleanGitStatus());
 		apiMocks.loadWorkspacePrActionStatus.mockResolvedValue(emptyPrStatus());
 	});
@@ -224,6 +231,79 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 			expect(openerMocks.openUrl).toHaveBeenCalledWith(
 				"https://github.com/acme/repo/actions/runs/1",
 			);
+		});
+	});
+
+	it("inserts check details into the composer and keeps deployments without insert buttons", async () => {
+		const user = userEvent.setup();
+		const insertIntoComposer = vi.fn();
+		apiMocks.loadWorkspacePrActionStatus.mockResolvedValue(
+			emptyPrStatus({
+				remoteState: "ok",
+				deployments: [
+					{
+						id: "deploy-1",
+						name: "Preview",
+						provider: "vercel",
+						status: "running",
+						url: "https://preview.example.com",
+					},
+				],
+				checks: [
+					{
+						id: "check-1",
+						name: "changes",
+						provider: "github",
+						status: "failure",
+						duration: "12s",
+						url: "https://github.com/acme/repo/actions/runs/1",
+					},
+				],
+			}),
+		);
+		apiMocks.getWorkspacePrCheckInsertText.mockResolvedValue(
+			"Check: changes\n\nContent Log:\nStep failed",
+		);
+
+		renderWithProviders(
+			<ComposerInsertProvider value={insertIntoComposer}>
+				<WorkspaceInspectorSidebar
+					workspaceId="workspace-1"
+					workspaceRootPath="/tmp/workspace"
+					workspaceBranch="feature/actions"
+					workspaceTargetBranch="main"
+					editorMode={false}
+					onOpenEditorFile={vi.fn()}
+				/>
+			</ComposerInsertProvider>,
+		);
+
+		await screen.findByText("Preview");
+		expect(
+			screen.queryByRole("button", { name: "Insert Preview into composer" }),
+		).not.toBeInTheDocument();
+
+		await user.click(
+			screen.getByRole("button", { name: "Insert changes into composer" }),
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.getWorkspacePrCheckInsertText).toHaveBeenCalledWith(
+				"workspace-1",
+				"check-1",
+			);
+		});
+
+		expect(insertIntoComposer).toHaveBeenCalledWith({
+			target: { workspaceId: "workspace-1" },
+			items: [
+				{
+					kind: "custom-tag",
+					label: "changes",
+					submitText: "Check: changes\n\nContent Log:\nStep failed",
+					key: "pr-check:check-1",
+				},
+			],
 		});
 	});
 });

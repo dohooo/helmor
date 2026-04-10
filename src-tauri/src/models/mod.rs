@@ -747,6 +747,17 @@ pub async fn get_workspace_pr_action_status(
 }
 
 #[tauri::command]
+pub async fn get_workspace_pr_check_insert_text(
+    workspace_id: String,
+    item_id: String,
+) -> CmdResult<String> {
+    run_blocking(move || {
+        github_graphql::lookup_workspace_pr_check_insert_text(&workspace_id, &item_id)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn merge_workspace_pr(
     workspace_id: String,
 ) -> CmdResult<Option<github_graphql::PullRequestInfo>> {

@@ -80,6 +80,22 @@ pub struct WorkspacePrActionStatus {
     pub message: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GithubCheckRunDetail {
+    details_url: Option<String>,
+    html_url: Option<String>,
+    output: Option<GithubCheckRunOutput>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GithubCheckRunOutput {
+    title: Option<String>,
+    summary: Option<String>,
+    text: Option<String>,
+}
+
 impl WorkspacePrActionStatus {
     fn unavailable(message: impl Into<String>) -> Self {
         Self {
@@ -291,6 +307,56 @@ pub fn lookup_workspace_pr_action_status(workspace_id: &str) -> Result<Workspace
     Ok(status)
 }
 
+pub fn lookup_workspace_pr_check_insert_text(workspace_id: &str, item_id: &str) -> Result<String> {
+    let Some(record) = workspaces::load_workspace_record_by_id(workspace_id)? else {
+        bail!("Workspace not found: {workspace_id}");
+    };
+
+    let Some(remote_url) = record.remote_url.as_deref() else {
+        bail!("Workspace has no remote");
+    };
+    let Some((owner, name)) = parse_github_remote(remote_url) else {
+        bail!("Workspace remote is not a GitHub repository");
+    };
+    let Some(branch) = record.branch.as_deref().filter(|b| !b.is_empty()) else {
+        bail!("Workspace has no current branch");
+    };
+    let Some(access_token) = auth::load_valid_github_access_token()? else {
+        bail!("GitHub account is not connected");
+    };
+
+    let client = Client::builder()
+        .build()
+        .context("Failed to build GitHub HTTP client")?;
+
+    let action_status = query_workspace_pr_action_status(
+        &client,
+        &access_token,
+        owner.clone(),
+        name.clone(),
+        branch,
+    )
+    .context("Failed to load current PR action status")?;
+
+    let item = action_status
+        .checks
+        .into_iter()
+        .find(|check| check.id == item_id)
+        .with_context(|| format!("Check item not found: {item_id}"))?;
+
+    let detail = item
+        .id
+        .strip_prefix("check-run-")
+        .and_then(|value| value.parse::<i64>().ok())
+        .map(|check_run_id| {
+            query_check_run_detail(&client, &access_token, &owner, &name, check_run_id)
+        })
+        .transpose()
+        .context("Failed to load check run details")?;
+
+    Ok(build_check_insert_text(&item, detail.as_ref()))
+}
+
 fn query_workspace_pr_action_status(
     client: &Client,
     access_token: &str,
@@ -424,6 +490,36 @@ query($owner: String!, $name: String!, $head: String!) {
     };
 
     Ok(build_action_status(pr))
+}
+
+fn query_check_run_detail(
+    client: &Client,
+    access_token: &str,
+    owner: &str,
+    name: &str,
+    check_run_id: i64,
+) -> Result<GithubCheckRunDetail> {
+    let response = client
+        .get(format!(
+            "https://api.github.com/repos/{owner}/{name}/check-runs/{check_run_id}"
+        ))
+        .header(USER_AGENT, "Helmor")
+        .header(ACCEPT, "application/vnd.github+json")
+        .header(AUTHORIZATION, format!("Bearer {access_token}"))
+        .send()
+        .context("Failed to reach GitHub REST API")?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(anyhow!(
+            "GitHub check run API returned HTTP {status}: {}",
+            response.text().unwrap_or_default()
+        ));
+    }
+
+    response
+        .json::<GithubCheckRunDetail>()
+        .context("Failed to decode GitHub check run response")
 }
 
 /// Merge a workspace's open PR via the GitHub GraphQL `mergePullRequest`
@@ -1046,6 +1142,79 @@ fn format_duration(started_at: Option<&str>, completed_at: Option<&str>) -> Opti
     Some(format!("{}h", minutes / 60))
 }
 
+fn build_check_insert_text(
+    item: &WorkspacePrActionItem,
+    detail: Option<&GithubCheckRunDetail>,
+) -> String {
+    let url = detail
+        .and_then(|run| run.details_url.as_deref().or(run.html_url.as_deref()))
+        .or(item.url.as_deref());
+
+    let mut sections = vec![format!(
+        "Check: {}\nProvider: {}\nStatus: {}{}{}",
+        item.name,
+        action_provider_label(item.provider),
+        action_status_label(item.status),
+        item.duration
+            .as_deref()
+            .map(|duration| format!("\nDuration: {duration}"))
+            .unwrap_or_default(),
+        url.map(|value| format!("\nURL: {value}"))
+            .unwrap_or_default(),
+    )];
+
+    if let Some(title) = detail
+        .and_then(|run| run.output.as_ref())
+        .and_then(|output| output.title.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        sections.push(format!("Content Title:\n{title}"));
+    }
+
+    if let Some(summary) = detail
+        .and_then(|run| run.output.as_ref())
+        .and_then(|output| output.summary.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        sections.push(format!("Content Summary:\n{summary}"));
+    }
+
+    if let Some(text) = detail
+        .and_then(|run| run.output.as_ref())
+        .and_then(|output| output.text.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        sections.push(format!("Content Log:\n{text}"));
+    }
+
+    if sections.len() == 1 {
+        sections
+            .push("Content Log:\nDetailed log text is not available for this check.".to_string());
+    }
+
+    sections.join("\n\n")
+}
+
+fn action_provider_label(provider: ActionProvider) -> &'static str {
+    match provider {
+        ActionProvider::Github => "GitHub",
+        ActionProvider::Vercel => "Vercel",
+        ActionProvider::Unknown => "Unknown",
+    }
+}
+
+fn action_status_label(status: ActionStatusKind) -> &'static str {
+    match status {
+        ActionStatusKind::Success => "success",
+        ActionStatusKind::Pending => "pending",
+        ActionStatusKind::Running => "running",
+        ActionStatusKind::Failure => "failure",
+    }
+}
+
 fn parse_github_datetime(value: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .ok()
@@ -1247,5 +1416,57 @@ mod tests {
         assert_eq!(status.checks[0].duration.as_deref(), Some("12s"));
         assert_eq!(status.deployments.len(), 1);
         assert_eq!(status.deployments[0].provider, ActionProvider::Vercel);
+    }
+
+    #[test]
+    fn builds_check_insert_text_with_detail_sections() {
+        let text = build_check_insert_text(
+            &WorkspacePrActionItem {
+                id: "check-run-42".to_string(),
+                name: "changes".to_string(),
+                provider: ActionProvider::Github,
+                status: ActionStatusKind::Failure,
+                duration: Some("12s".to_string()),
+                url: Some("https://github.com/octocat/hello-world/actions/runs/1".to_string()),
+            },
+            Some(&GithubCheckRunDetail {
+                details_url: Some(
+                    "https://github.com/octocat/hello-world/actions/runs/1/job/99".to_string(),
+                ),
+                html_url: None,
+                output: Some(GithubCheckRunOutput {
+                    title: Some("Job failed".to_string()),
+                    summary: Some("1 step failed".to_string()),
+                    text: Some("Step 3: tests failed".to_string()),
+                }),
+            }),
+        );
+
+        assert!(text.contains("Check: changes"));
+        assert!(text.contains("Provider: GitHub"));
+        assert!(text.contains("Status: failure"));
+        assert!(text.contains("Duration: 12s"));
+        assert!(text.contains("Content Title:\nJob failed"));
+        assert!(text.contains("Content Summary:\n1 step failed"));
+        assert!(text.contains("Content Log:\nStep 3: tests failed"));
+    }
+
+    #[test]
+    fn builds_check_insert_text_with_unavailable_log_fallback() {
+        let text = build_check_insert_text(
+            &WorkspacePrActionItem {
+                id: "status-context-ci".to_string(),
+                name: "CI".to_string(),
+                provider: ActionProvider::Github,
+                status: ActionStatusKind::Pending,
+                duration: None,
+                url: None,
+            },
+            None,
+        );
+
+        assert!(text.contains("Check: CI"));
+        assert!(text.contains("Status: pending"));
+        assert!(text.contains("Content Log:\nDetailed log text is not available for this check."));
     }
 }

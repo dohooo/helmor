@@ -473,7 +473,7 @@ const WorkspaceRowItem = memo(
 				{hasActionHandler ? (
 					<span
 						className={cn(
-							"flex shrink-0 items-center gap-1.5",
+							"flex shrink-0 items-center gap-0.5",
 							isBusy ? "visible" : "invisible group-hover:visible",
 						)}
 					>
@@ -494,7 +494,7 @@ const WorkspaceRowItem = memo(
 									variant="ghost"
 									size="icon-xs"
 									className={cn(
-										"text-muted-foreground",
+										"size-5 rounded-md p-0 text-muted-foreground",
 										workspaceActionsDisabled
 											? "cursor-not-allowed opacity-60"
 											: "cursor-pointer hover:text-foreground",
@@ -525,7 +525,7 @@ const WorkspaceRowItem = memo(
 										variant="ghost"
 										size="icon-xs"
 										className={cn(
-											"text-muted-foreground",
+											"size-5 rounded-md p-0 text-muted-foreground",
 											workspaceActionsDisabled
 												? "cursor-not-allowed opacity-60"
 												: "cursor-pointer hover:text-destructive",

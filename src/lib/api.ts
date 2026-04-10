@@ -1029,6 +1029,22 @@ export async function loadWorkspacePrActionStatus(
 	}
 }
 
+export async function getWorkspacePrCheckInsertText(
+	workspaceId: string,
+	itemId: string,
+): Promise<string> {
+	try {
+		return await invoke<string>("get_workspace_pr_check_insert_text", {
+			workspaceId,
+			itemId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load check details."),
+		);
+	}
+}
+
 /**
  * Merge the workspace's open PR via GitHub GraphQL `mergePullRequest`.
  * Returns the refreshed PR info on success, `null` if no PR / not connected.
