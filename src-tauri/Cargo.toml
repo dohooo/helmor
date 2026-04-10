@@ -23,6 +23,7 @@ tauri-build = { version = "2", features = [] }
 anyhow = "1"
 base64 = "0.22.1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+clap = { version = "4", features = ["derive"] }
 rand = "0.10.0"
 
 # Used for sending SIGTERM to the sidecar child during graceful shutdown.
@@ -41,6 +42,10 @@ tauri-plugin-mcp-bridge = "0.11.0"
 tauri-plugin-opener = "2"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+
+[[bin]]
+name = "helmor-cli"
+path = "src/bin/helmor-cli.rs"
 
 [[bin]]
 name = "gen_pipeline_fixture"

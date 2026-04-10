@@ -53,6 +53,70 @@ where
 // calls. Truly trivial commands that touch nothing — pure constants, struct
 // reads — are left as `pub fn` for simplicity.
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliStatus {
+    pub installed: bool,
+    pub install_path: Option<String>,
+    pub build_mode: String,
+}
+
+#[tauri::command]
+pub fn get_cli_status() -> CmdResult<CliStatus> {
+    let install_path = std::path::Path::new("/usr/local/bin/helmor");
+    Ok(CliStatus {
+        installed: install_path.exists(),
+        install_path: if install_path.exists() {
+            Some(install_path.display().to_string())
+        } else {
+            None
+        },
+        build_mode: crate::data_dir::data_mode_label().to_string(),
+    })
+}
+
+#[tauri::command]
+pub async fn install_cli() -> CmdResult<CliStatus> {
+    run_blocking(|| {
+        let source = std::env::current_exe()?;
+        let target_dir = source
+            .parent()
+            .context("Cannot determine binary directory")?;
+        let cli_binary = target_dir.join("helmor-cli");
+
+        if !cli_binary.exists() {
+            anyhow::bail!(
+                "CLI binary not found at {}. Run `cargo build --bin helmor-cli` first.",
+                cli_binary.display()
+            );
+        }
+
+        let install_path = std::path::PathBuf::from("/usr/local/bin/helmor");
+        std::fs::copy(&cli_binary, &install_path).with_context(|| {
+            format!(
+                "Failed to copy CLI to {}. You may need to run: sudo cp {} {}",
+                install_path.display(),
+                cli_binary.display(),
+                install_path.display()
+            )
+        })?;
+
+        // Make executable
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&install_path, std::fs::Permissions::from_mode(0o755))?;
+        }
+
+        Ok(CliStatus {
+            installed: true,
+            install_path: Some(install_path.display().to_string()),
+            build_mode: crate::data_dir::data_mode_label().to_string(),
+        })
+    })
+    .await
+}
+
 #[tauri::command]
 pub fn get_data_info() -> CmdResult<DataInfo> {
     let data_dir = crate::data_dir::data_dir()?;

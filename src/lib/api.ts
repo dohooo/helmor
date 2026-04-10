@@ -515,6 +515,20 @@ export async function loadDataInfo(): Promise<DataInfo | null> {
 	}
 }
 
+export type CliStatus = {
+	installed: boolean;
+	installPath: string | null;
+	buildMode: string;
+};
+
+export async function getCliStatus(): Promise<CliStatus> {
+	return await invoke<CliStatus>("get_cli_status");
+}
+
+export async function installCli(): Promise<CliStatus> {
+	return await invoke<CliStatus>("install_cli");
+}
+
 export async function loadArchivedWorkspaces(): Promise<WorkspaceSummary[]> {
 	try {
 		return await invoke<WorkspaceSummary[]>("list_archived_workspaces");

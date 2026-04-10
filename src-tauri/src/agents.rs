@@ -240,12 +240,12 @@ struct ExchangeContext {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct AgentModelDefinition {
-    pub(crate) id: &'static str,
-    pub(crate) provider: &'static str,
-    pub(crate) label: &'static str,
-    pub(crate) cli_model: &'static str,
-    pub(crate) badge: Option<&'static str>,
+pub struct AgentModelDefinition {
+    pub id: &'static str,
+    pub provider: &'static str,
+    pub label: &'static str,
+    pub cli_model: &'static str,
+    pub badge: Option<&'static str>,
 }
 
 const CLAUDE_MODEL_DEFINITIONS: &[AgentModelDefinition] = &[
@@ -1528,7 +1528,7 @@ fn current_timestamp_string() -> Result<String> {
     crate::models::db::current_timestamp()
 }
 
-pub(crate) fn find_model_definition(model_id: &str) -> Option<&'static AgentModelDefinition> {
+pub fn find_model_definition(model_id: &str) -> Option<&'static AgentModelDefinition> {
     CLAUDE_MODEL_DEFINITIONS
         .iter()
         .chain(CODEX_MODEL_DEFINITIONS.iter())
