@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
 
@@ -215,5 +215,67 @@ describe("WorkspaceComposerContainer", () => {
 			"session:session-1",
 			"session:session-2",
 		]);
+	});
+
+	it("auto-submits queued CLI prompts with queued model and permission mode", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			WORKSPACE_SESSIONS,
+		);
+
+		const onSubmit = vi.fn();
+		const onPendingPromptConsumed = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-1"
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{}}
+					effortLevels={{}}
+					permissionModes={{}}
+					onSelectModel={vi.fn()}
+					onSelectEffort={vi.fn()}
+					onTogglePlanMode={vi.fn()}
+					onSubmit={onSubmit}
+					pendingPromptForSession={{
+						sessionId: "session-1",
+						prompt: "Plan the fix",
+						modelId: "gpt-5.4",
+						permissionMode: "plan",
+					}}
+					onPendingPromptConsumed={onPendingPromptConsumed}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				prompt: "Plan the fix",
+				model: expect.objectContaining({
+					id: "gpt-5.4",
+					provider: "codex",
+				}),
+				permissionMode: "plan",
+			}),
+		);
+		expect(onPendingPromptConsumed).toHaveBeenCalledTimes(1);
 	});
 });

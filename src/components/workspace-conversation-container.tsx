@@ -73,7 +73,12 @@ type WorkspaceConversationContainerProps = {
 	headerLeading?: React.ReactNode;
 	/** Prompt queued by an external caller (e.g. the inspector Git commit
 	 * button) to be auto-submitted once the displayed session matches. */
-	pendingPromptForSession?: { sessionId: string; prompt: string } | null;
+	pendingPromptForSession?: {
+		sessionId: string;
+		prompt: string;
+		modelId?: string | null;
+		permissionMode?: string | null;
+	} | null;
 	/** Called after the pending prompt has been handed off to the composer's
 	 * submit flow, so the caller can clear the queue. */
 	onPendingPromptConsumed?: () => void;

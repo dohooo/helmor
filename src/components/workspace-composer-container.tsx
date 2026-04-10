@@ -66,7 +66,12 @@ type WorkspaceComposerContainerProps = {
 	}) => void;
 	/** Prompt queued by an external caller to auto-submit once the displayed
 	 * session matches `sessionId`. */
-	pendingPromptForSession?: { sessionId: string; prompt: string } | null;
+	pendingPromptForSession?: {
+		sessionId: string;
+		prompt: string;
+		modelId?: string | null;
+		permissionMode?: string | null;
+	} | null;
 	/** Called after the pending prompt has been dispatched, so the caller can
 	 * clear the queue. */
 	onPendingPromptConsumed?: () => void;
@@ -127,13 +132,29 @@ export const WorkspaceComposerContainer = memo(
 			() => findModelOption(modelSections, selectedModelId),
 			[modelSections, selectedModelId],
 		);
+		const pendingOverrideActive =
+			pendingPromptForSession?.sessionId === displayedSessionId;
+		const pendingModel = useMemo(
+			() =>
+				pendingOverrideActive && pendingPromptForSession?.modelId
+					? findModelOption(modelSections, pendingPromptForSession.modelId)
+					: null,
+			[
+				displayedSessionId,
+				modelSections,
+				pendingOverrideActive,
+				pendingPromptForSession,
+			],
+		);
+		const effectiveModel = pendingModel ?? selectedModel;
+		const effectiveSelectedModelId = effectiveModel?.id ?? selectedModelId;
 		const provider =
-			selectedModel?.provider ?? currentSession?.agentType ?? "claude";
+			effectiveModel?.provider ?? currentSession?.agentType ?? "claude";
 		const rawEffort =
 			effortLevels[composerContextKey] ?? currentSession?.effortLevel ?? "high";
 		const effortLevel = clampEffortToModel(
 			rawEffort,
-			selectedModelId,
+			effectiveSelectedModelId,
 			provider,
 		);
 		const permissionMode =
@@ -141,6 +162,10 @@ export const WorkspaceComposerContainer = memo(
 			(currentSession?.permissionMode === "plan"
 				? "plan"
 				: "bypassPermissions");
+		const effectivePermissionMode =
+			pendingOverrideActive && pendingPromptForSession?.permissionMode
+				? pendingPromptForSession.permissionMode
+				: permissionMode;
 		const loadingConversationContext =
 			Boolean(displayedWorkspaceId) &&
 			(workspaceDetailQuery.isPending || sessionsQuery.isPending);
@@ -267,7 +292,7 @@ export const WorkspaceComposerContainer = memo(
 				filePaths: string[],
 				customTags: ComposerCustomTag[],
 			) => {
-				if (!selectedModel) {
+				if (!effectiveModel) {
 					return;
 				}
 				onSubmit({
@@ -275,13 +300,19 @@ export const WorkspaceComposerContainer = memo(
 					imagePaths,
 					filePaths,
 					customTags,
-					model: selectedModel,
+					model: effectiveModel,
 					workingDirectory,
 					effortLevel,
-					permissionMode,
+					permissionMode: effectivePermissionMode,
 				});
 			},
-			[selectedModel, onSubmit, workingDirectory, effortLevel, permissionMode],
+			[
+				effectiveModel,
+				onSubmit,
+				workingDirectory,
+				effortLevel,
+				effectivePermissionMode,
+			],
 		);
 
 		// Track which queued prompt we've already dispatched so a re-render
@@ -297,25 +328,47 @@ export const WorkspaceComposerContainer = memo(
 			if (pendingPromptForSession.sessionId !== displayedSessionId) {
 				return;
 			}
-			if (!selectedModel) {
+			if (pendingPromptForSession.modelId && !pendingModel) {
+				// Wait for the model sections query to resolve the queued model.
+				return;
+			}
+			if (!effectiveModel) {
 				// Wait for the model sections query to resolve.
 				return;
 			}
 
-			const dispatchKey = `${pendingPromptForSession.sessionId}|${pendingPromptForSession.prompt}`;
+			const dispatchKey = [
+				pendingPromptForSession.sessionId,
+				pendingPromptForSession.prompt,
+				pendingPromptForSession.modelId ?? "",
+				pendingPromptForSession.permissionMode ?? "",
+			].join("|");
 			if (dispatchedPromptKeyRef.current === dispatchKey) {
 				return;
 			}
 			dispatchedPromptKeyRef.current = dispatchKey;
 
-			handleComposerSubmit(pendingPromptForSession.prompt, [], [], []);
+			onSubmit({
+				prompt: pendingPromptForSession.prompt,
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: effectiveModel,
+				workingDirectory,
+				effortLevel,
+				permissionMode: effectivePermissionMode,
+			});
 			onPendingPromptConsumed?.();
 		}, [
-			pendingPromptForSession,
 			displayedSessionId,
-			selectedModel,
-			handleComposerSubmit,
+			effectiveModel,
+			effectivePermissionMode,
+			effortLevel,
 			onPendingPromptConsumed,
+			onSubmit,
+			pendingModel,
+			pendingPromptForSession,
+			workingDirectory,
 		]);
 
 		const handleSelectModelInner = useCallback(
@@ -420,13 +473,13 @@ export const WorkspaceComposerContainer = memo(
 					submitDisabled={disabled || loadingConversationContext}
 					onStop={onStop}
 					sending={sending}
-					selectedModelId={selectedModelId}
+					selectedModelId={effectiveSelectedModelId}
 					modelSections={modelSections}
 					onSelectModel={handleSelectModelInner}
 					provider={provider}
 					effortLevel={effortLevel}
 					onSelectEffort={handleSelectEffortInner}
-					permissionMode={permissionMode}
+					permissionMode={effectivePermissionMode}
 					onTogglePlanMode={handleTogglePlanModeInner}
 					sendError={sendError}
 					restoreDraft={restoreDraft}

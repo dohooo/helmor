@@ -194,8 +194,11 @@ fn dispatch_tool(name: &str, args: &Value) -> Result<String> {
             let ws_ref = args["workspace"]
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Missing required param: workspace"))?;
+            let permission_mode = args["plan"]
+                .as_bool()
+                .and_then(|enabled| enabled.then_some("plan"));
             let ws_id = service::resolve_workspace_ref(ws_ref)?;
-            let resp = service::create_session(&ws_id, None)?;
+            let resp = service::create_session(&ws_id, None, permission_mode)?;
             Ok(serde_json::to_string_pretty(&resp)?)
         }
         "helmor_send" => {
@@ -207,13 +210,18 @@ fn dispatch_tool(name: &str, args: &Value) -> Result<String> {
                 .ok_or_else(|| anyhow::anyhow!("Missing required param: prompt"))?;
             let model = args["model"].as_str().map(String::from);
             let session_id = args["session_id"].as_str().map(String::from);
+            let permission_mode = if args["plan"].as_bool().unwrap_or(false) {
+                Some("plan".to_string())
+            } else {
+                Some("auto".to_string())
+            };
 
             let params = service::SendMessageParams {
                 workspace_ref: ws_ref.to_string(),
                 session_id,
                 prompt: prompt.to_string(),
                 model,
-                permission_mode: Some("auto".to_string()),
+                permission_mode,
             };
 
             let mut output = String::new();

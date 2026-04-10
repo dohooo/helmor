@@ -1489,10 +1489,12 @@ export type CreateSessionResponse = {
 export async function createSession(
 	workspaceId: string,
 	actionKind?: string | null,
+	permissionMode?: string | null,
 ): Promise<CreateSessionResponse> {
 	return invoke<CreateSessionResponse>("create_session", {
 		workspaceId,
 		actionKind: actionKind ?? null,
+		permissionMode: permissionMode ?? null,
 	});
 }
 

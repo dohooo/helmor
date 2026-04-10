@@ -361,8 +361,16 @@ pub async fn list_session_attachments(
 pub async fn create_session(
     workspace_id: String,
     action_kind: Option<String>,
+    permission_mode: Option<String>,
 ) -> CmdResult<sessions::CreateSessionResponse> {
-    run_blocking(move || sessions::create_session(&workspace_id, action_kind.as_deref())).await
+    run_blocking(move || {
+        sessions::create_session(
+            &workspace_id,
+            action_kind.as_deref(),
+            permission_mode.as_deref(),
+        )
+    })
+    .await
 }
 
 #[tauri::command]

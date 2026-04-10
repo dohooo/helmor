@@ -67,6 +67,9 @@ enum Commands {
         /// Model ID (default: opus-1m)
         #[arg(long)]
         model: Option<String>,
+        /// Queue/send the message in plan mode
+        #[arg(long)]
+        plan: bool,
         /// The prompt to send
         prompt: String,
     },
@@ -122,6 +125,9 @@ enum SessionAction {
         /// Workspace UUID or repo-name/directory-name
         #[arg(long)]
         workspace: String,
+        /// Create the session with plan mode selected
+        #[arg(long)]
+        plan: bool,
     },
 }
 
@@ -175,14 +181,22 @@ fn run(cli: &Cli) -> Result<()> {
         },
         Commands::Session { action } => match action {
             SessionAction::List { workspace } => cmd_session_list(workspace, cli.json),
-            SessionAction::New { workspace } => cmd_session_new(workspace, cli.json),
+            SessionAction::New { workspace, plan } => cmd_session_new(workspace, *plan, cli.json),
         },
         Commands::Send {
             workspace,
             session,
             model,
+            plan,
             prompt,
-        } => cmd_send(workspace, session.clone(), prompt, model.clone(), cli.json),
+        } => cmd_send(
+            workspace,
+            session.clone(),
+            prompt,
+            model.clone(),
+            *plan,
+            cli.json,
+        ),
         Commands::Mcp => helmor_lib::mcp::run_mcp_server(),
     }
 }
@@ -316,9 +330,9 @@ fn cmd_session_list(workspace_ref: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_session_new(workspace_ref: &str, json: bool) -> Result<()> {
+fn cmd_session_new(workspace_ref: &str, plan: bool, json: bool) -> Result<()> {
     let workspace_id = service::resolve_workspace_ref(workspace_ref)?;
-    let response = service::create_session(&workspace_id, None)?;
+    let response = service::create_session(&workspace_id, None, plan.then_some("plan"))?;
     if json {
         println!("{}", serde_json::to_string_pretty(&response)?);
     } else {
@@ -332,6 +346,7 @@ fn cmd_send(
     session: Option<String>,
     prompt: &str,
     model: Option<String>,
+    plan: bool,
     json: bool,
 ) -> Result<()> {
     use std::io::Write;
@@ -341,7 +356,7 @@ fn cmd_send(
         session_id: session,
         prompt: prompt.to_string(),
         model,
-        permission_mode: Some("auto".to_string()),
+        permission_mode: Some(if plan { "plan" } else { "auto" }.to_string()),
     };
 
     let mut stdout = std::io::stdout().lock();

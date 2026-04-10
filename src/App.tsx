@@ -314,6 +314,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const [pendingPromptForSession, setPendingPromptForSession] = useState<{
 		sessionId: string;
 		prompt: string;
+		modelId?: string | null;
+		permissionMode?: string | null;
 	} | null>(null);
 	// Lifecycle driver for the inspector Git commit button. Owns the button's
 	// visible state across all phases (click → session created → streaming →
@@ -1675,6 +1677,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 						setPendingPromptForSession({
 							sessionId: first.sessionId,
 							prompt: first.prompt,
+							modelId: first.modelId,
+							permissionMode: first.permissionMode,
 						});
 						handleSelectSession(first.sessionId);
 					}, 100);

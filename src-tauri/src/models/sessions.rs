@@ -340,6 +340,7 @@ pub struct CreateSessionResponse {
 pub fn create_session(
     workspace_id: &str,
     action_kind: Option<&str>,
+    permission_mode: Option<&str>,
 ) -> Result<CreateSessionResponse> {
     let mut connection = db::open_connection(true)?;
     let transaction = connection
@@ -366,9 +367,14 @@ pub fn create_session(
         .execute(
             r#"
             INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind)
-            VALUES (?1, ?2, 'idle', 'Untitled', 'default', ?3)
+            VALUES (?1, ?2, 'idle', 'Untitled', ?3, ?4)
             "#,
-            (&session_id, workspace_id, action_kind),
+            (
+                &session_id,
+                workspace_id,
+                permission_mode.unwrap_or("default"),
+                action_kind,
+            ),
         )
         .context("Failed to create session")?;
 

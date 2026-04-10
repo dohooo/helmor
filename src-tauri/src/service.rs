@@ -144,7 +144,17 @@ pub fn send_message(
         Some(sid) => sid,
         None => match detail.active_session_id {
             Some(sid) => sid,
-            None => create_session(&workspace_id, None)?.session_id,
+            None => {
+                create_session(
+                    &workspace_id,
+                    None,
+                    params
+                        .permission_mode
+                        .as_deref()
+                        .filter(|mode| *mode == "plan"),
+                )?
+                .session_id
+            }
         },
     };
 
@@ -302,7 +312,14 @@ pub fn send_message(
                     resolved_model = output.resolved_model.clone();
                 }
 
-                let _ = finalize_session(&conn, &session_id, model.id, model.provider, "idle");
+                let _ = finalize_session(
+                    &conn,
+                    &session_id,
+                    model.id,
+                    model.provider,
+                    "idle",
+                    params.permission_mode.as_deref(),
+                );
 
                 if is_aborted {
                     let final_messages = pipeline.finish();
@@ -361,7 +378,14 @@ pub fn send_message(
                     .and_then(Value::as_str)
                     .unwrap_or("Unknown sidecar error")
                     .to_string();
-                let _ = finalize_session(&conn, &session_id, model.id, model.provider, "idle");
+                let _ = finalize_session(
+                    &conn,
+                    &session_id,
+                    model.id,
+                    model.provider,
+                    "idle",
+                    params.permission_mode.as_deref(),
+                );
                 on_event(&AgentStreamEvent::Error {
                     message: msg,
                     persisted: true,
@@ -436,11 +460,12 @@ fn finalize_session(
     model_id: &str,
     provider: &str,
     status: &str,
+    permission_mode: Option<&str>,
 ) -> Result<()> {
     let now = crate::models::db::current_timestamp()?;
     conn.execute(
-        "UPDATE sessions SET status = ?2, model = ?3, agent_type = ?4, last_user_message_at = ?5, updated_at = ?5 WHERE id = ?1",
-        params![session_id, status, model_id, provider, now],
+        "UPDATE sessions SET status = ?2, model = ?3, agent_type = ?4, last_user_message_at = ?5, updated_at = ?5, permission_mode = COALESCE(?6, permission_mode) WHERE id = ?1",
+        params![session_id, status, model_id, provider, now, permission_mode],
     )?;
     conn.execute(
         "UPDATE workspaces SET active_session_id = ?2 WHERE id = (SELECT workspace_id FROM sessions WHERE id = ?1)",
@@ -621,6 +646,36 @@ mod tests {
         assert_eq!(sends.len(), 1);
         assert!(sends[0].model_id.is_none());
         assert!(sends[0].permission_mode.is_none());
+    }
+
+    #[test]
+    fn create_session_persists_requested_plan_mode() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _dir = TestDataDir::new("create-session-plan");
+
+        let db_path = crate::data_dir::db_path().unwrap();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name, root_path) VALUES ('r1', 'test-repo', '/tmp/test-repo')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, derived_status) VALUES ('w1', 'r1', 'test-dir', 'ready', 'in-progress')",
+            [],
+        )
+        .unwrap();
+
+        let response = create_session("w1", None, Some("plan")).unwrap();
+        let permission_mode: String = conn
+            .query_row(
+                "SELECT permission_mode FROM sessions WHERE id = ?1",
+                [response.session_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(permission_mode, "plan");
     }
 
     #[test]
