@@ -1812,7 +1812,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 												selectedWorkspaceId &&
 												installedEditors.length > 0 &&
 												preferredEditor ? (
-													<div className="flex items-center rounded-md border border-app-border/40 bg-app-elevated/50">
+													<div className="flex items-center">
 														<Button
 															variant="ghost"
 															size="xs"
@@ -1829,7 +1829,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 																	),
 																)
 															}
-															className="rounded-l-[5px] rounded-r-none text-app-muted hover:text-app-foreground"
+															className="text-app-muted hover:text-app-foreground"
 														>
 															<EditorIcon
 																editorId={preferredEditor.id}
@@ -1842,7 +1842,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 																<Button
 																	variant="ghost"
 																	size="icon-xs"
-																	className="w-4 rounded-l-none rounded-r-[5px] border-l border-app-border/40 text-app-muted hover:text-app-foreground"
+																	className="w-4 text-app-muted hover:text-app-foreground"
 																>
 																	<ChevronDown
 																		className="size-2.5"
