@@ -1085,6 +1085,29 @@ export async function closeWorkspacePr(
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Pending CLI sends
+// ---------------------------------------------------------------------------
+
+export type PendingCliSend = {
+	id: string;
+	workspaceId: string;
+	sessionId: string;
+	prompt: string;
+	modelId: string | null;
+	permissionMode: string | null;
+	createdAt: string;
+};
+
+/**
+ * Atomically read and delete all pending CLI sends. Called on window focus
+ * so the App can stream prompts that `helmor send` queued while the CLI
+ * detected the App was running.
+ */
+export async function drainPendingCliSends(): Promise<PendingCliSend[]> {
+	return invoke<PendingCliSend[]>("drain_pending_cli_sends");
+}
+
 export async function permanentlyDeleteWorkspace(
 	workspaceId: string,
 ): Promise<void> {

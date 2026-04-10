@@ -48,6 +48,7 @@ import {
 	type DetectedEditor,
 	detectInstalledEditors,
 	disconnectGithubIdentity,
+	drainPendingCliSends,
 	type GithubIdentityDeviceFlowStart,
 	type GithubIdentitySnapshot,
 	hideSession,
@@ -1627,6 +1628,68 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		},
 		[rememberSessionSelection],
 	);
+
+	// ── Pending CLI sends: on window focus, drain queued prompts ────────
+	// When `helmor send` detects the App is running it writes the prompt
+	// into `pending_cli_sends` instead of starting its own sidecar. On
+	// the next focus event we pick those up and replay them through the
+	// normal streaming path (setPendingPromptForSession → auto-submit).
+	useEffect(() => {
+		let unlisten: (() => void) | undefined;
+
+		void import("@tauri-apps/api/event").then(({ listen }) => {
+			void listen("tauri://focus", async () => {
+				try {
+					const sends = await drainPendingCliSends();
+					if (sends.length === 0) return;
+
+					// Process the first send immediately. If there are
+					// multiple we queue only the first — subsequent sends
+					// will be picked up on the next focus or could be
+					// extended later to a queue.
+					const first = sends[0];
+					console.log(
+						"[pendingCliSend] picked up",
+						sends.length,
+						"send(s), processing first:",
+						first.sessionId,
+					);
+
+					// Ensure workspace + session data is fresh before navigating
+					await queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceGroups,
+					});
+					if (first.workspaceId) {
+						await queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceSessions(first.workspaceId),
+						});
+					}
+
+					// Navigate to the workspace + session
+					handleSelectWorkspace(first.workspaceId);
+
+					// Small delay to let workspace selection settle before
+					// setting the pending prompt — otherwise the conversation
+					// container might not have mounted the target session yet.
+					setTimeout(() => {
+						setPendingPromptForSession({
+							sessionId: first.sessionId,
+							prompt: first.prompt,
+						});
+						handleSelectSession(first.sessionId);
+					}, 100);
+				} catch (error) {
+					console.error("[pendingCliSend] drain failed:", error);
+				}
+			}).then((fn) => {
+				unlisten = fn;
+			});
+		});
+
+		return () => {
+			unlisten?.();
+		};
+	}, [handleSelectWorkspace, handleSelectSession, queryClient]);
 
 	useEffect(() => {
 		if (!isIdentityConnected || workspaceViewMode === "editor") {

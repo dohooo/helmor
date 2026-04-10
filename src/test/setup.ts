@@ -81,6 +81,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 					remoteState: "unavailable",
 					message: null,
 				};
+			case "drain_pending_cli_sends":
+				return [];
 			case "conductor_source_available":
 				return false;
 			default:

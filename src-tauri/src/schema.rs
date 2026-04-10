@@ -147,6 +147,16 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS pending_cli_sends (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    model_id TEXT,
+    permission_mode TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS workspaces (
     id TEXT PRIMARY KEY,
     repository_id TEXT,

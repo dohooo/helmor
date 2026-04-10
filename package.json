@@ -26,7 +26,7 @@
 		"lint:fix": "biome check . --write --config-path=./biome.json && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --fix --allow-dirty -- -D warnings && cargo fmt --manifest-path src-tauri/Cargo.toml --all",
 		"dev:cli": "cd src-tauri && cargo run --bin helmor-cli --",
 		"dev:cli:build": "cd src-tauri && cargo build --bin helmor-cli",
-		"dev:cli:install": "cd src-tauri && cargo build --bin helmor-cli && cp target/debug/helmor-cli /usr/local/bin/helmor && echo 'Installed helmor to /usr/local/bin/helmor'",
+		"dev:cli:install": "cd src-tauri && cargo build --bin helmor-cli && cp target/debug/helmor-cli /usr/local/bin/helmor && cp ../sidecar/dist/helmor-sidecar /usr/local/bin/helmor-sidecar && echo 'Installed helmor + helmor-sidecar to /usr/local/bin/'",
 		"postinstall": "cd sidecar && bun install",
 		"prepare": "husky"
 	},

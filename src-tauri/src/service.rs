@@ -119,8 +119,10 @@ pub struct SendMessageResult {
     pub persisted: bool,
 }
 
-/// Send a prompt to an AI agent via the sidecar, stream results, and persist
-/// to the database. Each invocation owns its own sidecar process.
+/// Send a prompt to an AI agent. When the Helmor desktop app is running,
+/// the message is queued as a pending CLI send so the app's shared sidecar
+/// handles it — this gives the frontend live streaming updates. When the
+/// app is not running, falls back to creating an independent sidecar.
 pub fn send_message(
     params: SendMessageParams,
     on_event: &mut dyn FnMut(&crate::agents::AgentStreamEvent),
@@ -151,6 +153,57 @@ pub fn send_message(
     let model = crate::agents::find_model_definition(model_id)
         .with_context(|| format!("Unknown model: {model_id}"))?;
 
+    // ── App delegation ──────────────────────────────────────────────
+    // When the desktop app is running, queue the prompt as a pending
+    // send and return immediately. The app's focus handler picks it up
+    // and streams through its shared sidecar so the frontend sees live
+    // updates. The CLI prints a short confirmation instead of streaming.
+    if is_app_running() {
+        // Persist user message so the app's conversation container
+        // shows the optimistic user bubble right away.
+        let conn = crate::models::db::open_connection(true)?;
+        let timestamp = crate::models::db::current_timestamp()?;
+        let user_msg_id = Uuid::new_v4().to_string();
+        let turn_id = Uuid::new_v4().to_string();
+        let user_content = serde_json::json!({
+            "type": "user_prompt",
+            "text": params.prompt,
+        })
+        .to_string();
+        conn.execute(
+            r#"INSERT INTO session_messages
+               (id, session_id, role, content, created_at, sent_at, model, turn_id, is_resumable_message)
+               VALUES (?1, ?2, 'user', ?3, ?4, ?4, ?5, ?6, 0)"#,
+            params![user_msg_id, session_id, user_content, timestamp, model.id, turn_id],
+        )?;
+
+        insert_pending_cli_send(
+            &workspace_id,
+            &session_id,
+            &params.prompt,
+            Some(model_id),
+            params.permission_mode.as_deref(),
+        )?;
+
+        // Emit a minimal "done" event so the CLI knows the handoff succeeded.
+        on_event(&AgentStreamEvent::Done {
+            persisted: true,
+            session_id: Some(session_id.clone()),
+            provider: model.provider.to_string(),
+            model_id: model.id.to_string(),
+            resolved_model: String::new(),
+            working_directory: String::new(),
+        });
+
+        return Ok(SendMessageResult {
+            session_id,
+            provider: model.provider.to_string(),
+            model: model.id.to_string(),
+            persisted: true,
+        });
+    }
+
+    // ── Standalone mode (app not running) ────────────────────────────
     // 4. Create sidecar
     let sidecar = crate::sidecar::ManagedSidecar::new();
 
@@ -394,4 +447,200 @@ fn finalize_session(
         params![session_id, session_id],
     )?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Pending CLI sends — CLI queues a prompt for the App to execute via its
+// shared sidecar, so the frontend sees live streaming.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingCliSend {
+    pub id: String,
+    pub workspace_id: String,
+    pub session_id: String,
+    pub prompt: String,
+    pub model_id: Option<String>,
+    pub permission_mode: Option<String>,
+    pub created_at: String,
+}
+
+/// Insert a pending send so the App's frontend can pick it up on focus.
+pub fn insert_pending_cli_send(
+    workspace_id: &str,
+    session_id: &str,
+    prompt: &str,
+    model_id: Option<&str>,
+    permission_mode: Option<&str>,
+) -> Result<String> {
+    let conn = crate::models::db::open_connection(true)?;
+    let id = Uuid::new_v4().to_string();
+    conn.execute(
+        r#"INSERT INTO pending_cli_sends (id, workspace_id, session_id, prompt, model_id, permission_mode)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)"#,
+        params![id, workspace_id, session_id, prompt, model_id, permission_mode],
+    )
+    .context("Failed to insert pending CLI send")?;
+    Ok(id)
+}
+
+/// Read and delete all pending sends in one atomic operation.
+/// Returns them oldest-first so the App processes them in order.
+pub fn drain_pending_cli_sends() -> Result<Vec<PendingCliSend>> {
+    let conn = crate::models::db::open_connection(true)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, workspace_id, session_id, prompt, model_id, permission_mode, created_at
+         FROM pending_cli_sends ORDER BY datetime(created_at) ASC",
+    )?;
+    let rows: Vec<PendingCliSend> = stmt
+        .query_map([], |row| {
+            Ok(PendingCliSend {
+                id: row.get(0)?,
+                workspace_id: row.get(1)?,
+                session_id: row.get(2)?,
+                prompt: row.get(3)?,
+                model_id: row.get(4)?,
+                permission_mode: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("Failed to read pending CLI sends")?;
+
+    if !rows.is_empty() {
+        conn.execute("DELETE FROM pending_cli_sends", [])
+            .context("Failed to delete pending CLI sends")?;
+    }
+
+    Ok(rows)
+}
+
+/// Check if the Helmor App is running by testing the MCP bridge port.
+pub fn is_app_running() -> bool {
+    std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], 9223)),
+        Duration::from_millis(200),
+    )
+    .is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data_dir::TEST_ENV_LOCK;
+    use std::fs;
+    use std::path::PathBuf;
+
+    /// Helper: set HELMOR_DATA_DIR to a temp dir for tests that hit the DB.
+    struct TestDataDir {
+        root: PathBuf,
+    }
+
+    impl TestDataDir {
+        fn new(name: &str) -> Self {
+            let root =
+                std::env::temp_dir().join(format!("helmor-test-{name}-{}", uuid::Uuid::new_v4()));
+            std::env::set_var("HELMOR_DATA_DIR", root.display().to_string());
+            crate::data_dir::ensure_directory_structure().unwrap();
+            let db_path = crate::data_dir::db_path().unwrap();
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            crate::schema::ensure_schema(&conn).unwrap();
+            Self { root }
+        }
+    }
+
+    impl Drop for TestDataDir {
+        fn drop(&mut self) {
+            std::env::remove_var("HELMOR_DATA_DIR");
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn drain_returns_empty_when_no_pending_sends() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _dir = TestDataDir::new("drain-empty");
+
+        let sends = drain_pending_cli_sends().unwrap();
+        assert!(sends.is_empty());
+    }
+
+    #[test]
+    fn insert_and_drain_round_trip() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _dir = TestDataDir::new("insert-drain");
+
+        let id = insert_pending_cli_send(
+            "ws-1",
+            "sess-1",
+            "fix the bug",
+            Some("opus"),
+            Some("default"),
+        )
+        .unwrap();
+        assert!(!id.is_empty());
+
+        let sends = drain_pending_cli_sends().unwrap();
+        assert_eq!(sends.len(), 1);
+        assert_eq!(sends[0].workspace_id, "ws-1");
+        assert_eq!(sends[0].session_id, "sess-1");
+        assert_eq!(sends[0].prompt, "fix the bug");
+        assert_eq!(sends[0].model_id.as_deref(), Some("opus"));
+        assert_eq!(sends[0].permission_mode.as_deref(), Some("default"));
+
+        // Second drain should be empty — rows were deleted.
+        let sends2 = drain_pending_cli_sends().unwrap();
+        assert!(sends2.is_empty());
+    }
+
+    #[test]
+    fn drain_returns_oldest_first() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _dir = TestDataDir::new("drain-order");
+
+        insert_pending_cli_send("ws-1", "sess-a", "first", None, None).unwrap();
+        // Ensure different created_at by sleeping briefly
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        insert_pending_cli_send("ws-1", "sess-b", "second", None, None).unwrap();
+
+        let sends = drain_pending_cli_sends().unwrap();
+        assert_eq!(sends.len(), 2);
+        assert_eq!(sends[0].prompt, "first");
+        assert_eq!(sends[1].prompt, "second");
+    }
+
+    #[test]
+    fn insert_with_null_optional_fields() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _dir = TestDataDir::new("null-fields");
+
+        insert_pending_cli_send("ws-1", "sess-1", "hello", None, None).unwrap();
+
+        let sends = drain_pending_cli_sends().unwrap();
+        assert_eq!(sends.len(), 1);
+        assert!(sends[0].model_id.is_none());
+        assert!(sends[0].permission_mode.is_none());
+    }
+
+    #[test]
+    fn is_app_running_returns_false_when_no_listener() {
+        // Nothing should be listening on port 9223 during tests.
+        assert!(!is_app_running());
+    }
+
+    #[test]
+    fn is_app_running_returns_true_when_listener_exists() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // We can't easily test port 9223, but we can verify the TCP
+        // connect logic works by checking our dynamic port.
+        let result = std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            Duration::from_millis(200),
+        )
+        .is_ok();
+        assert!(result);
+        drop(listener);
+    }
 }

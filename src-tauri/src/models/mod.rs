@@ -778,6 +778,13 @@ pub async fn close_workspace_pr(
     run_blocking(move || github_graphql::close_workspace_pr(&workspace_id)).await
 }
 
+/// Read and delete all pending CLI sends. Called by the frontend on
+/// window focus to pick up prompts queued by `helmor send`.
+#[tauri::command]
+pub async fn drain_pending_cli_sends() -> CmdResult<Vec<crate::service::PendingCliSend>> {
+    run_blocking(crate::service::drain_pending_cli_sends).await
+}
+
 #[tauri::command]
 pub async fn write_editor_file(
     path: String,

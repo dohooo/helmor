@@ -201,6 +201,7 @@ pub fn run() {
             models::get_workspace_pr_check_insert_text,
             models::merge_workspace_pr,
             models::close_workspace_pr,
+            models::drain_pending_cli_sends,
             models::read_editor_file,
             models::set_workspace_manual_status,
             models::detect_installed_editors,
