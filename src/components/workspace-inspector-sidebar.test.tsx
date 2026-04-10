@@ -280,11 +280,11 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 
 		await screen.findByText("Preview");
 		expect(
-			screen.queryByRole("button", { name: "Insert Preview into composer" }),
+			screen.queryByRole("button", { name: "Append Preview to composer" }),
 		).not.toBeInTheDocument();
 
 		await user.click(
-			screen.getByRole("button", { name: "Insert changes into composer" }),
+			screen.getByRole("button", { name: "Append changes to composer" }),
 		);
 
 		await waitFor(() => {
@@ -304,6 +304,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 					key: "pr-check:check-1",
 				},
 			],
+			behavior: "append",
 		});
 	});
 });

@@ -11,8 +11,6 @@ import {
 	ChevronDown,
 	ChevronRightIcon,
 	GitBranchIcon,
-	LayersPlus,
-	LoaderCircle,
 	MinusIcon,
 	PlusIcon,
 	TriangleIcon,
@@ -32,7 +30,6 @@ import {
 	type WorkspacePrActionItem,
 	type WorkspacePrActionStatus,
 } from "@/lib/api";
-import { useComposerInsert } from "@/lib/composer-insert-context";
 import type { InspectorFileItem } from "@/lib/editor-session";
 import {
 	helmorQueryKeys,
@@ -41,7 +38,10 @@ import {
 	workspacePrActionStatusQueryOptions,
 } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
-import { useWorkspaceToast } from "@/lib/workspace-toast-context";
+import {
+	AppendContextButton,
+	type AppendContextPayloadResult,
+} from "./append-context-button";
 import { AnimatedShinyText } from "./ui/animated-shiny-text";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -668,11 +668,6 @@ function ActionsSection({
 	commitButtonState?: CommitButtonState;
 	prInfo: PullRequestInfo | null;
 }) {
-	const insertIntoComposer = useComposerInsert();
-	const pushToast = useWorkspaceToast();
-	const [insertingCheckIds, setInsertingCheckIds] = useState<
-		Record<string, boolean>
-	>({});
 	const gitStatusQuery = useQuery({
 		...workspaceGitActionStatusQueryOptions(workspaceId ?? "__none__"),
 		enabled: workspaceId !== null,
@@ -688,41 +683,18 @@ function ActionsSection({
 	const handleInsertCheck = useCallback(
 		async (item: WorkspacePrActionItem) => {
 			if (!workspaceId) return;
-
-			setInsertingCheckIds((prev) => ({ ...prev, [item.id]: true }));
-			try {
-				const submitText = await getWorkspacePrCheckInsertText(
-					workspaceId,
-					item.id,
-				);
-				insertIntoComposer({
-					target: { workspaceId },
-					items: [
-						{
-							kind: "custom-tag",
-							label: item.name,
-							submitText,
-							key: `pr-check:${item.id}`,
-						},
-					],
-				});
-			} catch (error) {
-				pushToast(
-					error instanceof Error
-						? error.message
-						: "Unable to load check details.",
-					"Couldn't insert check",
-					"destructive",
-				);
-			} finally {
-				setInsertingCheckIds((prev) => {
-					const next = { ...prev };
-					delete next[item.id];
-					return next;
-				});
-			}
+			const submitText = await getWorkspacePrCheckInsertText(
+				workspaceId,
+				item.id,
+			);
+			return {
+				target: { workspaceId },
+				label: item.name,
+				submitText,
+				key: `pr-check:${item.id}`,
+			};
 		},
-		[insertIntoComposer, pushToast, workspaceId],
+		[workspaceId],
 	);
 
 	return (
@@ -802,7 +774,6 @@ function ActionsSection({
 								key={item.id}
 								item={item}
 								onInsertToComposer={handleInsertCheck}
-								isInserting={Boolean(insertingCheckIds[item.id])}
 							/>
 						))}
 					</>
@@ -815,11 +786,11 @@ function ActionsSection({
 function ActionStatusRow({
 	item,
 	onInsertToComposer,
-	isInserting = false,
 }: {
 	item: WorkspacePrActionItem;
-	onInsertToComposer?: (item: WorkspacePrActionItem) => void;
-	isInserting?: boolean;
+	onInsertToComposer?: (
+		item: WorkspacePrActionItem,
+	) => AppendContextPayloadResult | Promise<AppendContextPayloadResult>;
 }) {
 	return (
 		<div className="group/check-row flex items-center justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
@@ -835,23 +806,15 @@ function ActionStatusRow({
 			</div>
 			<div className="flex shrink-0 items-center justify-end gap-1.5">
 				{onInsertToComposer && (
-					<RowIconButton
-						aria-label={`Insert ${item.name} into composer`}
-						disabled={isInserting}
-						onClick={() => onInsertToComposer(item)}
+					<AppendContextButton
+						subjectLabel={item.name}
+						getPayload={() => onInsertToComposer(item)}
+						errorTitle="Couldn't insert check"
 						className={cn(
 							"text-primary hover:bg-accent/60 hover:text-primary",
-							isInserting
-								? "opacity-100"
-								: "opacity-0 group-hover/check-row:opacity-100 focus-visible:opacity-100",
+							"opacity-0 group-hover/check-row:opacity-100 focus-visible:opacity-100",
 						)}
-					>
-						{isInserting ? (
-							<LoaderCircle className="size-3 animate-spin" strokeWidth={1.8} />
-						) : (
-							<LayersPlus className="size-3" strokeWidth={1.8} />
-						)}
-					</RowIconButton>
+					/>
 				)}
 				{item.url && (
 					<button
