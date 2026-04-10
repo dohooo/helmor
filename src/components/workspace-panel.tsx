@@ -635,9 +635,12 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 			>
 				<div className="flex min-w-0 items-center gap-2 text-[12.5px]">
 					{headerLeading}
-					<span className="group/branch inline-flex items-center gap-1 px-1 py-0.5 font-medium text-foreground">
+					<span className="group/branch relative inline-flex items-center gap-1 overflow-hidden px-1 py-0.5 font-medium text-foreground">
 						<GitBranch
-							className={cn("size-3.5", getBranchToneClassName(branchTone))}
+							className={cn(
+								"shrink-0 size-3.5",
+								getBranchToneClassName(branchTone),
+							)}
 							strokeWidth={1.9}
 						/>
 						{editingBranch !== null ? (
@@ -674,12 +677,12 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 									) : null}
 								</Tooltip>
 								{workspace?.branch && workspace.state !== "archived" ? (
-									<>
+									<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 bg-[linear-gradient(to_right,transparent_0%,var(--app-base)_35%,var(--app-base)_100%)] pl-5 pr-1 group-hover/branch:pointer-events-auto group-hover/branch:visible">
 										<span
 											role="button"
 											aria-label="Rename branch"
 											onClick={handleStartBranchRename}
-											className="invisible flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60 group-hover/branch:visible"
+											className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
 										>
 											<Pencil className="size-2.5" strokeWidth={2} />
 										</span>
@@ -690,11 +693,11 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 												if (!workspace.branch) return;
 												void navigator.clipboard.writeText(workspace.branch);
 											}}
-											className="invisible flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60 group-hover/branch:visible"
+											className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
 										>
 											<Copy className="size-2.5" strokeWidth={2} />
 										</span>
-									</>
+									</span>
 								) : null}
 							</>
 						)}
