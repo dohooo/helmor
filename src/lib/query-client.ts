@@ -1,5 +1,5 @@
 import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
-import { QueryClient, queryOptions } from "@tanstack/react-query";
+import { focusManager, QueryClient, queryOptions } from "@tanstack/react-query";
 import {
 	type AgentProvider,
 	DEFAULT_AGENT_MODEL_SECTIONS,
@@ -22,8 +22,6 @@ import {
 	lookupWorkspacePr,
 } from "./api";
 
-const NAVIGATION_STALE_TIME = 15_000;
-const WORKSPACE_STALE_TIME = 5 * 60_000;
 const SESSION_STALE_TIME = 10 * 60_000;
 const CHANGES_STALE_TIME = 3_000;
 const CHANGES_REFETCH_INTERVAL = 10_000;
@@ -64,12 +62,39 @@ export const helmorQueryKeys = {
 };
 
 export function createHelmorQueryClient() {
+	// Replace React Query's default focus listener (browser visibilitychange)
+	// with Tauri's native window focus/blur events. This is the official
+	// pattern for non-browser environments (cf. React Native AppState in
+	// the TanStack Query docs). The focusManager calls `handleFocus(true)`
+	// which triggers refetchOnWindowFocus for all queries, respecting each
+	// query's own staleTime — local DB queries use staleTime: 0 so they
+	// always refetch on focus, while remote GitHub queries keep their
+	// staleTime: 30s to avoid hammering the API.
+	focusManager.setEventListener((handleFocus) => {
+		let unlistenFocus: (() => void) | undefined;
+		let unlistenBlur: (() => void) | undefined;
+
+		void import("@tauri-apps/api/event").then(({ listen }) => {
+			void listen("tauri://focus", () => handleFocus(true)).then((fn) => {
+				unlistenFocus = fn;
+			});
+			void listen("tauri://blur", () => handleFocus(false)).then((fn) => {
+				unlistenBlur = fn;
+			});
+		});
+
+		return () => {
+			unlistenFocus?.();
+			unlistenBlur?.();
+		};
+	});
+
 	return new QueryClient({
 		defaultOptions: {
 			queries: {
 				gcTime: PERSIST_GC_TIME,
 				refetchOnReconnect: false,
-				refetchOnWindowFocus: false,
+				refetchOnWindowFocus: true,
 				retry: 1,
 			},
 		},
@@ -87,7 +112,7 @@ export function workspaceGroupsQueryOptions() {
 		queryFn: loadWorkspaceGroups,
 		initialData: DEFAULT_WORKSPACE_GROUPS,
 		initialDataUpdatedAt: 0,
-		staleTime: NAVIGATION_STALE_TIME,
+		staleTime: 0,
 	});
 }
 
@@ -97,7 +122,7 @@ export function archivedWorkspacesQueryOptions() {
 		queryFn: loadArchivedWorkspaces,
 		initialData: [],
 		initialDataUpdatedAt: 0,
-		staleTime: NAVIGATION_STALE_TIME,
+		staleTime: 0,
 	});
 }
 
@@ -107,7 +132,7 @@ export function repositoriesQueryOptions() {
 		queryFn: listRepositories,
 		initialData: [],
 		initialDataUpdatedAt: 0,
-		staleTime: 5 * 60_000,
+		staleTime: 0,
 	});
 }
 
@@ -125,7 +150,7 @@ export function workspaceDetailQueryOptions(workspaceId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
 		queryFn: () => loadWorkspaceDetail(workspaceId),
-		staleTime: WORKSPACE_STALE_TIME,
+		staleTime: 0,
 	});
 }
 
@@ -133,7 +158,7 @@ export function workspaceSessionsQueryOptions(workspaceId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
 		queryFn: () => loadWorkspaceSessions(workspaceId),
-		staleTime: WORKSPACE_STALE_TIME,
+		staleTime: 0,
 	});
 }
 
@@ -222,6 +247,7 @@ export function workspacePrQueryOptions(workspaceId: string) {
 		queryFn: () => lookupWorkspacePr(workspaceId),
 		staleTime: 30_000,
 		gcTime: DEFAULT_GC_TIME,
+		refetchOnWindowFocus: true,
 		refetchInterval: 60_000,
 		retry: 0,
 	});

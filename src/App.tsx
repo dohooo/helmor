@@ -42,7 +42,6 @@ import { WorkspaceEditorSurface } from "./components/workspace-editor-surface";
 import { WorkspaceInspectorSidebar } from "./components/workspace-inspector-sidebar";
 import { WorkspacesSidebarContainer } from "./components/workspaces-sidebar-container";
 import {
-	archiveWorkspace,
 	cancelGithubIdentityConnect,
 	closeWorkspacePr,
 	createSession,
@@ -397,35 +396,44 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	});
 	const workspacePrInfo = workspacePrQuery.data ?? null;
 
-	// Auto-archive the workspace when its PR has been closed (not merged).
-	// A closed PR signals the work is abandoned — archiving moves the
-	// workspace to the "Archived" section and frees the worktree on disk.
-	const autoArchiveTriggeredRef = useRef<string | null>(null);
+	// Reactively transition workspace sidebar status when the PR query
+	// detects a state change. Handles PRs created/merged/closed externally.
+	const selectedWorkspaceManualStatus =
+		selectedWorkspaceDetailQuery.data?.manualStatus ?? null;
 	const selectedWorkspaceState =
 		selectedWorkspaceDetailQuery.data?.state ?? null;
+	const prStatusSyncRef = useRef<string | null>(null);
 	useEffect(() => {
-		if (
-			!selectedWorkspaceId ||
-			!workspacePrInfo ||
-			workspacePrInfo.state !== "CLOSED" ||
-			workspacePrInfo.isMerged ||
-			// Don't archive if the workspace is already archived or not active.
-			selectedWorkspaceState !== "active"
-		) {
-			autoArchiveTriggeredRef.current = null;
+		if (!selectedWorkspaceId || !workspacePrInfo) {
+			prStatusSyncRef.current = null;
 			return;
 		}
-		// Only trigger once per workspace to avoid repeat archive attempts.
-		if (autoArchiveTriggeredRef.current === selectedWorkspaceId) return;
-		autoArchiveTriggeredRef.current = selectedWorkspaceId;
+		if (
+			selectedWorkspaceState !== "active" &&
+			selectedWorkspaceState !== "ready"
+		) {
+			return;
+		}
+
+		let targetStatus: string | null = null;
+		if (workspacePrInfo.isMerged) {
+			targetStatus = "done";
+		} else if (workspacePrInfo.state === "OPEN") {
+			targetStatus = "review";
+		} else if (workspacePrInfo.state === "CLOSED") {
+			targetStatus = "canceled";
+		}
+
+		if (!targetStatus) return;
+		if (selectedWorkspaceManualStatus === targetStatus) return;
+
+		const syncKey = `${selectedWorkspaceId}:${targetStatus}`;
+		if (prStatusSyncRef.current === syncKey) return;
+		prStatusSyncRef.current = syncKey;
 
 		void (async () => {
 			try {
-				console.log(
-					"[commitButton] PR closed — auto-archiving workspace",
-					selectedWorkspaceId,
-				);
-				await archiveWorkspace(selectedWorkspaceId);
+				await setWorkspaceManualStatus(selectedWorkspaceId, targetStatus);
 				await Promise.all([
 					queryClient.invalidateQueries({
 						queryKey: helmorQueryKeys.workspaceGroups,
@@ -435,10 +443,16 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 					}),
 				]);
 			} catch (error) {
-				console.error("[commitButton] Auto-archive failed:", error);
+				console.error("[prStatusSync] Failed:", error);
 			}
 		})();
-	}, [selectedWorkspaceId, workspacePrInfo, queryClient]);
+	}, [
+		selectedWorkspaceId,
+		workspacePrInfo,
+		selectedWorkspaceManualStatus,
+		selectedWorkspaceState,
+		queryClient,
+	]);
 
 	const pushWorkspaceToast = useCallback(
 		(
