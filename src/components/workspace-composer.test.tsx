@@ -1,7 +1,16 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { createHelmorQueryClient } from "@/lib/query-client";
+
+vi.mock("@tauri-apps/api/core", () => ({
+	invoke: vi.fn(),
+	convertFileSrc: vi.fn((path: string) => `asset://localhost${path}`),
+	Channel: class {
+		onmessage: ((event: unknown) => void) | null = null;
+	},
+}));
 
 vi.mock("./composer-editor/plugins/file-mention-plugin", () => ({
 	FileMentionPlugin: () => null,
@@ -97,5 +106,51 @@ describe("WorkspaceComposer", () => {
 				},
 			],
 		);
+	});
+
+	it("shows a hover preview for inserted image badges", async () => {
+		const user = userEvent.setup();
+		const queryClient = createHelmorQueryClient();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="acceptEdits"
+					onTogglePlanMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingInsertRequests={[
+						{
+							id: "insert-image-1",
+							workspaceId: "workspace-1",
+							sessionId: "session-1",
+							behavior: "append",
+							createdAt: 0,
+							items: [{ kind: "image", path: "/tmp/CleanShot.png" }],
+						},
+					]}
+					onPendingInsertRequestsConsumed={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		const badge = await screen.findByText("CleanShot.png");
+		await user.hover(badge);
+
+		expect(
+			await screen.findByRole("img", { name: "CleanShot.png" }),
+		).toHaveAttribute("src", "asset://localhost/tmp/CleanShot.png");
 	});
 });

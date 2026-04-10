@@ -9,10 +9,10 @@ import {
 	type SerializedLexicalNode,
 	type Spread,
 } from "lexical";
-import { Tag, X } from "lucide-react";
+import { Tag } from "lucide-react";
 import type { ReactNode } from "react";
-import { Button } from "@/components/ui/button";
 import type { ComposerCustomTag } from "@/lib/composer-insert";
+import { ComposerPreviewBadge } from "./composer-preview-badge";
 
 type SerializedCustomTagBadgeNode = Spread<
 	ComposerCustomTag,
@@ -29,37 +29,22 @@ function ComposerCustomTagBadge({
 	const [editor] = useLexicalComposerContext();
 
 	return (
-		<span className="mx-0.5 inline-flex cursor-default select-none items-center gap-1 rounded border border-border/60 align-middle text-[12px] transition-colors hover:border-muted-foreground/40 hover:bg-accent/40">
-			<span className="inline-flex items-center gap-1.5 px-1.5 py-0.5">
+		<ComposerPreviewBadge
+			icon={
 				<Tag
 					className="size-3 shrink-0 text-muted-foreground"
 					strokeWidth={1.8}
 				/>
-				<span className="max-w-[200px] truncate text-muted-foreground">
-					{customTag.label}
-				</span>
-			</span>
-			<Button
-				type="button"
-				variant="ghost"
-				size="icon-xs"
-				className="text-muted-foreground/40 hover:text-muted-foreground"
-				onMouseDown={(e) => {
-					e.preventDefault();
-					e.stopPropagation();
-				}}
-				onClick={(e) => {
-					e.preventDefault();
-					e.stopPropagation();
-					editor.update(() => {
-						const node = $getNodeByKey(nodeKey);
-						if ($isCustomTagBadgeNode(node)) node.remove();
-					});
-				}}
-			>
-				<X className="size-3" strokeWidth={1.8} />
-			</Button>
-		</span>
+			}
+			label={customTag.label}
+			removeLabel="Remove tag"
+			onRemove={() => {
+				editor.update(() => {
+					const node = $getNodeByKey(nodeKey);
+					if ($isCustomTagBadgeNode(node)) node.remove();
+				});
+			}}
+		/>
 	);
 }
 
