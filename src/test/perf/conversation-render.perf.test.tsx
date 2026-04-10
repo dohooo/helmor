@@ -188,8 +188,7 @@ function makeThread(count: number): ThreadMessageLike[] {
 	const out: ThreadMessageLike[] = [];
 	for (let i = 0; i < count; i += 1) {
 		const role = i % 2 === 0 ? "user" : "assistant";
-		const text =
-			`${role} message ${i} — ` + "lorem ipsum dolor sit amet ".repeat(3);
+		const text = `${role} message ${i} — ${"lorem ipsum dolor sit amet ".repeat(3)}`;
 		out.push(
 			role === "user"
 				? userMessage(`m${i}`, text)

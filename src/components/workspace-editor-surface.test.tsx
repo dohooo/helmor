@@ -1,6 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { EditorSessionState } from "@/lib/editor-session";
 
 const apiMocks = vi.hoisted(() => ({
@@ -123,13 +124,15 @@ describe("WorkspaceEditorSurface", () => {
 		});
 
 		render(
-			<EditorSurfaceHarness
-				initialSession={{
-					kind: "file",
-					path: "/tmp/helmor-workspace/src/App.tsx",
-				}}
-				onChangeSpy={onChangeSpy}
-			/>,
+			<TooltipProvider delayDuration={0}>
+				<EditorSurfaceHarness
+					initialSession={{
+						kind: "file",
+						path: "/tmp/helmor-workspace/src/App.tsx",
+					}}
+					onChangeSpy={onChangeSpy}
+				/>
+			</TooltipProvider>,
 		);
 
 		await waitFor(() => {
@@ -159,14 +162,16 @@ describe("WorkspaceEditorSurface", () => {
 		apiMocks.readEditorFile.mockRejectedValue(new Error("No such file"));
 
 		render(
-			<EditorSurfaceHarness
-				initialSession={{
-					kind: "file",
-					path: "/tmp/helmor-workspace/src/missing.ts",
-				}}
-				onChangeSpy={onChangeSpy}
-				onError={onError}
-			/>,
+			<TooltipProvider delayDuration={0}>
+				<EditorSurfaceHarness
+					initialSession={{
+						kind: "file",
+						path: "/tmp/helmor-workspace/src/missing.ts",
+					}}
+					onChangeSpy={onChangeSpy}
+					onError={onError}
+				/>
+			</TooltipProvider>,
 		);
 
 		await waitFor(() => {

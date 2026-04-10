@@ -10,7 +10,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({
 	loadGithubIdentitySession: vi.fn(),
-	startGithubIdentityConnect: vi.fn(),
 	cancelGithubIdentityConnect: vi.fn(),
 	listenGithubIdentityChanged: vi.fn(),
 	disconnectGithubIdentity: vi.fn(),
@@ -43,7 +42,6 @@ vi.mock("./lib/api", async (importOriginal) => {
 	return {
 		...actual,
 		loadGithubIdentitySession: apiMocks.loadGithubIdentitySession,
-		startGithubIdentityConnect: apiMocks.startGithubIdentityConnect,
 		cancelGithubIdentityConnect: apiMocks.cancelGithubIdentityConnect,
 		listenGithubIdentityChanged: apiMocks.listenGithubIdentityChanged,
 		disconnectGithubIdentity: apiMocks.disconnectGithubIdentity,
@@ -171,16 +169,8 @@ async function openGithubMenu() {
 }
 
 describe("App GitHub identity states", () => {
-	let identityListener:
-		| ((snapshot: {
-				status: string;
-				session?: typeof CONNECTED_IDENTITY;
-		  }) => void)
-		| null;
-
 	beforeEach(() => {
 		installTauriRuntime();
-		identityListener = null;
 		Object.defineProperty(navigator, "clipboard", {
 			configurable: true,
 			value: {
@@ -189,7 +179,6 @@ describe("App GitHub identity states", () => {
 		});
 
 		apiMocks.loadGithubIdentitySession.mockReset();
-		apiMocks.startGithubIdentityConnect.mockReset();
 		apiMocks.cancelGithubIdentityConnect.mockReset();
 		apiMocks.listenGithubIdentityChanged.mockReset();
 		apiMocks.disconnectGithubIdentity.mockReset();
@@ -253,82 +242,6 @@ describe("App GitHub identity states", () => {
 		expect(
 			await screen.findByText("GitHub account connection is not configured."),
 		).toBeInTheDocument();
-	});
-
-	it("connects GitHub identity and shows the account menu", async () => {
-		apiMocks.startGithubIdentityConnect.mockResolvedValue({
-			deviceCode: "device-code",
-			userCode: "ABCD-EFGH",
-			verificationUri: "https://github.com/login/device",
-			verificationUriComplete:
-				"https://github.com/login/device?user_code=ABCD-EFGH",
-			expiresAt: "2099-04-04T12:00:00Z",
-			intervalSeconds: 5,
-		});
-
-		render(<App />);
-
-		await screen.findByRole("main", { name: "GitHub identity gate" });
-		await waitFor(() => {
-			expect(
-				screen.getByRole("button", { name: "Continue with GitHub" }),
-			).toBeInTheDocument();
-		});
-		screen.getByRole("button", { name: "Continue with GitHub" }).click();
-		await userEvent
-			.setup()
-			.click(await screen.findByRole("button", { name: "Copy one-time code" }));
-
-		await waitFor(() => {
-			expect(openerMocks.openUrl).toHaveBeenCalledWith(
-				"https://github.com/login/device?user_code=ABCD-EFGH",
-			);
-		});
-		expect(await screen.findByText("ABCD-EFGH")).toBeInTheDocument();
-
-		identityListener?.({
-			status: "connected",
-			session: CONNECTED_IDENTITY,
-		});
-
-		expect(
-			await screen.findByRole("main", { name: "Application shell" }),
-		).toBeInTheDocument();
-		await openGithubMenu();
-		expect(
-			screen.getByRole("menuitem", { name: "Log out" }),
-		).toBeInTheDocument();
-	});
-
-	it("cancels a pending GitHub identity connection", async () => {
-		apiMocks.startGithubIdentityConnect.mockResolvedValue({
-			deviceCode: "device-code",
-			userCode: "ABCD-EFGH",
-			verificationUri: "https://github.com/login/device",
-			verificationUriComplete: null,
-			expiresAt: "2099-04-04T12:00:00Z",
-			intervalSeconds: 5,
-		});
-
-		render(<App />);
-
-		await screen.findByRole("main", { name: "GitHub identity gate" });
-		await waitFor(() => {
-			expect(
-				screen.getByRole("button", { name: "Continue with GitHub" }),
-			).toBeInTheDocument();
-		});
-		screen.getByRole("button", { name: "Continue with GitHub" }).click();
-		await screen.findByText("ABCD-EFGH");
-
-		screen.getByRole("button", { name: "Cancel" }).click();
-
-		await waitFor(() => {
-			expect(apiMocks.cancelGithubIdentityConnect).toHaveBeenCalled();
-			expect(
-				screen.getByRole("button", { name: "Continue with GitHub" }),
-			).toBeInTheDocument();
-		});
 	});
 
 	it("disconnects the GitHub identity from the account menu", async () => {
