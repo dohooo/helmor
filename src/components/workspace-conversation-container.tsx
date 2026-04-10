@@ -37,10 +37,10 @@ import {
 } from "@/lib/session-thread-cache";
 import {
 	createLiveThreadMessage,
-	describeUnknownError,
 	findModelOption,
 	getComposerContextKey,
 } from "@/lib/workspace-helpers";
+import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { ActionRow, ActionRowButton } from "./action-row";
 import { WorkspaceComposerContainer } from "./workspace-composer-container";
 import { WorkspacePanelContainer } from "./workspace-panel-container";
@@ -90,6 +90,7 @@ export const WorkspaceConversationContainer = memo(
 		onPendingPromptConsumed,
 	}: WorkspaceConversationContainerProps) {
 		const queryClient = useQueryClient();
+		const pushToast = useWorkspaceToast();
 		const [composerModelSelections, setComposerModelSelections] = useState<
 			Record<string, string>
 		>({});
@@ -511,9 +512,18 @@ export const WorkspaceConversationContainer = memo(
 							if (event.kind === "error") {
 								cleanup();
 								setPendingPermissions([]);
+								if (event.internal) {
+									// Unexpected internal failure — show a generic
+									// toast instead of raw error details.
+									pushToast(
+										"Something went wrong. Please try again.",
+										"Error",
+										"destructive",
+									);
+								}
 								setSendErrorsByContext((current) => ({
 									...current,
-									[contextKey]: event.message,
+									[contextKey]: event.internal ? null : event.message,
 								}));
 								setActiveSessionByContext((current) => {
 									if (!(contextKey in current)) {
@@ -560,12 +570,12 @@ export const WorkspaceConversationContainer = memo(
 						},
 					);
 				} catch (error) {
+					console.error("[conversation] invoke error:", error);
+					const errorMsg =
+						error instanceof Error ? error.message : String(error);
 					setSendErrorsByContext((current) => ({
 						...current,
-						[contextKey]: describeUnknownError(
-							error,
-							"Unable to send message.",
-						),
+						[contextKey]: errorMsg,
 					}));
 					setComposerRestoreState({
 						contextKey,

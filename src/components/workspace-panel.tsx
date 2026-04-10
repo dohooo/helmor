@@ -59,7 +59,7 @@ import {
 	type MessagePart,
 	type PromptSuggestionPart,
 	type PullRequestInfo,
-	prefetchWorkspaceRemoteRefs,
+	prefetchRemoteRefs,
 	renameSession,
 	type SessionAttachmentRecord,
 	type SystemNoticePart,
@@ -345,7 +345,7 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	const queryClient = useQueryClient();
 	const branchesQuery = useQuery({
 		queryKey: ["remoteBranches", workspace?.id],
-		queryFn: () => listRemoteBranches(workspace!.id),
+		queryFn: () => listRemoteBranches({ workspaceId: workspace!.id }),
 		enabled: false, // only fetch on demand
 		staleTime: 5 * 60 * 1000, // cache for 5 minutes
 		gcTime: 10 * 60 * 1000,
@@ -600,11 +600,13 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 							/>
 							{workspace.state === "archived" ? (
 								<span className="px-1 py-0.5 font-medium text-muted-foreground">
+									{workspace.remote ?? "origin"}/
 									{workspace.intendedTargetBranch}
 								</span>
 							) : (
 								<BranchPicker
 									currentBranch={workspace.intendedTargetBranch ?? ""}
+									displayRemote={workspace.remote ?? "origin"}
 									branches={remoteBranches}
 									loading={loadingBranches}
 									onOpen={() => {
@@ -616,7 +618,7 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 										// When it returns, refetch the local list so any new/
 										// removed branches show up. Errors are silent — the
 										// dropdown is still usable with the cached list.
-										void prefetchWorkspaceRemoteRefs(workspace.id)
+										void prefetchRemoteRefs({ workspaceId: workspace.id })
 											.then((res) => {
 												if (res.fetched) {
 													void branchesQuery.refetch();
@@ -652,7 +654,7 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 												onWorkspaceChanged?.();
 												if (reset) {
 													pushToast(
-														`Local branch reset to origin/${branch}`,
+														`Local branch reset to ${workspace.remote ?? "origin"}/${branch}`,
 														`Switched to ${branch}`,
 														"default",
 													);
@@ -3596,12 +3598,14 @@ function buildOptimisticSession(
 
 function BranchPicker({
 	currentBranch,
+	displayRemote,
 	branches,
 	loading,
 	onOpen,
 	onSelect,
 }: {
 	currentBranch: string;
+	displayRemote: string;
 	branches: string[];
 	loading: boolean;
 	onOpen: () => void;
@@ -3612,7 +3616,7 @@ function BranchPicker({
 	return (
 		<Popover
 			open={open}
-			onOpenChange={(next) => {
+			onOpenChange={(next: boolean) => {
 				setOpen(next);
 				if (next) onOpen();
 			}}
@@ -3622,9 +3626,11 @@ function BranchPicker({
 					type="button"
 					variant="ghost"
 					size="xs"
-					className="h-6 max-w-[140px] gap-1 rounded-md px-1.5 text-[13px] font-medium text-muted-foreground hover:text-foreground"
+					className="h-6 max-w-[180px] gap-1 rounded-md px-1.5 text-[13px] font-medium text-muted-foreground hover:text-foreground"
 				>
-					<span className="truncate">{currentBranch}</span>
+					<span className="truncate">
+						{displayRemote}/{currentBranch}
+					</span>
 					<ChevronDown data-icon="inline-end" strokeWidth={2} />
 				</Button>
 			</PopoverTrigger>

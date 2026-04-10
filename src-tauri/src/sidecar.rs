@@ -473,8 +473,24 @@ impl ManagedSidecar {
                                 } else if debug {
                                     eprintln!("[sidecar:debug] ← stdout [{request_id}] type={event_type} — NO LISTENER (dropped) {trimmed}");
                                 }
-                            } else if debug {
-                                eprintln!("[sidecar:debug] ← stdout [no-id] {trimmed}");
+                            } else {
+                                // No-id event — broadcast to all active listeners
+                                // (e.g. fatal uncaughtException / unhandledRejection).
+                                if debug {
+                                    eprintln!("[sidecar:debug] ← stdout [no-id] {trimmed}");
+                                }
+                                if event.event_type() == "error" {
+                                    let map = listeners.lock().unwrap_or_else(|e| e.into_inner());
+                                    for (rid, tx) in map.iter() {
+                                        let mut evt = event.clone();
+                                        evt.raw.as_object_mut().unwrap().insert(
+                                            "id".to_string(),
+                                            Value::String(rid.clone()),
+                                        );
+                                        let _ = tx.send(evt);
+                                    }
+                                    event_count += 1;
+                                }
                             }
                         }
                         Err(e) => {
@@ -490,9 +506,26 @@ impl ManagedSidecar {
                 if let Ok(mut flag) = reader_flag.lock() {
                     *flag = false;
                 }
-                // 2. Drop all listener senders so blocked rx.iter() calls return.
+                // 2. Send an error event to every active listener so in-flight
+                //    streams surface the crash instead of silently dropping.
+                // 3. Drop all listener senders so blocked rx.iter() calls return.
                 if let Ok(mut map) = listeners.lock() {
                     let count = map.len();
+                    if count > 0 {
+                        eprintln!("[sidecar] Notifying {count} active listener(s) of sidecar exit");
+                        let crash_event = SidecarEvent {
+                            raw: serde_json::json!({
+                                "type": "error",
+                                "message": "Agent process exited unexpectedly",
+                                "internal": true,
+                            }),
+                        };
+                        for (rid, tx) in map.iter() {
+                            let mut evt = crash_event.clone();
+                            evt.raw.as_object_mut().unwrap().insert("id".to_string(), Value::String(rid.clone()));
+                            let _ = tx.send(evt);
+                        }
+                    }
                     map.clear();
                     if debug { eprintln!("[sidecar:debug] Cleared {count} listeners"); }
                 }
@@ -628,5 +661,43 @@ mod tests {
         // Now start_reader_thread should be willing to start again
         let flag = sidecar.reader_running.lock().unwrap();
         assert!(!*flag, "Flag should be cleared, allowing restart");
+    }
+
+    #[test]
+    fn no_id_error_event_broadcasts_to_all_listeners() {
+        let sidecar = ManagedSidecar::new();
+        let rx1 = sidecar.subscribe("req-1");
+        let rx2 = sidecar.subscribe("req-2");
+
+        // Simulate a no-id error event being dispatched (same logic as
+        // the reader thread's broadcast path).
+        {
+            let event = SidecarEvent {
+                raw: serde_json::json!({
+                    "type": "error",
+                    "message": "Internal sidecar error",
+                    "internal": true,
+                }),
+            };
+            let map = sidecar.listeners.lock().unwrap();
+            for (rid, tx) in map.iter() {
+                let mut evt = event.clone();
+                evt.raw
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("id".to_string(), Value::String(rid.clone()));
+                let _ = tx.send(evt);
+            }
+        }
+
+        // Both listeners should receive the error with their own id injected
+        let e1 = rx1.recv().unwrap();
+        assert_eq!(e1.id(), Some("req-1"));
+        assert_eq!(e1.event_type(), "error");
+        assert_eq!(e1.raw.get("internal").and_then(Value::as_bool), Some(true));
+
+        let e2 = rx2.recv().unwrap();
+        assert_eq!(e2.id(), Some("req-2"));
+        assert_eq!(e2.event_type(), "error");
     }
 }

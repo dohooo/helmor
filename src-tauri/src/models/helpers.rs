@@ -590,6 +590,7 @@ pub fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRec
         session_count: row.get(26)?,
         message_count: row.get(27)?,
         attachment_count: row.get(28)?,
+        remote: row.get(29)?,
     })
 }
 

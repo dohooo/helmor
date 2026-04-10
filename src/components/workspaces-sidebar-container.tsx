@@ -958,125 +958,33 @@ export const WorkspacesSidebarContainer = memo(
 		// preflight and the slow apply use the shared recovery toast so an
 		// archived workspace whose on-disk state is broken can still be
 		// permanently deleted.
-		const handleRestoreWorkspace = useCallback(
-			(workspaceId: string) => {
-				void (async () => {
-					try {
-						await validateRestoreWorkspace(workspaceId);
-					} catch (error) {
-						pushPermanentDeleteRecoveryToast(
-							workspaceId,
-							"Restore failed",
-							error,
-							"Unable to restore workspace.",
-						);
-						return;
-					}
+		const executeRestore = useCallback(
+			(workspaceId: string, targetBranchOverride?: string) => {
+				const previousGroups = queryClient.getQueryData(
+					helmorQueryKeys.workspaceGroups,
+				);
+				const previousArchived = queryClient.getQueryData(
+					helmorQueryKeys.archivedWorkspaces,
+				);
 
-					const previousGroups = queryClient.getQueryData(
-						helmorQueryKeys.workspaceGroups,
-					);
-					const previousArchived = queryClient.getQueryData(
-						helmorQueryKeys.archivedWorkspaces,
-					);
+				// Find the summary in archived.
+				const archivedSummary = Array.isArray(previousArchived)
+					? (previousArchived as typeof archivedSummaries).find(
+							(summary) => summary.id === workspaceId,
+						)
+					: undefined;
 
-					// Find the summary in archived.
-					const archivedSummary = Array.isArray(previousArchived)
-						? (previousArchived as typeof archivedSummaries).find(
-								(summary) => summary.id === workspaceId,
-							)
-						: undefined;
-
-					if (!archivedSummary) {
-						// Not in archived for some reason — fall back to plain IPC.
-						beginSidebarMutation();
-						void restoreWorkspace(workspaceId)
-							.then((response) => {
-								prefetchWorkspace(workspaceId);
-								onSelectWorkspace(workspaceId);
-								if (response.branchRename) {
-									notifyBranchRename(response.branchRename);
-								}
-							})
-							.catch((error) => {
-								pushPermanentDeleteRecoveryToast(
-									workspaceId,
-									"Restore failed",
-									error,
-									"Unable to restore workspace.",
-								);
-							})
-							.finally(endSidebarMutation);
-						return;
-					}
-
-					// Remove from archived.
-					queryClient.setQueryData(
-						helmorQueryKeys.archivedWorkspaces,
-						(current) =>
-							Array.isArray(current)
-								? (current as typeof archivedSummaries).filter(
-										(summary) => summary.id !== workspaceId,
-									)
-								: current,
-					);
-
-					// Insert into the SAME group the canonical query will put it in
-					// after invalidation. Computed from the workspace's existing
-					// manual_status / derived_status (preserved through archival), so
-					// the placeholder lands in its real bucket from the start — no
-					// visible jump as the optimistic row gets replaced by the real one.
-					const placeholderRow = summaryToArchivedRow({
-						...archivedSummary,
-						state: "ready",
-					});
-					const targetGroupId = workspaceGroupIdFromStatus(
-						archivedSummary.manualStatus,
-						archivedSummary.derivedStatus,
-					);
-					queryClient.setQueryData(
-						helmorQueryKeys.workspaceGroups,
-						(current) =>
-							Array.isArray(current)
-								? (current as typeof groups).map((group) =>
-										group.id === targetGroupId
-											? { ...group, rows: [placeholderRow, ...group.rows] }
-											: group,
-									)
-								: current,
-					);
-
-					// Navigate to the restored workspace.
-					prefetchWorkspace(workspaceId);
-					onSelectWorkspace(workspaceId);
-
+				if (!archivedSummary) {
 					beginSidebarMutation();
-					void restoreWorkspace(workspaceId)
-						.then(async (response) => {
-							// Per-workspace caches refresh immediately — they're not
-							// part of the deferred sidebar batch and downstream UI
-							// (panel, sessions list) needs the latest record.
-							await Promise.all([
-								queryClient.invalidateQueries({
-									queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
-								}),
-								queryClient.invalidateQueries({
-									queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
-								}),
-							]);
+					void restoreWorkspace(workspaceId, targetBranchOverride)
+						.then((response) => {
+							prefetchWorkspace(workspaceId);
+							onSelectWorkspace(workspaceId);
 							if (response.branchRename) {
 								notifyBranchRename(response.branchRename);
 							}
 						})
 						.catch((error) => {
-							queryClient.setQueryData(
-								helmorQueryKeys.workspaceGroups,
-								previousGroups,
-							);
-							queryClient.setQueryData(
-								helmorQueryKeys.archivedWorkspaces,
-								previousArchived,
-							);
 							pushPermanentDeleteRecoveryToast(
 								workspaceId,
 								"Restore failed",
@@ -1085,7 +993,75 @@ export const WorkspacesSidebarContainer = memo(
 							);
 						})
 						.finally(endSidebarMutation);
-				})();
+					return;
+				}
+
+				queryClient.setQueryData(
+					helmorQueryKeys.archivedWorkspaces,
+					(current) =>
+						Array.isArray(current)
+							? (current as typeof archivedSummaries).filter(
+									(summary) => summary.id !== workspaceId,
+								)
+							: current,
+				);
+
+				const placeholderRow = summaryToArchivedRow({
+					...archivedSummary,
+					state: "ready",
+				});
+				const targetGroupId = workspaceGroupIdFromStatus(
+					archivedSummary.manualStatus,
+					archivedSummary.derivedStatus,
+				);
+				queryClient.setQueryData(helmorQueryKeys.workspaceGroups, (current) =>
+					Array.isArray(current)
+						? (current as typeof groups).map((group) =>
+								group.id === targetGroupId
+									? { ...group, rows: [placeholderRow, ...group.rows] }
+									: group,
+							)
+						: current,
+				);
+
+				prefetchWorkspace(workspaceId);
+				onSelectWorkspace(workspaceId);
+
+				beginSidebarMutation();
+				void restoreWorkspace(workspaceId, targetBranchOverride)
+					.then(async (response) => {
+						// Per-workspace caches refresh immediately — they're not
+						// part of the deferred sidebar batch and downstream UI
+						// (panel, sessions list) needs the latest record.
+						await Promise.all([
+							queryClient.invalidateQueries({
+								queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+							}),
+							queryClient.invalidateQueries({
+								queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+							}),
+						]);
+						if (response.branchRename) {
+							notifyBranchRename(response.branchRename);
+						}
+					})
+					.catch((error) => {
+						queryClient.setQueryData(
+							helmorQueryKeys.workspaceGroups,
+							previousGroups,
+						);
+						queryClient.setQueryData(
+							helmorQueryKeys.archivedWorkspaces,
+							previousArchived,
+						);
+						pushPermanentDeleteRecoveryToast(
+							workspaceId,
+							"Restore failed",
+							error,
+							"Unable to restore workspace.",
+						);
+					})
+					.finally(endSidebarMutation);
 			},
 			[
 				beginSidebarMutation,
@@ -1096,6 +1072,44 @@ export const WorkspacesSidebarContainer = memo(
 				pushPermanentDeleteRecoveryToast,
 				queryClient,
 			],
+		);
+
+		const handleRestoreWorkspace = useCallback(
+			(workspaceId: string) => {
+				void (async () => {
+					try {
+						const validation = await validateRestoreWorkspace(workspaceId);
+						if (validation.targetBranchConflict) {
+							const { currentBranch, suggestedBranch, remote } =
+								validation.targetBranchConflict;
+							pushWorkspaceToast(
+								`Branch "${currentBranch}" no longer exists on ${remote}. Switch target to "${suggestedBranch}"?`,
+								"Target branch changed",
+								"default",
+								{
+									persistent: true,
+									action: {
+										label: `Switch to ${suggestedBranch}`,
+										onClick: () => executeRestore(workspaceId, suggestedBranch),
+									},
+								},
+							);
+							return;
+						}
+					} catch (error) {
+						pushPermanentDeleteRecoveryToast(
+							workspaceId,
+							"Restore failed",
+							error,
+							"Unable to restore workspace.",
+						);
+						return;
+					}
+
+					executeRestore(workspaceId);
+				})();
+			},
+			[executeRestore, pushPermanentDeleteRecoveryToast, pushWorkspaceToast],
 		);
 
 		return (
