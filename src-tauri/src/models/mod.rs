@@ -710,6 +710,20 @@ pub async fn unstage_workspace_file(
 }
 
 #[tauri::command]
+pub async fn get_workspace_git_action_status(
+    workspace_id: String,
+) -> CmdResult<git_ops::WorkspaceGitActionStatus> {
+    run_blocking(move || {
+        let record = workspaces::load_workspace_record_by_id(&workspace_id)?
+            .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+        let workspace_dir =
+            crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+        git_ops::workspace_action_status(&workspace_dir)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn start_github_oauth_redirect(
     app: AppHandle,
     runtime: State<'_, auth::GithubIdentityFlowRuntime>,
@@ -723,6 +737,13 @@ pub async fn lookup_workspace_pr(
     workspace_id: String,
 ) -> CmdResult<Option<github_graphql::PullRequestInfo>> {
     run_blocking(move || github_graphql::lookup_workspace_pr(&workspace_id)).await
+}
+
+#[tauri::command]
+pub async fn get_workspace_pr_action_status(
+    workspace_id: String,
+) -> CmdResult<github_graphql::WorkspacePrActionStatus> {
+    run_blocking(move || github_graphql::lookup_workspace_pr_action_status(&workspace_id)).await
 }
 
 #[tauri::command]

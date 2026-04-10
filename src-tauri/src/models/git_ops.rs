@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use serde::Serialize;
 use std::{
     ffi::OsStr,
     fs,
@@ -8,6 +9,13 @@ use std::{
     thread,
     time::Duration,
 };
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceGitActionStatus {
+    pub uncommitted_count: usize,
+    pub conflict_count: usize,
+}
 
 /// Hard upper bound on any `git` command that touches the network. Long
 /// enough to tolerate a slow connection but short enough that a stalled
@@ -525,6 +533,42 @@ pub fn working_tree_clean(workspace_dir: &Path) -> Result<bool> {
     Ok(output.trim().is_empty())
 }
 
+/// Compact status for the inspector Actions panel.
+///
+/// This is intentionally local-only: it never fetches or contacts a remote, so
+/// the Actions panel can poll it frequently without hanging on credentials or
+/// network.
+pub fn workspace_action_status(workspace_dir: &Path) -> Result<WorkspaceGitActionStatus> {
+    let workspace_dir_arg = workspace_dir.display().to_string();
+    let status_output = run_git(
+        [
+            "-C",
+            workspace_dir_arg.as_str(),
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=normal",
+        ],
+        None,
+    )
+    .with_context(|| {
+        format!(
+            "Failed to read workspace git status for {}",
+            workspace_dir.display()
+        )
+    })?;
+
+    let uncommitted_count = parse_porcelain_status_paths(&status_output).len();
+
+    let conflict_output =
+        run_git(["-C", workspace_dir_arg.as_str(), "ls-files", "-u"], None).unwrap_or_default();
+    let conflict_count = parse_unmerged_paths(&conflict_output).len();
+
+    Ok(WorkspaceGitActionStatus {
+        uncommitted_count,
+        conflict_count,
+    })
+}
+
 /// Counts how many commits are reachable from HEAD but not from `base_ref`.
 /// Returns 0 if HEAD is fully contained in `base_ref` (i.e. no user commits
 /// beyond the baseline).
@@ -552,6 +596,36 @@ pub fn commits_ahead_of(workspace_dir: &Path, base_ref: &str) -> Result<u32> {
         .trim()
         .parse::<u32>()
         .with_context(|| format!("Unexpected rev-list count output: {}", output))
+}
+
+fn parse_porcelain_status_paths(output: &str) -> std::collections::BTreeSet<String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            if line.len() < 4 {
+                return None;
+            }
+            let path = line[3..].trim();
+            if path.is_empty() {
+                return None;
+            }
+            Some(path.to_string())
+        })
+        .collect()
+}
+
+fn parse_unmerged_paths(output: &str) -> std::collections::BTreeSet<String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (_, path) = line.split_once('\t')?;
+            let path = path.trim();
+            if path.is_empty() {
+                return None;
+            }
+            Some(path.to_string())
+        })
+        .collect()
 }
 
 /// Fetch a specific branch from `origin` into the workspace's repo.
@@ -631,4 +705,69 @@ pub fn reset_current_branch_hard(workspace_dir: &Path, target_ref: &str) -> Resu
             workspace_dir, target_ref
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(repo: &Path, args: &[&str]) {
+        run_git(args, Some(repo)).unwrap_or_else(|error| {
+            panic!("git {:?} failed in {}: {error:#}", args, repo.display())
+        });
+    }
+
+    fn init_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        run(dir.path(), &["init"]);
+        run(dir.path(), &["checkout", "-b", "main"]);
+        run(dir.path(), &["config", "user.email", "helmor@example.com"]);
+        run(dir.path(), &["config", "user.name", "Helmor Test"]);
+        std::fs::write(dir.path().join("file.txt"), "base\n").unwrap();
+        run(dir.path(), &["add", "file.txt"]);
+        run(dir.path(), &["commit", "-m", "initial"]);
+        dir
+    }
+
+    #[test]
+    fn workspace_action_status_reports_clean_repo() {
+        let dir = init_repo();
+
+        let status = workspace_action_status(dir.path()).unwrap();
+
+        assert_eq!(status.uncommitted_count, 0);
+        assert_eq!(status.conflict_count, 0);
+    }
+
+    #[test]
+    fn workspace_action_status_counts_dirty_and_untracked_files() {
+        let dir = init_repo();
+        std::fs::write(dir.path().join("file.txt"), "changed\n").unwrap();
+        std::fs::write(dir.path().join("new.txt"), "new\n").unwrap();
+
+        let status = workspace_action_status(dir.path()).unwrap();
+
+        assert_eq!(status.uncommitted_count, 2);
+        assert_eq!(status.conflict_count, 0);
+    }
+
+    #[test]
+    fn workspace_action_status_counts_merge_conflicts() {
+        let dir = init_repo();
+        run(dir.path(), &["checkout", "-b", "feature"]);
+        std::fs::write(dir.path().join("file.txt"), "feature\n").unwrap();
+        run(dir.path(), &["commit", "-am", "feature"]);
+        run(dir.path(), &["checkout", "main"]);
+        std::fs::write(dir.path().join("file.txt"), "main\n").unwrap();
+        run(dir.path(), &["commit", "-am", "main"]);
+        run(dir.path(), &["checkout", "feature"]);
+
+        let merge_result = run_git(["merge", "main"], Some(dir.path()));
+        assert!(merge_result.is_err(), "merge should conflict");
+
+        let status = workspace_action_status(dir.path()).unwrap();
+
+        assert_eq!(status.conflict_count, 1);
+        assert!(status.uncommitted_count >= 1);
+    }
 }

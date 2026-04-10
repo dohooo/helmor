@@ -7,6 +7,7 @@
 //! PR state without requiring `gh` to be installed on the user's machine.
 
 use anyhow::{anyhow, bail, Context, Result};
+use chrono::{DateTime, Utc};
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use serde::{Deserialize, Serialize};
@@ -28,6 +29,93 @@ pub struct PullRequestInfo {
     pub title: String,
     /// `true` when the PR has been merged into its base branch.
     pub is_merged: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActionStatusKind {
+    Success,
+    Pending,
+    Running,
+    Failure,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActionProvider {
+    Github,
+    Vercel,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteState {
+    Ok,
+    NoPr,
+    Unavailable,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspacePrActionItem {
+    pub id: String,
+    pub name: String,
+    pub provider: ActionProvider,
+    pub status: ActionStatusKind,
+    pub duration: Option<String>,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspacePrActionStatus {
+    pub pr: Option<PullRequestInfo>,
+    pub review_decision: Option<String>,
+    pub mergeable: Option<String>,
+    pub deployments: Vec<WorkspacePrActionItem>,
+    pub checks: Vec<WorkspacePrActionItem>,
+    pub remote_state: RemoteState,
+    pub message: Option<String>,
+}
+
+impl WorkspacePrActionStatus {
+    fn unavailable(message: impl Into<String>) -> Self {
+        Self {
+            pr: None,
+            review_decision: None,
+            mergeable: None,
+            deployments: Vec::new(),
+            checks: Vec::new(),
+            remote_state: RemoteState::Unavailable,
+            message: Some(message.into()),
+        }
+    }
+
+    fn no_pr() -> Self {
+        Self {
+            pr: None,
+            review_decision: None,
+            mergeable: None,
+            deployments: Vec::new(),
+            checks: Vec::new(),
+            remote_state: RemoteState::NoPr,
+            message: None,
+        }
+    }
+
+    fn error(message: impl Into<String>) -> Self {
+        Self {
+            pr: None,
+            review_decision: None,
+            mergeable: None,
+            deployments: Vec::new(),
+            checks: Vec::new(),
+            remote_state: RemoteState::Error,
+            message: Some(message.into()),
+        }
+    }
 }
 
 /// Look up the (most recent) pull request matching this workspace's current
@@ -159,6 +247,183 @@ query($owner: String!, $name: String!, $head: String!) {
         title: node.title,
         is_merged: node.merged,
     }))
+}
+
+/// Full PR action status for the inspector Actions panel.
+///
+/// Missing GitHub configuration, missing OAuth, inaccessible repositories, and
+/// "no PR for this branch" are represented in the returned status instead of
+/// bubbling as command errors. That keeps the local Git rows usable even when
+/// remote status cannot be queried.
+pub fn lookup_workspace_pr_action_status(workspace_id: &str) -> Result<WorkspacePrActionStatus> {
+    let Some(record) = workspaces::load_workspace_record_by_id(workspace_id)? else {
+        bail!("Workspace not found: {workspace_id}");
+    };
+
+    let Some(remote_url) = record.remote_url.as_deref() else {
+        return Ok(WorkspacePrActionStatus::unavailable(
+            "Workspace has no remote",
+        ));
+    };
+    let Some((owner, name)) = parse_github_remote(remote_url) else {
+        return Ok(WorkspacePrActionStatus::unavailable(
+            "Workspace remote is not a GitHub repository",
+        ));
+    };
+    let Some(branch) = record.branch.as_deref().filter(|b| !b.is_empty()) else {
+        return Ok(WorkspacePrActionStatus::unavailable(
+            "Workspace has no current branch",
+        ));
+    };
+    let Some(access_token) = auth::load_valid_github_access_token()? else {
+        return Ok(WorkspacePrActionStatus::unavailable(
+            "GitHub account is not connected",
+        ));
+    };
+
+    let client = Client::builder()
+        .build()
+        .context("Failed to build GitHub HTTP client")?;
+
+    let status = query_workspace_pr_action_status(&client, &access_token, owner, name, branch)
+        .unwrap_or_else(|error| WorkspacePrActionStatus::error(format!("{error:#}")));
+
+    Ok(status)
+}
+
+fn query_workspace_pr_action_status(
+    client: &Client,
+    access_token: &str,
+    owner: String,
+    name: String,
+    branch: &str,
+) -> Result<WorkspacePrActionStatus> {
+    let query = r#"
+query($owner: String!, $name: String!, $head: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(headRefName: $head, states: [OPEN, MERGED, CLOSED], first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        url
+        number
+        state
+        title
+        merged
+        reviewDecision
+        mergeable
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                contexts(first: 50) {
+                  nodes {
+                    __typename
+                    ... on CheckRun {
+                      databaseId
+                      name
+                      status
+                      conclusion
+                      detailsUrl
+                      startedAt
+                      completedAt
+                      checkSuite {
+                        app { name }
+                      }
+                    }
+                    ... on StatusContext {
+                      context
+                      state
+                      targetUrl
+                    }
+                  }
+                }
+              }
+              deployments(first: 20, orderBy: {field: CREATED_AT, direction: DESC}) {
+                nodes {
+                  id
+                  environment
+                  latestStatus {
+                    state
+                    logUrl
+                    environmentUrl
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"#;
+
+    let body = json!({
+        "query": query,
+        "variables": {
+            "owner": owner,
+            "name": name,
+            "head": branch,
+        },
+    });
+
+    let response = client
+        .post("https://api.github.com/graphql")
+        .header(USER_AGENT, "Helmor")
+        .header(ACCEPT, "application/json")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, format!("Bearer {access_token}"))
+        .json(&body)
+        .send()
+        .context("Failed to reach GitHub GraphQL API")?;
+
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Ok(WorkspacePrActionStatus::unavailable(
+            "GitHub token was rejected",
+        ));
+    }
+    if !status.is_success() {
+        return Ok(WorkspacePrActionStatus::error(format!(
+            "GitHub GraphQL API returned HTTP {status}: {}",
+            response.text().unwrap_or_default()
+        )));
+    }
+
+    let parsed: ActionGraphqlEnvelope = response
+        .json()
+        .context("Failed to decode GitHub GraphQL action status response")?;
+
+    if let Some(errors) = &parsed.errors {
+        if !errors.is_empty() {
+            let message = errors
+                .iter()
+                .map(|e| e.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            let is_repo_not_found = errors.iter().any(|e| {
+                e.message.contains("Could not resolve to a Repository")
+                    || e.message.contains("NOT_FOUND")
+            });
+            if is_repo_not_found {
+                return Ok(WorkspacePrActionStatus::unavailable(message));
+            }
+            return Ok(WorkspacePrActionStatus::error(message));
+        }
+    }
+
+    let Some(data) = parsed.data else {
+        return Ok(WorkspacePrActionStatus::no_pr());
+    };
+    let Some(repository) = data.repository else {
+        return Ok(WorkspacePrActionStatus::unavailable(
+            "GitHub repository was not returned",
+        ));
+    };
+    let Some(pr) = repository.pull_requests.nodes.into_iter().next() else {
+        return Ok(WorkspacePrActionStatus::no_pr());
+    };
+
+    Ok(build_action_status(pr))
 }
 
 /// Merge a workspace's open PR via the GitHub GraphQL `mergePullRequest`
@@ -454,6 +719,339 @@ struct GraphqlError {
     message: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ActionGraphqlEnvelope {
+    data: Option<ActionGraphqlData>,
+    errors: Option<Vec<GraphqlError>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ActionGraphqlData {
+    repository: Option<ActionRepository>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ActionRepository {
+    #[serde(rename = "pullRequests")]
+    pull_requests: ActionPullRequestConnection,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ActionPullRequestConnection {
+    nodes: Vec<ActionPullRequestNode>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActionPullRequestNode {
+    url: String,
+    number: i64,
+    state: String,
+    title: String,
+    merged: bool,
+    review_decision: Option<String>,
+    mergeable: Option<String>,
+    commits: ActionCommitConnection,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ActionCommitConnection {
+    nodes: Vec<ActionPullRequestCommitNode>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ActionPullRequestCommitNode {
+    commit: ActionCommitNode,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActionCommitNode {
+    status_check_rollup: Option<ActionStatusCheckRollup>,
+    deployments: ActionDeploymentConnection,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ActionStatusCheckRollup {
+    contexts: ActionCheckContextConnection,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ActionCheckContextConnection {
+    nodes: Vec<ActionCheckContextNode>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "__typename")]
+enum ActionCheckContextNode {
+    CheckRun(ActionCheckRunNode),
+    StatusContext(ActionStatusContextNode),
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActionCheckRunNode {
+    database_id: Option<i64>,
+    name: String,
+    status: String,
+    conclusion: Option<String>,
+    details_url: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+    check_suite: Option<ActionCheckSuite>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActionCheckSuite {
+    app: Option<ActionCheckApp>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ActionCheckApp {
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActionStatusContextNode {
+    context: String,
+    state: String,
+    target_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ActionDeploymentConnection {
+    nodes: Vec<ActionDeploymentNode>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActionDeploymentNode {
+    id: String,
+    environment: Option<String>,
+    latest_status: Option<ActionDeploymentStatusNode>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActionDeploymentStatusNode {
+    state: String,
+    log_url: Option<String>,
+    environment_url: Option<String>,
+}
+
+fn build_action_status(node: ActionPullRequestNode) -> WorkspacePrActionStatus {
+    let pr = PullRequestInfo {
+        url: node.url,
+        number: node.number,
+        state: node.state,
+        title: node.title,
+        is_merged: node.merged,
+    };
+    let review_decision = node.review_decision;
+    let mergeable = node.mergeable;
+    let latest_commit = node
+        .commits
+        .nodes
+        .into_iter()
+        .next()
+        .map(|node| node.commit);
+
+    let checks = latest_commit
+        .as_ref()
+        .and_then(|commit| commit.status_check_rollup.as_ref())
+        .map(|rollup| {
+            rollup
+                .contexts
+                .nodes
+                .iter()
+                .filter_map(normalize_check_context)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let deployments = latest_commit
+        .map(|commit| {
+            commit
+                .deployments
+                .nodes
+                .iter()
+                .map(normalize_deployment)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    WorkspacePrActionStatus {
+        pr: Some(pr),
+        review_decision,
+        mergeable,
+        deployments,
+        checks,
+        remote_state: RemoteState::Ok,
+        message: None,
+    }
+}
+
+fn normalize_check_context(node: &ActionCheckContextNode) -> Option<WorkspacePrActionItem> {
+    match node {
+        ActionCheckContextNode::CheckRun(check) => {
+            let app_name = check
+                .check_suite
+                .as_ref()
+                .and_then(|suite| suite.app.as_ref())
+                .map(|app| app.name.as_str());
+            let url = check.details_url.clone();
+            let provider = infer_provider(
+                ActionProvider::Unknown,
+                [Some(check.name.as_str()), app_name, url.as_deref()],
+            );
+            let provider = if provider == ActionProvider::Unknown {
+                ActionProvider::Github
+            } else {
+                provider
+            };
+            Some(WorkspacePrActionItem {
+                id: check
+                    .database_id
+                    .map(|id| format!("check-run-{id}"))
+                    .unwrap_or_else(|| format!("check-run-{}", check.name)),
+                name: check.name.clone(),
+                provider,
+                status: normalize_check_run_status(&check.status, check.conclusion.as_deref()),
+                duration: format_duration(
+                    check.started_at.as_deref(),
+                    check.completed_at.as_deref(),
+                ),
+                url,
+            })
+        }
+        ActionCheckContextNode::StatusContext(status) => {
+            let url = status.target_url.clone();
+            let provider = infer_provider(
+                ActionProvider::Github,
+                [Some(status.context.as_str()), url.as_deref(), None],
+            );
+            Some(WorkspacePrActionItem {
+                id: format!("status-context-{}", status.context),
+                name: status.context.clone(),
+                provider,
+                status: normalize_status_context_state(&status.state),
+                duration: None,
+                url,
+            })
+        }
+        ActionCheckContextNode::Other => None,
+    }
+}
+
+fn normalize_deployment(node: &ActionDeploymentNode) -> WorkspacePrActionItem {
+    let latest = node.latest_status.as_ref();
+    let log_url = latest.and_then(|status| status.log_url.clone());
+    let environment_url = latest.and_then(|status| status.environment_url.clone());
+    let url = environment_url.or(log_url);
+    let environment = node
+        .environment
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("Deployment");
+    let provider = infer_provider(
+        ActionProvider::Unknown,
+        [
+            Some(environment),
+            url.as_deref(),
+            latest.map(|status| status.state.as_str()),
+        ],
+    );
+
+    WorkspacePrActionItem {
+        id: node.id.clone(),
+        name: environment.to_string(),
+        provider,
+        status: latest
+            .map(|status| normalize_deployment_state(&status.state))
+            .unwrap_or(ActionStatusKind::Pending),
+        duration: None,
+        url,
+    }
+}
+
+fn normalize_check_run_status(status: &str, conclusion: Option<&str>) -> ActionStatusKind {
+    match status {
+        "COMPLETED" => match conclusion {
+            Some("SUCCESS" | "NEUTRAL" | "SKIPPED") => ActionStatusKind::Success,
+            _ => ActionStatusKind::Failure,
+        },
+        "IN_PROGRESS" => ActionStatusKind::Running,
+        "WAITING" | "REQUESTED" | "QUEUED" | "PENDING" => ActionStatusKind::Pending,
+        _ => ActionStatusKind::Pending,
+    }
+}
+
+fn normalize_status_context_state(state: &str) -> ActionStatusKind {
+    match state {
+        "SUCCESS" => ActionStatusKind::Success,
+        "FAILURE" | "ERROR" => ActionStatusKind::Failure,
+        "PENDING" => ActionStatusKind::Running,
+        _ => ActionStatusKind::Pending,
+    }
+}
+
+fn normalize_deployment_state(state: &str) -> ActionStatusKind {
+    match state {
+        "SUCCESS" => ActionStatusKind::Success,
+        "FAILURE" | "ERROR" | "INACTIVE" => ActionStatusKind::Failure,
+        "PENDING" | "QUEUED" => ActionStatusKind::Pending,
+        _ => ActionStatusKind::Running,
+    }
+}
+
+fn infer_provider<'a>(
+    default_provider: ActionProvider,
+    values: impl IntoIterator<Item = Option<&'a str>>,
+) -> ActionProvider {
+    let mut saw_github = false;
+    for value in values.into_iter().flatten() {
+        let value = value.to_ascii_lowercase();
+        if value.contains("vercel") {
+            return ActionProvider::Vercel;
+        }
+        if value.contains("github") {
+            saw_github = true;
+        }
+    }
+    if saw_github {
+        ActionProvider::Github
+    } else {
+        default_provider
+    }
+}
+
+fn format_duration(started_at: Option<&str>, completed_at: Option<&str>) -> Option<String> {
+    let started = parse_github_datetime(started_at?)?;
+    let completed = parse_github_datetime(completed_at?)?;
+    let seconds = (completed - started).num_seconds();
+    if seconds < 0 {
+        return None;
+    }
+    if seconds < 60 {
+        return Some(format!("{seconds}s"));
+    }
+    let minutes = seconds / 60;
+    if minutes < 60 {
+        return Some(format!("{minutes}m"));
+    }
+    Some(format!("{}h", minutes / 60))
+}
+
+fn parse_github_datetime(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|datetime| datetime.with_timezone(&Utc))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -494,5 +1092,160 @@ mod tests {
     fn rejects_malformed_remote() {
         assert_eq!(parse_github_remote("https://github.com/"), None);
         assert_eq!(parse_github_remote("git@github.com:incomplete"), None);
+    }
+
+    #[test]
+    fn normalizes_check_run_statuses() {
+        assert_eq!(
+            normalize_check_run_status("COMPLETED", Some("SUCCESS")),
+            ActionStatusKind::Success
+        );
+        assert_eq!(
+            normalize_check_run_status("COMPLETED", Some("SKIPPED")),
+            ActionStatusKind::Success
+        );
+        assert_eq!(
+            normalize_check_run_status("COMPLETED", Some("FAILURE")),
+            ActionStatusKind::Failure
+        );
+        assert_eq!(
+            normalize_check_run_status("IN_PROGRESS", None),
+            ActionStatusKind::Running
+        );
+        assert_eq!(
+            normalize_check_run_status("QUEUED", None),
+            ActionStatusKind::Pending
+        );
+    }
+
+    #[test]
+    fn normalizes_status_context_and_deployment_states() {
+        assert_eq!(
+            normalize_status_context_state("SUCCESS"),
+            ActionStatusKind::Success
+        );
+        assert_eq!(
+            normalize_status_context_state("ERROR"),
+            ActionStatusKind::Failure
+        );
+        assert_eq!(
+            normalize_status_context_state("PENDING"),
+            ActionStatusKind::Running
+        );
+        assert_eq!(
+            normalize_deployment_state("SUCCESS"),
+            ActionStatusKind::Success
+        );
+        assert_eq!(
+            normalize_deployment_state("FAILURE"),
+            ActionStatusKind::Failure
+        );
+        assert_eq!(
+            normalize_deployment_state("IN_PROGRESS"),
+            ActionStatusKind::Running
+        );
+    }
+
+    #[test]
+    fn infers_action_providers() {
+        assert_eq!(
+            infer_provider(
+                ActionProvider::Unknown,
+                [Some("Vercel – app"), Some("https://vercel.com/team/app")]
+            ),
+            ActionProvider::Vercel
+        );
+        assert_eq!(
+            infer_provider(
+                ActionProvider::Unknown,
+                [
+                    Some("GitHub Actions"),
+                    Some("https://github.com/org/repo/actions")
+                ]
+            ),
+            ActionProvider::Github
+        );
+        assert_eq!(
+            infer_provider(ActionProvider::Unknown, [Some("custom-ci"), None]),
+            ActionProvider::Unknown
+        );
+    }
+
+    #[test]
+    fn formats_check_run_durations() {
+        assert_eq!(
+            format_duration(Some("2026-04-10T00:00:00Z"), Some("2026-04-10T00:00:12Z")).as_deref(),
+            Some("12s")
+        );
+        assert_eq!(
+            format_duration(Some("2026-04-10T00:00:00Z"), Some("2026-04-10T00:02:03Z")).as_deref(),
+            Some("2m")
+        );
+        assert_eq!(
+            format_duration(Some("2026-04-10T00:00:00Z"), Some("2026-04-10T01:20:00Z")).as_deref(),
+            Some("1h")
+        );
+        assert_eq!(format_duration(None, Some("2026-04-10T00:00:00Z")), None);
+    }
+
+    #[test]
+    fn builds_action_status_with_review_and_mergeable_fields() {
+        let status = build_action_status(ActionPullRequestNode {
+            url: "https://github.com/octocat/hello-world/pull/1".to_string(),
+            number: 1,
+            state: "OPEN".to_string(),
+            title: "Update".to_string(),
+            merged: false,
+            review_decision: Some("CHANGES_REQUESTED".to_string()),
+            mergeable: Some("CONFLICTING".to_string()),
+            commits: ActionCommitConnection {
+                nodes: vec![ActionPullRequestCommitNode {
+                    commit: ActionCommitNode {
+                        status_check_rollup: Some(ActionStatusCheckRollup {
+                            contexts: ActionCheckContextConnection {
+                                nodes: vec![ActionCheckContextNode::CheckRun(ActionCheckRunNode {
+                                    database_id: Some(42),
+                                    name: "changes".to_string(),
+                                    status: "COMPLETED".to_string(),
+                                    conclusion: Some("SUCCESS".to_string()),
+                                    details_url: Some(
+                                        "https://github.com/octocat/hello-world/actions/runs/1"
+                                            .to_string(),
+                                    ),
+                                    started_at: Some("2026-04-10T00:00:00Z".to_string()),
+                                    completed_at: Some("2026-04-10T00:00:12Z".to_string()),
+                                    check_suite: Some(ActionCheckSuite {
+                                        app: Some(ActionCheckApp {
+                                            name: "GitHub Actions".to_string(),
+                                        }),
+                                    }),
+                                })],
+                            },
+                        }),
+                        deployments: ActionDeploymentConnection {
+                            nodes: vec![ActionDeploymentNode {
+                                id: "deployment-1".to_string(),
+                                environment: Some("Vercel Preview".to_string()),
+                                latest_status: Some(ActionDeploymentStatusNode {
+                                    state: "SUCCESS".to_string(),
+                                    log_url: Some("https://vercel.com/log".to_string()),
+                                    environment_url: Some("https://app.vercel.app".to_string()),
+                                }),
+                            }],
+                        },
+                    },
+                }],
+            },
+        });
+
+        assert_eq!(status.remote_state, RemoteState::Ok);
+        assert_eq!(status.review_decision.as_deref(), Some("CHANGES_REQUESTED"));
+        assert_eq!(status.mergeable.as_deref(), Some("CONFLICTING"));
+        assert_eq!(status.checks.len(), 1);
+        assert_eq!(status.checks[0].status, ActionStatusKind::Success);
+        assert_eq!(status.checks[0].provider, ActionProvider::Github);
+        assert_eq!(status.checks[0].duration.as_deref(), Some("12s"));
+        assert_eq!(status.deployments.len(), 1);
+        assert_eq!(status.deployments[0].provider, ActionProvider::Vercel);
     }
 }

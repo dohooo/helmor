@@ -47,12 +47,40 @@ vi.mock("@tauri-apps/api/core", () => ({
 				};
 			case "list_github_accessible_repositories":
 				return [];
+			case "list_repositories":
+				return [];
+			case "list_agent_model_sections":
+				return [];
 			case "get_add_repository_defaults":
 				return { lastCloneDirectory: null };
 			case "get_data_info":
 				return null;
+			case "load_auto_close_action_kinds":
+				return [];
+			case "load_auto_close_opt_in_asked":
+				return [];
 			case "list_remote_branches":
 				return [];
+			case "list_workspace_files":
+				return [];
+			case "list_workspace_changes_with_content":
+				return { items: [], prefetched: [] };
+			case "list_slash_commands":
+				return [];
+			case "lookup_workspace_pr":
+				return null;
+			case "get_workspace_git_action_status":
+				return { uncommittedCount: 0, conflictCount: 0 };
+			case "get_workspace_pr_action_status":
+				return {
+					pr: null,
+					reviewDecision: null,
+					mergeable: null,
+					deployments: [],
+					checks: [],
+					remoteState: "unavailable",
+					message: null,
+				};
 			case "conductor_source_available":
 				return false;
 			default:

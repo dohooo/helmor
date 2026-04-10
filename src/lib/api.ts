@@ -950,6 +950,33 @@ export type PullRequestInfo = {
 	isMerged: boolean;
 };
 
+export type ActionStatusKind = "success" | "pending" | "running" | "failure";
+export type ActionProvider = "github" | "vercel" | "unknown";
+
+export type WorkspaceGitActionStatus = {
+	uncommittedCount: number;
+	conflictCount: number;
+};
+
+export type WorkspacePrActionItem = {
+	id: string;
+	name: string;
+	provider: ActionProvider;
+	status: ActionStatusKind;
+	duration?: string | null;
+	url?: string | null;
+};
+
+export type WorkspacePrActionStatus = {
+	pr: PullRequestInfo | null;
+	reviewDecision?: string | null;
+	mergeable?: string | null;
+	deployments: WorkspacePrActionItem[];
+	checks: WorkspacePrActionItem[];
+	remoteState: "ok" | "noPr" | "unavailable" | "error";
+	message?: string | null;
+};
+
 /**
  * Look up the most recent pull request on GitHub whose head ref matches the
  * workspace's current branch. Returns `null` when there's no matching PR, the
@@ -968,6 +995,36 @@ export async function lookupWorkspacePr(
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to look up workspace PR."),
+		);
+	}
+}
+
+export async function loadWorkspaceGitActionStatus(
+	workspaceId: string,
+): Promise<WorkspaceGitActionStatus> {
+	try {
+		return await invoke<WorkspaceGitActionStatus>(
+			"get_workspace_git_action_status",
+			{ workspaceId },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load workspace Git status."),
+		);
+	}
+}
+
+export async function loadWorkspacePrActionStatus(
+	workspaceId: string,
+): Promise<WorkspacePrActionStatus> {
+	try {
+		return await invoke<WorkspacePrActionStatus>(
+			"get_workspace_pr_action_status",
+			{ workspaceId },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load workspace PR status."),
 		);
 	}
 }
