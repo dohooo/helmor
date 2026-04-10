@@ -2,9 +2,11 @@ pub mod agents;
 pub mod data_dir;
 pub mod error;
 mod import;
+pub mod mcp;
 mod models;
 pub mod pipeline;
 mod schema;
+pub mod service;
 pub mod sidecar;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -152,7 +154,9 @@ pub fn run() {
             models::disconnect_github_identity,
             models::get_add_repository_defaults,
             models::get_app_settings,
+            models::get_cli_status,
             models::get_data_info,
+            models::install_cli,
             models::get_github_cli_status,
             models::get_github_cli_user,
             models::get_github_identity_session,

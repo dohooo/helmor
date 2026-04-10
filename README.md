@@ -11,6 +11,10 @@ Vitest.
 - `pnpm run test` runs the current regression test suite.
 - `pnpm run test:watch` starts Vitest in watch mode.
 
+## CLI & MCP
+
+See [docs/cli-and-mcp.md](docs/cli-and-mcp.md) for the standalone CLI and MCP server guide.
+
 ## Current Scope
 
 This first brush intentionally keeps the app simple:
