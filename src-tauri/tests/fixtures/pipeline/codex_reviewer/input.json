@@ -2,7 +2,7 @@
 	{
 		"id": "30cc3afe-1ed4-442a-95a8-c9a2f7da5bfe",
 		"role": "user",
-		"content": "review一下最近四个提交",
+		"content": "Review the last four commits",
 		"content_is_json": false,
 		"parsed_content": null,
 		"created_at": "2026-04-03T16:18:55.627Z"
@@ -32,7 +32,7 @@
 	{
 		"id": "c56c8887-32fa-49a9-870f-5ad2a58d2300",
 		"role": "user",
-		"content": "review一下最近四个提交",
+		"content": "Review the last four commits",
 		"content_is_json": false,
 		"parsed_content": null,
 		"created_at": "2026-04-03T16:20:26.897Z"
@@ -40,13 +40,13 @@
 	{
 		"id": "dd8a13bd-93a8-46a8-a078-e8479ecc1bd2",
 		"role": "assistant",
-		"content": "{\"type\":\"assistant\",\"session_id\":\"019d5423-fdde-7863-991e-ea888f120ce1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"你的问题可以译成英文：`Could you review the latest four commits?`\\n\\n我先看最近四个提交的记录和改动范围，然后按代码审查的方式给你结论，重点放在 bug、回归风险和测试缺口上。\"}]}}",
+		"content": "{\"type\":\"assistant\",\"session_id\":\"019d5423-fdde-7863-991e-ea888f120ce1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Let me look at the last four commits' records and change scope, then give you a code review conclusion focusing on bugs, regression risks, and test coverage gaps.\"}]}}",
 		"content_is_json": true,
 		"parsed_content": {
 			"message": {
 				"content": [
 					{
-						"text": "你的问题可以译成英文：`Could you review the latest four commits?`\n\n我先看最近四个提交的记录和改动范围，然后按代码审查的方式给你结论，重点放在 bug、回归风险和测试缺口上。",
+						"text": "Let me look at the last four commits' records and change scope, then give you a code review conclusion focusing on bugs, regression risks, and test coverage gaps.",
 						"type": "text"
 					}
 				],
@@ -152,13 +152,13 @@
 	{
 		"id": "be2850e4-5a85-44bb-9e1c-820cdba7940a",
 		"role": "assistant",
-		"content": "{\"type\":\"assistant\",\"session_id\":\"019d5423-fdde-7863-991e-ea888f120ce1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"我先按提交逐个看 diff 和文件列表，确认哪些地方值得深入读，避免只做表面总结。\"}]}}",
+		"content": "{\"type\":\"assistant\",\"session_id\":\"019d5423-fdde-7863-991e-ea888f120ce1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Let me go through each commit's diff and file list one by one, identifying which parts are worth reading in depth to avoid a superficial summary.\"}]}}",
 		"content_is_json": true,
 		"parsed_content": {
 			"message": {
 				"content": [
 					{
-						"text": "我先按提交逐个看 diff 和文件列表，确认哪些地方值得深入读，避免只做表面总结。",
+						"text": "Let me go through each commit's diff and file list one by one, identifying which parts are worth reading in depth to avoid a superficial summary.",
 						"type": "text"
 					}
 				],
@@ -356,13 +356,13 @@
 	{
 		"id": "f76e7c44-7c0f-45c6-b9c5-d713119a186e",
 		"role": "assistant",
-		"content": "{\"type\":\"assistant\",\"session_id\":\"019d5423-fdde-7863-991e-ea888f120ce1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"我已经定位到主要风险面在 Rust 后端：`data_dir`、`schema`、`conductor` 模块拆分，以及新的导入逻辑。接下来我读关键实现并跑一次后端静态检查，确认有没有真实回归。\"}]}}",
+		"content": "{\"type\":\"assistant\",\"session_id\":\"019d5423-fdde-7863-991e-ea888f120ce1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I've identified the main risk areas in the Rust backend: `data_dir`, `schema`, `conductor` module refactoring, and the new import logic. Next I'll read the key implementations and run a backend static check to confirm whether there are any real regressions.\"}]}}",
 		"content_is_json": true,
 		"parsed_content": {
 			"message": {
 				"content": [
 					{
-						"text": "我已经定位到主要风险面在 Rust 后端：`data_dir`、`schema`、`conductor` 模块拆分，以及新的导入逻辑。接下来我读关键实现并跑一次后端静态检查，确认有没有真实回归。",
+						"text": "I've identified the main risk areas in the Rust backend: `data_dir`, `schema`, `conductor` module refactoring, and the new import logic. Next I'll read the key implementations and run a backend static check to confirm whether there are any real regressions.",
 						"type": "text"
 					}
 				],
@@ -652,13 +652,13 @@
 	{
 		"id": "7ab16c52-976d-4d84-abc2-7d14119397c0",
 		"role": "assistant",
-		"content": "{\"type\":\"assistant\",\"session_id\":\"019d5423-fdde-7863-991e-ea888f120ce1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"静态检查通过了，但这类重构更容易出“逻辑没炸、行为悄悄变了”的问题。我在对照旧实现找行为回归点，尤其是 schema 完整性和归档/导入路径。\"}]}}",
+		"content": "{\"type\":\"assistant\",\"session_id\":\"019d5423-fdde-7863-991e-ea888f120ce1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Static checks passed, but this type of refactoring is more prone to silent behavior changes rather than outright failures. I'm comparing against the old implementation to find behavioral regression points, especially around schema completeness and archive/import paths.\"}]}}",
 		"content_is_json": true,
 		"parsed_content": {
 			"message": {
 				"content": [
 					{
-						"text": "静态检查通过了，但这类重构更容易出“逻辑没炸、行为悄悄变了”的问题。我在对照旧实现找行为回归点，尤其是 schema 完整性和归档/导入路径。",
+						"text": "Static checks passed, but this type of refactoring is more prone to silent behavior changes rather than outright failures. I'm comparing against the old implementation to find behavioral regression points, especially around schema completeness and archive/import paths.",
 						"type": "text"
 					}
 				],
@@ -788,13 +788,13 @@
 	{
 		"id": "4d954488-9b44-4849-84ec-fa7dbb3dea9e",
 		"role": "assistant",
-		"content": "{\"type\":\"assistant\",\"session_id\":\"019d5423-fdde-7863-991e-ea888f120ce1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"测试还在跑。我已经开始对照旧 schema 了，目前能确认没有编译级别的问题，剩下主要看数据行为有没有静默回归。\"}]}}",
+		"content": "{\"type\":\"assistant\",\"session_id\":\"019d5423-fdde-7863-991e-ea888f120ce1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Tests are still running. I've started comparing against the old schema. So far I can confirm there are no compile-level issues; what remains is checking whether there are any silent behavioral regressions in the data layer.\"}]}}",
 		"content_is_json": true,
 		"parsed_content": {
 			"message": {
 				"content": [
 					{
-						"text": "测试还在跑。我已经开始对照旧 schema 了，目前能确认没有编译级别的问题，剩下主要看数据行为有没有静默回归。",
+						"text": "Tests are still running. I've started comparing against the old schema. So far I can confirm there are no compile-level issues; what remains is checking whether there are any silent behavioral regressions in the data layer.",
 						"type": "text"
 					}
 				],
@@ -1106,13 +1106,13 @@
 	{
 		"id": "79664b12-2f8b-40a4-815d-1b3ecd4b13ac",
 		"role": "assistant",
-		"content": "{\"type\":\"assistant\",\"session_id\":\"019d5423-fdde-7863-991e-ea888f120ce1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"我又盯了一下新的 import 流程。这里已经出现一个明确的破坏性场景了，我再确认一下前端是怎么传这个过滤参数的，避免误判。\"}]}}",
+		"content": "{\"type\":\"assistant\",\"session_id\":\"019d5423-fdde-7863-991e-ea888f120ce1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I took another look at the new import flow. There's already a clear breaking scenario here. Let me verify how the frontend passes this filter parameter to avoid a false positive.\"}]}}",
 		"content_is_json": true,
 		"parsed_content": {
 			"message": {
 				"content": [
 					{
-						"text": "我又盯了一下新的 import 流程。这里已经出现一个明确的破坏性场景了，我再确认一下前端是怎么传这个过滤参数的，避免误判。",
+						"text": "I took another look at the new import flow. There's already a clear breaking scenario here. Let me verify how the frontend passes this filter parameter to avoid a false positive.",
 						"type": "text"
 					}
 				],
@@ -1586,13 +1586,13 @@
 	{
 		"id": "e3cc1265-2038-41d8-8348-801f1aa5e24e",
 		"role": "assistant",
-		"content": "{\"type\":\"assistant\",\"session_id\":\"019d5423-fdde-7863-991e-ea888f120ce1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"我找到了一个比测试失败更大的回归点：后端把 Tauri 命令名整体改了，但前端 IPC 还在调用旧名字。这会直接导致桌面端很多核心操作在运行时失败。 我把对应行号再抓一下。\"}]}}",
+		"content": "{\"type\":\"assistant\",\"session_id\":\"019d5423-fdde-7863-991e-ea888f120ce1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I found a regression bigger than the test failures: the backend renamed all Tauri command names, but the frontend IPC is still calling the old names. This will directly cause many core desktop operations to fail at runtime. Let me grab the relevant line numbers.\"}]}}",
 		"content_is_json": true,
 		"parsed_content": {
 			"message": {
 				"content": [
 					{
-						"text": "我找到了一个比测试失败更大的回归点：后端把 Tauri 命令名整体改了，但前端 IPC 还在调用旧名字。这会直接导致桌面端很多核心操作在运行时失败。 我把对应行号再抓一下。",
+						"text": "I found a regression bigger than the test failures: the backend renamed all Tauri command names, but the frontend IPC is still calling the old names. This will directly cause many core desktop operations to fail at runtime. Let me grab the relevant line numbers.",
 						"type": "text"
 					}
 				],
