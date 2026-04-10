@@ -356,6 +356,7 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
 	const [editingTitle, setEditingTitle] = useState("");
 	const [editingBranch, setEditingBranch] = useState<string | null>(null);
+	const [branchCopied, setBranchCopied] = useState(false);
 
 	const handleStartBranchRename = useCallback(() => {
 		if (!workspace?.branch) return;
@@ -673,10 +674,19 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											onClick={() => {
 												if (!workspace.branch) return;
 												void navigator.clipboard.writeText(workspace.branch);
+												setBranchCopied(true);
+												setTimeout(() => setBranchCopied(false), 1500);
 											}}
 											className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
 										>
-											<Copy className="size-2.5" strokeWidth={2} />
+											{branchCopied ? (
+												<Check
+													className="size-2.5 text-green-400"
+													strokeWidth={2}
+												/>
+											) : (
+												<Copy className="size-2.5" strokeWidth={2} />
+											)}
 										</span>
 									</span>
 								) : null}
