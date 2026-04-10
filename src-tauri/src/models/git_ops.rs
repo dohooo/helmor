@@ -457,6 +457,17 @@ pub fn verify_commitish_exists(
     .context(error_message.to_string())
 }
 
+/// Rename a local branch: `git branch -m <old> <new>`.
+pub fn rename_branch(repo_root: &Path, old_name: &str, new_name: &str) -> Result<()> {
+    let repo_root = repo_root.display().to_string();
+    run_git(
+        ["-C", repo_root.as_str(), "branch", "-m", old_name, new_name],
+        None,
+    )
+    .map(|_| ())
+    .with_context(|| format!("Failed to rename branch {old_name} → {new_name}"))
+}
+
 /// Point a branch ref at a specific commit.
 pub fn point_branch_to_commit(repo_root: &Path, branch: &str, commit: &str) -> Result<()> {
     let repo_root = repo_root.display().to_string();

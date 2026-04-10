@@ -33,15 +33,21 @@ import {
 } from "./components/ui/dropdown-menu";
 import { Toaster } from "./components/ui/sonner";
 import { TooltipProvider } from "./components/ui/tooltip";
-import type { WorkspaceCommitButtonMode } from "./components/workspace-commit-button";
+import type {
+	CommitButtonState,
+	WorkspaceCommitButtonMode,
+} from "./components/workspace-commit-button";
 import { WorkspaceConversationContainer } from "./components/workspace-conversation-container";
 import { WorkspaceEditorSurface } from "./components/workspace-editor-surface";
 import { WorkspaceInspectorSidebar } from "./components/workspace-inspector-sidebar";
 import { WorkspacesSidebarContainer } from "./components/workspaces-sidebar-container";
 import {
+	archiveWorkspace,
 	cancelGithubIdentityConnect,
 	closeWorkspacePr,
 	createSession,
+	type DetectedEditor,
+	detectInstalledEditors,
 	disconnectGithubIdentity,
 	type GithubIdentityDeviceFlowStart,
 	type GithubIdentitySnapshot,
@@ -60,10 +66,6 @@ import {
 	type WorkspaceRow,
 	type WorkspaceSessionSummary,
 } from "./lib/api";
-import {
-	deriveCommitButtonMode,
-	deriveCommitButtonState,
-} from "./lib/commit-button-logic";
 import { COMMIT_BUTTON_PROMPTS } from "./lib/commit-button-prompts";
 import {
 	type ComposerInsertRequest,
@@ -102,18 +104,9 @@ import {
 	WorkspaceToastProvider,
 } from "./lib/workspace-toast-context";
 
-const ALL_EDITORS = [
-	{ id: "cursor", name: "Cursor" },
-	{ id: "vscode", name: "VS Code" },
-	{ id: "vscode-insiders", name: "VS Code Insiders" },
-	{ id: "windsurf", name: "Windsurf" },
-	{ id: "zed", name: "Zed" },
-	{ id: "webstorm", name: "WebStorm" },
-	{ id: "sublime", name: "Sublime Text" },
-] as const;
-
 const SIDEBAR_WIDTH_STORAGE_KEY = "helmor.workspaceSidebarWidth";
 const INSPECTOR_WIDTH_STORAGE_KEY = "helmor.workspaceInspectorWidth";
+const PREFERRED_EDITOR_STORAGE_KEY = "helmor.preferredEditorId";
 const DEFAULT_SIDEBAR_WIDTH = 336;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 520;
@@ -322,9 +315,6 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		sessionId: string;
 		prompt: string;
 	} | null>(null);
-	const [pendingComposerInserts, setPendingComposerInserts] = useState<
-		ResolvedComposerInsertRequest[]
-	>([]);
 	// Lifecycle driver for the inspector Git commit button. Owns the button's
 	// visible state across all phases (click → session created → streaming →
 	// stream ended → PR verification → next mode). See `handleInspector*` +
@@ -341,13 +331,35 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const [sendingSessionIds, setSendingSessionIds] = useState<Set<string>>(
 		() => new Set(),
 	);
+	const [pendingComposerInserts, setPendingComposerInserts] = useState<
+		ResolvedComposerInsertRequest[]
+	>([]);
+	// Sessions that finished streaming while the user was viewing a different
+	// session. Map of sessionId → workspaceId so we can derive both per-session
+	// and per-workspace red-dot indicators.
+	const [completedSessions, setCompletedSessions] = useState<
+		Map<string, string>
+	>(() => new Map());
+	const completedSessionIds = useMemo(
+		() => new Set(completedSessions.keys()),
+		[completedSessions],
+	);
+	const completedWorkspaceIds = useMemo(
+		() => new Set(completedSessions.values()),
+		[completedSessions],
+	);
 
 	const { settings: appSettings } = useSettings();
+	const [installedEditors, setInstalledEditors] = useState<DetectedEditor[]>(
+		[],
+	);
 	const [preferredEditorId, setPreferredEditorId] = useState<string | null>(
-		null,
+		() => localStorage.getItem(PREFERRED_EDITOR_STORAGE_KEY),
 	);
 	const preferredEditor =
-		ALL_EDITORS.find((e) => e.id === preferredEditorId) ?? ALL_EDITORS[0];
+		installedEditors.find((e) => e.id === preferredEditorId) ??
+		installedEditors[0] ??
+		null;
 	const isSidebarResizing = resizeState?.target === "sidebar";
 	const isInspectorResizing = resizeState?.target === "inspector";
 	const isIdentityConnected = githubIdentityState.status === "connected";
@@ -385,64 +397,48 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	});
 	const workspacePrInfo = workspacePrQuery.data ?? null;
 
-	// Reactively transition workspace sidebar status when the PR query
-	// detects a state change. This handles PRs created/merged/closed
-	// externally (not via the commit button lifecycle).
-	const selectedWorkspaceManualStatus =
-		selectedWorkspaceDetailQuery.data?.manualStatus ?? null;
+	// Auto-archive the workspace when its PR has been closed (not merged).
+	// A closed PR signals the work is abandoned — archiving moves the
+	// workspace to the "Archived" section and frees the worktree on disk.
+	const autoArchiveTriggeredRef = useRef<string | null>(null);
 	const selectedWorkspaceState =
 		selectedWorkspaceDetailQuery.data?.state ?? null;
-	const prStatusSyncRef = useRef<string | null>(null);
 	useEffect(() => {
-		if (!selectedWorkspaceId || !workspacePrInfo) {
-			prStatusSyncRef.current = null;
-			return;
-		}
 		if (
-			selectedWorkspaceState !== "active" &&
-			selectedWorkspaceState !== "ready"
+			!selectedWorkspaceId ||
+			!workspacePrInfo ||
+			workspacePrInfo.state !== "CLOSED" ||
+			workspacePrInfo.isMerged ||
+			// Don't archive if the workspace is already archived or not active.
+			selectedWorkspaceState !== "active"
 		) {
+			autoArchiveTriggeredRef.current = null;
 			return;
 		}
-
-		// Derive what the workspace status SHOULD be based on PR state.
-		let targetStatus: string | null = null;
-		if (workspacePrInfo.isMerged) {
-			targetStatus = "done";
-		} else if (workspacePrInfo.state === "OPEN") {
-			targetStatus = "review";
-		} else if (workspacePrInfo.state === "CLOSED") {
-			targetStatus = "canceled";
-		}
-
-		if (!targetStatus) return;
-		// Skip if already in the correct status.
-		if (selectedWorkspaceManualStatus === targetStatus) return;
-		// Deduplicate: only fire once per workspace + target combo.
-		const syncKey = `${selectedWorkspaceId}:${targetStatus}`;
-		if (prStatusSyncRef.current === syncKey) return;
-		prStatusSyncRef.current = syncKey;
+		// Only trigger once per workspace to avoid repeat archive attempts.
+		if (autoArchiveTriggeredRef.current === selectedWorkspaceId) return;
+		autoArchiveTriggeredRef.current = selectedWorkspaceId;
 
 		void (async () => {
 			try {
-				await setWorkspaceManualStatus(selectedWorkspaceId, targetStatus);
-				await queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGroups,
-				});
-				await queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceDetail(selectedWorkspaceId),
-				});
+				console.log(
+					"[commitButton] PR closed — auto-archiving workspace",
+					selectedWorkspaceId,
+				);
+				await archiveWorkspace(selectedWorkspaceId);
+				await Promise.all([
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceGroups,
+					}),
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceDetail(selectedWorkspaceId),
+					}),
+				]);
 			} catch (error) {
-				console.error("[prStatusSync] Failed:", error);
+				console.error("[commitButton] Auto-archive failed:", error);
 			}
 		})();
-	}, [
-		selectedWorkspaceId,
-		workspacePrInfo,
-		selectedWorkspaceManualStatus,
-		selectedWorkspaceState,
-		queryClient,
-	]);
+	}, [selectedWorkspaceId, workspacePrInfo, queryClient]);
 
 	const pushWorkspaceToast = useCallback(
 		(
@@ -499,6 +495,10 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		setDisplayedSessionId(null);
 		setWorkspaceViewMode("conversation");
 		setEditorSession(null);
+	}, []);
+
+	useEffect(() => {
+		void detectInstalledEditors().then(setInstalledEditors);
 	}, []);
 
 	useEffect(() => {
@@ -560,10 +560,6 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		let unlistenIdentity: (() => void) | undefined;
 
 		void loadGithubIdentitySession().then((snapshot) => {
-			console.log(
-				"[identity] loadGithubIdentitySession resolved:",
-				snapshot.status,
-			);
 			if (!disposed) {
 				setGithubIdentityState(snapshot);
 			}
@@ -1072,6 +1068,24 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			selectedSessionIdRef.current = immediateSessionId;
 			setSelectedWorkspaceId(workspaceId);
 			setSelectedSessionId(immediateSessionId);
+			// Clear all completed-session dots belonging to this workspace
+			if (workspaceId) {
+				setCompletedSessions((prev) => {
+					let changed = false;
+					for (const [, wsId] of prev) {
+						if (wsId === workspaceId) {
+							changed = true;
+							break;
+						}
+					}
+					if (!changed) return prev;
+					const next = new Map<string, string>();
+					for (const [sid, wsId] of prev) {
+						if (wsId !== workspaceId) next.set(sid, wsId);
+					}
+					return next;
+				});
+			}
 			if (workspaceId === null) {
 				if (workspaceSelectionRequestRef.current !== requestId) {
 					return;
@@ -1149,6 +1163,15 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			rememberSessionSelection(selectedWorkspaceIdRef.current, sessionId);
 			selectedSessionIdRef.current = sessionId;
 			setSelectedSessionId(sessionId);
+			// Clear the "completed while away" dot for this session
+			if (sessionId) {
+				setCompletedSessions((prev) => {
+					if (!prev.has(sessionId)) return prev;
+					const next = new Map(prev);
+					next.delete(sessionId);
+					return next;
+				});
+			}
 			if (sessionId === null) {
 				if (sessionSelectionRequestRef.current !== requestId) {
 					return;
@@ -1191,6 +1214,18 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 				});
 		},
 		[queryClient, rememberSessionSelection],
+	);
+
+	const handleSessionCompleted = useCallback(
+		(sessionId: string, workspaceId: string) => {
+			if (sessionId === selectedSessionIdRef.current) return;
+			setCompletedSessions((prev) => {
+				const next = new Map(prev);
+				next.set(sessionId, workspaceId);
+				return next;
+			});
+		},
+		[],
 	);
 
 	const handleInspectorCommitAction = useCallback(
@@ -1342,65 +1377,6 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		);
 	}, []);
 
-	const handleInsertIntoComposer = useCallback(
-		(request: ComposerInsertRequest) => {
-			const resolvedTarget = resolveComposerInsertTarget(request.target, {
-				selectedWorkspaceId,
-				displayedWorkspaceId,
-				displayedSessionId,
-			});
-			const targetWorkspaceId = resolvedTarget.workspaceId;
-			if (!targetWorkspaceId) {
-				pushWorkspaceToast(
-					"Open a workspace before inserting content into the composer.",
-					"Can't insert content",
-				);
-				return;
-			}
-
-			const items = request.items.filter((item) => {
-				if (item.kind === "text") return item.text.length > 0;
-				if (item.kind === "custom-tag") {
-					return (
-						item.label.trim().length > 0 && item.submitText.trim().length > 0
-					);
-				}
-				return item.path.length > 0;
-			});
-			if (items.length === 0) {
-				return;
-			}
-
-			setPendingComposerInserts((current) => [
-				...current,
-				{
-					id: crypto.randomUUID(),
-					workspaceId: targetWorkspaceId,
-					sessionId: resolvedTarget.sessionId ?? null,
-					items,
-					behavior: request.behavior ?? "append",
-					createdAt: Date.now(),
-				},
-			]);
-		},
-		[
-			displayedSessionId,
-			displayedWorkspaceId,
-			pushWorkspaceToast,
-			selectedWorkspaceId,
-		],
-	);
-
-	const handlePendingComposerInsertsConsumed = useCallback((ids: string[]) => {
-		if (ids.length === 0) {
-			return;
-		}
-		const consumed = new Set(ids);
-		setPendingComposerInserts((current) =>
-			current.filter((request) => !consumed.has(request.id)),
-		);
-	}, []);
-
 	// Watch the tracked session as it moves through the sending set. Once it
 	// exits (stream finished), verify whether a PR was created and rotate to
 	// the next button mode.
@@ -1487,17 +1463,18 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		const { phase, mode, trackedSessionId, workspaceId } = commitLifecycle;
 
 		if (phase === "done") {
-			queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspacePr(workspaceId),
-			});
-			queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspacePrActionStatus(workspaceId),
-			});
-			queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGitActionStatus(workspaceId),
-			});
+			// Merge/close use optimistic cache updates — don't refetch the
+			// PR query here or GitHub's propagation delay will briefly
+			// overwrite the optimistic value with the old state.
+			if (mode !== "merge" && mode !== "closed") {
+				queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspacePr(workspaceId),
+				});
+			}
 			// Refresh the file list so committed files disappear.
-			queryClient.invalidateQueries({ queryKey: ["workspaceChanges"] });
+			queryClient.invalidateQueries({
+				queryKey: ["workspaceChanges"],
+			});
 
 			void (async () => {
 				try {
@@ -1550,11 +1527,34 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	// active, the resting mode comes from the persistent PR query so the
 	// button stays in "merge" / "merged" after a successful create-pr even
 	// across page reloads.
-	const commitButtonMode = deriveCommitButtonMode(
-		commitLifecycle,
-		workspacePrInfo,
-	);
-	const commitButtonState = deriveCommitButtonState(commitLifecycle);
+	const commitButtonMode: WorkspaceCommitButtonMode = (() => {
+		if (commitLifecycle) {
+			if (commitLifecycle.phase === "done" && commitLifecycle.prInfo) {
+				return commitLifecycle.prInfo.isMerged ? "merged" : "merge";
+			}
+			return commitLifecycle.mode;
+		}
+		// Resting state — derive from persisted PR query.
+		if (workspacePrInfo) {
+			if (workspacePrInfo.isMerged) return "merged";
+			if (workspacePrInfo.state === "OPEN") return "merge";
+			if (workspacePrInfo.state === "CLOSED") return "create-pr";
+		}
+		return "create-pr";
+	})();
+	const commitButtonState: CommitButtonState = (() => {
+		if (!commitLifecycle) return "idle";
+		switch (commitLifecycle.phase) {
+			case "creating":
+			case "streaming":
+			case "verifying":
+				return "busy";
+			case "done":
+				return "done";
+			case "error":
+				return "error";
+		}
+	})();
 
 	const handleNavigateSessions = useCallback(
 		(offset: -1 | 1) => {
@@ -1665,6 +1665,61 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		workspaceViewMode,
 	]);
 
+	const handleInsertIntoComposer = useCallback(
+		(request: ComposerInsertRequest) => {
+			const resolvedTarget = resolveComposerInsertTarget(request.target, {
+				selectedWorkspaceId,
+				displayedWorkspaceId,
+				displayedSessionId,
+			});
+			const targetWorkspaceId = resolvedTarget.workspaceId;
+			if (!targetWorkspaceId) {
+				pushWorkspaceToast(
+					"Open a workspace before inserting content into the composer.",
+					"Can't insert content",
+				);
+				return;
+			}
+
+			const items = request.items.filter((item) => {
+				if (item.kind === "text") return item.text.length > 0;
+				if (item.kind === "custom-tag") {
+					return (
+						item.label.trim().length > 0 && item.submitText.trim().length > 0
+					);
+				}
+				return item.path.length > 0;
+			});
+			if (items.length === 0) return;
+
+			setPendingComposerInserts((current) => [
+				...current,
+				{
+					id: crypto.randomUUID(),
+					workspaceId: targetWorkspaceId,
+					sessionId: resolvedTarget.sessionId ?? null,
+					items,
+					behavior: request.behavior ?? "append",
+					createdAt: Date.now(),
+				},
+			]);
+		},
+		[
+			displayedSessionId,
+			displayedWorkspaceId,
+			pushWorkspaceToast,
+			selectedWorkspaceId,
+		],
+	);
+
+	const handlePendingComposerInsertsConsumed = useCallback((ids: string[]) => {
+		if (ids.length === 0) return;
+		const consumed = new Set(ids);
+		setPendingComposerInserts((current) =>
+			current.filter((r) => !consumed.has(r.id)),
+		);
+	}, []);
+
 	return (
 		<TooltipProvider delayDuration={0}>
 			<WorkspaceToastProvider value={pushWorkspaceToast}>
@@ -1697,6 +1752,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 												<WorkspacesSidebarContainer
 													selectedWorkspaceId={selectedWorkspaceId}
 													sendingWorkspaceIds={sendingWorkspaceIds}
+													completedWorkspaceIds={completedWorkspaceIds}
 													onSelectWorkspace={handleSelectWorkspace}
 													pushWorkspaceToast={pushWorkspaceToast}
 												/>
@@ -1797,6 +1853,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 												}
 												onSendingWorkspacesChange={setSendingWorkspaceIds}
 												onSendingSessionsChange={setSendingSessionIds}
+												completedSessionIds={completedSessionIds}
+												onSessionCompleted={handleSessionCompleted}
 												workspacePrInfo={workspacePrInfo}
 												pendingPromptForSession={pendingPromptForSession}
 												onPendingPromptConsumed={handlePendingPromptConsumed}
@@ -1825,56 +1883,89 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 													) : undefined
 												}
 												headerActions={
-													selectedWorkspaceId && preferredEditor ? (
-														<DropdownMenu>
-															<DropdownMenuTrigger className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none">
+													selectedWorkspaceId &&
+													installedEditors.length > 0 &&
+													preferredEditor ? (
+														<div className="flex items-center">
+															<Button
+																variant="ghost"
+																size="xs"
+																aria-label={`Open in ${preferredEditor.name}`}
+																title={`Open in ${preferredEditor.name}`}
+																onClick={() =>
+																	void openWorkspaceInEditor(
+																		selectedWorkspaceId,
+																		preferredEditor.id,
+																	).catch((e) =>
+																		pushWorkspaceToast(
+																			String(e),
+																			`Failed to open ${preferredEditor.name}`,
+																		),
+																	)
+																}
+																className="text-app-muted hover:text-app-foreground"
+															>
 																<EditorIcon
 																	editorId={preferredEditor.id}
 																	className="size-3.5"
 																/>
 																<span>{preferredEditor.name}</span>
-																<ChevronDown
-																	className="size-2.5 opacity-50"
-																	strokeWidth={2}
-																/>
-															</DropdownMenuTrigger>
-															<DropdownMenuContent
-																side="bottom"
-																align="end"
-																sideOffset={6}
-																className="min-w-[11rem]"
-															>
-																{ALL_EDITORS.map((editor) => (
-																	<DropdownMenuItem
-																		key={editor.id}
-																		onClick={() => {
-																			setPreferredEditorId(editor.id);
-																			void openWorkspaceInEditor(
-																				selectedWorkspaceId,
-																				editor.id,
-																			).catch((e) =>
-																				pushWorkspaceToast(
-																					String(e),
-																					`Failed to open ${editor.name}`,
-																				),
-																			);
-																		}}
-																		className="flex items-center gap-2"
+															</Button>
+															<DropdownMenu>
+																<DropdownMenuTrigger asChild>
+																	<Button
+																		variant="ghost"
+																		size="icon-xs"
+																		className="w-4 text-app-muted hover:text-app-foreground"
 																	>
-																		<EditorIcon
-																			editorId={editor.id}
-																			className="size-3.5 shrink-0"
+																		<ChevronDown
+																			className="size-2.5"
+																			strokeWidth={2}
 																		/>
-																		<span className="flex-1 font-medium">
-																			{editor.name}
-																		</span>
-																		{editor.id === preferredEditor.id && (
-																			<Check className="ml-auto size-3 text-muted-foreground" />
-																		)}
-																	</DropdownMenuItem>
-																))}
-															</DropdownMenuContent>
-														</DropdownMenu>
+																	</Button>
+																</DropdownMenuTrigger>
+																<DropdownMenuContent
+																	side="bottom"
+																	align="end"
+																	sideOffset={6}
+																	className="min-w-[11rem]"
+																>
+																	{installedEditors.map((editor) => (
+																		<DropdownMenuItem
+																			key={editor.id}
+																			onClick={() => {
+																				setPreferredEditorId(editor.id);
+																				localStorage.setItem(
+																					PREFERRED_EDITOR_STORAGE_KEY,
+																					editor.id,
+																				);
+																				void openWorkspaceInEditor(
+																					selectedWorkspaceId,
+																					editor.id,
+																				).catch((e) =>
+																					pushWorkspaceToast(
+																						String(e),
+																						`Failed to open ${editor.name}`,
+																					),
+																				);
+																			}}
+																			className="flex items-center gap-2"
+																		>
+																			<EditorIcon
+																				editorId={editor.id}
+																				className="size-3.5 shrink-0"
+																			/>
+																			<span className="flex-1 font-medium">
+																				{editor.name}
+																			</span>
+																			{editor.id === preferredEditor.id && (
+																				<Check className="ml-auto size-3 text-muted-foreground" />
+																			)}
+																		</DropdownMenuItem>
+																	))}
+																</DropdownMenuContent>
+															</DropdownMenu>
+														</div>
 													) : undefined
 												}
 											/>
@@ -1914,7 +2005,6 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 									style={{ width: `${inspectorWidth}px` }}
 								>
 									<WorkspaceInspectorSidebar
-										workspaceId={selectedWorkspaceId}
 										workspaceRootPath={workspaceRootPath}
 										workspaceBranch={
 											selectedWorkspaceDetailQuery.data?.branch ?? null

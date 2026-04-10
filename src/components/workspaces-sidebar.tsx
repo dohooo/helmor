@@ -37,6 +37,15 @@ import {
 	getWorkspaceBranchTone,
 	type WorkspaceBranchTone,
 } from "@/lib/workspace-helpers";
+
+/** Strip optional `prefix/` and humanize `kebab-case` → `Title Case`. */
+function humanizeBranch(branch: string): string {
+	const slug = branch.includes("/")
+		? branch.slice(branch.indexOf("/") + 1)
+		: branch;
+	return slug.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -341,6 +350,7 @@ type WorkspaceRowItemProps = {
 	row: WorkspaceRow;
 	selected: boolean;
 	isSending?: boolean;
+	isCompleted?: boolean;
 	rowRef?: (element: HTMLDivElement | null) => void;
 	onSelect?: (workspaceId: string) => void;
 	onPrefetch?: (workspaceId: string) => void;
@@ -361,6 +371,7 @@ const WorkspaceRowItem = memo(
 		row,
 		selected,
 		isSending,
+		isCompleted,
 		rowRef,
 		onSelect,
 		onPrefetch,
@@ -466,8 +477,14 @@ const WorkspaceRowItem = memo(
 									: "font-medium",
 						)}
 					>
-						{row.branch ?? row.title}
+						{row.branch ? humanizeBranch(row.branch) : row.title}
 					</span>
+					{isCompleted && !selected ? (
+						<span
+							aria-label="Session completed"
+							className="size-1.5 shrink-0 rounded-full bg-chart-2"
+						/>
+					) : null}
 				</div>
 
 				{hasActionHandler ? (
@@ -625,6 +642,7 @@ const WorkspaceRowItem = memo(
 			previous.row === next.row &&
 			previous.selected === next.selected &&
 			previous.isSending === next.isSending &&
+			previous.isCompleted === next.isCompleted &&
 			previous.archivingWorkspaceId === next.archivingWorkspaceId &&
 			previous.markingUnreadWorkspaceId === next.markingUnreadWorkspaceId &&
 			previous.restoringWorkspaceId === next.restoringWorkspaceId &&
@@ -640,6 +658,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	addingRepository,
 	selectedWorkspaceId,
 	sendingWorkspaceIds,
+	completedWorkspaceIds,
 	creatingWorkspaceRepoId,
 	onAddRepository,
 	onSelectWorkspace,
@@ -661,6 +680,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	addingRepository?: boolean;
 	selectedWorkspaceId?: string | null;
 	sendingWorkspaceIds?: Set<string>;
+	completedWorkspaceIds?: Set<string>;
 	creatingWorkspaceRepoId?: string | null;
 	onAddRepository?: () => void;
 	onSelectWorkspace?: (workspaceId: string) => void;
@@ -999,6 +1019,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 															row={row}
 															selected={selectedWorkspaceId === row.id}
 															isSending={sendingWorkspaceIds?.has(row.id)}
+															isCompleted={completedWorkspaceIds?.has(row.id)}
 															rowRef={setWorkspaceRowRef(row.id)}
 															onSelect={onSelectWorkspace}
 															onPrefetch={onPrefetchWorkspace}

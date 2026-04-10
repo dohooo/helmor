@@ -468,6 +468,51 @@ pub struct UpdateIntendedTargetBranchInternal {
 /// then schedules a background fetch from `origin` to silently re-align to the
 /// freshest tip if it is still safe.
 ///
+/// Rename the workspace's local git branch and update `workspaces.branch` in
+/// the database. Both sides must succeed atomically — if the DB update fails
+/// after a successful git rename, the git rename is rolled back.
+pub fn rename_workspace_branch(workspace_id: &str, new_branch: &str) -> Result<()> {
+    let record = load_workspace_record_by_id(workspace_id)?
+        .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+
+    if record.state != "ready" {
+        bail!("Cannot rename branch: workspace is not in ready state");
+    }
+
+    let old_branch = record
+        .branch
+        .as_deref()
+        .with_context(|| format!("Workspace {workspace_id} has no branch"))?;
+
+    if old_branch == new_branch {
+        return Ok(());
+    }
+
+    // Step 1: git branch -m
+    let repo_root = helpers::non_empty(&record.root_path)
+        .with_context(|| format!("Workspace {workspace_id} has no repo root path"))?;
+    let repo_root_path = std::path::Path::new(repo_root);
+
+    git_ops::rename_branch(repo_root_path, old_branch, new_branch)?;
+
+    // Step 2: update DB — rollback git on failure
+    let connection = db::open_connection(true)?;
+    if let Err(db_err) = connection.execute(
+        "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
+        (new_branch, workspace_id),
+    ) {
+        // Roll back the git rename
+        if let Err(rb_err) = git_ops::rename_branch(repo_root_path, new_branch, old_branch) {
+            eprintln!(
+                "[rename_workspace_branch] rollback git branch -m {new_branch} {old_branch} failed: {rb_err:#}"
+            );
+        }
+        return Err(db_err).context("Failed to update branch name in database");
+    }
+
+    Ok(())
+}
+
 /// The background fetch is dispatched via `tauri::async_runtime::spawn_blocking`
 /// rather than `std::thread::spawn` so it runs on Tokio's bounded blocking
 /// pool. Combined with the `GIT_NETWORK_TIMEOUT` cap inside `fetch_remote_branch`,

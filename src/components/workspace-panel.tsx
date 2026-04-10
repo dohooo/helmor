@@ -61,6 +61,7 @@ import {
 	type PullRequestInfo,
 	prefetchRemoteRefs,
 	renameSession,
+	renameWorkspaceBranch,
 	type SessionAttachmentRecord,
 	type SystemNoticePart,
 	type ThreadMessageLike,
@@ -127,6 +128,7 @@ type WorkspacePanelProps = {
 	refreshingSession?: boolean;
 	sending?: boolean;
 	sendingSessionIds?: Set<string>;
+	completedSessionIds?: Set<string>;
 	onSelectSession?: (sessionId: string) => void;
 	onPrefetchSession?: (sessionId: string) => void;
 	onSessionsChanged?: () => void;
@@ -204,6 +206,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	refreshingSession: _refreshingSession = false,
 	sending = false,
 	sendingSessionIds,
+	completedSessionIds,
 	onSelectSession,
 	onPrefetchSession,
 	onSessionsChanged,
@@ -254,6 +257,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 					selectedProvider={selectedProvider}
 					sending={sending}
 					sendingSessionIds={sendingSessionIds}
+					completedSessionIds={completedSessionIds}
 					loadingWorkspace={loadingWorkspace}
 					headerActions={headerActions}
 					headerLeading={headerLeading}
@@ -274,7 +278,9 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 					) : loadingWorkspace || loadingSession ? (
 						<ConversationColdPlaceholder />
 					) : (
-						<EmptyState hasSession={!!selectedSession} />
+						<div className="flex min-h-full flex-1 items-center justify-center px-8">
+							<EmptyState hasSession={!!selectedSession} />
+						</div>
 					)}
 				</div>
 			</div>
@@ -304,6 +310,7 @@ type WorkspacePanelHeaderProps = {
 	selectedProvider?: string | null;
 	sending: boolean;
 	sendingSessionIds?: Set<string>;
+	completedSessionIds?: Set<string>;
 	loadingWorkspace: boolean;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
@@ -322,6 +329,7 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	selectedProvider,
 	sending,
 	sendingSessionIds,
+	completedSessionIds,
 	loadingWorkspace,
 	headerActions,
 	headerLeading,
@@ -354,6 +362,48 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	const loadingBranches = branchesQuery.isFetching;
 	const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
 	const [editingTitle, setEditingTitle] = useState("");
+	const [editingBranch, setEditingBranch] = useState<string | null>(null);
+	const [branchCopied, setBranchCopied] = useState(false);
+
+	const handleStartBranchRename = useCallback(() => {
+		if (!workspace?.branch) return;
+		setEditingBranch(workspace.branch);
+	}, [workspace?.branch]);
+
+	const handleCommitBranchRename = useCallback(async () => {
+		if (editingBranch === null || !workspace) return;
+		const trimmed = editingBranch.trim();
+		if (trimmed && trimmed !== workspace.branch) {
+			const detailKey = helmorQueryKeys.workspaceDetail(workspace.id);
+			const previous = queryClient.getQueryData<WorkspaceDetail | null>(
+				detailKey,
+			);
+			if (previous) {
+				queryClient.setQueryData<WorkspaceDetail | null>(detailKey, {
+					...previous,
+					branch: trimmed,
+				});
+			}
+			try {
+				await renameWorkspaceBranch(workspace.id, trimmed);
+				onWorkspaceChanged?.();
+			} catch (err: unknown) {
+				if (previous) {
+					queryClient.setQueryData<WorkspaceDetail | null>(detailKey, previous);
+				}
+				pushToast(
+					err instanceof Error ? err.message : String(err),
+					"Branch rename failed",
+					"destructive",
+				);
+			}
+		}
+		setEditingBranch(null);
+	}, [editingBranch, workspace, queryClient, onWorkspaceChanged]);
+
+	const handleCancelBranchRename = useCallback(() => {
+		setEditingBranch(null);
+	}, []);
 
 	const handleCreateSession = useCallback(async () => {
 		if (!workspace) return;
@@ -585,12 +635,70 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 			>
 				<div className="flex min-w-0 items-center gap-2 text-[12.5px]">
 					{headerLeading}
-					<span className="inline-flex items-center gap-1 px-1 py-0.5 font-medium text-foreground">
+					<span className="group/branch relative inline-flex items-center gap-1 overflow-hidden px-1 py-0.5 font-medium text-foreground">
 						<GitBranch
-							className={cn("size-3.5", getBranchToneClassName(branchTone))}
+							className={cn(
+								"shrink-0 size-3.5",
+								getBranchToneClassName(branchTone),
+							)}
 							strokeWidth={1.9}
 						/>
-						<span className="truncate">{workspace?.branch ?? "No branch"}</span>
+						{editingBranch !== null ? (
+							<Input
+								autoFocus
+								value={editingBranch}
+								onChange={(event) => setEditingBranch(event.target.value)}
+								onKeyDown={(event) => {
+									if (event.key === "Enter") {
+										event.preventDefault();
+										void handleCommitBranchRename();
+									} else if (event.key === "Escape") {
+										handleCancelBranchRename();
+									}
+								}}
+								onBlur={() => void handleCommitBranchRename()}
+								onClick={(event) => event.stopPropagation()}
+								className="h-5 w-32 truncate rounded-md border-border bg-background px-1.5 py-0 text-[12.5px] font-medium text-foreground"
+							/>
+						) : (
+							<>
+								<span className="truncate">
+									{workspace?.branch ?? "No branch"}
+								</span>
+								{workspace?.branch && workspace.state !== "archived" ? (
+									<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 bg-[linear-gradient(to_right,transparent_0%,var(--background)_35%,var(--background)_100%)] pl-5 pr-1 group-hover/branch:pointer-events-auto group-hover/branch:visible">
+										<span
+											role="button"
+											aria-label="Rename branch"
+											onClick={handleStartBranchRename}
+											className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
+										>
+											<Pencil className="size-2.5" strokeWidth={2} />
+										</span>
+										<span
+											role="button"
+											aria-label="Copy branch name"
+											onClick={() => {
+												if (!workspace.branch) return;
+												void navigator.clipboard.writeText(workspace.branch);
+												setBranchCopied(true);
+												setTimeout(() => setBranchCopied(false), 1500);
+											}}
+											className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
+										>
+											{branchCopied ? (
+												<Check
+													className="size-2.5 text-green-400"
+													strokeWidth={2}
+												/>
+											) : (
+												<Copy className="size-2.5" strokeWidth={2} />
+											)}
+										</span>
+									</span>
+								) : null}
+							</>
+						)}
 					</span>
 					{workspace?.intendedTargetBranch ? (
 						<>
@@ -725,6 +833,8 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 										? sendingSessionIds.has(session.id)
 										: selected && sending;
 									const hasUnread = session.unreadCount > 0;
+									const isCompleted =
+										completedSessionIds?.has(session.id) ?? false;
 									const isEditing = editingSessionId === session.id;
 
 									return (
@@ -774,7 +884,7 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 												<span
 													className={cn(
 														"truncate font-medium",
-														hasUnread && !selected
+														(hasUnread || isCompleted) && !selected
 															? "text-foreground"
 															: undefined,
 													)}
@@ -782,9 +892,11 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 													{displaySessionTitle(session)}
 												</span>
 											)}
-											{hasUnread && !isEditing ? (
+											{(hasUnread || isCompleted) && !isEditing ? (
 												<span
-													aria-label="Unread session"
+													aria-label={
+														isCompleted ? "Session completed" : "Unread session"
+													}
 													className="size-1.5 shrink-0 rounded-full bg-chart-2"
 												/>
 											) : null}
