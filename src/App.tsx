@@ -21,22 +21,17 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import { SettingsButton, SettingsDialog } from "./components/settings-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "./components/ui/avatar";
+import { Button } from "./components/ui/button";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "./components/ui/dropdown-menu";
-import {
-	Toast,
-	ToastClose,
-	ToastDescription,
-	ToastProvider,
-	ToastTitle,
-	ToastViewport,
-} from "./components/ui/toast";
+import { Toaster } from "./components/ui/sonner";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type {
 	CommitButtonState,
@@ -96,7 +91,10 @@ import {
 	describeUnknownError,
 	summaryToArchivedRow,
 } from "./lib/workspace-helpers";
-import { WorkspaceToastProvider } from "./lib/workspace-toast-context";
+import {
+	type WorkspaceToastOptions,
+	WorkspaceToastProvider,
+} from "./lib/workspace-toast-context";
 
 const ALL_EDITORS = [
 	{ id: "cursor", name: "Cursor" },
@@ -122,20 +120,6 @@ const WORKSPACE_NAVIGATION_ORDER = [
 	"backlog",
 	"canceled",
 ] as const;
-
-type WorkspaceToast = {
-	id: string;
-	title: string;
-	description: string;
-	variant?: "default" | "destructive";
-	action?: {
-		label: string;
-		onClick: () => void;
-		destructive?: boolean;
-	};
-	/** If true, toast stays until manually dismissed (no auto-close) */
-	persistent?: boolean;
-};
 
 type GithubIdentityState =
 	| { status: "checking" }
@@ -322,7 +306,6 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const [editorSession, setEditorSession] = useState<EditorSessionState | null>(
 		null,
 	);
-	const [workspaceToasts, setWorkspaceToasts] = useState<WorkspaceToast[]>([]);
 	const [sendingWorkspaceIds, setSendingWorkspaceIds] = useState<Set<string>>(
 		() => new Set(),
 	);
@@ -442,30 +425,45 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			title = "Action failed",
 			variant: "default" | "destructive" = "destructive",
 			opts?: {
-				action?: WorkspaceToast["action"];
+				action?: WorkspaceToastOptions["action"];
 				persistent?: boolean;
 			},
 		) => {
-			setWorkspaceToasts((current) => [
-				...current,
-				{
-					id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-					title,
-					description,
-					variant,
-					action: opts?.action,
-					persistent: opts?.persistent,
-				},
-			]);
+			const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+			const action = opts?.action
+				? {
+						label: opts.action.label,
+						onClick: () => {
+							opts.action?.onClick();
+							toast.dismiss(id);
+						},
+					}
+				: undefined;
+			const cancel = opts?.action
+				? {
+						label: "Dismiss",
+						onClick: () => {
+							toast.dismiss(id);
+						},
+					}
+				: undefined;
+			const toastOptions = {
+				id,
+				description,
+				duration: opts?.persistent ? Number.POSITIVE_INFINITY : 4200,
+				action,
+				cancel,
+			};
+
+			if (variant === "destructive") {
+				toast.error(title, toastOptions);
+				return;
+			}
+
+			toast(title, toastOptions);
 		},
 		[],
 	);
-
-	const dismissWorkspaceToast = useCallback((toastId: string) => {
-		setWorkspaceToasts((current) =>
-			current.filter((toast) => toast.id !== toastId),
-		);
-	}, []);
 
 	const clearWorkspaceRuntimeState = useCallback(() => {
 		selectedWorkspaceIdRef.current = null;
@@ -1604,337 +1602,271 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	]);
 
 	return (
-		<TooltipProvider delay={0}>
-			<ToastProvider swipeDirection="right">
-				<WorkspaceToastProvider value={pushWorkspaceToast}>
-					{!isIdentityConnected ? (
-						<GithubIdentityGate
-							identityState={githubIdentityState}
-							onConnectGithub={() => {
-								void handleStartGithubOAuthRedirect();
-							}}
-							onCopyGithubCode={(userCode) =>
-								handleCopyGithubDeviceCode(userCode)
-							}
-							onCancelGithubConnect={handleCancelGithubIdentityConnect}
-						/>
-					) : (
-						<main
-							aria-label="Application shell"
-							className="relative h-screen overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
-						>
-							<div className="relative flex h-full min-h-0 bg-app-sidebar">
-								{workspaceViewMode === "conversation" && (
-									<>
-										{!sidebarCollapsed && (
-											<aside
-												aria-label="Workspace sidebar"
-												className="relative h-full shrink-0 overflow-hidden bg-app-sidebar"
-												style={{ width: `${sidebarWidth}px` }}
+		<TooltipProvider delayDuration={0}>
+			<WorkspaceToastProvider value={pushWorkspaceToast}>
+				{!isIdentityConnected ? (
+					<GithubIdentityGate
+						identityState={githubIdentityState}
+						onConnectGithub={() => {
+							void handleStartGithubOAuthRedirect();
+						}}
+						onCopyGithubCode={(userCode) =>
+							handleCopyGithubDeviceCode(userCode)
+						}
+						onCancelGithubConnect={handleCancelGithubIdentityConnect}
+					/>
+				) : (
+					<main
+						aria-label="Application shell"
+						className="relative h-screen overflow-hidden bg-background font-sans text-foreground antialiased"
+					>
+						<div className="relative flex h-full min-h-0 bg-background">
+							{workspaceViewMode === "conversation" && (
+								<>
+									{!sidebarCollapsed && (
+										<aside
+											aria-label="Workspace sidebar"
+											className="relative h-full shrink-0 overflow-hidden bg-sidebar"
+											style={{ width: `${sidebarWidth}px` }}
+										>
+											<WorkspacesSidebarContainer
+												selectedWorkspaceId={selectedWorkspaceId}
+												sendingWorkspaceIds={sendingWorkspaceIds}
+												onSelectWorkspace={handleSelectWorkspace}
+												pushWorkspaceToast={pushWorkspaceToast}
+											/>
+											<Button
+												aria-label="Collapse sidebar"
+												onClick={() => setSidebarCollapsed(true)}
+												variant="ghost"
+												size="icon-xs"
+												className="absolute right-[12px] top-[8px] z-20 text-muted-foreground hover:text-foreground"
 											>
-												<WorkspacesSidebarContainer
-													selectedWorkspaceId={selectedWorkspaceId}
-													sendingWorkspaceIds={sendingWorkspaceIds}
-													onSelectWorkspace={handleSelectWorkspace}
-													pushWorkspaceToast={pushWorkspaceToast}
-												/>
-												<button
-													type="button"
-													aria-label="Collapse sidebar"
-													onClick={() => setSidebarCollapsed(true)}
-													className="absolute right-[12px] top-[8px] z-20 flex size-5 items-center justify-center rounded text-app-foreground-soft/80 transition-colors hover:text-app-foreground"
-												>
-													<PanelLeftClose
-														className="size-4"
-														strokeWidth={1.8}
-													/>
-												</button>
-												<div className="absolute inset-x-3 bottom-3 z-20 flex items-center justify-between">
-													<SettingsButton onClick={onOpenSettings} />
-													<GithubStatusMenu
-														identityState={githubIdentityState}
-														onDisconnectGithub={() => {
-															void handleDisconnectGithubIdentity();
-														}}
-													/>
-												</div>
-											</aside>
-										)}
-
-										{!sidebarCollapsed && (
-											<div
-												role="separator"
-												tabIndex={0}
-												aria-label="Resize sidebar"
-												aria-orientation="vertical"
-												aria-valuemin={MIN_SIDEBAR_WIDTH}
-												aria-valuemax={MAX_SIDEBAR_WIDTH}
-												aria-valuenow={sidebarWidth}
-												onMouseDown={handleResizeStart("sidebar")}
-												onKeyDown={handleResizeKeyDown("sidebar")}
-												className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
-												style={{
-													left: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
-													width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
-												}}
-											>
-												<span
-													aria-hidden="true"
-													className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
-														isSidebarResizing
-															? "w-[2px] bg-app-foreground/80 shadow-[0_0_12px_rgba(250,249,246,0.2)]"
-															: "w-px bg-app-border/60 group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
-													}`}
+												<PanelLeftClose className="size-4" strokeWidth={1.8} />
+											</Button>
+											<div className="absolute inset-x-3 bottom-3 z-20 flex items-center justify-between">
+												<SettingsButton onClick={onOpenSettings} />
+												<GithubStatusMenu
+													identityState={githubIdentityState}
+													onDisconnectGithub={() => {
+														void handleDisconnectGithubIdentity();
+													}}
 												/>
 											</div>
-										)}
-									</>
-								)}
-
-								<section
-									aria-label="Workspace panel"
-									className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-app-elevated"
-								>
-									{workspaceViewMode === "conversation" && (
-										<div
-											aria-label="Workspace panel drag region"
-											className="absolute inset-x-0 top-0 z-10 h-9 bg-transparent"
-											data-tauri-drag-region
-										/>
+										</aside>
 									)}
 
-									<div
-										aria-label="Workspace viewport"
-										className="flex min-h-0 flex-1 flex-col bg-app-elevated"
-									>
-										{workspaceViewMode === "editor" && editorSession ? (
-											<WorkspaceEditorSurface
-												editorSession={editorSession}
-												workspaceRootPath={workspaceRootPath}
-												onChangeSession={handleEditorSessionChange}
-												onExit={handleExitEditorMode}
-												onError={handleEditorSurfaceError}
-											/>
-										) : (
-											<WorkspaceConversationContainer
-												selectedWorkspaceId={selectedWorkspaceId}
-												displayedWorkspaceId={displayedWorkspaceId}
-												selectedSessionId={selectedSessionId}
-												displayedSessionId={displayedSessionId}
-												sessionSelectionHistory={
-													selectedWorkspaceId
-														? (sessionSelectionHistoryByWorkspaceRef.current[
-																selectedWorkspaceId
-															] ?? [])
-														: []
-												}
-												onSelectSession={handleSelectSession}
-												onResolveDisplayedSession={
-													handleResolveDisplayedSession
-												}
-												onSendingWorkspacesChange={setSendingWorkspaceIds}
-												onSendingSessionsChange={setSendingSessionIds}
-												pendingPromptForSession={pendingPromptForSession}
-												onPendingPromptConsumed={handlePendingPromptConsumed}
-												headerLeading={
-													sidebarCollapsed ? (
-														<>
-															{/* Spacer to avoid macOS traffic lights */}
-															<div className="w-[52px] shrink-0" />
-															<button
-																type="button"
-																aria-label="Expand sidebar"
-																onClick={() => setSidebarCollapsed(false)}
-																className="flex size-5 items-center justify-center rounded text-app-foreground-soft/80 transition-colors hover:text-app-foreground"
-															>
-																<PanelLeftOpen
-																	className="size-4"
-																	strokeWidth={1.8}
-																/>
-															</button>
-														</>
-													) : undefined
-												}
-												headerActions={
-													selectedWorkspaceId && preferredEditor ? (
-														<DropdownMenu>
-															<DropdownMenuTrigger className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] font-medium text-app-muted transition-colors hover:text-app-foreground focus-visible:outline-none">
-																<EditorIcon
-																	editorId={preferredEditor.id}
-																	className="size-3.5"
-																/>
-																<span>{preferredEditor.name}</span>
-																<ChevronDown
-																	className="size-2.5 opacity-50"
-																	strokeWidth={2}
-																/>
-															</DropdownMenuTrigger>
-															<DropdownMenuContent
-																side="bottom"
-																align="end"
-																sideOffset={6}
-																className="min-w-[11rem]"
-															>
-																{ALL_EDITORS.map((editor) => (
-																	<DropdownMenuItem
-																		key={editor.id}
-																		onClick={() => {
-																			setPreferredEditorId(editor.id);
-																			void openWorkspaceInEditor(
-																				selectedWorkspaceId,
-																				editor.id,
-																			).catch((e) =>
-																				pushWorkspaceToast(
-																					String(e),
-																					`Failed to open ${editor.name}`,
-																				),
-																			);
-																		}}
-																		className="flex items-center gap-2"
-																	>
-																		<EditorIcon
-																			editorId={editor.id}
-																			className="size-3.5 shrink-0"
-																		/>
-																		<span className="flex-1 font-medium">
-																			{editor.name}
-																		</span>
-																		{editor.id === preferredEditor.id && (
-																			<Check className="ml-auto size-3 text-app-foreground-soft" />
-																		)}
-																	</DropdownMenuItem>
-																))}
-															</DropdownMenuContent>
-														</DropdownMenu>
-													) : undefined
-												}
-											/>
-										)}
-									</div>
-								</section>
-
-								<div
-									role="separator"
-									tabIndex={0}
-									aria-label="Resize inspector sidebar"
-									aria-orientation="vertical"
-									aria-valuemin={MIN_SIDEBAR_WIDTH}
-									aria-valuemax={MAX_SIDEBAR_WIDTH}
-									aria-valuenow={inspectorWidth}
-									onMouseDown={handleResizeStart("inspector")}
-									onKeyDown={handleResizeKeyDown("inspector")}
-									className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
-									style={{
-										right: `${inspectorWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
-										width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
-									}}
-								>
-									<span
-										aria-hidden="true"
-										className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
-											isInspectorResizing
-												? "w-[2px] bg-transparent shadow-none"
-												: "w-px bg-app-border/60 group-hover:w-[2px] group-hover:bg-app-foreground-soft/75 group-hover:shadow-[0_0_10px_rgba(250,249,246,0.08)] group-focus-visible:w-[2px] group-focus-visible:bg-app-foreground-soft/75"
-										}`}
-									/>
-								</div>
-
-								<aside
-									aria-label="Inspector sidebar"
-									className="relative h-full shrink-0 overflow-hidden bg-app-sidebar"
-									style={{ width: `${inspectorWidth}px` }}
-								>
-									<WorkspaceInspectorSidebar
-										workspaceRootPath={workspaceRootPath}
-										workspaceBranch={
-											selectedWorkspaceDetailQuery.data?.branch ?? null
-										}
-										workspaceTargetBranch={
-											selectedWorkspaceDetailQuery.data?.intendedTargetBranch ??
-											selectedWorkspaceDetailQuery.data?.defaultBranch ??
-											null
-										}
-										editorMode={workspaceViewMode === "editor"}
-										activeEditorPath={editorSession?.path ?? null}
-										onOpenEditorFile={handleOpenEditorFile}
-										onCommitAction={handleInspectorCommitAction}
-										commitButtonMode={commitButtonMode}
-										commitButtonState={commitButtonState}
-										prInfo={workspacePrInfo}
-									/>
-								</aside>
-							</div>
-						</main>
-					)}
-					<ToastViewport />
-					{workspaceToasts.map((toast) => (
-						<Toast
-							key={toast.id}
-							open
-							variant={toast.variant ?? "destructive"}
-							duration={toast.persistent ? 999999999 : 4200}
-							onOpenChange={(open: boolean) => {
-								if (!open) {
-									dismissWorkspaceToast(toast.id);
-								}
-							}}
-							className={
-								toast.action
-									? "flex-col items-stretch gap-0 rounded-xl border border-app-border bg-app-sidebar p-0 shadow-xl"
-									: undefined
-							}
-						>
-							{toast.action ? (
-								<>
-									<div className="px-4 pt-4 pb-3">
-										<ToastTitle className="text-[13px] font-semibold text-app-foreground">
-											{toast.title}
-										</ToastTitle>
-										<ToastDescription className="mt-1.5 text-[12px] leading-relaxed text-app-muted">
-											{toast.description}
-										</ToastDescription>
-									</div>
-									<div className="flex items-center justify-end gap-2 border-t border-app-border/50 px-3 py-2.5">
-										<button
-											type="button"
-											onClick={() => dismissWorkspaceToast(toast.id)}
-											className="rounded-md px-3 py-1.5 text-[12px] font-medium text-app-foreground-soft transition-colors hover:bg-app-foreground/[0.06]"
-										>
-											Dismiss
-										</button>
-										<button
-											type="button"
-											onClick={() => {
-												toast.action?.onClick();
-												dismissWorkspaceToast(toast.id);
+									{!sidebarCollapsed && (
+										<div
+											role="separator"
+											tabIndex={0}
+											aria-label="Resize sidebar"
+											aria-orientation="vertical"
+											aria-valuemin={MIN_SIDEBAR_WIDTH}
+											aria-valuemax={MAX_SIDEBAR_WIDTH}
+											aria-valuenow={sidebarWidth}
+											onMouseDown={handleResizeStart("sidebar")}
+											onKeyDown={handleResizeKeyDown("sidebar")}
+											className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+											style={{
+												left: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
+												width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
 											}}
-											className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors ${
-												toast.action.destructive
-													? "bg-red-500 text-white hover:bg-red-600"
-													: "bg-app-foreground/10 text-app-foreground hover:bg-app-foreground/20"
-											}`}
 										>
-											{toast.action.label}
-										</button>
-									</div>
-									<ToastClose
-										aria-label="Dismiss notification"
-										className="absolute right-2 top-2"
-									/>
-								</>
-							) : (
-								<>
-									<div className="grid gap-1">
-										<ToastTitle>{toast.title}</ToastTitle>
-										<ToastDescription>{toast.description}</ToastDescription>
-									</div>
-									<ToastClose aria-label="Dismiss notification" />
+											<span
+												aria-hidden="true"
+												className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
+													isSidebarResizing
+														? "w-[2px] bg-foreground/80 shadow-[0_0_12px_rgba(0,0,0,0.12)] dark:shadow-[0_0_12px_rgba(255,255,255,0.16)]"
+														: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
+												}`}
+											/>
+										</div>
+									)}
 								</>
 							)}
-						</Toast>
-					))}
-				</WorkspaceToastProvider>
-			</ToastProvider>
+
+							<section
+								aria-label="Workspace panel"
+								className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
+							>
+								{workspaceViewMode === "conversation" && (
+									<div
+										aria-label="Workspace panel drag region"
+										className="absolute inset-x-0 top-0 z-10 h-9 bg-transparent"
+										data-tauri-drag-region
+									/>
+								)}
+
+								<div
+									aria-label="Workspace viewport"
+									className="flex min-h-0 flex-1 flex-col bg-background"
+								>
+									{workspaceViewMode === "editor" && editorSession ? (
+										<WorkspaceEditorSurface
+											editorSession={editorSession}
+											workspaceRootPath={workspaceRootPath}
+											onChangeSession={handleEditorSessionChange}
+											onExit={handleExitEditorMode}
+											onError={handleEditorSurfaceError}
+										/>
+									) : (
+										<WorkspaceConversationContainer
+											selectedWorkspaceId={selectedWorkspaceId}
+											displayedWorkspaceId={displayedWorkspaceId}
+											selectedSessionId={selectedSessionId}
+											displayedSessionId={displayedSessionId}
+											sessionSelectionHistory={
+												selectedWorkspaceId
+													? (sessionSelectionHistoryByWorkspaceRef.current[
+															selectedWorkspaceId
+														] ?? [])
+													: []
+											}
+											onSelectSession={handleSelectSession}
+											onResolveDisplayedSession={handleResolveDisplayedSession}
+											onSendingWorkspacesChange={setSendingWorkspaceIds}
+											onSendingSessionsChange={setSendingSessionIds}
+											workspacePrInfo={workspacePrInfo}
+											pendingPromptForSession={pendingPromptForSession}
+											onPendingPromptConsumed={handlePendingPromptConsumed}
+											headerLeading={
+												sidebarCollapsed ? (
+													<>
+														{/* Spacer to avoid macOS traffic lights */}
+														<div className="w-[52px] shrink-0" />
+														<Button
+															aria-label="Expand sidebar"
+															onClick={() => setSidebarCollapsed(false)}
+															variant="ghost"
+															size="icon-xs"
+															className="text-muted-foreground hover:text-foreground"
+														>
+															<PanelLeftOpen
+																className="size-4"
+																strokeWidth={1.8}
+															/>
+														</Button>
+													</>
+												) : undefined
+											}
+											headerActions={
+												selectedWorkspaceId && preferredEditor ? (
+													<DropdownMenu>
+														<DropdownMenuTrigger className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none">
+															<EditorIcon
+																editorId={preferredEditor.id}
+																className="size-3.5"
+															/>
+															<span>{preferredEditor.name}</span>
+															<ChevronDown
+																className="size-2.5 opacity-50"
+																strokeWidth={2}
+															/>
+														</DropdownMenuTrigger>
+														<DropdownMenuContent
+															side="bottom"
+															align="end"
+															sideOffset={6}
+															className="min-w-[11rem]"
+														>
+															{ALL_EDITORS.map((editor) => (
+																<DropdownMenuItem
+																	key={editor.id}
+																	onClick={() => {
+																		setPreferredEditorId(editor.id);
+																		void openWorkspaceInEditor(
+																			selectedWorkspaceId,
+																			editor.id,
+																		).catch((e) =>
+																			pushWorkspaceToast(
+																				String(e),
+																				`Failed to open ${editor.name}`,
+																			),
+																		);
+																	}}
+																	className="flex items-center gap-2"
+																>
+																	<EditorIcon
+																		editorId={editor.id}
+																		className="size-3.5 shrink-0"
+																	/>
+																	<span className="flex-1 font-medium">
+																		{editor.name}
+																	</span>
+																	{editor.id === preferredEditor.id && (
+																		<Check className="ml-auto size-3 text-muted-foreground" />
+																	)}
+																</DropdownMenuItem>
+															))}
+														</DropdownMenuContent>
+													</DropdownMenu>
+												) : undefined
+											}
+										/>
+									)}
+								</div>
+							</section>
+
+							<div
+								role="separator"
+								tabIndex={0}
+								aria-label="Resize inspector sidebar"
+								aria-orientation="vertical"
+								aria-valuemin={MIN_SIDEBAR_WIDTH}
+								aria-valuemax={MAX_SIDEBAR_WIDTH}
+								aria-valuenow={inspectorWidth}
+								onMouseDown={handleResizeStart("inspector")}
+								onKeyDown={handleResizeKeyDown("inspector")}
+								className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+								style={{
+									right: `${inspectorWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
+									width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
+								}}
+							>
+								<span
+									aria-hidden="true"
+									className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
+										isInspectorResizing
+											? "w-[2px] bg-transparent shadow-none"
+											: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
+									}`}
+								/>
+							</div>
+
+							<aside
+								aria-label="Inspector sidebar"
+								className="relative h-full shrink-0 overflow-hidden bg-sidebar"
+								style={{ width: `${inspectorWidth}px` }}
+							>
+								<WorkspaceInspectorSidebar
+									workspaceRootPath={workspaceRootPath}
+									workspaceBranch={
+										selectedWorkspaceDetailQuery.data?.branch ?? null
+									}
+									workspaceTargetBranch={
+										selectedWorkspaceDetailQuery.data?.intendedTargetBranch ??
+										selectedWorkspaceDetailQuery.data?.defaultBranch ??
+										null
+									}
+									editorMode={workspaceViewMode === "editor"}
+									activeEditorPath={editorSession?.path ?? null}
+									onOpenEditorFile={handleOpenEditorFile}
+									onCommitAction={handleInspectorCommitAction}
+									commitButtonMode={commitButtonMode}
+									commitButtonState={commitButtonState}
+									prInfo={workspacePrInfo}
+								/>
+							</aside>
+						</div>
+					</main>
+				)}
+				<Toaster
+					theme={resolveTheme(appSettings.theme)}
+					position="top-right"
+					visibleToasts={6}
+				/>
+			</WorkspaceToastProvider>
 		</TooltipProvider>
 	);
 }
@@ -2060,7 +1992,7 @@ function GithubIdentityGate({
 	return (
 		<main
 			aria-label="GitHub identity gate"
-			className="relative h-screen overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
+			className="relative h-screen overflow-hidden bg-background font-sans text-foreground antialiased"
 		>
 			<div
 				aria-label="GitHub identity gate drag region"
@@ -2072,40 +2004,40 @@ function GithubIdentityGate({
 
 			<div className="relative flex h-full items-center justify-center px-6">
 				<div className="w-full max-w-[31rem]">
-					<h1 className="text-center text-[40px] leading-[1.04] tracking-[-0.04em] text-app-foreground">
+					<h1 className="text-center text-[40px] leading-[1.04] tracking-[-0.04em] text-foreground">
 						{title}
 					</h1>
-					<p className="mx-auto mt-4 max-w-[31rem] text-center text-[16px] leading-7 text-app-foreground-soft/72">
+					<p className="mx-auto mt-4 max-w-[31rem] text-center text-[16px] leading-7 text-muted-foreground">
 						{description}
 					</p>
 
 					{identityState.status === "awaiting-redirect" ? (
 						<div className="mt-8 flex flex-col items-center gap-4">
-							<div className="inline-flex items-center gap-2 text-[14px] text-app-foreground-soft/76">
+							<div className="inline-flex items-center gap-2 text-[14px] text-muted-foreground">
 								<RefreshCw className="size-4 animate-spin" strokeWidth={1.8} />
 								Waiting for authorization
 							</div>
-							<button
-								type="button"
+							<Button
+								variant="ghost"
 								onClick={onCancelGithubConnect}
-								className="inline-flex items-center justify-center rounded-full px-4 py-2 text-[14px] font-medium text-app-foreground-soft/78 transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
+								className="rounded-full px-4 text-[14px] text-muted-foreground hover:text-foreground"
 							>
 								Cancel
-							</button>
+							</Button>
 						</div>
 					) : identityState.status === "pending" ? (
 						<div className="mt-8 flex flex-col items-center gap-5">
-							<button
-								type="button"
+							<Button
+								variant="ghost"
 								onClick={() => {
 									void handleCopyCodeThenRedirect();
 								}}
 								disabled={codeCopied}
-								className="relative rounded-2xl px-5 py-3 transition-colors hover:bg-app-toolbar-hover/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong"
+								className="relative h-auto rounded-2xl px-5 py-3 hover:bg-accent/60"
 								aria-label="Copy one-time code"
 								title="Copy one-time code"
 							>
-								<span className="font-mono text-[30px] tracking-[0.18em] text-app-foreground">
+								<span className="font-mono text-[30px] tracking-[0.18em] text-foreground">
 									{identityState.flow.userCode}
 								</span>
 								<span className="absolute -right-6 top-1/2 flex -translate-y-1/2 items-center justify-center">
@@ -2116,50 +2048,48 @@ function GithubIdentityGate({
 										/>
 									) : (
 										<Copy
-											className="size-4 text-app-foreground/40"
+											className="size-4 text-foreground/40"
 											strokeWidth={1.8}
 										/>
 									)}
 								</span>
-							</button>
+							</Button>
 							<div className="flex flex-wrap items-center justify-center gap-3">
-								<button
-									type="button"
+								<Button
+									variant="ghost"
 									onClick={onCancelGithubConnect}
-									className="inline-flex items-center justify-center rounded-full px-4 py-2 text-[14px] font-medium text-app-foreground-soft/78 transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
+									className="rounded-full px-4 text-[14px] text-muted-foreground hover:text-foreground"
 								>
 									Cancel
-								</button>
+								</Button>
 							</div>
 						</div>
 					) : identityState.status === "unconfigured" ? (
 						<div className="mt-8 flex justify-center">
-							<button
-								type="button"
+							<Button
 								disabled
-								className="inline-flex items-center gap-2 rounded-full bg-[#353534] px-4 py-2 text-[14px] font-medium text-app-foreground/55 opacity-70"
+								className="rounded-full px-4 text-[14px] opacity-70"
 							>
-								<MarkGithubIcon size={16} />
+								<MarkGithubIcon size={16} data-icon="inline-start" />
 								Continue with GitHub
-							</button>
+							</Button>
 						</div>
 					) : identityState.status === "checking" ? (
-						<div className="mt-8 inline-flex w-full items-center justify-center gap-2 text-[14px] text-app-foreground-soft/76">
+						<div className="mt-8 inline-flex w-full items-center justify-center gap-2 text-[14px] text-muted-foreground">
 							<RefreshCw className="size-4 animate-spin" strokeWidth={1.8} />
 							Restoring your last session
 						</div>
 					) : (
 						<div className="mt-8 flex justify-center">
-							<button
-								type="button"
+							<Button
 								onClick={onConnectGithub}
-								className="inline-flex items-center gap-2 rounded-full bg-[#353534] px-4 py-2 text-[14px] font-medium text-app-foreground transition-colors hover:bg-[#424240]"
+								className="rounded-full px-4 text-[14px]"
 							>
-								<MarkGithubIcon size={16} />
+								<MarkGithubIcon size={16} data-icon="inline-start" />
 								{identityState.status === "error"
 									? "Retry with GitHub"
 									: "Continue with GitHub"}
-							</button>
+							</Button>
 						</div>
 					)}
 				</div>
@@ -2182,7 +2112,7 @@ function GithubStatusMenu({
 		<DropdownMenu>
 			<DropdownMenuTrigger
 				aria-label="GitHub account menu"
-				className="inline-flex h-7 items-center gap-2 rounded-md px-1.5 text-app-muted transition-colors hover:bg-app-toolbar-hover hover:text-app-foreground"
+				className="inline-flex h-7 items-center gap-2 rounded-md px-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
 			>
 				<Avatar size="sm" className="size-4">
 					{identitySession?.avatarUrl ? (
@@ -2191,22 +2121,18 @@ function GithubStatusMenu({
 							alt={identitySession.login}
 						/>
 					) : null}
-					<AvatarFallback className="bg-app-toolbar text-[10px] font-medium text-app-foreground-soft">
+					<AvatarFallback className="bg-muted text-[10px] font-medium text-muted-foreground">
 						{identitySession?.login.slice(0, 2).toUpperCase() ?? "GH"}
 					</AvatarFallback>
 				</Avatar>
-				<span className="text-[13px] font-medium text-app-foreground-soft/74">
+				<span className="text-[13px] font-medium text-muted-foreground">
 					{triggerLabel}
 				</span>
 			</DropdownMenuTrigger>
 
-			<DropdownMenuContent
-				align="end"
-				sideOffset={8}
-				className="w-44 rounded-[14px] border border-app-border bg-app-sidebar p-1.5 text-app-foreground shadow-[0_18px_48px_rgba(0,0,0,0.38)]"
-			>
+			<DropdownMenuContent align="end" sideOffset={8} className="w-44 p-1.5">
 				<DropdownMenuItem
-					className="rounded-[10px] px-2 py-2 text-app-foreground-soft hover:bg-app-row-hover focus:bg-app-row-hover"
+					className="rounded-md px-2 py-2 text-muted-foreground focus:bg-accent/60 focus:text-foreground"
 					onClick={onDisconnectGithub}
 				>
 					Log out

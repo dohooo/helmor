@@ -14,7 +14,11 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { AgentModelOption, ThreadMessageLike } from "@/lib/api";
+import type {
+	AgentModelOption,
+	PullRequestInfo,
+	ThreadMessageLike,
+} from "@/lib/api";
 import {
 	generateSessionTitle,
 	respondToPermissionRequest,
@@ -57,6 +61,7 @@ type WorkspaceConversationContainerProps = {
 	 * session-level lifecycle events (e.g. the commit button driver needs to
 	 * know when its target session's stream has ended). */
 	onSendingSessionsChange?: (sessionIds: Set<string>) => void;
+	workspacePrInfo?: PullRequestInfo | null;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
 	/** Prompt queued by an external caller (e.g. the inspector Git commit
@@ -78,6 +83,7 @@ export const WorkspaceConversationContainer = memo(
 		onResolveDisplayedSession,
 		onSendingWorkspacesChange,
 		onSendingSessionsChange,
+		workspacePrInfo = null,
 		headerActions,
 		headerLeading,
 		pendingPromptForSession = null,
@@ -643,6 +649,7 @@ export const WorkspaceConversationContainer = memo(
 					sending={isSending}
 					sendingSessionIds={sendingSessionIds}
 					selectedProvider={selectedProvider}
+					workspacePrInfo={workspacePrInfo}
 					onSelectSession={onSelectSession}
 					onResolveDisplayedSession={onResolveDisplayedSession}
 					headerActions={headerActions}
@@ -669,16 +676,16 @@ export const WorkspaceConversationContainer = memo(
 									leading={
 										<>
 											<ShieldQuestion
-												className="size-3.5 shrink-0 text-app-foreground-soft/60"
+												className="size-3.5 shrink-0 text-muted-foreground/60"
 												strokeWidth={1.8}
 												aria-hidden="true"
 											/>
-											<span className="truncate text-[12px] font-medium tracking-[0.01em] text-app-foreground-soft/72">
+											<span className="truncate text-[12px] font-medium tracking-[0.01em] text-muted-foreground">
 												{label ?? (
 													<>
 														<span className="font-semibold">{action}</span>
 														{target && (
-															<span className="ml-1.5 text-app-foreground-soft/50">
+															<span className="ml-1.5 text-muted-foreground/60">
 																{target}
 															</span>
 														)}

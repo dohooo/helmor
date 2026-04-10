@@ -2,6 +2,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { ImageIcon, X } from "lucide-react";
 import { useCallback, useState } from "react";
 import { createPortal } from "react-dom";
+import { Button } from "@/components/ui/button";
 
 /** Regex matching an absolute image path (may appear anywhere in a string). */
 const IMAGE_PATH_RE =
@@ -52,49 +53,58 @@ export function ImagePreviewBadge({
 
 	return (
 		<>
-			<span className="inline-flex items-center gap-1 rounded border border-app-border/60 text-[12px] transition-colors hover:border-app-foreground-soft/40 hover:bg-app-foreground/[0.03]">
-				<button
+			<span className="inline-flex items-center gap-1 rounded border border-border/60 text-[12px] transition-colors hover:border-muted-foreground/40 hover:bg-accent/40">
+				<Button
 					type="button"
+					variant="ghost"
+					size="xs"
 					onClick={handleClick}
-					className="inline-flex items-center gap-1.5 px-1.5 py-0.5"
+					className="h-auto gap-1.5 px-1.5 py-0.5"
 				>
 					<ImageIcon
-						className="size-3 shrink-0 text-app-project"
+						data-icon="inline-start"
+						className="size-3 shrink-0 text-chart-3"
 						strokeWidth={1.8}
 					/>
-					<span className="max-w-[200px] truncate text-app-foreground-soft">
+					<span className="max-w-[200px] truncate text-muted-foreground">
 						{fileName}
 					</span>
-				</button>
+				</Button>
 				{onRemove ? (
-					<button
+					<Button
 						type="button"
+						variant="ghost"
+						size="icon-xs"
 						onClick={onRemove}
-						className="px-1 py-0.5 text-app-muted/40 hover:text-app-muted"
+						className="text-muted-foreground/40 hover:text-muted-foreground"
 					>
 						<X className="size-3" strokeWidth={1.8} />
-					</button>
+					</Button>
 				) : null}
 			</span>
 			{open
 				? createPortal(
 						<div
-							className="fixed inset-0 z-[200] flex items-center justify-center bg-app-overlay backdrop-blur-sm"
+							className="fixed inset-0 z-[200] flex items-center justify-center bg-black/35 backdrop-blur-sm"
 							onClick={handleClose}
 						>
 							<div
-								className="relative max-h-[85vh] max-w-[85vw] overflow-hidden rounded-xl border border-app-border bg-app-tooltip shadow-2xl"
+								className="relative max-h-[85vh] max-w-[85vw] overflow-hidden rounded-xl border border-border bg-popover shadow-2xl"
 								onClick={(e) => e.stopPropagation()}
 							>
-								<div className="flex items-center justify-between border-b border-app-border/30 px-3 py-2">
-									<span className="text-[12px] text-app-muted">{fileName}</span>
-									<button
+								<div className="flex items-center justify-between border-b border-border/30 px-3 py-2">
+									<span className="text-[12px] text-muted-foreground">
+										{fileName}
+									</span>
+									<Button
 										type="button"
+										variant="ghost"
+										size="icon-xs"
 										onClick={handleClose}
-										className="flex size-5 items-center justify-center rounded text-app-muted hover:text-app-foreground"
+										className="size-5 text-muted-foreground hover:text-foreground"
 									>
 										<X className="size-3.5" strokeWidth={1.8} />
-									</button>
+									</Button>
 								</div>
 								<div className="overflow-auto p-2">
 									<img

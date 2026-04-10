@@ -343,7 +343,7 @@ export const WorkspaceComposerContainer = memo(
 											"oklch(0.8 0.09 84)",
 										]}
 									/>
-									<div className="pointer-events-none absolute inset-x-px bottom-0 z-[1] h-[2px] bg-app-sidebar" />
+									<div className="pointer-events-none absolute inset-x-px bottom-0 z-[1] h-[2px] bg-background" />
 								</>
 							) : null
 						}
@@ -351,18 +351,18 @@ export const WorkspaceComposerContainer = memo(
 							sending ? (
 								<ShimmerText
 									durationMs={1900}
-									className="truncate text-[12px] font-medium tracking-[0.02em] text-app-foreground-soft/80"
+									className="truncate text-[12px] font-medium tracking-[0.02em] text-muted-foreground"
 								>
 									Working...
 								</ShimmerText>
 							) : (
 								<>
 									<CircleAlert
-										className="size-3.5 shrink-0 text-app-foreground-soft/60"
+										className="size-3.5 shrink-0 text-muted-foreground/60"
 										strokeWidth={1.8}
 										aria-hidden="true"
 									/>
-									<span className="truncate text-[12px] font-medium tracking-[0.01em] text-app-foreground-soft/72">
+									<span className="truncate text-[12px] font-medium tracking-[0.01em] text-muted-foreground">
 										{autoCloseHelpText}
 									</span>
 								</>

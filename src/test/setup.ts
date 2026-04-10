@@ -64,6 +64,11 @@ vi.mock("@tauri-apps/api/core", () => ({
 	},
 }));
 
+// cmdk calls `scrollIntoView` which jsdom doesn't implement.
+if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
+	Element.prototype.scrollIntoView = () => {};
+}
+
 if (
 	typeof window !== "undefined" &&
 	typeof window.ResizeObserver === "undefined"

@@ -15,21 +15,16 @@ import {
 	PinOff,
 	Plus,
 	RotateCcw,
-	Search,
 	Trash2,
 } from "lucide-react";
 import {
-	type ButtonHTMLAttributes,
 	memo,
-	type ReactNode,
 	useCallback,
 	useEffect,
 	useLayoutEffect,
-	useMemo,
 	useRef,
 	useState,
 } from "react";
-import { createPortal } from "react-dom";
 import type {
 	GroupTone,
 	RepositoryCreateOption,
@@ -38,12 +33,19 @@ import type {
 } from "@/lib/api";
 import { recordSidebarRowRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
-import { BaseTooltip } from "./ui/base-tooltip";
+import {
+	getWorkspaceBranchTone,
+	type WorkspaceBranchTone,
+} from "@/lib/workspace-helpers";
+import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
 import {
 	Collapsible,
 	CollapsibleContent,
 	CollapsibleTrigger,
 } from "./ui/collapsible";
+import { Command, CommandEmpty, CommandItem, CommandList } from "./ui/command";
 import {
 	ContextMenu,
 	ContextMenuContent,
@@ -54,15 +56,17 @@ import {
 	ContextMenuSubTrigger,
 	ContextMenuTrigger,
 } from "./ui/context-menu";
+import { Popover, PopoverAnchor, PopoverContent } from "./ui/popover";
 import { ScrollArea } from "./ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const rowVariants = cva(
 	"group relative flex h-7.5 select-none items-center gap-2 rounded-md px-2.5 text-[13px] cursor-pointer",
 	{
 		variants: {
 			active: {
-				true: "bg-app-row-selected text-app-foreground",
-				false: "text-app-foreground/80 hover:bg-app-row-hover",
+				true: "bg-accent text-foreground",
+				false: "text-foreground/80 hover:bg-accent/60",
 			},
 		},
 		defaultVariants: {
@@ -72,12 +76,19 @@ const rowVariants = cva(
 );
 
 const groupToneClasses: Record<GroupTone, string> = {
-	pinned: "text-app-foreground-soft",
-	done: "text-app-done",
-	review: "text-app-review",
-	progress: "text-app-progress",
-	backlog: "text-app-backlog",
-	canceled: "text-app-canceled",
+	pinned: "text-[var(--workspace-sidebar-status-neutral)]",
+	done: "text-[var(--workspace-sidebar-status-done)]",
+	review: "text-[var(--workspace-sidebar-status-review)]",
+	progress: "text-[var(--workspace-sidebar-status-progress)]",
+	backlog: "text-[var(--workspace-sidebar-status-backlog)]",
+	canceled: "text-[var(--workspace-sidebar-status-canceled)]",
+};
+const branchToneClasses: Record<WorkspaceBranchTone, string> = {
+	working: "text-[var(--workspace-branch-status-working)]",
+	open: "text-[var(--workspace-branch-status-open)]",
+	merged: "text-[var(--workspace-branch-status-merged)]",
+	closed: "text-[var(--workspace-branch-status-closed)]",
+	inactive: "text-[var(--workspace-branch-status-inactive)]",
 };
 const ARCHIVED_SECTION_ID = "__archived__";
 
@@ -120,35 +131,6 @@ function findSelectedSectionId(
 	}
 
 	return null;
-}
-
-type ToolbarButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-	label: string;
-	className?: string;
-	children: ReactNode;
-};
-
-function ToolbarButton({
-	label,
-	className,
-	children,
-	ref,
-	...props
-}: ToolbarButtonProps & { ref?: React.Ref<HTMLButtonElement> }) {
-	return (
-		<button
-			{...props}
-			ref={ref}
-			type="button"
-			aria-label={label}
-			className={cn(
-				"flex size-6 cursor-pointer items-center justify-center rounded-[3px] bg-transparent p-0 text-app-foreground-soft/72 transition-colors hover:bg-transparent hover:text-app-foreground focus-visible:text-app-foreground",
-				className,
-			)}
-		>
-			{children}
-		</button>
-	);
 }
 
 function PartialCircleIcon({
@@ -259,11 +241,15 @@ const WorkspaceAvatar = memo(function WorkspaceAvatar({
 	repoInitials,
 	repoName,
 	title,
+	className,
+	fallbackClassName,
 }: {
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
 	repoName?: string | null;
 	title: string;
+	className?: string;
+	fallbackClassName?: string;
 }) {
 	const fallback = (
 		repoInitials?.trim() || initialsFromLabel(repoName || title)
@@ -278,16 +264,19 @@ const WorkspaceAvatar = memo(function WorkspaceAvatar({
 	}, [src]);
 
 	return (
-		<span
+		<Avatar
 			aria-hidden="true"
 			data-slot="workspace-avatar"
-			className="relative flex size-[16px] shrink-0 items-center justify-center overflow-hidden rounded-[5px] border-0 bg-transparent outline-none"
+			data-fallback={fallback}
+			className={cn(
+				"size-[16px] shrink-0 rounded-[5px] border-0 bg-transparent outline-none",
+				className,
+			)}
 		>
 			{src ? (
-				<img
+				<AvatarImage
 					src={src}
 					alt={`${repoName ?? title} icon`}
-					className="size-full object-cover"
 					onError={() => {
 						setHasImage(false);
 					}}
@@ -297,11 +286,17 @@ const WorkspaceAvatar = memo(function WorkspaceAvatar({
 				/>
 			) : null}
 			{!hasImage ? (
-				<span className="absolute inset-0 flex items-center justify-center bg-app-sidebar-strong text-[7px] font-semibold uppercase tracking-[0.02em] text-app-foreground-soft">
+				<AvatarFallback
+					delayMs={0}
+					className={cn(
+						"bg-muted text-[7px] font-semibold uppercase tracking-[0.02em] text-muted-foreground",
+						fallbackClassName,
+					)}
+				>
 					{fallback}
-				</span>
+				</AvatarFallback>
 			) : null}
-		</span>
+		</Avatar>
 	);
 });
 
@@ -363,6 +358,14 @@ const WorkspaceRowItem = memo(
 		) : (
 			<Archive className="size-3.5" strokeWidth={1.9} />
 		);
+		const isPinned = Boolean(row.pinnedAt);
+		const effectiveStatus =
+			row.manualStatus ?? row.derivedStatus ?? "in-progress";
+		const branchTone = getWorkspaceBranchTone({
+			workspaceState: row.state,
+			manualStatus: row.manualStatus,
+			derivedStatus: row.derivedStatus,
+		});
 
 		const rowBody = (
 			<div
@@ -389,7 +392,7 @@ const WorkspaceRowItem = memo(
 				}}
 				className={cn(
 					rowVariants({ active: selected }),
-					"w-full text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong",
+					"w-full text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
 					!selected && row.state === "archived" && "opacity-50",
 				)}
 			>
@@ -402,12 +405,15 @@ const WorkspaceRowItem = memo(
 					/>
 					{isSending ? (
 						<span className="relative flex size-[13px] shrink-0 items-center justify-center">
-							<span className="absolute inset-0 animate-spin rounded-full border border-transparent border-t-app-progress" />
-							<span className="size-1 rounded-full bg-app-progress" />
+							<span className="absolute inset-0 animate-spin rounded-full border border-transparent border-t-[var(--workspace-sidebar-status-progress)]" />
+							<span className="size-1 rounded-full bg-[var(--workspace-sidebar-status-progress)]" />
 						</span>
 					) : (
 						<GitBranch
-							className="size-[13px] shrink-0 text-app-warm"
+							className={cn(
+								"size-[13px] shrink-0",
+								branchToneClasses[branchTone],
+							)}
 							strokeWidth={1.9}
 						/>
 					)}
@@ -416,10 +422,10 @@ const WorkspaceRowItem = memo(
 							"truncate leading-none",
 							selected
 								? row.hasUnread
-									? "font-semibold text-app-foreground"
-									: "font-medium text-app-foreground"
+									? "font-semibold text-foreground"
+									: "font-medium text-foreground"
 								: row.hasUnread
-									? "font-semibold text-app-foreground"
+									? "font-semibold text-foreground"
 									: "font-medium",
 						)}
 					>
@@ -434,60 +440,76 @@ const WorkspaceRowItem = memo(
 							isBusy ? "visible" : "invisible group-hover:visible",
 						)}
 					>
-						<BaseTooltip side="top" content={<span>{actionLabel}</span>}>
-							<button
-								type="button"
-								aria-label={actionLabel}
-								disabled={Boolean(workspaceActionsDisabled)}
-								onClick={(event) => {
-									event.stopPropagation();
-									if (workspaceActionsDisabled) return;
-									if (isRestoreAction) {
-										onRestoreWorkspace?.(row.id);
-									} else {
-										onArchiveWorkspace?.(row.id);
-									}
-								}}
-								className={cn(
-									"flex items-center justify-center text-app-muted",
-									workspaceActionsDisabled
-										? "cursor-not-allowed opacity-60"
-										: "cursor-pointer hover:text-app-foreground",
-								)}
-							>
-								{actionIcon}
-							</button>
-						</BaseTooltip>
-						{isRestoreAction && onDeleteWorkspace ? (
-							<BaseTooltip side="top" content={<span>Delete permanently</span>}>
-								<button
-									type="button"
-									aria-label="Delete permanently"
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									aria-label={actionLabel}
 									disabled={Boolean(workspaceActionsDisabled)}
 									onClick={(event) => {
 										event.stopPropagation();
 										if (workspaceActionsDisabled) return;
-										onDeleteWorkspace(row.id);
+										if (isRestoreAction) {
+											onRestoreWorkspace?.(row.id);
+										} else {
+											onArchiveWorkspace?.(row.id);
+										}
 									}}
+									variant="ghost"
+									size="icon-xs"
 									className={cn(
-										"flex items-center justify-center text-app-muted",
+										"text-muted-foreground",
 										workspaceActionsDisabled
 											? "cursor-not-allowed opacity-60"
-											: "cursor-pointer hover:text-red-400",
+											: "cursor-pointer hover:text-foreground",
 									)}
 								>
-									<Trash2 className="size-3.5" strokeWidth={2.1} />
-								</button>
-							</BaseTooltip>
+									{actionIcon}
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent
+								side="top"
+								sideOffset={8}
+								className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+							>
+								<span>{actionLabel}</span>
+							</TooltipContent>
+						</Tooltip>
+						{isRestoreAction && onDeleteWorkspace ? (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Button
+										aria-label="Delete permanently"
+										disabled={Boolean(workspaceActionsDisabled)}
+										onClick={(event) => {
+											event.stopPropagation();
+											if (workspaceActionsDisabled) return;
+											onDeleteWorkspace(row.id);
+										}}
+										variant="ghost"
+										size="icon-xs"
+										className={cn(
+											"text-muted-foreground",
+											workspaceActionsDisabled
+												? "cursor-not-allowed opacity-60"
+												: "cursor-pointer hover:text-destructive",
+										)}
+									>
+										<Trash2 className="size-3.5" strokeWidth={2.1} />
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent
+									side="top"
+									sideOffset={8}
+									className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+								>
+									<span>Delete permanently</span>
+								</TooltipContent>
+							</Tooltip>
 						) : null}
 					</span>
 				) : null}
 			</div>
 		);
-
-		const isPinned = Boolean(row.pinnedAt);
-		const effectiveStatus =
-			row.manualStatus ?? row.derivedStatus ?? "in-progress";
 
 		return (
 			<ContextMenu>
@@ -516,7 +538,7 @@ const WorkspaceRowItem = memo(
 									<GroupIcon tone={opt.tone} />
 									<span className="flex-1">{opt.label}</span>
 									{effectiveStatus === opt.value ? (
-										<span className="ml-auto text-app-foreground">✓</span>
+										<span className="ml-auto text-foreground">✓</span>
 									) : null}
 								</ContextMenuItem>
 							))}
@@ -618,15 +640,6 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	restoringWorkspaceId?: string | null;
 }) {
 	const [isRepoPickerOpen, setIsRepoPickerOpen] = useState(false);
-	const [repoSearchQuery, setRepoSearchQuery] = useState("");
-	const repoPickerRef = useRef<HTMLDivElement | null>(null);
-	const repoPickerAnchorRef = useRef<HTMLButtonElement | null>(null);
-	const repoSearchInputRef = useRef<HTMLInputElement | null>(null);
-	const [pickerPos, setPickerPos] = useState<{
-		top: number;
-		left: number;
-	} | null>(null);
-	const viewportRef = useRef<HTMLDivElement | null>(null);
 	const workspaceRowRefs = useRef(new Map<string, HTMLDivElement>());
 	// Cache one ref-callback per workspace id so React does not detach +
 	// re-attach the row DOM ref on every parent render. The previous version
@@ -725,20 +738,6 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		};
 	}, [sectionOpenState, selectedWorkspaceId]);
 
-	const updatePickerPosition = useCallback(() => {
-		const anchor = repoPickerAnchorRef.current;
-		if (!anchor) return;
-		const rect = anchor.getBoundingClientRect();
-		const popoverWidth = 256;
-		let left = rect.right - popoverWidth;
-		if (left < 4) left = 4;
-		setPickerPos({ top: rect.bottom + 8, left });
-	}, []);
-
-	useLayoutEffect(() => {
-		if (!isRepoPickerOpen) return;
-		updatePickerPosition();
-	}, [isRepoPickerOpen, updatePickerPosition]);
 	const workspaceActionsBusy = Boolean(
 		addingRepository ||
 			archivingWorkspaceId ||
@@ -747,60 +746,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	);
 	const createBusy = Boolean(creatingWorkspaceRepoId);
 	const addRepositoryBusy = Boolean(addingRepository);
-	const filteredRepositories = useMemo(() => {
-		const normalizedQuery = repoSearchQuery.trim().toLowerCase();
-
-		if (!normalizedQuery) {
-			return availableRepositories ?? [];
-		}
-
-		return (availableRepositories ?? []).filter((repository) => {
-			const haystack =
-				`${repository.name} ${repository.defaultBranch ?? ""}`.toLowerCase();
-			return haystack.includes(normalizedQuery);
-		});
-	}, [availableRepositories, repoSearchQuery]);
-
-	useEffect(() => {
-		if (!isRepoPickerOpen) {
-			setRepoSearchQuery("");
-			return;
-		}
-
-		repoSearchInputRef.current?.focus();
-	}, [isRepoPickerOpen]);
-
-	useEffect(() => {
-		if (!isRepoPickerOpen) {
-			return;
-		}
-
-		const handlePointerDown = (event: PointerEvent) => {
-			const target = event.target;
-
-			if (
-				target instanceof Node &&
-				!repoPickerRef.current?.contains(target) &&
-				!repoPickerAnchorRef.current?.contains(target)
-			) {
-				setIsRepoPickerOpen(false);
-			}
-		};
-
-		const handleKeyDown = (event: KeyboardEvent) => {
-			if (event.key === "Escape") {
-				setIsRepoPickerOpen(false);
-			}
-		};
-
-		window.addEventListener("pointerdown", handlePointerDown);
-		window.addEventListener("keydown", handleKeyDown);
-
-		return () => {
-			window.removeEventListener("pointerdown", handlePointerDown);
-			window.removeEventListener("keydown", handleKeyDown);
-		};
-	}, [isRepoPickerOpen]);
+	const repositories = availableRepositories ?? [];
 
 	return (
 		<div className="flex h-full min-h-0 flex-col overflow-hidden pb-4">
@@ -813,150 +759,145 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			</div>
 
 			<div className="flex items-center justify-between px-3">
-				<h2 className="text-[13px] font-medium tracking-[-0.01em] text-app-foreground-soft">
+				<h2 className="text-[13px] font-medium tracking-[-0.01em] text-muted-foreground">
 					Workspaces
 				</h2>
 
-				<div className="relative flex items-center gap-1 text-app-foreground-soft/80">
-					<BaseTooltip side="top" content={<span>Add repository</span>}>
-						<ToolbarButton
-							label="Add repository"
-							disabled={addRepositoryBusy || createBusy || workspaceActionsBusy}
-							className={cn(
-								"text-app-foreground-soft/78",
-								addRepositoryBusy || createBusy || workspaceActionsBusy
-									? "cursor-not-allowed opacity-60"
-									: undefined,
-							)}
-							onClick={() => {
-								if (addRepositoryBusy || createBusy || workspaceActionsBusy) {
-									return;
+				<div className="flex items-center gap-1 text-muted-foreground">
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								type="button"
+								aria-label="Add repository"
+								variant="ghost"
+								size="icon-xs"
+								disabled={
+									addRepositoryBusy || createBusy || workspaceActionsBusy
 								}
+								className={cn(
+									"text-muted-foreground",
+									addRepositoryBusy || createBusy || workspaceActionsBusy
+										? "cursor-not-allowed opacity-60"
+										: undefined,
+								)}
+								onClick={() => {
+									if (addRepositoryBusy || createBusy || workspaceActionsBusy) {
+										return;
+									}
 
-								setIsRepoPickerOpen(false);
-								onAddRepository?.();
-							}}
+									setIsRepoPickerOpen(false);
+									onAddRepository?.();
+								}}
+							>
+								{addRepositoryBusy ? (
+									<LoaderCircle className="animate-spin" strokeWidth={2.1} />
+								) : (
+									<FolderPlus strokeWidth={2} />
+								)}
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent
+							side="top"
+							sideOffset={8}
+							className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
 						>
-							{addRepositoryBusy ? (
-								<LoaderCircle
-									className="size-3 animate-spin"
-									strokeWidth={2.1}
-								/>
-							) : (
-								<FolderPlus className="size-3" strokeWidth={2} />
-							)}
-						</ToolbarButton>
-					</BaseTooltip>
+							<span>Add repository</span>
+						</TooltipContent>
+					</Tooltip>
 
-					<BaseTooltip side="top" content={<span>Add workspace</span>}>
-						<ToolbarButton
-							ref={repoPickerAnchorRef}
-							label="New workspace"
-							disabled={addRepositoryBusy || createBusy || workspaceActionsBusy}
-							aria-expanded={isRepoPickerOpen}
-							aria-haspopup="dialog"
-							className={cn(
-								addRepositoryBusy || createBusy || workspaceActionsBusy
-									? "cursor-not-allowed opacity-60"
-									: undefined,
-							)}
-							onClick={() => {
-								if (addRepositoryBusy || createBusy || workspaceActionsBusy) {
-									return;
-								}
+					<Popover open={isRepoPickerOpen} onOpenChange={setIsRepoPickerOpen}>
+						<PopoverAnchor asChild>
+							<span className="inline-flex">
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<Button
+											type="button"
+											aria-label="New workspace"
+											aria-expanded={isRepoPickerOpen}
+											aria-haspopup="dialog"
+											variant="ghost"
+											size="icon-xs"
+											disabled={
+												addRepositoryBusy || createBusy || workspaceActionsBusy
+											}
+											onClick={() => {
+												if (
+													addRepositoryBusy ||
+													createBusy ||
+													workspaceActionsBusy
+												) {
+													return;
+												}
 
-								setIsRepoPickerOpen((current) => !current);
-							}}
+												setIsRepoPickerOpen((open) => !open);
+											}}
+										>
+											{createBusy ? (
+												<LoaderCircle
+													className="animate-spin"
+													strokeWidth={2.1}
+												/>
+											) : (
+												<Plus strokeWidth={2.4} />
+											)}
+										</Button>
+									</TooltipTrigger>
+									<TooltipContent
+										side="top"
+										sideOffset={8}
+										className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+									>
+										<span>Add workspace</span>
+									</TooltipContent>
+								</Tooltip>
+							</span>
+						</PopoverAnchor>
+						<PopoverContent
+							align="end"
+							sideOffset={8}
+							className="w-[296px] p-0"
 						>
-							{createBusy ? (
-								<LoaderCircle
-									className="size-3 animate-spin"
-									strokeWidth={2.1}
-								/>
-							) : (
-								<Plus className="size-3" strokeWidth={2.4} />
-							)}
-						</ToolbarButton>
-					</BaseTooltip>
-
-					{isRepoPickerOpen && pickerPos
-						? createPortal(
-								<div
-									ref={repoPickerRef}
-									role="dialog"
-									aria-label="Create workspace from repository"
-									className="fixed z-[9999] w-64 rounded-lg border border-app-border bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10"
-									style={{ top: pickerPos.top, left: pickerPos.left }}
-								>
-									<div className="relative">
-										<Search
-											className="pointer-events-none absolute left-2.5 top-1/2 size-3 -translate-y-1/2 text-app-foreground-soft/60"
-											strokeWidth={1.9}
-										/>
-										<input
-											ref={repoSearchInputRef}
-											type="text"
-											value={repoSearchQuery}
-											aria-label="Search repositories"
-											placeholder="Search repositories"
-											onChange={(event) => {
-												setRepoSearchQuery(event.target.value);
+							<Command>
+								<CommandList className="max-h-64">
+									<CommandEmpty>No repositories found.</CommandEmpty>
+									{repositories.map((repository) => (
+										<CommandItem
+											key={repository.id}
+											value={`${repository.name} ${repository.defaultBranch ?? ""}`}
+											onSelect={() => {
+												setIsRepoPickerOpen(false);
+												onCreateWorkspace?.(repository.id);
 											}}
-											onKeyDown={(event) => {
-												event.stopPropagation();
-											}}
-											className="h-8 w-full rounded-md border border-app-border bg-app-toolbar px-8 text-[12px] font-medium text-app-foreground outline-none placeholder:text-app-foreground-soft/56 focus:border-app-border-strong"
-										/>
-									</div>
-
-									<div className="mt-1 max-h-64 space-y-0.5 overflow-y-auto">
-										{filteredRepositories.length > 0 ? (
-											filteredRepositories.map((repository) => (
-												<button
-													key={repository.id}
-													type="button"
-													className="flex w-full items-center gap-2 rounded-md px-1.5 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
-													onClick={() => {
-														setIsRepoPickerOpen(false);
-														onCreateWorkspace?.(repository.id);
-													}}
-												>
-													<WorkspaceAvatar
-														repoIconSrc={repository.repoIconSrc}
-														repoInitials={repository.repoInitials}
-														repoName={repository.name}
-														title={repository.name}
-													/>
-													<span className="min-w-0 flex-1">
-														<span className="block truncate text-[12px] font-medium text-app-foreground">
-															{repository.name}
-														</span>
-														{repository.defaultBranch ? (
-															<span className="block truncate text-[10px] text-app-foreground-soft/52">
-																{repository.defaultBranch}
-															</span>
-														) : null}
-													</span>
-												</button>
-											))
-										) : (
-											<p className="px-1.5 py-2 text-[11px] leading-snug text-app-foreground-soft/60">
-												No repositories found.
-											</p>
-										)}
-									</div>
-								</div>,
-								document.body,
-							)
-						: null}
+											className="rounded-lg"
+										>
+											<WorkspaceAvatar
+												repoIconSrc={repository.repoIconSrc}
+												repoInitials={repository.repoInitials}
+												repoName={repository.name}
+												title={repository.name}
+												className="size-5 rounded-md"
+												fallbackClassName="text-[8px]"
+											/>
+											<span className="min-w-0 flex-1 truncate font-medium">
+												{repository.name}
+											</span>
+											{repository.defaultBranch ? (
+												<span className="shrink-0 text-xs text-muted-foreground">
+													{repository.defaultBranch.toLowerCase()}
+												</span>
+											) : null}
+										</CommandItem>
+									))}
+								</CommandList>
+							</Command>
+						</PopoverContent>
+					</Popover>
 				</div>
 			</div>
 
 			<ScrollArea
 				data-slot="workspace-groups-scroll"
-				className="relative mt-4 min-h-0 flex-1 overflow-hidden"
-				viewportRef={viewportRef}
-				viewportClassName="h-full min-w-0 w-full rounded-[inherit] px-2 pr-3"
+				className="relative mt-4 min-h-0 flex-1 overflow-hidden [&_[data-slot=scroll-area-viewport]]:h-full [&_[data-slot=scroll-area-viewport]]:min-w-0 [&_[data-slot=scroll-area-viewport]]:w-full [&_[data-slot=scroll-area-viewport]]:px-2 [&_[data-slot=scroll-area-viewport]]:pr-3"
 			>
 				<div className="flex min-h-full flex-col gap-4 pb-3">
 					{groups
@@ -975,10 +916,13 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 										}));
 									}}
 								>
-									<section aria-label={group.label} className="space-y-1.5">
+									<section
+										aria-label={group.label}
+										className="flex flex-col gap-1.5"
+									>
 										<CollapsibleTrigger
 											className={cn(
-												"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 py-1.5 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70",
+												"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 py-1.5 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
 												canCollapse ? "cursor-pointer" : "cursor-default",
 											)}
 											disabled={!canCollapse}
@@ -990,11 +934,14 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 											{group.rows.length > 0 ? (
 												<span className="relative flex h-5 min-w-5 items-center justify-center">
-													<span className="rounded-full bg-app-row-selected px-1.5 py-px text-center text-[10.5px] font-medium leading-[16px] text-app-muted transition-opacity group-hover/trigger:opacity-0">
+													<Badge
+														variant="secondary"
+														className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none transition-opacity group-hover/trigger:opacity-0"
+													>
 														{group.rows.length}
-													</span>
+													</Badge>
 													<ChevronRight
-														className="absolute left-1/2 top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 text-app-muted opacity-0 transition-all group-hover/trigger:opacity-100 group-data-[panel-open]/trigger:rotate-90"
+														className="absolute left-1/2 top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 text-muted-foreground opacity-0 transition-all group-hover/trigger:opacity-100 group-data-[panel-open]/trigger:rotate-90"
 														strokeWidth={2}
 													/>
 												</span>
@@ -1003,7 +950,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 										{group.rows.length > 0 ? (
 											<CollapsibleContent>
-												<div className="space-y-0.5">
+												<div className="flex flex-col gap-0.5">
 													{group.rows.map((row) => (
 														<WorkspaceRowItem
 															key={row.id}
@@ -1047,17 +994,17 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							}));
 						}}
 					>
-						<section aria-label="Archived" className="space-y-1.5">
+						<section aria-label="Archived" className="flex flex-col gap-1.5">
 							<CollapsibleTrigger
 								className={cn(
-									"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 py-1.5 text-[13px] font-semibold tracking-[-0.01em] text-app-foreground hover:bg-app-toolbar-hover/70",
+									"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 py-1.5 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
 									archivedRows.length > 0 ? "cursor-pointer" : "cursor-default",
 								)}
 								disabled={archivedRows.length === 0}
 							>
 								<span className="flex items-center gap-2">
 									<Archive
-										className="size-[14px] shrink-0 text-app-backlog"
+										className="size-[14px] shrink-0 text-[var(--workspace-sidebar-status-backlog)]"
 										strokeWidth={1.9}
 									/>
 									<span>Archived</span>
@@ -1065,11 +1012,14 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 								{archivedRows.length > 0 ? (
 									<span className="relative flex h-5 min-w-5 items-center justify-center">
-										<span className="rounded-full bg-app-row-selected px-1.5 py-px text-center text-[10.5px] font-medium leading-[16px] text-app-muted transition-opacity group-hover/trigger:opacity-0">
+										<Badge
+											variant="secondary"
+											className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none transition-opacity group-hover/trigger:opacity-0"
+										>
 											{archivedRows.length}
-										</span>
+										</Badge>
 										<ChevronRight
-											className="absolute left-1/2 top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 text-app-muted opacity-0 transition-all group-hover/trigger:opacity-100 group-data-[panel-open]/trigger:rotate-90"
+											className="absolute left-1/2 top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 text-muted-foreground opacity-0 transition-all group-hover/trigger:opacity-100 group-data-[panel-open]/trigger:rotate-90"
 											strokeWidth={2}
 										/>
 									</span>
@@ -1078,7 +1028,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 							{archivedRows.length > 0 ? (
 								<CollapsibleContent>
-									<div className="space-y-0.5">
+									<div className="flex flex-col gap-0.5">
 										{archivedRows.map((row) => (
 											<WorkspaceRowItem
 												key={row.id}

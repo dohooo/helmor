@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 type ActionRowProps = {
@@ -19,7 +20,7 @@ export function ActionRow({
 	return (
 		<div
 			className={cn(
-				"relative flex items-center justify-between overflow-hidden border border-app-border/40 bg-app-sidebar px-3 pb-1 pt-1.5",
+				"relative flex items-center justify-between overflow-hidden border border-border/40 bg-background px-3 pb-1 pt-1.5",
 				className,
 			)}
 		>
@@ -44,10 +45,12 @@ export function ActionRowButton({
 	...props
 }: ActionRowButtonProps) {
 	return (
-		<button
+		<Button
 			type="button"
+			variant={active ? "default" : "outline"}
+			size="sm"
 			className={cn(
-				"inline-flex h-7 cursor-pointer items-center gap-1 rounded-[3px] border border-app-border/45 bg-app-base/70 px-2.5 text-[12px] font-medium leading-none tracking-[0.02em] text-app-foreground-soft transition-colors hover:bg-app-base hover:text-app-foreground disabled:cursor-not-allowed disabled:opacity-60",
+				"h-7 cursor-pointer gap-1 rounded-[3px] border-border/45 bg-background/70 px-2.5 text-[12px] leading-none tracking-[0.02em] text-muted-foreground hover:bg-background hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60",
 				active &&
 					"border-transparent bg-foreground text-background hover:bg-foreground/90",
 				className,
@@ -55,6 +58,6 @@ export function ActionRowButton({
 			{...props}
 		>
 			{children}
-		</button>
+		</Button>
 	);
 }

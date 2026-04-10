@@ -92,7 +92,7 @@ function ComposerButton({
 			variant="ghost"
 			size="sm"
 			className={cn(
-				"h-auto gap-1.5 rounded-lg text-app-foreground-soft hover:text-app-foreground",
+				"h-auto gap-1.5 rounded-lg text-muted-foreground hover:text-foreground",
 				className,
 			)}
 		>
@@ -252,7 +252,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	return (
 		<div
 			aria-label="Workspace composer"
-			className="flex flex-col rounded-2xl border border-app-border/40 bg-app-sidebar px-4 pb-3 pt-3 shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]"
+			className="flex flex-col rounded-2xl border border-border/40 bg-background px-4 pb-3 pt-3 shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]"
 		>
 			<label htmlFor="workspace-input" className="sr-only">
 				Workspace input
@@ -266,11 +266,11 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								id="workspace-input"
 								aria-label="Workspace input"
 								aria-multiline
-								className="composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-app-foreground outline-none"
+								className="composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-foreground outline-none"
 							/>
 						}
 						placeholder={
-							<div className="pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-app-muted">
+							<div className="pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-muted-foreground">
 								Ask to make changes, @mention files, run /commands
 							</div>
 						}
@@ -295,7 +295,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			</LexicalComposer>
 
 			{sendError ? (
-				<div className="mt-2 rounded-lg border border-app-canceled/30 bg-app-canceled/10 px-3 py-2 text-[12px] text-app-foreground-soft">
+				<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-[12px] text-muted-foreground">
 					{sendError}
 				</div>
 			) : null}
@@ -306,9 +306,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						<DropdownMenuTrigger
 							disabled={disabled}
 							className={cn(
-								"flex items-center gap-1.5 rounded-lg px-1 py-0.5 text-[13px] font-medium text-app-foreground-soft transition-colors hover:text-app-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong",
+								"flex items-center gap-1.5 rounded-lg px-1 py-0.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
 								disabled &&
-									"cursor-not-allowed opacity-45 hover:text-app-foreground-soft",
+									"cursor-not-allowed opacity-45 hover:text-muted-foreground",
 							)}
 						>
 							{selectedModel?.provider === "codex" ? (
@@ -340,7 +340,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											className="flex items-center justify-between gap-3"
 										>
 											<div className="flex items-center gap-3">
-												<span className="text-app-foreground-soft">
+												<span className="text-muted-foreground">
 													{option.provider === "codex" ? (
 														<OpenAIIcon className="size-4" />
 													) : (
@@ -351,7 +351,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											</div>
 
 											{option.badge ? (
-												<span className="rounded-md border border-app-border-strong/70 bg-app-foreground/[0.06] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-app-foreground-soft">
+												<span className="rounded-md border border-border/70 bg-muted/70 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
 													{option.badge}
 												</span>
 											) : null}
@@ -375,13 +375,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 									"capitalize",
 									effectiveEffort === "max" || effectiveEffort === "xhigh"
 										? "effort-max-text"
-										: "text-app-foreground-soft",
+										: "text-muted-foreground",
 								)}
 							>
 								{effectiveEffort === "xhigh" ? "Extra High" : effectiveEffort}
 							</span>
 							<ChevronDown
-								className="size-3 text-app-foreground-soft/40"
+								className="size-3 text-muted-foreground/40"
 								strokeWidth={2}
 							/>
 						</DropdownMenuTrigger>
@@ -412,7 +412,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											</span>
 										</div>
 										{level === effectiveEffort ? (
-											<span className="text-[11px] text-app-foreground">✓</span>
+											<span className="text-[11px] text-foreground">✓</span>
 										) : null}
 									</DropdownMenuItem>
 								))}
@@ -426,8 +426,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						className={cn(
 							"gap-1.5 rounded-full px-2 py-0.5 text-[13px] font-medium transition-colors",
 							permissionMode === "plan"
-								? "bg-app-foreground/[0.08] text-app-foreground hover:bg-app-foreground/[0.12]"
-								: "text-app-muted/55 hover:bg-app-foreground/[0.04] hover:text-app-muted",
+								? "bg-foreground/[0.08] text-foreground hover:bg-foreground/[0.12]"
+								: "text-muted-foreground/55 hover:bg-accent/60 hover:text-muted-foreground",
 						)}
 						onClick={onTogglePlanMode}
 					>

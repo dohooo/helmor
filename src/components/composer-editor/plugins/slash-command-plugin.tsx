@@ -35,6 +35,7 @@ import type { TextNode } from "lexical";
 import { Loader2, RefreshCw } from "lucide-react";
 import { type ReactNode, useCallback, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { Button } from "@/components/ui/button";
 import {
 	Command,
 	CommandGroup,
@@ -168,32 +169,37 @@ export function SlashCommandPlugin({
 				if (!hasOptions) {
 					if (isLoading) {
 						stateRow = (
-							<div className="flex items-center gap-2 px-3 py-2 text-[13px] text-app-muted">
+							<div className="flex items-center gap-2 px-3 py-2 text-[13px] text-muted-foreground">
 								<Loader2 className="size-3.5 shrink-0 animate-spin" />
 								<span>Loading commands…</span>
 							</div>
 						);
 					} else if (isError) {
 						stateRow = (
-							<button
+							<Button
 								type="button"
+								variant="ghost"
+								size="sm"
 								onPointerDown={(event) => event.preventDefault()}
 								onClick={() => onRetry?.()}
-								className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-app-muted hover:bg-muted hover:text-foreground"
+								className="h-auto w-full justify-start gap-2 px-3 py-2 text-left text-[13px] text-muted-foreground hover:text-foreground"
 							>
-								<RefreshCw className="size-3.5 shrink-0" />
+								<RefreshCw
+									data-icon="inline-start"
+									className="size-3.5 shrink-0"
+								/>
 								<span>Failed to load commands · click to retry</span>
-							</button>
+							</Button>
 						);
 					} else if (queryActive) {
 						stateRow = (
-							<div className="px-3 py-2 text-[13px] text-app-muted">
+							<div className="px-3 py-2 text-[13px] text-muted-foreground">
 								No matches
 							</div>
 						);
 					} else {
 						stateRow = (
-							<div className="px-3 py-2 text-[13px] text-app-muted">
+							<div className="px-3 py-2 text-[13px] text-muted-foreground">
 								No commands available
 							</div>
 						);
@@ -220,12 +226,12 @@ export function SlashCommandPlugin({
 						<Command
 							value={highlightValue}
 							shouldFilter={false}
-							className="rounded-xl border border-app-border/60 bg-app-elevated text-app-foreground shadow-2xl ring-1 ring-black/5"
+							className="rounded-xl border border-border/60 bg-background text-foreground shadow-2xl ring-1 ring-black/5"
 						>
 							<CommandList className="max-h-72">
 								{stateRow}
 								{hasOptions ? (
-									<CommandGroup>
+									<CommandGroup heading="Commands">
 										{options.map((opt, index) => {
 											const cmd = opt.entry;
 											const isSelected = index === selectedIndex;
@@ -244,16 +250,18 @@ export function SlashCommandPlugin({
 													// typing.
 													onPointerDown={(event) => event.preventDefault()}
 													className={cn(
-														"flex min-w-0 items-center gap-2 px-3 py-2 text-[13px]",
+														"min-w-0 rounded-lg px-2.5 py-2 text-[13px]",
 														isSelected && "bg-muted text-foreground",
 													)}
 												>
-													<span className="shrink-0 text-app-muted">/</span>
-													<span className="shrink-0 font-medium">
+													<span className="shrink-0 text-muted-foreground">
+														/
+													</span>
+													<span className="min-w-0 shrink-0 truncate font-medium">
 														{cmd.name}
 													</span>
 													<span
-														className="min-w-0 flex-1 truncate whitespace-nowrap text-app-muted"
+														className="min-w-0 flex-1 truncate whitespace-nowrap text-xs text-muted-foreground"
 														title={cmd.description}
 													>
 														{cmd.description}
