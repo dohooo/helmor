@@ -9,6 +9,10 @@ import type {
 } from "@/lib/api";
 import { createSession, saveAutoCloseActionKinds } from "@/lib/api";
 import { describeActionKind } from "@/lib/commit-button-prompts";
+import type {
+	ComposerCustomTag,
+	ResolvedComposerInsertRequest,
+} from "@/lib/composer-insert";
 import {
 	agentModelSectionsQueryOptions,
 	autoCloseActionKindsQueryOptions,
@@ -41,6 +45,7 @@ type WorkspaceComposerContainerProps = {
 	restoreDraft: string | null;
 	restoreImages: string[];
 	restoreFiles: string[];
+	restoreCustomTags?: ComposerCustomTag[];
 	restoreNonce: number;
 	modelSelections: Record<string, string>;
 	effortLevels: Record<string, string>;
@@ -53,6 +58,7 @@ type WorkspaceComposerContainerProps = {
 		prompt: string;
 		imagePaths: string[];
 		filePaths: string[];
+		customTags: ComposerCustomTag[];
 		model: AgentModelOption;
 		workingDirectory: string | null;
 		effortLevel: string;
@@ -64,6 +70,8 @@ type WorkspaceComposerContainerProps = {
 	/** Called after the pending prompt has been dispatched, so the caller can
 	 * clear the queue. */
 	onPendingPromptConsumed?: () => void;
+	pendingInsertRequests?: ResolvedComposerInsertRequest[];
+	onPendingInsertRequestsConsumed?: (ids: string[]) => void;
 };
 
 export const WorkspaceComposerContainer = memo(
@@ -77,6 +85,7 @@ export const WorkspaceComposerContainer = memo(
 		restoreDraft,
 		restoreImages,
 		restoreFiles,
+		restoreCustomTags = [],
 		restoreNonce,
 		modelSelections,
 		effortLevels = {},
@@ -88,6 +97,8 @@ export const WorkspaceComposerContainer = memo(
 		onSubmit,
 		pendingPromptForSession = null,
 		onPendingPromptConsumed,
+		pendingInsertRequests = [],
+		onPendingInsertRequestsConsumed,
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
 		const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
@@ -250,7 +261,12 @@ export const WorkspaceComposerContainer = memo(
 			void slashCommandsQuery.refetch();
 		}, [slashCommandsQuery]);
 		const handleComposerSubmit = useCallback(
-			(prompt: string, imagePaths: string[], filePaths: string[]) => {
+			(
+				prompt: string,
+				imagePaths: string[],
+				filePaths: string[],
+				customTags: ComposerCustomTag[],
+			) => {
 				if (!selectedModel) {
 					return;
 				}
@@ -258,6 +274,7 @@ export const WorkspaceComposerContainer = memo(
 					prompt,
 					imagePaths,
 					filePaths,
+					customTags,
 					model: selectedModel,
 					workingDirectory,
 					effortLevel,
@@ -291,7 +308,7 @@ export const WorkspaceComposerContainer = memo(
 			}
 			dispatchedPromptKeyRef.current = dispatchKey;
 
-			handleComposerSubmit(pendingPromptForSession.prompt, [], []);
+			handleComposerSubmit(pendingPromptForSession.prompt, [], [], []);
 			onPendingPromptConsumed?.();
 		}, [
 			pendingPromptForSession,
@@ -415,7 +432,10 @@ export const WorkspaceComposerContainer = memo(
 					restoreDraft={restoreDraft}
 					restoreImages={restoreImages}
 					restoreFiles={restoreFiles}
+					restoreCustomTags={restoreCustomTags}
 					restoreNonce={restoreNonce}
+					pendingInsertRequests={pendingInsertRequests}
+					onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
 					slashCommands={slashCommands}
 					slashCommandsLoading={slashCommandsLoading}
 					slashCommandsError={slashCommandsError}

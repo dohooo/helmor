@@ -3,8 +3,14 @@ import { ContentEditable } from "@lexical/react/LexicalContentEditable";
 import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
 import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
-import type { LexicalEditor } from "lexical";
-import { $createParagraphNode, $createTextNode, $getRoot } from "lexical";
+import type { LexicalEditor, TextNode } from "lexical";
+import {
+	$createParagraphNode,
+	$createTextNode,
+	$getRoot,
+	$isElementNode,
+	$isTextNode,
+} from "lexical";
 import { ArrowUp, ChevronDown, ClipboardList, Square } from "lucide-react";
 import {
 	type ButtonHTMLAttributes,
@@ -17,8 +23,17 @@ import {
 	useState,
 } from "react";
 import type { AgentModelSection, SlashCommandEntry } from "@/lib/api";
+import type {
+	ComposerCustomTag,
+	ComposerInsertItem,
+	ResolvedComposerInsertRequest,
+} from "@/lib/composer-insert";
 import { recordComposerRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
+import {
+	$createCustomTagBadgeNode,
+	CustomTagBadgeNode,
+} from "./composer-editor/custom-tag-badge-node";
 import {
 	$createFileBadgeNode,
 	FileBadgeNode,
@@ -51,7 +66,12 @@ import {
 
 type WorkspaceComposerProps = {
 	contextKey: string;
-	onSubmit: (prompt: string, imagePaths: string[], filePaths: string[]) => void;
+	onSubmit: (
+		prompt: string,
+		imagePaths: string[],
+		filePaths: string[],
+		customTags: ComposerCustomTag[],
+	) => void;
 	disabled?: boolean;
 	submitDisabled?: boolean;
 	onStop?: () => void;
@@ -68,7 +88,10 @@ type WorkspaceComposerProps = {
 	restoreDraft?: string | null;
 	restoreImages?: string[];
 	restoreFiles?: string[];
+	restoreCustomTags?: ComposerCustomTag[];
 	restoreNonce?: number;
+	pendingInsertRequests?: ResolvedComposerInsertRequest[];
+	onPendingInsertRequestsConsumed?: (ids: string[]) => void;
 	slashCommands?: readonly SlashCommandEntry[];
 	slashCommandsLoading?: boolean;
 	slashCommandsError?: boolean;
@@ -115,7 +138,12 @@ function onEditorError(error: Error) {
 }
 
 /** Imperatively set Lexical editor content from draft text + attachment paths. */
-function $setEditorContent(draft: string, images: string[], files: string[]) {
+function $setEditorContent(
+	draft: string,
+	images: string[],
+	files: string[],
+	customTags: ComposerCustomTag[],
+) {
 	const root = $getRoot();
 	root.clear();
 	const paragraph = $createParagraphNode();
@@ -134,7 +162,101 @@ function $setEditorContent(draft: string, images: string[], files: string[]) {
 		}
 		paragraph.append($createFileBadgeNode(path));
 	}
+	for (const customTag of customTags) {
+		if (draft || paragraph.getChildrenSize() > 0) {
+			paragraph.append($createTextNode(" "));
+		}
+		paragraph.append($createCustomTagBadgeNode(customTag));
+	}
 	root.append(paragraph);
+}
+
+function $getComposerAppendTarget() {
+	const root = $getRoot();
+	const lastChild = root.getLastChild();
+	if ($isElementNode(lastChild)) {
+		return lastChild;
+	}
+
+	const paragraph = $createParagraphNode();
+	root.append(paragraph);
+	return paragraph;
+}
+
+function $ensureComposerInlineSeparator() {
+	const paragraph = $getComposerAppendTarget();
+	const lastChild = paragraph.getLastChild();
+	if (!lastChild) {
+		return;
+	}
+
+	if ($isTextNode(lastChild)) {
+		const text = lastChild.getTextContent();
+		if (text.endsWith(" ") || text.endsWith("\n")) {
+			return;
+		}
+		paragraph.append($createTextNode(" "));
+		return;
+	}
+
+	paragraph.append($createTextNode(" "));
+}
+
+function $appendComposerInsertItems(items: ComposerInsertItem[]) {
+	let selectionTarget: TextNode | null = null;
+	let lastInsertedInlineBadge = false;
+
+	for (const item of items) {
+		if (item.kind === "text") {
+			if (!item.text) continue;
+			const paragraph = $getComposerAppendTarget();
+			const lastChild = paragraph.getLastChild();
+			if (
+				lastChild &&
+				(!$isTextNode(lastChild) ||
+					(lastChild.getTextContent() &&
+						!lastChild.getTextContent().endsWith(" ") &&
+						!lastChild.getTextContent().endsWith("\n") &&
+						!item.text.startsWith(" ") &&
+						!item.text.startsWith("\n")))
+			) {
+				paragraph.append($createTextNode(" "));
+			}
+			selectionTarget = $createTextNode(item.text);
+			paragraph.append(selectionTarget);
+			lastInsertedInlineBadge = false;
+			continue;
+		}
+
+		$ensureComposerInlineSeparator();
+		const paragraph = $getComposerAppendTarget();
+		if (item.kind === "file") {
+			paragraph.append($createFileBadgeNode(item.path));
+		} else if (item.kind === "image") {
+			paragraph.append($createImageBadgeNode(item.path));
+		} else {
+			paragraph.append(
+				$createCustomTagBadgeNode({
+					id: item.key ?? crypto.randomUUID(),
+					label: item.label,
+					submitText: item.submitText,
+				}),
+			);
+		}
+		selectionTarget = null;
+		lastInsertedInlineBadge = true;
+	}
+
+	if (lastInsertedInlineBadge) {
+		const paragraph = $getComposerAppendTarget();
+		selectionTarget = $createTextNode(" ");
+		paragraph.append(selectionTarget);
+	}
+
+	if (selectionTarget) {
+		const offset = selectionTarget.getTextContentSize();
+		selectionTarget.select(offset, offset);
+	}
 }
 
 export const WorkspaceComposer = memo(function WorkspaceComposer({
@@ -156,7 +278,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	restoreDraft,
 	restoreImages = [],
 	restoreFiles = [],
+	restoreCustomTags = [],
 	restoreNonce = 0,
+	pendingInsertRequests = [],
+	onPendingInsertRequestsConsumed,
 	slashCommands = EMPTY_SLASH_COMMANDS,
 	slashCommandsLoading = false,
 	slashCommandsError = false,
@@ -170,6 +295,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		recordComposerRender(contextKey, instanceIdRef.current);
 	});
 	const editorRef = useRef<LexicalEditor | null>(null);
+	const consumedInsertRequestIdsRef = useRef<Set<string>>(new Set());
 	const [hasContent, setHasContent] = useState(false);
 	const isOpus = selectedModelId === "opus-1m" || selectedModelId === "opus";
 	const effectiveEffort = useMemo(() => {
@@ -198,7 +324,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const initialConfig = useRef({
 		namespace: "WorkspaceComposer",
 		theme: EDITOR_THEME,
-		nodes: [ImageBadgeNode, FileBadgeNode],
+		nodes: [ImageBadgeNode, FileBadgeNode, CustomTagBadgeNode],
 		onError: onEditorError,
 	}).current;
 
@@ -208,10 +334,21 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		if (prevContextKeyRef.current !== contextKey) {
 			prevContextKeyRef.current = contextKey;
 			editorRef.current?.update(() => {
-				$setEditorContent(restoreDraft ?? "", restoreImages, restoreFiles);
+				$setEditorContent(
+					restoreDraft ?? "",
+					restoreImages,
+					restoreFiles,
+					restoreCustomTags,
+				);
 			});
 		}
-	}, [contextKey, restoreDraft, restoreImages, restoreFiles]);
+	}, [
+		contextKey,
+		restoreDraft,
+		restoreImages,
+		restoreFiles,
+		restoreCustomTags,
+	]);
 
 	// Restore on nonce change (error restore / draft restore)
 	const prevNonceRef = useRef(restoreNonce);
@@ -221,13 +358,61 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		if (
 			!restoreDraft &&
 			restoreImages.length === 0 &&
-			restoreFiles.length === 0
+			restoreFiles.length === 0 &&
+			restoreCustomTags.length === 0
 		)
 			return;
 		editorRef.current?.update(() => {
-			$setEditorContent(restoreDraft ?? "", restoreImages, restoreFiles);
+			$setEditorContent(
+				restoreDraft ?? "",
+				restoreImages,
+				restoreFiles,
+				restoreCustomTags,
+			);
 		});
-	}, [restoreNonce, restoreDraft, restoreImages, restoreFiles]);
+	}, [
+		restoreNonce,
+		restoreDraft,
+		restoreImages,
+		restoreFiles,
+		restoreCustomTags,
+	]);
+
+	useEffect(() => {
+		const pendingIds = new Set(
+			pendingInsertRequests.map((request) => request.id),
+		);
+		for (const id of consumedInsertRequestIdsRef.current) {
+			if (!pendingIds.has(id)) {
+				consumedInsertRequestIdsRef.current.delete(id);
+			}
+		}
+
+		const unconsumed = pendingInsertRequests.filter(
+			(request) => !consumedInsertRequestIdsRef.current.has(request.id),
+		);
+		if (unconsumed.length === 0) {
+			return;
+		}
+
+		const editor = editorRef.current;
+		if (!editor) {
+			return;
+		}
+
+		const consumedIds: string[] = [];
+		editor.update(() => {
+			for (const request of unconsumed) {
+				$appendComposerInsertItems(request.items);
+				consumedInsertRequestIdsRef.current.add(request.id);
+				consumedIds.push(request.id);
+			}
+		});
+
+		if (consumedIds.length > 0) {
+			onPendingInsertRequestsConsumed?.(consumedIds);
+		}
+	}, [onPendingInsertRequestsConsumed, pendingInsertRequests]);
 
 	const handleSubmit = useCallback(() => {
 		const editor = editorRef.current;
@@ -235,14 +420,22 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		let prompt = "";
 		let images: string[] = [];
 		let files: string[] = [];
+		let customTags: ComposerCustomTag[] = [];
 		editor.read(() => {
 			const result = $extractComposerContent();
 			prompt = result.text;
 			images = result.images;
 			files = result.files;
+			customTags = result.customTags;
 		});
-		if (!prompt && images.length === 0) return;
-		onSubmit(prompt, images, files);
+		if (
+			!prompt &&
+			images.length === 0 &&
+			files.length === 0 &&
+			customTags.length === 0
+		)
+			return;
+		onSubmit(prompt, images, files, customTags);
 		editor.update(() => {
 			$getRoot().clear();
 		});
@@ -252,7 +445,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	return (
 		<div
 			aria-label="Workspace composer"
-			className="flex flex-col rounded-2xl border border-border/40 bg-background px-4 pb-3 pt-3 shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]"
+			className="flex flex-col rounded-2xl border border-border/40 bg-sidebar px-4 pb-3 pt-3 shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]"
 		>
 			<label htmlFor="workspace-input" className="sr-only">
 				Workspace input

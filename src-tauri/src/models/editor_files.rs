@@ -352,7 +352,7 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
     parse_numstat_into(&staged_numstat, &mut stats_map);
     parse_numstat_into(&unstaged_numstat, &mut stats_map);
 
-    Ok(file_map
+    let items: Vec<EditorFileListItem> = file_map
         .into_iter()
         .map(|(relative_path, status)| {
             let absolute = workspace_root.join(&relative_path);
@@ -373,7 +373,9 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
                 committed_status: committed_map.get(&relative_path).cloned(),
             }
         })
-        .collect())
+        .collect();
+
+    Ok(items)
 }
 
 /// List workspace changes and eagerly read their contents in a single IPC call.
@@ -520,8 +522,16 @@ pub fn unstage_workspace_file(workspace_root_path: &str, relative_path: &str) ->
 
 /// Find the merge-base commit between HEAD and the default branch.
 fn find_merge_base(workspace_root: &Path) -> Result<String> {
-    // Try main, then master
-    for branch in &["refs/heads/main", "refs/heads/master"] {
+    // Try remote-tracking refs first (origin/main, origin/master), then
+    // local refs. Workspaces are created from `refs/remotes/origin/<default>`
+    // so comparing against the same remote ref avoids phantom diffs when the
+    // local main branch is behind the remote.
+    for branch in &[
+        "refs/remotes/origin/main",
+        "refs/remotes/origin/master",
+        "refs/heads/main",
+        "refs/heads/master",
+    ] {
         if let Ok(base) = git_ops::run_git(["merge-base", "HEAD", *branch], Some(workspace_root)) {
             if !base.trim().is_empty() {
                 return Ok(base.trim().to_string());
@@ -1388,5 +1398,252 @@ mod tests {
             .expect("expected nested widget in result");
         assert!(Path::new(&nested_match.absolute_path).is_file());
         assert_eq!(nested_match.name, "widget_00.tsx");
+    }
+
+    // ── Git file classification tests ──────────────────────────────────
+
+    /// Creates a real git repo with a `main` branch and an initial commit,
+    /// then creates a feature branch and switches to it. Returns the repo
+    /// root path as a `PathBuf` that can be passed to `list_workspace_changes`.
+    struct GitRepoHarness {
+        root: PathBuf,
+        _temp: tempfile::TempDir,
+    }
+
+    impl GitRepoHarness {
+        fn new() -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().to_path_buf();
+
+            // Init repo + initial commit on main
+            git_ops::run_git(["init", "-b", "main"], Some(&root)).unwrap();
+            git_ops::run_git(["config", "user.email", "test@helmor.test"], Some(&root)).unwrap();
+            git_ops::run_git(["config", "user.name", "Test"], Some(&root)).unwrap();
+
+            fs::write(root.join("README.md"), "# Test\n").unwrap();
+            git_ops::run_git(["add", "."], Some(&root)).unwrap();
+            git_ops::run_git(["commit", "-m", "init"], Some(&root)).unwrap();
+
+            // Create and switch to feature branch
+            git_ops::run_git(["checkout", "-b", "feature/test"], Some(&root)).unwrap();
+
+            Self { root, _temp: temp }
+        }
+
+        fn path_str(&self) -> &str {
+            self.root.to_str().unwrap()
+        }
+
+        fn write_file(&self, relative: &str, content: &str) {
+            let abs = self.root.join(relative);
+            if let Some(parent) = abs.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(abs, content).unwrap();
+        }
+
+        fn git(&self, args: &[&str]) -> String {
+            git_ops::run_git(args.iter().copied(), Some(&self.root)).unwrap_or_default()
+        }
+
+        fn changes(&self) -> Vec<EditorFileListItem> {
+            list_workspace_changes(self.path_str()).unwrap()
+        }
+
+        fn find(&self, path: &str) -> Option<EditorFileListItem> {
+            self.changes().into_iter().find(|item| item.path == path)
+        }
+    }
+
+    #[test]
+    fn classification_unstaged_modification() {
+        let repo = GitRepoHarness::new();
+
+        // Commit a file on the feature branch, then modify it without staging
+        repo.write_file("src/app.ts", "const v1 = true;\n");
+        repo.git(&["add", "src/app.ts"]);
+        repo.git(&["commit", "-m", "add app"]);
+        repo.write_file("src/app.ts", "const v2 = true;\n");
+
+        let item = repo.find("src/app.ts").expect("file should appear");
+        assert!(
+            item.unstaged_status.is_some(),
+            "should have unstaged_status: {item:?}"
+        );
+        assert_eq!(item.unstaged_status.as_deref(), Some("M"));
+        // File is committed on branch (vs main) AND has working tree changes
+        assert!(item.committed_status.is_some());
+    }
+
+    #[test]
+    fn classification_staged_modification() {
+        let repo = GitRepoHarness::new();
+
+        // Commit a file, then modify and stage it
+        repo.write_file("src/app.ts", "const v1 = true;\n");
+        repo.git(&["add", "src/app.ts"]);
+        repo.git(&["commit", "-m", "add app"]);
+        repo.write_file("src/app.ts", "const v2 = true;\n");
+        repo.git(&["add", "src/app.ts"]);
+
+        let item = repo.find("src/app.ts").expect("file should appear");
+        assert_eq!(
+            item.staged_status.as_deref(),
+            Some("M"),
+            "should have staged M: {item:?}"
+        );
+        // No unstaged changes (everything is staged)
+        assert!(
+            item.unstaged_status.is_none(),
+            "should NOT have unstaged_status: {item:?}"
+        );
+    }
+
+    #[test]
+    fn classification_untracked_file() {
+        let repo = GitRepoHarness::new();
+
+        // Create a new file without staging
+        repo.write_file("new-file.txt", "hello\n");
+
+        let item = repo.find("new-file.txt").expect("file should appear");
+        assert_eq!(
+            item.unstaged_status.as_deref(),
+            Some("A"),
+            "untracked file should have unstaged A: {item:?}"
+        );
+        assert!(
+            item.staged_status.is_none(),
+            "untracked should NOT have staged_status: {item:?}"
+        );
+        assert!(
+            item.committed_status.is_none(),
+            "untracked should NOT have committed_status: {item:?}"
+        );
+    }
+
+    #[test]
+    fn classification_staged_new_file() {
+        let repo = GitRepoHarness::new();
+
+        // Create and stage a new file
+        repo.write_file("new-file.txt", "hello\n");
+        repo.git(&["add", "new-file.txt"]);
+
+        let item = repo.find("new-file.txt").expect("file should appear");
+        assert_eq!(
+            item.staged_status.as_deref(),
+            Some("A"),
+            "staged new file should have staged A: {item:?}"
+        );
+        assert!(
+            item.unstaged_status.is_none(),
+            "fully staged should NOT have unstaged_status: {item:?}"
+        );
+    }
+
+    #[test]
+    fn classification_committed_on_branch() {
+        let repo = GitRepoHarness::new();
+
+        // Commit a file on the feature branch
+        repo.write_file("feature.ts", "export const feature = true;\n");
+        repo.git(&["add", "feature.ts"]);
+        repo.git(&["commit", "-m", "add feature"]);
+
+        let item = repo.find("feature.ts").expect("file should appear");
+        assert_eq!(
+            item.committed_status.as_deref(),
+            Some("A"),
+            "committed file should have committed A: {item:?}"
+        );
+        // No staged or unstaged changes (committed and clean)
+        assert!(
+            item.staged_status.is_none(),
+            "clean committed should NOT have staged_status: {item:?}"
+        );
+        assert!(
+            item.unstaged_status.is_none(),
+            "clean committed should NOT have unstaged_status: {item:?}"
+        );
+    }
+
+    #[test]
+    fn classification_both_staged_and_unstaged() {
+        let repo = GitRepoHarness::new();
+
+        // Commit a file, then stage a change, then modify again
+        repo.write_file("mixed.ts", "v1\n");
+        repo.git(&["add", "mixed.ts"]);
+        repo.git(&["commit", "-m", "add mixed"]);
+        repo.write_file("mixed.ts", "v2\n");
+        repo.git(&["add", "mixed.ts"]);
+        repo.write_file("mixed.ts", "v3\n");
+
+        let item = repo.find("mixed.ts").expect("file should appear");
+        assert_eq!(
+            item.staged_status.as_deref(),
+            Some("M"),
+            "should have staged M: {item:?}"
+        );
+        assert_eq!(
+            item.unstaged_status.as_deref(),
+            Some("M"),
+            "should have unstaged M: {item:?}"
+        );
+    }
+
+    #[test]
+    fn classification_after_commit_changes_clear() {
+        let repo = GitRepoHarness::new();
+
+        // Create, stage, commit — should only show in committed section
+        repo.write_file("done.ts", "done\n");
+        repo.git(&["add", "done.ts"]);
+        repo.git(&["commit", "-m", "add done"]);
+
+        let item = repo.find("done.ts").expect("file should appear");
+        assert!(
+            item.committed_status.is_some(),
+            "should have committed_status: {item:?}"
+        );
+        assert!(
+            item.staged_status.is_none(),
+            "committed file should NOT have staged: {item:?}"
+        );
+        assert!(
+            item.unstaged_status.is_none(),
+            "committed file should NOT have unstaged: {item:?}"
+        );
+    }
+
+    #[test]
+    fn classification_no_changes_empty_result() {
+        let repo = GitRepoHarness::new();
+
+        // No changes at all — only README.md exists but it's on main too
+        let items = repo.changes();
+        assert!(
+            items.is_empty(),
+            "clean branch should have no changes: {items:?}"
+        );
+    }
+
+    #[test]
+    fn classification_discard_removes_from_changes() {
+        let repo = GitRepoHarness::new();
+
+        // Modify, then discard
+        repo.write_file("README.md", "modified\n");
+        assert!(
+            repo.find("README.md").is_some(),
+            "modified file should show"
+        );
+
+        repo.git(&["checkout", "--", "README.md"]);
+        assert!(
+            repo.find("README.md").is_none(),
+            "discarded file should NOT show"
+        );
     }
 }

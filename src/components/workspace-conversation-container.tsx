@@ -25,6 +25,11 @@ import {
 	startAgentMessageStream,
 	stopAgentStream,
 } from "@/lib/api";
+import type {
+	ComposerCustomTag,
+	ResolvedComposerInsertRequest,
+} from "@/lib/composer-insert";
+import { insertRequestMatchesComposer } from "@/lib/composer-insert";
 import {
 	agentModelSectionsQueryOptions,
 	helmorQueryKeys,
@@ -70,6 +75,8 @@ type WorkspaceConversationContainerProps = {
 	/** Called after the pending prompt has been handed off to the composer's
 	 * submit flow, so the caller can clear the queue. */
 	onPendingPromptConsumed?: () => void;
+	pendingInsertRequests?: ResolvedComposerInsertRequest[];
+	onPendingInsertRequestsConsumed?: (ids: string[]) => void;
 };
 
 export const WorkspaceConversationContainer = memo(
@@ -88,6 +95,8 @@ export const WorkspaceConversationContainer = memo(
 		headerLeading,
 		pendingPromptForSession = null,
 		onPendingPromptConsumed,
+		pendingInsertRequests = [],
+		onPendingInsertRequestsConsumed,
 	}: WorkspaceConversationContainerProps) {
 		const queryClient = useQueryClient();
 		const pushToast = useWorkspaceToast();
@@ -105,6 +114,7 @@ export const WorkspaceConversationContainer = memo(
 			draft: string;
 			images: string[];
 			files: string[];
+			customTags: ComposerCustomTag[];
 			nonce: number;
 		} | null>(null);
 		const [liveSessionsByContext, setLiveSessionsByContext] = useState<
@@ -268,6 +278,7 @@ export const WorkspaceConversationContainer = memo(
 				prompt,
 				imagePaths,
 				filePaths,
+				customTags,
 				model,
 				workingDirectory,
 				effortLevel,
@@ -276,6 +287,7 @@ export const WorkspaceConversationContainer = memo(
 				prompt: string;
 				imagePaths: string[];
 				filePaths: string[];
+				customTags: ComposerCustomTag[];
 				model: AgentModelOption;
 				workingDirectory: string | null;
 				effortLevel: string;
@@ -556,6 +568,7 @@ export const WorkspaceConversationContainer = memo(
 										draft: trimmedPrompt,
 										images: imagePaths,
 										files: filePaths,
+										customTags,
 										nonce: Date.now(),
 									});
 								}
@@ -582,6 +595,7 @@ export const WorkspaceConversationContainer = memo(
 						draft: trimmedPrompt,
 						images: imagePaths,
 						files: filePaths,
+						customTags,
 						nonce: Date.now(),
 					});
 					restoreSnapshot(queryClient, cacheSessionId, rollbackSnapshot);
@@ -646,7 +660,17 @@ export const WorkspaceConversationContainer = memo(
 		const restoreFiles = restoreActive
 			? composerRestoreState.files
 			: EMPTY_FILES;
+		const restoreCustomTags = restoreActive
+			? composerRestoreState.customTags
+			: [];
 		const restoreNonce = restoreActive ? composerRestoreState.nonce : 0;
+		const relevantPendingInsertRequests = pendingInsertRequests.filter(
+			(request) =>
+				insertRequestMatchesComposer(request, {
+					workspaceId: displayedWorkspaceId,
+					sessionId: displayedSessionId,
+				}),
+		);
 
 		return (
 			<>
@@ -737,6 +761,7 @@ export const WorkspaceConversationContainer = memo(
 							restoreDraft={restoreDraft}
 							restoreImages={restoreImages}
 							restoreFiles={restoreFiles}
+							restoreCustomTags={restoreCustomTags}
 							restoreNonce={restoreNonce}
 							modelSelections={composerModelSelections}
 							effortLevels={composerEffortLevels}
@@ -749,6 +774,8 @@ export const WorkspaceConversationContainer = memo(
 							onStop={handleStopStream}
 							pendingPromptForSession={pendingPromptForSession}
 							onPendingPromptConsumed={onPendingPromptConsumed}
+							pendingInsertRequests={relevantPendingInsertRequests}
+							onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
 						/>
 					</div>
 				</div>

@@ -10,6 +10,8 @@ import {
 	$isLineBreakNode,
 	$isTextNode,
 } from "lexical";
+import type { ComposerCustomTag } from "@/lib/composer-insert";
+import { $isCustomTagBadgeNode } from "./custom-tag-badge-node";
 import { $isFileBadgeNode } from "./file-badge-node";
 import { $isImageBadgeNode } from "./image-badge-node";
 
@@ -17,9 +19,11 @@ export function $extractComposerContent(): {
 	text: string;
 	images: string[];
 	files: string[];
+	customTags: ComposerCustomTag[];
 } {
 	const images: string[] = [];
 	const files: string[] = [];
+	const customTags: ComposerCustomTag[] = [];
 	const textParts: string[] = [];
 	const root = $getRoot();
 
@@ -50,6 +54,14 @@ export function $extractComposerContent(): {
 						textParts.push(" ");
 					}
 					textParts.push(`@${path}`);
+				} else if ($isCustomTagBadgeNode(child)) {
+					const customTag = child.getCustomTag();
+					customTags.push(customTag);
+					const last = textParts[textParts.length - 1];
+					if (last && !last.endsWith(" ") && !last.endsWith("\n")) {
+						textParts.push(" ");
+					}
+					textParts.push(customTag.submitText);
 				} else if ($isLineBreakNode(child)) {
 					textParts.push("\n");
 				}
@@ -66,5 +78,6 @@ export function $extractComposerContent(): {
 			.trim(),
 		images: [...new Set(images)],
 		files: [...new Set(files)],
+		customTags,
 	};
 }
