@@ -1057,6 +1057,24 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			selectedSessionIdRef.current = immediateSessionId;
 			setSelectedWorkspaceId(workspaceId);
 			setSelectedSessionId(immediateSessionId);
+			// Clear all completed-session dots belonging to this workspace
+			if (workspaceId) {
+				setCompletedSessions((prev) => {
+					let changed = false;
+					for (const [, wsId] of prev) {
+						if (wsId === workspaceId) {
+							changed = true;
+							break;
+						}
+					}
+					if (!changed) return prev;
+					const next = new Map<string, string>();
+					for (const [sid, wsId] of prev) {
+						if (wsId !== workspaceId) next.set(sid, wsId);
+					}
+					return next;
+				});
+			}
 			if (workspaceId === null) {
 				if (workspaceSelectionRequestRef.current !== requestId) {
 					return;
