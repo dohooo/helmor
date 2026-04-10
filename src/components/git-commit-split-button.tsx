@@ -1,5 +1,7 @@
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "./ui/button";
+import { ButtonGroup, ButtonGroupSeparator } from "./ui/button-group";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -26,20 +28,20 @@ export function CommitSplitButton({
 	const commitButtonClasses = cn(
 		"inline-flex h-full shrink-0 items-center gap-1 rounded-l-[4px] px-2 py-1 text-[11px] font-medium leading-none tracking-[0.01em] transition-colors",
 		disabled
-			? "bg-app-foreground/8 text-app-muted disabled:cursor-not-allowed disabled:opacity-60"
-			: "bg-app-accent text-app-foreground hover:bg-app-accent-strong hover:text-app-foreground",
+			? "bg-muted text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+			: "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground",
 	);
 
 	const dividerClasses = cn(
 		"w-px shrink-0 self-stretch",
-		disabled ? "bg-app-muted/55" : "bg-app-foreground/35",
+		disabled ? "bg-border/80" : "bg-primary-foreground/20",
 	);
 
 	const triggerClasses = cn(
 		"inline-flex h-full shrink-0 items-center rounded-r-[4px] px-1.5 py-1 transition-colors",
 		disabled
-			? "text-app-muted disabled:cursor-not-allowed disabled:opacity-60"
-			: "text-app-foreground hover:bg-app-accent-strong hover:text-app-foreground",
+			? "text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+			: "text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground",
 	);
 
 	const hasChanges = !disabled;
@@ -49,16 +51,18 @@ export function CommitSplitButton({
 			open={hasChanges && isOpen}
 			onOpenChange={(open) => onOpenChange?.(open)}
 		>
-			<div
+			<ButtonGroup
 				className={cn(
-					"ml-auto inline-flex h-6 items-stretch rounded-[4px] border",
-					disabled ? "border-app-border" : "border-app-accent",
+					"ml-auto h-6 items-stretch rounded-[4px] border [&>[data-slot=button]]:h-full [&>[data-slot=button]]:rounded-none [&>[data-slot=button]:first-child]:rounded-l-[4px] [&>[data-slot=button]:last-child]:rounded-r-[4px]",
+					disabled ? "border-border" : "border-primary",
 				)}
 			>
-				<button
+				<Button
 					type="button"
 					disabled={disabled}
 					aria-label="Commit current changes"
+					variant="ghost"
+					size="xs"
 					className={commitButtonClasses}
 					onMouseEnter={() => {
 						if (!hasChanges) return;
@@ -70,16 +74,15 @@ export function CommitSplitButton({
 					}}
 				>
 					<span>{mainLabel}</span>
-				</button>
-				<span className={dividerClasses} />
-				{/* NOTE: `asChild` isn't supported by this project's
-				 * DropdownMenuTrigger wrapper. This component is currently
-				 * unused and kept only as a WIP reference. */}
-				<DropdownMenuTrigger>
-					<button
+				</Button>
+				<ButtonGroupSeparator className={dividerClasses} />
+				<DropdownMenuTrigger asChild>
+					<Button
 						type="button"
 						disabled={disabled}
 						aria-label="Git section more actions"
+						variant="ghost"
+						size="xs"
 						className={triggerClasses}
 						onMouseEnter={() => {
 							if (!hasChanges) return;
@@ -87,9 +90,9 @@ export function CommitSplitButton({
 						}}
 					>
 						<ChevronDown className="size-3 flex-none" strokeWidth={2.2} />
-					</button>
+					</Button>
 				</DropdownMenuTrigger>
-			</div>
+			</ButtonGroup>
 			<DropdownMenuContent
 				align="end"
 				side="bottom"

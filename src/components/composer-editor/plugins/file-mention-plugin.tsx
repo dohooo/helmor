@@ -165,11 +165,11 @@ export function FileMentionPlugin({
 						<Command
 							value={highlightValue}
 							shouldFilter={false}
-							className="rounded-xl border border-app-border/60 bg-app-elevated text-app-foreground shadow-2xl ring-1 ring-black/5"
+							className="rounded-xl border border-border/60 bg-background text-foreground shadow-2xl ring-1 ring-black/5"
 						>
 							<CommandList className="max-h-72">
 								<CommandEmpty>No files</CommandEmpty>
-								<CommandGroup>
+								<CommandGroup heading="Files">
 									{options.map((opt, index) => {
 										const file = opt.file;
 										const isSelected = index === selectedIndex;
@@ -188,19 +188,19 @@ export function FileMentionPlugin({
 												onMouseEnter={() => setHighlightedIndex(index)}
 												onPointerDown={(event) => event.preventDefault()}
 												className={cn(
-													"flex min-w-0 items-center gap-2 px-3 py-2 text-[13px]",
+													"min-w-0 rounded-lg px-2.5 py-2 text-[13px]",
 													isSelected && "bg-muted text-foreground",
 												)}
 											>
 												<FileText
-													className="size-3.5 shrink-0 text-app-muted"
+													className="size-3.5 shrink-0 text-muted-foreground"
 													strokeWidth={1.8}
 												/>
-												<span className="shrink-0 font-medium">
+												<span className="min-w-0 shrink-0 truncate font-medium">
 													{file.name}
 												</span>
 												<span
-													className="min-w-0 flex-1 truncate whitespace-nowrap text-app-muted"
+													className="min-w-0 flex-1 truncate whitespace-nowrap text-xs text-muted-foreground"
 													title={file.path}
 												>
 													{directory}

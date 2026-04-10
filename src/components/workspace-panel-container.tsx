@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type {
+	PullRequestInfo,
 	ThreadMessageLike,
 	WorkspaceDetail,
 	WorkspaceSessionSummary,
@@ -25,6 +26,7 @@ type WorkspacePanelContainerProps = {
 	sending: boolean;
 	sendingSessionIds?: Set<string>;
 	selectedProvider?: string | null;
+	workspacePrInfo?: PullRequestInfo | null;
 	onSelectSession: (sessionId: string | null) => void;
 	onResolveDisplayedSession: (sessionId: string | null) => void;
 	headerActions?: React.ReactNode;
@@ -40,6 +42,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	sending,
 	sendingSessionIds,
 	selectedProvider = null,
+	workspacePrInfo = null,
 	onSelectSession,
 	onResolveDisplayedSession,
 	headerActions,
@@ -470,6 +473,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			onWorkspaceChanged={handleWorkspaceChanged}
 			headerActions={headerActions}
 			headerLeading={headerLeading}
+			prInfo={workspacePrInfo}
 		/>
 	);
 });

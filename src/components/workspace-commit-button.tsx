@@ -165,43 +165,43 @@ function semanticButtonVars(
 	variant: "filled" | "ghost",
 ): ButtonColorVars {
 	const palette = {
-		success: "var(--color-app-progress)",
-		danger: "var(--color-app-canceled)",
-		attention: "var(--color-app-review)",
-		accent: "var(--color-app-project)",
-		done: "#8957E5",
-		closed: "var(--color-app-canceled)",
+		success: "var(--chart-2)",
+		danger: "var(--destructive)",
+		attention: "var(--chart-4)",
+		accent: "var(--chart-3)",
+		done: "var(--chart-1)",
+		closed: "var(--destructive)",
 	}[role];
 
 	if (role === "closed" && variant === "ghost") {
 		return {
-			"--button-border": `color-mix(in oklch, ${palette} 32%, var(--color-app-border) 68%)`,
+			"--button-border": `color-mix(in oklch, ${palette} 32%, var(--border) 68%)`,
 			"--button-divider": `color-mix(in oklch, ${palette} 18%, transparent)`,
 			"--button-bg": "transparent",
 			"--button-bg-hover": "transparent",
-			"--button-fg": `color-mix(in oklch, ${palette} 52%, var(--color-app-foreground-soft) 48%)`,
-			"--button-fg-hover": `color-mix(in oklch, ${palette} 52%, var(--color-app-foreground-soft) 48%)`,
+			"--button-fg": `color-mix(in oklch, ${palette} 52%, var(--muted-foreground) 48%)`,
+			"--button-fg-hover": `color-mix(in oklch, ${palette} 52%, var(--muted-foreground) 48%)`,
 		};
 	}
 
 	if (variant === "ghost") {
 		return {
-			"--button-border": `color-mix(in oklch, ${palette} 46%, var(--color-app-border) 54%)`,
+			"--button-border": `color-mix(in oklch, ${palette} 46%, var(--border) 54%)`,
 			"--button-divider": `color-mix(in oklch, ${palette} 24%, transparent)`,
 			"--button-bg": "transparent",
 			"--button-bg-hover": "transparent",
-			"--button-fg": `color-mix(in oklch, ${palette} 74%, var(--color-app-foreground-soft) 26%)`,
-			"--button-fg-hover": `color-mix(in oklch, ${palette} 74%, var(--color-app-foreground-soft) 26%)`,
+			"--button-fg": `color-mix(in oklch, ${palette} 74%, var(--muted-foreground) 26%)`,
+			"--button-fg-hover": `color-mix(in oklch, ${palette} 74%, var(--muted-foreground) 26%)`,
 		};
 	}
 
 	return {
-		"--button-border": `color-mix(in oklch, ${palette} 52%, var(--color-app-border) 48%)`,
+		"--button-border": `color-mix(in oklch, ${palette} 52%, var(--border) 48%)`,
 		"--button-divider": "rgb(0 0 0 / 0.18)",
-		"--button-bg": `color-mix(in oklch, ${palette} 34%, var(--color-app-sidebar) 66%)`,
-		"--button-bg-hover": `color-mix(in oklch, ${palette} 44%, var(--color-app-sidebar) 56%)`,
-		"--button-fg": "var(--color-app-foreground)",
-		"--button-fg-hover": "var(--color-app-foreground)",
+		"--button-bg": `color-mix(in oklch, ${palette} 34%, var(--background) 66%)`,
+		"--button-bg-hover": `color-mix(in oklch, ${palette} 44%, var(--background) 56%)`,
+		"--button-fg": "var(--foreground)",
+		"--button-fg-hover": "var(--foreground)",
 	};
 }
 
@@ -226,10 +226,10 @@ function getButtonColorVars(
 		return {
 			"--button-border": "transparent",
 			"--button-divider": "rgb(255 255 255 / 0.18)",
-			"--button-bg": "rgb(22 163 74)",
-			"--button-bg-hover": "rgb(21 148 68)",
-			"--button-fg": "#ffffff",
-			"--button-fg-hover": "#ffffff",
+			"--button-bg": "var(--chart-2)",
+			"--button-bg-hover": "color-mix(in oklch, var(--chart-2) 90%, black 10%)",
+			"--button-fg": "var(--background)",
+			"--button-fg-hover": "var(--background)",
 		};
 	}
 
@@ -237,24 +237,23 @@ function getButtonColorVars(
 		return {
 			"--button-border": "transparent",
 			"--button-divider": "rgb(255 255 255 / 0.16)",
-			"--button-bg": "#8957E5",
-			"--button-bg-hover": "#7f4fda",
-			"--button-fg": "var(--color-app-foreground)",
-			"--button-fg-hover": "var(--color-app-foreground)",
+			"--button-bg": "var(--chart-4)",
+			"--button-bg-hover": "color-mix(in oklch, var(--chart-4) 90%, black 10%)",
+			"--button-fg": "var(--background)",
+			"--button-fg-hover": "var(--background)",
 		};
 	}
 
 	if (state === "disabled") {
 		return {
-			"--button-border":
-				"color-mix(in oklch, var(--color-app-border) 92%, transparent)",
+			"--button-border": "color-mix(in oklch, var(--border) 92%, transparent)",
 			"--button-divider": "rgb(0 0 0 / 0.12)",
 			"--button-bg":
-				"color-mix(in oklch, var(--color-app-accent) 72%, var(--color-app-sidebar) 28%)",
+				"color-mix(in oklch, var(--primary) 72%, var(--muted) 28%)",
 			"--button-bg-hover":
-				"color-mix(in oklch, var(--color-app-accent) 72%, var(--color-app-sidebar) 28%)",
-			"--button-fg": "var(--color-app-muted)",
-			"--button-fg-hover": "var(--color-app-muted)",
+				"color-mix(in oklch, var(--primary) 72%, var(--muted) 28%)",
+			"--button-fg": "var(--muted-foreground)",
+			"--button-fg-hover": "var(--muted-foreground)",
 		};
 	}
 	if (mode === "closed") return semanticButtonVars("closed", "ghost");

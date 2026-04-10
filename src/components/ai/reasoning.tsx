@@ -117,7 +117,7 @@ export const ReasoningTrigger = memo(
 		return (
 			<CollapsibleTrigger
 				className={cn(
-					"group/reasoning inline-flex max-w-full cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-app-muted transition-colors hover:text-app-foreground-soft [&::-webkit-details-marker]:hidden",
+					"group/reasoning inline-flex max-w-full cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden",
 					className,
 				)}
 				{...props}
@@ -151,11 +151,11 @@ export const ReasoningContent = memo(
 			<CollapsibleContent className={cn("pt-1.5", className)} {...props}>
 				<div
 					ref={scrollRef}
-					className="max-h-[20rem] overflow-auto rounded-lg bg-app-foreground/[0.03]"
+					className="max-h-[20rem] overflow-auto rounded-lg bg-muted/40"
 				>
 					<pre
 						ref={contentRef}
-						className="whitespace-pre-wrap break-words px-3 py-2.5 font-sans leading-relaxed text-app-muted/70"
+						className="whitespace-pre-wrap break-words px-3 py-2.5 font-sans leading-relaxed text-muted-foreground/80"
 						style={fontSize ? { fontSize: `${fontSize}px` } : undefined}
 					>
 						{children}

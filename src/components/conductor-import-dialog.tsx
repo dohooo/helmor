@@ -1,6 +1,5 @@
 import {
 	ArrowLeft,
-	Check,
 	FolderInput,
 	GitBranch,
 	Loader2,
@@ -14,7 +13,14 @@ import {
 	listConductorRepos,
 	listConductorWorkspaces,
 } from "@/lib/api";
+import { cn } from "@/lib/utils";
+import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
+import { Empty, EmptyHeader, EmptyTitle } from "./ui/empty";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "./ui/input-group";
+import { Separator } from "./ui/separator";
+import { Skeleton } from "./ui/skeleton";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,10 +46,10 @@ function statusLabel(ws: ConductorWorkspace): string {
 function SkeletonRow() {
 	return (
 		<div className="flex items-center gap-2 rounded-xl px-2 py-2">
-			<div className="size-7 shrink-0 animate-pulse rounded-lg bg-app-elevated" />
-			<div className="flex-1 space-y-1.5">
-				<div className="h-3 w-28 animate-pulse rounded bg-app-elevated" />
-				<div className="h-2.5 w-16 animate-pulse rounded bg-app-elevated" />
+			<Skeleton className="size-7 shrink-0 rounded-lg bg-muted" />
+			<div className="flex flex-1 flex-col gap-1.5">
+				<Skeleton className="h-3 w-28 bg-muted" />
+				<Skeleton className="h-2.5 w-16 bg-muted" />
 			</div>
 		</div>
 	);
@@ -235,26 +241,27 @@ export function ConductorImportDialog({
 			<DialogContent
 				ref={panelRef}
 				showCloseButton={!importing}
-				className="flex w-[24rem] max-w-[24rem] flex-col gap-0 rounded-xl border border-app-border bg-app-sidebar p-0 shadow-2xl"
+				className="flex w-[24rem] max-w-[24rem] flex-col gap-0 rounded-xl border border-border bg-background p-0 shadow-2xl"
 			>
 				{/* Header */}
 				<div className="flex items-center gap-2 px-4 pt-4 pb-2">
 					{selectedRepoId ? (
-						<button
-							type="button"
+						<Button
 							disabled={importing}
-							className="flex size-6 items-center justify-center rounded-md text-app-foreground-soft transition-colors hover:text-app-foreground disabled:opacity-40"
+							variant="ghost"
+							size="icon-xs"
+							className="text-muted-foreground hover:text-foreground"
 							onClick={() => setSelectedRepoId(null)}
 						>
 							<ArrowLeft className="size-3.5" strokeWidth={2} />
-						</button>
+						</Button>
 					) : (
 						<FolderInput
-							className="size-3.5 text-app-foreground-soft"
+							className="size-3.5 text-muted-foreground"
 							strokeWidth={1.8}
 						/>
 					)}
-					<DialogTitle className="flex-1 text-[13px] font-medium tracking-[-0.01em] text-app-foreground">
+					<DialogTitle className="flex-1 text-[13px] font-medium tracking-[-0.01em] text-foreground">
 						{selectedRepoId ? selectedRepo?.name : "Import from Conductor"}
 					</DialogTitle>
 				</div>
@@ -262,12 +269,14 @@ export function ConductorImportDialog({
 				{/* Search — hidden while importing */}
 				{!importing && (
 					<div className="px-3 pb-2">
-						<div className="relative">
-							<Search
-								className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-app-foreground-soft/60"
-								strokeWidth={1.9}
-							/>
-							<input
+						<InputGroup className="bg-muted/30 shadow-none">
+							<InputGroupAddon>
+								<Search
+									className="text-muted-foreground/60"
+									strokeWidth={1.9}
+								/>
+							</InputGroupAddon>
+							<InputGroupInput
 								ref={searchRef}
 								type="text"
 								value={searchQuery}
@@ -276,9 +285,9 @@ export function ConductorImportDialog({
 								}
 								onChange={(e) => setSearchQuery(e.target.value)}
 								onKeyDown={(e) => e.stopPropagation()}
-								className="h-9 w-full rounded-full border border-app-border bg-app-toolbar px-9 text-[13px] font-medium text-app-foreground outline-none placeholder:text-app-foreground-soft/56 focus:border-app-border-strong"
+								className="text-[13px] font-medium text-foreground placeholder:text-muted-foreground/60"
 							/>
-						</div>
+						</InputGroup>
 					</div>
 				)}
 
@@ -287,13 +296,13 @@ export function ConductorImportDialog({
 					{importing ? (
 						// --- Importing state ---
 						<div className="flex flex-col items-center justify-center gap-3 py-10">
-							<Loader2 className="size-5 animate-spin text-app-foreground-soft" />
+							<Loader2 className="size-5 animate-spin text-muted-foreground" />
 							<div className="text-center">
-								<p className="text-[13px] font-medium text-app-foreground">
+								<p className="text-[13px] font-medium text-foreground">
 									Importing {selectedIds.size} workspace
 									{selectedIds.size === 1 ? "" : "s"}
 								</p>
-								<p className="mt-1 text-[11px] text-app-foreground-soft/60">
+								<p className="mt-1 text-[11px] text-muted-foreground">
 									Setting up repositories and copying data...
 								</p>
 							</div>
@@ -306,15 +315,16 @@ export function ConductorImportDialog({
 						// --- Workspace list ---
 						<>
 							{importableWorkspaces.length > 1 && (
-								<button
-									type="button"
-									className="mb-1 w-full rounded-lg px-2 py-1.5 text-left text-[11px] uppercase tracking-[0.14em] text-app-foreground-soft/70 transition-colors hover:text-app-foreground-soft"
+								<Button
+									variant="ghost"
+									size="xs"
+									className="mb-1 w-full justify-start rounded-lg px-2 text-[11px] uppercase tracking-[0.14em] text-muted-foreground hover:text-foreground"
 									onClick={toggleAll}
 								>
 									{selectedIds.size === importableWorkspaces.length
 										? "Deselect all"
 										: "Select all"}
-								</button>
+								</Button>
 							)}
 							{filteredWorkspaces.length > 0 ? (
 								filteredWorkspaces.map((ws) => (
@@ -326,9 +336,11 @@ export function ConductorImportDialog({
 									/>
 								))
 							) : (
-								<p className="py-6 text-center text-[13px] text-app-foreground-soft/60">
-									No workspaces found
-								</p>
+								<Empty className="py-6">
+									<EmptyHeader>
+										<EmptyTitle>No workspaces found</EmptyTitle>
+									</EmptyHeader>
+								</Empty>
 							)}
 						</>
 					) : // --- Repo list ---
@@ -341,17 +353,22 @@ export function ConductorImportDialog({
 							/>
 						))
 					) : (
-						<p className="py-6 text-center text-[13px] text-app-foreground-soft/60">
-							{repos.length === 0
-								? "No Conductor repositories found"
-								: "No matches"}
-						</p>
+						<Empty className="py-6">
+							<EmptyHeader>
+								<EmptyTitle>
+									{repos.length === 0
+										? "No Conductor repositories found"
+										: "No matches"}
+								</EmptyTitle>
+							</EmptyHeader>
+						</Empty>
 					)}
 				</div>
 
 				{/* Footer — workspace step, not importing */}
 				{selectedRepoId && !loading && !importing && (
-					<div className="border-t border-app-border px-4 py-3">
+					<div className="px-4 py-3">
+						<Separator className="mb-3 bg-border" />
 						{importError && (
 							<p
 								className="mb-2 text-[11px] leading-relaxed text-red-400/90"
@@ -360,16 +377,20 @@ export function ConductorImportDialog({
 								{importError}
 							</p>
 						)}
-						<button
-							type="button"
+						<Button
 							disabled={selectedIds.size === 0}
 							onClick={handleImport}
-							className="flex h-8 w-full items-center justify-center gap-2 rounded-full bg-app-elevated text-[13px] font-medium text-app-foreground transition-colors hover:brightness-110 disabled:opacity-40 disabled:hover:brightness-100"
+							variant="secondary"
+							className="h-8 w-full rounded-full"
 						>
-							<FolderInput className="size-3.5" strokeWidth={1.8} />
+							<FolderInput
+								data-icon="inline-start"
+								className="size-3.5"
+								strokeWidth={1.8}
+							/>
 							Import {selectedIds.size} workspace
 							{selectedIds.size === 1 ? "" : "s"}
-						</button>
+						</Button>
 					</div>
 				)}
 			</DialogContent>
@@ -392,21 +413,23 @@ function RepoRow({
 		repo.workspaceCount > 0 && repo.alreadyImportedCount >= repo.workspaceCount;
 
 	return (
-		<button
+		<Button
 			type="button"
-			className={`flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition-colors ${
-				allImported ? "opacity-40" : "hover:bg-app-row-hover"
-			}`}
+			variant="ghost"
+			className={cn(
+				"h-auto w-full justify-start rounded-xl px-2 py-2 text-left transition-colors",
+				allImported ? "opacity-40" : "hover:bg-accent/60",
+			)}
 			onClick={onClick}
 		>
-			<div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-app-elevated text-[11px] font-semibold uppercase text-app-foreground-soft">
+			<div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-[11px] font-semibold uppercase text-muted-foreground">
 				{repo.name.slice(0, 2)}
 			</div>
 			<div className="min-w-0 flex-1">
-				<span className="block truncate text-[13px] font-medium text-app-foreground">
+				<span className="block truncate text-[13px] font-medium text-foreground">
 					{repo.name}
 				</span>
-				<span className="block text-[11px] tracking-[0.04em] text-app-foreground-soft/52">
+				<span className="block text-[11px] tracking-[0.04em] text-muted-foreground">
 					{allImported
 						? "All imported"
 						: repo.alreadyImportedCount > 0
@@ -414,7 +437,7 @@ function RepoRow({
 							: `${repo.workspaceCount} workspace${repo.workspaceCount === 1 ? "" : "s"}`}
 				</span>
 			</div>
-		</button>
+		</Button>
 	);
 }
 
@@ -430,14 +453,12 @@ function WorkspaceRow({
 	if (workspace.alreadyImported) {
 		return (
 			<div className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 opacity-40">
-				<div className="flex size-4 shrink-0 items-center justify-center rounded border border-app-border-strong text-app-foreground-soft">
-					<Check className="size-3" strokeWidth={2.5} />
-				</div>
+				<Checkbox checked disabled aria-hidden />
 				<div className="min-w-0 flex-1">
-					<span className="block truncate text-[13px] font-medium text-app-foreground-soft">
+					<span className="block truncate text-[13px] font-medium text-muted-foreground">
 						{workspace.prTitle || humanize(workspace.directoryName)}
 					</span>
-					<span className="block text-[11px] tracking-[0.04em] text-app-foreground-soft/52">
+					<span className="block text-[11px] tracking-[0.04em] text-muted-foreground">
 						Already imported
 					</span>
 				</div>
@@ -445,27 +466,24 @@ function WorkspaceRow({
 		);
 	}
 
-	return (
-		<button
-			type="button"
-			className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-app-row-hover"
-			onClick={() => onToggle(workspace.id)}
-		>
-			<div
-				className={`flex size-4 shrink-0 items-center justify-center rounded border transition-colors ${
-					checked
-						? "border-app-foreground-soft bg-app-foreground-soft text-app-base"
-						: "border-app-border-strong"
-				}`}
-			>
-				{checked && <Check className="size-3" strokeWidth={2.5} />}
-			</div>
+	const checkboxId = `conductor-import-workspace-${workspace.id}`;
 
+	return (
+		<label
+			htmlFor={checkboxId}
+			className="flex w-full cursor-pointer items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-accent/60"
+		>
+			<Checkbox
+				id={checkboxId}
+				checked={checked}
+				onCheckedChange={() => onToggle(workspace.id)}
+				aria-label={`Select ${workspace.prTitle || humanize(workspace.directoryName)}`}
+			/>
 			<div className="min-w-0 flex-1">
-				<span className="block truncate text-[13px] font-medium text-app-foreground">
+				<span className="block truncate text-[13px] font-medium text-foreground">
 					{workspace.prTitle || humanize(workspace.directoryName)}
 				</span>
-				<div className="flex items-center gap-2 text-[11px] tracking-[0.04em] text-app-foreground-soft/52">
+				<div className="flex items-center gap-2 text-[11px] tracking-[0.04em] text-muted-foreground">
 					{workspace.branch && (
 						<span className="flex items-center gap-0.5 truncate">
 							<GitBranch className="size-2.5 shrink-0" strokeWidth={2} />
@@ -479,6 +497,6 @@ function WorkspaceRow({
 					</span>
 				</div>
 			</div>
-		</button>
+		</label>
 	);
 }

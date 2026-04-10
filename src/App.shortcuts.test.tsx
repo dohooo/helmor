@@ -176,9 +176,7 @@ function expectSelectedSession(title: string) {
 }
 
 function expectSelectedWorkspace(title: string) {
-	expect(screen.getByRole("button", { name: title })).toHaveClass(
-		"bg-app-row-selected",
-	);
+	expect(screen.getByRole("button", { name: title })).toHaveClass("bg-accent");
 }
 
 function pressGlobalShortcut(
@@ -432,15 +430,14 @@ describe("App global navigation shortcuts", () => {
 			expectSelectedSession("Done session 2");
 		});
 
-		await user.click(screen.getByRole("button", { name: "New workspace" }));
+		const newWorkspaceButton = screen.getByRole("button", {
+			name: "New workspace",
+		});
+		await user.click(newWorkspaceButton);
+		const repositoryPicker = await screen.findByRole("dialog");
+		expect(repositoryPicker).toHaveFocus();
 
-		const repositorySearchInput = await screen.findByLabelText(
-			"Search repositories",
-		);
-		repositorySearchInput.focus();
-		expect(repositorySearchInput).toHaveFocus();
-
-		fireEvent.keyDown(repositorySearchInput, {
+		fireEvent.keyDown(repositoryPicker, {
 			key: "ArrowDown",
 			metaKey: true,
 			altKey: true,

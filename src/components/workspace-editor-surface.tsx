@@ -8,8 +8,9 @@ import {
 } from "react";
 import type { EditorSessionState } from "@/lib/editor-session";
 import { describeUnknownError } from "@/lib/workspace-helpers";
-import { BaseTooltip } from "./ui/base-tooltip";
+import { Button } from "./ui/button";
 import { KbdKey } from "./ui/kbd-key";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type WorkspaceEditorSurfaceProps = {
 	editorSession: EditorSessionState;
@@ -364,25 +365,28 @@ export function WorkspaceEditorSurface({
 				<div className="min-w-0 flex-1" data-tauri-drag-region />
 
 				<div className="flex shrink-0 items-center pr-2">
-					<BaseTooltip
-						side="bottom"
-						sideOffset={6}
-						content={
-							<>
-								<span className="leading-none">Close</span>
-								<KbdKey name="Esc" className="ml-1" />
-							</>
-						}
-					>
-						<button
-							type="button"
-							onClick={onExit}
-							aria-label="Close"
-							className="inline-flex aspect-square h-full items-center justify-center text-[#8f8f8f] transition-colors hover:text-white"
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								type="button"
+								variant="ghost"
+								size="icon-xs"
+								onClick={onExit}
+								aria-label="Close"
+								className="aspect-square h-full text-[#8f8f8f] hover:bg-transparent hover:text-white"
+							>
+								<X className="size-3.5" strokeWidth={1.8} />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent
+							side="bottom"
+							sideOffset={6}
+							className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
 						>
-							<X className="size-3.5" strokeWidth={1.8} />
-						</button>
-					</BaseTooltip>
+							<span className="leading-none">Close</span>
+							<KbdKey name="Esc" className="ml-1" />
+						</TooltipContent>
+					</Tooltip>
 				</div>
 			</div>
 

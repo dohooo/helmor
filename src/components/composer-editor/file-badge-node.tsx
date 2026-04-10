@@ -18,6 +18,7 @@ import {
 } from "lexical";
 import { FileText, X } from "lucide-react";
 import type { ReactNode } from "react";
+import { Button } from "@/components/ui/button";
 
 type SerializedFileBadgeNode = Spread<
 	{ filePath: string },
@@ -35,19 +36,21 @@ function ComposerFileBadge({
 	const fileName = filePath.split("/").pop() ?? filePath;
 
 	return (
-		<span className="inline-flex items-center gap-1 rounded border border-app-border/60 text-[12px] mx-0.5 align-middle cursor-default select-none transition-colors hover:border-app-foreground-soft/40 hover:bg-app-foreground/[0.03]">
+		<span className="mx-0.5 inline-flex cursor-default select-none items-center gap-1 rounded border border-border/60 align-middle text-[12px] transition-colors hover:border-muted-foreground/40 hover:bg-accent/40">
 			<span className="inline-flex items-center gap-1.5 px-1.5 py-0.5">
 				<FileText
-					className="size-3 shrink-0 text-app-muted"
+					className="size-3 shrink-0 text-muted-foreground"
 					strokeWidth={1.8}
 				/>
-				<span className="max-w-[200px] truncate text-app-foreground-soft">
+				<span className="max-w-[200px] truncate text-muted-foreground">
 					{fileName}
 				</span>
 			</span>
-			<button
+			<Button
 				type="button"
-				className="px-1 py-0.5 text-app-muted/40 hover:text-app-muted"
+				variant="ghost"
+				size="icon-xs"
+				className="text-muted-foreground/40 hover:text-muted-foreground"
 				onMouseDown={(e) => {
 					e.preventDefault();
 					e.stopPropagation();
@@ -62,7 +65,7 @@ function ComposerFileBadge({
 				}}
 			>
 				<X className="size-3" strokeWidth={1.8} />
-			</button>
+			</Button>
 		</span>
 	);
 }
