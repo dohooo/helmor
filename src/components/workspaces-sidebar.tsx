@@ -91,6 +91,8 @@ const branchToneClasses: Record<WorkspaceBranchTone, string> = {
 	inactive: "text-[var(--workspace-branch-status-inactive)]",
 };
 const ARCHIVED_SECTION_ID = "__archived__";
+const SECTION_OPEN_STATE_STORAGE_KEY =
+	"helmor:workspaces-sidebar:section-open-state";
 
 const STATUS_OPTIONS: ReadonlyArray<{
 	value: string;
@@ -106,9 +108,44 @@ const STATUS_OPTIONS: ReadonlyArray<{
 
 function createInitialSectionOpenState(groups: WorkspaceGroup[]) {
 	return Object.fromEntries([
-		...groups.map((group) => [group.id, group.rows.length > 0]),
+		...groups.map((group) => [group.id, true]),
 		[ARCHIVED_SECTION_ID, false],
 	]) as Record<string, boolean>;
+}
+
+function readStoredSectionOpenState() {
+	if (typeof window === "undefined") {
+		return null;
+	}
+
+	try {
+		const raw = window.localStorage.getItem(SECTION_OPEN_STATE_STORAGE_KEY);
+		if (!raw) {
+			return null;
+		}
+
+		const parsed = JSON.parse(raw);
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			return null;
+		}
+
+		return parsed as Record<string, boolean>;
+	} catch {
+		return null;
+	}
+}
+
+function writeStoredSectionOpenState(state: Record<string, boolean>) {
+	if (typeof window === "undefined") {
+		return;
+	}
+
+	try {
+		window.localStorage.setItem(
+			SECTION_OPEN_STATE_STORAGE_KEY,
+			JSON.stringify(state),
+		);
+	} catch {}
 }
 
 function findSelectedSectionId(
@@ -648,9 +685,10 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	const rowRefCallbackCache = useRef(
 		new Map<string, (element: HTMLDivElement | null) => void>(),
 	);
-	const [sectionOpenState, setSectionOpenState] = useState(() =>
-		createInitialSectionOpenState(groups),
-	);
+	const [sectionOpenState, setSectionOpenState] = useState(() => ({
+		...createInitialSectionOpenState(groups),
+		...readStoredSectionOpenState(),
+	}));
 
 	const setWorkspaceRowRef = useCallback((workspaceId: string) => {
 		const cache = rowRefCallbackCache.current;
@@ -673,7 +711,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			let changed = false;
 
 			for (const group of groups) {
-				const nextValue = current[group.id] ?? group.rows.length > 0;
+				const nextValue = current[group.id] ?? true;
 				next[group.id] = nextValue;
 				if (current[group.id] !== nextValue) {
 					changed = true;
@@ -693,6 +731,10 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			return changed ? next : current;
 		});
 	}, [archivedRows, groups]);
+
+	useEffect(() => {
+		writeStoredSectionOpenState(sectionOpenState);
+	}, [sectionOpenState]);
 
 	useEffect(() => {
 		const selectedSectionId = findSelectedSectionId(
@@ -908,7 +950,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							return (
 								<Collapsible
 									key={group.id}
-									open={sectionOpenState[group.id] ?? group.rows.length > 0}
+									open={sectionOpenState[group.id] ?? true}
 									onOpenChange={(open) => {
 										setSectionOpenState((current) => ({
 											...current,

@@ -763,24 +763,23 @@ function ActionStatusRow({
 	item: WorkspacePrActionStatus["checks"][number];
 }) {
 	return (
-		<div className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
-			<StatusIcon status={item.status} />
-			<ProviderIcon provider={item.provider} />
-			<span className="truncate">{item.name}</span>
-			{item.duration && (
-				<span className="shrink-0 text-[10.5px] text-muted-foreground">
-					{item.duration}
-				</span>
-			)}
+		<div className="flex items-center justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
+			<div className="flex min-w-0 items-center gap-1.5">
+				<StatusIcon status={item.status} />
+				<ProviderIcon provider={item.provider} className="text-primary" />
+				<span className="truncate text-primary">{item.name}</span>
+				{item.duration && (
+					<span className="shrink-0 text-[10.5px] text-muted-foreground">
+						{item.duration}
+					</span>
+				)}
+			</div>
 			{item.url && (
 				<button
 					type="button"
 					aria-label={`Open ${item.name}`}
 					onClick={() => void openUrl(item.url!)}
-					className={cn(
-						"size-3 shrink-0 text-primary transition-colors hover:text-primary/80",
-						!item.duration && "ml-auto",
-					)}
+					className="shrink-0 text-muted-foreground transition-colors hover:text-primary"
 				>
 					<ArrowUpRightIcon className="size-3" strokeWidth={1.8} />
 				</button>

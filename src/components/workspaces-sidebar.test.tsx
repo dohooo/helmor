@@ -42,6 +42,7 @@ const repositories: RepositoryCreateOption[] = [
 
 afterEach(() => {
 	cleanup();
+	window.localStorage.clear();
 });
 
 describe("WorkspacesSidebar", () => {
@@ -104,5 +105,78 @@ describe("WorkspacesSidebar", () => {
 
 		expect(onCreateWorkspace).toHaveBeenCalledWith("repo-1");
 		expect(screen.queryByRole("option", { name: /helmor/i })).toBeNull();
+	});
+
+	it("keeps non-archived sections open by default while archived stays collapsed", () => {
+		const archivedRow: WorkspaceRow = {
+			...workspaceRow,
+			id: "archived-1",
+			title: "Archived Workspace",
+			state: "archived",
+		};
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={workspaceGroups}
+					archivedRows={[archivedRow]}
+					selectedWorkspaceId={null}
+				/>
+			</TooltipProvider>,
+		);
+
+		expect(
+			screen.getByRole("button", { name: "Workspace 1" }),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Archived Workspace" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("persists section collapse state in localStorage", async () => {
+		const user = userEvent.setup();
+		const collapsedGroups: WorkspaceGroup[] = [
+			{
+				id: "done",
+				label: "Done",
+				tone: "done",
+				rows: [{ ...workspaceRow, id: "workspace-2", title: "Workspace 2" }],
+			},
+		];
+
+		const { unmount } = render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={collapsedGroups}
+					archivedRows={[]}
+					selectedWorkspaceId={null}
+				/>
+			</TooltipProvider>,
+		);
+
+		expect(
+			screen.getByRole("button", { name: "Workspace 2" }),
+		).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: /^Done/ }));
+		expect(
+			screen.queryByRole("button", { name: "Workspace 2" }),
+		).not.toBeInTheDocument();
+
+		unmount();
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={collapsedGroups}
+					archivedRows={[]}
+					selectedWorkspaceId={null}
+				/>
+			</TooltipProvider>,
+		);
+
+		expect(
+			screen.queryByRole("button", { name: "Workspace 2" }),
+		).not.toBeInTheDocument();
 	});
 });
