@@ -1815,7 +1815,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 													<div className="flex items-center rounded-md border border-app-border/40 bg-app-elevated/50">
 														<Button
 															variant="ghost"
-															size="icon-xs"
+															size="xs"
 															aria-label={`Open in ${preferredEditor.name}`}
 															title={`Open in ${preferredEditor.name}`}
 															onClick={() =>
@@ -1835,6 +1835,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 																editorId={preferredEditor.id}
 																className="size-3.5"
 															/>
+															<span>{preferredEditor.name}</span>
 														</Button>
 														<DropdownMenu>
 															<DropdownMenuTrigger asChild>
