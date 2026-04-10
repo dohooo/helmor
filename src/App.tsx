@@ -46,6 +46,8 @@ import {
 	cancelGithubIdentityConnect,
 	closeWorkspacePr,
 	createSession,
+	detectInstalledEditors,
+	type DetectedEditor,
 	disconnectGithubIdentity,
 	type GithubIdentityDeviceFlowStart,
 	type GithubIdentitySnapshot,
@@ -96,18 +98,9 @@ import {
 	WorkspaceToastProvider,
 } from "./lib/workspace-toast-context";
 
-const ALL_EDITORS = [
-	{ id: "cursor", name: "Cursor" },
-	{ id: "vscode", name: "VS Code" },
-	{ id: "vscode-insiders", name: "VS Code Insiders" },
-	{ id: "windsurf", name: "Windsurf" },
-	{ id: "zed", name: "Zed" },
-	{ id: "webstorm", name: "WebStorm" },
-	{ id: "sublime", name: "Sublime Text" },
-] as const;
-
 const SIDEBAR_WIDTH_STORAGE_KEY = "helmor.workspaceSidebarWidth";
 const INSPECTOR_WIDTH_STORAGE_KEY = "helmor.workspaceInspectorWidth";
+const PREFERRED_EDITOR_STORAGE_KEY = "helmor.preferredEditorId";
 const DEFAULT_SIDEBAR_WIDTH = 336;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 520;
@@ -348,11 +341,16 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	);
 
 	const { settings: appSettings } = useSettings();
+	const [installedEditors, setInstalledEditors] = useState<DetectedEditor[]>(
+		[],
+	);
 	const [preferredEditorId, setPreferredEditorId] = useState<string | null>(
-		null,
+		() => localStorage.getItem(PREFERRED_EDITOR_STORAGE_KEY),
 	);
 	const preferredEditor =
-		ALL_EDITORS.find((e) => e.id === preferredEditorId) ?? ALL_EDITORS[0];
+		installedEditors.find((e) => e.id === preferredEditorId) ??
+		installedEditors[0] ??
+		null;
 	const isSidebarResizing = resizeState?.target === "sidebar";
 	const isInspectorResizing = resizeState?.target === "inspector";
 	const isIdentityConnected = githubIdentityState.status === "connected";
@@ -488,6 +486,10 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		setDisplayedSessionId(null);
 		setWorkspaceViewMode("conversation");
 		setEditorSession(null);
+	}, []);
+
+	useEffect(() => {
+		void detectInstalledEditors().then(setInstalledEditors);
 	}, []);
 
 	useEffect(() => {
@@ -1807,56 +1809,88 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 												) : undefined
 											}
 											headerActions={
-												selectedWorkspaceId && preferredEditor ? (
-													<DropdownMenu>
-														<DropdownMenuTrigger className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none">
+												selectedWorkspaceId &&
+												installedEditors.length > 0 &&
+												preferredEditor ? (
+													<div className="flex items-center rounded-md border border-app-border/40 bg-app-elevated/50">
+														<Button
+															variant="ghost"
+															size="icon-xs"
+															aria-label={`Open in ${preferredEditor.name}`}
+															title={`Open in ${preferredEditor.name}`}
+															onClick={() =>
+																void openWorkspaceInEditor(
+																	selectedWorkspaceId,
+																	preferredEditor.id,
+																).catch((e) =>
+																	pushWorkspaceToast(
+																		String(e),
+																		`Failed to open ${preferredEditor.name}`,
+																	),
+																)
+															}
+															className="rounded-l-[5px] rounded-r-none text-app-muted hover:text-app-foreground"
+														>
 															<EditorIcon
 																editorId={preferredEditor.id}
 																className="size-3.5"
 															/>
-															<span>{preferredEditor.name}</span>
-															<ChevronDown
-																className="size-2.5 opacity-50"
-																strokeWidth={2}
-															/>
-														</DropdownMenuTrigger>
-														<DropdownMenuContent
-															side="bottom"
-															align="end"
-															sideOffset={6}
-															className="min-w-[11rem]"
-														>
-															{ALL_EDITORS.map((editor) => (
-																<DropdownMenuItem
-																	key={editor.id}
-																	onClick={() => {
-																		setPreferredEditorId(editor.id);
-																		void openWorkspaceInEditor(
-																			selectedWorkspaceId,
-																			editor.id,
-																		).catch((e) =>
-																			pushWorkspaceToast(
-																				String(e),
-																				`Failed to open ${editor.name}`,
-																			),
-																		);
-																	}}
-																	className="flex items-center gap-2"
+														</Button>
+														<DropdownMenu>
+															<DropdownMenuTrigger asChild>
+																<Button
+																	variant="ghost"
+																	size="icon-xs"
+																	className="w-4 rounded-l-none rounded-r-[5px] border-l border-app-border/40 text-app-muted hover:text-app-foreground"
 																>
-																	<EditorIcon
-																		editorId={editor.id}
-																		className="size-3.5 shrink-0"
+																	<ChevronDown
+																		className="size-2.5"
+																		strokeWidth={2}
 																	/>
-																	<span className="flex-1 font-medium">
-																		{editor.name}
-																	</span>
-																	{editor.id === preferredEditor.id && (
-																		<Check className="ml-auto size-3 text-muted-foreground" />
-																	)}
-																</DropdownMenuItem>
-															))}
-														</DropdownMenuContent>
-													</DropdownMenu>
+																</Button>
+															</DropdownMenuTrigger>
+															<DropdownMenuContent
+																side="bottom"
+																align="end"
+																sideOffset={6}
+																className="min-w-[11rem]"
+															>
+																{installedEditors.map((editor) => (
+																	<DropdownMenuItem
+																		key={editor.id}
+																		onClick={() => {
+																			setPreferredEditorId(editor.id);
+																			localStorage.setItem(
+																				PREFERRED_EDITOR_STORAGE_KEY,
+																				editor.id,
+																			);
+																			void openWorkspaceInEditor(
+																				selectedWorkspaceId,
+																				editor.id,
+																			).catch((e) =>
+																				pushWorkspaceToast(
+																					String(e),
+																					`Failed to open ${editor.name}`,
+																				),
+																			);
+																		}}
+																		className="flex items-center gap-2"
+																	>
+																		<EditorIcon
+																			editorId={editor.id}
+																			className="size-3.5 shrink-0"
+																		/>
+																		<span className="flex-1 font-medium">
+																			{editor.name}
+																		</span>
+																		{editor.id === preferredEditor.id && (
+																			<Check className="ml-auto size-3 text-muted-foreground" />
+																		)}
+																	</DropdownMenuItem>
+																))}
+															</DropdownMenuContent>
+														</DropdownMenu>
+													</div>
 												) : undefined
 											}
 										/>
