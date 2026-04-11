@@ -1016,7 +1016,7 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 						variant="ghost"
 						size="xs"
 						onClick={() => setExpanded((value) => !value)}
-						className="mb-0.5 h-auto items-center gap-1 px-0 text-[11px] text-muted-foreground/50 hover:bg-transparent hover:text-muted-foreground"
+						className="mb-0.5 h-auto items-center justify-start gap-1 px-0 text-[11px] text-muted-foreground/50 hover:bg-transparent hover:text-muted-foreground"
 					>
 						<ChevronDown
 							className={cn(

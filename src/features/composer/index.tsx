@@ -163,39 +163,46 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		onError: onEditorError,
 	}).current;
 
-	// Save & restore drafts on context switch
+	// Save & restore drafts on context switch.
+	// Uses Lexical's native EditorState serialization so the full node tree
+	// (including badge positions, order, and cursor) is preserved exactly.
 	const prevContextKeyRef = useRef(contextKey);
 	useEffect(() => {
 		if (prevContextKeyRef.current !== contextKey) {
 			const prevKey = prevContextKeyRef.current;
 			prevContextKeyRef.current = contextKey;
-			// Save outgoing draft
 			const editor = editorRef.current;
+
+			// Save outgoing editor state
 			if (editor) {
+				let hasContent = false;
 				editor.read(() => {
-					const content = $extractComposerContent();
-					if (
-						content.text ||
-						content.images.length ||
-						content.files.length ||
-						content.customTags.length
-					) {
-						draftCache.set(prevKey, content);
-					} else {
-						draftCache.delete(prevKey);
-					}
+					const c = $extractComposerContent();
+					hasContent = Boolean(
+						c.text || c.images.length || c.files.length || c.customTags.length,
+					);
+				});
+				if (hasContent) {
+					draftCache.set(prevKey, editor.getEditorState().toJSON());
+				} else {
+					draftCache.delete(prevKey);
+				}
+			}
+
+			// Restore incoming editor state
+			const cached = draftCache.get(contextKey);
+			if (cached && editor) {
+				editor.setEditorState(editor.parseEditorState(cached));
+			} else {
+				editor?.update(() => {
+					$setEditorContent(
+						restoreDraft ?? "",
+						restoreImages,
+						restoreFiles,
+						restoreCustomTags,
+					);
 				});
 			}
-			// Restore incoming draft (cache > error-restore > empty)
-			const cached = draftCache.get(contextKey);
-			editor?.update(() => {
-				$setEditorContent(
-					cached?.text ?? restoreDraft ?? "",
-					cached?.images ?? restoreImages,
-					cached?.files ?? restoreFiles,
-					cached?.customTags ?? restoreCustomTags,
-				);
-			});
 		}
 	}, [
 		contextKey,
