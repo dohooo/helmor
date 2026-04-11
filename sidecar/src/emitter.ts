@@ -20,8 +20,17 @@ export type AbortedEvent = {
 };
 
 export type ErrorEvent =
-	| { readonly id: string; readonly type: "error"; readonly message: string }
-	| { readonly type: "error"; readonly message: string };
+	| {
+			readonly id: string;
+			readonly type: "error";
+			readonly message: string;
+			readonly internal?: boolean;
+	  }
+	| {
+			readonly type: "error";
+			readonly message: string;
+			readonly internal?: boolean;
+	  };
 
 export type StoppedEvent = {
 	readonly id: string;
@@ -83,7 +92,7 @@ export interface SidecarEmitter {
 	ready(version: number): void;
 	end(requestId: string): void;
 	aborted(requestId: string, reason: string): void;
-	error(requestId: string | null, message: string): void;
+	error(requestId: string | null, message: string, internal?: boolean): void;
 	stopped(requestId: string, sessionId: string): void;
 	pong(requestId: string): void;
 	titleGenerated(
@@ -119,11 +128,16 @@ export function createSidecarEmitter(
 		end: (requestId) => write({ id: requestId, type: "end" }),
 		aborted: (requestId, reason) =>
 			write({ id: requestId, type: "aborted", reason }),
-		error: (requestId, message) =>
+		error: (requestId, message, internal) =>
 			write(
 				requestId === null
-					? { type: "error", message }
-					: { id: requestId, type: "error", message },
+					? { type: "error", message, ...(internal ? { internal: true } : {}) }
+					: {
+							id: requestId,
+							type: "error",
+							message,
+							...(internal ? { internal: true } : {}),
+						},
 			),
 		stopped: (requestId, sessionId) =>
 			write({ id: requestId, type: "stopped", sessionId }),

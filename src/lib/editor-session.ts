@@ -34,11 +34,11 @@ const DEFAULT_INSPECTOR_RELATIVE_FILES: Array<{
 }> = [
 	{ path: "src/App.tsx", status: "M" },
 	{
-		path: "src/components/workspace-inspector-sidebar.tsx",
+		path: "src/features/inspector/index.tsx",
 		status: "M",
 	},
 	{
-		path: "src/components/workspace-panel.tsx",
+		path: "src/features/panel/index.tsx",
 		status: "A",
 	},
 	{ path: "src/lib/api.ts", status: "M" },

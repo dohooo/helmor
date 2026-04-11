@@ -1,0 +1,365 @@
+import { MarkGithubIcon } from "@primer/octicons-react";
+import { useQuery } from "@tanstack/react-query";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { ArrowUpRightIcon, CheckIcon, TriangleIcon } from "lucide-react";
+import { useCallback } from "react";
+import {
+	AppendContextButton,
+	type AppendContextPayloadResult,
+} from "@/components/append-context-button";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import type {
+	CommitButtonState,
+	WorkspaceCommitButtonMode,
+} from "@/features/commit/button";
+import {
+	type ActionProvider,
+	type ActionStatusKind,
+	getWorkspacePrCheckInsertText,
+	type PullRequestInfo,
+	type WorkspaceGitActionStatus,
+	type WorkspacePrActionItem,
+	type WorkspacePrActionStatus,
+} from "@/lib/api";
+import { buildComposerPreviewPayload } from "@/lib/composer-insert";
+import {
+	workspaceGitActionStatusQueryOptions,
+	workspacePrActionStatusQueryOptions,
+} from "@/lib/query-client";
+import { cn } from "@/lib/utils";
+import {
+	INSPECTOR_SECTION_HEADER_CLASS,
+	INSPECTOR_SECTION_TITLE_CLASS,
+} from "../layout";
+
+interface GitStatusItem {
+	label: string;
+	status: ActionStatusKind;
+	action?: {
+		label: string;
+		mode: WorkspaceCommitButtonMode;
+	};
+}
+
+const EMPTY_GIT_ACTION_STATUS: WorkspaceGitActionStatus = {
+	uncommittedCount: 0,
+	conflictCount: 0,
+};
+
+const EMPTY_PR_ACTION_STATUS: WorkspacePrActionStatus = {
+	pr: null,
+	reviewDecision: null,
+	mergeable: null,
+	deployments: [],
+	checks: [],
+	remoteState: "unavailable",
+	message: null,
+};
+
+type ActionsSectionProps = {
+	workspaceId: string | null;
+	sectionRef?: React.RefObject<HTMLElement | null>;
+	bodyHeight: number;
+	expanded: boolean;
+	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
+	commitButtonState?: CommitButtonState;
+	prInfo: PullRequestInfo | null;
+};
+
+export function ActionsSection({
+	workspaceId,
+	sectionRef,
+	bodyHeight,
+	expanded,
+	onCommitAction,
+	commitButtonState,
+	prInfo,
+}: ActionsSectionProps) {
+	const gitStatusQuery = useQuery({
+		...workspaceGitActionStatusQueryOptions(workspaceId ?? "__none__"),
+		enabled: workspaceId !== null,
+	});
+	const prStatusQuery = useQuery({
+		...workspacePrActionStatusQueryOptions(workspaceId ?? "__none__"),
+		enabled: workspaceId !== null,
+	});
+	const gitStatus = gitStatusQuery.data ?? EMPTY_GIT_ACTION_STATUS;
+	const prStatus = prStatusQuery.data ?? EMPTY_PR_ACTION_STATUS;
+	const gitRows = buildGitStatusRows(gitStatus, prStatus, prInfo);
+	const actionDisabled = commitButtonState === "busy";
+	const handleInsertCheck = useCallback(
+		async (item: WorkspacePrActionItem) => {
+			if (!workspaceId) {
+				return;
+			}
+			const submitText = await getWorkspacePrCheckInsertText(
+				workspaceId,
+				item.id,
+			);
+			return {
+				target: { workspaceId },
+				label: item.name,
+				submitText,
+				key: `pr-check:${item.id}`,
+				preview: buildComposerPreviewPayload({
+					title: item.name,
+					content: submitText,
+					preferredKind: "code",
+				}),
+			};
+		},
+		[workspaceId],
+	);
+
+	return (
+		<section
+			ref={sectionRef}
+			aria-label="Inspector section Actions"
+			className={cn(
+				"flex min-h-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar",
+				expanded && "flex-1",
+			)}
+		>
+			<div className={INSPECTOR_SECTION_HEADER_CLASS}>
+				<span className={INSPECTOR_SECTION_TITLE_CLASS}>Actions</span>
+			</div>
+
+			<ScrollArea
+				aria-label="Actions panel body"
+				className={cn("bg-muted/18 text-[11.5px]", expanded && "flex-1")}
+				style={expanded ? undefined : { height: `${bodyHeight}px` }}
+			>
+				<div className="px-2.5 pb-1 pt-2">
+					<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+						Git status
+					</span>
+				</div>
+				{gitRows.map((item) => {
+					const action = item.action;
+					return (
+						<div
+							key={item.label}
+							className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60"
+						>
+							<StatusIcon status={item.status} />
+							<span className="truncate">{item.label}</span>
+							{action && (
+								<button
+									type="button"
+									disabled={actionDisabled}
+									onClick={() => {
+										if (actionDisabled) {
+											return;
+										}
+										void onCommitAction?.(action.mode);
+									}}
+									className="ml-auto shrink-0 cursor-pointer text-[10.5px] text-primary transition-colors hover:text-primary/80 disabled:cursor-not-allowed disabled:opacity-50"
+								>
+									{action.label}
+								</button>
+							)}
+						</div>
+					);
+				})}
+
+				{prStatus.deployments.length > 0 && (
+					<>
+						<div className="px-2.5 pb-1 pt-2.5">
+							<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+								Deployments
+							</span>
+						</div>
+						{prStatus.deployments.map((item) => (
+							<ActionStatusRow key={item.id} item={item} />
+						))}
+					</>
+				)}
+
+				{prStatus.checks.length > 0 && (
+					<>
+						<div className="px-2.5 pb-1 pt-2.5">
+							<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+								Checks
+							</span>
+						</div>
+						{prStatus.checks.map((item) => (
+							<ActionStatusRow
+								key={item.id}
+								item={item}
+								onInsertToComposer={handleInsertCheck}
+							/>
+						))}
+					</>
+				)}
+			</ScrollArea>
+		</section>
+	);
+}
+
+function ProviderIcon({ provider }: { provider: ActionProvider }) {
+	if (provider === "vercel") {
+		return (
+			<TriangleIcon
+				className="size-3 shrink-0 fill-current text-muted-foreground"
+				strokeWidth={0}
+			/>
+		);
+	}
+	if (provider === "unknown") {
+		return null;
+	}
+	return (
+		<MarkGithubIcon size={12} className="shrink-0 text-muted-foreground" />
+	);
+}
+
+function StatusIcon({ status }: { status: ActionStatusKind }) {
+	if (status === "success") {
+		return (
+			<CheckIcon
+				aria-label="Passed"
+				className="size-3 shrink-0 text-chart-2"
+				strokeWidth={2.2}
+			/>
+		);
+	}
+
+	const label =
+		status === "running"
+			? "Running"
+			: status === "failure"
+				? "Failed"
+				: "Pending";
+	const color =
+		status === "running"
+			? "rgb(245, 158, 11)"
+			: status === "failure"
+				? "rgb(207, 34, 46)"
+				: undefined;
+
+	return (
+		<span
+			aria-label={label}
+			className="inline-flex size-3 shrink-0 items-center justify-center rounded-full border border-current text-muted-foreground"
+			style={color ? { color } : undefined}
+		>
+			<span
+				className={cn(
+					"size-1.5 rounded-full",
+					status === "pending" && "bg-muted-foreground",
+				)}
+				style={color ? { backgroundColor: color } : undefined}
+			/>
+		</span>
+	);
+}
+
+function buildGitStatusRows(
+	gitStatus: WorkspaceGitActionStatus,
+	prStatus: WorkspacePrActionStatus,
+	prInfo: PullRequestInfo | null,
+): GitStatusItem[] {
+	const uncommittedCount = gitStatus.uncommittedCount;
+	const conflictCount = gitStatus.conflictCount;
+	const hasMergeConflict =
+		conflictCount > 0 || prStatus.mergeable === "CONFLICTING";
+	const pr = prStatus.pr ?? prInfo;
+	const isMerged = pr?.isMerged ?? false;
+
+	const rows: GitStatusItem[] = [
+		uncommittedCount === 0
+			? {
+					label: "No uncommitted changes",
+					status: "success",
+				}
+			: {
+					label:
+						uncommittedCount === 1
+							? "1 uncommitted change"
+							: `${uncommittedCount} uncommitted changes`,
+					status: "pending",
+					action: {
+						label: "Commit and push",
+						mode: "commit-and-push",
+					},
+				},
+		hasMergeConflict
+			? {
+					label: "Merge conflicts detected",
+					status: "failure",
+					action: {
+						label: "Resolve",
+						mode: "resolve-conflicts",
+					},
+				}
+			: {
+					label: "No merge conflicts",
+					status: "success",
+				},
+	];
+
+	if (isMerged || prStatus.reviewDecision === "APPROVED") {
+		rows.push({ label: "Review approved", status: "success" });
+	} else if (pr?.state === "CLOSED") {
+		rows.push({ label: "PR closed", status: "failure" });
+	} else if (prStatus.reviewDecision === "CHANGES_REQUESTED") {
+		rows.push({ label: "Changes requested", status: "failure" });
+	} else {
+		rows.push({ label: "Waiting for PR review", status: "pending" });
+	}
+
+	return rows;
+}
+
+function ActionStatusRow({
+	item,
+	onInsertToComposer,
+}: {
+	item: WorkspacePrActionItem;
+	onInsertToComposer?: (
+		item: WorkspacePrActionItem,
+	) => AppendContextPayloadResult | Promise<AppendContextPayloadResult>;
+}) {
+	return (
+		<div className="group/check-row flex items-center justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
+			<div className="flex min-w-0 items-center gap-1.5">
+				<StatusIcon status={item.status} />
+				<ProviderIcon provider={item.provider} />
+				<span className="truncate text-primary">{item.name}</span>
+				{item.duration && (
+					<span className="shrink-0 text-[10.5px] text-muted-foreground">
+						{item.duration}
+					</span>
+				)}
+			</div>
+			<div className="flex shrink-0 items-center justify-end gap-1.5">
+				{onInsertToComposer && (
+					<AppendContextButton
+						subjectLabel={item.name}
+						getPayload={() => onInsertToComposer(item)}
+						errorTitle="Couldn't insert check"
+						className={cn(
+							"text-primary hover:bg-accent/60 hover:text-primary",
+							"opacity-0 group-hover/check-row:opacity-100 focus-visible:opacity-100",
+						)}
+					/>
+				)}
+				{item.url && (
+					<button
+						type="button"
+						aria-label={`Open ${item.name}`}
+						onClick={() => {
+							if (!item.url) {
+								return;
+							}
+							void openUrl(item.url);
+						}}
+						className="shrink-0 text-muted-foreground transition-colors hover:text-primary"
+					>
+						<ArrowUpRightIcon className="size-3" strokeWidth={1.8} />
+					</button>
+				)}
+			</div>
+		</div>
+	);
+}

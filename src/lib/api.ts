@@ -109,6 +109,7 @@ export type WorkspaceSummary = {
 export type RepositoryCreateOption = {
 	id: string;
 	name: string;
+	remote?: string | null;
 	defaultBranch?: string | null;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
@@ -201,6 +202,7 @@ export type WorkspaceDetail = {
 	repoName: string;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
+	remote?: string | null;
 	remoteUrl?: string | null;
 	defaultBranch?: string | null;
 	rootPath?: string | null;
@@ -513,6 +515,20 @@ export async function loadDataInfo(): Promise<DataInfo | null> {
 	}
 }
 
+export type CliStatus = {
+	installed: boolean;
+	installPath: string | null;
+	buildMode: string;
+};
+
+export async function getCliStatus(): Promise<CliStatus> {
+	return await invoke<CliStatus>("get_cli_status");
+}
+
+export async function installCli(): Promise<CliStatus> {
+	return await invoke<CliStatus>("install_cli");
+}
+
 export async function loadArchivedWorkspaces(): Promise<WorkspaceSummary[]> {
 	try {
 		return await invoke<WorkspaceSummary[]>("list_archived_workspaces");
@@ -529,6 +545,38 @@ export async function listRepositories(): Promise<RepositoryCreateOption[]> {
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to load repositories."));
 	}
+}
+
+export type UpdateRepositoryRemoteResponse = {
+	orphanedWorkspaceCount: number;
+};
+
+export async function updateRepositoryRemote(
+	repoId: string,
+	remote: string,
+): Promise<UpdateRepositoryRemoteResponse> {
+	return invoke<UpdateRepositoryRemoteResponse>("update_repository_remote", {
+		repoId,
+		remote,
+	});
+}
+
+export async function listRepoRemotes(repoId: string): Promise<string[]> {
+	try {
+		return await invoke<string[]>("list_repo_remotes", { repoId });
+	} catch {
+		return [];
+	}
+}
+
+export async function updateRepositoryDefaultBranch(
+	repoId: string,
+	defaultBranch: string,
+): Promise<void> {
+	await invoke<void>("update_repository_default_branch", {
+		repoId,
+		defaultBranch,
+	});
 }
 
 export async function loadAddRepositoryDefaults(): Promise<AddRepositoryDefaults> {
@@ -592,11 +640,12 @@ export async function loadWorkspaceDetail(
 	}
 }
 
-export async function listRemoteBranches(
-	workspaceId: string,
-): Promise<string[]> {
+export async function listRemoteBranches(opts: {
+	workspaceId?: string;
+	repoId?: string;
+}): Promise<string[]> {
 	try {
-		return await invoke<string[]>("list_remote_branches", { workspaceId });
+		return await invoke<string[]>("list_remote_branches", opts);
 	} catch {
 		return [];
 	}
@@ -621,23 +670,44 @@ export async function updateIntendedTargetBranch(
 	);
 }
 
-export type PrefetchWorkspaceRemoteRefsResponse = {
+// -- Git watcher events --
+
+export type GitBranchChangedPayload = {
+	workspaceId: string;
+	oldBranch: string | null;
+	newBranch: string | null;
+};
+
+export type GitRefsChangedPayload = {
+	workspaceId: string;
+};
+
+export async function listenGitBranchChanged(
+	callback: (payload: GitBranchChangedPayload) => void,
+): Promise<UnlistenFn> {
+	return listen<GitBranchChangedPayload>("git-branch-changed", (event) =>
+		callback(event.payload),
+	);
+}
+
+export async function listenGitRefsChanged(
+	callback: (payload: GitRefsChangedPayload) => void,
+): Promise<UnlistenFn> {
+	return listen<GitRefsChangedPayload>("git-refs-changed", (event) =>
+		callback(event.payload),
+	);
+}
+
+export type PrefetchRemoteRefsResponse = {
 	/** True if a fetch was performed; false if the call was rate-limited. */
 	fetched: boolean;
 };
 
-/**
- * Best-effort `git fetch --prune origin` for the workspace's repo. Rate-limited
- * to once every 10 seconds per workspace on the backend, so callers can fire
- * this freely (e.g. on dropdown open) without worrying about thrashing.
- */
-export async function prefetchWorkspaceRemoteRefs(
-	workspaceId: string,
-): Promise<PrefetchWorkspaceRemoteRefsResponse> {
-	return invoke<PrefetchWorkspaceRemoteRefsResponse>(
-		"prefetch_workspace_remote_refs",
-		{ workspaceId },
-	);
+export async function prefetchRemoteRefs(opts: {
+	workspaceId?: string;
+	repoId?: string;
+}): Promise<PrefetchRemoteRefsResponse> {
+	return invoke<PrefetchRemoteRefsResponse>("prefetch_remote_refs", opts);
 }
 
 export async function loadWorkspaceSessions(
@@ -688,21 +758,30 @@ export async function loadSessionAttachments(
 
 export async function restoreWorkspace(
 	workspaceId: string,
+	targetBranchOverride?: string,
 ): Promise<RestoreWorkspaceResponse> {
 	return invoke<RestoreWorkspaceResponse>("restore_workspace", {
 		workspaceId,
+		targetBranchOverride,
 	});
 }
 
-/**
- * Read-only preflight: throws with the same error the slow `restoreWorkspace`
- * call would, so callers can validate cheaply BEFORE applying optimistic UI
- * updates. ~10-50ms (one DB read + a couple of `git rev-parse` calls).
- */
+export type TargetBranchConflict = {
+	currentBranch: string;
+	suggestedBranch: string;
+	remote: string;
+};
+
+export type ValidateRestoreResponse = {
+	targetBranchConflict?: TargetBranchConflict | null;
+};
+
 export async function validateRestoreWorkspace(
 	workspaceId: string,
-): Promise<void> {
-	await invoke<void>("validate_restore_workspace", { workspaceId });
+): Promise<ValidateRestoreResponse> {
+	return invoke<ValidateRestoreResponse>("validate_restore_workspace", {
+		workspaceId,
+	});
 }
 
 export async function archiveWorkspace(
@@ -730,7 +809,7 @@ export type DetectedEditor = {
 
 export async function detectInstalledEditors(): Promise<DetectedEditor[]> {
 	try {
-		return await invoke<DetectedEditor[]>("detect_installed_editors");
+		return (await invoke<DetectedEditor[]>("detect_installed_editors")) ?? [];
 	} catch {
 		return [];
 	}
@@ -899,6 +978,33 @@ export type PullRequestInfo = {
 	isMerged: boolean;
 };
 
+export type ActionStatusKind = "success" | "pending" | "running" | "failure";
+export type ActionProvider = "github" | "vercel" | "unknown";
+
+export type WorkspaceGitActionStatus = {
+	uncommittedCount: number;
+	conflictCount: number;
+};
+
+export type WorkspacePrActionItem = {
+	id: string;
+	name: string;
+	provider: ActionProvider;
+	status: ActionStatusKind;
+	duration?: string | null;
+	url?: string | null;
+};
+
+export type WorkspacePrActionStatus = {
+	pr: PullRequestInfo | null;
+	reviewDecision?: string | null;
+	mergeable?: string | null;
+	deployments: WorkspacePrActionItem[];
+	checks: WorkspacePrActionItem[];
+	remoteState: "ok" | "noPr" | "unavailable" | "error";
+	message?: string | null;
+};
+
 /**
  * Look up the most recent pull request on GitHub whose head ref matches the
  * workspace's current branch. Returns `null` when there's no matching PR, the
@@ -917,6 +1023,52 @@ export async function lookupWorkspacePr(
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to look up workspace PR."),
+		);
+	}
+}
+
+export async function loadWorkspaceGitActionStatus(
+	workspaceId: string,
+): Promise<WorkspaceGitActionStatus> {
+	try {
+		return await invoke<WorkspaceGitActionStatus>(
+			"get_workspace_git_action_status",
+			{ workspaceId },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load workspace Git status."),
+		);
+	}
+}
+
+export async function loadWorkspacePrActionStatus(
+	workspaceId: string,
+): Promise<WorkspacePrActionStatus> {
+	try {
+		return await invoke<WorkspacePrActionStatus>(
+			"get_workspace_pr_action_status",
+			{ workspaceId },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load workspace PR status."),
+		);
+	}
+}
+
+export async function getWorkspacePrCheckInsertText(
+	workspaceId: string,
+	itemId: string,
+): Promise<string> {
+	try {
+		return await invoke<string>("get_workspace_pr_check_insert_text", {
+			workspaceId,
+			itemId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load check details."),
 		);
 	}
 }
@@ -959,6 +1111,29 @@ export async function closeWorkspacePr(
 			describeInvokeError(error, "Unable to close workspace PR."),
 		);
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Pending CLI sends
+// ---------------------------------------------------------------------------
+
+export type PendingCliSend = {
+	id: string;
+	workspaceId: string;
+	sessionId: string;
+	prompt: string;
+	modelId: string | null;
+	permissionMode: string | null;
+	createdAt: string;
+};
+
+/**
+ * Atomically read and delete all pending CLI sends. Called on window focus
+ * so the App can stream prompts that `helmor send` queued while the CLI
+ * detected the App was running.
+ */
+export async function drainPendingCliSends(): Promise<PendingCliSend[]> {
+	return invoke<PendingCliSend[]>("drain_pending_cli_sends");
 }
 
 export async function permanentlyDeleteWorkspace(
@@ -1224,7 +1399,7 @@ export type AgentStreamEvent =
 			title?: string | null;
 			description?: string | null;
 	  }
-	| { kind: "error"; message: string; persisted: boolean };
+	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
 
 /**
  * Save a pasted clipboard image (base64) to a temp file and return its path.
@@ -1342,10 +1517,12 @@ export type CreateSessionResponse = {
 export async function createSession(
 	workspaceId: string,
 	actionKind?: string | null,
+	permissionMode?: string | null,
 ): Promise<CreateSessionResponse> {
 	return invoke<CreateSessionResponse>("create_session", {
 		workspaceId,
 		actionKind: actionKind ?? null,
+		permissionMode: permissionMode ?? null,
 	});
 }
 
@@ -1354,6 +1531,13 @@ export async function renameSession(
 	title: string,
 ): Promise<void> {
 	await invoke("rename_session", { sessionId, title });
+}
+
+export async function renameWorkspaceBranch(
+	workspaceId: string,
+	newBranch: string,
+): Promise<void> {
+	await invoke("rename_workspace_branch", { workspaceId, newBranch });
 }
 
 export type GenerateSessionTitleResponse = {

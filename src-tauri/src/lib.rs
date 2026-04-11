@@ -1,11 +1,31 @@
 pub mod agents;
+pub(crate) mod commands;
 pub mod data_dir;
 pub mod error;
+pub mod git;
+pub mod github;
 mod import;
-mod models;
+pub mod logging;
+pub mod mcp;
+pub mod models;
 pub mod pipeline;
 mod schema;
+pub mod service;
 pub mod sidecar;
+pub mod workspace;
+
+pub use git::ops as git_ops;
+pub use git::watcher as git_watcher;
+pub use github::auth;
+pub use github::cli as github_cli;
+pub use github::graphql as github_graphql;
+pub use models::db;
+pub use models::repos;
+pub use models::sessions;
+pub use models::settings;
+pub use workspace::files as editor_files;
+pub use workspace::helpers;
+pub use workspace::workspaces;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::path::BaseDirectory;
@@ -40,10 +60,7 @@ fn export_bundled_agent_paths(handle: &tauri::AppHandle) {
         .ok()
         .filter(|p| p.is_file());
     if let Some(path) = cli_js {
-        eprintln!(
-            "[setup] Claude Code CLI → {} (bundled resource)",
-            path.display()
-        );
+        tracing::info!(path = %path.display(), "Claude Code CLI (bundled resource)");
         // SAFETY: set_var is `unsafe` in Rust 2024 editions; we're in setup
         // before any threads spawn that would race with env reads.
         unsafe {
@@ -61,7 +78,7 @@ fn export_bundled_agent_paths(handle: &tauri::AppHandle) {
         .ok()
         .filter(|p| p.is_file());
     if let Some(path) = codex_bin {
-        eprintln!("[setup] Codex CLI → {} (bundled resource)", path.display());
+        tracing::info!(path = %path.display(), "Codex CLI (bundled resource)");
         unsafe {
             std::env::set_var("HELMOR_CODEX_BIN_PATH", path);
         }
@@ -80,10 +97,7 @@ fn export_bundled_agent_paths(handle: &tauri::AppHandle) {
         .ok()
         .filter(|p| p.is_file());
     if let Some(path) = bun_bin {
-        eprintln!(
-            "[setup] bun runtime → {} (bundled resource)",
-            path.display()
-        );
+        tracing::info!(path = %path.display(), "bun runtime (bundled resource)");
         unsafe {
             std::env::set_var("HELMOR_BUN_PATH", path);
         }
@@ -101,22 +115,34 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
 
     let app = builder
-        .manage(models::auth::GithubIdentityFlowRuntime::default())
+        .manage(auth::GithubIdentityFlowRuntime::default())
         .manage(sidecar::ManagedSidecar::new())
         .manage(agents::ActiveStreams::new())
+        .manage(git_watcher::GitWatcherManager::new())
         .setup(|app| {
             // Ensure data directory structure exists
             data_dir::ensure_directory_structure().expect("Failed to create Helmor data directory");
+
+            // Initialize structured logging (must come before any tracing macro call)
+            let logs_dir = data_dir::logs_dir().expect("Failed to resolve logs directory");
+            logging::init(&logs_dir).expect("Failed to initialize logging");
+
+            // Background cleanup: compress old logs, purge > 7 days
+            let cleanup_dir = logs_dir;
+            std::thread::Builder::new()
+                .name("log-cleanup".into())
+                .spawn(move || logging::cleanup(&cleanup_dir))
+                .ok();
 
             // Initialize database schema
             let db_path = data_dir::db_path().expect("Failed to resolve database path");
             let connection = rusqlite::Connection::open(&db_path).expect("Failed to open database");
             schema::ensure_schema(&connection).expect("Failed to initialize database schema");
 
-            eprintln!(
-                "Helmor {} — data: {}",
-                data_dir::data_mode_label(),
-                db_path.display()
+            tracing::info!(
+                mode = data_dir::data_mode_label(),
+                data = %db_path.display(),
+                "Helmor started"
             );
 
             // Resolve bundled Claude Code + Codex CLI resources and publish
@@ -135,6 +161,18 @@ pub fn run() {
             // server spun up inside `start_github_oauth_redirect`, so no
             // deep-link `on_open_url` handler is needed here.
 
+            // Start git filesystem watchers for all ready workspaces.
+            let watcher_handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("git-watcher-init".into())
+                .spawn(move || {
+                    let manager = watcher_handle.state::<git_watcher::GitWatcherManager>();
+                    if let Err(e) = manager.sync_from_db(watcher_handle.clone()) {
+                        tracing::error!("Failed to initialize git watchers: {e:#}");
+                    }
+                })
+                .ok();
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -144,73 +182,83 @@ pub fn run() {
             agents::respond_to_permission_request,
             agents::generate_session_title,
             agents::list_slash_commands,
-            models::archive_workspace,
-            models::validate_archive_workspace,
-            models::validate_restore_workspace,
-            models::cancel_github_identity_connect,
-            models::create_workspace_from_repo,
-            models::disconnect_github_identity,
-            models::get_add_repository_defaults,
-            models::get_app_settings,
-            models::get_data_info,
-            models::get_github_cli_status,
-            models::get_github_cli_user,
-            models::get_github_identity_session,
-            models::get_workspace,
-            models::add_repository_from_local_path,
-            models::list_github_accessible_repositories,
-            models::list_archived_workspaces,
-            models::list_repositories,
-            models::list_session_attachments,
-            models::list_session_thread_messages,
-            models::list_workspace_groups,
-            models::list_workspace_sessions,
-            models::create_session,
-            models::rename_session,
-            models::hide_session,
-            models::unhide_session,
-            models::delete_session,
-            models::list_hidden_sessions,
-            models::mark_session_read,
-            models::list_remote_branches,
-            models::update_intended_target_branch,
-            models::prefetch_workspace_remote_refs,
-            models::mark_workspace_read,
-            models::mark_workspace_unread,
-            models::pin_workspace,
-            models::unpin_workspace,
-            models::list_editor_files,
-            models::list_editor_files_with_content,
-            models::list_workspace_files,
-            models::list_workspace_changes,
-            models::list_workspace_changes_with_content,
-            models::discard_workspace_file,
-            models::stage_workspace_file,
-            models::unstage_workspace_file,
-            models::lookup_workspace_pr,
-            models::merge_workspace_pr,
-            models::close_workspace_pr,
-            models::read_editor_file,
-            models::set_workspace_manual_status,
-            models::detect_installed_editors,
-            models::open_workspace_in_editor,
-            models::permanently_delete_workspace,
-            models::restore_workspace,
-            models::stat_editor_file,
-            models::start_github_identity_connect,
-            models::start_github_oauth_redirect,
-            models::conductor_source_available,
-            models::list_conductor_repos,
-            models::list_conductor_workspaces,
-            models::import_conductor_workspaces,
-            models::save_pasted_image,
-            models::update_app_settings,
-            models::update_session_settings,
-            models::load_auto_close_action_kinds,
-            models::save_auto_close_action_kinds,
-            models::load_auto_close_opt_in_asked,
-            models::save_auto_close_opt_in_asked,
-            models::write_editor_file
+            commands::workspace_commands::archive_workspace,
+            commands::workspace_commands::validate_archive_workspace,
+            commands::workspace_commands::validate_restore_workspace,
+            commands::github_commands::cancel_github_identity_connect,
+            commands::workspace_commands::create_workspace_from_repo,
+            commands::github_commands::disconnect_github_identity,
+            commands::repository_commands::get_add_repository_defaults,
+            commands::settings_commands::get_app_settings,
+            commands::system_commands::get_cli_status,
+            commands::system_commands::get_data_info,
+            commands::system_commands::install_cli,
+            commands::github_commands::get_github_cli_status,
+            commands::github_commands::get_github_cli_user,
+            commands::github_commands::get_github_identity_session,
+            commands::workspace_commands::get_workspace,
+            commands::repository_commands::add_repository_from_local_path,
+            commands::github_commands::list_github_accessible_repositories,
+            commands::workspace_commands::list_archived_workspaces,
+            commands::repository_commands::list_repositories,
+            commands::repository_commands::update_repository_default_branch,
+            commands::repository_commands::update_repository_remote,
+            commands::repository_commands::list_repo_remotes,
+            commands::session_commands::list_session_attachments,
+            commands::session_commands::list_session_thread_messages,
+            commands::workspace_commands::list_workspace_groups,
+            commands::session_commands::list_workspace_sessions,
+            commands::session_commands::create_session,
+            commands::session_commands::rename_session,
+            commands::session_commands::hide_session,
+            commands::session_commands::unhide_session,
+            commands::session_commands::delete_session,
+            commands::session_commands::list_hidden_sessions,
+            commands::session_commands::mark_session_read,
+            commands::workspace_commands::list_remote_branches,
+            commands::workspace_commands::rename_workspace_branch,
+            commands::workspace_commands::update_intended_target_branch,
+            commands::workspace_commands::prefetch_remote_refs,
+            commands::workspace_commands::mark_workspace_read,
+            commands::workspace_commands::mark_workspace_unread,
+            commands::workspace_commands::pin_workspace,
+            commands::workspace_commands::unpin_workspace,
+            commands::editor_commands::list_editor_files,
+            commands::editor_commands::list_editor_files_with_content,
+            commands::editor_commands::list_workspace_files,
+            commands::editor_commands::list_workspace_changes,
+            commands::editor_commands::list_workspace_changes_with_content,
+            commands::editor_commands::discard_workspace_file,
+            commands::editor_commands::stage_workspace_file,
+            commands::editor_commands::unstage_workspace_file,
+            commands::editor_commands::get_workspace_git_action_status,
+            commands::github_commands::lookup_workspace_pr,
+            commands::github_commands::get_workspace_pr_action_status,
+            commands::github_commands::get_workspace_pr_check_insert_text,
+            commands::github_commands::merge_workspace_pr,
+            commands::github_commands::close_workspace_pr,
+            commands::system_commands::drain_pending_cli_sends,
+            commands::editor_commands::read_editor_file,
+            commands::workspace_commands::set_workspace_manual_status,
+            commands::system_commands::detect_installed_editors,
+            commands::system_commands::open_workspace_in_editor,
+            commands::workspace_commands::permanently_delete_workspace,
+            commands::workspace_commands::restore_workspace,
+            commands::editor_commands::stat_editor_file,
+            commands::github_commands::start_github_identity_connect,
+            commands::github_commands::start_github_oauth_redirect,
+            commands::conductor_commands::conductor_source_available,
+            commands::conductor_commands::list_conductor_repos,
+            commands::conductor_commands::list_conductor_workspaces,
+            commands::conductor_commands::import_conductor_workspaces,
+            commands::system_commands::save_pasted_image,
+            commands::settings_commands::update_app_settings,
+            commands::session_commands::update_session_settings,
+            commands::settings_commands::load_auto_close_action_kinds,
+            commands::settings_commands::save_auto_close_action_kinds,
+            commands::settings_commands::load_auto_close_opt_in_asked,
+            commands::settings_commands::save_auto_close_opt_in_asked,
+            commands::editor_commands::write_editor_file
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -231,15 +279,20 @@ pub fn run() {
 
         // Second pass after the user confirmed — don't re-prompt.
         if SHUTDOWN_CONFIRMED.load(Ordering::Acquire) {
-            eprintln!("[shutdown] CloseRequested[{label}] — confirmed, letting through");
+            tracing::debug!(window = %label, "CloseRequested — confirmed, letting through");
             return;
         }
 
         let active = app_handle.state::<agents::ActiveStreams>();
         let count = active.len();
-        eprintln!("[shutdown] CloseRequested[{label}] — {count} active stream(s)");
+        tracing::info!(window = %label, count, "CloseRequested");
 
         if count == 0 {
+            // Stop git filesystem watchers before tearing down the sidecar.
+            app_handle
+                .state::<git_watcher::GitWatcherManager>()
+                .shutdown();
+
             // No active streams, but still shut down the sidecar cooperatively
             // so Bun and any child CLIs get a chance to exit cleanly instead of
             // being SIGKILL'd by the Drop impl.
@@ -257,7 +310,7 @@ pub fn run() {
         // Guard against duplicate dialogs from rapid-fire CloseRequested
         // events (multiple windows, double Cmd+Q, etc.).
         if SHUTDOWN_DIALOG_OPEN.swap(true, Ordering::AcqRel) {
-            eprintln!("[shutdown] Dialog already on screen, swallowing duplicate");
+            tracing::debug!("Shutdown dialog already on screen, swallowing duplicate");
             return;
         }
 
@@ -268,7 +321,7 @@ pub fn run() {
             format!("There are {count} tasks in progress. Quitting now will cancel them.")
         };
 
-        eprintln!("[shutdown] Showing confirmation dialog");
+        tracing::info!("Showing shutdown confirmation dialog");
         app_handle
             .dialog()
             .message(message)
@@ -281,11 +334,14 @@ pub fn run() {
                 SHUTDOWN_DIALOG_OPEN.store(false, Ordering::Release);
 
                 if !confirmed {
-                    eprintln!("[shutdown] User cancelled — staying running");
+                    tracing::info!("Shutdown cancelled by user");
                     return;
                 }
 
-                eprintln!("[shutdown] User confirmed — aborting active streams");
+                tracing::info!("User confirmed shutdown — aborting active streams");
+                app_handle_clone
+                    .state::<git_watcher::GitWatcherManager>()
+                    .shutdown();
                 // We're on a worker thread now, so the blocking helpers are
                 // safe to call.
                 let sidecar = app_handle_clone.state::<sidecar::ManagedSidecar>();
@@ -304,7 +360,7 @@ pub fn run() {
                     std::time::Duration::from_millis(500),
                 );
                 SHUTDOWN_CONFIRMED.store(true, Ordering::Release);
-                eprintln!("[shutdown] Cleanup done, calling exit(0)");
+                tracing::info!("Shutdown cleanup done, calling exit(0)");
                 app_handle_clone.exit(0);
             });
     });

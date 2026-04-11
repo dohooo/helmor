@@ -34,17 +34,21 @@ interface MockThread {
 }
 
 let mockEvents: readonly CodexEvent[] = [];
+let lastThreadOptions: unknown = null;
+let lastRunInput: unknown = null;
 let mockStreamFactory: (
 	opts: { signal?: AbortSignal } | undefined,
 ) => AsyncIterable<CodexEvent> = () => asyncIterableFrom(mockEvents);
 
 class MockCodex {
-	startThread(_opts: unknown): MockThread {
+	startThread(opts: unknown): MockThread {
+		lastThreadOptions = opts;
 		return {
 			id: MOCK_THREAD_ID,
-			runStreamed: async (_input, opts) => ({
-				events: mockStreamFactory(opts),
-			}),
+			runStreamed: async (input, opts) => {
+				lastRunInput = input;
+				return { events: mockStreamFactory(opts) };
+			},
 		};
 	}
 	resumeThread(_id: string, _opts: unknown): MockThread {
@@ -108,6 +112,8 @@ describe("CodexSessionManager.sendMessage", () => {
 		manager = new CodexSessionManager();
 		mockEvents = [];
 		mockStreamFactory = () => asyncIterableFrom(mockEvents);
+		lastThreadOptions = null;
+		lastRunInput = null;
 	});
 
 	test("forwards every SDK event as passthrough and ends with 'end'", async () => {
@@ -271,6 +277,35 @@ describe("CodexSessionManager.sendMessage", () => {
 		expect(captured).toHaveLength(1);
 		expect(captured.some((e) => e.type === "end")).toBe(false);
 		expect(captured.some((e) => e.type === "aborted")).toBe(false);
+	});
+
+	test("plan mode uses read-only sandbox and prepends a plan-only instruction", async () => {
+		mockEvents = [{ type: "thread.started" }, { type: "turn.completed" }];
+
+		await manager.sendMessage(
+			"REQ-PLAN",
+			{
+				sessionId: "s-plan",
+				prompt: "Inspect the repo and tell me what to change",
+				model: "gpt-5.4",
+				cwd: "/tmp/project",
+				resume: undefined,
+				permissionMode: "plan",
+				effortLevel: undefined,
+			},
+			emitter,
+		);
+
+		expect(lastThreadOptions).toMatchObject({
+			model: "gpt-5.4",
+			workingDirectory: "/tmp/project",
+			sandboxMode: "read-only",
+			approvalPolicy: "never",
+		});
+		expect(lastRunInput).toBeString();
+		expect(lastRunInput).toContain("Plan mode is enabled.");
+		expect(lastRunInput).toContain("produce a concrete plan only");
+		expect(lastRunInput).toContain("User request:");
 	});
 });
 

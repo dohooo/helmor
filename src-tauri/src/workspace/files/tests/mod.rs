@@ -1,0 +1,11 @@
+mod editor_files;
+mod support;
+mod workspace_changes;
+mod workspace_targets;
+
+pub(super) use super::changes::{find_merge_base, parse_workspace_path, query_workspace_target};
+pub(super) use super::support::canonicalize_missing_path;
+pub(super) use super::{
+    list_editor_files, list_workspace_changes, list_workspace_files, read_editor_file,
+    stat_editor_file, write_editor_file, EditorFileListItem,
+};

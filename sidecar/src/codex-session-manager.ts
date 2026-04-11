@@ -32,6 +32,7 @@ function newCodex(): Codex {
 import { scanCodexSkills } from "./codex-skill-scanner.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { parseImageRefs } from "./images.js";
+import { logger } from "./logger.js";
 import type {
 	ListSlashCommandsParams,
 	SendMessageParams,
@@ -54,14 +55,27 @@ function parseEffort(value: string | undefined): CodexEffort | undefined {
 	return undefined;
 }
 
-function buildCodexInput(prompt: string): Input {
+const PLAN_MODE_PROMPT_PREFIX = `Plan mode is enabled.
+
+Analyze the task and produce a concrete plan only.
+Do not modify files, apply patches, or run write operations.
+Read-only inspection commands are allowed when needed for the plan.`;
+
+function buildCodexInput(
+	prompt: string,
+	permissionMode: string | undefined,
+): Input {
 	const { text, imagePaths } = parseImageRefs(prompt);
+	const promptText =
+		permissionMode === "plan"
+			? `${PLAN_MODE_PROMPT_PREFIX}\n\nUser request:\n${text || prompt}`
+			: text;
 	if (imagePaths.length === 0) {
-		return prompt;
+		return promptText || prompt;
 	}
 	const parts: UserInput[] = [];
-	if (text) {
-		parts.push({ type: "text", text });
+	if (promptText) {
+		parts.push({ type: "text", text: promptText });
 	}
 	for (const p of imagePaths) {
 		parts.push({ type: "local_image", path: p });
@@ -98,7 +112,10 @@ export class CodexSessionManager implements SessionManager {
 				skipGitRepoCheck: true,
 				...(effort ? { modelReasoningEffort: effort } : {}),
 				...(permissionMode === "plan"
-					? { approvalPolicy: "never" as const }
+					? {
+							approvalPolicy: "never" as const,
+							sandboxMode: "read-only" as const,
+						}
 					: {}),
 			};
 
@@ -106,13 +123,17 @@ export class CodexSessionManager implements SessionManager {
 				? codex.resumeThread(resume, threadOpts)
 				: codex.startThread(threadOpts);
 
-			const streamedTurn = await thread.runStreamed(buildCodexInput(prompt), {
-				signal: abortController.signal,
-			});
+			const streamedTurn = await thread.runStreamed(
+				buildCodexInput(prompt, permissionMode),
+				{
+					signal: abortController.signal,
+				},
+			);
 
 			// Codex events don't carry the thread id natively. Inject it as
 			// `session_id` (snake_case) so the on-the-wire format matches Claude.
 			for await (const event of streamedTurn.events) {
+				logger.sdkEvent(requestId, event);
 				const threadId = thread.id;
 				const enriched: object = threadId
 					? { ...(event as object), session_id: threadId }

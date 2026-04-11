@@ -1,5 +1,6 @@
 ---
 source: tests/pipeline_fixtures.rs
+assertion_line: 51
 expression: messages
 input_file: tests/fixtures/pipeline/small_chat_claude/input.json
 ---
@@ -8,15 +9,15 @@ input_file: tests/fixtures/pipeline/small_chat_claude/input.json
   createdAt: "2026-04-02T13:25:35.728Z"
   content:
     - type: text
-      text: 随便说点什么
+      text: Say something random
 - role: assistant
   id: 7dc34ada-feea-41fe-9573-be2b2f728bd3
   createdAt: "2026-04-02T13:25:46.236Z"
   content:
     - type: reasoning
-      text: "The user is saying \"随便说点什么\" which means \"say something random\" in Chinese. They're just making casual conversation. I'll respond briefly and casually."
+      text: "The user is saying \"say something random.\" They're just making casual conversation. I'll respond briefly and casually."
     - type: text
-      text: "你好！我是你的编码助手，当前在 `ottawa` 工作区，分支是 `lgq/wechat-ai-partner`。工作区状态干净，随时可以开工。有什么需要做的尽管说！"
+      text: "Hello! I'm your coding assistant, currently in the `ottawa` workspace on the `lgq/wechat-ai-partner` branch. The workspace is clean and ready to go. Just let me know what you need!"
   status:
     type: complete
     reason: stop

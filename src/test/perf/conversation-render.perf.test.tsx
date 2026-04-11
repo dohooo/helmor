@@ -69,6 +69,7 @@ if (typeof window !== "undefined") {
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterAll, beforeAll, describe, it, vi } from "vitest";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
 	ExtendedMessagePart,
 	ThreadMessageLike,
@@ -188,8 +189,7 @@ function makeThread(count: number): ThreadMessageLike[] {
 	const out: ThreadMessageLike[] = [];
 	for (let i = 0; i < count; i += 1) {
 		const role = i % 2 === 0 ? "user" : "assistant";
-		const text =
-			`${role} message ${i} — ` + "lorem ipsum dolor sit amet ".repeat(3);
+		const text = `${role} message ${i} — ${"lorem ipsum dolor sit amet ".repeat(3)}`;
 		out.push(
 			role === "user"
 				? userMessage(`m${i}`, text)
@@ -240,12 +240,11 @@ function resetStats() {
 // ---------------------------------------------------------------------------
 
 // Lazy import so the URL flip and mocks above are in place first.
-type LazyPanel =
-	typeof import("@/components/workspace-panel")["WorkspacePanel"];
+type LazyPanel = typeof import("@/features/panel")["WorkspacePanel"];
 let WorkspacePanel: LazyPanel;
 
 beforeAll(async () => {
-	const mod = await import("@/components/workspace-panel");
+	const mod = await import("@/features/panel");
 	WorkspacePanel = mod.WorkspacePanel;
 });
 
@@ -286,24 +285,26 @@ describe("conversation render perf", () => {
 			sending: boolean;
 		}) => (
 			<QueryClientProvider client={queryClient}>
-				<WorkspacePanel
-					workspace={workspace}
-					sessions={sessions}
-					selectedSessionId={params.selectedSessionId}
-					selectedProvider="claude-code"
-					sessionPanes={[
-						{
-							sessionId: params.selectedSessionId,
-							messages: params.messages,
-							sending: params.sending,
-							hasLoaded: true,
-							presentationState: "presented",
-						},
-					]}
-					loadingWorkspace={false}
-					loadingSession={false}
-					sending={params.sending}
-				/>
+				<TooltipProvider delayDuration={0}>
+					<WorkspacePanel
+						workspace={workspace}
+						sessions={sessions}
+						selectedSessionId={params.selectedSessionId}
+						selectedProvider="claude-code"
+						sessionPanes={[
+							{
+								sessionId: params.selectedSessionId,
+								messages: params.messages,
+								sending: params.sending,
+								hasLoaded: true,
+								presentationState: "presented",
+							},
+						]}
+						loadingWorkspace={false}
+						loadingSession={false}
+						sending={params.sending}
+					/>
+				</TooltipProvider>
 			</QueryClientProvider>
 		);
 

@@ -5,13 +5,14 @@
  * stdin/stdout JSON Lines protocol. Requests come in via stdin, responses
  * and streaming events go out via stdout. stderr is for debug logging.
  *
- * Set HELMOR_SIDECAR_DEBUG=1 for verbose logging.
+ * Log level controlled by HELMOR_LOG (debug|info|error), defaults to info.
  */
 
 import { createInterface } from "node:readline";
 import { ClaudeSessionManager } from "./claude-session-manager.js";
 import { CodexSessionManager } from "./codex-session-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
+import { logger } from "./logger.js";
 import {
 	errorMessage,
 	parseListSlashCommandsParams,
@@ -23,16 +24,6 @@ import {
 } from "./request-parser.js";
 import type { Provider, SessionManager } from "./session-manager.js";
 
-const DEBUG =
-	process.env.HELMOR_SIDECAR_DEBUG === "1" ||
-	process.env.HELMOR_SIDECAR_DEBUG === "true";
-
-function debug(...args: unknown[]): void {
-	if (DEBUG) {
-		console.error("[sidecar:ts:debug]", ...args);
-	}
-}
-
 const claudeManager = new ClaudeSessionManager();
 const managers: Record<Provider, SessionManager> = {
 	claude: claudeManager,
@@ -43,7 +34,31 @@ const emitter = createSidecarEmitter((event) => {
 	process.stdout.write(`${JSON.stringify(event)}\n`);
 });
 
-debug("Sidecar starting, pid =", process.pid);
+// ---------------------------------------------------------------------------
+// Global error recovery — the sidecar must never crash from unhandled errors.
+// Log to stderr so Rust can capture it, emit a protocol error event so any
+// in-flight request gets notified, and keep the process alive.
+// ---------------------------------------------------------------------------
+
+process.on("uncaughtException", (err) => {
+	logger.error("uncaughtException", { err: String(err) });
+	try {
+		emitter.error(null, "Internal sidecar error", true);
+	} catch {
+		// stdout may be broken — nothing more we can do
+	}
+});
+
+process.on("unhandledRejection", (reason) => {
+	logger.error("unhandledRejection", { reason: String(reason) });
+	try {
+		emitter.error(null, "Internal sidecar error", true);
+	} catch {
+		// stdout may be broken
+	}
+});
+
+logger.info("Sidecar starting", { pid: process.pid });
 emitter.ready(1);
 
 // ---------------------------------------------------------------------------
@@ -58,16 +73,17 @@ async function handleSendMessage(
 	try {
 		const provider = parseProvider(params.provider);
 		const sendParams = parseSendMessageParams(params);
-		if (DEBUG) {
-			debug(
-				`  prompt=${JSON.stringify(sendParams.prompt)} model=${sendParams.model ?? "(default)"} cwd=${sendParams.cwd ?? "(none)"} resume=${sendParams.resume ?? "(none)"}`,
-			);
-		}
+		logger.debug(`[${id}] sendMessage`, {
+			prompt: sendParams.prompt?.slice(0, 100),
+			model: sendParams.model ?? "(default)",
+			cwd: sendParams.cwd ?? "(none)",
+			resume: sendParams.resume ?? "(none)",
+		});
 		await managers[provider].sendMessage(id, sendParams, emitter);
-		debug(`[${id}] sendMessage completed`);
+		logger.debug(`[${id}] sendMessage completed`);
 	} catch (err) {
 		const msg = errorMessage(err);
-		debug(`[${id}] sendMessage FAILED: ${msg}`);
+		logger.error(`[${id}] sendMessage FAILED: ${msg}`);
 		emitter.error(id, msg);
 	}
 }
@@ -78,24 +94,26 @@ async function handleGenerateTitle(
 ): Promise<void> {
 	try {
 		const userMessage = requireString(params, "userMessage");
-		debug(`[${id}] generateTitle — userMessage=${JSON.stringify(userMessage)}`);
+		logger.debug(`[${id}] generateTitle`, {
+			userMessage: userMessage.slice(0, 100),
+		});
 
 		// Try Claude (cheap haiku) first; fall back to Codex if Claude is
 		// unavailable. Both implementations emit `titleGenerated` in the
 		// same shape, so the caller can't tell which one ran.
 		try {
 			await managers.claude.generateTitle(id, userMessage, emitter);
-			debug(`[${id}] generateTitle completed (claude)`);
+			logger.debug(`[${id}] generateTitle completed (claude)`);
 		} catch (claudeErr) {
-			debug(
+			logger.debug(
 				`[${id}] generateTitle claude failed, trying codex: ${errorMessage(claudeErr)}`,
 			);
 			await managers.codex.generateTitle(id, userMessage, emitter);
-			debug(`[${id}] generateTitle completed (codex fallback)`);
+			logger.debug(`[${id}] generateTitle completed (codex fallback)`);
 		}
 	} catch (err) {
 		const msg = errorMessage(err);
-		debug(`[${id}] generateTitle FAILED: ${msg}`);
+		logger.error(`[${id}] generateTitle FAILED: ${msg}`);
 		emitter.error(id, msg);
 	}
 }
@@ -107,15 +125,16 @@ async function handleListSlashCommands(
 	try {
 		const provider = parseProvider(params.provider);
 		const listParams = parseListSlashCommandsParams(params);
-		debug(
-			`[${id}] listSlashCommands provider=${provider} cwd=${listParams.cwd ?? "(none)"}`,
-		);
+		logger.debug(`[${id}] listSlashCommands`, {
+			provider,
+			cwd: listParams.cwd ?? "(none)",
+		});
 		const commands = await managers[provider].listSlashCommands(listParams);
 		emitter.slashCommandsListed(id, commands);
-		debug(`[${id}] listSlashCommands → ${commands.length} entries`);
+		logger.debug(`[${id}] listSlashCommands → ${commands.length} entries`);
 	} catch (err) {
 		const msg = errorMessage(err);
-		debug(`[${id}] listSlashCommands FAILED: ${msg}`);
+		logger.error(`[${id}] listSlashCommands FAILED: ${msg}`);
 		emitter.error(id, msg);
 	}
 }
@@ -127,7 +146,7 @@ async function handleStopSession(
 	try {
 		const provider = parseProvider(params.provider);
 		const sessionId = requireString(params, "sessionId");
-		debug(`[${id}] stopSession sessionId=${sessionId} provider=${provider}`);
+		logger.debug(`[${id}] stopSession`, { sessionId, provider });
 		await managers[provider].stopSession(sessionId);
 		emitter.stopped(id, sessionId);
 	} catch (err) {
@@ -144,18 +163,18 @@ async function handleStopSession(
  * known event before tearing down stdio.
  */
 async function handleShutdown(id: string): Promise<void> {
-	debug(`[${id}] shutdown — tearing down all sessions`);
+	logger.info(`[${id}] shutdown — tearing down all sessions`);
 	const results = await Promise.allSettled([
 		...Object.values(managers).map((m) => m.shutdown()),
 		...inflightHandlers,
 	]);
 	for (const r of results) {
 		if (r.status === "rejected") {
-			debug(`  shutdown: manager rejected: ${errorMessage(r.reason)}`);
+			logger.error(`shutdown: manager rejected: ${errorMessage(r.reason)}`);
 		}
 	}
 	emitter.pong(id);
-	debug("shutdown ack sent — exiting in next tick");
+	logger.info("shutdown ack sent — exiting in next tick");
 	// Give the stdout pipe a tick to flush the pong before exit.
 	setImmediate(() => process.exit(0));
 }
@@ -196,41 +215,45 @@ for await (const line of rl) {
 
 	const { id, method, params } = request;
 	requestCount++;
-	debug(
-		`← stdin [${id}] method=${method} provider=${params.provider ?? "(unset)"} (#${requestCount})`,
-	);
+	logger.debug(`← stdin [${id}] method=${method}`, {
+		provider: params.provider ?? "(unset)",
+		count: requestCount,
+	});
 
-	switch (method) {
-		case "sendMessage":
-			trackHandler(handleSendMessage(id, params));
-			break;
-		case "generateTitle":
-			trackHandler(handleGenerateTitle(id, params));
-			break;
-		case "listSlashCommands":
-			trackHandler(handleListSlashCommands(id, params));
-			break;
-		case "stopSession":
-			await handleStopSession(id, params);
-			break;
-		case "shutdown":
-			await handleShutdown(id);
-			break;
-		case "permissionResponse": {
-			const permissionId = params.permissionId as string;
-			const behavior = params.behavior as "allow" | "deny";
-			debug(
-				`[${id}] permissionResponse permissionId=${permissionId} behavior=${behavior}`,
-			);
-			claudeManager.resolvePermission(permissionId, behavior);
-			break;
+	try {
+		switch (method) {
+			case "sendMessage":
+				trackHandler(handleSendMessage(id, params));
+				break;
+			case "generateTitle":
+				trackHandler(handleGenerateTitle(id, params));
+				break;
+			case "listSlashCommands":
+				trackHandler(handleListSlashCommands(id, params));
+				break;
+			case "stopSession":
+				await handleStopSession(id, params);
+				break;
+			case "shutdown":
+				await handleShutdown(id);
+				break;
+			case "permissionResponse": {
+				const permissionId = params.permissionId as string;
+				const behavior = params.behavior as "allow" | "deny";
+				logger.debug(`[${id}] permissionResponse`, { permissionId, behavior });
+				claudeManager.resolvePermission(permissionId, behavior);
+				break;
+			}
+			case "ping":
+				emitter.pong(id);
+				break;
+			default:
+				emitter.error(id, `Unknown method: ${method}`);
 		}
-		case "ping":
-			emitter.pong(id);
-			break;
-		default:
-			emitter.error(id, `Unknown method: ${method}`);
+	} catch (err) {
+		logger.error(`Dispatch error for [${id}] ${method}`, { err: String(err) });
+		emitter.error(id, "Internal sidecar error", true);
 	}
 }
 
-debug("stdin closed — sidecar exiting");
+logger.info("stdin closed — sidecar exiting");

@@ -47,14 +47,46 @@ vi.mock("@tauri-apps/api/core", () => ({
 				};
 			case "list_github_accessible_repositories":
 				return [];
+			case "list_repositories":
+				return [];
+			case "list_agent_model_sections":
+				return [];
 			case "get_add_repository_defaults":
 				return { lastCloneDirectory: null };
 			case "get_data_info":
 				return null;
+			case "load_auto_close_action_kinds":
+				return [];
+			case "load_auto_close_opt_in_asked":
+				return [];
 			case "list_remote_branches":
+				return [];
+			case "list_workspace_files":
+				return [];
+			case "list_workspace_changes_with_content":
+				return { items: [], prefetched: [] };
+			case "list_slash_commands":
+				return [];
+			case "lookup_workspace_pr":
+				return null;
+			case "get_workspace_git_action_status":
+				return { uncommittedCount: 0, conflictCount: 0 };
+			case "get_workspace_pr_action_status":
+				return {
+					pr: null,
+					reviewDecision: null,
+					mergeable: null,
+					deployments: [],
+					checks: [],
+					remoteState: "unavailable",
+					message: null,
+				};
+			case "drain_pending_cli_sends":
 				return [];
 			case "conductor_source_available":
 				return false;
+			case "detect_installed_editors":
+				return [];
 			default:
 				return undefined;
 		}
@@ -63,6 +95,11 @@ vi.mock("@tauri-apps/api/core", () => ({
 		onmessage: ((event: unknown) => void) | null = null;
 	},
 }));
+
+// cmdk calls `scrollIntoView` which jsdom doesn't implement.
+if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
+	Element.prototype.scrollIntoView = () => {};
+}
 
 if (
 	typeof window !== "undefined" &&

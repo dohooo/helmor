@@ -6,13 +6,16 @@ use std::{
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 
-use super::{db, git_ops, helpers};
+use crate::{git_ops, helpers};
+
+use super::db;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryCreateOption {
     pub id: String,
     pub name: String,
+    pub remote: Option<String>,
     pub default_branch: Option<String>,
     pub repo_icon_src: Option<String>,
     pub repo_initials: String,
@@ -47,6 +50,7 @@ pub struct ResolvedRepositoryInput {
 pub(crate) struct RepositoryRecord {
     pub id: String,
     pub name: String,
+    pub remote: Option<String>,
     pub default_branch: Option<String>,
     pub root_path: String,
     pub setup_script: Option<String>,
@@ -61,7 +65,8 @@ pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>> {
               id,
               name,
               default_branch,
-              root_path
+              root_path,
+              remote
             FROM repos
             WHERE COALESCE(hidden, 0) = 0
             ORDER BY COALESCE(display_order, 0) ASC, LOWER(name) ASC
@@ -79,6 +84,7 @@ pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>> {
             Ok(RepositoryCreateOption {
                 id: row.get(0)?,
                 name,
+                remote: row.get(4)?,
                 default_branch: row.get(2)?,
                 repo_icon_src: icon_src,
                 repo_initials: initials,
@@ -95,7 +101,7 @@ pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRe
     let mut statement = connection
         .prepare(
             r#"
-            SELECT id, name, default_branch, root_path, setup_script
+            SELECT id, name, remote, default_branch, root_path, setup_script
             FROM repos
             WHERE id = ?1
             "#,
@@ -107,9 +113,10 @@ pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRe
             Ok(RepositoryRecord {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                default_branch: row.get(2)?,
-                root_path: row.get(3)?,
-                setup_script: row.get(4)?,
+                remote: row.get(2)?,
+                default_branch: row.get(3)?,
+                root_path: row.get(4)?,
+                setup_script: row.get(5)?,
             })
         })
         .with_context(|| format!("Failed to query repository {repo_id}"))?;
@@ -161,7 +168,7 @@ fn query_repository_by_root_path(
     let mut statement = connection
         .prepare(
             r#"
-            SELECT id, name, default_branch, root_path, setup_script
+            SELECT id, name, remote, default_branch, root_path, setup_script
             FROM repos
             WHERE root_path = ?1
             ORDER BY created_at ASC
@@ -175,9 +182,10 @@ fn query_repository_by_root_path(
             Ok(RepositoryRecord {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                default_branch: row.get(2)?,
-                root_path: row.get(3)?,
-                setup_script: row.get(4)?,
+                remote: row.get(2)?,
+                default_branch: row.get(3)?,
+                root_path: row.get(4)?,
+                setup_script: row.get(5)?,
             })
         })
         .with_context(|| format!("Failed to query repository row for {root_path}"))?;
@@ -198,7 +206,7 @@ fn query_repository_candidates_by_name(
     let mut statement = connection
         .prepare(
             r#"
-            SELECT id, name, default_branch, root_path, setup_script
+            SELECT id, name, remote, default_branch, root_path, setup_script
             FROM repos
             WHERE name = ?1 OR root_path LIKE ?2
             ORDER BY created_at ASC
@@ -213,9 +221,10 @@ fn query_repository_candidates_by_name(
             Ok(RepositoryRecord {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                default_branch: row.get(2)?,
-                root_path: row.get(3)?,
-                setup_script: row.get(4)?,
+                remote: row.get(2)?,
+                default_branch: row.get(3)?,
+                root_path: row.get(4)?,
+                setup_script: row.get(5)?,
             })
         })
         .with_context(|| format!("Failed to query repository candidates for {repository_name}"))?;
@@ -271,6 +280,99 @@ pub(crate) fn insert_repository(repository: &ResolvedRepositoryInput) -> Result<
         .with_context(|| format!("Failed to insert repository {}", repository.name))?;
 
     Ok(repo_id)
+}
+
+/// Atomically update the remote and re-resolve default_branch from the new
+/// remote's HEAD. Falls back to "main" if the remote HEAD can't be resolved.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateRepositoryRemoteResponse {
+    /// Number of ready workspaces whose `intended_target_branch` does not
+    /// exist on the new remote. Zero means everything lines up.
+    pub orphaned_workspace_count: u64,
+}
+
+pub fn update_repository_remote(
+    repo_id: &str,
+    remote: &str,
+) -> Result<UpdateRepositoryRemoteResponse> {
+    let repository = load_repository_by_id(repo_id)?
+        .with_context(|| format!("Repository not found: {repo_id}"))?;
+    let repo_root = std::path::PathBuf::from(repository.root_path.trim());
+
+    let new_default_branch = resolve_default_branch_from_remote_head(&repo_root, remote)
+        .with_context(|| {
+            format!("Remote \"{remote}\" has no HEAD — cannot determine default branch")
+        })?;
+    let new_remote_url = resolve_repository_remote_url(&repo_root, remote).ok();
+
+    let connection = db::open_connection(true)?;
+    let updated = connection
+        .execute(
+            "UPDATE repos SET remote = ?1, default_branch = ?2, remote_url = ?3, updated_at = datetime('now') WHERE id = ?4",
+            rusqlite::params![remote, new_default_branch, new_remote_url, repo_id],
+        )
+        .with_context(|| format!("Failed to update remote for {repo_id}"))?;
+
+    if updated != 1 {
+        bail!("Repository not found: {repo_id}");
+    }
+
+    // Fetch refs so the branch picker and workspace creation have local
+    // remote-tracking refs. This must succeed — without it,
+    // create_workspace_from_repo_impl will fail to resolve the start ref.
+    git_ops::fetch_all_remote(&repo_root, remote)
+        .with_context(|| format!("Failed to fetch from remote \"{remote}\""))?;
+
+    // Check how many ready workspaces have a target branch that doesn't
+    // exist on the new remote. We don't auto-overwrite — let the user
+    // decide via the header branch picker.
+    let remote_branches = git_ops::list_remote_branches(&repo_root, remote).unwrap_or_default();
+
+    let mut stmt = connection
+        .prepare(
+            "SELECT intended_target_branch FROM workspaces WHERE repository_id = ?1 AND state = 'ready'",
+        )
+        .context("Failed to query workspace target branches")?;
+    let targets: Vec<String> = stmt
+        .query_map([repo_id], |row| row.get::<_, Option<String>>(0))
+        .context("Failed to read workspace target branches")?
+        .filter_map(|r| r.ok().flatten())
+        .filter(|t| !t.trim().is_empty())
+        .collect();
+
+    let orphaned = targets
+        .iter()
+        .filter(|t| !remote_branches.contains(t))
+        .count() as u64;
+
+    Ok(UpdateRepositoryRemoteResponse {
+        orphaned_workspace_count: orphaned,
+    })
+}
+
+pub fn list_repo_remotes(repo_id: &str) -> Result<Vec<String>> {
+    let repository = load_repository_by_id(repo_id)?
+        .with_context(|| format!("Repository not found: {repo_id}"))?;
+    let repo_root = std::path::PathBuf::from(repository.root_path.trim());
+    git_ops::ensure_git_repository(&repo_root)?;
+    git_ops::list_remotes(&repo_root)
+}
+
+pub fn update_repository_default_branch(repo_id: &str, default_branch: &str) -> Result<()> {
+    let connection = db::open_connection(true)?;
+    let updated = connection
+        .execute(
+            "UPDATE repos SET default_branch = ?1, updated_at = datetime('now') WHERE id = ?2",
+            [default_branch, repo_id],
+        )
+        .with_context(|| format!("Failed to update default branch for {repo_id}"))?;
+
+    if updated != 1 {
+        bail!("Repository not found: {repo_id}");
+    }
+
+    Ok(())
 }
 
 pub(crate) fn delete_repository(repo_id: &str) -> Result<()> {
@@ -379,13 +481,13 @@ pub fn add_repository_from_local_path(folder_path: &str) -> Result<AddRepository
         load_repository_by_root_path(&resolved_repository.normalized_root_path)?;
 
     if let Some(last_clone_directory) = last_clone_directory.as_deref() {
-        super::settings::upsert_setting_value("last_clone_directory", last_clone_directory)
+        crate::settings::upsert_setting_value("last_clone_directory", last_clone_directory)
             .map_err(|e| anyhow::anyhow!(e))?;
     }
 
     if let Some(repository) = existing_repository {
         if let Some((selected_workspace_id, selected_workspace_state)) =
-            super::workspaces::select_visible_workspace_for_repo(&repository.id)
+            crate::workspaces::select_visible_workspace_for_repo(&repository.id)
                 .map_err(|e| anyhow::anyhow!(e))?
         {
             return Ok(AddRepositoryResponse {
@@ -397,7 +499,7 @@ pub fn add_repository_from_local_path(folder_path: &str) -> Result<AddRepository
             });
         }
 
-        let create_response = super::workspaces::create_workspace_from_repo_impl(&repository.id)
+        let create_response = crate::workspaces::create_workspace_from_repo_impl(&repository.id)
             .map_err(|error| {
                 anyhow::anyhow!("Repository already exists, but workspace create failed: {error}")
             })?;
@@ -413,7 +515,7 @@ pub fn add_repository_from_local_path(folder_path: &str) -> Result<AddRepository
 
     let repository_id = insert_repository(&resolved_repository)
         .with_context(|| format!("Failed to persist repository {}", resolved_repository.name))?;
-    let create_result = super::workspaces::create_workspace_from_repo_impl(&repository_id);
+    let create_result = crate::workspaces::create_workspace_from_repo_impl(&repository_id);
 
     match create_result {
         Ok(create_response) => Ok(AddRepositoryResponse {
@@ -436,22 +538,26 @@ fn resolve_repository_remote(repo_root: &Path) -> Result<Option<String>> {
     let repo_root_arg = repo_root.display().to_string();
     let output = git_ops::run_git(["-C", repo_root_arg.as_str(), "remote"], None)
         .map_err(|error| anyhow::anyhow!("Failed to read repository remotes: {error}"))?;
-    let remotes = output
+    let mut remotes = output
         .lines()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
 
+    if remotes.is_empty() {
+        return Ok(None);
+    }
+
+    // Prefer "origin" if it exists.
     if remotes.iter().any(|remote| remote == "origin") {
         return Ok(Some("origin".to_string()));
     }
 
-    if remotes.len() == 1 {
-        return Ok(remotes.first().cloned());
-    }
-
-    Ok(None)
+    // Multiple remotes, no origin — pick the first alphabetically.
+    // User can change it later in repo settings.
+    remotes.sort();
+    Ok(remotes.into_iter().next())
 }
 
 fn resolve_repository_remote_url(repo_root: &Path, remote: &str) -> Result<String> {
@@ -465,16 +571,20 @@ fn resolve_repository_remote_url(repo_root: &Path, remote: &str) -> Result<Strin
 }
 
 fn resolve_repository_default_branch(repo_root: &Path, remote: Option<&str>) -> Option<String> {
-    if let Some(remote) = remote {
-        if let Ok(symbolic_ref) = resolve_default_branch_from_remote_head(repo_root, remote) {
-            return Some(symbolic_ref);
-        }
-    }
-
-    resolve_current_branch(repo_root)
+    let remote = remote?;
+    resolve_default_branch_from_remote_head(repo_root, remote).ok()
 }
 
 fn resolve_default_branch_from_remote_head(repo_root: &Path, remote: &str) -> Result<String> {
+    // Authoritative: query the remote directly (lightweight network call).
+    if let Ok(branch) = resolve_head_from_ls_remote(repo_root, remote) {
+        return Ok(branch);
+    }
+    // Offline fallback: local symbolic ref (may be stale).
+    resolve_head_from_local_symbolic_ref(repo_root, remote)
+}
+
+fn resolve_head_from_local_symbolic_ref(repo_root: &Path, remote: &str) -> Result<String> {
     let repo_root_arg = repo_root.display().to_string();
     let output = git_ops::run_git(
         [
@@ -498,20 +608,36 @@ fn resolve_default_branch_from_remote_head(repo_root: &Path, remote: &str) -> Re
         .with_context(|| format!("Remote HEAD for {remote} did not include a branch name"))
 }
 
-fn resolve_current_branch(repo_root: &Path) -> Option<String> {
-    let repo_root_arg = repo_root.display().to_string();
-    let branch = git_ops::run_git(
-        ["-C", repo_root_arg.as_str(), "branch", "--show-current"],
+/// Query the remote via `git ls-remote --symref <remote> HEAD` to discover
+/// the default branch. Only transfers a few bytes — much cheaper than a fetch.
+fn resolve_head_from_ls_remote(repo_root: &Path, remote: &str) -> Result<String> {
+    let output = git_ops::run_git_with_timeout(
+        [
+            "-C",
+            &repo_root.display().to_string(),
+            "ls-remote",
+            "--symref",
+            remote,
+            "HEAD",
+        ],
         None,
+        git_ops::GIT_NETWORK_TIMEOUT,
     )
-    .ok()?;
-    let branch = branch.trim();
+    .with_context(|| format!("Failed to query HEAD from remote \"{remote}\""))?;
 
-    if branch.is_empty() || branch == "HEAD" {
-        None
-    } else {
-        Some(branch.to_string())
+    // Output format: "ref: refs/heads/main\tHEAD\n<sha>\tHEAD\n"
+    for line in output.lines() {
+        if let Some(rest) = line.strip_prefix("ref: refs/heads/") {
+            if let Some(branch) = rest.split('\t').next() {
+                let branch = branch.trim();
+                if !branch.is_empty() {
+                    return Ok(branch.to_string());
+                }
+            }
+        }
     }
+
+    bail!("Remote \"{remote}\" did not advertise a HEAD branch")
 }
 
 pub(crate) fn normalize_filesystem_path(path: &Path) -> Option<String> {

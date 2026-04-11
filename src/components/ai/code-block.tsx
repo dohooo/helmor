@@ -23,6 +23,8 @@ type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
 	code: string;
 	language?: string;
 	showLineNumbers?: boolean;
+	wrapLines?: boolean;
+	variant?: "default" | "plain";
 };
 
 type CodeBlockContextType = {
@@ -63,6 +65,8 @@ export const CodeBlock = ({
 	code,
 	language,
 	showLineNumbers = false,
+	wrapLines = false,
+	variant = "default",
 	className,
 	children,
 	...props
@@ -70,6 +74,7 @@ export const CodeBlock = ({
 	const [lightHtml, setLightHtml] = useState(() => plainHtml(code));
 	const [darkHtml, setDarkHtml] = useState(() => plainHtml(code));
 	const resolvedLanguage = useMemo(() => resolveLanguage(language), [language]);
+	const isPlain = variant === "plain";
 
 	useEffect(() => {
 		let cancelled = false;
@@ -139,24 +144,38 @@ export const CodeBlock = ({
 		<CodeBlockContext.Provider value={{ code }}>
 			<div
 				className={cn(
-					"group relative my-4 w-full min-w-0 max-w-full overflow-hidden rounded-lg border border-app-border/70 bg-app-sidebar/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]",
+					isPlain
+						? "w-full min-w-0 max-w-full"
+						: "group relative my-4 w-full min-w-0 max-w-full overflow-hidden rounded-lg border border-border/70 bg-background/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]",
 					className,
 				)}
 				{...props}
 			>
-				<div className="flex items-center justify-between gap-2 border-b border-app-border/60 px-3 py-2">
-					<span className="truncate font-mono text-[10.5px] tracking-wide text-app-muted uppercase">
-						{language || "code"}
-					</span>
-					<div className="flex items-center gap-1">{children}</div>
-				</div>
+				{isPlain ? null : (
+					<div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
+						<span className="truncate font-mono text-[10.5px] tracking-wide text-muted-foreground uppercase">
+							{language || "code"}
+						</span>
+						<div className="flex items-center gap-1">{children}</div>
+					</div>
+				)}
 				<div className="relative">
 					<div
-						className="overflow-x-auto overflow-y-hidden px-0 py-0 dark:hidden [&>pre]:m-0 [&>pre]:min-w-full [&>pre]:bg-transparent! [&>pre]:p-3.5 [&>pre]:text-[12px] [&>pre]:leading-5 [&>pre]:text-foreground! [&_code]:font-mono [&_code]:text-[12px]"
+						className={cn(
+							"px-0 py-0 dark:hidden [&>pre]:m-0 [&>pre]:bg-transparent! [&>pre]:p-3.5 [&>pre]:text-[12px] [&>pre]:leading-5 [&>pre]:text-foreground! [&_code]:font-mono [&_code]:text-[12px]",
+							wrapLines
+								? "overflow-x-hidden overflow-y-hidden [&>pre]:whitespace-pre-wrap [&>pre]:break-words [&_code]:whitespace-pre-wrap [&_code]:break-words"
+								: "overflow-x-auto overflow-y-hidden [&>pre]:min-w-full",
+						)}
 						dangerouslySetInnerHTML={{ __html: lightHtml }}
 					/>
 					<div
-						className="hidden overflow-x-auto overflow-y-hidden px-0 py-0 dark:block [&>pre]:m-0 [&>pre]:min-w-full [&>pre]:bg-transparent! [&>pre]:p-3.5 [&>pre]:text-[12px] [&>pre]:leading-5 [&>pre]:text-foreground! [&_code]:font-mono [&_code]:text-[12px]"
+						className={cn(
+							"hidden px-0 py-0 dark:block [&>pre]:m-0 [&>pre]:bg-transparent! [&>pre]:p-3.5 [&>pre]:text-[12px] [&>pre]:leading-5 [&>pre]:text-foreground! [&_code]:font-mono [&_code]:text-[12px]",
+							wrapLines
+								? "overflow-x-hidden overflow-y-hidden [&>pre]:whitespace-pre-wrap [&>pre]:break-words [&_code]:whitespace-pre-wrap [&_code]:break-words"
+								: "overflow-x-auto overflow-y-hidden [&>pre]:min-w-full",
+						)}
 						dangerouslySetInnerHTML={{ __html: darkHtml }}
 					/>
 				</div>
@@ -193,7 +212,7 @@ export const CodeBlockCopyButton = ({
 	return (
 		<Button
 			className={cn(
-				"h-7 w-7 rounded-md border border-app-border/60 bg-app-base/70 text-app-muted hover:bg-app-toolbar-hover hover:text-app-foreground",
+				"h-7 w-7 rounded-md border border-border/60 bg-background/70 text-muted-foreground hover:bg-accent/60 hover:text-foreground",
 				className,
 			)}
 			onClick={() => {

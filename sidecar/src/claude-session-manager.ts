@@ -14,6 +14,7 @@ import {
 import { isAbortError } from "./abort.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { parseImageRefs } from "./images.js";
+import { logger } from "./logger.js";
 import type {
 	ListSlashCommandsParams,
 	SendMessageParams,
@@ -285,6 +286,7 @@ export class ClaudeSessionManager implements SessionManager {
 
 		try {
 			for await (const message of q) {
+				logger.sdkEvent(requestId, message);
 				emitter.passthrough(requestId, message);
 			}
 			emitter.end(requestId);

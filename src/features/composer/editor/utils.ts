@@ -1,0 +1,83 @@
+/**
+ * Lexical content extraction for the composer editor.
+ *
+ * $-prefixed functions must be called inside editor.read() or editor.update().
+ */
+
+import {
+	$getRoot,
+	$isElementNode,
+	$isLineBreakNode,
+	$isTextNode,
+} from "lexical";
+import type { ComposerCustomTag } from "@/lib/composer-insert";
+import { $isCustomTagBadgeNode } from "./custom-tag-badge-node";
+import { $isFileBadgeNode } from "./file-badge-node";
+import { $isImageBadgeNode } from "./image-badge-node";
+
+export function $extractComposerContent(): {
+	text: string;
+	images: string[];
+	files: string[];
+	customTags: ComposerCustomTag[];
+} {
+	const images: string[] = [];
+	const files: string[] = [];
+	const customTags: ComposerCustomTag[] = [];
+	const textParts: string[] = [];
+	const root = $getRoot();
+
+	for (let pi = 0; pi < root.getChildrenSize(); pi++) {
+		const paragraph = root.getChildAtIndex(pi);
+		if (!paragraph) continue;
+
+		if (pi > 0) textParts.push("\n");
+
+		if ($isElementNode(paragraph)) {
+			for (const child of paragraph.getChildren()) {
+				if ($isTextNode(child)) {
+					textParts.push(child.getTextContent());
+				} else if ($isImageBadgeNode(child)) {
+					const path = child.getImagePath();
+					images.push(path);
+					// Ensure space before @ref so chat regex can match each one
+					const last = textParts[textParts.length - 1];
+					if (last && !last.endsWith(" ") && !last.endsWith("\n")) {
+						textParts.push(" ");
+					}
+					textParts.push(`@${path}`);
+				} else if ($isFileBadgeNode(child)) {
+					const path = child.getFilePath();
+					files.push(path);
+					const last = textParts[textParts.length - 1];
+					if (last && !last.endsWith(" ") && !last.endsWith("\n")) {
+						textParts.push(" ");
+					}
+					textParts.push(`@${path}`);
+				} else if ($isCustomTagBadgeNode(child)) {
+					const customTag = child.getCustomTag();
+					customTags.push(customTag);
+					const last = textParts[textParts.length - 1];
+					if (last && !last.endsWith(" ") && !last.endsWith("\n")) {
+						textParts.push(" ");
+					}
+					textParts.push(customTag.submitText);
+				} else if ($isLineBreakNode(child)) {
+					textParts.push("\n");
+				}
+			}
+		} else {
+			textParts.push(paragraph.getTextContent());
+		}
+	}
+
+	return {
+		text: textParts
+			.join("")
+			.replace(/\n{3,}/g, "\n\n")
+			.trim(),
+		images: [...new Set(images)],
+		files: [...new Set(files)],
+		customTags,
+	};
+}
