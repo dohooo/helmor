@@ -116,69 +116,81 @@ pub async fn generate_session_title(
         let connection =
             open_write_connection().map_err(|e| anyhow::anyhow!("Failed to open DB: {e}"))?;
 
-        let workspace_info: Option<(String, Option<String>, Option<String>)> = connection
+        let workspace_info: Option<(String, Option<String>, Option<String>, String)> = connection
             .query_row(
-                r#"SELECT w.id, w.branch, r.root_path
+                r#"SELECT w.id, w.branch, r.root_path, w.directory_name
                    FROM workspaces w
                    JOIN repos r ON r.id = w.repository_id
                    WHERE w.active_session_id = ?1 AND w.state = 'ready'"#,
                 [&session_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .ok();
 
-        if let Some((workspace_id, old_branch, root_path)) = workspace_info {
-            let branch_settings = crate::settings::load_branch_prefix_settings().unwrap_or(
-                crate::settings::BranchPrefixSettings {
-                    branch_prefix_type: None,
-                    branch_prefix_custom: None,
-                },
-            );
-            let new_branch =
-                crate::helpers::branch_name_for_directory(branch_segment, &branch_settings);
-
-            if old_branch.as_deref() != Some(new_branch.as_str()) {
-                let fs_rename_attempted = matches!(
-                    (&old_branch, &root_path),
-                    (Some(_), Some(repo_root)) if std::path::Path::new(repo_root).is_dir()
+        if let Some((workspace_id, old_branch, root_path, directory_name)) = workspace_info {
+            let branch_settings =
+                crate::settings::load_branch_prefix_settings().unwrap_or(
+                    crate::settings::BranchPrefixSettings {
+                        branch_prefix_type: None,
+                        branch_prefix_custom: None,
+                    },
                 );
 
-                let fs_rename_ok = if let (Some(ref old_name), Some(ref repo_root)) =
-                    (&old_branch, &root_path)
-                {
-                    if std::path::Path::new(repo_root).is_dir() {
-                        match crate::git_ops::run_git(
-                            ["-C", repo_root, "branch", "-m", old_name, &new_branch],
-                            None,
-                        ) {
-                            Ok(_) => true,
-                            Err(error) => {
-                                tracing::error!(old = old_name, new = %new_branch, "git branch -m failed: {error:#}; leaving branch unchanged");
-                                false
+            if !old_branch
+                .as_deref()
+                .is_some_and(|b| crate::helpers::is_default_branch_name(b, &directory_name, &branch_settings))
+            {
+                tracing::debug!(
+                    workspace_id = %workspace_id,
+                    "Skipping auto branch rename: branch already differs from default"
+                );
+            } else {
+                let new_branch =
+                    crate::helpers::branch_name_for_directory(branch_segment, &branch_settings);
+
+                if old_branch.as_deref() != Some(new_branch.as_str()) {
+                    let fs_rename_attempted = matches!(
+                        (&old_branch, &root_path),
+                        (Some(_), Some(repo_root)) if std::path::Path::new(repo_root).is_dir()
+                    );
+
+                    let fs_rename_ok = if let (Some(ref old_name), Some(ref repo_root)) =
+                        (&old_branch, &root_path)
+                    {
+                        if std::path::Path::new(repo_root).is_dir() {
+                            match crate::git_ops::run_git(
+                                ["-C", repo_root, "branch", "-m", old_name, &new_branch],
+                                None,
+                            ) {
+                                Ok(_) => true,
+                                Err(error) => {
+                                    tracing::error!(old = old_name, new = %new_branch, "git branch -m failed: {error:#}; leaving branch unchanged");
+                                    false
+                                }
                             }
+                        } else {
+                            true
                         }
                     } else {
                         true
-                    }
-                } else {
-                    true
-                };
+                    };
 
-                if fs_rename_ok {
-                    if let Err(error) = connection.execute(
-                        "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
-                        (&new_branch, &workspace_id),
-                    ) {
-                        tracing::error!(workspace_id = %workspace_id, "DB UPDATE workspaces.branch failed: {error:#}");
-                        if fs_rename_attempted {
-                            if let (Some(ref old_name), Some(ref repo_root)) =
-                                (&old_branch, &root_path)
-                            {
-                                if let Err(rb_err) = crate::git_ops::run_git(
-                                    ["-C", repo_root, "branch", "-m", &new_branch, old_name],
-                                    None,
-                                ) {
-                                    tracing::error!(fs = %new_branch, db = old_name, "FS rollback git branch -m also failed: {rb_err:#} — manual reconciliation required");
+                    if fs_rename_ok {
+                        if let Err(error) = connection.execute(
+                            "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
+                            (&new_branch, &workspace_id),
+                        ) {
+                            tracing::error!(workspace_id = %workspace_id, "DB UPDATE workspaces.branch failed: {error:#}");
+                            if fs_rename_attempted {
+                                if let (Some(ref old_name), Some(ref repo_root)) =
+                                    (&old_branch, &root_path)
+                                {
+                                    if let Err(rb_err) = crate::git_ops::run_git(
+                                        ["-C", repo_root, "branch", "-m", &new_branch, old_name],
+                                        None,
+                                    ) {
+                                        tracing::error!(fs = %new_branch, db = old_name, "FS rollback git branch -m also failed: {rb_err:#} — manual reconciliation required");
+                                    }
                                 }
                             }
                         }

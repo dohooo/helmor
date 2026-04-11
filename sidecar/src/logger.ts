@@ -99,8 +99,9 @@ class Logger {
 
 		if (this.devStderr) {
 			const { label, color } = LEVEL_FMT.debug;
+			const json = JSON.stringify(event);
 			process.stderr.write(
-				`${DIM}${localTs()}${RESET} ${color}${label}${RESET} ${DIM}sidecar:${RESET} [${requestId}] ← sdk type=${type}\n`,
+				`${DIM}${localTs()}${RESET} ${color}${label}${RESET} ${DIM}sidecar:${RESET} [${requestId}] ← sdk ${json}\n`,
 			);
 		}
 	}

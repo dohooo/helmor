@@ -469,6 +469,16 @@ pub fn branch_name_for_directory(
     format!("{prefix}{directory_name}")
 }
 
+/// Whether `branch` is still the auto-generated default derived from the
+/// workspace's celestial-body `directory_name`.
+pub fn is_default_branch_name(
+    branch: &str,
+    directory_name: &str,
+    settings: &crate::settings::BranchPrefixSettings,
+) -> bool {
+    branch == branch_name_for_directory(directory_name, settings)
+}
+
 /// Read the GitHub login from the stored identity metadata.
 fn resolve_github_login() -> Result<Option<String>> {
     let raw = crate::settings::load_setting_value("github_identity_meta")?;

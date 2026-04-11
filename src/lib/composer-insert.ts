@@ -16,7 +16,7 @@ export type ComposerPreviewPayload =
 			language?: string;
 	  };
 
-export const COMPOSER_PREVIEW_BADGE_THRESHOLD = 200;
+export const COMPOSER_PREVIEW_BADGE_THRESHOLD = 500;
 const COMPOSER_PREVIEW_LABEL_MAX_CHARS = 40;
 
 export type ComposerCustomTag = {
