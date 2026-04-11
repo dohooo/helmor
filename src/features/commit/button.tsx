@@ -1,12 +1,3 @@
-import {
-	AlertIcon,
-	ArrowUpRightIcon,
-	GitMergeIcon,
-	GitPullRequestClosedIcon,
-	GitPullRequestIcon,
-	UploadIcon,
-	XCircleFillIcon,
-} from "@primer/octicons-react";
 import { ChevronDown } from "lucide-react";
 import { type CSSProperties, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -148,8 +139,7 @@ function getDefaultMenuItems(
 }
 
 const BUTTON_STYLE =
-	"h-5 text-[11px] font-medium leading-none tracking-[0.01em] shadow-none transition-all duration-150";
-const BUTTON_ICON_CLASS = "relative -top-px size-[11px] shrink-0 align-middle";
+	"h-5 text-[11px] font-semibold leading-none tracking-[0.01em] shadow-none transition-all duration-150";
 
 type ButtonColorVars = CSSProperties & {
 	"--button-border"?: string;
@@ -226,10 +216,11 @@ function getButtonColorVars(
 		return {
 			"--button-border": "transparent",
 			"--button-divider": "rgb(255 255 255 / 0.18)",
-			"--button-bg": "var(--chart-2)",
-			"--button-bg-hover": "color-mix(in oklch, var(--chart-2) 90%, black 10%)",
-			"--button-fg": "var(--background)",
-			"--button-fg-hover": "var(--background)",
+			"--button-bg": "var(--workspace-pr-open-accent)",
+			"--button-bg-hover":
+				"color-mix(in oklch, var(--workspace-pr-open-accent) 90%, black 10%)",
+			"--button-fg": "#FFFFFF",
+			"--button-fg-hover": "#FFFFFF",
 		};
 	}
 
@@ -237,10 +228,71 @@ function getButtonColorVars(
 		return {
 			"--button-border": "transparent",
 			"--button-divider": "rgb(255 255 255 / 0.16)",
-			"--button-bg": "var(--chart-4)",
-			"--button-bg-hover": "color-mix(in oklch, var(--chart-4) 90%, black 10%)",
-			"--button-fg": "var(--background)",
-			"--button-fg-hover": "var(--background)",
+			"--button-bg": "var(--workspace-pr-merged-accent)",
+			"--button-bg-hover":
+				"color-mix(in oklch, var(--workspace-pr-merged-accent) 90%, black 10%)",
+			"--button-fg": "#FFFFFF",
+			"--button-fg-hover": "#FFFFFF",
+		};
+	}
+
+	if (mode === "closed" && state !== "disabled") {
+		return {
+			"--button-border": "transparent",
+			"--button-divider": "rgb(255 255 255 / 0.16)",
+			"--button-bg": "var(--workspace-pr-closed-accent)",
+			"--button-bg-hover":
+				"color-mix(in oklch, var(--workspace-pr-closed-accent) 90%, black 10%)",
+			"--button-fg": "var(--primary)",
+			"--button-fg-hover": "var(--primary)",
+		};
+	}
+
+	if (mode === "resolve-conflicts" && state !== "disabled") {
+		return {
+			"--button-border": "transparent",
+			"--button-divider":
+				"color-mix(in oklch, var(--primary-foreground) 22%, transparent)",
+			"--button-bg": "var(--primary)",
+			"--button-bg-hover": "color-mix(in oklch, var(--primary) 90%, black 10%)",
+			"--button-fg": "var(--primary-foreground)",
+			"--button-fg-hover": "var(--primary-foreground)",
+		};
+	}
+
+	if (mode === "fix" && state !== "disabled") {
+		return {
+			"--button-border": "transparent",
+			"--button-divider": "rgb(255 255 255 / 0.16)",
+			"--button-bg": "var(--workspace-pr-closed-accent)",
+			"--button-bg-hover":
+				"color-mix(in oklch, var(--workspace-pr-closed-accent) 90%, black 10%)",
+			"--button-fg": "var(--primary)",
+			"--button-fg-hover": "var(--primary)",
+		};
+	}
+
+	if (mode === "open-pr" && state !== "disabled") {
+		return {
+			"--button-border": "transparent",
+			"--button-divider":
+				"color-mix(in oklch, var(--primary-foreground) 22%, transparent)",
+			"--button-bg": "var(--primary)",
+			"--button-bg-hover": "color-mix(in oklch, var(--primary) 90%, black 10%)",
+			"--button-fg": "var(--primary-foreground)",
+			"--button-fg-hover": "var(--primary-foreground)",
+		};
+	}
+
+	if (mode === "commit-and-push" && state !== "disabled") {
+		return {
+			"--button-border": "transparent",
+			"--button-divider":
+				"color-mix(in oklch, var(--primary-foreground) 22%, transparent)",
+			"--button-bg": "var(--primary)",
+			"--button-bg-hover": "color-mix(in oklch, var(--primary) 90%, black 10%)",
+			"--button-fg": "var(--primary-foreground)",
+			"--button-fg-hover": "var(--primary-foreground)",
 		};
 	}
 
@@ -256,7 +308,6 @@ function getButtonColorVars(
 			"--button-fg-hover": "var(--muted-foreground)",
 		};
 	}
-	if (mode === "closed") return semanticButtonVars("closed", "ghost");
 
 	if (mode === "fix") return semanticButtonVars("danger", "filled");
 	if (mode === "resolve-conflicts")
@@ -272,22 +323,20 @@ function getButtonColorVars(
 function getModeIcon(mode: WorkspaceCommitButtonMode) {
 	switch (mode) {
 		case "create-pr":
-			return <GitPullRequestIcon size={11} className={BUTTON_ICON_CLASS} />;
+			return null;
 		case "commit-and-push":
-			return <UploadIcon size={11} className={BUTTON_ICON_CLASS} />;
+			return null;
 		case "fix":
-			return <XCircleFillIcon size={11} className={BUTTON_ICON_CLASS} />;
+			return null;
 		case "resolve-conflicts":
-			return <AlertIcon size={11} className={BUTTON_ICON_CLASS} />;
+			return null;
 		case "merge":
 		case "merged":
-			return <GitMergeIcon size={11} className={BUTTON_ICON_CLASS} />;
+			return null;
 		case "open-pr":
-			return <ArrowUpRightIcon size={11} className={BUTTON_ICON_CLASS} />;
+			return null;
 		case "closed":
-			return (
-				<GitPullRequestClosedIcon size={11} className={BUTTON_ICON_CLASS} />
-			);
+			return null;
 	}
 }
 
@@ -410,7 +459,7 @@ export function WorkspaceCommitButton({
 				onClick={() => runAction(onCommit)}
 				className={cn(
 					BUTTON_STYLE,
-					"min-w-0 cursor-pointer gap-1 rounded-[3px] border-0 bg-transparent px-1.5 text-[var(--button-fg)] shadow-none hover:bg-[var(--button-bg-hover)] hover:text-[var(--button-fg-hover)]",
+					"min-w-0 cursor-pointer gap-1 rounded-[3px] border-0 bg-transparent px-1.5 text-[var(--button-fg)] shadow-none outline-none hover:bg-[var(--button-bg-hover)] hover:text-[var(--button-fg-hover)] focus-visible:border-transparent focus-visible:ring-0 disabled:opacity-100",
 					(isBusy || isGhostMode) && "pointer-events-none",
 				)}
 			>
@@ -430,7 +479,7 @@ export function WorkspaceCommitButton({
 						}
 						className={cn(
 							BUTTON_STYLE,
-							"flex min-w-5 cursor-pointer items-center justify-center self-stretch rounded-[3px] border-0 bg-transparent px-0 leading-none text-[var(--button-fg)] shadow-none hover:bg-[var(--button-bg-hover)] hover:text-[var(--button-fg-hover)]",
+							"flex min-w-5 cursor-pointer items-center justify-center self-stretch rounded-[3px] border-0 bg-transparent px-0 leading-none text-[var(--button-fg)] shadow-none outline-none hover:bg-[var(--button-bg-hover)] hover:text-[var(--button-fg-hover)] focus-visible:border-transparent focus-visible:ring-0 disabled:opacity-100",
 							isBusy && "pointer-events-none",
 						)}
 					>

@@ -540,11 +540,6 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 							)}
 						</>
 					) : null}
-					{workspace?.state === "archived" ? (
-						<span className="px-1 py-0.5 font-medium text-muted-foreground">
-							Archived
-						</span>
-					) : null}
 				</div>
 				{headerActions ? (
 					<div className="flex shrink-0 items-center gap-1">

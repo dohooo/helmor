@@ -51,6 +51,11 @@ export default defineConfig(async () => ({
 			// already tree-shake to only the icons we actually use.
 			"lucide-react",
 		],
+		// Lexical's package graph produces many transient dev-only chunks.
+		// When Vite re-optimizes mid-session after a lockfile check, those
+		// generated chunk names can drift and leave stale references behind.
+		// Excluding Lexical avoids the broken half-optimized cache state.
+		exclude: ["lexical", "@lexical/react"],
 	},
 
 	// Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

@@ -217,23 +217,24 @@ export function ChangesSection({
 				className={cn(INSPECTOR_SECTION_HEADER_CLASS, gitHeaderHighlightClass)}
 			>
 				<div className="flex min-w-0 items-center gap-1.5">
-					<span className={INSPECTOR_SECTION_TITLE_CLASS}>Git</span>
+					{!prInfo ? (
+						<span className={INSPECTOR_SECTION_TITLE_CLASS}>Git</span>
+					) : null}
 					{prInfo && (
 						<Button
 							type="button"
-							variant="outline"
-							size="xs"
+							variant="link"
+							className={cn(
+								"h-9 self-center rounded-none px-0 py-0 pt-[4px] text-[11px] font-semibold leading-none tracking-[0.01em] no-underline",
+								prInfo.isMerged
+									? "text-primary hover:text-primary"
+									: prInfo.state === "OPEN"
+										? "text-[var(--workspace-pr-open-accent)] hover:text-[var(--workspace-pr-open-accent)]"
+										: "text-muted-foreground hover:text-foreground",
+							)}
 							onClick={() => {
 								void openUrl(prInfo.url);
 							}}
-							className={cn(
-								"h-5.5 gap-0.5 rounded-[3px] px-2 text-[11px] font-semibold leading-none tracking-[0.01em]",
-								prInfo.isMerged
-									? "border-[#8957E5]/45 bg-transparent text-[#8957E5] hover:border-[#8957E5]/65 hover:text-[#8957E5]"
-									: prInfo.state === "OPEN"
-										? "border-[rgb(22_163_74)]/55 text-[rgb(22_163_74)] hover:border-[rgb(22_163_74)]/70 hover:text-[rgb(22_163_74)]"
-										: "border-border/60 text-muted-foreground hover:border-border hover:text-foreground",
-							)}
 						>
 							PR #{prInfo.number}
 						</Button>

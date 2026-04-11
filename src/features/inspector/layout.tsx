@@ -10,7 +10,7 @@ export const TABS_ANIMATION_MS = 350;
 export const TABS_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 
 export const INSPECTOR_SECTION_HEADER_CLASS =
-	"flex h-9 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-muted/25 px-3";
+	"flex h-8 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-muted/25 px-3 pt-[2px]";
 export const INSPECTOR_SECTION_TITLE_CLASS =
 	"inline-flex h-9 items-center text-[13px] font-medium tracking-[-0.01em] leading-none text-muted-foreground";
 
@@ -19,11 +19,17 @@ export function getGitSectionHeaderHighlightClass(
 ) {
 	switch (mode) {
 		case "fix":
-			return "bg-[color-mix(in_oklch,var(--destructive)_14%,var(--background)_86%)]";
+			return "bg-[var(--workspace-pr-closed-header-bg)]";
 		case "resolve-conflicts":
-			return "bg-[color-mix(in_oklch,var(--chart-4)_14%,var(--background)_86%)]";
+			return null;
+		case "open-pr":
+			return null;
 		case "merge":
-			return "bg-[color-mix(in_oklch,var(--chart-2)_18%,var(--background)_82%)]";
+			return "bg-[var(--workspace-pr-open-header-bg)]";
+		case "merged":
+			return "bg-[var(--workspace-pr-merged-header-bg)]";
+		case "closed":
+			return "bg-[var(--workspace-pr-closed-header-bg)]";
 		default:
 			return null;
 	}
