@@ -5,7 +5,7 @@
  * stdin/stdout JSON Lines protocol. Requests come in via stdin, responses
  * and streaming events go out via stdout. stderr is for debug logging.
  *
- * Set HELMOR_SIDECAR_DEBUG=1 for verbose logging.
+ * Log level controlled by HELMOR_LOG (debug|info|error), defaults to info.
  */
 
 import { createInterface } from "node:readline";

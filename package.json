@@ -6,7 +6,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "tauri dev",
-		"dev:analyze": "VITE_HELMOR_PERF_HUD=1 HELMOR_SIDECAR_DEBUG=1 tauri dev",
+		"dev:analyze": "VITE_HELMOR_PERF_HUD=1 tauri dev",
 		"build": "tsc && vite build",
 		"preview": "vite preview",
 		"test": "pnpm run test:frontend && pnpm run test:sidecar && pnpm run test:rust",
@@ -21,7 +21,6 @@
 		"test:watch": "vitest",
 		"typecheck": "tsc --noEmit && cd sidecar && bunx tsc --noEmit",
 		"tauri": "tauri",
-		"tauri:debug": "HELMOR_SIDECAR_DEBUG=1 tauri dev",
 		"lint": "biome check . --config-path=./biome.json && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
 		"lint:fix": "biome check . --write --config-path=./biome.json && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --fix --allow-dirty -- -D warnings && cargo fmt --manifest-path src-tauri/Cargo.toml --all",
 		"dev:cli": "cd src-tauri && cargo run --bin helmor-cli --",

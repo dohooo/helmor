@@ -11,7 +11,7 @@ Helmor is a local-first desktop app built with **Tauri v2** (Rust backend) + **R
 ```bash
 pnpm install                 # Install dependencies (pnpm 10+, enforced via packageManager). Also runs `bun install` in sidecar/ via postinstall.
 pnpm run dev                 # Full desktop app: Tauri + Vite (webview served at localhost:1420 inside the app window)
-pnpm run dev:analyze         # Same as dev, with VITE_HELMOR_PERF_HUD=1 + HELMOR_SIDECAR_DEBUG=1 (perf HUD + sidecar trace)
+pnpm run dev:analyze         # Same as dev, with VITE_HELMOR_PERF_HUD=1 (perf HUD)
 pnpm run build               # tsc + vite build (frontend bundle to dist/)
 pnpm run typecheck           # tsc --noEmit for frontend AND sidecar (both must pass)
 pnpm run lint                # biome check . + cargo clippy -- -D warnings
@@ -158,7 +158,8 @@ When a snapshot drifts: stop. Look at the diff. Decide whether the new shape is 
 - **macOS window chrome**: Overlay title bar with traffic lights at (16, 24). Drag region via `data-tauri-drag-region`.
 - **Serde convention**: Rust structs use `#[serde(rename_all = "camelCase")]` so JSON fields match TypeScript types directly.
 - **Rust clippy**: All Rust code must pass `cargo clippy --all-targets -- -D warnings` with zero warnings. Run clippy before committing any Rust changes — `lint-staged` enforces it on `*.rs` pre-commit along with `cargo fmt`.
-- **Performance instrumentation**: `VITE_HELMOR_PERF_HUD=1` enables the in-app perf HUD + `react-scan` + long-frame tracker in `src/lib/dev-*`. `HELMOR_SIDECAR_DEBUG=1` makes the sidecar log every event. Use `pnpm run dev:analyze` to turn both on at once. Perf notes and reproducers live in `docs/perf/`.
+- **Performance instrumentation**: `VITE_HELMOR_PERF_HUD=1` enables the in-app perf HUD + `react-scan` + long-frame tracker in `src/lib/dev-*`. Use `pnpm run dev:analyze` to turn it on. Perf notes and reproducers live in `docs/perf/`.
+- **Logging**: Dev builds default to `debug` level (both Rust and sidecar). Override with `HELMOR_LOG=info|debug|error`. Structured JSON logs are written to `{data_dir}/logs/`. See `src-tauri/src/logging.rs`.
 
 ## Debugging (Tauri MCP only)
 
@@ -181,7 +182,7 @@ When a snapshot drifts: stop. Look at the diff. Decide whether the new shape is 
 - **Emit a test event into the app** — `ipc_emit_event eventName=... payload=...`. Exercises frontend event handlers in isolation without scripting a full user flow.
 - **Wait for async sidecar / agent streaming** — `webview_wait_for type=ipc-event value=<event-name>`. The only way to await Tauri-native events like agent stream progress, `turn.completed`, or the pipeline's collapse output. DOM-only waits will miss them because streaming events land in state, not only in the DOM.
 - **Read webview console logs** — `read_logs source=console lines=200 filter=<regex>`. Replaces opening DevTools. Essential when tracing `src/lib/dev-*` perf instrumentation (long-frame tracker, react-scan, render debug) or any warning from `message-layout-estimator`.
-- **Read Rust + sidecar logs** — `read_logs source=system filter=helmor`. Captures Rust `eprintln!` and sidecar stdout/stderr. Pair with `HELMOR_SIDECAR_DEBUG=1` (via `pnpm run dev:analyze`) when diagnosing sidecar lifecycle (spawn, graceful SIGTERM, crash), or when verifying which SDK events the sidecar is actually forwarding.
+- **Read Rust + sidecar logs** — `read_logs source=system filter=helmor`. Captures Rust tracing output and sidecar stderr. Dev builds log at `debug` level by default. Structured JSONL logs are also written to `{data_dir}/logs/` for post-hoc analysis.
 - **Evaluate a JS expression in the webview** — `webview_execute_js script="(() => <expr>)()"`. **Must be an IIFE**; return value must be JSON-serializable; `window.__TAURI__` is available. Useful for measuring `use-stick-to-bottom` scroll offsets, reading CSS custom properties, or sampling `performance.now()` around a suspected hot path. **Not** useful for reading React state — state lives inside `App.tsx` closures and is not exposed to the JS context.
 - **Inspect computed styles** — `webview_get_styles selector=... properties=[...]`. Pass `multiple=true` to check a batch. Cheaper than full DOM snapshots when triaging a CSS regression (Tailwind token collisions, oklch color drift, unexpected flex gap/overflow).
 - **Ask the user to point at an element** — when a layout or pixel issue is hard to describe in words, call `webview_select_element` to pop an overlay picker, or have the user Alt+Shift+Click the element and then call `webview_get_pointed_element`. Both return rich element metadata (tag, classes, attributes, bounding rect, CSS selector, computed styles, parent chain) plus an annotated screenshot. Faster than a back-and-forth "which element do you mean".
@@ -194,6 +195,6 @@ When a snapshot drifts: stop. Look at the diff. Decide whether the new shape is 
 - **Multi-window scenarios.** All tools default to `windowId=main`. Explicitly pass `windowId` for modals, settings dialogs, or any secondary window. Use `manage_window action=list` to discover labels.
 - **`webview_execute_js` cannot see React state.** The app owns state via `useState` inside `App.tsx` closures and never exposes it to `window`. Observe state indirectly via DOM snapshots plus `ipc_monitor`, or add a temporary `window.__helmor_probe = ...` assignment if you really need introspection.
 - **`ipc_monitor` is sticky.** A running monitor keeps collecting between tool calls and across scenarios. Stop it explicitly when you finish a reproduction, or `ipc_get_captured` results will be contaminated.
-- **Tauri MCP does not see HTTP/WebSocket traffic from the sidecar's SDK calls.** It only captures Tauri IPC (frontend ↔ Rust). For sidecar ↔ Claude/Codex SDK traffic, rely on `read_logs source=system` with `HELMOR_SIDECAR_DEBUG=1`, or add temporary logging in `sidecar/src/`.
+- **Tauri MCP does not see HTTP/WebSocket traffic from the sidecar's SDK calls.** It only captures Tauri IPC (frontend ↔ Rust). For sidecar ↔ Claude/Codex SDK traffic, check the structured JSONL logs in `{data_dir}/logs/sidecar-debug.*.jsonl`, or add temporary logging in `sidecar/src/`.
 - **Ref IDs are per-snapshot.** A `ref=e3` returned by one `webview_dom_snapshot` call is not guaranteed to point at the same element after a re-render. Re-snapshot after any UI state change.
 - **`list_devices` is for Tauri mobile (Android/iOS).** Helmor is desktop-only — ignore it.

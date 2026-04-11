@@ -10,7 +10,7 @@
  * (see src-tauri/src/logging.rs). The sidecar is a short-lived child process
  * and only needs to append.
  *
- * In dev (HELMOR_SIDECAR_DEBUG=1), also writes human-readable lines to stderr.
+ * In dev (HELMOR_LOG=debug), also writes human-readable lines to stderr.
  * stdout is NEVER touched — it is the exclusive JSON protocol channel.
  *
  * NOTE: We intentionally avoid pino/winston because `bun build --compile`
@@ -33,11 +33,15 @@ class Logger {
 	private devStderr: boolean;
 
 	constructor() {
-		const debug =
-			process.env.HELMOR_SIDECAR_DEBUG === "1" ||
-			process.env.HELMOR_SIDECAR_DEBUG === "true";
-		this.minLevel = debug ? LEVELS.debug : LEVELS.info;
-		this.devStderr = debug;
+		const envLevel = process.env.HELMOR_LOG?.toLowerCase();
+		const level: Level =
+			envLevel === "debug" || envLevel === "trace"
+				? "debug"
+				: envLevel === "error"
+					? "error"
+					: "info";
+		this.minLevel = LEVELS[level];
+		this.devStderr = level === "debug";
 
 		const logDir = process.env.HELMOR_LOG_DIR;
 		if (logDir) {

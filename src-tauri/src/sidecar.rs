@@ -99,15 +99,14 @@ impl SidecarProcess {
             cmd.process_group(0);
         }
 
-        // Pass log dir + debug flag to the sidecar process
+        // Pass log config to the sidecar process
         if let Ok(dir) = crate::data_dir::logs_dir() {
             cmd.env("HELMOR_LOG_DIR", dir);
         }
-        if std::env::var("HELMOR_SIDECAR_DEBUG")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-        {
-            cmd.env("HELMOR_SIDECAR_DEBUG", "1");
+        if let Ok(level) = std::env::var("HELMOR_LOG") {
+            cmd.env("HELMOR_LOG", level);
+        } else if crate::data_dir::is_dev() {
+            cmd.env("HELMOR_LOG", "debug");
         }
 
         tracing::debug!(
