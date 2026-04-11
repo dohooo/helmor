@@ -7,9 +7,7 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
-use rusqlite::Row;
-
-use super::workspaces::WorkspaceRecord;
+use crate::models::workspaces::WorkspaceRecord;
 
 // ---- Display / naming helpers ----
 
@@ -442,7 +440,7 @@ pub const WORKSPACE_NAMES: &[&str] = &[
 
 pub fn branch_name_for_directory(
     directory_name: &str,
-    settings: &super::settings::BranchPrefixSettings,
+    settings: &crate::settings::BranchPrefixSettings,
 ) -> String {
     let prefix_type = settings
         .branch_prefix_type
@@ -473,7 +471,7 @@ pub fn branch_name_for_directory(
 
 /// Read the GitHub login from the stored identity metadata.
 fn resolve_github_login() -> Result<Option<String>> {
-    let raw = super::settings::load_setting_value("github_identity_meta")?;
+    let raw = crate::settings::load_setting_value("github_identity_meta")?;
     let raw = match raw {
         Some(v) => v,
         None => return Ok(None),
@@ -483,7 +481,7 @@ fn resolve_github_login() -> Result<Option<String>> {
 }
 
 pub fn allocate_directory_name_for_repo(repo_id: &str) -> Result<String> {
-    let connection = super::db::open_connection(false)?;
+    let connection = crate::db::open_connection(false)?;
     allocate_directory_name_with_conn(&connection, repo_id)
 }
 
@@ -555,43 +553,6 @@ pub fn attachment_prefix(path: &Path) -> String {
         prefix.push('/');
     }
     prefix
-}
-
-// ---- Row mapper ----
-
-pub fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord> {
-    Ok(WorkspaceRecord {
-        id: row.get(0)?,
-        repo_id: row.get(1)?,
-        repo_name: row.get(2)?,
-        remote_url: row.get(3)?,
-        default_branch: row.get(4)?,
-        root_path: row.get(5)?,
-        directory_name: row.get(6)?,
-        state: row.get(7)?,
-        has_unread: row.get::<_, i64>(8)? != 0,
-        workspace_unread: row.get(9)?,
-        session_unread_total: row.get(10)?,
-        unread_session_count: row.get(11)?,
-        derived_status: row.get(12)?,
-        manual_status: row.get(13)?,
-        branch: row.get(14)?,
-        initialization_parent_branch: row.get(15)?,
-        intended_target_branch: row.get(16)?,
-        notes: row.get(17)?,
-        pinned_at: row.get(18)?,
-        active_session_id: row.get(19)?,
-        active_session_title: row.get(20)?,
-        active_session_agent_type: row.get(21)?,
-        active_session_status: row.get(22)?,
-        pr_title: row.get(23)?,
-        pr_description: row.get(24)?,
-        archive_commit: row.get(25)?,
-        session_count: row.get(26)?,
-        message_count: row.get(27)?,
-        attachment_count: row.get(28)?,
-        remote: row.get(29)?,
-    })
 }
 
 #[cfg(test)]

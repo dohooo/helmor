@@ -1,7 +1,7 @@
 //! Public service facade for non-Tauri consumers (e.g. `helmorctl`).
 //!
-//! Re-exports domain types and functions from the private `models` module
-//! so that `[[bin]]` targets can use them without making `models` public.
+//! Re-exports domain types and functions from the core backend modules so
+//! that `[[bin]]` targets can use them without going through Tauri commands.
 
 use std::time::Duration;
 
@@ -13,19 +13,20 @@ use uuid::Uuid;
 
 // ---- Types ----
 
-pub use crate::models::repos::{AddRepositoryResponse, RepositoryCreateOption};
-pub use crate::models::sessions::{CreateSessionResponse, WorkspaceSessionSummary};
-pub use crate::models::workspaces::{
+pub use crate::commands::DataInfo;
+pub use crate::repos::{AddRepositoryResponse, RepositoryCreateOption};
+pub use crate::sessions::{CreateSessionResponse, WorkspaceSessionSummary};
+pub use crate::workspaces::{
     CreateWorkspaceResponse, WorkspaceDetail, WorkspaceSidebarGroup, WorkspaceSidebarRow,
 };
-pub use crate::models::DataInfo;
 
 // ---- Domain functions ----
 
-pub use crate::models::repos::{add_repository_from_local_path, list_repositories};
-pub use crate::models::sessions::{create_session, list_workspace_sessions};
-pub use crate::models::workspaces::{
-    create_workspace_from_repo_impl, get_workspace, list_workspace_groups, load_workspace_records,
+pub use crate::models::workspaces::load_workspace_records;
+pub use crate::repos::{add_repository_from_local_path, list_repositories};
+pub use crate::sessions::{create_session, list_workspace_sessions};
+pub use crate::workspaces::{
+    create_workspace_from_repo_impl, get_workspace, list_workspace_groups,
 };
 
 /// Build [`DataInfo`] without needing a Tauri runtime.

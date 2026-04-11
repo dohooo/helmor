@@ -10,7 +10,7 @@ use std::thread;
 use std::time::Duration as StdDuration;
 use tauri::{AppHandle, Emitter};
 
-use super::settings;
+use crate::settings;
 
 const GITHUB_IDENTITY_META_KEY: &str = "github_identity_meta";
 const DEV_IDENTITY_SECRET_KEY: &str = "github_identity_secret";

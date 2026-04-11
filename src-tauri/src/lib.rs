@@ -1,15 +1,31 @@
 pub mod agents;
+pub(crate) mod commands;
 pub mod data_dir;
 pub mod error;
-pub mod git_watcher;
+pub mod git;
+pub mod github;
 mod import;
 pub mod logging;
 pub mod mcp;
-mod models;
+pub mod models;
 pub mod pipeline;
 mod schema;
 pub mod service;
 pub mod sidecar;
+pub mod workspace;
+
+pub use git::ops as git_ops;
+pub use git::watcher as git_watcher;
+pub use github::auth;
+pub use github::cli as github_cli;
+pub use github::graphql as github_graphql;
+pub use models::db;
+pub use models::repos;
+pub use models::sessions;
+pub use models::settings;
+pub use workspace::files as editor_files;
+pub use workspace::helpers;
+pub use workspace::workspaces;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::path::BaseDirectory;
@@ -99,7 +115,7 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
 
     let app = builder
-        .manage(models::auth::GithubIdentityFlowRuntime::default())
+        .manage(auth::GithubIdentityFlowRuntime::default())
         .manage(sidecar::ManagedSidecar::new())
         .manage(agents::ActiveStreams::new())
         .manage(git_watcher::GitWatcherManager::new())
@@ -166,83 +182,83 @@ pub fn run() {
             agents::respond_to_permission_request,
             agents::generate_session_title,
             agents::list_slash_commands,
-            models::archive_workspace,
-            models::validate_archive_workspace,
-            models::validate_restore_workspace,
-            models::cancel_github_identity_connect,
-            models::create_workspace_from_repo,
-            models::disconnect_github_identity,
-            models::get_add_repository_defaults,
-            models::get_app_settings,
-            models::get_cli_status,
-            models::get_data_info,
-            models::install_cli,
-            models::get_github_cli_status,
-            models::get_github_cli_user,
-            models::get_github_identity_session,
-            models::get_workspace,
-            models::add_repository_from_local_path,
-            models::list_github_accessible_repositories,
-            models::list_archived_workspaces,
-            models::list_repositories,
-            models::update_repository_default_branch,
-            models::update_repository_remote,
-            models::list_repo_remotes,
-            models::list_session_attachments,
-            models::list_session_thread_messages,
-            models::list_workspace_groups,
-            models::list_workspace_sessions,
-            models::create_session,
-            models::rename_session,
-            models::hide_session,
-            models::unhide_session,
-            models::delete_session,
-            models::list_hidden_sessions,
-            models::mark_session_read,
-            models::list_remote_branches,
-            models::rename_workspace_branch,
-            models::update_intended_target_branch,
-            models::prefetch_remote_refs,
-            models::mark_workspace_read,
-            models::mark_workspace_unread,
-            models::pin_workspace,
-            models::unpin_workspace,
-            models::list_editor_files,
-            models::list_editor_files_with_content,
-            models::list_workspace_files,
-            models::list_workspace_changes,
-            models::list_workspace_changes_with_content,
-            models::discard_workspace_file,
-            models::stage_workspace_file,
-            models::unstage_workspace_file,
-            models::get_workspace_git_action_status,
-            models::lookup_workspace_pr,
-            models::get_workspace_pr_action_status,
-            models::get_workspace_pr_check_insert_text,
-            models::merge_workspace_pr,
-            models::close_workspace_pr,
-            models::drain_pending_cli_sends,
-            models::read_editor_file,
-            models::set_workspace_manual_status,
-            models::detect_installed_editors,
-            models::open_workspace_in_editor,
-            models::permanently_delete_workspace,
-            models::restore_workspace,
-            models::stat_editor_file,
-            models::start_github_identity_connect,
-            models::start_github_oauth_redirect,
-            models::conductor_source_available,
-            models::list_conductor_repos,
-            models::list_conductor_workspaces,
-            models::import_conductor_workspaces,
-            models::save_pasted_image,
-            models::update_app_settings,
-            models::update_session_settings,
-            models::load_auto_close_action_kinds,
-            models::save_auto_close_action_kinds,
-            models::load_auto_close_opt_in_asked,
-            models::save_auto_close_opt_in_asked,
-            models::write_editor_file
+            commands::workspace_commands::archive_workspace,
+            commands::workspace_commands::validate_archive_workspace,
+            commands::workspace_commands::validate_restore_workspace,
+            commands::github_commands::cancel_github_identity_connect,
+            commands::workspace_commands::create_workspace_from_repo,
+            commands::github_commands::disconnect_github_identity,
+            commands::repository_commands::get_add_repository_defaults,
+            commands::settings_commands::get_app_settings,
+            commands::system_commands::get_cli_status,
+            commands::system_commands::get_data_info,
+            commands::system_commands::install_cli,
+            commands::github_commands::get_github_cli_status,
+            commands::github_commands::get_github_cli_user,
+            commands::github_commands::get_github_identity_session,
+            commands::workspace_commands::get_workspace,
+            commands::repository_commands::add_repository_from_local_path,
+            commands::github_commands::list_github_accessible_repositories,
+            commands::workspace_commands::list_archived_workspaces,
+            commands::repository_commands::list_repositories,
+            commands::repository_commands::update_repository_default_branch,
+            commands::repository_commands::update_repository_remote,
+            commands::repository_commands::list_repo_remotes,
+            commands::session_commands::list_session_attachments,
+            commands::session_commands::list_session_thread_messages,
+            commands::workspace_commands::list_workspace_groups,
+            commands::session_commands::list_workspace_sessions,
+            commands::session_commands::create_session,
+            commands::session_commands::rename_session,
+            commands::session_commands::hide_session,
+            commands::session_commands::unhide_session,
+            commands::session_commands::delete_session,
+            commands::session_commands::list_hidden_sessions,
+            commands::session_commands::mark_session_read,
+            commands::workspace_commands::list_remote_branches,
+            commands::workspace_commands::rename_workspace_branch,
+            commands::workspace_commands::update_intended_target_branch,
+            commands::workspace_commands::prefetch_remote_refs,
+            commands::workspace_commands::mark_workspace_read,
+            commands::workspace_commands::mark_workspace_unread,
+            commands::workspace_commands::pin_workspace,
+            commands::workspace_commands::unpin_workspace,
+            commands::editor_commands::list_editor_files,
+            commands::editor_commands::list_editor_files_with_content,
+            commands::editor_commands::list_workspace_files,
+            commands::editor_commands::list_workspace_changes,
+            commands::editor_commands::list_workspace_changes_with_content,
+            commands::editor_commands::discard_workspace_file,
+            commands::editor_commands::stage_workspace_file,
+            commands::editor_commands::unstage_workspace_file,
+            commands::editor_commands::get_workspace_git_action_status,
+            commands::github_commands::lookup_workspace_pr,
+            commands::github_commands::get_workspace_pr_action_status,
+            commands::github_commands::get_workspace_pr_check_insert_text,
+            commands::github_commands::merge_workspace_pr,
+            commands::github_commands::close_workspace_pr,
+            commands::system_commands::drain_pending_cli_sends,
+            commands::editor_commands::read_editor_file,
+            commands::workspace_commands::set_workspace_manual_status,
+            commands::system_commands::detect_installed_editors,
+            commands::system_commands::open_workspace_in_editor,
+            commands::workspace_commands::permanently_delete_workspace,
+            commands::workspace_commands::restore_workspace,
+            commands::editor_commands::stat_editor_file,
+            commands::github_commands::start_github_identity_connect,
+            commands::github_commands::start_github_oauth_redirect,
+            commands::conductor_commands::conductor_source_available,
+            commands::conductor_commands::list_conductor_repos,
+            commands::conductor_commands::list_conductor_workspaces,
+            commands::conductor_commands::import_conductor_workspaces,
+            commands::system_commands::save_pasted_image,
+            commands::settings_commands::update_app_settings,
+            commands::session_commands::update_session_settings,
+            commands::settings_commands::load_auto_close_action_kinds,
+            commands::settings_commands::save_auto_close_action_kinds,
+            commands::settings_commands::load_auto_close_opt_in_asked,
+            commands::settings_commands::save_auto_close_opt_in_asked,
+            commands::editor_commands::write_editor_file
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

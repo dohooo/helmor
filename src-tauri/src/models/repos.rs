@@ -6,7 +6,9 @@ use std::{
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 
-use super::{db, git_ops, helpers};
+use crate::{git_ops, helpers};
+
+use super::db;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -479,13 +481,13 @@ pub fn add_repository_from_local_path(folder_path: &str) -> Result<AddRepository
         load_repository_by_root_path(&resolved_repository.normalized_root_path)?;
 
     if let Some(last_clone_directory) = last_clone_directory.as_deref() {
-        super::settings::upsert_setting_value("last_clone_directory", last_clone_directory)
+        crate::settings::upsert_setting_value("last_clone_directory", last_clone_directory)
             .map_err(|e| anyhow::anyhow!(e))?;
     }
 
     if let Some(repository) = existing_repository {
         if let Some((selected_workspace_id, selected_workspace_state)) =
-            super::workspaces::select_visible_workspace_for_repo(&repository.id)
+            crate::workspaces::select_visible_workspace_for_repo(&repository.id)
                 .map_err(|e| anyhow::anyhow!(e))?
         {
             return Ok(AddRepositoryResponse {
@@ -497,7 +499,7 @@ pub fn add_repository_from_local_path(folder_path: &str) -> Result<AddRepository
             });
         }
 
-        let create_response = super::workspaces::create_workspace_from_repo_impl(&repository.id)
+        let create_response = crate::workspaces::create_workspace_from_repo_impl(&repository.id)
             .map_err(|error| {
                 anyhow::anyhow!("Repository already exists, but workspace create failed: {error}")
             })?;
@@ -513,7 +515,7 @@ pub fn add_repository_from_local_path(folder_path: &str) -> Result<AddRepository
 
     let repository_id = insert_repository(&resolved_repository)
         .with_context(|| format!("Failed to persist repository {}", resolved_repository.name))?;
-    let create_result = super::workspaces::create_workspace_from_repo_impl(&repository_id);
+    let create_result = crate::workspaces::create_workspace_from_repo_impl(&repository_id);
 
     match create_result {
         Ok(create_response) => Ok(AddRepositoryResponse {

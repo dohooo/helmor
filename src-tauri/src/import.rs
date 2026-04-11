@@ -9,7 +9,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
 
-use crate::models::{git_ops, helpers};
+use crate::{git_ops, helpers};
 
 // ---------------------------------------------------------------------------
 // Public types

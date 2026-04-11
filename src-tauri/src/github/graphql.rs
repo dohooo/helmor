@@ -13,7 +13,7 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::{auth, workspaces};
+use crate::{auth, models::workspaces as workspace_models};
 
 /// A single pull request surfaced to the frontend.
 #[derive(Debug, Clone, Serialize)]
@@ -145,7 +145,7 @@ impl WorkspacePrActionStatus {
 ///   - `Err(_)` only for unexpected transport / parse failures (so the caller
 ///     can surface a distinct "something went wrong" state).
 pub fn lookup_workspace_pr(workspace_id: &str) -> Result<Option<PullRequestInfo>> {
-    let Some(record) = workspaces::load_workspace_record_by_id(workspace_id)? else {
+    let Some(record) = workspace_models::load_workspace_record_by_id(workspace_id)? else {
         bail!("Workspace not found: {workspace_id}");
     };
 
@@ -272,7 +272,7 @@ query($owner: String!, $name: String!, $head: String!) {
 /// bubbling as command errors. That keeps the local Git rows usable even when
 /// remote status cannot be queried.
 pub fn lookup_workspace_pr_action_status(workspace_id: &str) -> Result<WorkspacePrActionStatus> {
-    let Some(record) = workspaces::load_workspace_record_by_id(workspace_id)? else {
+    let Some(record) = workspace_models::load_workspace_record_by_id(workspace_id)? else {
         bail!("Workspace not found: {workspace_id}");
     };
 
@@ -308,7 +308,7 @@ pub fn lookup_workspace_pr_action_status(workspace_id: &str) -> Result<Workspace
 }
 
 pub fn lookup_workspace_pr_check_insert_text(workspace_id: &str, item_id: &str) -> Result<String> {
-    let Some(record) = workspaces::load_workspace_record_by_id(workspace_id)? else {
+    let Some(record) = workspace_models::load_workspace_record_by_id(workspace_id)? else {
         bail!("Workspace not found: {workspace_id}");
     };
 
@@ -540,7 +540,7 @@ pub fn merge_workspace_pr(workspace_id: &str) -> Result<Option<PullRequestInfo>>
     };
 
     // We need the PR's GraphQL node ID. Re-query with node ID included.
-    let Some(record) = workspaces::load_workspace_record_by_id(workspace_id)? else {
+    let Some(record) = workspace_models::load_workspace_record_by_id(workspace_id)? else {
         bail!("Workspace not found: {workspace_id}");
     };
     let Some(remote_url) = record.remote_url.as_deref() else {
@@ -650,7 +650,7 @@ pub fn close_workspace_pr(workspace_id: &str) -> Result<Option<PullRequestInfo>>
         return Ok(None);
     };
 
-    let Some(record) = workspaces::load_workspace_record_by_id(workspace_id)? else {
+    let Some(record) = workspace_models::load_workspace_record_by_id(workspace_id)? else {
         bail!("Workspace not found: {workspace_id}");
     };
     let Some(remote_url) = record.remote_url.as_deref() else {
