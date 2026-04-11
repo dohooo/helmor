@@ -261,7 +261,8 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 				],
 			}),
 		);
-		const longCheckOutput = "const failure = true;\n".repeat(12);
+		// 22 chars per line × 25 = 550 chars, above the composer preview threshold (500).
+		const longCheckOutput = "const failure = true;\n".repeat(25);
 		apiMocks.getWorkspacePrCheckInsertText.mockResolvedValue(longCheckOutput);
 
 		renderWithProviders(

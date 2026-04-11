@@ -33,7 +33,7 @@ vi.mock("@/components/terminal-output", () => ({
 
 const defaults = {
 	repoId: "repo-1",
-	workspaceId: "ws-1",
+	workspaceId: "ws-1" as string | null,
 	workspaceState: "ready" as string | null,
 	setupScript: "echo hello" as string | null,
 	scriptsLoaded: true,
@@ -190,10 +190,10 @@ describe("SetupTab", () => {
 
 	it("does not auto-complete if workspaceId is null", () => {
 		renderSetup({
+			workspaceId: null,
 			workspaceState: "setup_pending",
 			setupScript: null,
 			scriptsLoaded: true,
-			workspaceId: null,
 		});
 
 		expect(apiMocks.completeWorkspaceSetup).not.toHaveBeenCalled();
