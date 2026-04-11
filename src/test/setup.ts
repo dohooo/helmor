@@ -85,6 +85,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 				return [];
 			case "conductor_source_available":
 				return false;
+			case "detect_installed_editors":
+				return [];
 			default:
 				return undefined;
 		}

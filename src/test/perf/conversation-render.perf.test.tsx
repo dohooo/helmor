@@ -69,6 +69,7 @@ if (typeof window !== "undefined") {
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterAll, beforeAll, describe, it, vi } from "vitest";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
 	ExtendedMessagePart,
 	ThreadMessageLike,
@@ -285,24 +286,26 @@ describe("conversation render perf", () => {
 			sending: boolean;
 		}) => (
 			<QueryClientProvider client={queryClient}>
-				<WorkspacePanel
-					workspace={workspace}
-					sessions={sessions}
-					selectedSessionId={params.selectedSessionId}
-					selectedProvider="claude-code"
-					sessionPanes={[
-						{
-							sessionId: params.selectedSessionId,
-							messages: params.messages,
-							sending: params.sending,
-							hasLoaded: true,
-							presentationState: "presented",
-						},
-					]}
-					loadingWorkspace={false}
-					loadingSession={false}
-					sending={params.sending}
-				/>
+				<TooltipProvider delayDuration={0}>
+					<WorkspacePanel
+						workspace={workspace}
+						sessions={sessions}
+						selectedSessionId={params.selectedSessionId}
+						selectedProvider="claude-code"
+						sessionPanes={[
+							{
+								sessionId: params.selectedSessionId,
+								messages: params.messages,
+								sending: params.sending,
+								hasLoaded: true,
+								presentationState: "presented",
+							},
+						]}
+						loadingWorkspace={false}
+						loadingSession={false}
+						sending={params.sending}
+					/>
+				</TooltipProvider>
 			</QueryClientProvider>
 		);
 

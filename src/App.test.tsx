@@ -455,12 +455,19 @@ describe("App", () => {
 			/>,
 		);
 
-		const selectedReadLabel = screen.getByText("Selected read");
-		const unreadLabel = screen.getByText("Unselected unread");
+		// Walk up past the `HyperText`-injected `<span class="inline-block">` to
+		// the sidebar's own label span — that's where the font-weight classes
+		// live now that branch/title text goes through the scramble animation.
+		const selectedReadLabel = screen
+			.getByText("Selected read")
+			.closest("span.truncate");
+		const unreadLabel = screen
+			.getByText("Unselected unread")
+			.closest("span.truncate");
 
-		expect(selectedReadLabel.className).toContain("font-medium");
-		expect(selectedReadLabel.className).not.toContain("font-semibold");
-		expect(unreadLabel.className).toContain("font-semibold");
+		expect(selectedReadLabel?.className).toContain("font-medium");
+		expect(selectedReadLabel?.className).not.toContain("font-semibold");
+		expect(unreadLabel?.className).toContain("font-semibold");
 	});
 
 	it("reopens a collapsed group when selection moves into it", async () => {

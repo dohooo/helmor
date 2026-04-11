@@ -108,8 +108,7 @@ pub fn run() {
             data_dir::ensure_directory_structure().expect("Failed to create Helmor data directory");
 
             // Initialize structured logging (must come before any tracing macro call)
-            let logs_dir =
-                data_dir::logs_dir().expect("Failed to resolve logs directory");
+            let logs_dir = data_dir::logs_dir().expect("Failed to resolve logs directory");
             logging::init(&logs_dir).expect("Failed to initialize logging");
 
             // Background cleanup: compress old logs, purge > 7 days
@@ -274,7 +273,9 @@ pub fn run() {
 
         if count == 0 {
             // Stop git filesystem watchers before tearing down the sidecar.
-            app_handle.state::<git_watcher::GitWatcherManager>().shutdown();
+            app_handle
+                .state::<git_watcher::GitWatcherManager>()
+                .shutdown();
 
             // No active streams, but still shut down the sidecar cooperatively
             // so Bun and any child CLIs get a chance to exit cleanly instead of
@@ -322,7 +323,9 @@ pub fn run() {
                 }
 
                 tracing::info!("User confirmed shutdown — aborting active streams");
-                app_handle_clone.state::<git_watcher::GitWatcherManager>().shutdown();
+                app_handle_clone
+                    .state::<git_watcher::GitWatcherManager>()
+                    .shutdown();
                 // We're on a worker thread now, so the blocking helpers are
                 // safe to call.
                 let sidecar = app_handle_clone.state::<sidecar::ManagedSidecar>();

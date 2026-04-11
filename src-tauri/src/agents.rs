@@ -144,7 +144,10 @@ pub fn abort_all_active_streams_blocking(
         return;
     }
 
-    tracing::info!(count = handles.len(), "Graceful shutdown — aborting active streams");
+    tracing::info!(
+        count = handles.len(),
+        "Graceful shutdown — aborting active streams"
+    );
 
     for handle in &handles {
         let stop_req = crate::sidecar::SidecarRequest {
@@ -173,7 +176,10 @@ pub fn abort_all_active_streams_blocking(
     if remaining == 0 {
         tracing::info!("Graceful shutdown — all streams drained cleanly");
     } else {
-        tracing::info!(remaining, "Graceful shutdown — timeout, streams still active");
+        tracing::info!(
+            remaining,
+            "Graceful shutdown — timeout, streams still active"
+        );
     }
 }
 
@@ -1022,7 +1028,10 @@ fn stream_via_sidecar(
                                 ) {
                                     Ok(_) => persisted_turn_count += 1,
                                     Err(e) => {
-                                        tracing::error!(turn = persisted_turn_count, "Failed to persist turn: {e}");
+                                        tracing::error!(
+                                            turn = persisted_turn_count,
+                                            "Failed to persist turn: {e}"
+                                        );
                                         break;
                                     }
                                 }
@@ -1168,7 +1177,10 @@ fn stream_via_sidecar(
                                             persisted_turn_count += 1;
                                         }
                                         Err(e) => {
-                                            tracing::error!(turn = persisted_turn_count, "Failed to persist turn: {e}");
+                                            tracing::error!(
+                                                turn = persisted_turn_count,
+                                                "Failed to persist turn: {e}"
+                                            );
                                             break;
                                         }
                                     }

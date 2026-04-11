@@ -110,7 +110,11 @@ impl SidecarProcess {
         }
 
         tracing::debug!(
-            cmd = if is_dev { format!("bun run {}", sidecar_path.display()) } else { sidecar_path.display().to_string() },
+            cmd = if is_dev {
+                format!("bun run {}", sidecar_path.display())
+            } else {
+                sidecar_path.display().to_string()
+            },
             "Spawning sidecar"
         );
 
@@ -355,7 +359,10 @@ impl ManagedSidecar {
         };
         match process.send(&request) {
             Ok(()) => {
-                tracing::info!(timeout_ms = cooperative.as_millis() as u64, "Sidecar shutdown: cooperative request sent");
+                tracing::info!(
+                    timeout_ms = cooperative.as_millis() as u64,
+                    "Sidecar shutdown: cooperative request sent"
+                );
                 if process.wait_with_timeout(cooperative) {
                     tracing::info!("Sidecar shutdown: exited cleanly");
                     *guard = None;

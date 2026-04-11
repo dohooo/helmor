@@ -93,9 +93,7 @@ pub fn cleanup(logs_dir: &Path) {
         }
 
         // Purge old .jsonl.gz beyond retention
-        if name.ends_with(".jsonl.gz")
-            && extract_date(name).is_some_and(|d| d < cutoff.as_str())
-        {
+        if name.ends_with(".jsonl.gz") && extract_date(name).is_some_and(|d| d < cutoff.as_str()) {
             let _ = fs::remove_file(&path);
         }
     }
@@ -152,9 +150,7 @@ fn append_gz(path: &Path) -> PathBuf {
 /// Extract the `YYYY-MM-DD` segment from a log filename like `rust-error.2026-04-11.jsonl.gz`.
 fn extract_date(filename: &str) -> Option<&str> {
     filename.split('.').find(|s| {
-        s.len() == 10
-            && s.as_bytes().get(4) == Some(&b'-')
-            && s.as_bytes().get(7) == Some(&b'-')
+        s.len() == 10 && s.as_bytes().get(4) == Some(&b'-') && s.as_bytes().get(7) == Some(&b'-')
     })
 }
 

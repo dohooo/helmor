@@ -53,6 +53,7 @@ if (typeof window !== "undefined") {
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterAll, beforeAll, describe, it, vi } from "vitest";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
 	ExtendedMessagePart,
 	ThreadMessageLike,
@@ -213,24 +214,26 @@ describe("streaming replay perf", () => {
 
 		const buildPanel = (messages: ThreadMessageLike[], sending: boolean) => (
 			<QueryClientProvider client={queryClient}>
-				<WorkspacePanel
-					workspace={workspace}
-					sessions={sessions}
-					selectedSessionId={sessionA.id}
-					selectedProvider="claude-code"
-					sessionPanes={[
-						{
-							sessionId: sessionA.id,
-							messages,
-							sending,
-							hasLoaded: true,
-							presentationState: "presented",
-						},
-					]}
-					loadingWorkspace={false}
-					loadingSession={false}
-					sending={sending}
-				/>
+				<TooltipProvider delayDuration={0}>
+					<WorkspacePanel
+						workspace={workspace}
+						sessions={sessions}
+						selectedSessionId={sessionA.id}
+						selectedProvider="claude-code"
+						sessionPanes={[
+							{
+								sessionId: sessionA.id,
+								messages,
+								sending,
+								hasLoaded: true,
+								presentationState: "presented",
+							},
+						]}
+						loadingWorkspace={false}
+						loadingSession={false}
+						sending={sending}
+					/>
+				</TooltipProvider>
 			</QueryClientProvider>
 		);
 

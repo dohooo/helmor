@@ -809,7 +809,7 @@ export type DetectedEditor = {
 
 export async function detectInstalledEditors(): Promise<DetectedEditor[]> {
 	try {
-		return await invoke<DetectedEditor[]>("detect_installed_editors");
+		return (await invoke<DetectedEditor[]>("detect_installed_editors")) ?? [];
 	} catch {
 		return [];
 	}

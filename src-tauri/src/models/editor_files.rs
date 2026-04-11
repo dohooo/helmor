@@ -1803,7 +1803,11 @@ mod tests {
         let repo_root = test_dir.root.join("source-repo");
         fs::create_dir_all(&repo_root).unwrap();
         git_ops::run_git(["init", "-b", "main"], Some(&repo_root)).unwrap();
-        git_ops::run_git(["config", "user.email", "test@helmor.test"], Some(&repo_root)).unwrap();
+        git_ops::run_git(
+            ["config", "user.email", "test@helmor.test"],
+            Some(&repo_root),
+        )
+        .unwrap();
         git_ops::run_git(["config", "user.name", "Test"], Some(&repo_root)).unwrap();
         fs::write(repo_root.join("f.txt"), "base\n").unwrap();
         git_ops::run_git(["add", "."], Some(&repo_root)).unwrap();

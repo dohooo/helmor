@@ -326,7 +326,10 @@ fn import_workspace_db_records(conn: &Connection, workspace_id: &str) -> Result<
             )
             .unwrap_or_else(|_| ("unknown".to_string(), None));
 
-        tracing::info!(workspace_id, "Workspace exists in DB but filesystem incomplete — retrying Phase 2");
+        tracing::info!(
+            workspace_id,
+            "Workspace exists in DB but filesystem incomplete — retrying Phase 2"
+        );
         return Ok(ImportDbResult::Imported(ImportedWorkspaceMeta {
             workspace_id: workspace_id.to_string(),
             repo_name,
@@ -459,7 +462,10 @@ fn setup_workspace_filesystem(
                     );
 
                     if source_branch.is_none() {
-                        tracing::error!(directory_name, "Could not resolve source branch — worktree not created");
+                        tracing::error!(
+                            directory_name,
+                            "Could not resolve source branch — worktree not created"
+                        );
                     }
                     if let Some(ref src) = source_branch {
                         let import_branch = format!("{src}-import");
@@ -476,11 +482,17 @@ fn setup_workspace_filesystem(
                                         "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
                                         rusqlite::params![import_branch, workspace_id],
                                     ) {
-                                        tracing::error!(directory_name, "Failed to update branch: {e}");
+                                        tracing::error!(
+                                            directory_name,
+                                            "Failed to update branch: {e}"
+                                        );
                                     }
                                 }
                                 Err(e) => {
-                                    tracing::error!(directory_name, "Failed to open DB to update branch: {e}");
+                                    tracing::error!(
+                                        directory_name,
+                                        "Failed to open DB to update branch: {e}"
+                                    );
                                 }
                             }
                         }

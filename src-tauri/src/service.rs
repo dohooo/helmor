@@ -543,8 +543,16 @@ pub fn drain_pending_cli_sends() -> Result<Vec<PendingCliSend>> {
 
 /// Check if the Helmor App is running by testing the MCP bridge port.
 pub fn is_app_running() -> bool {
+    is_port_listening(9223)
+}
+
+/// Return true iff a TCP listener is accepting connections on the given
+/// loopback port right now. Factored out from `is_app_running` so tests can
+/// exercise the probe against an ephemeral port instead of the hard-coded
+/// MCP bridge port (which collides with a locally-running dev build).
+fn is_port_listening(port: u16) -> bool {
     std::net::TcpStream::connect_timeout(
-        &std::net::SocketAddr::from(([127, 0, 0, 1], 9223)),
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
         Duration::from_millis(200),
     )
     .is_ok()
@@ -679,23 +687,21 @@ mod tests {
     }
 
     #[test]
-    fn is_app_running_returns_false_when_no_listener() {
-        // Nothing should be listening on port 9223 during tests.
-        assert!(!is_app_running());
+    fn is_port_listening_returns_false_when_no_listener() {
+        // Bind an ephemeral port, release it, then probe — nothing should
+        // be listening on a port we just closed. This used to hard-code
+        // 9223, which collides with any locally-running dev build.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        assert!(!is_port_listening(port));
     }
 
     #[test]
-    fn is_app_running_returns_true_when_listener_exists() {
+    fn is_port_listening_returns_true_when_listener_exists() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        // We can't easily test port 9223, but we can verify the TCP
-        // connect logic works by checking our dynamic port.
-        let result = std::net::TcpStream::connect_timeout(
-            &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-            Duration::from_millis(200),
-        )
-        .is_ok();
-        assert!(result);
+        assert!(is_port_listening(port));
         drop(listener);
     }
 }

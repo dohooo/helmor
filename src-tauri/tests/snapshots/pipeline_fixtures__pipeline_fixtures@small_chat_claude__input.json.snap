@@ -1,0 +1,29 @@
+---
+source: tests/pipeline_fixtures.rs
+assertion_line: 51
+expression: messages
+input_file: tests/fixtures/pipeline/small_chat_claude/input.json
+---
+- role: user
+  id: 2d12d9f3-89ed-4e1a-b261-7bbc222e69d0
+  createdAt: "2026-04-02T13:25:35.728Z"
+  content:
+    - type: text
+      text: Say something random
+- role: assistant
+  id: 7dc34ada-feea-41fe-9573-be2b2f728bd3
+  createdAt: "2026-04-02T13:25:46.236Z"
+  content:
+    - type: reasoning
+      text: "The user is saying \"say something random.\" They're just making casual conversation. I'll respond briefly and casually."
+    - type: text
+      text: "Hello! I'm your coding assistant, currently in the `ottawa` workspace on the `lgq/wechat-ai-partner` branch. The workspace is clean and ready to go. Just let me know what you need!"
+  status:
+    type: complete
+    reason: stop
+- role: system
+  id: 852432ac-ac6d-48d8-8f0a-0309a6b7a443
+  createdAt: "2026-04-02T13:25:48.587Z"
+  content:
+    - type: text
+      text: 8.8s • in 3 • out 124 • $0.0723

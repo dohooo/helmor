@@ -341,9 +341,7 @@ fn handle_head_change(
 
     // Update DB branch column (CAS: only if DB still holds old_branch)
     if let Some(ref branch) = new_branch {
-        if let Err(e) =
-            update_branch_in_db(workspace_id, old_branch.as_deref(), branch)
-        {
+        if let Err(e) = update_branch_in_db(workspace_id, old_branch.as_deref(), branch) {
             tracing::error!(workspace_id, "Failed to update branch in DB: {e:#}");
         }
     }
@@ -380,7 +378,10 @@ fn update_branch_in_db(
     }
     .context("Failed to update workspace branch from git watcher")?;
     if rows == 0 {
-        tracing::debug!(workspace_id, "CAS miss: branch already changed by another path");
+        tracing::debug!(
+            workspace_id,
+            "CAS miss: branch already changed by another path"
+        );
     }
     Ok(())
 }
@@ -539,10 +540,7 @@ mod tests {
         let repo = init_repo();
         git(repo.path(), &["checkout", "-b", "feature/test"]);
         let gitdir = resolve_gitdir(repo.path()).unwrap();
-        assert_eq!(
-            read_head_branch(&gitdir),
-            Some("feature/test".to_string())
-        );
+        assert_eq!(read_head_branch(&gitdir), Some("feature/test".to_string()));
     }
 
     #[test]
@@ -569,10 +567,7 @@ mod tests {
         );
 
         let wt_gitdir = resolve_gitdir(wt_dir.path()).unwrap();
-        assert_eq!(
-            read_head_branch(&wt_gitdir),
-            Some("wt-branch".to_string())
-        );
+        assert_eq!(read_head_branch(&wt_gitdir), Some("wt-branch".to_string()));
         // Main repo still on main
         let main_gitdir = resolve_gitdir(repo.path()).unwrap();
         assert_eq!(read_head_branch(&main_gitdir), Some("main".to_string()));

@@ -503,7 +503,11 @@ pub fn rename_workspace_branch(workspace_id: &str, new_branch: &str) -> Result<(
     ) {
         // Roll back the git rename
         if let Err(rb_err) = git_ops::rename_branch(repo_root_path, new_branch, old_branch) {
-            tracing::error!(old = old_branch, new = new_branch, "Rollback git branch -m failed: {rb_err:#}");
+            tracing::error!(
+                old = old_branch,
+                new = new_branch,
+                "Rollback git branch -m failed: {rb_err:#}"
+            );
         }
         return Err(db_err).context("Failed to update branch name in database");
     }

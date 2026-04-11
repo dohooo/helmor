@@ -94,7 +94,9 @@ async function handleGenerateTitle(
 ): Promise<void> {
 	try {
 		const userMessage = requireString(params, "userMessage");
-		logger.debug(`[${id}] generateTitle`, { userMessage: userMessage.slice(0, 100) });
+		logger.debug(`[${id}] generateTitle`, {
+			userMessage: userMessage.slice(0, 100),
+		});
 
 		// Try Claude (cheap haiku) first; fall back to Codex if Claude is
 		// unavailable. Both implementations emit `titleGenerated` in the
@@ -103,7 +105,9 @@ async function handleGenerateTitle(
 			await managers.claude.generateTitle(id, userMessage, emitter);
 			logger.debug(`[${id}] generateTitle completed (claude)`);
 		} catch (claudeErr) {
-			logger.debug(`[${id}] generateTitle claude failed, trying codex: ${errorMessage(claudeErr)}`);
+			logger.debug(
+				`[${id}] generateTitle claude failed, trying codex: ${errorMessage(claudeErr)}`,
+			);
 			await managers.codex.generateTitle(id, userMessage, emitter);
 			logger.debug(`[${id}] generateTitle completed (codex fallback)`);
 		}
@@ -121,7 +125,10 @@ async function handleListSlashCommands(
 	try {
 		const provider = parseProvider(params.provider);
 		const listParams = parseListSlashCommandsParams(params);
-		logger.debug(`[${id}] listSlashCommands`, { provider, cwd: listParams.cwd ?? "(none)" });
+		logger.debug(`[${id}] listSlashCommands`, {
+			provider,
+			cwd: listParams.cwd ?? "(none)",
+		});
 		const commands = await managers[provider].listSlashCommands(listParams);
 		emitter.slashCommandsListed(id, commands);
 		logger.debug(`[${id}] listSlashCommands → ${commands.length} entries`);

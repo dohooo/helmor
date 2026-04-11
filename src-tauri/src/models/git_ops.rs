@@ -312,7 +312,13 @@ pub fn create_worktree_from_start_point(
     // Git auto-sets upstream when branching from a remote-tracking ref.
     // Unset it — the branch should push to its own remote name, not the parent.
     let _ = run_git(
-        ["-C", repo_root.as_str(), "branch", "--unset-upstream", branch],
+        [
+            "-C",
+            repo_root.as_str(),
+            "branch",
+            "--unset-upstream",
+            branch,
+        ],
         None,
     );
 
@@ -797,19 +803,32 @@ mod tests {
         let origin = init_repo();
         let clone_dir = tempfile::tempdir().unwrap();
         run_git(
-            ["clone", &origin.path().display().to_string(), &clone_dir.path().display().to_string()],
+            [
+                "clone",
+                &origin.path().display().to_string(),
+                &clone_dir.path().display().to_string(),
+            ],
             None,
         )
         .unwrap();
         // Configure user in clone
-        run(clone_dir.path(), &["config", "user.email", "helmor@example.com"]);
+        run(
+            clone_dir.path(),
+            &["config", "user.email", "helmor@example.com"],
+        );
         run(clone_dir.path(), &["config", "user.name", "Helmor Test"]);
         (origin, clone_dir)
     }
 
     fn has_upstream(repo: &Path, branch: &str) -> bool {
         run_git(
-            ["-C", &repo.display().to_string(), "config", "--get", &format!("branch.{branch}.remote")],
+            [
+                "-C",
+                &repo.display().to_string(),
+                "config",
+                "--get",
+                &format!("branch.{branch}.remote"),
+            ],
             None,
         )
         .is_ok()
