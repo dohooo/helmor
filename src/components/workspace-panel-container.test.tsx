@@ -344,6 +344,24 @@ describe("WorkspacePanelContainer loading semantics", () => {
 			expect(getSessionPaneIds()).toContain("session-1");
 		});
 
+		// Install the deferred mock BEFORE evicting the cache. The live
+		// observer on session-1 fires an automatic refetch the instant
+		// `removeQueries` drops its data, and that refetch must not hit the
+		// default `mockReset` stub (which returns undefined and poisons the
+		// query with a `"data cannot be undefined"` error that survives the
+		// later rerender back to session-1).
+		const deferredMessages =
+			createDeferred<ReturnType<typeof createMessages>>();
+		apiMocks.loadSessionThreadMessages.mockImplementation(
+			(sessionId?: string) => {
+				if (sessionId === "session-1") {
+					return deferredMessages.promise;
+				}
+
+				return Promise.resolve(createMessages(sessionId ?? "session-unknown"));
+			},
+		);
+
 		queryClient.removeQueries({
 			queryKey: [...helmorQueryKeys.sessionMessages("session-1"), "thread"],
 		});
@@ -363,18 +381,6 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		await waitFor(() => {
 			expect(getSessionPaneIds()).toContain("session-3");
 		});
-
-		const deferredMessages =
-			createDeferred<ReturnType<typeof createMessages>>();
-		apiMocks.loadSessionThreadMessages.mockImplementation(
-			(sessionId?: string) => {
-				if (sessionId === "session-1") {
-					return deferredMessages.promise;
-				}
-
-				return Promise.resolve(createMessages(sessionId ?? "session-unknown"));
-			},
-		);
 
 		rendered.rerender(
 			<WorkspacePanelContainer

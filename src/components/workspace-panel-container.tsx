@@ -304,11 +304,18 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		(selectedWorkspaceId !== displayedWorkspaceId ||
 			(hasWorkspaceContent &&
 				(detailQuery.isFetching || sessionsQuery.isFetching)));
+	// Session is "loading" whenever we have a target session but no resolved
+	// message data yet. We intentionally do NOT gate this on `refreshingWorkspace`
+	// — a background workspace revalidation (e.g. from the git watcher's
+	// `invalidateQueries(workspaceDetail)`) must not suppress session-level
+	// loading, or the panel falls through to `EmptyState` and flashes
+	// "Nothing here yet" before the real messages land. We also deliberately
+	// drop the old `messagesQuery.isPending` guard: it was redundant with
+	// `!hasResolvedSessionMessages` for enabled queries and hid loading when
+	// a previous fetch had errored — the user still needs a placeholder, not
+	// EmptyState, until the next fetch succeeds.
 	const loadingSession =
-		Boolean(threadSessionId) &&
-		!refreshingWorkspace &&
-		!hasResolvedSessionMessages &&
-		messagesQuery.isPending;
+		Boolean(threadSessionId) && !hasResolvedSessionMessages;
 	const refreshingSession =
 		Boolean(threadSessionId) &&
 		!loadingSession &&
