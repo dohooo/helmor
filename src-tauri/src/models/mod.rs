@@ -349,7 +349,6 @@ pub async fn list_workspace_sessions(
 pub async fn list_session_thread_messages(
     session_id: String,
 ) -> CmdResult<Vec<crate::pipeline::types::ThreadMessageLike>> {
-    std::thread::sleep(std::time::Duration::from_secs(3));
     run_blocking(move || {
         let historical = sessions::list_session_historical_records(&session_id)?;
         Ok(crate::pipeline::MessagePipeline::convert_historical(

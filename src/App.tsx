@@ -632,6 +632,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(payload.workspaceId),
 			});
+			// Checkout changes what's uncommitted — refresh file diff
+			queryClient.invalidateQueries({ queryKey: ["workspaceChanges"] });
 		}).then((unlisten) => {
 			if (disposed) {
 				unlisten();
@@ -651,6 +653,9 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceGitActionStatus(payload.workspaceId),
 			});
+			// Ref changes (commit, push, fetch) affect merge-base and
+			// staged/unstaged state — refresh the inspector file diff.
+			queryClient.invalidateQueries({ queryKey: ["workspaceChanges"] });
 		}).then((unlisten) => {
 			if (disposed) {
 				unlisten();
@@ -2159,11 +2164,14 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 										workspaceBranch={
 											selectedWorkspaceDetailQuery.data?.branch ?? null
 										}
-										workspaceTargetBranch={
-											selectedWorkspaceDetailQuery.data?.intendedTargetBranch ??
-											selectedWorkspaceDetailQuery.data?.defaultBranch ??
-											null
-										}
+										workspaceTargetBranch={(() => {
+											const d = selectedWorkspaceDetailQuery.data;
+											const target =
+												d?.intendedTargetBranch ?? d?.defaultBranch;
+											if (!target) return null;
+											const remote = d?.remote ?? "origin";
+											return `${remote}/${target}`;
+										})()}
 										editorMode={workspaceViewMode === "editor"}
 										activeEditorPath={editorSession?.path ?? null}
 										onOpenEditorFile={handleOpenEditorFile}

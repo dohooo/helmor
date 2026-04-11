@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use uuid::Uuid;
 
-use super::{git_ops, workspaces};
+use super::{db, git_ops, workspaces};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -521,18 +521,66 @@ pub fn unstage_workspace_file(workspace_root_path: &str, relative_path: &str) ->
 }
 
 /// Find the merge-base commit between HEAD and the default branch.
+/// Extract `(repo_name, directory_name)` from a workspace root path.
+/// The path format is `{data_dir}/workspaces/{repo_name}/{directory_name}`.
+fn parse_workspace_path(workspace_root: &Path) -> Option<(&str, &str)> {
+    let dir_name = workspace_root.file_name()?.to_str()?;
+    let repo_name = workspace_root.parent()?.file_name()?.to_str()?;
+    Some((repo_name, dir_name))
+}
+
+/// Query the DB for a workspace's configured remote + target branch.
+fn query_workspace_target(
+    conn: &rusqlite::Connection,
+    repo_name: &str,
+    dir_name: &str,
+) -> Option<(String, String)> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT r.remote, COALESCE(w.intended_target_branch, r.default_branch)
+             FROM workspaces w
+             JOIN repos r ON r.id = w.repository_id
+             WHERE r.name = ?1 AND w.directory_name = ?2 AND w.state = 'ready'",
+        )
+        .ok()?;
+
+    stmt.query_row(rusqlite::params![repo_name, dir_name], |row| {
+        let remote: Option<String> = row.get(0)?;
+        let target: Option<String> = row.get(1)?;
+        Ok((remote, target))
+    })
+    .ok()
+    .and_then(|(remote, target)| Some((remote.unwrap_or_else(|| "origin".into()), target?)))
+}
+
+/// Look up the workspace's configured remote + intended target branch from the
+/// DB so the merge-base is computed against the right ref instead of
+/// hard-coded `origin/main`.
+fn lookup_workspace_target(workspace_root: &Path) -> Option<(String, String)> {
+    let (repo_name, dir_name) = parse_workspace_path(workspace_root)?;
+    let conn = db::open_connection(false).ok()?;
+    query_workspace_target(&conn, repo_name, dir_name)
+}
+
 fn find_merge_base(workspace_root: &Path) -> Result<String> {
-    // Try remote-tracking refs first (origin/main, origin/master), then
-    // local refs. Workspaces are created from `refs/remotes/origin/<default>`
-    // so comparing against the same remote ref avoids phantom diffs when the
-    // local main branch is behind the remote.
-    for branch in &[
-        "refs/remotes/origin/main",
-        "refs/remotes/origin/master",
-        "refs/heads/main",
-        "refs/heads/master",
-    ] {
-        if let Ok(base) = git_ops::run_git(["merge-base", "HEAD", *branch], Some(workspace_root)) {
+    // Build the candidate ref list from the workspace's actual configuration.
+    let mut candidates: Vec<String> = Vec::new();
+
+    if let Some((remote, target)) = lookup_workspace_target(workspace_root) {
+        // Preferred: remote-tracking ref for the intended target branch
+        candidates.push(format!("refs/remotes/{remote}/{target}"));
+        // Local fallback for the same branch
+        candidates.push(format!("refs/heads/{target}"));
+    }
+
+    // Generic fallbacks (covers workspaces without a configured target)
+    candidates.push("refs/remotes/origin/main".into());
+    candidates.push("refs/remotes/origin/master".into());
+    candidates.push("refs/heads/main".into());
+    candidates.push("refs/heads/master".into());
+
+    for branch in &candidates {
+        if let Ok(base) = git_ops::run_git(["merge-base", "HEAD", branch], Some(workspace_root)) {
             if !base.trim().is_empty() {
                 return Ok(base.trim().to_string());
             }
@@ -1644,6 +1692,176 @@ mod tests {
         assert!(
             repo.find("README.md").is_none(),
             "discarded file should NOT show"
+        );
+    }
+
+    // ── parse_workspace_path tests ────────────────────────────────────
+
+    #[test]
+    fn parse_workspace_path_normal() {
+        let path = Path::new("/Users/x/helmor-dev/workspaces/my-repo/feature-branch");
+        let (repo, dir) = parse_workspace_path(path).unwrap();
+        assert_eq!(repo, "my-repo");
+        assert_eq!(dir, "feature-branch");
+    }
+
+    #[test]
+    fn parse_workspace_path_root_returns_none() {
+        assert!(parse_workspace_path(Path::new("/")).is_none());
+    }
+
+    #[test]
+    fn parse_workspace_path_single_component_returns_none() {
+        assert!(parse_workspace_path(Path::new("/tmp")).is_none());
+    }
+
+    // ── query_workspace_target tests ──────────────────────────────────
+
+    fn test_db_with_workspace(
+        remote: Option<&str>,
+        target: Option<&str>,
+        default_branch: &str,
+    ) -> rusqlite::Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::ensure_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name, default_branch, remote) VALUES ('r1', 'test-repo', ?1, ?2)",
+            rusqlite::params![default_branch, remote],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, derived_status, intended_target_branch)
+             VALUES ('w1', 'r1', 'ws-dir', 'ready', 'in-progress', ?1)",
+            rusqlite::params![target],
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn query_target_returns_intended_target_branch() {
+        let conn = test_db_with_workspace(Some("origin"), Some("develop"), "main");
+        let result = query_workspace_target(&conn, "test-repo", "ws-dir");
+        assert_eq!(result, Some(("origin".into(), "develop".into())));
+    }
+
+    #[test]
+    fn query_target_falls_back_to_default_branch() {
+        let conn = test_db_with_workspace(Some("origin"), None, "main");
+        let result = query_workspace_target(&conn, "test-repo", "ws-dir");
+        assert_eq!(result, Some(("origin".into(), "main".into())));
+    }
+
+    #[test]
+    fn query_target_defaults_remote_to_origin() {
+        let conn = test_db_with_workspace(None, Some("develop"), "main");
+        let result = query_workspace_target(&conn, "test-repo", "ws-dir");
+        assert_eq!(result, Some(("origin".into(), "develop".into())));
+    }
+
+    #[test]
+    fn query_target_custom_remote() {
+        let conn = test_db_with_workspace(Some("upstream"), Some("release"), "main");
+        let result = query_workspace_target(&conn, "test-repo", "ws-dir");
+        assert_eq!(result, Some(("upstream".into(), "release".into())));
+    }
+
+    #[test]
+    fn query_target_returns_none_for_unknown_workspace() {
+        let conn = test_db_with_workspace(Some("origin"), Some("develop"), "main");
+        let result = query_workspace_target(&conn, "test-repo", "nonexistent");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn query_target_returns_none_for_archived_workspace() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::ensure_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name, default_branch) VALUES ('r1', 'test-repo', 'main')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, derived_status, intended_target_branch)
+             VALUES ('w1', 'r1', 'ws-dir', 'archived', 'done', 'develop')",
+            rusqlite::params![],
+        )
+        .unwrap();
+        let result = query_workspace_target(&conn, "test-repo", "ws-dir");
+        assert!(result.is_none(), "archived workspaces should not match");
+    }
+
+    // ── find_merge_base with configured target ────────────────────────
+
+    #[test]
+    fn find_merge_base_uses_configured_target_branch() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let test_dir = TestDataDir::new("merge-base-target");
+
+        // Set up a git repo with main + a target branch
+        let repo_root = test_dir.root.join("source-repo");
+        fs::create_dir_all(&repo_root).unwrap();
+        git_ops::run_git(["init", "-b", "main"], Some(&repo_root)).unwrap();
+        git_ops::run_git(["config", "user.email", "test@helmor.test"], Some(&repo_root)).unwrap();
+        git_ops::run_git(["config", "user.name", "Test"], Some(&repo_root)).unwrap();
+        fs::write(repo_root.join("f.txt"), "base\n").unwrap();
+        git_ops::run_git(["add", "."], Some(&repo_root)).unwrap();
+        git_ops::run_git(["commit", "-m", "init"], Some(&repo_root)).unwrap();
+
+        // Create a target branch and diverge
+        git_ops::run_git(["checkout", "-b", "custom/target"], Some(&repo_root)).unwrap();
+        fs::write(repo_root.join("target.txt"), "target\n").unwrap();
+        git_ops::run_git(["add", "."], Some(&repo_root)).unwrap();
+        git_ops::run_git(["commit", "-m", "target commit"], Some(&repo_root)).unwrap();
+        let target_sha = git_ops::run_git(["rev-parse", "HEAD"], Some(&repo_root))
+            .unwrap()
+            .trim()
+            .to_string();
+
+        // Create a workspace branch from target
+        git_ops::run_git(["checkout", "-b", "workspace/dev"], Some(&repo_root)).unwrap();
+        fs::write(repo_root.join("work.txt"), "work\n").unwrap();
+        git_ops::run_git(["add", "."], Some(&repo_root)).unwrap();
+        git_ops::run_git(["commit", "-m", "workspace commit"], Some(&repo_root)).unwrap();
+
+        // Switch main repo away from workspace/dev so the worktree can use it
+        git_ops::run_git(["checkout", "main"], Some(&repo_root)).unwrap();
+
+        let workspace_dir =
+            crate::data_dir::workspace_dir("merge-base-repo", "merge-base-ws").unwrap();
+        git_ops::run_git(
+            [
+                "worktree",
+                "add",
+                workspace_dir.to_str().unwrap(),
+                "workspace/dev",
+            ],
+            Some(&repo_root),
+        )
+        .unwrap();
+
+        // Seed DB with matching workspace
+        let conn = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name, root_path, default_branch, remote) VALUES ('r1', 'merge-base-repo', ?1, 'main', 'origin')",
+            [repo_root.display().to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, derived_status, intended_target_branch)
+             VALUES ('w1', 'r1', 'merge-base-ws', 'ready', 'in-progress', 'custom/target')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        // Now: find_merge_base should compare against custom/target, not main.
+        // The merge-base of workspace/dev and custom/target is target_sha.
+        let base = find_merge_base(&workspace_dir).unwrap();
+        assert_eq!(
+            base, target_sha,
+            "merge-base should be the target branch tip, not main"
         );
     }
 }

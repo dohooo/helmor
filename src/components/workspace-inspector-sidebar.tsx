@@ -1308,10 +1308,10 @@ function BranchDiffSection({
 						className="size-3 shrink-0 text-muted-foreground"
 						strokeWidth={2}
 					/>
-					<span className="flex min-w-0 items-center truncate">
-						<HyperText text={branchLabel} className="truncate" />
+					<span className="flex min-w-0 items-center">
+						<HyperText text={branchLabel} className="shrink-0" />
 						<span className="mx-1 shrink-0 text-muted-foreground">→</span>
-						<HyperText text={targetLabel} className="shrink-0" />
+						<HyperText text={targetLabel} className="min-w-0 truncate" />
 					</span>
 				</Button>
 				<Badge
