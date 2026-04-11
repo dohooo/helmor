@@ -277,6 +277,7 @@ pub fn create_worktree(repo_root: &Path, workspace_dir: &Path, branch: &str) -> 
 
 /// Create a worktree with a branch based on a start point.
 /// Uses `-B` to create or reset the branch if it already exists.
+/// The upstream is explicitly unset so the branch stays local-only.
 pub fn create_worktree_from_start_point(
     repo_root: &Path,
     workspace_dir: &Path,
@@ -286,7 +287,7 @@ pub fn create_worktree_from_start_point(
     let repo_root = repo_root.display().to_string();
     let workspace_dir_arg = workspace_dir.display().to_string();
     prune_worktrees(&repo_root);
-    run_git(
+    let output = run_git(
         [
             "-C",
             repo_root.as_str(),
@@ -306,7 +307,16 @@ pub fn create_worktree_from_start_point(
             branch,
             start_point
         )
-    })
+    })?;
+
+    // Git auto-sets upstream when branching from a remote-tracking ref.
+    // Unset it — the branch should push to its own remote name, not the parent.
+    let _ = run_git(
+        ["-C", repo_root.as_str(), "branch", "--unset-upstream", branch],
+        None,
+    );
+
+    Ok(output)
 }
 
 pub fn remove_worktree(repo_root: &Path, workspace_dir: &Path) -> Result<()> {
