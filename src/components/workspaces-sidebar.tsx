@@ -65,6 +65,7 @@ import {
 	ContextMenuSubTrigger,
 	ContextMenuTrigger,
 } from "./ui/context-menu";
+import { HyperText } from "./ui/hyper-text";
 import { Popover, PopoverAnchor, PopoverContent } from "./ui/popover";
 import { ScrollArea } from "./ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -479,7 +480,9 @@ const WorkspaceRowItem = memo(
 									: "font-medium",
 						)}
 					>
-						{row.branch ? humanizeBranch(row.branch) : row.title}
+						<HyperText
+							text={row.branch ? humanizeBranch(row.branch) : row.title}
+						/>
 					</span>
 					{isCompleted && !selected ? (
 						<span

@@ -32,6 +32,7 @@ function newCodex(): Codex {
 import { scanCodexSkills } from "./codex-skill-scanner.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { parseImageRefs } from "./images.js";
+import { logger } from "./logger.js";
 import type {
 	ListSlashCommandsParams,
 	SendMessageParams,
@@ -132,6 +133,7 @@ export class CodexSessionManager implements SessionManager {
 			// Codex events don't carry the thread id natively. Inject it as
 			// `session_id` (snake_case) so the on-the-wire format matches Claude.
 			for await (const event of streamedTurn.events) {
+				logger.sdkEvent(requestId, event);
 				const threadId = thread.id;
 				const enriched: object = threadId
 					? { ...(event as object), session_id: threadId }

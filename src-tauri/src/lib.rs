@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod data_dir;
 pub mod error;
+pub mod git_watcher;
 mod import;
 pub mod logging;
 pub mod mcp;
@@ -101,6 +102,7 @@ pub fn run() {
         .manage(models::auth::GithubIdentityFlowRuntime::default())
         .manage(sidecar::ManagedSidecar::new())
         .manage(agents::ActiveStreams::new())
+        .manage(git_watcher::GitWatcherManager::new())
         .setup(|app| {
             // Ensure data directory structure exists
             data_dir::ensure_directory_structure().expect("Failed to create Helmor data directory");
@@ -143,6 +145,18 @@ pub fn run() {
             // OAuth callback is now handled by a one-shot localhost HTTP
             // server spun up inside `start_github_oauth_redirect`, so no
             // deep-link `on_open_url` handler is needed here.
+
+            // Start git filesystem watchers for all ready workspaces.
+            let watcher_handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("git-watcher-init".into())
+                .spawn(move || {
+                    let manager = watcher_handle.state::<git_watcher::GitWatcherManager>();
+                    if let Err(e) = manager.sync_from_db(watcher_handle.clone()) {
+                        tracing::error!("Failed to initialize git watchers: {e:#}");
+                    }
+                })
+                .ok();
 
             Ok(())
         })
@@ -259,6 +273,9 @@ pub fn run() {
         tracing::info!(window = %label, count, "CloseRequested");
 
         if count == 0 {
+            // Stop git filesystem watchers before tearing down the sidecar.
+            app_handle.state::<git_watcher::GitWatcherManager>().shutdown();
+
             // No active streams, but still shut down the sidecar cooperatively
             // so Bun and any child CLIs get a chance to exit cleanly instead of
             // being SIGKILL'd by the Drop impl.
@@ -305,6 +322,7 @@ pub fn run() {
                 }
 
                 tracing::info!("User confirmed shutdown — aborting active streams");
+                app_handle_clone.state::<git_watcher::GitWatcherManager>().shutdown();
                 // We're on a worker thread now, so the blocking helpers are
                 // safe to call.
                 let sidecar = app_handle_clone.state::<sidecar::ManagedSidecar>();

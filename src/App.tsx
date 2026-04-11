@@ -52,13 +52,16 @@ import {
 	type GithubIdentityDeviceFlowStart,
 	type GithubIdentitySnapshot,
 	hideSession,
+	listenGitBranchChanged,
 	listenGithubIdentityChanged,
+	listenGitRefsChanged,
 	loadAutoCloseActionKinds,
 	loadGithubIdentitySession,
 	lookupWorkspacePr,
 	mergeWorkspacePr,
 	openWorkspaceInEditor,
 	type PullRequestInfo,
+	prefetchRemoteRefs,
 	setWorkspaceManualStatus,
 	startGithubOAuthRedirect,
 	type WorkspaceDetail,
@@ -614,6 +617,54 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			unlistenIdentity?.();
 		};
 	}, []);
+
+	// ── Git watcher: react to external branch / ref changes ──────────
+	useEffect(() => {
+		let disposed = false;
+		let unlistenBranch: (() => void) | undefined;
+		let unlistenRefs: (() => void) | undefined;
+
+		void listenGitBranchChanged((payload) => {
+			if (disposed) return;
+			queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceGroups,
+			});
+			queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceDetail(payload.workspaceId),
+			});
+		}).then((unlisten) => {
+			if (disposed) {
+				unlisten();
+				return;
+			}
+			unlistenBranch = unlisten;
+		});
+
+		void listenGitRefsChanged((payload) => {
+			if (disposed) return;
+			queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceGroups,
+			});
+			queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceDetail(payload.workspaceId),
+			});
+			queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceGitActionStatus(payload.workspaceId),
+			});
+		}).then((unlisten) => {
+			if (disposed) {
+				unlisten();
+				return;
+			}
+			unlistenRefs = unlisten;
+		});
+
+		return () => {
+			disposed = true;
+			unlistenBranch?.();
+			unlistenRefs?.();
+		};
+	}, [queryClient]);
 
 	useEffect(() => {
 		if (
@@ -1644,6 +1695,13 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 		void import("@tauri-apps/api/event").then(({ listen }) => {
 			void listen("tauri://focus", async () => {
+				// Smart fetch: refresh remote refs for the active workspace
+				// so file tree diffs stay current after terminal pushes.
+				const wsId = selectedWorkspaceIdRef.current;
+				if (wsId) {
+					prefetchRemoteRefs({ workspaceId: wsId }).catch(() => {});
+				}
+
 				try {
 					const sends = await drainPendingCliSends();
 					if (sends.length === 0) return;

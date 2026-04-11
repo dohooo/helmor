@@ -670,6 +670,34 @@ export async function updateIntendedTargetBranch(
 	);
 }
 
+// -- Git watcher events --
+
+export type GitBranchChangedPayload = {
+	workspaceId: string;
+	oldBranch: string | null;
+	newBranch: string | null;
+};
+
+export type GitRefsChangedPayload = {
+	workspaceId: string;
+};
+
+export async function listenGitBranchChanged(
+	callback: (payload: GitBranchChangedPayload) => void,
+): Promise<UnlistenFn> {
+	return listen<GitBranchChangedPayload>("git-branch-changed", (event) =>
+		callback(event.payload),
+	);
+}
+
+export async function listenGitRefsChanged(
+	callback: (payload: GitRefsChangedPayload) => void,
+): Promise<UnlistenFn> {
+	return listen<GitRefsChangedPayload>("git-refs-changed", (event) =>
+		callback(event.payload),
+	);
+}
+
 export type PrefetchRemoteRefsResponse = {
 	/** True if a fetch was performed; false if the call was rate-limited. */
 	fetched: boolean;

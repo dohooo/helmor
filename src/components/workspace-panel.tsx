@@ -102,6 +102,7 @@ import {
 	EmptyMedia,
 	EmptyTitle,
 } from "./ui/empty";
+import { HyperText } from "./ui/hyper-text";
 import { Input } from "./ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Separator } from "./ui/separator";
@@ -662,9 +663,11 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 							/>
 						) : (
 							<>
-								<span className="truncate">
-									{workspace?.branch ?? "No branch"}
-								</span>
+								<HyperText
+									key={workspace?.id}
+									text={workspace?.branch ?? "No branch"}
+									className="truncate"
+								/>
 								{workspace?.branch && workspace.state !== "archived" ? (
 									<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 bg-[linear-gradient(to_right,transparent_0%,var(--background)_35%,var(--background)_100%)] pl-5 pr-1 group-hover/branch:pointer-events-auto group-hover/branch:visible">
 										<span

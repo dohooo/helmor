@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{
-    filter::LevelFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt, Layer,
+    filter::LevelFilter, fmt, fmt::time::ChronoLocal, layer::SubscriberExt,
+    util::SubscriberInitExt, Layer,
 };
 
 /// Set up the global tracing subscriber.
@@ -40,6 +41,7 @@ pub fn init(logs_dir: &Path) -> Result<()> {
                 .flatten_event(true)
                 .with_current_span(false)
                 .with_span_list(false)
+                .with_timer(ChronoLocal::default())
                 .with_writer(appender)
                 .with_filter($level)
         }};
@@ -49,6 +51,7 @@ pub fn init(logs_dir: &Path) -> Result<()> {
         fmt::layer()
             .with_writer(std::io::stderr)
             .with_ansi(true)
+            .with_timer(ChronoLocal::default())
             .with_filter(level)
     });
 

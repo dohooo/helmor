@@ -256,9 +256,13 @@ pub async fn list_conductor_workspaces(
 
 #[tauri::command]
 pub async fn import_conductor_workspaces(
+    app: AppHandle,
     workspace_ids: Vec<String>,
 ) -> CmdResult<crate::import::ImportWorkspacesResult> {
-    run_blocking(move || crate::import::import_conductor_workspaces(&workspace_ids)).await
+    let result =
+        run_blocking(move || crate::import::import_conductor_workspaces(&workspace_ids)).await?;
+    crate::git_watcher::notify_workspace_changed(&app);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -307,10 +311,14 @@ pub async fn list_repo_remotes(repo_id: String) -> CmdResult<Vec<String>> {
 
 #[tauri::command]
 pub async fn create_workspace_from_repo(
+    app: AppHandle,
     repo_id: String,
 ) -> CmdResult<workspaces::CreateWorkspaceResponse> {
     let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
-    run_blocking(move || workspaces::create_workspace_from_repo_impl(&repo_id)).await
+    let result =
+        run_blocking(move || workspaces::create_workspace_from_repo_impl(&repo_id)).await?;
+    crate::git_watcher::notify_workspace_changed(&app);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -341,6 +349,7 @@ pub async fn list_workspace_sessions(
 pub async fn list_session_thread_messages(
     session_id: String,
 ) -> CmdResult<Vec<crate::pipeline::types::ThreadMessageLike>> {
+    std::thread::sleep(std::time::Duration::from_secs(3));
     run_blocking(move || {
         let historical = sessions::list_session_historical_records(&session_id)?;
         Ok(crate::pipeline::MessagePipeline::convert_historical(
@@ -459,10 +468,17 @@ pub async fn list_remote_branches(
 }
 
 #[tauri::command]
-pub async fn rename_workspace_branch(workspace_id: String, new_branch: String) -> CmdResult<()> {
+pub async fn rename_workspace_branch(
+    app: AppHandle,
+    workspace_id: String,
+    new_branch: String,
+) -> CmdResult<()> {
     let ws_lock = db::workspace_mutation_lock(&workspace_id);
     let _lock = ws_lock.lock().await;
-    run_blocking(move || workspaces::rename_workspace_branch(&workspace_id, &new_branch)).await
+    run_blocking(move || workspaces::rename_workspace_branch(&workspace_id, &new_branch)).await?;
+    // Resync watcher so its cached branch matches the rename
+    crate::git_watcher::notify_workspace_changed(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -489,15 +505,18 @@ pub async fn prefetch_remote_refs(
 
 #[tauri::command]
 pub async fn restore_workspace(
+    app: AppHandle,
     workspace_id: String,
     target_branch_override: Option<String>,
 ) -> CmdResult<workspaces::RestoreWorkspaceResponse> {
     let ws_lock = db::workspace_mutation_lock(&workspace_id);
     let _lock = ws_lock.lock().await;
-    run_blocking(move || {
+    let result = run_blocking(move || {
         workspaces::restore_workspace_impl(&workspace_id, target_branch_override.as_deref())
     })
-    .await
+    .await?;
+    crate::git_watcher::notify_workspace_changed(&app);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -509,11 +528,14 @@ pub async fn validate_restore_workspace(
 
 #[tauri::command]
 pub async fn archive_workspace(
+    app: AppHandle,
     workspace_id: String,
 ) -> CmdResult<workspaces::ArchiveWorkspaceResponse> {
     let ws_lock = db::workspace_mutation_lock(&workspace_id);
     let _lock = ws_lock.lock().await;
-    run_blocking(move || workspaces::archive_workspace_impl(&workspace_id)).await
+    let result = run_blocking(move || workspaces::archive_workspace_impl(&workspace_id)).await?;
+    crate::git_watcher::notify_workspace_changed(&app);
+    Ok(result)
 }
 
 /// Read-only preflight for archive — see `validate_restore_workspace` doc.
@@ -523,10 +545,12 @@ pub async fn validate_archive_workspace(workspace_id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub async fn permanently_delete_workspace(workspace_id: String) -> CmdResult<()> {
+pub async fn permanently_delete_workspace(app: AppHandle, workspace_id: String) -> CmdResult<()> {
     let ws_lock = db::workspace_mutation_lock(&workspace_id);
     let _lock = ws_lock.lock().await;
-    run_blocking(move || workspaces::permanently_delete_workspace(&workspace_id)).await
+    run_blocking(move || workspaces::permanently_delete_workspace(&workspace_id)).await?;
+    crate::git_watcher::notify_workspace_changed(&app);
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -46,6 +46,7 @@ import {
 import { AnimatedShinyText } from "./ui/animated-shiny-text";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { HyperText } from "./ui/hyper-text";
 import { NumberTicker } from "./ui/number-ticker";
 import { ScrollArea } from "./ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
@@ -1308,9 +1309,9 @@ function BranchDiffSection({
 						strokeWidth={2}
 					/>
 					<span className="flex min-w-0 items-center truncate">
-						<span className="truncate">{branchLabel}</span>
+						<HyperText text={branchLabel} className="truncate" />
 						<span className="mx-1 shrink-0 text-muted-foreground">→</span>
-						<span className="shrink-0">{targetLabel}</span>
+						<HyperText text={targetLabel} className="shrink-0" />
 					</span>
 				</Button>
 				<Badge

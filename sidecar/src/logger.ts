@@ -1,27 +1,45 @@
 /**
  * Structured JSON logger for the sidecar process.
  *
- * Outputs NDJSON to three level-specific files (inclusive routing):
- *   sidecar-debug.YYYY-MM-DD.jsonl  — all events
- *   sidecar-info.YYYY-MM-DD.jsonl   — info + error
- *   sidecar-error.YYYY-MM-DD.jsonl  — error only
- *
- * File rotation, compression, and retention are handled by the Rust host
- * (see src-tauri/src/logging.rs). The sidecar is a short-lived child process
- * and only needs to append.
- *
- * In dev (HELMOR_LOG=debug), also writes human-readable lines to stderr.
- * stdout is NEVER touched — it is the exclusive JSON protocol channel.
- *
- * NOTE: We intentionally avoid pino/winston because `bun build --compile`
- * breaks their worker-thread-based transports. This logger is ~40 lines of
- * logic and covers the exact requirements without external dependencies.
+ * - NDJSON to three level-specific files (inclusive routing).
+ * - Dev stderr matches Rust tracing-subscriber's default format so both
+ *   processes produce visually identical terminal output.
+ * - stdout is NEVER touched — it is the exclusive JSON protocol channel.
  */
 
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 
 type Level = "debug" | "info" | "error";
 const LEVELS: Record<Level, number> = { debug: 0, info: 1, error: 2 };
+
+// ANSI codes matching Rust tracing-subscriber defaults.
+const DIM = "\x1b[2m";
+const RESET = "\x1b[0m";
+
+// Local RFC 3339 timestamp matching Rust's ChronoLocal default output.
+// Pads ms → µs (6 fractional digits) and appends the UTC offset.
+function localTs(): string {
+	const d = new Date();
+	const off = -d.getTimezoneOffset();
+	const sign = off >= 0 ? "+" : "-";
+	const abs = Math.abs(off);
+	const oh = String(Math.floor(abs / 60)).padStart(2, "0");
+	const om = String(abs % 60).padStart(2, "0");
+	const pad = (n: number, w = 2) => String(n).padStart(w, "0");
+	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}000${sign}${oh}:${om}`;
+}
+const LEVEL_FMT: Record<Level, { label: string; color: string }> = {
+	error: { label: "ERROR", color: "\x1b[31m" }, // red
+	info: { label: " INFO", color: "\x1b[32m" }, // green (right-padded to 5)
+	debug: { label: "DEBUG", color: "\x1b[34m" }, // blue
+};
+
+function fmtValue(v: unknown): string {
+	if (typeof v === "string") return `"${v}"`;
+	if (v === null || v === undefined) return String(v);
+	if (typeof v === "object") return JSON.stringify(v);
+	return String(v);
+}
 
 class Logger {
 	private minLevel: number;
@@ -46,9 +64,8 @@ class Logger {
 		const logDir = process.env.HELMOR_LOG_DIR;
 		if (logDir) {
 			mkdirSync(logDir, { recursive: true });
-			const today = new Date().toISOString().slice(0, 10);
-			const path = (lvl: string) =>
-				`${logDir}/sidecar-${lvl}.${today}.jsonl`;
+			const today = localTs().slice(0, 10);
+			const path = (lvl: string) => `${logDir}/sidecar-${lvl}.${today}.jsonl`;
 			this.files.debug = createWriteStream(path("debug"), { flags: "a" });
 			this.files.info = createWriteStream(path("info"), { flags: "a" });
 			this.files.error = createWriteStream(path("error"), { flags: "a" });
@@ -56,32 +73,65 @@ class Logger {
 	}
 
 	debug(msg: string, data?: Record<string, unknown>): void {
-		this.write("debug", msg, data);
+		this.emit("debug", msg, data);
 	}
 	info(msg: string, data?: Record<string, unknown>): void {
-		this.write("info", msg, data);
+		this.emit("info", msg, data);
 	}
 	error(msg: string, data?: Record<string, unknown>): void {
-		this.write("error", msg, data);
+		this.emit("error", msg, data);
 	}
 
-	private write(
+	/** Log a raw SDK event. Full payload → JSONL; compact summary → stderr. */
+	sdkEvent(requestId: string, event: unknown): void {
+		if (LEVELS.debug < this.minLevel) return;
+
+		const ts = localTs();
+		const evt =
+			typeof event === "object" && event !== null
+				? (event as Record<string, unknown>)
+				: {};
+		const type = String(evt.type ?? "unknown");
+
+		// Full event → JSONL debug file
+		const line = `${JSON.stringify({ ts, level: "debug", source: "sidecar", msg: "sdk_event", requestId, type, event })}\n`;
+		this.files.debug?.write(line);
+
+		if (this.devStderr) {
+			const { label, color } = LEVEL_FMT.debug;
+			process.stderr.write(
+				`${DIM}${localTs()}${RESET} ${color}${label}${RESET} ${DIM}sidecar:${RESET} [${requestId}] ← sdk type=${type}\n`,
+			);
+		}
+	}
+
+	private emit(
 		level: Level,
 		msg: string,
 		data?: Record<string, unknown>,
 	): void {
 		if (LEVELS[level] < this.minLevel) return;
 
-		const line = `${JSON.stringify({ ts: new Date().toISOString(), level, source: "sidecar", msg, ...data })}\n`;
+		const ts = localTs();
+		const line = `${JSON.stringify({ ts, level, source: "sidecar", msg, ...data })}\n`;
 
 		// Inclusive file routing
 		this.files.debug?.write(line);
 		if (LEVELS[level] >= LEVELS.info) this.files.info?.write(line);
 		if (LEVELS[level] >= LEVELS.error) this.files.error?.write(line);
 
-		// Human-readable stderr for dev
+		// Human-readable stderr matching Rust tracing format
 		if (this.devStderr) {
-			process.stderr.write(`[sidecar:${level}] ${msg}\n`);
+			const { label, color } = LEVEL_FMT[level];
+			let fields = "";
+			if (data) {
+				for (const [k, v] of Object.entries(data)) {
+					fields += ` ${k}=${fmtValue(v)}`;
+				}
+			}
+			process.stderr.write(
+				`${DIM}${localTs()}${RESET} ${color}${label}${RESET} ${DIM}sidecar:${RESET} ${msg}${fields}\n`,
+			);
 		}
 	}
 }

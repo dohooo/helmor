@@ -791,4 +791,46 @@ mod tests {
         assert_eq!(status.conflict_count, 1);
         assert!(status.uncommitted_count >= 1);
     }
+
+    /// Clone a repo so we have a real `origin` remote with tracking refs.
+    fn init_repo_with_remote() -> (tempfile::TempDir, tempfile::TempDir) {
+        let origin = init_repo();
+        let clone_dir = tempfile::tempdir().unwrap();
+        run_git(
+            ["clone", &origin.path().display().to_string(), &clone_dir.path().display().to_string()],
+            None,
+        )
+        .unwrap();
+        // Configure user in clone
+        run(clone_dir.path(), &["config", "user.email", "helmor@example.com"]);
+        run(clone_dir.path(), &["config", "user.name", "Helmor Test"]);
+        (origin, clone_dir)
+    }
+
+    fn has_upstream(repo: &Path, branch: &str) -> bool {
+        run_git(
+            ["-C", &repo.display().to_string(), "config", "--get", &format!("branch.{branch}.remote")],
+            None,
+        )
+        .is_ok()
+    }
+
+    #[test]
+    fn create_worktree_from_start_point_unsets_upstream() {
+        let (_origin, clone) = init_repo_with_remote();
+        let wt_dir = tempfile::tempdir().unwrap();
+
+        create_worktree_from_start_point(
+            clone.path(),
+            wt_dir.path(),
+            "workspace/test",
+            "origin/main",
+        )
+        .unwrap();
+
+        assert!(
+            !has_upstream(clone.path(), "workspace/test"),
+            "workspace branch should have no upstream after creation"
+        );
+    }
 }
