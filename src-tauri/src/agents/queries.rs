@@ -128,18 +128,16 @@ pub async fn generate_session_title(
             .ok();
 
         if let Some((workspace_id, old_branch, root_path, directory_name)) = workspace_info {
-            let branch_settings =
-                crate::settings::load_branch_prefix_settings().unwrap_or(
-                    crate::settings::BranchPrefixSettings {
-                        branch_prefix_type: None,
-                        branch_prefix_custom: None,
-                    },
-                );
+            let branch_settings = crate::settings::load_branch_prefix_settings().unwrap_or(
+                crate::settings::BranchPrefixSettings {
+                    branch_prefix_type: None,
+                    branch_prefix_custom: None,
+                },
+            );
 
-            if !old_branch
-                .as_deref()
-                .is_some_and(|b| crate::helpers::is_default_branch_name(b, &directory_name, &branch_settings))
-            {
+            if !old_branch.as_deref().is_some_and(|b| {
+                crate::helpers::is_default_branch_name(b, &directory_name, &branch_settings)
+            }) {
                 tracing::debug!(
                     workspace_id = %workspace_id,
                     "Skipping auto branch rename: branch already differs from default"

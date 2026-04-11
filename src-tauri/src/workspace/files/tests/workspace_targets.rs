@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use crate::{data_dir::TEST_ENV_LOCK as TEST_LOCK, git_ops};
 
 use super::{
-    find_merge_base, parse_workspace_path, query_workspace_target,
+    parse_workspace_path, query_workspace_target, resolve_target_ref,
     support::{test_db_with_workspace, TestDataDir},
 };
 
@@ -83,7 +83,7 @@ fn query_target_returns_none_for_archived_workspace() {
 }
 
 #[test]
-fn find_merge_base_uses_configured_target_branch() {
+fn resolve_target_ref_uses_configured_target_branch() {
     let _lock = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     let test_dir = TestDataDir::new("merge-base-target");
 
@@ -104,10 +104,6 @@ fn find_merge_base_uses_configured_target_branch() {
     fs::write(repo_root.join("target.txt"), "target\n").unwrap();
     git_ops::run_git(["add", "."], Some(&repo_root)).unwrap();
     git_ops::run_git(["commit", "-m", "target commit"], Some(&repo_root)).unwrap();
-    let target_sha = git_ops::run_git(["rev-parse", "HEAD"], Some(&repo_root))
-        .unwrap()
-        .trim()
-        .to_string();
 
     git_ops::run_git(["checkout", "-b", "workspace/dev"], Some(&repo_root)).unwrap();
     fs::write(repo_root.join("work.txt"), "work\n").unwrap();
@@ -141,9 +137,9 @@ fn find_merge_base_uses_configured_target_branch() {
 	.unwrap();
     drop(conn);
 
-    let base = find_merge_base(&workspace_dir).unwrap();
+    let resolved = resolve_target_ref(&workspace_dir).unwrap();
     assert_eq!(
-        base, target_sha,
-        "merge-base should be the target branch tip, not main"
+        resolved, "refs/heads/custom/target",
+        "should resolve to the configured target branch ref"
     );
 }
