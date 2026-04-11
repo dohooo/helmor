@@ -16,6 +16,19 @@ pub async fn create_workspace_from_repo(
     Ok(result)
 }
 
+/// Transition a workspace from "setup_pending" to "ready" (e.g. when no
+/// setup script is configured but the workspace was created with that state).
+#[tauri::command]
+pub async fn complete_workspace_setup(app: AppHandle, workspace_id: String) -> CmdResult<()> {
+    run_blocking(move || {
+        let ts = crate::models::db::current_timestamp()?;
+        crate::models::workspaces::update_workspace_state(&workspace_id, "ready", &ts)
+    })
+    .await?;
+    git_watcher::notify_workspace_changed(&app);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn list_workspace_groups() -> CmdResult<Vec<workspaces::WorkspaceSidebarGroup>> {
     run_blocking(workspaces::list_workspace_groups).await

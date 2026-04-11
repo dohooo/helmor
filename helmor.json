@@ -1,0 +1,5 @@
+{
+	"scripts": {
+		"setup": "cp \"$HELMOR_ROOT_PATH/.env.local\" \"$HELMOR_WORKSPACE_PATH/.env.local\"\npnpm install"
+	}
+}

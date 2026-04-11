@@ -8,6 +8,7 @@ import {
 	useState,
 } from "react";
 import { flushSync } from "react-dom";
+import { loadRepoScripts, type RepoScripts } from "@/lib/api";
 import type { InspectorFileItem } from "@/lib/editor-session";
 import { workspaceChangesQueryOptions } from "@/lib/query-client";
 import { MIN_SECTION_HEIGHT, TABS_ANIMATION_MS, TABS_EASING } from "../layout";
@@ -26,13 +27,25 @@ type ResizeState = {
 
 type UseWorkspaceInspectorSidebarArgs = {
 	workspaceRootPath?: string | null;
+	repoId: string | null;
+	workspaceState?: string | null;
 };
 
 export function useWorkspaceInspectorSidebar({
 	workspaceRootPath,
+	repoId,
+	workspaceState,
 }: UseWorkspaceInspectorSidebarArgs) {
 	const [tabsOpen, setTabsOpen] = useState(false);
 	const [activeTab, setActiveTab] = useState("setup");
+
+	// Auto-open the setup tab when workspace needs setup.
+	useEffect(() => {
+		if (workspaceState === "setup_pending") {
+			setTabsOpen(true);
+			setActiveTab("setup");
+		}
+	}, [workspaceState]);
 	const [changesHeight, setChangesHeight] = useState(0);
 	const [actionsHeight, setActionsHeight] = useState(0);
 	const [resizeState, setResizeState] = useState<ResizeState | null>(null);
@@ -56,6 +69,15 @@ export function useWorkspaceInspectorSidebar({
 		setChangesHeight(Math.round(resizableAvailable * DEFAULT_CHANGES_RATIO));
 		setActionsHeight(Math.round(resizableAvailable * DEFAULT_ACTIONS_RATIO));
 	}, [changesHeight]);
+
+	const repoScriptsQuery = useQuery({
+		queryKey: ["repoScripts", repoId],
+		queryFn: () => loadRepoScripts(repoId!),
+		enabled: !!repoId,
+		staleTime: 0,
+	});
+	const repoScripts: RepoScripts | null = repoScriptsQuery.data ?? null;
+	const scriptsLoaded = repoScriptsQuery.isFetched;
 
 	const isResizing = resizeState !== null;
 	const isActionsResizing = resizeState?.target === "actions";
@@ -269,6 +291,8 @@ export function useWorkspaceInspectorSidebar({
 		isActionsResizing,
 		isResizing,
 		isTabsResizing,
+		repoScripts,
+		scriptsLoaded,
 		setActiveTab,
 		tabsOpen,
 		tabsWrapperRef,

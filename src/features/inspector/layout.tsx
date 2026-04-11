@@ -35,6 +35,7 @@ type InspectorTabsSectionProps = {
 	onToggle: () => void;
 	activeTab: string;
 	onTabChange: (tab: string) => void;
+	children?: React.ReactNode;
 };
 
 export function InspectorTabsSection({
@@ -43,6 +44,7 @@ export function InspectorTabsSection({
 	onToggle,
 	activeTab,
 	onTabChange,
+	children,
 }: InspectorTabsSectionProps) {
 	return (
 		<div
@@ -68,13 +70,13 @@ export function InspectorTabsSection({
 						>
 							<TabsTrigger
 								value="setup"
-								className="h-9 w-auto gap-0 px-0 text-[12px] font-medium text-muted-foreground data-[state=active]:border-muted-foreground/80 data-[state=active]:bg-transparent data-[state=active]:text-foreground"
+								className="h-9 w-auto gap-0 border-transparent px-0 text-[12px] font-medium text-muted-foreground focus-visible:border-transparent focus-visible:ring-0 focus-visible:outline-none data-[state=active]:bg-transparent data-[state=active]:text-foreground"
 							>
 								Setup
 							</TabsTrigger>
 							<TabsTrigger
 								value="run"
-								className="h-9 w-auto gap-0 px-0 text-[12px] font-medium text-muted-foreground data-[state=active]:border-muted-foreground/80 data-[state=active]:bg-transparent data-[state=active]:text-foreground"
+								className="h-9 w-auto gap-0 border-transparent px-0 text-[12px] font-medium text-muted-foreground focus-visible:border-transparent focus-visible:ring-0 focus-visible:outline-none data-[state=active]:bg-transparent data-[state=active]:text-foreground"
 							>
 								Run
 							</TabsTrigger>
@@ -101,8 +103,10 @@ export function InspectorTabsSection({
 					{open && (
 						<div
 							aria-label="Inspector tabs body"
-							className="min-h-0 flex-1 bg-sidebar"
-						/>
+							className="flex min-h-0 flex-1 flex-col bg-sidebar"
+						>
+							{children}
+						</div>
 					)}
 				</Tabs>
 			</section>

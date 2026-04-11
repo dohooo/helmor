@@ -198,8 +198,8 @@ pub(crate) fn insert_initializing_workspace_and_session(
                 branch,
                 default_branch,
                 default_branch,
-                initialization_log_path.display().to_string(),
                 setup_log_path.display().to_string(),
+                initialization_log_path.display().to_string(),
                 timestamp,
             ),
         )

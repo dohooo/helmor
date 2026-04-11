@@ -115,7 +115,12 @@ function App() {
 				<AppShell onOpenSettings={() => setSettingsOpen(true)} />
 				<SettingsDialog
 					open={settingsOpen}
-					onClose={() => setSettingsOpen(false)}
+					onClose={() => {
+						setSettingsOpen(false);
+						void queryClient.invalidateQueries({
+							queryKey: ["repoScripts"],
+						});
+					}}
 				/>
 			</PersistQueryClientProvider>
 		</SettingsContext.Provider>
@@ -1468,6 +1473,10 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 									<WorkspaceInspectorSidebar
 										workspaceId={selectedWorkspaceId}
 										workspaceRootPath={workspaceRootPath}
+										workspaceState={
+											selectedWorkspaceDetailQuery.data?.state ?? null
+										}
+										repoId={selectedWorkspaceDetailQuery.data?.repoId ?? null}
 										workspaceBranch={
 											selectedWorkspaceDetailQuery.data?.branch ?? null
 										}
@@ -1486,6 +1495,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 										commitButtonMode={commitButtonMode}
 										commitButtonState={commitButtonState}
 										prInfo={workspacePrInfo}
+										onOpenSettings={onOpenSettings}
 									/>
 								</aside>
 							</div>

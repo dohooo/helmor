@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { InspectorFileItem } from "./editor-session";
 
@@ -1212,6 +1212,12 @@ export async function createWorkspaceFromRepo(
 	});
 }
 
+export async function completeWorkspaceSetup(
+	workspaceId: string,
+): Promise<void> {
+	return invoke("complete_workspace_setup", { workspaceId });
+}
+
 export async function addRepositoryFromLocalPath(
 	folderPath: string,
 ): Promise<AddRepositoryResponse> {
@@ -1589,6 +1595,70 @@ export async function loadHiddenSessions(
 	} catch {
 		return [];
 	}
+}
+
+// ---- Repository scripts ----
+
+export type RepoScripts = {
+	setupScript?: string | null;
+	runScript?: string | null;
+	archiveScript?: string | null;
+	setupFromProject: boolean;
+	runFromProject: boolean;
+	archiveFromProject: boolean;
+};
+
+export type ScriptEvent =
+	| { type: "started"; pid: number; command: string }
+	| { type: "stdout"; data: string }
+	| { type: "stderr"; data: string }
+	| { type: "exited"; code: number | null }
+	| { type: "error"; message: string };
+
+export async function loadRepoScripts(repoId: string): Promise<RepoScripts> {
+	return invoke<RepoScripts>("load_repo_scripts", { repoId });
+}
+
+export async function updateRepoScripts(
+	repoId: string,
+	setupScript: string | null,
+	runScript: string | null,
+	archiveScript: string | null,
+): Promise<void> {
+	await invoke("update_repo_scripts", {
+		repoId,
+		setupScript,
+		runScript,
+		archiveScript,
+	});
+}
+
+export async function executeRepoScript(
+	repoId: string,
+	scriptType: "setup" | "run",
+	onEvent: (event: ScriptEvent) => void,
+	workspaceId?: string | null,
+): Promise<void> {
+	const channel = new Channel<ScriptEvent>();
+	channel.onmessage = onEvent;
+	await invoke("execute_repo_script", {
+		repoId,
+		scriptType,
+		workspaceId: workspaceId ?? null,
+		channel,
+	});
+}
+
+export async function stopRepoScript(
+	repoId: string,
+	scriptType: "setup" | "run",
+	workspaceId?: string | null,
+): Promise<boolean> {
+	return invoke<boolean>("stop_repo_script", {
+		repoId,
+		scriptType,
+		workspaceId: workspaceId ?? null,
+	});
 }
 
 export { DEFAULT_AGENT_MODEL_SECTIONS, DEFAULT_WORKSPACE_GROUPS };

@@ -259,16 +259,6 @@ impl CreateTestHarness {
         crate::data_dir::workspace_dir(&self.repo_name, directory_name).unwrap()
     }
 
-    pub(crate) fn set_repo_setup_script(&self, script: Option<&str>) {
-        let connection = Connection::open(self.db_path()).unwrap();
-        connection
-            .execute(
-                "UPDATE repos SET setup_script = ?2 WHERE id = ?1",
-                (&self.repo_id, script),
-            )
-            .unwrap();
-    }
-
     pub(crate) fn insert_workspace_name(&self, directory_name: &str) {
         let connection = Connection::open(self.db_path()).unwrap();
         connection

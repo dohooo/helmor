@@ -31,6 +31,10 @@ export type PresentedSessionPane = {
 type RenderedMessage = ThreadMessageLike;
 type ThreadViewportSlot = ComponentType<Record<string, never>>;
 
+// Persists streaming start times across component unmount/remount cycles
+// (e.g. when switching sessions/workspaces and back).
+const streamingStartTimes = new Map<string, number>();
+
 const CHAT_LAYOUT_CACHE_VERSION = "chat-layout-v1";
 const NON_VIRTUALIZED_THREAD_MESSAGE_LIMIT = 12;
 const PROGRESSIVE_VIEWPORT_DEFAULT_HEIGHT = 900;
@@ -133,6 +137,14 @@ function ChatThread({
 		},
 		[scrollRef],
 	);
+	// Track streaming start time per session so the timer survives session switches.
+	if (sending && !streamingStartTimes.has(sessionId)) {
+		streamingStartTimes.set(sessionId, Date.now());
+	} else if (!sending) {
+		streamingStartTimes.delete(sessionId);
+	}
+	const sendingStartTime = streamingStartTimes.get(sessionId) ?? 0;
+
 	const previousSendingRef = useRef(sending);
 	const sendingJustStarted = sending && !previousSendingRef.current;
 
@@ -189,6 +201,7 @@ function ChatThread({
 				scrollRef={handleScrollRef}
 				sessionId={sessionId}
 				sending={sending}
+				sendingStartTime={sendingStartTime}
 				stopScroll={stopScroll}
 				usePlainThread={usePlainThread}
 			>
@@ -222,6 +235,7 @@ function ConversationViewport({
 	scrollRef,
 	sessionId,
 	sending,
+	sendingStartTime,
 	stopScroll,
 	usePlainThread,
 }: {
@@ -237,6 +251,7 @@ function ConversationViewport({
 	scrollRef: React.RefCallback<HTMLElement>;
 	sessionId: string;
 	sending: boolean;
+	sendingStartTime: number;
 	stopScroll: () => void;
 	usePlainThread: boolean;
 }) {
@@ -252,7 +267,7 @@ function ConversationViewport({
 
 	const Header: ThreadViewportSlot = ConversationHeaderSpacer;
 	const Footer: ThreadViewportSlot = sending
-		? StreamingFooter
+		? () => <StreamingFooter startTime={sendingStartTime} />
 		: ConversationFooterSpacer;
 	const EmptyPlaceholder: ThreadViewportSlot = () => (
 		<div className="flex min-h-full flex-1 items-center justify-center px-8">
@@ -836,16 +851,17 @@ function ConversationFooterSpacer() {
 	return <div className="h-5 shrink-0" />;
 }
 
-function StreamingFooter() {
-	const [elapsed, setElapsed] = useState(0);
+function StreamingFooter({ startTime }: { startTime: number }) {
+	const [elapsed, setElapsed] = useState(() =>
+		Math.floor((Date.now() - startTime) / 1000),
+	);
 
 	useEffect(() => {
-		const start = Date.now();
 		const intervalId = window.setInterval(() => {
-			setElapsed(Math.floor((Date.now() - start) / 1000));
+			setElapsed(Math.floor((Date.now() - startTime) / 1000));
 		}, 1000);
 		return () => window.clearInterval(intervalId);
-	}, []);
+	}, [startTime]);
 
 	const display =
 		elapsed < 60
