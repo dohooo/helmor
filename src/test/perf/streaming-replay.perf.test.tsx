@@ -178,12 +178,11 @@ function resetStats() {
 	).__HELMOR_DEV_RENDER_STATS__ = undefined;
 }
 
-type LazyPanel =
-	typeof import("@/components/workspace-panel")["WorkspacePanel"];
+type LazyPanel = typeof import("@/features/panel")["WorkspacePanel"];
 let WorkspacePanel: LazyPanel;
 
 beforeAll(async () => {
-	const mod = await import("@/components/workspace-panel");
+	const mod = await import("@/features/panel");
 	WorkspacePanel = mod.WorkspacePanel;
 });
 

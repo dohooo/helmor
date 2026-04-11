@@ -8,8 +8,8 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import { WorkspacePanel } from "./components/workspace-panel";
-import { WorkspacesSidebar } from "./components/workspaces-sidebar";
+import { WorkspacesSidebar } from "./features/navigation";
+import { WorkspacePanel } from "./features/panel";
 import type { RepositoryCreateOption, WorkspaceGroup } from "./lib/api";
 import { renderWithProviders } from "./test/render-with-providers";
 

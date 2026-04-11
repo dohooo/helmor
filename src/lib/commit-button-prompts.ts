@@ -1,4 +1,4 @@
-import type { WorkspaceCommitButtonMode } from "@/components/workspace-commit-button";
+import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 
 /**
  * Full prompt templates dispatched to a freshly created session when the

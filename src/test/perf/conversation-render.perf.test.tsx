@@ -240,12 +240,11 @@ function resetStats() {
 // ---------------------------------------------------------------------------
 
 // Lazy import so the URL flip and mocks above are in place first.
-type LazyPanel =
-	typeof import("@/components/workspace-panel")["WorkspacePanel"];
+type LazyPanel = typeof import("@/features/panel")["WorkspacePanel"];
 let WorkspacePanel: LazyPanel;
 
 beforeAll(async () => {
-	const mod = await import("@/components/workspace-panel");
+	const mod = await import("@/features/panel");
 	WorkspacePanel = mod.WorkspacePanel;
 });
 

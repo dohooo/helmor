@@ -1,7 +1,7 @@
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
-} from "@/components/workspace-commit-button";
+} from "@/features/commit/button";
 import type { PullRequestInfo } from "./api";
 
 /**
