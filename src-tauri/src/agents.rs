@@ -144,10 +144,7 @@ pub fn abort_all_active_streams_blocking(
         return;
     }
 
-    eprintln!(
-        "[agents] Graceful shutdown — aborting {} active stream(s)",
-        handles.len()
-    );
+    tracing::info!(count = handles.len(), "Graceful shutdown — aborting active streams");
 
     for handle in &handles {
         let stop_req = crate::sidecar::SidecarRequest {
@@ -159,10 +156,7 @@ pub fn abort_all_active_streams_blocking(
             }),
         };
         if let Err(e) = sidecar.send(&stop_req) {
-            eprintln!(
-                "[agents] Failed to send stopSession during shutdown for {}: {e}",
-                handle.request_id
-            );
+            tracing::error!(request_id = %handle.request_id, "Failed to send stopSession during shutdown: {e}");
         }
     }
 
@@ -177,11 +171,9 @@ pub fn abort_all_active_streams_blocking(
 
     let remaining = active.len();
     if remaining == 0 {
-        eprintln!("[agents] Graceful shutdown — all streams drained cleanly");
+        tracing::info!("Graceful shutdown — all streams drained cleanly");
     } else {
-        eprintln!(
-            "[agents] Graceful shutdown — timeout reached, {remaining} stream(s) still active (sidecar will be killed by Drop)"
-        );
+        tracing::info!(remaining, "Graceful shutdown — timeout, streams still active");
     }
 }
 
@@ -434,10 +426,7 @@ pub async fn respond_to_permission_request(
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
     request: PermissionResponseRequest,
 ) -> CmdResult<()> {
-    eprintln!(
-        "[agents] Permission response: id={} behavior={}",
-        request.permission_id, request.behavior
-    );
+    tracing::info!(permission_id = %request.permission_id, behavior = %request.behavior, "Permission response");
     let req = crate::sidecar::SidecarRequest {
         id: Uuid::new_v4().to_string(),
         method: "permissionResponse".to_string(),
@@ -552,7 +541,7 @@ pub async fn generate_session_title(
                             .get("message")
                             .and_then(Value::as_str)
                             .unwrap_or("Unknown error");
-                        eprintln!("[generate_session_title] Sidecar error: {msg}");
+                        tracing::error!("generate_session_title: sidecar error: {msg}");
                         break;
                     }
                     _ => {
@@ -628,9 +617,7 @@ pub async fn generate_session_title(
                         ) {
                             Ok(_) => true,
                             Err(error) => {
-                                eprintln!(
-                                    "[generate_session_title] git branch -m {old_name} {new_branch} failed: {error:#}; leaving branch unchanged"
-                                );
+                                tracing::error!(old = old_name, new = %new_branch, "git branch -m failed: {error:#}; leaving branch unchanged");
                                 false
                             }
                         }
@@ -649,9 +636,7 @@ pub async fn generate_session_title(
                         "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
                         (&new_branch, &workspace_id),
                     ) {
-                        eprintln!(
-                            "[generate_session_title] DB UPDATE workspaces.branch failed for {workspace_id}: {error:#}"
-                        );
+                        tracing::error!(workspace_id = %workspace_id, "DB UPDATE workspaces.branch failed: {error:#}");
                         // Roll back the FS rename so the two sides agree.
                         if fs_rename_attempted {
                             if let (Some(ref old_name), Some(ref repo_root)) =
@@ -661,9 +646,7 @@ pub async fn generate_session_title(
                                     ["-C", repo_root, "branch", "-m", &new_branch, old_name],
                                     None,
                                 ) {
-                                    eprintln!(
-                                        "[generate_session_title] FS rollback git branch -m {new_branch} {old_name} also failed: {rb_err:#}; FS={new_branch}, DB={old_name} — manual reconciliation required"
-                                    );
+                                    tracing::error!(fs = %new_branch, db = old_name, "FS rollback git branch -m also failed: {rb_err:#} — manual reconciliation required");
                                 }
                             }
                         }
@@ -816,12 +799,6 @@ pub async fn list_slash_commands(
     result
 }
 
-fn sidecar_debug_enabled() -> bool {
-    std::env::var("HELMOR_SIDECAR_DEBUG")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-}
-
 #[allow(clippy::too_many_arguments)]
 fn stream_via_sidecar(
     app: AppHandle,
@@ -835,17 +812,14 @@ fn stream_via_sidecar(
     working_directory: &Path,
 ) -> CmdResult<()> {
     let request_id = stream_id.to_string();
-    let debug = sidecar_debug_enabled();
 
-    if debug {
-        eprintln!(
-            "[agents:debug] stream_via_sidecar — provider={} model={} cwd={} prompt_len={}",
-            model.provider,
-            model.cli_model,
-            working_directory.display(),
-            prompt.len()
-        );
-    }
+    tracing::debug!(
+        provider = %model.provider,
+        model = %model.cli_model,
+        cwd = %working_directory.display(),
+        prompt_len = prompt.len(),
+        "stream_via_sidecar"
+    );
 
     // Resume id: prefer the one the frontend passed, otherwise look it up
     // in the DB. Provider isolation only — passing a Codex thread id to
@@ -869,12 +843,12 @@ fn stream_via_sidecar(
         })
     });
 
-    if debug {
-        eprintln!(
-            "[agents:debug] resume_session_id={:?} helmor_session_id={:?} provider={}",
-            resume_session_id, request.helmor_session_id, model.provider
-        );
-    }
+    tracing::debug!(
+        resume_session_id = ?resume_session_id,
+        helmor_session_id = ?request.helmor_session_id,
+        provider = %model.provider,
+        "Session resume context"
+    );
 
     let helmor_session_id = request.helmor_session_id.clone();
 
@@ -945,7 +919,6 @@ fn stream_via_sidecar(
                 &pipeline_session_id,
             )
         });
-        let debug = sidecar_debug_enabled();
         let mut event_count: u64 = 0;
 
         // --- Incremental persistence setup ---
@@ -971,20 +944,16 @@ fn stream_via_sidecar(
 
             match persist_user_message(conn, &ctx, &prompt_copy, &files_copy) {
                 Ok(()) => {
-                    if debug {
-                        eprintln!("[agents:debug] [{rid}] User message persisted to DB");
-                    }
+                    tracing::debug!(rid = %rid, "User message persisted to DB");
                     exchange_ctx = Some(ctx);
                 }
                 Err(e) => {
-                    eprintln!("[agents] Failed to persist user message: {e}");
+                    tracing::error!(rid = %rid, "Failed to persist user message: {e}");
                 }
             }
         }
 
-        if debug {
-            eprintln!("[agents:debug] [{rid}] Waiting for sidecar events...");
-        }
+        tracing::debug!(rid = %rid, "Waiting for sidecar events...");
 
         // Receive events from our dedicated channel (dispatched by request ID)
         for event in rx.iter() {
@@ -1001,9 +970,9 @@ fn stream_via_sidecar(
                             "UPDATE sessions SET provider_session_id = ?2, agent_type = ?3 WHERE id = ?1",
                             params![ctx.helmor_session_id, sid, ctx.model_provider],
                         ) {
-                            eprintln!("[agents] Failed to persist session id: {e}");
-                        } else if debug {
-                            eprintln!("[agents:debug] [{rid}] provider_session_id = {sid}");
+                            tracing::error!(rid = %rid, "Failed to persist session id: {e}");
+                        } else {
+                            tracing::debug!(rid = %rid, provider_session_id = sid, "Session ID persisted");
                         }
                     }
                 }
@@ -1053,9 +1022,7 @@ fn stream_via_sidecar(
                                 ) {
                                     Ok(_) => persisted_turn_count += 1,
                                     Err(e) => {
-                                        eprintln!(
-                                            "[agents] Failed to persist turn {persisted_turn_count}: {e}"
-                                        );
+                                        tracing::error!(turn = persisted_turn_count, "Failed to persist turn: {e}");
                                         break;
                                     }
                                 }
@@ -1097,7 +1064,7 @@ fn stream_via_sidecar(
                                 )
                             };
                             if let Err(e) = persistence_result {
-                                eprintln!("[agents] Failed to finalize exchange: {e}");
+                                tracing::error!(rid = %rid, "Failed to finalize exchange: {e}");
                             }
                         }
                     }
@@ -1152,11 +1119,7 @@ fn stream_via_sidecar(
                         .get("description")
                         .and_then(Value::as_str)
                         .map(str::to_string);
-                    if debug {
-                        eprintln!(
-                            "[agents:debug] [{rid}] Permission request: tool={tool_name} id={permission_id}"
-                        );
-                    }
+                    tracing::debug!(rid = %rid, tool = %tool_name, permission_id = %permission_id, "Permission request");
                     let _ = on_event.send(AgentStreamEvent::PermissionRequest {
                         permission_id,
                         tool_name,
@@ -1177,11 +1140,7 @@ fn stream_via_sidecar(
                         .get("internal")
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
-                    if debug {
-                        eprintln!(
-                            "[agents:debug] [{rid}] Sidecar error (internal={internal}): {msg}"
-                        );
-                    }
+                    tracing::debug!(rid = %rid, internal, "Sidecar error: {msg}");
                     let _ = on_event.send(AgentStreamEvent::Error {
                         message: msg,
                         persisted: exchange_ctx.is_some(),
@@ -1209,9 +1168,7 @@ fn stream_via_sidecar(
                                             persisted_turn_count += 1;
                                         }
                                         Err(e) => {
-                                            eprintln!(
-                                                "[agents] Failed to persist turn {persisted_turn_count}: {e}"
-                                            );
+                                            tracing::error!(turn = persisted_turn_count, "Failed to persist turn: {e}");
                                             break;
                                         }
                                     }
@@ -1235,9 +1192,7 @@ fn stream_via_sidecar(
             }
         }
 
-        if debug {
-            eprintln!("[agents:debug] [{rid}] Event loop exited after {event_count} events");
-        }
+        tracing::debug!(rid = %rid, event_count, "Event loop exited");
         sidecar_state.unsubscribe(&rid);
         // Always unregister — covers all exit paths (end / aborted / error /
         // sidecar EOF / channel close on shutdown). The graceful-shutdown

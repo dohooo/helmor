@@ -2,6 +2,7 @@ pub mod agents;
 pub mod data_dir;
 pub mod error;
 mod import;
+pub mod logging;
 pub mod mcp;
 mod models;
 pub mod pipeline;
@@ -42,10 +43,7 @@ fn export_bundled_agent_paths(handle: &tauri::AppHandle) {
         .ok()
         .filter(|p| p.is_file());
     if let Some(path) = cli_js {
-        eprintln!(
-            "[setup] Claude Code CLI → {} (bundled resource)",
-            path.display()
-        );
+        tracing::info!(path = %path.display(), "Claude Code CLI (bundled resource)");
         // SAFETY: set_var is `unsafe` in Rust 2024 editions; we're in setup
         // before any threads spawn that would race with env reads.
         unsafe {
@@ -63,7 +61,7 @@ fn export_bundled_agent_paths(handle: &tauri::AppHandle) {
         .ok()
         .filter(|p| p.is_file());
     if let Some(path) = codex_bin {
-        eprintln!("[setup] Codex CLI → {} (bundled resource)", path.display());
+        tracing::info!(path = %path.display(), "Codex CLI (bundled resource)");
         unsafe {
             std::env::set_var("HELMOR_CODEX_BIN_PATH", path);
         }
@@ -82,10 +80,7 @@ fn export_bundled_agent_paths(handle: &tauri::AppHandle) {
         .ok()
         .filter(|p| p.is_file());
     if let Some(path) = bun_bin {
-        eprintln!(
-            "[setup] bun runtime → {} (bundled resource)",
-            path.display()
-        );
+        tracing::info!(path = %path.display(), "bun runtime (bundled resource)");
         unsafe {
             std::env::set_var("HELMOR_BUN_PATH", path);
         }
@@ -110,15 +105,27 @@ pub fn run() {
             // Ensure data directory structure exists
             data_dir::ensure_directory_structure().expect("Failed to create Helmor data directory");
 
+            // Initialize structured logging (must come before any tracing macro call)
+            let logs_dir =
+                data_dir::logs_dir().expect("Failed to resolve logs directory");
+            logging::init(&logs_dir).expect("Failed to initialize logging");
+
+            // Background cleanup: compress old logs, purge > 7 days
+            let cleanup_dir = logs_dir;
+            std::thread::Builder::new()
+                .name("log-cleanup".into())
+                .spawn(move || logging::cleanup(&cleanup_dir))
+                .ok();
+
             // Initialize database schema
             let db_path = data_dir::db_path().expect("Failed to resolve database path");
             let connection = rusqlite::Connection::open(&db_path).expect("Failed to open database");
             schema::ensure_schema(&connection).expect("Failed to initialize database schema");
 
-            eprintln!(
-                "Helmor {} — data: {}",
-                data_dir::data_mode_label(),
-                db_path.display()
+            tracing::info!(
+                mode = data_dir::data_mode_label(),
+                data = %db_path.display(),
+                "Helmor started"
             );
 
             // Resolve bundled Claude Code + Codex CLI resources and publish
@@ -243,13 +250,13 @@ pub fn run() {
 
         // Second pass after the user confirmed — don't re-prompt.
         if SHUTDOWN_CONFIRMED.load(Ordering::Acquire) {
-            eprintln!("[shutdown] CloseRequested[{label}] — confirmed, letting through");
+            tracing::debug!(window = %label, "CloseRequested — confirmed, letting through");
             return;
         }
 
         let active = app_handle.state::<agents::ActiveStreams>();
         let count = active.len();
-        eprintln!("[shutdown] CloseRequested[{label}] — {count} active stream(s)");
+        tracing::info!(window = %label, count, "CloseRequested");
 
         if count == 0 {
             // No active streams, but still shut down the sidecar cooperatively
@@ -269,7 +276,7 @@ pub fn run() {
         // Guard against duplicate dialogs from rapid-fire CloseRequested
         // events (multiple windows, double Cmd+Q, etc.).
         if SHUTDOWN_DIALOG_OPEN.swap(true, Ordering::AcqRel) {
-            eprintln!("[shutdown] Dialog already on screen, swallowing duplicate");
+            tracing::debug!("Shutdown dialog already on screen, swallowing duplicate");
             return;
         }
 
@@ -280,7 +287,7 @@ pub fn run() {
             format!("There are {count} tasks in progress. Quitting now will cancel them.")
         };
 
-        eprintln!("[shutdown] Showing confirmation dialog");
+        tracing::info!("Showing shutdown confirmation dialog");
         app_handle
             .dialog()
             .message(message)
@@ -293,11 +300,11 @@ pub fn run() {
                 SHUTDOWN_DIALOG_OPEN.store(false, Ordering::Release);
 
                 if !confirmed {
-                    eprintln!("[shutdown] User cancelled — staying running");
+                    tracing::info!("Shutdown cancelled by user");
                     return;
                 }
 
-                eprintln!("[shutdown] User confirmed — aborting active streams");
+                tracing::info!("User confirmed shutdown — aborting active streams");
                 // We're on a worker thread now, so the blocking helpers are
                 // safe to call.
                 let sidecar = app_handle_clone.state::<sidecar::ManagedSidecar>();
@@ -316,7 +323,7 @@ pub fn run() {
                     std::time::Duration::from_millis(500),
                 );
                 SHUTDOWN_CONFIRMED.store(true, Ordering::Release);
-                eprintln!("[shutdown] Cleanup done, calling exit(0)");
+                tracing::info!("Shutdown cleanup done, calling exit(0)");
                 app_handle_clone.exit(0);
             });
     });

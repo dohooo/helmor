@@ -299,7 +299,7 @@ pub fn send_message(
                 while persisted_turn_count < pipeline.accumulator.turns_len() {
                     let turn = pipeline.accumulator.turn_at(persisted_turn_count);
                     if let Err(e) = persist_turn(&conn, &session_id, turn, &model_str, &turn_id) {
-                        eprintln!("[helmor] Failed to persist turn: {e}");
+                        tracing::error!("Failed to persist turn: {e}");
                         break;
                     }
                     persisted_turn_count += 1;
@@ -404,7 +404,7 @@ pub fn send_message(
                         let turn = pipeline.accumulator.turn_at(persisted_turn_count);
                         if let Err(e) = persist_turn(&conn, &session_id, turn, &model_str, &turn_id)
                         {
-                            eprintln!("[helmor] Failed to persist turn: {e}");
+                            tracing::error!("Failed to persist turn: {e}");
                             break;
                         }
                         persisted_turn_count += 1;

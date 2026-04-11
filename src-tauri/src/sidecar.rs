@@ -22,24 +22,6 @@ use serde::Serialize;
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------
-// Debug logging — enabled via HELMOR_SIDECAR_DEBUG=1
-// ---------------------------------------------------------------------------
-
-fn debug_enabled() -> bool {
-    std::env::var("HELMOR_SIDECAR_DEBUG")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-}
-
-macro_rules! sidecar_debug {
-    ($($arg:tt)*) => {
-        if debug_enabled() {
-            eprintln!("[sidecar:debug] {}", format!($($arg)*));
-        }
-    };
-}
-
-// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -90,9 +72,7 @@ impl SidecarProcess {
     /// Returns the process and a BufReader for stdout (to be consumed by the reader thread).
     fn start() -> Result<(Self, BufReader<std::process::ChildStdout>)> {
         let sidecar_path = resolve_sidecar_path()?;
-        sidecar_debug!("Resolved sidecar path: {}", sidecar_path.display());
-
-        let debug = debug_enabled();
+        tracing::debug!(path = %sidecar_path.display(), "Resolved sidecar path");
 
         // Development (.ts) → bun run index.ts
         // Production (compiled binary) → execute directly
@@ -119,17 +99,20 @@ impl SidecarProcess {
             cmd.process_group(0);
         }
 
-        if debug {
+        // Pass log dir + debug flag to the sidecar process
+        if let Ok(dir) = crate::data_dir::logs_dir() {
+            cmd.env("HELMOR_LOG_DIR", dir);
+        }
+        if std::env::var("HELMOR_SIDECAR_DEBUG")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+        {
             cmd.env("HELMOR_SIDECAR_DEBUG", "1");
         }
 
-        sidecar_debug!(
-            "Spawning: {}",
-            if is_dev {
-                format!("bun run {}", sidecar_path.display())
-            } else {
-                sidecar_path.display().to_string()
-            }
+        tracing::debug!(
+            cmd = if is_dev { format!("bun run {}", sidecar_path.display()) } else { sidecar_path.display().to_string() },
+            "Spawning sidecar"
         );
 
         let mut child = cmd.spawn().with_context(|| {
@@ -150,7 +133,7 @@ impl SidecarProcess {
             .context("Failed to capture sidecar stdout")?;
         let mut reader = BufReader::new(stdout);
 
-        sidecar_debug!("Waiting for ready signal...");
+        tracing::debug!("Waiting for sidecar ready signal...");
 
         // Wait for "ready" signal
         let mut line = String::new();
@@ -164,7 +147,7 @@ impl SidecarProcess {
             bail!("Unexpected sidecar startup message: {line}");
         }
 
-        eprintln!("[sidecar] Started (pid={})", child.id());
+        tracing::info!(pid = child.id(), "Sidecar started");
 
         let process = Self {
             child,
@@ -180,12 +163,7 @@ impl SidecarProcess {
             .map_err(|_| anyhow::anyhow!("Sidecar stdin lock poisoned"))?;
 
         let json = serde_json::to_string(request).context("Failed to serialize request")?;
-        sidecar_debug!(
-            "→ stdin [{}] {} ({}B)",
-            request.id,
-            request.method,
-            json.len()
-        );
+        tracing::debug!(id = %request.id, method = %request.method, bytes = json.len(), "→ stdin");
         writeln!(stdin, "{json}").context("Failed to write to sidecar stdin")?;
         stdin.flush().context("Failed to flush sidecar stdin")?;
 
@@ -296,11 +274,7 @@ impl ManagedSidecar {
     pub fn subscribe(&self, request_id: &str) -> mpsc::Receiver<SidecarEvent> {
         let (tx, rx) = mpsc::channel();
         if let Ok(mut map) = self.listeners.lock() {
-            sidecar_debug!(
-                "subscribe({}) — {} active listeners",
-                request_id,
-                map.len() + 1
-            );
+            tracing::debug!(request_id, listeners = map.len() + 1, "subscribe");
             map.insert(request_id.to_string(), tx);
         }
         rx
@@ -311,11 +285,7 @@ impl ManagedSidecar {
     pub fn unsubscribe(&self, request_id: &str) {
         if let Ok(mut map) = self.listeners.lock() {
             map.remove(request_id);
-            sidecar_debug!(
-                "unsubscribe({}) — {} active listeners",
-                request_id,
-                map.len()
-            );
+            tracing::debug!(request_id, listeners = map.len(), "unsubscribe");
         }
     }
 
@@ -333,9 +303,9 @@ impl ManagedSidecar {
         };
 
         if needs_restart {
-            sidecar_debug!("send() — sidecar needs (re)start");
+            tracing::debug!("Sidecar needs (re)start");
             if let Some(mut old) = guard.take() {
-                sidecar_debug!("send() — killing old sidecar process");
+                tracing::debug!("Killing old sidecar process");
                 old.kill();
             }
             let (process, reader) = SidecarProcess::start()?;
@@ -363,7 +333,7 @@ impl ManagedSidecar {
         let mut guard = match self.process.lock() {
             Ok(g) => g,
             Err(e) => {
-                eprintln!("[sidecar] shutdown: lock poisoned, taking over: {e}");
+                tracing::error!("Sidecar shutdown: lock poisoned, taking over: {e}");
                 e.into_inner()
             }
         };
@@ -386,32 +356,29 @@ impl ManagedSidecar {
         };
         match process.send(&request) {
             Ok(()) => {
-                eprintln!(
-                    "[sidecar] shutdown: cooperative request sent, waiting up to {}ms",
-                    cooperative.as_millis()
-                );
+                tracing::info!(timeout_ms = cooperative.as_millis() as u64, "Sidecar shutdown: cooperative request sent");
                 if process.wait_with_timeout(cooperative) {
-                    eprintln!("[sidecar] shutdown: exited cleanly via process.exit(0)");
+                    tracing::info!("Sidecar shutdown: exited cleanly");
                     *guard = None;
                     return;
                 }
             }
             Err(e) => {
-                eprintln!("[sidecar] shutdown: cooperative send failed: {e}");
+                tracing::error!("Sidecar shutdown: cooperative send failed: {e}");
             }
         }
 
         // Step 2: SIGTERM escalation.
-        eprintln!("[sidecar] shutdown: cooperative timed out — sending SIGTERM");
+        tracing::info!("Sidecar shutdown: cooperative timed out — sending SIGTERM");
         process.send_sigterm();
         if process.wait_with_timeout(escalation) {
-            eprintln!("[sidecar] shutdown: exited after SIGTERM");
+            tracing::info!("Sidecar shutdown: exited after SIGTERM");
             *guard = None;
             return;
         }
 
         // Step 3: SIGKILL last resort.
-        eprintln!("[sidecar] shutdown: SIGTERM ignored — sending SIGKILL");
+        tracing::info!("Sidecar shutdown: SIGTERM ignored — sending SIGKILL");
         process.kill();
         *guard = None;
     }
@@ -435,19 +402,18 @@ impl ManagedSidecar {
 
         let listeners = Arc::clone(&self.listeners);
         let reader_flag = Arc::clone(&self.reader_running);
-        let debug = debug_enabled();
 
         std::thread::Builder::new()
             .name("sidecar-reader".into())
             .spawn(move || {
-                if debug { eprintln!("[sidecar:debug] Reader thread started"); }
+                tracing::debug!("Reader thread started");
                 let mut reader = reader;
                 let mut event_count: u64 = 0;
                 loop {
                     let mut line = String::new();
                     match reader.read_line(&mut line) {
                         Ok(0) => {
-                            eprintln!("[sidecar] Process exited (EOF) — {event_count} events dispatched");
+                            tracing::info!(event_count, "Sidecar process exited (EOF)");
                             break;
                         }
                         Ok(_) => {
@@ -456,7 +422,7 @@ impl ManagedSidecar {
                                 continue;
                             }
                             let Ok(raw) = serde_json::from_str::<Value>(trimmed) else {
-                                eprintln!("[sidecar] Invalid JSON: {trimmed}");
+                                tracing::error!(line = trimmed, "Invalid JSON from sidecar");
                                 continue;
                             };
                             let event = SidecarEvent { raw };
@@ -465,20 +431,16 @@ impl ManagedSidecar {
                                 let event_type = event.event_type().to_string();
                                 let map = listeners.lock().unwrap_or_else(|e| e.into_inner());
                                 if let Some(tx) = map.get(request_id) {
-                                    if debug {
-                                        eprintln!("[sidecar:debug] ← stdout [{request_id}] type={event_type} {trimmed}");
-                                    }
+                                    tracing::debug!(request_id, event_type = %event_type, "← stdout");
                                     let _ = tx.send(event);
                                     event_count += 1;
-                                } else if debug {
-                                    eprintln!("[sidecar:debug] ← stdout [{request_id}] type={event_type} — NO LISTENER (dropped) {trimmed}");
+                                } else {
+                                    tracing::debug!(request_id, event_type = %event_type, "← stdout (no listener, dropped)");
                                 }
                             } else {
                                 // No-id event — broadcast to all active listeners
                                 // (e.g. fatal uncaughtException / unhandledRejection).
-                                if debug {
-                                    eprintln!("[sidecar:debug] ← stdout [no-id] {trimmed}");
-                                }
+                                tracing::debug!(raw = trimmed, "← stdout [no-id]");
                                 if event.event_type() == "error" {
                                     let map = listeners.lock().unwrap_or_else(|e| e.into_inner());
                                     for (rid, tx) in map.iter() {
@@ -494,14 +456,14 @@ impl ManagedSidecar {
                             }
                         }
                         Err(e) => {
-                            eprintln!("[sidecar] Read error: {e}");
+                            tracing::error!("Sidecar read error: {e}");
                             break;
                         }
                     }
                 }
 
                 // --- Cleanup on exit ---
-                if debug { eprintln!("[sidecar:debug] Reader thread exiting — cleaning up"); }
+                tracing::debug!("Reader thread exiting — cleaning up");
                 // 1. Clear reader_running so next send() spawns a fresh reader.
                 if let Ok(mut flag) = reader_flag.lock() {
                     *flag = false;
@@ -512,7 +474,7 @@ impl ManagedSidecar {
                 if let Ok(mut map) = listeners.lock() {
                     let count = map.len();
                     if count > 0 {
-                        eprintln!("[sidecar] Notifying {count} active listener(s) of sidecar exit");
+                        tracing::info!(count, "Notifying active listeners of sidecar exit");
                         let crash_event = SidecarEvent {
                             raw: serde_json::json!({
                                 "type": "error",
@@ -527,7 +489,7 @@ impl ManagedSidecar {
                         }
                     }
                     map.clear();
-                    if debug { eprintln!("[sidecar:debug] Cleared {count} listeners"); }
+                    tracing::debug!(count, "Cleared listeners");
                 }
             })
             .ok();

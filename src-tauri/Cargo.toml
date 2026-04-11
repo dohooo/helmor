@@ -23,6 +23,7 @@ tauri-build = { version = "2", features = [] }
 anyhow = "1"
 base64 = "0.22.1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+flate2 = "1"
 clap = { version = "4", features = ["derive"] }
 rand = "0.10.0"
 
@@ -40,6 +41,9 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-mcp-bridge = "0.11.0"
 tauri-plugin-opener = "2"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 

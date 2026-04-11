@@ -326,7 +326,7 @@ fn import_workspace_db_records(conn: &Connection, workspace_id: &str) -> Result<
             )
             .unwrap_or_else(|_| ("unknown".to_string(), None));
 
-        eprintln!("[import] Workspace {workspace_id} exists in DB but filesystem incomplete — retrying Phase 2");
+        tracing::info!(workspace_id, "Workspace exists in DB but filesystem incomplete — retrying Phase 2");
         return Ok(ImportDbResult::Imported(ImportedWorkspaceMeta {
             workspace_id: workspace_id.to_string(),
             repo_name,
@@ -459,14 +459,14 @@ fn setup_workspace_filesystem(
                     );
 
                     if source_branch.is_none() {
-                        eprintln!("[import] Could not resolve source branch for {directory_name} — worktree not created");
+                        tracing::error!(directory_name, "Could not resolve source branch — worktree not created");
                     }
                     if let Some(ref src) = source_branch {
                         let import_branch = format!("{src}-import");
                         if let Err(e) =
                             setup_imported_worktree(root, &workspace_dir, &import_branch, src)
                         {
-                            eprintln!("[import] Worktree failed for {directory_name}: {e}");
+                            tracing::error!(directory_name, "Worktree failed: {e}");
                             // Non-fatal: we still copy .context/ below
                         } else {
                             // Update branch in DB (best-effort, DB is already committed)
@@ -476,11 +476,11 @@ fn setup_workspace_filesystem(
                                         "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
                                         rusqlite::params![import_branch, workspace_id],
                                     ) {
-                                        eprintln!("[import] Failed to update branch for {directory_name}: {e}");
+                                        tracing::error!(directory_name, "Failed to update branch: {e}");
                                     }
                                 }
                                 Err(e) => {
-                                    eprintln!("[import] Failed to open DB to update branch for {directory_name}: {e}");
+                                    tracing::error!(directory_name, "Failed to open DB to update branch: {e}");
                                 }
                             }
                         }
@@ -603,10 +603,7 @@ fn copy_claude_sessions_for_workspace(
 
     // Create destination dir if needed
     if std::fs::create_dir_all(&dst_dir).is_err() {
-        eprintln!(
-            "[import] Failed to create Claude project dir: {}",
-            dst_dir.display()
-        );
+        tracing::error!(dir = %dst_dir.display(), "Failed to create Claude project dir");
         return;
     }
 
@@ -636,11 +633,7 @@ fn copy_claude_sessions_for_workspace(
     }
 
     if copied > 0 {
-        eprintln!(
-            "[import] Copied {copied} Claude session file(s): {} → {}",
-            src_dir.display(),
-            dst_dir.display()
-        );
+        tracing::info!(count = copied, src = %src_dir.display(), dst = %dst_dir.display(), "Copied Claude session files");
     }
 }
 
@@ -677,10 +670,7 @@ fn resolve_source_branch(
                     && git_ops::verify_branch_exists(repo_root, &actual).is_ok()
                 {
                     if actual != db_branch {
-                        eprintln!(
-                            "[import] Branch mismatch for {directory_name}: DB has '{db_branch}', \
-                             actual is '{actual}' — using actual"
-                        );
+                        tracing::info!(directory_name, db = db_branch, actual = %actual, "Branch mismatch — using actual");
                     }
                     return Some(actual);
                 }
@@ -693,7 +683,7 @@ fn resolve_source_branch(
         return Some(db_branch.to_string());
     }
 
-    eprintln!("[import] No valid branch found for {directory_name} (tried '{db_branch}')");
+    tracing::error!(directory_name, branch = db_branch, "No valid branch found");
     None
 }
 

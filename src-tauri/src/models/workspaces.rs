@@ -503,9 +503,7 @@ pub fn rename_workspace_branch(workspace_id: &str, new_branch: &str) -> Result<(
     ) {
         // Roll back the git rename
         if let Err(rb_err) = git_ops::rename_branch(repo_root_path, new_branch, old_branch) {
-            eprintln!(
-                "[rename_workspace_branch] rollback git branch -m {new_branch} {old_branch} failed: {rb_err:#}"
-            );
+            tracing::error!(old = old_branch, new = new_branch, "Rollback git branch -m failed: {rb_err:#}");
         }
         return Err(db_err).context("Failed to update branch name in database");
     }
@@ -1491,10 +1489,7 @@ pub fn restore_workspace_impl(
 
     if let Err(error) = fs::remove_dir_all(&staged_archive_dir) {
         let _ = fs::rename(&staged_archive_dir, &archived_context_dir);
-        eprintln!(
-            "[restore_workspace] Failed to delete staged archived context {}: {error}",
-            staged_archive_dir.display()
-        );
+        tracing::error!(dir = %staged_archive_dir.display(), "Failed to delete staged archived context: {error}");
     }
 
     let branch_rename = if actual_branch != branch {
