@@ -351,6 +351,20 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		[completedSessions],
 	);
 
+	// Clear the completed-session dot for whichever session the user
+	// is actually viewing. This fires on workspace switches (where the
+	// default session resolves through cache or async prime) and on
+	// direct session tab clicks alike.
+	useEffect(() => {
+		if (!displayedSessionId) return;
+		setCompletedSessions((prev) => {
+			if (!prev.has(displayedSessionId)) return prev;
+			const next = new Map(prev);
+			next.delete(displayedSessionId);
+			return next;
+		});
+	}, [displayedSessionId]);
+
 	const { settings: appSettings } = useSettings();
 	const [installedEditors, setInstalledEditors] = useState<DetectedEditor[]>(
 		[],
@@ -910,7 +924,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	);
 
 	const resolveCachedWorkspaceDisplay = useCallback(
-		(workspaceId: string) => {
+		(workspaceId: string, preferredSessionId?: string | null) => {
 			const workspaceDetail = queryClient.getQueryData<WorkspaceDetail | null>(
 				helmorQueryKeys.workspaceDetail(workspaceId),
 			);
@@ -923,6 +937,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			}
 
 			const sessionId =
+				preferredSessionId ??
 				workspaceDetail.activeSessionId ??
 				workspaceSessions.find((session) => session.active)?.id ??
 				workspaceSessions[0]?.id ??
@@ -1085,24 +1100,9 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			selectedSessionIdRef.current = immediateSessionId;
 			setSelectedWorkspaceId(workspaceId);
 			setSelectedSessionId(immediateSessionId);
-			// Clear all completed-session dots belonging to this workspace
-			if (workspaceId) {
-				setCompletedSessions((prev) => {
-					let changed = false;
-					for (const [, wsId] of prev) {
-						if (wsId === workspaceId) {
-							changed = true;
-							break;
-						}
-					}
-					if (!changed) return prev;
-					const next = new Map<string, string>();
-					for (const [sid, wsId] of prev) {
-						if (wsId !== workspaceId) next.set(sid, wsId);
-					}
-					return next;
-				});
-			}
+			// Session-level completed dots are cleared reactively via the
+			// displayedSessionId effect — only the actually-viewed session
+			// loses its dot, not every session in the workspace.
 			if (workspaceId === null) {
 				if (workspaceSelectionRequestRef.current !== requestId) {
 					return;
@@ -1115,7 +1115,10 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			setDisplayedWorkspaceId(workspaceId);
 			setDisplayedSessionId(immediateSessionId);
 
-			const cachedWorkspaceDisplay = resolveCachedWorkspaceDisplay(workspaceId);
+			const cachedWorkspaceDisplay = resolveCachedWorkspaceDisplay(
+				workspaceId,
+				immediateSessionId,
+			);
 			if (cachedWorkspaceDisplay) {
 				selectedSessionIdRef.current = cachedWorkspaceDisplay.sessionId;
 				rememberSessionSelection(workspaceId, cachedWorkspaceDisplay.sessionId);
@@ -1907,7 +1910,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 										aria-label="Workspace viewport"
 										className="flex min-h-0 flex-1 flex-col bg-background"
 									>
-										{workspaceViewMode === "editor" && editorSession ? (
+										{workspaceViewMode === "editor" && editorSession && (
 											<WorkspaceEditorSurface
 												editorSession={editorSession}
 												workspaceRootPath={workspaceRootPath}
@@ -1915,7 +1918,14 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 												onExit={handleExitEditorMode}
 												onError={handleEditorSurfaceError}
 											/>
-										) : (
+										)}
+										<div
+											className={
+												workspaceViewMode === "editor"
+													? "hidden"
+													: "flex min-h-0 flex-1 flex-col"
+											}
+										>
 											<WorkspaceConversationContainer
 												selectedWorkspaceId={selectedWorkspaceId}
 												displayedWorkspaceId={displayedWorkspaceId}
@@ -2050,7 +2060,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 													) : undefined
 												}
 											/>
-										)}
+										</div>
 									</div>
 								</section>
 
@@ -2166,6 +2176,27 @@ function EditorIcon({
 			return (
 				<svg className={className} viewBox="0 0 24 24" fill="currentColor">
 					<path d="M20.953 6.924c-.123-.429-.404-.715-.834-.858-.378-.126-6.32-2.048-6.32-2.048s-.065-.024-.203-.065c-.484-.138-.793-.065-1.136.199-.243.188-8.39 6.1-8.39 6.1S3.535 10.579 3.2 10.877c-.233.208-.374.463-.373.794.002.33.087.523.393.754l8.04 5.078s5.833 1.953 6.243 2.086c.488.16.867.09 1.2-.166.236-.183.347-.273.347-.273l-.003-5.402-7.473-4.424 7.476-2.4" />
+				</svg>
+			);
+		case "terminal":
+			return (
+				<svg
+					className={className}
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					strokeWidth={2}
+					strokeLinecap="round"
+					strokeLinejoin="round"
+				>
+					<polyline points="4 17 10 11 4 5" />
+					<line x1="12" y1="19" x2="20" y2="19" />
+				</svg>
+			);
+		case "warp":
+			return (
+				<svg className={className} viewBox="0 0 24 24" fill="currentColor">
+					<path d="M12.035 2.723h9.253A2.712 2.712 0 0 1 24 5.435v10.529a2.712 2.712 0 0 1-2.712 2.713H8.047Zm-1.681 2.6L6.766 19.677h5.598l-.399 1.6H2.712A2.712 2.712 0 0 1 0 18.565V8.036a2.712 2.712 0 0 1 2.712-2.712Z" />
 				</svg>
 			);
 		default:

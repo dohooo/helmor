@@ -838,93 +838,104 @@ const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 									const isEditing = editingSessionId === session.id;
 
 									return (
-										<TabsTrigger
-											key={session.id}
-											value={session.id}
-											title={displaySessionTitle(session)}
-											onMouseEnter={() => {
-												onPrefetchSession?.(session.id);
-											}}
-											onFocus={() => {
-												onPrefetchSession?.(session.id);
-											}}
-											className="group/tab relative h-full w-auto max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
-										>
-											<SessionProviderIcon
-												agentType={
-													selected
-														? (selectedProvider ?? session.agentType)
-														: session.agentType
-												}
-												active={isActive}
-											/>
-											{isEditing ? (
-												<Input
-													// Mounted only when entering edit mode, so autoFocus
-													// fires exactly once instead of refocusing on every
-													// parent re-render (e.g. during streaming).
-													autoFocus
-													value={editingTitle}
-													onChange={(event) =>
-														setEditingTitle(event.target.value)
-													}
-													onKeyDown={(event) => {
-														if (event.key === "Enter") {
-															event.preventDefault();
-															void handleCommitRename();
-														} else if (event.key === "Escape") {
-															handleCancelRename();
-														}
+										<Tooltip key={session.id}>
+											<TooltipTrigger asChild>
+												<TabsTrigger
+													value={session.id}
+													onMouseEnter={() => {
+														onPrefetchSession?.(session.id);
 													}}
-													onBlur={() => void handleCommitRename()}
-													onClick={(event) => event.stopPropagation()}
-													className="h-6 w-20 truncate rounded-md border-border bg-background px-1.5 py-0 text-[13px] font-medium text-foreground"
-												/>
-											) : (
-												<span
-													className={cn(
-														"truncate font-medium",
-														(hasUnread || isCompleted) && !selected
-															? "text-foreground"
-															: undefined,
-													)}
+													onFocus={() => {
+														onPrefetchSession?.(session.id);
+													}}
+													className="group/tab relative h-full w-auto max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
 												>
-													{displaySessionTitle(session)}
-												</span>
-											)}
-											{(hasUnread || isCompleted) && !isEditing ? (
-												<span
-													aria-label={
-														isCompleted ? "Session completed" : "Unread session"
-													}
-													className="size-1.5 shrink-0 rounded-full bg-chart-2"
-												/>
-											) : null}
-											{!isEditing ? (
-												<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-[linear-gradient(to_right,transparent_0%,#2F2F2F_35%,#2F2F2F_100%)] pl-5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible">
-													<span
-														role="button"
-														aria-label="Rename session"
-														onClick={(event) =>
-															handleStartRename(session, event)
+													<SessionProviderIcon
+														agentType={
+															selected
+																? (selectedProvider ?? session.agentType)
+																: session.agentType
 														}
-														className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
-													>
-														<Pencil className="size-2.5" strokeWidth={2} />
-													</span>
-													<span
-														role="button"
-														aria-label="Close session"
-														onClick={(event) =>
-															handleHideSession(session.id, event)
-														}
-														className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
-													>
-														<X className="size-2.5" strokeWidth={2} />
-													</span>
-												</span>
-											) : null}
-										</TabsTrigger>
+														active={isActive}
+													/>
+													{isEditing ? (
+														<Input
+															// Mounted only when entering edit mode, so autoFocus
+															// fires exactly once instead of refocusing on every
+															// parent re-render (e.g. during streaming).
+															autoFocus
+															value={editingTitle}
+															onChange={(event) =>
+																setEditingTitle(event.target.value)
+															}
+															onKeyDown={(event) => {
+																if (event.key === "Enter") {
+																	event.preventDefault();
+																	void handleCommitRename();
+																} else if (event.key === "Escape") {
+																	handleCancelRename();
+																}
+															}}
+															onBlur={() => void handleCommitRename()}
+															onClick={(event) => event.stopPropagation()}
+															className="h-6 w-20 truncate rounded-md border-border bg-background px-1.5 py-0 text-[13px] font-medium text-foreground"
+														/>
+													) : (
+														<span
+															className={cn(
+																"truncate font-medium",
+																(hasUnread || isCompleted) && !selected
+																	? "text-foreground"
+																	: undefined,
+															)}
+														>
+															{displaySessionTitle(session)}
+														</span>
+													)}
+													{(hasUnread || isCompleted) && !isEditing ? (
+														<span
+															aria-label={
+																isCompleted
+																	? "Session completed"
+																	: "Unread session"
+															}
+															className="size-1.5 shrink-0 rounded-full bg-chart-2"
+														/>
+													) : null}
+													{!isEditing ? (
+														<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-[linear-gradient(to_right,transparent_0%,#2F2F2F_35%,#2F2F2F_100%)] pl-5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible">
+															<span
+																role="button"
+																aria-label="Rename session"
+																onClick={(event) =>
+																	handleStartRename(session, event)
+																}
+																className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
+															>
+																<Pencil className="size-2.5" strokeWidth={2} />
+															</span>
+															<span
+																role="button"
+																aria-label="Close session"
+																onClick={(event) =>
+																	handleHideSession(session.id, event)
+																}
+																className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
+															>
+																<X className="size-2.5" strokeWidth={2} />
+															</span>
+														</span>
+													) : null}
+												</TabsTrigger>
+											</TooltipTrigger>
+											<TooltipContent
+												side="bottom"
+												sideOffset={8}
+												className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+											>
+												<span>{displaySessionTitle(session)}</span>
+											</TooltipContent>
+										</Tooltip>
 									);
 								})}
 							</TabsList>

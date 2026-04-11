@@ -597,6 +597,16 @@ fn detect_installed_editors_blocking() -> anyhow::Result<Vec<DetectedEditor>> {
                 "$HOME/Applications/Sublime Text.app",
             ],
         ),
+        (
+            "terminal",
+            "Terminal",
+            &["/System/Applications/Utilities/Terminal.app"],
+        ),
+        (
+            "warp",
+            "Warp",
+            &["/Applications/Warp.app", "$HOME/Applications/Warp.app"],
+        ),
     ];
 
     let home = std::env::var("HOME").unwrap_or_default();
@@ -644,6 +654,8 @@ pub async fn open_workspace_in_editor(workspace_id: String, editor: String) -> C
             "zed" => "Zed",
             "webstorm" => "WebStorm",
             "sublime" => "Sublime Text",
+            "terminal" => "Terminal",
+            "warp" => "Warp",
             _ => return Err(anyhow::anyhow!("Unsupported editor: {editor}")),
         };
 
