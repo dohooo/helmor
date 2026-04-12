@@ -451,9 +451,9 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											role="button"
 											aria-label="Rename branch"
 											onClick={handleStartBranchRename}
-											className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
+											className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 										>
-											<Pencil className="size-2.5" strokeWidth={2} />
+											<Pencil className="size-3" strokeWidth={2} />
 										</span>
 										<span
 											role="button"
@@ -466,15 +466,15 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 												setBranchCopied(true);
 												setTimeout(() => setBranchCopied(false), 1500);
 											}}
-											className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
+											className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 										>
 											{branchCopied ? (
 												<Check
-													className="size-2.5 text-green-400"
+													className="size-3 text-green-400"
 													strokeWidth={2}
 												/>
 											) : (
-												<Copy className="size-2.5" strokeWidth={2} />
+												<Copy className="size-3" strokeWidth={2} />
 											)}
 										</span>
 									</span>
@@ -693,19 +693,16 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 															/>
 														) : null}
 														{!isEditing ? (
-															<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-[linear-gradient(to_right,transparent_0%,#2F2F2F_35%,#2F2F2F_100%)] pl-5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible">
+															<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-[linear-gradient(to_right,transparent_0%,var(--muted)_35%,var(--muted)_100%)] pl-5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible">
 																<span
 																	role="button"
 																	aria-label="Rename session"
 																	onClick={(event) =>
 																		handleStartRename(session, event)
 																	}
-																	className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
+																	className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 																>
-																	<Pencil
-																		className="size-2.5"
-																		strokeWidth={2}
-																	/>
+																	<Pencil className="size-3" strokeWidth={2} />
 																</span>
 																<span
 																	role="button"
@@ -713,9 +710,9 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																	onClick={(event) =>
 																		handleHideSession(session.id, event)
 																	}
-																	className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
+																	className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 																>
-																	<X className="size-2.5" strokeWidth={2} />
+																	<X className="size-3" strokeWidth={2} />
 																</span>
 															</span>
 														) : null}

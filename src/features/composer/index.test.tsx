@@ -128,7 +128,7 @@ describe("WorkspaceComposer", () => {
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
 					permissionMode="acceptEdits"
-					onTogglePlanMode={vi.fn()}
+					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
@@ -196,7 +196,7 @@ describe("WorkspaceComposer", () => {
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
 					permissionMode="acceptEdits"
-					onTogglePlanMode={vi.fn()}
+					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
@@ -242,7 +242,7 @@ describe("WorkspaceComposer", () => {
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
 					permissionMode="acceptEdits"
-					onTogglePlanMode={vi.fn()}
+					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
@@ -302,7 +302,7 @@ describe("WorkspaceComposer", () => {
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
 					permissionMode="acceptEdits"
-					onTogglePlanMode={vi.fn()}
+					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
@@ -378,7 +378,7 @@ describe("WorkspaceComposer", () => {
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
 					permissionMode="acceptEdits"
-					onTogglePlanMode={vi.fn()}
+					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
@@ -423,7 +423,7 @@ describe("WorkspaceComposer", () => {
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
 					permissionMode="plan"
-					onTogglePlanMode={vi.fn()}
+					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
@@ -461,7 +461,7 @@ describe("WorkspaceComposer", () => {
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
 					permissionMode="plan"
-					onTogglePlanMode={vi.fn()}
+					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
@@ -506,7 +506,7 @@ describe("WorkspaceComposer", () => {
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
 					permissionMode="plan"
-					onTogglePlanMode={vi.fn()}
+					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
@@ -539,7 +539,7 @@ describe("WorkspaceComposer", () => {
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
 					permissionMode="plan"
-					onTogglePlanMode={vi.fn()}
+					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
@@ -552,11 +552,11 @@ describe("WorkspaceComposer", () => {
 		expect(screen.getByText(/Describe what to change/)).toBeInTheDocument();
 	});
 
-	it("restores Send button after Plan toggle dismisses pending review", async () => {
+	it("keeps plan review controls visible while permission is pending", async () => {
 		const queryClient = createHelmorQueryClient();
-		const onTogglePlanMode = vi.fn();
+		const onChangePermissionMode = vi.fn();
 
-		const { rerender } = render(
+		render(
 			<QueryClientProvider client={queryClient}>
 				<WorkspaceComposer
 					contextKey="session:session-1"
@@ -571,7 +571,7 @@ describe("WorkspaceComposer", () => {
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
 					permissionMode="plan"
-					onTogglePlanMode={onTogglePlanMode}
+					onChangePermissionMode={onChangePermissionMode}
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
@@ -582,38 +582,58 @@ describe("WorkspaceComposer", () => {
 		);
 
 		expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Plan mode" })).toBeDisabled();
+		expect(onChangePermissionMode).not.toHaveBeenCalled();
+		expect(
+			screen.queryByRole("button", { name: "Send" }),
+		).not.toBeInTheDocument();
+	});
 
-		await userEvent.click(screen.getByRole("button", { name: "Plan mode" }));
-		expect(onTogglePlanMode).toHaveBeenCalled();
+	it("updates permission mode before approving plan review", async () => {
+		const queryClient = createHelmorQueryClient();
+		const onChangePermissionMode = vi.fn();
+		const onPermissionResponse = vi.fn();
 
-		rerender(
+		render(
 			<QueryClientProvider client={queryClient}>
 				<WorkspaceComposer
 					contextKey="session:session-1"
 					onSubmit={vi.fn()}
 					disabled={false}
 					submitDisabled={false}
-					sending={true}
+					sending={false}
 					selectedModelId="opus-1m"
 					modelSections={MODEL_SECTIONS}
 					onSelectModel={vi.fn()}
 					provider="claude"
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
-					permissionMode="bypassPermissions"
-					onTogglePlanMode={onTogglePlanMode}
+					permissionMode="plan"
+					onChangePermissionMode={onChangePermissionMode}
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
 					pendingExitPlanPermissionId="exit-plan-perm-1"
-					onPermissionResponse={vi.fn()}
+					onPermissionResponse={onPermissionResponse}
 				/>
 			</QueryClientProvider>,
 		);
 
-		expect(
-			screen.queryByRole("button", { name: "Approve" }),
-		).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+		expect(onChangePermissionMode).toHaveBeenCalledWith("bypassPermissions");
+		expect(onPermissionResponse).toHaveBeenCalledWith(
+			"exit-plan-perm-1",
+			"allow",
+			{
+				updatedPermissions: [
+					{
+						type: "setMode",
+						mode: "bypassPermissions",
+						destination: "session",
+					},
+				],
+			},
+		);
 	});
 });

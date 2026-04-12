@@ -391,7 +391,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 									>
 										<CollapsibleTrigger
 											className={cn(
-												"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 py-1.5 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
+												"group/trigger flex w-full cursor-pointer select-none items-center justify-between rounded-lg px-2 py-1.5 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
 												canCollapse ? "cursor-pointer" : "cursor-default",
 											)}
 											disabled={!canCollapse}
@@ -470,7 +470,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						<section aria-label="Archived" className="flex flex-col gap-1.5">
 							<CollapsibleTrigger
 								className={cn(
-									"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 py-1.5 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
+									"group/trigger flex w-full cursor-pointer select-none items-center justify-between rounded-lg px-2 py-1.5 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
 									archivedRows.length > 0 ? "cursor-pointer" : "cursor-default",
 								)}
 								disabled={archivedRows.length === 0}

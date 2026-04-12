@@ -154,6 +154,36 @@ function parsePermissionMode(value: string | undefined): ClaudePermissionMode {
 	return "bypassPermissions";
 }
 
+function extractSessionPermissionMode(
+	updates: readonly PermissionUpdate[] | undefined,
+): ClaudePermissionMode | undefined {
+	if (!updates) {
+		return undefined;
+	}
+
+	for (const update of updates) {
+		if (typeof update !== "object" || update === null) {
+			continue;
+		}
+
+		const candidate = update as {
+			type?: unknown;
+			destination?: unknown;
+			mode?: unknown;
+		};
+		if (
+			candidate.type === "setMode" &&
+			candidate.destination === "session" &&
+			typeof candidate.mode === "string" &&
+			(VALID_PERMISSION_MODES as readonly string[]).includes(candidate.mode)
+		) {
+			return candidate.mode as ClaudePermissionMode;
+		}
+	}
+
+	return undefined;
+}
+
 function parseEffort(value: string | undefined): ClaudeEffort | undefined {
 	if (value && (VALID_EFFORT_LEVELS as readonly string[]).includes(value)) {
 		return value as ClaudeEffort;
@@ -414,11 +444,18 @@ export class ClaudeSessionManager implements SessionManager {
 						},
 					);
 					if (resolution.behavior === "allow") {
+						const updatedPermissions =
+							resolution.updatedPermissions ?? options.suggestions;
+						const nextPermissionMode =
+							extractSessionPermissionMode(updatedPermissions);
+						if (nextPermissionMode) {
+							emitter.permissionModeChanged(requestId, nextPermissionMode);
+						}
+
 						return {
 							behavior: "allow" as const,
 							updatedInput: input,
-							updatedPermissions:
-								resolution.updatedPermissions ?? options.suggestions,
+							updatedPermissions,
 						};
 					}
 					return {

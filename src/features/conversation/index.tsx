@@ -142,13 +142,15 @@ export const WorkspaceConversationContainer = memo(
 			[],
 		);
 
-		const handleTogglePlanMode = useCallback((contextKey: string) => {
-			setComposerPermissionModes((current) => ({
-				...current,
-				[contextKey]:
-					current[contextKey] === "plan" ? "bypassPermissions" : "plan",
-			}));
-		}, []);
+		const handleChangePermissionMode = useCallback(
+			(contextKey: string, mode: string) => {
+				setComposerPermissionModes((current) => ({
+					...current,
+					[contextKey]: mode,
+				}));
+			},
+			[],
+		);
 
 		const handleComposerSubmitWrapper = useCallback(
 			(payload: Parameters<typeof handleComposerSubmit>[0]) => {
@@ -275,7 +277,7 @@ export const WorkspaceConversationContainer = memo(
 							permissionModes={composerPermissionModes}
 							onSelectModel={handleSelectModel}
 							onSelectEffort={handleSelectEffort}
-							onTogglePlanMode={handleTogglePlanMode}
+							onChangePermissionMode={handleChangePermissionMode}
 							onSwitchSession={onSelectSession}
 							onSubmit={handleComposerSubmitWrapper}
 							onStop={handleStopStream}

@@ -77,7 +77,7 @@ type WorkspaceComposerProps = {
 	effortLevel: string;
 	onSelectEffort: (level: string) => void;
 	permissionMode: string;
-	onTogglePlanMode: () => void;
+	onChangePermissionMode: (mode: string) => void;
 	sendError?: string | null;
 	restoreDraft?: string | null;
 	restoreImages?: string[];
@@ -134,7 +134,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	effortLevel,
 	onSelectEffort,
 	permissionMode,
-	onTogglePlanMode,
+	onChangePermissionMode,
 	sendError,
 	restoreDraft,
 	restoreImages = [],
@@ -183,40 +183,16 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		return null;
 	}, [modelSections, selectedModelId]);
 	const hasPendingDeferredTool = pendingDeferredTool !== null;
-	const dismissedPlanRef = useRef(false);
-	if (!pendingExitPlanPermissionId) {
-		dismissedPlanRef.current = false;
-	}
-
-	// Auto-allow ExitPlanMode if user already dismissed plan mode
-	useEffect(() => {
-		if (
-			dismissedPlanRef.current &&
-			pendingExitPlanPermissionId &&
-			onPermissionResponse
-		) {
-			onPermissionResponse(pendingExitPlanPermissionId, "allow", {
-				updatedPermissions: [
-					{
-						type: "setMode",
-						mode: "bypassPermissions",
-						destination: "session",
-					},
-				],
-			});
-		}
-	}, [pendingExitPlanPermissionId, onPermissionResponse]);
-
-	const hasPendingPlanReview =
-		pendingExitPlanPermissionId !== null && !dismissedPlanRef.current;
-	const controlsDisabled =
-		disabled || (hasPendingDeferredTool && !hasPendingPlanReview);
-	const effectiveSending = sending && !dismissedPlanRef.current;
+	const hasPendingPlanReview = pendingExitPlanPermissionId !== null;
+	const inputDisabled = disabled || hasPendingDeferredTool;
+	const toolbarDisabled =
+		disabled || hasPendingDeferredTool || hasPendingPlanReview;
 	const sendDisabled =
 		disabled ||
 		submitDisabled ||
-		effectiveSending ||
-		(hasPendingDeferredTool && !hasPendingPlanReview) ||
+		sending ||
+		hasPendingDeferredTool ||
+		hasPendingPlanReview ||
 		!selectedModel ||
 		!hasContent;
 
@@ -343,6 +319,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 
 	const handlePlanApprove = useCallback(() => {
 		if (!pendingExitPlanPermissionId || !onPermissionResponse) return;
+		onChangePermissionMode("bypassPermissions");
 		onPermissionResponse(pendingExitPlanPermissionId, "allow", {
 			updatedPermissions: [
 				{
@@ -352,7 +329,11 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				},
 			],
 		});
-	}, [pendingExitPlanPermissionId, onPermissionResponse]);
+	}, [
+		onChangePermissionMode,
+		pendingExitPlanPermissionId,
+		onPermissionResponse,
+	]);
 
 	const handlePlanRequestChanges = useCallback(() => {
 		if (!pendingExitPlanPermissionId || !onPermissionResponse) return;
@@ -364,9 +345,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			});
 		}
 		onPermissionResponse(pendingExitPlanPermissionId, "deny", {
-			message:
-				feedback.trim() ||
-				"Please revise the plan and call ExitPlanMode again.",
+			message: feedback.trim(),
 		});
 		if (editor) {
 			editor.update(() => {
@@ -411,258 +390,262 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			aria-label="Workspace composer"
 			className={cn(
 				"flex flex-col rounded-2xl border border-border/40 bg-sidebar px-4 pb-3 pt-3 shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]",
-				controlsDisabled && "cursor-not-allowed opacity-60",
+				inputDisabled &&
+					!hasPendingDeferredTool &&
+					"cursor-not-allowed opacity-60",
 			)}
 		>
 			<label htmlFor="workspace-input" className="sr-only">
 				Workspace input
 			</label>
 
-			{pendingDeferredTool &&
-			pendingDeferredTool.toolName !== "ExitPlanMode" ? (
+			{hasPendingDeferredTool ? (
 				<DeferredToolPanel
-					deferred={pendingDeferredTool}
+					deferred={pendingDeferredTool!}
 					disabled={disabled || sending}
 					onResponse={onDeferredToolResponse}
 				/>
-			) : null}
-
-			<LexicalComposer initialConfig={initialConfig}>
-				<div className="relative">
-					<PlainTextPlugin
-						contentEditable={
-							<ContentEditable
-								id="workspace-input"
-								aria-label="Workspace input"
-								aria-multiline
-								className="composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-foreground outline-none"
+			) : (
+				<>
+					<LexicalComposer initialConfig={initialConfig}>
+						<div className="relative">
+							<PlainTextPlugin
+								contentEditable={
+									<ContentEditable
+										id="workspace-input"
+										aria-label="Workspace input"
+										aria-multiline
+										className="composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-foreground outline-none"
+									/>
+								}
+								placeholder={
+									<div className="pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-muted-foreground">
+										{hasPendingPlanReview
+											? "Describe what to change, then click Request Changes"
+											: "Ask to make changes, @mention files, run /commands"}
+									</div>
+								}
+								ErrorBoundary={LexicalErrorBoundary}
 							/>
-						}
-						placeholder={
-							<div className="pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-muted-foreground">
-								{hasPendingPlanReview
-									? "Describe what to change, then click Request Changes"
-									: "Ask to make changes, @mention files, run /commands"}
-							</div>
-						}
-						ErrorBoundary={LexicalErrorBoundary}
-					/>
-				</div>
-				<HistoryPlugin />
-				<SlashCommandPlugin
-					commands={slashCommands}
-					isLoading={slashCommandsLoading}
-					isError={slashCommandsError}
-					onRetry={onRetrySlashCommands}
-				/>
-				<FileMentionPlugin workspaceRootPath={workspaceRootPath} />
-				<SubmitPlugin onSubmit={handleSubmit} disabled={sendDisabled} />
-				<PasteImagePlugin />
-				<DropFilePlugin />
-				<AutoResizePlugin minHeight={64} maxHeight={240} />
-				<EditorRefPlugin editorRef={editorRef} />
-				<EditablePlugin disabled={controlsDisabled} />
-				<HasContentPlugin onChange={setHasContent} />
-			</LexicalComposer>
+						</div>
+						<HistoryPlugin />
+						<SlashCommandPlugin
+							commands={slashCommands}
+							isLoading={slashCommandsLoading}
+							isError={slashCommandsError}
+							onRetry={onRetrySlashCommands}
+						/>
+						<FileMentionPlugin workspaceRootPath={workspaceRootPath} />
+						<SubmitPlugin onSubmit={handleSubmit} disabled={sendDisabled} />
+						<PasteImagePlugin />
+						<DropFilePlugin />
+						<AutoResizePlugin minHeight={64} maxHeight={240} />
+						<EditorRefPlugin editorRef={editorRef} />
+						<EditablePlugin disabled={inputDisabled} />
+						<HasContentPlugin onChange={setHasContent} />
+					</LexicalComposer>
 
-			{sendError ? (
-				<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-[12px] text-muted-foreground">
-					{sendError}
-				</div>
-			) : null}
+					{sendError ? (
+						<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-[12px] text-muted-foreground">
+							{sendError}
+						</div>
+					) : null}
 
-			<div className="mt-2.5 flex items-end justify-between gap-3">
-				<div className="flex flex-wrap items-center gap-2">
-					<DropdownMenu>
-						<DropdownMenuTrigger
-							disabled={controlsDisabled}
-							className={cn(
-								"flex items-center gap-1.5 rounded-lg px-1 py-0.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
-								controlsDisabled &&
-									"cursor-not-allowed opacity-45 hover:text-muted-foreground",
-							)}
-						>
-							{selectedModel?.provider === "codex" ? (
-								<OpenAIIcon className="size-[14px]" />
-							) : (
-								<ClaudeIcon className="size-[14px]" />
-							)}
-							<span>{selectedModel?.label ?? "Select model"}</span>
-							<ChevronDown className="size-3 opacity-40" strokeWidth={2} />
-						</DropdownMenuTrigger>
+					<div className="mt-2.5 flex items-end justify-between gap-3">
+						<div className="flex flex-wrap items-center gap-2">
+							<DropdownMenu>
+								<DropdownMenuTrigger
+									disabled={toolbarDisabled}
+									className={cn(
+										"flex items-center gap-1.5 rounded-lg px-1 py-0.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
+										toolbarDisabled &&
+											"cursor-not-allowed opacity-45 hover:text-muted-foreground",
+									)}
+								>
+									{selectedModel?.provider === "codex" ? (
+										<OpenAIIcon className="size-[14px]" />
+									) : (
+										<ClaudeIcon className="size-[14px]" />
+									)}
+									<span>{selectedModel?.label ?? "Select model"}</span>
+									<ChevronDown className="size-3 opacity-40" strokeWidth={2} />
+								</DropdownMenuTrigger>
 
-						<DropdownMenuContent
-							side="top"
-							align="start"
-							sideOffset={8}
-							className="min-w-[17rem]"
-						>
-							{modelSections.map((section, index) => (
-								<DropdownMenuGroup key={section.id}>
-									{index > 0 ? <DropdownMenuSeparator /> : null}
-									<DropdownMenuLabel>{section.label}</DropdownMenuLabel>
-									{section.options.map((option) => (
-										<DropdownMenuItem
-											key={option.id}
-											disabled={controlsDisabled}
-											onClick={() => {
-												onSelectModel(option.id);
-											}}
-											className="flex items-center justify-between gap-3"
-										>
-											<div className="flex items-center gap-3">
-												<span className="text-muted-foreground">
-													{option.provider === "codex" ? (
-														<OpenAIIcon className="size-4" />
-													) : (
-														<ClaudeIcon className="size-4" />
-													)}
-												</span>
-												<span className="font-medium">{option.label}</span>
-											</div>
+								<DropdownMenuContent
+									side="top"
+									align="start"
+									sideOffset={8}
+									className="min-w-[17rem]"
+								>
+									{modelSections.map((section, index) => (
+										<DropdownMenuGroup key={section.id}>
+											{index > 0 ? <DropdownMenuSeparator /> : null}
+											<DropdownMenuLabel>{section.label}</DropdownMenuLabel>
+											{section.options.map((option) => (
+												<DropdownMenuItem
+													key={option.id}
+													disabled={toolbarDisabled}
+													onClick={() => {
+														onSelectModel(option.id);
+													}}
+													className="flex items-center justify-between gap-3"
+												>
+													<div className="flex items-center gap-3">
+														<span className="text-muted-foreground">
+															{option.provider === "codex" ? (
+																<OpenAIIcon className="size-4" />
+															) : (
+																<ClaudeIcon className="size-4" />
+															)}
+														</span>
+														<span className="font-medium">{option.label}</span>
+													</div>
 
-											{option.badge ? (
-												<span className="rounded-md border border-border/70 bg-muted/70 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-													{option.badge}
-												</span>
-											) : null}
-										</DropdownMenuItem>
+													{option.badge ? (
+														<span className="rounded-md border border-border/70 bg-muted/70 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+															{option.badge}
+														</span>
+													) : null}
+												</DropdownMenuItem>
+											))}
+										</DropdownMenuGroup>
 									))}
-								</DropdownMenuGroup>
-							))}
-						</DropdownMenuContent>
-					</DropdownMenu>
+								</DropdownMenuContent>
+							</DropdownMenu>
 
-					<DropdownMenu>
-						<DropdownMenuTrigger
-							disabled={controlsDisabled}
-							className={cn(
-								"flex items-center gap-0.5 px-1 py-0.5 text-[13px] font-medium focus-visible:outline-none",
-								controlsDisabled ? "cursor-not-allowed opacity-45" : null,
-							)}
-						>
-							<span
-								className={cn(
-									"capitalize",
-									effectiveEffort === "max" || effectiveEffort === "xhigh"
-										? "effort-max-text"
-										: "text-muted-foreground",
-								)}
-							>
-								{effectiveEffort === "xhigh" ? "Extra High" : effectiveEffort}
-							</span>
-							<ChevronDown
-								className="size-3 text-muted-foreground/40"
-								strokeWidth={2}
-							/>
-						</DropdownMenuTrigger>
-						<DropdownMenuContent
-							side="top"
-							align="start"
-							sideOffset={8}
-							className="min-w-[11rem]"
-						>
-							<DropdownMenuGroup>
-								<DropdownMenuLabel>Effort</DropdownMenuLabel>
-								{(provider === "codex"
-									? (["minimal", "low", "medium", "high", "xhigh"] as const)
-									: isOpus
-										? (["low", "medium", "high", "max"] as const)
-										: (["low", "medium", "high"] as const)
-								).map((level) => (
-									<DropdownMenuItem
-										key={level}
-										disabled={controlsDisabled}
-										onClick={() => onSelectEffort(level)}
-										className="flex items-center justify-between gap-3"
+							<DropdownMenu>
+								<DropdownMenuTrigger
+									disabled={toolbarDisabled}
+									className={cn(
+										"flex items-center gap-0.5 px-1 py-0.5 text-[13px] font-medium focus-visible:outline-none",
+										toolbarDisabled ? "cursor-not-allowed opacity-45" : null,
+									)}
+								>
+									<span
+										className={cn(
+											"capitalize",
+											effectiveEffort === "max" || effectiveEffort === "xhigh"
+												? "effort-max-text"
+												: "text-muted-foreground",
+										)}
 									>
-										<div className="flex items-center gap-2.5">
-											<EffortBrainIcon level={level} />
-											<span className="font-medium capitalize">
-												{level === "xhigh" ? "Extra High" : level}
-											</span>
-										</div>
-										{level === effectiveEffort ? (
-											<span className="text-[11px] text-foreground">✓</span>
-										) : null}
-									</DropdownMenuItem>
-								))}
-							</DropdownMenuGroup>
-						</DropdownMenuContent>
-					</DropdownMenu>
+										{effectiveEffort === "xhigh"
+											? "Extra High"
+											: effectiveEffort}
+									</span>
+									<ChevronDown
+										className="size-3 text-muted-foreground/40"
+										strokeWidth={2}
+									/>
+								</DropdownMenuTrigger>
+								<DropdownMenuContent
+									side="top"
+									align="start"
+									sideOffset={8}
+									className="min-w-[11rem]"
+								>
+									<DropdownMenuGroup>
+										<DropdownMenuLabel>Effort</DropdownMenuLabel>
+										{(provider === "codex"
+											? (["minimal", "low", "medium", "high", "xhigh"] as const)
+											: isOpus
+												? (["low", "medium", "high", "max"] as const)
+												: (["low", "medium", "high"] as const)
+										).map((level) => (
+											<DropdownMenuItem
+												key={level}
+												disabled={toolbarDisabled}
+												onClick={() => onSelectEffort(level)}
+												className="flex items-center justify-between gap-3"
+											>
+												<div className="flex items-center gap-2.5">
+													<EffortBrainIcon level={level} />
+													<span className="font-medium capitalize">
+														{level === "xhigh" ? "Extra High" : level}
+													</span>
+												</div>
+												{level === effectiveEffort ? (
+													<span className="text-[11px] text-foreground">✓</span>
+												) : null}
+											</DropdownMenuItem>
+										))}
+									</DropdownMenuGroup>
+								</DropdownMenuContent>
+							</DropdownMenu>
 
-					<ComposerButton
-						aria-label="Plan mode"
-						disabled={controlsDisabled}
-						className={cn(
-							"cursor-pointer gap-1.5 rounded-full px-2 py-0.5 text-[13px] font-medium transition-colors",
-							permissionMode === "plan" || hasPendingPlanReview
-								? "bg-foreground/[0.08] text-foreground hover:bg-foreground/[0.12]"
-								: "text-muted-foreground/55 hover:bg-accent/60 hover:text-muted-foreground",
-						)}
-						onClick={() => {
-							if (hasPendingPlanReview) {
-								dismissedPlanRef.current = true;
-							}
-							onTogglePlanMode();
-						}}
-					>
-						<ClipboardList className="size-[14px]" strokeWidth={1.8} />
-						<span>Plan</span>
-					</ComposerButton>
-				</div>
+							<ComposerButton
+								aria-label="Plan mode"
+								disabled={toolbarDisabled}
+								className={cn(
+									"cursor-pointer gap-1.5 rounded-full px-2 py-0.5 text-[13px] font-medium transition-colors",
+									permissionMode === "plan" || hasPendingPlanReview
+										? "bg-foreground/[0.08] text-foreground hover:bg-foreground/[0.12]"
+										: "text-muted-foreground/55 hover:bg-accent/60 hover:text-muted-foreground",
+								)}
+								onClick={() =>
+									onChangePermissionMode(
+										permissionMode === "plan" ? "bypassPermissions" : "plan",
+									)
+								}
+							>
+								<ClipboardList className="size-[14px]" strokeWidth={1.8} />
+								<span>Plan</span>
+							</ComposerButton>
+						</div>
 
-				<div className="flex items-center gap-2">
-					{hasPendingPlanReview ? (
-						<>
-							<Button
-								variant="ghost"
-								size="sm"
-								aria-label="Request Changes"
-								onClick={handlePlanRequestChanges}
-								disabled={disabled || !hasContent}
-								className="h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px] text-muted-foreground hover:text-foreground"
-							>
-								<MessageSquareMore className="size-3.5" strokeWidth={1.8} />
-								Request Changes
-							</Button>
-							<Button
-								variant="default"
-								size="sm"
-								aria-label="Approve"
-								onClick={handlePlanApprove}
-								disabled={disabled}
-								className="h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px]"
-							>
-								<Check className="size-3.5" strokeWidth={2} />
-								Approve
-							</Button>
-						</>
-					) : sending && !dismissedPlanRef.current ? (
-						<Button
-							variant="destructive"
-							size="icon"
-							aria-label="Stop"
-							onClick={onStop}
-							disabled={disabled || submitDisabled}
-							className="rounded-[9px]"
-						>
-							<Square className="size-3 fill-current" strokeWidth={0} />
-						</Button>
-					) : (
-						<Button
-							variant="outline"
-							size="icon"
-							aria-label="Send"
-							onClick={handleSubmit}
-							disabled={sendDisabled}
-							className="rounded-[9px]"
-						>
-							<ArrowUp className="size-[15px]" strokeWidth={2.2} />
-						</Button>
-					)}
-				</div>
-			</div>
+						<div className="flex items-center gap-2">
+							{hasPendingPlanReview ? (
+								<>
+									<Button
+										variant="ghost"
+										size="sm"
+										aria-label="Request Changes"
+										onClick={handlePlanRequestChanges}
+										disabled={disabled || !hasContent}
+										className="h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px] text-muted-foreground hover:text-foreground"
+									>
+										<MessageSquareMore className="size-3.5" strokeWidth={1.8} />
+										Request Changes
+									</Button>
+									<Button
+										variant="default"
+										size="sm"
+										aria-label="Approve"
+										onClick={handlePlanApprove}
+										disabled={disabled}
+										className="h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px]"
+									>
+										<Check className="size-3.5" strokeWidth={2} />
+										Approve
+									</Button>
+								</>
+							) : sending ? (
+								<Button
+									variant="destructive"
+									size="icon"
+									aria-label="Stop"
+									onClick={onStop}
+									disabled={disabled || submitDisabled}
+									className="rounded-[9px]"
+								>
+									<Square className="size-3 fill-current" strokeWidth={0} />
+								</Button>
+							) : (
+								<Button
+									variant="outline"
+									size="icon"
+									aria-label="Send"
+									onClick={handleSubmit}
+									disabled={sendDisabled}
+									className="rounded-[9px]"
+								>
+									<ArrowUp className="size-[15px]" strokeWidth={2.2} />
+								</Button>
+							)}
+						</div>
+					</div>
+				</>
+			)}
 		</div>
 	);
 });

@@ -62,7 +62,7 @@ type WorkspaceComposerContainerProps = {
 	permissionModes: Record<string, string>;
 	onSelectModel: (contextKey: string, modelId: string) => void;
 	onSelectEffort: (contextKey: string, level: string) => void;
-	onTogglePlanMode: (contextKey: string) => void;
+	onChangePermissionMode: (contextKey: string, mode: string) => void;
 	onSwitchSession?: (sessionId: string) => void;
 	onSubmit: (payload: {
 		prompt: string;
@@ -113,7 +113,7 @@ export const WorkspaceComposerContainer = memo(
 		permissionModes = {},
 		onSelectModel,
 		onSelectEffort,
-		onTogglePlanMode,
+		onChangePermissionMode,
 		onSwitchSession,
 		onSubmit,
 		pendingPromptForSession = null,
@@ -403,9 +403,12 @@ export const WorkspaceComposerContainer = memo(
 			[onSelectEffort, composerContextKey],
 		);
 
-		const handleTogglePlanModeInner = useCallback(() => {
-			onTogglePlanMode(composerContextKey);
-		}, [onTogglePlanMode, composerContextKey]);
+		const handleChangePermissionModeInner = useCallback(
+			(mode: string) => {
+				onChangePermissionMode(composerContextKey, mode);
+			},
+			[onChangePermissionMode, composerContextKey],
+		);
 
 		const actionDisplayName = sessionActionKind
 			? describeActionKind(sessionActionKind)
@@ -498,7 +501,7 @@ export const WorkspaceComposerContainer = memo(
 					effortLevel={effortLevel}
 					onSelectEffort={handleSelectEffortInner}
 					permissionMode={effectivePermissionMode}
-					onTogglePlanMode={handleTogglePlanModeInner}
+					onChangePermissionMode={handleChangePermissionModeInner}
 					sendError={sendError}
 					restoreDraft={restoreDraft}
 					restoreImages={restoreImages}

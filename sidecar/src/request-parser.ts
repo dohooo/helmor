@@ -108,19 +108,12 @@ export function parseProvider(value: unknown): Provider {
 export function parseSendMessageParams(
 	params: Record<string, unknown>,
 ): SendMessageParams {
-	const postToolPermissionMode = optionalString(
-		params,
-		"postToolPermissionMode",
-	);
-	const postToolUseId = optionalString(params, "postToolUseId");
 	return {
 		sessionId: requireString(params, "sessionId"),
 		prompt: requireString(params, "prompt"),
 		model: optionalString(params, "model"),
 		cwd: optionalString(params, "cwd"),
 		resume: optionalString(params, "resume"),
-		...(postToolPermissionMode !== undefined ? { postToolPermissionMode } : {}),
-		...(postToolUseId !== undefined ? { postToolUseId } : {}),
 		permissionMode: optionalString(params, "permissionMode"),
 		effortLevel: optionalString(params, "effortLevel"),
 	};

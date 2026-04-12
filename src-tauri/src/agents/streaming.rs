@@ -172,8 +172,6 @@ pub(super) fn stream_via_sidecar(
             "cwd": working_directory.display().to_string(),
             "resume": resume_session_id,
             "provider": model.provider,
-            "postToolPermissionMode": request.post_tool_permission_mode,
-            "postToolUseId": request.post_tool_use_id,
             "effortLevel": request.effort_level,
             "permissionMode": request.permission_mode,
         }),
@@ -228,6 +226,7 @@ pub(super) fn stream_via_sidecar(
         } else {
             None
         };
+        let mut persisted_exit_plan_review: Option<ThreadMessageLike> = None;
 
         if let (Some(hsid), Some(conn)) = (&hsid_copy, &db_conn) {
             let ctx = ExchangeContext {
@@ -380,7 +379,10 @@ pub(super) fn stream_via_sidecar(
 
                         // Final render with DB-synced IDs so the frontend
                         // cache matches what the historical loader returns.
-                        let final_messages = pipeline_state.finish();
+                        let mut final_messages = pipeline_state.finish();
+                        if let Some(plan_message) = persisted_exit_plan_review.clone() {
+                            final_messages.push(plan_message);
+                        }
                         let _ = on_event.send(AgentStreamEvent::Update {
                             messages: final_messages,
                         });
@@ -486,16 +488,18 @@ pub(super) fn stream_via_sidecar(
                                     None
                                 };
                             let (msg_id, created_at) = persisted_metadata.unwrap_or_default();
-                            let plan_message = build_exit_plan_review_message(
+                            persisted_exit_plan_review = Some(build_exit_plan_review_message(
                                 (!msg_id.is_empty()).then_some(msg_id),
                                 (!created_at.is_empty()).then_some(created_at),
                                 &permission_id,
                                 &tool_name,
                                 &tool_input,
-                            );
+                            ));
 
                             let mut final_messages = pipeline_state.finish();
-                            final_messages.push(plan_message);
+                            if let Some(plan_message) = persisted_exit_plan_review.clone() {
+                                final_messages.push(plan_message);
+                            }
                             let _ = on_event.send(AgentStreamEvent::Update {
                                 messages: final_messages,
                             });
@@ -529,7 +533,6 @@ pub(super) fn stream_via_sidecar(
                         .cloned()
                         .unwrap_or(Value::Object(Default::default()));
                     let mut resolved_model = model_copy.cli_model.to_string();
-                    let mut persisted_plan_message: Option<ThreadMessageLike> = None;
 
                     if let Some(mut pipeline_state) = pipeline.take() {
                         pipeline_state.accumulator.flush_pending();
@@ -560,48 +563,9 @@ pub(super) fn stream_via_sidecar(
                         // the last Update so the cached thread keeps DB-stable ids
                         // across the follow-up resume path.
                         pipeline_state.accumulator.sync_persisted_ids();
-
                         resolved_model = pipeline_state.accumulator.resolved_model().to_string();
-                        if tool_name == "ExitPlanMode" {
-                            let persisted_metadata =
-                                if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
-                                    match persist_exit_plan_message(
-                                        conn,
-                                        ctx,
-                                        &resolved_model,
-                                        &tool_use_id,
-                                        &tool_name,
-                                        &tool_input,
-                                    ) {
-                                        Ok(metadata) => Some(metadata),
-                                        Err(error) => {
-                                            tracing::error!(
-                                                rid = %rid,
-                                                tool_use_id = %tool_use_id,
-                                                "Failed to persist exit-plan message: {error}"
-                                            );
-                                            None
-                                        }
-                                    }
-                                } else {
-                                    None
-                                };
-                            let (message_id, created_at) =
-                                persisted_metadata.unwrap_or((String::new(), String::new()));
 
-                            persisted_plan_message = Some(build_exit_plan_review_message(
-                                (!message_id.is_empty()).then_some(message_id),
-                                (!created_at.is_empty()).then_some(created_at),
-                                &tool_use_id,
-                                &tool_name,
-                                &tool_input,
-                            ));
-                        }
-
-                        let mut final_messages = pipeline_state.finish();
-                        if let Some(plan_message) = persisted_plan_message {
-                            final_messages.push(plan_message);
-                        }
+                        let final_messages = pipeline_state.finish();
                         let _ = on_event.send(AgentStreamEvent::Update {
                             messages: final_messages,
                         });
@@ -735,7 +699,10 @@ pub(super) fn stream_via_sidecar(
                             }
 
                             match emit {
-                                crate::pipeline::PipelineEmit::Full(messages) => {
+                                crate::pipeline::PipelineEmit::Full(mut messages) => {
+                                    if let Some(ref plan_msg) = persisted_exit_plan_review {
+                                        messages.push(plan_msg.clone());
+                                    }
                                     let _ = on_event.send(AgentStreamEvent::Update { messages });
                                 }
                                 crate::pipeline::PipelineEmit::Partial(message) => {

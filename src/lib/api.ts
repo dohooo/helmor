@@ -72,8 +72,6 @@ export type AgentSendRequest = {
 	modelId: string;
 	prompt: string;
 	resumeOnly?: boolean | null;
-	postToolPermissionMode?: string | null;
-	postToolUseId?: string | null;
 	sessionId?: string | null;
 	helmorSessionId?: string | null;
 	workingDirectory?: string | null;

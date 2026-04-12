@@ -484,9 +484,34 @@ function PlanReviewCard({ part }: { part: PlanReviewPart }) {
 				<ClipboardList className="size-3.5" strokeWidth={1.8} />
 				Plan
 			</div>
+			{part.planFilePath ? (
+				<p className="mt-2 break-words text-[12px] leading-5 text-muted-foreground">
+					{part.planFilePath}
+				</p>
+			) : null}
 			<pre className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground">
 				{part.plan?.trim() || "No plan content."}
 			</pre>
+			{(part.allowedPrompts ?? []).length > 0 ? (
+				<div className="mt-3 grid gap-2 rounded-lg border border-border/50 bg-muted/20 p-2.5">
+					<p className="text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
+						Approved Prompts
+					</p>
+					{part.allowedPrompts?.map((entry) => (
+						<div
+							key={`${entry.tool}:${entry.prompt}`}
+							className="rounded-md border border-border/50 bg-background/70 px-2 py-1.5"
+						>
+							<p className="text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
+								{entry.tool}
+							</p>
+							<p className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-5 text-foreground">
+								{entry.prompt}
+							</p>
+						</div>
+					))}
+				</div>
+			) : null}
 		</div>
 	);
 }

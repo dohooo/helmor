@@ -2,11 +2,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Minus, Monitor, Moon, Plus, Settings, Sun } from "lucide-react";
 import { memo, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Field, FieldContent, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
 	isConductorAvailable,
@@ -125,7 +125,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 										type="button"
 										onClick={() => setActiveSection(key)}
 										className={cn(
-											"flex items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] font-medium transition-colors",
+											"flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] font-medium transition-colors",
 											activeSection === key
 												? "bg-accent text-foreground"
 												: "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
@@ -263,10 +263,10 @@ export const SettingsDialog = memo(function SettingsDialog({
 											input
 										</div>
 									</div>
-									<Checkbox
+									<Switch
 										checked={settings.notifications}
 										onCheckedChange={(checked) =>
-											updateSettings({ notifications: checked === true })
+											updateSettings({ notifications: checked })
 										}
 									/>
 								</div>
