@@ -24,6 +24,11 @@ import {
 	CommandItem,
 	CommandList,
 } from "@/components/ui/command";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { HyperText } from "@/components/ui/hyper-text";
 import { Input } from "@/components/ui/input";
 import {
@@ -330,13 +335,16 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		],
 	);
 
-	const handleToggleHistory = useCallback(async () => {
-		if (!showHistory && workspace) {
-			const hidden = await loadHiddenSessions(workspace.id);
-			setHiddenSessions(hidden);
-		}
-		setShowHistory((value) => !value);
-	}, [showHistory, workspace]);
+	const handleToggleHistory = useCallback(
+		async (open: boolean) => {
+			if (open && workspace) {
+				const hidden = await loadHiddenSessions(workspace.id);
+				setHiddenSessions(hidden);
+			}
+			setShowHistory(open);
+		},
+		[workspace],
+	);
 
 	const handleUnhide = useCallback(
 		async (sessionId: string) => {
@@ -742,67 +750,65 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					<Plus className="size-3.5" strokeWidth={1.8} />
 				</Button>
 
-				<div className="relative ml-1 shrink-0">
-					<Button
-						aria-label="Session history"
-						onClick={handleToggleHistory}
-						variant="ghost"
-						size="icon-sm"
-						className={cn(
-							"text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-							showHistory && "bg-accent/60 text-foreground",
-						)}
-					>
-						<History className="size-3.5" strokeWidth={1.8} />
-					</Button>
-
-					{showHistory ? (
-						<div className="absolute right-0 top-full z-30 mt-1 w-56 rounded-lg border border-border bg-popover py-1 shadow-lg">
-							{hiddenSessions.length > 0 ? (
-								hiddenSessions.map((session) => (
-									<div
-										key={session.id}
-										className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-[12px] text-muted-foreground hover:bg-accent/60"
-									>
-										<div className="flex min-w-0 items-center gap-1.5">
-											<SessionProviderIcon
-												agentType={session.agentType}
-												active={false}
-											/>
-											<span className="truncate">
-												{displaySessionTitle(session)}
-											</span>
-										</div>
-										<div className="flex shrink-0 items-center gap-0.5">
-											<Button
-												aria-label="Restore session"
-												onClick={() => handleUnhide(session.id)}
-												variant="ghost"
-												size="icon-xs"
-												className="text-muted-foreground hover:text-foreground"
-											>
-												<RotateCcw className="size-3" strokeWidth={1.8} />
-											</Button>
-											<Button
-												aria-label="Delete session permanently"
-												onClick={() => handleDelete(session.id)}
-												variant="ghost"
-												size="icon-xs"
-												className="text-muted-foreground hover:text-destructive"
-											>
-												<Trash2 className="size-3" strokeWidth={1.8} />
-											</Button>
-										</div>
-									</div>
-								))
-							) : (
-								<div className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
-									No hidden sessions
-								</div>
+				<DropdownMenu open={showHistory} onOpenChange={handleToggleHistory}>
+					<DropdownMenuTrigger asChild>
+						<Button
+							aria-label="Session history"
+							variant="ghost"
+							size="icon-sm"
+							className={cn(
+								"ml-1 shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground focus-visible:border-transparent focus-visible:ring-0",
+								showHistory && "bg-accent/60 text-foreground",
 							)}
-						</div>
-					) : null}
-				</div>
+						>
+							<History className="size-3.5" strokeWidth={1.8} />
+						</Button>
+					</DropdownMenuTrigger>
+					<DropdownMenuContent align="end" className="w-56">
+						{hiddenSessions.length > 0 ? (
+							hiddenSessions.map((session) => (
+								<div
+									key={session.id}
+									className="flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-[12px] text-muted-foreground hover:bg-accent/60"
+								>
+									<div className="flex min-w-0 items-center gap-1.5">
+										<SessionProviderIcon
+											agentType={session.agentType}
+											active={false}
+										/>
+										<span className="truncate">
+											{displaySessionTitle(session)}
+										</span>
+									</div>
+									<div className="flex shrink-0 items-center gap-0.5">
+										<Button
+											aria-label="Restore session"
+											onClick={() => handleUnhide(session.id)}
+											variant="ghost"
+											size="icon-xs"
+											className="text-muted-foreground hover:text-foreground"
+										>
+											<RotateCcw className="size-3" strokeWidth={1.8} />
+										</Button>
+										<Button
+											aria-label="Delete session permanently"
+											onClick={() => handleDelete(session.id)}
+											variant="ghost"
+											size="icon-xs"
+											className="text-muted-foreground hover:text-destructive"
+										>
+											<Trash2 className="size-3" strokeWidth={1.8} />
+										</Button>
+									</div>
+								</div>
+							))
+						) : (
+							<div className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
+								No hidden sessions
+							</div>
+						)}
+					</DropdownMenuContent>
+				</DropdownMenu>
 			</div>
 		</header>
 	);
