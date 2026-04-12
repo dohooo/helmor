@@ -14,54 +14,34 @@ export type TerminalHandle = {
 	dispose: () => void;
 };
 
-const DARK_THEME: ITheme = {
-	background: "oklch(0.205 0 0)",
-	foreground: "oklch(0.87 0 0)",
-	cursor: "oklch(0.87 0 0)",
-	selectionBackground: "oklch(0.4 0.02 264)",
-	black: "#1e1e2e",
-	red: "#f38ba8",
-	green: "#a6e3a1",
-	yellow: "#f9e2af",
-	blue: "#89b4fa",
-	magenta: "#cba6f7",
-	cyan: "#94e2d5",
-	white: "#cdd6f4",
-	brightBlack: "#585b70",
-	brightRed: "#f38ba8",
-	brightGreen: "#a6e3a1",
-	brightYellow: "#f9e2af",
-	brightBlue: "#89b4fa",
-	brightMagenta: "#cba6f7",
-	brightCyan: "#94e2d5",
-	brightWhite: "#a6adc8",
-};
+/** Read --terminal-* CSS variables and build an xterm ITheme. */
+function resolveTerminalTheme(): ITheme {
+	const s = getComputedStyle(document.documentElement);
+	const v = (suffix: string) =>
+		s.getPropertyValue(`--terminal-${suffix}`).trim();
 
-const LIGHT_THEME: ITheme = {
-	background: "oklch(0.985 0 0)",
-	foreground: "oklch(0.205 0 0)",
-	cursor: "oklch(0.205 0 0)",
-	selectionBackground: "oklch(0.85 0.02 264)",
-	black: "#5c6370",
-	red: "#e45649",
-	green: "#50a14f",
-	yellow: "#c18401",
-	blue: "#4078f2",
-	magenta: "#a626a4",
-	cyan: "#0184bc",
-	white: "#fafafa",
-	brightBlack: "#4f525e",
-	brightRed: "#e06c75",
-	brightGreen: "#98c379",
-	brightYellow: "#e5c07b",
-	brightBlue: "#61afef",
-	brightMagenta: "#c678dd",
-	brightCyan: "#56b6c2",
-	brightWhite: "#ffffff",
-};
-
-function isDark() {
-	return document.documentElement.classList.contains("dark");
+	return {
+		background: v("background"),
+		foreground: v("foreground"),
+		cursor: v("cursor"),
+		selectionBackground: v("selection"),
+		black: v("black"),
+		red: v("red"),
+		green: v("green"),
+		yellow: v("yellow"),
+		blue: v("blue"),
+		magenta: v("magenta"),
+		cyan: v("cyan"),
+		white: v("white"),
+		brightBlack: v("bright-black"),
+		brightRed: v("bright-red"),
+		brightGreen: v("bright-green"),
+		brightYellow: v("bright-yellow"),
+		brightBlue: v("bright-blue"),
+		brightMagenta: v("bright-magenta"),
+		brightCyan: v("bright-cyan"),
+		brightWhite: v("bright-white"),
+	};
 }
 
 export function TerminalOutput({
@@ -84,7 +64,7 @@ export function TerminalOutput({
 			fontSize: 12,
 			fontFamily: "'GeistMono', 'SF Mono', Monaco, Menlo, monospace",
 			lineHeight: 1.3,
-			theme: isDark() ? DARK_THEME : LIGHT_THEME,
+			theme: resolveTerminalTheme(),
 			cursorBlink: false,
 			cursorStyle: "bar",
 			cursorInactiveStyle: "none",
@@ -106,9 +86,9 @@ export function TerminalOutput({
 		});
 		resizeObserver.observe(container);
 
-		// Sync xterm theme when app light/dark mode changes.
+		// Re-resolve CSS variables when app light/dark mode changes.
 		const themeObserver = new MutationObserver(() => {
-			terminal.options.theme = isDark() ? DARK_THEME : LIGHT_THEME;
+			terminal.options.theme = resolveTerminalTheme();
 		});
 		themeObserver.observe(document.documentElement, {
 			attributes: true,
@@ -144,9 +124,15 @@ export function TerminalOutput({
 
 	return (
 		<div
-			ref={containerRef}
 			className={className}
-			style={{ width: "100%", height: "100%" }}
-		/>
+			style={{
+				width: "100%",
+				height: "100%",
+				padding: 12,
+				backgroundColor: "var(--terminal-background)",
+			}}
+		>
+			<div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+		</div>
 	);
 }

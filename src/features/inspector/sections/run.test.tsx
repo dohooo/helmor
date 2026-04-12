@@ -33,6 +33,7 @@ const defaults = {
 	repoId: "repo-1",
 	workspaceId: "ws-1",
 	runScript: "npm test" as string | null,
+	isActive: true,
 	onOpenSettings: vi.fn(),
 };
 

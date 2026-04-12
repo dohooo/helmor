@@ -1,5 +1,5 @@
 import { Play, RotateCcw, Settings2, Square } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	type TerminalHandle,
 	TerminalOutput,
@@ -14,6 +14,7 @@ type RunTabProps = {
 	repoId: string | null;
 	workspaceId: string | null;
 	runScript: string | null;
+	isActive: boolean;
 	onOpenSettings: () => void;
 };
 
@@ -21,11 +22,20 @@ export function RunTab({
 	repoId,
 	workspaceId,
 	runScript,
+	isActive,
 	onOpenSettings,
 }: RunTabProps) {
 	const termRef = useRef<TerminalHandle | null>(null);
 	const [status, setStatus] = useState<ScriptStatus>("idle");
 	const [hasRun, setHasRun] = useState(false);
+
+	// Reset to initial state when tab deactivates (avoids stale empty terminal).
+	useEffect(() => {
+		if (!isActive && status !== "running") {
+			setHasRun(false);
+			setStatus("idle");
+		}
+	}, [isActive, status]);
 
 	const handleRun = useCallback(() => {
 		if (!repoId) return;

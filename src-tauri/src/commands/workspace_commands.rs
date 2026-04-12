@@ -1,4 +1,4 @@
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::{db, git_watcher, workspaces};
 
@@ -161,6 +161,10 @@ pub async fn archive_workspace(
 ) -> CmdResult<workspaces::ArchiveWorkspaceResponse> {
     let ws_lock = db::workspace_mutation_lock(&workspace_id);
     let _lock = ws_lock.lock().await;
+    // Stop the git watcher BEFORE removing the worktree to avoid race
+    // conditions between the watcher's debouncer and directory deletion.
+    let manager = app.state::<git_watcher::GitWatcherManager>();
+    manager.unwatch(&workspace_id);
     let result = run_blocking(move || workspaces::archive_workspace_impl(&workspace_id)).await?;
     git_watcher::notify_workspace_changed(&app);
     Ok(result)
@@ -175,6 +179,8 @@ pub async fn validate_archive_workspace(workspace_id: String) -> CmdResult<()> {
 pub async fn permanently_delete_workspace(app: AppHandle, workspace_id: String) -> CmdResult<()> {
     let ws_lock = db::workspace_mutation_lock(&workspace_id);
     let _lock = ws_lock.lock().await;
+    let manager = app.state::<git_watcher::GitWatcherManager>();
+    manager.unwatch(&workspace_id);
     run_blocking(move || workspaces::permanently_delete_workspace(&workspace_id)).await?;
     git_watcher::notify_workspace_changed(&app);
     Ok(())

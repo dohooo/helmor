@@ -43,6 +43,17 @@ body {
 	overflow-anchor: none;
 }
 
+/* Sonner toast: stack content and action buttons vertically */
+[data-sonner-toast][data-styled="true"]:has([data-button]) {
+	flex-wrap: wrap;
+}
+[data-sonner-toast][data-styled="true"]:has([data-button]) [data-content] {
+	flex: 1 0 100%;
+}
+[data-sonner-toast][data-styled="true"] [data-button] {
+	margin-top: 4px;
+}
+
 /*
  * Conversation scrollbar entry animation — fires once per app load.
  *

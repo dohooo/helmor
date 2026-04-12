@@ -326,21 +326,38 @@ pub fn create_worktree_from_start_point(
 }
 
 pub fn remove_worktree(repo_root: &Path, workspace_dir: &Path) -> Result<()> {
-    let repo_root = repo_root.display().to_string();
+    let repo_root_str = repo_root.display().to_string();
     let workspace_dir_arg = workspace_dir.display().to_string();
-    run_git(
+    let result = run_git(
         [
             "-C",
-            repo_root.as_str(),
+            repo_root_str.as_str(),
             "worktree",
             "remove",
             "--force",
             workspace_dir_arg.as_str(),
         ],
         None,
-    )
-    .map(|_| ())
-    .with_context(|| format!("Failed to remove worktree at {}", workspace_dir.display()))
+    );
+
+    if result.is_ok() {
+        return Ok(());
+    }
+
+    // Fallback: `git worktree remove --force` can fail with "Directory not
+    // empty" when a process still holds a file handle open (e.g. file watcher).
+    // Manually nuke the directory and prune the stale worktree entry.
+    if workspace_dir.exists() {
+        fs::remove_dir_all(workspace_dir).with_context(|| {
+            format!(
+                "Failed to remove worktree directory at {}",
+                workspace_dir.display()
+            )
+        })?;
+    }
+    run_git(["-C", repo_root_str.as_str(), "worktree", "prune"], None)
+        .map(|_| ())
+        .with_context(|| format!("Failed to prune worktree for {}", workspace_dir.display()))
 }
 
 pub fn remove_branch(repo_root: &Path, branch: &str) -> Result<()> {

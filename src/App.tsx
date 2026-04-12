@@ -1503,7 +1503,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 					)}
 					<Toaster
 						theme={resolveTheme(appSettings.theme)}
-						position="top-right"
+						position="bottom-right"
 						visibleToasts={6}
 					/>
 				</ComposerInsertProvider>

@@ -22,6 +22,7 @@ type SetupTabProps = {
 	workspaceState: string | null;
 	setupScript: string | null;
 	scriptsLoaded: boolean;
+	isActive: boolean;
 	onOpenSettings: () => void;
 };
 
@@ -31,14 +32,24 @@ export function SetupTab({
 	workspaceState,
 	setupScript,
 	scriptsLoaded,
+	isActive,
 	onOpenSettings,
 }: SetupTabProps) {
 	const termRef = useRef<TerminalHandle | null>(null);
 	const [status, setStatus] = useState<ScriptStatus>("idle");
 	const [hasRun, setHasRun] = useState(false);
+	const hasAutoRunRef = useRef(false);
 	const queryClient = useQueryClient();
 
 	const hasScript = !!setupScript?.trim();
+
+	// Reset to initial state when tab deactivates (avoids stale empty terminal).
+	useEffect(() => {
+		if (!isActive && status !== "running") {
+			setHasRun(false);
+			setStatus("idle");
+		}
+	}, [isActive, status]);
 
 	const handleRun = useCallback(() => {
 		if (!repoId) return;
@@ -83,8 +94,15 @@ export function SetupTab({
 	}, [repoId, workspaceId]);
 
 	// Auto-run setup when workspace is pending and script is available.
+	// Ref guard prevents re-triggering after tab-switch resets.
 	useEffect(() => {
-		if (workspaceState === "setup_pending" && hasScript && status === "idle") {
+		if (
+			workspaceState === "setup_pending" &&
+			hasScript &&
+			status === "idle" &&
+			!hasAutoRunRef.current
+		) {
+			hasAutoRunRef.current = true;
 			handleRun();
 		}
 	}, [workspaceState, hasScript, status, handleRun]);

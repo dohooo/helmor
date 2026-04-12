@@ -37,6 +37,7 @@ const defaults = {
 	workspaceState: "ready" as string | null,
 	setupScript: "echo hello" as string | null,
 	scriptsLoaded: true,
+	isActive: true,
 	onOpenSettings: vi.fn(),
 };
 

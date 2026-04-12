@@ -15,7 +15,7 @@ import {
 	Trash2,
 	X,
 } from "lucide-react";
-import { memo, useCallback, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
@@ -122,6 +122,23 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	const [editingTitle, setEditingTitle] = useState("");
 	const [editingBranch, setEditingBranch] = useState<string | null>(null);
 	const [branchCopied, setBranchCopied] = useState(false);
+	const tabsScrollRef = useRef<HTMLDivElement>(null);
+	const [hasRightOverflow, setHasRightOverflow] = useState(false);
+
+	const updateOverflow = useCallback(() => {
+		const el = tabsScrollRef.current;
+		if (!el) return;
+		setHasRightOverflow(el.scrollWidth - el.scrollLeft - el.clientWidth > 1);
+	}, []);
+
+	useEffect(() => {
+		const el = tabsScrollRef.current;
+		if (!el) return;
+		updateOverflow();
+		const ro = new ResizeObserver(updateOverflow);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, [updateOverflow, sessions.length]);
 
 	const handleStartBranchRename = useCallback(() => {
 		if (!workspace?.branch) {
@@ -554,140 +571,152 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 			</div>
 
 			<div className="flex items-center px-4 pb-1">
-				<div className="scrollbar-none min-w-0 flex-1 overflow-x-auto">
-					{loadingWorkspace ? (
-						<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
-							<Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
-							Loading
-						</div>
-					) : sessions.length > 0 ? (
-						<Tabs
-							value={selectedSessionId ?? sessions[0]?.id}
-							onValueChange={(value) => {
-								onSelectSession?.(value);
-							}}
-							className="min-w-max gap-0"
-						>
-							<TabsList
-								aria-label="Sessions"
-								className="inline-flex min-w-full w-max justify-start self-start"
-							>
-								{sessions.map((session) => {
-									const selected = session.id === selectedSessionId;
-									const isActive = sendingSessionIds
-										? sendingSessionIds.has(session.id)
-										: selected && sending;
-									const hasUnread = session.unreadCount > 0;
-									const isCompleted =
-										completedSessionIds?.has(session.id) ?? false;
-									const isEditing = editingSessionId === session.id;
-
-									return (
-										<Tooltip key={session.id}>
-											<TooltipTrigger asChild>
-												<TabsTrigger
-													value={session.id}
-													onMouseEnter={() => {
-														onPrefetchSession?.(session.id);
-													}}
-													onFocus={() => {
-														onPrefetchSession?.(session.id);
-													}}
-													className="group/tab relative h-full w-auto max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
-												>
-													<SessionProviderIcon
-														agentType={
-															selected
-																? (selectedProvider ?? session.agentType)
-																: session.agentType
-														}
-														active={isActive}
-													/>
-													{isEditing ? (
-														<Input
-															autoFocus
-															value={editingTitle}
-															onChange={(event) =>
-																setEditingTitle(event.target.value)
-															}
-															onKeyDown={(event) => {
-																if (event.key === "Enter") {
-																	event.preventDefault();
-																	void handleCommitRename();
-																} else if (event.key === "Escape") {
-																	handleCancelRename();
-																}
-															}}
-															onBlur={() => void handleCommitRename()}
-															onClick={(event) => event.stopPropagation()}
-															className="h-6 w-20 truncate rounded-md border-border bg-background px-1.5 py-0 text-[13px] font-medium text-foreground"
-														/>
-													) : (
-														<span
-															className={cn(
-																"truncate font-medium",
-																(hasUnread || isCompleted) && !selected
-																	? "text-foreground"
-																	: undefined,
-															)}
-														>
-															{displaySessionTitle(session)}
-														</span>
-													)}
-													{(hasUnread || isCompleted) && !isEditing ? (
-														<span
-															aria-label={
-																isCompleted
-																	? "Session completed"
-																	: "Unread session"
-															}
-															className="size-1.5 shrink-0 rounded-full bg-chart-2"
-														/>
-													) : null}
-													{!isEditing ? (
-														<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-[linear-gradient(to_right,transparent_0%,#2F2F2F_35%,#2F2F2F_100%)] pl-5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible">
-															<span
-																role="button"
-																aria-label="Rename session"
-																onClick={(event) =>
-																	handleStartRename(session, event)
-																}
-																className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
-															>
-																<Pencil className="size-2.5" strokeWidth={2} />
-															</span>
-															<span
-																role="button"
-																aria-label="Close session"
-																onClick={(event) =>
-																	handleHideSession(session.id, event)
-																}
-																className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
-															>
-																<X className="size-2.5" strokeWidth={2} />
-															</span>
-														</span>
-													) : null}
-												</TabsTrigger>
-											</TooltipTrigger>
-											<TooltipContent
-												side="bottom"
-												sideOffset={8}
-												className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
-											>
-												<span>{displaySessionTitle(session)}</span>
-											</TooltipContent>
-										</Tooltip>
-									);
-								})}
-							</TabsList>
-						</Tabs>
-					) : (
-						<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
-							<AlertCircle className="size-3" strokeWidth={1.8} />
-							No sessions
-						</div>
+				<div className="group/tabs-scroll relative min-w-0 flex-1">
+					{hasRightOverflow && (
+						<div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-background to-transparent" />
 					)}
+					<div
+						ref={tabsScrollRef}
+						onScroll={updateOverflow}
+						className="scrollbar-none min-w-0 flex-1 overflow-x-auto"
+					>
+						{loadingWorkspace ? (
+							<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
+								<Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
+								Loading
+							</div>
+						) : sessions.length > 0 ? (
+							<Tabs
+								value={selectedSessionId ?? sessions[0]?.id}
+								onValueChange={(value) => {
+									onSelectSession?.(value);
+								}}
+								className="min-w-max gap-0"
+							>
+								<TabsList
+									aria-label="Sessions"
+									className="inline-flex min-w-full w-max justify-start self-start"
+								>
+									{sessions.map((session) => {
+										const selected = session.id === selectedSessionId;
+										const isActive = sendingSessionIds
+											? sendingSessionIds.has(session.id)
+											: selected && sending;
+										const hasUnread = session.unreadCount > 0;
+										const isCompleted =
+											completedSessionIds?.has(session.id) ?? false;
+										const isEditing = editingSessionId === session.id;
+
+										return (
+											<Tooltip key={session.id}>
+												<TooltipTrigger asChild>
+													<TabsTrigger
+														value={session.id}
+														onMouseEnter={() => {
+															onPrefetchSession?.(session.id);
+														}}
+														onFocus={() => {
+															onPrefetchSession?.(session.id);
+														}}
+														className="group/tab relative h-full w-auto max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
+													>
+														<SessionProviderIcon
+															agentType={
+																selected
+																	? (selectedProvider ?? session.agentType)
+																	: session.agentType
+															}
+															active={isActive}
+														/>
+														{isEditing ? (
+															<Input
+																autoFocus
+																value={editingTitle}
+																onChange={(event) =>
+																	setEditingTitle(event.target.value)
+																}
+																onKeyDown={(event) => {
+																	if (event.key === "Enter") {
+																		event.preventDefault();
+																		void handleCommitRename();
+																	} else if (event.key === "Escape") {
+																		handleCancelRename();
+																	}
+																}}
+																onBlur={() => void handleCommitRename()}
+																onClick={(event) => event.stopPropagation()}
+																className="h-6 w-20 truncate rounded-md border-border bg-background px-1.5 py-0 text-[13px] font-medium text-foreground"
+															/>
+														) : (
+															<span
+																className={cn(
+																	"truncate font-medium",
+																	(hasUnread || isCompleted) && !selected
+																		? "text-foreground"
+																		: undefined,
+																)}
+															>
+																{displaySessionTitle(session)}
+															</span>
+														)}
+														{(hasUnread || isCompleted) && !isEditing ? (
+															<span
+																aria-label={
+																	isCompleted
+																		? "Session completed"
+																		: "Unread session"
+																}
+																className="size-1.5 shrink-0 rounded-full bg-chart-2"
+															/>
+														) : null}
+														{!isEditing ? (
+															<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-[linear-gradient(to_right,transparent_0%,#2F2F2F_35%,#2F2F2F_100%)] pl-5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible">
+																<span
+																	role="button"
+																	aria-label="Rename session"
+																	onClick={(event) =>
+																		handleStartRename(session, event)
+																	}
+																	className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
+																>
+																	<Pencil
+																		className="size-2.5"
+																		strokeWidth={2}
+																	/>
+																</span>
+																<span
+																	role="button"
+																	aria-label="Close session"
+																	onClick={(event) =>
+																		handleHideSession(session.id, event)
+																	}
+																	className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
+																>
+																	<X className="size-2.5" strokeWidth={2} />
+																</span>
+															</span>
+														) : null}
+													</TabsTrigger>
+												</TooltipTrigger>
+												<TooltipContent
+													side="bottom"
+													sideOffset={8}
+													className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+												>
+													<span>{displaySessionTitle(session)}</span>
+												</TooltipContent>
+											</Tooltip>
+										);
+									})}
+								</TabsList>
+							</Tabs>
+						) : (
+							<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
+								<AlertCircle className="size-3" strokeWidth={1.8} />
+								No sessions
+							</div>
+						)}
+					</div>
 				</div>
 
 				<Button

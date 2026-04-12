@@ -657,6 +657,9 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 	const hasOutput = resultText != null && resultText.length > 5;
 	const isLiveTool = isLiveStreamingStatus(streamingStatus);
 	const [isOpen, setIsOpen] = useState(isLiveTool);
+	useEffect(() => {
+		if (!isLiveTool) setIsOpen(false);
+	}, [isLiveTool]);
 
 	const statusIndicator = isLiveTool ? (
 		<LoaderCircle
@@ -1079,9 +1082,7 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 	const [open, setOpen] = useState(group.active);
 	useEffect(() => {
-		if (group.active) {
-			setOpen(true);
-		}
+		setOpen(group.active);
 	}, [group.active]);
 	const collapsedGroupIconClassName = "size-3.5 text-muted-foreground";
 
