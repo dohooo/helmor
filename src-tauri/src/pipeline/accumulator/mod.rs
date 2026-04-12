@@ -112,6 +112,15 @@ pub struct StreamAccumulator {
     /// Template of the current assistant message (for rebuilding).
     cur_asst_template: Option<Value>,
 
+    // ── ID-unification tracking ────────────────────────────────────
+    /// Index into `collected[]` for the first entry of the current
+    /// pending assistant turn (set on the first `handle_assistant` of a
+    /// new SDK message ID, consumed by `flush_assistant`).
+    pending_turn_collected_idx: Option<usize>,
+    /// Index into `collected[]` for the result message (Claude `result`
+    /// or Codex `turn.completed`), used by `sync_result_id`.
+    result_collected_idx: Option<usize>,
+
     // ── Coverage guard ───────────────────────────────────────────────
     /// Top-level event types that fell through `push_event`'s match
     /// without a handler. Tested as a hard-zero invariant in
@@ -204,6 +213,8 @@ impl StreamAccumulator {
             cur_asst_id: None,
             cur_asst_blocks: Vec::new(),
             cur_asst_template: None,
+            pending_turn_collected_idx: None,
+            result_collected_idx: None,
             dropped_event_types: Vec::new(),
         }
     }
@@ -460,6 +471,29 @@ impl StreamAccumulator {
         self.result_json.as_deref()
     }
 
+    /// Propagate pre-assigned turn UUIDs back into the corresponding
+    /// `collected[]` entries so the IDs the frontend sees during streaming
+    /// match the IDs stored in the DB. Call after persisting turns.
+    pub fn sync_persisted_ids(&mut self) {
+        for turn in &self.turns {
+            if let Some(idx) = turn.collected_idx {
+                if idx < self.collected.len() {
+                    self.collected[idx].id = turn.id.clone();
+                }
+            }
+        }
+    }
+
+    /// Propagate the result message's DB row ID into the corresponding
+    /// `collected[]` entry. Call after `persist_result_and_finalize`.
+    pub fn sync_result_id(&mut self, result_id: &str) {
+        if let Some(idx) = self.result_collected_idx {
+            if idx < self.collected.len() {
+                self.collected[idx].id = result_id.to_string();
+            }
+        }
+    }
+
     /// Reclassify any in-flight tool_use as `error` so the adapter's
     /// settle pass can fill `result = "aborted by user"` and the
     /// frontend stops the spinner. Walks live Claude blocks, staged
@@ -544,6 +578,36 @@ impl StreamAccumulator {
         self.flush_assistant();
     }
 
+    /// Convert any active streaming partial into a finalized assistant
+    /// message so terminal notices can land after it in the rendered thread.
+    /// Used by abort handling, where no final provider `assistant` event will
+    /// arrive to consume the partial naturally.
+    pub(super) fn materialize_partial(&mut self, context_key: &str, _session_id: &str) {
+        if !self.has_active_partial() {
+            return;
+        }
+
+        let (partial_id, created_at) = self.get_or_create_partial_identity(context_key);
+        let partial = if !self.blocks.is_empty() {
+            streaming::build_materialized_partial_from_blocks(self, partial_id, created_at)
+        } else {
+            streaming::build_materialized_partial_fallback(self, partial_id, created_at)
+        };
+
+        if let Some(message) = partial {
+            let collected_idx = self.collected.len();
+            self.turns.push(CollectedTurn {
+                id: uuid::Uuid::new_v4().to_string(),
+                role: "assistant".to_string(),
+                content_json: message.raw_json.clone(),
+                collected_idx: Some(collected_idx),
+            });
+            self.collected.push(message);
+        }
+
+        self.finalize_blocks();
+    }
+
     /// Project accumulator state into `ParsedAgentOutput`. Always succeeds —
     /// empty input yields empty output. Drains owned fields, single-call.
     pub fn drain_output(&mut self, fallback_session_id: Option<&str>) -> ParsedAgentOutput {
@@ -581,6 +645,7 @@ impl StreamAccumulator {
         });
 
         self.line_count += 1;
+        let collected_idx = self.collected.len();
         self.collected.push(IntermediateMessage {
             id: format!("abort:{}", self.line_count),
             role: "error".to_string(),
@@ -590,8 +655,10 @@ impl StreamAccumulator {
             is_streaming: false,
         });
         self.turns.push(CollectedTurn {
+            id: uuid::Uuid::new_v4().to_string(),
             role: "error".to_string(),
             content_json: NOTICE_JSON.to_string(),
+            collected_idx: Some(collected_idx),
         });
     }
 
@@ -625,6 +692,12 @@ impl StreamAccumulator {
             .is_some_and(|current| Some(current) == msg_id);
         if self.cur_asst_id.is_some() && !same_msg_id {
             self.flush_assistant();
+        }
+
+        // Track the collected[] index of the first entry in this
+        // assistant group so flush_assistant can link the turn to it.
+        if self.pending_turn_collected_idx.is_none() {
+            self.pending_turn_collected_idx = Some(self.collected.len());
         }
 
         self.cur_asst_id = msg_id.map(str::to_string);
@@ -681,9 +754,12 @@ impl StreamAccumulator {
     fn handle_user(&mut self, raw_line: &str, value: &Value) {
         // Persistence: flush any pending assistant turn
         self.flush_assistant();
+        let collected_idx = self.collected.len();
         self.turns.push(CollectedTurn {
+            id: uuid::Uuid::new_v4().to_string(),
             role: "user".to_string(),
             content_json: raw_line.to_string(),
+            collected_idx: Some(collected_idx),
         });
 
         // Rendering
@@ -703,7 +779,8 @@ impl StreamAccumulator {
         }
         self.result_json = Some(raw_line.to_string());
 
-        // Rendering
+        // Rendering — track index so sync_result_id can back-fill the DB UUID.
+        self.result_collected_idx = Some(self.collected.len());
         self.collect_message(raw_line, value, "assistant", None);
     }
 
@@ -730,8 +807,10 @@ impl StreamAccumulator {
         self.collect_message(&s, &synthetic, "error", None);
 
         self.turns.push(CollectedTurn {
+            id: uuid::Uuid::new_v4().to_string(),
             role: "error".to_string(),
             content_json: raw_line.to_string(),
+            collected_idx: None,
         });
     }
 
@@ -796,7 +875,8 @@ impl StreamAccumulator {
         }
         self.result_json = Some(raw_line.to_string());
 
-        // Rendering
+        // Rendering — Codex equivalent of handle_result
+        self.result_collected_idx = Some(self.collected.len());
         self.collect_message(raw_line, value, "assistant", None);
     }
 
@@ -816,6 +896,7 @@ impl StreamAccumulator {
     fn flush_assistant(&mut self) {
         if self.cur_asst_blocks.is_empty() {
             self.cur_asst_id = None;
+            self.pending_turn_collected_idx = None;
             return;
         }
 
@@ -824,8 +905,10 @@ impl StreamAccumulator {
                 message["content"] = Value::Array(std::mem::take(&mut self.cur_asst_blocks));
             }
             self.turns.push(CollectedTurn {
+                id: uuid::Uuid::new_v4().to_string(),
                 role: "assistant".to_string(),
                 content_json: template.to_string(),
+                collected_idx: self.pending_turn_collected_idx.take(),
             });
         }
 

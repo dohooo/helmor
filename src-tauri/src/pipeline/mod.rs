@@ -81,6 +81,15 @@ impl MessagePipeline {
         self.render_full()
     }
 
+    /// Finalize any active streaming partial into a collected assistant
+    /// message. Used on abort paths where no terminal provider assistant
+    /// event will arrive, but the last visible partial should still remain
+    /// in the thread ahead of the terminal abort notice.
+    pub fn materialize_partial(&mut self) {
+        self.accumulator
+            .materialize_partial(&self.context_key, &self.session_id);
+    }
+
     /// Convert historical DB records (static, no accumulator).
     pub fn convert_historical(records: &[HistoricalRecord]) -> Vec<ThreadMessageLike> {
         let intermediate: Vec<IntermediateMessage> = records

@@ -181,6 +181,8 @@ pub fn run() {
             agents::send_agent_message_stream,
             agents::stop_agent_stream,
             agents::respond_to_permission_request,
+            agents::respond_to_deferred_tool,
+            agents::respond_to_elicitation_request,
             agents::generate_session_title,
             agents::list_slash_commands,
             commands::workspace_commands::archive_workspace,

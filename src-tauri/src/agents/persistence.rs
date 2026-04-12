@@ -61,7 +61,9 @@ pub(super) fn persist_turn_message(
     resolved_model: &str,
 ) -> Result<String> {
     let now = current_timestamp_string()?;
-    let msg_id = uuid::Uuid::new_v4().to_string();
+    // Use the pre-assigned ID from the turn so streaming and historical
+    // message IDs are the same UUID.
+    let msg_id = turn.id.clone();
 
     conn.execute(
         r#"
@@ -94,7 +96,7 @@ pub(super) fn persist_result_and_finalize(
     usage: &AgentUsage,
     raw_result_json: Option<&str>,
     status: &str,
-) -> Result<()> {
+) -> Result<String> {
     let now = current_timestamp_string()?;
     let result_message_id = uuid::Uuid::new_v4().to_string();
 
@@ -143,7 +145,9 @@ pub(super) fn persist_result_and_finalize(
 
     transaction
         .commit()
-        .context("Failed to commit result and finalize transaction")
+        .context("Failed to commit result and finalize transaction")?;
+
+    Ok(result_message_id)
 }
 
 pub(super) fn finalize_session_metadata(

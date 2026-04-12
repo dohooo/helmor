@@ -14,6 +14,7 @@ import {
 	Globe,
 	Info,
 	LoaderCircle,
+	MessageSquareMore,
 	MessageSquareText,
 	Pencil,
 	Plug,
@@ -1522,6 +1523,31 @@ function getToolInfo(
 				/>
 			),
 			body: text ?? undefined,
+		};
+	}
+
+	if (
+		name === "AskUserQuestion" ||
+		name === "askUserQuestions" ||
+		name === "vscode_askQuestions"
+	) {
+		const questions = Array.isArray(input.questions) ? input.questions : [];
+		const firstQuestion = questions[0];
+		const detail =
+			str(input.question) ??
+			str(input.prompt) ??
+			(isObj(firstQuestion)
+				? (str(firstQuestion.question) ?? str(firstQuestion.header))
+				: null);
+		return {
+			action: "Ask user",
+			icon: (
+				<MessageSquareMore
+					className={neutralToolIconClassName}
+					strokeWidth={1.8}
+				/>
+			),
+			detail: detail ? truncate(detail, 60) : undefined,
 		};
 	}
 

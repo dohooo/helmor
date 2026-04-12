@@ -47,8 +47,10 @@ pub(super) fn handle_item_snapshot(
                 acc.assistant_text.push_str(text);
             }
             acc.turns.push(CollectedTurn {
+                id: uuid::Uuid::new_v4().to_string(),
                 role: "assistant".to_string(),
                 content_json: raw_line.to_string(),
+                collected_idx: None,
             });
         }
         acc.collect_or_replace(
@@ -128,8 +130,10 @@ fn handle_codex_error_item(
 
     if persist {
         acc.turns.push(CollectedTurn {
+            id: uuid::Uuid::new_v4().to_string(),
             role: "error".to_string(),
             content_json: raw_line.to_string(),
+            collected_idx: None,
         });
     }
 }
@@ -211,8 +215,10 @@ fn handle_command_execution(
 
     if persist {
         acc.turns.push(CollectedTurn {
+            id: uuid::Uuid::new_v4().to_string(),
             role: "assistant".to_string(),
             content_json: raw_line.to_string(),
+            collected_idx: None,
         });
     }
 }
@@ -277,8 +283,10 @@ fn handle_web_search(
         acc.collect_or_replace(&sr_str, &synthetic_result, "user", user_id);
 
         acc.turns.push(CollectedTurn {
+            id: uuid::Uuid::new_v4().to_string(),
             role: "assistant".to_string(),
             content_json: raw_line.to_string(),
+            collected_idx: None,
         });
     }
 }
@@ -354,8 +362,10 @@ fn handle_mcp_tool_call(
 
     if persist {
         acc.turns.push(CollectedTurn {
+            id: uuid::Uuid::new_v4().to_string(),
             role: "assistant".to_string(),
             content_json: raw_line.to_string(),
+            collected_idx: None,
         });
     }
 }
@@ -426,8 +436,10 @@ fn handle_file_change(
 
     if persist {
         acc.turns.push(CollectedTurn {
+            id: uuid::Uuid::new_v4().to_string(),
             role: "assistant".to_string(),
             content_json: raw_line.to_string(),
+            collected_idx: None,
         });
     }
 }
@@ -468,8 +480,10 @@ fn handle_reasoning(
 
     if persist {
         acc.turns.push(CollectedTurn {
+            id: uuid::Uuid::new_v4().to_string(),
             role: "assistant".to_string(),
             content_json: raw_line.to_string(),
+            collected_idx: None,
         });
     }
 }
@@ -533,8 +547,10 @@ fn handle_todo_list(
 
     if persist {
         acc.turns.push(CollectedTurn {
+            id: uuid::Uuid::new_v4().to_string(),
             role: "assistant".to_string(),
             content_json: raw_line.to_string(),
+            collected_idx: None,
         });
     }
 }

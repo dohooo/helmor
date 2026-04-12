@@ -179,4 +179,45 @@ describe("WorkspacesSidebar", () => {
 			screen.queryByRole("button", { name: "Workspace 2" }),
 		).not.toBeInTheDocument();
 	});
+
+	it("keeps the yellow dot visible for any workspace waiting on user interaction", () => {
+		const groups: WorkspaceGroup[] = [
+			{
+				id: "progress",
+				label: "In Progress",
+				tone: "progress",
+				rows: [
+					workspaceRow,
+					{
+						...workspaceRow,
+						id: "workspace-2",
+						title: "Workspace 2",
+					},
+				],
+			},
+		];
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={groups}
+					archivedRows={[]}
+					selectedWorkspaceId="workspace-1"
+					interactionRequiredWorkspaceIds={
+						new Set(["workspace-1", "workspace-2"])
+					}
+				/>
+			</TooltipProvider>,
+		);
+
+		const selectedRow = screen.getByRole("button", { name: "Workspace 1" });
+		const otherRow = screen.getByRole("button", { name: "Workspace 2" });
+
+		expect(
+			within(selectedRow).getByLabelText("Interaction required"),
+		).toBeInTheDocument();
+		expect(
+			within(otherRow).getByLabelText("Interaction required"),
+		).toBeInTheDocument();
+	});
 });

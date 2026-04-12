@@ -348,6 +348,72 @@ pub(super) fn build_partial_from_blocks(
     }
 }
 
+pub(super) fn build_materialized_partial_from_blocks(
+    acc: &StreamAccumulator,
+    partial_id: String,
+    created_at: String,
+) -> Option<IntermediateMessage> {
+    let mut content_blocks = Vec::new();
+    for block in acc.blocks.values() {
+        match block {
+            StreamingBlock::Text { text } => {
+                if !text.is_empty() {
+                    content_blocks.push(serde_json::json!({"type": "text", "text": text}));
+                }
+            }
+            StreamingBlock::Thinking { text, .. } => {
+                if !text.is_empty() {
+                    content_blocks.push(serde_json::json!({
+                        "type": "thinking",
+                        "thinking": text,
+                    }));
+                }
+            }
+            StreamingBlock::ToolUse {
+                tool_use_id,
+                tool_name,
+                input_json_text,
+                parsed_input,
+                status,
+            } => {
+                let input = parsed_input
+                    .clone()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                content_blocks.push(serde_json::json!({
+                    "type": "tool_use",
+                    "id": tool_use_id,
+                    "name": tool_name,
+                    "input": input,
+                    "__streaming_status": status,
+                    "__input_json_text": input_json_text,
+                }));
+            }
+        }
+    }
+
+    if content_blocks.is_empty() {
+        return None;
+    }
+
+    let parsed = serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "type": "message",
+            "role": "assistant",
+            "content": content_blocks,
+        },
+    });
+
+    Some(IntermediateMessage {
+        id: partial_id,
+        role: "assistant".to_string(),
+        raw_json: serde_json::to_string(&parsed).unwrap_or_default(),
+        parsed: Some(parsed),
+        created_at,
+        is_streaming: false,
+    })
+}
+
 pub(super) fn build_partial_fallback(
     acc: &StreamAccumulator,
     _session_id: &str,
@@ -393,6 +459,51 @@ pub(super) fn build_partial_fallback(
         created_at,
         is_streaming: true,
     }
+}
+
+pub(super) fn build_materialized_partial_fallback(
+    acc: &StreamAccumulator,
+    partial_id: String,
+    created_at: String,
+) -> Option<IntermediateMessage> {
+    let text = acc.fallback_text.trim();
+    let thinking = acc.fallback_thinking.trim();
+
+    if text.is_empty() && thinking.is_empty() {
+        return None;
+    }
+
+    let mut content = Vec::new();
+    if !thinking.is_empty() {
+        content.push(serde_json::json!({
+            "type": "thinking",
+            "thinking": thinking,
+        }));
+    }
+    if !text.is_empty() {
+        content.push(serde_json::json!({
+            "type": "text",
+            "text": text,
+        }));
+    }
+
+    let parsed = serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "type": "message",
+            "role": "assistant",
+            "content": content,
+        },
+    });
+
+    Some(IntermediateMessage {
+        id: partial_id,
+        role: "assistant".to_string(),
+        raw_json: serde_json::to_string(&parsed).unwrap_or_default(),
+        parsed: Some(parsed),
+        created_at,
+        is_streaming: false,
+    })
 }
 
 // ---------------------------------------------------------------------------

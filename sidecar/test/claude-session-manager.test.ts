@@ -66,6 +66,25 @@ function loadClaudeFixture(fixtureName: string): FixtureEvent[] {
 		});
 }
 
+function expectedSendMessageEvents(
+	sdkMessages: readonly FixtureEvent[],
+): readonly FixtureEvent[] {
+	const expected: FixtureEvent[] = [];
+
+	for (const message of sdkMessages) {
+		expected.push(message);
+		if (
+			message.type === "result" &&
+			!("deferred_tool_use" in message) &&
+			message.is_error !== true
+		) {
+			break;
+		}
+	}
+
+	return expected;
+}
+
 async function* asyncIterableFrom<T>(items: readonly T[]): AsyncGenerator<T> {
 	for (const item of items) yield item;
 }
@@ -236,6 +255,172 @@ describe("ClaudeSessionManager.sendMessage", () => {
 		expect(captured.some((e) => e.type === "end")).toBe(false);
 		expect(captured.some((e) => e.type === "aborted")).toBe(false);
 	});
+
+	test("suppresses deferred tool_use passthrough while keeping the deferred control event", async () => {
+		mockQueryImpl = async function* withDeferredTool() {
+			yield {
+				type: "assistant",
+				session_id: "sdk-session-1",
+				uuid: "assistant-1",
+				message: {
+					content: [
+						{ type: "text", text: "Need a quick decision." },
+						{
+							type: "tool_use",
+							id: "tool-ask-1",
+							name: "AskUserQuestion",
+							input: {
+								questions: [
+									{ question: "Which path should we take?", options: [] },
+								],
+							},
+						},
+					],
+				},
+			};
+			yield {
+				type: "result",
+				session_id: "sdk-session-1",
+				result: "",
+				deferred_tool_use: {
+					id: "tool-ask-1",
+					name: "AskUserQuestion",
+					input: {
+						questions: [
+							{ question: "Which path should we take?", options: [] },
+						],
+					},
+				},
+			};
+		};
+
+		await manager.sendMessage(
+			"REQ-DEFER",
+			{
+				sessionId: "helmor-sess-defer",
+				prompt: "x",
+				model: undefined,
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+			},
+			emitter,
+		);
+
+		expect(captured).toHaveLength(3);
+		expect(captured[0]?.type).toBe("assistant");
+		expect(
+			(
+				captured[0]?.message as {
+					content?: Array<{ type?: string; name?: string; text?: string }>;
+				}
+			).content ?? [],
+		).toEqual([{ type: "text", text: "Need a quick decision." }]);
+		expect(captured[1]).toEqual({
+			id: "REQ-DEFER",
+			type: "deferredToolUse",
+			toolUseId: "tool-ask-1",
+			toolName: "AskUserQuestion",
+			toolInput: {
+				questions: [{ question: "Which path should we take?", options: [] }],
+			},
+		});
+		expect(captured[2]).toEqual({ id: "REQ-DEFER", type: "end" });
+	});
+
+	test("stops after a successful result and ignores trailing SDK noise", async () => {
+		let tailReached = false;
+		let iteratorClosed = false;
+
+		mockQueryImpl = async function* withTrailingNoise() {
+			try {
+				yield {
+					type: "system",
+					subtype: "init",
+					session_id: "sdk-session-1",
+					uuid: "system-1",
+				};
+				yield {
+					type: "assistant",
+					session_id: "sdk-session-1",
+					uuid: "assistant-1",
+					message: {
+						content: [{ type: "text", text: "Final answer." }],
+					},
+				};
+				yield {
+					type: "result",
+					session_id: "sdk-session-1",
+					subtype: "success",
+					is_error: false,
+					result: "Final answer.",
+				};
+
+				tailReached = true;
+				yield {
+					type: "system",
+					subtype: "init",
+					session_id: "sdk-session-1",
+					uuid: "system-2",
+				};
+				yield {
+					type: "assistant",
+					session_id: "sdk-session-1",
+					uuid: "assistant-2",
+					message: {
+						content: [{ type: "text", text: "API Error" }],
+					},
+				};
+			} finally {
+				iteratorClosed = true;
+			}
+		};
+
+		await manager.sendMessage(
+			"REQ-RESULT-END",
+			{
+				sessionId: "helmor-sess-result",
+				prompt: "x",
+				model: undefined,
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+			},
+			emitter,
+		);
+
+		expect(tailReached).toBe(false);
+		expect(iteratorClosed).toBe(true);
+		expect(captured).toEqual([
+			{
+				id: "REQ-RESULT-END",
+				type: "system",
+				subtype: "init",
+				session_id: "sdk-session-1",
+				uuid: "system-1",
+			},
+			{
+				id: "REQ-RESULT-END",
+				type: "assistant",
+				session_id: "sdk-session-1",
+				uuid: "assistant-1",
+				message: {
+					content: [{ type: "text", text: "Final answer." }],
+				},
+			},
+			{
+				id: "REQ-RESULT-END",
+				type: "result",
+				session_id: "sdk-session-1",
+				subtype: "success",
+				is_error: false,
+				result: "Final answer.",
+			},
+			{ id: "REQ-RESULT-END", type: "end" },
+		]);
+	});
 });
 
 describe("ClaudeSessionManager.stopSession", () => {
@@ -386,6 +571,7 @@ describe("Claude full-fixture round-trip", () => {
 		test(`${fixture} round-trips through ClaudeSessionManager without loss`, async () => {
 			const sdkMessages = loadClaudeFixture(fixture);
 			expect(sdkMessages.length).toBeGreaterThan(0);
+			const expectedMessages = expectedSendMessageEvents(sdkMessages);
 
 			const captured: Array<Record<string, unknown>> = [];
 			const emitter = createSidecarEmitter((event) => {
@@ -408,9 +594,9 @@ describe("Claude full-fixture round-trip", () => {
 				emitter,
 			);
 
-			// Every SDK event becomes a passthrough emit; the manager appends
-			// exactly one terminal `end`. No events get dropped.
-			expect(captured).toHaveLength(sdkMessages.length + 1);
+			// The sidecar forwards every SDK event up to the first successful
+			// terminal result, then emits exactly one terminal `end`.
+			expect(captured).toHaveLength(expectedMessages.length + 1);
 			expect(captured[captured.length - 1]).toEqual({
 				id: `REQ-${fixture}`,
 				type: "end",
@@ -424,8 +610,8 @@ describe("Claude full-fixture round-trip", () => {
 			// `type` of every passthrough event matches the corresponding
 			// source event one-for-one (in order). This is the strict
 			// "no transformation, no reorder, no drop" guarantee.
-			for (let i = 0; i < sdkMessages.length; i++) {
-				expect(captured[i]?.type).toBe(sdkMessages[i]?.type);
+			for (let i = 0; i < expectedMessages.length; i++) {
+				expect(captured[i]?.type).toBe(expectedMessages[i]?.type);
 			}
 		});
 	}

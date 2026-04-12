@@ -110,7 +110,26 @@ function App() {
 		<SettingsContext.Provider value={settingsContextValue}>
 			<PersistQueryClientProvider
 				client={queryClient}
-				persistOptions={{ persister: helmorQueryPersister }}
+				persistOptions={{
+					persister: helmorQueryPersister,
+					dehydrateOptions: {
+						shouldDehydrateQuery: (query) => {
+							// Never persist session thread messages — they must
+							// always be loaded fresh from the DB. Stale streaming
+							// snapshots surviving app restart was a root cause of
+							// cross-session message contamination.
+							const key = query.queryKey;
+							if (
+								key[0] === "sessionMessages" &&
+								key.length >= 3 &&
+								key[2] === "thread"
+							) {
+								return false;
+							}
+							return query.state.status === "success";
+						},
+					},
+				}}
 			>
 				<AppShell onOpenSettings={() => setSettingsOpen(true)} />
 				<SettingsDialog
@@ -236,6 +255,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const [completedSessions, setCompletedSessions] = useState<
 		Map<string, string>
 	>(() => new Map());
+	const [interactionRequiredSessions, setInteractionRequiredSessions] =
+		useState<Map<string, string>>(() => new Map());
 	const completedSessionIds = useMemo(
 		() => new Set(completedSessions.keys()),
 		[completedSessions],
@@ -243,6 +264,14 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const completedWorkspaceIds = useMemo(
 		() => new Set(completedSessions.values()),
 		[completedSessions],
+	);
+	const interactionRequiredSessionIds = useMemo(
+		() => new Set(interactionRequiredSessions.keys()),
+		[interactionRequiredSessions],
+	);
+	const interactionRequiredWorkspaceIds = useMemo(
+		() => new Set(interactionRequiredSessions.values()),
+		[interactionRequiredSessions],
 	);
 
 	// Clear the completed-session dot for whichever session the user
@@ -937,6 +966,28 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		[],
 	);
 
+	const handleInteractionSessionsChange = useCallback(
+		(nextMap: Map<string, string>) => {
+			setInteractionRequiredSessions((current) => {
+				if (current.size === nextMap.size) {
+					let unchanged = true;
+					for (const [sessionId, workspaceId] of nextMap) {
+						if (current.get(sessionId) !== workspaceId) {
+							unchanged = false;
+							break;
+						}
+					}
+					if (unchanged) {
+						return current;
+					}
+				}
+
+				return new Map(nextMap);
+			});
+		},
+		[],
+	);
+
 	const handleNavigateSessions = useCallback(
 		(offset: -1 | 1) => {
 			const workspaceId = selectedWorkspaceIdRef.current;
@@ -1210,6 +1261,9 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 													selectedWorkspaceId={selectedWorkspaceId}
 													sendingWorkspaceIds={sendingWorkspaceIds}
 													completedWorkspaceIds={completedWorkspaceIds}
+													interactionRequiredWorkspaceIds={
+														interactionRequiredWorkspaceIds
+													}
 													onSelectWorkspace={handleSelectWorkspace}
 													pushWorkspaceToast={pushWorkspaceToast}
 												/>
@@ -1319,7 +1373,13 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 												}
 												onSendingWorkspacesChange={setSendingWorkspaceIds}
 												onSendingSessionsChange={setSendingSessionIds}
+												onInteractionSessionsChange={
+													handleInteractionSessionsChange
+												}
 												completedSessionIds={completedSessionIds}
+												interactionRequiredSessionIds={
+													interactionRequiredSessionIds
+												}
 												onSessionCompleted={handleSessionCompleted}
 												workspacePrInfo={workspacePrInfo}
 												pendingPromptForSession={pendingPromptForSession}

@@ -25,7 +25,7 @@ use self::persistence::{
     persist_turn_message, persist_user_message,
 };
 use self::streaming::stream_via_sidecar;
-use self::support::resolve_working_directory;
+use self::support::{resolve_resume_working_directory, resolve_working_directory};
 
 #[cfg(test)]
 use self::support::{non_empty, parse_claude_output, parse_codex_output};
@@ -80,6 +80,36 @@ pub enum AgentStreamEvent {
         title: Option<String>,
         description: Option<String>,
     },
+    DeferredToolUse {
+        provider: String,
+        model_id: String,
+        resolved_model: String,
+        session_id: Option<String>,
+        working_directory: String,
+        permission_mode: Option<String>,
+        #[serde(rename = "toolUseId")]
+        tool_use_id: String,
+        #[serde(rename = "toolName")]
+        tool_name: String,
+        #[serde(rename = "toolInput")]
+        tool_input: Value,
+    },
+    ElicitationRequest {
+        provider: String,
+        model_id: String,
+        resolved_model: String,
+        session_id: Option<String>,
+        working_directory: String,
+        #[serde(rename = "elicitationId")]
+        elicitation_id: Option<String>,
+        #[serde(rename = "serverName")]
+        server_name: String,
+        message: String,
+        mode: Option<String>,
+        url: Option<String>,
+        #[serde(rename = "requestedSchema")]
+        requested_schema: Option<Value>,
+    },
     Error {
         message: String,
         persisted: bool,
@@ -101,6 +131,8 @@ pub struct AgentSendRequest {
     pub provider: String,
     pub model_id: String,
     pub prompt: String,
+    #[serde(default)]
+    pub resume_only: bool,
     pub session_id: Option<String>,
     pub helmor_session_id: Option<String>,
     pub working_directory: Option<String>,
@@ -138,7 +170,7 @@ pub async fn send_agent_message_stream(
     on_event: Channel<AgentStreamEvent>,
 ) -> CmdResult<()> {
     let prompt = request.prompt.trim().to_string();
-    if prompt.is_empty() {
+    if prompt.is_empty() && !request.resume_only {
         return Err(anyhow::anyhow!("Prompt cannot be empty.").into());
     }
 
@@ -154,7 +186,7 @@ pub async fn send_agent_message_stream(
         .into());
     }
 
-    let working_directory = resolve_working_directory(request.working_directory.as_deref())?;
+    let working_directory = resolve_stream_working_directory(&request)?;
     let stream_id = Uuid::new_v4().to_string();
     let active_streams = app.state::<ActiveStreams>();
 
@@ -169,6 +201,26 @@ pub async fn send_agent_message_stream(
         &request,
         &working_directory,
     )
+}
+
+fn resolve_stream_working_directory(
+    request: &AgentSendRequest,
+) -> anyhow::Result<std::path::PathBuf> {
+    if request.resume_only {
+        if let Some(session_id) = request.helmor_session_id.as_deref() {
+            if let Some(workspace_dir) = resolve_resume_working_directory(session_id)? {
+                if !workspace_dir.is_dir() {
+                    return Err(anyhow::anyhow!(
+                        "Workspace directory not found for resumed session: {}",
+                        workspace_dir.display()
+                    ));
+                }
+                return Ok(workspace_dir);
+            }
+        }
+    }
+
+    resolve_working_directory(request.working_directory.as_deref())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -221,6 +273,69 @@ pub async fn respond_to_permission_request(
     sidecar
         .send(&req)
         .map_err(|e| anyhow::anyhow!("Failed to send permission response: {e}"))?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeferredToolResponseRequest {
+    pub tool_use_id: String,
+    pub behavior: String,
+    pub reason: Option<String>,
+    pub updated_input: Option<Value>,
+}
+
+#[tauri::command]
+pub async fn respond_to_deferred_tool(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    request: DeferredToolResponseRequest,
+) -> CmdResult<()> {
+    tracing::info!(
+        tool_use_id = %request.tool_use_id,
+        behavior = %request.behavior,
+        "Deferred tool response"
+    );
+    let req = crate::sidecar::SidecarRequest {
+        id: Uuid::new_v4().to_string(),
+        method: "deferredToolResponse".to_string(),
+        params: serde_json::json!({
+            "toolUseId": request.tool_use_id,
+            "behavior": request.behavior,
+            "reason": request.reason,
+            "updatedInput": request.updated_input,
+        }),
+    };
+    sidecar
+        .send(&req)
+        .map_err(|e| anyhow::anyhow!("Failed to send deferred tool response: {e}"))?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationResponseRequest {
+    pub elicitation_id: String,
+    pub action: String,
+    pub content: Option<Value>,
+}
+
+#[tauri::command]
+pub async fn respond_to_elicitation_request(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    request: ElicitationResponseRequest,
+) -> CmdResult<()> {
+    let req = crate::sidecar::SidecarRequest {
+        id: Uuid::new_v4().to_string(),
+        method: "elicitationResponse".to_string(),
+        params: serde_json::json!({
+            "elicitationId": request.elicitation_id,
+            "action": request.action,
+            "content": request.content,
+        }),
+    };
+    sidecar
+        .send(&req)
+        .map_err(|e| anyhow::anyhow!("Failed to send elicitation response: {e}"))?;
     Ok(())
 }
 
@@ -508,6 +623,82 @@ mod tests {
     }
 
     #[test]
+    fn resume_stream_uses_session_workspace_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+
+        let db_path = setup_test_db(dir.path());
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('s1', 'w1', 'idle', 'Test')",
+            [],
+        )
+        .unwrap();
+
+        let workspace_dir = crate::data_dir::workspace_dir("test-repo", "test").unwrap();
+        std::fs::create_dir_all(&workspace_dir).unwrap();
+
+        let provided_dir = dir.path().join("somewhere-else");
+        std::fs::create_dir_all(&provided_dir).unwrap();
+
+        let request = AgentSendRequest {
+            provider: "claude".to_string(),
+            model_id: "opus-1m".to_string(),
+            prompt: String::new(),
+            resume_only: true,
+            session_id: Some("provider-session-1".to_string()),
+            helmor_session_id: Some("s1".to_string()),
+            working_directory: Some(provided_dir.display().to_string()),
+            effort_level: None,
+            permission_mode: Some("plan".to_string()),
+            user_message_id: None,
+            files: None,
+        };
+
+        let resolved = resolve_stream_working_directory(&request).unwrap();
+        assert_eq!(resolved, workspace_dir);
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn resume_stream_errors_when_session_workspace_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+
+        let db_path = setup_test_db(dir.path());
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('s1', 'w1', 'idle', 'Test')",
+            [],
+        )
+        .unwrap();
+
+        let request = AgentSendRequest {
+            provider: "claude".to_string(),
+            model_id: "opus-1m".to_string(),
+            prompt: String::new(),
+            resume_only: true,
+            session_id: Some("provider-session-1".to_string()),
+            helmor_session_id: Some("s1".to_string()),
+            working_directory: None,
+            effort_level: None,
+            permission_mode: Some("plan".to_string()),
+            user_message_id: None,
+            files: None,
+        };
+
+        let error = resolve_stream_working_directory(&request).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Workspace directory not found for resumed session"),);
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
     fn incremental_persist_preserves_existing_values_when_null() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
@@ -593,16 +784,20 @@ mod tests {
 
         // Persist two intermediate turns
         let turn1 = CollectedTurn {
+            id: Uuid::new_v4().to_string(),
             role: "assistant".to_string(),
             content_json:
                 r#"{"type":"assistant","message":{"content":[{"type":"text","text":"I'll help"}]}}"#
                     .to_string(),
+            collected_idx: None,
         };
         let turn2 = CollectedTurn {
+            id: Uuid::new_v4().to_string(),
             role: "user".to_string(),
             content_json:
                 r#"{"type":"user","content":[{"type":"tool_result","tool_use_id":"t1"}]}"#
                     .to_string(),
+            collected_idx: None,
         };
 
         let _ = persist_turn_message(&conn, &ctx, &turn1, "opus").unwrap();

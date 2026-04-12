@@ -71,6 +71,7 @@ export type AgentSendRequest = {
 	provider: AgentProvider;
 	modelId: string;
 	prompt: string;
+	resumeOnly?: boolean | null;
 	sessionId?: string | null;
 	helmorSessionId?: string | null;
 	workingDirectory?: string | null;
@@ -1405,6 +1406,32 @@ export type AgentStreamEvent =
 			title?: string | null;
 			description?: string | null;
 	  }
+	| {
+			kind: "deferredToolUse";
+			provider: AgentProvider;
+			modelId: string;
+			resolvedModel: string;
+			sessionId?: string | null;
+			workingDirectory: string;
+			permissionMode?: string | null;
+			toolUseId: string;
+			toolName: string;
+			toolInput: Record<string, unknown>;
+	  }
+	| {
+			kind: "elicitationRequest";
+			provider: AgentProvider;
+			modelId: string;
+			resolvedModel: string;
+			sessionId?: string | null;
+			workingDirectory: string;
+			elicitationId?: string | null;
+			serverName: string;
+			message: string;
+			mode?: string | null;
+			url?: string | null;
+			requestedSchema?: Record<string, unknown> | null;
+	  }
 	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
 
 /**
@@ -1452,6 +1479,38 @@ export async function respondToPermissionRequest(
 ): Promise<void> {
 	await invoke("respond_to_permission_request", {
 		request: { permissionId, behavior },
+	});
+}
+
+export async function respondToDeferredTool(
+	toolUseId: string,
+	behavior: "allow" | "deny",
+	options?: {
+		reason?: string | null;
+		updatedInput?: Record<string, unknown> | null;
+	},
+): Promise<void> {
+	await invoke("respond_to_deferred_tool", {
+		request: {
+			toolUseId,
+			behavior,
+			reason: options?.reason ?? null,
+			updatedInput: options?.updatedInput ?? null,
+		},
+	});
+}
+
+export async function respondToElicitationRequest(
+	elicitationId: string,
+	action: "accept" | "decline" | "cancel",
+	content?: Record<string, unknown> | null,
+): Promise<void> {
+	await invoke("respond_to_elicitation_request", {
+		request: {
+			elicitationId,
+			action,
+			content: content ?? null,
+		},
 	});
 }
 

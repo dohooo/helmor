@@ -64,6 +64,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	selectedWorkspaceId,
 	sendingWorkspaceIds,
 	completedWorkspaceIds,
+	interactionRequiredWorkspaceIds,
 	creatingWorkspaceRepoId,
 	onAddRepository,
 	onSelectWorkspace,
@@ -86,6 +87,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	selectedWorkspaceId?: string | null;
 	sendingWorkspaceIds?: Set<string>;
 	completedWorkspaceIds?: Set<string>;
+	interactionRequiredWorkspaceIds?: Set<string>;
 	creatingWorkspaceRepoId?: string | null;
 	onAddRepository?: () => void;
 	onSelectWorkspace?: (workspaceId: string) => void;
@@ -425,6 +427,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 															selected={selectedWorkspaceId === row.id}
 															isSending={sendingWorkspaceIds?.has(row.id)}
 															isCompleted={completedWorkspaceIds?.has(row.id)}
+															isInteractionRequired={interactionRequiredWorkspaceIds?.has(
+																row.id,
+															)}
 															rowRef={setWorkspaceRowRef(row.id)}
 															onSelect={onSelectWorkspace}
 															onPrefetch={onPrefetchWorkspace}

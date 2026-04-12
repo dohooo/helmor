@@ -261,7 +261,25 @@ pub fn normalize_message(msg: &ThreadMessageLike) -> NormThreadMessage {
 }
 
 pub fn normalize_all(msgs: &[ThreadMessageLike]) -> Vec<NormThreadMessage> {
-    msgs.iter().map(normalize_message).collect()
+    let mut counter = 0usize;
+    let mut id_map = std::collections::HashMap::<String, String>::new();
+    msgs.iter()
+        .map(|msg| {
+            let mut norm = normalize_message(msg);
+            // Replace non-deterministic IDs (UUIDs, stream:N:role, partial
+            // IDs) with sequential labels so snapshots are stable across
+            // runs. Deterministic short test IDs (e.g. "e1", "u1") pass
+            // through unchanged.
+            if let Some(raw) = &norm.id {
+                let stable = id_map.entry(raw.clone()).or_insert_with(|| {
+                    counter += 1;
+                    format!("msg-{counter}")
+                });
+                norm.id = Some(stable.clone());
+            }
+            norm
+        })
+        .collect()
 }
 
 // ============================================================================

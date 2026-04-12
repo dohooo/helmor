@@ -18,6 +18,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
 import type { AgentModelSection, SlashCommandEntry } from "@/lib/api";
 import type {
 	ComposerCustomTag,
@@ -26,6 +27,11 @@ import type {
 import { recordComposerRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
 import { ComposerButton } from "./button";
+import type {
+	DeferredToolResponseHandler,
+	DeferredToolResponseOptions,
+} from "./deferred-tool";
+import { DeferredToolPanel } from "./deferred-tool-panel";
 import { CustomTagBadgeNode } from "./editor/custom-tag-badge-node";
 import { FileBadgeNode } from "./editor/file-badge-node";
 import { ImageBadgeNode } from "./editor/image-badge-node";
@@ -78,9 +84,16 @@ type WorkspaceComposerProps = {
 	slashCommandsError?: boolean;
 	onRetrySlashCommands?: () => void;
 	workspaceRootPath?: string | null;
+	pendingDeferredTool?: PendingDeferredTool | null;
+	onDeferredToolResponse?: DeferredToolResponseHandler;
 };
 
 const EMPTY_SLASH_COMMANDS: readonly SlashCommandEntry[] = [];
+const noopDeferredToolResponse = (
+	_deferred: PendingDeferredTool,
+	_behavior: "allow" | "deny",
+	_options?: DeferredToolResponseOptions,
+) => {};
 // ---------------------------------------------------------------------------
 // Lexical editor config (stable reference — defined outside component)
 // ---------------------------------------------------------------------------
@@ -122,6 +135,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	slashCommandsError = false,
 	onRetrySlashCommands,
 	workspaceRootPath = null,
+	pendingDeferredTool = null,
+	onDeferredToolResponse = noopDeferredToolResponse,
 }: WorkspaceComposerProps) {
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
@@ -152,8 +167,15 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		}
 		return null;
 	}, [modelSections, selectedModelId]);
+	const hasPendingDeferredTool = pendingDeferredTool !== null;
+	const controlsDisabled = disabled || hasPendingDeferredTool;
 	const sendDisabled =
-		disabled || submitDisabled || sending || !selectedModel || !hasContent;
+		disabled ||
+		submitDisabled ||
+		sending ||
+		hasPendingDeferredTool ||
+		!selectedModel ||
+		!hasContent;
 
 	// Lexical initial config — must be a new object per mount for key resets
 	const initialConfig = useRef({
@@ -314,6 +336,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				Workspace input
 			</label>
 
+			{pendingDeferredTool ? (
+				<DeferredToolPanel
+					deferred={pendingDeferredTool}
+					disabled={disabled || sending}
+					onResponse={onDeferredToolResponse}
+				/>
+			) : null}
+
 			<LexicalComposer initialConfig={initialConfig}>
 				<div className="relative">
 					<PlainTextPlugin
@@ -346,7 +376,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				<DropFilePlugin />
 				<AutoResizePlugin minHeight={64} maxHeight={240} />
 				<EditorRefPlugin editorRef={editorRef} />
-				<EditablePlugin disabled={disabled} />
+				<EditablePlugin disabled={controlsDisabled} />
 				<HasContentPlugin onChange={setHasContent} />
 			</LexicalComposer>
 
@@ -360,10 +390,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				<div className="flex flex-wrap items-center gap-2">
 					<DropdownMenu>
 						<DropdownMenuTrigger
-							disabled={disabled}
+							disabled={controlsDisabled}
 							className={cn(
 								"flex items-center gap-1.5 rounded-lg px-1 py-0.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
-								disabled &&
+								controlsDisabled &&
 									"cursor-not-allowed opacity-45 hover:text-muted-foreground",
 							)}
 						>
@@ -389,7 +419,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 									{section.options.map((option) => (
 										<DropdownMenuItem
 											key={option.id}
-											disabled={disabled}
+											disabled={controlsDisabled}
 											onClick={() => {
 												onSelectModel(option.id);
 											}}
@@ -420,10 +450,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 
 					<DropdownMenu>
 						<DropdownMenuTrigger
-							disabled={disabled}
+							disabled={controlsDisabled}
 							className={cn(
 								"flex items-center gap-0.5 px-1 py-0.5 text-[13px] font-medium focus-visible:outline-none",
-								disabled ? "cursor-not-allowed opacity-45" : null,
+								controlsDisabled ? "cursor-not-allowed opacity-45" : null,
 							)}
 						>
 							<span
@@ -457,7 +487,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								).map((level) => (
 									<DropdownMenuItem
 										key={level}
-										disabled={disabled}
+										disabled={controlsDisabled}
 										onClick={() => onSelectEffort(level)}
 										className="flex items-center justify-between gap-3"
 									>
@@ -478,7 +508,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 
 					<ComposerButton
 						aria-label="Plan mode"
-						disabled={disabled}
+						disabled={controlsDisabled}
 						className={cn(
 							"gap-1.5 rounded-full px-2 py-0.5 text-[13px] font-medium transition-colors",
 							permissionMode === "plan"

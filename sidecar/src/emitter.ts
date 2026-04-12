@@ -70,6 +70,25 @@ export type PermissionRequestEvent = {
 	readonly description: string | undefined;
 };
 
+export type ElicitationRequestEvent = {
+	readonly id: string;
+	readonly type: "elicitationRequest";
+	readonly serverName: string;
+	readonly message: string;
+	readonly mode: "form" | "url" | undefined;
+	readonly url: string | undefined;
+	readonly elicitationId: string | undefined;
+	readonly requestedSchema: Record<string, unknown> | undefined;
+};
+
+export type DeferredToolUseEvent = {
+	readonly id: string;
+	readonly type: "deferredToolUse";
+	readonly toolUseId: string;
+	readonly toolName: string;
+	readonly toolInput: Record<string, unknown>;
+};
+
 export type SidecarControlEvent =
 	| ReadyEvent
 	| EndEvent
@@ -79,7 +98,9 @@ export type SidecarControlEvent =
 	| PongEvent
 	| TitleGeneratedEvent
 	| SlashCommandsListedEvent
-	| PermissionRequestEvent;
+	| PermissionRequestEvent
+	| ElicitationRequestEvent
+	| DeferredToolUseEvent;
 
 /**
  * Typed emitter for the sidecar's stdout protocol.
@@ -111,6 +132,21 @@ export interface SidecarEmitter {
 		toolInput: Record<string, unknown>,
 		title: string | undefined,
 		description: string | undefined,
+	): void;
+	elicitationRequest(
+		requestId: string,
+		serverName: string,
+		message: string,
+		mode: "form" | "url" | undefined,
+		url: string | undefined,
+		elicitationId: string | undefined,
+		requestedSchema: Record<string, unknown> | undefined,
+	): void;
+	deferredToolUse(
+		requestId: string,
+		toolUseId: string,
+		toolName: string,
+		toolInput: Record<string, unknown>,
 	): void;
 	/**
 	 * Forward a raw provider SDK message. `id` is appended LAST so an SDK
@@ -162,6 +198,33 @@ export function createSidecarEmitter(
 				toolInput,
 				title,
 				description,
+			}),
+		elicitationRequest: (
+			requestId,
+			serverName,
+			message,
+			mode,
+			url,
+			elicitationId,
+			requestedSchema,
+		) =>
+			write({
+				id: requestId,
+				type: "elicitationRequest",
+				serverName,
+				message,
+				mode,
+				url,
+				elicitationId,
+				requestedSchema,
+			}),
+		deferredToolUse: (requestId, toolUseId, toolName, toolInput) =>
+			write({
+				id: requestId,
+				type: "deferredToolUse",
+				toolUseId,
+				toolName,
+				toolInput,
 			}),
 		passthrough: (requestId, message) =>
 			write({ ...(message as Record<string, unknown>), id: requestId }),

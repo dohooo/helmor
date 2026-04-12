@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { ActionRow, ActionRowButton } from "@/components/action-row";
 import { ShimmerText } from "@/components/ui/shimmer-text";
 import { ShineBorder } from "@/components/ui/shine-border";
+import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
 import type {
 	AgentModelOption,
 	AgentModelSection,
@@ -30,6 +31,7 @@ import {
 	getComposerContextKey,
 	inferDefaultModelId,
 } from "@/lib/workspace-helpers";
+import type { DeferredToolResponseHandler } from "./deferred-tool";
 import { WorkspaceComposer } from "./index";
 
 const EMPTY_MODEL_SECTIONS: AgentModelSection[] = [];
@@ -47,6 +49,8 @@ type WorkspaceComposerContainerProps = {
 	restoreFiles: string[];
 	restoreCustomTags?: ComposerCustomTag[];
 	restoreNonce: number;
+	pendingDeferredTool?: PendingDeferredTool | null;
+	onDeferredToolResponse?: DeferredToolResponseHandler;
 	modelSelections: Record<string, string>;
 	effortLevels: Record<string, string>;
 	permissionModes: Record<string, string>;
@@ -79,6 +83,8 @@ type WorkspaceComposerContainerProps = {
 	onPendingInsertRequestsConsumed?: (ids: string[]) => void;
 };
 
+const noopDeferredToolResponse: DeferredToolResponseHandler = () => {};
+
 export const WorkspaceComposerContainer = memo(
 	function WorkspaceComposerContainer({
 		displayedWorkspaceId,
@@ -92,6 +98,8 @@ export const WorkspaceComposerContainer = memo(
 		restoreFiles,
 		restoreCustomTags = [],
 		restoreNonce,
+		pendingDeferredTool = null,
+		onDeferredToolResponse = noopDeferredToolResponse,
 		modelSelections,
 		effortLevels = {},
 		permissionModes = {},
@@ -487,6 +495,8 @@ export const WorkspaceComposerContainer = memo(
 					restoreFiles={restoreFiles}
 					restoreCustomTags={restoreCustomTags}
 					restoreNonce={restoreNonce}
+					pendingDeferredTool={pendingDeferredTool}
+					onDeferredToolResponse={onDeferredToolResponse}
 					pendingInsertRequests={pendingInsertRequests}
 					onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
 					slashCommands={slashCommands}

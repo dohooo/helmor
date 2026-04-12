@@ -260,8 +260,18 @@ pub struct IntermediateMessage {
 /// persistence logic in `agents.rs` share the same type.
 #[derive(Debug, Clone)]
 pub struct CollectedTurn {
+    /// Pre-assigned ID used as the `session_messages.id` DB row key.
+    /// Generated at turn creation so the same UUID can be propagated
+    /// back to the rendering `collected[]` entry via `sync_persisted_ids`,
+    /// unifying streaming and historical message IDs.
+    pub id: String,
     pub role: String,
     pub content_json: String,
+    /// Index into the accumulator's `collected[]` for the first
+    /// `IntermediateMessage` that this turn maps to. `sync_persisted_ids`
+    /// copies `self.id` into `collected[idx].id` so the frontend cache
+    /// key matches what the historical DB loader produces.
+    pub collected_idx: Option<usize>,
 }
 
 /// Input record for converting historical (DB-persisted) messages through

@@ -2,10 +2,14 @@
  * `SessionManager` implementation backed by the Claude Agent SDK.
  */
 
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { extname } from "node:path";
 import {
+	type ElicitationResult,
+	type HookInput,
+	type HookJSONOutput,
 	type Query,
 	query,
 	type SDKMessage,
@@ -120,6 +124,16 @@ type ClaudePermissionMode = (typeof VALID_PERMISSION_MODES)[number];
 const VALID_EFFORT_LEVELS = ["low", "medium", "high", "max"] as const;
 type ClaudeEffort = (typeof VALID_EFFORT_LEVELS)[number];
 
+const DEFERRED_TOOL_NAMES = new Set(["AskUserQuestion", "ExitPlanMode"]);
+
+type DeferredToolBehavior = "allow" | "deny";
+
+interface DeferredToolResolution {
+	readonly behavior: DeferredToolBehavior;
+	readonly reason: string | undefined;
+	readonly updatedInput: Record<string, unknown> | undefined;
+}
+
 function parsePermissionMode(value: string | undefined): ClaudePermissionMode {
 	if (
 		value !== undefined &&
@@ -202,6 +216,14 @@ export class ClaudeSessionManager implements SessionManager {
 		string,
 		(behavior: "allow" | "deny") => void
 	>();
+	private readonly pendingElicitations = new Map<
+		string,
+		(result: ElicitationResult) => void
+	>();
+	private readonly deferredToolResponses = new Map<
+		string,
+		DeferredToolResolution
+	>();
 
 	resolvePermission(permissionId: string, behavior: "allow" | "deny"): void {
 		const resolve = this.pendingPermissions.get(permissionId);
@@ -209,6 +231,61 @@ export class ClaudeSessionManager implements SessionManager {
 			this.pendingPermissions.delete(permissionId);
 			resolve(behavior);
 		}
+	}
+
+	resolveElicitation(elicitationId: string, result: ElicitationResult): void {
+		const resolve = this.pendingElicitations.get(elicitationId);
+		if (resolve) {
+			this.pendingElicitations.delete(elicitationId);
+			resolve(result);
+		}
+	}
+
+	resolveDeferredTool(
+		toolUseId: string,
+		behavior: DeferredToolBehavior,
+		reason: string | undefined,
+		updatedInput: Record<string, unknown> | undefined,
+	): void {
+		this.deferredToolResponses.set(toolUseId, {
+			behavior,
+			reason,
+			updatedInput,
+		});
+	}
+
+	private async handleDeferredToolHook(
+		input: HookInput,
+		toolUseID: string | undefined,
+	): Promise<HookJSONOutput> {
+		if (input.hook_event_name !== "PreToolUse") {
+			return {};
+		}
+		if (!toolUseID || !DEFERRED_TOOL_NAMES.has(input.tool_name)) {
+			return {};
+		}
+		const resolved = this.deferredToolResponses.get(toolUseID);
+		if (resolved) {
+			this.deferredToolResponses.delete(toolUseID);
+			return {
+				hookSpecificOutput: {
+					hookEventName: "PreToolUse",
+					permissionDecision: resolved.behavior,
+					...(resolved.reason
+						? { permissionDecisionReason: resolved.reason }
+						: {}),
+					...(resolved.updatedInput
+						? { updatedInput: resolved.updatedInput }
+						: {}),
+				},
+			};
+		}
+		return {
+			hookSpecificOutput: {
+				hookEventName: "PreToolUse",
+				permissionDecision: "defer",
+			},
+		};
 	}
 
 	async sendMessage(
@@ -247,9 +324,48 @@ export class ClaudeSessionManager implements SessionManager {
 				permissionMode: parsePermissionMode(permissionMode),
 				allowDangerouslySkipPermissions: true,
 				effort: parseEffort(effortLevel),
+				hooks: {
+					PreToolUse: [
+						{
+							hooks: [
+								async (input, toolUseID) =>
+									this.handleDeferredToolHook(input, toolUseID),
+							],
+						},
+					],
+				},
+				onElicitation: async (request, options) => {
+					const elicitationId = request.elicitationId ?? randomUUID();
+					emitter.elicitationRequest(
+						requestId,
+						request.serverName,
+						request.message,
+						request.mode,
+						request.url,
+						elicitationId,
+						request.requestedSchema as Record<string, unknown> | undefined,
+					);
+					return await new Promise<ElicitationResult>((resolve) => {
+						this.pendingElicitations.set(elicitationId, resolve);
+						options.signal.addEventListener(
+							"abort",
+							() => {
+								this.pendingElicitations.delete(elicitationId);
+								resolve({ action: "cancel" });
+							},
+							{ once: true },
+						);
+					});
+				},
 				includePartialMessages: true,
 				settingSources: ["user", "project", "local"],
 				canUseTool: async (_toolName, input, options) => {
+					if (DEFERRED_TOOL_NAMES.has(_toolName)) {
+						return {
+							behavior: "allow" as const,
+							updatedInput: input,
+						};
+					}
 					const permissionId = options.toolUseID;
 					emitter.permissionRequest(
 						requestId,
@@ -287,7 +403,23 @@ export class ClaudeSessionManager implements SessionManager {
 		try {
 			for await (const message of q) {
 				logger.sdkEvent(requestId, message);
-				emitter.passthrough(requestId, message);
+				if (isDeferredToolResult(message)) {
+					emitter.deferredToolUse(
+						requestId,
+						message.deferred_tool_use.id,
+						message.deferred_tool_use.name,
+						message.deferred_tool_use.input,
+					);
+					continue;
+				}
+				const passthroughMessage = stripDeferredToolUseFromAssistant(message);
+				if (passthroughMessage) {
+					emitter.passthrough(requestId, passthroughMessage);
+				}
+				if (isTerminalSuccessResult(message)) {
+					emitter.end(requestId);
+					return;
+				}
 			}
 			emitter.end(requestId);
 		} catch (err) {
@@ -309,6 +441,10 @@ export class ClaudeSessionManager implements SessionManager {
 				void closeErr;
 			}
 			this.sessions.delete(sessionId);
+			for (const [elicitationId, resolve] of this.pendingElicitations) {
+				this.pendingElicitations.delete(elicitationId);
+				resolve({ action: "cancel" });
+			}
 		}
 	}
 
@@ -498,6 +634,10 @@ export class ClaudeSessionManager implements SessionManager {
 			}
 		}
 		this.sessions.clear();
+		for (const [elicitationId, resolve] of this.pendingElicitations) {
+			this.pendingElicitations.delete(elicitationId);
+			resolve({ action: "cancel" });
+		}
 	}
 }
 
@@ -508,5 +648,93 @@ function isResultMessage(
 		message.type === "result" &&
 		"result" in message &&
 		typeof (message as { result?: unknown }).result === "string"
+	);
+}
+
+function isDeferredToolResult(message: SDKMessage): message is SDKMessage & {
+	type: "result";
+	deferred_tool_use: {
+		id: string;
+		name: string;
+		input: Record<string, unknown>;
+	};
+} {
+	if (message.type !== "result") return false;
+	if (!("deferred_tool_use" in message)) return false;
+	const deferred = (message as { deferred_tool_use?: unknown })
+		.deferred_tool_use;
+	if (typeof deferred !== "object" || deferred === null) return false;
+	const value = deferred as { id?: unknown; name?: unknown; input?: unknown };
+	return (
+		typeof value.id === "string" &&
+		typeof value.name === "string" &&
+		typeof value.input === "object" &&
+		value.input !== null
+	);
+}
+
+function isTerminalSuccessResult(message: SDKMessage): boolean {
+	if (message.type !== "result") {
+		return false;
+	}
+	if (isDeferredToolResult(message)) {
+		return false;
+	}
+	return (message as { is_error?: boolean }).is_error !== true;
+}
+
+function stripDeferredToolUseFromAssistant(message: SDKMessage): object | null {
+	if (message.type !== "assistant") {
+		return message;
+	}
+	if (!("message" in message)) {
+		return message;
+	}
+
+	const assistantMessage = (message as { message?: unknown }).message;
+	if (typeof assistantMessage !== "object" || assistantMessage === null) {
+		return message;
+	}
+
+	const content = (assistantMessage as { content?: unknown }).content;
+	if (!Array.isArray(content)) {
+		return message;
+	}
+
+	let removedDeferredTool = false;
+	const filteredContent = content.filter((block) => {
+		if (!isDeferredToolUseBlock(block)) {
+			return true;
+		}
+		removedDeferredTool = true;
+		return false;
+	});
+
+	if (!removedDeferredTool) {
+		return message;
+	}
+	if (filteredContent.length === 0) {
+		return null;
+	}
+
+	return {
+		...(message as Record<string, unknown>),
+		message: {
+			...(assistantMessage as Record<string, unknown>),
+			content: filteredContent,
+		},
+	};
+}
+
+function isDeferredToolUseBlock(block: unknown): boolean {
+	if (typeof block !== "object" || block === null) {
+		return false;
+	}
+
+	const value = block as { type?: unknown; name?: unknown };
+	return (
+		value.type === "tool_use" &&
+		typeof value.name === "string" &&
+		DEFERRED_TOOL_NAMES.has(value.name)
 	);
 }

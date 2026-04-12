@@ -69,6 +69,7 @@ type WorkspacePanelHeaderProps = {
 	sending: boolean;
 	sendingSessionIds?: Set<string>;
 	completedSessionIds?: Set<string>;
+	interactionRequiredSessionIds?: Set<string>;
 	loadingWorkspace: boolean;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
@@ -88,6 +89,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	sending,
 	sendingSessionIds,
 	completedSessionIds,
+	interactionRequiredSessionIds,
 	loadingWorkspace,
 	headerActions,
 	headerLeading,
@@ -605,6 +607,10 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 										const hasUnread = session.unreadCount > 0;
 										const isCompleted =
 											completedSessionIds?.has(session.id) ?? false;
+										const isInteractionRequired =
+											interactionRequiredSessionIds?.has(session.id) ?? false;
+										const hasStatusDot =
+											isInteractionRequired || hasUnread || isCompleted;
 										const isEditing = editingSessionId === session.id;
 
 										return (
@@ -651,7 +657,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 															<span
 																className={cn(
 																	"truncate font-medium",
-																	(hasUnread || isCompleted) && !selected
+																	hasStatusDot && !selected
 																		? "text-foreground"
 																		: undefined,
 																)}
@@ -659,14 +665,21 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																{displaySessionTitle(session)}
 															</span>
 														)}
-														{(hasUnread || isCompleted) && !isEditing ? (
+														{hasStatusDot && !isEditing ? (
 															<span
 																aria-label={
-																	isCompleted
-																		? "Session completed"
-																		: "Unread session"
+																	isInteractionRequired
+																		? "Interaction required"
+																		: isCompleted
+																			? "Session completed"
+																			: "Unread session"
 																}
-																className="size-1.5 shrink-0 rounded-full bg-chart-2"
+																className={cn(
+																	"size-1.5 shrink-0 rounded-full",
+																	isInteractionRequired
+																		? "bg-yellow-500"
+																		: "bg-chart-2",
+																)}
 															/>
 														) : null}
 														{!isEditing ? (

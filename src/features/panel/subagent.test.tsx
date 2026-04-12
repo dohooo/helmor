@@ -260,3 +260,23 @@ describe("AssistantToolCall — synthetic Prompt tool", () => {
 		expect(queryByText(longPrompt)).toBeInTheDocument();
 	});
 });
+
+describe("AssistantToolCall — ask user tools", () => {
+	it("renders an icon for vscode_askQuestions entries", () => {
+		const { container, queryByText } = render(
+			<AssistantToolCall
+				toolName="vscode_askQuestions"
+				args={{
+					questions: [
+						{ header: "Path", question: "Which path should we take?" },
+					],
+				}}
+				childParts={[]}
+			/>,
+		);
+
+		expect(queryByText("Ask user")).toBeInTheDocument();
+		expect(queryByText("Which path should we take?")).toBeInTheDocument();
+		expect(container.querySelector("svg")).not.toBeNull();
+	});
+});

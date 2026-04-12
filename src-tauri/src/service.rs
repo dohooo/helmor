@@ -292,6 +292,7 @@ pub fn send_message(
                 }
                 pipeline.accumulator.flush_pending();
                 if is_aborted {
+                    pipeline.materialize_partial();
                     pipeline.accumulator.append_aborted_notice();
                 }
 
@@ -445,7 +446,7 @@ fn persist_turn(
     turn_id: &str,
 ) -> Result<()> {
     let now = crate::models::db::current_timestamp()?;
-    let msg_id = Uuid::new_v4().to_string();
+    let msg_id = turn.id.clone();
     conn.execute(
         r#"INSERT INTO session_messages
            (id, session_id, role, content, created_at, sent_at, model, turn_id, is_resumable_message)

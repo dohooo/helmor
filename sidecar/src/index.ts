@@ -15,6 +15,8 @@ import { createSidecarEmitter } from "./emitter.js";
 import { logger } from "./logger.js";
 import {
 	errorMessage,
+	optionalString,
+	parseElicitationResultContent,
 	parseListSlashCommandsParams,
 	parseProvider,
 	parseRequest,
@@ -154,6 +156,20 @@ async function handleStopSession(
 	}
 }
 
+function optionalObject(
+	params: Record<string, unknown>,
+	key: string,
+): Record<string, unknown> | undefined {
+	const value = params[key];
+	if (value === undefined || value === null) {
+		return undefined;
+	}
+	if (typeof value === "object") {
+		return value as Record<string, unknown>;
+	}
+	throw new Error(`params.${key} must be an object`);
+}
+
 /**
  * Cooperative shutdown — closes every live session across all providers and
  * exits the process. The Rust side calls this before escalating to SIGTERM /
@@ -242,6 +258,37 @@ for await (const line of rl) {
 				const behavior = params.behavior as "allow" | "deny";
 				logger.debug(`[${id}] permissionResponse`, { permissionId, behavior });
 				claudeManager.resolvePermission(permissionId, behavior);
+				break;
+			}
+			case "elicitationResponse": {
+				const elicitationId = requireString(params, "elicitationId");
+				const action = requireString(params, "action") as
+					| "accept"
+					| "decline"
+					| "cancel";
+				const content = parseElicitationResultContent(params, "content");
+				logger.debug(`[${id}] elicitationResponse`, { elicitationId, action });
+				claudeManager.resolveElicitation(elicitationId, {
+					action,
+					...(content ? { content } : {}),
+				});
+				break;
+			}
+			case "deferredToolResponse": {
+				const toolUseId = requireString(params, "toolUseId");
+				const behavior = requireString(params, "behavior") as "allow" | "deny";
+				const reason = optionalString(params, "reason");
+				const updatedInput = optionalObject(params, "updatedInput");
+				logger.debug(`[${id}] deferredToolResponse`, {
+					toolUseId,
+					behavior,
+				});
+				claudeManager.resolveDeferredTool(
+					toolUseId,
+					behavior,
+					reason,
+					updatedInput,
+				);
 				break;
 			}
 			case "ping":

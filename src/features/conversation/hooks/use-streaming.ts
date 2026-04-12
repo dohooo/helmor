@@ -1,8 +1,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+	buildPendingDeferredTool,
+	getDeferredToolResumeModelId,
+	type PendingDeferredTool,
+} from "@/features/conversation/pending-deferred-tool";
 import type { AgentModelOption, ThreadMessageLike } from "@/lib/api";
 import {
 	generateSessionTitle,
+	respondToDeferredTool,
 	respondToPermissionRequest,
 	startAgentMessageStream,
 	stopAgentStream,
@@ -14,9 +20,12 @@ import {
 } from "@/lib/query-client";
 import {
 	appendUserMessage,
+	readSessionThread,
 	replaceStreamingTail,
 	restoreSnapshot,
 	type SessionThreadSnapshot,
+	sessionThreadCacheKey,
+	shareMessages,
 } from "@/lib/session-thread-cache";
 import {
 	createLiveThreadMessage,
@@ -34,6 +43,8 @@ type PendingPermission = {
 	title?: string | null;
 	description?: string | null;
 };
+
+const EMPTY_PENDING_PERMISSIONS: PendingPermission[] = [];
 
 type ComposerRestoreState = {
 	contextKey: string;
@@ -63,6 +74,9 @@ type UseConversationStreamingArgs = {
 	selectionPending: boolean;
 	onSendingWorkspacesChange?: (workspaceIds: Set<string>) => void;
 	onSendingSessionsChange?: (sessionIds: Set<string>) => void;
+	onInteractionSessionsChange?: (
+		sessionWorkspaceMap: Map<string, string>,
+	) => void;
 	onSessionCompleted?: (sessionId: string, workspaceId: string) => void;
 };
 
@@ -74,6 +88,7 @@ export function useConversationStreaming({
 	selectionPending,
 	onSendingWorkspacesChange,
 	onSendingSessionsChange,
+	onInteractionSessionsChange,
 	onSessionCompleted,
 }: UseConversationStreamingArgs) {
 	const queryClient = useQueryClient();
@@ -81,23 +96,30 @@ export function useConversationStreaming({
 	const [composerRestoreState, setComposerRestoreState] =
 		useState<ComposerRestoreState | null>(null);
 	const [liveSessionsByContext, setLiveSessionsByContext] = useState<
-		Record<string, { provider: string; sessionId?: string | null }>
+		Record<string, { provider: string; providerSessionId?: string | null }>
 	>({});
 	const [sendErrorsByContext, setSendErrorsByContext] = useState<
 		Record<string, string | null>
 	>({});
 	const [activeSessionByContext, setActiveSessionByContext] = useState<
-		Record<string, { sessionId: string; provider: string }>
+		Record<string, { stopSessionId: string; provider: string }>
 	>({});
 	const [sendingContextKeys, setSendingContextKeys] = useState<Set<string>>(
 		() => new Set(),
 	);
-	const [pendingPermissions, setPendingPermissions] = useState<
-		PendingPermission[]
-	>([]);
+	const [pendingPermissionsByContext, setPendingPermissionsByContext] =
+		useState<Record<string, PendingPermission[]>>({});
+	const [pendingDeferredByContext, setPendingDeferredByContext] = useState<
+		Record<string, PendingDeferredTool | null>
+	>({});
+	const [interactionWorkspaceByContext, setInteractionWorkspaceByContext] =
+		useState<Record<string, string | null>>({});
 	const sendingWorkspaceMapRef = useRef<Map<string, string>>(new Map());
 	const activeSendError = sendErrorsByContext[composerContextKey] ?? null;
 	const isSending = sendingContextKeys.has(composerContextKey);
+	const pendingPermissions =
+		pendingPermissionsByContext[composerContextKey] ??
+		EMPTY_PENDING_PERMISSIONS;
 
 	const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
 	const selectedProvider = useMemo(() => {
@@ -122,6 +144,8 @@ export function useConversationStreaming({
 	onSendingWorkspacesChangeRef.current = onSendingWorkspacesChange;
 	const onSendingSessionsChangeRef = useRef(onSendingSessionsChange);
 	onSendingSessionsChangeRef.current = onSendingSessionsChange;
+	const onInteractionSessionsChangeRef = useRef(onInteractionSessionsChange);
+	onInteractionSessionsChangeRef.current = onInteractionSessionsChange;
 	const onSessionCompletedRef = useRef(onSessionCompleted);
 	onSessionCompletedRef.current = onSessionCompleted;
 	useLayoutEffect(() => {
@@ -132,6 +156,84 @@ export function useConversationStreaming({
 		onSendingWorkspacesChangeRef.current?.(workspaceIds);
 		onSendingSessionsChangeRef.current?.(sendingSessionIds);
 	}, [sendingContextKeys, sendingSessionIds]);
+	useLayoutEffect(() => {
+		const interactionSessions = new Map<string, string>();
+
+		for (const [contextKey, permissions] of Object.entries(
+			pendingPermissionsByContext,
+		)) {
+			if (permissions.length === 0 || !contextKey.startsWith("session:")) {
+				continue;
+			}
+			const workspaceId = interactionWorkspaceByContext[contextKey];
+			if (!workspaceId) {
+				continue;
+			}
+			interactionSessions.set(contextKey.slice(8), workspaceId);
+		}
+
+		for (const [contextKey, deferred] of Object.entries(
+			pendingDeferredByContext,
+		)) {
+			if (!deferred || !contextKey.startsWith("session:")) {
+				continue;
+			}
+			const workspaceId = interactionWorkspaceByContext[contextKey];
+			if (!workspaceId) {
+				continue;
+			}
+			interactionSessions.set(contextKey.slice(8), workspaceId);
+		}
+
+		onInteractionSessionsChangeRef.current?.(interactionSessions);
+	}, [
+		interactionWorkspaceByContext,
+		pendingDeferredByContext,
+		pendingPermissionsByContext,
+	]);
+
+	const rememberInteractionWorkspace = useCallback(
+		(contextKey: string, workspaceId: string | null | undefined) => {
+			if (workspaceId === undefined) {
+				return;
+			}
+
+			setInteractionWorkspaceByContext((current) => {
+				if ((current[contextKey] ?? null) === (workspaceId ?? null)) {
+					return current;
+				}
+
+				return {
+					...current,
+					[contextKey]: workspaceId ?? null,
+				};
+			});
+		},
+		[],
+	);
+
+	const clearPendingPermissions = useCallback((contextKey: string) => {
+		setPendingPermissionsByContext((current) => {
+			const existing = current[contextKey] ?? EMPTY_PENDING_PERMISSIONS;
+			if (existing.length === 0) {
+				return current;
+			}
+
+			const next = { ...current };
+			delete next[contextKey];
+			return next;
+		});
+	}, []);
+
+	const appendPendingPermission = useCallback(
+		(contextKey: string, permission: PendingPermission) => {
+			setPendingPermissionsByContext((current) => ({
+				...current,
+				[contextKey]: [...(current[contextKey] ?? []), permission],
+			}));
+		},
+		[],
+	);
 
 	const handleStopStream = useCallback(() => {
 		const activeSession = activeSessionByContext[composerContextKey];
@@ -139,20 +241,53 @@ export function useConversationStreaming({
 			return;
 		}
 
-		void stopAgentStream(activeSession.sessionId, activeSession.provider);
+		void stopAgentStream(activeSession.stopSessionId, activeSession.provider);
 	}, [activeSessionByContext, composerContextKey]);
 
 	const handlePermissionResponse = useCallback(
 		(permissionId: string, behavior: "allow" | "deny") => {
-			setPendingPermissions((prev) =>
-				prev.filter((permission) => permission.permissionId !== permissionId),
-			);
+			setPendingPermissionsByContext((current) => {
+				const permissions =
+					current[composerContextKey] ?? EMPTY_PENDING_PERMISSIONS;
+				const nextPermissions = permissions.filter(
+					(permission) => permission.permissionId !== permissionId,
+				);
+				if (nextPermissions.length === permissions.length) {
+					return current;
+				}
+
+				const next = { ...current };
+				if (nextPermissions.length > 0) {
+					next[composerContextKey] = nextPermissions;
+				} else {
+					delete next[composerContextKey];
+				}
+				return next;
+			});
 			respondToPermissionRequest(permissionId, behavior).catch((err) =>
 				console.error("[helmor] permission response:", err),
 			);
 		},
-		[],
+		[composerContextKey],
 	);
+
+	const clearSendingState = useCallback((contextKey: string) => {
+		setActiveSessionByContext((current) => {
+			if (!(contextKey in current)) {
+				return current;
+			}
+
+			const next = { ...current };
+			delete next[contextKey];
+			return next;
+		});
+		sendingWorkspaceMapRef.current.delete(contextKey);
+		setSendingContextKeys((current) => {
+			const next = new Set(current);
+			next.delete(contextKey);
+			return next;
+		});
+	}, []);
 
 	const invalidateConversationQueries = useCallback(
 		async (workspaceId: string | null, sessionId: string | null) => {
@@ -186,26 +321,295 @@ export function useConversationStreaming({
 		[queryClient],
 	);
 
-	const invalidateSidebarQueries = useCallback(
-		(workspaceId: string | null) => {
-			const invalidations: Promise<unknown>[] = [
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGroups,
-				}),
-			];
-			if (workspaceId) {
-				invalidations.push(
-					queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
-					}),
-					queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
-					}),
-				);
-			}
-			return Promise.all(invalidations);
+	const applyDeferredToolEvent = useCallback(
+		(contextKey: string, event: PendingDeferredTool) => {
+			clearPendingPermissions(contextKey);
+			setPendingDeferredByContext((current) => ({
+				...current,
+				[contextKey]: event,
+			}));
+			setLiveSessionsByContext((current) => ({
+				...current,
+				[contextKey]: {
+					provider: event.provider,
+					providerSessionId:
+						event.providerSessionId ??
+						current[contextKey]?.providerSessionId ??
+						null,
+				},
+			}));
+			clearSendingState(contextKey);
 		},
-		[queryClient],
+		[clearPendingPermissions, clearSendingState],
+	);
+
+	const handleDeferredToolResponse = useCallback(
+		async (
+			deferred: PendingDeferredTool,
+			behavior: "allow" | "deny",
+			options?: {
+				reason?: string;
+				updatedInput?: Record<string, unknown>;
+			},
+		) => {
+			if (!displayedSessionId) return;
+			const fallbackModelId =
+				selectedProvider === deferred.provider
+					? displayedSelectedModelId
+					: null;
+			const resumeModelId = getDeferredToolResumeModelId(
+				deferred,
+				fallbackModelId,
+			);
+			if (!resumeModelId) {
+				setSendErrorsByContext((current) => ({
+					...current,
+					[composerContextKey]:
+						"Unable to resume deferred tool: missing modelId.",
+				}));
+				return;
+			}
+			const contextKey = composerContextKey;
+			const cacheSessionId = displayedSessionId;
+			const resumeBaseSnapshot =
+				readSessionThread(queryClient, cacheSessionId) ?? [];
+
+			setPendingDeferredByContext((current) => ({
+				...current,
+				[contextKey]: null,
+			}));
+			clearPendingPermissions(contextKey);
+			setSendErrorsByContext((current) => ({
+				...current,
+				[contextKey]: null,
+			}));
+			rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
+			if (displayedWorkspaceId) {
+				sendingWorkspaceMapRef.current.set(contextKey, displayedWorkspaceId);
+			}
+			setSendingContextKeys((current) => {
+				const next = new Set(current);
+				next.add(contextKey);
+				return next;
+			});
+
+			try {
+				await respondToDeferredTool(deferred.toolUseId, behavior, {
+					reason: options?.reason,
+					updatedInput: options?.updatedInput,
+				});
+
+				const stopSessionId = displayedSessionId;
+				setActiveSessionByContext((current) => ({
+					...current,
+					[contextKey]: {
+						stopSessionId,
+						provider: deferred.provider,
+					},
+				}));
+
+				let frameId: number | null = null;
+				let baseMessages: ThreadMessageLike[] = [];
+				let pendingPartial: ThreadMessageLike | null = null;
+				let needsFlush = false;
+
+				const changesRefreshInterval = window.setInterval(() => {
+					void queryClient.invalidateQueries({
+						queryKey: ["workspaceChanges"],
+					});
+				}, 3_000);
+
+				const flushStreamMessages = () => {
+					frameId = null;
+					if (!needsFlush) return;
+					needsFlush = false;
+
+					const rendered = pendingPartial
+						? [...baseMessages, pendingPartial]
+						: baseMessages;
+					const nextMessages = [...resumeBaseSnapshot, ...rendered];
+					queryClient.setQueryData<ThreadMessageLike[]>(
+						sessionThreadCacheKey(cacheSessionId),
+						(prev) => shareMessages(prev ?? [], nextMessages),
+					);
+				};
+
+				const scheduleFlush = () => {
+					needsFlush = true;
+					if (frameId !== null) return;
+					frameId = window.requestAnimationFrame(() => flushStreamMessages());
+				};
+
+				const cleanup = () => {
+					window.clearInterval(changesRefreshInterval);
+					if (frameId !== null) {
+						window.cancelAnimationFrame(frameId);
+						frameId = null;
+					}
+				};
+
+				await startAgentMessageStream(
+					{
+						provider: deferred.provider,
+						modelId: resumeModelId,
+						prompt: "",
+						resumeOnly: true,
+						sessionId: deferred.providerSessionId,
+						helmorSessionId: displayedSessionId,
+						workingDirectory: deferred.workingDirectory,
+						permissionMode: deferred.permissionMode,
+					},
+					(event) => {
+						if (event.kind === "update") {
+							baseMessages = event.messages;
+							pendingPartial = null;
+							scheduleFlush();
+							return;
+						}
+
+						if (event.kind === "streamingPartial") {
+							pendingPartial = event.message;
+							scheduleFlush();
+							return;
+						}
+
+						if (event.kind === "permissionRequest") {
+							rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
+							appendPendingPermission(contextKey, {
+								permissionId: event.permissionId,
+								toolName: event.toolName,
+								toolInput: event.toolInput,
+								title: event.title,
+								description: event.description,
+							});
+							return;
+						}
+
+						if (event.kind === "deferredToolUse") {
+							rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
+							const nextDeferred = buildPendingDeferredTool(
+								event,
+								deferred.modelId,
+							);
+							if (frameId !== null) {
+								window.cancelAnimationFrame(frameId);
+								frameId = null;
+							}
+							flushStreamMessages();
+							cleanup();
+							if (!nextDeferred) {
+								setPendingDeferredByContext((current) => ({
+									...current,
+									[contextKey]: deferred,
+								}));
+								setSendErrorsByContext((current) => ({
+									...current,
+									[contextKey]:
+										"Unable to continue deferred tool: missing modelId.",
+								}));
+								clearSendingState(contextKey);
+								return;
+							}
+							applyDeferredToolEvent(contextKey, nextDeferred);
+							return;
+						}
+
+						if (event.kind === "done" || event.kind === "aborted") {
+							if (frameId !== null) {
+								window.cancelAnimationFrame(frameId);
+								frameId = null;
+							}
+							flushStreamMessages();
+							cleanup();
+							clearPendingPermissions(contextKey);
+
+							if (event.kind === "done") {
+								const sid = event.sessionId ?? displayedSessionId;
+								if (sid && displayedWorkspaceId) {
+									onSessionCompletedRef.current?.(sid, displayedWorkspaceId);
+								}
+							}
+
+							void queryClient.invalidateQueries({
+								queryKey: ["workspaceChanges"],
+							});
+
+							setLiveSessionsByContext((current) => ({
+								...current,
+								[contextKey]: {
+									provider: event.provider,
+									providerSessionId:
+										event.sessionId ??
+										current[contextKey]?.providerSessionId ??
+										null,
+								},
+							}));
+							clearSendingState(contextKey);
+
+							if (event.persisted) {
+								void invalidateConversationQueries(displayedWorkspaceId, null);
+							}
+							return;
+						}
+
+						if (event.kind === "error") {
+							cleanup();
+							clearPendingPermissions(contextKey);
+							setPendingDeferredByContext((current) => ({
+								...current,
+								[contextKey]: deferred,
+							}));
+							if (event.internal) {
+								pushToast(
+									"Something went wrong. Please try again.",
+									"Error",
+									"destructive",
+								);
+							}
+							setSendErrorsByContext((current) => ({
+								...current,
+								[contextKey]: event.internal ? null : event.message,
+							}));
+							clearSendingState(contextKey);
+
+							if (event.persisted) {
+								void invalidateConversationQueries(
+									displayedWorkspaceId,
+									displayedSessionId,
+								);
+							}
+						}
+					},
+				);
+			} catch (error) {
+				console.error("[conversation] deferred tool response:", error);
+				const errorMsg = error instanceof Error ? error.message : String(error);
+				setPendingDeferredByContext((current) => ({
+					...current,
+					[contextKey]: deferred,
+				}));
+				setSendErrorsByContext((current) => ({
+					...current,
+					[contextKey]: errorMsg,
+				}));
+				clearSendingState(contextKey);
+			}
+		},
+		[
+			applyDeferredToolEvent,
+			appendPendingPermission,
+			clearSendingState,
+			clearPendingPermissions,
+			composerContextKey,
+			displayedSelectedModelId,
+			displayedSessionId,
+			displayedWorkspaceId,
+			invalidateConversationQueries,
+			pushToast,
+			queryClient,
+			rememberInteractionWorkspace,
+			selectedProvider,
+		],
 	);
 
 	const handleComposerSubmit = useCallback(
@@ -220,7 +624,7 @@ export function useConversationStreaming({
 			permissionMode,
 		}: SubmitPayload) => {
 			const trimmedPrompt = prompt.trim();
-			if (!trimmedPrompt || selectionPending) {
+			if (!trimmedPrompt || selectionPending || !displayedSessionId) {
 				return;
 			}
 
@@ -237,9 +641,12 @@ export function useConversationStreaming({
 			const previousLiveSession = liveSessionsByContext[contextKey];
 			const providerSessionId =
 				previousLiveSession?.provider === model.provider
-					? (previousLiveSession.sessionId ?? undefined)
+					? (previousLiveSession.providerSessionId ?? undefined)
 					: undefined;
-			const cacheSessionId = displayedSessionId ?? contextKey;
+			// Always use the real session ID — never fall back to a
+			// workspace-level contextKey, which would share cache entries
+			// across sessions and leak provider session IDs on resume.
+			const cacheSessionId = displayedSessionId;
 			const rollbackSnapshot: SessionThreadSnapshot = appendUserMessage(
 				queryClient,
 				cacheSessionId,
@@ -250,6 +657,12 @@ export function useConversationStreaming({
 				...current,
 				[contextKey]: null,
 			}));
+			clearPendingPermissions(contextKey);
+			setPendingDeferredByContext((current) => ({
+				...current,
+				[contextKey]: null,
+			}));
+			rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
 			if (displayedWorkspaceId) {
 				sendingWorkspaceMapRef.current.set(contextKey, displayedWorkspaceId);
 			}
@@ -288,11 +701,11 @@ export function useConversationStreaming({
 					);
 				}
 
-				const sidecarSessionId = displayedSessionId ?? `tmp-${contextKey}`;
+				const stopSessionId = displayedSessionId;
 				setActiveSessionByContext((current) => ({
 					...current,
 					[contextKey]: {
-						sessionId: sidecarSessionId,
+						stopSessionId,
 						provider: model.provider,
 					},
 				}));
@@ -364,16 +777,36 @@ export function useConversationStreaming({
 						}
 
 						if (event.kind === "permissionRequest") {
-							setPendingPermissions((prev) => [
-								...prev,
-								{
-									permissionId: event.permissionId,
-									toolName: event.toolName,
-									toolInput: event.toolInput,
-									title: event.title,
-									description: event.description,
-								},
-							]);
+							rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
+							appendPendingPermission(contextKey, {
+								permissionId: event.permissionId,
+								toolName: event.toolName,
+								toolInput: event.toolInput,
+								title: event.title,
+								description: event.description,
+							});
+							return;
+						}
+
+						if (event.kind === "deferredToolUse") {
+							rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
+							const nextDeferred = buildPendingDeferredTool(event, model.id);
+							if (frameId !== null) {
+								window.cancelAnimationFrame(frameId);
+								frameId = null;
+							}
+							flushStreamMessages();
+							cleanup();
+							if (!nextDeferred) {
+								setSendErrorsByContext((current) => ({
+									...current,
+									[contextKey]:
+										"Unable to continue deferred tool: missing modelId.",
+								}));
+								clearSendingState(contextKey);
+								return;
+							}
+							applyDeferredToolEvent(contextKey, nextDeferred);
 							return;
 						}
 
@@ -384,7 +817,7 @@ export function useConversationStreaming({
 							}
 							flushStreamMessages();
 							cleanup();
-							setPendingPermissions([]);
+							clearPendingPermissions(contextKey);
 
 							if (event.kind === "done") {
 								const sid = event.sessionId ?? displayedSessionId;
@@ -401,36 +834,27 @@ export function useConversationStreaming({
 								...current,
 								[contextKey]: {
 									provider: event.provider,
-									sessionId:
-										event.sessionId ?? current[contextKey]?.sessionId ?? null,
+									providerSessionId:
+										event.sessionId ??
+										current[contextKey]?.providerSessionId ??
+										null,
 								},
 							}));
-							setActiveSessionByContext((current) => {
-								if (!(contextKey in current)) {
-									return current;
-								}
-
-								const next = { ...current };
-								delete next[contextKey];
-								return next;
-							});
+							clearSendingState(contextKey);
 
 							if (event.persisted) {
-								void invalidateSidebarQueries(displayedWorkspaceId);
+								// Sidebar only — don't invalidate session messages
+								// here. The streaming snapshot IS the correct data
+								// and its message IDs differ from DB IDs, so a
+								// refetch would cause a full re-render flicker.
+								void invalidateConversationQueries(displayedWorkspaceId, null);
 							}
-
-							sendingWorkspaceMapRef.current.delete(contextKey);
-							setSendingContextKeys((current) => {
-								const next = new Set(current);
-								next.delete(contextKey);
-								return next;
-							});
 							return;
 						}
 
 						if (event.kind === "error") {
 							cleanup();
-							setPendingPermissions([]);
+							clearPendingPermissions(contextKey);
 							if (event.internal) {
 								pushToast(
 									"Something went wrong. Please try again.",
@@ -442,17 +866,12 @@ export function useConversationStreaming({
 								...current,
 								[contextKey]: event.internal ? null : event.message,
 							}));
-							setActiveSessionByContext((current) => {
-								if (!(contextKey in current)) {
-									return current;
-								}
-
-								const next = { ...current };
-								delete next[contextKey];
-								return next;
-							});
+							clearSendingState(contextKey);
 
 							if (event.persisted) {
+								// Error path: DO invalidate session messages — the
+								// DB may have partial data that the snapshot doesn't
+								// reflect correctly.
 								void invalidateConversationQueries(
 									displayedWorkspaceId,
 									displayedSessionId,
@@ -468,13 +887,6 @@ export function useConversationStreaming({
 									nonce: Date.now(),
 								});
 							}
-
-							sendingWorkspaceMapRef.current.delete(contextKey);
-							setSendingContextKeys((current) => {
-								const next = new Set(current);
-								next.delete(contextKey);
-								return next;
-							});
 						}
 					},
 				);
@@ -494,35 +906,38 @@ export function useConversationStreaming({
 					nonce: Date.now(),
 				});
 				restoreSnapshot(queryClient, cacheSessionId, rollbackSnapshot);
-				sendingWorkspaceMapRef.current.delete(contextKey);
-				setSendingContextKeys((current) => {
-					const next = new Set(current);
-					next.delete(contextKey);
-					return next;
-				});
+				clearSendingState(contextKey);
 			}
 		},
 		[
+			applyDeferredToolEvent,
+			appendPendingPermission,
+			clearSendingState,
+			clearPendingPermissions,
 			composerContextKey,
 			displayedSessionId,
 			displayedWorkspaceId,
 			invalidateConversationQueries,
-			invalidateSidebarQueries,
 			liveSessionsByContext,
 			pushToast,
 			queryClient,
+			rememberInteractionWorkspace,
 			selectionPending,
 		],
 	);
 
 	const restoreActive = composerRestoreState?.contextKey === composerContextKey;
+	const pendingDeferredTool =
+		pendingDeferredByContext[composerContextKey] ?? null;
 
 	return {
 		activeSendError,
 		handleComposerSubmit,
+		handleDeferredToolResponse,
 		handlePermissionResponse,
 		handleStopStream,
 		isSending,
+		pendingDeferredTool,
 		pendingPermissions,
 		restoreCustomTags: restoreActive ? composerRestoreState.customTags : [],
 		restoreDraft: restoreActive ? composerRestoreState.draft : null,

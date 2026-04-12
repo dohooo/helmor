@@ -28,7 +28,11 @@ type WorkspaceConversationContainerProps = {
 	 * session-level lifecycle events (e.g. the commit button driver needs to
 	 * know when its target session's stream has ended). */
 	onSendingSessionsChange?: (sessionIds: Set<string>) => void;
+	onInteractionSessionsChange?: (
+		sessionWorkspaceMap: Map<string, string>,
+	) => void;
 	completedSessionIds?: Set<string>;
+	interactionRequiredSessionIds?: Set<string>;
 	onSessionCompleted?: (sessionId: string, workspaceId: string) => void;
 	workspacePrInfo?: PullRequestInfo | null;
 	headerActions?: React.ReactNode;
@@ -59,7 +63,9 @@ export const WorkspaceConversationContainer = memo(
 		onResolveDisplayedSession,
 		onSendingWorkspacesChange,
 		onSendingSessionsChange,
+		onInteractionSessionsChange,
 		completedSessionIds,
+		interactionRequiredSessionIds,
 		onSessionCompleted,
 		workspacePrInfo = null,
 		headerActions,
@@ -91,9 +97,11 @@ export const WorkspaceConversationContainer = memo(
 		const {
 			activeSendError,
 			handleComposerSubmit,
+			handleDeferredToolResponse,
 			handlePermissionResponse,
 			handleStopStream,
 			isSending,
+			pendingDeferredTool,
 			pendingPermissions,
 			restoreCustomTags,
 			restoreDraft,
@@ -110,6 +118,7 @@ export const WorkspaceConversationContainer = memo(
 			selectionPending,
 			onSendingSessionsChange,
 			onSendingWorkspacesChange,
+			onInteractionSessionsChange,
 			onSessionCompleted,
 		});
 
@@ -165,6 +174,7 @@ export const WorkspaceConversationContainer = memo(
 					sending={isSending}
 					sendingSessionIds={sendingSessionIds}
 					completedSessionIds={completedSessionIds}
+					interactionRequiredSessionIds={interactionRequiredSessionIds}
 					selectedProvider={selectedProvider}
 					workspacePrInfo={workspacePrInfo}
 					onSelectSession={onSelectSession}
@@ -246,6 +256,8 @@ export const WorkspaceConversationContainer = memo(
 							restoreFiles={restoreFiles}
 							restoreCustomTags={restoreCustomTags}
 							restoreNonce={restoreNonce}
+							pendingDeferredTool={pendingDeferredTool}
+							onDeferredToolResponse={handleDeferredToolResponse}
 							modelSelections={composerModelSelections}
 							effortLevels={composerEffortLevels}
 							permissionModes={composerPermissionModes}
