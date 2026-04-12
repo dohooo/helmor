@@ -89,6 +89,12 @@ export type DeferredToolUseEvent = {
 	readonly toolInput: Record<string, unknown>;
 };
 
+export type PermissionModeChangedEvent = {
+	readonly id: string;
+	readonly type: "permissionModeChanged";
+	readonly permissionMode: string;
+};
+
 export type SidecarControlEvent =
 	| ReadyEvent
 	| EndEvent
@@ -100,7 +106,8 @@ export type SidecarControlEvent =
 	| SlashCommandsListedEvent
 	| PermissionRequestEvent
 	| ElicitationRequestEvent
-	| DeferredToolUseEvent;
+	| DeferredToolUseEvent
+	| PermissionModeChangedEvent;
 
 /**
  * Typed emitter for the sidecar's stdout protocol.
@@ -148,6 +155,7 @@ export interface SidecarEmitter {
 		toolName: string,
 		toolInput: Record<string, unknown>,
 	): void;
+	permissionModeChanged(requestId: string, permissionMode: string): void;
 	/**
 	 * Forward a raw provider SDK message. `id` is appended LAST so an SDK
 	 * field named `id` can never override our request id.
@@ -225,6 +233,12 @@ export function createSidecarEmitter(
 				toolUseId,
 				toolName,
 				toolInput,
+			}),
+		permissionModeChanged: (requestId, permissionMode) =>
+			write({
+				id: requestId,
+				type: "permissionModeChanged",
+				permissionMode,
 			}),
 		passthrough: (requestId, message) =>
 			write({ ...(message as Record<string, unknown>), id: requestId }),

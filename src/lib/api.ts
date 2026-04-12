@@ -72,6 +72,8 @@ export type AgentSendRequest = {
 	modelId: string;
 	prompt: string;
 	resumeOnly?: boolean | null;
+	postToolPermissionMode?: string | null;
+	postToolUseId?: string | null;
 	sessionId?: string | null;
 	helmorSessionId?: string | null;
 	workingDirectory?: string | null;
@@ -1337,6 +1339,18 @@ export type FileMentionPart = {
 	type: "file-mention";
 	path: string;
 };
+export type PlanReviewAllowedPrompt = {
+	tool: string;
+	prompt: string;
+};
+export type PlanReviewPart = {
+	type: "plan-review";
+	toolUseId: string;
+	toolName: string;
+	plan?: string | null;
+	planFilePath?: string | null;
+	allowedPrompts?: PlanReviewAllowedPrompt[];
+};
 export type MessagePart =
 	| TextPart
 	| ReasoningPart
@@ -1345,7 +1359,8 @@ export type MessagePart =
 	| TodoListPart
 	| ImagePart
 	| PromptSuggestionPart
-	| FileMentionPart;
+	| FileMentionPart
+	| PlanReviewPart;
 
 export type CollapsedGroupPart = {
 	type: "collapsed-group";
@@ -1476,9 +1491,18 @@ export async function stopAgentStream(
 export async function respondToPermissionRequest(
 	permissionId: string,
 	behavior: "allow" | "deny",
+	options?: {
+		updatedPermissions?: unknown[];
+		message?: string;
+	},
 ): Promise<void> {
 	await invoke("respond_to_permission_request", {
-		request: { permissionId, behavior },
+		request: {
+			permissionId,
+			behavior,
+			updatedPermissions: options?.updatedPermissions ?? null,
+			message: options?.message ?? null,
+		},
 	});
 }
 

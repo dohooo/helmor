@@ -10,6 +10,7 @@ import {
 	type ElicitationResult,
 	type HookInput,
 	type HookJSONOutput,
+	type PermissionUpdate,
 	type Query,
 	query,
 	type SDKMessage,
@@ -124,7 +125,13 @@ type ClaudePermissionMode = (typeof VALID_PERMISSION_MODES)[number];
 const VALID_EFFORT_LEVELS = ["low", "medium", "high", "max"] as const;
 type ClaudeEffort = (typeof VALID_EFFORT_LEVELS)[number];
 
-const DEFERRED_TOOL_NAMES = new Set(["AskUserQuestion", "ExitPlanMode"]);
+const DEFERRED_TOOL_NAMES = new Set(["AskUserQuestion"]);
+
+interface PermissionResolution {
+	readonly behavior: "allow" | "deny";
+	readonly updatedPermissions?: PermissionUpdate[];
+	readonly message?: string;
+}
 
 type DeferredToolBehavior = "allow" | "deny";
 
@@ -132,7 +139,10 @@ interface DeferredToolResolution {
 	readonly behavior: DeferredToolBehavior;
 	readonly reason: string | undefined;
 	readonly updatedInput: Record<string, unknown> | undefined;
+	readonly createdAt: number;
 }
+
+const DEFERRED_TOOL_RESPONSE_TTL_MS = 5 * 60 * 1000;
 
 function parsePermissionMode(value: string | undefined): ClaudePermissionMode {
 	if (
@@ -214,7 +224,7 @@ export class ClaudeSessionManager implements SessionManager {
 	private readonly sessions = new Map<string, LiveSession>();
 	private readonly pendingPermissions = new Map<
 		string,
-		(behavior: "allow" | "deny") => void
+		(resolution: PermissionResolution) => void
 	>();
 	private readonly pendingElicitations = new Map<
 		string,
@@ -225,11 +235,24 @@ export class ClaudeSessionManager implements SessionManager {
 		DeferredToolResolution
 	>();
 
-	resolvePermission(permissionId: string, behavior: "allow" | "deny"): void {
+	private pruneExpiredDeferredToolResponses(now = Date.now()): void {
+		for (const [toolUseId, resolution] of this.deferredToolResponses) {
+			if (now - resolution.createdAt > DEFERRED_TOOL_RESPONSE_TTL_MS) {
+				this.deferredToolResponses.delete(toolUseId);
+			}
+		}
+	}
+
+	resolvePermission(
+		permissionId: string,
+		behavior: "allow" | "deny",
+		updatedPermissions?: PermissionUpdate[],
+		message?: string,
+	): void {
 		const resolve = this.pendingPermissions.get(permissionId);
 		if (resolve) {
 			this.pendingPermissions.delete(permissionId);
-			resolve(behavior);
+			resolve({ behavior, updatedPermissions, message });
 		}
 	}
 
@@ -247,10 +270,12 @@ export class ClaudeSessionManager implements SessionManager {
 		reason: string | undefined,
 		updatedInput: Record<string, unknown> | undefined,
 	): void {
+		this.pruneExpiredDeferredToolResponses();
 		this.deferredToolResponses.set(toolUseId, {
 			behavior,
 			reason,
 			updatedInput,
+			createdAt: Date.now(),
 		});
 	}
 
@@ -264,9 +289,9 @@ export class ClaudeSessionManager implements SessionManager {
 		if (!toolUseID || !DEFERRED_TOOL_NAMES.has(input.tool_name)) {
 			return {};
 		}
+		this.pruneExpiredDeferredToolResponses();
 		const resolved = this.deferredToolResponses.get(toolUseID);
 		if (resolved) {
-			this.deferredToolResponses.delete(toolUseID);
 			return {
 				hookSpecificOutput: {
 					hookEventName: "PreToolUse",
@@ -375,25 +400,31 @@ export class ClaudeSessionManager implements SessionManager {
 						options.title,
 						options.description,
 					);
-					const behavior = await new Promise<"allow" | "deny">((resolve) => {
-						this.pendingPermissions.set(permissionId, resolve);
-						options.signal.addEventListener(
-							"abort",
-							() => {
-								this.pendingPermissions.delete(permissionId);
-								resolve("deny");
-							},
-							{ once: true },
-						);
-					});
-					if (behavior === "allow") {
+					const resolution = await new Promise<PermissionResolution>(
+						(resolve) => {
+							this.pendingPermissions.set(permissionId, resolve);
+							options.signal.addEventListener(
+								"abort",
+								() => {
+									this.pendingPermissions.delete(permissionId);
+									resolve({ behavior: "deny" });
+								},
+								{ once: true },
+							);
+						},
+					);
+					if (resolution.behavior === "allow") {
 						return {
 							behavior: "allow" as const,
 							updatedInput: input,
-							updatedPermissions: options.suggestions,
+							updatedPermissions:
+								resolution.updatedPermissions ?? options.suggestions,
 						};
 					}
-					return { behavior: "deny" as const, message: "User denied" };
+					return {
+						behavior: "deny" as const,
+						message: resolution.message ?? "User denied",
+					};
 				},
 			},
 		});

@@ -173,7 +173,7 @@ export const WorkspaceRowItem = memo(
 						repoName={row.repoName}
 						title={row.title}
 					/>
-					{isSending ? (
+					{isSending && !isInteractionRequired ? (
 						<span className="relative flex size-[13px] shrink-0 items-center justify-center">
 							<span className="absolute inset-0 animate-spin rounded-full border border-transparent border-t-[var(--workspace-sidebar-status-progress)]" />
 							<span className="size-1 rounded-full bg-[var(--workspace-sidebar-status-progress)]" />

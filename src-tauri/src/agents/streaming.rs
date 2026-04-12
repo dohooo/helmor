@@ -8,10 +8,14 @@ use serde_json::Value;
 use tauri::{ipc::Channel, AppHandle, Manager};
 use uuid::Uuid;
 
+use crate::pipeline::types::{
+    ExtendedMessagePart, MessagePart, MessageRole, PlanAllowedPrompt, ThreadMessageLike,
+};
+
 use super::{
-    finalize_session_metadata, open_write_connection, persist_result_and_finalize,
-    persist_turn_message, persist_user_message, AgentModelDefinition, AgentSendRequest,
-    AgentStreamEvent, CmdResult, ExchangeContext,
+    finalize_session_metadata, open_write_connection, persist_exit_plan_message,
+    persist_result_and_finalize, persist_turn_message, persist_user_message, AgentModelDefinition,
+    AgentSendRequest, AgentStreamEvent, CmdResult, ExchangeContext,
 };
 
 #[derive(Debug, Clone)]
@@ -168,6 +172,8 @@ pub(super) fn stream_via_sidecar(
             "cwd": working_directory.display().to_string(),
             "resume": resume_session_id,
             "provider": model.provider,
+            "postToolPermissionMode": request.post_tool_permission_mode,
+            "postToolUseId": request.post_tool_use_id,
             "effortLevel": request.effort_level,
             "permissionMode": request.permission_mode,
         }),
@@ -193,7 +199,7 @@ pub(super) fn stream_via_sidecar(
     let working_dir_str = working_directory.display().to_string();
     let hsid_copy = helmor_session_id;
     let effort_copy = request.effort_level.clone();
-    let permission_mode_copy = request.permission_mode.clone();
+    let mut permission_mode_copy = request.permission_mode.clone();
     let user_message_id_copy = request.user_message_id.clone();
     let files_copy = request.files.clone().unwrap_or_default();
     let resume_only = request.resume_only;
@@ -431,6 +437,71 @@ pub(super) fn stream_via_sidecar(
                         .and_then(Value::as_str)
                         .map(str::to_string);
                     tracing::debug!(rid = %rid, tool = %tool_name, permission_id = %permission_id, "Permission request");
+
+                    // ExitPlanMode: flush pipeline, persist and render PlanReview
+                    // card before sending the permission request to the frontend.
+                    if tool_name == "ExitPlanMode" {
+                        if let Some(pipeline_state) = pipeline.as_mut() {
+                            pipeline_state.accumulator.flush_pending();
+
+                            if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
+                                let model_str =
+                                    pipeline_state.accumulator.resolved_model().to_string();
+                                while persisted_turn_count < pipeline_state.accumulator.turns_len()
+                                {
+                                    match persist_turn_message(
+                                        conn,
+                                        ctx,
+                                        pipeline_state.accumulator.turn_at(persisted_turn_count),
+                                        &model_str,
+                                    ) {
+                                        Ok(_) => persisted_turn_count += 1,
+                                        Err(error) => {
+                                            tracing::error!(
+                                                turn = persisted_turn_count,
+                                                "Failed to persist turn: {error}"
+                                            );
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            pipeline_state.accumulator.sync_persisted_ids();
+
+                            let resolved_model =
+                                pipeline_state.accumulator.resolved_model().to_string();
+                            let persisted_metadata =
+                                if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
+                                    persist_exit_plan_message(
+                                        conn,
+                                        ctx,
+                                        &resolved_model,
+                                        &permission_id,
+                                        &tool_name,
+                                        &tool_input,
+                                    )
+                                    .ok()
+                                } else {
+                                    None
+                                };
+                            let (msg_id, created_at) = persisted_metadata.unwrap_or_default();
+                            let plan_message = build_exit_plan_review_message(
+                                (!msg_id.is_empty()).then_some(msg_id),
+                                (!created_at.is_empty()).then_some(created_at),
+                                &permission_id,
+                                &tool_name,
+                                &tool_input,
+                            );
+
+                            let mut final_messages = pipeline_state.finish();
+                            final_messages.push(plan_message);
+                            let _ = on_event.send(AgentStreamEvent::Update {
+                                messages: final_messages,
+                            });
+                        }
+                    }
+
                     let _ = on_event.send(AgentStreamEvent::PermissionRequest {
                         permission_id,
                         tool_name,
@@ -458,6 +529,7 @@ pub(super) fn stream_via_sidecar(
                         .cloned()
                         .unwrap_or(Value::Object(Default::default()));
                     let mut resolved_model = model_copy.cli_model.to_string();
+                    let mut persisted_plan_message: Option<ThreadMessageLike> = None;
 
                     if let Some(mut pipeline_state) = pipeline.take() {
                         pipeline_state.accumulator.flush_pending();
@@ -490,7 +562,46 @@ pub(super) fn stream_via_sidecar(
                         pipeline_state.accumulator.sync_persisted_ids();
 
                         resolved_model = pipeline_state.accumulator.resolved_model().to_string();
-                        let final_messages = pipeline_state.finish();
+                        if tool_name == "ExitPlanMode" {
+                            let persisted_metadata =
+                                if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
+                                    match persist_exit_plan_message(
+                                        conn,
+                                        ctx,
+                                        &resolved_model,
+                                        &tool_use_id,
+                                        &tool_name,
+                                        &tool_input,
+                                    ) {
+                                        Ok(metadata) => Some(metadata),
+                                        Err(error) => {
+                                            tracing::error!(
+                                                rid = %rid,
+                                                tool_use_id = %tool_use_id,
+                                                "Failed to persist exit-plan message: {error}"
+                                            );
+                                            None
+                                        }
+                                    }
+                                } else {
+                                    None
+                                };
+                            let (message_id, created_at) =
+                                persisted_metadata.unwrap_or((String::new(), String::new()));
+
+                            persisted_plan_message = Some(build_exit_plan_review_message(
+                                (!message_id.is_empty()).then_some(message_id),
+                                (!created_at.is_empty()).then_some(created_at),
+                                &tool_use_id,
+                                &tool_name,
+                                &tool_input,
+                            ));
+                        }
+
+                        let mut final_messages = pipeline_state.finish();
+                        if let Some(plan_message) = persisted_plan_message {
+                            final_messages.push(plan_message);
+                        }
                         let _ = on_event.send(AgentStreamEvent::Update {
                             messages: final_messages,
                         });
@@ -523,6 +634,13 @@ pub(super) fn stream_via_sidecar(
                         tool_input,
                     });
                     break;
+                }
+                "permissionModeChanged" => {
+                    permission_mode_copy = event
+                        .raw
+                        .get("permissionMode")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
                 }
                 "elicitationRequest" => {
                     let resolved_model = pipeline
@@ -638,4 +756,53 @@ pub(super) fn stream_via_sidecar(
     });
 
     Ok(())
+}
+
+fn build_exit_plan_review_message(
+    id: Option<String>,
+    created_at: Option<String>,
+    tool_use_id: &str,
+    tool_name: &str,
+    tool_input: &Value,
+) -> ThreadMessageLike {
+    let plan = tool_input
+        .get("plan")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let plan_file_path = tool_input
+        .get("planFilePath")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let allowed_prompts = tool_input
+        .get("allowedPrompts")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    let tool = entry.get("tool").and_then(Value::as_str)?;
+                    let prompt = entry.get("prompt").and_then(Value::as_str)?;
+                    Some(PlanAllowedPrompt {
+                        tool: tool.to_string(),
+                        prompt: prompt.to_string(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    ThreadMessageLike {
+        role: MessageRole::Assistant,
+        id,
+        created_at,
+        content: vec![ExtendedMessagePart::Basic(MessagePart::PlanReview {
+            tool_use_id: tool_use_id.to_string(),
+            tool_name: tool_name.to_string(),
+            plan,
+            plan_file_path,
+            allowed_prompts,
+        })],
+        status: None,
+        streaming: None,
+    }
 }

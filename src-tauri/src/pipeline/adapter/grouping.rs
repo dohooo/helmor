@@ -250,7 +250,8 @@ pub(super) fn merge_adjacent_assistants(msgs: Vec<ThreadMessageLike>) -> Vec<Thr
         let should_merge = matches!(
             (out.last().map(|p| &p.role), &msg.role),
             (Some(MessageRole::Assistant), MessageRole::Assistant)
-        );
+        ) && !assistant_contains_plan_review(out.last())
+            && !message_contains_plan_review(&msg);
 
         if should_merge {
             let prev = out.last_mut().unwrap();
@@ -267,4 +268,17 @@ pub(super) fn merge_adjacent_assistants(msgs: Vec<ThreadMessageLike>) -> Vec<Thr
     }
 
     out
+}
+
+fn assistant_contains_plan_review(message: Option<&ThreadMessageLike>) -> bool {
+    message.is_some_and(message_contains_plan_review)
+}
+
+fn message_contains_plan_review(message: &ThreadMessageLike) -> bool {
+    message.content.iter().any(|part| {
+        matches!(
+            part,
+            ExtendedMessagePart::Basic(MessagePart::PlanReview { .. })
+        )
+    })
 }

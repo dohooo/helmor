@@ -9,6 +9,7 @@ import { useConversationStreaming } from "./use-streaming";
 
 const apiMocks = vi.hoisted(() => ({
 	generateSessionTitle: vi.fn(),
+	loadSessionThreadMessages: vi.fn(),
 	respondToDeferredTool: vi.fn(),
 	respondToPermissionRequest: vi.fn(),
 	startAgentMessageStream: vi.fn(),
@@ -21,6 +22,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	return {
 		...actual,
 		generateSessionTitle: apiMocks.generateSessionTitle,
+		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 		respondToDeferredTool: apiMocks.respondToDeferredTool,
 		respondToPermissionRequest: apiMocks.respondToPermissionRequest,
 		startAgentMessageStream: apiMocks.startAgentMessageStream,
@@ -67,7 +69,7 @@ function createWrapper() {
 	});
 	const pushToast = vi.fn();
 
-	return function Wrapper({ children }: { children: ReactNode }) {
+	function Wrapper({ children }: { children: ReactNode }) {
 		return (
 			<WorkspaceToastProvider value={pushToast}>
 				<QueryClientProvider client={queryClient}>
@@ -75,18 +77,22 @@ function createWrapper() {
 				</QueryClientProvider>
 			</WorkspaceToastProvider>
 		);
-	};
+	}
+
+	return { Wrapper, queryClient, pushToast };
 }
 
 describe("useConversationStreaming", () => {
 	beforeEach(() => {
 		apiMocks.generateSessionTitle.mockReset();
+		apiMocks.loadSessionThreadMessages.mockReset();
 		apiMocks.respondToDeferredTool.mockReset();
 		apiMocks.respondToPermissionRequest.mockReset();
 		apiMocks.startAgentMessageStream.mockReset();
 		apiMocks.stopAgentStream.mockReset();
 
 		apiMocks.generateSessionTitle.mockResolvedValue(null);
+		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
 		apiMocks.respondToDeferredTool.mockResolvedValue(undefined);
 		apiMocks.respondToPermissionRequest.mockResolvedValue(undefined);
 		apiMocks.stopAgentStream.mockResolvedValue(undefined);
@@ -105,7 +111,7 @@ describe("useConversationStreaming", () => {
 		);
 
 		const interactionSnapshots: Map<string, string>[] = [];
-		const wrapper = createWrapper();
+		const { Wrapper } = createWrapper();
 		const { result, rerender } = renderHook(
 			({ composerContextKey, displayedSessionId, displayedWorkspaceId }) =>
 				useConversationStreaming({
@@ -124,7 +130,7 @@ describe("useConversationStreaming", () => {
 					displayedSessionId: "session-1",
 					displayedWorkspaceId: "workspace-1",
 				},
-				wrapper,
+				wrapper: Wrapper,
 			},
 		);
 
@@ -185,6 +191,7 @@ describe("useConversationStreaming", () => {
 		expect(apiMocks.respondToPermissionRequest).toHaveBeenCalledWith(
 			"permission-1",
 			"allow",
+			undefined,
 		);
 		expect(result.current.pendingPermissions).toEqual([]);
 		expect(getLastInteractionSnapshot(interactionSnapshots)).toEqual(new Map());
@@ -197,7 +204,7 @@ describe("useConversationStreaming", () => {
 			},
 		);
 
-		const wrapper = createWrapper();
+		const { Wrapper } = createWrapper();
 		const { result } = renderHook(
 			() =>
 				useConversationStreaming({
@@ -207,7 +214,7 @@ describe("useConversationStreaming", () => {
 					displayedWorkspaceId: "workspace-1",
 					selectionPending: false,
 				}),
-			{ wrapper },
+			{ wrapper: Wrapper },
 		);
 
 		await act(async () => {
@@ -239,6 +246,192 @@ describe("useConversationStreaming", () => {
 		expect(apiMocks.stopAgentStream).not.toHaveBeenCalledWith(
 			"provider-session-1",
 			"claude",
+		);
+	});
+
+	it("passes updatedPermissions through permission response for ExitPlanMode approve", async () => {
+		apiMocks.startAgentMessageStream.mockImplementation(
+			async (_payload: unknown, onEvent: (event: unknown) => void) => {
+				onEvent({
+					kind: "permissionRequest",
+					permissionId: "exit-plan-perm-1",
+					toolName: "ExitPlanMode",
+					toolInput: { plan: "1. Do things." },
+					title: null,
+					description: null,
+				});
+			},
+		);
+
+		const { Wrapper } = createWrapper();
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "plan something",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "plan",
+			});
+		});
+
+		expect(result.current.pendingPermissions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					permissionId: "exit-plan-perm-1",
+					toolName: "ExitPlanMode",
+				}),
+			]),
+		);
+
+		act(() => {
+			result.current.handlePermissionResponse("exit-plan-perm-1", "allow", {
+				updatedPermissions: [
+					{
+						type: "setMode",
+						mode: "bypassPermissions",
+						destination: "session",
+					},
+				],
+			});
+		});
+
+		expect(apiMocks.respondToPermissionRequest).toHaveBeenCalledWith(
+			"exit-plan-perm-1",
+			"allow",
+			{
+				updatedPermissions: [
+					{
+						type: "setMode",
+						mode: "bypassPermissions",
+						destination: "session",
+					},
+				],
+			},
+		);
+	});
+
+	it("passes deny message through permission response for ExitPlanMode feedback", async () => {
+		apiMocks.startAgentMessageStream.mockImplementation(
+			async (_payload: unknown, onEvent: (event: unknown) => void) => {
+				onEvent({
+					kind: "permissionRequest",
+					permissionId: "exit-plan-perm-2",
+					toolName: "ExitPlanMode",
+					toolInput: { plan: "1. Do things." },
+					title: null,
+					description: null,
+				});
+			},
+		);
+
+		const { Wrapper } = createWrapper();
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "plan something",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "plan",
+			});
+		});
+
+		act(() => {
+			result.current.handlePermissionResponse("exit-plan-perm-2", "deny", {
+				message: "Make the plan shorter.",
+			});
+		});
+
+		expect(apiMocks.respondToPermissionRequest).toHaveBeenCalledWith(
+			"exit-plan-perm-2",
+			"deny",
+			{ message: "Make the plan shorter." },
+		);
+	});
+
+	it("filters ExitPlanMode from regular pending permissions", async () => {
+		apiMocks.startAgentMessageStream.mockImplementation(
+			async (_payload: unknown, onEvent: (event: unknown) => void) => {
+				onEvent({
+					kind: "permissionRequest",
+					permissionId: "perm-bash-1",
+					toolName: "Bash",
+					toolInput: { command: "ls" },
+					title: null,
+					description: null,
+				});
+				onEvent({
+					kind: "permissionRequest",
+					permissionId: "exit-plan-perm-3",
+					toolName: "ExitPlanMode",
+					toolInput: { plan: "1. Do things." },
+					title: null,
+					description: null,
+				});
+			},
+		);
+
+		const { Wrapper } = createWrapper();
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "do something",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "plan",
+			});
+		});
+
+		expect(result.current.pendingPermissions).toHaveLength(2);
+		expect(result.current.pendingPermissions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ toolName: "Bash" }),
+				expect.objectContaining({ toolName: "ExitPlanMode" }),
+			]),
 		);
 	});
 });

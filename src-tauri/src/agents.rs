@@ -21,8 +21,8 @@ pub use self::queries::{
 pub use self::streaming::{abort_all_active_streams_blocking, ActiveStreams};
 
 use self::persistence::{
-    finalize_session_metadata, open_write_connection, persist_result_and_finalize,
-    persist_turn_message, persist_user_message,
+    finalize_session_metadata, open_write_connection, persist_exit_plan_message,
+    persist_result_and_finalize, persist_turn_message, persist_user_message,
 };
 use self::streaming::stream_via_sidecar;
 use self::support::{resolve_resume_working_directory, resolve_working_directory};
@@ -133,6 +133,8 @@ pub struct AgentSendRequest {
     pub prompt: String,
     #[serde(default)]
     pub resume_only: bool,
+    pub post_tool_permission_mode: Option<String>,
+    pub post_tool_use_id: Option<String>,
     pub session_id: Option<String>,
     pub helmor_session_id: Option<String>,
     pub working_directory: Option<String>,
@@ -254,6 +256,8 @@ pub async fn stop_agent_stream(
 pub struct PermissionResponseRequest {
     pub permission_id: String,
     pub behavior: String,
+    pub updated_permissions: Option<Vec<Value>>,
+    pub message: Option<String>,
 }
 
 #[tauri::command]
@@ -262,13 +266,20 @@ pub async fn respond_to_permission_request(
     request: PermissionResponseRequest,
 ) -> CmdResult<()> {
     tracing::info!(permission_id = %request.permission_id, behavior = %request.behavior, "Permission response");
+    let mut params = serde_json::json!({
+        "permissionId": request.permission_id,
+        "behavior": request.behavior,
+    });
+    if let Some(perms) = &request.updated_permissions {
+        params["updatedPermissions"] = serde_json::json!(perms);
+    }
+    if let Some(msg) = &request.message {
+        params["message"] = serde_json::json!(msg);
+    }
     let req = crate::sidecar::SidecarRequest {
         id: Uuid::new_v4().to_string(),
         method: "permissionResponse".to_string(),
-        params: serde_json::json!({
-            "permissionId": request.permission_id,
-            "behavior": request.behavior,
-        }),
+        params,
     };
     sidecar
         .send(&req)
@@ -647,6 +658,8 @@ mod tests {
             model_id: "opus-1m".to_string(),
             prompt: String::new(),
             resume_only: true,
+            post_tool_permission_mode: None,
+            post_tool_use_id: None,
             session_id: Some("provider-session-1".to_string()),
             helmor_session_id: Some("s1".to_string()),
             working_directory: Some(provided_dir.display().to_string()),
@@ -681,6 +694,8 @@ mod tests {
             model_id: "opus-1m".to_string(),
             prompt: String::new(),
             resume_only: true,
+            post_tool_permission_mode: None,
+            post_tool_use_id: None,
             session_id: Some("provider-session-1".to_string()),
             helmor_session_id: Some("s1".to_string()),
             working_directory: None,

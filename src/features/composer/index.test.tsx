@@ -107,29 +107,6 @@ function createAskUserQuestionDeferredTool(): PendingDeferredTool {
 	};
 }
 
-function createExitPlanModeDeferredTool(): PendingDeferredTool {
-	return {
-		provider: "claude",
-		modelId: "opus-1m",
-		resolvedModel: "opus-1m",
-		providerSessionId: "provider-session-1",
-		workingDirectory: "/tmp/helmor",
-		permissionMode: "plan",
-		toolUseId: "tool-plan-1",
-		toolName: "ExitPlanMode",
-		toolInput: {
-			plan: "1. Add the deferred tool panel.\n2. Wire resume-only continuation.\n3. Add coverage.",
-			planFilePath: "/tmp/helmor/.claude/plan.md",
-			allowedPrompts: [
-				{
-					tool: "Bash",
-					prompt: "run tests",
-				},
-			],
-		},
-	};
-}
-
 describe("WorkspaceComposer", () => {
 	it("renders custom tag insertions as badges and expands them on submit", async () => {
 		const queryClient = createHelmorQueryClient();
@@ -428,11 +405,8 @@ describe("WorkspaceComposer", () => {
 		expect(inlineInput).toHaveValue("Prototype a compact approval surface");
 	});
 
-	it("approves ExitPlanMode with the original tool input", async () => {
-		const user = userEvent.setup();
+	it("shows Approve and Request Changes buttons when ExitPlanMode permission is pending", () => {
 		const queryClient = createHelmorQueryClient();
-		const handleDeferredToolResponse = vi.fn();
-		const deferred = createExitPlanModeDeferredTool();
 
 		render(
 			<QueryClientProvider client={queryClient}>
@@ -453,23 +427,24 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingDeferredTool={deferred}
-					onDeferredToolResponse={handleDeferredToolResponse}
+					pendingExitPlanPermissionId="exit-plan-perm-1"
+					onPermissionResponse={vi.fn()}
 				/>
 			</QueryClientProvider>,
 		);
 
-		await user.click(screen.getByRole("button", { name: "Approve Plan" }));
-
-		expect(handleDeferredToolResponse).toHaveBeenCalledWith(deferred, "allow", {
-			updatedInput: deferred.toolInput,
-		});
+		expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "Request Changes" }),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Send" }),
+		).not.toBeInTheDocument();
 	});
 
-	it("sends ExitPlanMode feedback through deny for plan revisions", async () => {
-		const user = userEvent.setup();
+	it("calls onPermissionResponse with allow + updatedPermissions when Approve is clicked", async () => {
 		const queryClient = createHelmorQueryClient();
-		const handleDeferredToolResponse = vi.fn();
+		const onPermissionResponse = vi.fn();
 
 		render(
 			<QueryClientProvider client={queryClient}>
@@ -490,25 +465,155 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingDeferredTool={createExitPlanModeDeferredTool()}
-					onDeferredToolResponse={handleDeferredToolResponse}
+					pendingExitPlanPermissionId="exit-plan-perm-1"
+					onPermissionResponse={onPermissionResponse}
 				/>
 			</QueryClientProvider>,
 		);
 
-		await user.type(
-			screen.getByLabelText("Plan feedback"),
-			"Split the validation and resume-flow work into separate commits.",
-		);
-		await user.click(screen.getByRole("button", { name: "Request Changes" }));
+		await userEvent.click(screen.getByRole("button", { name: "Approve" }));
 
-		expect(handleDeferredToolResponse).toHaveBeenCalledWith(
-			expect.objectContaining({ toolUseId: "tool-plan-1" }),
-			"deny",
+		expect(onPermissionResponse).toHaveBeenCalledWith(
+			"exit-plan-perm-1",
+			"allow",
 			{
-				reason:
-					"Split the validation and resume-flow work into separate commits.",
+				updatedPermissions: [
+					{
+						type: "setMode",
+						mode: "bypassPermissions",
+						destination: "session",
+					},
+				],
 			},
 		);
+	});
+
+	it("disables Request Changes when input is empty", () => {
+		const queryClient = createHelmorQueryClient();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="plan"
+					onTogglePlanMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingExitPlanPermissionId="exit-plan-perm-1"
+					onPermissionResponse={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(
+			screen.getByRole("button", { name: "Request Changes" }),
+		).toBeDisabled();
+	});
+
+	it("shows plan review placeholder when ExitPlanMode permission is pending", () => {
+		const queryClient = createHelmorQueryClient();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="plan"
+					onTogglePlanMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingExitPlanPermissionId="exit-plan-perm-1"
+					onPermissionResponse={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(screen.getByText(/Describe what to change/)).toBeInTheDocument();
+	});
+
+	it("restores Send button after Plan toggle dismisses pending review", async () => {
+		const queryClient = createHelmorQueryClient();
+		const onTogglePlanMode = vi.fn();
+
+		const { rerender } = render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={true}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="plan"
+					onTogglePlanMode={onTogglePlanMode}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingExitPlanPermissionId="exit-plan-perm-1"
+					onPermissionResponse={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "Plan mode" }));
+		expect(onTogglePlanMode).toHaveBeenCalled();
+
+		rerender(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={true}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="bypassPermissions"
+					onTogglePlanMode={onTogglePlanMode}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingExitPlanPermissionId="exit-plan-perm-1"
+					onPermissionResponse={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(
+			screen.queryByRole("button", { name: "Approve" }),
+		).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
 	});
 });

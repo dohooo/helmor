@@ -58,6 +58,7 @@
 		"@tanstack/react-query-persist-client": "^5.97.0",
 		"@tauri-apps/api": "2.10.1",
 		"@tauri-apps/plugin-dialog": "2.6.0",
+		"@tauri-apps/plugin-notification": "^2.3.3",
 		"@tauri-apps/plugin-opener": "2.5.3",
 		"@testing-library/user-event": "14.6.1",
 		"@xterm/addon-fit": "^0.11.0",

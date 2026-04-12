@@ -43,7 +43,7 @@ use labels::{
 
 use super::types::{
     ExtendedMessagePart, HistoricalRecord, IntermediateMessage, MessagePart, MessageRole,
-    MessageStatus, ThreadMessageLike,
+    MessageStatus, PlanAllowedPrompt, ThreadMessageLike,
 };
 
 // ---------------------------------------------------------------------------
@@ -103,6 +103,13 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
         // result (session summary)
         if msg_type == Some("result") {
             result.push(make_system(msg, &build_result_label(parsed)));
+            i += 1;
+            continue;
+        }
+
+        // Persisted plan review card emitted from an ExitPlanMode deferral.
+        if msg_type == Some("exit_plan_mode") {
+            result.push(convert_exit_plan_mode_msg(msg, parsed));
             i += 1;
             continue;
         }
@@ -550,5 +557,61 @@ fn convert_rate_limit_msg(msg: &IntermediateMessage, out: &mut Vec<ThreadMessage
         .and_then(Value::as_str);
     if status == Some("rejected") {
         out.push(make_system_notice(msg, build_rate_limit_notice(parsed)));
+    }
+}
+
+fn convert_exit_plan_mode_msg(
+    msg: &IntermediateMessage,
+    parsed: Option<&Value>,
+) -> ThreadMessageLike {
+    let tool_use_id = parsed
+        .and_then(|p| p.get("toolUseId"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let tool_name = parsed
+        .and_then(|p| p.get("toolName"))
+        .and_then(Value::as_str)
+        .unwrap_or("ExitPlanMode")
+        .to_string();
+    let plan = parsed
+        .and_then(|p| p.get("plan"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let plan_file_path = parsed
+        .and_then(|p| p.get("planFilePath"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let allowed_prompts = parsed
+        .and_then(|p| p.get("allowedPrompts"))
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    let tool = entry.get("tool").and_then(Value::as_str)?;
+                    let prompt = entry.get("prompt").and_then(Value::as_str)?;
+                    Some(PlanAllowedPrompt {
+                        tool: tool.to_string(),
+                        prompt: prompt.to_string(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    ThreadMessageLike {
+        role: MessageRole::Assistant,
+        id: Some(msg.id.clone()),
+        created_at: Some(msg.created_at.clone()),
+        content: vec![ExtendedMessagePart::Basic(MessagePart::PlanReview {
+            tool_use_id,
+            tool_name,
+            plan,
+            plan_file_path,
+            allowed_prompts,
+        })],
+        status: None,
+        streaming: None,
     }
 }

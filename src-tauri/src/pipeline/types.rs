@@ -109,6 +109,21 @@ pub enum MessagePart {
     #[serde(rename = "prompt-suggestion", rename_all = "camelCase")]
     PromptSuggestion { text: String },
 
+    /// Persisted ExitPlanMode review card. The plan itself needs to live in
+    /// the chat thread so users can revisit it later even after the deferred
+    /// interaction state is gone.
+    #[serde(rename = "plan-review", rename_all = "camelCase")]
+    PlanReview {
+        tool_use_id: String,
+        tool_name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        plan: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        plan_file_path: Option<String>,
+        #[serde(default)]
+        allowed_prompts: Vec<PlanAllowedPrompt>,
+    },
+
     /// Inline file reference from the composer's @-mention picker.
     #[serde(rename = "file-mention", rename_all = "camelCase")]
     FileMention { path: String },
@@ -141,6 +156,14 @@ pub enum NoticeSeverity {
 pub struct TodoItem {
     pub text: String,
     pub status: TodoStatus,
+}
+
+/// Explicit tool prompts Claude pre-approved while presenting a plan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanAllowedPrompt {
+    pub tool: String,
+    pub prompt: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

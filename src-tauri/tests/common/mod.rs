@@ -101,6 +101,14 @@ pub enum NormPart {
         text_length: usize,
         text_preview: String,
     },
+    PlanReview {
+        tool_use_id: String,
+        tool_name: String,
+        plan_length: usize,
+        plan_preview: Option<String>,
+        plan_file_path: Option<String>,
+        allowed_prompt_tools: Vec<String>,
+    },
     FileMention {
         path: String,
     },
@@ -230,6 +238,23 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
             text_length: utf16_len(text),
             text_preview: truncate(text),
         },
+        MessagePart::PlanReview {
+            tool_use_id,
+            tool_name,
+            plan,
+            plan_file_path,
+            allowed_prompts,
+        } => NormPart::PlanReview {
+            tool_use_id: tool_use_id.clone(),
+            tool_name: tool_name.clone(),
+            plan_length: plan.as_deref().map(utf16_len).unwrap_or(0),
+            plan_preview: plan.as_deref().map(truncate),
+            plan_file_path: plan_file_path.clone(),
+            allowed_prompt_tools: allowed_prompts
+                .iter()
+                .map(|entry| entry.tool.clone())
+                .collect(),
+        },
         MessagePart::FileMention { path } => NormPart::FileMention { path: path.clone() },
     }
 }
@@ -335,6 +360,33 @@ pub fn user_prompt_with_files(id: &str, text: &str, files: &[&str]) -> Historica
         "files": files,
     });
     make_record(id, "user", &serde_json::to_string(&parsed).unwrap())
+}
+
+pub fn exit_plan_mode(
+    id: &str,
+    tool_use_id: &str,
+    plan: &str,
+    plan_file_path: Option<&str>,
+    allowed_prompts: &[(&str, &str)],
+) -> HistoricalRecord {
+    let mut parsed = json!({
+        "type": "exit_plan_mode",
+        "toolUseId": tool_use_id,
+        "toolName": "ExitPlanMode",
+        "plan": plan,
+    });
+    if let Some(path) = plan_file_path {
+        parsed["planFilePath"] = Value::String(path.to_string());
+    }
+    if !allowed_prompts.is_empty() {
+        parsed["allowedPrompts"] = Value::Array(
+            allowed_prompts
+                .iter()
+                .map(|(tool, prompt)| json!({ "tool": tool, "prompt": prompt }))
+                .collect(),
+        );
+    }
+    make_record(id, "assistant", &serde_json::to_string(&parsed).unwrap())
 }
 
 pub fn system_json(id: &str, extra: Value) -> HistoricalRecord {

@@ -5,7 +5,14 @@ import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
 import type { LexicalEditor } from "lexical";
 import { $getRoot } from "lexical";
-import { ArrowUp, ChevronDown, ClipboardList, Square } from "lucide-react";
+import {
+	ArrowUp,
+	Check,
+	ChevronDown,
+	ClipboardList,
+	MessageSquareMore,
+	Square,
+} from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -86,6 +93,12 @@ type WorkspaceComposerProps = {
 	workspaceRootPath?: string | null;
 	pendingDeferredTool?: PendingDeferredTool | null;
 	onDeferredToolResponse?: DeferredToolResponseHandler;
+	pendingExitPlanPermissionId?: string | null;
+	onPermissionResponse?: (
+		permissionId: string,
+		behavior: "allow" | "deny",
+		options?: { updatedPermissions?: unknown[]; message?: string },
+	) => void;
 };
 
 const EMPTY_SLASH_COMMANDS: readonly SlashCommandEntry[] = [];
@@ -137,6 +150,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	workspaceRootPath = null,
 	pendingDeferredTool = null,
 	onDeferredToolResponse = noopDeferredToolResponse,
+	pendingExitPlanPermissionId = null,
+	onPermissionResponse,
 }: WorkspaceComposerProps) {
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
@@ -168,12 +183,40 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		return null;
 	}, [modelSections, selectedModelId]);
 	const hasPendingDeferredTool = pendingDeferredTool !== null;
-	const controlsDisabled = disabled || hasPendingDeferredTool;
+	const dismissedPlanRef = useRef(false);
+	if (!pendingExitPlanPermissionId) {
+		dismissedPlanRef.current = false;
+	}
+
+	// Auto-allow ExitPlanMode if user already dismissed plan mode
+	useEffect(() => {
+		if (
+			dismissedPlanRef.current &&
+			pendingExitPlanPermissionId &&
+			onPermissionResponse
+		) {
+			onPermissionResponse(pendingExitPlanPermissionId, "allow", {
+				updatedPermissions: [
+					{
+						type: "setMode",
+						mode: "bypassPermissions",
+						destination: "session",
+					},
+				],
+			});
+		}
+	}, [pendingExitPlanPermissionId, onPermissionResponse]);
+
+	const hasPendingPlanReview =
+		pendingExitPlanPermissionId !== null && !dismissedPlanRef.current;
+	const controlsDisabled =
+		disabled || (hasPendingDeferredTool && !hasPendingPlanReview);
+	const effectiveSending = sending && !dismissedPlanRef.current;
 	const sendDisabled =
 		disabled ||
 		submitDisabled ||
-		sending ||
-		hasPendingDeferredTool ||
+		effectiveSending ||
+		(hasPendingDeferredTool && !hasPendingPlanReview) ||
 		!selectedModel ||
 		!hasContent;
 
@@ -298,6 +341,42 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		}
 	}, [onPendingInsertRequestsConsumed, pendingInsertRequests]);
 
+	const handlePlanApprove = useCallback(() => {
+		if (!pendingExitPlanPermissionId || !onPermissionResponse) return;
+		onPermissionResponse(pendingExitPlanPermissionId, "allow", {
+			updatedPermissions: [
+				{
+					type: "setMode",
+					mode: "bypassPermissions",
+					destination: "session",
+				},
+			],
+		});
+	}, [pendingExitPlanPermissionId, onPermissionResponse]);
+
+	const handlePlanRequestChanges = useCallback(() => {
+		if (!pendingExitPlanPermissionId || !onPermissionResponse) return;
+		const editor = editorRef.current;
+		let feedback = "";
+		if (editor) {
+			editor.read(() => {
+				feedback = $extractComposerContent().text;
+			});
+		}
+		onPermissionResponse(pendingExitPlanPermissionId, "deny", {
+			message:
+				feedback.trim() ||
+				"Please revise the plan and call ExitPlanMode again.",
+		});
+		if (editor) {
+			editor.update(() => {
+				$getRoot().clear();
+			});
+			draftCache.delete(contextKey);
+			setHasContent(false);
+		}
+	}, [pendingExitPlanPermissionId, onPermissionResponse, contextKey]);
+
 	const handleSubmit = useCallback(() => {
 		const editor = editorRef.current;
 		if (!editor) return;
@@ -330,13 +409,17 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	return (
 		<div
 			aria-label="Workspace composer"
-			className="flex flex-col rounded-2xl border border-border/40 bg-sidebar px-4 pb-3 pt-3 shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]"
+			className={cn(
+				"flex flex-col rounded-2xl border border-border/40 bg-sidebar px-4 pb-3 pt-3 shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]",
+				controlsDisabled && "cursor-not-allowed opacity-60",
+			)}
 		>
 			<label htmlFor="workspace-input" className="sr-only">
 				Workspace input
 			</label>
 
-			{pendingDeferredTool ? (
+			{pendingDeferredTool &&
+			pendingDeferredTool.toolName !== "ExitPlanMode" ? (
 				<DeferredToolPanel
 					deferred={pendingDeferredTool}
 					disabled={disabled || sending}
@@ -357,7 +440,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						}
 						placeholder={
 							<div className="pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-muted-foreground">
-								Ask to make changes, @mention files, run /commands
+								{hasPendingPlanReview
+									? "Describe what to change, then click Request Changes"
+									: "Ask to make changes, @mention files, run /commands"}
 							</div>
 						}
 						ErrorBoundary={LexicalErrorBoundary}
@@ -510,12 +595,17 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						aria-label="Plan mode"
 						disabled={controlsDisabled}
 						className={cn(
-							"gap-1.5 rounded-full px-2 py-0.5 text-[13px] font-medium transition-colors",
-							permissionMode === "plan"
+							"cursor-pointer gap-1.5 rounded-full px-2 py-0.5 text-[13px] font-medium transition-colors",
+							permissionMode === "plan" || hasPendingPlanReview
 								? "bg-foreground/[0.08] text-foreground hover:bg-foreground/[0.12]"
 								: "text-muted-foreground/55 hover:bg-accent/60 hover:text-muted-foreground",
 						)}
-						onClick={onTogglePlanMode}
+						onClick={() => {
+							if (hasPendingPlanReview) {
+								dismissedPlanRef.current = true;
+							}
+							onTogglePlanMode();
+						}}
 					>
 						<ClipboardList className="size-[14px]" strokeWidth={1.8} />
 						<span>Plan</span>
@@ -523,7 +613,32 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				</div>
 
 				<div className="flex items-center gap-2">
-					{sending ? (
+					{hasPendingPlanReview ? (
+						<>
+							<Button
+								variant="ghost"
+								size="sm"
+								aria-label="Request Changes"
+								onClick={handlePlanRequestChanges}
+								disabled={disabled || !hasContent}
+								className="h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px] text-muted-foreground hover:text-foreground"
+							>
+								<MessageSquareMore className="size-3.5" strokeWidth={1.8} />
+								Request Changes
+							</Button>
+							<Button
+								variant="default"
+								size="sm"
+								aria-label="Approve"
+								onClick={handlePlanApprove}
+								disabled={disabled}
+								className="h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px]"
+							>
+								<Check className="size-3.5" strokeWidth={2} />
+								Approve
+							</Button>
+						</>
+					) : sending && !dismissedPlanRef.current ? (
 						<Button
 							variant="destructive"
 							size="icon"

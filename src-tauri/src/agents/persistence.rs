@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
+use serde_json::{json, Value};
 
 use crate::pipeline::types::{AgentUsage, CollectedTurn};
 use crate::sessions::mark_session_read_in_transaction;
@@ -83,6 +84,55 @@ pub(super) fn persist_turn_message(
         ],
     )?;
     Ok(msg_id)
+}
+
+pub(super) fn persist_exit_plan_message(
+    conn: &Connection,
+    ctx: &ExchangeContext,
+    resolved_model: &str,
+    tool_use_id: &str,
+    tool_name: &str,
+    tool_input: &Value,
+) -> Result<(String, String)> {
+    let now = current_timestamp_string()?;
+    let msg_id = uuid::Uuid::new_v4().to_string();
+    let mut payload = json!({
+        "type": "exit_plan_mode",
+        "toolUseId": tool_use_id,
+        "toolName": tool_name,
+    });
+
+    if let Some(plan) = tool_input.get("plan").and_then(Value::as_str) {
+        payload["plan"] = Value::String(plan.to_string());
+    }
+    if let Some(plan_file_path) = tool_input.get("planFilePath").and_then(Value::as_str) {
+        payload["planFilePath"] = Value::String(plan_file_path.to_string());
+    }
+    if let Some(allowed_prompts) = tool_input
+        .get("allowedPrompts")
+        .filter(|value| value.is_array())
+    {
+        payload["allowedPrompts"] = allowed_prompts.clone();
+    }
+
+    conn.execute(
+        r#"
+            INSERT INTO session_messages (
+              id, session_id, role, content, created_at, sent_at,
+              model, turn_id, is_resumable_message
+            ) VALUES (?1, ?2, 'assistant', ?3, ?4, ?4, ?5, ?6, 0)
+            "#,
+        params![
+            msg_id,
+            ctx.helmor_session_id,
+            payload.to_string(),
+            now,
+            resolved_model,
+            ctx.turn_id
+        ],
+    )?;
+
+    Ok((msg_id, now))
 }
 
 #[allow(clippy::too_many_arguments)]

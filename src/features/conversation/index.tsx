@@ -145,7 +145,8 @@ export const WorkspaceConversationContainer = memo(
 		const handleTogglePlanMode = useCallback((contextKey: string) => {
 			setComposerPermissionModes((current) => ({
 				...current,
-				[contextKey]: current[contextKey] === "plan" ? "acceptEdits" : "plan",
+				[contextKey]:
+					current[contextKey] === "plan" ? "bypassPermissions" : "plan",
 			}));
 		}, []);
 
@@ -161,6 +162,13 @@ export const WorkspaceConversationContainer = memo(
 					workspaceId: displayedWorkspaceId,
 					sessionId: displayedSessionId,
 				}),
+		);
+
+		const exitPlanPermission = pendingPermissions.find(
+			(perm) => perm.toolName === "ExitPlanMode",
+		);
+		const toolPermissions = pendingPermissions.filter(
+			(perm) => perm.toolName !== "ExitPlanMode",
 		);
 
 		return (
@@ -185,7 +193,7 @@ export const WorkspaceConversationContainer = memo(
 
 				<div className="mt-auto px-4 pb-4 pt-0">
 					<div>
-						{pendingPermissions.map((perm) => {
+						{toolPermissions.map((perm) => {
 							const action = perm.toolName || "Tool";
 							const target =
 								typeof perm.toolInput?.file_path === "string"
@@ -258,6 +266,10 @@ export const WorkspaceConversationContainer = memo(
 							restoreNonce={restoreNonce}
 							pendingDeferredTool={pendingDeferredTool}
 							onDeferredToolResponse={handleDeferredToolResponse}
+							pendingExitPlanPermissionId={
+								exitPlanPermission?.permissionId ?? null
+							}
+							onPermissionResponse={handlePermissionResponse}
 							modelSelections={composerModelSelections}
 							effortLevels={composerEffortLevels}
 							permissionModes={composerPermissionModes}

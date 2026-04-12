@@ -1,0 +1,19 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: plan-review
+      tool_use_id: tool-1
+      tool_name: ExitPlanMode
+      plan_length: 23
+      plan_preview: "1. Step one\n2. Step two"
+      plan_file_path: ~
+      allowed_prompt_tools:
+        - Bash
+        - Read
+  status: ~
+  streaming: ~

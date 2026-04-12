@@ -1,0 +1,19 @@
+---
+source: tests/pipeline_scenarios.rs
+assertion_line: 415
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: plan-review
+      tool_use_id: tool-plan-1
+      tool_name: ExitPlanMode
+      plan_length: 38
+      plan_preview: "1. Review the plan\n2. Approve the mode"
+      plan_file_path: /tmp/plan.md
+      allowed_prompt_tools:
+        - Read
+  status: ~
+  streaming: ~

@@ -3,6 +3,7 @@ import type {
 	CollapsedGroupPart,
 	ExtendedMessagePart,
 	MessagePart,
+	PlanReviewPart,
 	ThreadMessageLike,
 	ToolCallPart,
 } from "./api";
@@ -162,9 +163,49 @@ function estimateAssistantPartHeight(
 		case "image":
 			// Cap matches the rendered max-height; small slack for margin.
 			return 440;
+		case "plan-review":
+			return estimatePlanReviewHeight(part, options);
 		default:
 			return TOOL_SUMMARY_HEIGHT;
 	}
+}
+
+function estimatePlanReviewHeight(
+	part: PlanReviewPart,
+	options: { fontSize: number; contentWidth: number },
+) {
+	const bodyWidth = Math.max(MIN_TEXT_WIDTH, options.contentWidth - 24);
+	const planHeight = measureTextHeight(
+		part.plan?.trim() || "No plan content was attached to this request.",
+		{
+			fontSize: Math.max(options.fontSize - 2, 12),
+			lineHeight: 20,
+			maxWidth: bodyWidth,
+			whiteSpace: "pre-wrap",
+		},
+	);
+	const promptsHeight = (part.allowedPrompts ?? []).reduce((sum, entry) => {
+		return (
+			sum +
+			measureTextHeight(entry.prompt, {
+				fontSize: Math.max(options.fontSize - 2, 12),
+				lineHeight: 18,
+				maxWidth: bodyWidth - 16,
+				whiteSpace: "normal",
+			}) +
+			34
+		);
+	}, 0);
+	const filePathHeight = part.planFilePath
+		? measureTextHeight(part.planFilePath, {
+				fontSize: Math.max(options.fontSize - 2, 12),
+				lineHeight: 18,
+				maxWidth: bodyWidth,
+				whiteSpace: "normal",
+			}) + 6
+		: 0;
+
+	return 86 + filePathHeight + planHeight + promptsHeight + 36;
 }
 
 function estimateAssistantTextHeight(

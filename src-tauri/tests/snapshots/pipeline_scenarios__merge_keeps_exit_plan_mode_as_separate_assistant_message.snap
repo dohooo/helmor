@@ -1,0 +1,28 @@
+---
+source: tests/pipeline_scenarios.rs
+assertion_line: 434
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: text
+      text: Plan complete.
+  status:
+    type: complete
+    reason: stop
+  streaming: ~
+- role: assistant
+  id: msg-2
+  content_length: 1
+  content:
+    - type: plan-review
+      tool_use_id: tool-plan-1
+      tool_name: ExitPlanMode
+      plan_length: 18
+      plan_preview: 1. Review the plan
+      plan_file_path: ~
+      allowed_prompt_tools: []
+  status: ~
+  streaming: ~

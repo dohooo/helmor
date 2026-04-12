@@ -6,6 +6,7 @@ import {
 	ChevronDown,
 	Circle,
 	CircleDot,
+	ClipboardList,
 	Clock3,
 	Copy,
 	FilePlus,
@@ -58,6 +59,7 @@ import type {
 	FileMentionPart,
 	ImagePart,
 	MessagePart,
+	PlanReviewPart,
 	PromptSuggestionPart,
 	SystemNoticePart,
 	ThreadMessageLike,
@@ -231,7 +233,11 @@ function ChatAssistantMessage({
 							toolName={part.toolName}
 							args={part.args}
 							result={part.result}
-							isError={(part as ToolCallPart).isError}
+							isError={
+								part.toolName === "ExitPlanMode"
+									? false
+									: (part as ToolCallPart).isError
+							}
 							streamingStatus={(part as ToolCallPart).streamingStatus}
 							childParts={(part as ToolCallPart).children}
 						/>
@@ -242,6 +248,14 @@ function ChatAssistantMessage({
 				}
 				if (isImagePart(part)) {
 					return <ImageBlock key={`img:${index}`} part={part} />;
+				}
+				if (isPlanReviewPart(part)) {
+					return (
+						<PlanReviewCard
+							key={`plan-review:${part.toolUseId}:${index}`}
+							part={part}
+						/>
+					);
 				}
 				return null;
 			})}
@@ -459,6 +473,20 @@ function TodoList({ part }: { part: TodoListPart }) {
 					</div>
 				);
 			})}
+		</div>
+	);
+}
+
+function PlanReviewCard({ part }: { part: PlanReviewPart }) {
+	return (
+		<div className="rounded-xl border-[1.5px] border-border/70 bg-background/60 px-3.5 py-3">
+			<div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
+				<ClipboardList className="size-3.5" strokeWidth={1.8} />
+				Plan
+			</div>
+			<pre className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground">
+				{part.plan?.trim() || "No plan content."}
+			</pre>
 		</div>
 	);
 }
@@ -1354,6 +1382,15 @@ function isPromptSuggestionPart(part: unknown): part is PromptSuggestionPart {
 function isFileMentionPart(part: unknown): part is FileMentionPart {
 	return (
 		isObj(part) && part.type === "file-mention" && typeof part.path === "string"
+	);
+}
+
+function isPlanReviewPart(part: unknown): part is PlanReviewPart {
+	return (
+		isObj(part) &&
+		part.type === "plan-review" &&
+		typeof part.toolUseId === "string" &&
+		typeof part.toolName === "string"
 	);
 }
 

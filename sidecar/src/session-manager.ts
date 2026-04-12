@@ -15,6 +15,8 @@ export interface SendMessageParams {
 	readonly model: string | undefined;
 	readonly cwd: string | undefined;
 	readonly resume: string | undefined;
+	readonly postToolPermissionMode?: string | undefined;
+	readonly postToolUseId?: string | undefined;
 	readonly permissionMode: string | undefined;
 	readonly effortLevel: string | undefined;
 }

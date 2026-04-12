@@ -609,7 +609,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 								>
 									{sessions.map((session) => {
 										const selected = session.id === selectedSessionId;
-										const isActive = sendingSessionIds
+										const isActivelySending = sendingSessionIds
 											? sendingSessionIds.has(session.id)
 											: selected && sending;
 										const hasUnread = session.unreadCount > 0;
@@ -617,6 +617,8 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											completedSessionIds?.has(session.id) ?? false;
 										const isInteractionRequired =
 											interactionRequiredSessionIds?.has(session.id) ?? false;
+										const isActive =
+											isActivelySending && !isInteractionRequired;
 										const hasStatusDot =
 											isInteractionRequired || hasUnread || isCompleted;
 										const isEditing = editingSessionId === session.id;
@@ -767,40 +769,48 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					<DropdownMenuContent align="end" className="w-56">
 						{hiddenSessions.length > 0 ? (
 							hiddenSessions.map((session) => (
-								<div
-									key={session.id}
-									className="flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-[12px] text-muted-foreground hover:bg-accent/60"
-								>
-									<div className="flex min-w-0 items-center gap-1.5">
-										<SessionProviderIcon
-											agentType={session.agentType}
-											active={false}
-										/>
-										<span className="truncate">
-											{displaySessionTitle(session)}
-										</span>
-									</div>
-									<div className="flex shrink-0 items-center gap-0.5">
-										<Button
-											aria-label="Restore session"
-											onClick={() => handleUnhide(session.id)}
-											variant="ghost"
-											size="icon-xs"
-											className="text-muted-foreground hover:text-foreground"
-										>
-											<RotateCcw className="size-3" strokeWidth={1.8} />
-										</Button>
-										<Button
-											aria-label="Delete session permanently"
-											onClick={() => handleDelete(session.id)}
-											variant="ghost"
-											size="icon-xs"
-											className="text-muted-foreground hover:text-destructive"
-										>
-											<Trash2 className="size-3" strokeWidth={1.8} />
-										</Button>
-									</div>
-								</div>
+								<Tooltip key={session.id}>
+									<TooltipTrigger asChild>
+										<div className="flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-[12px] text-muted-foreground hover:bg-accent/60">
+											<div className="flex min-w-0 items-center gap-1.5">
+												<SessionProviderIcon
+													agentType={session.agentType}
+													active={false}
+												/>
+												<span className="truncate">
+													{displaySessionTitle(session)}
+												</span>
+											</div>
+											<div className="flex shrink-0 items-center gap-0.5">
+												<Button
+													aria-label="Restore session"
+													onClick={() => handleUnhide(session.id)}
+													variant="ghost"
+													size="icon-xs"
+													className="text-muted-foreground hover:text-foreground"
+												>
+													<RotateCcw className="size-3" strokeWidth={1.8} />
+												</Button>
+												<Button
+													aria-label="Delete session permanently"
+													onClick={() => handleDelete(session.id)}
+													variant="ghost"
+													size="icon-xs"
+													className="text-muted-foreground hover:text-destructive"
+												>
+													<Trash2 className="size-3" strokeWidth={1.8} />
+												</Button>
+											</div>
+										</div>
+									</TooltipTrigger>
+									<TooltipContent
+										side="left"
+										sideOffset={8}
+										className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+									>
+										<span>{displaySessionTitle(session)}</span>
+									</TooltipContent>
+								</Tooltip>
 							))
 						) : (
 							<div className="px-2.5 py-1.5 text-[11px] text-muted-foreground">

@@ -37,22 +37,35 @@ type ActionRowButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 	active?: boolean;
 };
 
-/** Button styled identically to the "Enable Auto Close" button. */
 export function ActionRowButton({
 	active,
 	className,
 	children,
 	...props
 }: ActionRowButtonProps) {
+	if (active) {
+		return (
+			<Button
+				type="button"
+				size="sm"
+				className={cn(
+					"h-7 cursor-pointer gap-1 rounded-[3px] border-transparent bg-foreground px-2.5 text-[12px] leading-none tracking-[0.02em] text-background shadow-none transition-colors hover:bg-[color-mix(in_oklch,var(--foreground)_90%,black_10%)] hover:text-background disabled:cursor-not-allowed disabled:opacity-50",
+					className,
+				)}
+				{...props}
+			>
+				{children}
+			</Button>
+		);
+	}
+
 	return (
 		<Button
 			type="button"
-			variant={active ? "default" : "outline"}
+			variant="outline"
 			size="sm"
 			className={cn(
-				"h-7 cursor-pointer gap-1 rounded-[3px] border-border/45 bg-background/70 px-2.5 text-[12px] leading-none tracking-[0.02em] text-muted-foreground hover:bg-background hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60",
-				active &&
-					"border-transparent bg-foreground text-background hover:bg-foreground/90",
+				"h-7 cursor-pointer gap-1 rounded-[3px] px-2.5 text-[12px] leading-none tracking-[0.02em] disabled:cursor-not-allowed disabled:opacity-60",
 				className,
 			)}
 			{...props}

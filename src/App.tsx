@@ -78,6 +78,7 @@ import {
 	saveSettings,
 	useSettings,
 } from "./lib/settings";
+import { useOsNotifications } from "./lib/use-os-notifications";
 import { summaryToArchivedRow } from "./lib/workspace-helpers";
 import {
 	type WorkspaceToastOptions,
@@ -289,6 +290,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	}, [displayedSessionId]);
 
 	const { settings: appSettings } = useSettings();
+	const notify = useOsNotifications(appSettings);
 	const [installedEditors, setInstalledEditors] = useState<DetectedEditor[]>(
 		[],
 	);
@@ -962,8 +964,13 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 				next.set(sessionId, workspaceId);
 				return next;
 			});
+			const name =
+				queryClient.getQueryData<WorkspaceDetail | null>(
+					helmorQueryKeys.workspaceDetail(workspaceId),
+				)?.title ?? "Workspace";
+			notify({ title: "Session completed", body: name });
 		},
-		[],
+		[notify, queryClient],
 	);
 
 	const handleInteractionSessionsChange = useCallback(
@@ -982,10 +989,20 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 					}
 				}
 
+				for (const [sessionId, workspaceId] of nextMap) {
+					if (!current.has(sessionId)) {
+						const name =
+							queryClient.getQueryData<WorkspaceDetail | null>(
+								helmorQueryKeys.workspaceDetail(workspaceId),
+							)?.title ?? "Workspace";
+						notify({ title: "Input needed", body: name });
+					}
+				}
+
 				return new Map(nextMap);
 			});
 		},
-		[],
+		[notify, queryClient],
 	);
 
 	const handleNavigateSessions = useCallback(

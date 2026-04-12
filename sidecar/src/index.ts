@@ -9,6 +9,7 @@
  */
 
 import { createInterface } from "node:readline";
+import type { PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeSessionManager } from "./claude-session-manager.js";
 import { CodexSessionManager } from "./codex-session-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
@@ -256,8 +257,18 @@ for await (const line of rl) {
 			case "permissionResponse": {
 				const permissionId = params.permissionId as string;
 				const behavior = params.behavior as "allow" | "deny";
+				const updatedPermissions = Array.isArray(params.updatedPermissions)
+					? (params.updatedPermissions as PermissionUpdate[])
+					: undefined;
+				const message =
+					typeof params.message === "string" ? params.message : undefined;
 				logger.debug(`[${id}] permissionResponse`, { permissionId, behavior });
-				claudeManager.resolvePermission(permissionId, behavior);
+				claudeManager.resolvePermission(
+					permissionId,
+					behavior,
+					updatedPermissions,
+					message,
+				);
 				break;
 			}
 			case "elicitationResponse": {

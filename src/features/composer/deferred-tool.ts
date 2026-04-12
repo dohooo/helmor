@@ -41,21 +41,6 @@ export type AskUserQuestionViewModel = {
 	source: string | null;
 };
 
-export type ExitPlanModeAllowedPrompt = {
-	tool: string;
-	prompt: string;
-};
-
-export type ExitPlanModeViewModel = {
-	kind: "exit-plan-mode";
-	toolUseId: string;
-	toolName: string;
-	toolInput: Record<string, unknown>;
-	plan: string | null;
-	planFilePath: string | null;
-	allowedPrompts: ExitPlanModeAllowedPrompt[];
-};
-
 export type GenericDeferredToolViewModel = {
 	kind: "generic";
 	toolUseId: string;
@@ -65,7 +50,6 @@ export type GenericDeferredToolViewModel = {
 
 export type DeferredToolViewModel =
 	| AskUserQuestionViewModel
-	| ExitPlanModeViewModel
 	| GenericDeferredToolViewModel;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -209,57 +193,12 @@ function normalizeAskUserQuestion(
 	};
 }
 
-function normalizeExitPlanMode(
-	deferred: PendingDeferredTool,
-): ExitPlanModeViewModel | null {
-	if (deferred.toolName !== "ExitPlanMode") {
-		return null;
-	}
-
-	const allowedPromptsValue = deferred.toolInput.allowedPrompts;
-	const allowedPrompts = Array.isArray(allowedPromptsValue)
-		? allowedPromptsValue
-				.map((entry) => {
-					if (!isRecord(entry)) {
-						return null;
-					}
-
-					const tool = readString(entry.tool);
-					const prompt = readString(entry.prompt);
-					if (!tool || !prompt) {
-						return null;
-					}
-
-					return {
-						tool,
-						prompt,
-					} satisfies ExitPlanModeAllowedPrompt;
-				})
-				.filter((entry): entry is ExitPlanModeAllowedPrompt => entry !== null)
-		: [];
-
-	return {
-		kind: "exit-plan-mode",
-		toolUseId: deferred.toolUseId,
-		toolName: deferred.toolName,
-		toolInput: deferred.toolInput,
-		plan: readString(deferred.toolInput.plan),
-		planFilePath: readString(deferred.toolInput.planFilePath),
-		allowedPrompts,
-	};
-}
-
 export function normalizeDeferredTool(
 	deferred: PendingDeferredTool,
 ): DeferredToolViewModel {
 	const askUserQuestion = normalizeAskUserQuestion(deferred);
 	if (askUserQuestion) {
 		return askUserQuestion;
-	}
-
-	const exitPlanMode = normalizeExitPlanMode(deferred);
-	if (exitPlanMode) {
-		return exitPlanMode;
 	}
 
 	return {

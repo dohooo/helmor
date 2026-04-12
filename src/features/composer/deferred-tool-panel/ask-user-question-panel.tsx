@@ -4,7 +4,6 @@ import {
 	ChevronRight,
 	Circle,
 	CircleDot,
-	ClipboardCheck,
 	ClipboardList,
 	MessageSquareMore,
 	X,
@@ -14,21 +13,17 @@ import { ActionRowButton } from "@/components/action-row";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
 import { cn } from "@/lib/utils";
 import type {
 	AskUserQuestionViewModel,
 	DeferredQuestion,
-	DeferredToolResponseHandler,
-	ExitPlanModeViewModel,
-} from "./deferred-tool";
-import { normalizeDeferredTool } from "./deferred-tool";
-
-type DeferredToolPanelProps = {
-	deferred: PendingDeferredTool;
-	disabled?: boolean;
-	onResponse: DeferredToolResponseHandler;
-};
+} from "../deferred-tool";
+import {
+	autosizeTextarea,
+	DeferredToolCard,
+	type DeferredToolPanelProps,
+	INLINE_TEXTAREA_CLASS,
+} from "./shared";
 
 type AskQuestionResponseState = {
 	selectedOptionLabels: string[];
@@ -43,47 +38,6 @@ const EMPTY_RESPONSE_STATE: AskQuestionResponseState = {
 	otherText: "",
 	notes: "",
 };
-
-export function DeferredToolPanel({
-	deferred,
-	disabled = false,
-	onResponse,
-}: DeferredToolPanelProps) {
-	const viewModel = useMemo(
-		() => normalizeDeferredTool(deferred),
-		[deferred.toolInput, deferred.toolName, deferred.toolUseId],
-	);
-
-	if (viewModel.kind === "ask-user-question") {
-		return (
-			<AskUserQuestionPanel
-				deferred={deferred}
-				disabled={disabled}
-				onResponse={onResponse}
-				viewModel={viewModel}
-			/>
-		);
-	}
-
-	if (viewModel.kind === "exit-plan-mode") {
-		return (
-			<ExitPlanModePanel
-				deferred={deferred}
-				disabled={disabled}
-				onResponse={onResponse}
-				viewModel={viewModel}
-			/>
-		);
-	}
-
-	return (
-		<GenericDeferredToolPanel
-			deferred={deferred}
-			disabled={disabled}
-			onResponse={onResponse}
-		/>
-	);
-}
 
 function buildInitialAskResponses(
 	viewModel: AskUserQuestionViewModel,
@@ -176,16 +130,7 @@ function buildAskUserQuestionInput(
 	};
 }
 
-function autosizeTextarea(element: HTMLTextAreaElement | null) {
-	if (!element) {
-		return;
-	}
-
-	element.style.height = "0px";
-	element.style.height = `${element.scrollHeight}px`;
-}
-
-function AskUserQuestionPanel({
+export function AskUserQuestionPanel({
 	deferred,
 	disabled,
 	onResponse,
@@ -300,7 +245,7 @@ function AskUserQuestionPanel({
 			: `Answer ${remainingCount} more question${remainingCount === 1 ? "" : "s"}`;
 
 	return (
-		<div className="mb-3 rounded-[16px] bg-background/80 px-2.5 py-2.5 ring-1 ring-inset ring-border/35 backdrop-blur-sm">
+		<DeferredToolCard>
 			<div className="flex items-start gap-3 px-1 pb-2">
 				<div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-muted/55 text-muted-foreground">
 					<MessageSquareMore className="size-3.5" strokeWidth={1.8} />
@@ -555,7 +500,7 @@ function AskUserQuestionPanel({
 								notes: value,
 							}));
 						}}
-						className="min-h-0 resize-none overflow-hidden rounded-none border-0 !bg-transparent px-1 py-0.5 leading-5 shadow-none placeholder:text-muted-foreground/55 focus-visible:ring-0 disabled:!bg-transparent dark:!bg-transparent dark:disabled:!bg-transparent"
+						className={INLINE_TEXTAREA_CLASS}
 					/>
 				</div>
 			</div>
@@ -580,201 +525,6 @@ function AskUserQuestionPanel({
 					</ActionRowButton>
 				</div>
 			</div>
-		</div>
-	);
-}
-
-function ExitPlanModePanel({
-	deferred,
-	disabled,
-	onResponse,
-	viewModel,
-}: DeferredToolPanelProps & { viewModel: ExitPlanModeViewModel }) {
-	const [feedback, setFeedback] = useState("");
-
-	useEffect(() => {
-		setFeedback("");
-	}, [viewModel.toolUseId]);
-
-	return (
-		<div className="mb-3 rounded-[14px] border border-border/50 bg-background/80 p-3">
-			<div className="flex items-start gap-2">
-				<div className="mt-0.5 rounded-full border border-border/60 p-1 text-muted-foreground">
-					<ClipboardList className="size-3.5" strokeWidth={1.8} />
-				</div>
-				<div className="min-w-0">
-					<p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-						Plan Approval
-					</p>
-					<p className="mt-1 text-sm font-medium text-foreground">
-						Review the plan before resuming the deferred ExitPlanMode call.
-					</p>
-					{viewModel.planFilePath ? (
-						<p className="mt-1 text-[12px] text-muted-foreground">
-							Plan file: {viewModel.planFilePath}
-						</p>
-					) : null}
-				</div>
-			</div>
-
-			<div className="mt-3 rounded-xl border border-border/60 bg-muted/20 p-3">
-				<p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-					Current Plan
-				</p>
-				<pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-[12px] leading-5 text-foreground">
-					{viewModel.plan?.trim() ||
-						"No plan content was attached to this request."}
-				</pre>
-			</div>
-
-			{viewModel.allowedPrompts.length > 0 ? (
-				<div className="mt-3 rounded-xl border border-border/60 bg-background p-3">
-					<p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-						Approved Tool Prompts
-					</p>
-					<div className="mt-2 grid gap-2">
-						{viewModel.allowedPrompts.map((entry) => (
-							<div
-								key={`${entry.tool}:${entry.prompt}`}
-								className="rounded-lg border border-border/50 bg-muted/20 px-2.5 py-2"
-							>
-								<p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-									{entry.tool}
-								</p>
-								<p className="mt-1 text-[12px] text-foreground">
-									{entry.prompt}
-								</p>
-							</div>
-						))}
-					</div>
-				</div>
-			) : null}
-
-			<Textarea
-				aria-label="Plan feedback"
-				className="mt-3"
-				disabled={disabled}
-				placeholder="Optional feedback for revisions"
-				value={feedback}
-				onChange={(event) => setFeedback(event.target.value)}
-			/>
-
-			<div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-				<ActionRowButton
-					disabled={disabled}
-					onClick={() =>
-						onResponse(deferred, "deny", {
-							reason: feedback.trim() || "The current plan is not approved.",
-						})
-					}
-				>
-					<X className="size-3.5" strokeWidth={2} />
-					<span>Reject</span>
-				</ActionRowButton>
-				<ActionRowButton
-					disabled={disabled}
-					onClick={() =>
-						onResponse(deferred, "deny", {
-							reason:
-								feedback.trim() ||
-								"Please revise the plan and call ExitPlanMode again.",
-						})
-					}
-				>
-					<ClipboardList className="size-3.5" strokeWidth={2} />
-					<span>Request Changes</span>
-				</ActionRowButton>
-				<ActionRowButton
-					active
-					disabled={disabled}
-					onClick={() =>
-						onResponse(deferred, "allow", {
-							updatedInput: viewModel.toolInput,
-						})
-					}
-				>
-					<ClipboardCheck className="size-3.5" strokeWidth={2} />
-					<span>Approve Plan</span>
-				</ActionRowButton>
-			</div>
-		</div>
-	);
-}
-
-function GenericDeferredToolPanel({
-	deferred,
-	disabled,
-	onResponse,
-}: DeferredToolPanelProps) {
-	const [reason, setReason] = useState("");
-
-	useEffect(() => {
-		setReason("");
-	}, [deferred.toolUseId]);
-
-	return (
-		<div className="mb-3 rounded-[14px] border border-border/50 bg-background/80 p-3">
-			<div className="flex items-start gap-2">
-				<div className="mt-0.5 rounded-full border border-border/60 p-1 text-muted-foreground">
-					<ClipboardList className="size-3.5" strokeWidth={1.8} />
-				</div>
-				<div>
-					<p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-						Deferred Tool
-					</p>
-					<p className="mt-1 text-sm font-medium text-foreground">
-						{deferred.toolName}
-					</p>
-					<p className="mt-1 text-[12px] text-muted-foreground">
-						This tool was deferred and needs an explicit allow or deny response.
-					</p>
-				</div>
-			</div>
-
-			<div className="mt-3 rounded-xl border border-border/60 bg-muted/20 p-3">
-				<p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-					Tool Input
-				</p>
-				<pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-[12px] leading-5 text-foreground">
-					{JSON.stringify(deferred.toolInput, null, 2)}
-				</pre>
-			</div>
-
-			<Textarea
-				aria-label="Deferred tool reason"
-				className="mt-3"
-				disabled={disabled}
-				placeholder="Optional reason"
-				value={reason}
-				onChange={(event) => setReason(event.target.value)}
-			/>
-
-			<div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-				<ActionRowButton
-					disabled={disabled}
-					onClick={() =>
-						onResponse(deferred, "deny", {
-							...(reason.trim() ? { reason: reason.trim() } : {}),
-						})
-					}
-				>
-					<X className="size-3.5" strokeWidth={2} />
-					<span>Deny</span>
-				</ActionRowButton>
-				<ActionRowButton
-					active
-					disabled={disabled}
-					onClick={() =>
-						onResponse(deferred, "allow", {
-							updatedInput: deferred.toolInput,
-							...(reason.trim() ? { reason: reason.trim() } : {}),
-						})
-					}
-				>
-					<Check className="size-3.5" strokeWidth={2} />
-					<span>Allow</span>
-				</ActionRowButton>
-			</div>
-		</div>
+		</DeferredToolCard>
 	);
 }

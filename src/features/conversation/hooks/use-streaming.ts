@@ -17,6 +17,7 @@ import type { ComposerCustomTag } from "@/lib/composer-insert";
 import {
 	agentModelSectionsQueryOptions,
 	helmorQueryKeys,
+	sessionThreadMessagesQueryOptions,
 } from "@/lib/query-client";
 import {
 	appendUserMessage,
@@ -245,7 +246,11 @@ export function useConversationStreaming({
 	}, [activeSessionByContext, composerContextKey]);
 
 	const handlePermissionResponse = useCallback(
-		(permissionId: string, behavior: "allow" | "deny") => {
+		(
+			permissionId: string,
+			behavior: "allow" | "deny",
+			options?: { updatedPermissions?: unknown[]; message?: string },
+		) => {
 			setPendingPermissionsByContext((current) => {
 				const permissions =
 					current[composerContextKey] ?? EMPTY_PENDING_PERMISSIONS;
@@ -264,7 +269,7 @@ export function useConversationStreaming({
 				}
 				return next;
 			});
-			respondToPermissionRequest(permissionId, behavior).catch((err) =>
+			respondToPermissionRequest(permissionId, behavior, options).catch((err) =>
 				console.error("[helmor] permission response:", err),
 			);
 		},
@@ -317,6 +322,24 @@ export function useConversationStreaming({
 			}
 
 			await Promise.all(invalidations);
+		},
+		[queryClient],
+	);
+
+	const refreshSessionThreadFromDb = useCallback(
+		(sessionId: string | null) => {
+			if (!sessionId) {
+				return;
+			}
+
+			void queryClient
+				.fetchQuery({
+					...sessionThreadMessagesQueryOptions(sessionId),
+					staleTime: 0,
+				})
+				.catch((error) => {
+					console.error("[conversation] refresh session thread:", error);
+				});
 		},
 		[queryClient],
 	);
@@ -497,6 +520,7 @@ export function useConversationStreaming({
 							}
 							flushStreamMessages();
 							cleanup();
+							refreshSessionThreadFromDb(cacheSessionId);
 							if (!nextDeferred) {
 								setPendingDeferredByContext((current) => ({
 									...current,
@@ -629,6 +653,7 @@ export function useConversationStreaming({
 			}
 
 			const contextKey = composerContextKey;
+
 			const now = new Date().toISOString();
 			const userMessageId = crypto.randomUUID();
 			const optimisticUserMessage = createLiveThreadMessage({
@@ -797,6 +822,7 @@ export function useConversationStreaming({
 							}
 							flushStreamMessages();
 							cleanup();
+							refreshSessionThreadFromDb(cacheSessionId);
 							if (!nextDeferred) {
 								setSendErrorsByContext((current) => ({
 									...current,
@@ -919,10 +945,13 @@ export function useConversationStreaming({
 			displayedWorkspaceId,
 			invalidateConversationQueries,
 			liveSessionsByContext,
+			handleDeferredToolResponse,
+			pendingDeferredByContext,
 			pushToast,
 			queryClient,
 			rememberInteractionWorkspace,
 			selectionPending,
+			refreshSessionThreadFromDb,
 		],
 	);
 

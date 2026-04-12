@@ -51,6 +51,12 @@ type WorkspaceComposerContainerProps = {
 	restoreNonce: number;
 	pendingDeferredTool?: PendingDeferredTool | null;
 	onDeferredToolResponse?: DeferredToolResponseHandler;
+	pendingExitPlanPermissionId?: string | null;
+	onPermissionResponse?: (
+		permissionId: string,
+		behavior: "allow" | "deny",
+		options?: { updatedPermissions?: unknown[]; message?: string },
+	) => void;
 	modelSelections: Record<string, string>;
 	effortLevels: Record<string, string>;
 	permissionModes: Record<string, string>;
@@ -100,6 +106,8 @@ export const WorkspaceComposerContainer = memo(
 		restoreNonce,
 		pendingDeferredTool = null,
 		onDeferredToolResponse = noopDeferredToolResponse,
+		pendingExitPlanPermissionId = null,
+		onPermissionResponse,
 		modelSelections,
 		effortLevels = {},
 		permissionModes = {},
@@ -177,7 +185,9 @@ export const WorkspaceComposerContainer = memo(
 		const loadingConversationContext =
 			Boolean(displayedWorkspaceId) &&
 			(workspaceDetailQuery.isPending || sessionsQuery.isPending);
-		const composerDisabled = displayedWorkspaceId === null;
+		const composerDisabled =
+			displayedWorkspaceId === null ||
+			workspaceDetailQuery.data?.state === "archived";
 
 		// Auto-close opt-in state comes from settings: `auto_close_action_kinds`
 		// is the persistent list of action kinds the user has enabled. A given
@@ -497,6 +507,8 @@ export const WorkspaceComposerContainer = memo(
 					restoreNonce={restoreNonce}
 					pendingDeferredTool={pendingDeferredTool}
 					onDeferredToolResponse={onDeferredToolResponse}
+					pendingExitPlanPermissionId={pendingExitPlanPermissionId}
+					onPermissionResponse={onPermissionResponse}
 					pendingInsertRequests={pendingInsertRequests}
 					onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
 					slashCommands={slashCommands}
