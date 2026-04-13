@@ -8,8 +8,15 @@
  * `id` field so what we replay matches raw SDK output.
  */
 
-import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { createSidecarEmitter, type SidecarEmitter } from "../src/emitter.js";
 
@@ -37,10 +44,13 @@ type MockQueryImpl = (options: {
 }) => AsyncIterable<unknown>;
 
 let mockQueryImpl: MockQueryImpl = () => emptyAsyncIterable();
+let lastQueryArgs: unknown = null;
 
 mock.module("@anthropic-ai/claude-agent-sdk", () => ({
-	query: (options: { abortController?: AbortController }) =>
-		mockQueryImpl(options),
+	query: (options: unknown) => {
+		lastQueryArgs = options;
+		return mockQueryImpl(options as Parameters<MockQueryImpl>[0]);
+	},
 }));
 
 // Dynamic import AFTER the mock is registered so the manager picks up the
@@ -60,6 +70,20 @@ const CLAUDE_FIXTURE_ROOT = resolve(
 	import.meta.dir,
 	"../../src-tauri/tests/fixtures/streams/claude",
 );
+
+const tempRoots: string[] = [];
+
+function makeTempDir(prefix: string): string {
+	const dir = mkdtempSync(resolve(tmpdir(), prefix));
+	tempRoots.push(dir);
+	return dir;
+}
+
+afterEach(() => {
+	for (const dir of tempRoots.splice(0)) {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
 
 interface FixtureEvent {
 	readonly [key: string]: unknown;
@@ -132,6 +156,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 
 	beforeEach(() => {
 		captured = [];
+		lastQueryArgs = null;
 		emitter = createSidecarEmitter((event) => {
 			captured.push(event as Record<string, unknown>);
 		});
@@ -282,6 +307,40 @@ describe("ClaudeSessionManager.sendMessage", () => {
 		expect(captured).toHaveLength(1);
 		expect(captured.some((e) => e.type === "end")).toBe(false);
 		expect(captured.some((e) => e.type === "aborted")).toBe(false);
+	});
+
+	test("adds worktree git metadata directories to Claude query options", async () => {
+		const workspaceDir = makeTempDir("helmor-claude-worktree-");
+		const repoRoot = makeTempDir("helmor-claude-repo-");
+		const gitCommonDir = resolve(repoRoot, ".git");
+		const gitDir = resolve(gitCommonDir, "worktrees", "alnitak");
+
+		mkdirSync(gitDir, { recursive: true });
+		writeFileSync(resolve(workspaceDir, ".git"), `gitdir: ${gitDir}\n`);
+		writeFileSync(resolve(gitDir, "commondir"), "../../\n");
+
+		mockQueryImpl = () => asyncIterableFrom([{ type: "result", result: "ok" }]);
+
+		await manager.sendMessage(
+			"REQ-WORKTREE",
+			{
+				sessionId: "s-worktree",
+				prompt: "commit the changes",
+				model: "opus-1m",
+				cwd: workspaceDir,
+				resume: undefined,
+				permissionMode: "bypassPermissions",
+				effortLevel: undefined,
+			},
+			emitter,
+		);
+
+		expect(lastQueryArgs).toMatchObject({
+			options: {
+				cwd: workspaceDir,
+				additionalDirectories: [gitDir, gitCommonDir],
+			},
+		});
 	});
 
 	test("suppresses deferred tool_use passthrough while keeping the deferred control event", async () => {

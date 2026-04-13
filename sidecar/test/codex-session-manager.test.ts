@@ -9,8 +9,15 @@
  * emitted.
  */
 
-import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { createSidecarEmitter, type SidecarEmitter } from "../src/emitter.js";
 
@@ -71,6 +78,20 @@ const CODEX_FIXTURE_ROOT = resolve(
 	import.meta.dir,
 	"../../src-tauri/tests/fixtures/streams/codex",
 );
+
+const tempRoots: string[] = [];
+
+function makeTempDir(prefix: string): string {
+	const dir = mkdtempSync(resolve(tmpdir(), prefix));
+	tempRoots.push(dir);
+	return dir;
+}
+
+afterEach(() => {
+	for (const dir of tempRoots.splice(0)) {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
 
 function loadCodexFixture(fixtureName: string): CodexEvent[] {
 	const raw = readFileSync(resolve(CODEX_FIXTURE_ROOT, fixtureName), "utf-8");
@@ -306,6 +327,37 @@ describe("CodexSessionManager.sendMessage", () => {
 		expect(lastRunInput).toContain("Plan mode is enabled.");
 		expect(lastRunInput).toContain("produce a concrete plan only");
 		expect(lastRunInput).toContain("User request:");
+	});
+
+	test("adds worktree git metadata directories to thread options", async () => {
+		mockEvents = [{ type: "thread.started" }, { type: "turn.completed" }];
+		const workspaceDir = makeTempDir("helmor-codex-worktree-");
+		const repoRoot = makeTempDir("helmor-codex-repo-");
+		const gitCommonDir = resolve(repoRoot, ".git");
+		const gitDir = resolve(gitCommonDir, "worktrees", "alnitak");
+
+		mkdirSync(gitDir, { recursive: true });
+		writeFileSync(resolve(workspaceDir, ".git"), `gitdir: ${gitDir}\n`);
+		writeFileSync(resolve(gitDir, "commondir"), "../../\n");
+
+		await manager.sendMessage(
+			"REQ-WORKTREE",
+			{
+				sessionId: "s-worktree",
+				prompt: "commit the changes",
+				model: "gpt-5.4",
+				cwd: workspaceDir,
+				resume: undefined,
+				permissionMode: "bypassPermissions",
+				effortLevel: undefined,
+			},
+			emitter,
+		);
+
+		expect(lastThreadOptions).toMatchObject({
+			workingDirectory: workspaceDir,
+			additionalDirectories: [gitDir, gitCommonDir],
+		});
 	});
 });
 

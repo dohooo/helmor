@@ -1,6 +1,7 @@
 import "./App.css";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
 	Check,
 	ChevronDown,
@@ -32,6 +33,8 @@ import { WorkspaceConversationContainer } from "@/features/conversation";
 import { WorkspaceEditorSurface } from "@/features/editor";
 import { WorkspaceInspectorSidebar } from "@/features/inspector";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
+import { seedNewSessionInCache } from "@/features/panel/session-cache";
+import { closeWorkspaceSession } from "@/features/panel/session-close";
 import { SettingsButton, SettingsDialog } from "@/features/settings";
 import { EditorIcon } from "@/shell/editor-icon";
 import { GithubIdentityGate } from "@/shell/github-identity-gate";
@@ -49,6 +52,7 @@ import {
 } from "@/shell/layout";
 import {
 	type ConductorWorkspace,
+	createSession,
 	type DetectedEditor,
 	detectInstalledEditors,
 	drainPendingCliSends,
@@ -199,6 +203,10 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const warmedWorkspaceIdsRef = useRef<Set<string>>(new Set());
 	const selectedWorkspaceIdRef = useRef<string | null>(null);
 	const selectedSessionIdRef = useRef<string | null>(null);
+	const sessionCloseShortcutRequestedAtRef = useRef(0);
+	const workspaceViewModeRef = useRef<"conversation" | "editor">(
+		"conversation",
+	);
 	const sessionSelectionHistoryByWorkspaceRef = useRef<
 		Record<string, string[]>
 	>({});
@@ -497,6 +505,10 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	useEffect(() => {
 		selectedSessionIdRef.current = selectedSessionId;
 	}, [selectedSessionId]);
+
+	useEffect(() => {
+		workspaceViewModeRef.current = workspaceViewMode;
+	}, [workspaceViewMode]);
 
 	// Persist last workspace/session for restore-on-launch
 	useEffect(() => {
@@ -1111,6 +1123,123 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		[notify, queryClient],
 	);
 
+	const getCloseableCurrentSession = useCallback(() => {
+		if (workspaceViewModeRef.current !== "conversation") {
+			return null;
+		}
+
+		const workspaceId = selectedWorkspaceIdRef.current;
+		const sessionId = selectedSessionIdRef.current;
+		if (!workspaceId || !sessionId) {
+			return null;
+		}
+
+		const workspace = queryClient.getQueryData<WorkspaceDetail | null>(
+			helmorQueryKeys.workspaceDetail(workspaceId),
+		);
+		const sessions =
+			queryClient.getQueryData<WorkspaceSessionSummary[]>(
+				helmorQueryKeys.workspaceSessions(workspaceId),
+			) ?? [];
+		if (!workspace || !sessions.some((session) => session.id === sessionId)) {
+			return null;
+		}
+
+		return {
+			workspaceId,
+			sessionId,
+			workspace,
+			sessions,
+		};
+	}, [queryClient]);
+
+	const handleCloseSelectedSession = useCallback(async () => {
+		const currentSession = getCloseableCurrentSession();
+		if (!currentSession) {
+			return false;
+		}
+
+		await closeWorkspaceSession({
+			queryClient,
+			workspace: currentSession.workspace,
+			sessions: currentSession.sessions,
+			sessionId: currentSession.sessionId,
+			onSelectSession: handleSelectSession,
+			onSessionsChanged: () => {
+				void Promise.all([
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceDetail(
+							currentSession.workspaceId,
+						),
+					}),
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceSessions(
+							currentSession.workspaceId,
+						),
+					}),
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceGroups,
+					}),
+					queryClient.invalidateQueries({
+						queryKey: [
+							...helmorQueryKeys.sessionMessages(currentSession.sessionId),
+							"thread",
+						],
+					}),
+				]);
+			},
+			pushToast: pushWorkspaceToast,
+		});
+		return true;
+	}, [
+		getCloseableCurrentSession,
+		handleSelectSession,
+		pushWorkspaceToast,
+		queryClient,
+	]);
+
+	const handleCreateSession = useCallback(async () => {
+		const workspaceId = selectedWorkspaceIdRef.current;
+		if (!workspaceId) {
+			return;
+		}
+
+		try {
+			const { sessionId } = await createSession(workspaceId);
+			seedNewSessionInCache({
+				queryClient,
+				workspaceId,
+				sessionId,
+				workspace:
+					queryClient.getQueryData<WorkspaceDetail | null>(
+						helmorQueryKeys.workspaceDetail(workspaceId),
+					) ?? null,
+				existingSessions:
+					queryClient.getQueryData<WorkspaceSessionSummary[]>(
+						helmorQueryKeys.workspaceSessions(workspaceId),
+					) ?? [],
+			});
+			handleSelectSession(sessionId);
+
+			void Promise.all([
+				queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+				}),
+				queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+				}),
+				queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceGroups,
+				}),
+			]);
+		} catch (error) {
+			pushWorkspaceToast(
+				error instanceof Error ? error.message : String(error),
+				"Unable to create session",
+			);
+		}
+	}, [handleSelectSession, pushWorkspaceToast, queryClient]);
+
 	const handleNavigateSessions = useCallback(
 		(offset: -1 | 1) => {
 			const workspaceId = selectedWorkspaceIdRef.current;
@@ -1246,6 +1375,34 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	]);
 
 	useEffect(() => {
+		let disposed = false;
+		let unlisten: (() => void) | undefined;
+
+		void getCurrentWindow()
+			.onCloseRequested(async (event) => {
+				if (Date.now() - sessionCloseShortcutRequestedAtRef.current > 1_000) {
+					return;
+				}
+
+				sessionCloseShortcutRequestedAtRef.current = 0;
+				event.preventDefault();
+			})
+			.then((fn) => {
+				if (disposed) {
+					fn();
+					return;
+				}
+
+				unlisten = fn;
+			});
+
+		return () => {
+			disposed = true;
+			unlisten?.();
+		};
+	}, []);
+
+	useEffect(() => {
 		if (!isIdentityConnected || workspaceViewMode === "editor") {
 			return;
 		}
@@ -1295,6 +1452,70 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		isIdentityConnected,
 		workspaceViewMode,
 	]);
+
+	useEffect(() => {
+		if (!isIdentityConnected || workspaceViewMode === "editor") {
+			return;
+		}
+
+		const handleWindowKeyDown = (event: globalThis.KeyboardEvent) => {
+			if (
+				!event.metaKey ||
+				event.altKey ||
+				event.ctrlKey ||
+				event.shiftKey ||
+				event.key.toLowerCase() !== "w"
+			) {
+				return;
+			}
+
+			if (!getCloseableCurrentSession()) {
+				return;
+			}
+
+			sessionCloseShortcutRequestedAtRef.current = Date.now();
+			event.preventDefault();
+			void handleCloseSelectedSession();
+		};
+
+		window.addEventListener("keydown", handleWindowKeyDown, true);
+
+		return () => {
+			window.removeEventListener("keydown", handleWindowKeyDown, true);
+		};
+	}, [
+		getCloseableCurrentSession,
+		handleCloseSelectedSession,
+		isIdentityConnected,
+		workspaceViewMode,
+	]);
+
+	useEffect(() => {
+		if (!isIdentityConnected || workspaceViewMode === "editor") {
+			return;
+		}
+
+		const handleWindowKeyDown = (event: globalThis.KeyboardEvent) => {
+			if (
+				!event.metaKey ||
+				event.altKey ||
+				event.ctrlKey ||
+				event.shiftKey ||
+				event.key.toLowerCase() !== "t"
+			) {
+				return;
+			}
+
+			event.preventDefault();
+			void handleCreateSession();
+		};
+
+		window.addEventListener("keydown", handleWindowKeyDown, true);
+
+		return () => {
+			window.removeEventListener("keydown", handleWindowKeyDown, true);
+		};
+	}, [handleCreateSession, isIdentityConnected, workspaceViewMode]);
 
 	const handleInsertIntoComposer = useCallback(
 		(request: ComposerInsertRequest) => {

@@ -134,6 +134,36 @@ describe("WorkspacesSidebar", () => {
 		).not.toBeInTheDocument();
 	});
 
+	it("keeps empty groups visible with condensed spacing", () => {
+		const emptyGroups: WorkspaceGroup[] = [
+			{ id: "done", label: "Done", tone: "done", rows: [] },
+			{ id: "review", label: "In review", tone: "review", rows: [] },
+			{ id: "progress", label: "In progress", tone: "progress", rows: [] },
+			{ id: "backlog", label: "Backlog", tone: "backlog", rows: [] },
+			{ id: "canceled", label: "Canceled", tone: "canceled", rows: [] },
+		];
+
+		const { container } = render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar groups={emptyGroups} archivedRows={[]} />
+			</TooltipProvider>,
+		);
+
+		expect(screen.getByRole("button", { name: "Done" })).toHaveAttribute(
+			"data-empty-group",
+			"true",
+		);
+		expect(screen.getByRole("button", { name: "Archived" })).toHaveAttribute(
+			"data-empty-group",
+			"true",
+		);
+
+		const virtualList = container.querySelector(
+			'[data-slot="workspace-groups-scroll"] > div',
+		);
+		expect(virtualList).toHaveStyle({ height: "244px" });
+	});
+
 	it("persists section collapse state in localStorage", async () => {
 		const user = userEvent.setup();
 		const collapsedGroups: WorkspaceGroup[] = [

@@ -45,7 +45,6 @@ import {
 import {
 	createSession,
 	deleteSession,
-	hideSession,
 	listRemoteBranches,
 	loadHiddenSessions,
 	type PullRequestInfo,
@@ -61,10 +60,11 @@ import { helmorQueryKeys } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import {
 	getWorkspaceBranchTone,
-	isNewSession,
 	type WorkspaceBranchTone,
 } from "@/lib/workspace-helpers";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
+import { seedNewSessionInCache } from "./session-cache";
+import { closeWorkspaceSession } from "./session-close";
 
 type WorkspacePanelHeaderProps = {
 	workspace: WorkspaceDetail | null;
@@ -198,60 +198,14 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		}
 		try {
 			const result = await createSession(workspace.id);
-			const now = new Date().toISOString();
-			const optimisticSession = buildOptimisticSession(
-				workspace.id,
-				result.sessionId,
-				now,
-			);
-
-			queryClient.setQueryData(
-				helmorQueryKeys.workspaceDetail(workspace.id),
-				(current: WorkspaceDetail | null | undefined) => {
-					const base = current ?? workspace;
-					if (!base) {
-						return base;
-					}
-
-					return {
-						...base,
-						activeSessionId: result.sessionId,
-						activeSessionTitle: "Untitled",
-						activeSessionAgentType: null,
-						activeSessionStatus: "idle",
-						sessionCount:
-							base.activeSessionId === result.sessionId
-								? base.sessionCount
-								: base.sessionCount + 1,
-					};
-				},
-			);
-			queryClient.setQueryData(
-				helmorQueryKeys.workspaceSessions(workspace.id),
-				(current: WorkspaceSessionSummary[] | undefined) => {
-					const existingSessions = current ?? sessions;
-					if (
-						existingSessions.some((session) => session.id === result.sessionId)
-					) {
-						return existingSessions.map((session) => ({
-							...session,
-							active: session.id === result.sessionId,
-						}));
-					}
-
-					return [
-						...existingSessions.map((session) => ({
-							...session,
-							active: false,
-						})),
-						optimisticSession,
-					];
-				},
-			);
-			queryClient.setQueryData(
-				[...helmorQueryKeys.sessionMessages(result.sessionId), "thread"],
-				[],
-			);
+			seedNewSessionInCache({
+				queryClient,
+				workspaceId: workspace.id,
+				sessionId: result.sessionId,
+				workspace,
+				existingSessions: sessions,
+				createdAt: new Date().toISOString(),
+			});
 
 			onSessionsChanged?.();
 			onSelectSession?.(result.sessionId);
@@ -267,72 +221,15 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				return;
 			}
 
-			const targetSession = sessions.find((s) => s.id === sessionId) ?? null;
-			const isEmptySession = isNewSession(targetSession);
-			const isClosingLastVisibleSession = sessions.length === 1;
-
-			try {
-				if (isClosingLastVisibleSession) {
-					const { sessionId: replacementSessionId } = await createSession(
-						workspace.id,
-					);
-					const now = new Date().toISOString();
-					const optimisticSession = buildOptimisticSession(
-						workspace.id,
-						replacementSessionId,
-						now,
-					);
-
-					queryClient.setQueryData(
-						helmorQueryKeys.workspaceDetail(workspace.id),
-						(current: WorkspaceDetail | null | undefined) => {
-							const base = current ?? workspace;
-							if (!base) {
-								return base;
-							}
-
-							return {
-								...base,
-								activeSessionId: replacementSessionId,
-								activeSessionTitle: "Untitled",
-								activeSessionAgentType: null,
-								activeSessionStatus: "idle",
-								sessionCount: Math.max(1, base.sessionCount),
-							};
-						},
-					);
-					queryClient.setQueryData(
-						helmorQueryKeys.workspaceSessions(workspace.id),
-						() => [optimisticSession],
-					);
-					queryClient.setQueryData(
-						[
-							...helmorQueryKeys.sessionMessages(replacementSessionId),
-							"thread",
-						],
-						[],
-					);
-
-					onSelectSession?.(replacementSessionId);
-				}
-
-				// New sessions (never had any messages) are deleted outright
-				// instead of being hidden, so they don't clutter the history list.
-				if (isEmptySession) {
-					await deleteSession(sessionId);
-				} else {
-					await hideSession(sessionId);
-				}
-				onSessionsChanged?.();
-			} catch (error) {
-				console.error("Failed to close session:", error);
-				onSessionsChanged?.();
-				pushToast(
-					error instanceof Error ? error.message : String(error),
-					"Unable to close session",
-					"destructive",
-				);
-			}
+			await closeWorkspaceSession({
+				queryClient,
+				workspace,
+				sessions,
+				sessionId,
+				onSelectSession,
+				onSessionsChanged,
+				pushToast,
+			});
 		},
 		[
 			onSelectSession,
@@ -886,38 +783,6 @@ function displaySessionTitle(session: WorkspaceSessionSummary): string {
 		return session.title;
 	}
 	return "Untitled";
-}
-
-function buildOptimisticSession(
-	workspaceId: string,
-	sessionId: string,
-	createdAt: string,
-): WorkspaceSessionSummary {
-	return {
-		id: sessionId,
-		workspaceId,
-		title: "Untitled",
-		agentType: null,
-		status: "idle",
-		model: null,
-		permissionMode: "default",
-		providerSessionId: null,
-		effortLevel: null,
-		unreadCount: 0,
-		contextTokenCount: 0,
-		contextUsedPercent: null,
-		thinkingEnabled: true,
-		fastMode: false,
-		agentPersonality: null,
-		createdAt,
-		updatedAt: createdAt,
-		lastUserMessageAt: null,
-		resumeSessionAt: null,
-		isHidden: false,
-		isCompacting: false,
-		actionKind: null,
-		active: true,
-	};
 }
 
 function BranchPicker({

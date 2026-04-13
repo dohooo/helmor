@@ -31,6 +31,7 @@ function newCodex(): Codex {
 
 import { scanCodexSkills } from "./codex-skill-scanner.js";
 import type { SidecarEmitter } from "./emitter.js";
+import { resolveGitAccessDirectories } from "./git-access.js";
 import { parseImageRefs } from "./images.js";
 import { logger } from "./logger.js";
 import type {
@@ -106,9 +107,11 @@ export class CodexSessionManager implements SessionManager {
 		try {
 			const codex = newCodex();
 			const effort = parseEffort(effortLevel);
+			const additionalDirectories = await resolveGitAccessDirectories(cwd);
 			const threadOpts: ThreadOptions = {
 				...(model ? { model } : {}),
 				...(cwd ? { workingDirectory: cwd } : {}),
+				...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
 				skipGitRepoCheck: true,
 				...(effort ? { modelReasoningEffort: effort } : {}),
 				...(permissionMode === "plan"

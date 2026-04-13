@@ -64,13 +64,23 @@ type VirtualItem =
 			canCollapse: boolean;
 	  }
 	| { kind: "row"; groupId: string; row: WorkspaceRow; isArchived: boolean }
-	| { kind: "group-gap" }
+	| { kind: "group-gap"; size: number }
 	| { kind: "bottom-padding" };
 
 const HEADER_HEIGHT = 42; // 36px content + 6px gap below
+const EMPTY_HEADER_HEIGHT = 30; // tighter header for empty groups
 const ROW_HEIGHT = 32; // 30px (h-7.5) + 2px gap
 const GROUP_GAP = 16; // gap-4
+const EMPTY_GROUP_GAP = 8; // tighter spacing around empty groups
 const BOTTOM_PADDING = 24; // pb-6
+
+function getGroupHeaderHeight(hasRows: boolean) {
+	return hasRows ? HEADER_HEIGHT : EMPTY_HEADER_HEIGHT;
+}
+
+function getGroupGapSize(previousHasRows: boolean, nextHasRows: boolean) {
+	return previousHasRows && nextHasRows ? GROUP_GAP : EMPTY_GROUP_GAP;
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -187,8 +197,18 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		);
 
 		for (let gi = 0; gi < visibleGroups.length; gi++) {
-			if (gi > 0) items.push({ kind: "group-gap" });
 			const group = visibleGroups[gi];
+			if (gi > 0) {
+				const previousGroup = visibleGroups[gi - 1];
+				items.push({
+					kind: "group-gap",
+					size: getGroupGapSize(
+						previousGroup.rows.length > 0,
+						group.rows.length > 0,
+					),
+				});
+			}
+
 			const canCollapse = group.rows.length > 0;
 			items.push({
 				kind: "group-header",
@@ -210,7 +230,14 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		}
 
 		// Archived section
-		items.push({ kind: "group-gap" });
+		const previousGroup = visibleGroups.at(-1);
+		items.push({
+			kind: "group-gap",
+			size: getGroupGapSize(
+				previousGroup?.rows.length > 0,
+				archivedRows.length > 0,
+			),
+		});
 		items.push({
 			kind: "group-header",
 			groupId: ARCHIVED_SECTION_ID,
@@ -243,13 +270,14 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		count: flatItems.length,
 		getScrollElement: () => scrollContainerRef.current,
 		estimateSize: (index) => {
-			switch (flatItems[index].kind) {
+			const item = flatItems[index];
+			switch (item.kind) {
 				case "group-header":
-					return HEADER_HEIGHT;
+					return getGroupHeaderHeight(item.group.rows.length > 0);
 				case "row":
 					return ROW_HEIGHT;
 				case "group-gap":
-					return GROUP_GAP;
+					return item.size;
 				case "bottom-padding":
 					return BOTTOM_PADDING;
 			}
@@ -313,14 +341,17 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						? (sectionOpenState[item.groupId] ?? false)
 						: (sectionOpenState[item.groupId] ?? true);
 				const isArchived = item.groupId === ARCHIVED_SECTION_ID;
+				const isEmptyGroup = item.group.rows.length === 0;
 
 				return (
 					<button
 						type="button"
 						className={cn(
-							"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 py-1.5 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
+							"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
+							isEmptyGroup ? "py-1" : "py-1.5",
 							item.canCollapse ? "cursor-pointer" : "cursor-default",
 						)}
+						data-empty-group={isEmptyGroup ? "true" : "false"}
 						disabled={!item.canCollapse}
 						onClick={() => toggleSection(item.groupId)}
 					>
