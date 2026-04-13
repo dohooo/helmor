@@ -19,6 +19,7 @@ import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { CliInstallPanel } from "./panels/cli-install";
 import { ConductorImportPanel } from "./panels/conductor-import";
+import { DevToolsPanel } from "./panels/dev-tools";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 
 const MIN_FONT_SIZE = 12;
@@ -29,6 +30,7 @@ type SettingsSection =
 	| "workspace"
 	| "experimental"
 	| "import"
+	| "developer"
 	| `repo:${string}`;
 
 function sectionLabel(
@@ -73,9 +75,15 @@ export const SettingsDialog = memo(function SettingsDialog({
 		}
 	}, [open]);
 
-	const fixedSections: SettingsSection[] = conductorEnabled
-		? ["appearance", "workspace", "experimental", "import"]
-		: ["appearance", "workspace", "experimental"];
+	const isDev = import.meta.env.DEV;
+
+	const fixedSections: SettingsSection[] = [
+		"appearance",
+		"workspace",
+		"experimental",
+		...(conductorEnabled ? (["import"] as const) : []),
+		...(isDev ? (["developer"] as const) : []),
+	];
 
 	const activeRepoId = activeSection.startsWith("repo:")
 		? activeSection.slice(5)
@@ -88,7 +96,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 		<Dialog open={open} onOpenChange={onClose}>
 			<DialogContent className="flex h-[min(80vh,640px)] w-[min(80vw,860px)] max-w-[860px] gap-0 overflow-hidden rounded-2xl border-border/60 bg-background p-0 shadow-2xl sm:max-w-[860px]">
 				{/* Nav sidebar */}
-				<nav className="flex w-[200px] shrink-0 flex-col gap-1 border-r border-border/40 bg-muted/30 px-3 pt-14 pb-6">
+				<nav className="flex w-[200px] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/40 bg-muted/30 px-3 pt-14 pb-6">
 					<ToggleGroup
 						type="single"
 						value={activeSection}
@@ -329,6 +337,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 						)}
 
 						{activeSection === "import" && <ConductorImportPanel />}
+
+						{activeSection === "developer" && <DevToolsPanel />}
 
 						{activeRepo && (
 							<RepositorySettingsPanel

@@ -261,6 +261,7 @@ pub fn run() {
             commands::conductor_commands::list_conductor_workspaces,
             commands::conductor_commands::import_conductor_workspaces,
             commands::system_commands::save_pasted_image,
+            commands::system_commands::dev_reset_all_data,
             commands::settings_commands::update_app_settings,
             commands::session_commands::update_session_settings,
             commands::settings_commands::load_auto_close_action_kinds,

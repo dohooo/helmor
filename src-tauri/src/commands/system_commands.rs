@@ -1,7 +1,10 @@
 use anyhow::Context;
 use serde::Serialize;
+use tauri::Manager;
 
-use crate::{models::workspaces as workspace_models, service};
+use crate::{
+    agents, git_watcher, models::db, models::workspaces as workspace_models, service, sidecar,
+};
 
 use super::common::{run_blocking, CmdResult};
 
@@ -263,4 +266,119 @@ fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
     base64::engine::general_purpose::STANDARD
         .decode(input)
         .map_err(|e| anyhow::anyhow!("base64 decode error: {e}"))
+}
+
+// ---------------------------------------------------------------------------
+// Dev-only: nuclear data reset
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DevResetResult {
+    pub repos_deleted: usize,
+    pub workspaces_deleted: usize,
+    pub sessions_deleted: usize,
+    pub messages_deleted: usize,
+    pub attachments_deleted: usize,
+    pub directories_removed: Vec<String>,
+}
+
+/// Wipe **all** workspaces, sessions, messages, repos, and their filesystem
+/// artefacts from the dev data directory.  Only compiled into debug builds.
+///
+/// Safety guard: the function asserts `data_dir::is_dev()` at runtime as well,
+/// so even if someone somehow calls this from a release binary, it refuses.
+#[tauri::command]
+pub async fn dev_reset_all_data(app: tauri::AppHandle) -> CmdResult<DevResetResult> {
+    // 1. Stop all active agent streams so they don't write into deleted sessions.
+    {
+        let sidecar_state = app.state::<sidecar::ManagedSidecar>();
+        let active = app.state::<agents::ActiveStreams>();
+        agents::abort_all_active_streams_blocking(
+            &sidecar_state,
+            &active,
+            std::time::Duration::from_millis(1500),
+        );
+    }
+
+    // 2. Stop all git watchers.
+    {
+        let manager = app.state::<git_watcher::GitWatcherManager>();
+        manager.shutdown();
+    }
+
+    run_blocking(move || {
+        use crate::data_dir;
+
+        // Runtime double-check: never run in release.
+        anyhow::ensure!(
+            data_dir::is_dev(),
+            "dev_reset_all_data called outside dev mode"
+        );
+
+        let data_dir = data_dir::data_dir()?;
+        tracing::warn!(dir = %data_dir.display(), "DEV RESET: wiping all data");
+
+        // --- Database cleanup (single transaction) -----------------------
+        let mut conn = db::open_connection(true)?;
+        let tx = conn
+            .transaction()
+            .context("Failed to start dev-reset transaction")?;
+
+        let attachments_deleted: usize = tx.execute("DELETE FROM attachments", []).unwrap_or(0);
+        let messages_deleted: usize = tx.execute("DELETE FROM session_messages", []).unwrap_or(0);
+        let sessions_deleted: usize = tx.execute("DELETE FROM sessions", []).unwrap_or(0);
+        let _diff_comments: usize = tx.execute("DELETE FROM diff_comments", []).unwrap_or(0);
+        let _pending: usize = tx.execute("DELETE FROM pending_cli_sends", []).unwrap_or(0);
+        let workspaces_deleted: usize = tx.execute("DELETE FROM workspaces", []).unwrap_or(0);
+        let repos_deleted: usize = tx.execute("DELETE FROM repos", []).unwrap_or(0);
+
+        tx.commit()
+            .context("Failed to commit dev-reset transaction")?;
+
+        tracing::info!(
+            repos_deleted,
+            workspaces_deleted,
+            sessions_deleted,
+            messages_deleted,
+            "DEV RESET: database cleared"
+        );
+
+        // --- Filesystem cleanup (best-effort) ----------------------------
+        let mut dirs_removed = Vec::new();
+
+        let dirs_to_clear = [
+            data_dir.join("workspaces"),
+            data_dir.join("archived-contexts"),
+            data_dir.join("paste-cache"),
+        ];
+
+        for dir in &dirs_to_clear {
+            if dir.is_dir() {
+                // Remove contents but recreate the empty directory.
+                if std::fs::remove_dir_all(dir).is_ok() {
+                    dirs_removed.push(dir.display().to_string());
+                    std::fs::create_dir_all(dir).ok();
+                }
+            }
+        }
+
+        // Workspace-specific logs (keep the top-level logs/ dir).
+        let ws_logs = data_dir.join("logs").join("workspaces");
+        if ws_logs.is_dir() && std::fs::remove_dir_all(&ws_logs).is_ok() {
+            dirs_removed.push(ws_logs.display().to_string());
+        }
+
+        tracing::info!(?dirs_removed, "DEV RESET: filesystem cleaned");
+
+        Ok(DevResetResult {
+            repos_deleted,
+            workspaces_deleted,
+            sessions_deleted,
+            messages_deleted,
+            attachments_deleted,
+            directories_removed: dirs_removed,
+        })
+    })
+    .await
 }

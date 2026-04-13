@@ -530,6 +530,19 @@ export async function installCli(): Promise<CliStatus> {
 	return await invoke<CliStatus>("install_cli");
 }
 
+export type DevResetResult = {
+	reposDeleted: number;
+	workspacesDeleted: number;
+	sessionsDeleted: number;
+	messagesDeleted: number;
+	attachmentsDeleted: number;
+	directoriesRemoved: string[];
+};
+
+export async function devResetAllData(): Promise<DevResetResult> {
+	return await invoke<DevResetResult>("dev_reset_all_data");
+}
+
 export async function loadArchivedWorkspaces(): Promise<WorkspaceSummary[]> {
 	try {
 		return await invoke<WorkspaceSummary[]>("list_archived_workspaces");
@@ -1559,6 +1572,7 @@ export type ConductorWorkspace = {
 	sessionCount: number;
 	messageCount: number;
 	alreadyImported: boolean;
+	iconSrc: string | null;
 };
 
 export type ImportWorkspacesResult = {
