@@ -5,10 +5,15 @@ import {
 	getDeferredToolResumeModelId,
 	type PendingDeferredTool,
 } from "@/features/conversation/pending-deferred-tool";
+import {
+	buildPendingElicitation,
+	type PendingElicitation,
+} from "@/features/conversation/pending-elicitation";
 import type { AgentModelOption, ThreadMessageLike } from "@/lib/api";
 import {
 	generateSessionTitle,
 	respondToDeferredTool,
+	respondToElicitationRequest,
 	respondToPermissionRequest,
 	startAgentMessageStream,
 	stopAgentStream,
@@ -113,14 +118,28 @@ export function useConversationStreaming({
 	const [pendingDeferredByContext, setPendingDeferredByContext] = useState<
 		Record<string, PendingDeferredTool | null>
 	>({});
+	const [pendingElicitationByContext, setPendingElicitationByContext] =
+		useState<Record<string, PendingElicitation | null>>({});
+	const [
+		elicitationResponsePendingByContext,
+		setElicitationResponsePendingByContext,
+	] = useState<Record<string, boolean>>({});
 	const [interactionWorkspaceByContext, setInteractionWorkspaceByContext] =
 		useState<Record<string, string | null>>({});
+	const [planReviewByContext, setPlanReviewByContext] = useState<
+		Record<string, boolean>
+	>({});
 	const sendingWorkspaceMapRef = useRef<Map<string, string>>(new Map());
 	const activeSendError = sendErrorsByContext[composerContextKey] ?? null;
 	const isSending = sendingContextKeys.has(composerContextKey);
 	const pendingPermissions =
 		pendingPermissionsByContext[composerContextKey] ??
 		EMPTY_PENDING_PERMISSIONS;
+	const pendingElicitation =
+		pendingElicitationByContext[composerContextKey] ?? null;
+	const elicitationResponsePending =
+		elicitationResponsePendingByContext[composerContextKey] ?? false;
+	const hasPlanReview = planReviewByContext[composerContextKey] ?? false;
 
 	const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
 	const selectedProvider = useMemo(() => {
@@ -186,11 +205,37 @@ export function useConversationStreaming({
 			interactionSessions.set(contextKey.slice(8), workspaceId);
 		}
 
+		for (const [contextKey, elicitation] of Object.entries(
+			pendingElicitationByContext,
+		)) {
+			if (!elicitation || !contextKey.startsWith("session:")) {
+				continue;
+			}
+			const workspaceId = interactionWorkspaceByContext[contextKey];
+			if (!workspaceId) {
+				continue;
+			}
+			interactionSessions.set(contextKey.slice(8), workspaceId);
+		}
+
+		for (const [contextKey, active] of Object.entries(planReviewByContext)) {
+			if (!active || !contextKey.startsWith("session:")) {
+				continue;
+			}
+			const workspaceId = interactionWorkspaceByContext[contextKey];
+			if (!workspaceId) {
+				continue;
+			}
+			interactionSessions.set(contextKey.slice(8), workspaceId);
+		}
+
 		onInteractionSessionsChangeRef.current?.(interactionSessions);
 	}, [
 		interactionWorkspaceByContext,
+		pendingElicitationByContext,
 		pendingDeferredByContext,
 		pendingPermissionsByContext,
+		planReviewByContext,
 	]);
 
 	const rememberInteractionWorkspace = useCallback(
@@ -223,6 +268,43 @@ export function useConversationStreaming({
 			const next = { ...current };
 			delete next[contextKey];
 			return next;
+		});
+	}, []);
+
+	const clearPendingElicitation = useCallback((contextKey: string) => {
+		setPendingElicitationByContext((current) => {
+			if (!(contextKey in current)) {
+				return current;
+			}
+
+			const next = { ...current };
+			delete next[contextKey];
+			return next;
+		});
+		setElicitationResponsePendingByContext((current) => {
+			if (!(contextKey in current)) {
+				return current;
+			}
+
+			const next = { ...current };
+			delete next[contextKey];
+			return next;
+		});
+	}, []);
+
+	const clearPlanReview = useCallback((contextKey: string) => {
+		setPlanReviewByContext((current) => {
+			if (!current[contextKey]) return current;
+			const next = { ...current };
+			delete next[contextKey];
+			return next;
+		});
+	}, []);
+
+	const setPlanReviewActive = useCallback((contextKey: string) => {
+		setPlanReviewByContext((current) => {
+			if (current[contextKey]) return current;
+			return { ...current, [contextKey]: true };
 		});
 	}, []);
 
@@ -276,23 +358,34 @@ export function useConversationStreaming({
 		[composerContextKey],
 	);
 
-	const clearSendingState = useCallback((contextKey: string) => {
-		setActiveSessionByContext((current) => {
-			if (!(contextKey in current)) {
+	const pauseSendingState = useCallback((contextKey: string) => {
+		sendingWorkspaceMapRef.current.delete(contextKey);
+		setSendingContextKeys((current) => {
+			if (!current.has(contextKey)) {
 				return current;
 			}
 
-			const next = { ...current };
-			delete next[contextKey];
-			return next;
-		});
-		sendingWorkspaceMapRef.current.delete(contextKey);
-		setSendingContextKeys((current) => {
 			const next = new Set(current);
 			next.delete(contextKey);
 			return next;
 		});
 	}, []);
+
+	const clearSendingState = useCallback(
+		(contextKey: string) => {
+			setActiveSessionByContext((current) => {
+				if (!(contextKey in current)) {
+					return current;
+				}
+
+				const next = { ...current };
+				delete next[contextKey];
+				return next;
+			});
+			pauseSendingState(contextKey);
+		},
+		[pauseSendingState],
+	);
 
 	const invalidateConversationQueries = useCallback(
 		async (workspaceId: string | null, sessionId: string | null) => {
@@ -347,6 +440,7 @@ export function useConversationStreaming({
 	const applyDeferredToolEvent = useCallback(
 		(contextKey: string, event: PendingDeferredTool) => {
 			clearPendingPermissions(contextKey);
+			clearPendingElicitation(contextKey);
 			setPendingDeferredByContext((current) => ({
 				...current,
 				[contextKey]: event,
@@ -363,7 +457,81 @@ export function useConversationStreaming({
 			}));
 			clearSendingState(contextKey);
 		},
-		[clearPendingPermissions, clearSendingState],
+		[clearPendingElicitation, clearPendingPermissions, clearSendingState],
+	);
+
+	const applyElicitationEvent = useCallback(
+		(contextKey: string, event: PendingElicitation) => {
+			setPendingDeferredByContext((current) => ({
+				...current,
+				[contextKey]: null,
+			}));
+			setPendingElicitationByContext((current) => ({
+				...current,
+				[contextKey]: event,
+			}));
+			setElicitationResponsePendingByContext((current) => ({
+				...current,
+				[contextKey]: false,
+			}));
+			pauseSendingState(contextKey);
+		},
+		[pauseSendingState],
+	);
+
+	const handleElicitationResponse = useCallback(
+		async (
+			elicitation: PendingElicitation,
+			action: "accept" | "decline" | "cancel",
+			content?: Record<string, unknown>,
+		) => {
+			const contextKey = composerContextKey;
+			setSendErrorsByContext((current) => ({
+				...current,
+				[contextKey]: null,
+			}));
+			setElicitationResponsePendingByContext((current) => ({
+				...current,
+				[contextKey]: true,
+			}));
+
+			try {
+				await respondToElicitationRequest(
+					elicitation.elicitationId,
+					action,
+					content,
+				);
+				clearPendingElicitation(contextKey);
+				rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
+				if (displayedWorkspaceId) {
+					sendingWorkspaceMapRef.current.set(contextKey, displayedWorkspaceId);
+				}
+				setSendingContextKeys((current) => {
+					const next = new Set(current);
+					next.add(contextKey);
+					return next;
+				});
+			} catch (error) {
+				console.error("[conversation] elicitation response:", error);
+				const errorMsg = error instanceof Error ? error.message : String(error);
+				setElicitationResponsePendingByContext((current) => ({
+					...current,
+					[contextKey]: false,
+				}));
+				setSendErrorsByContext((current) => ({
+					...current,
+					[contextKey]: errorMsg,
+				}));
+				pushToast(errorMsg, "Unable to answer request", "destructive");
+			}
+		},
+		[
+			clearPendingElicitation,
+			composerContextKey,
+			displayedWorkspaceId,
+			pushToast,
+			rememberInteractionWorkspace,
+		],
 	);
 
 	const handleDeferredToolResponse = useCallback(
@@ -401,6 +569,7 @@ export function useConversationStreaming({
 				...current,
 				[contextKey]: null,
 			}));
+			clearPendingElicitation(contextKey);
 			clearPendingPermissions(contextKey);
 			setSendErrorsByContext((current) => ({
 				...current,
@@ -508,6 +677,30 @@ export function useConversationStreaming({
 							return;
 						}
 
+						if (event.kind === "planCaptured") {
+							rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
+							setPlanReviewActive(contextKey);
+							return;
+						}
+
+						if (event.kind === "elicitationRequest") {
+							rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
+							const nextElicitation = buildPendingElicitation(
+								event,
+								deferred.modelId,
+							);
+							if (!nextElicitation) {
+								setSendErrorsByContext((current) => ({
+									...current,
+									[contextKey]:
+										"Unable to continue elicitation: missing elicitationId or modelId.",
+								}));
+								return;
+							}
+							applyElicitationEvent(contextKey, nextElicitation);
+							return;
+						}
+
 						if (event.kind === "deferredToolUse") {
 							rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
 							const nextDeferred = buildPendingDeferredTool(
@@ -546,6 +739,7 @@ export function useConversationStreaming({
 							flushStreamMessages();
 							cleanup();
 							clearPendingPermissions(contextKey);
+							clearPendingElicitation(contextKey);
 
 							if (event.kind === "done") {
 								const sid = event.sessionId ?? displayedSessionId;
@@ -579,6 +773,7 @@ export function useConversationStreaming({
 						if (event.kind === "error") {
 							cleanup();
 							clearPendingPermissions(contextKey);
+							clearPendingElicitation(contextKey);
 							setPendingDeferredByContext((current) => ({
 								...current,
 								[contextKey]: deferred,
@@ -621,8 +816,10 @@ export function useConversationStreaming({
 		},
 		[
 			applyDeferredToolEvent,
+			applyElicitationEvent,
 			appendPendingPermission,
 			clearSendingState,
+			clearPendingElicitation,
 			clearPendingPermissions,
 			composerContextKey,
 			displayedSelectedModelId,
@@ -683,10 +880,12 @@ export function useConversationStreaming({
 				[contextKey]: null,
 			}));
 			clearPendingPermissions(contextKey);
+			clearPlanReview(contextKey);
 			setPendingDeferredByContext((current) => ({
 				...current,
 				[contextKey]: null,
 			}));
+			clearPendingElicitation(contextKey);
 			rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
 			if (displayedWorkspaceId) {
 				sendingWorkspaceMapRef.current.set(contextKey, displayedWorkspaceId);
@@ -813,6 +1012,27 @@ export function useConversationStreaming({
 							return;
 						}
 
+						if (event.kind === "planCaptured") {
+							rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
+							setPlanReviewActive(contextKey);
+							return;
+						}
+
+						if (event.kind === "elicitationRequest") {
+							rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
+							const nextElicitation = buildPendingElicitation(event, model.id);
+							if (!nextElicitation) {
+								setSendErrorsByContext((current) => ({
+									...current,
+									[contextKey]:
+										"Unable to continue elicitation: missing elicitationId or modelId.",
+								}));
+								return;
+							}
+							applyElicitationEvent(contextKey, nextElicitation);
+							return;
+						}
+
 						if (event.kind === "deferredToolUse") {
 							rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
 							const nextDeferred = buildPendingDeferredTool(event, model.id);
@@ -844,6 +1064,7 @@ export function useConversationStreaming({
 							flushStreamMessages();
 							cleanup();
 							clearPendingPermissions(contextKey);
+							clearPendingElicitation(contextKey);
 
 							if (event.kind === "done") {
 								const sid = event.sessionId ?? displayedSessionId;
@@ -881,6 +1102,7 @@ export function useConversationStreaming({
 						if (event.kind === "error") {
 							cleanup();
 							clearPendingPermissions(contextKey);
+							clearPendingElicitation(contextKey);
 							if (event.internal) {
 								pushToast(
 									"Something went wrong. Please try again.",
@@ -937,16 +1159,16 @@ export function useConversationStreaming({
 		},
 		[
 			applyDeferredToolEvent,
+			applyElicitationEvent,
 			appendPendingPermission,
 			clearSendingState,
+			clearPendingElicitation,
 			clearPendingPermissions,
 			composerContextKey,
 			displayedSessionId,
 			displayedWorkspaceId,
 			invalidateConversationQueries,
 			liveSessionsByContext,
-			handleDeferredToolResponse,
-			pendingDeferredByContext,
 			pushToast,
 			queryClient,
 			rememberInteractionWorkspace,
@@ -961,11 +1183,15 @@ export function useConversationStreaming({
 
 	return {
 		activeSendError,
+		elicitationResponsePending,
 		handleComposerSubmit,
 		handleDeferredToolResponse,
+		handleElicitationResponse,
 		handlePermissionResponse,
 		handleStopStream,
+		hasPlanReview,
 		isSending,
+		pendingElicitation,
 		pendingDeferredTool,
 		pendingPermissions,
 		restoreCustomTags: restoreActive ? composerRestoreState.customTags : [],

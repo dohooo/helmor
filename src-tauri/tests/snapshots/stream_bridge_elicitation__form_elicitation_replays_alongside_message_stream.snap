@@ -1,0 +1,51 @@
+---
+source: tests/stream_bridge_elicitation.rs
+expression: snapshot
+---
+line_count: 5
+control_events:
+  - elicitationId: elicitation-form-1
+    kind: elicitationRequest
+    message: Need structured input
+    mode: form
+    model_id: opus-1m
+    provider: claude
+    requestedSchema:
+      properties:
+        approved:
+          title: Approved
+          type: boolean
+        name:
+          title: Project name
+          type: string
+      required:
+        - name
+        - approved
+      type: object
+    resolved_model: claude-opus-4-20250514
+    serverName: design-server
+    session_id: provider-session-1
+    url: ~
+    working_directory: /tmp/helmor
+final_messages:
+  - role: assistant
+    id: msg-1
+    content_length: 2
+    content:
+      - type: text
+        text: Before elicitation.
+      - type: text
+        text: After elicitation.
+    status:
+      type: complete
+      reason: stop
+    streaming: ~
+  - role: system
+    id: msg-2
+    content_length: 1
+    content:
+      - type: text
+        text: Done
+    status: ~
+    streaming: ~
+dropped_event_types: []

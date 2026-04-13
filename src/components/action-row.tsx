@@ -49,7 +49,7 @@ export function ActionRowButton({
 				type="button"
 				size="sm"
 				className={cn(
-					"h-7 cursor-pointer gap-1 rounded-[3px] border-transparent bg-foreground px-2.5 text-[12px] leading-none tracking-[0.02em] text-background shadow-none transition-colors hover:bg-[color-mix(in_oklch,var(--foreground)_90%,black_10%)] hover:text-background disabled:cursor-not-allowed disabled:opacity-50",
+					"h-7 cursor-pointer gap-1 rounded-[3px] border-transparent bg-foreground px-2.5 text-[12px] leading-none tracking-[0.02em] text-background shadow-none transition-colors hover:bg-[color-mix(in_oklch,var(--foreground)_90%,black_10%)] hover:text-background disabled:cursor-not-allowed disabled:border-border/50 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
 					className,
 				)}
 				{...props}

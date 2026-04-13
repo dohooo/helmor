@@ -3,6 +3,7 @@ import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
+import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
 import type { AgentModelOption } from "@/lib/api";
 import { WorkspaceToastProvider } from "@/lib/workspace-toast-context";
 import { useConversationStreaming } from "./use-streaming";
@@ -11,6 +12,7 @@ const apiMocks = vi.hoisted(() => ({
 	generateSessionTitle: vi.fn(),
 	loadSessionThreadMessages: vi.fn(),
 	respondToDeferredTool: vi.fn(),
+	respondToElicitationRequest: vi.fn(),
 	respondToPermissionRequest: vi.fn(),
 	startAgentMessageStream: vi.fn(),
 	stopAgentStream: vi.fn(),
@@ -24,6 +26,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		generateSessionTitle: apiMocks.generateSessionTitle,
 		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 		respondToDeferredTool: apiMocks.respondToDeferredTool,
+		respondToElicitationRequest: apiMocks.respondToElicitationRequest,
 		respondToPermissionRequest: apiMocks.respondToPermissionRequest,
 		startAgentMessageStream: apiMocks.startAgentMessageStream,
 		stopAgentStream: apiMocks.stopAgentStream,
@@ -49,6 +52,30 @@ function createDeferredTool(): PendingDeferredTool {
 		toolName: "AskUserQuestion",
 		toolInput: {
 			question: "Pick one",
+		},
+	};
+}
+
+function createPendingElicitation(): PendingElicitation {
+	return {
+		provider: "claude",
+		modelId: "opus-1m",
+		resolvedModel: "opus-1m",
+		providerSessionId: "provider-session-1",
+		workingDirectory: "/tmp/helmor",
+		elicitationId: "elicitation-1",
+		serverName: "design-server",
+		message: "Need structured input",
+		mode: "form",
+		requestedSchema: {
+			type: "object",
+			properties: {
+				name: {
+					type: "string",
+					title: "Name",
+				},
+			},
+			required: ["name"],
 		},
 	};
 }
@@ -94,6 +121,7 @@ describe("useConversationStreaming", () => {
 		apiMocks.generateSessionTitle.mockResolvedValue(null);
 		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
 		apiMocks.respondToDeferredTool.mockResolvedValue(undefined);
+		apiMocks.respondToElicitationRequest.mockResolvedValue(undefined);
 		apiMocks.respondToPermissionRequest.mockResolvedValue(undefined);
 		apiMocks.stopAgentStream.mockResolvedValue(undefined);
 	});
@@ -249,17 +277,10 @@ describe("useConversationStreaming", () => {
 		);
 	});
 
-	it("passes updatedPermissions through permission response for ExitPlanMode approve", async () => {
+	it("sets hasPlanReview when planCaptured event is received", async () => {
 		apiMocks.startAgentMessageStream.mockImplementation(
 			async (_payload: unknown, onEvent: (event: unknown) => void) => {
-				onEvent({
-					kind: "permissionRequest",
-					permissionId: "exit-plan-perm-1",
-					toolName: "ExitPlanMode",
-					toolInput: { plan: "1. Do things." },
-					title: null,
-					description: null,
-				});
+				onEvent({ kind: "planCaptured" });
 			},
 		);
 
@@ -289,53 +310,13 @@ describe("useConversationStreaming", () => {
 			});
 		});
 
-		expect(result.current.pendingPermissions).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					permissionId: "exit-plan-perm-1",
-					toolName: "ExitPlanMode",
-				}),
-			]),
-		);
-
-		act(() => {
-			result.current.handlePermissionResponse("exit-plan-perm-1", "allow", {
-				updatedPermissions: [
-					{
-						type: "setMode",
-						mode: "bypassPermissions",
-						destination: "session",
-					},
-				],
-			});
-		});
-
-		expect(apiMocks.respondToPermissionRequest).toHaveBeenCalledWith(
-			"exit-plan-perm-1",
-			"allow",
-			{
-				updatedPermissions: [
-					{
-						type: "setMode",
-						mode: "bypassPermissions",
-						destination: "session",
-					},
-				],
-			},
-		);
+		expect(result.current.hasPlanReview).toBe(true);
 	});
 
-	it("passes deny message through permission response for ExitPlanMode feedback", async () => {
+	it("clears hasPlanReview when a new message is submitted", async () => {
 		apiMocks.startAgentMessageStream.mockImplementation(
 			async (_payload: unknown, onEvent: (event: unknown) => void) => {
-				onEvent({
-					kind: "permissionRequest",
-					permissionId: "exit-plan-perm-2",
-					toolName: "ExitPlanMode",
-					toolInput: { plan: "1. Do things." },
-					title: null,
-					description: null,
-				});
+				onEvent({ kind: "planCaptured" });
 			},
 		);
 
@@ -365,41 +346,102 @@ describe("useConversationStreaming", () => {
 			});
 		});
 
-		act(() => {
-			result.current.handlePermissionResponse("exit-plan-perm-2", "deny", {
-				message: "Make the plan shorter.",
+		expect(result.current.hasPlanReview).toBe(true);
+
+		// Reset mock so the second submit does not re-emit planCaptured
+		apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+
+		// Submitting a new message should clear the plan review
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "implement it",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "bypassPermissions",
 			});
 		});
 
-		expect(apiMocks.respondToPermissionRequest).toHaveBeenCalledWith(
-			"exit-plan-perm-2",
-			"deny",
-			{ message: "Make the plan shorter." },
-		);
+		expect(result.current.hasPlanReview).toBe(false);
 	});
 
-	it("filters ExitPlanMode from regular pending permissions", async () => {
+	it("tracks pending elicitation separately from deferred tools", async () => {
+		const streamCallbacks: Array<(event: unknown) => void> = [];
 		apiMocks.startAgentMessageStream.mockImplementation(
 			async (_payload: unknown, onEvent: (event: unknown) => void) => {
-				onEvent({
-					kind: "permissionRequest",
-					permissionId: "perm-bash-1",
-					toolName: "Bash",
-					toolInput: { command: "ls" },
-					title: null,
-					description: null,
-				});
-				onEvent({
-					kind: "permissionRequest",
-					permissionId: "exit-plan-perm-3",
-					toolName: "ExitPlanMode",
-					toolInput: { plan: "1. Do things." },
-					title: null,
-					description: null,
-				});
+				streamCallbacks.push(onEvent);
 			},
 		);
 
+		const interactionSnapshots: Map<string, string>[] = [];
+		const { Wrapper } = createWrapper();
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					onInteractionSessionsChange: (sessionWorkspaceMap) => {
+						interactionSnapshots.push(new Map(sessionWorkspaceMap));
+					},
+					selectionPending: false,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "Need structured input",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+			});
+		});
+
+		act(() => {
+			streamCallbacks[0]({
+				kind: "elicitationRequest",
+				provider: "claude",
+				modelId: "",
+				resolvedModel: "opus-1m",
+				sessionId: "provider-session-1",
+				workingDirectory: "/tmp/helmor",
+				elicitationId: "elicitation-1",
+				serverName: "design-server",
+				message: "Need structured input",
+				mode: "form",
+				requestedSchema: {
+					type: "object",
+					properties: {
+						name: { type: "string", title: "Name" },
+					},
+					required: ["name"],
+				},
+			});
+		});
+
+		expect(result.current.pendingDeferredTool).toBeNull();
+		expect(result.current.pendingElicitation).toEqual(
+			expect.objectContaining({
+				elicitationId: "elicitation-1",
+				modelId: MODEL.id,
+				serverName: "design-server",
+			}),
+		);
+		expect(getLastInteractionSnapshot(interactionSnapshots)).toEqual(
+			new Map([["session-1", "workspace-1"]]),
+		);
+	});
+
+	it("responds to elicitation requests without using deferred tool flow", async () => {
 		const { Wrapper } = createWrapper();
 		const { result } = renderHook(
 			() =>
@@ -414,24 +456,19 @@ describe("useConversationStreaming", () => {
 		);
 
 		await act(async () => {
-			await result.current.handleComposerSubmit({
-				prompt: "do something",
-				imagePaths: [],
-				filePaths: [],
-				customTags: [],
-				model: MODEL,
-				workingDirectory: "/tmp/helmor",
-				effortLevel: "medium",
-				permissionMode: "plan",
-			});
+			await result.current.handleElicitationResponse(
+				createPendingElicitation(),
+				"accept",
+				{ name: "Helmor" },
+			);
 		});
 
-		expect(result.current.pendingPermissions).toHaveLength(2);
-		expect(result.current.pendingPermissions).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({ toolName: "Bash" }),
-				expect.objectContaining({ toolName: "ExitPlanMode" }),
-			]),
+		expect(apiMocks.respondToElicitationRequest).toHaveBeenCalledWith(
+			"elicitation-1",
+			"accept",
+			{ name: "Helmor" },
 		);
+		expect(result.current.pendingElicitation).toBeNull();
+		expect(result.current.isSending).toBe(true);
 	});
 });

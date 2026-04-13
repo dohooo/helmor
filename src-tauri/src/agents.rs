@@ -18,7 +18,9 @@ pub use self::queries::{
     GenerateSessionTitleRequest, GenerateSessionTitleResponse, ListSlashCommandsRequest,
     SlashCommandEntry,
 };
-pub use self::streaming::{abort_all_active_streams_blocking, ActiveStreams};
+pub use self::streaming::{
+    abort_all_active_streams_blocking, bridge_elicitation_request_event, ActiveStreams,
+};
 
 use self::persistence::{
     finalize_session_metadata, open_write_connection, persist_exit_plan_message,
@@ -110,6 +112,10 @@ pub enum AgentStreamEvent {
         #[serde(rename = "requestedSchema")]
         requested_schema: Option<Value>,
     },
+    /// A plan was captured from ExitPlanMode. The plan content is already
+    /// in the thread messages as a PlanReview card; this event just tells
+    /// the frontend to show the Implement / Request Changes buttons.
+    PlanCaptured {},
     Error {
         message: String,
         persisted: bool,
@@ -328,12 +334,10 @@ pub struct ElicitationResponseRequest {
     pub content: Option<Value>,
 }
 
-#[tauri::command]
-pub async fn respond_to_elicitation_request(
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
-    request: ElicitationResponseRequest,
-) -> CmdResult<()> {
-    let req = crate::sidecar::SidecarRequest {
+fn build_elicitation_response_sidecar_request(
+    request: &ElicitationResponseRequest,
+) -> crate::sidecar::SidecarRequest {
+    crate::sidecar::SidecarRequest {
         id: Uuid::new_v4().to_string(),
         method: "elicitationResponse".to_string(),
         params: serde_json::json!({
@@ -341,7 +345,15 @@ pub async fn respond_to_elicitation_request(
             "action": request.action,
             "content": request.content,
         }),
-    };
+    }
+}
+
+#[tauri::command]
+pub async fn respond_to_elicitation_request(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    request: ElicitationResponseRequest,
+) -> CmdResult<()> {
+    let req = build_elicitation_response_sidecar_request(&request);
     sidecar
         .send(&req)
         .map_err(|e| anyhow::anyhow!("Failed to send elicitation response: {e}"))?;
@@ -369,6 +381,7 @@ pub async fn list_slash_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use insta::assert_yaml_snapshot;
 
     // -----------------------------------------------------------------------
     // parse_claude_output
@@ -836,5 +849,35 @@ mod tests {
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), len_before, "Duplicate model IDs found");
+    }
+
+    #[test]
+    fn build_elicitation_response_sidecar_request_serializes_expected_payload() {
+        let request = ElicitationResponseRequest {
+            elicitation_id: "elicitation-1".to_string(),
+            action: "accept".to_string(),
+            content: Some(serde_json::json!({
+                "name": "Helmor",
+                "approved": true,
+            })),
+        };
+
+        let sidecar_request = build_elicitation_response_sidecar_request(&request);
+        assert_eq!(sidecar_request.method, "elicitationResponse");
+        let mut serialized = serde_json::to_value(&sidecar_request).unwrap();
+        serialized["id"] = serde_json::json!("<uuid>");
+        assert_yaml_snapshot!(
+            serialized,
+            @r#"
+id: "<uuid>"
+method: elicitationResponse
+params:
+  action: accept
+  content:
+    approved: true
+    name: Helmor
+  elicitationId: elicitation-1
+        "#
+        );
     }
 }

@@ -421,6 +421,24 @@ export class ClaudeSessionManager implements SessionManager {
 							updatedInput: input,
 						};
 					}
+					// Intercept ExitPlanMode: capture plan content and deny to
+					// end the turn cleanly. The user starts a new turn to act.
+					if (_toolName === "ExitPlanMode") {
+						const plan =
+							typeof input?.plan === "string" && input.plan.trim()
+								? input.plan
+								: null;
+						if (plan) {
+							emitter.planCaptured(requestId, options.toolUseID, plan);
+						}
+						return {
+							behavior: "deny" as const,
+							message:
+								"Plan captured by the client. " +
+								"Do NOT continue generating text or call any tools. " +
+								"The turn is over. The user will respond in a new turn.",
+						};
+					}
 					const permissionId = options.toolUseID;
 					emitter.permissionRequest(
 						requestId,

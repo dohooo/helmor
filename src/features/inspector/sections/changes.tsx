@@ -7,6 +7,7 @@ import {
 import {
 	ChevronRightIcon,
 	GitBranchIcon,
+	LoaderCircleIcon,
 	MinusIcon,
 	PlusIcon,
 	Undo2Icon,
@@ -15,7 +16,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatedShinyText } from "@/components/ui/animated-shiny-text";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { HyperText } from "@/components/ui/hyper-text";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -82,6 +82,34 @@ export function ChangesSection({
 	const [changesOpen, setChangesOpen] = useState(true);
 	const [stagedOpen, setStagedOpen] = useState(true);
 	const [branchDiffOpen, setBranchDiffOpen] = useState(true);
+
+	// Only show loading when the user switches target branch within the
+	// same workspace — not on workspace/repo navigation or routine polling.
+	const [branchSwitching, setBranchSwitching] = useState(false);
+	const prevTargetRef = useRef(workspaceTargetBranch);
+	const prevWorkspaceRef = useRef(workspaceId);
+	const switchChangesRef = useRef(changes);
+	useEffect(() => {
+		const sameWorkspace = prevWorkspaceRef.current === workspaceId;
+		prevWorkspaceRef.current = workspaceId;
+		const targetChanged = prevTargetRef.current !== workspaceTargetBranch;
+		prevTargetRef.current = workspaceTargetBranch;
+		if (targetChanged && sameWorkspace) {
+			switchChangesRef.current = changes;
+			setBranchSwitching(true);
+		}
+	}, [workspaceId, workspaceTargetBranch, changes]);
+	useEffect(() => {
+		if (!branchSwitching) return;
+		// Clear once fresh data arrives (array identity changes).
+		if (changes !== switchChangesRef.current) {
+			setBranchSwitching(false);
+			return;
+		}
+		// Safety timeout so loading never gets stuck.
+		const id = window.setTimeout(() => setBranchSwitching(false), 5000);
+		return () => window.clearTimeout(id);
+	}, [branchSwitching, changes]);
 
 	const stagedChanges = useMemo(
 		() =>
@@ -296,11 +324,12 @@ export function ChangesSection({
 					</>
 				)}
 
-				{committedChanges.length > 0 && (
+				{(committedChanges.length > 0 || branchSwitching) && (
 					<BranchDiffSection
 						branch={workspaceBranch}
 						targetBranch={workspaceTargetBranch}
 						count={committedChanges.length}
+						loading={branchSwitching}
 						open={branchDiffOpen}
 						onToggle={() => setBranchDiffOpen((current) => !current)}
 						changes={committedChanges}
@@ -433,6 +462,7 @@ function BranchDiffSection({
 	branch,
 	targetBranch,
 	count,
+	loading,
 	open,
 	onToggle,
 	changes,
@@ -445,6 +475,7 @@ function BranchDiffSection({
 	branch: string | null;
 	targetBranch: string | null;
 	count: number;
+	loading: boolean;
 	open: boolean;
 	onToggle: () => void;
 	changes: InspectorFileItem[];
@@ -481,21 +512,34 @@ function BranchDiffSection({
 						strokeWidth={2}
 					/>
 					<span className="flex min-w-0 items-center">
-						<HyperText text={branchLabel} className="shrink-0" />
+						<span className="shrink-0">{branchLabel}</span>
 						<span className="mx-1 shrink-0 text-muted-foreground">→</span>
-						<HyperText text={targetLabel} className="min-w-0 truncate" />
+						<span className="min-w-0 truncate">{targetLabel}</span>
 					</span>
 				</Button>
 				<Badge
 					variant="secondary"
 					className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none"
 				>
-					{count}
+					{loading ? (
+						<LoaderCircleIcon className="size-2.5 animate-spin" />
+					) : (
+						count
+					)}
 				</Badge>
 			</div>
 			{open && (
-				<div className="pl-3">
-					{treeView ? (
+				<div
+					className={cn(
+						"pl-3 transition-opacity duration-150",
+						loading && "pointer-events-none opacity-40",
+					)}
+				>
+					{loading && changes.length === 0 ? (
+						<div className="px-2 py-2 text-[10.5px] text-muted-foreground">
+							Switching target branch…
+						</div>
+					) : treeView ? (
 						<ChangesTreeView
 							changes={changes}
 							editorMode={editorMode}

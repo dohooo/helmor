@@ -19,7 +19,21 @@ import { createSidecarEmitter, type SidecarEmitter } from "../src/emitter.js";
 // ---------------------------------------------------------------------------
 
 type MockQueryImpl = (options: {
-	abortController?: AbortController;
+	prompt?: unknown;
+	options?: {
+		abortController?: AbortController;
+		onElicitation?: (
+			request: {
+				serverName: string;
+				message: string;
+				mode?: "form" | "url";
+				url?: string;
+				elicitationId?: string;
+				requestedSchema?: Record<string, unknown>;
+			},
+			options: { signal: AbortSignal },
+		) => Promise<{ action: string; content?: Record<string, unknown> }>;
+	};
 }) => AsyncIterable<unknown>;
 
 let mockQueryImpl: MockQueryImpl = () => emptyAsyncIterable();
@@ -91,6 +105,20 @@ async function* asyncIterableFrom<T>(items: readonly T[]): AsyncGenerator<T> {
 
 function emptyAsyncIterable(): AsyncIterable<unknown> {
 	return asyncIterableFrom<unknown>([]);
+}
+
+async function waitForCondition(
+	predicate: () => boolean,
+	label: string,
+	timeoutMs = 250,
+): Promise<void> {
+	const startedAt = Date.now();
+	while (!predicate()) {
+		if (Date.now() - startedAt > timeoutMs) {
+			throw new Error(`Timed out waiting for ${label}`);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -428,6 +456,187 @@ describe("ClaudeSessionManager.stopSession", () => {
 		const manager = new ClaudeSessionManager();
 		// Should not throw.
 		await manager.stopSession("never-existed");
+	});
+
+	test("emits elicitationRequest and resumes when the elicitation is resolved", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		const emitter = createSidecarEmitter((event) => {
+			captured.push(event as Record<string, unknown>);
+		});
+		const manager = new ClaudeSessionManager();
+
+		mockQueryImpl = async function* withElicitation(queryArgs) {
+			const onElicitation = queryArgs.options?.onElicitation;
+			if (!onElicitation) {
+				throw new Error("Expected onElicitation hook");
+			}
+
+			const result = await onElicitation(
+				{
+					serverName: "design-server",
+					message: "Need more structured input",
+					mode: "form",
+					elicitationId: "elicitation-1",
+					requestedSchema: {
+						type: "object",
+						properties: {
+							name: { type: "string" },
+						},
+						required: ["name"],
+					},
+				},
+				{ signal: queryArgs.options?.abortController?.signal as AbortSignal },
+			);
+
+			yield {
+				type: "assistant",
+				session_id: "sdk-session-1",
+				uuid: "assistant-1",
+				message: {
+					content: [{ type: "text", text: JSON.stringify(result) }],
+				},
+			};
+			yield {
+				type: "result",
+				session_id: "sdk-session-1",
+				subtype: "success",
+				is_error: false,
+				result: "done",
+			};
+		};
+
+		const sendPromise = manager.sendMessage(
+			"REQ-ELICIT",
+			{
+				sessionId: "elicitation-session",
+				prompt: "Need structured input",
+				model: undefined,
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+			},
+			emitter,
+		);
+
+		await waitForCondition(
+			() => captured.some((event) => event.type === "elicitationRequest"),
+			"elicitation request event",
+		);
+
+		expect(captured[0]).toEqual({
+			id: "REQ-ELICIT",
+			type: "elicitationRequest",
+			serverName: "design-server",
+			message: "Need more structured input",
+			mode: "form",
+			url: undefined,
+			elicitationId: "elicitation-1",
+			requestedSchema: {
+				type: "object",
+				properties: {
+					name: { type: "string" },
+				},
+				required: ["name"],
+			},
+		});
+
+		manager.resolveElicitation("elicitation-1", {
+			action: "accept",
+			content: { name: "Helmor" },
+		});
+
+		await sendPromise;
+
+		expect(captured).toContainEqual({
+			id: "REQ-ELICIT",
+			type: "assistant",
+			session_id: "sdk-session-1",
+			uuid: "assistant-1",
+			message: {
+				content: [
+					{
+						type: "text",
+						text: '{"action":"accept","content":{"name":"Helmor"}}',
+					},
+				],
+			},
+		});
+		expect(captured[captured.length - 1]).toEqual({
+			id: "REQ-ELICIT",
+			type: "end",
+		});
+	});
+
+	test("cancels pending elicitation when the session is stopped", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		const emitter = createSidecarEmitter((event) => {
+			captured.push(event as Record<string, unknown>);
+		});
+		const manager = new ClaudeSessionManager();
+
+		mockQueryImpl = async function* withAbortableElicitation(queryArgs) {
+			const onElicitation = queryArgs.options?.onElicitation;
+			if (!onElicitation) {
+				throw new Error("Expected onElicitation hook");
+			}
+
+			const result = await onElicitation(
+				{
+					serverName: "auth-server",
+					message: "Finish the external auth flow",
+					mode: "url",
+					url: "https://example.com/authorize",
+					elicitationId: "elicitation-stop-1",
+				},
+				{ signal: queryArgs.options?.abortController?.signal as AbortSignal },
+			);
+
+			yield {
+				type: "assistant",
+				session_id: "sdk-session-stop",
+				uuid: "assistant-stop-1",
+				message: {
+					content: [{ type: "text", text: JSON.stringify(result) }],
+				},
+			};
+		};
+
+		const sendPromise = manager.sendMessage(
+			"REQ-ELICIT-STOP",
+			{
+				sessionId: "elicitation-stop-session",
+				prompt: "Need auth",
+				model: undefined,
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+			},
+			emitter,
+		);
+
+		await waitForCondition(
+			() => captured.some((event) => event.type === "elicitationRequest"),
+			"stop-session elicitation request event",
+		);
+
+		await manager.stopSession("elicitation-stop-session");
+		await sendPromise;
+
+		expect(captured).toContainEqual({
+			id: "REQ-ELICIT-STOP",
+			type: "assistant",
+			session_id: "sdk-session-stop",
+			uuid: "assistant-stop-1",
+			message: {
+				content: [{ type: "text", text: '{"action":"cancel"}' }],
+			},
+		});
+		expect(captured[captured.length - 1]).toEqual({
+			id: "REQ-ELICIT-STOP",
+			type: "end",
+		});
 	});
 });
 

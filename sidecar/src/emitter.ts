@@ -95,6 +95,13 @@ export type PermissionModeChangedEvent = {
 	readonly permissionMode: string;
 };
 
+export type PlanCapturedEvent = {
+	readonly id: string;
+	readonly type: "planCaptured";
+	readonly toolUseId: string;
+	readonly plan: string | null;
+};
+
 export type SidecarControlEvent =
 	| ReadyEvent
 	| EndEvent
@@ -107,7 +114,8 @@ export type SidecarControlEvent =
 	| PermissionRequestEvent
 	| ElicitationRequestEvent
 	| DeferredToolUseEvent
-	| PermissionModeChangedEvent;
+	| PermissionModeChangedEvent
+	| PlanCapturedEvent;
 
 /**
  * Typed emitter for the sidecar's stdout protocol.
@@ -156,6 +164,7 @@ export interface SidecarEmitter {
 		toolInput: Record<string, unknown>,
 	): void;
 	permissionModeChanged(requestId: string, permissionMode: string): void;
+	planCaptured(requestId: string, toolUseId: string, plan: string | null): void;
 	/**
 	 * Forward a raw provider SDK message. `id` is appended LAST so an SDK
 	 * field named `id` can never override our request id.
@@ -240,6 +249,8 @@ export function createSidecarEmitter(
 				type: "permissionModeChanged",
 				permissionMode,
 			}),
+		planCaptured: (requestId, toolUseId, plan) =>
+			write({ id: requestId, type: "planCaptured", toolUseId, plan }),
 		passthrough: (requestId, message) =>
 			write({ ...(message as Record<string, unknown>), id: requestId }),
 	};

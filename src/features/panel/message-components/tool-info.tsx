@@ -188,7 +188,7 @@ export function getToolInfo(
 
 	if (name === "EnterPlanMode") {
 		return {
-			action: "Plan mode",
+			action: "Enter Plan mode",
 			icon: (
 				<ClipboardList className={neutralToolIconClassName} strokeWidth={1.8} />
 			),

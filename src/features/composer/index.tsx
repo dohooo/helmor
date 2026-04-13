@@ -26,6 +26,7 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
+import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
 import type { AgentModelSection, SlashCommandEntry } from "@/lib/api";
 import type {
 	ComposerCustomTag,
@@ -57,6 +58,8 @@ import {
 	$setEditorContent,
 	draftCache,
 } from "./editor-ops";
+import type { ElicitationResponseHandler } from "./elicitation";
+import { ElicitationPanel } from "./elicitation-panel";
 
 type WorkspaceComposerProps = {
 	contextKey: string;
@@ -65,6 +68,7 @@ type WorkspaceComposerProps = {
 		imagePaths: string[],
 		filePaths: string[],
 		customTags: ComposerCustomTag[],
+		options?: { permissionModeOverride?: string },
 	) => void;
 	disabled?: boolean;
 	submitDisabled?: boolean;
@@ -91,14 +95,12 @@ type WorkspaceComposerProps = {
 	slashCommandsError?: boolean;
 	onRetrySlashCommands?: () => void;
 	workspaceRootPath?: string | null;
+	pendingElicitation?: PendingElicitation | null;
+	onElicitationResponse?: ElicitationResponseHandler;
+	elicitationResponsePending?: boolean;
 	pendingDeferredTool?: PendingDeferredTool | null;
 	onDeferredToolResponse?: DeferredToolResponseHandler;
-	pendingExitPlanPermissionId?: string | null;
-	onPermissionResponse?: (
-		permissionId: string,
-		behavior: "allow" | "deny",
-		options?: { updatedPermissions?: unknown[]; message?: string },
-	) => void;
+	hasPlanReview?: boolean;
 };
 
 const EMPTY_SLASH_COMMANDS: readonly SlashCommandEntry[] = [];
@@ -107,6 +109,7 @@ const noopDeferredToolResponse = (
 	_behavior: "allow" | "deny",
 	_options?: DeferredToolResponseOptions,
 ) => {};
+const noopElicitationResponse: ElicitationResponseHandler = () => {};
 // ---------------------------------------------------------------------------
 // Lexical editor config (stable reference — defined outside component)
 // ---------------------------------------------------------------------------
@@ -148,10 +151,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	slashCommandsError = false,
 	onRetrySlashCommands,
 	workspaceRootPath = null,
+	pendingElicitation = null,
+	onElicitationResponse = noopElicitationResponse,
+	elicitationResponsePending = false,
 	pendingDeferredTool = null,
 	onDeferredToolResponse = noopDeferredToolResponse,
-	pendingExitPlanPermissionId = null,
-	onPermissionResponse,
+	hasPlanReview = false,
 }: WorkspaceComposerProps) {
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
@@ -182,17 +187,16 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		}
 		return null;
 	}, [modelSections, selectedModelId]);
+	const hasPendingElicitation = pendingElicitation !== null;
 	const hasPendingDeferredTool = pendingDeferredTool !== null;
-	const hasPendingPlanReview = pendingExitPlanPermissionId !== null;
-	const inputDisabled = disabled || hasPendingDeferredTool;
-	const toolbarDisabled =
-		disabled || hasPendingDeferredTool || hasPendingPlanReview;
+	const hasPendingInteraction = hasPendingElicitation || hasPendingDeferredTool;
+	const inputDisabled = disabled || hasPendingInteraction;
+	const toolbarDisabled = disabled || hasPendingInteraction;
 	const sendDisabled =
 		disabled ||
 		submitDisabled ||
 		sending ||
-		hasPendingDeferredTool ||
-		hasPendingPlanReview ||
+		hasPendingInteraction ||
 		!selectedModel ||
 		!hasContent;
 
@@ -317,26 +321,16 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		}
 	}, [onPendingInsertRequestsConsumed, pendingInsertRequests]);
 
-	const handlePlanApprove = useCallback(() => {
-		if (!pendingExitPlanPermissionId || !onPermissionResponse) return;
+	const handlePlanImplement = useCallback(() => {
+		if (!hasPlanReview) return;
 		onChangePermissionMode("bypassPermissions");
-		onPermissionResponse(pendingExitPlanPermissionId, "allow", {
-			updatedPermissions: [
-				{
-					type: "setMode",
-					mode: "bypassPermissions",
-					destination: "session",
-				},
-			],
+		onSubmit("Go ahead with the plan.", [], [], [], {
+			permissionModeOverride: "bypassPermissions",
 		});
-	}, [
-		onChangePermissionMode,
-		pendingExitPlanPermissionId,
-		onPermissionResponse,
-	]);
+	}, [hasPlanReview, onChangePermissionMode, onSubmit]);
 
 	const handlePlanRequestChanges = useCallback(() => {
-		if (!pendingExitPlanPermissionId || !onPermissionResponse) return;
+		if (!hasPlanReview) return;
 		const editor = editorRef.current;
 		let feedback = "";
 		if (editor) {
@@ -344,9 +338,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				feedback = $extractComposerContent().text;
 			});
 		}
-		onPermissionResponse(pendingExitPlanPermissionId, "deny", {
-			message: feedback.trim(),
-		});
+		if (!feedback.trim()) return;
+		onSubmit(feedback.trim(), [], [], []);
 		if (editor) {
 			editor.update(() => {
 				$getRoot().clear();
@@ -354,7 +347,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			draftCache.delete(contextKey);
 			setHasContent(false);
 		}
-	}, [pendingExitPlanPermissionId, onPermissionResponse, contextKey]);
+	}, [hasPlanReview, onSubmit, contextKey]);
 
 	const handleSubmit = useCallback(() => {
 		const editor = editorRef.current;
@@ -391,7 +384,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			className={cn(
 				"flex flex-col rounded-2xl border border-border/40 bg-sidebar px-4 pb-3 pt-3 shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]",
 				inputDisabled &&
-					!hasPendingDeferredTool &&
+					!hasPendingInteraction &&
 					"cursor-not-allowed opacity-60",
 			)}
 		>
@@ -399,7 +392,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				Workspace input
 			</label>
 
-			{hasPendingDeferredTool ? (
+			{hasPendingElicitation ? (
+				<ElicitationPanel
+					elicitation={pendingElicitation!}
+					disabled={disabled || elicitationResponsePending}
+					onResponse={onElicitationResponse}
+				/>
+			) : hasPendingDeferredTool ? (
 				<DeferredToolPanel
 					deferred={pendingDeferredTool!}
 					disabled={disabled || sending}
@@ -420,7 +419,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								}
 								placeholder={
 									<div className="pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-muted-foreground">
-										{hasPendingPlanReview
+										{hasPlanReview && permissionMode === "plan"
 											? "Describe what to change, then click Request Changes"
 											: "Ask to make changes, @mention files, run /commands"}
 									</div>
@@ -578,7 +577,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								disabled={toolbarDisabled}
 								className={cn(
 									"cursor-pointer gap-1.5 rounded-full px-2 py-0.5 text-[13px] font-medium transition-colors",
-									permissionMode === "plan" || hasPendingPlanReview
+									permissionMode === "plan"
 										? "bg-foreground/[0.08] text-foreground hover:bg-foreground/[0.12]"
 										: "text-muted-foreground/55 hover:bg-accent/60 hover:text-muted-foreground",
 								)}
@@ -594,7 +593,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						</div>
 
 						<div className="flex items-center gap-2">
-							{hasPendingPlanReview ? (
+							{hasPlanReview && permissionMode === "plan" ? (
 								<>
 									<Button
 										variant="ghost"
@@ -610,13 +609,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 									<Button
 										variant="default"
 										size="sm"
-										aria-label="Approve"
-										onClick={handlePlanApprove}
+										aria-label="Implement"
+										onClick={handlePlanImplement}
 										disabled={disabled}
 										className="h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px]"
 									>
 										<Check className="size-3.5" strokeWidth={2} />
-										Approve
+										Implement
 									</Button>
 								</>
 							) : sending ? (
@@ -646,6 +645,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 					</div>
 				</>
 			)}
+
+			{sendError && hasPendingElicitation ? (
+				<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-[12px] text-muted-foreground">
+					{sendError}
+				</div>
+			) : null}
 		</div>
 	);
 });

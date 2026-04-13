@@ -9,6 +9,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
+import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
 import { createHelmorQueryClient } from "@/lib/query-client";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -17,6 +18,14 @@ vi.mock("@tauri-apps/api/core", () => ({
 	Channel: class {
 		onmessage: ((event: unknown) => void) | null = null;
 	},
+}));
+
+const openerMocks = vi.hoisted(() => ({
+	openUrl: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/plugin-opener", () => ({
+	openUrl: openerMocks.openUrl,
 }));
 
 vi.mock("./composer-editor/plugins/file-mention-plugin", () => ({
@@ -107,7 +116,56 @@ function createAskUserQuestionDeferredTool(): PendingDeferredTool {
 	};
 }
 
+function createFormElicitation(): PendingElicitation {
+	return {
+		provider: "claude",
+		modelId: "opus-1m",
+		resolvedModel: "opus-1m",
+		providerSessionId: "provider-session-1",
+		workingDirectory: "/tmp/helmor",
+		elicitationId: "elicitation-form-1",
+		serverName: "design-server",
+		message: "Tell the MCP server what to do next.",
+		mode: "form",
+		requestedSchema: {
+			type: "object",
+			properties: {
+				name: {
+					type: "string",
+					title: "Project name",
+					description: "Used for the next step.",
+				},
+				approved: {
+					type: "boolean",
+					title: "Approved",
+				},
+			},
+			required: ["name", "approved"],
+		},
+	};
+}
+
+function createUrlElicitation(): PendingElicitation {
+	return {
+		provider: "claude",
+		modelId: "opus-1m",
+		resolvedModel: "opus-1m",
+		providerSessionId: "provider-session-1",
+		workingDirectory: "/tmp/helmor",
+		elicitationId: "elicitation-url-1",
+		serverName: "auth-server",
+		message: "Finish sign-in in the browser.",
+		mode: "url",
+		url: "https://example.com/authorize",
+		requestedSchema: null,
+	};
+}
+
 describe("WorkspaceComposer", () => {
+	afterEach(() => {
+		openerMocks.openUrl.mockReset();
+	});
+
 	it("renders custom tag insertions as badges and expands them on submit", async () => {
 		const queryClient = createHelmorQueryClient();
 		const handleSubmit = vi.fn();
@@ -405,6 +463,126 @@ describe("WorkspaceComposer", () => {
 		expect(inlineInput).toHaveValue("Prototype a compact approval surface");
 	});
 
+	it("renders a form elicitation panel and submits structured content", async () => {
+		const user = userEvent.setup();
+		const queryClient = createHelmorQueryClient();
+		const onElicitationResponse = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="acceptEdits"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingElicitation={createFormElicitation()}
+					onElicitationResponse={onElicitationResponse}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(
+			screen.getByPlaceholderText("Project name · Required"),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByText("This field is required."),
+		).not.toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "Send Response" }),
+		).toBeDisabled();
+		expect(
+			screen.queryByRole("button", { name: "Send" }),
+		).not.toBeInTheDocument();
+
+		await user.type(
+			screen.getByPlaceholderText("Project name · Required"),
+			"Helmor Elicitation",
+		);
+		expect(
+			screen.getByRole("button", { name: "Send Response" }),
+		).toBeDisabled();
+		await user.click(screen.getByRole("button", { name: "Next field" }));
+		await user.click(screen.getByRole("button", { name: "Yes" }));
+		expect(
+			screen.getByRole("button", { name: "Send Response" }),
+		).not.toBeDisabled();
+		await user.click(screen.getByRole("button", { name: "Send Response" }));
+
+		expect(onElicitationResponse).toHaveBeenCalledWith(
+			expect.objectContaining({ elicitationId: "elicitation-form-1" }),
+			"accept",
+			{ approved: true, name: "Helmor Elicitation" },
+		);
+	});
+
+	it("opens and copies URL elicitation links through the shared panel shell", async () => {
+		const user = userEvent.setup();
+		const queryClient = createHelmorQueryClient();
+		const onElicitationResponse = vi.fn();
+		const writeText = vi.fn().mockResolvedValue(undefined);
+		Object.defineProperty(navigator, "clipboard", {
+			configurable: true,
+			value: { writeText },
+		});
+		openerMocks.openUrl.mockResolvedValue(undefined);
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="acceptEdits"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingElicitation={createUrlElicitation()}
+					onElicitationResponse={onElicitationResponse}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(
+			screen.getByText("Finish sign-in in the browser."),
+		).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Copy Link" }));
+		expect(writeText).toHaveBeenCalledWith("https://example.com/authorize");
+
+		await user.click(screen.getByRole("button", { name: "Open Link" }));
+
+		expect(openerMocks.openUrl).toHaveBeenCalledWith(
+			"https://example.com/authorize",
+		);
+		await waitFor(() => {
+			expect(onElicitationResponse).toHaveBeenCalledWith(
+				expect.objectContaining({ elicitationId: "elicitation-url-1" }),
+				"accept",
+			);
+		});
+	});
+
 	it("shows Approve and Request Changes buttons when ExitPlanMode permission is pending", () => {
 		const queryClient = createHelmorQueryClient();
 
@@ -427,13 +605,14 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingExitPlanPermissionId="exit-plan-perm-1"
-					onPermissionResponse={vi.fn()}
+					hasPlanReview
 				/>
 			</QueryClientProvider>,
 		);
 
-		expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "Implement" }),
+		).toBeInTheDocument();
 		expect(
 			screen.getByRole("button", { name: "Request Changes" }),
 		).toBeInTheDocument();
@@ -442,15 +621,15 @@ describe("WorkspaceComposer", () => {
 		).not.toBeInTheDocument();
 	});
 
-	it("calls onPermissionResponse with allow + updatedPermissions when Approve is clicked", async () => {
+	it("calls onSubmit with bypassPermissions when Implement is clicked", async () => {
 		const queryClient = createHelmorQueryClient();
-		const onPermissionResponse = vi.fn();
+		const onSubmit = vi.fn();
 
 		render(
 			<QueryClientProvider client={queryClient}>
 				<WorkspaceComposer
 					contextKey="session:session-1"
-					onSubmit={vi.fn()}
+					onSubmit={onSubmit}
 					disabled={false}
 					submitDisabled={false}
 					sending={false}
@@ -465,26 +644,19 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingExitPlanPermissionId="exit-plan-perm-1"
-					onPermissionResponse={onPermissionResponse}
+					hasPlanReview
 				/>
 			</QueryClientProvider>,
 		);
 
-		await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+		await userEvent.click(screen.getByRole("button", { name: "Implement" }));
 
-		expect(onPermissionResponse).toHaveBeenCalledWith(
-			"exit-plan-perm-1",
-			"allow",
-			{
-				updatedPermissions: [
-					{
-						type: "setMode",
-						mode: "bypassPermissions",
-						destination: "session",
-					},
-				],
-			},
+		expect(onSubmit).toHaveBeenCalledWith(
+			"Go ahead with the plan.",
+			[],
+			[],
+			[],
+			{ permissionModeOverride: "bypassPermissions" },
 		);
 	});
 
@@ -510,8 +682,7 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingExitPlanPermissionId="exit-plan-perm-1"
-					onPermissionResponse={vi.fn()}
+					hasPlanReview
 				/>
 			</QueryClientProvider>,
 		);
@@ -521,7 +692,7 @@ describe("WorkspaceComposer", () => {
 		).toBeDisabled();
 	});
 
-	it("shows plan review placeholder when ExitPlanMode permission is pending", () => {
+	it("shows plan review placeholder when plan is captured", () => {
 		const queryClient = createHelmorQueryClient();
 
 		render(
@@ -543,8 +714,7 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingExitPlanPermissionId="exit-plan-perm-1"
-					onPermissionResponse={vi.fn()}
+					hasPlanReview
 				/>
 			</QueryClientProvider>,
 		);
@@ -552,7 +722,7 @@ describe("WorkspaceComposer", () => {
 		expect(screen.getByText(/Describe what to change/)).toBeInTheDocument();
 	});
 
-	it("keeps plan review controls visible while permission is pending", async () => {
+	it("keeps plan review controls visible while plan review is active", async () => {
 		const queryClient = createHelmorQueryClient();
 		const onChangePermissionMode = vi.fn();
 
@@ -575,24 +745,136 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingExitPlanPermissionId="exit-plan-perm-1"
-					onPermissionResponse={vi.fn()}
+					hasPlanReview
 				/>
 			</QueryClientProvider>,
 		);
 
-		expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Plan mode" })).toBeDisabled();
+		expect(
+			screen.getByRole("button", { name: "Implement" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "Plan mode" }),
+		).not.toBeDisabled();
 		expect(onChangePermissionMode).not.toHaveBeenCalled();
 		expect(
 			screen.queryByRole("button", { name: "Send" }),
 		).not.toBeInTheDocument();
 	});
 
-	it("updates permission mode before approving plan review", async () => {
+	it("switches permission mode and submits when Implement is clicked", async () => {
 		const queryClient = createHelmorQueryClient();
 		const onChangePermissionMode = vi.fn();
-		const onPermissionResponse = vi.fn();
+		const onSubmit = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={onSubmit}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="plan"
+					onChangePermissionMode={onChangePermissionMode}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					hasPlanReview
+				/>
+			</QueryClientProvider>,
+		);
+
+		await userEvent.click(screen.getByRole("button", { name: "Implement" }));
+
+		expect(onChangePermissionMode).toHaveBeenCalledWith("bypassPermissions");
+		expect(onSubmit).toHaveBeenCalledWith(
+			"Go ahead with the plan.",
+			[],
+			[],
+			[],
+			{ permissionModeOverride: "bypassPermissions" },
+		);
+	});
+
+	it("shows normal Send button when hasPlanReview but permissionMode is not plan", () => {
+		const queryClient = createHelmorQueryClient();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="bypassPermissions"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					hasPlanReview
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Implement" }),
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Request Changes" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("shows normal placeholder when hasPlanReview but permissionMode is not plan", () => {
+		const queryClient = createHelmorQueryClient();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="bypassPermissions"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					hasPlanReview
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(
+			screen.queryByText(/Describe what to change/),
+		).not.toBeInTheDocument();
+		expect(screen.getByText(/Ask to make changes/)).toBeInTheDocument();
+	});
+
+	it("plan toggle button is freely clickable during plan review", async () => {
+		const queryClient = createHelmorQueryClient();
+		const onChangePermissionMode = vi.fn();
 
 		render(
 			<QueryClientProvider client={queryClient}>
@@ -613,27 +895,15 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingExitPlanPermissionId="exit-plan-perm-1"
-					onPermissionResponse={onPermissionResponse}
+					hasPlanReview
 				/>
 			</QueryClientProvider>,
 		);
 
-		await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+		const planButton = screen.getByRole("button", { name: "Plan mode" });
+		expect(planButton).not.toBeDisabled();
 
+		await userEvent.click(planButton);
 		expect(onChangePermissionMode).toHaveBeenCalledWith("bypassPermissions");
-		expect(onPermissionResponse).toHaveBeenCalledWith(
-			"exit-plan-perm-1",
-			"allow",
-			{
-				updatedPermissions: [
-					{
-						type: "setMode",
-						mode: "bypassPermissions",
-						destination: "session",
-					},
-				],
-			},
-		);
 	});
 });

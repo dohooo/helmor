@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rusqlite::params;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::{ipc::Channel, AppHandle, Manager};
 use uuid::Uuid;
 
@@ -106,6 +106,40 @@ pub fn abort_all_active_streams_blocking(
             remaining,
             "Graceful shutdown — timeout, streams still active"
         );
+    }
+}
+
+pub fn bridge_elicitation_request_event(
+    provider: &str,
+    model_id: &str,
+    resolved_model: &str,
+    session_id: Option<String>,
+    working_directory: &str,
+    raw: &Value,
+) -> AgentStreamEvent {
+    AgentStreamEvent::ElicitationRequest {
+        provider: provider.to_string(),
+        model_id: model_id.to_string(),
+        resolved_model: resolved_model.to_string(),
+        session_id,
+        working_directory: working_directory.to_string(),
+        elicitation_id: raw
+            .get("elicitationId")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        server_name: raw
+            .get("serverName")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        message: raw
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        mode: raw.get("mode").and_then(Value::as_str).map(str::to_string),
+        url: raw.get("url").and_then(Value::as_str).map(str::to_string),
+        requested_schema: raw.get("requestedSchema").cloned(),
     }
 }
 
@@ -440,72 +474,6 @@ pub(super) fn stream_via_sidecar(
                         .map(str::to_string);
                     tracing::debug!(rid = %rid, tool = %tool_name, permission_id = %permission_id, "Permission request");
 
-                    // ExitPlanMode: flush pipeline, persist and render PlanReview
-                    // card before sending the permission request to the frontend.
-                    if tool_name == "ExitPlanMode" {
-                        if let Some(pipeline_state) = pipeline.as_mut() {
-                            pipeline_state.accumulator.flush_pending();
-
-                            if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
-                                let model_str =
-                                    pipeline_state.accumulator.resolved_model().to_string();
-                                while persisted_turn_count < pipeline_state.accumulator.turns_len()
-                                {
-                                    match persist_turn_message(
-                                        conn,
-                                        ctx,
-                                        pipeline_state.accumulator.turn_at(persisted_turn_count),
-                                        &model_str,
-                                    ) {
-                                        Ok(_) => persisted_turn_count += 1,
-                                        Err(error) => {
-                                            tracing::error!(
-                                                turn = persisted_turn_count,
-                                                "Failed to persist turn: {error}"
-                                            );
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-
-                            pipeline_state.accumulator.sync_persisted_ids();
-
-                            let resolved_model =
-                                pipeline_state.accumulator.resolved_model().to_string();
-                            let persisted_metadata =
-                                if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
-                                    persist_exit_plan_message(
-                                        conn,
-                                        ctx,
-                                        &resolved_model,
-                                        &permission_id,
-                                        &tool_name,
-                                        &tool_input,
-                                    )
-                                    .ok()
-                                } else {
-                                    None
-                                };
-                            let (msg_id, created_at) = persisted_metadata.unwrap_or_default();
-                            persisted_exit_plan_review = Some(build_exit_plan_review_message(
-                                (!msg_id.is_empty()).then_some(msg_id),
-                                (!created_at.is_empty()).then_some(created_at),
-                                &permission_id,
-                                &tool_name,
-                                &tool_input,
-                            ));
-
-                            let mut final_messages = pipeline_state.finish();
-                            if let Some(plan_message) = persisted_exit_plan_review.clone() {
-                                final_messages.push(plan_message);
-                            }
-                            let _ = on_event.send(AgentStreamEvent::Update {
-                                messages: final_messages,
-                            });
-                        }
-                    }
-
                     let _ = on_event.send(AgentStreamEvent::PermissionRequest {
                         permission_id,
                         tool_name,
@@ -513,6 +481,78 @@ pub(super) fn stream_via_sidecar(
                         title,
                         description,
                     });
+                }
+                "planCaptured" => {
+                    let tool_use_id = event
+                        .raw
+                        .get("toolUseId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let plan_value = event.raw.get("plan").cloned().unwrap_or(Value::Null);
+                    let tool_input = json!({ "plan": plan_value });
+                    tracing::debug!(rid = %rid, tool_use_id = %tool_use_id, "Plan captured");
+
+                    if let Some(pipeline_state) = pipeline.as_mut() {
+                        pipeline_state.accumulator.flush_pending();
+
+                        if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
+                            let model_str = pipeline_state.accumulator.resolved_model().to_string();
+                            while persisted_turn_count < pipeline_state.accumulator.turns_len() {
+                                match persist_turn_message(
+                                    conn,
+                                    ctx,
+                                    pipeline_state.accumulator.turn_at(persisted_turn_count),
+                                    &model_str,
+                                ) {
+                                    Ok(_) => persisted_turn_count += 1,
+                                    Err(error) => {
+                                        tracing::error!(
+                                            turn = persisted_turn_count,
+                                            "Failed to persist turn: {error}"
+                                        );
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        pipeline_state.accumulator.sync_persisted_ids();
+
+                        let resolved_model =
+                            pipeline_state.accumulator.resolved_model().to_string();
+                        let persisted_metadata =
+                            if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
+                                persist_exit_plan_message(
+                                    conn,
+                                    ctx,
+                                    &resolved_model,
+                                    &tool_use_id,
+                                    "ExitPlanMode",
+                                    &tool_input,
+                                )
+                                .ok()
+                            } else {
+                                None
+                            };
+                        let (msg_id, created_at) = persisted_metadata.unwrap_or_default();
+                        persisted_exit_plan_review = Some(build_exit_plan_review_message(
+                            (!msg_id.is_empty()).then_some(msg_id),
+                            (!created_at.is_empty()).then_some(created_at),
+                            &tool_use_id,
+                            "ExitPlanMode",
+                            &tool_input,
+                        ));
+
+                        let mut final_messages = pipeline_state.finish();
+                        if let Some(plan_message) = persisted_exit_plan_review.clone() {
+                            final_messages.push(plan_message);
+                        }
+                        let _ = on_event.send(AgentStreamEvent::Update {
+                            messages: final_messages,
+                        });
+                    }
+                    let _ = on_event.send(AgentStreamEvent::PlanCaptured {});
                 }
                 "deferredToolUse" => {
                     let tool_use_id = event
@@ -611,41 +651,14 @@ pub(super) fn stream_via_sidecar(
                         .as_ref()
                         .map(|state| state.accumulator.resolved_model().to_string())
                         .unwrap_or_else(|| model_copy.cli_model.to_string());
-                    let _ = on_event.send(AgentStreamEvent::ElicitationRequest {
-                        provider: provider.clone(),
-                        model_id: model_id.clone(),
-                        resolved_model,
-                        session_id: resolved_session_id.clone(),
-                        working_directory: working_dir_str.clone(),
-                        elicitation_id: event
-                            .raw
-                            .get("elicitationId")
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                        server_name: event
-                            .raw
-                            .get("serverName")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                        message: event
-                            .raw
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                        mode: event
-                            .raw
-                            .get("mode")
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                        url: event
-                            .raw
-                            .get("url")
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                        requested_schema: event.raw.get("requestedSchema").cloned(),
-                    });
+                    let _ = on_event.send(bridge_elicitation_request_event(
+                        &provider,
+                        &model_id,
+                        &resolved_model,
+                        resolved_session_id.clone(),
+                        &working_dir_str,
+                        &event.raw,
+                    ));
                 }
                 "error" => {
                     let message = event
@@ -771,5 +784,60 @@ fn build_exit_plan_review_message(
         })],
         status: None,
         streaming: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use insta::assert_yaml_snapshot;
+
+    #[test]
+    fn build_elicitation_request_event_maps_raw_sidecar_payload() {
+        let event = bridge_elicitation_request_event(
+            "claude",
+            "opus-1m",
+            "claude-opus-4-20250514",
+            Some("provider-session-1".to_string()),
+            "/tmp/helmor",
+            &serde_json::json!({
+                "elicitationId": "elicitation-1",
+                "serverName": "design-server",
+                "message": "Need structured input",
+                "mode": "form",
+                "url": null,
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" }
+                    },
+                    "required": ["name"]
+                }
+            }),
+        );
+
+        assert_yaml_snapshot!(
+            serde_json::to_value(&event).unwrap(),
+            @r#"
+elicitationId: elicitation-1
+kind: elicitationRequest
+message: Need structured input
+mode: form
+model_id: opus-1m
+provider: claude
+requestedSchema:
+  properties:
+    name:
+      type: string
+  required:
+    - name
+  type: object
+resolved_model: claude-opus-4-20250514
+serverName: design-server
+session_id: provider-session-1
+url: ~
+working_directory: /tmp/helmor
+            "#
+        );
     }
 }

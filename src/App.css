@@ -451,6 +451,12 @@ body {
 	border-bottom: none;
 }
 
+/* Session tab: fade text under hover action icons */
+.group\/tab:hover .tab-content-fade {
+	-webkit-mask-image: linear-gradient(to left, transparent 1.2rem, black 2rem);
+	mask-image: linear-gradient(to left, transparent 1.2rem, black 2rem);
+}
+
 /* Lexical composer: remove default paragraph margins */
 .composer-paragraph {
 	margin: 0;

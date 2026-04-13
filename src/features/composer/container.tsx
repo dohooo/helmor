@@ -5,6 +5,7 @@ import { ActionRow, ActionRowButton } from "@/components/action-row";
 import { ShimmerText } from "@/components/ui/shimmer-text";
 import { ShineBorder } from "@/components/ui/shine-border";
 import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
+import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
 import type {
 	AgentModelOption,
 	AgentModelSection,
@@ -33,6 +34,7 @@ import {
 	isNewSession,
 } from "@/lib/workspace-helpers";
 import type { DeferredToolResponseHandler } from "./deferred-tool";
+import type { ElicitationResponseHandler } from "./elicitation";
 import { WorkspaceComposer } from "./index";
 
 const EMPTY_MODEL_SECTIONS: AgentModelSection[] = [];
@@ -50,14 +52,12 @@ type WorkspaceComposerContainerProps = {
 	restoreFiles: string[];
 	restoreCustomTags?: ComposerCustomTag[];
 	restoreNonce: number;
+	pendingElicitation?: PendingElicitation | null;
+	onElicitationResponse?: ElicitationResponseHandler;
+	elicitationResponsePending?: boolean;
 	pendingDeferredTool?: PendingDeferredTool | null;
 	onDeferredToolResponse?: DeferredToolResponseHandler;
-	pendingExitPlanPermissionId?: string | null;
-	onPermissionResponse?: (
-		permissionId: string,
-		behavior: "allow" | "deny",
-		options?: { updatedPermissions?: unknown[]; message?: string },
-	) => void;
+	hasPlanReview?: boolean;
 	modelSelections: Record<string, string>;
 	effortLevels: Record<string, string>;
 	permissionModes: Record<string, string>;
@@ -91,6 +91,7 @@ type WorkspaceComposerContainerProps = {
 };
 
 const noopDeferredToolResponse: DeferredToolResponseHandler = () => {};
+const noopElicitationResponse: ElicitationResponseHandler = () => {};
 
 export const WorkspaceComposerContainer = memo(
 	function WorkspaceComposerContainer({
@@ -105,10 +106,12 @@ export const WorkspaceComposerContainer = memo(
 		restoreFiles,
 		restoreCustomTags = [],
 		restoreNonce,
+		pendingElicitation = null,
+		onElicitationResponse = noopElicitationResponse,
+		elicitationResponsePending = false,
 		pendingDeferredTool = null,
 		onDeferredToolResponse = noopDeferredToolResponse,
-		pendingExitPlanPermissionId = null,
-		onPermissionResponse,
+		hasPlanReview = false,
 		modelSelections,
 		effortLevels = {},
 		permissionModes = {},
@@ -310,6 +313,7 @@ export const WorkspaceComposerContainer = memo(
 				imagePaths: string[],
 				filePaths: string[],
 				customTags: ComposerCustomTag[],
+				options?: { permissionModeOverride?: string },
 			) => {
 				if (!effectiveModel) {
 					return;
@@ -322,7 +326,8 @@ export const WorkspaceComposerContainer = memo(
 					model: effectiveModel,
 					workingDirectory,
 					effortLevel,
-					permissionMode: effectivePermissionMode,
+					permissionMode:
+						options?.permissionModeOverride ?? effectivePermissionMode,
 				});
 			},
 			[
@@ -509,10 +514,12 @@ export const WorkspaceComposerContainer = memo(
 					restoreFiles={restoreFiles}
 					restoreCustomTags={restoreCustomTags}
 					restoreNonce={restoreNonce}
+					pendingElicitation={pendingElicitation}
+					onElicitationResponse={onElicitationResponse}
+					elicitationResponsePending={elicitationResponsePending}
 					pendingDeferredTool={pendingDeferredTool}
 					onDeferredToolResponse={onDeferredToolResponse}
-					pendingExitPlanPermissionId={pendingExitPlanPermissionId}
-					onPermissionResponse={onPermissionResponse}
+					hasPlanReview={hasPlanReview}
 					pendingInsertRequests={pendingInsertRequests}
 					onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
 					slashCommands={slashCommands}

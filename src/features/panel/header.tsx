@@ -539,9 +539,25 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											);
 										}
 
+										// Invalidate changes so diff section shows loading.
+										if (workspace.rootPath) {
+											void queryClient.invalidateQueries({
+												queryKey: helmorQueryKeys.workspaceChanges(
+													workspace.rootPath,
+												),
+											});
+										}
+
 										void updateIntendedTargetBranch(workspace.id, branch)
 											.then(({ reset }) => {
 												onWorkspaceChanged?.();
+												if (workspace.rootPath) {
+													void queryClient.invalidateQueries({
+														queryKey: helmorQueryKeys.workspaceChanges(
+															workspace.rootPath,
+														),
+													});
+												}
 												if (reset) {
 													pushToast(
 														`Local branch reset to ${workspace.remote ?? "origin"}/${branch}`,
@@ -640,64 +656,68 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 														}}
 														className="group/tab relative h-full w-auto max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
 													>
-														<SessionProviderIcon
-															agentType={
-																selected
-																	? (selectedProvider ?? session.agentType)
-																	: session.agentType
-															}
-															active={isActive}
-														/>
-														{isEditing ? (
-															<Input
-																autoFocus
-																value={editingTitle}
-																onChange={(event) =>
-																	setEditingTitle(event.target.value)
+														{/* Content wrapper: text fades out on the right when hovered so
+														    the action icons can sit on the tab's own background. */}
+														<span className="tab-content-fade flex min-w-0 flex-1 items-center gap-1.5">
+															<SessionProviderIcon
+																agentType={
+																	selected
+																		? (selectedProvider ?? session.agentType)
+																		: session.agentType
 																}
-																onKeyDown={(event) => {
-																	if (event.key === "Enter") {
-																		event.preventDefault();
-																		void handleCommitRename();
-																	} else if (event.key === "Escape") {
-																		handleCancelRename();
+																active={isActive}
+															/>
+															{isEditing ? (
+																<Input
+																	autoFocus
+																	value={editingTitle}
+																	onChange={(event) =>
+																		setEditingTitle(event.target.value)
 																	}
-																}}
-																onBlur={() => void handleCommitRename()}
-																onClick={(event) => event.stopPropagation()}
-																className="h-6 w-20 truncate rounded-md border-border bg-background px-1.5 py-0 text-[13px] font-medium text-foreground"
-															/>
-														) : (
-															<span
-																className={cn(
-																	"truncate font-medium",
-																	hasStatusDot && !selected
-																		? "text-foreground"
-																		: undefined,
-																)}
-															>
-																{displaySessionTitle(session)}
-															</span>
-														)}
-														{hasStatusDot && !isEditing ? (
-															<span
-																aria-label={
-																	isInteractionRequired
-																		? "Interaction required"
-																		: isCompleted
-																			? "Session completed"
-																			: "Unread session"
-																}
-																className={cn(
-																	"size-1.5 shrink-0 rounded-full",
-																	isInteractionRequired
-																		? "bg-yellow-500"
-																		: "bg-chart-2",
-																)}
-															/>
-														) : null}
+																	onKeyDown={(event) => {
+																		if (event.key === "Enter") {
+																			event.preventDefault();
+																			void handleCommitRename();
+																		} else if (event.key === "Escape") {
+																			handleCancelRename();
+																		}
+																	}}
+																	onBlur={() => void handleCommitRename()}
+																	onClick={(event) => event.stopPropagation()}
+																	className="h-6 w-20 truncate rounded-md border-border bg-background px-1.5 py-0 text-[13px] font-medium text-foreground"
+																/>
+															) : (
+																<span
+																	className={cn(
+																		"truncate font-medium",
+																		hasStatusDot && !selected
+																			? "text-foreground"
+																			: undefined,
+																	)}
+																>
+																	{displaySessionTitle(session)}
+																</span>
+															)}
+															{hasStatusDot && !isEditing ? (
+																<span
+																	aria-label={
+																		isInteractionRequired
+																			? "Interaction required"
+																			: isCompleted
+																				? "Session completed"
+																				: "Unread session"
+																	}
+																	className={cn(
+																		"size-1.5 shrink-0 rounded-full",
+																		isInteractionRequired
+																			? "bg-yellow-500"
+																			: "bg-chart-2",
+																	)}
+																/>
+															) : null}
+														</span>
 														{!isEditing ? (
-															<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-[linear-gradient(to_right,transparent_0%,var(--muted)_35%,var(--muted)_100%)] pl-5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible">
+															<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible">
 																<span
 																	role="button"
 																	aria-label="Rename session"

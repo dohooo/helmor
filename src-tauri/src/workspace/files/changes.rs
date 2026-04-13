@@ -25,21 +25,60 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
     }
 
     let target_ref = resolve_target_ref(workspace_root)?;
-    let committed_output = git_ops::run_git(
-        ["diff", "--name-status", target_ref.as_str(), "HEAD"],
-        Some(workspace_root),
-    )
-    .unwrap_or_default();
-    let unstaged_output =
-        git_ops::run_git(["diff", "--name-status"], Some(workspace_root)).unwrap_or_default();
-    let staged_output =
-        git_ops::run_git(["diff", "--name-status", "--cached"], Some(workspace_root))
-            .unwrap_or_default();
-    let untracked_output = git_ops::run_git(
-        ["ls-files", "--others", "--exclude-standard"],
-        Some(workspace_root),
-    )
-    .unwrap_or_default();
+
+    // Run all git commands in parallel — they're independent reads.
+    let (
+        committed_output,
+        unstaged_output,
+        staged_output,
+        untracked_output,
+        committed_numstat,
+        staged_numstat,
+        unstaged_numstat,
+    ) = std::thread::scope(|s| {
+        let h_committed = s.spawn(|| {
+            git_ops::run_git(
+                ["diff", "--name-status", target_ref.as_str(), "HEAD"],
+                Some(workspace_root),
+            )
+            .unwrap_or_default()
+        });
+        let h_unstaged = s.spawn(|| {
+            git_ops::run_git(["diff", "--name-status"], Some(workspace_root)).unwrap_or_default()
+        });
+        let h_staged = s.spawn(|| {
+            git_ops::run_git(["diff", "--name-status", "--cached"], Some(workspace_root))
+                .unwrap_or_default()
+        });
+        let h_untracked = s.spawn(|| {
+            git_ops::run_git(
+                ["ls-files", "--others", "--exclude-standard"],
+                Some(workspace_root),
+            )
+            .unwrap_or_default()
+        });
+        let tr = target_ref.as_str();
+        let h_cn = s.spawn(move || {
+            git_ops::run_git(["diff", "--numstat", tr, "HEAD"], Some(workspace_root))
+                .unwrap_or_default()
+        });
+        let h_sn = s.spawn(|| {
+            git_ops::run_git(["diff", "--numstat", "--cached"], Some(workspace_root))
+                .unwrap_or_default()
+        });
+        let h_un = s.spawn(|| {
+            git_ops::run_git(["diff", "--numstat"], Some(workspace_root)).unwrap_or_default()
+        });
+        (
+            h_committed.join().unwrap_or_default(),
+            h_unstaged.join().unwrap_or_default(),
+            h_staged.join().unwrap_or_default(),
+            h_untracked.join().unwrap_or_default(),
+            h_cn.join().unwrap_or_default(),
+            h_sn.join().unwrap_or_default(),
+            h_un.join().unwrap_or_default(),
+        )
+    });
 
     let mut committed_map = BTreeMap::<String, String>::new();
     parse_name_status_into(&committed_output, &mut committed_map);
@@ -71,15 +110,6 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
     }
 
     let mut stats_map = BTreeMap::<String, (u32, u32)>::new();
-    let committed_numstat = git_ops::run_git(
-        ["diff", "--numstat", target_ref.as_str(), "HEAD"],
-        Some(workspace_root),
-    )
-    .unwrap_or_default();
-    let staged_numstat = git_ops::run_git(["diff", "--numstat", "--cached"], Some(workspace_root))
-        .unwrap_or_default();
-    let unstaged_numstat =
-        git_ops::run_git(["diff", "--numstat"], Some(workspace_root)).unwrap_or_default();
     parse_numstat_into(&committed_numstat, &mut stats_map);
     parse_numstat_into(&staged_numstat, &mut stats_map);
     parse_numstat_into(&unstaged_numstat, &mut stats_map);
@@ -267,6 +297,9 @@ fn lookup_workspace_target(workspace_root: &Path) -> Option<(String, String)> {
 /// Returns the ref itself (not a merge-base) so `git diff <ref> HEAD`
 /// compares the two branch tips directly. This means identical trees
 /// produce zero diff, which is the correct behavior for "Branch Changes".
+///
+/// Uses a single `git for-each-ref` call to batch-check all candidates
+/// instead of N sequential `rev-parse --verify` invocations.
 pub(super) fn resolve_target_ref(workspace_root: &Path) -> Result<String> {
     let mut candidates = Vec::<String>::new();
 
@@ -280,11 +313,23 @@ pub(super) fn resolve_target_ref(workspace_root: &Path) -> Result<String> {
     candidates.push("refs/heads/main".into());
     candidates.push("refs/heads/master".into());
 
+    // Batch-check with a single git call.
+    let mut args = vec![
+        "for-each-ref".to_string(),
+        "--format=%(refname)".to_string(),
+    ];
+    args.extend(candidates.iter().cloned());
+    let existing_refs: std::collections::HashSet<String> =
+        git_ops::run_git(args.iter().map(|s| s.as_str()), Some(workspace_root))
+            .unwrap_or_default()
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+
     for branch in &candidates {
-        if let Ok(sha) = git_ops::run_git(["rev-parse", "--verify", branch], Some(workspace_root)) {
-            if !sha.trim().is_empty() {
-                return Ok(branch.clone());
-            }
+        if existing_refs.contains(branch) {
+            return Ok(branch.clone());
         }
     }
 

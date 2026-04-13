@@ -4,14 +4,17 @@
 // intentional and StrictMode-safe in situ.
 "use no memo";
 
+import { useQuery } from "@tanstack/react-query";
 import { Check, ShieldQuestion, X } from "lucide-react";
-import { memo, useCallback, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActionRow, ActionRowButton } from "@/components/action-row";
 import { WorkspaceComposerContainer } from "@/features/composer/container";
 import { WorkspacePanelContainer } from "@/features/panel/container";
 import type { PullRequestInfo } from "@/lib/api";
 import type { ResolvedComposerInsertRequest } from "@/lib/composer-insert";
 import { insertRequestMatchesComposer } from "@/lib/composer-insert";
+import { hasUnresolvedPlanReview } from "@/lib/plan-review";
+import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
 import { getComposerContextKey } from "@/lib/workspace-helpers";
 import { useConversationStreaming } from "./hooks/use-streaming";
 
@@ -98,9 +101,12 @@ export const WorkspaceConversationContainer = memo(
 			activeSendError,
 			handleComposerSubmit,
 			handleDeferredToolResponse,
+			handleElicitationResponse,
 			handlePermissionResponse,
 			handleStopStream,
+			elicitationResponsePending,
 			isSending,
+			pendingElicitation,
 			pendingDeferredTool,
 			pendingPermissions,
 			restoreCustomTags,
@@ -121,6 +127,28 @@ export const WorkspaceConversationContainer = memo(
 			onInteractionSessionsChange,
 			onSessionCompleted,
 		});
+
+		// Derived from thread messages — survives refresh / session switch.
+		const threadQuery = useQuery({
+			...sessionThreadMessagesQueryOptions(displayedSessionId ?? "__none__"),
+			enabled: Boolean(displayedSessionId),
+		});
+		const hasPlanReview = useMemo(
+			() => hasUnresolvedPlanReview(threadQuery.data ?? []),
+			[threadQuery.data],
+		);
+
+		// Auto-activate plan button when AI enters plan mode on its own.
+		const prevPlanReviewRef = useRef(false);
+		useEffect(() => {
+			if (hasPlanReview && !prevPlanReviewRef.current) {
+				setComposerPermissionModes((current) => ({
+					...current,
+					[composerContextKey]: "plan",
+				}));
+			}
+			prevPlanReviewRef.current = hasPlanReview;
+		}, [hasPlanReview, composerContextKey]);
 
 		const handleSelectModel = useCallback(
 			(contextKey: string, modelId: string) => {
@@ -166,12 +194,7 @@ export const WorkspaceConversationContainer = memo(
 				}),
 		);
 
-		const exitPlanPermission = pendingPermissions.find(
-			(perm) => perm.toolName === "ExitPlanMode",
-		);
-		const toolPermissions = pendingPermissions.filter(
-			(perm) => perm.toolName !== "ExitPlanMode",
-		);
+		const toolPermissions = pendingPermissions;
 
 		return (
 			<>
@@ -266,12 +289,12 @@ export const WorkspaceConversationContainer = memo(
 							restoreFiles={restoreFiles}
 							restoreCustomTags={restoreCustomTags}
 							restoreNonce={restoreNonce}
+							pendingElicitation={pendingElicitation}
+							onElicitationResponse={handleElicitationResponse}
+							elicitationResponsePending={elicitationResponsePending}
 							pendingDeferredTool={pendingDeferredTool}
 							onDeferredToolResponse={handleDeferredToolResponse}
-							pendingExitPlanPermissionId={
-								exitPlanPermission?.permissionId ?? null
-							}
-							onPermissionResponse={handlePermissionResponse}
+							hasPlanReview={hasPlanReview}
 							modelSelections={composerModelSelections}
 							effortLevels={composerEffortLevels}
 							permissionModes={composerPermissionModes}

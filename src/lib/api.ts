@@ -1445,6 +1445,7 @@ export type AgentStreamEvent =
 			url?: string | null;
 			requestedSchema?: Record<string, unknown> | null;
 	  }
+	| { kind: "planCaptured" }
 	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
 
 /**

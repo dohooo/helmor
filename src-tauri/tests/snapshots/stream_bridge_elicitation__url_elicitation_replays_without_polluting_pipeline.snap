@@ -1,0 +1,38 @@
+---
+source: tests/stream_bridge_elicitation.rs
+expression: snapshot
+---
+line_count: 3
+control_events:
+  - elicitationId: elicitation-url-1
+    kind: elicitationRequest
+    message: Finish sign-in in the browser.
+    mode: url
+    model_id: opus-1m
+    provider: claude
+    requestedSchema: ~
+    resolved_model: claude-opus-4-20250514
+    serverName: auth-server
+    session_id: provider-session-1
+    url: "https://example.com/authorize"
+    working_directory: /tmp/helmor
+final_messages:
+  - role: assistant
+    id: msg-1
+    content_length: 1
+    content:
+      - type: text
+        text: Open the sign-in page.
+    status:
+      type: complete
+      reason: stop
+    streaming: ~
+  - role: system
+    id: msg-2
+    content_length: 1
+    content:
+      - type: text
+        text: Done
+    status: ~
+    streaming: ~
+dropped_event_types: []

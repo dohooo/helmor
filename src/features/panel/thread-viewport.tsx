@@ -17,6 +17,7 @@ import type { ThreadMessageLike } from "@/lib/api";
 import { HelmorProfiler } from "@/lib/dev-react-profiler";
 import { estimateThreadRowHeights } from "@/lib/message-layout-estimator";
 import { measureSync } from "@/lib/perf-marks";
+import { hasUnresolvedPlanReview } from "@/lib/plan-review";
 import { useSettings } from "@/lib/settings";
 import { EmptyState, MemoConversationMessage } from "./message-components";
 
@@ -266,9 +267,11 @@ function ConversationViewport({
 	);
 
 	const Header: ThreadViewportSlot = ConversationHeaderSpacer;
-	const Footer: ThreadViewportSlot = sending
-		? () => <StreamingFooter startTime={sendingStartTime} />
-		: ConversationFooterSpacer;
+	const planReviewActive = useMemo(() => hasUnresolvedPlanReview(data), [data]);
+	const Footer: ThreadViewportSlot =
+		sending && !planReviewActive
+			? () => <StreamingFooter startTime={sendingStartTime} />
+			: ConversationFooterSpacer;
 	const EmptyPlaceholder: ThreadViewportSlot = () => (
 		<div className="flex min-h-full flex-1 items-center justify-center px-8">
 			<EmptyState hasSession={hasSession} />
