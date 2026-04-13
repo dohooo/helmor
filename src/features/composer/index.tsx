@@ -578,7 +578,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								className={cn(
 									"cursor-pointer gap-1.5 rounded-full px-2 py-0.5 text-[13px] font-medium transition-colors",
 									permissionMode === "plan"
-										? "bg-foreground/[0.08] text-foreground hover:bg-foreground/[0.12]"
+										? "text-plan ring-1 ring-plan/40 hover:bg-plan/10 hover:text-plan"
 										: "text-muted-foreground/55 hover:bg-accent/60 hover:text-muted-foreground",
 								)}
 								onClick={() =>
@@ -601,7 +601,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										aria-label="Request Changes"
 										onClick={handlePlanRequestChanges}
 										disabled={disabled || !hasContent}
-										className="h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px] text-muted-foreground hover:text-foreground"
+										className="my-0.5 h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px] transition-none text-muted-foreground hover:text-foreground"
 									>
 										<MessageSquareMore className="size-3.5" strokeWidth={1.8} />
 										Request Changes
@@ -612,7 +612,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										aria-label="Implement"
 										onClick={handlePlanImplement}
 										disabled={disabled}
-										className="h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px]"
+										className="my-0.5 h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px] transition-none"
 									>
 										<Check className="size-3.5" strokeWidth={2} />
 										Implement

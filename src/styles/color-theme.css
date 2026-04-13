@@ -52,6 +52,7 @@
 	--workspace-pr-closed-accent: #da3633;
 	--workspace-pr-closed-header-bg: #f1c7c5;
 	--workspace-pr-conflicts-header-bg: #212830;
+	--plan: #48968c;
 	/* Terminal (xterm.js) — reuses app tokens where possible */
 	--terminal-background: var(--sidebar);
 	--terminal-foreground: var(--foreground);
@@ -130,6 +131,7 @@
 	--workspace-pr-closed-accent: #da3633;
 	--workspace-pr-closed-header-bg: #5a2b2b;
 	--workspace-pr-conflicts-header-bg: #212830;
+	--plan: #48968c;
 	/* Terminal (xterm.js) — only overrides that differ from :root */
 	--terminal-selection: oklch(0.35 0.03 250);
 	--terminal-black: oklch(0.21 0 0);
