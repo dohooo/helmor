@@ -23,11 +23,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	lastSessionId: null,
 };
 
-const SETTINGS_KEY_MAP: Record<keyof AppSettings, string> = {
+export const THEME_STORAGE_KEY = "helmor-theme";
+
+// theme is stored in localStorage (sync read for flash-free boot), not SQLite
+const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	fontSize: "app.font_size",
 	branchPrefixType: "branch_prefix_type",
 	branchPrefixCustom: "branch_prefix_custom",
-	theme: "app.theme",
 	notifications: "app.notifications",
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
@@ -49,7 +51,7 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.branchPrefixCustom] ??
 				DEFAULT_SETTINGS.branchPrefixCustom,
 			theme:
-				(raw[SETTINGS_KEY_MAP.theme] as AppSettings["theme"]) ??
+				(localStorage.getItem(THEME_STORAGE_KEY) as AppSettings["theme"]) ??
 				DEFAULT_SETTINGS.theme,
 			notifications:
 				raw[SETTINGS_KEY_MAP.notifications] !== undefined
@@ -64,13 +66,22 @@ export async function loadSettings(): Promise<AppSettings> {
 }
 
 export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
+	if (patch.theme !== undefined) {
+		try {
+			localStorage.setItem(THEME_STORAGE_KEY, patch.theme);
+		} catch {
+			// ignore
+		}
+	}
+
 	const settings: Record<string, string> = {};
 	for (const [key, dbKey] of Object.entries(SETTINGS_KEY_MAP)) {
-		const value = patch[key as keyof AppSettings];
+		const value = patch[key as keyof Omit<AppSettings, "theme">];
 		if (value !== undefined) {
 			settings[dbKey] = value === null ? "" : String(value);
 		}
 	}
+	if (Object.keys(settings).length === 0) return;
 	try {
 		await invoke("update_app_settings", { settingsMap: settings });
 	} catch {

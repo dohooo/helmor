@@ -89,6 +89,8 @@ import {
 	resolveTheme,
 	SettingsContext,
 	saveSettings,
+	THEME_STORAGE_KEY,
+	type ThemeMode,
 	useSettings,
 } from "./lib/settings";
 import { useOsNotifications } from "./lib/use-os-notifications";
@@ -102,9 +104,14 @@ function App() {
 	const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [queryClient] = useState(() => createHelmorQueryClient());
+	const preloadSettings = useMemo<AppSettings>(() => {
+		const t = localStorage.getItem(THEME_STORAGE_KEY) as ThemeMode | null;
+		return { ...DEFAULT_SETTINGS, theme: t ?? DEFAULT_SETTINGS.theme };
+	}, []);
+
 	const settingsContextValue = useMemo(
 		() => ({
-			settings: appSettings ?? DEFAULT_SETTINGS,
+			settings: appSettings ?? preloadSettings,
 			updateSettings: (patch: Partial<AppSettings>) => {
 				setAppSettings((previous) => {
 					const next = { ...(previous ?? DEFAULT_SETTINGS), ...patch };
@@ -521,6 +528,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		const apply = () => {
 			const effective = resolveTheme(appSettings.theme);
 			document.documentElement.classList.toggle("dark", effective === "dark");
+			document.documentElement.style.colorScheme = effective;
 		};
 
 		apply();

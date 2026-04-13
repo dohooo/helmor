@@ -4,16 +4,15 @@ import logoAnimation from "@/assets/helmor-logo-animation.json";
 import { resolveTheme, useSettings } from "@/lib/settings";
 
 // Deep-clone the animation JSON and swap colours for a given theme.
-// Dark (original): white shapes on #0E0E0E background
-// Light:           #0E0E0E shapes on transparent background
+// Background layer is always transparent (container provides bg).
+// Dark: white shapes, Light: dark shapes.
 function themedAnimationData(theme: "light" | "dark") {
 	const data = JSON.parse(JSON.stringify(logoAnimation));
-	if (theme === "dark") return data;
 
 	const darkFill = [0.055, 0.055, 0.055, 1]; // #0E0E0E
 	for (const layer of data.layers) {
-		// Shape layers (ty 4): recolour fills
-		if (layer.ty === 4 && layer.shapes) {
+		// Light mode: recolour shape fills to dark
+		if (theme === "light" && layer.ty === 4 && layer.shapes) {
 			for (const group of layer.shapes) {
 				for (const item of group.it ?? []) {
 					if (item.ty === "fl") {
@@ -22,7 +21,7 @@ function themedAnimationData(theme: "light" | "dark") {
 				}
 			}
 		}
-		// Solid background layer (ty 1): make transparent
+		// Always make background layer transparent
 		if (layer.ty === 1) {
 			layer.sc = "#00000000";
 		}
