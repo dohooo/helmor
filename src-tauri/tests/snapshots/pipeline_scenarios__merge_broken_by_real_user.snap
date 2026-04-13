@@ -3,7 +3,7 @@ source: tests/pipeline_scenarios.rs
 expression: run_normalized(msgs)
 ---
 - role: assistant
-  id: a1
+  id: msg-1
   content_length: 1
   content:
     - type: text
@@ -13,7 +13,7 @@ expression: run_normalized(msgs)
     reason: stop
   streaming: ~
 - role: user
-  id: u1
+  id: msg-2
   content_length: 1
   content:
     - type: text
@@ -21,7 +21,7 @@ expression: run_normalized(msgs)
   status: ~
   streaming: ~
 - role: assistant
-  id: a2
+  id: msg-3
   content_length: 1
   content:
     - type: text

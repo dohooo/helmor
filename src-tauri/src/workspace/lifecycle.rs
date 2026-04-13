@@ -93,15 +93,11 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
     let workspace_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let workspace_dir = crate::data_dir::workspace_dir(&repository.name, &directory_name)?;
-    let setup_root_dir = crate::data_dir::data_dir()?
-        .join("repo-roots")
-        .join(&repository.name);
     let logs_dir = crate::data_dir::workspace_logs_dir(&workspace_id)?;
     let initialization_log_path = logs_dir.join("initialization.log");
     let setup_log_path = logs_dir.join("setup.log");
     let timestamp = db::current_timestamp()?;
     let mut created_worktree = false;
-    let mut created_setup_root = false;
 
     fs::create_dir_all(&logs_dir).with_context(|| {
         format!(
@@ -174,36 +170,29 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
             initialization_files_copied,
             &timestamp,
         )?;
-        workspace_models::update_workspace_state(&workspace_id, "setting_up", &timestamp)?;
-
-        git_ops::refresh_repo_setup_root(&repo_root, &setup_root_dir, &start_ref)?;
-        created_setup_root = true;
-
-        let setup_hook = match resolve_setup_hook(&repository, &workspace_dir, &setup_root_dir) {
-            Ok(value) => value,
-            Err(error) => {
-                let _ = write_log_file(&setup_log_path, &format!("{error:#}"));
-                return Err(error);
+        // Defer setup to the frontend inspector: if a script is configured,
+        // the workspace starts in "setup_pending" and the UI auto-triggers it.
+        let has_setup = match resolve_setup_hook(&repository, &workspace_dir) {
+            Ok(Some(s)) if !s.trim().is_empty() => true,
+            Ok(_) => false,
+            Err(e) => {
+                tracing::warn!("Failed to resolve setup hook, skipping: {e:#}");
+                false
             }
         };
-        run_setup_hook(
-            setup_hook.as_deref(),
-            &workspace_dir,
-            &setup_root_dir,
-            &setup_log_path,
-        )?;
-        workspace_models::update_workspace_state(&workspace_id, "ready", &timestamp)?;
+        let final_state = if has_setup { "setup_pending" } else { "ready" };
+        workspace_models::update_workspace_state(&workspace_id, final_state, &timestamp)?;
 
         Ok(CreateWorkspaceResponse {
             created_workspace_id: workspace_id.clone(),
             selected_workspace_id: workspace_id.clone(),
-            created_state: "ready".to_string(),
+            created_state: final_state.to_string(),
             directory_name,
             branch: branch.clone(),
         })
     })();
 
-    let result = match create_result {
+    match create_result {
         Ok(response) => Ok(response),
         Err(error) => {
             cleanup_failed_created_workspace(
@@ -216,14 +205,7 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
             );
             Err(error)
         }
-    };
-
-    if created_setup_root {
-        let _ = git_ops::remove_worktree(&repo_root, &setup_root_dir);
-        let _ = fs::remove_dir_all(&setup_root_dir);
     }
-
-    result
 }
 
 struct ArchivePreflightData {
@@ -232,6 +214,62 @@ struct ArchivePreflightData {
     workspace_dir: PathBuf,
     archived_context_dir: PathBuf,
     archive_commit: String,
+}
+
+/// Best-effort archive hook: load the repo's archive_script and run it
+/// inside the workspace directory before tearing it down.
+fn run_archive_hook(workspace_id: &str, workspace_dir: &Path, repo_root: &Path) {
+    let record = match workspace_models::load_workspace_record_by_id(workspace_id) {
+        Ok(Some(r)) => r,
+        _ => return,
+    };
+    let scripts = match repos::load_repo_scripts(&record.repo_id) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let script = match scripts.archive_script.filter(|s| !s.trim().is_empty()) {
+        Some(s) => s,
+        None => return,
+    };
+
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    tracing::info!(workspace_id, script = %script, "Running archive hook");
+
+    let status = Command::new(&shell)
+        .arg("-c")
+        .arg(&script)
+        .current_dir(workspace_dir)
+        .env("HELMOR_ROOT_PATH", repo_root.display().to_string())
+        .env("HELMOR_WORKSPACE_PATH", workspace_dir.display().to_string())
+        .env("HELMOR_WORKSPACE_NAME", &record.directory_name)
+        .env(
+            "HELMOR_DEFAULT_BRANCH",
+            record.default_branch.as_deref().unwrap_or("main"),
+        )
+        // Legacy Conductor compatibility
+        .env("CONDUCTOR_ROOT_PATH", repo_root.display().to_string())
+        .env(
+            "CONDUCTOR_WORKSPACE_PATH",
+            workspace_dir.display().to_string(),
+        )
+        .env("CONDUCTOR_WORKSPACE_NAME", &record.directory_name)
+        .env(
+            "CONDUCTOR_DEFAULT_BRANCH",
+            record.default_branch.as_deref().unwrap_or("main"),
+        )
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            tracing::info!(workspace_id, "Archive hook succeeded");
+        }
+        Ok(s) => {
+            tracing::warn!(workspace_id, code = ?s.code(), "Archive hook exited with error");
+        }
+        Err(e) => {
+            tracing::warn!(workspace_id, error = %e, "Archive hook failed to spawn");
+        }
+    }
 }
 
 fn archive_workspace_preflight(workspace_id: &str) -> Result<ArchivePreflightData> {
@@ -290,6 +328,9 @@ pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResp
         archived_context_dir,
         archive_commit,
     } = archive_workspace_preflight(workspace_id)?;
+
+    // Run archive script (best-effort, don't block archive on script failure).
+    run_archive_hook(workspace_id, &workspace_dir, &repo_root);
 
     fs::create_dir_all(archived_context_dir.parent().with_context(|| {
         format!(
@@ -713,168 +754,41 @@ fn create_staged_archive_context(
     Ok(())
 }
 
+/// Resolve the setup script command string from DB or project config.
 fn resolve_setup_hook(
     repository: &repos::RepositoryRecord,
     workspace_dir: &Path,
-    setup_root_dir: &Path,
-) -> Result<Option<PathBuf>> {
-    let raw_setup_script = if let Some(script) = repository
+) -> Result<Option<String>> {
+    if let Some(script) = repository
         .setup_script
         .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
     {
-        Some(script.to_string())
-    } else {
-        load_setup_script_from_conductor_json(workspace_dir)?
-    };
-
-    let Some(raw_setup_script) = raw_setup_script else {
-        return Ok(None);
-    };
-
-    let resolved_path = expand_hook_path(&raw_setup_script, workspace_dir, setup_root_dir);
-    if !resolved_path.exists() {
-        bail!(
-            "Configured setup script is missing at {}",
-            resolved_path.display()
-        );
+        return Ok(Some(script.to_string()));
     }
-
-    Ok(Some(resolved_path))
+    load_setup_script_from_project_config(workspace_dir)
 }
 
-fn load_setup_script_from_conductor_json(workspace_dir: &Path) -> Result<Option<String>> {
-    let conductor_json_path = workspace_dir.join("conductor.json");
-    if !conductor_json_path.is_file() {
-        return Ok(None);
-    }
-
-    let contents = fs::read_to_string(&conductor_json_path).with_context(|| {
-        format!(
-            "Failed to read conductor.json at {}",
-            conductor_json_path.display()
-        )
-    })?;
-    let json: Value = serde_json::from_str(&contents).with_context(|| {
-        format!(
-            "Failed to parse conductor.json at {}",
-            conductor_json_path.display()
-        )
-    })?;
-
-    Ok(json
-        .get("scripts")
-        .and_then(|value| value.get("setup"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned))
-}
-
-fn expand_hook_path(raw_value: &str, workspace_dir: &Path, setup_root_dir: &Path) -> PathBuf {
-    let setup_root = setup_root_dir.display().to_string();
-    let expanded = raw_value
-        .replace("$CONDUCTOR_ROOT_PATH", &setup_root)
-        .replace(
-            "$CONDUCTOR_WORKSPACE_PATH",
-            &workspace_dir.display().to_string(),
-        );
-    let expanded_path = PathBuf::from(expanded);
-
-    if expanded_path.is_absolute() {
-        expanded_path
-    } else {
-        workspace_dir.join(expanded_path)
-    }
-}
-
-fn run_setup_hook(
-    setup_script: Option<&Path>,
-    workspace_dir: &Path,
-    setup_root_dir: &Path,
-    log_path: &Path,
-) -> Result<()> {
-    let Some(setup_script) = setup_script else {
-        write_log_file(log_path, "No setup script configured.\n")?;
-        return Ok(());
-    };
-
-    let (program, args) = command_for_script(setup_script)?;
-    let setup_root = setup_root_dir.display().to_string();
-    let workspace_path = workspace_dir.display().to_string();
-
-    let output = Command::new(&program)
-        .args(&args)
-        .arg(setup_script)
-        .current_dir(workspace_dir)
-        .env("CONDUCTOR_ROOT_PATH", &setup_root)
-        .env("CONDUCTOR_WORKSPACE_PATH", &workspace_path)
-        .output()
-        .map_err(|error| {
-            let _ = write_log_file(
-                log_path,
-                &format!(
-                    "Failed to spawn setup script\nProgram: {}\nScript: {}\nError: {}\n",
-                    program,
-                    setup_script.display(),
-                    error
-                ),
-            );
-            anyhow::anyhow!(
-                "Failed to execute setup script {}: {error}",
-                setup_script.display()
-            )
-        })?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    write_log_file(
-        log_path,
-        &format!(
-            "Program: {}\nScript: {}\nWorkspace: {}\nCONDUCTOR_ROOT_PATH={}\nCONDUCTOR_WORKSPACE_PATH={}\nExit status: {}\n\n[stdout]\n{}\n\n[stderr]\n{}\n",
-            program,
-            setup_script.display(),
-            workspace_dir.display(),
-            setup_root,
-            workspace_path,
-            output.status,
-            stdout,
-            stderr
-        ),
-    )?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        let detail = if !stderr.trim().is_empty() {
-            stderr.trim().to_string()
-        } else if !stdout.trim().is_empty() {
-            stdout.trim().to_string()
-        } else {
-            format!("exit status {}", output.status)
-        };
-        bail!(
-            "Setup script failed for {}: {detail}",
-            setup_script.display()
-        )
-    }
-}
-
-fn command_for_script(script_path: &Path) -> Result<(String, Vec<String>)> {
-    let contents = fs::read_to_string(script_path)
-        .with_context(|| format!("Failed to inspect setup script {}", script_path.display()))?;
-    let first_line = contents.lines().next().unwrap_or_default();
-
-    if let Some(interpreter) = first_line.strip_prefix("#!") {
-        let tokens = interpreter
-            .split_whitespace()
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
-        if let Some((program, args)) = tokens.split_first() {
-            return Ok((program.clone(), args.to_vec()));
+fn load_setup_script_from_project_config(workspace_dir: &Path) -> Result<Option<String>> {
+    for filename in &["helmor.json", "conductor.json"] {
+        let config_path = workspace_dir.join(filename);
+        if !config_path.is_file() {
+            continue;
+        }
+        let contents = fs::read_to_string(&config_path)
+            .with_context(|| format!("Failed to read {}", config_path.display()))?;
+        let json: Value = serde_json::from_str(&contents)
+            .with_context(|| format!("Failed to parse {}", config_path.display()))?;
+        if let Some(setup) = json
+            .get("scripts")
+            .and_then(|v| v.get("setup"))
+            .and_then(Value::as_str)
+        {
+            return Ok(Some(setup.to_owned()));
         }
     }
-
-    Ok(("/bin/sh".to_string(), Vec::new()))
+    Ok(None)
 }
 
 fn write_log_file(path: &Path, contents: &str) -> Result<()> {

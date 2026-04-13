@@ -171,6 +171,30 @@ function createMessages(sessionId: string) {
 	];
 }
 
+function createPlanReviewMessages(
+	sessionId: string,
+	toolUseId = "tool-plan-1",
+) {
+	return [
+		{
+			role: "assistant" as const,
+			id: `${sessionId}-plan-review`,
+			createdAt: "2026-04-05T00:00:00Z",
+			content: [
+				{
+					type: "plan-review" as const,
+					toolUseId,
+					toolName: "ExitPlanMode",
+					plan: "1. Review the implementation plan.",
+					planFilePath: "/tmp/plan.md",
+					allowedPrompts: [],
+				},
+			],
+			status: { type: "complete", reason: "stop" },
+		},
+	];
+}
+
 function getLatestPanelProps() {
 	const latestCall =
 		panelRenderSpy.mock.calls[panelRenderSpy.mock.calls.length - 1];
@@ -588,5 +612,43 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		await waitFor(() => {
 			expect(getSessionPaneIds()).toEqual(["session-created"]);
 		});
+	});
+
+	it("renders plan-review messages from DB as read-only cards", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			createWorkspaceDetail("workspace-1"),
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			createWorkspaceSessions("workspace-1"),
+		);
+		queryClient.setQueryData(
+			[...helmorQueryKeys.sessionMessages("session-1"), "thread"],
+			createPlanReviewMessages("session-1"),
+		);
+
+		renderWithProviders(
+			<WorkspacePanelContainer
+				selectedWorkspaceId="workspace-1"
+				displayedWorkspaceId="workspace-1"
+				selectedSessionId="session-1"
+				displayedSessionId="session-1"
+				sending={false}
+				onSelectSession={vi.fn()}
+				onResolveDisplayedSession={vi.fn()}
+			/>,
+			{ queryClient },
+		);
+
+		const pane = (
+			getLatestPanelProps().sessionPanes as Array<{
+				sessionId: string;
+				messages: Array<unknown>;
+			}>
+		).find((entry) => entry.sessionId === "session-1");
+
+		expect(pane?.messages).toHaveLength(1);
 	});
 });

@@ -257,4 +257,62 @@ describe("WorkspacePanel", () => {
 			"gap-2",
 		);
 	});
+
+	it("shows a yellow dot for sessions waiting on user interaction", () => {
+		const sessions = [
+			SESSIONS[0],
+			{
+				...SESSIONS[0],
+				id: "session-2",
+				title: "Session 2",
+				active: false,
+				unreadCount: 3,
+			},
+		];
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<QueryClientProvider client={createHelmorQueryClient()}>
+					<WorkspacePanel
+						workspace={WORKSPACE}
+						sessions={sessions}
+						selectedSessionId="session-1"
+						sessionPanes={[]}
+						sending={false}
+						interactionRequiredSessionIds={new Set(["session-2"])}
+					/>
+				</QueryClientProvider>
+			</TooltipProvider>,
+		);
+
+		const tab = screen.getByRole("tab", { name: /Session 2/i });
+		expect(
+			within(tab).getByLabelText("Interaction required"),
+		).toBeInTheDocument();
+		expect(within(tab).queryByLabelText("Unread session")).toBeNull();
+	});
+
+	it("keeps the yellow dot visible on the selected session while interaction is pending", () => {
+		render(
+			<TooltipProvider delayDuration={0}>
+				<QueryClientProvider client={createHelmorQueryClient()}>
+					<WorkspacePanel
+						workspace={WORKSPACE}
+						sessions={SESSIONS}
+						selectedSessionId="session-1"
+						sessionPanes={[]}
+						sending={false}
+						interactionRequiredSessionIds={new Set(["session-1"])}
+					/>
+				</QueryClientProvider>
+			</TooltipProvider>,
+		);
+
+		const selectedTabs = screen.getAllByRole("tab", { name: /Session 1/i });
+		expect(
+			selectedTabs.some(
+				(tab) => within(tab).queryByLabelText("Interaction required") !== null,
+			),
+		).toBe(true);
+	});
 });

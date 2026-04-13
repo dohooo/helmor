@@ -14,7 +14,8 @@ describe("buildComposerPreviewInsertItem", () => {
 	});
 
 	it("builds a code preview badge for long code-like content", () => {
-		const longCode = "const failure = true;\n".repeat(12);
+		// 22 chars per line × 25 = 550 chars, comfortably above the 500 threshold.
+		const longCode = "const failure = true;\n".repeat(25);
 
 		expect(
 			buildComposerPreviewInsertItem({
@@ -34,8 +35,9 @@ describe("buildComposerPreviewInsertItem", () => {
 	});
 
 	it("builds a text preview badge for long non-code content", () => {
+		// 52 chars per repetition × 12 = 624 chars, comfortably above 500.
 		const longText =
-			"This is a long plain-text note without code syntax. ".repeat(6);
+			"This is a long plain-text note without code syntax. ".repeat(12);
 
 		expect(
 			buildComposerPreviewInsertItem({

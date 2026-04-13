@@ -7,19 +7,9 @@ fn create_workspace_from_repo_creates_ready_workspace_and_initial_session() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
 
-    harness.commit_repo_files(&[
-        (
-            "conductor.json",
-            r#"{"scripts":{"setup":"$CONDUCTOR_ROOT_PATH/conductor-setup.sh"}}"#,
-        ),
-        (
-            "conductor-setup.sh",
-            "#!/bin/sh\nset -e\nprintf '%s' \"$CONDUCTOR_ROOT_PATH\" > \"$CONDUCTOR_WORKSPACE_PATH/.context/setup-root.txt\"\nprintf 'json' > \"$CONDUCTOR_WORKSPACE_PATH/setup-from-json.txt\"\n",
-        ),
-    ]);
-
     let response = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap();
 
+    // No setup script → goes straight to "ready".
     assert_eq!(response.created_state, "ready");
     assert!(
         helpers::WORKSPACE_NAMES.contains(&response.directory_name.as_str()),
@@ -37,8 +27,6 @@ fn create_workspace_from_repo_creates_ready_workspace_and_initial_session() {
     assert!(workspace_dir.join(".context/notes.md").exists());
     assert!(workspace_dir.join(".context/todos.md").exists());
     assert!(workspace_dir.join(".context/attachments").is_dir());
-    assert!(workspace_dir.join(".context/setup-root.txt").exists());
-    assert!(workspace_dir.join("setup-from-json.txt").exists());
 
     let connection = Connection::open(harness.db_path()).unwrap();
     let (
@@ -48,24 +36,13 @@ fn create_workspace_from_repo_creates_ready_workspace_and_initial_session() {
         initialization_parent_branch,
         intended_target_branch,
         initialization_files_copied,
-        setup_log_path,
         initialization_log_path,
         active_session_id,
-    ): (
-        String,
-        String,
-        String,
-        String,
-        String,
-        i64,
-        String,
-        String,
-        String,
-    ) = connection
+    ): (String, String, String, String, String, i64, String, String) = connection
         .query_row(
             r#"
             SELECT state, branch, placeholder_branch_name, initialization_parent_branch,
-              intended_target_branch, initialization_files_copied, setup_log_path,
+              intended_target_branch, initialization_files_copied,
               initialization_log_path, active_session_id
             FROM workspaces WHERE id = ?1
             "#,
@@ -80,21 +57,21 @@ fn create_workspace_from_repo_creates_ready_workspace_and_initial_session() {
                     row.get(5)?,
                     row.get(6)?,
                     row.get(7)?,
-                    row.get(8)?,
                 ))
             },
         )
         .unwrap();
-    let (session_title, session_model, session_permission_mode, thinking_enabled): (
+    let (session_title, session_model, session_agent_type, session_permission_mode, thinking_enabled): (
         String,
-        String,
+        Option<String>,
+        Option<String>,
         String,
         i64,
     ) = connection
         .query_row(
-            "SELECT title, model, permission_mode, thinking_enabled FROM sessions WHERE id = ?1",
+            "SELECT title, model, agent_type, permission_mode, thinking_enabled FROM sessions WHERE id = ?1",
             [&active_session_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )
         .unwrap();
 
@@ -107,41 +84,40 @@ fn create_workspace_from_repo_creates_ready_workspace_and_initial_session() {
     assert_eq!(initialization_parent_branch, "main");
     assert_eq!(intended_target_branch, "main");
     assert!(initialization_files_copied > 0);
-    assert!(Path::new(&setup_log_path).is_file());
     assert!(Path::new(&initialization_log_path).is_file());
     assert_eq!(session_title, "Untitled");
-    assert_eq!(session_model, "opus");
+    assert_eq!(session_model, None, "new session should have no model");
+    assert_eq!(
+        session_agent_type, None,
+        "new session should have no agent_type"
+    );
     assert_eq!(session_permission_mode, "default");
     assert_eq!(thinking_enabled, 1);
 }
 
 #[test]
-fn create_workspace_from_repo_prefers_repo_setup_script_over_conductor_json() {
+fn create_workspace_from_repo_defers_setup_when_script_configured() {
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
-    harness.set_repo_setup_script(Some("$CONDUCTOR_ROOT_PATH/repo-settings-setup.sh"));
-    harness.commit_repo_files(&[
-        (
-            "conductor.json",
-            r#"{"scripts":{"setup":"$CONDUCTOR_ROOT_PATH/conductor-setup.sh"}}"#,
-        ),
-        (
-            "conductor-setup.sh",
-            "#!/bin/sh\nset -e\nprintf 'json' > \"$CONDUCTOR_WORKSPACE_PATH/json-setup.txt\"\n",
-        ),
-        (
-            "repo-settings-setup.sh",
-            "#!/bin/sh\nset -e\nprintf 'repo' > \"$CONDUCTOR_WORKSPACE_PATH/repo-setup.txt\"\n",
-        ),
-    ]);
+
+    harness.commit_repo_files(&[("conductor.json", r#"{"scripts":{"setup":"echo hello"}}"#)]);
 
     let response = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap();
-    let workspace_dir = harness.workspace_dir(&response.directory_name);
 
-    assert!(workspace_dir.join("repo-setup.txt").exists());
-    assert!(!workspace_dir.join("json-setup.txt").exists());
+    // Setup script detected → deferred to frontend inspector.
+    assert_eq!(response.created_state, "setup_pending");
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let state: String = connection
+        .query_row(
+            "SELECT state FROM workspaces WHERE id = ?1",
+            [&response.created_workspace_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "setup_pending");
 }
 
 #[test]
@@ -197,53 +173,4 @@ fn create_workspace_from_repo_cleans_up_after_worktree_failure() {
 
     assert_eq!(workspace_count, 0);
     assert_eq!(session_count, 0);
-}
-
-#[test]
-fn create_workspace_from_repo_cleans_up_after_setup_failure_and_keeps_logs() {
-    let _guard = TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let harness = CreateTestHarness::new();
-
-    harness.commit_repo_files(&[
-        (
-            "conductor.json",
-            r#"{"scripts":{"setup":"$CONDUCTOR_ROOT_PATH/conductor-setup.sh"}}"#,
-        ),
-        (
-            "conductor-setup.sh",
-            "#!/bin/sh\nset -e\necho 'failing setup'\nexit 7\n",
-        ),
-    ]);
-
-    let error = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap_err();
-
-    assert!(error.to_string().contains("Setup script failed"));
-    assert!(!harness.workspace_dir("acamar").exists());
-
-    let connection = Connection::open(harness.db_path()).unwrap();
-    let (workspace_count, session_count): (i64, i64) = connection
-        .query_row(
-            "SELECT (SELECT COUNT(*) FROM workspaces), (SELECT COUNT(*) FROM sessions)",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .unwrap();
-    assert_eq!(workspace_count, 0);
-    assert_eq!(session_count, 0);
-
-    let log_root = crate::data_dir::logs_dir().unwrap().join("workspaces");
-    let mut log_files = fs::read_dir(&log_root)
-        .unwrap()
-        .flat_map(Result::ok)
-        .map(|entry| entry.path())
-        .collect::<Vec<_>>();
-    log_files.sort();
-
-    assert!(!log_files.is_empty());
-    let setup_log = log_files[0].join("setup.log");
-    assert!(setup_log.is_file());
-    let setup_log_contents = fs::read_to_string(setup_log).unwrap();
-    assert!(setup_log_contents.contains("failing setup"));
 }

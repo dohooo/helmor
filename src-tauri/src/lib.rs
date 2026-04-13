@@ -109,6 +109,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init());
 
     #[cfg(debug_assertions)]
@@ -119,6 +120,7 @@ pub fn run() {
         .manage(sidecar::ManagedSidecar::new())
         .manage(agents::ActiveStreams::new())
         .manage(git_watcher::GitWatcherManager::new())
+        .manage(workspace::scripts::ScriptProcessManager::new())
         .setup(|app| {
             // Ensure data directory structure exists
             data_dir::ensure_directory_structure().expect("Failed to create Helmor data directory");
@@ -180,12 +182,15 @@ pub fn run() {
             agents::send_agent_message_stream,
             agents::stop_agent_stream,
             agents::respond_to_permission_request,
+            agents::respond_to_deferred_tool,
+            agents::respond_to_elicitation_request,
             agents::generate_session_title,
             agents::list_slash_commands,
             commands::workspace_commands::archive_workspace,
             commands::workspace_commands::validate_archive_workspace,
             commands::workspace_commands::validate_restore_workspace,
             commands::github_commands::cancel_github_identity_connect,
+            commands::workspace_commands::complete_workspace_setup,
             commands::workspace_commands::create_workspace_from_repo,
             commands::github_commands::disconnect_github_identity,
             commands::repository_commands::get_add_repository_defaults,
@@ -204,6 +209,10 @@ pub fn run() {
             commands::repository_commands::update_repository_default_branch,
             commands::repository_commands::update_repository_remote,
             commands::repository_commands::list_repo_remotes,
+            commands::repository_commands::load_repo_scripts,
+            commands::repository_commands::update_repo_scripts,
+            commands::script_commands::execute_repo_script,
+            commands::script_commands::stop_repo_script,
             commands::session_commands::list_session_attachments,
             commands::session_commands::list_session_thread_messages,
             commands::workspace_commands::list_workspace_groups,

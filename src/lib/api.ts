@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { InspectorFileItem } from "./editor-session";
 
@@ -71,6 +71,7 @@ export type AgentSendRequest = {
 	provider: AgentProvider;
 	modelId: string;
 	prompt: string;
+	resumeOnly?: boolean | null;
 	sessionId?: string | null;
 	helmorSessionId?: string | null;
 	workingDirectory?: string | null;
@@ -1212,6 +1213,12 @@ export async function createWorkspaceFromRepo(
 	});
 }
 
+export async function completeWorkspaceSetup(
+	workspaceId: string,
+): Promise<void> {
+	return invoke("complete_workspace_setup", { workspaceId });
+}
+
 export async function addRepositoryFromLocalPath(
 	folderPath: string,
 ): Promise<AddRepositoryResponse> {
@@ -1330,6 +1337,18 @@ export type FileMentionPart = {
 	type: "file-mention";
 	path: string;
 };
+export type PlanReviewAllowedPrompt = {
+	tool: string;
+	prompt: string;
+};
+export type PlanReviewPart = {
+	type: "plan-review";
+	toolUseId: string;
+	toolName: string;
+	plan?: string | null;
+	planFilePath?: string | null;
+	allowedPrompts?: PlanReviewAllowedPrompt[];
+};
 export type MessagePart =
 	| TextPart
 	| ReasoningPart
@@ -1338,7 +1357,8 @@ export type MessagePart =
 	| TodoListPart
 	| ImagePart
 	| PromptSuggestionPart
-	| FileMentionPart;
+	| FileMentionPart
+	| PlanReviewPart;
 
 export type CollapsedGroupPart = {
 	type: "collapsed-group";
@@ -1399,6 +1419,32 @@ export type AgentStreamEvent =
 			title?: string | null;
 			description?: string | null;
 	  }
+	| {
+			kind: "deferredToolUse";
+			provider: AgentProvider;
+			modelId: string;
+			resolvedModel: string;
+			sessionId?: string | null;
+			workingDirectory: string;
+			permissionMode?: string | null;
+			toolUseId: string;
+			toolName: string;
+			toolInput: Record<string, unknown>;
+	  }
+	| {
+			kind: "elicitationRequest";
+			provider: AgentProvider;
+			modelId: string;
+			resolvedModel: string;
+			sessionId?: string | null;
+			workingDirectory: string;
+			elicitationId?: string | null;
+			serverName: string;
+			message: string;
+			mode?: string | null;
+			url?: string | null;
+			requestedSchema?: Record<string, unknown> | null;
+	  }
 	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
 
 /**
@@ -1443,9 +1489,50 @@ export async function stopAgentStream(
 export async function respondToPermissionRequest(
 	permissionId: string,
 	behavior: "allow" | "deny",
+	options?: {
+		updatedPermissions?: unknown[];
+		message?: string;
+	},
 ): Promise<void> {
 	await invoke("respond_to_permission_request", {
-		request: { permissionId, behavior },
+		request: {
+			permissionId,
+			behavior,
+			updatedPermissions: options?.updatedPermissions ?? null,
+			message: options?.message ?? null,
+		},
+	});
+}
+
+export async function respondToDeferredTool(
+	toolUseId: string,
+	behavior: "allow" | "deny",
+	options?: {
+		reason?: string | null;
+		updatedInput?: Record<string, unknown> | null;
+	},
+): Promise<void> {
+	await invoke("respond_to_deferred_tool", {
+		request: {
+			toolUseId,
+			behavior,
+			reason: options?.reason ?? null,
+			updatedInput: options?.updatedInput ?? null,
+		},
+	});
+}
+
+export async function respondToElicitationRequest(
+	elicitationId: string,
+	action: "accept" | "decline" | "cancel",
+	content?: Record<string, unknown> | null,
+): Promise<void> {
+	await invoke("respond_to_elicitation_request", {
+		request: {
+			elicitationId,
+			action,
+			content: content ?? null,
+		},
 	});
 }
 
@@ -1589,6 +1676,70 @@ export async function loadHiddenSessions(
 	} catch {
 		return [];
 	}
+}
+
+// ---- Repository scripts ----
+
+export type RepoScripts = {
+	setupScript?: string | null;
+	runScript?: string | null;
+	archiveScript?: string | null;
+	setupFromProject: boolean;
+	runFromProject: boolean;
+	archiveFromProject: boolean;
+};
+
+export type ScriptEvent =
+	| { type: "started"; pid: number; command: string }
+	| { type: "stdout"; data: string }
+	| { type: "stderr"; data: string }
+	| { type: "exited"; code: number | null }
+	| { type: "error"; message: string };
+
+export async function loadRepoScripts(repoId: string): Promise<RepoScripts> {
+	return invoke<RepoScripts>("load_repo_scripts", { repoId });
+}
+
+export async function updateRepoScripts(
+	repoId: string,
+	setupScript: string | null,
+	runScript: string | null,
+	archiveScript: string | null,
+): Promise<void> {
+	await invoke("update_repo_scripts", {
+		repoId,
+		setupScript,
+		runScript,
+		archiveScript,
+	});
+}
+
+export async function executeRepoScript(
+	repoId: string,
+	scriptType: "setup" | "run",
+	onEvent: (event: ScriptEvent) => void,
+	workspaceId?: string | null,
+): Promise<void> {
+	const channel = new Channel<ScriptEvent>();
+	channel.onmessage = onEvent;
+	await invoke("execute_repo_script", {
+		repoId,
+		scriptType,
+		workspaceId: workspaceId ?? null,
+		channel,
+	});
+}
+
+export async function stopRepoScript(
+	repoId: string,
+	scriptType: "setup" | "run",
+	workspaceId?: string | null,
+): Promise<boolean> {
+	return invoke<boolean>("stop_repo_script", {
+		repoId,
+		scriptType,
+		workspaceId: workspaceId ?? null,
+	});
 }
 
 export { DEFAULT_AGENT_MODEL_SECTIONS, DEFAULT_WORKSPACE_GROUPS };

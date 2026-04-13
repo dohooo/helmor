@@ -5,7 +5,14 @@ import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
 import type { LexicalEditor } from "lexical";
 import { $getRoot } from "lexical";
-import { ArrowUp, ChevronDown, ClipboardList, Square } from "lucide-react";
+import {
+	ArrowUp,
+	Check,
+	ChevronDown,
+	ClipboardList,
+	MessageSquareMore,
+	Square,
+} from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -18,6 +25,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
 import type { AgentModelSection, SlashCommandEntry } from "@/lib/api";
 import type {
 	ComposerCustomTag,
@@ -26,6 +34,11 @@ import type {
 import { recordComposerRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
 import { ComposerButton } from "./button";
+import type {
+	DeferredToolResponseHandler,
+	DeferredToolResponseOptions,
+} from "./deferred-tool";
+import { DeferredToolPanel } from "./deferred-tool-panel";
 import { CustomTagBadgeNode } from "./editor/custom-tag-badge-node";
 import { FileBadgeNode } from "./editor/file-badge-node";
 import { ImageBadgeNode } from "./editor/image-badge-node";
@@ -64,7 +77,7 @@ type WorkspaceComposerProps = {
 	effortLevel: string;
 	onSelectEffort: (level: string) => void;
 	permissionMode: string;
-	onTogglePlanMode: () => void;
+	onChangePermissionMode: (mode: string) => void;
 	sendError?: string | null;
 	restoreDraft?: string | null;
 	restoreImages?: string[];
@@ -78,9 +91,22 @@ type WorkspaceComposerProps = {
 	slashCommandsError?: boolean;
 	onRetrySlashCommands?: () => void;
 	workspaceRootPath?: string | null;
+	pendingDeferredTool?: PendingDeferredTool | null;
+	onDeferredToolResponse?: DeferredToolResponseHandler;
+	pendingExitPlanPermissionId?: string | null;
+	onPermissionResponse?: (
+		permissionId: string,
+		behavior: "allow" | "deny",
+		options?: { updatedPermissions?: unknown[]; message?: string },
+	) => void;
 };
 
 const EMPTY_SLASH_COMMANDS: readonly SlashCommandEntry[] = [];
+const noopDeferredToolResponse = (
+	_deferred: PendingDeferredTool,
+	_behavior: "allow" | "deny",
+	_options?: DeferredToolResponseOptions,
+) => {};
 // ---------------------------------------------------------------------------
 // Lexical editor config (stable reference — defined outside component)
 // ---------------------------------------------------------------------------
@@ -108,7 +134,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	effortLevel,
 	onSelectEffort,
 	permissionMode,
-	onTogglePlanMode,
+	onChangePermissionMode,
 	sendError,
 	restoreDraft,
 	restoreImages = [],
@@ -122,6 +148,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	slashCommandsError = false,
 	onRetrySlashCommands,
 	workspaceRootPath = null,
+	pendingDeferredTool = null,
+	onDeferredToolResponse = noopDeferredToolResponse,
+	pendingExitPlanPermissionId = null,
+	onPermissionResponse,
 }: WorkspaceComposerProps) {
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
@@ -152,8 +182,19 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		}
 		return null;
 	}, [modelSections, selectedModelId]);
+	const hasPendingDeferredTool = pendingDeferredTool !== null;
+	const hasPendingPlanReview = pendingExitPlanPermissionId !== null;
+	const inputDisabled = disabled || hasPendingDeferredTool;
+	const toolbarDisabled =
+		disabled || hasPendingDeferredTool || hasPendingPlanReview;
 	const sendDisabled =
-		disabled || submitDisabled || sending || !selectedModel || !hasContent;
+		disabled ||
+		submitDisabled ||
+		sending ||
+		hasPendingDeferredTool ||
+		hasPendingPlanReview ||
+		!selectedModel ||
+		!hasContent;
 
 	// Lexical initial config — must be a new object per mount for key resets
 	const initialConfig = useRef({
@@ -163,39 +204,46 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		onError: onEditorError,
 	}).current;
 
-	// Save & restore drafts on context switch
+	// Save & restore drafts on context switch.
+	// Uses Lexical's native EditorState serialization so the full node tree
+	// (including badge positions, order, and cursor) is preserved exactly.
 	const prevContextKeyRef = useRef(contextKey);
 	useEffect(() => {
 		if (prevContextKeyRef.current !== contextKey) {
 			const prevKey = prevContextKeyRef.current;
 			prevContextKeyRef.current = contextKey;
-			// Save outgoing draft
 			const editor = editorRef.current;
+
+			// Save outgoing editor state
 			if (editor) {
+				let hasContent = false;
 				editor.read(() => {
-					const content = $extractComposerContent();
-					if (
-						content.text ||
-						content.images.length ||
-						content.files.length ||
-						content.customTags.length
-					) {
-						draftCache.set(prevKey, content);
-					} else {
-						draftCache.delete(prevKey);
-					}
+					const c = $extractComposerContent();
+					hasContent = Boolean(
+						c.text || c.images.length || c.files.length || c.customTags.length,
+					);
+				});
+				if (hasContent) {
+					draftCache.set(prevKey, editor.getEditorState().toJSON());
+				} else {
+					draftCache.delete(prevKey);
+				}
+			}
+
+			// Restore incoming editor state
+			const cached = draftCache.get(contextKey);
+			if (cached && editor) {
+				editor.setEditorState(editor.parseEditorState(cached));
+			} else {
+				editor?.update(() => {
+					$setEditorContent(
+						restoreDraft ?? "",
+						restoreImages,
+						restoreFiles,
+						restoreCustomTags,
+					);
 				});
 			}
-			// Restore incoming draft (cache > error-restore > empty)
-			const cached = draftCache.get(contextKey);
-			editor?.update(() => {
-				$setEditorContent(
-					cached?.text ?? restoreDraft ?? "",
-					cached?.images ?? restoreImages,
-					cached?.files ?? restoreFiles,
-					cached?.customTags ?? restoreCustomTags,
-				);
-			});
 		}
 	}, [
 		contextKey,
@@ -269,6 +317,45 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		}
 	}, [onPendingInsertRequestsConsumed, pendingInsertRequests]);
 
+	const handlePlanApprove = useCallback(() => {
+		if (!pendingExitPlanPermissionId || !onPermissionResponse) return;
+		onChangePermissionMode("bypassPermissions");
+		onPermissionResponse(pendingExitPlanPermissionId, "allow", {
+			updatedPermissions: [
+				{
+					type: "setMode",
+					mode: "bypassPermissions",
+					destination: "session",
+				},
+			],
+		});
+	}, [
+		onChangePermissionMode,
+		pendingExitPlanPermissionId,
+		onPermissionResponse,
+	]);
+
+	const handlePlanRequestChanges = useCallback(() => {
+		if (!pendingExitPlanPermissionId || !onPermissionResponse) return;
+		const editor = editorRef.current;
+		let feedback = "";
+		if (editor) {
+			editor.read(() => {
+				feedback = $extractComposerContent().text;
+			});
+		}
+		onPermissionResponse(pendingExitPlanPermissionId, "deny", {
+			message: feedback.trim(),
+		});
+		if (editor) {
+			editor.update(() => {
+				$getRoot().clear();
+			});
+			draftCache.delete(contextKey);
+			setHasContent(false);
+		}
+	}, [pendingExitPlanPermissionId, onPermissionResponse, contextKey]);
+
 	const handleSubmit = useCallback(() => {
 		const editor = editorRef.current;
 		if (!editor) return;
@@ -301,216 +388,264 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	return (
 		<div
 			aria-label="Workspace composer"
-			className="flex flex-col rounded-2xl border border-border/40 bg-sidebar px-4 pb-3 pt-3 shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]"
+			className={cn(
+				"flex flex-col rounded-2xl border border-border/40 bg-sidebar px-4 pb-3 pt-3 shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]",
+				inputDisabled &&
+					!hasPendingDeferredTool &&
+					"cursor-not-allowed opacity-60",
+			)}
 		>
 			<label htmlFor="workspace-input" className="sr-only">
 				Workspace input
 			</label>
 
-			<LexicalComposer initialConfig={initialConfig}>
-				<div className="relative">
-					<PlainTextPlugin
-						contentEditable={
-							<ContentEditable
-								id="workspace-input"
-								aria-label="Workspace input"
-								aria-multiline
-								className="composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-foreground outline-none"
-							/>
-						}
-						placeholder={
-							<div className="pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-muted-foreground">
-								Ask to make changes, @mention files, run /commands
-							</div>
-						}
-						ErrorBoundary={LexicalErrorBoundary}
-					/>
-				</div>
-				<HistoryPlugin />
-				<SlashCommandPlugin
-					commands={slashCommands}
-					isLoading={slashCommandsLoading}
-					isError={slashCommandsError}
-					onRetry={onRetrySlashCommands}
+			{hasPendingDeferredTool ? (
+				<DeferredToolPanel
+					deferred={pendingDeferredTool!}
+					disabled={disabled || sending}
+					onResponse={onDeferredToolResponse}
 				/>
-				<FileMentionPlugin workspaceRootPath={workspaceRootPath} />
-				<SubmitPlugin onSubmit={handleSubmit} disabled={sendDisabled} />
-				<PasteImagePlugin />
-				<DropFilePlugin />
-				<AutoResizePlugin minHeight={64} maxHeight={240} />
-				<EditorRefPlugin editorRef={editorRef} />
-				<EditablePlugin disabled={disabled} />
-				<HasContentPlugin onChange={setHasContent} />
-			</LexicalComposer>
-
-			{sendError ? (
-				<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-[12px] text-muted-foreground">
-					{sendError}
-				</div>
-			) : null}
-
-			<div className="mt-2.5 flex items-end justify-between gap-3">
-				<div className="flex flex-wrap items-center gap-2">
-					<DropdownMenu>
-						<DropdownMenuTrigger
-							disabled={disabled}
-							className={cn(
-								"flex items-center gap-1.5 rounded-lg px-1 py-0.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
-								disabled &&
-									"cursor-not-allowed opacity-45 hover:text-muted-foreground",
-							)}
-						>
-							{selectedModel?.provider === "codex" ? (
-								<OpenAIIcon className="size-[14px]" />
-							) : (
-								<ClaudeIcon className="size-[14px]" />
-							)}
-							<span>{selectedModel?.label ?? "Select model"}</span>
-							<ChevronDown className="size-3 opacity-40" strokeWidth={2} />
-						</DropdownMenuTrigger>
-
-						<DropdownMenuContent
-							side="top"
-							align="start"
-							sideOffset={8}
-							className="min-w-[17rem]"
-						>
-							{modelSections.map((section, index) => (
-								<DropdownMenuGroup key={section.id}>
-									{index > 0 ? <DropdownMenuSeparator /> : null}
-									<DropdownMenuLabel>{section.label}</DropdownMenuLabel>
-									{section.options.map((option) => (
-										<DropdownMenuItem
-											key={option.id}
-											disabled={disabled}
-											onClick={() => {
-												onSelectModel(option.id);
-											}}
-											className="flex items-center justify-between gap-3"
-										>
-											<div className="flex items-center gap-3">
-												<span className="text-muted-foreground">
-													{option.provider === "codex" ? (
-														<OpenAIIcon className="size-4" />
-													) : (
-														<ClaudeIcon className="size-4" />
-													)}
-												</span>
-												<span className="font-medium">{option.label}</span>
-											</div>
-
-											{option.badge ? (
-												<span className="rounded-md border border-border/70 bg-muted/70 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-													{option.badge}
-												</span>
-											) : null}
-										</DropdownMenuItem>
-									))}
-								</DropdownMenuGroup>
-							))}
-						</DropdownMenuContent>
-					</DropdownMenu>
-
-					<DropdownMenu>
-						<DropdownMenuTrigger
-							disabled={disabled}
-							className={cn(
-								"flex items-center gap-0.5 px-1 py-0.5 text-[13px] font-medium focus-visible:outline-none",
-								disabled ? "cursor-not-allowed opacity-45" : null,
-							)}
-						>
-							<span
-								className={cn(
-									"capitalize",
-									effectiveEffort === "max" || effectiveEffort === "xhigh"
-										? "effort-max-text"
-										: "text-muted-foreground",
-								)}
-							>
-								{effectiveEffort === "xhigh" ? "Extra High" : effectiveEffort}
-							</span>
-							<ChevronDown
-								className="size-3 text-muted-foreground/40"
-								strokeWidth={2}
+			) : (
+				<>
+					<LexicalComposer initialConfig={initialConfig}>
+						<div className="relative">
+							<PlainTextPlugin
+								contentEditable={
+									<ContentEditable
+										id="workspace-input"
+										aria-label="Workspace input"
+										aria-multiline
+										className="composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-foreground outline-none"
+									/>
+								}
+								placeholder={
+									<div className="pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-muted-foreground">
+										{hasPendingPlanReview
+											? "Describe what to change, then click Request Changes"
+											: "Ask to make changes, @mention files, run /commands"}
+									</div>
+								}
+								ErrorBoundary={LexicalErrorBoundary}
 							/>
-						</DropdownMenuTrigger>
-						<DropdownMenuContent
-							side="top"
-							align="start"
-							sideOffset={8}
-							className="min-w-[11rem]"
-						>
-							<DropdownMenuGroup>
-								<DropdownMenuLabel>Effort</DropdownMenuLabel>
-								{(provider === "codex"
-									? (["minimal", "low", "medium", "high", "xhigh"] as const)
-									: isOpus
-										? (["low", "medium", "high", "max"] as const)
-										: (["low", "medium", "high"] as const)
-								).map((level) => (
-									<DropdownMenuItem
-										key={level}
-										disabled={disabled}
-										onClick={() => onSelectEffort(level)}
-										className="flex items-center justify-between gap-3"
+						</div>
+						<HistoryPlugin />
+						<SlashCommandPlugin
+							commands={slashCommands}
+							isLoading={slashCommandsLoading}
+							isError={slashCommandsError}
+							onRetry={onRetrySlashCommands}
+						/>
+						<FileMentionPlugin workspaceRootPath={workspaceRootPath} />
+						<SubmitPlugin onSubmit={handleSubmit} disabled={sendDisabled} />
+						<PasteImagePlugin />
+						<DropFilePlugin />
+						<AutoResizePlugin minHeight={64} maxHeight={240} />
+						<EditorRefPlugin editorRef={editorRef} />
+						<EditablePlugin disabled={inputDisabled} />
+						<HasContentPlugin onChange={setHasContent} />
+					</LexicalComposer>
+
+					{sendError ? (
+						<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-[12px] text-muted-foreground">
+							{sendError}
+						</div>
+					) : null}
+
+					<div className="mt-2.5 flex items-end justify-between gap-3">
+						<div className="flex flex-wrap items-center gap-2">
+							<DropdownMenu>
+								<DropdownMenuTrigger
+									disabled={toolbarDisabled}
+									className={cn(
+										"flex items-center gap-1.5 rounded-lg px-1 py-0.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
+										toolbarDisabled &&
+											"cursor-not-allowed opacity-45 hover:text-muted-foreground",
+									)}
+								>
+									{selectedModel?.provider === "codex" ? (
+										<OpenAIIcon className="size-[14px]" />
+									) : (
+										<ClaudeIcon className="size-[14px]" />
+									)}
+									<span>{selectedModel?.label ?? "Select model"}</span>
+									<ChevronDown className="size-3 opacity-40" strokeWidth={2} />
+								</DropdownMenuTrigger>
+
+								<DropdownMenuContent
+									side="top"
+									align="start"
+									sideOffset={8}
+									className="min-w-[17rem]"
+								>
+									{modelSections.map((section, index) => (
+										<DropdownMenuGroup key={section.id}>
+											{index > 0 ? <DropdownMenuSeparator /> : null}
+											<DropdownMenuLabel>{section.label}</DropdownMenuLabel>
+											{section.options.map((option) => (
+												<DropdownMenuItem
+													key={option.id}
+													disabled={toolbarDisabled}
+													onClick={() => {
+														onSelectModel(option.id);
+													}}
+													className="flex items-center justify-between gap-3"
+												>
+													<div className="flex items-center gap-3">
+														<span className="text-muted-foreground">
+															{option.provider === "codex" ? (
+																<OpenAIIcon className="size-4" />
+															) : (
+																<ClaudeIcon className="size-4" />
+															)}
+														</span>
+														<span className="font-medium">{option.label}</span>
+													</div>
+
+													{option.badge ? (
+														<span className="rounded-md border border-border/70 bg-muted/70 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+															{option.badge}
+														</span>
+													) : null}
+												</DropdownMenuItem>
+											))}
+										</DropdownMenuGroup>
+									))}
+								</DropdownMenuContent>
+							</DropdownMenu>
+
+							<DropdownMenu>
+								<DropdownMenuTrigger
+									disabled={toolbarDisabled}
+									className={cn(
+										"flex items-center gap-0.5 px-1 py-0.5 text-[13px] font-medium focus-visible:outline-none",
+										toolbarDisabled ? "cursor-not-allowed opacity-45" : null,
+									)}
+								>
+									<span
+										className={cn(
+											"capitalize",
+											effectiveEffort === "max" || effectiveEffort === "xhigh"
+												? "effort-max-text"
+												: "text-muted-foreground",
+										)}
 									>
-										<div className="flex items-center gap-2.5">
-											<EffortBrainIcon level={level} />
-											<span className="font-medium capitalize">
-												{level === "xhigh" ? "Extra High" : level}
-											</span>
-										</div>
-										{level === effectiveEffort ? (
-											<span className="text-[11px] text-foreground">✓</span>
-										) : null}
-									</DropdownMenuItem>
-								))}
-							</DropdownMenuGroup>
-						</DropdownMenuContent>
-					</DropdownMenu>
+										{effectiveEffort === "xhigh"
+											? "Extra High"
+											: effectiveEffort}
+									</span>
+									<ChevronDown
+										className="size-3 text-muted-foreground/40"
+										strokeWidth={2}
+									/>
+								</DropdownMenuTrigger>
+								<DropdownMenuContent
+									side="top"
+									align="start"
+									sideOffset={8}
+									className="min-w-[11rem]"
+								>
+									<DropdownMenuGroup>
+										<DropdownMenuLabel>Effort</DropdownMenuLabel>
+										{(provider === "codex"
+											? (["minimal", "low", "medium", "high", "xhigh"] as const)
+											: isOpus
+												? (["low", "medium", "high", "max"] as const)
+												: (["low", "medium", "high"] as const)
+										).map((level) => (
+											<DropdownMenuItem
+												key={level}
+												disabled={toolbarDisabled}
+												onClick={() => onSelectEffort(level)}
+												className="flex items-center justify-between gap-3"
+											>
+												<div className="flex items-center gap-2.5">
+													<EffortBrainIcon level={level} />
+													<span className="font-medium capitalize">
+														{level === "xhigh" ? "Extra High" : level}
+													</span>
+												</div>
+												{level === effectiveEffort ? (
+													<span className="text-[11px] text-foreground">✓</span>
+												) : null}
+											</DropdownMenuItem>
+										))}
+									</DropdownMenuGroup>
+								</DropdownMenuContent>
+							</DropdownMenu>
 
-					<ComposerButton
-						aria-label="Plan mode"
-						disabled={disabled}
-						className={cn(
-							"gap-1.5 rounded-full px-2 py-0.5 text-[13px] font-medium transition-colors",
-							permissionMode === "plan"
-								? "bg-foreground/[0.08] text-foreground hover:bg-foreground/[0.12]"
-								: "text-muted-foreground/55 hover:bg-accent/60 hover:text-muted-foreground",
-						)}
-						onClick={onTogglePlanMode}
-					>
-						<ClipboardList className="size-[14px]" strokeWidth={1.8} />
-						<span>Plan</span>
-					</ComposerButton>
-				</div>
+							<ComposerButton
+								aria-label="Plan mode"
+								disabled={toolbarDisabled}
+								className={cn(
+									"cursor-pointer gap-1.5 rounded-full px-2 py-0.5 text-[13px] font-medium transition-colors",
+									permissionMode === "plan" || hasPendingPlanReview
+										? "bg-foreground/[0.08] text-foreground hover:bg-foreground/[0.12]"
+										: "text-muted-foreground/55 hover:bg-accent/60 hover:text-muted-foreground",
+								)}
+								onClick={() =>
+									onChangePermissionMode(
+										permissionMode === "plan" ? "bypassPermissions" : "plan",
+									)
+								}
+							>
+								<ClipboardList className="size-[14px]" strokeWidth={1.8} />
+								<span>Plan</span>
+							</ComposerButton>
+						</div>
 
-				<div className="flex items-center gap-2">
-					{sending ? (
-						<Button
-							variant="destructive"
-							size="icon"
-							aria-label="Stop"
-							onClick={onStop}
-							disabled={disabled || submitDisabled}
-							className="rounded-[9px]"
-						>
-							<Square className="size-3 fill-current" strokeWidth={0} />
-						</Button>
-					) : (
-						<Button
-							variant="outline"
-							size="icon"
-							aria-label="Send"
-							onClick={handleSubmit}
-							disabled={sendDisabled}
-							className="rounded-[9px]"
-						>
-							<ArrowUp className="size-[15px]" strokeWidth={2.2} />
-						</Button>
-					)}
-				</div>
-			</div>
+						<div className="flex items-center gap-2">
+							{hasPendingPlanReview ? (
+								<>
+									<Button
+										variant="ghost"
+										size="sm"
+										aria-label="Request Changes"
+										onClick={handlePlanRequestChanges}
+										disabled={disabled || !hasContent}
+										className="h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px] text-muted-foreground hover:text-foreground"
+									>
+										<MessageSquareMore className="size-3.5" strokeWidth={1.8} />
+										Request Changes
+									</Button>
+									<Button
+										variant="default"
+										size="sm"
+										aria-label="Approve"
+										onClick={handlePlanApprove}
+										disabled={disabled}
+										className="h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px]"
+									>
+										<Check className="size-3.5" strokeWidth={2} />
+										Approve
+									</Button>
+								</>
+							) : sending ? (
+								<Button
+									variant="destructive"
+									size="icon"
+									aria-label="Stop"
+									onClick={onStop}
+									disabled={disabled || submitDisabled}
+									className="rounded-[9px]"
+								>
+									<Square className="size-3 fill-current" strokeWidth={0} />
+								</Button>
+							) : (
+								<Button
+									variant="outline"
+									size="icon"
+									aria-label="Send"
+									onClick={handleSubmit}
+									disabled={sendDisabled}
+									className="rounded-[9px]"
+								>
+									<ArrowUp className="size-[15px]" strokeWidth={2.2} />
+								</Button>
+							)}
+						</div>
+					</div>
+				</>
+			)}
 		</div>
 	);
 });

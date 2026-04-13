@@ -20,6 +20,10 @@ pub struct GenerateSessionTitleResponse {
     pub skipped: bool,
 }
 
+/// Sidecar response timeout — generous to cover LLM latency + sidecar's own
+/// 15 s abort, but bounded so we never block a Tauri command thread forever.
+const TITLE_GEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub async fn generate_session_title(
     app: AppHandle,
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
@@ -68,33 +72,45 @@ pub async fn generate_session_title(
             let mut title: Option<String> = None;
             let mut branch_name: Option<String> = None;
 
-            for event in rx.iter() {
-                match event.event_type() {
-                    "titleGenerated" => {
-                        title = event
-                            .raw
-                            .get("title")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                            .filter(|text| !text.is_empty());
-                        branch_name = event
-                            .raw
-                            .get("branchName")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                            .filter(|branch| !branch.is_empty());
+            loop {
+                match rx.recv_timeout(TITLE_GEN_TIMEOUT) {
+                    Ok(event) => match event.event_type() {
+                        "titleGenerated" => {
+                            title = event
+                                .raw
+                                .get("title")
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                                .filter(|text| !text.is_empty());
+                            branch_name = event
+                                .raw
+                                .get("branchName")
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                                .filter(|branch| !branch.is_empty());
+                            break;
+                        }
+                        "error" => {
+                            let message = event
+                                .raw
+                                .get("message")
+                                .and_then(Value::as_str)
+                                .unwrap_or("Unknown error");
+                            tracing::error!("generate_session_title: sidecar error: {message}");
+                            break;
+                        }
+                        _ => {}
+                    },
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        tracing::error!(
+                            "generate_session_title: timed out after {TITLE_GEN_TIMEOUT:?}"
+                        );
                         break;
                     }
-                    "error" => {
-                        let message = event
-                            .raw
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .unwrap_or("Unknown error");
-                        tracing::error!("generate_session_title: sidecar error: {message}");
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        tracing::error!("generate_session_title: sidecar disconnected");
                         break;
                     }
-                    _ => {}
                 }
             }
 
@@ -113,27 +129,49 @@ pub async fn generate_session_title(
     }
 
     if let Some(ref branch_segment) = generated_branch {
-        let connection =
-            open_write_connection().map_err(|e| anyhow::anyhow!("Failed to open DB: {e}"))?;
+        // Look up workspace via sessions.workspace_id — works for any session,
+        // not just the currently active one.
+        let workspace_info: Option<(String, Option<String>, String)> = {
+            let connection =
+                open_write_connection().map_err(|e| anyhow::anyhow!("Failed to open DB: {e}"))?;
+            connection
+                .query_row(
+                    r#"SELECT w.id, r.root_path, w.directory_name
+                       FROM workspaces w
+                       JOIN repos r ON r.id = w.repository_id
+                       JOIN sessions s ON s.workspace_id = w.id
+                       WHERE s.id = ?1 AND w.state = 'ready'"#,
+                    [&session_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .ok()
+        };
 
-        let workspace_info: Option<(String, Option<String>, Option<String>, String)> = connection
-            .query_row(
-                r#"SELECT w.id, w.branch, r.root_path, w.directory_name
-                   FROM workspaces w
-                   JOIN repos r ON r.id = w.repository_id
-                   WHERE w.active_session_id = ?1 AND w.state = 'ready'"#,
-                [&session_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .ok();
-
-        if let Some((workspace_id, old_branch, root_path, directory_name)) = workspace_info {
+        if let Some((workspace_id, root_path, directory_name)) = workspace_info {
             let branch_settings = crate::settings::load_branch_prefix_settings().unwrap_or(
                 crate::settings::BranchPrefixSettings {
                     branch_prefix_type: None,
                     branch_prefix_custom: None,
                 },
             );
+
+            // Acquire per-workspace lock so concurrent title-gens serialise
+            // their branch renames instead of racing on `git branch -m`.
+            let ws_lock = crate::models::db::workspace_mutation_lock(&workspace_id);
+            let _guard = ws_lock.lock().await;
+
+            // Re-read branch under lock to avoid TOCTOU: if another title-gen
+            // already renamed the branch, we'll see the updated value and skip.
+            let connection =
+                open_write_connection().map_err(|e| anyhow::anyhow!("Failed to open DB: {e}"))?;
+            let old_branch: Option<String> = connection
+                .query_row(
+                    "SELECT branch FROM workspaces WHERE id = ?1",
+                    [&workspace_id],
+                    |row| row.get(0),
+                )
+                .ok()
+                .flatten();
 
             if !old_branch.as_deref().is_some_and(|b| {
                 crate::helpers::is_default_branch_name(b, &directory_name, &branch_settings)
@@ -149,7 +187,7 @@ pub async fn generate_session_title(
                 if old_branch.as_deref() != Some(new_branch.as_str()) {
                     let fs_rename_attempted = matches!(
                         (&old_branch, &root_path),
-                        (Some(_), Some(repo_root)) if std::path::Path::new(repo_root).is_dir()
+                        (Some(_), Some(ref repo_root)) if std::path::Path::new(repo_root).is_dir()
                     );
 
                     let fs_rename_ok = if let (Some(ref old_name), Some(ref repo_root)) =

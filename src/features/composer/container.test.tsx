@@ -191,7 +191,7 @@ describe("WorkspaceComposerContainer", () => {
 					permissionModes={{}}
 					onSelectModel={vi.fn()}
 					onSelectEffort={vi.fn()}
-					onTogglePlanMode={vi.fn()}
+					onChangePermissionMode={vi.fn()}
 					onSubmit={vi.fn()}
 				/>
 			</QueryClientProvider>
@@ -252,7 +252,7 @@ describe("WorkspaceComposerContainer", () => {
 					permissionModes={{}}
 					onSelectModel={vi.fn()}
 					onSelectEffort={vi.fn()}
-					onTogglePlanMode={vi.fn()}
+					onChangePermissionMode={vi.fn()}
 					onSubmit={onSubmit}
 					pendingPromptForSession={{
 						sessionId: "session-1",

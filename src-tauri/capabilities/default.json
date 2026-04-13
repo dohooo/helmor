@@ -8,6 +8,7 @@
 		"core:window:allow-start-dragging",
 		"deep-link:default",
 		"dialog:default",
+		"notification:default",
 		"opener:default"
 	]
 }

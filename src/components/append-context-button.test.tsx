@@ -49,7 +49,8 @@ describe("AppendContextButton", () => {
 	it("normalizes long payloads into preview badges", async () => {
 		const user = userEvent.setup();
 		const insertIntoComposer = vi.fn();
-		const longCode = "const failure = true;\n".repeat(12);
+		// 22 chars per line × 25 = 550 chars, above the composer preview threshold (500).
+		const longCode = "const failure = true;\n".repeat(25);
 
 		renderWithProviders(
 			<WorkspaceToastProvider value={vi.fn()}>

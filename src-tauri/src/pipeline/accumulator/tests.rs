@@ -898,6 +898,52 @@ fn abort_notice_lands_after_flushed_assistant_in_turns() {
 }
 
 #[test]
+fn materialized_partial_stays_before_abort_notice_in_snapshot() {
+    let mut acc = StreamAccumulator::new("claude", "opus");
+    acc.push_event(
+        &json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text"}
+            }
+        }),
+        "",
+    );
+    acc.push_event(
+        &json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "still streaming"}
+            }
+        }),
+        "",
+    );
+
+    acc.mark_pending_tools_aborted();
+    acc.flush_pending();
+    acc.materialize_partial("ctx", "sess");
+    acc.append_aborted_notice();
+
+    let snapshot = acc.snapshot("ctx", "sess");
+    assert_eq!(snapshot.len(), 2);
+    assert_eq!(snapshot[0].role, "assistant");
+    assert_eq!(snapshot[1].role, "error");
+    assert!(!snapshot[0].is_streaming);
+    assert_eq!(
+        snapshot[0].parsed.as_ref().unwrap()["message"]["content"][0]["text"].as_str(),
+        Some("still streaming"),
+    );
+    assert_eq!(
+        snapshot[1].parsed.as_ref().unwrap()["content"].as_str(),
+        Some("aborted by user"),
+    );
+}
+
+#[test]
 fn append_aborted_notice_appends_one_per_call() {
     let mut acc = StreamAccumulator::new("claude", "opus");
     acc.append_aborted_notice();
@@ -909,4 +955,143 @@ fn append_aborted_notice_appends_one_per_call() {
         .filter(|&i| acc.turn_at(i).role == "error")
         .count();
     assert_eq!(turns_after_one, 1);
+}
+
+// -----------------------------------------------------------------------
+// ID unification: sync_persisted_ids / sync_result_id
+// -----------------------------------------------------------------------
+
+fn push_assistant_event(acc: &mut StreamAccumulator, msg_id: &str, text: &str) {
+    let raw = serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "id": msg_id,
+            "role": "assistant",
+            "content": [{"type": "text", "text": text}],
+        }
+    });
+    let line = serde_json::to_string(&raw).unwrap();
+    acc.push_event(&raw, &line);
+}
+
+fn push_user_event(acc: &mut StreamAccumulator) {
+    let raw = serde_json::json!({
+        "type": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "t1"}]
+    });
+    let line = serde_json::to_string(&raw).unwrap();
+    acc.push_event(&raw, &line);
+}
+
+fn push_result_event(acc: &mut StreamAccumulator) {
+    let raw = serde_json::json!({
+        "type": "result",
+        "result": "Done",
+        "usage": {"input_tokens": 10, "output_tokens": 5}
+    });
+    let line = serde_json::to_string(&raw).unwrap();
+    acc.push_event(&raw, &line);
+}
+
+#[test]
+fn sync_persisted_ids_propagates_turn_uuids_to_collected() {
+    let mut acc = StreamAccumulator::new("claude", "opus");
+
+    // assistant turn (msg_id="m1") → collected[0]
+    push_assistant_event(&mut acc, "m1", "Hello");
+    // user tool result → flushes assistant, creates user turn → collected[1]
+    push_user_event(&mut acc);
+
+    assert_eq!(acc.turns_len(), 2);
+    let asst_turn_id = acc.turn_at(0).id.clone();
+    let user_turn_id = acc.turn_at(1).id.clone();
+
+    // Before sync: collected IDs are ephemeral stream:N:role
+    assert!(
+        acc.collected()[0].id.starts_with("stream:")
+            || acc.collected()[0].id.contains("stream-partial")
+    );
+    assert!(acc.collected()[1].id.starts_with("stream:"));
+
+    // Sync propagates turn UUIDs
+    acc.sync_persisted_ids();
+    assert_eq!(acc.collected()[0].id, asst_turn_id);
+    assert_eq!(acc.collected()[1].id, user_turn_id);
+
+    // UUIDs are valid v4 format
+    assert!(uuid::Uuid::parse_str(&asst_turn_id).is_ok());
+    assert!(uuid::Uuid::parse_str(&user_turn_id).is_ok());
+}
+
+#[test]
+fn sync_result_id_propagates_to_result_collected_entry() {
+    let mut acc = StreamAccumulator::new("claude", "opus");
+
+    push_assistant_event(&mut acc, "m1", "Thinking...");
+    push_result_event(&mut acc);
+
+    // result is the last collected entry
+    let result_idx = acc.collected().len() - 1;
+    let old_id = acc.collected()[result_idx].id.clone();
+    assert!(old_id.starts_with("stream:"));
+
+    let fake_db_id = "db-result-uuid-123";
+    acc.sync_result_id(fake_db_id);
+    assert_eq!(acc.collected()[result_idx].id, fake_db_id);
+}
+
+#[test]
+fn sync_persisted_ids_with_multi_block_assistant() {
+    let mut acc = StreamAccumulator::new("claude", "opus");
+
+    // Two assistant events with same msg_id → batched into one turn
+    push_assistant_event(&mut acc, "m1", "Part 1");
+    push_assistant_event(&mut acc, "m1", "Part 2");
+
+    // Force flush
+    acc.flush_pending();
+
+    assert_eq!(acc.turns_len(), 1);
+    let turn_id = acc.turn_at(0).id.clone();
+
+    // collected has 2 entries, but the turn maps to the FIRST
+    assert_eq!(acc.collected().len(), 2);
+    acc.sync_persisted_ids();
+    assert_eq!(acc.collected()[0].id, turn_id);
+    // Second entry keeps its original ID (collapse will merge them)
+    assert_ne!(acc.collected()[1].id, turn_id);
+}
+
+#[test]
+fn deferred_pause_final_snapshot_uses_persisted_turn_id() {
+    let mut acc = StreamAccumulator::new("claude", "opus");
+
+    push_assistant_event(&mut acc, "m1", "Need input before continuing");
+    acc.flush_pending();
+
+    assert_eq!(acc.turns_len(), 1);
+    let turn_id = acc.turn_at(0).id.clone();
+    assert_ne!(acc.collected()[0].id, turn_id);
+
+    acc.sync_persisted_ids();
+
+    let snapshot = acc.snapshot("ctx", "sess");
+    assert_eq!(snapshot.len(), 1);
+    assert_eq!(snapshot[0].id, turn_id);
+    assert!(!snapshot[0].is_streaming);
+}
+
+#[test]
+fn turn_ids_are_unique_across_turns() {
+    let mut acc = StreamAccumulator::new("claude", "opus");
+    push_assistant_event(&mut acc, "m1", "Hello");
+    push_user_event(&mut acc);
+    push_assistant_event(&mut acc, "m2", "World");
+    acc.flush_pending();
+
+    let ids: Vec<String> = (0..acc.turns_len())
+        .map(|i| acc.turn_at(i).id.clone())
+        .collect();
+    let unique: std::collections::HashSet<&String> = ids.iter().collect();
+    assert_eq!(ids.len(), unique.len(), "Turn IDs must be unique");
 }

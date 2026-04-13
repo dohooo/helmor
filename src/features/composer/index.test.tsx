@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
 import { createHelmorQueryClient } from "@/lib/query-client";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -56,6 +57,56 @@ const MODEL_SECTIONS = [
 	},
 ] satisfies import("@/lib/api").AgentModelSection[];
 
+function createAskUserQuestionDeferredTool(): PendingDeferredTool {
+	return {
+		provider: "claude",
+		modelId: "opus-1m",
+		resolvedModel: "opus-1m",
+		providerSessionId: "provider-session-1",
+		workingDirectory: "/tmp/helmor",
+		permissionMode: "default",
+		toolUseId: "tool-ask-1",
+		toolName: "AskUserQuestion",
+		toolInput: {
+			questions: [
+				{
+					header: "UI",
+					question: "Which UI path should we take?",
+					options: [
+						{
+							label: "Patch existing",
+							description: "Keep the current layout and patch the flow.",
+						},
+						{
+							label: "Build new",
+							description: "Create a dedicated approval surface.",
+							preview: "<div>New approval panel</div>",
+						},
+					],
+				},
+				{
+					header: "Checks",
+					question: "Which checks should run before merge?",
+					multiSelect: true,
+					options: [
+						{
+							label: "Vitest",
+							description: "Run the frontend test suite.",
+						},
+						{
+							label: "Typecheck",
+							description: "Run the repository typecheck.",
+						},
+					],
+				},
+			],
+			metadata: {
+				source: "planner",
+			},
+		},
+	};
+}
+
 describe("WorkspaceComposer", () => {
 	it("renders custom tag insertions as badges and expands them on submit", async () => {
 		const queryClient = createHelmorQueryClient();
@@ -77,7 +128,7 @@ describe("WorkspaceComposer", () => {
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
 					permissionMode="acceptEdits"
-					onTogglePlanMode={vi.fn()}
+					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
@@ -145,7 +196,7 @@ describe("WorkspaceComposer", () => {
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
 					permissionMode="acceptEdits"
-					onTogglePlanMode={vi.fn()}
+					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
@@ -191,7 +242,7 @@ describe("WorkspaceComposer", () => {
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
 					permissionMode="acceptEdits"
-					onTogglePlanMode={vi.fn()}
+					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
@@ -228,6 +279,361 @@ describe("WorkspaceComposer", () => {
 
 		expect(await screen.findByTestId("code-block")).toHaveTextContent(
 			"log::Error: request failed",
+		);
+	});
+
+	it("collects AskUserQuestion answers into updatedInput and resumes via allow", async () => {
+		const user = userEvent.setup();
+		const queryClient = createHelmorQueryClient();
+		const handleDeferredToolResponse = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="acceptEdits"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingDeferredTool={createAskUserQuestionDeferredTool()}
+					onDeferredToolResponse={handleDeferredToolResponse}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(screen.queryByText("Claude Needs Input")).not.toBeInTheDocument();
+		expect(
+			screen.getByText("Which UI path should we take?"),
+		).toBeInTheDocument();
+		expect(screen.getByText("Choose one option.")).toBeInTheDocument();
+		expect(
+			screen.queryByText(/deferred tool call can resume/i),
+		).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: /Build new/i }));
+		expect(
+			screen.getByText("Which checks should run before merge?"),
+		).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "UI" }));
+		await user.type(
+			screen.getByLabelText("Optional note for Claude"),
+			"Prefer the dedicated approval surface.{enter}Keep it compact.",
+		);
+		expect(screen.getByLabelText("Optional note for Claude")).toHaveValue(
+			"Prefer the dedicated approval surface.\nKeep it compact.",
+		);
+		await user.click(screen.getByRole("button", { name: "Checks" }));
+		expect(screen.getByText("Choose one or more options.")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: /Vitest/i }));
+		await user.click(screen.getByRole("button", { name: /Typecheck/i }));
+		await user.click(screen.getByRole("button", { name: "Send Answers" }));
+
+		expect(handleDeferredToolResponse).toHaveBeenCalledWith(
+			expect.objectContaining({ toolUseId: "tool-ask-1" }),
+			"allow",
+			expect.objectContaining({
+				updatedInput: expect.objectContaining({
+					answers: {
+						"Which UI path should we take?": "Build new",
+						"Which checks should run before merge?": "Vitest, Typecheck",
+					},
+					annotations: {
+						"Which UI path should we take?": {
+							preview: "<div>New approval panel</div>",
+							notes: "Prefer the dedicated approval surface.\nKeep it compact.",
+						},
+					},
+				}),
+			}),
+		);
+	});
+
+	it("edits custom AskUserQuestion answers inline inside the Other row", async () => {
+		const user = userEvent.setup();
+		const queryClient = createHelmorQueryClient();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="acceptEdits"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingDeferredTool={createAskUserQuestionDeferredTool()}
+					onDeferredToolResponse={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(
+			screen.queryByText("Write a custom answer directly in this row."),
+		).not.toBeInTheDocument();
+
+		const inlineInput = screen.getByLabelText("Other answer for UI");
+		expect(inlineInput).toHaveAttribute("placeholder", "Other");
+
+		const otherRow = inlineInput.closest('[data-ask-option-row="other"]');
+		expect(otherRow).not.toBeNull();
+
+		await user.click(otherRow!);
+		expect(inlineInput.closest('[data-ask-option-row="other"]')).not.toBeNull();
+
+		await user.type(inlineInput, "Prototype a compact approval surface");
+		expect(inlineInput).toHaveValue("Prototype a compact approval surface");
+	});
+
+	it("shows Approve and Request Changes buttons when ExitPlanMode permission is pending", () => {
+		const queryClient = createHelmorQueryClient();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="plan"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingExitPlanPermissionId="exit-plan-perm-1"
+					onPermissionResponse={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "Request Changes" }),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Send" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("calls onPermissionResponse with allow + updatedPermissions when Approve is clicked", async () => {
+		const queryClient = createHelmorQueryClient();
+		const onPermissionResponse = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="plan"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingExitPlanPermissionId="exit-plan-perm-1"
+					onPermissionResponse={onPermissionResponse}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+		expect(onPermissionResponse).toHaveBeenCalledWith(
+			"exit-plan-perm-1",
+			"allow",
+			{
+				updatedPermissions: [
+					{
+						type: "setMode",
+						mode: "bypassPermissions",
+						destination: "session",
+					},
+				],
+			},
+		);
+	});
+
+	it("disables Request Changes when input is empty", () => {
+		const queryClient = createHelmorQueryClient();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="plan"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingExitPlanPermissionId="exit-plan-perm-1"
+					onPermissionResponse={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(
+			screen.getByRole("button", { name: "Request Changes" }),
+		).toBeDisabled();
+	});
+
+	it("shows plan review placeholder when ExitPlanMode permission is pending", () => {
+		const queryClient = createHelmorQueryClient();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="plan"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingExitPlanPermissionId="exit-plan-perm-1"
+					onPermissionResponse={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(screen.getByText(/Describe what to change/)).toBeInTheDocument();
+	});
+
+	it("keeps plan review controls visible while permission is pending", async () => {
+		const queryClient = createHelmorQueryClient();
+		const onChangePermissionMode = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={true}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="plan"
+					onChangePermissionMode={onChangePermissionMode}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingExitPlanPermissionId="exit-plan-perm-1"
+					onPermissionResponse={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Plan mode" })).toBeDisabled();
+		expect(onChangePermissionMode).not.toHaveBeenCalled();
+		expect(
+			screen.queryByRole("button", { name: "Send" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("updates permission mode before approving plan review", async () => {
+		const queryClient = createHelmorQueryClient();
+		const onChangePermissionMode = vi.fn();
+		const onPermissionResponse = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="plan"
+					onChangePermissionMode={onChangePermissionMode}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingExitPlanPermissionId="exit-plan-perm-1"
+					onPermissionResponse={onPermissionResponse}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+		expect(onChangePermissionMode).toHaveBeenCalledWith("bypassPermissions");
+		expect(onPermissionResponse).toHaveBeenCalledWith(
+			"exit-plan-perm-1",
+			"allow",
+			{
+				updatedPermissions: [
+					{
+						type: "setMode",
+						mode: "bypassPermissions",
+						destination: "session",
+					},
+				],
+			},
 		);
 	});
 });

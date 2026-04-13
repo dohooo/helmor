@@ -1,5 +1,6 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, GitBranch, LoaderCircle } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	Command,
 	CommandEmpty,
@@ -12,11 +13,20 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
+import { Textarea } from "@/components/ui/textarea";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
 	listRemoteBranches,
 	listRepoRemotes,
+	loadRepoScripts,
 	prefetchRemoteRefs,
 	type RepositoryCreateOption,
+	updateRepoScripts,
 	updateRepositoryDefaultBranch,
 	updateRepositoryRemote,
 } from "@/lib/api";
@@ -233,6 +243,177 @@ export function RepositorySettingsPanel({
 					</Popover>
 					{error && <p className="mt-2 text-[12px] text-red-400/90">{error}</p>}
 				</div>
+			</div>
+
+			<ScriptsSection repoId={repo.id} />
+		</div>
+	);
+}
+
+function ScriptField({
+	label,
+	description,
+	placeholder,
+	value,
+	locked,
+	onChange,
+}: {
+	label: string;
+	description: string;
+	placeholder: string;
+	value: string;
+	locked: boolean;
+	onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+}) {
+	const textarea = (
+		<Textarea
+			className="mt-2 min-h-[72px] resize-y bg-app-base/30 font-mono text-[12px]"
+			placeholder={placeholder}
+			value={value}
+			onChange={onChange}
+			readOnly={locked}
+			disabled={locked}
+		/>
+	);
+
+	return (
+		<div>
+			<div className="text-[12px] font-medium text-app-foreground">{label}</div>
+			<div className="mt-0.5 text-[11px] text-app-muted">{description}</div>
+			{locked ? (
+				<TooltipProvider>
+					<Tooltip>
+						<TooltipTrigger asChild>{textarea}</TooltipTrigger>
+						<TooltipContent side="top">
+							来自项目配置 helmor.json，无法在此编辑
+						</TooltipContent>
+					</Tooltip>
+				</TooltipProvider>
+			) : (
+				textarea
+			)}
+		</div>
+	);
+}
+
+function ScriptsSection({ repoId }: { repoId: string }) {
+	const queryClient = useQueryClient();
+	const scriptsQuery = useQuery({
+		queryKey: ["repoScripts", repoId],
+		queryFn: () => loadRepoScripts(repoId),
+		staleTime: 0,
+	});
+
+	const data = scriptsQuery.data;
+	const setupLocked = data?.setupFromProject ?? false;
+	const runLocked = data?.runFromProject ?? false;
+	const archiveLocked = data?.archiveFromProject ?? false;
+
+	const [setupScript, setSetupScript] = useState("");
+	const [runScript, setRunScript] = useState("");
+	const [archiveScript, setArchiveScript] = useState("");
+	const initialized = useRef(false);
+
+	useEffect(() => {
+		if (!data) return;
+		const shouldSyncSetup = setupLocked || !initialized.current;
+		const shouldSyncRun = runLocked || !initialized.current;
+		const shouldSyncArchive = archiveLocked || !initialized.current;
+		if (shouldSyncSetup) setSetupScript(data.setupScript ?? "");
+		if (shouldSyncRun) setRunScript(data.runScript ?? "");
+		if (shouldSyncArchive) setArchiveScript(data.archiveScript ?? "");
+		if (!setupLocked && !runLocked && !archiveLocked) {
+			initialized.current = true;
+		}
+	}, [data, setupLocked, runLocked, archiveLocked]);
+
+	// Reset when switching repos.
+	useEffect(() => {
+		initialized.current = false;
+	}, [repoId]);
+
+	const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	const save = useCallback(
+		(nextSetup: string, nextRun: string, nextArchive: string) => {
+			if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+			saveTimerRef.current = setTimeout(() => {
+				void updateRepoScripts(
+					repoId,
+					nextSetup.trim() || null,
+					nextRun.trim() || null,
+					nextArchive.trim() || null,
+				).then(() => {
+					void queryClient.invalidateQueries({
+						queryKey: ["repoScripts", repoId],
+					});
+				});
+			}, 600);
+		},
+		[repoId, queryClient],
+	);
+
+	const handleSetupChange = useCallback(
+		(e: React.ChangeEvent<HTMLTextAreaElement>) => {
+			const value = e.target.value;
+			setSetupScript(value);
+			save(value, runScript, archiveScript);
+		},
+		[runScript, archiveScript, save],
+	);
+
+	const handleRunChange = useCallback(
+		(e: React.ChangeEvent<HTMLTextAreaElement>) => {
+			const value = e.target.value;
+			setRunScript(value);
+			save(setupScript, value, archiveScript);
+		},
+		[setupScript, archiveScript, save],
+	);
+
+	const handleArchiveChange = useCallback(
+		(e: React.ChangeEvent<HTMLTextAreaElement>) => {
+			const value = e.target.value;
+			setArchiveScript(value);
+			save(setupScript, runScript, value);
+		},
+		[setupScript, runScript, save],
+	);
+
+	return (
+		<div className="rounded-xl border border-app-border/30 bg-app-base/20 px-5 py-4">
+			<div className="text-[13px] font-medium leading-snug text-app-foreground">
+				Scripts
+			</div>
+			<div className="mt-1 text-[12px] leading-snug text-app-muted">
+				Commands that run when workspaces are set up, run, or archived.
+			</div>
+
+			<div className="mt-4 space-y-4">
+				<ScriptField
+					label="Setup script"
+					description="Runs when a new workspace is created"
+					placeholder="e.g., npm install"
+					value={setupScript}
+					locked={setupLocked}
+					onChange={handleSetupChange}
+				/>
+				<ScriptField
+					label="Run script"
+					description="Runs when you click the play button"
+					placeholder="e.g., npm run dev"
+					value={runScript}
+					locked={runLocked}
+					onChange={handleRunChange}
+				/>
+				<ScriptField
+					label="Archive script"
+					description="Runs when a workspace is archived"
+					placeholder="e.g., docker compose down"
+					value={archiveScript}
+					locked={archiveLocked}
+					onChange={handleArchiveChange}
+				/>
 			</div>
 		</div>
 	);

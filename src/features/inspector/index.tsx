@@ -8,12 +8,16 @@ import { useWorkspaceInspectorSidebar } from "./hooks/use-inspector";
 import { HorizontalResizeHandle, InspectorTabsSection } from "./layout";
 import { ActionsSection } from "./sections/actions";
 import { ChangesSection } from "./sections/changes";
+import { RunTab } from "./sections/run";
+import { SetupTab } from "./sections/setup";
 
 type WorkspaceInspectorSidebarProps = {
 	workspaceId?: string | null;
 	workspaceRootPath?: string | null;
 	workspaceBranch?: string | null;
 	workspaceTargetBranch?: string | null;
+	workspaceState?: string | null;
+	repoId?: string | null;
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile(path: string): void;
@@ -22,6 +26,7 @@ type WorkspaceInspectorSidebarProps = {
 	commitButtonMode?: WorkspaceCommitButtonMode;
 	commitButtonState?: CommitButtonState;
 	prInfo?: PullRequestInfo | null;
+	onOpenSettings?: () => void;
 };
 
 export function WorkspaceInspectorSidebar({
@@ -29,6 +34,8 @@ export function WorkspaceInspectorSidebar({
 	workspaceRootPath,
 	workspaceBranch,
 	workspaceTargetBranch,
+	workspaceState,
+	repoId,
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
@@ -36,6 +43,7 @@ export function WorkspaceInspectorSidebar({
 	commitButtonMode,
 	commitButtonState,
 	prInfo,
+	onOpenSettings,
 }: WorkspaceInspectorSidebarProps) {
 	const {
 		actionsHeight,
@@ -50,12 +58,18 @@ export function WorkspaceInspectorSidebar({
 		isActionsResizing,
 		isResizing,
 		isTabsResizing,
+		repoScripts,
+		scriptsLoaded,
 		setActiveTab,
 		tabsOpen,
 		tabsWrapperRef,
 	} = useWorkspaceInspectorSidebar({
 		workspaceRootPath,
+		repoId: repoId ?? null,
+		workspaceState,
 	});
+
+	const handleOpenSettings = onOpenSettings ?? (() => {});
 
 	return (
 		<div
@@ -110,7 +124,26 @@ export function WorkspaceInspectorSidebar({
 				onToggle={handleToggleTabs}
 				activeTab={activeTab}
 				onTabChange={setActiveTab}
-			/>
+			>
+				<SetupTab
+					key={`setup-${workspaceId ?? "none"}`}
+					repoId={repoId ?? null}
+					workspaceId={workspaceId ?? null}
+					workspaceState={workspaceState ?? null}
+					setupScript={repoScripts?.setupScript ?? null}
+					scriptsLoaded={scriptsLoaded}
+					isActive={activeTab === "setup"}
+					onOpenSettings={handleOpenSettings}
+				/>
+				<RunTab
+					key={`run-${workspaceId ?? "none"}`}
+					repoId={repoId ?? null}
+					workspaceId={workspaceId ?? null}
+					runScript={repoScripts?.runScript ?? null}
+					isActive={activeTab === "run"}
+					onOpenSettings={handleOpenSettings}
+				/>
+			</InspectorTabsSection>
 		</div>
 	);
 }

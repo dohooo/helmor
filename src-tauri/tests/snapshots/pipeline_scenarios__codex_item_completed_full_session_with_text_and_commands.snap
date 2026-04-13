@@ -3,7 +3,7 @@ source: tests/pipeline_scenarios.rs
 expression: run_normalized(msgs)
 ---
 - role: assistant
-  id: c1
+  id: msg-1
   content_length: 3
   content:
     - type: text

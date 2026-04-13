@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { ActionRow, ActionRowButton } from "@/components/action-row";
 import { ShimmerText } from "@/components/ui/shimmer-text";
 import { ShineBorder } from "@/components/ui/shine-border";
+import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
 import type {
 	AgentModelOption,
 	AgentModelSection,
@@ -29,7 +30,9 @@ import {
 	findModelOption,
 	getComposerContextKey,
 	inferDefaultModelId,
+	isNewSession,
 } from "@/lib/workspace-helpers";
+import type { DeferredToolResponseHandler } from "./deferred-tool";
 import { WorkspaceComposer } from "./index";
 
 const EMPTY_MODEL_SECTIONS: AgentModelSection[] = [];
@@ -47,12 +50,20 @@ type WorkspaceComposerContainerProps = {
 	restoreFiles: string[];
 	restoreCustomTags?: ComposerCustomTag[];
 	restoreNonce: number;
+	pendingDeferredTool?: PendingDeferredTool | null;
+	onDeferredToolResponse?: DeferredToolResponseHandler;
+	pendingExitPlanPermissionId?: string | null;
+	onPermissionResponse?: (
+		permissionId: string,
+		behavior: "allow" | "deny",
+		options?: { updatedPermissions?: unknown[]; message?: string },
+	) => void;
 	modelSelections: Record<string, string>;
 	effortLevels: Record<string, string>;
 	permissionModes: Record<string, string>;
 	onSelectModel: (contextKey: string, modelId: string) => void;
 	onSelectEffort: (contextKey: string, level: string) => void;
-	onTogglePlanMode: (contextKey: string) => void;
+	onChangePermissionMode: (contextKey: string, mode: string) => void;
 	onSwitchSession?: (sessionId: string) => void;
 	onSubmit: (payload: {
 		prompt: string;
@@ -79,6 +90,8 @@ type WorkspaceComposerContainerProps = {
 	onPendingInsertRequestsConsumed?: (ids: string[]) => void;
 };
 
+const noopDeferredToolResponse: DeferredToolResponseHandler = () => {};
+
 export const WorkspaceComposerContainer = memo(
 	function WorkspaceComposerContainer({
 		displayedWorkspaceId,
@@ -92,12 +105,16 @@ export const WorkspaceComposerContainer = memo(
 		restoreFiles,
 		restoreCustomTags = [],
 		restoreNonce,
+		pendingDeferredTool = null,
+		onDeferredToolResponse = noopDeferredToolResponse,
+		pendingExitPlanPermissionId = null,
+		onPermissionResponse,
 		modelSelections,
 		effortLevels = {},
 		permissionModes = {},
 		onSelectModel,
 		onSelectEffort,
-		onTogglePlanMode,
+		onChangePermissionMode,
 		onSwitchSession,
 		onSubmit,
 		pendingPromptForSession = null,
@@ -169,7 +186,9 @@ export const WorkspaceComposerContainer = memo(
 		const loadingConversationContext =
 			Boolean(displayedWorkspaceId) &&
 			(workspaceDetailQuery.isPending || sessionsQuery.isPending);
-		const composerDisabled = displayedWorkspaceId === null;
+		const composerDisabled =
+			displayedWorkspaceId === null ||
+			workspaceDetailQuery.data?.state === "archived";
 
 		// Auto-close opt-in state comes from settings: `auto_close_action_kinds`
 		// is the persistent list of action kinds the user has enabled. A given
@@ -211,13 +230,13 @@ export const WorkspaceComposerContainer = memo(
 				const currentProvider = provider;
 				const newProvider = newModel?.provider;
 
-				// If provider changed and session has been used (has agentType),
-				// create a new session for the new provider
+				// Only create a new session when provider changes AND the session
+				// already has messages. New/empty sessions just switch in-place.
 				if (
 					newProvider &&
 					currentProvider &&
 					newProvider !== currentProvider &&
-					currentSession?.agentType &&
+					!isNewSession(currentSession) &&
 					displayedSessionId &&
 					displayedWorkspaceId
 				) {
@@ -385,9 +404,12 @@ export const WorkspaceComposerContainer = memo(
 			[onSelectEffort, composerContextKey],
 		);
 
-		const handleTogglePlanModeInner = useCallback(() => {
-			onTogglePlanMode(composerContextKey);
-		}, [onTogglePlanMode, composerContextKey]);
+		const handleChangePermissionModeInner = useCallback(
+			(mode: string) => {
+				onChangePermissionMode(composerContextKey, mode);
+			},
+			[onChangePermissionMode, composerContextKey],
+		);
 
 		const actionDisplayName = sessionActionKind
 			? describeActionKind(sessionActionKind)
@@ -480,13 +502,17 @@ export const WorkspaceComposerContainer = memo(
 					effortLevel={effortLevel}
 					onSelectEffort={handleSelectEffortInner}
 					permissionMode={effectivePermissionMode}
-					onTogglePlanMode={handleTogglePlanModeInner}
+					onChangePermissionMode={handleChangePermissionModeInner}
 					sendError={sendError}
 					restoreDraft={restoreDraft}
 					restoreImages={restoreImages}
 					restoreFiles={restoreFiles}
 					restoreCustomTags={restoreCustomTags}
 					restoreNonce={restoreNonce}
+					pendingDeferredTool={pendingDeferredTool}
+					onDeferredToolResponse={onDeferredToolResponse}
+					pendingExitPlanPermissionId={pendingExitPlanPermissionId}
+					onPermissionResponse={onPermissionResponse}
 					pendingInsertRequests={pendingInsertRequests}
 					onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
 					slashCommands={slashCommands}

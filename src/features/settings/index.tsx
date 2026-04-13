@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Field, FieldContent, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
 	isConductorAvailable,
@@ -124,7 +125,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 										type="button"
 										onClick={() => setActiveSection(key)}
 										className={cn(
-											"flex items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] font-medium transition-colors",
+											"flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] font-medium transition-colors",
 											activeSection === key
 												? "bg-accent text-foreground"
 												: "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
@@ -249,6 +250,25 @@ export const SettingsDialog = memo(function SettingsDialog({
 											<Plus className="size-3.5" strokeWidth={2} />
 										</Button>
 									</div>
+								</div>
+
+								{/* Desktop Notifications */}
+								<div className="flex items-center justify-between rounded-xl border border-border/30 bg-muted/30 px-5 py-4">
+									<div className="mr-8">
+										<div className="text-[13px] font-medium leading-snug text-foreground">
+											Desktop Notifications
+										</div>
+										<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
+											Show system notifications when sessions complete or need
+											input
+										</div>
+									</div>
+									<Switch
+										checked={settings.notifications}
+										onCheckedChange={(checked) =>
+											updateSettings({ notifications: checked })
+										}
+									/>
 								</div>
 							</div>
 						)}

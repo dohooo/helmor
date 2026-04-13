@@ -542,7 +542,7 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
               s.resume_session_at, s.is_hidden, s.is_compacting, s.action_kind
             FROM sessions s
             WHERE s.workspace_id = ?1 AND s.is_hidden = 1
-            ORDER BY datetime(s.created_at) ASC
+            ORDER BY datetime(s.updated_at) DESC
             "#,
         )
         .context("Failed to prepare hidden sessions query")?;

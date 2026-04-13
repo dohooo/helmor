@@ -15,7 +15,7 @@ import {
 	Trash2,
 	X,
 } from "lucide-react";
-import { memo, useCallback, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +24,11 @@ import {
 	CommandItem,
 	CommandList,
 } from "@/components/ui/command";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { HyperText } from "@/components/ui/hyper-text";
 import { Input } from "@/components/ui/input";
 import {
@@ -56,6 +61,7 @@ import { helmorQueryKeys } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import {
 	getWorkspaceBranchTone,
+	isNewSession,
 	type WorkspaceBranchTone,
 } from "@/lib/workspace-helpers";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
@@ -69,6 +75,7 @@ type WorkspacePanelHeaderProps = {
 	sending: boolean;
 	sendingSessionIds?: Set<string>;
 	completedSessionIds?: Set<string>;
+	interactionRequiredSessionIds?: Set<string>;
 	loadingWorkspace: boolean;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
@@ -88,6 +95,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	sending,
 	sendingSessionIds,
 	completedSessionIds,
+	interactionRequiredSessionIds,
 	loadingWorkspace,
 	headerActions,
 	headerLeading,
@@ -122,6 +130,23 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	const [editingTitle, setEditingTitle] = useState("");
 	const [editingBranch, setEditingBranch] = useState<string | null>(null);
 	const [branchCopied, setBranchCopied] = useState(false);
+	const tabsScrollRef = useRef<HTMLDivElement>(null);
+	const [hasRightOverflow, setHasRightOverflow] = useState(false);
+
+	const updateOverflow = useCallback(() => {
+		const el = tabsScrollRef.current;
+		if (!el) return;
+		setHasRightOverflow(el.scrollWidth - el.scrollLeft - el.clientWidth > 1);
+	}, []);
+
+	useEffect(() => {
+		const el = tabsScrollRef.current;
+		if (!el) return;
+		updateOverflow();
+		const ro = new ResizeObserver(updateOverflow);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, [updateOverflow, sessions.length]);
 
 	const handleStartBranchRename = useCallback(() => {
 		if (!workspace?.branch) {
@@ -242,6 +267,8 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				return;
 			}
 
+			const targetSession = sessions.find((s) => s.id === sessionId) ?? null;
+			const isEmptySession = isNewSession(targetSession);
 			const isClosingLastVisibleSession = sessions.length === 1;
 
 			try {
@@ -289,7 +316,13 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					onSelectSession?.(replacementSessionId);
 				}
 
-				await hideSession(sessionId);
+				// New sessions (never had any messages) are deleted outright
+				// instead of being hidden, so they don't clutter the history list.
+				if (isEmptySession) {
+					await deleteSession(sessionId);
+				} else {
+					await hideSession(sessionId);
+				}
 				onSessionsChanged?.();
 			} catch (error) {
 				console.error("Failed to close session:", error);
@@ -306,18 +339,21 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 			onSessionsChanged,
 			pushToast,
 			queryClient,
-			sessions.length,
+			sessions,
 			workspace,
 		],
 	);
 
-	const handleToggleHistory = useCallback(async () => {
-		if (!showHistory && workspace) {
-			const hidden = await loadHiddenSessions(workspace.id);
-			setHiddenSessions(hidden);
-		}
-		setShowHistory((value) => !value);
-	}, [showHistory, workspace]);
+	const handleToggleHistory = useCallback(
+		async (open: boolean) => {
+			if (open && workspace) {
+				const hidden = await loadHiddenSessions(workspace.id);
+				setHiddenSessions(hidden);
+			}
+			setShowHistory(open);
+		},
+		[workspace],
+	);
 
 	const handleUnhide = useCallback(
 		async (sessionId: string) => {
@@ -424,9 +460,9 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											role="button"
 											aria-label="Rename branch"
 											onClick={handleStartBranchRename}
-											className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
+											className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 										>
-											<Pencil className="size-2.5" strokeWidth={2} />
+											<Pencil className="size-3" strokeWidth={2} />
 										</span>
 										<span
 											role="button"
@@ -439,15 +475,15 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 												setBranchCopied(true);
 												setTimeout(() => setBranchCopied(false), 1500);
 											}}
-											className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
+											className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 										>
 											{branchCopied ? (
 												<Check
-													className="size-2.5 text-green-400"
+													className="size-3 text-green-400"
 													strokeWidth={2}
 												/>
 											) : (
-												<Copy className="size-2.5" strokeWidth={2} />
+												<Copy className="size-3" strokeWidth={2} />
 											)}
 										</span>
 									</span>
@@ -549,140 +585,162 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 			</div>
 
 			<div className="flex items-center px-4 pb-1">
-				<div className="scrollbar-none min-w-0 flex-1 overflow-x-auto">
-					{loadingWorkspace ? (
-						<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
-							<Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
-							Loading
-						</div>
-					) : sessions.length > 0 ? (
-						<Tabs
-							value={selectedSessionId ?? sessions[0]?.id}
-							onValueChange={(value) => {
-								onSelectSession?.(value);
-							}}
-							className="min-w-max gap-0"
-						>
-							<TabsList
-								aria-label="Sessions"
-								className="inline-flex min-w-full w-max justify-start self-start"
-							>
-								{sessions.map((session) => {
-									const selected = session.id === selectedSessionId;
-									const isActive = sendingSessionIds
-										? sendingSessionIds.has(session.id)
-										: selected && sending;
-									const hasUnread = session.unreadCount > 0;
-									const isCompleted =
-										completedSessionIds?.has(session.id) ?? false;
-									const isEditing = editingSessionId === session.id;
-
-									return (
-										<Tooltip key={session.id}>
-											<TooltipTrigger asChild>
-												<TabsTrigger
-													value={session.id}
-													onMouseEnter={() => {
-														onPrefetchSession?.(session.id);
-													}}
-													onFocus={() => {
-														onPrefetchSession?.(session.id);
-													}}
-													className="group/tab relative h-full w-auto max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
-												>
-													<SessionProviderIcon
-														agentType={
-															selected
-																? (selectedProvider ?? session.agentType)
-																: session.agentType
-														}
-														active={isActive}
-													/>
-													{isEditing ? (
-														<Input
-															autoFocus
-															value={editingTitle}
-															onChange={(event) =>
-																setEditingTitle(event.target.value)
-															}
-															onKeyDown={(event) => {
-																if (event.key === "Enter") {
-																	event.preventDefault();
-																	void handleCommitRename();
-																} else if (event.key === "Escape") {
-																	handleCancelRename();
-																}
-															}}
-															onBlur={() => void handleCommitRename()}
-															onClick={(event) => event.stopPropagation()}
-															className="h-6 w-20 truncate rounded-md border-border bg-background px-1.5 py-0 text-[13px] font-medium text-foreground"
-														/>
-													) : (
-														<span
-															className={cn(
-																"truncate font-medium",
-																(hasUnread || isCompleted) && !selected
-																	? "text-foreground"
-																	: undefined,
-															)}
-														>
-															{displaySessionTitle(session)}
-														</span>
-													)}
-													{(hasUnread || isCompleted) && !isEditing ? (
-														<span
-															aria-label={
-																isCompleted
-																	? "Session completed"
-																	: "Unread session"
-															}
-															className="size-1.5 shrink-0 rounded-full bg-chart-2"
-														/>
-													) : null}
-													{!isEditing ? (
-														<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-[linear-gradient(to_right,transparent_0%,#2F2F2F_35%,#2F2F2F_100%)] pl-5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible">
-															<span
-																role="button"
-																aria-label="Rename session"
-																onClick={(event) =>
-																	handleStartRename(session, event)
-																}
-																className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
-															>
-																<Pencil className="size-2.5" strokeWidth={2} />
-															</span>
-															<span
-																role="button"
-																aria-label="Close session"
-																onClick={(event) =>
-																	handleHideSession(session.id, event)
-																}
-																className="flex items-center justify-center rounded-sm p-0.5 hover:bg-accent/60"
-															>
-																<X className="size-2.5" strokeWidth={2} />
-															</span>
-														</span>
-													) : null}
-												</TabsTrigger>
-											</TooltipTrigger>
-											<TooltipContent
-												side="bottom"
-												sideOffset={8}
-												className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
-											>
-												<span>{displaySessionTitle(session)}</span>
-											</TooltipContent>
-										</Tooltip>
-									);
-								})}
-							</TabsList>
-						</Tabs>
-					) : (
-						<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
-							<AlertCircle className="size-3" strokeWidth={1.8} />
-							No sessions
-						</div>
+				<div className="group/tabs-scroll relative min-w-0 flex-1">
+					{hasRightOverflow && (
+						<div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-background to-transparent" />
 					)}
+					<div
+						ref={tabsScrollRef}
+						onScroll={updateOverflow}
+						className="scrollbar-none min-w-0 flex-1 overflow-x-auto"
+					>
+						{loadingWorkspace ? (
+							<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
+								<Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
+								Loading
+							</div>
+						) : sessions.length > 0 ? (
+							<Tabs
+								value={selectedSessionId ?? sessions[0]?.id}
+								onValueChange={(value) => {
+									onSelectSession?.(value);
+								}}
+								className="min-w-max gap-0"
+							>
+								<TabsList
+									aria-label="Sessions"
+									className="inline-flex min-w-full w-max justify-start self-start"
+								>
+									{sessions.map((session) => {
+										const selected = session.id === selectedSessionId;
+										const isActivelySending = sendingSessionIds
+											? sendingSessionIds.has(session.id)
+											: selected && sending;
+										const hasUnread = session.unreadCount > 0;
+										const isCompleted =
+											completedSessionIds?.has(session.id) ?? false;
+										const isInteractionRequired =
+											interactionRequiredSessionIds?.has(session.id) ?? false;
+										const isActive =
+											isActivelySending && !isInteractionRequired;
+										const hasStatusDot =
+											isInteractionRequired || hasUnread || isCompleted;
+										const isEditing = editingSessionId === session.id;
+
+										return (
+											<Tooltip key={session.id}>
+												<TooltipTrigger asChild>
+													<TabsTrigger
+														value={session.id}
+														onMouseEnter={() => {
+															onPrefetchSession?.(session.id);
+														}}
+														onFocus={() => {
+															onPrefetchSession?.(session.id);
+														}}
+														className="group/tab relative h-full w-auto max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
+													>
+														<SessionProviderIcon
+															agentType={
+																selected
+																	? (selectedProvider ?? session.agentType)
+																	: session.agentType
+															}
+															active={isActive}
+														/>
+														{isEditing ? (
+															<Input
+																autoFocus
+																value={editingTitle}
+																onChange={(event) =>
+																	setEditingTitle(event.target.value)
+																}
+																onKeyDown={(event) => {
+																	if (event.key === "Enter") {
+																		event.preventDefault();
+																		void handleCommitRename();
+																	} else if (event.key === "Escape") {
+																		handleCancelRename();
+																	}
+																}}
+																onBlur={() => void handleCommitRename()}
+																onClick={(event) => event.stopPropagation()}
+																className="h-6 w-20 truncate rounded-md border-border bg-background px-1.5 py-0 text-[13px] font-medium text-foreground"
+															/>
+														) : (
+															<span
+																className={cn(
+																	"truncate font-medium",
+																	hasStatusDot && !selected
+																		? "text-foreground"
+																		: undefined,
+																)}
+															>
+																{displaySessionTitle(session)}
+															</span>
+														)}
+														{hasStatusDot && !isEditing ? (
+															<span
+																aria-label={
+																	isInteractionRequired
+																		? "Interaction required"
+																		: isCompleted
+																			? "Session completed"
+																			: "Unread session"
+																}
+																className={cn(
+																	"size-1.5 shrink-0 rounded-full",
+																	isInteractionRequired
+																		? "bg-yellow-500"
+																		: "bg-chart-2",
+																)}
+															/>
+														) : null}
+														{!isEditing ? (
+															<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-[10px] bg-[linear-gradient(to_right,transparent_0%,var(--muted)_35%,var(--muted)_100%)] pl-5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible">
+																<span
+																	role="button"
+																	aria-label="Rename session"
+																	onClick={(event) =>
+																		handleStartRename(session, event)
+																	}
+																	className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+																>
+																	<Pencil className="size-3" strokeWidth={2} />
+																</span>
+																<span
+																	role="button"
+																	aria-label="Close session"
+																	onClick={(event) =>
+																		handleHideSession(session.id, event)
+																	}
+																	className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+																>
+																	<X className="size-3" strokeWidth={2} />
+																</span>
+															</span>
+														) : null}
+													</TabsTrigger>
+												</TooltipTrigger>
+												<TooltipContent
+													side="bottom"
+													sideOffset={8}
+													className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+												>
+													<span>{displaySessionTitle(session)}</span>
+												</TooltipContent>
+											</Tooltip>
+										);
+									})}
+								</TabsList>
+							</Tabs>
+						) : (
+							<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
+								<AlertCircle className="size-3" strokeWidth={1.8} />
+								No sessions
+							</div>
+						)}
+					</div>
 				</div>
 
 				<Button
@@ -695,67 +753,73 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					<Plus className="size-3.5" strokeWidth={1.8} />
 				</Button>
 
-				<div className="relative ml-1 shrink-0">
-					<Button
-						aria-label="Session history"
-						onClick={handleToggleHistory}
-						variant="ghost"
-						size="icon-sm"
-						className={cn(
-							"text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-							showHistory && "bg-accent/60 text-foreground",
-						)}
-					>
-						<History className="size-3.5" strokeWidth={1.8} />
-					</Button>
-
-					{showHistory ? (
-						<div className="absolute right-0 top-full z-30 mt-1 w-56 rounded-lg border border-border bg-popover py-1 shadow-lg">
-							{hiddenSessions.length > 0 ? (
-								hiddenSessions.map((session) => (
-									<div
-										key={session.id}
-										className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-[12px] text-muted-foreground hover:bg-accent/60"
-									>
-										<div className="flex min-w-0 items-center gap-1.5">
-											<SessionProviderIcon
-												agentType={session.agentType}
-												active={false}
-											/>
-											<span className="truncate">
-												{displaySessionTitle(session)}
-											</span>
-										</div>
-										<div className="flex shrink-0 items-center gap-0.5">
-											<Button
-												aria-label="Restore session"
-												onClick={() => handleUnhide(session.id)}
-												variant="ghost"
-												size="icon-xs"
-												className="text-muted-foreground hover:text-foreground"
-											>
-												<RotateCcw className="size-3" strokeWidth={1.8} />
-											</Button>
-											<Button
-												aria-label="Delete session permanently"
-												onClick={() => handleDelete(session.id)}
-												variant="ghost"
-												size="icon-xs"
-												className="text-muted-foreground hover:text-destructive"
-											>
-												<Trash2 className="size-3" strokeWidth={1.8} />
-											</Button>
-										</div>
-									</div>
-								))
-							) : (
-								<div className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
-									No hidden sessions
-								</div>
+				<DropdownMenu open={showHistory} onOpenChange={handleToggleHistory}>
+					<DropdownMenuTrigger asChild>
+						<Button
+							aria-label="Session history"
+							variant="ghost"
+							size="icon-sm"
+							className={cn(
+								"ml-1 shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground focus-visible:border-transparent focus-visible:ring-0",
+								showHistory && "bg-accent/60 text-foreground",
 							)}
-						</div>
-					) : null}
-				</div>
+						>
+							<History className="size-3.5" strokeWidth={1.8} />
+						</Button>
+					</DropdownMenuTrigger>
+					<DropdownMenuContent align="end" className="w-56">
+						{hiddenSessions.length > 0 ? (
+							hiddenSessions.map((session) => (
+								<Tooltip key={session.id}>
+									<TooltipTrigger asChild>
+										<div className="flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-[12px] text-muted-foreground hover:bg-accent/60">
+											<div className="flex min-w-0 items-center gap-1.5">
+												<SessionProviderIcon
+													agentType={session.agentType}
+													active={false}
+												/>
+												<span className="truncate">
+													{displaySessionTitle(session)}
+												</span>
+											</div>
+											<div className="flex shrink-0 items-center gap-0.5">
+												<Button
+													aria-label="Restore session"
+													onClick={() => handleUnhide(session.id)}
+													variant="ghost"
+													size="icon-xs"
+													className="text-muted-foreground hover:text-foreground"
+												>
+													<RotateCcw className="size-3" strokeWidth={1.8} />
+												</Button>
+												<Button
+													aria-label="Delete session permanently"
+													onClick={() => handleDelete(session.id)}
+													variant="ghost"
+													size="icon-xs"
+													className="text-muted-foreground hover:text-destructive"
+												>
+													<Trash2 className="size-3" strokeWidth={1.8} />
+												</Button>
+											</div>
+										</div>
+									</TooltipTrigger>
+									<TooltipContent
+										side="left"
+										sideOffset={8}
+										className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+									>
+										<span>{displaySessionTitle(session)}</span>
+									</TooltipContent>
+								</Tooltip>
+							))
+						) : (
+							<div className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
+								No hidden sessions
+							</div>
+						)}
+					</DropdownMenuContent>
+				</DropdownMenu>
 			</div>
 		</header>
 	);

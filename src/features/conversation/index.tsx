@@ -28,7 +28,11 @@ type WorkspaceConversationContainerProps = {
 	 * session-level lifecycle events (e.g. the commit button driver needs to
 	 * know when its target session's stream has ended). */
 	onSendingSessionsChange?: (sessionIds: Set<string>) => void;
+	onInteractionSessionsChange?: (
+		sessionWorkspaceMap: Map<string, string>,
+	) => void;
 	completedSessionIds?: Set<string>;
+	interactionRequiredSessionIds?: Set<string>;
 	onSessionCompleted?: (sessionId: string, workspaceId: string) => void;
 	workspacePrInfo?: PullRequestInfo | null;
 	headerActions?: React.ReactNode;
@@ -59,7 +63,9 @@ export const WorkspaceConversationContainer = memo(
 		onResolveDisplayedSession,
 		onSendingWorkspacesChange,
 		onSendingSessionsChange,
+		onInteractionSessionsChange,
 		completedSessionIds,
+		interactionRequiredSessionIds,
 		onSessionCompleted,
 		workspacePrInfo = null,
 		headerActions,
@@ -91,9 +97,11 @@ export const WorkspaceConversationContainer = memo(
 		const {
 			activeSendError,
 			handleComposerSubmit,
+			handleDeferredToolResponse,
 			handlePermissionResponse,
 			handleStopStream,
 			isSending,
+			pendingDeferredTool,
 			pendingPermissions,
 			restoreCustomTags,
 			restoreDraft,
@@ -110,6 +118,7 @@ export const WorkspaceConversationContainer = memo(
 			selectionPending,
 			onSendingSessionsChange,
 			onSendingWorkspacesChange,
+			onInteractionSessionsChange,
 			onSessionCompleted,
 		});
 
@@ -133,12 +142,15 @@ export const WorkspaceConversationContainer = memo(
 			[],
 		);
 
-		const handleTogglePlanMode = useCallback((contextKey: string) => {
-			setComposerPermissionModes((current) => ({
-				...current,
-				[contextKey]: current[contextKey] === "plan" ? "acceptEdits" : "plan",
-			}));
-		}, []);
+		const handleChangePermissionMode = useCallback(
+			(contextKey: string, mode: string) => {
+				setComposerPermissionModes((current) => ({
+					...current,
+					[contextKey]: mode,
+				}));
+			},
+			[],
+		);
 
 		const handleComposerSubmitWrapper = useCallback(
 			(payload: Parameters<typeof handleComposerSubmit>[0]) => {
@@ -154,6 +166,13 @@ export const WorkspaceConversationContainer = memo(
 				}),
 		);
 
+		const exitPlanPermission = pendingPermissions.find(
+			(perm) => perm.toolName === "ExitPlanMode",
+		);
+		const toolPermissions = pendingPermissions.filter(
+			(perm) => perm.toolName !== "ExitPlanMode",
+		);
+
 		return (
 			<>
 				<WorkspacePanelContainer
@@ -165,6 +184,7 @@ export const WorkspaceConversationContainer = memo(
 					sending={isSending}
 					sendingSessionIds={sendingSessionIds}
 					completedSessionIds={completedSessionIds}
+					interactionRequiredSessionIds={interactionRequiredSessionIds}
 					selectedProvider={selectedProvider}
 					workspacePrInfo={workspacePrInfo}
 					onSelectSession={onSelectSession}
@@ -175,7 +195,7 @@ export const WorkspaceConversationContainer = memo(
 
 				<div className="mt-auto px-4 pb-4 pt-0">
 					<div>
-						{pendingPermissions.map((perm) => {
+						{toolPermissions.map((perm) => {
 							const action = perm.toolName || "Tool";
 							const target =
 								typeof perm.toolInput?.file_path === "string"
@@ -246,12 +266,18 @@ export const WorkspaceConversationContainer = memo(
 							restoreFiles={restoreFiles}
 							restoreCustomTags={restoreCustomTags}
 							restoreNonce={restoreNonce}
+							pendingDeferredTool={pendingDeferredTool}
+							onDeferredToolResponse={handleDeferredToolResponse}
+							pendingExitPlanPermissionId={
+								exitPlanPermission?.permissionId ?? null
+							}
+							onPermissionResponse={handlePermissionResponse}
 							modelSelections={composerModelSelections}
 							effortLevels={composerEffortLevels}
 							permissionModes={composerPermissionModes}
 							onSelectModel={handleSelectModel}
 							onSelectEffort={handleSelectEffort}
-							onTogglePlanMode={handleTogglePlanMode}
+							onChangePermissionMode={handleChangePermissionMode}
 							onSwitchSession={onSelectSession}
 							onSubmit={handleComposerSubmitWrapper}
 							onStop={handleStopStream}

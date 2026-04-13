@@ -52,6 +52,27 @@
 	--workspace-pr-closed-accent: #da3633;
 	--workspace-pr-closed-header-bg: #f1c7c5;
 	--workspace-pr-conflicts-header-bg: #212830;
+	/* Terminal (xterm.js) — reuses app tokens where possible */
+	--terminal-background: var(--sidebar);
+	--terminal-foreground: var(--foreground);
+	--terminal-cursor: var(--foreground);
+	--terminal-selection: oklch(0.87 0.03 250);
+	--terminal-black: oklch(0.26 0 0);
+	--terminal-red: var(--destructive);
+	--terminal-green: oklch(0.5 0.15 155);
+	--terminal-yellow: oklch(0.53 0.14 75);
+	--terminal-blue: oklch(0.5 0.16 255);
+	--terminal-magenta: oklch(0.52 0.17 315);
+	--terminal-cyan: oklch(0.5 0.1 195);
+	--terminal-white: oklch(0.87 0 0);
+	--terminal-bright-black: oklch(0.556 0 0);
+	--terminal-bright-red: oklch(0.6 0.2 22);
+	--terminal-bright-green: oklch(0.55 0.14 150);
+	--terminal-bright-yellow: oklch(0.58 0.12 75);
+	--terminal-bright-blue: oklch(0.55 0.14 255);
+	--terminal-bright-magenta: oklch(0.57 0.15 310);
+	--terminal-bright-cyan: oklch(0.55 0.09 192);
+	--terminal-bright-white: oklch(0.95 0 0);
 	--radius: 0.625rem;
 }
 
@@ -109,4 +130,21 @@
 	--workspace-pr-closed-accent: #da3633;
 	--workspace-pr-closed-header-bg: #5a2b2b;
 	--workspace-pr-conflicts-header-bg: #212830;
+	/* Terminal (xterm.js) — only overrides that differ from :root */
+	--terminal-selection: oklch(0.35 0.03 250);
+	--terminal-black: oklch(0.21 0 0);
+	--terminal-green: oklch(0.72 0.14 155);
+	--terminal-yellow: oklch(0.82 0.13 85);
+	--terminal-blue: oklch(0.72 0.13 250);
+	--terminal-magenta: oklch(0.72 0.14 310);
+	--terminal-cyan: oklch(0.78 0.09 192);
+	--terminal-white: oklch(0.87 0 0);
+	--terminal-bright-black: oklch(0.5 0 0);
+	--terminal-bright-red: oklch(0.78 0.15 18);
+	--terminal-bright-green: oklch(0.78 0.12 150);
+	--terminal-bright-yellow: oklch(0.88 0.11 85);
+	--terminal-bright-blue: oklch(0.78 0.11 250);
+	--terminal-bright-magenta: oklch(0.78 0.12 310);
+	--terminal-bright-cyan: oklch(0.84 0.07 192);
+	--terminal-bright-white: oklch(0.985 0 0);
 }

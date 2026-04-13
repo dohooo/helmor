@@ -45,3 +45,26 @@ pub async fn update_repository_remote(
 pub async fn list_repo_remotes(repo_id: String) -> CmdResult<Vec<String>> {
     run_blocking(move || repos::list_repo_remotes(&repo_id)).await
 }
+
+#[tauri::command]
+pub async fn load_repo_scripts(repo_id: String) -> CmdResult<repos::RepoScripts> {
+    run_blocking(move || repos::load_repo_scripts(&repo_id)).await
+}
+
+#[tauri::command]
+pub async fn update_repo_scripts(
+    repo_id: String,
+    setup_script: Option<String>,
+    run_script: Option<String>,
+    archive_script: Option<String>,
+) -> CmdResult<()> {
+    run_blocking(move || {
+        repos::update_repo_scripts(
+            &repo_id,
+            setup_script.as_deref(),
+            run_script.as_deref(),
+            archive_script.as_deref(),
+        )
+    })
+    .await
+}

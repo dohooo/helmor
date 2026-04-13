@@ -26,6 +26,7 @@ type WorkspacePanelContainerProps = {
 	sending: boolean;
 	sendingSessionIds?: Set<string>;
 	completedSessionIds?: Set<string>;
+	interactionRequiredSessionIds?: Set<string>;
 	selectedProvider?: string | null;
 	workspacePrInfo?: PullRequestInfo | null;
 	onSelectSession: (sessionId: string | null) => void;
@@ -43,6 +44,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	sending,
 	sendingSessionIds,
 	completedSessionIds,
+	interactionRequiredSessionIds,
 	selectedProvider = null,
 	workspacePrInfo = null,
 	onSelectSession,
@@ -248,10 +250,6 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		enabled: Boolean(threadSessionId),
 	});
 
-	// React Query is the single source of truth — the streaming pipeline
-	// writes finalized turns straight into this cache via
-	// `session-thread-cache.ts`, so there is no separate "live" overlay
-	// to merge here. Reading is a direct array deref.
 	const messages = messagesQuery.data ?? EMPTY_MESSAGES;
 
 	const preferredPaneSessionId = selectedSessionId ?? threadSessionId;
@@ -476,6 +474,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			sending={sending}
 			sendingSessionIds={sendingSessionIds}
 			completedSessionIds={completedSessionIds}
+			interactionRequiredSessionIds={interactionRequiredSessionIds}
 			onSelectSession={handleSelectSession}
 			onPrefetchSession={handlePrefetchSession}
 			onSessionsChanged={handleSessionsChanged}

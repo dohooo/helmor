@@ -28,6 +28,7 @@ import type {
 	FileMentionPart,
 	ImagePart,
 	MessagePart,
+	PlanReviewPart,
 	PromptSuggestionPart,
 	SystemNoticePart,
 	ThreadMessageLike,
@@ -133,6 +134,21 @@ export function partStructurallyEqual(
 		case "file-mention": {
 			const fb = b as FileMentionPart;
 			return a.path === fb.path;
+		}
+		case "plan-review": {
+			const pb = b as PlanReviewPart;
+			if (a.toolUseId !== pb.toolUseId) return false;
+			if (a.toolName !== pb.toolName) return false;
+			if (a.plan !== pb.plan) return false;
+			if (a.planFilePath !== pb.planFilePath) return false;
+			const aPrompts = a.allowedPrompts ?? [];
+			const bPrompts = pb.allowedPrompts ?? [];
+			if (aPrompts.length !== bPrompts.length) return false;
+			for (let i = 0; i < aPrompts.length; i += 1) {
+				if (aPrompts[i]!.tool !== bPrompts[i]!.tool) return false;
+				if (aPrompts[i]!.prompt !== bPrompts[i]!.prompt) return false;
+			}
+			return true;
 		}
 		default: {
 			const _exhaustive: never = a;

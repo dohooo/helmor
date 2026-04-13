@@ -404,6 +404,49 @@ fn asst_server_tool_use() {
 }
 
 #[test]
+fn asst_exit_plan_mode_renders_as_plan_review_card() {
+    let msgs = vec![exit_plan_mode(
+        "a1",
+        "tool-plan-1",
+        "1. Review the plan\n2. Approve the mode",
+        Some("/tmp/plan.md"),
+        &[("Read", "Open the implementation notes")],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn merge_keeps_exit_plan_mode_as_separate_assistant_message() {
+    let msgs = vec![
+        assistant_json(
+            "a1",
+            json!([{ "type": "text", "text": "Plan complete." }]),
+            Some(json!({ "type": "assistant" })),
+        ),
+        exit_plan_mode("a2", "tool-plan-1", "1. Review the plan", None, &[]),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn exit_plan_mode_empty_allowed_prompts_serializes_as_empty_array() {
+    let msgs = vec![exit_plan_mode("a1", "tool-1", "Do the thing.", None, &[])];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn exit_plan_mode_missing_plan_file_path() {
+    let msgs = vec![exit_plan_mode(
+        "a1",
+        "tool-1",
+        "1. Step one\n2. Step two",
+        None,
+        &[("Bash", "run tests"), ("Read", "check files")],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
 fn asst_tool_use_missing_id_name() {
     let msgs = vec![assistant_json(
         "a1",

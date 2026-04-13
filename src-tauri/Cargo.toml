@@ -40,6 +40,7 @@ tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-mcp-bridge = "0.11.0"
+tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 notify = "7"
 notify-debouncer-full = "0.4"

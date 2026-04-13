@@ -59,6 +59,7 @@ export type WorkspaceRowItemProps = {
 	selected: boolean;
 	isSending?: boolean;
 	isCompleted?: boolean;
+	isInteractionRequired?: boolean;
 	rowRef?: (element: HTMLDivElement | null) => void;
 	onSelect?: (workspaceId: string) => void;
 	onPrefetch?: (workspaceId: string) => void;
@@ -80,6 +81,7 @@ export const WorkspaceRowItem = memo(
 		selected,
 		isSending,
 		isCompleted,
+		isInteractionRequired,
 		rowRef,
 		onSelect,
 		onPrefetch,
@@ -124,6 +126,16 @@ export const WorkspaceRowItem = memo(
 		});
 		const actionOverlayWidthClassName =
 			isRestoreAction && onDeleteWorkspace ? "w-16" : "w-9";
+		const statusDotLabel = isInteractionRequired
+			? "Interaction required"
+			: isCompleted
+				? "Session completed"
+				: null;
+		const statusDotClassName = isInteractionRequired
+			? "bg-yellow-500"
+			: "bg-chart-2";
+		const showStatusDot =
+			statusDotLabel !== null && (isInteractionRequired || !selected);
 
 		const rowBody = (
 			<div
@@ -161,7 +173,7 @@ export const WorkspaceRowItem = memo(
 						repoName={row.repoName}
 						title={row.title}
 					/>
-					{isSending ? (
+					{isSending && !isInteractionRequired ? (
 						<span className="relative flex size-[13px] shrink-0 items-center justify-center">
 							<span className="absolute inset-0 animate-spin rounded-full border border-transparent border-t-[var(--workspace-sidebar-status-progress)]" />
 							<span className="size-1 rounded-full bg-[var(--workspace-sidebar-status-progress)]" />
@@ -191,10 +203,13 @@ export const WorkspaceRowItem = memo(
 							text={row.branch ? humanizeBranch(row.branch) : row.title}
 						/>
 					</span>
-					{isCompleted && !selected ? (
+					{showStatusDot ? (
 						<span
-							aria-label="Session completed"
-							className="size-1.5 shrink-0 rounded-full bg-chart-2"
+							aria-label={statusDotLabel ?? undefined}
+							className={cn(
+								"size-1.5 shrink-0 rounded-full",
+								statusDotClassName,
+							)}
 						/>
 					) : null}
 				</div>
@@ -359,6 +374,7 @@ export const WorkspaceRowItem = memo(
 			previous.selected === next.selected &&
 			previous.isSending === next.isSending &&
 			previous.isCompleted === next.isCompleted &&
+			previous.isInteractionRequired === next.isInteractionRequired &&
 			previous.archivingWorkspaceId === next.archivingWorkspaceId &&
 			previous.markingUnreadWorkspaceId === next.markingUnreadWorkspaceId &&
 			previous.restoringWorkspaceId === next.restoringWorkspaceId &&

@@ -90,6 +90,7 @@ import {
 	saveSettings,
 	useSettings,
 } from "./lib/settings";
+import { useOsNotifications } from "./lib/use-os-notifications";
 import { summaryToArchivedRow } from "./lib/workspace-helpers";
 import {
 	type WorkspaceToastOptions,
@@ -122,12 +123,36 @@ function App() {
 		<SettingsContext.Provider value={settingsContextValue}>
 			<PersistQueryClientProvider
 				client={queryClient}
-				persistOptions={{ persister: helmorQueryPersister }}
+				persistOptions={{
+					persister: helmorQueryPersister,
+					dehydrateOptions: {
+						shouldDehydrateQuery: (query) => {
+							// Never persist session thread messages — they must
+							// always be loaded fresh from the DB. Stale streaming
+							// snapshots surviving app restart was a root cause of
+							// cross-session message contamination.
+							const key = query.queryKey;
+							if (
+								key[0] === "sessionMessages" &&
+								key.length >= 3 &&
+								key[2] === "thread"
+							) {
+								return false;
+							}
+							return query.state.status === "success";
+						},
+					},
+				}}
 			>
 				<AppShell onOpenSettings={() => setSettingsOpen(true)} />
 				<SettingsDialog
 					open={settingsOpen}
-					onClose={() => setSettingsOpen(false)}
+					onClose={() => {
+						setSettingsOpen(false);
+						void queryClient.invalidateQueries({
+							queryKey: ["repoScripts"],
+						});
+					}}
 				/>
 			</PersistQueryClientProvider>
 		</SettingsContext.Provider>
@@ -250,6 +275,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const [completedSessions, setCompletedSessions] = useState<
 		Map<string, string>
 	>(() => new Map());
+	const [interactionRequiredSessions, setInteractionRequiredSessions] =
+		useState<Map<string, string>>(() => new Map());
 	const completedSessionIds = useMemo(
 		() => new Set(completedSessions.keys()),
 		[completedSessions],
@@ -257,6 +284,14 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const completedWorkspaceIds = useMemo(
 		() => new Set(completedSessions.values()),
 		[completedSessions],
+	);
+	const interactionRequiredSessionIds = useMemo(
+		() => new Set(interactionRequiredSessions.keys()),
+		[interactionRequiredSessions],
+	);
+	const interactionRequiredWorkspaceIds = useMemo(
+		() => new Set(interactionRequiredSessions.values()),
+		[interactionRequiredSessions],
 	);
 
 	// Clear the completed-session dot for whichever session the user
@@ -289,6 +324,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	}, [showOnboarding]);
 
 	const { settings: appSettings } = useSettings();
+	const notify = useOsNotifications(appSettings);
 	const [installedEditors, setInstalledEditors] = useState<DetectedEditor[]>(
 		[],
 	);
@@ -978,8 +1014,45 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 				next.set(sessionId, workspaceId);
 				return next;
 			});
+			const name =
+				queryClient.getQueryData<WorkspaceDetail | null>(
+					helmorQueryKeys.workspaceDetail(workspaceId),
+				)?.title ?? "Workspace";
+			notify({ title: "Session completed", body: name });
 		},
-		[],
+		[notify, queryClient],
+	);
+
+	const handleInteractionSessionsChange = useCallback(
+		(nextMap: Map<string, string>) => {
+			setInteractionRequiredSessions((current) => {
+				if (current.size === nextMap.size) {
+					let unchanged = true;
+					for (const [sessionId, workspaceId] of nextMap) {
+						if (current.get(sessionId) !== workspaceId) {
+							unchanged = false;
+							break;
+						}
+					}
+					if (unchanged) {
+						return current;
+					}
+				}
+
+				for (const [sessionId, workspaceId] of nextMap) {
+					if (!current.has(sessionId)) {
+						const name =
+							queryClient.getQueryData<WorkspaceDetail | null>(
+								helmorQueryKeys.workspaceDetail(workspaceId),
+							)?.title ?? "Workspace";
+						notify({ title: "Input needed", body: name });
+					}
+				}
+
+				return new Map(nextMap);
+			});
+		},
+		[notify, queryClient],
 	);
 
 	const handleNavigateSessions = useCallback(
@@ -1278,6 +1351,9 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 													selectedWorkspaceId={selectedWorkspaceId}
 													sendingWorkspaceIds={sendingWorkspaceIds}
 													completedWorkspaceIds={completedWorkspaceIds}
+													interactionRequiredWorkspaceIds={
+														interactionRequiredWorkspaceIds
+													}
 													onSelectWorkspace={handleSelectWorkspace}
 													pushWorkspaceToast={pushWorkspaceToast}
 												/>
@@ -1402,7 +1478,13 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 												}
 												onSendingWorkspacesChange={setSendingWorkspaceIds}
 												onSendingSessionsChange={setSendingSessionIds}
+												onInteractionSessionsChange={
+													handleInteractionSessionsChange
+												}
 												completedSessionIds={completedSessionIds}
+												interactionRequiredSessionIds={
+													interactionRequiredSessionIds
+												}
 												onSessionCompleted={handleSessionCompleted}
 												workspacePrInfo={workspacePrInfo}
 												pendingPromptForSession={pendingPromptForSession}
@@ -1556,6 +1638,10 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 									<WorkspaceInspectorSidebar
 										workspaceId={selectedWorkspaceId}
 										workspaceRootPath={workspaceRootPath}
+										workspaceState={
+											selectedWorkspaceDetailQuery.data?.state ?? null
+										}
+										repoId={selectedWorkspaceDetailQuery.data?.repoId ?? null}
 										workspaceBranch={
 											selectedWorkspaceDetailQuery.data?.branch ?? null
 										}
@@ -1574,6 +1660,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 										commitButtonMode={commitButtonMode}
 										commitButtonState={commitButtonState}
 										prInfo={workspacePrInfo}
+										onOpenSettings={onOpenSettings}
 									/>
 								</aside>
 							</div>
@@ -1581,7 +1668,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 					)}
 					<Toaster
 						theme={resolveTheme(appSettings.theme)}
-						position="top-right"
+						position="bottom-right"
 						visibleToasts={6}
 					/>
 				</ComposerInsertProvider>

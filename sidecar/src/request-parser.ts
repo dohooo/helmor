@@ -4,11 +4,14 @@
  * missing or wrong-shaped field.
  */
 
+import type { ElicitationResult } from "@anthropic-ai/claude-agent-sdk";
 import type {
 	ListSlashCommandsParams,
 	Provider,
 	SendMessageParams,
 } from "./session-manager.js";
+
+type ElicitationContent = NonNullable<ElicitationResult["content"]>;
 
 export interface RawRequest {
 	readonly id: string;
@@ -48,6 +51,53 @@ export function optionalString(
 ): string | undefined {
 	const value = params[key];
 	return typeof value === "string" ? value : undefined;
+}
+
+function optionalObject(
+	params: Record<string, unknown>,
+	key: string,
+): Record<string, unknown> | undefined {
+	const value = params[key];
+	if (value === undefined || value === null) {
+		return undefined;
+	}
+	if (typeof value === "object") {
+		return value as Record<string, unknown>;
+	}
+	throw new Error(`params.${key} must be an object`);
+}
+
+function isElicitationContentValue(
+	value: unknown,
+): value is ElicitationContent[string] {
+	return (
+		typeof value === "string" ||
+		typeof value === "number" ||
+		typeof value === "boolean" ||
+		(Array.isArray(value) && value.every((item) => typeof item === "string"))
+	);
+}
+
+export function parseElicitationResultContent(
+	params: Record<string, unknown>,
+	key: string,
+): ElicitationResult["content"] | undefined {
+	const content = optionalObject(params, key);
+	if (!content) {
+		return undefined;
+	}
+
+	const parsedContent: ElicitationContent = {};
+	for (const [contentKey, value] of Object.entries(content)) {
+		if (!isElicitationContentValue(value)) {
+			throw new Error(
+				`params.${key}.${contentKey} must be a string, number, boolean, or string[]`,
+			);
+		}
+		parsedContent[contentKey] = value;
+	}
+
+	return parsedContent;
 }
 
 export function parseProvider(value: unknown): Provider {

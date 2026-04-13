@@ -24,9 +24,9 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
         );
     }
 
-    let merge_base = find_merge_base(workspace_root)?;
+    let target_ref = resolve_target_ref(workspace_root)?;
     let committed_output = git_ops::run_git(
-        ["diff", "--name-status", merge_base.as_str(), "HEAD"],
+        ["diff", "--name-status", target_ref.as_str(), "HEAD"],
         Some(workspace_root),
     )
     .unwrap_or_default();
@@ -72,7 +72,7 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
 
     let mut stats_map = BTreeMap::<String, (u32, u32)>::new();
     let committed_numstat = git_ops::run_git(
-        ["diff", "--numstat", merge_base.as_str(), "HEAD"],
+        ["diff", "--numstat", target_ref.as_str(), "HEAD"],
         Some(workspace_root),
     )
     .unwrap_or_default();
@@ -262,7 +262,12 @@ fn lookup_workspace_target(workspace_root: &Path) -> Option<(String, String)> {
     query_workspace_target(&conn, repo_name, dir_name)
 }
 
-pub(super) fn find_merge_base(workspace_root: &Path) -> Result<String> {
+/// Resolve the target branch ref for diff comparison.
+///
+/// Returns the ref itself (not a merge-base) so `git diff <ref> HEAD`
+/// compares the two branch tips directly. This means identical trees
+/// produce zero diff, which is the correct behavior for "Branch Changes".
+pub(super) fn resolve_target_ref(workspace_root: &Path) -> Result<String> {
     let mut candidates = Vec::<String>::new();
 
     if let Some((remote, target)) = lookup_workspace_target(workspace_root) {
@@ -276,13 +281,14 @@ pub(super) fn find_merge_base(workspace_root: &Path) -> Result<String> {
     candidates.push("refs/heads/master".into());
 
     for branch in &candidates {
-        if let Ok(base) = git_ops::run_git(["merge-base", "HEAD", branch], Some(workspace_root)) {
-            if !base.trim().is_empty() {
-                return Ok(base.trim().to_string());
+        if let Ok(sha) = git_ops::run_git(["rev-parse", "--verify", branch], Some(workspace_root)) {
+            if !sha.trim().is_empty() {
+                return Ok(branch.clone());
             }
         }
     }
 
+    // No target branch found — fall back to empty tree for initial commits.
     let empty_tree = git_ops::run_git(
         ["hash-object", "-t", "tree", "/dev/null"],
         Some(workspace_root),

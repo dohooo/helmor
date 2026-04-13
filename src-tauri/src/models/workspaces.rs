@@ -198,8 +198,8 @@ pub(crate) fn insert_initializing_workspace_and_session(
                 branch,
                 default_branch,
                 default_branch,
-                initialization_log_path.display().to_string(),
                 setup_log_path.display().to_string(),
+                initialization_log_path.display().to_string(),
                 timestamp,
             ),
         )
@@ -212,24 +212,17 @@ pub(crate) fn insert_initializing_workspace_and_session(
               id,
               workspace_id,
               title,
-              agent_type,
               status,
-              model,
               permission_mode,
-              provider_session_id,
               unread_count,
               context_token_count,
-              context_used_percent,
               thinking_enabled,
               fast_mode,
-              agent_personality,
               created_at,
               updated_at,
-              last_user_message_at,
-              resume_session_at,
               is_hidden,
               is_compacting
-            ) VALUES (?1, ?2, 'Untitled', 'claude', 'idle', 'opus', 'default', NULL, 0, 0, NULL, 1, 0, NULL, ?3, ?3, NULL, NULL, 0, 0)
+            ) VALUES (?1, ?2, 'Untitled', 'idle', 'default', 0, 0, 1, 0, ?3, ?3, 0, 0)
             "#,
             (session_id, workspace_id, timestamp),
         )

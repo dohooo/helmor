@@ -8,6 +8,7 @@ export type AppSettings = {
 	branchPrefixType: "github" | "custom" | "none";
 	branchPrefixCustom: string;
 	theme: ThemeMode;
+	notifications: boolean;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -15,6 +16,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	branchPrefixType: "github",
 	branchPrefixCustom: "",
 	theme: "system",
+	notifications: true,
 };
 
 const SETTINGS_KEY_MAP: Record<keyof AppSettings, string> = {
@@ -22,6 +24,7 @@ const SETTINGS_KEY_MAP: Record<keyof AppSettings, string> = {
 	branchPrefixType: "branch_prefix_type",
 	branchPrefixCustom: "branch_prefix_custom",
 	theme: "app.theme",
+	notifications: "app.notifications",
 };
 
 export async function loadSettings(): Promise<AppSettings> {
@@ -42,6 +45,10 @@ export async function loadSettings(): Promise<AppSettings> {
 			theme:
 				(raw[SETTINGS_KEY_MAP.theme] as AppSettings["theme"]) ??
 				DEFAULT_SETTINGS.theme,
+			notifications:
+				raw[SETTINGS_KEY_MAP.notifications] !== undefined
+					? raw[SETTINGS_KEY_MAP.notifications] === "true"
+					: DEFAULT_SETTINGS.notifications,
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS };

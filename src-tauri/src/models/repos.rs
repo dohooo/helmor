@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::{git_ops, helpers};
 
@@ -54,6 +55,8 @@ pub(crate) struct RepositoryRecord {
     pub default_branch: Option<String>,
     pub root_path: String,
     pub setup_script: Option<String>,
+    #[allow(dead_code)] // Queried separately via RepoScripts; kept here for completeness.
+    pub run_script: Option<String>,
 }
 
 pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>> {
@@ -101,7 +104,7 @@ pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRe
     let mut statement = connection
         .prepare(
             r#"
-            SELECT id, name, remote, default_branch, root_path, setup_script
+            SELECT id, name, remote, default_branch, root_path, setup_script, run_script
             FROM repos
             WHERE id = ?1
             "#,
@@ -117,6 +120,7 @@ pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRe
                 default_branch: row.get(3)?,
                 root_path: row.get(4)?,
                 setup_script: row.get(5)?,
+                run_script: row.get(6)?,
             })
         })
         .with_context(|| format!("Failed to query repository {repo_id}"))?;
@@ -168,7 +172,7 @@ fn query_repository_by_root_path(
     let mut statement = connection
         .prepare(
             r#"
-            SELECT id, name, remote, default_branch, root_path, setup_script
+            SELECT id, name, remote, default_branch, root_path, setup_script, run_script
             FROM repos
             WHERE root_path = ?1
             ORDER BY created_at ASC
@@ -186,6 +190,7 @@ fn query_repository_by_root_path(
                 default_branch: row.get(3)?,
                 root_path: row.get(4)?,
                 setup_script: row.get(5)?,
+                run_script: row.get(6)?,
             })
         })
         .with_context(|| format!("Failed to query repository row for {root_path}"))?;
@@ -206,7 +211,7 @@ fn query_repository_candidates_by_name(
     let mut statement = connection
         .prepare(
             r#"
-            SELECT id, name, remote, default_branch, root_path, setup_script
+            SELECT id, name, remote, default_branch, root_path, setup_script, run_script
             FROM repos
             WHERE name = ?1 OR root_path LIKE ?2
             ORDER BY created_at ASC
@@ -225,6 +230,7 @@ fn query_repository_candidates_by_name(
                 default_branch: row.get(3)?,
                 root_path: row.get(4)?,
                 setup_script: row.get(5)?,
+                run_script: row.get(6)?,
             })
         })
         .with_context(|| format!("Failed to query repository candidates for {repository_name}"))?;
@@ -367,6 +373,141 @@ pub fn update_repository_default_branch(repo_id: &str, default_branch: &str) -> 
             [default_branch, repo_id],
         )
         .with_context(|| format!("Failed to update default branch for {repo_id}"))?;
+
+    if updated != 1 {
+        bail!("Repository not found: {repo_id}");
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoScripts {
+    pub setup_script: Option<String>,
+    pub run_script: Option<String>,
+    pub archive_script: Option<String>,
+    pub setup_from_project: bool,
+    pub run_from_project: bool,
+    pub archive_from_project: bool,
+}
+
+pub fn load_repo_scripts(repo_id: &str) -> Result<RepoScripts> {
+    let connection = db::open_connection(false)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT setup_script, run_script, archive_script, root_path FROM repos WHERE id = ?1",
+        )
+        .with_context(|| format!("Failed to prepare script lookup for {repo_id}"))?;
+
+    let (db_setup, db_run, db_archive, root_path) = statement
+        .query_row([repo_id], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .with_context(|| format!("Repository not found: {repo_id}"))?;
+
+    // helmor.json project config takes priority, per-field.
+    let project = root_path
+        .as_deref()
+        .filter(|p| !p.is_empty())
+        .and_then(|root| load_helmor_json_scripts(Path::new(root)));
+
+    let (setup_script, setup_from_project) =
+        pick_script(project.as_ref().and_then(|p| p.setup.as_deref()), db_setup);
+    let (run_script, run_from_project) =
+        pick_script(project.as_ref().and_then(|p| p.run.as_deref()), db_run);
+    let (archive_script, archive_from_project) = pick_script(
+        project.as_ref().and_then(|p| p.archive.as_deref()),
+        db_archive,
+    );
+
+    Ok(RepoScripts {
+        setup_script,
+        run_script,
+        archive_script,
+        setup_from_project,
+        run_from_project,
+        archive_from_project,
+    })
+}
+
+/// Project config wins when present; returns (value, is_from_project).
+fn pick_script(project_value: Option<&str>, db_value: Option<String>) -> (Option<String>, bool) {
+    match project_value {
+        Some(v) => (Some(v.to_owned()), true),
+        None => (db_value, false),
+    }
+}
+
+struct HelmorJsonScripts {
+    setup: Option<String>,
+    run: Option<String>,
+    archive: Option<String>,
+}
+
+/// Try helmor.json first, then conductor.json as fallback.
+fn load_helmor_json_scripts(root_path: &Path) -> Option<HelmorJsonScripts> {
+    for filename in &["helmor.json", "conductor.json"] {
+        if let Some(result) = parse_project_config_scripts(&root_path.join(filename)) {
+            return Some(result);
+        }
+    }
+    None
+}
+
+fn parse_project_config_scripts(config_path: &Path) -> Option<HelmorJsonScripts> {
+    if !config_path.is_file() {
+        return None;
+    }
+    let contents = match fs::read_to_string(config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Failed to read {}: {e:#}", config_path.display());
+            return None;
+        }
+    };
+    let json: Value = match serde_json::from_str(&contents) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("Invalid JSON in {}: {e}", config_path.display());
+            return None;
+        }
+    };
+    let scripts = json.get("scripts")?;
+    Some(HelmorJsonScripts {
+        setup: scripts
+            .get("setup")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        run: scripts
+            .get("run")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        archive: scripts
+            .get("archive")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    })
+}
+
+pub fn update_repo_scripts(
+    repo_id: &str,
+    setup_script: Option<&str>,
+    run_script: Option<&str>,
+    archive_script: Option<&str>,
+) -> Result<()> {
+    let connection = db::open_connection(true)?;
+    let updated = connection
+        .execute(
+            "UPDATE repos SET setup_script = ?1, run_script = ?2, archive_script = ?3, updated_at = datetime('now') WHERE id = ?4",
+            rusqlite::params![setup_script, run_script, archive_script, repo_id],
+        )
+        .with_context(|| format!("Failed to update scripts for {repo_id}"))?;
 
     if updated != 1 {
         bail!("Repository not found: {repo_id}");
