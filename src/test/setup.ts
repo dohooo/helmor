@@ -1,6 +1,29 @@
 import "@testing-library/jest-dom/vitest";
 import { vi } from "vitest";
 
+// @tanstack/react-virtual requires a layout engine to determine visible items.
+// jsdom has none, so mock the virtualizer to render all items unconditionally.
+vi.mock("@tanstack/react-virtual", () => ({
+	useVirtualizer: (opts: {
+		count: number;
+		estimateSize: (i: number) => number;
+		getItemKey: (i: number) => string | number;
+	}) => {
+		let offset = 0;
+		const items = Array.from({ length: opts.count }, (_, i) => {
+			const size = opts.estimateSize(i);
+			const start = offset;
+			offset += size;
+			return { index: i, key: opts.getItemKey(i), size, start };
+		});
+		return {
+			getVirtualItems: () => items,
+			getTotalSize: () => offset,
+			scrollToIndex: () => {},
+		};
+	},
+}));
+
 vi.mock("@tauri-apps/api/event", () => ({
 	listen: vi.fn(async () => () => {}),
 }));

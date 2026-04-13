@@ -1,3 +1,4 @@
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
 	Archive,
 	ChevronRight,
@@ -10,16 +11,12 @@ import {
 	useCallback,
 	useEffect,
 	useLayoutEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-	Collapsible,
-	CollapsibleContent,
-	CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import {
 	Command,
 	CommandEmpty,
@@ -31,7 +28,6 @@ import {
 	PopoverAnchor,
 	PopoverContent,
 } from "@/components/ui/popover";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
 	Tooltip,
 	TooltipContent,
@@ -55,6 +51,30 @@ import {
 	findSelectedSectionId,
 	GroupIcon,
 } from "./shared";
+
+// ---------------------------------------------------------------------------
+// Virtual list item types
+// ---------------------------------------------------------------------------
+
+type VirtualItem =
+	| {
+			kind: "group-header";
+			groupId: string;
+			group: WorkspaceGroup;
+			canCollapse: boolean;
+	  }
+	| { kind: "row"; groupId: string; row: WorkspaceRow; isArchived: boolean }
+	| { kind: "group-gap" }
+	| { kind: "bottom-padding" };
+
+const HEADER_HEIGHT = 42; // 36px content + 6px gap below
+const ROW_HEIGHT = 32; // 30px (h-7.5) + 2px gap
+const GROUP_GAP = 16; // gap-4
+const BOTTOM_PADDING = 24; // pb-6
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
 export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	groups,
@@ -104,33 +124,11 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	restoringWorkspaceId?: string | null;
 }) {
 	const [isRepoPickerOpen, setIsRepoPickerOpen] = useState(false);
-	const workspaceRowRefs = useRef(new Map<string, HTMLDivElement>());
-	// Cache one ref-callback per workspace id so React does not detach +
-	// re-attach the row DOM ref on every parent render. The previous version
-	// returned `(workspaceId) => (el) => {...}` which produced a brand-new
-	// closure for each row each render.
-	const rowRefCallbackCache = useRef(
-		new Map<string, (element: HTMLDivElement | null) => void>(),
-	);
+	const scrollContainerRef = useRef<HTMLDivElement>(null);
 	const [sectionOpenState, setSectionOpenState] = useState(() => ({
 		...createInitialSectionOpenState(groups),
 		...readStoredSectionOpenState(),
 	}));
-
-	const setWorkspaceRowRef = useCallback((workspaceId: string) => {
-		const cache = rowRefCallbackCache.current;
-		const existing = cache.get(workspaceId);
-		if (existing) return existing;
-		const callback = (element: HTMLDivElement | null) => {
-			if (element) {
-				workspaceRowRefs.current.set(workspaceId, element);
-				return;
-			}
-			workspaceRowRefs.current.delete(workspaceId);
-		};
-		cache.set(workspaceId, callback);
-		return callback;
-	}, []);
 
 	useEffect(() => {
 		setSectionOpenState((current) => {
@@ -181,31 +179,108 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		);
 	}, [archivedRows, groups, selectedWorkspaceId]);
 
-	useLayoutEffect(() => {
-		if (!selectedWorkspaceId) {
-			return;
-		}
+	// ── Flatten groups into virtual items ──────────────────────────────
+	const flatItems = useMemo(() => {
+		const items: VirtualItem[] = [];
+		const visibleGroups = groups.filter(
+			(g) => g.id !== "pinned" || g.rows.length > 0,
+		);
 
-		const selectedRowElement =
-			workspaceRowRefs.current.get(selectedWorkspaceId);
-		if (
-			!selectedRowElement ||
-			typeof selectedRowElement.scrollIntoView !== "function"
-		) {
-			return;
-		}
-
-		const frameId = window.requestAnimationFrame(() => {
-			selectedRowElement.scrollIntoView({
-				block: "nearest",
-				inline: "nearest",
+		for (let gi = 0; gi < visibleGroups.length; gi++) {
+			if (gi > 0) items.push({ kind: "group-gap" });
+			const group = visibleGroups[gi];
+			const canCollapse = group.rows.length > 0;
+			items.push({
+				kind: "group-header",
+				groupId: group.id,
+				group,
+				canCollapse,
 			});
+
+			if (sectionOpenState[group.id] !== false && group.rows.length > 0) {
+				for (const row of group.rows) {
+					items.push({
+						kind: "row",
+						groupId: group.id,
+						row,
+						isArchived: false,
+					});
+				}
+			}
+		}
+
+		// Archived section
+		items.push({ kind: "group-gap" });
+		items.push({
+			kind: "group-header",
+			groupId: ARCHIVED_SECTION_ID,
+			group: {
+				id: ARCHIVED_SECTION_ID,
+				label: "Archived",
+				tone: "backlog" as WorkspaceGroup["tone"],
+				rows: archivedRows,
+			},
+			canCollapse: archivedRows.length > 0,
 		});
 
-		return () => {
-			window.cancelAnimationFrame(frameId);
-		};
-	}, [sectionOpenState, selectedWorkspaceId]);
+		if (sectionOpenState[ARCHIVED_SECTION_ID] && archivedRows.length > 0) {
+			for (const row of archivedRows) {
+				items.push({
+					kind: "row",
+					groupId: ARCHIVED_SECTION_ID,
+					row,
+					isArchived: true,
+				});
+			}
+		}
+
+		items.push({ kind: "bottom-padding" });
+		return items;
+	}, [groups, archivedRows, sectionOpenState]);
+
+	// ── Virtualizer ───────────────────────────────────────────────────
+	const virtualizer = useVirtualizer({
+		count: flatItems.length,
+		getScrollElement: () => scrollContainerRef.current,
+		estimateSize: (index) => {
+			switch (flatItems[index].kind) {
+				case "group-header":
+					return HEADER_HEIGHT;
+				case "row":
+					return ROW_HEIGHT;
+				case "group-gap":
+					return GROUP_GAP;
+				case "bottom-padding":
+					return BOTTOM_PADDING;
+			}
+		},
+		getItemKey: (index) => {
+			const item = flatItems[index];
+			switch (item.kind) {
+				case "group-header":
+					return `header-${item.groupId}`;
+				case "row":
+					return `row-${item.row.id}`;
+				case "group-gap":
+					return `gap-${index}`;
+				case "bottom-padding":
+					return "bottom-padding";
+			}
+		},
+		overscan: 12,
+	});
+
+	// ── Scroll selected into view ─────────────────────────────────────
+	useLayoutEffect(() => {
+		if (!selectedWorkspaceId) return;
+
+		const targetIndex = flatItems.findIndex(
+			(item) => item.kind === "row" && item.row.id === selectedWorkspaceId,
+		);
+		if (targetIndex === -1) return;
+
+		virtualizer.scrollToIndex(targetIndex, { align: "auto" });
+	}, [selectedWorkspaceId, sectionOpenState, flatItems, virtualizer]);
 
 	const workspaceActionsBusy = Boolean(
 		addingRepository ||
@@ -216,6 +291,129 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	const createBusy = Boolean(creatingWorkspaceRepoId);
 	const addRepositoryBusy = Boolean(addingRepository);
 	const repositories = availableRepositories ?? [];
+
+	// ── Toggle section ────────────────────────────────────────────────
+	const toggleSection = useCallback((groupId: string) => {
+		setSectionOpenState((current) => ({
+			...current,
+			[groupId]: !current[groupId],
+		}));
+	}, []);
+
+	// ── Render a single virtual item ──────────────────────────────────
+	const renderItem = useCallback(
+		(item: VirtualItem) => {
+			if (item.kind === "group-gap" || item.kind === "bottom-padding") {
+				return null;
+			}
+
+			if (item.kind === "group-header") {
+				const isOpen =
+					item.groupId === ARCHIVED_SECTION_ID
+						? (sectionOpenState[item.groupId] ?? false)
+						: (sectionOpenState[item.groupId] ?? true);
+				const isArchived = item.groupId === ARCHIVED_SECTION_ID;
+
+				return (
+					<button
+						type="button"
+						className={cn(
+							"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 py-1.5 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
+							item.canCollapse ? "cursor-pointer" : "cursor-default",
+						)}
+						disabled={!item.canCollapse}
+						onClick={() => toggleSection(item.groupId)}
+					>
+						<span className="flex items-center gap-2">
+							{isArchived ? (
+								<Archive
+									className="size-[14px] shrink-0 text-[var(--workspace-sidebar-status-backlog)]"
+									strokeWidth={1.9}
+								/>
+							) : (
+								<GroupIcon tone={item.group.tone} />
+							)}
+							<span>{item.group.label}</span>
+						</span>
+
+						{item.group.rows.length > 0 ? (
+							<span className="relative flex h-5 min-w-5 items-center justify-center">
+								<Badge
+									variant="secondary"
+									className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none transition-opacity group-hover/trigger:opacity-0"
+								>
+									{item.group.rows.length}
+								</Badge>
+								<ChevronRight
+									className={cn(
+										"absolute left-1/2 top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 text-muted-foreground opacity-0 transition-all group-hover/trigger:opacity-100",
+										isOpen && "rotate-90",
+									)}
+									strokeWidth={2}
+								/>
+							</span>
+						) : null}
+					</button>
+				);
+			}
+
+			// kind === "row"
+			return (
+				<div className="pl-2">
+					<WorkspaceRowItem
+						row={item.row}
+						selected={selectedWorkspaceId === item.row.id}
+						isSending={sendingWorkspaceIds?.has(item.row.id)}
+						isCompleted={completedWorkspaceIds?.has(item.row.id)}
+						isInteractionRequired={interactionRequiredWorkspaceIds?.has(
+							item.row.id,
+						)}
+						onSelect={onSelectWorkspace}
+						onPrefetch={onPrefetchWorkspace}
+						onArchiveWorkspace={onArchiveWorkspace}
+						onMarkWorkspaceUnread={onMarkWorkspaceUnread}
+						onTogglePin={onTogglePin}
+						onSetManualStatus={onSetManualStatus}
+						archivingWorkspaceId={archivingWorkspaceId}
+						markingUnreadWorkspaceId={markingUnreadWorkspaceId}
+						restoringWorkspaceId={restoringWorkspaceId}
+						workspaceActionsDisabled={Boolean(
+							creatingWorkspaceRepoId ||
+								archivingWorkspaceId ||
+								markingUnreadWorkspaceId ||
+								restoringWorkspaceId,
+						)}
+						{...(item.isArchived
+							? {
+									onRestoreWorkspace,
+									onDeleteWorkspace,
+								}
+							: {})}
+					/>
+				</div>
+			);
+		},
+		[
+			sectionOpenState,
+			toggleSection,
+			selectedWorkspaceId,
+			sendingWorkspaceIds,
+			completedWorkspaceIds,
+			interactionRequiredWorkspaceIds,
+			onSelectWorkspace,
+			onPrefetchWorkspace,
+			onArchiveWorkspace,
+			onMarkWorkspaceUnread,
+			onRestoreWorkspace,
+			onDeleteWorkspace,
+			onTogglePin,
+			onSetManualStatus,
+			archivingWorkspaceId,
+			markingUnreadWorkspaceId,
+			restoringWorkspaceId,
+			creatingWorkspaceRepoId,
+		],
+	);
 
 	return (
 		<div className="flex h-full min-h-0 flex-col overflow-hidden pb-4">
@@ -364,176 +562,36 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				</div>
 			</div>
 
-			<ScrollArea
+			{/* Virtualized workspace list */}
+			<div
+				ref={scrollContainerRef}
 				data-slot="workspace-groups-scroll"
-				className="relative mt-4 min-h-0 flex-1 overflow-hidden [&_[data-slot=scroll-area-viewport]]:h-full [&_[data-slot=scroll-area-viewport]]:min-w-0 [&_[data-slot=scroll-area-viewport]]:w-full [&_[data-slot=scroll-area-viewport]]:px-2 [&_[data-slot=scroll-area-viewport]]:pr-3"
+				className="relative mt-4 min-h-0 flex-1 overflow-y-auto px-2 pr-3"
 			>
-				<div className="flex min-h-full flex-col gap-4 pb-3">
-					{groups
-						.filter((group) => group.id !== "pinned" || group.rows.length > 0)
-						.map((group) => {
-							const canCollapse = group.rows.length > 0;
-
-							return (
-								<Collapsible
-									key={group.id}
-									open={sectionOpenState[group.id] ?? true}
-									onOpenChange={(open) => {
-										setSectionOpenState((current) => ({
-											...current,
-											[group.id]: open,
-										}));
-									}}
-								>
-									<section
-										aria-label={group.label}
-										className="flex flex-col gap-1.5"
-									>
-										<CollapsibleTrigger
-											className={cn(
-												"group/trigger flex w-full cursor-pointer select-none items-center justify-between rounded-lg px-2 py-1.5 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
-												canCollapse ? "cursor-pointer" : "cursor-default",
-											)}
-											disabled={!canCollapse}
-										>
-											<span className="flex items-center gap-2">
-												<GroupIcon tone={group.tone} />
-												<span>{group.label}</span>
-											</span>
-
-											{group.rows.length > 0 ? (
-												<span className="relative flex h-5 min-w-5 items-center justify-center">
-													<Badge
-														variant="secondary"
-														className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none transition-opacity group-hover/trigger:opacity-0"
-													>
-														{group.rows.length}
-													</Badge>
-													<ChevronRight
-														className="absolute left-1/2 top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 text-muted-foreground opacity-0 transition-all group-hover/trigger:opacity-100 group-data-[panel-open]/trigger:rotate-90"
-														strokeWidth={2}
-													/>
-												</span>
-											) : null}
-										</CollapsibleTrigger>
-
-										{group.rows.length > 0 ? (
-											<CollapsibleContent>
-												<div className="flex flex-col gap-0.5 pl-2">
-													{group.rows.map((row) => (
-														<WorkspaceRowItem
-															key={row.id}
-															row={row}
-															selected={selectedWorkspaceId === row.id}
-															isSending={sendingWorkspaceIds?.has(row.id)}
-															isCompleted={completedWorkspaceIds?.has(row.id)}
-															isInteractionRequired={interactionRequiredWorkspaceIds?.has(
-																row.id,
-															)}
-															rowRef={setWorkspaceRowRef(row.id)}
-															onSelect={onSelectWorkspace}
-															onPrefetch={onPrefetchWorkspace}
-															onArchiveWorkspace={onArchiveWorkspace}
-															onMarkWorkspaceUnread={onMarkWorkspaceUnread}
-															onTogglePin={onTogglePin}
-															onSetManualStatus={onSetManualStatus}
-															archivingWorkspaceId={archivingWorkspaceId}
-															markingUnreadWorkspaceId={
-																markingUnreadWorkspaceId
-															}
-															restoringWorkspaceId={restoringWorkspaceId}
-															workspaceActionsDisabled={Boolean(
-																creatingWorkspaceRepoId ||
-																	archivingWorkspaceId ||
-																	markingUnreadWorkspaceId ||
-																	restoringWorkspaceId,
-															)}
-														/>
-													))}
-												</div>
-											</CollapsibleContent>
-										) : null}
-									</section>
-								</Collapsible>
-							);
-						})}
-
-					<Collapsible
-						open={sectionOpenState[ARCHIVED_SECTION_ID] ?? false}
-						onOpenChange={(open) => {
-							setSectionOpenState((current) => ({
-								...current,
-								[ARCHIVED_SECTION_ID]: open,
-							}));
-						}}
-					>
-						<section aria-label="Archived" className="flex flex-col gap-1.5">
-							<CollapsibleTrigger
-								className={cn(
-									"group/trigger flex w-full cursor-pointer select-none items-center justify-between rounded-lg px-2 py-1.5 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
-									archivedRows.length > 0 ? "cursor-pointer" : "cursor-default",
-								)}
-								disabled={archivedRows.length === 0}
-							>
-								<span className="flex items-center gap-2">
-									<Archive
-										className="size-[14px] shrink-0 text-[var(--workspace-sidebar-status-backlog)]"
-										strokeWidth={1.9}
-									/>
-									<span>Archived</span>
-								</span>
-
-								{archivedRows.length > 0 ? (
-									<span className="relative flex h-5 min-w-5 items-center justify-center">
-										<Badge
-											variant="secondary"
-											className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none transition-opacity group-hover/trigger:opacity-0"
-										>
-											{archivedRows.length}
-										</Badge>
-										<ChevronRight
-											className="absolute left-1/2 top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 text-muted-foreground opacity-0 transition-all group-hover/trigger:opacity-100 group-data-[panel-open]/trigger:rotate-90"
-											strokeWidth={2}
-										/>
-									</span>
-								) : null}
-							</CollapsibleTrigger>
-
-							{archivedRows.length > 0 ? (
-								<CollapsibleContent>
-									<div className="flex flex-col gap-0.5 pl-2">
-										{archivedRows.map((row) => (
-											<WorkspaceRowItem
-												key={row.id}
-												row={row}
-												selected={selectedWorkspaceId === row.id}
-												rowRef={setWorkspaceRowRef(row.id)}
-												onSelect={onSelectWorkspace}
-												onPrefetch={onPrefetchWorkspace}
-												onArchiveWorkspace={onArchiveWorkspace}
-												onMarkWorkspaceUnread={onMarkWorkspaceUnread}
-												onRestoreWorkspace={onRestoreWorkspace}
-												onDeleteWorkspace={onDeleteWorkspace}
-												onTogglePin={onTogglePin}
-												onSetManualStatus={onSetManualStatus}
-												archivingWorkspaceId={archivingWorkspaceId}
-												markingUnreadWorkspaceId={markingUnreadWorkspaceId}
-												restoringWorkspaceId={restoringWorkspaceId}
-												workspaceActionsDisabled={Boolean(
-													creatingWorkspaceRepoId ||
-														archivingWorkspaceId ||
-														markingUnreadWorkspaceId ||
-														restoringWorkspaceId,
-												)}
-											/>
-										))}
-									</div>
-								</CollapsibleContent>
-							) : null}
-						</section>
-					</Collapsible>
+				<div
+					style={{
+						height: `${virtualizer.getTotalSize()}px`,
+						width: "100%",
+						position: "relative",
+					}}
+				>
+					{virtualizer.getVirtualItems().map((vItem) => (
+						<div
+							key={vItem.key}
+							style={{
+								position: "absolute",
+								top: 0,
+								left: 0,
+								width: "100%",
+								height: `${vItem.size}px`,
+								transform: `translateY(${vItem.start}px)`,
+							}}
+						>
+							{renderItem(flatItems[vItem.index])}
+						</div>
+					))}
 				</div>
-			</ScrollArea>
+			</div>
 		</div>
 	);
 });

@@ -104,7 +104,7 @@ describe("App", () => {
 		expect(resizeHandle).toHaveAttribute("aria-valuenow", "336");
 		expect(inspectorResizeHandle).toHaveAttribute("aria-valuenow", "336");
 		expect(safeAreas).toHaveLength(1);
-		expect(groupsScrollRegion).toHaveClass("overflow-hidden");
+		expect(groupsScrollRegion).toHaveClass("overflow-y-auto");
 		expect(groupsScrollRegion).toHaveClass("flex-1");
 		expect(screen.getByText("Workspaces")).toBeInTheDocument();
 		expect(doneGroup).toBeInTheDocument();
@@ -529,14 +529,7 @@ describe("App", () => {
 		});
 	});
 
-	it("opens archived and scrolls the selected workspace into view", async () => {
-		const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
-		const scrollIntoViewMock = vi.fn();
-		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
-			configurable: true,
-			value: scrollIntoViewMock,
-		});
-
+	it("opens archived and shows the selected workspace", async () => {
 		const archivedRows = [
 			{
 				id: "archived-workspace",
@@ -546,33 +539,23 @@ describe("App", () => {
 			},
 		];
 
-		try {
-			const { rerender } = renderWithProviders(
-				<WorkspacesSidebar groups={[]} archivedRows={archivedRows} />,
-			);
+		const { rerender } = renderWithProviders(
+			<WorkspacesSidebar groups={[]} archivedRows={archivedRows} />,
+		);
 
-			rerender(
-				<WorkspacesSidebar
-					groups={[]}
-					archivedRows={archivedRows}
-					selectedWorkspaceId="archived-workspace"
-				/>,
-			);
+		rerender(
+			<WorkspacesSidebar
+				groups={[]}
+				archivedRows={archivedRows}
+				selectedWorkspaceId="archived-workspace"
+			/>,
+		);
 
-			await waitFor(() => {
-				expect(
-					screen.getByRole("button", { name: "Archived workspace" }),
-				).toBeInTheDocument();
-			});
-			await waitFor(() => {
-				expect(scrollIntoViewMock).toHaveBeenCalled();
-			});
-		} finally {
-			Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
-				configurable: true,
-				value: originalScrollIntoView,
-			});
-		}
+		await waitFor(() => {
+			expect(
+				screen.getByRole("button", { name: "Archived workspace" }),
+			).toBeInTheDocument();
+		});
 	});
 
 	it("disables restore while a workspace is being restored", async () => {

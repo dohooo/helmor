@@ -7,6 +7,7 @@ import type {
 	WorkspaceGroup,
 	WorkspaceRow,
 } from "@/lib/api";
+
 import { WorkspacesSidebar } from "./index";
 
 const workspaceRow: WorkspaceRow = {
