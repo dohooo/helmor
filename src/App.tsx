@@ -138,6 +138,18 @@ function App() {
 		);
 	}, []);
 
+	// Cmd+, to open settings (standard macOS convention)
+	useEffect(() => {
+		const handler = (e: KeyboardEvent) => {
+			if (e.metaKey && e.key === ",") {
+				e.preventDefault();
+				setSettingsOpen(true);
+			}
+		};
+		window.addEventListener("keydown", handler);
+		return () => window.removeEventListener("keydown", handler);
+	}, []);
+
 	return (
 		<SettingsContext.Provider value={settingsContextValue}>
 			<PersistQueryClientProvider
