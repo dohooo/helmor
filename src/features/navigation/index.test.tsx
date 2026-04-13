@@ -161,7 +161,7 @@ describe("WorkspacesSidebar", () => {
 		const virtualList = container.querySelector(
 			'[data-slot="workspace-groups-scroll"] > div',
 		);
-		expect(virtualList).toHaveStyle({ height: "244px" });
+		expect(virtualList).toHaveStyle({ height: "208px" });
 	});
 
 	it("persists section collapse state in localStorage", async () => {

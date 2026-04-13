@@ -67,10 +67,10 @@ type VirtualItem =
 	| { kind: "group-gap"; size: number }
 	| { kind: "bottom-padding" };
 
-const HEADER_HEIGHT = 42; // 36px content + 6px gap below
-const EMPTY_HEADER_HEIGHT = 30; // tighter header for empty groups
+const HEADER_HEIGHT = 34; // tighter header + minimal gap below
+const EMPTY_HEADER_HEIGHT = 24; // tighter header for empty groups
 const ROW_HEIGHT = 32; // 30px (h-7.5) + 2px gap
-const GROUP_GAP = 16; // gap-4
+const GROUP_GAP = 8; // tighter gap between populated groups
 const EMPTY_GROUP_GAP = 8; // tighter spacing around empty groups
 const BOTTOM_PADDING = 24; // pb-6
 
@@ -348,7 +348,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						type="button"
 						className={cn(
 							"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
-							isEmptyGroup ? "py-1" : "py-1.5",
+							isEmptyGroup ? "py-0.5" : "py-1",
 							item.canCollapse ? "cursor-pointer" : "cursor-default",
 						)}
 						data-empty-group={isEmptyGroup ? "true" : "false"}
