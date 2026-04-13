@@ -1,5 +1,5 @@
 {
 	"scripts": {
-		"setup": "cp \"$HELMOR_ROOT_PATH/.env.local\" \"$HELMOR_WORKSPACE_PATH/.env.local\"\npnpm install"
+		"setup": "cp \"$HELMOR_ROOT_PATH/.env.local\" \"$HELMOR_WORKSPACE_PATH/.env.local\"\ncp -r \"$HELMOR_ROOT_PATH/sidecar/dist\" \"$HELMOR_WORKSPACE_PATH/sidecar/dist\"\npnpm install"
 	}
 }

@@ -235,6 +235,17 @@ export function rowToWorkspaceSummary(
 	};
 }
 
+/** Session has never exchanged any messages with an agent. */
+export function isNewSession(
+	session: Pick<
+		WorkspaceSessionSummary,
+		"agentType" | "lastUserMessageAt"
+	> | null,
+): boolean {
+	if (!session) return true;
+	return !session.agentType && !session.lastUserMessageAt;
+}
+
 export function getComposerContextKey(
 	workspaceId: string | null,
 	sessionId: string | null,

@@ -61,6 +61,7 @@ import { helmorQueryKeys } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import {
 	getWorkspaceBranchTone,
+	isNewSession,
 	type WorkspaceBranchTone,
 } from "@/lib/workspace-helpers";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
@@ -266,6 +267,8 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				return;
 			}
 
+			const targetSession = sessions.find((s) => s.id === sessionId) ?? null;
+			const isEmptySession = isNewSession(targetSession);
 			const isClosingLastVisibleSession = sessions.length === 1;
 
 			try {
@@ -313,7 +316,13 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					onSelectSession?.(replacementSessionId);
 				}
 
-				await hideSession(sessionId);
+				// New sessions (never had any messages) are deleted outright
+				// instead of being hidden, so they don't clutter the history list.
+				if (isEmptySession) {
+					await deleteSession(sessionId);
+				} else {
+					await hideSession(sessionId);
+				}
 				onSessionsChanged?.();
 			} catch (error) {
 				console.error("Failed to close session:", error);
@@ -330,7 +339,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 			onSessionsChanged,
 			pushToast,
 			queryClient,
-			sessions.length,
+			sessions,
 			workspace,
 		],
 	);

@@ -61,16 +61,17 @@ fn create_workspace_from_repo_creates_ready_workspace_and_initial_session() {
             },
         )
         .unwrap();
-    let (session_title, session_model, session_permission_mode, thinking_enabled): (
+    let (session_title, session_model, session_agent_type, session_permission_mode, thinking_enabled): (
         String,
-        String,
+        Option<String>,
+        Option<String>,
         String,
         i64,
     ) = connection
         .query_row(
-            "SELECT title, model, permission_mode, thinking_enabled FROM sessions WHERE id = ?1",
+            "SELECT title, model, agent_type, permission_mode, thinking_enabled FROM sessions WHERE id = ?1",
             [&active_session_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )
         .unwrap();
 
@@ -85,7 +86,11 @@ fn create_workspace_from_repo_creates_ready_workspace_and_initial_session() {
     assert!(initialization_files_copied > 0);
     assert!(Path::new(&initialization_log_path).is_file());
     assert_eq!(session_title, "Untitled");
-    assert_eq!(session_model, "opus");
+    assert_eq!(session_model, None, "new session should have no model");
+    assert_eq!(
+        session_agent_type, None,
+        "new session should have no agent_type"
+    );
     assert_eq!(session_permission_mode, "default");
     assert_eq!(thinking_enabled, 1);
 }

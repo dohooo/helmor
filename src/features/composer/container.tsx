@@ -30,6 +30,7 @@ import {
 	findModelOption,
 	getComposerContextKey,
 	inferDefaultModelId,
+	isNewSession,
 } from "@/lib/workspace-helpers";
 import type { DeferredToolResponseHandler } from "./deferred-tool";
 import { WorkspaceComposer } from "./index";
@@ -229,13 +230,13 @@ export const WorkspaceComposerContainer = memo(
 				const currentProvider = provider;
 				const newProvider = newModel?.provider;
 
-				// If provider changed and session has been used (has agentType),
-				// create a new session for the new provider
+				// Only create a new session when provider changes AND the session
+				// already has messages. New/empty sessions just switch in-place.
 				if (
 					newProvider &&
 					currentProvider &&
 					newProvider !== currentProvider &&
-					currentSession?.agentType &&
+					!isNewSession(currentSession) &&
 					displayedSessionId &&
 					displayedWorkspaceId
 				) {
