@@ -123,12 +123,18 @@ function App() {
 		[appSettings],
 	);
 
-	const [splashReady, setSplashReady] = useState(false);
+	const [splashVisible, setSplashVisible] = useState(true);
+	const [splashMounted, setSplashMounted] = useState(true);
 
 	useEffect(() => {
-		const minDelay = new Promise<void>((r) => setTimeout(r, 2000));
-		void Promise.all([loadSettings().then(setAppSettings), minDelay]).then(() =>
-			setSplashReady(true),
+		const minDelay = new Promise<void>((r) => setTimeout(r, 1000));
+		void Promise.all([loadSettings().then(setAppSettings), minDelay]).then(
+			() => {
+				// Start fade-out
+				setSplashVisible(false);
+				// Remove from DOM after transition
+				setTimeout(() => setSplashMounted(false), 400);
+			},
 		);
 	}, []);
 
@@ -157,11 +163,8 @@ function App() {
 					},
 				}}
 			>
-				{splashReady ? (
-					<AppShell onOpenSettings={() => setSettingsOpen(true)} />
-				) : (
-					<SplashScreen />
-				)}
+				<AppShell onOpenSettings={() => setSettingsOpen(true)} />
+				{splashMounted && <SplashScreen visible={splashVisible} />}
 				<SettingsDialog
 					open={settingsOpen}
 					onClose={() => {
