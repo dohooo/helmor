@@ -18,6 +18,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { isAbortError } from "./abort.js";
 import type { SidecarEmitter } from "./emitter.js";
+import { resolveGitAccessDirectories } from "./git-access.js";
 import { parseImageRefs } from "./images.js";
 import { logger } from "./logger.js";
 import type {
@@ -358,6 +359,7 @@ export class ClaudeSessionManager implements SessionManager {
 			effortLevel,
 		} = params;
 		const abortController = new AbortController();
+		const additionalDirectories = await resolveGitAccessDirectories(cwd);
 
 		const { text, imagePaths } = parseImageRefs(prompt);
 		const promptValue: string | AsyncIterable<SDKUserMessage> =
@@ -374,6 +376,7 @@ export class ClaudeSessionManager implements SessionManager {
 				pathToClaudeCodeExecutable: CLAUDE_CLI_PATH,
 				...executableOptions(),
 				cwd: cwd || undefined,
+				...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
 				model: model || undefined,
 				...(resume ? { resume } : {}),
 				permissionMode: parsePermissionMode(permissionMode),

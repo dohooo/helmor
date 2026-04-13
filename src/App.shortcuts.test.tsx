@@ -9,6 +9,9 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({
+	createSession: vi.fn(),
+	deleteSession: vi.fn(),
+	hideSession: vi.fn(),
 	loadWorkspaceGroups: vi.fn(),
 	loadArchivedWorkspaces: vi.fn(),
 	loadAgentModelSections: vi.fn(),
@@ -17,9 +20,30 @@ const apiMocks = vi.hoisted(() => ({
 	loadSessionThreadMessages: vi.fn(),
 }));
 
+const windowApiMocks = vi.hoisted(() => ({
+	onCloseRequested: vi.fn(),
+	closeRequestedHandler: null as
+		| ((event: { preventDefault: () => void }) => void | Promise<void>)
+		| null,
+}));
+
 vi.mock("./App.css", () => ({}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
 	open: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/window", () => ({
+	getCurrentWindow: () => ({
+		onCloseRequested: windowApiMocks.onCloseRequested.mockImplementation(
+			async (handler: typeof windowApiMocks.closeRequestedHandler) => {
+				windowApiMocks.closeRequestedHandler = handler;
+				return () => {
+					if (windowApiMocks.closeRequestedHandler === handler) {
+						windowApiMocks.closeRequestedHandler = null;
+					}
+				};
+			},
+		),
+	}),
 }));
 
 vi.mock("./lib/api", async (importOriginal) => {
@@ -27,6 +51,9 @@ vi.mock("./lib/api", async (importOriginal) => {
 
 	return {
 		...actual,
+		createSession: apiMocks.createSession,
+		deleteSession: apiMocks.deleteSession,
+		hideSession: apiMocks.hideSession,
 		loadWorkspaceGroups: apiMocks.loadWorkspaceGroups,
 		loadArchivedWorkspaces: apiMocks.loadArchivedWorkspaces,
 		loadAgentModelSections: apiMocks.loadAgentModelSections,
@@ -48,59 +75,130 @@ const WORKSPACE_IDS = {
 } as const;
 
 type WorkspaceFixtureId = (typeof WORKSPACE_IDS)[keyof typeof WORKSPACE_IDS];
-
-const SESSION_FIXTURES: Record<
-	WorkspaceFixtureId,
-	readonly {
-		id: string;
-		title: string;
-		active: boolean;
-	}[]
-> = {
-	[WORKSPACE_IDS.done]: [
-		{
-			id: "session-done-1",
-			title: "Done session 1",
-			active: true,
-		},
-		{
-			id: "session-done-2",
-			title: "Done session 2",
-			active: false,
-		},
-	],
-	[WORKSPACE_IDS.review]: [
-		{
-			id: "session-review-1",
-			title: "Review session 1",
-			active: true,
-		},
-	],
-	[WORKSPACE_IDS.progress]: [
-		{
-			id: "session-progress-1",
-			title: "Progress session 1",
-			active: true,
-		},
-	],
-	[WORKSPACE_IDS.archived1]: [
-		{
-			id: "session-archived-1",
-			title: "Archived session 1",
-			active: true,
-		},
-	],
-	[WORKSPACE_IDS.archived2]: [
-		{
-			id: "session-archived-2",
-			title: "Archived session 2",
-			active: true,
-		},
-	],
+type SessionFixture = {
+	id: string;
+	title: string;
+	active: boolean;
 };
 
+const SESSION_FIXTURES: Record<WorkspaceFixtureId, readonly SessionFixture[]> =
+	{
+		[WORKSPACE_IDS.done]: [
+			{
+				id: "session-done-1",
+				title: "Done session 1",
+				active: true,
+			},
+			{
+				id: "session-done-2",
+				title: "Done session 2",
+				active: false,
+			},
+		],
+		[WORKSPACE_IDS.review]: [
+			{
+				id: "session-review-1",
+				title: "Review session 1",
+				active: true,
+			},
+		],
+		[WORKSPACE_IDS.progress]: [
+			{
+				id: "session-progress-1",
+				title: "Progress session 1",
+				active: true,
+			},
+		],
+		[WORKSPACE_IDS.archived1]: [
+			{
+				id: "session-archived-1",
+				title: "Archived session 1",
+				active: true,
+			},
+		],
+		[WORKSPACE_IDS.archived2]: [
+			{
+				id: "session-archived-2",
+				title: "Archived session 2",
+				active: true,
+			},
+		],
+	};
+
+let runtimeSessionFixtures: Record<WorkspaceFixtureId, SessionFixture[]> =
+	createRuntimeSessionFixtures();
+
+function createRuntimeSessionFixtures(): Record<
+	WorkspaceFixtureId,
+	SessionFixture[]
+> {
+	return Object.fromEntries(
+		Object.entries(SESSION_FIXTURES).map(([workspaceId, sessions]) => [
+			workspaceId,
+			sessions.map((session) => ({ ...session })),
+		]),
+	) as Record<WorkspaceFixtureId, SessionFixture[]>;
+}
+
+function addSessionFixture(workspaceId: WorkspaceFixtureId, sessionId: string) {
+	runtimeSessionFixtures[workspaceId] = [
+		...runtimeSessionFixtures[workspaceId].map((session) => ({
+			...session,
+			active: false,
+		})),
+		{
+			id: sessionId,
+			title: "Untitled",
+			active: true,
+		},
+	];
+}
+
+function closeSessionFixture(sessionId: string): WorkspaceFixtureId | null {
+	for (const workspaceId of Object.keys(
+		runtimeSessionFixtures,
+	) as WorkspaceFixtureId[]) {
+		const sessions = runtimeSessionFixtures[workspaceId];
+		const removedIndex = sessions.findIndex(
+			(session) => session.id === sessionId,
+		);
+		if (removedIndex === -1) {
+			continue;
+		}
+
+		const removedWasActive = sessions[removedIndex]?.active ?? false;
+		const remainingSessions = sessions.filter(
+			(session) => session.id !== sessionId,
+		);
+		const nextActiveId =
+			remainingSessions.length === 0
+				? null
+				: removedWasActive
+					? ((
+							remainingSessions[removedIndex] ??
+							remainingSessions[removedIndex - 1] ??
+							remainingSessions[0]
+						)?.id ?? null)
+					: ((
+							remainingSessions.find((session) => session.active) ??
+							remainingSessions[0]
+						)?.id ?? null);
+
+		runtimeSessionFixtures[workspaceId] = remainingSessions.map((session) => ({
+			...session,
+			active: session.id === nextActiveId,
+		}));
+
+		return workspaceId;
+	}
+
+	return null;
+}
+
 function createWorkspaceDetail(workspaceId: WorkspaceFixtureId) {
-	const primarySession = SESSION_FIXTURES[workspaceId][0];
+	const sessions = runtimeSessionFixtures[workspaceId];
+	const primarySession =
+		sessions.find((session) => session.active) ?? sessions[0];
 	const archived = workspaceId.startsWith("workspace-archived");
 
 	return {
@@ -116,10 +214,10 @@ function createWorkspaceDetail(workspaceId: WorkspaceFixtureId) {
 		unreadSessionCount: 0,
 		derivedStatus: archived ? "archived" : "progress",
 		manualStatus: null,
-		activeSessionId: primarySession.id,
-		activeSessionTitle: primarySession.title,
+		activeSessionId: primarySession?.id ?? null,
+		activeSessionTitle: primarySession?.title ?? null,
 		activeSessionAgentType: "claude",
-		activeSessionStatus: "idle",
+		activeSessionStatus: primarySession ? "idle" : null,
 		branch: archived ? "archive/main" : "main",
 		initializationParentBranch: "main",
 		intendedTargetBranch: "main",
@@ -128,14 +226,14 @@ function createWorkspaceDetail(workspaceId: WorkspaceFixtureId) {
 		prTitle: null,
 		prDescription: null,
 		archiveCommit: null,
-		sessionCount: SESSION_FIXTURES[workspaceId].length,
+		sessionCount: sessions.length,
 		messageCount: 0,
 		attachmentCount: 0,
 	};
 }
 
 function createWorkspaceSessions(workspaceId: WorkspaceFixtureId) {
-	return SESSION_FIXTURES[workspaceId].map((session) => ({
+	return runtimeSessionFixtures[workspaceId].map((session) => ({
 		id: session.id,
 		workspaceId,
 		title: session.title,
@@ -191,6 +289,16 @@ function pressGlobalShortcut(
 	});
 }
 
+function pressCreateSessionShortcut(
+	options?: Parameters<typeof fireEvent.keyDown>[1],
+) {
+	fireEvent.keyDown(window, {
+		key: "t",
+		metaKey: true,
+		...options,
+	});
+}
+
 async function renderAppReady() {
 	render(<App />);
 
@@ -202,12 +310,29 @@ async function renderAppReady() {
 
 describe("App global navigation shortcuts", () => {
 	beforeEach(() => {
+		runtimeSessionFixtures = createRuntimeSessionFixtures();
+		apiMocks.createSession.mockReset();
+		apiMocks.deleteSession.mockReset();
+		apiMocks.hideSession.mockReset();
 		apiMocks.loadWorkspaceGroups.mockReset();
 		apiMocks.loadArchivedWorkspaces.mockReset();
 		apiMocks.loadAgentModelSections.mockReset();
 		apiMocks.loadWorkspaceDetail.mockReset();
 		apiMocks.loadWorkspaceSessions.mockReset();
 		apiMocks.loadSessionThreadMessages.mockReset();
+		windowApiMocks.onCloseRequested.mockClear();
+		windowApiMocks.closeRequestedHandler = null;
+		apiMocks.createSession.mockImplementation(async (workspaceId: string) => {
+			const nextSessionId = `${workspaceId}-session-new`;
+			addSessionFixture(workspaceId as WorkspaceFixtureId, nextSessionId);
+			return { sessionId: nextSessionId };
+		});
+		apiMocks.deleteSession.mockImplementation(async (sessionId: string) => {
+			closeSessionFixture(sessionId);
+		});
+		apiMocks.hideSession.mockImplementation(async (sessionId: string) => {
+			closeSessionFixture(sessionId);
+		});
 
 		apiMocks.loadWorkspaceGroups.mockResolvedValue([
 			{
@@ -335,6 +460,27 @@ describe("App global navigation shortcuts", () => {
 
 		await waitFor(() => {
 			expectSelectedSession("Done session 2");
+		});
+	});
+
+	it("creates a new session on Command+T", async () => {
+		await renderAppReady();
+
+		apiMocks.createSession.mockImplementationOnce(
+			async (workspaceId: string) => {
+				addSessionFixture(
+					workspaceId as WorkspaceFixtureId,
+					"session-done-new",
+				);
+				return { sessionId: "session-done-new" };
+			},
+		);
+
+		pressCreateSessionShortcut();
+
+		await waitFor(() => {
+			expect(apiMocks.createSession).toHaveBeenCalledWith(WORKSPACE_IDS.done);
+			expectSelectedSession("Untitled");
 		});
 	});
 
@@ -483,5 +629,29 @@ describe("App global navigation shortcuts", () => {
 		expect(apiMocks.loadSessionThreadMessages).not.toHaveBeenCalledWith(
 			"session-done-2",
 		);
+	});
+
+	it("closes the current session on Command+W and swallows the follow-up window close", async () => {
+		await renderAppReady();
+
+		await waitFor(() => {
+			expect(windowApiMocks.closeRequestedHandler).not.toBeNull();
+		});
+
+		fireEvent.keyDown(window, {
+			key: "w",
+			metaKey: true,
+		});
+
+		await waitFor(() => {
+			expectSelectedSession("Done session 2");
+		});
+		expect(apiMocks.hideSession).toHaveBeenCalledWith("session-done-1");
+		expect(apiMocks.deleteSession).not.toHaveBeenCalled();
+
+		const preventDefault = vi.fn();
+		await windowApiMocks.closeRequestedHandler?.({ preventDefault });
+
+		expect(preventDefault).toHaveBeenCalledTimes(1);
 	});
 });
