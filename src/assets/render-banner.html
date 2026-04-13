@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin:0; padding:0; }
+  body { overflow:hidden; background:#0E0E0E; }
+  #banner {
+    overflow: hidden;
+    background: #0E0E0E;
+    transition: background-color 0.5s ease;
+  }
+  #banner.reveal { background-color: #FEFEFE; }
+  svg { display:block; width:100%; height:100%; }
+  .t {
+    fill: #FEFEFE;
+    transform-box: fill-box;
+    transform-origin: center center;
+  }
+  @keyframes chaos {
+    0%     { transform: scaleX(1);  fill: #FEFEFE; }
+    24.5%  { transform: scaleX(0);  fill: #FEFEFE; }
+    25.5%  { transform: scaleX(0);  fill: #1a1a1a; }
+    50%    { transform: scaleX(-1); fill: #1a1a1a; }
+    74.5%  { transform: scaleX(0);  fill: #1a1a1a; }
+    75.5%  { transform: scaleX(0);  fill: #FEFEFE; }
+    100%   { transform: scaleX(1);  fill: #FEFEFE; }
+  }
+</style>
+</head>
+<body>
+<div id="banner">
+  <svg id="c"></svg>
+</div>
+<script>
+const W = window.innerWidth, H = window.innerHeight;
+const banner = document.getElementById('banner');
+const svg = document.getElementById('c');
+banner.style.width = W + 'px';
+banner.style.height = H + 'px';
+svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+const NS = 'http://www.w3.org/2000/svg';
+const TW = Math.round(W / 17), SLANT = Math.round(TW * 0.54), TH = Math.round(TW * 1.6);
+const GAP = Math.round(TW * 0.09);
+const CX = TW + GAP, RY = Math.round(TW * 1.19);
+
+const COLS = Math.ceil(W / CX) + 2;
+const ROWS = Math.ceil(H / RY) + 2;
+const OX = Math.round((W - COLS * CX) / 2);
+const OY = Math.round((H - ROWS * RY) / 2);
+
+const H_SHAPE = [[0,0],[0,1],[0,2],[1,1],[2,0],[2,1],[2,2]];
+const allTiles = [];
+const grid = {};
+
+for (let r = 0; r < ROWS; r++) {
+  for (let c = 0; c < COLS; c++) {
+    const x = OX + c * CX, y = OY + r * RY;
+    const el = document.createElementNS(NS, 'polygon');
+    const pts = c % 2 === 0
+      ? `${x},${y} ${x+TW},${y+SLANT} ${x+TW},${y+TH} ${x},${y+TH-SLANT}`
+      : `${x},${y+SLANT} ${x+TW},${y} ${x+TW},${y+TH-SLANT} ${x},${y+TH}`;
+    el.setAttribute('points', pts);
+    el.classList.add('t');
+    const key = `${c},${r}`;
+    el.dataset.key = key;
+    svg.appendChild(el);
+    allTiles.push(el);
+    grid[key] = el;
+  }
+}
+
+function toChaos(el) {
+  el.getAnimations().forEach(a => a.cancel());
+  el.style.transition = 'none';
+  el.style.fill = '';
+  el.style.transform = '';
+  const dur = (0.4 + Math.random() * 0.7).toFixed(2);
+  const delay = (-Math.random() * 2).toFixed(2);
+  el.style.animation = `chaos ${dur}s cubic-bezier(0.4,0,0.2,1) infinite ${delay}s`;
+}
+
+function placeLogos(n) {
+  const placed = [];
+  for (let i = 0; i < 500 && placed.length < n; i++) {
+    const c = Math.floor(Math.random() * (COLS - 2));
+    const r = Math.floor(Math.random() * (ROWS - 2));
+    if (placed.every(p => Math.abs(c-p[0]) >= 4 || Math.abs(r-p[1]) >= 4))
+      placed.push([c, r]);
+  }
+  const keys = new Set();
+  for (const [bc, br] of placed)
+    H_SHAPE.forEach(([dc, dr]) => keys.add(`${bc+dc},${br+dr}`));
+  return keys;
+}
+
+function settleAll(logoKeys) {
+  banner.classList.add('reveal');
+  allTiles.forEach(el => {
+    const delay = Math.random() * 400;
+    const isLogo = logoKeys.has(el.dataset.key);
+    setTimeout(() => {
+      el.getAnimations().forEach(a => a.cancel());
+      el.style.animation = 'none';
+      el.style.transition = 'transform 0.25s ease-out, fill 0.25s ease';
+      el.style.transform = 'scaleX(1)';
+      el.style.fill = isLogo ? '#0E0E0E' : '#FEFEFE';
+    }, delay);
+  });
+}
+
+function chaosAll() {
+  banner.classList.remove('reveal');
+  allTiles.forEach(el => {
+    const delay = Math.random() * 300;
+    setTimeout(() => toChaos(el), delay);
+  });
+}
+
+const ROUNDS = 6, CHAOS_MS = 1000, REVEAL_MS = 1000;
+
+function loop() {
+  for (let r = 0; r < ROUNDS; r++) {
+    const t = r * (CHAOS_MS + REVEAL_MS);
+    setTimeout(() => settleAll(placeLogos(4)), t + CHAOS_MS);
+    if (r < ROUNDS - 1) setTimeout(chaosAll, t + CHAOS_MS + REVEAL_MS);
+  }
+  const total = ROUNDS * (CHAOS_MS + REVEAL_MS);
+  setTimeout(() => { chaosAll(); setTimeout(loop, CHAOS_MS); }, total);
+}
+
+allTiles.forEach(toChaos);
+window.__ready = true;
+setTimeout(loop, 0);
+</script>
+</body>
+</html>
