@@ -203,7 +203,7 @@ function getButtonColorVars(
 		return {
 			"--button-border": "transparent",
 			"--button-divider":
-				"color-mix(in oklch, var(--foreground) 22%, transparent)",
+				"color-mix(in oklch, var(--background) 22%, transparent)",
 			"--button-bg": "var(--foreground)",
 			"--button-bg-hover":
 				"color-mix(in oklch, var(--foreground) 90%, black 10%)",

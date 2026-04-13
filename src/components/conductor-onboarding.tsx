@@ -21,7 +21,7 @@ function DotGrid() {
 		<div
 			className="pointer-events-none absolute inset-0"
 			style={{
-				backgroundImage: `radial-gradient(circle, color-mix(in oklch, var(--color-app-foreground) 9%, transparent) 1px, transparent 1px)`,
+				backgroundImage: `radial-gradient(circle, color-mix(in oklch, var(--color-foreground) 9%, transparent) 1px, transparent 1px)`,
 				backgroundSize: "22px 22px",
 				maskImage:
 					"radial-gradient(ellipse 90% 80% at 50% 50%, black 30%, transparent 100%)",
@@ -54,51 +54,36 @@ function ConductorLogo({
 }
 
 // ---------------------------------------------------------------------------
-// Helmor logo — concentric ring + H
+// Helmor wordmark — Tesla-ish wide uppercase wordmark
 // ---------------------------------------------------------------------------
 
-function HelmorLogo({
+const HELMOR_WORDMARK_FONT_FAMILY =
+	'"Eurostile Extended","Eurostile","Microgramma D Extended","Bank Gothic","Aldrich","Rajdhani","Arial Narrow",sans-serif';
+
+function HelmorWordmark({
 	className,
-	size = 56,
+	size = 20,
 }: {
 	className?: string;
 	size?: number;
 }) {
 	return (
-		<svg
-			viewBox="0 0 64 64"
-			fill="none"
+		<span
 			className={className}
-			style={{ width: size, height: size }}
-			xmlns="http://www.w3.org/2000/svg"
+			style={{
+				fontFamily: HELMOR_WORDMARK_FONT_FAMILY,
+				fontSize: size,
+				fontWeight: 500,
+				letterSpacing: "0.28em",
+				textTransform: "uppercase",
+				lineHeight: 1,
+				textShadow:
+					"0 0 18px color-mix(in oklch, var(--color-primary) 18%, transparent)",
+			}}
 			aria-label="Helmor"
 		>
-			<circle
-				cx="32"
-				cy="32"
-				r="29"
-				stroke="currentColor"
-				strokeWidth="1"
-				strokeOpacity="0.18"
-				strokeDasharray="2 4"
-			/>
-			<circle cx="32" cy="32" r="23" fill="currentColor" fillOpacity="0.09" />
-			<circle
-				cx="32"
-				cy="32"
-				r="23"
-				stroke="currentColor"
-				strokeWidth="1.5"
-				strokeOpacity="0.3"
-			/>
-			<path
-				d="M20 18v28M44 18v28M20 32h24"
-				stroke="currentColor"
-				strokeWidth="4"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			/>
-		</svg>
+			HELMOR
+		</span>
 	);
 }
 
@@ -107,25 +92,41 @@ function HelmorLogo({
 // ---------------------------------------------------------------------------
 
 type BeamEntry = { id: string; d: string; delay: number };
+type BeamAnchorElement = HTMLSpanElement;
+const BEAM_LEAD_OUT = 18;
+type BeamMode = "logo-to-items" | "items-to-logo";
+
+function buildBeamPath(sx: number, sy: number, ex: number, ey: number) {
+	const distance = ex - sx;
+	const lead = Math.min(BEAM_LEAD_OUT, Math.max(10, distance * 0.14));
+	const startLeadX = sx + lead;
+	const endLeadX = ex - lead;
+	const c1x = sx + distance * 0.42;
+	const c2x = sx + distance * 0.58;
+
+	return `M ${sx} ${sy} L ${startLeadX} ${sy} C ${c1x} ${sy}, ${c2x} ${ey}, ${endLeadX} ${ey} L ${ex} ${ey}`;
+}
 
 type MultiBeamProps = {
-	workspaceRefs: React.RefObject<Map<string, HTMLDivElement>>;
-	helmorIconRef: React.RefObject<HTMLDivElement | null>;
+	workspaceRefs: React.RefObject<Map<string, BeamAnchorElement>>;
+	logoRef: React.RefObject<BeamAnchorElement | null>;
 	containerRef: React.RefObject<HTMLDivElement | null>;
 	/** true = fully active (dots cycling), false = idle (paths only) */
 	active: boolean;
-	/** true = retract all beams toward Helmor and fade dots */
+	/** true = retract all beams and fade dots */
 	transferring: boolean;
 	workspaceIds: string[];
+	mode: BeamMode;
 };
 
 function MultiBeam({
 	workspaceRefs,
-	helmorIconRef,
+	logoRef,
 	containerRef,
 	active,
 	transferring,
 	workspaceIds,
+	mode,
 }: MultiBeamProps) {
 	const gradId = useId();
 	const [beams, setBeams] = useState<BeamEntry[]>([]);
@@ -133,42 +134,46 @@ function MultiBeam({
 	useEffect(() => {
 		function recalc() {
 			const container = containerRef.current;
-			const helmorEl = helmorIconRef.current;
-			if (!container || !helmorEl) return;
+			const logoEl = logoRef.current;
+			if (!container || !logoEl) return;
 
 			const cr = container.getBoundingClientRect();
-			const hr = helmorEl.getBoundingClientRect();
-			// Stop beam just outside the icon's left edge (outer circle ≈ 2px inside bounding box)
-			const ex = hr.left - cr.left - 6;
-			const ey = hr.top + hr.height / 2 - cr.top;
+			const lr = logoEl.getBoundingClientRect();
+			const lx = lr.left + lr.width / 2 - cr.left;
+			const ly = lr.top + lr.height / 2 - cr.top;
 
 			const newBeams: BeamEntry[] = [];
 			workspaceIds.forEach((id, i) => {
 				const el = workspaceRefs.current?.get(id);
 				if (!el) return;
 				const wr = el.getBoundingClientRect();
-				const sx = wr.right - cr.left;
-				const sy = wr.top + wr.height / 2 - cr.top;
-				const midX = sx + (ex - sx) * 0.5;
+				const wx = wr.left + wr.width / 2 - cr.left;
+				const wy = wr.top + wr.height / 2 - cr.top;
+				const sx = mode === "logo-to-items" ? lx : wx;
+				const sy = mode === "logo-to-items" ? ly : wy;
+				const ex = mode === "logo-to-items" ? wx : lx;
+				const ey = mode === "logo-to-items" ? wy : ly;
+				if (ex <= sx) return;
+
 				newBeams.push({
 					id,
-					d: `M ${sx} ${sy} C ${midX} ${sy}, ${midX} ${ey}, ${ex} ${ey}`,
+					d: buildBeamPath(sx, sy, ex, ey),
 					delay: i * 0.1,
 				});
 			});
 			setBeams(newBeams);
 		}
 
-		// Measure after layout + entrance animations have settled (beams fade in at 0.8s).
-		const tid = setTimeout(() => requestAnimationFrame(recalc), 650);
+		// Measure after skeleton layout has settled (~300ms min display).
+		const tid = setTimeout(() => requestAnimationFrame(recalc), 300);
 		const ro = new ResizeObserver(recalc);
 		if (containerRef.current) ro.observe(containerRef.current);
-		if (helmorIconRef.current) ro.observe(helmorIconRef.current);
+		if (logoRef.current) ro.observe(logoRef.current);
 		return () => {
 			clearTimeout(tid);
 			ro.disconnect();
 		};
-	}, [workspaceIds, workspaceRefs, helmorIconRef, containerRef]);
+	}, [workspaceIds, workspaceRefs, logoRef, containerRef, mode]);
 
 	if (!beams.length) return null;
 
@@ -180,29 +185,29 @@ function MultiBeam({
 					<linearGradient id={`${gradId}-g`} x1="0%" y1="0%" x2="100%" y2="0%">
 						<stop
 							offset="0%"
-							stopColor="var(--color-app-foreground)"
+							stopColor="var(--color-foreground)"
 							stopOpacity="0"
 						/>
 						<stop
 							offset="50%"
-							stopColor="var(--color-app-foreground)"
+							stopColor="var(--color-foreground)"
 							stopOpacity="0.4"
 						/>
 						<stop
 							offset="100%"
-							stopColor="var(--color-app-foreground)"
+							stopColor="var(--color-foreground)"
 							stopOpacity="0"
 						/>
 					</linearGradient>
 				</defs>
 
-				{beams.map((beam) => (
-					<g key={beam.id}>
-						{/* Background rail — retracts toward Helmor when transferring */}
+				{beams.map((beam, i) => (
+					<g key={i}>
+						{/* Background rail */}
 						<motion.path
 							d={beam.d}
 							fill="none"
-							stroke="var(--color-app-border)"
+							stroke="var(--color-border)"
 							strokeWidth="1"
 							strokeLinecap="round"
 							initial={{ pathLength: 1, pathOffset: 0, opacity: 0.35 }}
@@ -259,12 +264,12 @@ function MultiBeam({
 
 			{/* HTML layer — travelling dots (offsetPath requires HTML, not SVG) */}
 			{(active || transferring) &&
-				beams.map((beam) => (
+				beams.map((beam, i) => (
 					<motion.div
-						key={`dot-${beam.id}`}
+						key={`dot-${i}`}
 						className="pointer-events-none absolute left-0 top-0 size-[5px] rounded-full"
 						style={{
-							background: "var(--color-app-foreground)",
+							background: "var(--color-foreground)",
 							offsetPath: `path("${beam.d}")`,
 							offsetRotate: "0deg",
 						}}
@@ -298,20 +303,33 @@ function MultiBeam({
 // Workspace skeleton row
 // ---------------------------------------------------------------------------
 
-function SkeletonRow({ index }: { index: number }) {
+function SkeletonRow({
+	id,
+	setLeftRef,
+	setRightRef,
+}: {
+	id: string;
+	setLeftRef?: (id: string, el: BeamAnchorElement | null) => void;
+	setRightRef?: (id: string, el: BeamAnchorElement | null) => void;
+}) {
 	return (
-		<motion.div
-			initial={{ opacity: 0, x: -10 }}
-			animate={{ opacity: 1, x: 0 }}
-			transition={{ delay: index * 0.1, duration: 0.5 }}
-			className="flex items-center gap-2.5 rounded-lg border border-app-border/30 bg-app-sidebar px-3 py-2.5"
-		>
-			<div className="size-7 shrink-0 animate-pulse rounded-md bg-app-accent" />
+		<div className="relative flex items-center gap-2.5 rounded-lg border border-border/30 bg-sidebar px-3 py-2.5">
+			<span
+				aria-hidden="true"
+				ref={setLeftRef ? (el) => setLeftRef(id, el) : undefined}
+				className="pointer-events-none absolute left-0 top-1/2 size-px -translate-x-1/2 -translate-y-1/2"
+			/>
+			<span
+				aria-hidden="true"
+				ref={setRightRef ? (el) => setRightRef(id, el) : undefined}
+				className="pointer-events-none absolute right-0 top-1/2 size-px -translate-y-1/2 translate-x-1/2"
+			/>
+			<div className="size-7 shrink-0 animate-pulse rounded-md bg-muted" />
 			<div className="flex-1 space-y-1.5">
-				<div className="h-2.5 w-28 animate-pulse rounded bg-app-accent" />
-				<div className="h-2 w-16 animate-pulse rounded bg-app-accent" />
+				<div className="h-2.5 w-28 animate-pulse rounded bg-muted" />
+				<div className="h-2 w-16 animate-pulse rounded bg-muted" />
 			</div>
-		</motion.div>
+		</div>
 	);
 }
 
@@ -328,7 +346,8 @@ type WorkspaceRowProps = {
 	index: number;
 	phase: Phase;
 	forHelmor?: boolean;
-	setRef?: (id: string, el: HTMLDivElement | null) => void;
+	setLeftRef?: (id: string, el: BeamAnchorElement | null) => void;
+	setRightRef?: (id: string, el: BeamAnchorElement | null) => void;
 };
 
 function WorkspaceRow({
@@ -336,16 +355,19 @@ function WorkspaceRow({
 	index,
 	phase,
 	forHelmor = false,
-	setRef,
+	setLeftRef,
+	setRightRef,
 }: WorkspaceRowProps) {
 	const label = humanize(workspace.directoryName);
 	const initials = label.slice(0, 2).toUpperCase();
 	const transferring = phase === "importing" && !forHelmor;
+	const shouldAnimateEntrance = forHelmor;
 
 	return (
 		<motion.div
-			ref={setRef ? (el) => setRef(workspace.id, el) : undefined}
-			initial={{ opacity: 0 }}
+			initial={
+				shouldAnimateEntrance ? { opacity: 0, x: 12, scale: 0.98 } : false
+			}
 			animate={
 				transferring
 					? { opacity: 0, x: 220, scale: 0.75 }
@@ -354,22 +376,34 @@ function WorkspaceRow({
 			transition={
 				transferring
 					? { duration: 0.75, delay: index * 0.09, ease: [0.4, 0, 0.6, 1] }
-					: {
-							duration: 0.7,
-							delay: forHelmor ? 0.25 + index * 0.12 : 0.35 + index * 0.12,
-							ease: [0, 0, 0.2, 1],
-						}
+					: shouldAnimateEntrance
+						? {
+								duration: 0.55,
+								delay: 0.25 + index * 0.12,
+								ease: [0, 0, 0.2, 1],
+							}
+						: { duration: 0 }
 			}
-			className="flex items-center gap-2.5 rounded-lg border border-app-border/40 bg-app-sidebar px-3 py-2.5"
+			className="relative flex items-center gap-2.5 rounded-lg border border-border/40 bg-sidebar px-3 py-2.5"
 		>
-			<div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-app-accent text-[10px] font-bold text-app-foreground-soft">
+			<span
+				aria-hidden="true"
+				ref={setLeftRef ? (el) => setLeftRef(workspace.id, el) : undefined}
+				className="pointer-events-none absolute left-0 top-1/2 size-px -translate-x-1/2 -translate-y-1/2"
+			/>
+			<span
+				aria-hidden="true"
+				ref={setRightRef ? (el) => setRightRef(workspace.id, el) : undefined}
+				className="pointer-events-none absolute right-0 top-1/2 size-px -translate-y-1/2 translate-x-1/2"
+			/>
+			<div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-accent text-[10px] font-bold text-accent-foreground/75">
 				{initials}
 			</div>
 			<div className="min-w-0 flex-1">
-				<div className="truncate text-[12px] font-medium text-app-foreground">
+				<div className="truncate text-[12px] font-medium text-foreground">
 					{label}
 				</div>
-				<div className="flex items-center gap-1.5 text-[10px] text-app-muted">
+				<div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
 					{workspace.branch && (
 						<>
 							<GitBranch className="size-2.5 shrink-0" strokeWidth={2} />
@@ -379,10 +413,7 @@ function WorkspaceRow({
 				</div>
 			</div>
 			{forHelmor && (
-				<Check
-					className="size-3.5 shrink-0 text-app-positive"
-					strokeWidth={2.5}
-				/>
+				<Check className="size-3.5 shrink-0 text-chart-2" strokeWidth={2.5} />
 			)}
 		</motion.div>
 	);
@@ -399,7 +430,11 @@ export type ConductorOnboardingProps = {
 };
 
 const MAX_VISIBLE = 5;
-const SKELETON_ROWS = 4;
+const SKELETON_ROWS = 5;
+const SKELETON_IDS = Array.from(
+	{ length: SKELETON_ROWS },
+	(_, i) => `skeleton-${i}`,
+);
 const LOGO_SIZE = 56;
 
 export function ConductorOnboarding({
@@ -413,13 +448,23 @@ export function ConductorOnboarding({
 	const [showDoneDetails, setShowDoneDetails] = useState(false);
 
 	const containerRef = useRef<HTMLDivElement>(null);
-	const helmorIconRef = useRef<HTMLDivElement>(null);
-	const workspaceRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+	const conductorAnchorRef = useRef<BeamAnchorElement>(null);
+	const helmorAnchorRef = useRef<BeamAnchorElement>(null);
+	const leftWorkspaceRefs = useRef<Map<string, BeamAnchorElement>>(new Map());
+	const rightWorkspaceRefs = useRef<Map<string, BeamAnchorElement>>(new Map());
 
-	const setWorkspaceRef = useCallback(
-		(id: string, el: HTMLDivElement | null) => {
-			if (el) workspaceRefs.current.set(id, el);
-			else workspaceRefs.current.delete(id);
+	const setLeftWorkspaceRef = useCallback(
+		(id: string, el: BeamAnchorElement | null) => {
+			if (el) leftWorkspaceRefs.current.set(id, el);
+			else leftWorkspaceRefs.current.delete(id);
+		},
+		[],
+	);
+
+	const setRightWorkspaceRef = useCallback(
+		(id: string, el: BeamAnchorElement | null) => {
+			if (el) rightWorkspaceRefs.current.set(id, el);
+			else rightWorkspaceRefs.current.delete(id);
 		},
 		[],
 	);
@@ -441,7 +486,6 @@ export function ConductorOnboarding({
 					// 1100ms ≈ layout (1.0s) + buffer → show welcome details
 					setTimeout(() => {
 						setShowDoneDetails(true);
-						setTimeout(onComplete, 2800);
 					}, 1100);
 				},
 				Math.max(1000 - elapsed, 0),
@@ -459,12 +503,27 @@ export function ConductorOnboarding({
 	// Keep beams mounted through import so they can play the retraction animation;
 	// only remove them when "done" so AnimatePresence fires the exit.
 	const showBeams = !isDone && !isLoadingWorkspaces && visible.length > 0;
+	const beamWorkspaceIds = isLoadingWorkspaces
+		? SKELETON_IDS
+		: visible.map((w) => w.id);
 	const beamTransferring = phase === "importing";
+
+	// Delay right beams until left beams finish drawing.
+	// Left beams: ~0ms (ResizeObserver) + 1.4s pathLength + 0.4s stagger = ~1.8s
+	const [showRightBeams, setShowRightBeams] = useState(false);
+	useEffect(() => {
+		if (!showBeams) {
+			setShowRightBeams(false);
+			return;
+		}
+		const tid = setTimeout(() => setShowRightBeams(true), 2000);
+		return () => clearTimeout(tid);
+	}, [showBeams]);
 
 	return (
 		<div
 			ref={containerRef}
-			className="fixed inset-0 z-50 flex flex-col items-center justify-center overflow-hidden bg-app-base font-sans text-app-foreground antialiased"
+			className="fixed inset-0 z-50 flex flex-col items-center justify-center overflow-hidden bg-background font-sans text-foreground antialiased"
 		>
 			{/* Drag region */}
 			<div
@@ -473,34 +532,50 @@ export function ConductorOnboarding({
 			/>
 
 			<DotGrid />
-			<div
-				className="pointer-events-none absolute inset-0"
-				style={{
-					background:
-						"radial-gradient(ellipse 80% 70% at 50% 50%, color-mix(in oklch, var(--color-app-foreground) 3%, transparent), transparent)",
-				}}
-			/>
 
 			{/* Beams — visible from "revealed" through "importing", removed on "done" */}
 			<AnimatePresence>
 				{showBeams && (
-					<motion.div
-						key="beams"
-						className="absolute inset-0"
-						initial={{ opacity: 0 }}
-						animate={{ opacity: 1 }}
-						exit={{ opacity: 0, transition: { duration: 0.5 } }}
-						transition={{ duration: 0.8, delay: 0.8 }}
-					>
-						<MultiBeam
-							workspaceRefs={workspaceRefs}
-							helmorIconRef={helmorIconRef}
-							containerRef={containerRef}
-							active={!beamTransferring}
-							transferring={beamTransferring}
-							workspaceIds={visible.map((w) => w.id)}
-						/>
-					</motion.div>
+					<>
+						<motion.div
+							key="left-beams"
+							className="absolute inset-0"
+							initial={false}
+							animate={{ opacity: 1, x: 0 }}
+							exit={{ opacity: 0, transition: { duration: 0.5 } }}
+							transition={{ duration: 0 }}
+						>
+							<MultiBeam
+								workspaceRefs={leftWorkspaceRefs}
+								logoRef={conductorAnchorRef}
+								containerRef={containerRef}
+								active={!beamTransferring}
+								transferring={beamTransferring}
+								workspaceIds={beamWorkspaceIds}
+								mode="logo-to-items"
+							/>
+						</motion.div>
+						{showRightBeams && (
+							<motion.div
+								key="right-beams"
+								className="absolute inset-0"
+								initial={false}
+								animate={{ opacity: 1, x: 0 }}
+								exit={{ opacity: 0, transition: { duration: 0.5 } }}
+								transition={{ duration: 0 }}
+							>
+								<MultiBeam
+									workspaceRefs={rightWorkspaceRefs}
+									logoRef={helmorAnchorRef}
+									containerRef={containerRef}
+									active={!beamTransferring}
+									transferring={beamTransferring}
+									workspaceIds={beamWorkspaceIds}
+									mode="items-to-logo"
+								/>
+							</motion.div>
+						)}
+					</>
 				)}
 			</AnimatePresence>
 
@@ -508,74 +583,88 @@ export function ConductorOnboarding({
 			<LayoutGroup>
 				<motion.div
 					layout
-					className="relative z-10 flex w-full max-w-[760px] items-start px-14"
-					style={{ justifyContent: isDone ? "center" : "space-between" }}
-					transition={{ layout: { duration: 1.0, ease: [0, 0, 0.2, 1] } }}
+					className="relative z-10 flex w-full max-w-[1080px] items-center justify-center gap-56 px-10"
+					transition={{
+						layout: { duration: isDone ? 1.0 : 0, ease: [0, 0, 0.2, 1] },
+					}}
 				>
 					{/* LEFT: Conductor */}
 					<AnimatePresence mode="popLayout">
 						{!isDone && (
 							<motion.div
-								key="conductor"
+								key="conductor-column"
 								layout
-								style={{ width: 300 }}
-								className="flex flex-col gap-4"
-								initial={{ opacity: 0 }}
-								animate={{ opacity: 1 }}
+								initial={false}
+								animate={
+									beamTransferring
+										? { opacity: 0, x: 220, scale: 0.75 }
+										: { opacity: 1, x: 0, scale: 1 }
+								}
 								exit={{ opacity: 0, transition: { duration: 0.15 } }}
-								transition={{ duration: 0.35, ease: "easeOut" }}
+								transition={
+									beamTransferring
+										? { duration: 0.75, ease: [0.4, 0, 0.6, 1] }
+										: { duration: 0 }
+								}
+								className="flex w-[220px] shrink-0 justify-end"
 							>
-								{/* Header fades out on its own when importing starts */}
-								<motion.div
-									initial={{ opacity: 0, y: -8 }}
-									animate={{
-										opacity: phase === "importing" ? 0 : 1,
-										y: 0,
-									}}
-									transition={
-										phase === "importing"
-											? { duration: 0.55, delay: 0.15 }
-											: { duration: 0.75, delay: 0.3 }
-									}
-									className="flex items-center gap-3"
-								>
+								<div className="relative inline-flex items-center justify-center">
+									<span
+										aria-hidden="true"
+										ref={conductorAnchorRef}
+										className="pointer-events-none absolute right-0 top-1/2 size-px -translate-y-1/2 translate-x-1/2"
+									/>
 									<ConductorLogo
 										className="shrink-0 rounded-[11px]"
 										style={{ width: LOGO_SIZE, height: LOGO_SIZE }}
 									/>
-									{workspaces.length > 0 && (
-										<span className="rounded-full bg-app-accent px-2.5 py-0.5 text-[11px] font-medium text-app-foreground-soft">
-											{workspaces.length}
-										</span>
-									)}
-								</motion.div>
-
-								{/* Workspace list */}
-								<div className="flex flex-col gap-1.5">
-									{isLoadingWorkspaces
-										? Array.from({ length: SKELETON_ROWS }, (_, i) => (
-												<SkeletonRow key={i} index={i} />
-											))
-										: visible.map((ws, i) => (
-												<WorkspaceRow
-													key={ws.id}
-													workspace={ws}
-													index={i}
-													phase={phase}
-													setRef={setWorkspaceRef}
-												/>
-											))}
-									{overflow > 0 && !isLoadingWorkspaces && (
-										<motion.p
-											initial={{ opacity: 0 }}
-											animate={{ opacity: phase === "importing" ? 0 : 0.4 }}
-											transition={{ delay: 0.5 }}
-											className="px-3 py-0.5 text-[11px] text-app-muted"
-										>
-											+{overflow} more
-										</motion.p>
-									)}
 								</div>
+							</motion.div>
+						)}
+					</AnimatePresence>
+
+					{/* CENTER: Workspace list */}
+					<AnimatePresence mode="popLayout">
+						{!isDone && (
+							<motion.div
+								key="workspace-list-column"
+								layout
+								initial={false}
+								animate={{ opacity: 1, x: 0 }}
+								exit={{ opacity: 0, transition: { duration: 0.15 } }}
+								transition={{ duration: 0 }}
+								className="flex w-[300px] shrink-0 flex-col gap-1.5"
+							>
+								{isLoadingWorkspaces
+									? SKELETON_IDS.map((id) => (
+											<SkeletonRow
+												key={id}
+												id={id}
+												setLeftRef={setLeftWorkspaceRef}
+												setRightRef={setRightWorkspaceRef}
+											/>
+										))
+									: visible.map((ws, i) => (
+											<WorkspaceRow
+												key={ws.id}
+												workspace={ws}
+												index={i}
+												phase={phase}
+												setLeftRef={setLeftWorkspaceRef}
+												setRightRef={setRightWorkspaceRef}
+											/>
+										))}
+								{(isLoadingWorkspaces || overflow > 0) && (
+									<p
+										className="px-3 py-0.5 text-[11px] text-primary text-right"
+										style={{
+											opacity:
+												isLoadingWorkspaces || phase === "importing" ? 0 : 0.4,
+										}}
+									>
+										{isLoadingWorkspaces ? "\u00A0" : `+${overflow} more`}
+									</p>
+								)}
 							</motion.div>
 						)}
 					</AnimatePresence>
@@ -584,46 +673,27 @@ export function ConductorOnboarding({
 					<motion.div
 						layout
 						transition={{ layout: { duration: 1.0, ease: [0, 0, 0.2, 1] } }}
-						className="flex flex-col items-center gap-3"
+						className={`flex w-[220px] shrink-0 flex-col gap-3 ${isDone ? "items-center" : "items-start"}`}
 					>
 						<motion.div
-							initial={{ opacity: 0 }}
-							animate={{ opacity: 1 }}
-							transition={{ duration: 0.8, delay: 0.35 }}
-							className="flex flex-col items-center gap-2"
+							initial={false}
+							animate={{ opacity: 1, x: 0 }}
+							transition={{ duration: 0 }}
+							className={`flex flex-col gap-2 ${isDone ? "items-center" : "items-start"}`}
 						>
-							{/* helmorIconRef — beam endpoint is measured from here */}
-							<div
-								ref={helmorIconRef}
-								className="relative inline-flex items-center justify-center"
-							>
-								{/* Pulse rings during import */}
-								<AnimatePresence>
-									{phase === "importing" &&
-										[0, 1, 2].map((i) => (
-											<motion.div
-												key={i}
-												className="absolute rounded-full border border-app-foreground/20"
-												style={{ inset: 0 }}
-												initial={{ scale: 1, opacity: 0.45 }}
-												animate={{ scale: 2.8 + i * 0.55, opacity: 0 }}
-												transition={{
-													duration: 2.2,
-													delay: i * 0.6,
-													repeat: Number.POSITIVE_INFINITY,
-													ease: "easeOut",
-												}}
-											/>
-										))}
-								</AnimatePresence>
-
+							<div className="relative inline-flex items-center justify-center">
+								<span
+									aria-hidden="true"
+									ref={helmorAnchorRef}
+									className="pointer-events-none absolute -left-1 top-1/2 size-px -translate-x-1/2 -translate-y-1/2"
+								/>
 								<motion.div
 									animate={isDone ? { scale: 1.22 } : { scale: 1 }}
 									transition={{ duration: 0.7, ease: [0, 0, 0.2, 1] }}
 								>
-									<HelmorLogo
-										size={LOGO_SIZE}
-										className={`relative transition-colors duration-500 ${isDone ? "text-app-foreground" : "text-app-foreground-soft"}`}
+									<HelmorWordmark
+										size={22}
+										className={`relative transition-colors duration-500 ${isDone ? "text-primary" : "text-primary/92"}`}
 									/>
 								</motion.div>
 
@@ -639,25 +709,13 @@ export function ConductorOnboarding({
 												damping: 20,
 												delay: 0.28,
 											}}
-											className="absolute -right-2 -top-2 flex size-5 items-center justify-center rounded-full bg-app-positive text-white"
+											className="absolute -right-2 -top-2 flex size-5 translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-chart-2 text-background"
 										>
 											<Check className="size-3" strokeWidth={3} />
 										</motion.div>
 									)}
 								</AnimatePresence>
 							</div>
-
-							<motion.span
-								animate={
-									isDone
-										? { fontWeight: 700, fontSize: "1rem" }
-										: { fontWeight: 600, fontSize: "0.875rem" }
-								}
-								transition={{ duration: 0.45 }}
-								className="text-app-foreground"
-							>
-								Helmor
-							</motion.span>
 
 							{/* Counter — stays visible throughout done phase */}
 							{isDone && importedCount > 0 && (
@@ -670,7 +728,7 @@ export function ConductorOnboarding({
 										y: { duration: 0.25 },
 										fontSize: { duration: 1.0, ease: "easeOut" },
 									}}
-									className="font-medium text-app-foreground-soft"
+									className="font-medium text-muted-foreground"
 								>
 									<NumberTicker value={importedCount} /> imported
 								</motion.p>
@@ -702,7 +760,7 @@ export function ConductorOnboarding({
 											/>
 										))}
 										{overflow > 0 && (
-											<p className="px-3 py-0.5 text-[11px] text-app-muted opacity-40">
+											<p className="px-3 py-0.5 text-[11px] text-primary opacity-40">
 												+{overflow} more
 											</p>
 										)}
@@ -712,15 +770,28 @@ export function ConductorOnboarding({
 										initial={{ opacity: 0, y: 6 }}
 										animate={{ opacity: 1, y: 0 }}
 										transition={{ delay: 0.6 }}
-										className="text-center"
+										className="flex flex-col items-center gap-4 text-center"
 									>
-										<p className="text-base font-semibold text-app-foreground">
-											Welcome to Helmor
-										</p>
-										<p className="mt-0.5 text-sm text-app-muted">
-											{importedCount}{" "}
-											{importedCount === 1 ? "workspace" : "workspaces"} ready
-										</p>
+										<div>
+											<p className="text-base font-semibold text-foreground">
+												Welcome to Helmor
+											</p>
+											<p className="mt-0.5 text-sm text-muted-foreground">
+												{importedCount}{" "}
+												{importedCount === 1 ? "workspace" : "workspaces"} ready
+											</p>
+										</div>
+										<button
+											type="button"
+											onClick={onComplete}
+											className="rounded-lg px-7 py-2.5 text-sm font-semibold transition-opacity hover:opacity-90 active:opacity-75"
+											style={{
+												background: "var(--color-foreground)",
+												color: "var(--color-background)",
+											}}
+										>
+											Get started
+										</button>
 									</motion.div>
 								</motion.div>
 							)}
@@ -739,25 +810,26 @@ export function ConductorOnboarding({
 								initial={{ opacity: 0 }}
 								animate={{ opacity: 1 }}
 								exit={{ opacity: 0 }}
-								className="text-[12px] text-app-negative"
+								className="text-[12px] text-destructive"
 							>
 								{importError}
 							</motion.p>
 						)}
 
-						{phase === "revealed" && !isLoadingWorkspaces && (
+						{phase === "revealed" && (
 							<motion.div
 								key="cta"
-								initial={{ opacity: 0, y: 12 }}
+								initial={false}
 								animate={{ opacity: 1, y: 0 }}
 								exit={{ opacity: 0, y: -8 }}
-								transition={{ duration: 0.55, delay: 0.5 }}
+								transition={{ duration: 0 }}
 								className="flex flex-col items-center gap-2"
 							>
 								<button
 									type="button"
 									onClick={() => void handleImport()}
-									className="group relative flex items-center gap-2 overflow-hidden rounded-lg px-7 py-3 text-sm font-semibold tracking-[0.01em] transition-opacity hover:opacity-90 active:opacity-75"
+									disabled={isLoadingWorkspaces}
+									className="group relative flex items-center gap-2 overflow-hidden rounded-lg px-7 py-3 text-sm font-semibold tracking-[0.01em] transition-opacity hover:opacity-90 active:opacity-75 disabled:opacity-40 disabled:pointer-events-none"
 									style={{
 										background: "var(--color-foreground)",
 										color: "var(--color-background)",
@@ -779,7 +851,7 @@ export function ConductorOnboarding({
 								<button
 									type="button"
 									onClick={onComplete}
-									className="text-[11px] text-app-muted transition-colors hover:text-app-foreground-soft"
+									className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
 								>
 									Skip for now
 								</button>
@@ -792,10 +864,10 @@ export function ConductorOnboarding({
 								initial={{ opacity: 0 }}
 								animate={{ opacity: 1 }}
 								exit={{ opacity: 0 }}
-								className="flex items-center gap-2 text-sm text-app-foreground-soft"
+								className="flex items-center gap-2 text-sm text-muted-foreground"
 							>
 								<motion.span
-									className="inline-block size-4 rounded-full border-2 border-app-border border-t-app-foreground"
+									className="inline-block size-4 rounded-full border-2 border-border border-t-foreground"
 									animate={{ rotate: 360 }}
 									transition={{
 										duration: 0.75,

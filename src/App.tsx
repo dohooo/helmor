@@ -1452,7 +1452,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 																		),
 																	)
 																}
-																className="text-app-muted hover:text-app-foreground"
+																className="text-muted-foreground hover:text-foreground"
 															>
 																<EditorIcon
 																	editorId={preferredEditor.id}
@@ -1465,7 +1465,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 																	<Button
 																		variant="ghost"
 																		size="icon-xs"
-																		className="w-4 text-app-muted hover:text-app-foreground"
+																		className="w-4 text-muted-foreground hover:text-foreground"
 																	>
 																		<ChevronDown
 																			className="size-2.5"
