@@ -1426,22 +1426,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 													/>
 												</Button>
 												<div className="absolute inset-x-3 bottom-3 z-20 flex items-center justify-between">
-													<div className="flex items-center gap-1">
-														<SettingsButton onClick={onOpenSettings} />
-														<button
-															type="button"
-															title="Open onboarding (debug)"
-															onClick={() => {
-																localStorage.removeItem(
-																	"helmor_onboarding_completed",
-																);
-																setShowOnboarding(true);
-															}}
-															className="flex h-7 items-center rounded px-1.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-														>
-															OB
-														</button>
-													</div>
+													<SettingsButton onClick={onOpenSettings} />
 													{githubIdentityState.status === "connected" ? (
 														<GithubStatusMenu
 															identityState={githubIdentityState}

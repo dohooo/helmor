@@ -9,7 +9,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
 
-use crate::{git_ops, helpers};
+use crate::{git_ops, helpers, workspace::helpers as ws_helpers};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -39,6 +39,7 @@ pub struct ConductorWorkspace {
     pub session_count: i64,
     pub message_count: i64,
     pub already_imported: bool,
+    pub icon_src: Option<String>,
 }
 
 /// Result returned to the frontend after an import attempt.
@@ -121,8 +122,10 @@ pub fn list_conductor_workspaces(repo_id: &str) -> Result<Vec<ConductorWorkspace
                  WHERE m.session_id IN (
                      SELECT s.id FROM source.sessions s WHERE s.workspace_id = w.id
                  )) AS message_count,
-                (CASE WHEN w.id IN (SELECT id FROM main.workspaces) THEN 1 ELSE 0 END) AS already_imported
+                (CASE WHEN w.id IN (SELECT id FROM main.workspaces) THEN 1 ELSE 0 END) AS already_imported,
+                r.root_path
             FROM source.workspaces w
+            JOIN source.repos r ON r.id = w.repository_id
             WHERE w.repository_id = ?1
               AND w.state IN ('ready', 'archived')
             ORDER BY w.updated_at DESC
@@ -132,21 +135,35 @@ pub fn list_conductor_workspaces(repo_id: &str) -> Result<Vec<ConductorWorkspace
 
     let workspaces = stmt
         .query_map([repo_id], |row| {
-            Ok(ConductorWorkspace {
-                id: row.get(0)?,
-                directory_name: row.get(1)?,
-                state: row.get(2)?,
-                branch: row.get(3)?,
-                derived_status: row.get(4)?,
-                pr_title: row.get(5)?,
-                session_count: row.get(6)?,
-                message_count: row.get(7)?,
-                already_imported: row.get::<_, i64>(8)? != 0,
-            })
+            let root_path: Option<String> = row.get(9)?;
+            Ok((
+                ConductorWorkspace {
+                    id: row.get(0)?,
+                    directory_name: row.get(1)?,
+                    state: row.get(2)?,
+                    branch: row.get(3)?,
+                    derived_status: row.get(4)?,
+                    pr_title: row.get(5)?,
+                    session_count: row.get(6)?,
+                    message_count: row.get(7)?,
+                    already_imported: row.get::<_, i64>(8)? != 0,
+                    icon_src: None,
+                },
+                root_path,
+            ))
         })
         .context("Failed to read Conductor workspaces")?
         .collect::<rusqlite::Result<Vec<_>>>()
         .context("Failed to collect Conductor workspaces")?;
+
+    // Resolve repo icons from filesystem after closing the DB statement.
+    let workspaces: Vec<ConductorWorkspace> = workspaces
+        .into_iter()
+        .map(|(mut ws, root_path)| {
+            ws.icon_src = ws_helpers::repo_icon_src_for_root_path(root_path.as_deref());
+            ws
+        })
+        .collect();
 
     helmor_conn.execute("DETACH DATABASE source", []).ok();
 

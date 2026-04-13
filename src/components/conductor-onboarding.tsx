@@ -3,6 +3,7 @@ import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import type React from "react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import conductorLogoSrc from "@/assets/conductor.webp";
+import helmorLogoSrc from "@/assets/helmor-logo.png";
 import { type ConductorWorkspace, importConductorWorkspaces } from "@/lib/api";
 import { NumberTicker } from "./ui/number-ticker";
 
@@ -50,40 +51,6 @@ function ConductorLogo({
 			style={style}
 			draggable={false}
 		/>
-	);
-}
-
-// ---------------------------------------------------------------------------
-// Helmor wordmark — Tesla-ish wide uppercase wordmark
-// ---------------------------------------------------------------------------
-
-const HELMOR_WORDMARK_FONT_FAMILY =
-	'"Eurostile Extended","Eurostile","Microgramma D Extended","Bank Gothic","Aldrich","Rajdhani","Arial Narrow",sans-serif';
-
-function HelmorWordmark({
-	className,
-	size = 20,
-}: {
-	className?: string;
-	size?: number;
-}) {
-	return (
-		<span
-			className={className}
-			style={{
-				fontFamily: HELMOR_WORDMARK_FONT_FAMILY,
-				fontSize: size,
-				fontWeight: 500,
-				letterSpacing: "0.28em",
-				textTransform: "uppercase",
-				lineHeight: 1,
-				textShadow:
-					"0 0 18px color-mix(in oklch, var(--color-primary) 18%, transparent)",
-			}}
-			aria-label="Helmor"
-		>
-			HELMOR
-		</span>
 	);
 }
 
@@ -396,9 +363,18 @@ function WorkspaceRow({
 				ref={setRightRef ? (el) => setRightRef(workspace.id, el) : undefined}
 				className="pointer-events-none absolute right-0 top-1/2 size-px -translate-y-1/2 translate-x-1/2"
 			/>
-			<div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-accent text-[10px] font-bold text-accent-foreground/75">
-				{initials}
-			</div>
+			{workspace.iconSrc ? (
+				<img
+					src={workspace.iconSrc}
+					alt=""
+					className="size-7 shrink-0 rounded-md object-cover"
+					draggable={false}
+				/>
+			) : (
+				<div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-accent text-[10px] font-bold text-accent-foreground/75">
+					{initials}
+				</div>
+			)}
 			<div className="min-w-0 flex-1">
 				<div className="truncate text-[12px] font-medium text-foreground">
 					{label}
@@ -413,7 +389,11 @@ function WorkspaceRow({
 				</div>
 			</div>
 			{forHelmor && (
-				<Check className="size-3.5 shrink-0 text-chart-2" strokeWidth={2.5} />
+				<Check
+					className="size-3.5 shrink-0"
+					strokeWidth={2.5}
+					style={{ color: "#1F883D" }}
+				/>
 			)}
 		</motion.div>
 	);
@@ -691,9 +671,12 @@ export function ConductorOnboarding({
 									animate={isDone ? { scale: 1.22 } : { scale: 1 }}
 									transition={{ duration: 0.7, ease: [0, 0, 0.2, 1] }}
 								>
-									<HelmorWordmark
-										size={22}
-										className={`relative transition-colors duration-500 ${isDone ? "text-primary" : "text-primary/92"}`}
+									<img
+										src={helmorLogoSrc}
+										alt="Helmor"
+										className="shrink-0 rounded-[11px]"
+										style={{ width: LOGO_SIZE - 10, height: LOGO_SIZE - 10 }}
+										draggable={false}
 									/>
 								</motion.div>
 
@@ -709,7 +692,8 @@ export function ConductorOnboarding({
 												damping: 20,
 												delay: 0.28,
 											}}
-											className="absolute -right-2 -top-2 flex size-5 translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-chart-2 text-background"
+											className="absolute -right-2 -top-2 flex size-5 translate-x-1/4 -translate-y-1/4 items-center justify-center rounded-full text-background"
+											style={{ backgroundColor: "#1F883D" }}
 										>
 											<Check className="size-3" strokeWidth={3} />
 										</motion.div>
@@ -760,7 +744,7 @@ export function ConductorOnboarding({
 											/>
 										))}
 										{overflow > 0 && (
-											<p className="px-3 py-0.5 text-[11px] text-primary opacity-40">
+											<p className="px-3 py-0.5 text-[11px] text-primary text-right opacity-40">
 												+{overflow} more
 											</p>
 										)}

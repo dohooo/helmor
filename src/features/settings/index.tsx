@@ -19,6 +19,11 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
 	isConductorAvailable,
 	loadGithubIdentitySession,
 	type RepositoryCreateOption,
@@ -404,14 +409,24 @@ function RadioOption({
 
 export function SettingsButton({ onClick }: { onClick: () => void }) {
 	return (
-		<Button
-			variant="ghost"
-			size="icon"
-			onClick={onClick}
-			title="Settings"
-			className="text-muted-foreground hover:text-foreground"
-		>
-			<Settings className="size-[15px]" strokeWidth={1.8} />
-		</Button>
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					variant="ghost"
+					size="icon"
+					onClick={onClick}
+					className="text-muted-foreground hover:text-foreground"
+				>
+					<Settings className="size-[15px]" strokeWidth={1.8} />
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent
+				side="top"
+				sideOffset={6}
+				className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+			>
+				<span className="leading-none">Settings</span>
+			</TooltipContent>
+		</Tooltip>
 	);
 }
