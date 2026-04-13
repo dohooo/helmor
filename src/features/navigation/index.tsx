@@ -419,7 +419,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 										{group.rows.length > 0 ? (
 											<CollapsibleContent>
-												<div className="flex flex-col gap-0.5">
+												<div className="flex flex-col gap-0.5 pl-2">
 													{group.rows.map((row) => (
 														<WorkspaceRowItem
 															key={row.id}
@@ -501,7 +501,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 							{archivedRows.length > 0 ? (
 								<CollapsibleContent>
-									<div className="flex flex-col gap-0.5">
+									<div className="flex flex-col gap-0.5 pl-2">
 										{archivedRows.map((row) => (
 											<WorkspaceRowItem
 												key={row.id}
