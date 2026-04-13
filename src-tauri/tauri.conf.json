@@ -28,7 +28,8 @@
 					"y": 20
 				},
 				"hiddenTitle": true,
-				"center": true
+				"center": true,
+				"backgroundColor": "#0E0E0E"
 			}
 		],
 		"security": {

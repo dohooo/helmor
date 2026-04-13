@@ -9,6 +9,8 @@ export type AppSettings = {
 	branchPrefixCustom: string;
 	theme: ThemeMode;
 	notifications: boolean;
+	lastWorkspaceId: string | null;
+	lastSessionId: string | null;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -17,6 +19,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	branchPrefixCustom: "",
 	theme: "system",
 	notifications: true,
+	lastWorkspaceId: null,
+	lastSessionId: null,
 };
 
 const SETTINGS_KEY_MAP: Record<keyof AppSettings, string> = {
@@ -25,6 +29,8 @@ const SETTINGS_KEY_MAP: Record<keyof AppSettings, string> = {
 	branchPrefixCustom: "branch_prefix_custom",
 	theme: "app.theme",
 	notifications: "app.notifications",
+	lastWorkspaceId: "app.last_workspace_id",
+	lastSessionId: "app.last_session_id",
 };
 
 export async function loadSettings(): Promise<AppSettings> {
@@ -49,6 +55,8 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.notifications] !== undefined
 					? raw[SETTINGS_KEY_MAP.notifications] === "true"
 					: DEFAULT_SETTINGS.notifications,
+			lastWorkspaceId: raw[SETTINGS_KEY_MAP.lastWorkspaceId] || null,
+			lastSessionId: raw[SETTINGS_KEY_MAP.lastSessionId] || null,
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS };
@@ -60,11 +68,11 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 	for (const [key, dbKey] of Object.entries(SETTINGS_KEY_MAP)) {
 		const value = patch[key as keyof AppSettings];
 		if (value !== undefined) {
-			settings[dbKey] = String(value);
+			settings[dbKey] = value === null ? "" : String(value);
 		}
 	}
 	try {
-		await invoke("update_app_settings", { settings });
+		await invoke("update_app_settings", { settingsMap: settings });
 	} catch {
 		// ignore — non-Tauri env
 	}

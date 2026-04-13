@@ -26,6 +26,7 @@ import {
 	workspaceGroupsQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
+import { useSettings } from "@/lib/settings";
 import {
 	clearWorkspaceUnreadFromGroups,
 	clearWorkspaceUnreadFromSummaries,
@@ -64,6 +65,7 @@ export function useWorkspacesSidebarController({
 	pushWorkspaceToast,
 }: UseWorkspacesSidebarControllerArgs) {
 	const queryClient = useQueryClient();
+	const { settings } = useSettings();
 	const [addingRepository, setAddingRepository] = useState(false);
 	const [creatingWorkspaceRepoId, setCreatingWorkspaceRepoId] = useState<
 		string | null
@@ -128,11 +130,21 @@ export function useWorkspacesSidebarController({
 			return;
 		}
 
-		const nextWorkspaceId =
+		let nextWorkspaceId: string | null;
+		if (
 			selectedWorkspaceId &&
 			hasWorkspaceId(selectedWorkspaceId, groups, archivedSummaries)
-				? selectedWorkspaceId
-				: (findInitialWorkspaceId(groups) ?? archivedSummaries[0]?.id ?? null);
+		) {
+			nextWorkspaceId = selectedWorkspaceId;
+		} else if (
+			settings.lastWorkspaceId &&
+			hasWorkspaceId(settings.lastWorkspaceId, groups, archivedSummaries)
+		) {
+			nextWorkspaceId = settings.lastWorkspaceId;
+		} else {
+			nextWorkspaceId =
+				findInitialWorkspaceId(groups) ?? archivedSummaries[0]?.id ?? null;
+		}
 
 		if (nextWorkspaceId !== selectedWorkspaceId) {
 			onSelectWorkspace(nextWorkspaceId);
@@ -145,6 +157,7 @@ export function useWorkspacesSidebarController({
 		groupsQuery.isFetching,
 		onSelectWorkspace,
 		selectedWorkspaceId,
+		settings.lastWorkspaceId,
 	]);
 
 	const prefetchWorkspace = useCallback(

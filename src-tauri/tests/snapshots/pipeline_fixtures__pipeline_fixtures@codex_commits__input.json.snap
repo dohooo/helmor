@@ -1,6 +1,5 @@
 ---
 source: tests/pipeline_fixtures.rs
-assertion_line: 51
 expression: messages
 input_file: tests/fixtures/pipeline/codex_commits/input.json
 ---
@@ -116,4 +115,4 @@ input_file: tests/fixtures/pipeline/codex_commits/input.json
   createdAt: "2026-04-05T03:45:28.970Z"
   content:
     - type: text
-      text: "in 21,224 • out 683"
+      text: Done

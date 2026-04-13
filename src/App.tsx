@@ -17,6 +17,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { ConductorOnboarding } from "@/components/conductor-onboarding";
+import { SplashScreen } from "@/components/splash-screen";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -98,15 +99,15 @@ import {
 } from "./lib/workspace-toast-context";
 
 function App() {
-	const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+	const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [queryClient] = useState(() => createHelmorQueryClient());
 	const settingsContextValue = useMemo(
 		() => ({
-			settings: appSettings,
+			settings: appSettings ?? DEFAULT_SETTINGS,
 			updateSettings: (patch: Partial<AppSettings>) => {
 				setAppSettings((previous) => {
-					const next = { ...previous, ...patch };
+					const next = { ...(previous ?? DEFAULT_SETTINGS), ...patch };
 					void saveSettings(patch);
 					return next;
 				});
@@ -115,8 +116,13 @@ function App() {
 		[appSettings],
 	);
 
+	const [splashReady, setSplashReady] = useState(false);
+
 	useEffect(() => {
-		void loadSettings().then(setAppSettings);
+		const minDelay = new Promise<void>((r) => setTimeout(r, 2000));
+		void Promise.all([loadSettings().then(setAppSettings), minDelay]).then(() =>
+			setSplashReady(true),
+		);
 	}, []);
 
 	return (
@@ -144,7 +150,11 @@ function App() {
 					},
 				}}
 			>
-				<AppShell onOpenSettings={() => setSettingsOpen(true)} />
+				{splashReady ? (
+					<AppShell onOpenSettings={() => setSettingsOpen(true)} />
+				) : (
+					<SplashScreen />
+				)}
 				<SettingsDialog
 					open={settingsOpen}
 					onClose={() => {
@@ -466,6 +476,19 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		selectedSessionIdRef.current = selectedSessionId;
 	}, [selectedSessionId]);
 
+	// Persist last workspace/session for restore-on-launch
+	useEffect(() => {
+		if (selectedWorkspaceId) {
+			void saveSettings({ lastWorkspaceId: selectedWorkspaceId });
+		}
+	}, [selectedWorkspaceId]);
+
+	useEffect(() => {
+		if (selectedSessionId) {
+			void saveSettings({ lastSessionId: selectedSessionId });
+		}
+	}, [selectedSessionId]);
+
 	const rememberSessionSelection = useCallback(
 		(workspaceId: string | null, sessionId: string | null) => {
 			if (!workspaceId || !sessionId) {
@@ -727,10 +750,12 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 					helmorQueryKeys.workspaceSessions(workspaceId),
 				) ?? [];
 
-			if (workspaceSessions.length > 0) {
-				const sessionIds = new Set(
-					workspaceSessions.map((session) => session.id),
-				);
+			const sessionIds =
+				workspaceSessions.length > 0
+					? new Set(workspaceSessions.map((session) => session.id))
+					: null;
+
+			if (sessionIds) {
 				for (let i = sessionHistory.length - 1; i >= 0; i -= 1) {
 					const sessionId = sessionHistory[i];
 					if (sessionIds.has(sessionId)) {
@@ -743,6 +768,14 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 				return sessionHistory[sessionHistory.length - 1] ?? null;
 			}
 
+			// Restore last session from persisted settings
+			if (
+				appSettings.lastSessionId &&
+				(!sessionIds || sessionIds.has(appSettings.lastSessionId))
+			) {
+				return appSettings.lastSessionId;
+			}
+
 			return (
 				workspaceDetail?.activeSessionId ??
 				workspaceSessions.find((session) => session.active)?.id ??
@@ -750,7 +783,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 				null
 			);
 		},
-		[queryClient],
+		[queryClient, appSettings.lastSessionId],
 	);
 
 	const primeInitialWorkspaceDisplay = useCallback(

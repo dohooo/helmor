@@ -1,3 +1,4 @@
+import { format } from "date-fns";
 import {
 	AlertCircle,
 	AlertTriangle,
@@ -139,6 +140,17 @@ function CopyMessageButton() {
 
 // --- ChatSystemMessage ---
 
+function MessageTimestamp({ createdAt }: { createdAt?: string }) {
+	if (!createdAt) return null;
+	const date = new Date(createdAt);
+	if (Number.isNaN(date.getTime())) return null;
+	return (
+		<span className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground/50">
+			{format(date, "HH:mm")}
+		</span>
+	);
+}
+
 export function ChatSystemMessage({ message }: { message: RenderedMessage }) {
 	const parts = message.content as MessagePart[];
 
@@ -163,6 +175,7 @@ export function ChatSystemMessage({ message }: { message: RenderedMessage }) {
 				})}
 			</div>
 			<CopyMessageButton />
+			<MessageTimestamp createdAt={message.createdAt} />
 		</div>
 	);
 }

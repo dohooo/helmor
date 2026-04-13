@@ -7,6 +7,6 @@ expression: run_normalized(msgs)
   content_length: 1
   content:
     - type: text
-      text: "4.5s • in 1,234 • out 567 • $0.0123"
+      text: 4.5s
   status: ~
   streaming: ~

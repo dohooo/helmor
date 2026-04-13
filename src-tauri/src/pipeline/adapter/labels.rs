@@ -280,18 +280,7 @@ pub(super) fn build_result_label(parsed: Option<&Value>) -> String {
         None => return "Done".to_string(),
     };
 
-    let cost = parsed.get("total_cost_usd").and_then(Value::as_f64);
     let duration_ms = parsed.get("duration_ms").and_then(Value::as_f64);
-    let usage = parsed.get("usage");
-
-    let input_tokens = usage
-        .and_then(|u| u.get("input_tokens"))
-        .and_then(Value::as_i64)
-        .or_else(|| parsed.get("input_tokens").and_then(Value::as_i64));
-    let output_tokens = usage
-        .and_then(|u| u.get("output_tokens"))
-        .and_then(Value::as_i64)
-        .or_else(|| parsed.get("output_tokens").and_then(Value::as_i64));
 
     let mut bits: Vec<String> = Vec::new();
 
@@ -308,16 +297,6 @@ pub(super) fn build_result_label(parsed: Option<&Value>) -> String {
         } else {
             bits.push(format!("{total_secs:.1}s"));
         }
-    }
-
-    if let Some(v) = input_tokens {
-        bits.push(format!("in {}", format_count(v)));
-    }
-    if let Some(v) = output_tokens {
-        bits.push(format!("out {}", format_count(v)));
-    }
-    if let Some(c) = cost {
-        bits.push(format!("${c:.4}"));
     }
 
     if bits.is_empty() {

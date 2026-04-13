@@ -1,6 +1,5 @@
 ---
 source: tests/pipeline_fixtures.rs
-assertion_line: 51
 expression: messages
 input_file: tests/fixtures/pipeline/small_chat_claude/input.json
 ---
@@ -26,4 +25,4 @@ input_file: tests/fixtures/pipeline/small_chat_claude/input.json
   createdAt: "2026-04-02T13:25:48.587Z"
   content:
     - type: text
-      text: 8.8s • in 3 • out 124 • $0.0723
+      text: 8.8s

@@ -310,9 +310,10 @@ fn result_label_formatting() {
         "total_cost_usd": 0.0123
     })));
     assert!(label.contains("1m 31s"));
-    assert!(label.contains("in 5,200"));
-    assert!(label.contains("out 1,200"));
-    assert!(label.contains("$0.0123"));
+    // token counts and cost are no longer shown
+    assert!(!label.contains("in "));
+    assert!(!label.contains("out "));
+    assert!(!label.contains("$"));
 }
 
 #[test]
