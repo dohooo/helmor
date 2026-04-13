@@ -11,6 +11,7 @@ pub mod models;
 pub mod pipeline;
 mod schema;
 pub mod service;
+mod shell_env;
 pub mod sidecar;
 pub mod workspace;
 
@@ -146,6 +147,12 @@ pub fn run() {
                 data = %db_path.display(),
                 "Helmor started"
             );
+
+            // On macOS, GUI-launched apps only see the minimal system PATH.
+            // Capture the user's login-shell PATH (Homebrew, nvm, pnpm, cargo,
+            // etc.) so every child process — sidecar, git, workspace scripts —
+            // can find developer tools without manual PATH hacks.
+            shell_env::inherit_login_shell_env();
 
             // Resolve bundled Claude Code + Codex CLI resources and publish
             // them to the sidecar via env vars before it ever spawns. The
