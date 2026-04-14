@@ -1,4 +1,4 @@
-import { format } from "date-fns";
+import { formatDistanceToNow } from "date-fns";
 import {
 	AlertCircle,
 	AlertTriangle,
@@ -145,9 +145,12 @@ function MessageTimestamp({ createdAt }: { createdAt?: string }) {
 	const date = new Date(createdAt);
 	if (Number.isNaN(date.getTime())) return null;
 	return (
-		<span className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground/50">
-			{format(date, "HH:mm")}
-		</span>
+		<>
+			<span className="mx-1 text-[11px] text-muted-foreground/40">·</span>
+			<span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+				{formatDistanceToNow(date, { addSuffix: true })}
+			</span>
+		</>
 	);
 }
 
