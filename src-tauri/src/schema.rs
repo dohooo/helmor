@@ -319,7 +319,6 @@ CREATE INDEX IF NOT EXISTS idx_session_messages_turn_id ON session_messages(turn
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_diff_comments_workspace ON diff_comments(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspaces_repository_id ON workspaces(repository_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_repos_root_path ON repos(root_path);
 
 -- Triggers (use CREATE TRIGGER IF NOT EXISTS where supported, otherwise wrapped)
 CREATE TRIGGER IF NOT EXISTS update_repos_updated_at

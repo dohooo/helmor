@@ -27,12 +27,14 @@ type ResizeState = {
 
 type UseWorkspaceInspectorSidebarArgs = {
 	workspaceRootPath?: string | null;
+	workspaceId: string | null;
 	repoId: string | null;
 	workspaceState?: string | null;
 };
 
 export function useWorkspaceInspectorSidebar({
 	workspaceRootPath,
+	workspaceId,
 	repoId,
 	workspaceState,
 }: UseWorkspaceInspectorSidebarArgs) {
@@ -83,8 +85,8 @@ export function useWorkspaceInspectorSidebar({
 	}, [changesHeight]);
 
 	const repoScriptsQuery = useQuery({
-		queryKey: ["repoScripts", repoId],
-		queryFn: () => loadRepoScripts(repoId!),
+		queryKey: ["repoScripts", repoId, workspaceId],
+		queryFn: () => loadRepoScripts(repoId!, workspaceId),
 		enabled: !!repoId,
 		staleTime: 0,
 	});

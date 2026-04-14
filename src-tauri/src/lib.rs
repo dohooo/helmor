@@ -124,11 +124,11 @@ pub fn run() {
         .manage(workspace::scripts::ScriptProcessManager::new())
         .setup(|app| {
             // Ensure data directory structure exists
-            data_dir::ensure_directory_structure().expect("Failed to create Helmor data directory");
+            data_dir::ensure_directory_structure()?;
 
             // Initialize structured logging (must come before any tracing macro call)
-            let logs_dir = data_dir::logs_dir().expect("Failed to resolve logs directory");
-            logging::init(&logs_dir).expect("Failed to initialize logging");
+            let logs_dir = data_dir::logs_dir()?;
+            logging::init(&logs_dir)?;
 
             // Background cleanup: compress old logs, purge > 7 days
             let cleanup_dir = logs_dir;
@@ -140,9 +140,9 @@ pub fn run() {
             }
 
             // Initialize database schema
-            let db_path = data_dir::db_path().expect("Failed to resolve database path");
-            let connection = rusqlite::Connection::open(&db_path).expect("Failed to open database");
-            schema::ensure_schema(&connection).expect("Failed to initialize database schema");
+            let db_path = data_dir::db_path()?;
+            let connection = rusqlite::Connection::open(&db_path)?;
+            schema::ensure_schema(&connection)?;
 
             tracing::info!(
                 mode = data_dir::data_mode_label(),

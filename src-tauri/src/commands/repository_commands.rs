@@ -47,8 +47,11 @@ pub async fn list_repo_remotes(repo_id: String) -> CmdResult<Vec<String>> {
 }
 
 #[tauri::command]
-pub async fn load_repo_scripts(repo_id: String) -> CmdResult<repos::RepoScripts> {
-    run_blocking(move || repos::load_repo_scripts(&repo_id)).await
+pub async fn load_repo_scripts(
+    repo_id: String,
+    workspace_id: Option<String>,
+) -> CmdResult<repos::RepoScripts> {
+    run_blocking(move || repos::load_repo_scripts(&repo_id, workspace_id.as_deref())).await
 }
 
 #[tauri::command]

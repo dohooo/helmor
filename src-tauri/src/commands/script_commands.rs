@@ -17,7 +17,8 @@ pub async fn execute_repo_script(
 ) -> CmdResult<()> {
     let scripts = tauri::async_runtime::spawn_blocking({
         let repo_id = repo_id.clone();
-        move || repos::load_repo_scripts(&repo_id)
+        let ws_id = workspace_id.clone();
+        move || repos::load_repo_scripts(&repo_id, ws_id.as_deref())
     })
     .await
     .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))??;
