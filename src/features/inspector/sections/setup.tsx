@@ -130,7 +130,7 @@ export function SetupTab({
 		<TabsContent
 			value="setup"
 			forceMount
-			className="relative flex min-h-0 flex-1 flex-col data-[state=inactive]:invisible data-[state=inactive]:absolute data-[state=inactive]:inset-0 data-[state=inactive]:pointer-events-none"
+			className="relative flex min-h-0 flex-1 flex-col data-[state=inactive]:invisible data-[state=inactive]:opacity-0 data-[state=inactive]:absolute data-[state=inactive]:inset-0 data-[state=inactive]:pointer-events-none"
 		>
 			{hasRun ? (
 				<>
