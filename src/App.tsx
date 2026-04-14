@@ -62,8 +62,8 @@ import {
 	listenGitBranchChanged,
 	listenGitRefsChanged,
 	openWorkspaceInEditor,
-	prefetchRemoteRefs,
 	setWorkspaceManualStatus,
+	triggerWorkspaceFetch,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "./lib/api";
@@ -713,6 +713,11 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 			const status = options?.fileStatus ?? "M";
 
+			// Background fetch so the next view reflects latest remote state
+			if (selectedWorkspaceId) {
+				triggerWorkspaceFetch(selectedWorkspaceId);
+			}
+
 			setWorkspaceViewMode("editor");
 			setEditorSession({
 				kind: "diff",
@@ -728,6 +733,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			confirmDiscardEditorChanges,
 			editorSession?.path,
 			pushWorkspaceToast,
+			selectedWorkspaceId,
 			workspaceRootPath,
 		],
 	);
@@ -962,6 +968,11 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			selectedSessionIdRef.current = immediateSessionId;
 			setSelectedWorkspaceId(workspaceId);
 			setSelectedSessionId(immediateSessionId);
+
+			if (workspaceId) {
+				triggerWorkspaceFetch(workspaceId);
+			}
+
 			// Session-level completed dots are cleared reactively via the
 			// displayedSessionId effect — only the actually-viewed session
 			// loses its dot, not every session in the workspace.
@@ -1360,11 +1371,11 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 		void import("@tauri-apps/api/event").then(({ listen }) => {
 			void listen("tauri://focus", async () => {
-				// Smart fetch: refresh remote refs for the active workspace
-				// so file tree diffs stay current after terminal pushes.
+				// Smart fetch: refresh target branch for the active workspace
+				// so file tree diffs stay current after the user returns.
 				const wsId = selectedWorkspaceIdRef.current;
 				if (wsId) {
-					prefetchRemoteRefs({ workspaceId: wsId }).catch(() => {});
+					triggerWorkspaceFetch(wsId);
 				}
 
 				try {
