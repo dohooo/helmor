@@ -8,7 +8,6 @@ import {
 	Copy,
 	GitBranch,
 	History,
-	LoaderCircle,
 	Pencil,
 	Plus,
 	RotateCcw,
@@ -16,15 +15,10 @@ import {
 	X,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { BranchPickerPopover } from "@/components/branch-picker";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
 import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
-import {
-	Command,
-	CommandEmpty,
-	CommandItem,
-	CommandList,
-} from "@/components/ui/command";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -32,11 +26,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { HyperText } from "@/components/ui/hyper-text";
 import { Input } from "@/components/ui/input";
-import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "@/components/ui/popover";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
 	Tooltip,
@@ -781,6 +770,7 @@ function displaySessionTitle(session: WorkspaceSessionSummary): string {
 	return "Untitled";
 }
 
+// BranchPicker: thin wrapper around shared BranchPickerPopover with header trigger styling.
 function BranchPicker({
 	currentBranch,
 	displayRemote,
@@ -796,68 +786,25 @@ function BranchPicker({
 	onOpen: () => void;
 	onSelect: (branch: string) => void;
 }) {
-	const [open, setOpen] = useState(false);
-
 	return (
-		<Popover
-			open={open}
-			onOpenChange={(next: boolean) => {
-				setOpen(next);
-				if (next) {
-					onOpen();
-				}
-			}}
+		<BranchPickerPopover
+			currentBranch={currentBranch}
+			branches={branches}
+			loading={loading}
+			onOpen={onOpen}
+			onSelect={onSelect}
 		>
-			<PopoverTrigger asChild>
-				<Button
-					type="button"
-					variant="ghost"
-					size="xs"
-					className="h-6 max-w-[180px] gap-1 rounded-md px-1.5 text-[13px] font-medium text-muted-foreground hover:text-foreground"
-				>
-					<span className="truncate">
-						{displayRemote}/{currentBranch}
-					</span>
-					<ChevronDown data-icon="inline-end" strokeWidth={2} />
-				</Button>
-			</PopoverTrigger>
-			<PopoverContent align="start" className="w-[260px] p-0">
-				<Command className="rounded-lg! p-0.5">
-					<CommandList className="max-h-52">
-						{loading && branches.length === 0 ? (
-							<div className="flex items-center justify-center gap-2 py-5 text-[12px] text-muted-foreground">
-								<LoaderCircle
-									className="size-3.5 animate-spin"
-									strokeWidth={2}
-								/>
-								Loading branches...
-							</div>
-						) : null}
-						<CommandEmpty>No branches found</CommandEmpty>
-						{branches.map((branch) => (
-							<CommandItem
-								key={branch}
-								value={branch}
-								data-checked={branch === currentBranch ? "true" : undefined}
-								onSelect={() => {
-									onSelect(branch);
-									setOpen(false);
-								}}
-								className="rounded-lg text-[12px]"
-							>
-								<span
-									className={cn(
-										"min-w-0 flex-1 truncate",
-										branch === currentBranch && "font-semibold",
-									)}
-								>
-									{branch}
-								</span>
-							</CommandItem>
-						))}
-					</CommandList>
-				</Command>
-			</PopoverContent>
-		</Popover>
+			<Button
+				type="button"
+				variant="ghost"
+				size="xs"
+				className="h-6 max-w-[180px] gap-1 rounded-md px-1.5 text-[13px] font-medium text-muted-foreground hover:text-foreground"
+			>
+				<span className="truncate">
+					{displayRemote}/{currentBranch}
+				</span>
+				<ChevronDown data-icon="inline-end" strokeWidth={2} />
+			</Button>
+		</BranchPickerPopover>
 	);
 }

@@ -1687,19 +1687,21 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 										{!sidebarCollapsed && (
 											<aside
 												aria-label="Workspace sidebar"
-												className="relative h-full shrink-0 overflow-hidden bg-sidebar"
+												className="relative flex h-full shrink-0 flex-col overflow-hidden bg-sidebar"
 												style={{ width: `${sidebarWidth}px` }}
 											>
-												<WorkspacesSidebarContainer
-													selectedWorkspaceId={selectedWorkspaceId}
-													sendingWorkspaceIds={sendingWorkspaceIds}
-													completedWorkspaceIds={completedWorkspaceIds}
-													interactionRequiredWorkspaceIds={
-														interactionRequiredWorkspaceIds
-													}
-													onSelectWorkspace={handleSelectWorkspace}
-													pushWorkspaceToast={pushWorkspaceToast}
-												/>
+												<div className="min-h-0 flex-1">
+													<WorkspacesSidebarContainer
+														selectedWorkspaceId={selectedWorkspaceId}
+														sendingWorkspaceIds={sendingWorkspaceIds}
+														completedWorkspaceIds={completedWorkspaceIds}
+														interactionRequiredWorkspaceIds={
+															interactionRequiredWorkspaceIds
+														}
+														onSelectWorkspace={handleSelectWorkspace}
+														pushWorkspaceToast={pushWorkspaceToast}
+													/>
+												</div>
 												<Button
 													aria-label="Collapse sidebar"
 													onClick={() => setSidebarCollapsed(true)}
@@ -1712,7 +1714,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 														strokeWidth={1.8}
 													/>
 												</Button>
-												<div className="absolute inset-x-3 bottom-3 z-20 flex items-center justify-between">
+												<div className="flex shrink-0 items-center justify-between px-3 pb-3 pt-1">
 													<SettingsButton onClick={onOpenSettings} />
 													{githubIdentityState.status === "connected" ? (
 														<GithubStatusMenu

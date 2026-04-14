@@ -72,7 +72,7 @@ const EMPTY_HEADER_HEIGHT = 24; // tighter header for empty groups
 const ROW_HEIGHT = 32; // 30px (h-7.5) + 2px gap
 const GROUP_GAP = 8; // tighter gap between populated groups
 const EMPTY_GROUP_GAP = 8; // tighter spacing around empty groups
-const BOTTOM_PADDING = 24; // pb-6
+const BOTTOM_PADDING = 8;
 
 function getGroupHeaderHeight(hasRows: boolean) {
 	return hasRows ? HEADER_HEIGHT : EMPTY_HEADER_HEIGHT;
@@ -447,7 +447,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	);
 
 	return (
-		<div className="flex h-full min-h-0 flex-col overflow-hidden pb-4">
+		<div className="flex h-full min-h-0 flex-col overflow-hidden">
 			<div
 				data-slot="window-safe-top"
 				className="flex h-9 shrink-0 items-center pr-3"
