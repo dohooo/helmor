@@ -10,11 +10,12 @@ pub async fn read_editor_file(path: String) -> CmdResult<editor_files::EditorFil
 }
 
 #[tauri::command]
-pub async fn read_file_git_original(
+pub async fn read_file_at_ref(
     workspace_root_path: String,
     file_path: String,
+    git_ref: String,
 ) -> CmdResult<Option<String>> {
-    run_blocking(move || editor_files::read_file_git_original(&workspace_root_path, &file_path))
+    run_blocking(move || editor_files::read_file_at_ref(&workspace_root_path, &file_path, &git_ref))
         .await
 }
 

@@ -868,13 +868,15 @@ export async function readEditorFile(
 	}
 }
 
-export async function readFileGitOriginal(
+export async function readFileAtRef(
 	workspaceRootPath: string,
 	filePath: string,
+	gitRef: string,
 ): Promise<string | null> {
-	return await invoke<string | null>("read_file_git_original", {
+	return await invoke<string | null>("read_file_at_ref", {
 		workspaceRootPath,
 		filePath,
+		gitRef,
 	});
 }
 

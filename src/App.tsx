@@ -73,7 +73,7 @@ import {
 	resolveComposerInsertTarget,
 } from "./lib/composer-insert";
 import { ComposerInsertProvider } from "./lib/composer-insert-context";
-import type { EditorSessionState } from "./lib/editor-session";
+import type { DiffOpenOptions, EditorSessionState } from "./lib/editor-session";
 import { isPathWithinRoot } from "./lib/editor-session";
 import {
 	archivedWorkspacesQueryOptions,
@@ -694,7 +694,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	);
 
 	const handleOpenEditorFile = useCallback(
-		(path: string) => {
+		(path: string, options?: DiffOpenOptions) => {
 			if (!workspaceRootPath) {
 				pushWorkspaceToast(
 					"Open a workspace with a resolved root path before using the in-app editor.",
@@ -711,12 +711,17 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 				return;
 			}
 
+			const status = options?.fileStatus ?? "M";
+
 			setWorkspaceViewMode("editor");
 			setEditorSession({
 				kind: "diff",
 				path,
-				inline: false,
+				inline: status !== "M",
 				dirty: false,
+				fileStatus: status,
+				originalRef: options?.originalRef,
+				modifiedRef: options?.modifiedRef,
 			});
 		},
 		[
