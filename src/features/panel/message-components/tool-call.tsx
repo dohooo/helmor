@@ -126,24 +126,31 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 				{info.action}
 			</span>
 			{info.file ? (
-				<>
-					<img
-						src={getMaterialFileIcon(info.file)}
-						alt=""
-						className="size-4 shrink-0"
+				hasDiff ? (
+					<EditDiffTrigger
+						file={info.file}
+						diffAdd={info.diffAdd}
+						diffDel={info.diffDel}
+						oldStr={oldStr}
+						newStr={newStr}
+						icon={
+							<img
+								src={getMaterialFileIcon(info.file)}
+								alt=""
+								className="size-4 shrink-0"
+							/>
+						}
 					/>
-					{hasDiff ? (
-						<EditDiffTrigger
-							file={info.file}
-							diffAdd={info.diffAdd}
-							diffDel={info.diffDel}
-							oldStr={oldStr}
-							newStr={newStr}
+				) : (
+					<>
+						<img
+							src={getMaterialFileIcon(info.file)}
+							alt=""
+							className="size-4 shrink-0"
 						/>
-					) : (
 						<span className="truncate text-muted-foreground">{info.file}</span>
-					)}
-				</>
+					</>
+				)
 			) : null}
 			{!hasDiff && (info.diffAdd != null || info.diffDel != null) ? (
 				<span className="flex items-center gap-1 text-[11px]">

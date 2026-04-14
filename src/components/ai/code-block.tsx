@@ -140,6 +140,15 @@ export const CodeBlock = ({
 		};
 	}, [code, resolvedLanguage, showLineNumbers]);
 
+	const codePadding = isPlain
+		? "[&>pre]:p-3.5"
+		: "[&>pre]:px-3.5 [&>pre]:pb-3.5 [&>pre]:pt-1";
+	const wrapClasses = wrapLines
+		? "overflow-x-hidden overflow-y-hidden [&>pre]:whitespace-pre-wrap [&>pre]:break-words [&_code]:whitespace-pre-wrap [&_code]:break-words"
+		: "overflow-x-auto overflow-y-hidden [&>pre]:min-w-full";
+	const codeBase =
+		"[&>pre]:m-0 [&>pre]:bg-transparent! [&>pre]:text-[12px] [&>pre]:leading-5 [&>pre]:text-foreground! [&_code]:font-mono [&_code]:text-[12px]";
+
 	return (
 		<CodeBlockContext.Provider value={{ code }}>
 			<div
@@ -152,29 +161,30 @@ export const CodeBlock = ({
 				{...props}
 			>
 				{isPlain ? null : (
-					<div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
-						<span className="truncate font-mono text-[10.5px] tracking-wide text-muted-foreground uppercase">
-							{language || "code"}
-						</span>
-						<div className="flex items-center gap-1">{children}</div>
+					<div className="flex items-center justify-between gap-2 px-3 pt-1.5">
+						{language ? (
+							<span className="truncate font-mono text-[10px] leading-none tracking-wide text-muted-foreground/50 uppercase select-none">
+								{language}
+							</span>
+						) : (
+							<span />
+						)}
+						<div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+							{children}
+						</div>
 					</div>
 				)}
 				<div className="relative">
 					<div
-						className={cn(
-							"px-0 py-0 dark:hidden [&>pre]:m-0 [&>pre]:bg-transparent! [&>pre]:p-3.5 [&>pre]:text-[12px] [&>pre]:leading-5 [&>pre]:text-foreground! [&_code]:font-mono [&_code]:text-[12px]",
-							wrapLines
-								? "overflow-x-hidden overflow-y-hidden [&>pre]:whitespace-pre-wrap [&>pre]:break-words [&_code]:whitespace-pre-wrap [&_code]:break-words"
-								: "overflow-x-auto overflow-y-hidden [&>pre]:min-w-full",
-						)}
+						className={cn(codeBase, codePadding, wrapClasses, "dark:hidden")}
 						dangerouslySetInnerHTML={{ __html: lightHtml }}
 					/>
 					<div
 						className={cn(
-							"hidden px-0 py-0 dark:block [&>pre]:m-0 [&>pre]:bg-transparent! [&>pre]:p-3.5 [&>pre]:text-[12px] [&>pre]:leading-5 [&>pre]:text-foreground! [&_code]:font-mono [&_code]:text-[12px]",
-							wrapLines
-								? "overflow-x-hidden overflow-y-hidden [&>pre]:whitespace-pre-wrap [&>pre]:break-words [&_code]:whitespace-pre-wrap [&_code]:break-words"
-								: "overflow-x-auto overflow-y-hidden [&>pre]:min-w-full",
+							codeBase,
+							codePadding,
+							wrapClasses,
+							"hidden dark:block",
 						)}
 						dangerouslySetInnerHTML={{ __html: darkHtml }}
 					/>
@@ -212,7 +222,7 @@ export const CodeBlockCopyButton = ({
 	return (
 		<Button
 			className={cn(
-				"h-7 w-7 rounded-md border border-border/60 bg-background/70 text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+				"h-6 w-6 rounded-md text-muted-foreground/50 hover:bg-accent/60 hover:text-foreground",
 				className,
 			)}
 			onClick={() => {

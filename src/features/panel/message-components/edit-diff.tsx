@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { type ReactNode, useCallback, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Separator } from "@/components/ui/separator";
 
@@ -8,12 +8,14 @@ export function EditDiffTrigger({
 	diffDel,
 	oldStr,
 	newStr,
+	icon,
 }: {
 	file: string;
 	diffAdd?: number;
 	diffDel?: number;
 	oldStr: string | null;
 	newStr: string | null;
+	icon?: ReactNode;
 }) {
 	const triggerRef = useRef<HTMLSpanElement>(null);
 	const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -41,6 +43,7 @@ export function EditDiffTrigger({
 				onMouseLeave={hideDelayed}
 				className="inline-flex cursor-default items-center gap-1.5 rounded border border-border/60 px-1.5 py-0.5 transition-colors hover:border-muted-foreground/40 hover:bg-accent/40"
 			>
+				{icon}
 				<span className="truncate text-muted-foreground">{file}</span>
 				{diffAdd != null || diffDel != null ? (
 					<span className="flex items-center gap-1 text-[11px]">
