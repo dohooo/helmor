@@ -1,18 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-	Check,
-	ChevronDown,
-	GitBranch,
-	Loader2,
-	LoaderCircle,
-	Trash2,
-} from "lucide-react";
+import { Check, ChevronDown, GitBranch, Loader2, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { BranchPickerPopover } from "@/components/branch-picker";
 import { Button } from "@/components/ui/button";
 import {
 	Command,
 	CommandEmpty,
-	CommandInput,
 	CommandItem,
 	CommandList,
 } from "@/components/ui/command";
@@ -58,7 +51,6 @@ export function RepositorySettingsPanel({
 }) {
 	const [branches, setBranches] = useState<string[]>([]);
 	const [loading, setLoading] = useState(false);
-	const [open, setOpen] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
 	const currentBranch = repo.defaultBranch ?? "main";
@@ -82,7 +74,6 @@ export function RepositorySettingsPanel({
 	const handleSelect = useCallback(
 		(branch: string) => {
 			if (branch === currentBranch) return;
-			setOpen(false);
 			setError(null);
 			void updateRepositoryDefaultBranch(repo.id, branch).then(
 				onRepoSettingsChanged,
@@ -200,14 +191,17 @@ export function RepositorySettingsPanel({
 					Each workspace is an isolated copy of your codebase.
 				</div>
 				<div className="mt-3">
-					<Popover
-						open={open}
-						onOpenChange={(next: boolean) => {
-							setOpen(next);
-							if (next) handleOpen();
-						}}
+					<BranchPickerPopover
+						currentBranch={currentBranch}
+						branches={branches}
+						loading={loading}
+						onOpen={handleOpen}
+						onSelect={handleSelect}
 					>
-						<PopoverTrigger className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-[13px] font-medium text-app-foreground transition-colors hover:border-app-border-strong">
+						<button
+							type="button"
+							className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-[13px] font-medium text-app-foreground transition-colors hover:border-app-border-strong"
+						>
 							<GitBranch
 								className="size-3.5 text-app-foreground-soft"
 								strokeWidth={1.8}
@@ -219,45 +213,8 @@ export function RepositorySettingsPanel({
 								className="size-3 shrink-0 text-app-muted"
 								strokeWidth={2}
 							/>
-						</PopoverTrigger>
-						<PopoverContent align="start" className="w-[280px] p-0">
-							<Command className="rounded-lg! p-0.5">
-								<CommandInput placeholder="Search branches..." />
-								<CommandList className="max-h-52">
-									{loading && branches.length === 0 ? (
-										<div className="flex items-center justify-center gap-2 py-5 text-[12px] text-app-muted">
-											<LoaderCircle
-												className="size-3.5 animate-spin"
-												strokeWidth={2}
-											/>
-											Loading branches...
-										</div>
-									) : null}
-									<CommandEmpty>No branches found</CommandEmpty>
-									{branches.map((branch) => (
-										<CommandItem
-											key={branch}
-											value={branch}
-											onSelect={() => handleSelect(branch)}
-											className="flex items-center justify-between gap-2 px-1.5 py-1 text-[12px]"
-										>
-											<span
-												className={cn(
-													"truncate",
-													branch === currentBranch && "font-semibold",
-												)}
-											>
-												{branch}
-											</span>
-											{branch === currentBranch && (
-												<Check className="size-3.5 shrink-0" strokeWidth={2} />
-											)}
-										</CommandItem>
-									))}
-								</CommandList>
-							</Command>
-						</PopoverContent>
-					</Popover>
+						</button>
+					</BranchPickerPopover>
 					{error && <p className="mt-2 text-[12px] text-red-400/90">{error}</p>}
 				</div>
 			</div>
