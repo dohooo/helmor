@@ -14,17 +14,25 @@ export type TerminalHandle = {
 	dispose: () => void;
 };
 
-/** Read --terminal-* CSS variables and build an xterm ITheme. */
+/** Read --terminal-* and --foreground CSS variables and build an xterm ITheme. */
 function resolveTerminalTheme(): ITheme {
 	const s = getComputedStyle(document.documentElement);
 	const v = (suffix: string) =>
 		s.getPropertyValue(`--terminal-${suffix}`).trim();
+
+	// Match the app's global scrollbar colors (foreground @ 18%/30%/40%).
+	const fg = s.getPropertyValue("--foreground").trim();
+	const mix = (pct: number) =>
+		`color-mix(in oklch, ${fg} ${pct}%, transparent)`;
 
 	return {
 		background: v("background"),
 		foreground: v("foreground"),
 		cursor: v("cursor"),
 		selectionBackground: v("selection"),
+		scrollbarSliderBackground: mix(18),
+		scrollbarSliderHoverBackground: mix(30),
+		scrollbarSliderActiveBackground: mix(40),
 		black: v("black"),
 		red: v("red"),
 		green: v("green"),
@@ -128,7 +136,7 @@ export function TerminalOutput({
 			style={{
 				width: "100%",
 				height: "100%",
-				padding: 12,
+				padding: "12px 2px 12px 12px",
 				backgroundColor: "var(--terminal-background)",
 			}}
 		>

@@ -37,7 +37,6 @@ export function RunTab({
 	const [status, setStatus] = useState<ScriptStatus>("idle");
 	const [hasRun, setHasRun] = useState(false);
 
-	// Attach to store on mount / when workspaceId changes; replay buffered output.
 	useEffect(() => {
 		if (!workspaceId) return;
 
@@ -49,15 +48,18 @@ export function RunTab({
 		if (existing) {
 			setHasRun(true);
 			setStatus(existing.status);
-			requestAnimationFrame(() => {
-				termRef.current?.clear();
-				for (const chunk of existing.chunks) {
-					termRef.current?.write(chunk);
-				}
-			});
+			const replay = () => {
+				const t = termRef.current;
+				if (!t) return;
+				t.clear();
+				for (const chunk of existing.chunks) t.write(chunk);
+			};
+			if (termRef.current) replay();
+			else requestAnimationFrame(replay);
 		} else {
 			setHasRun(false);
 			setStatus("idle");
+			termRef.current?.clear();
 		}
 
 		return () => detach(workspaceId, "run");
@@ -86,10 +88,38 @@ export function RunTab({
 
 	const hasScript = !!runScript?.trim();
 
-	// Empty state: no script configured
-	if (!hasScript && !hasRun) {
-		return (
-			<TabsContent value="run" className="flex-1 min-h-0">
+	return (
+		<TabsContent
+			value="run"
+			forceMount
+			className="relative flex min-h-0 flex-1 flex-col data-[state=inactive]:invisible data-[state=inactive]:absolute data-[state=inactive]:inset-0 data-[state=inactive]:pointer-events-none"
+		>
+			{hasRun ? (
+				<>
+					<div className="min-h-0 flex-1">
+						<TerminalOutput terminalRef={termRef} className="h-full" />
+					</div>
+
+					{(status === "running" || status === "exited") && (
+						<div className="absolute bottom-3 right-4">
+							<Button
+								variant={status === "running" ? "destructive" : "secondary"}
+								size="sm"
+								className="border border-border/40 text-[12px] shadow-sm backdrop-blur-sm transition-none"
+								onClick={status === "running" ? handleStop : handleRun}
+								disabled={status === "exited" && !hasScript}
+							>
+								{status === "running" ? (
+									<Square className="size-3" strokeWidth={2} />
+								) : (
+									<RotateCcw className="size-3" strokeWidth={2} />
+								)}
+								{status === "running" ? "Stop" : "Rerun"}
+							</Button>
+						</div>
+					)}
+				</>
+			) : !hasScript ? (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
 					<Button
 						variant="outline"
@@ -104,14 +134,7 @@ export function RunTab({
 						Run tests or a development server to test changes in this workspace.
 					</p>
 				</div>
-			</TabsContent>
-		);
-	}
-
-	// Ready state before first run
-	if (!hasRun) {
-		return (
-			<TabsContent value="run" className="flex-1 min-h-0">
+			) : (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
 					<p className="text-[13px] text-muted-foreground">
 						No run script output
@@ -127,35 +150,6 @@ export function RunTab({
 					>
 						<Play className="size-3" strokeWidth={2} />
 						Run
-					</Button>
-				</div>
-			</TabsContent>
-		);
-	}
-
-	return (
-		<TabsContent value="run" className="relative flex min-h-0 flex-1 flex-col">
-			{/* Terminal */}
-			<div className="min-h-0 flex-1">
-				<TerminalOutput terminalRef={termRef} className="h-full" />
-			</div>
-
-			{/* Floating action button */}
-			{(status === "running" || status === "exited") && (
-				<div className="absolute bottom-3 right-3">
-					<Button
-						variant={status === "running" ? "destructive" : "secondary"}
-						size="sm"
-						className="text-[12px] transition-none"
-						onClick={status === "running" ? handleStop : handleRun}
-						disabled={status === "exited" && !hasScript}
-					>
-						{status === "running" ? (
-							<Square className="size-3" strokeWidth={2} />
-						) : (
-							<RotateCcw className="size-3" strokeWidth={2} />
-						)}
-						{status === "running" ? "Stop" : "Rerun"}
 					</Button>
 				</div>
 			)}
