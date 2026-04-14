@@ -527,7 +527,8 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 										const isActive =
 											isActivelySending && !isInteractionRequired;
 										const hasStatusDot =
-											isInteractionRequired || hasUnread || isCompleted;
+											isInteractionRequired ||
+											(!selected && (hasUnread || isCompleted));
 										const isEditing = editingSessionId === session.id;
 
 										return (
