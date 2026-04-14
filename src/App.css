@@ -244,6 +244,21 @@ body {
 	background: transparent;
 }
 
+/* xterm: custom scrollbar shape to match app style */
+.xterm .xterm-scrollable-element > .scrollbar {
+	width: 8px !important;
+}
+
+.xterm .xterm-scrollable-element > .scrollbar > .slider {
+	border-radius: 999px !important;
+	left: 2px !important;
+	width: calc(100% - 4px) !important;
+}
+
+.xterm .xterm-scrollable-element > .shadow.top {
+	display: none !important;
+}
+
 .scrollbar-none {
 	scrollbar-width: none;
 }

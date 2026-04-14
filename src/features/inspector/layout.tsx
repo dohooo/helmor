@@ -111,7 +111,7 @@ export function InspectorTabsSection({
 					{open && (
 						<div
 							aria-label="Inspector tabs body"
-							className="flex min-h-0 flex-1 flex-col bg-sidebar"
+							className="relative flex min-h-0 flex-1 flex-col bg-sidebar"
 						>
 							{children}
 						</div>

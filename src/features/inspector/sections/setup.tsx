@@ -43,7 +43,6 @@ export function SetupTab({
 
 	const hasScript = !!setupScript?.trim();
 
-	// Attach to store on mount / when workspaceId changes; replay buffered output.
 	useEffect(() => {
 		if (!workspaceId) return;
 
@@ -51,7 +50,6 @@ export function SetupTab({
 			onChunk: (data) => termRef.current?.write(data),
 			onStatusChange: (s) => {
 				setStatus(s);
-				// Invalidate workspace detail when setup completes successfully.
 				if (s === "exited") {
 					const state = getScriptState(workspaceId, "setup");
 					if (state?.exitCode === 0) {
@@ -66,17 +64,21 @@ export function SetupTab({
 		if (existing) {
 			setHasRun(true);
 			setStatus(existing.status);
-			requestAnimationFrame(() => {
-				termRef.current?.clear();
-				for (const chunk of existing.chunks) {
-					termRef.current?.write(chunk);
-				}
-			});
+			const replay = () => {
+				const t = termRef.current;
+				if (!t) return;
+				t.clear();
+				for (const chunk of existing.chunks) t.write(chunk);
+			};
+			// Terminal already mounted → replay now; otherwise wait one frame
+			// for React to flush setHasRun(true) and mount the terminal.
+			if (termRef.current) replay();
+			else requestAnimationFrame(replay);
 		} else {
 			setHasRun(false);
 			setStatus("idle");
-			// Reset auto-run guard for this new workspace.
 			hasAutoRunRef.current = false;
+			termRef.current?.clear();
 		}
 
 		return () => detach(workspaceId, "setup");
@@ -124,10 +126,38 @@ export function SetupTab({
 		}
 	}, [workspaceState, scriptsLoaded, hasScript, workspaceId, queryClient]);
 
-	// Empty state: no script configured
-	if (!hasScript && !hasRun) {
-		return (
-			<TabsContent value="setup" className="flex-1 min-h-0">
+	return (
+		<TabsContent
+			value="setup"
+			forceMount
+			className="relative flex min-h-0 flex-1 flex-col data-[state=inactive]:invisible data-[state=inactive]:absolute data-[state=inactive]:inset-0 data-[state=inactive]:pointer-events-none"
+		>
+			{hasRun ? (
+				<>
+					<div className="min-h-0 flex-1">
+						<TerminalOutput terminalRef={termRef} className="h-full" />
+					</div>
+
+					{(status === "running" || status === "exited") && (
+						<div className="absolute bottom-3 right-4">
+							<Button
+								variant={status === "running" ? "destructive" : "secondary"}
+								size="sm"
+								className="border border-border/40 text-[12px] shadow-sm backdrop-blur-sm transition-none"
+								onClick={status === "running" ? handleStop : handleRun}
+								disabled={status === "exited" && !hasScript}
+							>
+								{status === "running" ? (
+									<Square className="size-3" strokeWidth={2} />
+								) : (
+									<RotateCcw className="size-3" strokeWidth={2} />
+								)}
+								{status === "running" ? "Stop" : "Rerun setup"}
+							</Button>
+						</div>
+					)}
+				</>
+			) : !hasScript ? (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
 					<p className="text-[13px] font-medium text-muted-foreground">
 						No setup script configured
@@ -145,14 +175,7 @@ export function SetupTab({
 						Open settings
 					</Button>
 				</div>
-			</TabsContent>
-		);
-	}
-
-	// Ready state before first run
-	if (!hasRun) {
-		return (
-			<TabsContent value="setup" className="flex-1 min-h-0">
+			) : (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
 					<p className="text-[13px] text-muted-foreground">
 						No setup script output
@@ -168,38 +191,6 @@ export function SetupTab({
 					>
 						<Play className="size-3" strokeWidth={2} />
 						Run setup
-					</Button>
-				</div>
-			</TabsContent>
-		);
-	}
-
-	return (
-		<TabsContent
-			value="setup"
-			className="relative flex min-h-0 flex-1 flex-col"
-		>
-			{/* Terminal */}
-			<div className="min-h-0 flex-1">
-				<TerminalOutput terminalRef={termRef} className="h-full" />
-			</div>
-
-			{/* Floating action button */}
-			{(status === "running" || status === "exited") && (
-				<div className="absolute bottom-3 right-3">
-					<Button
-						variant={status === "running" ? "destructive" : "secondary"}
-						size="sm"
-						className="text-[12px] transition-none"
-						onClick={status === "running" ? handleStop : handleRun}
-						disabled={status === "exited" && !hasScript}
-					>
-						{status === "running" ? (
-							<Square className="size-3" strokeWidth={2} />
-						) : (
-							<RotateCcw className="size-3" strokeWidth={2} />
-						)}
-						{status === "running" ? "Stop" : "Rerun setup"}
 					</Button>
 				</div>
 			)}
