@@ -67,6 +67,7 @@ export function WorkspaceInspectorSidebar({
 		tabsWrapperRef,
 	} = useWorkspaceInspectorSidebar({
 		workspaceRootPath,
+		workspaceId: workspaceId ?? null,
 		repoId: repoId ?? null,
 		workspaceState,
 	});
