@@ -27,7 +27,9 @@
 		"dev:cli:build": "cd src-tauri && cargo build --bin helmor-cli",
 		"dev:cli:install": "cd src-tauri && cargo build --bin helmor-cli && cp target/debug/helmor-cli /usr/local/bin/helmor && cp ../sidecar/dist/helmor-sidecar /usr/local/bin/helmor-sidecar && echo 'Installed helmor + helmor-sidecar to /usr/local/bin/'",
 		"postinstall": "cd sidecar && bun install && node -e \"const{execSync}=require('child_process');try{execSync('sccache --version',{stdio:'pipe'})}catch{console.error('\\n\\x1b[33m⚠  sccache is not installed.\\x1b[0m Rust builds will be slower without cross-worktree compilation cache.\\n\\n  Install it:\\n\\n    brew install sccache\\n');process.exit(1)}\"",
-		"prepare": "husky"
+		"prepare": "husky",
+		"storybook": "storybook dev -p 6006",
+		"build-storybook": "storybook build"
 	},
 	"dependencies": {
 		"@chenglou/pretext": "0.0.4",
@@ -105,7 +107,17 @@
 		"tailwindcss": "4.2.2",
 		"typescript": "6.0.2",
 		"vite": "8.0.3",
-		"vitest": "4.1.2"
+		"vitest": "4.1.2",
+		"storybook": "^10.3.5",
+		"@storybook/react-vite": "^10.3.5",
+		"@chromatic-com/storybook": "^5.1.2",
+		"@storybook/addon-vitest": "^10.3.5",
+		"@storybook/addon-a11y": "^10.3.5",
+		"@storybook/addon-docs": "^10.3.5",
+		"@storybook/addon-onboarding": "^10.3.5",
+		"playwright": "^1.59.1",
+		"@vitest/browser-playwright": "4.1.2",
+		"@vitest/coverage-v8": "4.1.2"
 	},
 	"lint-staged": {
 		"*.{ts,tsx,js,jsx,json,css}": [

@@ -42,3 +42,6 @@ docs/perf/iter*-after-switch.png
 # whitelisted above the broader pattern.
 docs/perf/*-trace.json
 docs/perf/goal*-style-*.json
+
+*storybook.log
+storybook-static

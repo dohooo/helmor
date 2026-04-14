@@ -18,10 +18,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-	type CommitButtonState,
-	WorkspaceCommitButton,
-	type WorkspaceCommitButtonMode,
+import type {
+	CommitButtonState,
+	WorkspaceCommitButtonMode,
 } from "@/features/commit/button";
 import {
 	discardWorkspaceFile,
@@ -32,11 +31,7 @@ import {
 import type { InspectorFileItem } from "@/lib/editor-session";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
-import {
-	getGitSectionHeaderHighlightClass,
-	INSPECTOR_SECTION_HEADER_CLASS,
-	INSPECTOR_SECTION_TITLE_CLASS,
-} from "../layout";
+import { GitSectionHeader } from "./git-section-header";
 
 const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
 	M: "text-yellow-500",
@@ -225,9 +220,6 @@ export function ChangesSection({
 		[invalidateChanges, workspaceRootPath],
 	);
 
-	const gitHeaderHighlightClass =
-		getGitSectionHeaderHighlightClass(commitButtonMode);
-
 	const handleCommitButtonClick = useCallback(async () => {
 		if (!onCommitAction) {
 			return;
@@ -241,44 +233,14 @@ export function ChangesSection({
 			className="flex min-h-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar"
 			style={{ height: `${bodyHeight}px` }}
 		>
-			<div
-				className={cn(INSPECTOR_SECTION_HEADER_CLASS, gitHeaderHighlightClass)}
-			>
-				<div className="flex min-w-0 items-center gap-1.5">
-					{!prInfo ? (
-						<span className={INSPECTOR_SECTION_TITLE_CLASS}>Git</span>
-					) : null}
-					{prInfo && (
-						<Button
-							type="button"
-							variant="link"
-							className={cn(
-								"h-9 self-center rounded-none px-0 py-0 pt-[4px] text-[11px] font-semibold leading-none tracking-[0.01em] no-underline",
-								prInfo.isMerged
-									? "text-primary hover:text-primary"
-									: prInfo.state === "OPEN"
-										? "text-[var(--workspace-pr-open-accent)] hover:text-[var(--workspace-pr-open-accent)]"
-										: "text-muted-foreground hover:text-foreground",
-							)}
-							onClick={() => {
-								void openUrl(prInfo.url);
-							}}
-						>
-							PR #{prInfo.number}
-						</Button>
-					)}
-				</div>
-				{(hasChanges ||
-					commitButtonState === "busy" ||
-					commitButtonMode !== "create-pr") && (
-					<WorkspaceCommitButton
-						mode={commitButtonMode}
-						state={commitButtonState}
-						className="my-0.5 ml-auto"
-						onCommit={handleCommitButtonClick}
-					/>
-				)}
-			</div>
+			<GitSectionHeader
+				commitButtonMode={commitButtonMode}
+				commitButtonState={commitButtonState}
+				prInfo={prInfo}
+				hasChanges={hasChanges}
+				onPrClick={prInfo ? () => void openUrl(prInfo.url) : undefined}
+				onCommit={handleCommitButtonClick}
+			/>
 
 			<ScrollArea
 				aria-label="Changes panel body"
