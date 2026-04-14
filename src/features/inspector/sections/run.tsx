@@ -49,9 +49,8 @@ export function RunTab({
 		if (existing) {
 			setHasRun(true);
 			setStatus(existing.status);
-			// Replay buffered chunks into a fresh terminal on next frame
-			// (terminal mounts asynchronously).
 			requestAnimationFrame(() => {
+				termRef.current?.clear();
 				for (const chunk of existing.chunks) {
 					termRef.current?.write(chunk);
 				}

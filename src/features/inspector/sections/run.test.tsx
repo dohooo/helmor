@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Tabs } from "@/components/ui/tabs";
 import { renderWithProviders } from "@/test/render-with-providers";
+import { _resetForTesting } from "../script-store";
 import { RunTab } from "./run";
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
@@ -55,6 +56,7 @@ describe("RunTab", () => {
 	});
 
 	afterEach(() => {
+		_resetForTesting();
 		vi.restoreAllMocks();
 		cleanup();
 	});

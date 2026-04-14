@@ -67,6 +67,7 @@ export function SetupTab({
 			setHasRun(true);
 			setStatus(existing.status);
 			requestAnimationFrame(() => {
+				termRef.current?.clear();
 				for (const chunk of existing.chunks) {
 					termRef.current?.write(chunk);
 				}

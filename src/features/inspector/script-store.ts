@@ -7,15 +7,15 @@ type Listener = {
 	onStatusChange: (status: ScriptStatus) => void;
 };
 
-type ScriptEntry = {
+export type ScriptEntry = {
 	chunks: string[];
 	status: ScriptStatus;
 	exitCode: number | null;
-	listener: Listener | null;
 };
 
-/** Module-level store — survives React mount/unmount cycles. */
+/** Module-level stores — survive React mount/unmount cycles. */
 const entries = new Map<string, ScriptEntry>();
+const listeners = new Map<string, Listener>();
 
 function key(workspaceId: string, scriptType: string) {
 	return `${workspaceId}:${scriptType}`;
@@ -32,22 +32,19 @@ export function startScript(
 ) {
 	const k = key(workspaceId, scriptType);
 
-	// If there's already a running entry, its output will be replaced.
 	const entry: ScriptEntry = {
 		chunks: [],
 		status: "running",
 		exitCode: null,
-		listener: entries.get(k)?.listener ?? null,
 	};
 	entries.set(k, entry);
 
-	entry.listener?.onStatusChange("running");
+	listeners.get(k)?.onStatusChange("running");
 
 	executeRepoScript(
 		repoId,
 		scriptType,
 		(event: ScriptEvent) => {
-			// Guard: entry may have been replaced by a new run.
 			if (entries.get(k) !== entry) return;
 
 			switch (event.type) {
@@ -56,19 +53,19 @@ export function startScript(
 				case "stdout":
 				case "stderr":
 					entry.chunks.push(event.data);
-					entry.listener?.onChunk(event.data);
+					listeners.get(k)?.onChunk(event.data);
 					break;
 				case "exited":
 					entry.status = "exited";
 					entry.exitCode = event.code;
-					entry.listener?.onStatusChange("exited");
+					listeners.get(k)?.onStatusChange("exited");
 					break;
 				case "error": {
 					const msg = `\r\n\x1b[31m${event.message}\x1b[0m\r\n`;
 					entry.chunks.push(msg);
 					entry.status = "exited";
-					entry.listener?.onChunk(msg);
-					entry.listener?.onStatusChange("exited");
+					listeners.get(k)?.onChunk(msg);
+					listeners.get(k)?.onStatusChange("exited");
 					break;
 				}
 			}
@@ -79,8 +76,8 @@ export function startScript(
 		const msg = `\r\n\x1b[31mFailed to start: ${err}\x1b[0m\r\n`;
 		entry.chunks.push(msg);
 		entry.status = "exited";
-		entry.listener?.onChunk(msg);
-		entry.listener?.onStatusChange("exited");
+		listeners.get(k)?.onChunk(msg);
+		listeners.get(k)?.onStatusChange("exited");
 	});
 }
 
@@ -92,25 +89,23 @@ export function stopScript(
 	void stopRepoScript(repoId, scriptType, workspaceId);
 }
 
-/** Attach a live listener. Returns current state for replay, or null. */
+/** Attach a live listener. Returns current entry for replay, or null. */
 export function attach(
 	workspaceId: string,
 	scriptType: string,
 	listener: Listener,
 ): ScriptEntry | null {
-	const k = key(workspaceId, scriptType);
-	const entry = entries.get(k);
-	if (entry) {
-		entry.listener = listener;
-		return entry;
-	}
-	return null;
+	listeners.set(key(workspaceId, scriptType), listener);
+	return entries.get(key(workspaceId, scriptType)) ?? null;
 }
 
 /** Detach the live listener (entry stays alive). */
 export function detach(workspaceId: string, scriptType: string) {
-	const entry = entries.get(key(workspaceId, scriptType));
-	if (entry) {
-		entry.listener = null;
-	}
+	listeners.delete(key(workspaceId, scriptType));
+}
+
+/** Reset all state. Test-only. */
+export function _resetForTesting() {
+	entries.clear();
+	listeners.clear();
 }
