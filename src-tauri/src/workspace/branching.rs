@@ -310,6 +310,21 @@ pub struct PrefetchRemoteRefsResponse {
     pub fetched: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SyncWorkspaceTargetOutcome {
+    Updated,
+    AlreadyUpToDate,
+    Conflict,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncWorkspaceTargetResponse {
+    pub outcome: SyncWorkspaceTargetOutcome,
+    pub target_branch: String,
+}
+
 pub fn prefetch_remote_refs(
     workspace_id: Option<&str>,
     repo_id: Option<&str>,
@@ -351,6 +366,79 @@ pub fn prefetch_remote_refs(
     }
 
     Ok(PrefetchRemoteRefsResponse { fetched: true })
+}
+
+pub fn sync_workspace_with_target_branch(
+    workspace_id: &str,
+) -> Result<SyncWorkspaceTargetResponse> {
+    let record = workspace_models::load_workspace_record_by_id(workspace_id)?
+        .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+    if record.state != "ready" {
+        bail!("Cannot sync target branch: workspace is not in ready state");
+    }
+
+    let target_branch = record
+        .intended_target_branch
+        .clone()
+        .or(record.default_branch.clone())
+        .unwrap_or_else(|| "main".to_string());
+    let remote = record
+        .remote
+        .clone()
+        .unwrap_or_else(|| "origin".to_string());
+    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+    if !workspace_dir.is_dir() {
+        bail!("Workspace directory is missing for {workspace_id}");
+    }
+
+    let current_status =
+        git_ops::workspace_action_status(&workspace_dir, Some(&remote), Some(&target_branch))?;
+    if current_status.conflict_count > 0 {
+        return Ok(SyncWorkspaceTargetResponse {
+            outcome: SyncWorkspaceTargetOutcome::Conflict,
+            target_branch,
+        });
+    }
+    if current_status.uncommitted_count > 0 {
+        bail!("Cannot pull updates while the workspace has uncommitted changes");
+    }
+
+    git_ops::fetch_remote_branch(&workspace_dir, &remote, &target_branch)?;
+    let behind_count = git_ops::commits_behind(
+        &workspace_dir,
+        &format!("refs/remotes/{remote}/{target_branch}"),
+    )?;
+    if behind_count == 0 {
+        return Ok(SyncWorkspaceTargetResponse {
+            outcome: SyncWorkspaceTargetOutcome::AlreadyUpToDate,
+            target_branch,
+        });
+    }
+
+    match git_ops::merge_ref_no_edit(
+        &workspace_dir,
+        &format!("refs/remotes/{remote}/{target_branch}"),
+    ) {
+        Ok(()) => Ok(SyncWorkspaceTargetResponse {
+            outcome: SyncWorkspaceTargetOutcome::Updated,
+            target_branch,
+        }),
+        Err(error) => {
+            let merge_status = git_ops::workspace_action_status(
+                &workspace_dir,
+                Some(&remote),
+                Some(&target_branch),
+            )?;
+            if merge_status.conflict_count > 0 {
+                Ok(SyncWorkspaceTargetResponse {
+                    outcome: SyncWorkspaceTargetOutcome::Conflict,
+                    target_branch,
+                })
+            } else {
+                Err(error)
+            }
+        }
+    }
 }
 
 pub(crate) fn clear_prefetch_rate_limit(workspace_id: &str) {

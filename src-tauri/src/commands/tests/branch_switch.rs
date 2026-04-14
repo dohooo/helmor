@@ -290,3 +290,64 @@ fn prefetch_remote_refs_rate_limit() {
     let third = workspaces::prefetch_remote_refs(Some(&harness.workspace_id), None).unwrap();
     assert!(third.fetched, "rate limiter should re-enable after reset");
 }
+
+#[test]
+fn sync_workspace_target_branch_reports_already_up_to_date() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = BranchSwitchTestHarness::new();
+
+    let result = workspaces::sync_workspace_with_target_branch(&harness.workspace_id).unwrap();
+
+    assert_eq!(
+        result.outcome,
+        workspaces::SyncWorkspaceTargetOutcome::AlreadyUpToDate
+    );
+    assert_eq!(result.target_branch, "main");
+}
+
+#[test]
+fn sync_workspace_target_branch_merges_latest_target() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = BranchSwitchTestHarness::new();
+    harness.commit_in_workspace("feature.txt", "local work", "local commit");
+    harness.upstream_advance("main", "main2.txt", "fresh", "advance main");
+
+    let result = workspaces::sync_workspace_with_target_branch(&harness.workspace_id).unwrap();
+
+    assert_eq!(
+        result.outcome,
+        workspaces::SyncWorkspaceTargetOutcome::Updated
+    );
+    let merged_main = fs::read_to_string(harness.workspace_dir().join("main2.txt")).unwrap();
+    let merged_feature = fs::read_to_string(harness.workspace_dir().join("feature.txt")).unwrap();
+    assert_eq!(merged_main, "fresh");
+    assert_eq!(merged_feature, "local work");
+}
+
+#[test]
+fn sync_workspace_target_branch_reports_conflict() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = BranchSwitchTestHarness::new();
+    harness.commit_in_workspace("README.md", "workspace change", "workspace change");
+    harness.upstream_advance("main", "README.md", "upstream change", "advance readme");
+
+    let result = workspaces::sync_workspace_with_target_branch(&harness.workspace_id).unwrap();
+
+    assert_eq!(
+        result.outcome,
+        workspaces::SyncWorkspaceTargetOutcome::Conflict
+    );
+    let status =
+        git_ops::workspace_action_status(&harness.workspace_dir(), Some("origin"), Some("main"))
+            .unwrap();
+    assert!(
+        status.conflict_count > 0,
+        "merge conflict should remain visible"
+    );
+}

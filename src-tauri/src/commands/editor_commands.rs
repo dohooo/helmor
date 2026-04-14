@@ -81,7 +81,12 @@ pub async fn get_workspace_git_action_status(
             .with_context(|| format!("Workspace not found: {workspace_id}"))?;
         let workspace_dir =
             crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
-        git_ops::workspace_action_status(&workspace_dir)
+        let remote = record.remote.as_deref();
+        let target_branch = record
+            .intended_target_branch
+            .as_deref()
+            .or(record.default_branch.as_deref());
+        git_ops::workspace_action_status(&workspace_dir, remote, target_branch)
     })
     .await
 }

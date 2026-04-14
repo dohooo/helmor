@@ -58,6 +58,9 @@ function makeGitActionStatus(
 	return {
 		uncommittedCount: 0,
 		conflictCount: 0,
+		syncTargetBranch: "main",
+		syncStatus: "upToDate",
+		behindTargetCount: 0,
 		...overrides,
 	};
 }

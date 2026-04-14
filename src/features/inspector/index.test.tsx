@@ -15,6 +15,7 @@ const apiMocks = vi.hoisted(() => ({
 	getWorkspacePrCheckInsertText: vi.fn(),
 	loadWorkspaceGitActionStatus: vi.fn(),
 	loadWorkspacePrActionStatus: vi.fn(),
+	syncWorkspaceWithTargetBranch: vi.fn(),
 }));
 
 const openerMocks = vi.hoisted(() => ({
@@ -34,11 +35,18 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		listWorkspaceChangesWithContent: apiMocks.listWorkspaceChangesWithContent,
 		loadWorkspaceGitActionStatus: apiMocks.loadWorkspaceGitActionStatus,
 		loadWorkspacePrActionStatus: apiMocks.loadWorkspacePrActionStatus,
+		syncWorkspaceWithTargetBranch: apiMocks.syncWorkspaceWithTargetBranch,
 	};
 });
 
 function cleanGitStatus(): WorkspaceGitActionStatus {
-	return { uncommittedCount: 0, conflictCount: 0 };
+	return {
+		uncommittedCount: 0,
+		conflictCount: 0,
+		syncTargetBranch: "main",
+		syncStatus: "upToDate",
+		behindTargetCount: 0,
+	};
 }
 
 function emptyPrStatus(
@@ -78,6 +86,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		apiMocks.getWorkspacePrCheckInsertText.mockReset();
 		apiMocks.loadWorkspaceGitActionStatus.mockReset();
 		apiMocks.loadWorkspacePrActionStatus.mockReset();
+		apiMocks.syncWorkspaceWithTargetBranch.mockReset();
 		openerMocks.openUrl.mockReset();
 
 		apiMocks.listWorkspaceChangesWithContent.mockResolvedValue({
@@ -89,6 +98,10 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		);
 		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue(cleanGitStatus());
 		apiMocks.loadWorkspacePrActionStatus.mockResolvedValue(emptyPrStatus());
+		apiMocks.syncWorkspaceWithTargetBranch.mockResolvedValue({
+			outcome: "updated",
+			targetBranch: "main",
+		});
 	});
 
 	afterEach(() => {
@@ -112,10 +125,12 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 	it("shows clean git rows with passed status icons", async () => {
 		renderInspector();
 
-		await screen.findByText("No uncommitted changes");
+		await screen.findByText("No updates from main");
 
 		const actions = screen.getByLabelText("Inspector section Actions");
-		expect(within(actions).getByText("No merge conflicts")).toBeInTheDocument();
+		expect(
+			within(actions).getByText("No updates from main"),
+		).toBeInTheDocument();
 		expect(
 			within(actions).getByText("Waiting for PR review"),
 		).toBeInTheDocument();
@@ -128,6 +143,9 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
 			uncommittedCount: 2,
 			conflictCount: 1,
+			syncTargetBranch: "main",
+			syncStatus: "behind",
+			behindTargetCount: 2,
 		});
 
 		renderInspector({ onCommitAction });
@@ -140,10 +158,52 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		expect(onCommitAction).toHaveBeenCalledWith("resolve-conflicts");
 	});
 
+	it("shows pull when target branch is behind and triggers sync action", async () => {
+		const user = userEvent.setup();
+		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
+			uncommittedCount: 0,
+			conflictCount: 0,
+			syncTargetBranch: "main",
+			syncStatus: "behind",
+			behindTargetCount: 2,
+		});
+
+		renderInspector();
+
+		await screen.findByText("2 updates available from main");
+		await user.click(screen.getByRole("button", { name: "Pull" }));
+
+		await waitFor(() => {
+			expect(apiMocks.syncWorkspaceWithTargetBranch).toHaveBeenCalledWith(
+				"workspace-1",
+			);
+		});
+	});
+
+	it("hides pull when conflicts are present even if target is behind", async () => {
+		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
+			uncommittedCount: 0,
+			conflictCount: 1,
+			syncTargetBranch: "main",
+			syncStatus: "behind",
+			behindTargetCount: 3,
+		});
+
+		renderInspector();
+
+		await screen.findByText("Merge conflicts detected");
+		expect(
+			screen.queryByRole("button", { name: "Pull" }),
+		).not.toBeInTheDocument();
+	});
+
 	it("disables git row actions while the commit lifecycle is busy", async () => {
 		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
 			uncommittedCount: 1,
 			conflictCount: 0,
+			syncTargetBranch: "main",
+			syncStatus: "upToDate",
+			behindTargetCount: 0,
 		});
 
 		renderInspector({ commitButtonState: "busy" });
