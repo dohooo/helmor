@@ -1,13 +1,7 @@
-import { AlertTriangle, Loader2, Trash2 } from "lucide-react";
+import { Loader2, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import {
-	Dialog,
-	DialogContent,
-	DialogDescription,
-	DialogFooter,
-	DialogTitle,
-} from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { devResetAllData, loadDataInfo } from "@/lib/api";
 
 export function DevToolsPanel() {
@@ -85,55 +79,22 @@ export function DevToolsPanel() {
 				)}
 			</div>
 
-			{/* Confirmation dialog */}
-			<Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-				<DialogContent className="max-w-sm">
-					<div className="flex items-center gap-3">
-						<div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-destructive/10">
-							<AlertTriangle
-								className="size-5 text-destructive"
-								strokeWidth={1.8}
-							/>
-						</div>
-						<div>
-							<DialogTitle className="text-[14px] font-semibold">
-								Confirm Reset
-							</DialogTitle>
-							<DialogDescription className="mt-1 text-[12px] text-muted-foreground">
-								This will permanently delete{" "}
-								<strong>all workspaces, sessions, and repositories</strong> from
-								the development database. This action cannot be undone. You can
-								re-import from Conductor afterwards.
-							</DialogDescription>
-						</div>
-					</div>
-					<DialogFooter className="mt-4">
-						<Button
-							variant="outline"
-							size="sm"
-							onClick={() => setConfirmOpen(false)}
-							disabled={resetting}
-						>
-							Cancel
-						</Button>
-						<Button
-							variant="destructive"
-							size="sm"
-							onClick={() => void handleReset()}
-							disabled={resetting}
-						>
-							{resetting ? (
-								<>
-									<Loader2 className="mr-1.5 size-3.5 animate-spin" />
-									Resetting...
-								</>
-							) : (
-								"Delete Everything"
-							)}
-						</Button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
+			<ConfirmDialog
+				open={confirmOpen}
+				onOpenChange={setConfirmOpen}
+				title="Confirm Reset"
+				description={
+					<>
+						This will permanently delete{" "}
+						<strong>all workspaces, sessions, and repositories</strong> from the
+						development database. This action cannot be undone. You can
+						re-import from Conductor afterwards.
+					</>
+				}
+				confirmLabel={resetting ? "Resetting..." : "Delete Everything"}
+				onConfirm={() => void handleReset()}
+				loading={resetting}
+			/>
 		</div>
 	);
 }

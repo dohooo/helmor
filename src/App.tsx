@@ -1,7 +1,7 @@
 import "./App.css";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+
 import {
 	Check,
 	ChevronDown,
@@ -18,6 +18,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { ConductorOnboarding } from "@/components/conductor-onboarding";
+import { QuitConfirmDialog } from "@/components/quit-confirm-dialog";
 import { SplashScreen } from "@/components/splash-screen";
 import { Button } from "@/components/ui/button";
 import {
@@ -205,7 +206,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const warmedWorkspaceIdsRef = useRef<Set<string>>(new Set());
 	const selectedWorkspaceIdRef = useRef<string | null>(null);
 	const selectedSessionIdRef = useRef<string | null>(null);
-	const sessionCloseShortcutRequestedAtRef = useRef(0);
+
 	const workspaceViewModeRef = useRef<"conversation" | "editor">(
 		"conversation",
 	);
@@ -1440,33 +1441,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		queuePendingPromptForSession,
 	]);
 
-	useEffect(() => {
-		let disposed = false;
-		let unlisten: (() => void) | undefined;
-
-		void getCurrentWindow()
-			.onCloseRequested(async (event) => {
-				if (Date.now() - sessionCloseShortcutRequestedAtRef.current > 1_000) {
-					return;
-				}
-
-				sessionCloseShortcutRequestedAtRef.current = 0;
-				event.preventDefault();
-			})
-			.then((fn) => {
-				if (disposed) {
-					fn();
-					return;
-				}
-
-				unlisten = fn;
-			});
-
-		return () => {
-			disposed = true;
-			unlisten?.();
-		};
-	}, []);
+	// Close-confirmation is handled by <QuitConfirmDialog /> which registers
+	// its own onCloseRequested listener.  No need for a separate hook here.
 
 	useEffect(() => {
 		if (!isIdentityConnected || workspaceViewMode === "editor") {
@@ -1539,7 +1515,6 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 				return;
 			}
 
-			sessionCloseShortcutRequestedAtRef.current = Date.now();
 			event.preventDefault();
 			void handleCloseSelectedSession();
 		};
@@ -2031,6 +2006,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 					/>
 				</ComposerInsertProvider>
 			</WorkspaceToastProvider>
+			<QuitConfirmDialog sendingSessionIds={sendingSessionIds} />
 		</TooltipProvider>
 	);
 }

@@ -269,6 +269,50 @@ fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
 }
 
 // ---------------------------------------------------------------------------
+// Graceful quit (called from the frontend quit-confirmation dialog)
+// ---------------------------------------------------------------------------
+
+/// Shut down git watchers, abort active streams (when `force`), tear down
+/// the sidecar cooperatively, then exit. Git watchers go first to stop new
+/// events from arriving while we drain.
+#[tauri::command]
+pub async fn request_quit(app: tauri::AppHandle, force: bool) {
+    tracing::info!(force, "request_quit invoked from frontend");
+
+    // 1. Stop filesystem watchers so no new events arrive.
+    app.state::<git_watcher::GitWatcherManager>().shutdown();
+
+    // 2. If tasks are in flight, gracefully stop every active stream.
+    if force {
+        let sidecar = app.state::<sidecar::ManagedSidecar>();
+        let active = app.state::<agents::ActiveStreams>();
+        agents::abort_all_active_streams_blocking(
+            &sidecar,
+            &active,
+            std::time::Duration::from_millis(1500),
+        );
+    }
+
+    // 3. Cooperative sidecar teardown: shutdown RPC → SIGTERM → SIGKILL.
+    let sidecar = app.state::<sidecar::ManagedSidecar>();
+    let (cooperative, escalation) = if force {
+        (
+            std::time::Duration::from_millis(2000),
+            std::time::Duration::from_millis(500),
+        )
+    } else {
+        (
+            std::time::Duration::from_millis(500),
+            std::time::Duration::from_millis(200),
+        )
+    };
+    sidecar.shutdown(cooperative, escalation);
+
+    // 4. Done — terminate the process.
+    app.exit(0);
+}
+
+// ---------------------------------------------------------------------------
 // Dev-only: nuclear data reset
 // ---------------------------------------------------------------------------
 
