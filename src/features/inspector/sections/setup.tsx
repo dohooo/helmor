@@ -7,14 +7,16 @@ import {
 } from "@/components/terminal-output";
 import { Button } from "@/components/ui/button";
 import { TabsContent } from "@/components/ui/tabs";
-import {
-	completeWorkspaceSetup,
-	executeRepoScript,
-	stopRepoScript,
-} from "@/lib/api";
+import { completeWorkspaceSetup } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
-
-type ScriptStatus = "idle" | "running" | "exited";
+import {
+	attach,
+	detach,
+	getScriptState,
+	type ScriptStatus,
+	startScript,
+	stopScript,
+} from "../script-store";
 
 type SetupTabProps = {
 	repoId: string | null;
@@ -22,7 +24,6 @@ type SetupTabProps = {
 	workspaceState: string | null;
 	setupScript: string | null;
 	scriptsLoaded: boolean;
-	isActive: boolean;
 	onOpenSettings: () => void;
 };
 
@@ -32,7 +33,6 @@ export function SetupTab({
 	workspaceState,
 	setupScript,
 	scriptsLoaded,
-	isActive,
 	onOpenSettings,
 }: SetupTabProps) {
 	const termRef = useRef<TerminalHandle | null>(null);
@@ -43,58 +43,58 @@ export function SetupTab({
 
 	const hasScript = !!setupScript?.trim();
 
-	// Reset to initial state when tab deactivates (avoids stale empty terminal).
+	// Attach to store on mount / when workspaceId changes; replay buffered output.
 	useEffect(() => {
-		if (!isActive && status !== "running") {
+		if (!workspaceId) return;
+
+		const existing = attach(workspaceId, "setup", {
+			onChunk: (data) => termRef.current?.write(data),
+			onStatusChange: (s) => {
+				setStatus(s);
+				// Invalidate workspace detail when setup completes successfully.
+				if (s === "exited") {
+					const state = getScriptState(workspaceId, "setup");
+					if (state?.exitCode === 0) {
+						queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+						});
+					}
+				}
+			},
+		});
+
+		if (existing) {
+			setHasRun(true);
+			setStatus(existing.status);
+			requestAnimationFrame(() => {
+				for (const chunk of existing.chunks) {
+					termRef.current?.write(chunk);
+				}
+			});
+		} else {
 			setHasRun(false);
 			setStatus("idle");
+			// Reset auto-run guard for this new workspace.
+			hasAutoRunRef.current = false;
 		}
-	}, [isActive, status]);
+
+		return () => detach(workspaceId, "setup");
+	}, [workspaceId, queryClient]);
 
 	const handleRun = useCallback(() => {
-		if (!repoId) return;
+		if (!repoId || !workspaceId) return;
 		termRef.current?.clear();
 		setStatus("running");
 		setHasRun(true);
-		executeRepoScript(
-			repoId,
-			"setup",
-			(event) => {
-				switch (event.type) {
-					case "started":
-						break;
-					case "stdout":
-					case "stderr":
-						termRef.current?.write(event.data);
-						break;
-					case "exited":
-						setStatus("exited");
-						if (event.code === 0 && workspaceId) {
-							queryClient.invalidateQueries({
-								queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
-							});
-						}
-						break;
-					case "error":
-						termRef.current?.write(`\r\n\x1b[31m${event.message}\x1b[0m\r\n`);
-						setStatus("exited");
-						break;
-				}
-			},
-			workspaceId,
-		).catch((err) => {
-			termRef.current?.write(`\r\n\x1b[31mFailed to start: ${err}\x1b[0m\r\n`);
-			setStatus("exited");
-		});
-	}, [repoId, workspaceId, queryClient]);
+		startScript(repoId, "setup", workspaceId);
+	}, [repoId, workspaceId]);
 
 	const handleStop = useCallback(() => {
-		if (!repoId) return;
-		void stopRepoScript(repoId, "setup", workspaceId);
+		if (!repoId || !workspaceId) return;
+		stopScript(repoId, "setup", workspaceId);
 	}, [repoId, workspaceId]);
 
 	// Auto-run setup when workspace is pending and script is available.
-	// Ref guard prevents re-triggering after tab-switch resets.
 	useEffect(() => {
 		if (
 			workspaceState === "setup_pending" &&
@@ -108,7 +108,6 @@ export function SetupTab({
 	}, [workspaceState, hasScript, status, handleRun]);
 
 	// Auto-complete if workspace is pending but no script is configured.
-	// Wait until scriptsLoaded to distinguish "still loading" from "no script".
 	useEffect(() => {
 		if (
 			workspaceState === "setup_pending" &&
