@@ -141,30 +141,24 @@ export function RunTab({
 			</div>
 
 			{/* Floating action button */}
-			<div className="absolute bottom-3 right-3 flex items-center gap-1.5 [will-change:transform]">
-				{status === "running" ? (
+			{(status === "running" || status === "exited") && (
+				<div className="absolute bottom-3 right-3">
 					<Button
-						variant="secondary"
+						variant={status === "running" ? "destructive" : "secondary"}
 						size="sm"
-						className="text-[12px] transition-colors"
-						onClick={handleStop}
+						className="text-[12px] transition-none"
+						onClick={status === "running" ? handleStop : handleRun}
+						disabled={status === "exited" && !hasScript}
 					>
-						<Square className="size-3" strokeWidth={2} />
-						Stop
+						{status === "running" ? (
+							<Square className="size-3" strokeWidth={2} />
+						) : (
+							<RotateCcw className="size-3" strokeWidth={2} />
+						)}
+						{status === "running" ? "Stop" : "Rerun"}
 					</Button>
-				) : status === "exited" ? (
-					<Button
-						variant="secondary"
-						size="sm"
-						className="text-[12px] transition-colors"
-						onClick={handleRun}
-						disabled={!hasScript}
-					>
-						<RotateCcw className="size-3" strokeWidth={2} />
-						Rerun
-					</Button>
-				) : null}
-			</div>
+				</div>
+			)}
 		</TabsContent>
 	);
 }
