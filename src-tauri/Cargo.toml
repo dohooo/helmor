@@ -61,3 +61,25 @@ path = "src/bin/gen_pipeline_fixture.rs"
 [dev-dependencies]
 insta = { version = "1", features = ["yaml", "glob"] }
 tempfile = "3"
+
+# ---------------------------------------------------------------------------
+# Dev profile: optimised for fastest compilation, not runtime performance.
+# sccache is the cross-worktree cache; incremental is disabled because the
+# two are mutually exclusive.
+# ---------------------------------------------------------------------------
+[profile.dev]
+debug = "line-tables-only"   # keep backtraces, skip 80% of debug info
+split-debuginfo = "unpacked" # skip dsymutil merge (macOS default, explicit)
+opt-level = 0
+codegen-units = 256          # max intra-crate parallelism
+incremental = false          # required for sccache compatibility
+
+[profile.dev.package."*"]
+debug = false                # deps don't need debug info at all
+opt-level = 0
+codegen-units = 256
+
+[profile.dev.build-override]
+debug = false                # build scripts & proc-macros: fastest possible
+opt-level = 0
+codegen-units = 256

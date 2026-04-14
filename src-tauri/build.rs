@@ -10,7 +10,12 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     for env_path in candidate_env_paths() {
-        println!("cargo:rerun-if-changed={}", env_path.display());
+        // Only watch files that exist. Watching a missing file makes Cargo
+        // treat the fingerprint as permanently stale, which forces a full
+        // recompile of the crate on every single `cargo build` invocation.
+        if env_path.exists() {
+            println!("cargo:rerun-if-changed={}", env_path.display());
+        }
         load_env_var(&env_path, GITHUB_CLIENT_ID_KEY);
         load_env_var(&env_path, GITHUB_CLIENT_SECRET_KEY);
     }

@@ -1,0 +1,5 @@
+[build]
+rustc-wrapper = "sccache"
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-no_deduplicate"]
