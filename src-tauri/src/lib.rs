@@ -262,6 +262,7 @@ pub fn run() {
             commands::github_commands::close_workspace_pr,
             commands::system_commands::drain_pending_cli_sends,
             commands::editor_commands::read_editor_file,
+            commands::editor_commands::read_file_at_ref,
             commands::workspace_commands::set_workspace_manual_status,
             commands::system_commands::detect_installed_editors,
             commands::system_commands::open_workspace_in_editor,

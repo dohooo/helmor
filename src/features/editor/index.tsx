@@ -39,7 +39,7 @@ type DiffController = Awaited<
 
 export function WorkspaceEditorSurface({
 	editorSession,
-	workspaceRootPath: _workspaceRootPath,
+	workspaceRootPath,
 	onChangeSession,
 	onExit,
 	onError,
@@ -81,8 +81,37 @@ export function WorkspaceEditorSurface({
 
 		void (async () => {
 			try {
-				const { readEditorFile } = await import("@/lib/api");
-				const response = await readEditorFile(editorSession.path);
+				const api = await import("@/lib/api");
+				const isDiff = editorSession.kind === "diff";
+				const status = editorSession.fileStatus ?? "M";
+				const origRef = editorSession.originalRef ?? "HEAD";
+
+				// Fetch original side (from git ref)
+				const originalPromise =
+					isDiff && status !== "A" && workspaceRootPath
+						? api.readFileAtRef(workspaceRootPath, editorSession.path, origRef)
+						: Promise.resolve(null);
+
+				// Fetch modified side (from disk or git ref)
+				const modifiedPromise = editorSession.modifiedRef
+					? workspaceRootPath
+						? api.readFileAtRef(
+								workspaceRootPath,
+								editorSession.path,
+								editorSession.modifiedRef,
+							)
+						: Promise.resolve(null)
+					: status !== "D"
+						? api
+								.readEditorFile(editorSession.path)
+								.then((r) => r.content)
+								.catch(() => null)
+						: Promise.resolve(null);
+
+				const [original, modified] = await Promise.all([
+					originalPromise,
+					modifiedPromise,
+				]);
 
 				if (cancelled) {
 					return;
@@ -90,10 +119,11 @@ export function WorkspaceEditorSurface({
 
 				onChangeSessionRef.current({
 					...editorSession,
-					originalText: editorSession.originalText ?? response.content,
-					modifiedText: editorSession.modifiedText ?? response.content,
+					originalText:
+						editorSession.originalText ??
+						(isDiff ? (original ?? "") : (modified ?? "")),
+					modifiedText: editorSession.modifiedText ?? modified ?? "",
 					dirty: Boolean(editorSession.dirty),
-					mtimeMs: response.mtimeMs,
 				});
 			} catch (error) {
 				if (cancelled) {
@@ -112,7 +142,7 @@ export function WorkspaceEditorSurface({
 		return () => {
 			cancelled = true;
 		};
-	}, [canRenderDiff, canRenderFile, editorSession]);
+	}, [canRenderDiff, canRenderFile, editorSession, workspaceRootPath]);
 
 	// Dispose editors on unmount (separate from the switching effect so the
 	// fast-path can skip cleanup without leaking on unmount).

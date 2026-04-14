@@ -3,6 +3,7 @@ import type {
 	WorkspaceCommitButtonMode,
 } from "@/features/commit/button";
 import type { PullRequestInfo } from "@/lib/api";
+import type { DiffOpenOptions } from "@/lib/editor-session";
 import { cn } from "@/lib/utils";
 import { useWorkspaceInspectorSidebar } from "./hooks/use-inspector";
 import { HorizontalResizeHandle, InspectorTabsSection } from "./layout";
@@ -20,7 +21,7 @@ type WorkspaceInspectorSidebarProps = {
 	repoId?: string | null;
 	editorMode: boolean;
 	activeEditorPath?: string | null;
-	onOpenEditorFile(path: string): void;
+	onOpenEditorFile(path: string, options?: DiffOpenOptions): void;
 	onOpenMockReview?: (path: string) => void;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
 	commitButtonMode?: WorkspaceCommitButtonMode;

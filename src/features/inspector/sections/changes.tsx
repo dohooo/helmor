@@ -7,6 +7,8 @@ import {
 import {
 	ChevronRightIcon,
 	GitBranchIcon,
+	ListIcon,
+	ListTreeIcon,
 	LoaderCircleIcon,
 	MinusIcon,
 	PlusIcon,
@@ -28,7 +30,7 @@ import {
 	stageWorkspaceFile,
 	unstageWorkspaceFile,
 } from "@/lib/api";
-import type { InspectorFileItem } from "@/lib/editor-session";
+import type { DiffOpenOptions, InspectorFileItem } from "@/lib/editor-session";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import { GitSectionHeader } from "./git-section-header";
@@ -48,7 +50,7 @@ type ChangesSectionProps = {
 	changes: InspectorFileItem[];
 	editorMode: boolean;
 	activeEditorPath?: string | null;
-	onOpenEditorFile: (path: string) => void;
+	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
 	commitButtonMode?: WorkspaceCommitButtonMode;
@@ -73,7 +75,8 @@ export function ChangesSection({
 	prInfo,
 }: ChangesSectionProps) {
 	const queryClient = useQueryClient();
-	const [treeView] = useState(true);
+	const [changesTreeView, setChangesTreeView] = useState(true);
+	const [branchDiffTreeView, setBranchDiffTreeView] = useState(true);
 	const [changesOpen, setChangesOpen] = useState(true);
 	const [stagedOpen, setStagedOpen] = useState(true);
 	const [branchDiffOpen, setBranchDiffOpen] = useState(true);
@@ -255,7 +258,8 @@ export function ChangesSection({
 								open={stagedOpen}
 								onToggle={() => setStagedOpen((current) => !current)}
 								changes={stagedChanges}
-								treeView={treeView}
+								treeView={changesTreeView}
+								onToggleTreeView={() => setChangesTreeView((v) => !v)}
 								action="unstage"
 								onStageAction={unstageFile}
 								onBatchAction={unstageAll}
@@ -272,7 +276,8 @@ export function ChangesSection({
 								open={changesOpen}
 								onToggle={() => setChangesOpen((current) => !current)}
 								changes={unstagedChanges}
-								treeView={treeView}
+								treeView={changesTreeView}
+								onToggleTreeView={() => setChangesTreeView((v) => !v)}
 								action="stage"
 								onStageAction={stageFile}
 								onBatchAction={stageAll}
@@ -295,7 +300,8 @@ export function ChangesSection({
 						open={branchDiffOpen}
 						onToggle={() => setBranchDiffOpen((current) => !current)}
 						changes={committedChanges}
-						treeView={treeView}
+						treeView={branchDiffTreeView}
+						onToggleTreeView={() => setBranchDiffTreeView((v) => !v)}
 						editorMode={editorMode}
 						activeEditorPath={activeEditorPath}
 						onOpenEditorFile={onOpenEditorFile}
@@ -322,6 +328,7 @@ function ChangesGroup({
 	onToggle,
 	changes,
 	treeView,
+	onToggleTreeView,
 	action,
 	onStageAction,
 	onBatchAction,
@@ -337,13 +344,14 @@ function ChangesGroup({
 	onToggle: () => void;
 	changes: InspectorFileItem[];
 	treeView: boolean;
+	onToggleTreeView: () => void;
 	action: StageActionKind;
 	onStageAction: (path: string) => void;
 	onBatchAction?: () => void;
 	onDiscard?: (path: string) => void;
 	editorMode: boolean;
 	activeEditorPath?: string | null;
-	onOpenEditorFile: (path: string) => void;
+	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 }) {
 	return (
@@ -355,7 +363,7 @@ function ChangesGroup({
 					size="xs"
 					onClick={onToggle}
 					aria-expanded={open}
-					className="h-auto min-w-0 flex-1 justify-start gap-1 rounded-none px-0 text-left hover:bg-transparent hover:text-foreground aria-expanded:bg-transparent aria-expanded:text-foreground"
+					className="h-auto min-w-0 flex-1 justify-start gap-1 rounded-none px-0 text-left hover:bg-transparent hover:text-foreground dark:hover:bg-transparent aria-expanded:bg-transparent aria-expanded:text-foreground"
 				>
 					<ChevronRightIcon
 						data-icon="inline-start"
@@ -367,13 +375,14 @@ function ChangesGroup({
 					/>
 					<span className="truncate">{label}</span>
 				</Button>
+				<ViewToggleButton treeView={treeView} onToggle={onToggleTreeView} />
 				{onBatchAction && (
 					<RowIconButton
 						aria-label={
 							action === "stage" ? "Stage all changes" : "Unstage all changes"
 						}
 						onClick={onBatchAction}
-						className="opacity-0 transition-opacity group-hover/header:opacity-100 focus-visible:opacity-100"
+						className="text-transparent hover:bg-transparent group-hover/header:text-muted-foreground group-hover/header:hover:text-foreground"
 					>
 						{action === "stage" ? (
 							<PlusIcon className="size-3.5" strokeWidth={2} />
@@ -429,6 +438,7 @@ function BranchDiffSection({
 	onToggle,
 	changes,
 	treeView,
+	onToggleTreeView,
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
@@ -442,13 +452,25 @@ function BranchDiffSection({
 	onToggle: () => void;
 	changes: InspectorFileItem[];
 	treeView: boolean;
+	onToggleTreeView: () => void;
 	editorMode: boolean;
 	activeEditorPath?: string | null;
-	onOpenEditorFile: (path: string) => void;
+	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 }) {
 	const branchLabel = branch ?? "HEAD";
 	const targetLabel = targetBranch ?? "main";
+
+	const handleOpenFile = useCallback(
+		(path: string, options?: DiffOpenOptions) => {
+			onOpenEditorFile(path, {
+				fileStatus: options?.fileStatus ?? "M",
+				originalRef: targetBranch ?? undefined,
+				modifiedRef: "HEAD",
+			});
+		},
+		[onOpenEditorFile, targetBranch],
+	);
 
 	return (
 		<div>
@@ -459,7 +481,7 @@ function BranchDiffSection({
 					size="xs"
 					onClick={onToggle}
 					aria-expanded={open}
-					className="h-auto min-w-0 flex-1 justify-start gap-1 rounded-none px-0 text-left hover:bg-transparent hover:text-foreground aria-expanded:bg-transparent aria-expanded:text-foreground"
+					className="h-auto min-w-0 flex-1 justify-start gap-1 rounded-none px-0 text-left hover:bg-transparent hover:text-foreground dark:hover:bg-transparent aria-expanded:bg-transparent aria-expanded:text-foreground"
 				>
 					<ChevronRightIcon
 						data-icon="inline-start"
@@ -479,6 +501,7 @@ function BranchDiffSection({
 						<span className="min-w-0 truncate">{targetLabel}</span>
 					</span>
 				</Button>
+				<ViewToggleButton treeView={treeView} onToggle={onToggleTreeView} />
 				<Badge
 					variant="secondary"
 					className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none"
@@ -506,7 +529,7 @@ function BranchDiffSection({
 							changes={changes}
 							editorMode={editorMode}
 							activeEditorPath={activeEditorPath}
-							onOpenEditorFile={onOpenEditorFile}
+							onOpenEditorFile={handleOpenFile}
 							flashingPaths={flashingPaths}
 						/>
 					) : (
@@ -514,7 +537,7 @@ function BranchDiffSection({
 							changes={changes}
 							editorMode={editorMode}
 							activeEditorPath={activeEditorPath}
-							onOpenEditorFile={onOpenEditorFile}
+							onOpenEditorFile={handleOpenFile}
 							flashingPaths={flashingPaths}
 						/>
 					)}
@@ -572,7 +595,7 @@ function ChangesTreeView({
 	changes: InspectorFileItem[];
 	editorMode: boolean;
 	activeEditorPath?: string | null;
-	onOpenEditorFile: (path: string) => void;
+	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 	action?: StageActionKind;
 	onStageAction?: (path: string) => void;
@@ -644,7 +667,7 @@ function TreeNodeList({
 	depth: number;
 	editorMode: boolean;
 	activeEditorPath?: string | null;
-	onOpenEditorFile: (path: string) => void;
+	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 	action?: StageActionKind;
 	onStageAction?: (path: string) => void;
@@ -731,11 +754,18 @@ function TreeNodeList({
 						style={{ paddingLeft: `${depth * 12 + 22}px` }}
 						role="treeitem"
 						tabIndex={0}
-						onClick={() => file && onOpenEditorFile(file.absolutePath)}
+						onClick={() =>
+							file &&
+							onOpenEditorFile(file.absolutePath, {
+								fileStatus: file.status,
+							})
+						}
 						onKeyDown={(event) => {
 							if ((event.key === "Enter" || event.key === " ") && file) {
 								event.preventDefault();
-								onOpenEditorFile(file.absolutePath);
+								onOpenEditorFile(file.absolutePath, {
+									fileStatus: file.status,
+								});
 							}
 						}}
 					>
@@ -773,7 +803,7 @@ function ChangesFlatView({
 	changes: InspectorFileItem[];
 	editorMode: boolean;
 	activeEditorPath?: string | null;
-	onOpenEditorFile: (path: string) => void;
+	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 	action?: StageActionKind;
 	onStageAction?: (path: string) => void;
@@ -797,11 +827,17 @@ function ChangesFlatView({
 					)}
 					role="button"
 					tabIndex={0}
-					onClick={() => onOpenEditorFile(change.absolutePath)}
+					onClick={() =>
+						onOpenEditorFile(change.absolutePath, {
+							fileStatus: change.status,
+						})
+					}
 					onKeyDown={(event) => {
 						if (event.key === "Enter" || event.key === " ") {
 							event.preventDefault();
-							onOpenEditorFile(change.absolutePath);
+							onOpenEditorFile(change.absolutePath, {
+								fileStatus: change.status,
+							});
 						}
 					}}
 				>
@@ -810,20 +846,24 @@ function ChangesFlatView({
 						alt=""
 						className="size-4 shrink-0"
 					/>
-					<ShinyFlash active={flashingPaths.has(change.path)}>
-						{change.name}
-					</ShinyFlash>
-					<span
-						className={cn(
-							"ml-auto shrink-0 truncate text-[10px] text-muted-foreground",
-							hasAction && "group-hover/row:hidden",
-						)}
-					>
-						{change.path.slice(0, change.path.lastIndexOf("/"))}
+					<span className="min-w-0 max-w-[60%] truncate">
+						<ShinyFlash active={flashingPaths.has(change.path)}>
+							{change.name}
+						</ShinyFlash>
 					</span>
 					<span
 						className={cn(
-							"flex shrink-0 items-center gap-1.5",
+							"min-w-0 flex-1 truncate text-right text-[10px] text-muted-foreground",
+							hasAction && "group-hover/row:hidden",
+						)}
+					>
+						{change.path.includes("/")
+							? change.path.slice(0, change.path.lastIndexOf("/"))
+							: ""}
+					</span>
+					<span
+						className={cn(
+							"flex shrink-0 items-center gap-1 tabular-nums",
 							hasAction && "group-hover/row:hidden",
 						)}
 					>
@@ -973,6 +1013,28 @@ function RowIconButton({
 	);
 }
 
+function ViewToggleButton({
+	treeView,
+	onToggle,
+}: {
+	treeView: boolean;
+	onToggle: () => void;
+}) {
+	return (
+		<RowIconButton
+			aria-label={treeView ? "Switch to list view" : "Switch to tree view"}
+			onClick={onToggle}
+			className="text-transparent hover:bg-transparent group-hover/header:text-muted-foreground group-hover/header:hover:text-foreground"
+		>
+			{treeView ? (
+				<ListIcon className="size-3.5" strokeWidth={1.8} />
+			) : (
+				<ListTreeIcon className="size-3.5" strokeWidth={1.8} />
+			)}
+		</RowIconButton>
+	);
+}
+
 function LineStats({
 	insertions,
 	deletions,
@@ -985,7 +1047,7 @@ function LineStats({
 	}
 
 	return (
-		<span className="flex shrink-0 items-center gap-1 text-[10px]">
+		<span className="flex shrink-0 items-center gap-1 text-[10px] tabular-nums">
 			{insertions > 0 && (
 				<span className="text-chart-2">
 					+<NumberTicker value={insertions} className="text-chart-2" />

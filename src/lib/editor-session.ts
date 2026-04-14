@@ -1,3 +1,11 @@
+export type DiffFileStatus = "M" | "A" | "D";
+
+export type DiffOpenOptions = {
+	fileStatus: DiffFileStatus;
+	originalRef?: string;
+	modifiedRef?: string;
+};
+
 export type EditorSessionState = {
 	kind: "file" | "diff";
 	path: string;
@@ -8,6 +16,12 @@ export type EditorSessionState = {
 	inline?: boolean;
 	dirty?: boolean;
 	mtimeMs?: number | null;
+	/** File change status — determines fetch strategy and display mode. */
+	fileStatus?: DiffFileStatus;
+	/** Git ref for the original (left) side. Defaults to "HEAD". */
+	originalRef?: string;
+	/** Git ref for the modified (right) side. Omit to read from working tree. */
+	modifiedRef?: string;
 };
 
 export type InspectorFileItem = {
