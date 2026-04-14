@@ -88,9 +88,16 @@ impl SlashCommandCache {
 // Local skill/command scanner
 // ---------------------------------------------------------------------------
 
-/// Scan `~/.claude/skills/` and `~/.claude/commands/` (and optionally
-/// project-level commands) for slash command entries.  Returns results
-/// sorted by name.
+/// Scan skills and commands from disk following the Claude Code precedence:
+///
+///   1. Personal skills  — `~/.claude/skills/<name>/SKILL.md`
+///   2. Project skills   — `<cwd>/.claude/skills/<name>/SKILL.md`
+///   3. Personal commands — `~/.claude/commands/<name>.md`
+///   4. Project commands  — `<cwd>/.claude/commands/<name>.md`
+///
+/// Dedup by name (first occurrence wins), so higher-priority locations
+/// shadow lower ones.  Skills always shadow same-named commands because
+/// they are scanned first.
 pub fn scan_local_commands(working_directory: Option<&str>) -> Vec<SlashCommandEntry> {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return Vec::new();
@@ -100,13 +107,20 @@ pub fn scan_local_commands(working_directory: Option<&str>) -> Vec<SlashCommandE
     let mut entries = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
-    // 1. ~/.claude/skills/*/SKILL.md
+    // 1. Personal skills — ~/.claude/skills/*/SKILL.md (highest priority)
     scan_skills_dir(&claude_dir.join("skills"), &mut entries, &mut seen);
 
-    // 2. ~/.claude/commands/*.md
+    // 2. Project skills — <cwd>/.claude/skills/*/SKILL.md
+    if let Some(cwd) = working_directory {
+        let project_skills = Path::new(cwd).join(".claude").join("skills");
+        scan_skills_dir(&project_skills, &mut entries, &mut seen);
+    }
+
+    // 3. Personal commands — ~/.claude/commands/*.md
+    //    (same-named skills from steps 1–2 take precedence via `seen` set)
     scan_commands_dir(&claude_dir.join("commands"), &mut entries, &mut seen);
 
-    // 3. <cwd>/.claude/commands/*.md (project-level)
+    // 4. Project commands — <cwd>/.claude/commands/*.md (lowest priority)
     if let Some(cwd) = working_directory {
         let project_cmds = Path::new(cwd).join(".claude").join("commands");
         scan_commands_dir(&project_cmds, &mut entries, &mut seen);
