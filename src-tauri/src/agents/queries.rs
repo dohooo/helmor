@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
 use super::CmdResult;
@@ -259,10 +259,71 @@ pub struct SlashCommandEntry {
     pub source: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlashCommandsResponse {
+    pub commands: Vec<SlashCommandEntry>,
+    /// `false` while the background sidecar refresh is still in flight
+    /// (the commands shown are from a local disk scan only).
+    pub is_complete: bool,
+}
+
 pub async fn list_slash_commands(
     app: AppHandle,
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    cache: tauri::State<'_, super::slash_commands::SlashCommandCache>,
     request: ListSlashCommandsRequest,
+) -> CmdResult<SlashCommandsResponse> {
+    let cache_key = (
+        request.provider.clone(),
+        request.working_directory.clone().unwrap_or_default(),
+        request.model_id.clone().unwrap_or_default(),
+    );
+
+    // Non-claude providers (e.g. Codex): the sidecar scan is already fast
+    // (pure filesystem, no MCP wait), so fall through to the blocking path.
+    if request.provider != "claude" {
+        let commands = fetch_from_sidecar(&sidecar, &request)?;
+        return Ok(SlashCommandsResponse {
+            commands,
+            is_complete: true,
+        });
+    }
+
+    // --- Claude provider: progressive loading ---
+
+    // 1. Check cache
+    if let Some((commands, is_complete)) = cache.get(&cache_key) {
+        // Cache hit — return immediately.  Spawn a background refresh to
+        // keep the cache fresh (stale-while-revalidate).
+        if is_complete {
+            spawn_background_refresh(&app, &cache, &request, cache_key);
+        }
+        return Ok(SlashCommandsResponse {
+            commands,
+            is_complete,
+        });
+    }
+
+    // 2. Cache miss — scan local skills from disk (fast, < 5 ms)
+    let local = super::slash_commands::scan_local_commands(request.working_directory.as_deref());
+    cache.set(cache_key.clone(), local.clone(), false);
+
+    // 3. Spawn background sidecar refresh
+    spawn_background_refresh(&app, &cache, &request, cache_key);
+
+    Ok(SlashCommandsResponse {
+        commands: local,
+        is_complete: false,
+    })
+}
+
+/// Run the sidecar `listSlashCommands` call synchronously (blocking the
+/// current async task).  Used for the non-claude fast path and by the
+/// background refresh thread.
+fn fetch_from_sidecar(
+    sidecar: &crate::sidecar::ManagedSidecar,
+    request: &ListSlashCommandsRequest,
 ) -> CmdResult<Vec<SlashCommandEntry>> {
     let request_id = Uuid::new_v4().to_string();
 
@@ -287,89 +348,125 @@ pub async fn list_slash_commands(
         return Err(anyhow::anyhow!("Sidecar send failed: {e}").into());
     }
 
-    let result: CmdResult<Vec<SlashCommandEntry>> = tauri::async_runtime::spawn_blocking({
-        let rid = request_id.clone();
-        move || {
-            let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
-            let mut commands: Vec<SlashCommandEntry> = Vec::new();
-            let mut error: Option<String> = None;
-            let timeout = std::time::Duration::from_secs(10);
+    let mut commands: Vec<SlashCommandEntry> = Vec::new();
+    let mut error: Option<String> = None;
+    let timeout = std::time::Duration::from_secs(10);
 
-            loop {
-                match rx.recv_timeout(timeout) {
-                    Ok(event) => match event.event_type() {
-                        "slashCommandsListed" => {
-                            if let Some(entries) =
-                                event.raw.get("commands").and_then(Value::as_array)
-                            {
-                                for entry in entries {
-                                    let Some(name) = entry.get("name").and_then(Value::as_str)
-                                    else {
-                                        continue;
-                                    };
-                                    let description = entry
-                                        .get("description")
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("")
-                                        .to_string();
-                                    let argument_hint = entry
-                                        .get("argumentHint")
-                                        .and_then(Value::as_str)
-                                        .filter(|hint| !hint.is_empty())
-                                        .map(str::to_string);
-                                    let source = entry
-                                        .get("source")
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("builtin")
-                                        .to_string();
-                                    commands.push(SlashCommandEntry {
-                                        name: name.to_string(),
-                                        description,
-                                        argument_hint,
-                                        source,
-                                    });
-                                }
-                            }
-                            break;
+    loop {
+        match rx.recv_timeout(timeout) {
+            Ok(event) => match event.event_type() {
+                "slashCommandsListed" => {
+                    if let Some(entries) = event.raw.get("commands").and_then(Value::as_array) {
+                        for entry in entries {
+                            let Some(name) = entry.get("name").and_then(Value::as_str) else {
+                                continue;
+                            };
+                            let description = entry
+                                .get("description")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
+                            let argument_hint = entry
+                                .get("argumentHint")
+                                .and_then(Value::as_str)
+                                .filter(|hint| !hint.is_empty())
+                                .map(str::to_string);
+                            let source = entry
+                                .get("source")
+                                .and_then(Value::as_str)
+                                .unwrap_or("builtin")
+                                .to_string();
+                            commands.push(SlashCommandEntry {
+                                name: name.to_string(),
+                                description,
+                                argument_hint,
+                                source,
+                            });
                         }
-                        "error" => {
-                            error = Some(
-                                event
-                                    .raw
-                                    .get("message")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("Unknown error")
-                                    .to_string(),
-                            );
-                            break;
-                        }
-                        _ => {}
-                    },
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        error = Some("listSlashCommands timed out after 10s".to_string());
-                        break;
                     }
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        error = Some(
-                            "Sidecar disconnected while waiting for slash commands".to_string(),
-                        );
-                        break;
+                    break;
+                }
+                "error" => {
+                    error = Some(
+                        event
+                            .raw
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Unknown error")
+                            .to_string(),
+                    );
+                    break;
+                }
+                _ => {}
+            },
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                error = Some("listSlashCommands timed out after 10s".to_string());
+                break;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                error = Some("Sidecar disconnected while waiting for slash commands".to_string());
+                break;
+            }
+        }
+    }
+
+    sidecar.unsubscribe(&request_id);
+    if let Some(message) = error {
+        Err(anyhow::anyhow!("listSlashCommands failed: {message}").into())
+    } else {
+        Ok(commands)
+    }
+}
+
+/// Fire-and-forget background thread that fetches the full command list from
+/// the sidecar and updates the cache + emits a Tauri event on success.
+fn spawn_background_refresh(
+    app: &AppHandle,
+    cache: &super::slash_commands::SlashCommandCache,
+    request: &ListSlashCommandsRequest,
+    cache_key: (String, String, String),
+) {
+    if !cache.try_start_refresh() {
+        return; // another refresh already in flight
+    }
+
+    let app = app.clone();
+    let request = request.clone();
+
+    std::thread::Builder::new()
+        .name("slash-cmd-refresh".into())
+        .spawn(move || {
+            let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
+            let cache_state: tauri::State<'_, super::slash_commands::SlashCommandCache> =
+                app.state();
+
+            match fetch_from_sidecar(&sidecar_state, &request) {
+                Ok(commands) => {
+                    tracing::debug!(
+                        count = commands.len(),
+                        "Background slash command refresh succeeded"
+                    );
+                    cache_state.set(cache_key, commands, true);
+
+                    // Notify the frontend so it can invalidate its React Query cache.
+                    let payload = serde_json::json!({
+                        "provider": request.provider,
+                        "cwd": request.working_directory.as_deref().unwrap_or(""),
+                        "model": request.model_id.as_deref().unwrap_or(""),
+                    });
+                    if let Err(e) = app.emit("slash-commands-refreshed", payload) {
+                        tracing::warn!("Failed to emit slash-commands-refreshed: {e}");
                     }
+                }
+                Err(e) => {
+                    // Don't clear the cache — stale local data is better than nothing.
+                    tracing::warn!("Background slash command refresh failed: {e:?}");
                 }
             }
 
-            sidecar_state.unsubscribe(&rid);
-            if let Some(message) = error {
-                Err(anyhow::anyhow!("listSlashCommands failed: {message}").into())
-            } else {
-                Ok(commands)
-            }
-        }
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("listSlashCommands task failed: {e}"))?;
-
-    result
+            cache_state.finish_refresh();
+        })
+        .ok();
 }
 
 fn open_write_connection() -> Result<rusqlite::Connection> {

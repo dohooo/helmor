@@ -12,7 +12,11 @@ import type {
 	AgentProvider,
 	SlashCommandEntry,
 } from "@/lib/api";
-import { createSession, saveAutoCloseActionKinds } from "@/lib/api";
+import {
+	createSession,
+	listenSlashCommandsRefreshed,
+	saveAutoCloseActionKinds,
+} from "@/lib/api";
 import { describeActionKind } from "@/lib/commit-button-prompts";
 import type {
 	ComposerCustomTag,
@@ -294,7 +298,9 @@ export const WorkspaceComposerContainer = memo(
 			),
 			enabled: Boolean(workingDirectory),
 		});
-		const slashCommands = slashCommandsQuery.data ?? EMPTY_SLASH_COMMANDS;
+		const slashCommandsResponse = slashCommandsQuery.data;
+		const slashCommands =
+			slashCommandsResponse?.commands ?? EMPTY_SLASH_COMMANDS;
 		// Pending only (`isPending`) covers the very first fetch with no data
 		// yet; once we have data, `isFetching` covers background refetches but
 		// users don't need a spinner for those — the cached list is fine.
@@ -304,9 +310,40 @@ export const WorkspaceComposerContainer = memo(
 			!slashCommandsQuery.isError;
 		const slashCommandsError =
 			Boolean(workingDirectory) && slashCommandsQuery.isError;
+		// True when local skills are shown but the full list is still loading
+		// in the background via the sidecar.
+		const slashCommandsRefreshing =
+			slashCommandsResponse != null && !slashCommandsResponse.isComplete;
 		const refetchSlashCommands = useCallback(() => {
 			void slashCommandsQuery.refetch();
 		}, [slashCommandsQuery]);
+
+		// Listen for background sidecar refresh completion → invalidate query
+		// so the popup updates with the full list (including built-in commands).
+		useEffect(() => {
+			let disposed = false;
+			let unlisten: (() => void) | undefined;
+			void listenSlashCommandsRefreshed(() => {
+				if (disposed) return;
+				void queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.slashCommands(
+						slashProvider,
+						workingDirectory,
+						selectedModelId,
+					),
+				});
+			}).then((fn) => {
+				if (disposed) {
+					fn();
+					return;
+				}
+				unlisten = fn;
+			});
+			return () => {
+				disposed = true;
+				unlisten?.();
+			};
+		}, [queryClient, slashProvider, workingDirectory, selectedModelId]);
 		const handleComposerSubmit = useCallback(
 			(
 				prompt: string,
@@ -525,6 +562,7 @@ export const WorkspaceComposerContainer = memo(
 					slashCommands={slashCommands}
 					slashCommandsLoading={slashCommandsLoading}
 					slashCommandsError={slashCommandsError}
+					slashCommandsRefreshing={slashCommandsRefreshing}
 					onRetrySlashCommands={refetchSlashCommands}
 					workspaceRootPath={workingDirectory}
 				/>
