@@ -62,13 +62,18 @@
 		var(--workspace-pr-open-accent) 35%,
 		transparent
 	);
+	--workspace-pr-conflicts-accent: rgb(210, 153, 34);
+	--workspace-pr-conflicts-header-bg: color-mix(
+		in srgb,
+		var(--workspace-pr-conflicts-accent) 35%,
+		transparent
+	);
 	--workspace-pr-closed-accent: #da3633;
 	--workspace-pr-closed-header-bg: color-mix(
 		in srgb,
 		var(--workspace-pr-closed-accent) 35%,
 		transparent
 	);
-	--workspace-pr-conflicts-header-bg: #212830;
 	--plan: #48968c;
 	/* Terminal (xterm.js) — reuses app tokens where possible */
 	--terminal-background: var(--sidebar);
@@ -158,13 +163,18 @@
 		var(--workspace-pr-open-accent) 35%,
 		transparent
 	);
+	--workspace-pr-conflicts-accent: rgb(210, 153, 34);
+	--workspace-pr-conflicts-header-bg: color-mix(
+		in srgb,
+		var(--workspace-pr-conflicts-accent) 35%,
+		transparent
+	);
 	--workspace-pr-closed-accent: #da3633;
 	--workspace-pr-closed-header-bg: color-mix(
 		in srgb,
 		var(--workspace-pr-closed-accent) 35%,
 		transparent
 	);
-	--workspace-pr-conflicts-header-bg: #212830;
 	--plan: #48968c;
 	/* Terminal (xterm.js) — only overrides that differ from :root */
 	--terminal-selection: oklch(0.35 0.03 250);

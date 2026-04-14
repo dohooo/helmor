@@ -1,3 +1,5 @@
+import { Github } from "@lobehub/icons";
+import { ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
 	type CommitButtonState,
@@ -50,24 +52,26 @@ export function GitSectionHeader({
 			<div className="flex min-w-0 items-center gap-1.5">
 				{!prInfo ? (
 					<span className={INSPECTOR_SECTION_TITLE_CLASS}>Git</span>
-				) : null}
-				{prInfo && (
+				) : (
 					<Button
 						type="button"
 						variant="outline"
 						size="xs"
 						className={cn(
-							"my-0.5 bg-transparent text-[11px] font-normal tracking-[0.01em]",
+							"my-0.5 gap-1.5 bg-transparent font-normal tracking-[0.01em] hover:bg-transparent hover:opacity-80",
 							(commitButtonMode === "fix" || commitButtonMode === "closed") &&
-								"border-[var(--workspace-pr-closed-accent)] text-[var(--workspace-pr-closed-accent)]",
+								"border-[var(--workspace-pr-closed-accent)] text-[var(--workspace-pr-closed-accent)] hover:text-[var(--workspace-pr-closed-accent)]",
+							commitButtonMode === "resolve-conflicts" &&
+								"border-[var(--workspace-pr-conflicts-accent)] text-[var(--workspace-pr-conflicts-accent)] hover:text-[var(--workspace-pr-conflicts-accent)]",
 							commitButtonMode === "merge" &&
-								"border-[var(--workspace-pr-open-accent)] text-[var(--workspace-pr-open-accent)]",
+								"border-[var(--workspace-pr-open-accent)] text-[var(--workspace-pr-open-accent)] hover:text-[var(--workspace-pr-open-accent)]",
 							commitButtonMode === "merged" &&
-								"border-[var(--workspace-pr-merged-accent)] text-[var(--workspace-pr-merged-accent)]",
+								"border-[var(--workspace-pr-merged-accent)] text-[var(--workspace-pr-merged-accent)] hover:text-[var(--workspace-pr-merged-accent)]",
 						)}
 						onClick={onPrClick}
 					>
-						PR #{prInfo.number}
+						<Github size={12} />#{prInfo.number}
+						<ExternalLink size={12} strokeWidth={2} />
 					</Button>
 				)}
 			</div>

@@ -146,6 +146,7 @@ function getButtonVariant(
 	switch (mode) {
 		case "fix":
 		case "closed":
+		case "resolve-conflicts":
 		case "merge":
 		case "merged":
 			return "default";
@@ -160,6 +161,8 @@ function getModeClassName(mode: WorkspaceCommitButtonMode): string | undefined {
 		case "fix":
 		case "closed":
 			return "bg-[var(--workspace-pr-closed-accent)] text-white hover:bg-[var(--workspace-pr-closed-accent)]";
+		case "resolve-conflicts":
+			return "bg-[var(--workspace-pr-conflicts-accent)] text-white hover:bg-[var(--workspace-pr-conflicts-accent)]";
 		case "merge":
 			return "bg-[var(--workspace-pr-open-accent)] text-white hover:bg-[var(--workspace-pr-open-accent)]";
 		case "merged":
