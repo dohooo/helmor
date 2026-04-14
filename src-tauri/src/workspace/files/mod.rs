@@ -9,7 +9,7 @@ pub use changes::{
 };
 pub use editor::{
     list_editor_files, list_editor_files_with_content, list_workspace_files, read_editor_file,
-    read_file_git_original, stat_editor_file, write_editor_file,
+    read_file_at_ref, stat_editor_file, write_editor_file,
 };
 pub use types::{
     EditorFileListItem, EditorFilePrefetchItem, EditorFileReadResponse, EditorFileStatResponse,

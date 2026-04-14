@@ -28,7 +28,7 @@ import {
 	stageWorkspaceFile,
 	unstageWorkspaceFile,
 } from "@/lib/api";
-import type { InspectorFileItem } from "@/lib/editor-session";
+import type { DiffOpenOptions, InspectorFileItem } from "@/lib/editor-session";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import { GitSectionHeader } from "./git-section-header";
@@ -48,7 +48,7 @@ type ChangesSectionProps = {
 	changes: InspectorFileItem[];
 	editorMode: boolean;
 	activeEditorPath?: string | null;
-	onOpenEditorFile: (path: string) => void;
+	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
 	commitButtonMode?: WorkspaceCommitButtonMode;
@@ -343,7 +343,7 @@ function ChangesGroup({
 	onDiscard?: (path: string) => void;
 	editorMode: boolean;
 	activeEditorPath?: string | null;
-	onOpenEditorFile: (path: string) => void;
+	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 }) {
 	return (
@@ -444,11 +444,22 @@ function BranchDiffSection({
 	treeView: boolean;
 	editorMode: boolean;
 	activeEditorPath?: string | null;
-	onOpenEditorFile: (path: string) => void;
+	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 }) {
 	const branchLabel = branch ?? "HEAD";
 	const targetLabel = targetBranch ?? "main";
+
+	const handleOpenFile = useCallback(
+		(path: string, options?: DiffOpenOptions) => {
+			onOpenEditorFile(path, {
+				fileStatus: options?.fileStatus ?? "M",
+				originalRef: targetBranch ?? undefined,
+				modifiedRef: "HEAD",
+			});
+		},
+		[onOpenEditorFile, targetBranch],
+	);
 
 	return (
 		<div>
@@ -506,7 +517,7 @@ function BranchDiffSection({
 							changes={changes}
 							editorMode={editorMode}
 							activeEditorPath={activeEditorPath}
-							onOpenEditorFile={onOpenEditorFile}
+							onOpenEditorFile={handleOpenFile}
 							flashingPaths={flashingPaths}
 						/>
 					) : (
@@ -514,7 +525,7 @@ function BranchDiffSection({
 							changes={changes}
 							editorMode={editorMode}
 							activeEditorPath={activeEditorPath}
-							onOpenEditorFile={onOpenEditorFile}
+							onOpenEditorFile={handleOpenFile}
 							flashingPaths={flashingPaths}
 						/>
 					)}
@@ -572,7 +583,7 @@ function ChangesTreeView({
 	changes: InspectorFileItem[];
 	editorMode: boolean;
 	activeEditorPath?: string | null;
-	onOpenEditorFile: (path: string) => void;
+	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 	action?: StageActionKind;
 	onStageAction?: (path: string) => void;
@@ -644,7 +655,7 @@ function TreeNodeList({
 	depth: number;
 	editorMode: boolean;
 	activeEditorPath?: string | null;
-	onOpenEditorFile: (path: string) => void;
+	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 	action?: StageActionKind;
 	onStageAction?: (path: string) => void;
@@ -731,11 +742,18 @@ function TreeNodeList({
 						style={{ paddingLeft: `${depth * 12 + 22}px` }}
 						role="treeitem"
 						tabIndex={0}
-						onClick={() => file && onOpenEditorFile(file.absolutePath)}
+						onClick={() =>
+							file &&
+							onOpenEditorFile(file.absolutePath, {
+								fileStatus: file.status,
+							})
+						}
 						onKeyDown={(event) => {
 							if ((event.key === "Enter" || event.key === " ") && file) {
 								event.preventDefault();
-								onOpenEditorFile(file.absolutePath);
+								onOpenEditorFile(file.absolutePath, {
+									fileStatus: file.status,
+								});
 							}
 						}}
 					>
@@ -773,7 +791,7 @@ function ChangesFlatView({
 	changes: InspectorFileItem[];
 	editorMode: boolean;
 	activeEditorPath?: string | null;
-	onOpenEditorFile: (path: string) => void;
+	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 	action?: StageActionKind;
 	onStageAction?: (path: string) => void;
@@ -797,11 +815,17 @@ function ChangesFlatView({
 					)}
 					role="button"
 					tabIndex={0}
-					onClick={() => onOpenEditorFile(change.absolutePath)}
+					onClick={() =>
+						onOpenEditorFile(change.absolutePath, {
+							fileStatus: change.status,
+						})
+					}
 					onKeyDown={(event) => {
 						if (event.key === "Enter" || event.key === " ") {
 							event.preventDefault();
-							onOpenEditorFile(change.absolutePath);
+							onOpenEditorFile(change.absolutePath, {
+								fileStatus: change.status,
+							});
 						}
 					}}
 				>

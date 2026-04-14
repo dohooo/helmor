@@ -83,12 +83,34 @@ export function WorkspaceEditorSurface({
 			try {
 				const api = await import("@/lib/api");
 				const isDiff = editorSession.kind === "diff";
+				const status = editorSession.fileStatus ?? "M";
+				const origRef = editorSession.originalRef ?? "HEAD";
 
-				const [response, gitOriginal] = await Promise.all([
-					api.readEditorFile(editorSession.path),
-					isDiff && workspaceRootPath
-						? api.readFileGitOriginal(workspaceRootPath, editorSession.path)
-						: Promise.resolve(null),
+				// Fetch original side (from git ref)
+				const originalPromise =
+					isDiff && status !== "A" && workspaceRootPath
+						? api.readFileAtRef(workspaceRootPath, editorSession.path, origRef)
+						: Promise.resolve(null);
+
+				// Fetch modified side (from disk or git ref)
+				const modifiedPromise = editorSession.modifiedRef
+					? workspaceRootPath
+						? api.readFileAtRef(
+								workspaceRootPath,
+								editorSession.path,
+								editorSession.modifiedRef,
+							)
+						: Promise.resolve(null)
+					: status !== "D"
+						? api
+								.readEditorFile(editorSession.path)
+								.then((r) => r.content)
+								.catch(() => null)
+						: Promise.resolve(null);
+
+				const [original, modified] = await Promise.all([
+					originalPromise,
+					modifiedPromise,
 				]);
 
 				if (cancelled) {
@@ -99,10 +121,9 @@ export function WorkspaceEditorSurface({
 					...editorSession,
 					originalText:
 						editorSession.originalText ??
-						(isDiff ? (gitOriginal ?? "") : response.content),
-					modifiedText: editorSession.modifiedText ?? response.content,
+						(isDiff ? (original ?? "") : (modified ?? "")),
+					modifiedText: editorSession.modifiedText ?? modified ?? "",
 					dirty: Boolean(editorSession.dirty),
-					mtimeMs: response.mtimeMs,
 				});
 			} catch (error) {
 				if (cancelled) {
