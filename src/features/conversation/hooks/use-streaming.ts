@@ -82,6 +82,7 @@ type UseConversationStreamingArgs = {
 	onSendingSessionsChange?: (sessionIds: Set<string>) => void;
 	onInteractionSessionsChange?: (
 		sessionWorkspaceMap: Map<string, string>,
+		interactionCounts: Map<string, number>,
 	) => void;
 	onSessionCompleted?: (sessionId: string, workspaceId: string) => void;
 };
@@ -178,6 +179,12 @@ export function useConversationStreaming({
 	}, [sendingContextKeys, sendingSessionIds]);
 	useLayoutEffect(() => {
 		const interactionSessions = new Map<string, string>();
+		const interactionCounts = new Map<string, number>();
+
+		const resolveWorkspace = (contextKey: string): string | null =>
+			interactionWorkspaceByContext[contextKey] ??
+			sendingWorkspaceMapRef.current.get(contextKey) ??
+			null;
 
 		for (const [contextKey, permissions] of Object.entries(
 			pendingPermissionsByContext,
@@ -185,11 +192,14 @@ export function useConversationStreaming({
 			if (permissions.length === 0 || !contextKey.startsWith("session:")) {
 				continue;
 			}
-			const workspaceId = interactionWorkspaceByContext[contextKey];
-			if (!workspaceId) {
-				continue;
-			}
-			interactionSessions.set(contextKey.slice(8), workspaceId);
+			const workspaceId = resolveWorkspace(contextKey);
+			if (!workspaceId) continue;
+			const sessionId = contextKey.slice(8);
+			interactionSessions.set(sessionId, workspaceId);
+			interactionCounts.set(
+				sessionId,
+				(interactionCounts.get(sessionId) ?? 0) + permissions.length,
+			);
 		}
 
 		for (const [contextKey, deferred] of Object.entries(
@@ -198,11 +208,14 @@ export function useConversationStreaming({
 			if (!deferred || !contextKey.startsWith("session:")) {
 				continue;
 			}
-			const workspaceId = interactionWorkspaceByContext[contextKey];
-			if (!workspaceId) {
-				continue;
-			}
-			interactionSessions.set(contextKey.slice(8), workspaceId);
+			const workspaceId = resolveWorkspace(contextKey);
+			if (!workspaceId) continue;
+			const sessionId = contextKey.slice(8);
+			interactionSessions.set(sessionId, workspaceId);
+			interactionCounts.set(
+				sessionId,
+				(interactionCounts.get(sessionId) ?? 0) + 1,
+			);
 		}
 
 		for (const [contextKey, elicitation] of Object.entries(
@@ -211,25 +224,34 @@ export function useConversationStreaming({
 			if (!elicitation || !contextKey.startsWith("session:")) {
 				continue;
 			}
-			const workspaceId = interactionWorkspaceByContext[contextKey];
-			if (!workspaceId) {
-				continue;
-			}
-			interactionSessions.set(contextKey.slice(8), workspaceId);
+			const workspaceId = resolveWorkspace(contextKey);
+			if (!workspaceId) continue;
+			const sessionId = contextKey.slice(8);
+			interactionSessions.set(sessionId, workspaceId);
+			interactionCounts.set(
+				sessionId,
+				(interactionCounts.get(sessionId) ?? 0) + 1,
+			);
 		}
 
 		for (const [contextKey, active] of Object.entries(planReviewByContext)) {
 			if (!active || !contextKey.startsWith("session:")) {
 				continue;
 			}
-			const workspaceId = interactionWorkspaceByContext[contextKey];
-			if (!workspaceId) {
-				continue;
-			}
-			interactionSessions.set(contextKey.slice(8), workspaceId);
+			const workspaceId = resolveWorkspace(contextKey);
+			if (!workspaceId) continue;
+			const sessionId = contextKey.slice(8);
+			interactionSessions.set(sessionId, workspaceId);
+			interactionCounts.set(
+				sessionId,
+				(interactionCounts.get(sessionId) ?? 0) + 1,
+			);
 		}
 
-		onInteractionSessionsChangeRef.current?.(interactionSessions);
+		onInteractionSessionsChangeRef.current?.(
+			interactionSessions,
+			interactionCounts,
+		);
 	}, [
 		interactionWorkspaceByContext,
 		pendingElicitationByContext,

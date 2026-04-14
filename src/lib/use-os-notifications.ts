@@ -5,8 +5,7 @@ type NotifyFn = (opts: { title: string; body: string }) => void;
 
 /** Sends native OS notifications, gated by the `notifications` setting. */
 export function useOsNotifications(settings: AppSettings): NotifyFn {
-	const permissionCheckedRef = useRef(false);
-	const permissionGrantedRef = useRef(false);
+	const permissionRequestedRef = useRef(false);
 
 	return useCallback(
 		({ title, body }: { title: string; body: string }) => {
@@ -17,20 +16,18 @@ export function useOsNotifications(settings: AppSettings): NotifyFn {
 					const { isPermissionGranted, requestPermission, sendNotification } =
 						await import("@tauri-apps/plugin-notification");
 
-					if (!permissionCheckedRef.current) {
-						permissionCheckedRef.current = true;
-						let granted = await isPermissionGranted();
-						if (!granted) {
-							const result = await requestPermission();
-							granted = result === "granted";
-						}
-						permissionGrantedRef.current = granted;
+					let granted = await isPermissionGranted();
+					if (!granted) {
+						// Only pop the OS permission dialog once per session
+						if (permissionRequestedRef.current) return;
+						permissionRequestedRef.current = true;
+						granted = (await requestPermission()) === "granted";
 					}
 
-					if (!permissionGrantedRef.current) return;
+					if (!granted) return;
 					sendNotification({ title, body });
-				} catch {
-					// non-Tauri env or permission denied
+				} catch (err) {
+					console.warn("[os-notification] failed to send:", err);
 				}
 			})();
 		},
