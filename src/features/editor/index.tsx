@@ -39,7 +39,7 @@ type DiffController = Awaited<
 
 export function WorkspaceEditorSurface({
 	editorSession,
-	workspaceRootPath: _workspaceRootPath,
+	workspaceRootPath,
 	onChangeSession,
 	onExit,
 	onError,
@@ -81,8 +81,15 @@ export function WorkspaceEditorSurface({
 
 		void (async () => {
 			try {
-				const { readEditorFile } = await import("@/lib/api");
-				const response = await readEditorFile(editorSession.path);
+				const api = await import("@/lib/api");
+				const isDiff = editorSession.kind === "diff";
+
+				const [response, gitOriginal] = await Promise.all([
+					api.readEditorFile(editorSession.path),
+					isDiff && workspaceRootPath
+						? api.readFileGitOriginal(workspaceRootPath, editorSession.path)
+						: Promise.resolve(null),
+				]);
 
 				if (cancelled) {
 					return;
@@ -90,7 +97,9 @@ export function WorkspaceEditorSurface({
 
 				onChangeSessionRef.current({
 					...editorSession,
-					originalText: editorSession.originalText ?? response.content,
+					originalText:
+						editorSession.originalText ??
+						(isDiff ? (gitOriginal ?? "") : response.content),
 					modifiedText: editorSession.modifiedText ?? response.content,
 					dirty: Boolean(editorSession.dirty),
 					mtimeMs: response.mtimeMs,
@@ -112,7 +121,7 @@ export function WorkspaceEditorSurface({
 		return () => {
 			cancelled = true;
 		};
-	}, [canRenderDiff, canRenderFile, editorSession]);
+	}, [canRenderDiff, canRenderFile, editorSession, workspaceRootPath]);
 
 	// Dispose editors on unmount (separate from the switching effect so the
 	// fast-path can skip cleanup without leaking on unmount).
