@@ -627,6 +627,14 @@ export function useWorkspacesSidebarController({
 			await refetchNavigation();
 			prefetchWorkspace(response.selectedWorkspaceId);
 			onSelectWorkspace(response.selectedWorkspaceId);
+
+			if (!response.createdRepository) {
+				pushWorkspaceToast(
+					"Switched to the existing workspace.",
+					"Repository already added",
+					"default",
+				);
+			}
 		} catch (error) {
 			pushWorkspaceToast(
 				describeUnknownError(error, "Unable to add repository."),

@@ -13,7 +13,7 @@ import type { PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeSessionManager } from "./claude-session-manager.js";
 import { CodexSessionManager } from "./codex-session-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
-import { logger } from "./logger.js";
+import { errorDetails, logger } from "./logger.js";
 import {
 	errorMessage,
 	optionalString,
@@ -44,7 +44,7 @@ const emitter = createSidecarEmitter((event) => {
 // ---------------------------------------------------------------------------
 
 process.on("uncaughtException", (err) => {
-	logger.error("uncaughtException", { err: String(err) });
+	logger.error("uncaughtException", errorDetails(err));
 	try {
 		emitter.error(null, "Internal sidecar error", true);
 	} catch {
@@ -53,7 +53,7 @@ process.on("uncaughtException", (err) => {
 });
 
 process.on("unhandledRejection", (reason) => {
-	logger.error("unhandledRejection", { reason: String(reason) });
+	logger.error("unhandledRejection", errorDetails(reason));
 	try {
 		emitter.error(null, "Internal sidecar error", true);
 	} catch {
@@ -86,7 +86,7 @@ async function handleSendMessage(
 		logger.debug(`[${id}] sendMessage completed`);
 	} catch (err) {
 		const msg = errorMessage(err);
-		logger.error(`[${id}] sendMessage FAILED: ${msg}`);
+		logger.error(`[${id}] sendMessage FAILED: ${msg}`, errorDetails(err));
 		emitter.error(id, msg);
 	}
 }
@@ -116,7 +116,7 @@ async function handleGenerateTitle(
 		}
 	} catch (err) {
 		const msg = errorMessage(err);
-		logger.error(`[${id}] generateTitle FAILED: ${msg}`);
+		logger.error(`[${id}] generateTitle FAILED: ${msg}`, errorDetails(err));
 		emitter.error(id, msg);
 	}
 }
@@ -137,7 +137,7 @@ async function handleListSlashCommands(
 		logger.debug(`[${id}] listSlashCommands → ${commands.length} entries`);
 	} catch (err) {
 		const msg = errorMessage(err);
-		logger.error(`[${id}] listSlashCommands FAILED: ${msg}`);
+		logger.error(`[${id}] listSlashCommands FAILED: ${msg}`, errorDetails(err));
 		emitter.error(id, msg);
 	}
 }
@@ -153,7 +153,9 @@ async function handleStopSession(
 		await managers[provider].stopSession(sessionId);
 		emitter.stopped(id, sessionId);
 	} catch (err) {
-		emitter.error(id, errorMessage(err));
+		const msg = errorMessage(err);
+		logger.error(`[${id}] stopSession FAILED: ${msg}`, errorDetails(err));
+		emitter.error(id, msg);
 	}
 }
 
@@ -187,7 +189,7 @@ async function handleShutdown(id: string): Promise<void> {
 	]);
 	for (const r of results) {
 		if (r.status === "rejected") {
-			logger.error(`shutdown: manager rejected: ${errorMessage(r.reason)}`);
+			logger.error("shutdown: manager rejected", errorDetails(r.reason));
 		}
 	}
 	emitter.pong(id);
@@ -223,6 +225,10 @@ for await (const line of rl) {
 	try {
 		request = parseRequest(line);
 	} catch (err) {
+		logger.error("Invalid request", {
+			lineLength: line.length,
+			...errorDetails(err),
+		});
 		emitter.error(
 			null,
 			`Invalid request: ${errorMessage(err)} (${line.slice(0, 100)})`,
@@ -306,10 +312,14 @@ for await (const line of rl) {
 				emitter.pong(id);
 				break;
 			default:
+				logger.error(`[${id}] Unknown method`, { method });
 				emitter.error(id, `Unknown method: ${method}`);
 		}
 	} catch (err) {
-		logger.error(`Dispatch error for [${id}] ${method}`, { err: String(err) });
+		logger.error(`Dispatch error for [${id}] ${method}`, {
+			method,
+			...errorDetails(err),
+		});
 		emitter.error(id, "Internal sidecar error", true);
 	}
 }

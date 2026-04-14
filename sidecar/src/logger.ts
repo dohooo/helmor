@@ -41,6 +41,32 @@ function fmtValue(v: unknown): string {
 	return String(v);
 }
 
+export function errorDetails(err: unknown): Record<string, unknown> {
+	if (err instanceof Error) {
+		const details: Record<string, unknown> = {
+			error: err.message,
+			errorName: err.name,
+		};
+		if (err.stack) {
+			details.errorStack = err.stack;
+		}
+		if ("cause" in err && err.cause !== undefined) {
+			details.errorCause = String(err.cause);
+		}
+		return details;
+	}
+
+	if (typeof err === "object" && err !== null) {
+		try {
+			return { error: JSON.stringify(err) };
+		} catch {
+			return { error: String(err) };
+		}
+	}
+
+	return { error: String(err) };
+}
+
 class Logger {
 	private minLevel: number;
 	private files: Record<Level, WriteStream | undefined> = {

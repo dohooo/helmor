@@ -315,7 +315,13 @@ impl ManagedSidecar {
             *guard = Some(process);
 
             // Start the reader/dispatcher thread (always spawns fresh)
-            self.start_reader_thread(reader);
+            if let Err(error) = self.start_reader_thread(reader) {
+                tracing::error!(error = %error, "Failed to start sidecar reader thread");
+                if let Some(mut process) = guard.take() {
+                    process.kill();
+                }
+                return Err(error);
+            }
         }
 
         guard.as_ref().unwrap().send(request)
@@ -393,7 +399,7 @@ impl ManagedSidecar {
     /// events to the correct per-request channel. On exit (EOF / error), the
     /// thread clears `reader_running` and drops all listener senders so that
     /// blocked `rx.iter()` calls in `stream_via_sidecar` unblock immediately.
-    fn start_reader_thread(&self, reader: BufReader<std::process::ChildStdout>) {
+    fn start_reader_thread(&self, reader: BufReader<std::process::ChildStdout>) -> Result<()> {
         // Reset flag — previous reader (if any) already exited or we killed its process.
         if let Ok(mut running) = self.reader_running.lock() {
             *running = false;
@@ -401,13 +407,14 @@ impl ManagedSidecar {
 
         let mut running = self.reader_running.lock().unwrap();
         if *running {
-            return;
+            return Ok(());
         }
         *running = true;
         drop(running);
 
         let listeners = Arc::clone(&self.listeners);
         let reader_flag = Arc::clone(&self.reader_running);
+        let thread_reader_flag = Arc::clone(&reader_flag);
 
         std::thread::Builder::new()
             .name("sidecar-reader".into())
@@ -471,7 +478,7 @@ impl ManagedSidecar {
                 // --- Cleanup on exit ---
                 tracing::debug!("Reader thread exiting — cleaning up");
                 // 1. Clear reader_running so next send() spawns a fresh reader.
-                if let Ok(mut flag) = reader_flag.lock() {
+                if let Ok(mut flag) = thread_reader_flag.lock() {
                     *flag = false;
                 }
                 // 2. Send an error event to every active listener so in-flight
@@ -498,7 +505,13 @@ impl ManagedSidecar {
                     tracing::debug!(count, "Cleared listeners");
                 }
             })
-            .ok();
+            .map(|_| ())
+            .map_err(|error| {
+                if let Ok(mut flag) = reader_flag.lock() {
+                    *flag = false;
+                }
+                anyhow::anyhow!("Failed to spawn sidecar reader thread: {error}")
+            })
     }
 }
 

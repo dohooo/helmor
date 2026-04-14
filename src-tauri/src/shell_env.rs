@@ -172,10 +172,12 @@ mod unix {
         let mut stdout = child.stdout.take().unwrap();
         let reader = std::thread::Builder::new()
             .name("shell-env-reader".into())
-            .spawn(move || {
+            .spawn(move || -> anyhow::Result<Vec<u8>> {
                 let mut buf = Vec::with_capacity(8 * 1024);
-                stdout.read_to_end(&mut buf).ok();
-                buf
+                stdout
+                    .read_to_end(&mut buf)
+                    .map_err(|error| anyhow::anyhow!("read login shell stdout: {error}"))?;
+                Ok(buf)
             })?;
 
         // Poll for exit.
@@ -186,7 +188,10 @@ mod unix {
                     if !status.success() {
                         anyhow::bail!("`{program} -l -c env` exited with {status}");
                     }
-                    return Ok(reader.join().unwrap_or_default());
+                    let output = reader
+                        .join()
+                        .map_err(|_| anyhow::anyhow!("login shell stdout reader panicked"))??;
+                    return Ok(output);
                 }
                 Ok(None) => {
                     if std::time::Instant::now() >= deadline {

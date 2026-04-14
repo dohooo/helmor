@@ -485,7 +485,7 @@ fn setup_workspace_filesystem(
                         );
                     }
                     if let Some(ref src) = source_branch {
-                        let import_branch = format!("{src}-import");
+                        let import_branch = format!("{src}-copy");
                         if let Err(e) =
                             setup_imported_worktree(root, &workspace_dir, &import_branch, src)
                         {
@@ -718,7 +718,7 @@ fn resolve_source_branch(
 
 /// Create a git worktree for an imported active workspace.
 ///
-/// Creates `new_branch` (e.g. `foo-import`) based on the commit that
+/// Creates `new_branch` (e.g. `foo-copy`) based on the commit that
 /// `source_branch` points to.  The source branch itself is likely still
 /// checked out in a Conductor worktree, so we create a new branch.
 fn setup_imported_worktree(
