@@ -146,14 +146,26 @@ function getButtonVariant(
 	switch (mode) {
 		case "fix":
 		case "closed":
-			return "destructive";
+		case "merge":
 		case "merged":
-		case "resolve-conflicts":
-			return "secondary";
-		case "open-pr":
-			return "outline";
-		default:
 			return "default";
+		default:
+			return "outline";
+	}
+}
+
+/** Mode-specific button color overrides (layered on top of the variant). */
+function getModeClassName(mode: WorkspaceCommitButtonMode): string | undefined {
+	switch (mode) {
+		case "fix":
+		case "closed":
+			return "bg-[var(--workspace-pr-closed-accent)] text-white hover:bg-[var(--workspace-pr-closed-accent)]";
+		case "merge":
+			return "bg-[var(--workspace-pr-open-accent)] text-white hover:bg-[var(--workspace-pr-open-accent)]";
+		case "merged":
+			return "bg-[var(--workspace-pr-merged-accent)] text-white hover:bg-[var(--workspace-pr-merged-accent)]";
+		default:
+			return undefined;
 	}
 }
 
@@ -207,6 +219,7 @@ export function WorkspaceCommitButton({
 	const isBusy = currentState === "busy";
 	const isGhostMode = mode === "merged" || mode === "closed";
 	const buttonVariant = getButtonVariant(mode);
+	const modeClassName = getModeClassName(mode);
 
 	const setState = (nextState: CommitButtonState) => {
 		onStateChange?.(nextState);
@@ -284,7 +297,12 @@ export function WorkspaceCommitButton({
 			variant={buttonVariant}
 			disabled={isBusy || currentState === "disabled" || disabled}
 			onClick={isGhostMode ? undefined : () => runAction(onCommit)}
-			className={cn("min-w-0", className, isGhostMode && "pointer-events-none")}
+			className={cn(
+				"min-w-0",
+				modeClassName,
+				className,
+				isGhostMode && "pointer-events-none",
+			)}
 		>
 			{mainIcon}
 			<span>{mainText}</span>
@@ -304,7 +322,7 @@ export function WorkspaceCommitButton({
 					variant={buttonVariant}
 					disabled={isBusy || currentState === "disabled" || disabled}
 					onClick={() => runAction(onCommit)}
-					className="min-w-0"
+					className={cn("min-w-0", modeClassName)}
 				>
 					{mainIcon}
 					<span>{mainText}</span>
@@ -322,6 +340,7 @@ export function WorkspaceCommitButton({
 							isBusy || currentState === "disabled" || disabled || !hasMenuItems
 						}
 						aria-label={optionsAriaLabel}
+						className={modeClassName}
 					>
 						<ChevronDown strokeWidth={2.2} />
 					</Button>

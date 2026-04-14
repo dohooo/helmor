@@ -54,14 +54,16 @@ export function GitSectionHeader({
 				{prInfo && (
 					<Button
 						type="button"
-						variant="link"
+						variant="outline"
+						size="xs"
 						className={cn(
-							"h-9 self-center rounded-none px-0 py-0 pt-[4px] text-[11px] font-normal leading-none tracking-[0.01em] no-underline",
-							prInfo.isMerged
-								? "text-[var(--workspace-pr-merged-link)] hover:text-[var(--workspace-pr-merged-link)]"
-								: prInfo.state === "OPEN"
-									? "text-[var(--workspace-pr-open-accent)] hover:text-[var(--workspace-pr-open-accent)]"
-									: "text-muted-foreground hover:text-foreground",
+							"my-0.5 bg-transparent text-[11px] font-normal tracking-[0.01em]",
+							(commitButtonMode === "fix" || commitButtonMode === "closed") &&
+								"border-[var(--workspace-pr-closed-accent)] text-[var(--workspace-pr-closed-accent)]",
+							commitButtonMode === "merge" &&
+								"border-[var(--workspace-pr-open-accent)] text-[var(--workspace-pr-open-accent)]",
+							commitButtonMode === "merged" &&
+								"border-[var(--workspace-pr-merged-accent)] text-[var(--workspace-pr-merged-accent)]",
 						)}
 						onClick={onPrClick}
 					>
