@@ -94,7 +94,8 @@ export function ActionsSection({
 	});
 	const gitStatus = gitStatusQuery.data ?? EMPTY_GIT_ACTION_STATUS;
 	const prStatus = prStatusQuery.data ?? EMPTY_PR_ACTION_STATUS;
-	const gitRows = buildGitStatusRows(gitStatus, prStatus, prInfo);
+	const gitRows = buildGitRows(gitStatus);
+	const reviewRows = buildReviewRows(prStatus, prInfo);
 	const actionDisabled = commitButtonState === "busy";
 	const handleSync = useCallback(async () => {
 		if (!workspaceId || syncPending) {
@@ -184,7 +185,7 @@ export function ActionsSection({
 			>
 				<div className="px-2.5 pb-1 pt-2">
 					<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
-						Git status
+						Git
 					</span>
 				</div>
 				{gitRows.map((item) => {
@@ -225,6 +226,25 @@ export function ActionsSection({
 						</div>
 					);
 				})}
+
+				{reviewRows.length > 0 && (
+					<>
+						<div className="px-2.5 pb-1 pt-2.5">
+							<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+								Review
+							</span>
+						</div>
+						{reviewRows.map((item) => (
+							<div
+								key={item.label}
+								className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60"
+							>
+								<StatusIcon status={item.status} />
+								<span className="truncate">{item.label}</span>
+							</div>
+						))}
+					</>
+				)}
 
 				{prStatus.deployments.length > 0 && (
 					<>
@@ -318,21 +338,13 @@ function StatusIcon({ status }: { status: ActionStatusKind }) {
 	);
 }
 
-function buildGitStatusRows(
-	gitStatus: WorkspaceGitActionStatus,
-	prStatus: WorkspacePrActionStatus,
-	prInfo: PullRequestInfo | null,
-): GitStatusItem[] {
+function buildGitRows(gitStatus: WorkspaceGitActionStatus): GitStatusItem[] {
 	const uncommittedCount = gitStatus.uncommittedCount;
 	const conflictCount = gitStatus.conflictCount;
-	const hasMergeConflict =
-		conflictCount > 0 || prStatus.mergeable === "CONFLICTING";
 	const syncTargetBranch =
 		gitStatus.syncTargetBranch?.trim() || "target branch";
-	const pr = prStatus.pr ?? prInfo;
-	const isMerged = pr?.isMerged ?? false;
 
-	const rows: GitStatusItem[] = [
+	return [
 		uncommittedCount === 0
 			? {
 					label: "No uncommitted changes",
@@ -350,7 +362,7 @@ function buildGitStatusRows(
 						mode: "commit-and-push",
 					},
 				},
-		hasMergeConflict
+		conflictCount > 0
 			? {
 					label: "Merge conflicts detected",
 					status: "failure",
@@ -382,6 +394,17 @@ function buildGitStatusRows(
 							status: "pending",
 						},
 	];
+}
+
+function buildReviewRows(
+	prStatus: WorkspacePrActionStatus,
+	prInfo: PullRequestInfo | null,
+): GitStatusItem[] {
+	const pr = prStatus.pr ?? prInfo;
+	const isMerged = pr?.isMerged ?? false;
+	const hasMergeConflict = prStatus.mergeable === "CONFLICTING";
+
+	const rows: GitStatusItem[] = [];
 
 	if (isMerged || prStatus.reviewDecision === "APPROVED") {
 		rows.push({ label: "Review approved", status: "success" });
@@ -389,8 +412,15 @@ function buildGitStatusRows(
 		rows.push({ label: "PR closed", status: "failure" });
 	} else if (prStatus.reviewDecision === "CHANGES_REQUESTED") {
 		rows.push({ label: "Changes requested", status: "failure" });
-	} else {
+	} else if (prStatus.remoteState !== "noPr") {
 		rows.push({ label: "Waiting for PR review", status: "pending" });
+	}
+
+	if (hasMergeConflict) {
+		rows.push({
+			label: "Merge conflicts detected",
+			status: "failure",
+		});
 	}
 
 	return rows;
