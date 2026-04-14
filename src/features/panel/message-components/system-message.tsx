@@ -146,7 +146,7 @@ function MessageTimestamp({ createdAt }: { createdAt?: string }) {
 	if (Number.isNaN(date.getTime())) return null;
 	return (
 		<>
-			<span className="mx-1 text-[11px] text-muted-foreground/40">·</span>
+			<span className="mx-0.5 text-[11px] text-muted-foreground/60">•</span>
 			<span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
 				{formatDistanceToNow(date, { addSuffix: true })}
 			</span>
@@ -177,8 +177,8 @@ export function ChatSystemMessage({ message }: { message: RenderedMessage }) {
 					return null;
 				})}
 			</div>
-			<CopyMessageButton />
 			<MessageTimestamp createdAt={message.createdAt} />
+			<CopyMessageButton />
 		</div>
 	);
 }
