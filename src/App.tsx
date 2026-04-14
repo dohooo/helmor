@@ -82,6 +82,7 @@ import {
 	helmorQueryPersister,
 	sessionThreadMessagesQueryOptions,
 	workspaceDetailQueryOptions,
+	workspaceGitActionStatusQueryOptions,
 	workspaceGroupsQueryOptions,
 	workspacePrQueryOptions,
 	workspaceSessionsQueryOptions,
@@ -442,6 +443,15 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		enabled: isIdentityConnected && selectedWorkspaceId !== null,
 	});
 	const workspacePrInfo = workspacePrQuery.data ?? null;
+
+	// Git working-tree status for the commit button's mode gate:
+	// when a PR is open but local changes exist, show "Commit and Push"
+	// instead of "Merge" so the user doesn't accidentally lose work.
+	const gitActionStatusQuery = useQuery({
+		...workspaceGitActionStatusQueryOptions(selectedWorkspaceId ?? "__none__"),
+		enabled: selectedWorkspaceId !== null,
+	});
+	const uncommittedCount = gitActionStatusQuery.data?.uncommittedCount ?? 0;
 
 	// Reactively transition workspace sidebar status when the PR query
 	// detects a state change. Handles PRs created/merged/closed externally.
@@ -1088,6 +1098,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		selectedWorkspaceIdRef,
 		workspaceManualStatus: selectedWorkspaceManualStatus,
 		workspacePrInfo,
+		uncommittedCount,
 		sendingSessionIds,
 		onSelectSession: handleSelectSession,
 	});

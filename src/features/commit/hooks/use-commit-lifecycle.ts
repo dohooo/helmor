@@ -42,6 +42,7 @@ export function useWorkspaceCommitLifecycle({
 	selectedWorkspaceIdRef,
 	workspaceManualStatus,
 	workspacePrInfo,
+	uncommittedCount,
 	sendingSessionIds,
 	onSelectSession,
 }: {
@@ -49,6 +50,7 @@ export function useWorkspaceCommitLifecycle({
 	selectedWorkspaceIdRef: MutableRefObject<string | null>;
 	workspaceManualStatus: string | null;
 	workspacePrInfo: PullRequestInfo | null;
+	uncommittedCount: number;
 	sendingSessionIds: Set<string>;
 	onSelectSession: (sessionId: string | null) => void;
 }) {
@@ -324,12 +326,16 @@ export function useWorkspaceCommitLifecycle({
 
 		if (workspacePrInfo) {
 			if (workspacePrInfo.isMerged) return "merged";
-			if (workspacePrInfo.state === "OPEN") return "merge";
+			if (workspacePrInfo.state === "OPEN") {
+				// Gate: must commit & push local changes before allowing merge
+				if (uncommittedCount > 0) return "commit-and-push";
+				return "merge";
+			}
 			if (workspacePrInfo.state === "CLOSED") return "create-pr";
 		}
 
 		return "create-pr";
-	}, [commitLifecycle, workspacePrInfo]);
+	}, [commitLifecycle, uncommittedCount, workspacePrInfo]);
 
 	const commitButtonState = useMemo<CommitButtonState>(() => {
 		if (!commitLifecycle) return "idle";
