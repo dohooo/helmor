@@ -1085,6 +1085,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		queuePendingPromptForSession,
 	} = useWorkspaceCommitLifecycle({
 		queryClient,
+		selectedWorkspaceId,
 		selectedWorkspaceIdRef,
 		workspaceManualStatus: selectedWorkspaceManualStatus,
 		workspacePrInfo,
