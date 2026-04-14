@@ -105,7 +105,7 @@ export function RunTab({
 							<Button
 								variant={status === "running" ? "destructive" : "secondary"}
 								size="sm"
-								className="border border-border/40 text-[12px] shadow-sm backdrop-blur-sm transition-none"
+								className="text-[12px] shadow-sm backdrop-blur-sm transition-none"
 								onClick={status === "running" ? handleStop : handleRun}
 								disabled={status === "exited" && !hasScript}
 							>
