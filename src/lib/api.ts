@@ -539,6 +539,10 @@ export type DevResetResult = {
 	directoriesRemoved: string[];
 };
 
+export async function requestQuit(force: boolean): Promise<void> {
+	return await invoke("request_quit", { force });
+}
+
 export async function devResetAllData(): Promise<DevResetResult> {
 	return await invoke<DevResetResult>("dev_reset_all_data");
 }

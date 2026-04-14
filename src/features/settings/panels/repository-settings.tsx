@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, GitBranch, Loader2, Trash2 } from "lucide-react";
+import { Check, ChevronDown, GitBranch, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BranchPickerPopover } from "@/components/branch-picker";
 import { Button } from "@/components/ui/button";
@@ -9,12 +9,7 @@ import {
 	CommandItem,
 	CommandList,
 } from "@/components/ui/command";
-import {
-	Dialog,
-	DialogContent,
-	DialogDescription,
-	DialogTitle,
-} from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
 	Popover,
 	PopoverContent,
@@ -448,44 +443,22 @@ function DeleteRepoSection({
 				)}
 			</div>
 
-			<Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-				<DialogContent className="max-w-[320px] gap-0 p-4">
-					<DialogTitle className="text-[13px] font-semibold">
-						Delete {repo.name}?
-					</DialogTitle>
-					<DialogDescription className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">
+			<ConfirmDialog
+				open={confirmOpen}
+				onOpenChange={setConfirmOpen}
+				title={`Delete ${repo.name}?`}
+				description={
+					<>
 						This will permanently delete all workspaces, sessions, and messages
 						associated with{" "}
 						<strong className="text-foreground/80">{repo.name}</strong>. This
 						cannot be undone.
-					</DialogDescription>
-					<div className="mt-3 flex justify-end gap-2">
-						<Button
-							variant="outline"
-							size="sm"
-							onClick={() => setConfirmOpen(false)}
-							disabled={deleting}
-						>
-							Cancel
-						</Button>
-						<Button
-							variant="destructive"
-							size="sm"
-							onClick={() => void handleDelete()}
-							disabled={deleting}
-						>
-							{deleting ? (
-								<>
-									<Loader2 className="mr-1.5 size-3.5 animate-spin" />
-									Deleting...
-								</>
-							) : (
-								"Delete"
-							)}
-						</Button>
-					</div>
-				</DialogContent>
-			</Dialog>
+					</>
+				}
+				confirmLabel={deleting ? "Deleting..." : "Delete"}
+				onConfirm={() => void handleDelete()}
+				loading={deleting}
+			/>
 		</>
 	);
 }
