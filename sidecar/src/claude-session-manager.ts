@@ -3,7 +3,6 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { basename, extname } from "node:path";
 import {
@@ -19,6 +18,7 @@ import {
 import { isAbortError } from "./abort.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { resolveGitAccessDirectories } from "./git-access.js";
+import { readImageWithResize } from "./image-resize.js";
 import { parseImageRefs } from "./images.js";
 import { errorDetails, logger } from "./logger.js";
 import type {
@@ -230,13 +230,13 @@ async function buildUserMessageWithImages(
 
 	for (const imgPath of imagePaths) {
 		try {
-			const data = await readFile(imgPath);
+			const { buffer } = await readImageWithResize(imgPath);
 			content.push({
 				type: "image",
 				source: {
 					type: "base64",
 					media_type: extToMediaType(imgPath),
-					data: data.toString("base64"),
+					data: buffer.toString("base64"),
 				},
 			});
 		} catch (err) {
