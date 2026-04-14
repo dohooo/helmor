@@ -1,7 +1,7 @@
 /**
  * Structured JSON logger for the sidecar process.
  *
- * - NDJSON to three level-specific files (inclusive routing).
+ * - NDJSON to a single file per day: `sidecar.YYYY-MM-DD.jsonl`.
  * - Dev stderr matches Rust tracing-subscriber's default format so both
  *   processes produce visually identical terminal output.
  * - stdout is NEVER touched — it is the exclusive JSON protocol channel.
@@ -69,11 +69,7 @@ export function errorDetails(err: unknown): Record<string, unknown> {
 
 class Logger {
 	private minLevel: number;
-	private files: Record<Level, WriteStream | undefined> = {
-		debug: undefined,
-		info: undefined,
-		error: undefined,
-	};
+	private file: WriteStream | undefined;
 	private devStderr: boolean;
 
 	constructor() {
@@ -91,10 +87,9 @@ class Logger {
 		if (logDir) {
 			mkdirSync(logDir, { recursive: true });
 			const today = localTs().slice(0, 10);
-			const path = (lvl: string) => `${logDir}/sidecar-${lvl}.${today}.jsonl`;
-			this.files.debug = createWriteStream(path("debug"), { flags: "a" });
-			this.files.info = createWriteStream(path("info"), { flags: "a" });
-			this.files.error = createWriteStream(path("error"), { flags: "a" });
+			this.file = createWriteStream(`${logDir}/sidecar.${today}.jsonl`, {
+				flags: "a",
+			});
 		}
 	}
 
@@ -119,9 +114,8 @@ class Logger {
 				: {};
 		const type = String(evt.type ?? "unknown");
 
-		// Full event → JSONL debug file
 		const line = `${JSON.stringify({ ts, level: "debug", source: "sidecar", msg: "sdk_event", requestId, type, event })}\n`;
-		this.files.debug?.write(line);
+		this.file?.write(line);
 
 		if (this.devStderr) {
 			const { label, color } = LEVEL_FMT.debug;
@@ -141,11 +135,7 @@ class Logger {
 
 		const ts = localTs();
 		const line = `${JSON.stringify({ ts, level, source: "sidecar", msg, ...data })}\n`;
-
-		// Inclusive file routing
-		this.files.debug?.write(line);
-		if (LEVELS[level] >= LEVELS.info) this.files.info?.write(line);
-		if (LEVELS[level] >= LEVELS.error) this.files.error?.write(line);
+		this.file?.write(line);
 
 		// Human-readable stderr matching Rust tracing format
 		if (this.devStderr) {
