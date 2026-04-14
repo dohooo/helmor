@@ -45,8 +45,17 @@
 	--workspace-branch-status-merged: var(--chart-4);
 	--workspace-branch-status-closed: var(--destructive);
 	--workspace-branch-status-inactive: var(--workspace-sidebar-status-neutral);
-	--workspace-pr-merged-accent: #8957e5;
-	--workspace-pr-merged-header-bg: #ede7fb;
+	--workspace-pr-merged-accent: #9333eae6;
+	--workspace-pr-merged-link: color-mix(
+		in srgb,
+		var(--workspace-pr-merged-accent) 95%,
+		transparent
+	);
+	--workspace-pr-merged-header-bg: color-mix(
+		in srgb,
+		var(--workspace-pr-merged-accent) 20%,
+		transparent
+	);
 	--workspace-pr-open-accent: #238636;
 	--workspace-pr-open-header-bg: #c5e3c8;
 	--workspace-pr-closed-accent: #da3633;
@@ -124,8 +133,17 @@
 	--workspace-branch-status-merged: var(--chart-4);
 	--workspace-branch-status-closed: var(--destructive);
 	--workspace-branch-status-inactive: var(--workspace-sidebar-status-neutral);
-	--workspace-pr-merged-accent: #8957e5;
-	--workspace-pr-merged-header-bg: #3a295f;
+	--workspace-pr-merged-accent: #9333eae6;
+	--workspace-pr-merged-link: color-mix(
+		in srgb,
+		var(--workspace-pr-merged-accent) 95%,
+		transparent
+	);
+	--workspace-pr-merged-header-bg: color-mix(
+		in srgb,
+		var(--workspace-pr-merged-accent) 20%,
+		transparent
+	);
 	--workspace-pr-open-accent: #238636;
 	--workspace-pr-open-header-bg: #2a4b34;
 	--workspace-pr-closed-accent: #da3633;

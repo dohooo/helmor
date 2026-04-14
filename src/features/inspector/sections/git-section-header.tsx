@@ -56,9 +56,9 @@ export function GitSectionHeader({
 						type="button"
 						variant="link"
 						className={cn(
-							"h-9 self-center rounded-none px-0 py-0 pt-[4px] text-[11px] font-semibold leading-none tracking-[0.01em] no-underline",
+							"h-9 self-center rounded-none px-0 py-0 pt-[4px] text-[11px] font-normal leading-none tracking-[0.01em] no-underline",
 							prInfo.isMerged
-								? "text-primary hover:text-primary"
+								? "text-[var(--workspace-pr-merged-link)] hover:text-[var(--workspace-pr-merged-link)]"
 								: prInfo.state === "OPEN"
 									? "text-[var(--workspace-pr-open-accent)] hover:text-[var(--workspace-pr-open-accent)]"
 									: "text-muted-foreground hover:text-foreground",

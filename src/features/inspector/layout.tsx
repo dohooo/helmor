@@ -10,7 +10,7 @@ export const TABS_ANIMATION_MS = 350;
 export const TABS_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 
 export const INSPECTOR_SECTION_HEADER_CLASS =
-	"flex h-8 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-muted/25 px-3 pt-[2px]";
+	"flex h-8 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-muted/25 px-3";
 export const INSPECTOR_SECTION_TITLE_CLASS =
 	"inline-flex h-9 items-center text-[13px] font-medium tracking-[-0.01em] leading-none text-muted-foreground";
 
