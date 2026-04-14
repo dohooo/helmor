@@ -1535,6 +1535,34 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		};
 	}, [handleCreateSession, isIdentityConnected, workspaceViewMode]);
 
+	// Cmd+R to run the configured run script
+	useEffect(() => {
+		if (!isIdentityConnected) {
+			return;
+		}
+
+		const handleWindowKeyDown = (event: globalThis.KeyboardEvent) => {
+			if (
+				!event.metaKey ||
+				event.altKey ||
+				event.ctrlKey ||
+				event.shiftKey ||
+				event.key.toLowerCase() !== "r"
+			) {
+				return;
+			}
+
+			event.preventDefault();
+			window.dispatchEvent(new Event("helmor:run-script"));
+		};
+
+		window.addEventListener("keydown", handleWindowKeyDown, true);
+
+		return () => {
+			window.removeEventListener("keydown", handleWindowKeyDown, true);
+		};
+	}, [isIdentityConnected]);
+
 	const handleInsertIntoComposer = useCallback(
 		(request: ComposerInsertRequest) => {
 			const resolvedTarget = resolveComposerInsertTarget(request.target, {

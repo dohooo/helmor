@@ -51,6 +51,7 @@ export function WorkspaceInspectorSidebar({
 		activeTab,
 		changes,
 		changesHeight,
+		clearPendingRunScript,
 		containerRef,
 		flashingPaths,
 		handleResizeStart,
@@ -58,6 +59,7 @@ export function WorkspaceInspectorSidebar({
 		isActionsResizing,
 		isResizing,
 		isTabsResizing,
+		pendingRunScript,
 		repoScripts,
 		scriptsLoaded,
 		setActiveTab,
@@ -141,6 +143,8 @@ export function WorkspaceInspectorSidebar({
 					workspaceId={workspaceId ?? null}
 					runScript={repoScripts?.runScript ?? null}
 					isActive={activeTab === "run"}
+					pendingRun={pendingRunScript}
+					onPendingRunHandled={clearPendingRunScript}
 					onOpenSettings={handleOpenSettings}
 				/>
 			</InspectorTabsSection>

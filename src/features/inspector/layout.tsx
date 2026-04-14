@@ -69,20 +69,22 @@ export function InspectorTabsSection({
 					onValueChange={onTabChange}
 					className={cn("flex min-h-0 flex-col gap-0", open && "flex-1")}
 				>
-					<div className={cn(INSPECTOR_SECTION_HEADER_CLASS, "relative z-10")}>
+					<div
+						className={cn(INSPECTOR_SECTION_HEADER_CLASS, "relative z-10 pt-0")}
+					>
 						<TabsList
 							variant="line"
-							className="h-9 gap-4 border-none bg-transparent p-0"
+							className="h-8 gap-4 border-none bg-transparent p-0"
 						>
 							<TabsTrigger
 								value="setup"
-								className="h-9 w-auto gap-0 border-transparent px-0 text-[12px] font-medium text-muted-foreground focus-visible:border-transparent focus-visible:ring-0 focus-visible:outline-none data-[state=active]:bg-transparent data-[state=active]:text-foreground"
+								className="h-8 w-auto gap-0 border-transparent px-0 text-[12px] font-medium text-muted-foreground after:bottom-[-1px] focus-visible:border-transparent focus-visible:ring-0 focus-visible:outline-none data-[state=active]:bg-transparent data-[state=active]:text-foreground"
 							>
 								Setup
 							</TabsTrigger>
 							<TabsTrigger
 								value="run"
-								className="h-9 w-auto gap-0 border-transparent px-0 text-[12px] font-medium text-muted-foreground focus-visible:border-transparent focus-visible:ring-0 focus-visible:outline-none data-[state=active]:bg-transparent data-[state=active]:text-foreground"
+								className="h-8 w-auto gap-0 border-transparent px-0 text-[12px] font-medium text-muted-foreground after:bottom-[-1px] focus-visible:border-transparent focus-visible:ring-0 focus-visible:outline-none data-[state=active]:bg-transparent data-[state=active]:text-foreground"
 							>
 								Run
 							</TabsTrigger>
