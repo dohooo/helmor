@@ -215,7 +215,7 @@ export const WorkspaceRowItem = memo(
 				{hasActionHandler ? (
 					<span
 						className={cn(
-							"pointer-events-none absolute inset-y-0 right-0 z-10 flex items-center justify-end opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
+							"pointer-events-none absolute inset-y-0 right-0 z-10 flex items-center justify-end opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
 							actionOverlayWidthClassName,
 							isBusy && "pointer-events-auto opacity-100",
 						)}
