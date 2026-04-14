@@ -241,6 +241,7 @@ pub fn run() {
             commands::workspace_commands::rename_workspace_branch,
             commands::workspace_commands::update_intended_target_branch,
             commands::workspace_commands::prefetch_remote_refs,
+            commands::workspace_commands::sync_workspace_with_target_branch,
             commands::workspace_commands::mark_workspace_read,
             commands::workspace_commands::mark_workspace_unread,
             commands::workspace_commands::pin_workspace,

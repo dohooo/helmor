@@ -107,7 +107,13 @@ vi.mock("@tauri-apps/api/core", () => ({
 			case "lookup_workspace_pr":
 				return null;
 			case "get_workspace_git_action_status":
-				return { uncommittedCount: 0, conflictCount: 0 };
+				return {
+					uncommittedCount: 0,
+					conflictCount: 0,
+					syncTargetBranch: null,
+					syncStatus: "unknown",
+					behindTargetCount: 0,
+				};
 			case "get_workspace_pr_action_status":
 				return {
 					pr: null,

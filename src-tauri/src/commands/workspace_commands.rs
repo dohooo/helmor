@@ -132,6 +132,15 @@ pub async fn prefetch_remote_refs(
 }
 
 #[tauri::command]
+pub async fn sync_workspace_with_target_branch(
+    workspace_id: String,
+) -> CmdResult<workspaces::SyncWorkspaceTargetResponse> {
+    let ws_lock = db::workspace_mutation_lock(&workspace_id);
+    let _lock = ws_lock.lock().await;
+    run_blocking(move || workspaces::sync_workspace_with_target_branch(&workspace_id)).await
+}
+
+#[tauri::command]
 pub async fn restore_workspace(
     app: AppHandle,
     workspace_id: String,

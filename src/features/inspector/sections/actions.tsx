@@ -1,8 +1,9 @@
 import { MarkGithubIcon } from "@primer/octicons-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowUpRightIcon, CheckIcon, TriangleIcon } from "lucide-react";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
+import { toast } from "sonner";
 import {
 	AppendContextButton,
 	type AppendContextPayloadResult,
@@ -17,12 +18,14 @@ import {
 	type ActionStatusKind,
 	getWorkspacePrCheckInsertText,
 	type PullRequestInfo,
+	syncWorkspaceWithTargetBranch,
 	type WorkspaceGitActionStatus,
 	type WorkspacePrActionItem,
 	type WorkspacePrActionStatus,
 } from "@/lib/api";
 import { buildComposerPreviewPayload } from "@/lib/composer-insert";
 import {
+	helmorQueryKeys,
 	workspaceGitActionStatusQueryOptions,
 	workspacePrActionStatusQueryOptions,
 } from "@/lib/query-client";
@@ -37,13 +40,17 @@ interface GitStatusItem {
 	status: ActionStatusKind;
 	action?: {
 		label: string;
-		mode: WorkspaceCommitButtonMode;
+		kind: "commit" | "sync";
+		mode?: WorkspaceCommitButtonMode;
 	};
 }
 
 const EMPTY_GIT_ACTION_STATUS: WorkspaceGitActionStatus = {
 	uncommittedCount: 0,
 	conflictCount: 0,
+	syncTargetBranch: null,
+	syncStatus: "unknown",
+	behindTargetCount: 0,
 };
 
 const EMPTY_PR_ACTION_STATUS: WorkspacePrActionStatus = {
@@ -75,6 +82,8 @@ export function ActionsSection({
 	commitButtonState,
 	prInfo,
 }: ActionsSectionProps) {
+	const queryClient = useQueryClient();
+	const [syncPending, setSyncPending] = useState(false);
 	const gitStatusQuery = useQuery({
 		...workspaceGitActionStatusQueryOptions(workspaceId ?? "__none__"),
 		enabled: workspaceId !== null,
@@ -87,6 +96,50 @@ export function ActionsSection({
 	const prStatus = prStatusQuery.data ?? EMPTY_PR_ACTION_STATUS;
 	const gitRows = buildGitStatusRows(gitStatus, prStatus, prInfo);
 	const actionDisabled = commitButtonState === "busy";
+	const handleSync = useCallback(async () => {
+		if (!workspaceId || syncPending) {
+			return;
+		}
+
+		setSyncPending(true);
+		try {
+			const result = await syncWorkspaceWithTargetBranch(workspaceId);
+			const target = result.targetBranch;
+			if (result.outcome === "updated") {
+				toast.success(`Pulled latest from ${target}`);
+			} else if (result.outcome === "alreadyUpToDate") {
+				toast(`Already up to date with ${target}`);
+			} else {
+				toast.error(`Conflicts detected while pulling ${target}`);
+			}
+		} catch (error) {
+			const message =
+				error instanceof Error
+					? error.message
+					: "Unable to pull target updates.";
+			toast.error(message);
+		} finally {
+			await Promise.all([
+				queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceGitActionStatus(workspaceId),
+				}),
+				queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspacePr(workspaceId),
+				}),
+				queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspacePrActionStatus(workspaceId),
+				}),
+				queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+				}),
+				queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceGroups,
+				}),
+				queryClient.invalidateQueries({ queryKey: ["workspaceChanges"] }),
+			]);
+			setSyncPending(false);
+		}
+	}, [queryClient, syncPending, workspaceId]);
 	const handleInsertCheck = useCallback(
 		async (item: WorkspacePrActionItem) => {
 			if (!workspaceId) {
@@ -146,16 +199,27 @@ export function ActionsSection({
 							{action && (
 								<button
 									type="button"
-									disabled={actionDisabled}
 									onClick={() => {
-										if (actionDisabled) {
+										if (
+											(action.kind === "commit" && actionDisabled) ||
+											(action.kind === "sync" && syncPending)
+										) {
 											return;
 										}
-										void onCommitAction?.(action.mode);
+										if (action.kind === "sync") {
+											void handleSync();
+											return;
+										}
+										void onCommitAction?.(action.mode!);
 									}}
 									className="ml-auto shrink-0 cursor-pointer text-[10.5px] text-primary transition-colors hover:text-primary/80 disabled:cursor-not-allowed disabled:opacity-50"
+									disabled={
+										action.kind === "commit" ? actionDisabled : syncPending
+									}
 								>
-									{action.label}
+									{action.kind === "sync" && syncPending
+										? "Pulling..."
+										: action.label}
 								</button>
 							)}
 						</div>
@@ -263,6 +327,8 @@ function buildGitStatusRows(
 	const conflictCount = gitStatus.conflictCount;
 	const hasMergeConflict =
 		conflictCount > 0 || prStatus.mergeable === "CONFLICTING";
+	const syncTargetBranch =
+		gitStatus.syncTargetBranch?.trim() || "target branch";
 	const pr = prStatus.pr ?? prInfo;
 	const isMerged = pr?.isMerged ?? false;
 
@@ -280,6 +346,7 @@ function buildGitStatusRows(
 					status: "pending",
 					action: {
 						label: "Commit and push",
+						kind: "commit",
 						mode: "commit-and-push",
 					},
 				},
@@ -289,13 +356,31 @@ function buildGitStatusRows(
 					status: "failure",
 					action: {
 						label: "Resolve",
+						kind: "commit",
 						mode: "resolve-conflicts",
 					},
 				}
-			: {
-					label: "No merge conflicts",
-					status: "success",
-				},
+			: gitStatus.syncStatus === "behind"
+				? {
+						label:
+							gitStatus.behindTargetCount === 1
+								? `1 update available from ${syncTargetBranch}`
+								: `${gitStatus.behindTargetCount} updates available from ${syncTargetBranch}`,
+						status: "pending",
+						action: {
+							label: "Pull",
+							kind: "sync",
+						},
+					}
+				: gitStatus.syncStatus === "upToDate"
+					? {
+							label: `No updates from ${syncTargetBranch}`,
+							status: "success",
+						}
+					: {
+							label: "Sync status unavailable",
+							status: "pending",
+						},
 	];
 
 	if (isMerged || prStatus.reviewDecision === "APPROVED") {

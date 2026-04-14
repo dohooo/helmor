@@ -1014,10 +1014,24 @@ export type PullRequestInfo = {
 
 export type ActionStatusKind = "success" | "pending" | "running" | "failure";
 export type ActionProvider = "github" | "vercel" | "unknown";
+export type WorkspaceGitSyncStatus = "upToDate" | "behind" | "unknown";
 
 export type WorkspaceGitActionStatus = {
 	uncommittedCount: number;
 	conflictCount: number;
+	syncTargetBranch?: string | null;
+	syncStatus: WorkspaceGitSyncStatus;
+	behindTargetCount: number;
+};
+
+export type SyncWorkspaceTargetOutcome =
+	| "updated"
+	| "alreadyUpToDate"
+	| "conflict";
+
+export type SyncWorkspaceTargetResponse = {
+	outcome: SyncWorkspaceTargetOutcome;
+	targetBranch: string;
 };
 
 export type WorkspacePrActionItem = {
@@ -1072,6 +1086,21 @@ export async function loadWorkspaceGitActionStatus(
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to load workspace Git status."),
+		);
+	}
+}
+
+export async function syncWorkspaceWithTargetBranch(
+	workspaceId: string,
+): Promise<SyncWorkspaceTargetResponse> {
+	try {
+		return await invoke<SyncWorkspaceTargetResponse>(
+			"sync_workspace_with_target_branch",
+			{ workspaceId },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to pull target branch updates."),
 		);
 	}
 }

@@ -15,6 +15,17 @@ use std::{
 pub struct WorkspaceGitActionStatus {
     pub uncommitted_count: usize,
     pub conflict_count: usize,
+    pub sync_target_branch: Option<String>,
+    pub sync_status: WorkspaceSyncStatus,
+    pub behind_target_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceSyncStatus {
+    UpToDate,
+    Behind,
+    Unknown,
 }
 
 /// Hard upper bound on any `git` command that touches the network. Long
@@ -582,7 +593,11 @@ pub fn working_tree_clean(workspace_dir: &Path) -> Result<bool> {
 /// This is intentionally local-only: it never fetches or contacts a remote, so
 /// the Actions panel can poll it frequently without hanging on credentials or
 /// network.
-pub fn workspace_action_status(workspace_dir: &Path) -> Result<WorkspaceGitActionStatus> {
+pub fn workspace_action_status(
+    workspace_dir: &Path,
+    remote: Option<&str>,
+    target_branch: Option<&str>,
+) -> Result<WorkspaceGitActionStatus> {
     let workspace_dir_arg = workspace_dir.display().to_string();
     let status_output = run_git(
         [
@@ -606,11 +621,48 @@ pub fn workspace_action_status(workspace_dir: &Path) -> Result<WorkspaceGitActio
     let conflict_output =
         run_git(["-C", workspace_dir_arg.as_str(), "ls-files", "-u"], None).unwrap_or_default();
     let conflict_count = parse_unmerged_paths(&conflict_output).len();
+    let sync_target_branch = target_branch
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let (sync_status, behind_target_count) =
+        workspace_sync_status(workspace_dir, remote, sync_target_branch.as_deref());
 
     Ok(WorkspaceGitActionStatus {
         uncommitted_count,
         conflict_count,
+        sync_target_branch,
+        sync_status,
+        behind_target_count,
     })
+}
+
+fn workspace_sync_status(
+    workspace_dir: &Path,
+    remote: Option<&str>,
+    target_branch: Option<&str>,
+) -> (WorkspaceSyncStatus, u32) {
+    let Some(remote) = remote.map(str::trim).filter(|value| !value.is_empty()) else {
+        return (WorkspaceSyncStatus::Unknown, 0);
+    };
+    let Some(target_branch) = target_branch
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return (WorkspaceSyncStatus::Unknown, 0);
+    };
+
+    let target_ref = format!("refs/remotes/{remote}/{target_branch}");
+    let exists = verify_remote_ref_exists(workspace_dir, remote, target_branch).unwrap_or(false);
+    if !exists {
+        return (WorkspaceSyncStatus::Unknown, 0);
+    }
+
+    match commits_behind(workspace_dir, &target_ref) {
+        Ok(count) if count > 0 => (WorkspaceSyncStatus::Behind, count),
+        Ok(_) => (WorkspaceSyncStatus::UpToDate, 0),
+        Err(_) => (WorkspaceSyncStatus::Unknown, 0),
+    }
 }
 
 /// Counts how many commits are reachable from HEAD but not from `base_ref`.
@@ -632,6 +684,34 @@ pub fn commits_ahead_of(workspace_dir: &Path, base_ref: &str) -> Result<u32> {
     .with_context(|| {
         format!(
             "Failed to count commits ahead of {} in {}",
+            base_ref, workspace_dir
+        )
+    })?;
+
+    output
+        .trim()
+        .parse::<u32>()
+        .with_context(|| format!("Unexpected rev-list count output: {}", output))
+}
+
+/// Counts how many commits are reachable from `base_ref` but not from HEAD.
+/// Returns 0 if HEAD already contains everything in `base_ref`.
+pub fn commits_behind(workspace_dir: &Path, base_ref: &str) -> Result<u32> {
+    let workspace_dir = workspace_dir.display().to_string();
+    let range = format!("HEAD..{base_ref}");
+    let output = run_git(
+        [
+            "-C",
+            workspace_dir.as_str(),
+            "rev-list",
+            "--count",
+            range.as_str(),
+        ],
+        None,
+    )
+    .with_context(|| {
+        format!(
+            "Failed to count commits behind {} in {}",
             base_ref, workspace_dir
         )
     })?;
@@ -734,6 +814,22 @@ pub fn remote_ref_sha(workspace_dir: &Path, remote: &str, branch: &str) -> Resul
     Ok(sha.trim().to_string())
 }
 
+pub fn merge_ref_no_edit(workspace_dir: &Path, target_ref: &str) -> Result<()> {
+    let workspace_dir = workspace_dir.display().to_string();
+    run_git(
+        [
+            "-C",
+            workspace_dir.as_str(),
+            "merge",
+            "--no-edit",
+            target_ref,
+        ],
+        None,
+    )
+    .map(|_| ())
+    .with_context(|| format!("Failed to merge {target_ref} into {workspace_dir}"))
+}
+
 /// Hard-reset the currently checked-out branch in the workspace to `target_ref`.
 /// Caller is responsible for ensuring this is safe (clean tree, no user commits).
 pub fn reset_current_branch_hard(workspace_dir: &Path, target_ref: &str) -> Result<()> {
@@ -767,6 +863,7 @@ mod tests {
         run(dir.path(), &["checkout", "-b", "main"]);
         run(dir.path(), &["config", "user.email", "helmor@example.com"]);
         run(dir.path(), &["config", "user.name", "Helmor Test"]);
+        run(dir.path(), &["config", "commit.gpgsign", "false"]);
         std::fs::write(dir.path().join("file.txt"), "base\n").unwrap();
         run(dir.path(), &["add", "file.txt"]);
         run(dir.path(), &["commit", "-m", "initial"]);
@@ -777,10 +874,12 @@ mod tests {
     fn workspace_action_status_reports_clean_repo() {
         let dir = init_repo();
 
-        let status = workspace_action_status(dir.path()).unwrap();
+        let status = workspace_action_status(dir.path(), None, None).unwrap();
 
         assert_eq!(status.uncommitted_count, 0);
         assert_eq!(status.conflict_count, 0);
+        assert_eq!(status.sync_status, WorkspaceSyncStatus::Unknown);
+        assert_eq!(status.behind_target_count, 0);
     }
 
     #[test]
@@ -789,7 +888,7 @@ mod tests {
         std::fs::write(dir.path().join("file.txt"), "changed\n").unwrap();
         std::fs::write(dir.path().join("new.txt"), "new\n").unwrap();
 
-        let status = workspace_action_status(dir.path()).unwrap();
+        let status = workspace_action_status(dir.path(), None, None).unwrap();
 
         assert_eq!(status.uncommitted_count, 2);
         assert_eq!(status.conflict_count, 0);
@@ -809,10 +908,37 @@ mod tests {
         let merge_result = run_git(["merge", "main"], Some(dir.path()));
         assert!(merge_result.is_err(), "merge should conflict");
 
-        let status = workspace_action_status(dir.path()).unwrap();
+        let status = workspace_action_status(dir.path(), None, None).unwrap();
 
         assert_eq!(status.conflict_count, 1);
         assert!(status.uncommitted_count >= 1);
+    }
+
+    #[test]
+    fn workspace_action_status_reports_behind_target_branch() {
+        let (origin, clone) = init_repo_with_remote();
+        run(origin.path(), &["checkout", "main"]);
+        std::fs::write(origin.path().join("remote.txt"), "fresh\n").unwrap();
+        run(origin.path(), &["add", "remote.txt"]);
+        run(origin.path(), &["commit", "-m", "advance main"]);
+        fetch_remote_branch(clone.path(), "origin", "main").unwrap();
+
+        let status = workspace_action_status(clone.path(), Some("origin"), Some("main")).unwrap();
+
+        assert_eq!(status.sync_target_branch.as_deref(), Some("main"));
+        assert_eq!(status.sync_status, WorkspaceSyncStatus::Behind);
+        assert_eq!(status.behind_target_count, 1);
+    }
+
+    #[test]
+    fn workspace_action_status_reports_up_to_date_target_branch() {
+        let (_origin, clone) = init_repo_with_remote();
+
+        let status = workspace_action_status(clone.path(), Some("origin"), Some("main")).unwrap();
+
+        assert_eq!(status.sync_target_branch.as_deref(), Some("main"));
+        assert_eq!(status.sync_status, WorkspaceSyncStatus::UpToDate);
+        assert_eq!(status.behind_target_count, 0);
     }
 
     /// Clone a repo so we have a real `origin` remote with tracking refs.
