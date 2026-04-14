@@ -16,6 +16,7 @@ import {
 	X,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
 import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
@@ -765,12 +766,7 @@ function SessionProviderIcon({
 	active: boolean;
 }) {
 	if (active) {
-		return (
-			<span className="relative flex size-3.5 shrink-0 items-center justify-center">
-				<span className="absolute inset-0 animate-spin rounded-full border border-transparent border-t-chart-2" />
-				<span className="size-1.5 rounded-full bg-chart-2" />
-			</span>
-		);
+		return <HelmorThinkingIndicator size={14} />;
 	}
 	if (agentType === "codex") {
 		return <OpenAIIcon className="size-3 shrink-0 text-muted-foreground" />;
