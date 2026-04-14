@@ -868,6 +868,10 @@ export async function readEditorFile(
 	}
 }
 
+export function triggerWorkspaceFetch(workspaceId: string): void {
+	void invoke("trigger_workspace_fetch", { workspaceId });
+}
+
 export async function readFileAtRef(
 	workspaceRootPath: string,
 	filePath: string,

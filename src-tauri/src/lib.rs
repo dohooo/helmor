@@ -15,6 +15,9 @@ mod shell_env;
 pub mod sidecar;
 pub mod workspace;
 
+#[cfg(test)]
+pub(crate) mod testkit;
+
 pub use git::ops as git_ops;
 pub use git::watcher as git_watcher;
 pub use github::auth;
@@ -264,6 +267,7 @@ pub fn run() {
             commands::editor_commands::read_editor_file,
             commands::editor_commands::read_file_at_ref,
             commands::workspace_commands::set_workspace_manual_status,
+            commands::workspace_commands::trigger_workspace_fetch,
             commands::system_commands::detect_installed_editors,
             commands::system_commands::open_workspace_in_editor,
             commands::workspace_commands::permanently_delete_workspace,

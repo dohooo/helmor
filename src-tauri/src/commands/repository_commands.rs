@@ -1,4 +1,6 @@
-use crate::{db, repos, settings};
+use tauri::AppHandle;
+
+use crate::{db, git_watcher, repos, settings};
 
 use super::common::{run_blocking, CmdResult};
 
@@ -27,18 +29,25 @@ pub async fn add_repository_from_local_path(
 
 #[tauri::command]
 pub async fn update_repository_default_branch(
+    app: AppHandle,
     repo_id: String,
     default_branch: String,
 ) -> CmdResult<()> {
-    run_blocking(move || repos::update_repository_default_branch(&repo_id, &default_branch)).await
+    run_blocking(move || repos::update_repository_default_branch(&repo_id, &default_branch))
+        .await?;
+    git_watcher::notify_workspace_changed(&app);
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn update_repository_remote(
+    app: AppHandle,
     repo_id: String,
     remote: String,
 ) -> CmdResult<repos::UpdateRepositoryRemoteResponse> {
-    run_blocking(move || repos::update_repository_remote(&repo_id, &remote)).await
+    let result = run_blocking(move || repos::update_repository_remote(&repo_id, &remote)).await?;
+    git_watcher::notify_workspace_changed(&app);
+    Ok(result)
 }
 
 #[tauri::command]
