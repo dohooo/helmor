@@ -1119,14 +1119,17 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 	const handleSessionCompleted = useCallback(
 		(sessionId: string, workspaceId: string) => {
-			setCompletedSessions((prev) => {
-				const next = new Map(prev);
-				next.set(sessionId, workspaceId);
-				return next;
-			});
-			// Skip notification only when the user is actively viewing this session
-			if (document.hasFocus() && sessionId === selectedSessionIdRef.current)
-				return;
+			const isCurrentSession = sessionId === selectedSessionIdRef.current;
+			// Green dot only for sessions the user isn't viewing
+			if (!isCurrentSession) {
+				setCompletedSessions((prev) => {
+					const next = new Map(prev);
+					next.set(sessionId, workspaceId);
+					return next;
+				});
+			}
+			// OS notification: skip when user is focused on this session
+			if (document.hasFocus() && isCurrentSession) return;
 			const name =
 				queryClient.getQueryData<WorkspaceDetail | null>(
 					helmorQueryKeys.workspaceDetail(workspaceId),
