@@ -68,3 +68,9 @@ pub async fn update_repo_scripts(
     })
     .await
 }
+
+#[tauri::command]
+pub async fn delete_repository(repo_id: String) -> CmdResult<()> {
+    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
+    run_blocking(move || repos::delete_repository_cascade(&repo_id)).await
+}

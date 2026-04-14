@@ -529,54 +529,47 @@ pub(crate) fn delete_repository(repo_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Delete a repository and all related data (workspaces, sessions, messages, etc.)
+pub fn delete_repository_cascade(repo_id: &str) -> Result<()> {
+    let mut connection = db::open_connection(true)?;
+    let tx = connection
+        .transaction()
+        .context("Failed to start delete repository transaction")?;
+
+    // Delete leaf data first, then parent rows.
+    tx.execute(
+        "DELETE FROM attachments WHERE session_id IN (SELECT s.id FROM sessions s JOIN workspaces w ON s.workspace_id = w.id WHERE w.repository_id = ?1)",
+        [repo_id],
+    ).context("Failed to delete attachments for repository")?;
+    tx.execute(
+        "DELETE FROM session_messages WHERE session_id IN (SELECT s.id FROM sessions s JOIN workspaces w ON s.workspace_id = w.id WHERE w.repository_id = ?1)",
+        [repo_id],
+    ).context("Failed to delete session messages for repository")?;
+    tx.execute(
+        "DELETE FROM sessions WHERE workspace_id IN (SELECT id FROM workspaces WHERE repository_id = ?1)",
+        [repo_id],
+    ).context("Failed to delete sessions for repository")?;
+    tx.execute(
+        "DELETE FROM diff_comments WHERE workspace_id IN (SELECT id FROM workspaces WHERE repository_id = ?1)",
+        [repo_id],
+    ).context("Failed to delete diff comments for repository")?;
+    tx.execute(
+        "DELETE FROM pending_cli_sends WHERE workspace_id IN (SELECT id FROM workspaces WHERE repository_id = ?1)",
+        [repo_id],
+    ).context("Failed to delete pending sends for repository")?;
+    tx.execute("DELETE FROM workspaces WHERE repository_id = ?1", [repo_id])
+        .context("Failed to delete workspaces for repository")?;
+    tx.execute("DELETE FROM repos WHERE id = ?1", [repo_id])
+        .context("Failed to delete repository row")?;
+
+    tx.commit()
+        .context("Failed to commit delete repository transaction")?;
+
+    Ok(())
+}
+
 pub fn resolve_repository_from_local_path(folder_path: &str) -> Result<ResolvedRepositoryInput> {
-    let selected_path = PathBuf::from(folder_path.trim());
-
-    if folder_path.trim().is_empty() {
-        bail!("No repository folder was selected.");
-    }
-
-    if !selected_path.exists() {
-        bail!("Selected path does not exist: {}", selected_path.display());
-    }
-
-    if !selected_path.is_dir() {
-        bail!(
-            "Selected path is not a directory: {}",
-            selected_path.display()
-        );
-    }
-
-    let selected_path_arg = selected_path.display().to_string();
-    let inside_work_tree = git_ops::run_git(
-        [
-            "-C",
-            selected_path_arg.as_str(),
-            "rev-parse",
-            "--is-inside-work-tree",
-        ],
-        None,
-    )
-    .map_err(|error| anyhow::anyhow!("Selected directory is not a Git working tree: {error}"))?;
-
-    if inside_work_tree.trim() != "true" {
-        bail!(
-            "Selected directory is not a Git working tree: {}",
-            selected_path.display()
-        );
-    }
-
-    let normalized_root_path = git_ops::run_git(
-        [
-            "-C",
-            selected_path_arg.as_str(),
-            "rev-parse",
-            "--show-toplevel",
-        ],
-        None,
-    )
-    .map_err(|error| anyhow::anyhow!("Failed to resolve Git repository root: {error}"))?;
-    let normalized_root_path = normalized_root_path.trim().to_string();
+    let normalized_root_path = resolve_git_root_path(folder_path)?;
     let normalized_root = Path::new(&normalized_root_path);
     let name = normalized_root
         .file_name()
@@ -613,20 +606,18 @@ pub fn resolve_repository_from_local_path(folder_path: &str) -> Result<ResolvedR
 }
 
 pub fn add_repository_from_local_path(folder_path: &str) -> Result<AddRepositoryResponse> {
-    let resolved_repository = resolve_repository_from_local_path(folder_path)?;
-    let last_clone_directory = Path::new(&resolved_repository.normalized_root_path)
+    // Fast duplicate check: only needs git root path, no network calls.
+    let normalized_root_path = resolve_git_root_path(folder_path)?;
+
+    let last_clone_directory = Path::new(&normalized_root_path)
         .parent()
         .map(|parent| parent.display().to_string());
-
-    let existing_repository =
-        load_repository_by_root_path(&resolved_repository.normalized_root_path)?;
-
-    if let Some(last_clone_directory) = last_clone_directory.as_deref() {
-        crate::settings::upsert_setting_value("last_clone_directory", last_clone_directory)
+    if let Some(dir) = last_clone_directory.as_deref() {
+        crate::settings::upsert_setting_value("last_clone_directory", dir)
             .map_err(|e| anyhow::anyhow!(e))?;
     }
 
-    if let Some(repository) = existing_repository {
+    if let Some(repository) = load_repository_by_root_path(&normalized_root_path)? {
         if let Some((selected_workspace_id, selected_workspace_state)) =
             crate::workspaces::select_visible_workspace_for_repo(&repository.id)
                 .map_err(|e| anyhow::anyhow!(e))?
@@ -654,6 +645,9 @@ pub fn add_repository_from_local_path(folder_path: &str) -> Result<AddRepository
         });
     }
 
+    // Only do the expensive remote/branch resolution for truly new repos.
+    let resolved_repository = resolve_repository_from_local_path(folder_path)?;
+
     let repository_id = insert_repository(&resolved_repository)
         .with_context(|| format!("Failed to persist repository {}", resolved_repository.name))?;
     let create_result = crate::workspaces::create_workspace_from_repo_impl(&repository_id);
@@ -671,6 +665,56 @@ pub fn add_repository_from_local_path(folder_path: &str) -> Result<AddRepository
             bail!("First workspace create failed: {error}");
         }
     }
+}
+
+/// Lightweight git root resolution — no network calls, just local git commands.
+fn resolve_git_root_path(folder_path: &str) -> Result<String> {
+    let selected_path = PathBuf::from(folder_path.trim());
+
+    if folder_path.trim().is_empty() {
+        bail!("No repository folder was selected.");
+    }
+    if !selected_path.exists() {
+        bail!("Selected path does not exist: {}", selected_path.display());
+    }
+    if !selected_path.is_dir() {
+        bail!(
+            "Selected path is not a directory: {}",
+            selected_path.display()
+        );
+    }
+
+    let selected_path_arg = selected_path.display().to_string();
+    let inside_work_tree = git_ops::run_git(
+        [
+            "-C",
+            selected_path_arg.as_str(),
+            "rev-parse",
+            "--is-inside-work-tree",
+        ],
+        None,
+    )
+    .map_err(|error| anyhow::anyhow!("Selected directory is not a Git working tree: {error}"))?;
+
+    if inside_work_tree.trim() != "true" {
+        bail!(
+            "Selected directory is not a Git working tree: {}",
+            selected_path.display()
+        );
+    }
+
+    let root = git_ops::run_git(
+        [
+            "-C",
+            selected_path_arg.as_str(),
+            "rev-parse",
+            "--show-toplevel",
+        ],
+        None,
+    )
+    .map_err(|error| anyhow::anyhow!("Failed to resolve Git repository root: {error}"))?;
+
+    Ok(root.trim().to_string())
 }
 
 // ---- Git remote / branch resolution helpers ----
