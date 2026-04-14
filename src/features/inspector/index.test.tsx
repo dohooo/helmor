@@ -125,11 +125,11 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 	it("shows clean git rows with passed status icons", async () => {
 		renderInspector();
 
-		await screen.findByText("No updates from main");
+		await screen.findByText("Up to date with main");
 
 		const actions = screen.getByLabelText("Inspector section Actions");
 		expect(
-			within(actions).getByText("No updates from main"),
+			within(actions).getByText("Up to date with main"),
 		).toBeInTheDocument();
 		expect(
 			within(actions).getByText("Waiting for PR review"),
@@ -170,7 +170,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 
 		renderInspector();
 
-		await screen.findByText("2 updates available from main");
+		await screen.findByText("2 commits behind main");
 		await user.click(screen.getByRole("button", { name: "Pull" }));
 
 		await waitFor(() => {

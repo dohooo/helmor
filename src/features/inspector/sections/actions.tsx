@@ -364,8 +364,8 @@ function buildGitStatusRows(
 				? {
 						label:
 							gitStatus.behindTargetCount === 1
-								? `1 update available from ${syncTargetBranch}`
-								: `${gitStatus.behindTargetCount} updates available from ${syncTargetBranch}`,
+								? `1 commit behind ${syncTargetBranch}`
+								: `${gitStatus.behindTargetCount} commits behind ${syncTargetBranch}`,
 						status: "pending",
 						action: {
 							label: "Pull",
@@ -374,7 +374,7 @@ function buildGitStatusRows(
 					}
 				: gitStatus.syncStatus === "upToDate"
 					? {
-							label: `No updates from ${syncTargetBranch}`,
+							label: `Up to date with ${syncTargetBranch}`,
 							status: "success",
 						}
 					: {
