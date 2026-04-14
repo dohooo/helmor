@@ -120,6 +120,7 @@ pub fn run() {
         .manage(auth::GithubIdentityFlowRuntime::default())
         .manage(sidecar::ManagedSidecar::new())
         .manage(agents::ActiveStreams::new())
+        .manage(agents::SlashCommandCache::new())
         .manage(git_watcher::GitWatcherManager::new())
         .manage(workspace::scripts::ScriptProcessManager::new())
         .setup(|app| {

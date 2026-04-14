@@ -8,6 +8,7 @@ use crate::error::CommandError;
 mod catalog;
 mod persistence;
 mod queries;
+mod slash_commands;
 mod streaming;
 mod support;
 
@@ -16,8 +17,9 @@ pub use self::catalog::{
 };
 pub use self::queries::{
     GenerateSessionTitleRequest, GenerateSessionTitleResponse, ListSlashCommandsRequest,
-    SlashCommandEntry,
+    SlashCommandEntry, SlashCommandsResponse,
 };
+pub use self::slash_commands::SlashCommandCache;
 pub use self::streaming::{
     abort_all_active_streams_blocking, bridge_elicitation_request_event, ActiveStreams,
 };
@@ -373,9 +375,10 @@ pub async fn generate_session_title(
 pub async fn list_slash_commands(
     app: AppHandle,
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    cache: tauri::State<'_, SlashCommandCache>,
     request: ListSlashCommandsRequest,
-) -> CmdResult<Vec<SlashCommandEntry>> {
-    queries::list_slash_commands(app, sidecar, request).await
+) -> CmdResult<SlashCommandsResponse> {
+    queries::list_slash_commands(app, sidecar, cache, request).await
 }
 
 #[cfg(test)]

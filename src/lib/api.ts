@@ -620,19 +620,29 @@ export type SlashCommandEntry = {
 	source: "builtin" | "skill";
 };
 
+export type SlashCommandsResponse = {
+	commands: SlashCommandEntry[];
+	/** `false` while the background sidecar refresh is still in flight. */
+	isComplete: boolean;
+};
+
 /**
  * Fetch the slash commands the composer popup should display for the given
- * provider + workspace. The Rust side dispatches to the sidecar which uses
- * either the Claude SDK control protocol or a Codex skill-directory scan,
- * but the frontend gets the same shape either way.
+ * provider + workspace.
+ *
+ * The Rust backend returns local skills instantly from a disk scan and
+ * fetches the full list (including built-in commands) from the sidecar in
+ * the background.  When `isComplete` is `false`, a background refresh is
+ * still in flight — listen for the `slash-commands-refreshed` event and
+ * invalidate the query when it fires.
  */
 export async function listSlashCommands(input: {
 	provider: AgentProvider;
 	workingDirectory?: string | null;
 	modelId?: string | null;
-}): Promise<SlashCommandEntry[]> {
+}): Promise<SlashCommandsResponse> {
 	try {
-		return await invoke<SlashCommandEntry[]>("list_slash_commands", {
+		return await invoke<SlashCommandsResponse>("list_slash_commands", {
 			request: {
 				provider: input.provider,
 				workingDirectory: input.workingDirectory ?? null,
@@ -644,6 +654,12 @@ export async function listSlashCommands(input: {
 			describeInvokeError(error, "Unable to load slash commands."),
 		);
 	}
+}
+
+export async function listenSlashCommandsRefreshed(
+	callback: () => void,
+): Promise<UnlistenFn> {
+	return listen("slash-commands-refreshed", () => callback());
 }
 
 export async function loadWorkspaceDetail(

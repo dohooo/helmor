@@ -201,16 +201,14 @@ export function slashCommandsQueryOptions(
 		// Slash commands rarely change within a workspace; cache aggressively.
 		staleTime: 5 * 60_000,
 		gcTime: DEFAULT_GC_TIME,
-		// Retry on transient sidecar failures (cold-start `claude-code`,
-		// control-protocol timeouts). Without this a single timeout would
-		// lock the popup empty until the staleTime window expires, which
-		// the user perceives as "/ doesn't open the menu anymore". Errors
-		// are surfaced through `isError` so the popup can show a retry
-		// affordance instead of silently failing.
-		retry: 2,
-		retryDelay: (attempt) => Math.min(1_000 * 2 ** attempt, 4_000),
+		// The Rust backend always succeeds now (returns local skills from
+		// disk even if the sidecar is unreachable), so retries are no longer
+		// necessary. The background sidecar refresh handles recovery by
+		// emitting a `slash-commands-refreshed` event which triggers a
+		// query invalidation.
+		retry: 0,
 		// Refetch on mount so re-opening a workspace tab gets a fresh shot
-		// at recovery without waiting out staleTime.
+		// at upgrading a partial cache to a complete one.
 		refetchOnMount: "always",
 	});
 }

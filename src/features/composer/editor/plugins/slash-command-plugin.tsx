@@ -92,6 +92,7 @@ export function SlashCommandPlugin({
 	commands,
 	isLoading = false,
 	isError = false,
+	isRefreshing = false,
 	onRetry,
 }: {
 	commands: readonly SlashCommandEntry[];
@@ -99,6 +100,8 @@ export function SlashCommandPlugin({
 	isLoading?: boolean;
 	/** True when the query rejected (sidecar timeout, missing CLI, etc). */
 	isError?: boolean;
+	/** True when local skills are shown but the full list is still loading. */
+	isRefreshing?: boolean;
 	/** Click handler for the "retry" row in the error state. */
 	onRetry?: () => void;
 }) {
@@ -271,6 +274,12 @@ export function SlashCommandPlugin({
 										})}
 									</CommandGroup>
 								) : null}
+								{hasOptions && isRefreshing && (
+									<div className="flex items-center gap-2 border-t border-border/40 px-3 py-1.5 text-[12px] text-muted-foreground">
+										<Loader2 className="size-3 shrink-0 animate-spin" />
+										<span>Loading more commands…</span>
+									</div>
+								)}
 							</CommandList>
 						</Command>
 					</div>,
