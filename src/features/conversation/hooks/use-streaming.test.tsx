@@ -147,7 +147,7 @@ describe("useConversationStreaming", () => {
 					displayedSelectedModelId: MODEL.id,
 					displayedSessionId,
 					displayedWorkspaceId,
-					onInteractionSessionsChange: (sessionWorkspaceMap) => {
+					onInteractionSessionsChange: (sessionWorkspaceMap, _counts) => {
 						interactionSnapshots.push(new Map(sessionWorkspaceMap));
 					},
 					selectionPending: false,
@@ -385,7 +385,7 @@ describe("useConversationStreaming", () => {
 					displayedSelectedModelId: MODEL.id,
 					displayedSessionId: "session-1",
 					displayedWorkspaceId: "workspace-1",
-					onInteractionSessionsChange: (sessionWorkspaceMap) => {
+					onInteractionSessionsChange: (sessionWorkspaceMap, _counts) => {
 						interactionSnapshots.push(new Map(sessionWorkspaceMap));
 					},
 					selectionPending: false,

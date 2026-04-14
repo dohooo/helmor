@@ -1114,12 +1114,14 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 	const handleSessionCompleted = useCallback(
 		(sessionId: string, workspaceId: string) => {
-			if (sessionId === selectedSessionIdRef.current) return;
 			setCompletedSessions((prev) => {
 				const next = new Map(prev);
 				next.set(sessionId, workspaceId);
 				return next;
 			});
+			// Skip notification only when the user is actively viewing this session
+			if (document.hasFocus() && sessionId === selectedSessionIdRef.current)
+				return;
 			const name =
 				queryClient.getQueryData<WorkspaceDetail | null>(
 					helmorQueryKeys.workspaceDetail(workspaceId),
@@ -1129,8 +1131,28 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		[notify, queryClient],
 	);
 
+	const lastInteractionCountsRef = useRef<Map<string, number>>(new Map());
 	const handleInteractionSessionsChange = useCallback(
-		(nextMap: Map<string, string>) => {
+		(nextMap: Map<string, string>, counts: Map<string, number>) => {
+			// Notify for new sessions or sessions with increased interaction count
+			for (const [sessionId, workspaceId] of nextMap) {
+				const count = counts.get(sessionId) ?? 0;
+				const prev = lastInteractionCountsRef.current.get(sessionId) ?? 0;
+				if (count > prev) {
+					const name =
+						queryClient.getQueryData<WorkspaceDetail | null>(
+							helmorQueryKeys.workspaceDetail(workspaceId),
+						)?.title ?? "Workspace";
+					notify({ title: "Input needed", body: name });
+				}
+			}
+			// Track counts (only for sessions still in the map)
+			const nextCounts = new Map<string, number>();
+			for (const [sessionId] of nextMap) {
+				nextCounts.set(sessionId, counts.get(sessionId) ?? 0);
+			}
+			lastInteractionCountsRef.current = nextCounts;
+
 			setInteractionRequiredSessions((current) => {
 				if (current.size === nextMap.size) {
 					let unchanged = true;
@@ -1140,21 +1162,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 							break;
 						}
 					}
-					if (unchanged) {
-						return current;
-					}
+					if (unchanged) return current;
 				}
-
-				for (const [sessionId, workspaceId] of nextMap) {
-					if (!current.has(sessionId)) {
-						const name =
-							queryClient.getQueryData<WorkspaceDetail | null>(
-								helmorQueryKeys.workspaceDetail(workspaceId),
-							)?.title ?? "Workspace";
-						notify({ title: "Input needed", body: name });
-					}
-				}
-
 				return new Map(nextMap);
 			});
 		},

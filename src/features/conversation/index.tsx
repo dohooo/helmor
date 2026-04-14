@@ -33,6 +33,7 @@ type WorkspaceConversationContainerProps = {
 	onSendingSessionsChange?: (sessionIds: Set<string>) => void;
 	onInteractionSessionsChange?: (
 		sessionWorkspaceMap: Map<string, string>,
+		interactionCounts: Map<string, number>,
 	) => void;
 	completedSessionIds?: Set<string>;
 	interactionRequiredSessionIds?: Set<string>;
