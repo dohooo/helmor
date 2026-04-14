@@ -576,6 +576,11 @@ export class ClaudeSessionManager implements SessionManager {
 			}
 
 			const { title, branchName } = parseTitleAndBranch(raw);
+			logger.info(`[${requestId}] titleGenerated`, {
+				title,
+				branchName: branchName ?? "(empty)",
+				rawPreview: raw.slice(0, 200),
+			});
 			emitter.titleGenerated(requestId, title, branchName);
 		} finally {
 			clearTimeout(timeout);
