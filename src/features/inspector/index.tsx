@@ -129,17 +129,14 @@ export function WorkspaceInspectorSidebar({
 				onTabChange={setActiveTab}
 			>
 				<SetupTab
-					key={`setup-${workspaceId ?? "none"}`}
 					repoId={repoId ?? null}
 					workspaceId={workspaceId ?? null}
 					workspaceState={workspaceState ?? null}
 					setupScript={repoScripts?.setupScript ?? null}
 					scriptsLoaded={scriptsLoaded}
-					isActive={activeTab === "setup"}
 					onOpenSettings={handleOpenSettings}
 				/>
 				<RunTab
-					key={`run-${workspaceId ?? "none"}`}
 					repoId={repoId ?? null}
 					workspaceId={workspaceId ?? null}
 					runScript={repoScripts?.runScript ?? null}

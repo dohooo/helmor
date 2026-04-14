@@ -6,9 +6,13 @@ import {
 } from "@/components/terminal-output";
 import { Button } from "@/components/ui/button";
 import { TabsContent } from "@/components/ui/tabs";
-import { executeRepoScript, stopRepoScript } from "@/lib/api";
-
-type ScriptStatus = "idle" | "running" | "exited";
+import {
+	attach,
+	detach,
+	type ScriptStatus,
+	startScript,
+	stopScript,
+} from "../script-store";
 
 type RunTabProps = {
 	repoId: string | null;
@@ -33,49 +37,44 @@ export function RunTab({
 	const [status, setStatus] = useState<ScriptStatus>("idle");
 	const [hasRun, setHasRun] = useState(false);
 
-	// Reset to initial state when tab deactivates (avoids stale empty terminal).
+	// Attach to store on mount / when workspaceId changes; replay buffered output.
 	useEffect(() => {
-		if (!isActive && status !== "running") {
+		if (!workspaceId) return;
+
+		const existing = attach(workspaceId, "run", {
+			onChunk: (data) => termRef.current?.write(data),
+			onStatusChange: setStatus,
+		});
+
+		if (existing) {
+			setHasRun(true);
+			setStatus(existing.status);
+			// Replay buffered chunks into a fresh terminal on next frame
+			// (terminal mounts asynchronously).
+			requestAnimationFrame(() => {
+				for (const chunk of existing.chunks) {
+					termRef.current?.write(chunk);
+				}
+			});
+		} else {
 			setHasRun(false);
 			setStatus("idle");
 		}
-	}, [isActive, status]);
+
+		return () => detach(workspaceId, "run");
+	}, [workspaceId]);
 
 	const handleRun = useCallback(() => {
-		if (!repoId) return;
+		if (!repoId || !workspaceId) return;
 		termRef.current?.clear();
 		setStatus("running");
 		setHasRun(true);
-		executeRepoScript(
-			repoId,
-			"run",
-			(event) => {
-				switch (event.type) {
-					case "started":
-						break;
-					case "stdout":
-					case "stderr":
-						termRef.current?.write(event.data);
-						break;
-					case "exited":
-						setStatus("exited");
-						break;
-					case "error":
-						termRef.current?.write(`\r\n\x1b[31m${event.message}\x1b[0m\r\n`);
-						setStatus("exited");
-						break;
-				}
-			},
-			workspaceId,
-		).catch((err) => {
-			termRef.current?.write(`\r\n\x1b[31mFailed to start: ${err}\x1b[0m\r\n`);
-			setStatus("exited");
-		});
+		startScript(repoId, "run", workspaceId);
 	}, [repoId, workspaceId]);
 
 	const handleStop = useCallback(() => {
-		if (!repoId) return;
-		void stopRepoScript(repoId, "run", workspaceId);
+		if (!repoId || !workspaceId) return;
+		stopScript(repoId, "run", workspaceId);
 	}, [repoId, workspaceId]);
 
 	// Handle pending run request from Cmd+R shortcut.
