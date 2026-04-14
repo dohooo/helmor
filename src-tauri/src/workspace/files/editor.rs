@@ -19,6 +19,32 @@ use super::{
 const MAX_EDITOR_FILE_ITEMS: usize = 24;
 const MAX_PREFETCH_BYTES: u64 = 1_048_576;
 
+/// Read the git HEAD version of a file. Returns `None` for new/untracked files.
+pub fn read_file_git_original(
+    workspace_root_path: &str,
+    file_path: &str,
+) -> Result<Option<String>> {
+    let workspace_root = Path::new(workspace_root_path);
+    if !workspace_root.is_absolute() || !workspace_root.is_dir() {
+        bail!(
+            "Workspace root is not a valid directory: {}",
+            workspace_root.display()
+        );
+    }
+
+    let abs = Path::new(file_path);
+    let relative = abs
+        .strip_prefix(workspace_root)
+        .with_context(|| format!("{file_path} is not inside {workspace_root_path}"))?;
+    let relative_str = relative.to_string_lossy().replace('\\', "/");
+
+    let git_path = format!("HEAD:{relative_str}");
+    match crate::git_ops::run_git(["show", &git_path], Some(workspace_root)) {
+        Ok(content) => Ok(Some(content)),
+        Err(_) => Ok(None), // file doesn't exist in HEAD (new/untracked)
+    }
+}
+
 pub fn read_editor_file(path: &str) -> Result<EditorFileReadResponse> {
     let resolved_path = resolve_allowed_path(Path::new(path), true)?;
     let metadata = fs::metadata(&resolved_path)

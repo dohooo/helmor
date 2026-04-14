@@ -10,6 +10,15 @@ pub async fn read_editor_file(path: String) -> CmdResult<editor_files::EditorFil
 }
 
 #[tauri::command]
+pub async fn read_file_git_original(
+    workspace_root_path: String,
+    file_path: String,
+) -> CmdResult<Option<String>> {
+    run_blocking(move || editor_files::read_file_git_original(&workspace_root_path, &file_path))
+        .await
+}
+
+#[tauri::command]
 pub async fn list_editor_files(
     workspace_root_path: String,
 ) -> CmdResult<Vec<editor_files::EditorFileListItem>> {
