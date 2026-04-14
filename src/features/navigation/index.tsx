@@ -234,7 +234,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		items.push({
 			kind: "group-gap",
 			size: getGroupGapSize(
-				previousGroup?.rows.length > 0,
+				(previousGroup?.rows.length ?? 0) > 0,
 				archivedRows.length > 0,
 			),
 		});
