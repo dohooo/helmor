@@ -364,9 +364,7 @@ function ProgressiveConversationViewport({
 	const initialScrollAppliedRef = useRef(false);
 	const pendingScrollAdjustmentRef = useRef(0);
 	const isUserScrollingRef = useRef(false);
-	const scrollIdleTimerRef = useRef<ReturnType<
-		typeof window.setTimeout
-	> | null>(null);
+	const scrollIdleTimerRef = useRef<number | null>(null);
 	const deferredMeasuredHeightsRef = useRef<Record<string, number>>({});
 	const hasUserScrolledRef = useRef(false);
 
