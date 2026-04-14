@@ -82,7 +82,9 @@ import {
 	helmorQueryPersister,
 	sessionThreadMessagesQueryOptions,
 	workspaceDetailQueryOptions,
+	workspaceGitActionStatusQueryOptions,
 	workspaceGroupsQueryOptions,
+	workspacePrActionStatusQueryOptions,
 	workspacePrQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "./lib/query-client";
@@ -442,6 +444,21 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		enabled: isIdentityConnected && selectedWorkspaceId !== null,
 	});
 	const workspacePrInfo = workspacePrQuery.data ?? null;
+
+	// PR action status (mergeable, reviewDecision, checks) and local git
+	// status (uncommittedCount, conflictCount). These drive the commit
+	// button's mode derivation — shared cache with inspector's actions.tsx.
+	const workspacePrActionStatusQuery = useQuery({
+		...workspacePrActionStatusQueryOptions(selectedWorkspaceId ?? "__none__"),
+		enabled: isIdentityConnected && selectedWorkspaceId !== null,
+	});
+	const workspacePrActionStatus = workspacePrActionStatusQuery.data ?? null;
+
+	const workspaceGitActionStatusQuery = useQuery({
+		...workspaceGitActionStatusQueryOptions(selectedWorkspaceId ?? "__none__"),
+		enabled: selectedWorkspaceId !== null,
+	});
+	const workspaceGitActionStatus = workspaceGitActionStatusQuery.data ?? null;
 
 	// Reactively transition workspace sidebar status when the PR query
 	// detects a state change. Handles PRs created/merged/closed externally.
@@ -1089,6 +1106,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		selectedWorkspaceIdRef,
 		workspaceManualStatus: selectedWorkspaceManualStatus,
 		workspacePrInfo,
+		workspacePrActionStatus,
+		workspaceGitActionStatus,
 		sendingSessionIds,
 		onSelectSession: handleSelectSession,
 	});

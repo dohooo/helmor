@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { PullRequestInfo } from "./api";
+import type {
+	PullRequestInfo,
+	WorkspaceGitActionStatus,
+	WorkspacePrActionStatus,
+} from "./api";
 import {
 	type CommitLifecycle,
 	deriveCommitButtonMode,
@@ -33,6 +37,31 @@ function makeLifecycle(
 	};
 }
 
+function makePrActionStatus(
+	overrides: Partial<WorkspacePrActionStatus> = {},
+): WorkspacePrActionStatus {
+	return {
+		pr: null,
+		reviewDecision: null,
+		mergeable: null,
+		deployments: [],
+		checks: [],
+		remoteState: "ok",
+		message: null,
+		...overrides,
+	};
+}
+
+function makeGitActionStatus(
+	overrides: Partial<WorkspaceGitActionStatus> = {},
+): WorkspaceGitActionStatus {
+	return {
+		uncommittedCount: 0,
+		conflictCount: 0,
+		...overrides,
+	};
+}
+
 // ── deriveCommitButtonMode ───────────────────────────────────────────
 
 describe("deriveCommitButtonMode", () => {
@@ -41,7 +70,7 @@ describe("deriveCommitButtonMode", () => {
 			expect(deriveCommitButtonMode(null, null)).toBe("create-pr");
 		});
 
-		it("returns merge when PR is OPEN", () => {
+		it("returns merge when PR is OPEN and no blocking conditions", () => {
 			expect(deriveCommitButtonMode(null, makePr({ state: "OPEN" }))).toBe(
 				"merge",
 			);
@@ -56,13 +85,175 @@ describe("deriveCommitButtonMode", () => {
 			).toBe("merged");
 		});
 
-		it("returns create-pr when PR is CLOSED (not merged)", () => {
+		it("returns open-pr when PR is CLOSED (not merged)", () => {
 			expect(
 				deriveCommitButtonMode(
 					null,
 					makePr({ state: "CLOSED", isMerged: false }),
 				),
-			).toBe("create-pr");
+			).toBe("open-pr");
+		});
+	});
+
+	describe("resolve-conflicts priority", () => {
+		it("returns resolve-conflicts when mergeable is CONFLICTING", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makePr({ state: "OPEN" }),
+					makePrActionStatus({ mergeable: "CONFLICTING" }),
+				),
+			).toBe("resolve-conflicts");
+		});
+
+		it("returns resolve-conflicts when local conflictCount > 0", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makePr({ state: "OPEN" }),
+					makePrActionStatus(),
+					makeGitActionStatus({ conflictCount: 3 }),
+				),
+			).toBe("resolve-conflicts");
+		});
+
+		it("conflicts take precedence over uncommitted changes", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makePr({ state: "OPEN" }),
+					makePrActionStatus({ mergeable: "CONFLICTING" }),
+					makeGitActionStatus({ uncommittedCount: 5 }),
+				),
+			).toBe("resolve-conflicts");
+		});
+
+		it("conflicts take precedence over failing checks", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makePr({ state: "OPEN" }),
+					makePrActionStatus({
+						mergeable: "CONFLICTING",
+						checks: [
+							{
+								id: "ci-1",
+								name: "build",
+								provider: "github",
+								status: "failure",
+							},
+						],
+					}),
+				),
+			).toBe("resolve-conflicts");
+		});
+	});
+
+	describe("commit-and-push priority", () => {
+		it("returns commit-and-push when uncommittedCount > 0 and no conflicts", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makePr({ state: "OPEN" }),
+					makePrActionStatus({ mergeable: "MERGEABLE" }),
+					makeGitActionStatus({ uncommittedCount: 2 }),
+				),
+			).toBe("commit-and-push");
+		});
+
+		it("uncommitted changes take precedence over failing checks", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makePr({ state: "OPEN" }),
+					makePrActionStatus({
+						mergeable: "MERGEABLE",
+						checks: [
+							{
+								id: "ci-1",
+								name: "build",
+								provider: "github",
+								status: "failure",
+							},
+						],
+					}),
+					makeGitActionStatus({ uncommittedCount: 1 }),
+				),
+			).toBe("commit-and-push");
+		});
+	});
+
+	describe("fix CI priority", () => {
+		it("returns fix when a check has failure status", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makePr({ state: "OPEN" }),
+					makePrActionStatus({
+						checks: [
+							{
+								id: "ci-1",
+								name: "build",
+								provider: "github",
+								status: "failure",
+							},
+						],
+					}),
+					makeGitActionStatus(),
+				),
+			).toBe("fix");
+		});
+
+		it("returns merge when all checks pass", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makePr({ state: "OPEN" }),
+					makePrActionStatus({
+						checks: [
+							{
+								id: "ci-1",
+								name: "build",
+								provider: "github",
+								status: "success",
+							},
+						],
+					}),
+					makeGitActionStatus(),
+				),
+			).toBe("merge");
+		});
+
+		it("returns merge when checks are pending (not failure)", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makePr({ state: "OPEN" }),
+					makePrActionStatus({
+						checks: [
+							{
+								id: "ci-1",
+								name: "build",
+								provider: "github",
+								status: "pending",
+							},
+						],
+					}),
+					makeGitActionStatus(),
+				),
+			).toBe("merge");
+		});
+	});
+
+	describe("backward compatibility (no action status args)", () => {
+		it("returns merge when PR is OPEN with only 2 args", () => {
+			expect(deriveCommitButtonMode(null, makePr({ state: "OPEN" }))).toBe(
+				"merge",
+			);
+		});
+
+		it("returns create-pr with no args", () => {
+			expect(deriveCommitButtonMode(null, null)).toBe("create-pr");
 		});
 	});
 
@@ -129,11 +320,13 @@ describe("deriveCommitButtonMode", () => {
 			).toBe("create-pr");
 		});
 
-		it("lifecycle takes priority over PR query", () => {
+		it("lifecycle takes priority over PR query and action statuses", () => {
 			expect(
 				deriveCommitButtonMode(
 					makeLifecycle({ mode: "create-pr", phase: "streaming" }),
 					makePr({ state: "OPEN" }),
+					makePrActionStatus({ mergeable: "CONFLICTING" }),
+					makeGitActionStatus({ uncommittedCount: 5 }),
 				),
 			).toBe("create-pr");
 		});
@@ -144,6 +337,28 @@ describe("deriveCommitButtonMode", () => {
 
 describe("deriveCommitButtonState", () => {
 	it("returns idle when no lifecycle", () => {
+		expect(deriveCommitButtonState(null)).toBe("idle");
+	});
+
+	it("returns disabled when mergeable is UNKNOWN", () => {
+		expect(
+			deriveCommitButtonState(
+				null,
+				makePrActionStatus({ mergeable: "UNKNOWN" }),
+			),
+		).toBe("disabled");
+	});
+
+	it("returns idle when mergeable is MERGEABLE", () => {
+		expect(
+			deriveCommitButtonState(
+				null,
+				makePrActionStatus({ mergeable: "MERGEABLE" }),
+			),
+		).toBe("idle");
+	});
+
+	it("returns idle when no prActionStatus", () => {
 		expect(deriveCommitButtonState(null)).toBe("idle");
 	});
 
@@ -175,6 +390,15 @@ describe("deriveCommitButtonState", () => {
 		expect(deriveCommitButtonState(makeLifecycle({ phase: "error" }))).toBe(
 			"error",
 		);
+	});
+
+	it("lifecycle takes priority over UNKNOWN mergeable", () => {
+		expect(
+			deriveCommitButtonState(
+				makeLifecycle({ phase: "streaming" }),
+				makePrActionStatus({ mergeable: "UNKNOWN" }),
+			),
+		).toBe("busy");
 	});
 });
 
