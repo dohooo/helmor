@@ -4,7 +4,7 @@ expression: snapshot
 input_file: tests/fixtures/streams/codex/list-files.jsonl
 ---
 line_count: 8
-checkpoint_count: 5
+checkpoint_count: 4
 checkpoints:
   - line_index: 2
     event_type: item.completed
@@ -12,13 +12,6 @@ checkpoints:
       - assistant
     last_part_types:
       - text
-  - line_index: 3
-    event_type: item.started
-    roles:
-      - assistant
-    last_part_types:
-      - text
-      - tool-call
   - line_index: 4
     event_type: item.completed
     roles:

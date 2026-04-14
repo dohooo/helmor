@@ -129,10 +129,15 @@ impl MessagePipeline {
 
     /// Partial render: only build the trailing streaming message.
     /// Sent on stream deltas. Much cheaper than a full render.
+    ///
+    /// Tries the Claude path first (block-level deltas in `blocks` /
+    /// `fallback_text`), then falls back to the Codex path (last-touched
+    /// `collected[]` entry tracked by `codex_partial_idx`).
     fn emit_partial(&mut self) -> PipelineEmit {
         let partial = match self
             .accumulator
             .build_partial(&self.context_key, &self.session_id)
+            .or_else(|| self.accumulator.build_codex_partial())
         {
             Some(p) => p,
             None => return PipelineEmit::None,
