@@ -199,6 +199,7 @@ export const WorkspaceRowItem = memo(
 					>
 						<HyperText
 							text={row.branch ? humanizeBranch(row.branch) : row.title}
+							className="inline"
 						/>
 					</span>
 					{showStatusDot ? (
