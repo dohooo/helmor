@@ -395,36 +395,27 @@ pub struct RepoScripts {
 pub fn load_repo_scripts(repo_id: &str, workspace_id: Option<&str>) -> Result<RepoScripts> {
     let connection = db::open_connection(false)?;
     let mut statement = connection
-        .prepare(
-            "SELECT setup_script, run_script, archive_script, root_path FROM repos WHERE id = ?1",
-        )
+        .prepare("SELECT setup_script, run_script, archive_script FROM repos WHERE id = ?1")
         .with_context(|| format!("Failed to prepare script lookup for {repo_id}"))?;
 
-    let (db_setup, db_run, db_archive, root_path) = statement
+    let (db_setup, db_run, db_archive) = statement
         .query_row([repo_id], |row| {
             Ok((
                 row.get::<_, Option<String>>(0)?,
                 row.get::<_, Option<String>>(1)?,
                 row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
             ))
         })
         .with_context(|| format!("Repository not found: {repo_id}"))?;
 
-    // When a workspace is provided, read helmor.json from the workspace directory
-    // only. Otherwise fall back to repo root. Workspace is the source of truth.
-    let project = if let Some(ws_id) = workspace_id {
+    // Only read helmor.json from the workspace directory — never from repo root.
+    let project = workspace_id.and_then(|ws_id| {
         crate::models::workspaces::load_workspace_record_by_id(ws_id)
             .ok()
             .flatten()
             .and_then(|ws| crate::data_dir::workspace_dir(&ws.repo_name, &ws.directory_name).ok())
             .and_then(|dir| load_helmor_json_scripts(&dir))
-    } else {
-        root_path
-            .as_deref()
-            .filter(|p| !p.is_empty())
-            .and_then(|root| load_helmor_json_scripts(Path::new(root)))
-    };
+    });
 
     let (setup_script, setup_from_project) =
         pick_script(project.as_ref().and_then(|p| p.setup.as_deref()), db_setup);
