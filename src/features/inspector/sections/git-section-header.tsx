@@ -58,7 +58,7 @@ export function GitSectionHeader({
 						variant="outline"
 						size="xs"
 						className={cn(
-							"my-0.5 gap-1.5 bg-transparent font-normal tracking-[0.01em] hover:bg-transparent hover:opacity-80",
+							"my-0.5 bg-transparent font-normal tracking-[0.01em] hover:bg-transparent hover:opacity-80",
 							(commitButtonMode === "fix" || commitButtonMode === "closed") &&
 								"border-[var(--workspace-pr-closed-accent)] text-[var(--workspace-pr-closed-accent)] hover:text-[var(--workspace-pr-closed-accent)]",
 							commitButtonMode === "resolve-conflicts" &&
@@ -70,8 +70,17 @@ export function GitSectionHeader({
 						)}
 						onClick={onPrClick}
 					>
-						<Github size={12} />#{prInfo.number}
-						<ExternalLink size={12} strokeWidth={2} />
+						<span className="inline-flex items-center gap-1.5 leading-none">
+							<Github size={12} className="shrink-0 self-center" />
+							<span className="inline-flex items-center leading-none tabular-nums text-sm font-light">
+								#{prInfo.number}
+							</span>
+							<ExternalLink
+								size={12}
+								strokeWidth={2}
+								className="shrink-0 self-center"
+							/>
+						</span>
 					</Button>
 				)}
 			</div>
