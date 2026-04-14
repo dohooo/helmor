@@ -157,6 +157,26 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to deduplicate repos and create unique index on root_path")?;
     }
 
+    // Migration: drop dead workspace log path columns.
+    // These stored temp-file paths for git-worktree and setup-script output
+    // that were never read back. The files themselves lived in /tmp and were
+    // cleaned up by the OS on reboot.
+    let has_setup_log: bool = connection
+        .prepare("SELECT 1 FROM pragma_table_info('workspaces') WHERE name = 'setup_log_path'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+
+    if has_setup_log {
+        connection
+            .execute_batch(
+                r#"
+                ALTER TABLE workspaces DROP COLUMN setup_log_path;
+                ALTER TABLE workspaces DROP COLUMN initialization_log_path;
+                "#,
+            )
+            .context("Failed to drop workspace log path columns")?;
+    }
+
     Ok(())
 }
 
@@ -217,8 +237,6 @@ CREATE TABLE IF NOT EXISTS workspaces (
     placeholder_branch_name TEXT,
     initialization_parent_branch TEXT,
     big_terminal_mode INTEGER DEFAULT 0,
-    setup_log_path TEXT,
-    initialization_log_path TEXT,
     initialization_files_copied INTEGER,
     pinned_at TEXT,
     linked_workspace_ids TEXT,
