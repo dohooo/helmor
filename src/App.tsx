@@ -84,6 +84,7 @@ import {
 	workspaceDetailQueryOptions,
 	workspaceGitActionStatusQueryOptions,
 	workspaceGroupsQueryOptions,
+	workspacePrActionStatusQueryOptions,
 	workspacePrQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "./lib/query-client";
@@ -444,14 +445,20 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	});
 	const workspacePrInfo = workspacePrQuery.data ?? null;
 
-	// Git working-tree status for the commit button's mode gate:
-	// when a PR is open but local changes exist, show "Commit and Push"
-	// instead of "Merge" so the user doesn't accidentally lose work.
-	const gitActionStatusQuery = useQuery({
+	// PR action status (mergeable, reviewDecision, checks) and local git
+	// status (uncommittedCount, conflictCount). These drive the commit
+	// button's mode derivation — shared cache with inspector's actions.tsx.
+	const workspacePrActionStatusQuery = useQuery({
+		...workspacePrActionStatusQueryOptions(selectedWorkspaceId ?? "__none__"),
+		enabled: isIdentityConnected && selectedWorkspaceId !== null,
+	});
+	const workspacePrActionStatus = workspacePrActionStatusQuery.data ?? null;
+
+	const workspaceGitActionStatusQuery = useQuery({
 		...workspaceGitActionStatusQueryOptions(selectedWorkspaceId ?? "__none__"),
 		enabled: selectedWorkspaceId !== null,
 	});
-	const uncommittedCount = gitActionStatusQuery.data?.uncommittedCount ?? 0;
+	const workspaceGitActionStatus = workspaceGitActionStatusQuery.data ?? null;
 
 	// Reactively transition workspace sidebar status when the PR query
 	// detects a state change. Handles PRs created/merged/closed externally.
@@ -1099,7 +1106,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		selectedWorkspaceIdRef,
 		workspaceManualStatus: selectedWorkspaceManualStatus,
 		workspacePrInfo,
-		uncommittedCount,
+		workspacePrActionStatus,
+		workspaceGitActionStatus,
 		sendingSessionIds,
 		onSelectSession: handleSelectSession,
 	});

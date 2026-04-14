@@ -17,7 +17,13 @@ import {
 	type PullRequestInfo,
 	setWorkspaceManualStatus,
 	type WorkspaceDetail,
+	type WorkspaceGitActionStatus,
+	type WorkspacePrActionStatus,
 } from "@/lib/api";
+import {
+	deriveCommitButtonMode,
+	deriveCommitButtonState,
+} from "@/lib/commit-button-logic";
 import { COMMIT_BUTTON_PROMPTS } from "@/lib/commit-button-prompts";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type { CommitButtonState, WorkspaceCommitButtonMode } from "../button";
@@ -43,7 +49,8 @@ export function useWorkspaceCommitLifecycle({
 	selectedWorkspaceIdRef,
 	workspaceManualStatus,
 	workspacePrInfo,
-	uncommittedCount,
+	workspacePrActionStatus,
+	workspaceGitActionStatus,
 	sendingSessionIds,
 	onSelectSession,
 }: {
@@ -52,7 +59,8 @@ export function useWorkspaceCommitLifecycle({
 	selectedWorkspaceIdRef: MutableRefObject<string | null>;
 	workspaceManualStatus: string | null;
 	workspacePrInfo: PullRequestInfo | null;
-	uncommittedCount: number;
+	workspacePrActionStatus: WorkspacePrActionStatus | null;
+	workspaceGitActionStatus: WorkspaceGitActionStatus | null;
 	sendingSessionIds: Set<string>;
 	onSelectSession: (sessionId: string | null) => void;
 }) {
@@ -60,6 +68,11 @@ export function useWorkspaceCommitLifecycle({
 		useState<PendingPromptForSession | null>(null);
 	const [commitLifecycle, setCommitLifecycle] =
 		useState<CommitLifecycle | null>(null);
+
+	// Keep a stable ref so the merge-validation guard in the callback can
+	// read the latest value without adding it to the dependency array.
+	const prActionStatusRef = useRef(workspacePrActionStatus);
+	prActionStatusRef.current = workspacePrActionStatus;
 
 	const handleInspectorCommitAction = useCallback(
 		async (mode: WorkspaceCommitButtonMode) => {
@@ -72,6 +85,27 @@ export function useWorkspaceCommitLifecycle({
 			console.log("[commitButton] begin", { mode, workspaceId });
 
 			if (mode === "merge" || mode === "closed") {
+				// ── Merge pre-validation ─────────────────────────────────
+				if (mode === "merge") {
+					const currentMergeable = prActionStatusRef.current?.mergeable;
+					if (currentMergeable === "CONFLICTING") {
+						console.warn(
+							"[commitButton] merge blocked: PR has merge conflicts",
+						);
+						return;
+					}
+					if (currentMergeable === "UNKNOWN") {
+						console.warn(
+							"[commitButton] merge blocked: mergeable status still computing, please wait",
+						);
+						// Trigger a refresh so the status resolves sooner
+						void queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspacePrActionStatus(workspaceId),
+						});
+						return;
+					}
+				}
+
 				const currentPr = queryClient.getQueryData<PullRequestInfo | null>(
 					helmorQueryKeys.workspacePr(workspaceId),
 				);
@@ -324,40 +358,26 @@ export function useWorkspaceCommitLifecycle({
 			? commitLifecycle
 			: null;
 
-	const commitButtonMode = useMemo<WorkspaceCommitButtonMode>(() => {
-		if (activeLifecycle) {
-			if (activeLifecycle.phase === "done" && activeLifecycle.prInfo) {
-				return activeLifecycle.prInfo.isMerged ? "merged" : "merge";
-			}
-			return activeLifecycle.mode;
-		}
+	const commitButtonMode = useMemo<WorkspaceCommitButtonMode>(
+		() =>
+			deriveCommitButtonMode(
+				activeLifecycle,
+				workspacePrInfo,
+				workspacePrActionStatus,
+				workspaceGitActionStatus,
+			),
+		[
+			activeLifecycle,
+			workspacePrInfo,
+			workspacePrActionStatus,
+			workspaceGitActionStatus,
+		],
+	);
 
-		if (workspacePrInfo) {
-			if (workspacePrInfo.isMerged) return "merged";
-			if (workspacePrInfo.state === "OPEN") {
-				// Gate: must commit & push local changes before allowing merge
-				if (uncommittedCount > 0) return "commit-and-push";
-				return "merge";
-			}
-			if (workspacePrInfo.state === "CLOSED") return "create-pr";
-		}
-
-		return "create-pr";
-	}, [activeLifecycle, uncommittedCount, workspacePrInfo]);
-
-	const commitButtonState = useMemo<CommitButtonState>(() => {
-		if (!activeLifecycle) return "idle";
-		switch (activeLifecycle.phase) {
-			case "creating":
-			case "streaming":
-			case "verifying":
-				return "busy";
-			case "done":
-				return "done";
-			case "error":
-				return "error";
-		}
-	}, [activeLifecycle]);
+	const commitButtonState = useMemo<CommitButtonState>(
+		() => deriveCommitButtonState(activeLifecycle, workspacePrActionStatus),
+		[activeLifecycle, workspacePrActionStatus],
+	);
 
 	return {
 		commitButtonMode,
