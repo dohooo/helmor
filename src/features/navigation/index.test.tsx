@@ -255,4 +255,24 @@ describe("WorkspacesSidebar", () => {
 			within(otherRow).getByLabelText("Interaction required"),
 		).toBeInTheDocument();
 	});
+
+	it("shows workspace hover actions without an opacity transition", () => {
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={workspaceGroups}
+					archivedRows={[]}
+					onArchiveWorkspace={vi.fn()}
+				/>
+			</TooltipProvider>,
+		);
+
+		const actionButton = screen.getByRole("button", {
+			name: "Archive workspace",
+		});
+		const actionOverlay = actionButton.parentElement?.parentElement;
+
+		expect(actionOverlay).not.toBeNull();
+		expect(actionOverlay).not.toHaveClass("transition-opacity");
+	});
 });
