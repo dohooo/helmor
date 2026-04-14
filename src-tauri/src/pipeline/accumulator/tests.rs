@@ -1095,3 +1095,342 @@ fn turn_ids_are_unique_across_turns() {
     let unique: std::collections::HashSet<&String> = ids.iter().collect();
     assert_eq!(ids.len(), unique.len(), "Turn IDs must be unique");
 }
+
+// ---------------------------------------------------------------------------
+// Codex vs Claude full-render frequency comparison.
+//
+// These tests quantify the core architectural difference: Codex fires
+// `PushOutcome::Finalized` on every single item event (started, updated,
+// completed), while Claude reserves `Finalized` for terminal events and
+// uses `StreamingDelta` for mid-stream deltas.
+//
+// Each `Finalized` triggers a full adapter + collapse render pass and a
+// complete message-array IPC to the frontend, causing the virtual
+// scroller to recalculate ALL row positions. Excessive full renders with
+// stale height measurements produce the text-overlap bug observed only
+// in Codex sessions.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn claude_streaming_uses_mostly_streaming_delta() {
+    // Simulate a typical Claude turn: text streaming + tool_use + result.
+    let mut acc = StreamAccumulator::new("claude", "opus");
+    let mut finalized_count = 0u32;
+    let mut streaming_delta_count = 0u32;
+
+    // 1. Text block start
+    let outcome = acc.push_event(
+        &json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text"}
+            }
+        }),
+        "",
+    );
+    match outcome {
+        PushOutcome::Finalized => finalized_count += 1,
+        PushOutcome::StreamingDelta => streaming_delta_count += 1,
+        _ => {}
+    }
+
+    // 2. Multiple text deltas (simulate 10 streaming chunks)
+    for i in 0..10 {
+        let outcome = acc.push_event(
+            &json!({
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": format!("chunk{i} ")}
+                }
+            }),
+            "",
+        );
+        match outcome {
+            PushOutcome::Finalized => finalized_count += 1,
+            PushOutcome::StreamingDelta => streaming_delta_count += 1,
+            _ => {}
+        }
+    }
+
+    // 3. Text block stop
+    let outcome = acc.push_event(
+        &json!({
+            "type": "stream_event",
+            "event": {"type": "content_block_stop", "index": 0}
+        }),
+        "",
+    );
+    match outcome {
+        PushOutcome::Finalized => finalized_count += 1,
+        PushOutcome::StreamingDelta => streaming_delta_count += 1,
+        _ => {}
+    }
+
+    // 4. Tool use block
+    let outcome = acc.push_event(
+        &json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "tool_use", "id": "tc1", "name": "Bash"}
+            }
+        }),
+        "",
+    );
+    match outcome {
+        PushOutcome::Finalized => finalized_count += 1,
+        PushOutcome::StreamingDelta => streaming_delta_count += 1,
+        _ => {}
+    }
+
+    let outcome = acc.push_event(
+        &json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": "{\"command\":\"ls\"}"}
+            }
+        }),
+        "",
+    );
+    match outcome {
+        PushOutcome::Finalized => finalized_count += 1,
+        PushOutcome::StreamingDelta => streaming_delta_count += 1,
+        _ => {}
+    }
+
+    let outcome = acc.push_event(
+        &json!({
+            "type": "stream_event",
+            "event": {"type": "content_block_stop", "index": 1}
+        }),
+        "",
+    );
+    match outcome {
+        PushOutcome::Finalized => finalized_count += 1,
+        PushOutcome::StreamingDelta => streaming_delta_count += 1,
+        _ => {}
+    }
+
+    // 5. Full assistant message (terminal)
+    let full_msg = json!({
+        "type": "assistant",
+        "message": {
+            "id": "msg1",
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "chunk0 chunk1 chunk2 chunk3 chunk4 chunk5 chunk6 chunk7 chunk8 chunk9 "},
+                {"type": "tool_use", "id": "tc1", "name": "Bash", "input": {"command": "ls"}}
+            ]
+        }
+    });
+    let raw = serde_json::to_string(&full_msg).unwrap();
+    let outcome = acc.push_event(&full_msg, &raw);
+    match outcome {
+        PushOutcome::Finalized => finalized_count += 1,
+        PushOutcome::StreamingDelta => streaming_delta_count += 1,
+        _ => {}
+    }
+
+    // Claude: overwhelming majority are StreamingDelta, only 1 Finalized
+    // (the terminal assistant message).
+    assert!(
+        streaming_delta_count > finalized_count,
+        "Claude should use StreamingDelta far more than Finalized. \
+         Got streaming_delta={streaming_delta_count}, finalized={finalized_count}"
+    );
+    assert_eq!(
+        finalized_count, 1,
+        "Claude should have exactly 1 Finalized (the terminal assistant message)"
+    );
+}
+
+#[test]
+fn codex_streaming_fires_finalized_on_every_event() {
+    // Simulate a typical Codex turn with the same logical operations:
+    // text analysis + command execution with full lifecycle.
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+    let mut finalized_count = 0u32;
+    let mut streaming_delta_count = 0u32;
+
+    // 1. agent_message item.started
+    let event = json!({
+        "type": "item.started",
+        "item": {"type": "agent_message", "id": "msg1", "text": ""}
+    });
+    let outcome = acc.push_event(&event, &event.to_string());
+    match outcome {
+        PushOutcome::Finalized => finalized_count += 1,
+        PushOutcome::StreamingDelta => streaming_delta_count += 1,
+        _ => {}
+    }
+
+    // 2. agent_message item.updated (partial text)
+    let event = json!({
+        "type": "item.updated",
+        "item": {"type": "agent_message", "id": "msg1", "text": "Let me analyze..."}
+    });
+    let outcome = acc.push_event(&event, &event.to_string());
+    match outcome {
+        PushOutcome::Finalized => finalized_count += 1,
+        PushOutcome::StreamingDelta => streaming_delta_count += 1,
+        _ => {}
+    }
+
+    // 3. agent_message item.completed
+    let event = json!({
+        "type": "item.completed",
+        "item": {"type": "agent_message", "id": "msg1", "text": "Let me analyze the codebase."}
+    });
+    let outcome = acc.push_event(&event, &event.to_string());
+    match outcome {
+        PushOutcome::Finalized => finalized_count += 1,
+        PushOutcome::StreamingDelta => streaming_delta_count += 1,
+        _ => {}
+    }
+
+    // 4. command_execution item.started (command running)
+    let event = json!({
+        "type": "item.started",
+        "item": {"type": "command_execution", "id": "cmd1", "command": "ls -la"}
+    });
+    let outcome = acc.push_event(&event, &event.to_string());
+    match outcome {
+        PushOutcome::Finalized => finalized_count += 1,
+        PushOutcome::StreamingDelta => streaming_delta_count += 1,
+        _ => {}
+    }
+
+    // 5. command_execution item.completed
+    let event = json!({
+        "type": "item.completed",
+        "item": {
+            "type": "command_execution",
+            "id": "cmd1",
+            "command": "ls -la",
+            "exit_code": 0,
+            "aggregated_output": "file1.txt\nfile2.txt"
+        }
+    });
+    let outcome = acc.push_event(&event, &event.to_string());
+    match outcome {
+        PushOutcome::Finalized => finalized_count += 1,
+        PushOutcome::StreamingDelta => streaming_delta_count += 1,
+        _ => {}
+    }
+
+    // 6. Second agent_message item.started
+    let event = json!({
+        "type": "item.started",
+        "item": {"type": "agent_message", "id": "msg2", "text": ""}
+    });
+    let outcome = acc.push_event(&event, &event.to_string());
+    match outcome {
+        PushOutcome::Finalized => finalized_count += 1,
+        PushOutcome::StreamingDelta => streaming_delta_count += 1,
+        _ => {}
+    }
+
+    // 7. Second agent_message item.completed
+    let event = json!({
+        "type": "item.completed",
+        "item": {"type": "agent_message", "id": "msg2", "text": "The directory contains two files."}
+    });
+    let outcome = acc.push_event(&event, &event.to_string());
+    match outcome {
+        PushOutcome::Finalized => finalized_count += 1,
+        PushOutcome::StreamingDelta => streaming_delta_count += 1,
+        _ => {}
+    }
+
+    // 8. turn.completed
+    let event = json!({"type": "turn.completed"});
+    let outcome = acc.push_event(&event, &event.to_string());
+    match outcome {
+        PushOutcome::Finalized => finalized_count += 1,
+        PushOutcome::StreamingDelta => streaming_delta_count += 1,
+        _ => {}
+    }
+
+    // After the fix: item.started and item.updated use StreamingDelta,
+    // only item.completed and turn.completed use Finalized.
+    // Events: started(msg1)=SD, updated(msg1)=SD, completed(msg1)=F,
+    //         started(cmd1)=SD, completed(cmd1)=F,
+    //         started(msg2)=SD, completed(msg2)=F, turn.completed=F
+    assert_eq!(
+        streaming_delta_count, 4,
+        "item.started and item.updated should be StreamingDelta"
+    );
+    assert_eq!(
+        finalized_count, 4,
+        "Only item.completed and turn.completed should be Finalized"
+    );
+}
+
+/// Verify that item.started and item.updated return StreamingDelta
+/// while item.completed stays Finalized, matching Claude's pattern.
+#[test]
+fn codex_fixed_uses_streaming_delta_for_in_progress_items() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+    let mut finalized_count = 0u32;
+    let mut streaming_delta_count = 0u32;
+
+    // item.started → should be StreamingDelta after fix
+    let event = json!({
+        "type": "item.started",
+        "item": {"type": "command_execution", "id": "cmd1", "command": "ls"}
+    });
+    let outcome = acc.push_event(&event, &event.to_string());
+    match outcome {
+        PushOutcome::Finalized => finalized_count += 1,
+        PushOutcome::StreamingDelta => streaming_delta_count += 1,
+        _ => {}
+    }
+
+    // item.updated → should be StreamingDelta after fix
+    let event = json!({
+        "type": "item.updated",
+        "item": {"type": "command_execution", "id": "cmd1", "command": "ls"}
+    });
+    let outcome = acc.push_event(&event, &event.to_string());
+    match outcome {
+        PushOutcome::Finalized => finalized_count += 1,
+        PushOutcome::StreamingDelta => streaming_delta_count += 1,
+        _ => {}
+    }
+
+    // item.completed → stays Finalized (terminal event, like Claude's assistant)
+    let event = json!({
+        "type": "item.completed",
+        "item": {
+            "type": "command_execution",
+            "id": "cmd1",
+            "command": "ls",
+            "exit_code": 0,
+            "aggregated_output": "file.txt"
+        }
+    });
+    let outcome = acc.push_event(&event, &event.to_string());
+    match outcome {
+        PushOutcome::Finalized => finalized_count += 1,
+        PushOutcome::StreamingDelta => streaming_delta_count += 1,
+        _ => {}
+    }
+
+    // Post-fix expectation: 2 StreamingDelta + 1 Finalized
+    // (matching Claude's pattern: deltas are light, only terminal is full)
+    assert_eq!(
+        streaming_delta_count, 2,
+        "item.started and item.updated should be StreamingDelta"
+    );
+    assert_eq!(
+        finalized_count, 1,
+        "Only item.completed should be Finalized"
+    );
+}

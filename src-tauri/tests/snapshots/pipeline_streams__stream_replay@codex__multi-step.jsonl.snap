@@ -4,7 +4,7 @@ expression: snapshot
 input_file: tests/fixtures/streams/codex/multi-step.jsonl
 ---
 line_count: 23
-checkpoint_count: 20
+checkpoint_count: 12
 checkpoints:
   - line_index: 2
     event_type: item.completed
@@ -12,13 +12,6 @@ checkpoints:
       - assistant
     last_part_types:
       - text
-  - line_index: 3
-    event_type: item.started
-    roles:
-      - assistant
-    last_part_types:
-      - text
-      - todo-list
   - line_index: 4
     event_type: item.completed
     roles:
@@ -27,15 +20,6 @@ checkpoints:
       - text
       - todo-list
       - text
-  - line_index: 5
-    event_type: item.started
-    roles:
-      - assistant
-    last_part_types:
-      - text
-      - todo-list
-      - text
-      - tool-call
   - line_index: 6
     event_type: item.completed
     roles:
@@ -55,27 +39,6 @@ checkpoints:
       - text
       - tool-call
       - text
-  - line_index: 8
-    event_type: item.updated
-    roles:
-      - assistant
-    last_part_types:
-      - text
-      - todo-list
-      - text
-      - tool-call
-      - text
-  - line_index: 9
-    event_type: item.started
-    roles:
-      - assistant
-    last_part_types:
-      - text
-      - todo-list
-      - text
-      - tool-call
-      - text
-      - tool-call
   - line_index: 10
     event_type: item.completed
     roles:
@@ -99,31 +62,6 @@ checkpoints:
       - text
       - tool-call
       - text
-  - line_index: 12
-    event_type: item.updated
-    roles:
-      - assistant
-    last_part_types:
-      - text
-      - todo-list
-      - text
-      - tool-call
-      - text
-      - tool-call
-      - text
-  - line_index: 13
-    event_type: item.started
-    roles:
-      - assistant
-    last_part_types:
-      - text
-      - todo-list
-      - text
-      - tool-call
-      - text
-      - tool-call
-      - text
-      - tool-call
   - line_index: 14
     event_type: item.completed
     roles:
@@ -151,38 +89,8 @@ checkpoints:
       - text
       - tool-call
       - text
-  - line_index: 16
-    event_type: item.started
-    roles:
-      - assistant
-    last_part_types:
-      - text
-      - todo-list
-      - text
-      - tool-call
-      - text
-      - tool-call
-      - text
-      - tool-call
-      - text
-      - tool-call
   - line_index: 17
     event_type: item.completed
-    roles:
-      - assistant
-    last_part_types:
-      - text
-      - todo-list
-      - text
-      - tool-call
-      - text
-      - tool-call
-      - text
-      - tool-call
-      - text
-      - tool-call
-  - line_index: 18
-    event_type: item.updated
     roles:
       - assistant
     last_part_types:

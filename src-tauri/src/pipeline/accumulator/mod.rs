@@ -121,6 +121,15 @@ pub struct StreamAccumulator {
     /// or Codex `turn.completed`), used by `sync_result_id`.
     result_collected_idx: Option<usize>,
 
+    // ── Codex partial tracking ──────────────────────────────────────
+    /// Index into `collected[]` of the entry most recently written by
+    /// `collect_or_replace` during a Codex `item.started` /
+    /// `item.updated` event. Consumed by `build_codex_partial` to
+    /// render only the last-touched entry as a streaming partial,
+    /// matching Claude's `StreamingDelta` pattern. Cleared explicitly
+    /// on `item.completed` (Finalized) events.
+    codex_partial_idx: Option<usize>,
+
     // ── Coverage guard ───────────────────────────────────────────────
     /// Top-level event types that fell through `push_event`'s match
     /// without a handler. Tested as a hard-zero invariant in
@@ -215,6 +224,7 @@ impl StreamAccumulator {
             cur_asst_template: None,
             pending_turn_collected_idx: None,
             result_collected_idx: None,
+            codex_partial_idx: None,
             dropped_event_types: Vec::new(),
         }
     }
@@ -317,28 +327,27 @@ impl StreamAccumulator {
             }
 
             // ── Codex item / turn events ───────────────────────────────
-            // Codex items go through `collect_or_replace` which mutates
-            // `collected[]` directly — they don't touch the streaming
-            // `blocks` buffer, so the partial-render path can't surface
-            // them. They're also free to update non-trailing entries
-            // (multiple items can be in flight when subagents fan out),
-            // so a "render the trailing partial only" optimization would
-            // miss updates. Routing them through `Finalized` means each
-            // delta runs the full adapter + collapse pass; that cost is
-            // structurally tied to Codex's per-item snapshot model rather
-            // than something we can shave with the current pipeline.
-            // If this ever becomes a profile hot spot the right fix is
-            // to extend `build_partial` to render an arbitrary trailing
-            // collected entry (and have `collect_or_replace` report which
-            // index it touched), not to silently downgrade these to
-            // `StreamingDelta` here.
+            // `item.completed` is the terminal event — it persists to DB
+            // and needs a full adapter + collapse render pass (Finalized).
+            //
+            // `item.started` / `item.updated` are in-progress snapshots.
+            // They go through `collect_or_replace` which tracks the
+            // last-touched index in `codex_partial_idx`. Returning
+            // `StreamingDelta` lets `emit_partial` render only that
+            // single entry via `build_codex_partial`, matching Claude's
+            // lightweight partial-render pattern. This reduces full
+            // re-renders by ~60-75% per Codex turn.
             Some("item.completed") => {
                 codex::handle_item_completed(self, raw_line, value);
+                // Terminal event — clear the partial index so a stale
+                // entry from the completed handler's collect_or_replace
+                // call doesn't leak into the next StreamingDelta cycle.
+                self.codex_partial_idx = None;
                 PushOutcome::Finalized
             }
             Some("item.started") | Some("item.updated") => {
                 codex::handle_item_snapshot(self, raw_line, value, false);
-                PushOutcome::Finalized
+                PushOutcome::StreamingDelta
             }
             Some("turn.completed") => {
                 self.handle_turn_completed(value, raw_line);
@@ -438,11 +447,31 @@ impl StreamAccumulator {
         messages
     }
 
+    /// Build a streaming partial from the last Codex `collected[]` entry
+    /// touched by `collect_or_replace`. Returns `None` if no entry was
+    /// recently touched. This is the Codex counterpart to the Claude
+    /// `build_partial` path: Codex items land directly in `collected[]`
+    /// (full snapshots, not block-level deltas), so the partial is a
+    /// clone of the last-touched entry with `is_streaming = true`.
+    pub fn build_codex_partial(&mut self) -> Option<IntermediateMessage> {
+        let idx = self.codex_partial_idx.take()?;
+        let entry = self.collected.get(idx)?;
+        Some(IntermediateMessage {
+            id: entry.id.clone(),
+            role: entry.role.clone(),
+            raw_json: entry.raw_json.clone(),
+            parsed: entry.parsed.clone(),
+            created_at: entry.created_at.clone(),
+            is_streaming: true,
+        })
+    }
+
     /// Whether the accumulator has an active streaming partial.
     pub fn has_active_partial(&self) -> bool {
         !self.blocks.is_empty()
             || !self.fallback_text.trim().is_empty()
             || !self.fallback_thinking.trim().is_empty()
+            || self.codex_partial_idx.is_some()
     }
 
     // ── Persistence accessors ───────────────────────────────────────
@@ -949,13 +978,16 @@ impl StreamAccumulator {
         override_id: Option<String>,
     ) {
         if let Some(id) = override_id.as_deref() {
-            if let Some(existing) = self.collected.iter_mut().rev().find(|m| m.id == id) {
-                existing.raw_json = raw.to_string();
-                existing.parsed = Some(parsed.clone());
+            if let Some(pos) = self.collected.iter().rposition(|m| m.id == id) {
+                self.collected[pos].raw_json = raw.to_string();
+                self.collected[pos].parsed = Some(parsed.clone());
+                self.codex_partial_idx = Some(pos);
                 return;
             }
         }
+        let idx = self.collected.len();
         self.collect_message(raw, parsed, role, override_id.as_deref());
+        self.codex_partial_idx = Some(idx);
     }
 
     fn get_partial_created_at(&mut self) -> String {
