@@ -417,6 +417,24 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			: null) ??
 		null;
 
+	// Cmd+Shift+C to copy current workspace path
+	useEffect(() => {
+		const handler = (e: KeyboardEvent) => {
+			if (e.metaKey && e.shiftKey && e.key.toLowerCase() === "c") {
+				if (!workspaceRootPath) return;
+				e.preventDefault();
+				void navigator.clipboard.writeText(workspaceRootPath).then(() => {
+					toast.success("Path copied", {
+						description: workspaceRootPath,
+						duration: 2000,
+					});
+				});
+			}
+		};
+		window.addEventListener("keydown", handler, true);
+		return () => window.removeEventListener("keydown", handler, true);
+	}, [workspaceRootPath]);
+
 	// Persistent PR state for the current workspace's branch. Drives the
 	// commit button's resting mode and the "Git · PR #xxx" header badge.
 	const workspacePrQuery = useQuery({
