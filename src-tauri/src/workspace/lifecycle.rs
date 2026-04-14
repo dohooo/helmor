@@ -223,7 +223,7 @@ fn run_archive_hook(workspace_id: &str, workspace_dir: &Path, repo_root: &Path) 
         Ok(Some(r)) => r,
         _ => return,
     };
-    let scripts = match repos::load_repo_scripts(&record.repo_id) {
+    let scripts = match repos::load_repo_scripts(&record.repo_id, Some(workspace_id)) {
         Ok(s) => s,
         Err(_) => return,
     };

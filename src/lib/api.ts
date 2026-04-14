@@ -1715,8 +1715,14 @@ export type ScriptEvent =
 	| { type: "exited"; code: number | null }
 	| { type: "error"; message: string };
 
-export async function loadRepoScripts(repoId: string): Promise<RepoScripts> {
-	return invoke<RepoScripts>("load_repo_scripts", { repoId });
+export async function loadRepoScripts(
+	repoId: string,
+	workspaceId?: string | null,
+): Promise<RepoScripts> {
+	return invoke<RepoScripts>("load_repo_scripts", {
+		repoId,
+		workspaceId: workspaceId ?? null,
+	});
 }
 
 export async function updateRepoScripts(
