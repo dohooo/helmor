@@ -95,7 +95,7 @@ const STATE_LABELS: Record<CommitButtonState, string> = {
 	disabled: "Disabled",
 };
 
-// ── Cell: real component in an inspector-like container ───────────────
+// ── Cell: mirrors the real <section> wrapper from changes.tsx ─────────
 
 const PANEL_WIDTH = 300;
 
@@ -107,8 +107,8 @@ function HeaderCell({
 	state: CommitButtonState;
 }) {
 	return (
-		<div
-			className="overflow-hidden rounded-tr-lg bg-sidebar"
+		<section
+			className="flex min-h-0 flex-col overflow-hidden bg-sidebar"
 			style={{ width: PANEL_WIDTH }}
 		>
 			<GitSectionHeader
@@ -116,9 +116,9 @@ function HeaderCell({
 				commitButtonState={state}
 				prInfo={prForMode(mode)}
 				hasChanges={hasChangesForMode(mode)}
-				className="border-b-0 rounded-tr-lg"
+				className="border-b-0"
 			/>
-		</div>
+		</section>
 	);
 }
 
@@ -223,12 +223,12 @@ export const StateMatrix: Story = {
 
 const singleDecorator = (Story: React.ComponentType) => (
 	<div style={{ padding: 32 }}>
-		<div
-			className="overflow-hidden rounded-tr-lg bg-sidebar"
+		<section
+			className="flex min-h-0 flex-col overflow-hidden bg-sidebar"
 			style={{ width: PANEL_WIDTH }}
 		>
 			<Story />
-		</div>
+		</section>
 	</div>
 );
 

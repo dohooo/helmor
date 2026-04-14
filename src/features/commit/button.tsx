@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import { type CSSProperties, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	ButtonGroup,
@@ -138,186 +138,38 @@ function getDefaultMenuItems(
 	];
 }
 
-const BUTTON_STYLE =
-	"h-5 text-[11px] font-semibold leading-none tracking-[0.01em] shadow-none transition-all duration-150";
+type ActionButtonVariant = "default" | "secondary" | "outline" | "destructive";
 
-type ButtonColorVars = CSSProperties & {
-	"--button-border"?: string;
-	"--button-divider"?: string;
-	"--button-bg"?: string;
-	"--button-bg-hover"?: string;
-	"--button-fg"?: string;
-	"--button-fg-hover"?: string;
-};
-
-function semanticButtonVars(
-	role: "success" | "danger" | "attention" | "accent" | "done" | "closed",
-	variant: "filled" | "ghost",
-): ButtonColorVars {
-	const palette = {
-		success: "var(--chart-2)",
-		danger: "var(--destructive)",
-		attention: "var(--chart-4)",
-		accent: "var(--chart-3)",
-		done: "var(--chart-1)",
-		closed: "var(--destructive)",
-	}[role];
-
-	if (role === "closed" && variant === "ghost") {
-		return {
-			"--button-border": `color-mix(in oklch, ${palette} 32%, var(--border) 68%)`,
-			"--button-divider": `color-mix(in oklch, ${palette} 18%, transparent)`,
-			"--button-bg": "transparent",
-			"--button-bg-hover": "transparent",
-			"--button-fg": `color-mix(in oklch, ${palette} 52%, var(--muted-foreground) 48%)`,
-			"--button-fg-hover": `color-mix(in oklch, ${palette} 52%, var(--muted-foreground) 48%)`,
-		};
+function getButtonVariant(
+	mode: WorkspaceCommitButtonMode,
+): ActionButtonVariant {
+	switch (mode) {
+		case "fix":
+		case "closed":
+		case "resolve-conflicts":
+		case "merge":
+		case "merged":
+			return "default";
+		default:
+			return "outline";
 	}
-
-	if (variant === "ghost") {
-		return {
-			"--button-border": `color-mix(in oklch, ${palette} 46%, var(--border) 54%)`,
-			"--button-divider": `color-mix(in oklch, ${palette} 24%, transparent)`,
-			"--button-bg": "transparent",
-			"--button-bg-hover": "transparent",
-			"--button-fg": `color-mix(in oklch, ${palette} 74%, var(--muted-foreground) 26%)`,
-			"--button-fg-hover": `color-mix(in oklch, ${palette} 74%, var(--muted-foreground) 26%)`,
-		};
-	}
-
-	return {
-		"--button-border": `color-mix(in oklch, ${palette} 52%, var(--border) 48%)`,
-		"--button-divider": "rgb(0 0 0 / 0.18)",
-		"--button-bg": `color-mix(in oklch, ${palette} 34%, var(--background) 66%)`,
-		"--button-bg-hover": `color-mix(in oklch, ${palette} 44%, var(--background) 56%)`,
-		"--button-fg": "var(--foreground)",
-		"--button-fg-hover": "var(--foreground)",
-	};
 }
 
-function getButtonColorVars(
-	mode: WorkspaceCommitButtonMode,
-	state: CommitButtonState,
-): ButtonColorVars {
-	if (mode === "create-pr" && state !== "disabled") {
-		return {
-			"--button-border": "transparent",
-			"--button-divider":
-				"color-mix(in oklch, var(--background) 22%, transparent)",
-			"--button-bg": "var(--foreground)",
-			"--button-bg-hover":
-				"color-mix(in oklch, var(--foreground) 90%, black 10%)",
-			"--button-fg": "var(--background)",
-			"--button-fg-hover": "var(--background)",
-		};
+/** Mode-specific button color overrides (layered on top of the variant). */
+function getModeClassName(mode: WorkspaceCommitButtonMode): string | undefined {
+	switch (mode) {
+		case "fix":
+		case "closed":
+			return "bg-[var(--workspace-pr-closed-accent)] text-white hover:bg-[var(--workspace-pr-closed-accent)]";
+		case "resolve-conflicts":
+			return "bg-[var(--workspace-pr-conflicts-accent)] text-white hover:bg-[var(--workspace-pr-conflicts-accent)]";
+		case "merge":
+			return "bg-[var(--workspace-pr-open-accent)] text-white hover:bg-[var(--workspace-pr-open-accent)]";
+		case "merged":
+			return "bg-[var(--workspace-pr-merged-accent)] text-white hover:bg-[var(--workspace-pr-merged-accent)]";
+		default:
+			return undefined;
 	}
-
-	if (mode === "merge" && state !== "disabled") {
-		return {
-			"--button-border": "transparent",
-			"--button-divider": "rgb(255 255 255 / 0.18)",
-			"--button-bg": "var(--workspace-pr-open-accent)",
-			"--button-bg-hover":
-				"color-mix(in oklch, var(--workspace-pr-open-accent) 90%, black 10%)",
-			"--button-fg": "#FFFFFF",
-			"--button-fg-hover": "#FFFFFF",
-		};
-	}
-
-	if (mode === "merged" && state !== "disabled") {
-		return {
-			"--button-border": "transparent",
-			"--button-divider": "rgb(255 255 255 / 0.16)",
-			"--button-bg": "var(--workspace-pr-merged-accent)",
-			"--button-bg-hover":
-				"color-mix(in oklch, var(--workspace-pr-merged-accent) 90%, black 10%)",
-			"--button-fg": "#FFFFFF",
-			"--button-fg-hover": "#FFFFFF",
-		};
-	}
-
-	if (mode === "closed" && state !== "disabled") {
-		return {
-			"--button-border": "transparent",
-			"--button-divider": "rgb(255 255 255 / 0.16)",
-			"--button-bg": "var(--workspace-pr-closed-accent)",
-			"--button-bg-hover":
-				"color-mix(in oklch, var(--workspace-pr-closed-accent) 90%, black 10%)",
-			"--button-fg": "var(--primary)",
-			"--button-fg-hover": "var(--primary)",
-		};
-	}
-
-	if (mode === "resolve-conflicts" && state !== "disabled") {
-		return {
-			"--button-border": "transparent",
-			"--button-divider":
-				"color-mix(in oklch, var(--primary-foreground) 22%, transparent)",
-			"--button-bg": "var(--primary)",
-			"--button-bg-hover": "color-mix(in oklch, var(--primary) 90%, black 10%)",
-			"--button-fg": "var(--primary-foreground)",
-			"--button-fg-hover": "var(--primary-foreground)",
-		};
-	}
-
-	if (mode === "fix" && state !== "disabled") {
-		return {
-			"--button-border": "transparent",
-			"--button-divider": "rgb(255 255 255 / 0.16)",
-			"--button-bg": "var(--workspace-pr-closed-accent)",
-			"--button-bg-hover":
-				"color-mix(in oklch, var(--workspace-pr-closed-accent) 90%, black 10%)",
-			"--button-fg": "var(--primary)",
-			"--button-fg-hover": "var(--primary)",
-		};
-	}
-
-	if (mode === "open-pr" && state !== "disabled") {
-		return {
-			"--button-border": "transparent",
-			"--button-divider":
-				"color-mix(in oklch, var(--primary-foreground) 22%, transparent)",
-			"--button-bg": "var(--primary)",
-			"--button-bg-hover": "color-mix(in oklch, var(--primary) 90%, black 10%)",
-			"--button-fg": "var(--primary-foreground)",
-			"--button-fg-hover": "var(--primary-foreground)",
-		};
-	}
-
-	if (mode === "commit-and-push" && state !== "disabled") {
-		return {
-			"--button-border": "transparent",
-			"--button-divider":
-				"color-mix(in oklch, var(--primary-foreground) 22%, transparent)",
-			"--button-bg": "var(--primary)",
-			"--button-bg-hover": "color-mix(in oklch, var(--primary) 90%, black 10%)",
-			"--button-fg": "var(--primary-foreground)",
-			"--button-fg-hover": "var(--primary-foreground)",
-		};
-	}
-
-	if (state === "disabled") {
-		return {
-			"--button-border": "color-mix(in oklch, var(--border) 92%, transparent)",
-			"--button-divider": "rgb(0 0 0 / 0.12)",
-			"--button-bg":
-				"color-mix(in oklch, var(--primary) 72%, var(--muted) 28%)",
-			"--button-bg-hover":
-				"color-mix(in oklch, var(--primary) 72%, var(--muted) 28%)",
-			"--button-fg": "var(--muted-foreground)",
-			"--button-fg-hover": "var(--muted-foreground)",
-		};
-	}
-
-	if (mode === "fix") return semanticButtonVars("danger", "filled");
-	if (mode === "resolve-conflicts")
-		return semanticButtonVars("attention", "filled");
-	if (mode === "open-pr") return semanticButtonVars("accent", "filled");
-	if (mode === "create-pr" || mode === "commit-and-push" || mode === "merge") {
-		return semanticButtonVars("success", "filled");
-	}
-
-	return semanticButtonVars("accent", "filled");
 }
 
 function getModeIcon(mode: WorkspaceCommitButtonMode) {
@@ -369,6 +221,8 @@ export function WorkspaceCommitButton({
 	const currentState = isControlled ? state : internalState;
 	const isBusy = currentState === "busy";
 	const isGhostMode = mode === "merged" || mode === "closed";
+	const buttonVariant = getButtonVariant(mode);
+	const modeClassName = getModeClassName(mode);
 
 	const setState = (nextState: CommitButtonState) => {
 		onStateChange?.(nextState);
@@ -422,7 +276,6 @@ export function WorkspaceCommitButton({
 		resolvedMenuItems.length > 0;
 	const mainText = mainLabel ?? STATE_LABELS[mode][currentState];
 	const mainIcon = getModeIcon(mode);
-	const buttonColorVars = getButtonColorVars(mode, currentState);
 	const optionsAriaLabel =
 		mode === "commit-and-push"
 			? "Commit and push options"
@@ -440,66 +293,62 @@ export function WorkspaceCommitButton({
 									? "Closed options"
 									: "Create PR options";
 
-	const group = (
-		<ButtonGroup
-			aria-label={mainText}
+	const mainButton = (
+		<Button
+			type="button"
+			size="xs"
+			variant={buttonVariant}
+			disabled={isBusy || currentState === "disabled" || disabled}
+			onClick={isGhostMode ? undefined : () => runAction(onCommit)}
 			className={cn(
-				"h-5 inline-flex items-stretch rounded-[3px] border border-[var(--button-border)] bg-[var(--button-bg)] p-0 shadow-none",
+				"min-w-0",
+				modeClassName,
 				className,
+				isGhostMode && "pointer-events-none",
 			)}
-			style={buttonColorVars}
 		>
-			<Button
-				type="button"
-				size="sm"
-				variant="outline"
-				disabled={
-					isGhostMode || isBusy || currentState === "disabled" || disabled
-				}
-				onClick={() => runAction(onCommit)}
-				className={cn(
-					BUTTON_STYLE,
-					"min-w-0 cursor-pointer gap-1 rounded-[3px] border-0 bg-transparent px-1.5 text-[var(--button-fg)] shadow-none outline-none hover:bg-[var(--button-bg-hover)] hover:text-[var(--button-fg-hover)] focus-visible:border-transparent focus-visible:ring-0 disabled:opacity-100",
-					(isBusy || isGhostMode) && "pointer-events-none",
-				)}
-			>
-				{mainIcon}
-				<span>{mainText}</span>
-			</Button>
-			{hasMenuItems ? (
-				<>
-					<ButtonGroupSeparator
-						className="w-px self-stretch bg-[var(--button-divider)]"
-						orientation="vertical"
-					/>
-					<DropdownMenuTrigger
-						aria-label={optionsAriaLabel}
-						disabled={
-							isBusy || currentState === "disabled" || disabled || !hasMenuItems
-						}
-						className={cn(
-							BUTTON_STYLE,
-							"flex min-w-5 cursor-pointer items-center justify-center self-stretch rounded-[3px] border-0 bg-transparent px-0 leading-none text-[var(--button-fg)] shadow-none outline-none hover:bg-[var(--button-bg-hover)] hover:text-[var(--button-fg-hover)] focus-visible:border-transparent focus-visible:ring-0 disabled:opacity-100",
-							isBusy && "pointer-events-none",
-						)}
-					>
-						<ChevronDown
-							className="relative -top-px size-2.5 align-middle"
-							strokeWidth={2.2}
-						/>
-					</DropdownMenuTrigger>
-				</>
-			) : null}
-		</ButtonGroup>
+			{mainIcon}
+			<span>{mainText}</span>
+		</Button>
 	);
 
 	if (!hasMenuItems) {
-		return group;
+		return mainButton;
 	}
 
 	return (
 		<DropdownMenu>
-			{group}
+			<ButtonGroup aria-label={mainText} className={className}>
+				<Button
+					type="button"
+					size="xs"
+					variant={buttonVariant}
+					disabled={isBusy || currentState === "disabled" || disabled}
+					onClick={() => runAction(onCommit)}
+					className={cn("min-w-0", modeClassName)}
+				>
+					{mainIcon}
+					<span>{mainText}</span>
+				</Button>
+				<ButtonGroupSeparator
+					orientation="vertical"
+					className="bg-primary-foreground/20"
+				/>
+				<DropdownMenuTrigger asChild>
+					<Button
+						type="button"
+						size="icon-xs"
+						variant={buttonVariant}
+						disabled={
+							isBusy || currentState === "disabled" || disabled || !hasMenuItems
+						}
+						aria-label={optionsAriaLabel}
+						className={modeClassName}
+					>
+						<ChevronDown strokeWidth={2.2} />
+					</Button>
+				</DropdownMenuTrigger>
+			</ButtonGroup>
 			<DropdownMenuContent align="end" side="bottom" sideOffset={4}>
 				{resolvedMenuItems.map((item) => (
 					<DropdownMenuItem

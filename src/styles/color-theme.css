@@ -46,12 +46,34 @@
 	--workspace-branch-status-closed: var(--destructive);
 	--workspace-branch-status-inactive: var(--workspace-sidebar-status-neutral);
 	--workspace-pr-merged-accent: #8957e5;
-	--workspace-pr-merged-header-bg: #ede7fb;
+	--workspace-pr-merged-link: color-mix(
+		in srgb,
+		var(--workspace-pr-merged-accent) 95%,
+		transparent
+	);
+	--workspace-pr-merged-header-bg: color-mix(
+		in srgb,
+		var(--workspace-pr-merged-accent) 35%,
+		transparent
+	);
 	--workspace-pr-open-accent: #238636;
-	--workspace-pr-open-header-bg: #c5e3c8;
+	--workspace-pr-open-header-bg: color-mix(
+		in srgb,
+		var(--workspace-pr-open-accent) 35%,
+		transparent
+	);
+	--workspace-pr-conflicts-accent: rgb(210, 153, 34);
+	--workspace-pr-conflicts-header-bg: color-mix(
+		in srgb,
+		var(--workspace-pr-conflicts-accent) 35%,
+		transparent
+	);
 	--workspace-pr-closed-accent: #da3633;
-	--workspace-pr-closed-header-bg: #f1c7c5;
-	--workspace-pr-conflicts-header-bg: #212830;
+	--workspace-pr-closed-header-bg: color-mix(
+		in srgb,
+		var(--workspace-pr-closed-accent) 35%,
+		transparent
+	);
 	--plan: #48968c;
 	/* Terminal (xterm.js) — reuses app tokens where possible */
 	--terminal-background: var(--sidebar);
@@ -125,12 +147,34 @@
 	--workspace-branch-status-closed: var(--destructive);
 	--workspace-branch-status-inactive: var(--workspace-sidebar-status-neutral);
 	--workspace-pr-merged-accent: #8957e5;
-	--workspace-pr-merged-header-bg: #3a295f;
+	--workspace-pr-merged-link: color-mix(
+		in srgb,
+		var(--workspace-pr-merged-accent) 95%,
+		transparent
+	);
+	--workspace-pr-merged-header-bg: color-mix(
+		in srgb,
+		var(--workspace-pr-merged-accent) 35%,
+		transparent
+	);
 	--workspace-pr-open-accent: #238636;
-	--workspace-pr-open-header-bg: #2a4b34;
+	--workspace-pr-open-header-bg: color-mix(
+		in srgb,
+		var(--workspace-pr-open-accent) 35%,
+		transparent
+	);
+	--workspace-pr-conflicts-accent: rgb(210, 153, 34);
+	--workspace-pr-conflicts-header-bg: color-mix(
+		in srgb,
+		var(--workspace-pr-conflicts-accent) 35%,
+		transparent
+	);
 	--workspace-pr-closed-accent: #da3633;
-	--workspace-pr-closed-header-bg: #5a2b2b;
-	--workspace-pr-conflicts-header-bg: #212830;
+	--workspace-pr-closed-header-bg: color-mix(
+		in srgb,
+		var(--workspace-pr-closed-accent) 35%,
+		transparent
+	);
 	--plan: #48968c;
 	/* Terminal (xterm.js) — only overrides that differ from :root */
 	--terminal-selection: oklch(0.35 0.03 250);
