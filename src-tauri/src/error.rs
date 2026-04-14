@@ -27,6 +27,8 @@ impl Serialize for CommandError {
 
 impl From<anyhow::Error> for CommandError {
     fn from(error: anyhow::Error) -> Self {
+        let error_chain = format!("{error:#}");
+        tracing::error!(error = %error_chain, error_debug = ?error, "Tauri command failed");
         CommandError(error)
     }
 }

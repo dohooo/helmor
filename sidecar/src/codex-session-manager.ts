@@ -33,7 +33,7 @@ import { scanCodexSkills } from "./codex-skill-scanner.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { resolveGitAccessDirectories } from "./git-access.js";
 import { parseImageRefs } from "./images.js";
-import { logger } from "./logger.js";
+import { errorDetails, logger } from "./logger.js";
 import type {
 	ListSlashCommandsParams,
 	SendMessageParams,
@@ -218,8 +218,10 @@ export class CodexSessionManager implements SessionManager {
 		for (const controller of snapshot) {
 			try {
 				controller.abort();
-			} catch {
-				// best-effort
+			} catch (err) {
+				logger.error("Codex shutdown failed during abort()", {
+					...errorDetails(err),
+				});
 			}
 		}
 		this.abortControllers.clear();

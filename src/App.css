@@ -251,6 +251,10 @@ body {
 	display: none;
 }
 
+.scrollbar-stable {
+	scrollbar-gutter: stable;
+}
+
 [data-slot="scroll-area-viewport"] > div {
 	display: block !important;
 	min-width: 0 !important;

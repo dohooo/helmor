@@ -38,6 +38,7 @@ export function useWorkspaceInspectorSidebar({
 }: UseWorkspaceInspectorSidebarArgs) {
 	const [tabsOpen, setTabsOpen] = useState(false);
 	const [activeTab, setActiveTab] = useState("setup");
+	const [pendingRunScript, setPendingRunScript] = useState(false);
 
 	// Auto-open the setup tab when workspace needs setup.
 	useEffect(() => {
@@ -46,6 +47,17 @@ export function useWorkspaceInspectorSidebar({
 			setActiveTab("setup");
 		}
 	}, [workspaceState]);
+
+	// Listen for Cmd+R "run script" shortcut event.
+	useEffect(() => {
+		const handler = () => {
+			setTabsOpen(true);
+			setActiveTab("run");
+			setPendingRunScript(true);
+		};
+		window.addEventListener("helmor:run-script", handler);
+		return () => window.removeEventListener("helmor:run-script", handler);
+	}, []);
 	const [changesHeight, setChangesHeight] = useState(0);
 	const [actionsHeight, setActionsHeight] = useState(0);
 	const [resizeState, setResizeState] = useState<ResizeState | null>(null);
@@ -278,12 +290,18 @@ export function useWorkspaceInspectorSidebar({
 		[actionsHeight, changesHeight],
 	);
 
+	const clearPendingRunScript = useCallback(
+		() => setPendingRunScript(false),
+		[],
+	);
+
 	return {
 		actionsHeight,
 		actionsRef,
 		activeTab,
 		changes,
 		changesHeight,
+		clearPendingRunScript,
 		containerRef,
 		flashingPaths,
 		handleResizeStart,
@@ -291,6 +309,7 @@ export function useWorkspaceInspectorSidebar({
 		isActionsResizing,
 		isResizing,
 		isTabsResizing,
+		pendingRunScript,
 		repoScripts,
 		scriptsLoaded,
 		setActiveTab,

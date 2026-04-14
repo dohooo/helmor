@@ -47,7 +47,7 @@ afterEach(() => {
 });
 
 describe("WorkspacesSidebar", () => {
-	it("updates the row icon immediately when a workspace enters sending state", () => {
+	it("shows the Helmor thinking indicator when a workspace enters sending state", () => {
 		const { rerender } = render(
 			<TooltipProvider delayDuration={0}>
 				<WorkspacesSidebar
@@ -60,7 +60,9 @@ describe("WorkspacesSidebar", () => {
 		);
 
 		const initialRow = screen.getByRole("button", { name: "Workspace 1" });
-		expect(initialRow.querySelector(".animate-spin")).toBeNull();
+		expect(
+			initialRow.querySelector('[data-slot="helmor-thinking-indicator"]'),
+		).toBeNull();
 
 		rerender(
 			<TooltipProvider delayDuration={0}>
@@ -74,7 +76,9 @@ describe("WorkspacesSidebar", () => {
 		);
 
 		const updatedRow = screen.getByRole("button", { name: "Workspace 1" });
-		expect(updatedRow.querySelector(".animate-spin")).not.toBeNull();
+		expect(
+			updatedRow.querySelector('[data-slot="helmor-thinking-indicator"]'),
+		).not.toBeNull();
 	});
 
 	it("opens the repository picker and creates a workspace from the selected repository", async () => {

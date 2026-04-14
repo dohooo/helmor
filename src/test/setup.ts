@@ -1,6 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 import { vi } from "vitest";
 
+vi.mock("lottie-web/build/player/lottie_svg", () => ({
+	default: {
+		loadAnimation: vi.fn(() => ({
+			destroy: vi.fn(),
+		})),
+	},
+}));
+
 // @tanstack/react-virtual requires a layout engine to determine visible items.
 // jsdom has none, so mock the virtualizer to render all items unconditionally.
 vi.mock("@tanstack/react-virtual", () => ({
@@ -26,6 +34,12 @@ vi.mock("@tanstack/react-virtual", () => ({
 
 vi.mock("@tauri-apps/api/event", () => ({
 	listen: vi.fn(async () => () => {}),
+}));
+
+vi.mock("@tauri-apps/api/window", () => ({
+	getCurrentWindow: vi.fn(() => ({
+		onCloseRequested: vi.fn(async () => () => {}),
+	})),
 }));
 
 // `src/lib/api.ts` always calls `invoke` from `@tauri-apps/api/core` now —
@@ -137,6 +151,19 @@ if (
 	// JSDOM does not provide ResizeObserver.
 	window.ResizeObserver = ResizeObserverMock as typeof ResizeObserver;
 	globalThis.ResizeObserver = ResizeObserverMock as typeof ResizeObserver;
+}
+
+if (typeof window !== "undefined" && typeof window.matchMedia === "undefined") {
+	window.matchMedia = ((query: string) => ({
+		matches: query.includes("dark"),
+		media: query,
+		onchange: null,
+		addListener: () => {},
+		removeListener: () => {},
+		addEventListener: () => {},
+		removeEventListener: () => {},
+		dispatchEvent: () => false,
+	})) as typeof window.matchMedia;
 }
 
 if (typeof HTMLCanvasElement !== "undefined") {

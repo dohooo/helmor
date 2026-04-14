@@ -561,6 +561,10 @@ export async function listRepositories(): Promise<RepositoryCreateOption[]> {
 	}
 }
 
+export async function deleteRepository(repoId: string): Promise<void> {
+	await invoke<void>("delete_repository", { repoId });
+}
+
 export type UpdateRepositoryRemoteResponse = {
 	orphanedWorkspaceCount: number;
 };

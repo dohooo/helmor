@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { extname } from "node:path";
+import { basename, extname } from "node:path";
 import {
 	type ElicitationResult,
 	type HookInput,
@@ -20,7 +20,7 @@ import { isAbortError } from "./abort.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { resolveGitAccessDirectories } from "./git-access.js";
 import { parseImageRefs } from "./images.js";
-import { logger } from "./logger.js";
+import { errorDetails, logger } from "./logger.js";
 import type {
 	ListSlashCommandsParams,
 	SendMessageParams,
@@ -239,7 +239,11 @@ async function buildUserMessageWithImages(
 					data: data.toString("base64"),
 				},
 			});
-		} catch {
+		} catch (err) {
+			logger.error("Failed to read image attachment", {
+				imageName: basename(imgPath),
+				...errorDetails(err),
+			});
 			content.push({ type: "text", text: `[Image not found: ${imgPath}]` });
 		}
 	}
@@ -526,8 +530,11 @@ export class ClaudeSessionManager implements SessionManager {
 			try {
 				q.close();
 			} catch (closeErr) {
-				// Best-effort cleanup; never let this mask the original error.
-				void closeErr;
+				logger.error("Claude session cleanup failed during q.close()", {
+					requestId,
+					sessionId,
+					...errorDetails(closeErr),
+				});
 			}
 			this.sessions.delete(sessionId);
 			for (const [elicitationId, resolve] of this.pendingElicitations) {
@@ -575,7 +582,13 @@ export class ClaudeSessionManager implements SessionManager {
 			try {
 				q.close();
 			} catch (closeErr) {
-				void closeErr;
+				logger.error(
+					"Claude title generation cleanup failed during q.close()",
+					{
+						requestId,
+						...errorDetails(closeErr),
+					},
+				);
 			}
 		}
 	}
@@ -639,8 +652,14 @@ export class ClaudeSessionManager implements SessionManager {
 				for await (const _ of q) {
 					void _;
 				}
-			} catch {
-				// ignored — teardown path handles errors via the outer await
+			} catch (err) {
+				if (!isAbortError(err)) {
+					logger.error("Claude slash-command drain failed", {
+						cwd: cwd || "(none)",
+						model: model || "(default)",
+						...errorDetails(err),
+					});
+				}
 			}
 		})();
 
@@ -655,8 +674,12 @@ export class ClaudeSessionManager implements SessionManager {
 			timedOut = true;
 			try {
 				abortController.abort();
-			} catch {
-				// best-effort
+			} catch (err) {
+				logger.error("Claude slash-command timeout abort failed", {
+					cwd: cwd || "(none)",
+					model: model || "(default)",
+					...errorDetails(err),
+				});
 			}
 		}, SLASH_COMMANDS_TIMEOUT_MS);
 
@@ -691,15 +714,31 @@ export class ClaudeSessionManager implements SessionManager {
 			resolveDone();
 			try {
 				abortController.abort();
-			} catch {
-				// best-effort
+			} catch (err) {
+				logger.error("Claude slash-command cleanup failed during abort()", {
+					cwd: cwd || "(none)",
+					model: model || "(default)",
+					...errorDetails(err),
+				});
 			}
 			try {
 				q.close();
-			} catch {
-				// best-effort
+			} catch (err) {
+				logger.error("Claude slash-command cleanup failed during q.close()", {
+					cwd: cwd || "(none)",
+					model: model || "(default)",
+					...errorDetails(err),
+				});
 			}
-			await drain.catch(() => undefined);
+			await drain.catch((err) => {
+				if (!isAbortError(err)) {
+					logger.error("Claude slash-command drain join failed", {
+						cwd: cwd || "(none)",
+						model: model || "(default)",
+						...errorDetails(err),
+					});
+				}
+			});
 		}
 	}
 
@@ -714,12 +753,15 @@ export class ClaudeSessionManager implements SessionManager {
 	async shutdown(): Promise<void> {
 		// Snapshot first — `query.close()` triggers the finally block in
 		// sendMessage which mutates `this.sessions`.
-		const snapshot = Array.from(this.sessions.values());
-		for (const session of snapshot) {
+		const snapshot = Array.from(this.sessions.entries());
+		for (const [sessionId, session] of snapshot) {
 			try {
 				session.query.close();
-			} catch {
-				// best-effort
+			} catch (err) {
+				logger.error("Claude shutdown failed during query.close()", {
+					sessionId,
+					...errorDetails(err),
+				});
 			}
 		}
 		this.sessions.clear();

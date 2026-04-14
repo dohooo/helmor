@@ -110,6 +110,53 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         )
         .context("Failed to wrap plain-text user prompts as JSON")?;
 
+    // Migration: deduplicate repos with identical root_path.
+    // Keeps the oldest row per root_path, re-parents workspaces from duplicates,
+    // then adds a unique index so it can't recur.
+    let has_repos_table: bool = connection
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'repos'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+    let has_unique_idx: bool = connection
+        .prepare(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_repos_root_path'",
+        )
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+
+    if has_repos_table && !has_unique_idx {
+        connection
+            .execute_batch(
+                r#"
+                -- Re-parent workspaces from duplicate repos to the canonical (oldest) repo
+                UPDATE workspaces
+                SET repository_id = (
+                    SELECT r2.id FROM repos r2
+                    WHERE r2.root_path = (SELECT root_path FROM repos WHERE id = workspaces.repository_id)
+                    ORDER BY r2.created_at ASC
+                    LIMIT 1
+                )
+                WHERE repository_id IN (
+                    SELECT r.id FROM repos r
+                    WHERE r.root_path IN (
+                        SELECT root_path FROM repos GROUP BY root_path HAVING COUNT(*) > 1
+                    )
+                );
+
+                -- Delete duplicate repos (keep the oldest per root_path)
+                DELETE FROM repos WHERE id NOT IN (
+                    SELECT id FROM (
+                        SELECT id, ROW_NUMBER() OVER (PARTITION BY root_path ORDER BY created_at ASC) AS rn
+                        FROM repos
+                    ) WHERE rn = 1
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_repos_root_path ON repos(root_path);
+                "#,
+            )
+            .context("Failed to deduplicate repos and create unique index on root_path")?;
+    }
+
     Ok(())
 }
 
@@ -272,6 +319,7 @@ CREATE INDEX IF NOT EXISTS idx_session_messages_turn_id ON session_messages(turn
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_diff_comments_workspace ON diff_comments(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspaces_repository_id ON workspaces(repository_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_repos_root_path ON repos(root_path);
 
 -- Triggers (use CREATE TRIGGER IF NOT EXISTS where supported, otherwise wrapped)
 CREATE TRIGGER IF NOT EXISTS update_repos_updated_at

@@ -581,6 +581,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 											</span>
 											{repository.defaultBranch ? (
 												<span className="shrink-0 text-xs text-muted-foreground">
+													{repository.remote ?? "origin"}/
 													{repository.defaultBranch.toLowerCase()}
 												</span>
 											) : null}
@@ -597,7 +598,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			<div
 				ref={scrollContainerRef}
 				data-slot="workspace-groups-scroll"
-				className="relative mt-4 min-h-0 flex-1 overflow-y-auto px-2 pr-3"
+				className="scrollbar-stable relative mt-4 min-h-0 flex-1 overflow-y-auto px-2 pr-1"
 			>
 				<div
 					style={{

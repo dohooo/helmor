@@ -39,6 +39,7 @@ export type PendingPromptForSession = {
 
 export function useWorkspaceCommitLifecycle({
 	queryClient,
+	selectedWorkspaceId,
 	selectedWorkspaceIdRef,
 	workspaceManualStatus,
 	workspacePrInfo,
@@ -47,6 +48,7 @@ export function useWorkspaceCommitLifecycle({
 	onSelectSession,
 }: {
 	queryClient: QueryClient;
+	selectedWorkspaceId: string | null;
 	selectedWorkspaceIdRef: MutableRefObject<string | null>;
 	workspaceManualStatus: string | null;
 	workspacePrInfo: PullRequestInfo | null;
@@ -316,12 +318,18 @@ export function useWorkspaceCommitLifecycle({
 		return () => window.clearTimeout(timeoutId);
 	}, [commitLifecycle, onSelectSession, queryClient]);
 
+	// Only honour the lifecycle if it belongs to the currently-selected workspace.
+	const activeLifecycle =
+		commitLifecycle && commitLifecycle.workspaceId === selectedWorkspaceId
+			? commitLifecycle
+			: null;
+
 	const commitButtonMode = useMemo<WorkspaceCommitButtonMode>(() => {
-		if (commitLifecycle) {
-			if (commitLifecycle.phase === "done" && commitLifecycle.prInfo) {
-				return commitLifecycle.prInfo.isMerged ? "merged" : "merge";
+		if (activeLifecycle) {
+			if (activeLifecycle.phase === "done" && activeLifecycle.prInfo) {
+				return activeLifecycle.prInfo.isMerged ? "merged" : "merge";
 			}
-			return commitLifecycle.mode;
+			return activeLifecycle.mode;
 		}
 
 		if (workspacePrInfo) {
@@ -335,11 +343,11 @@ export function useWorkspaceCommitLifecycle({
 		}
 
 		return "create-pr";
-	}, [commitLifecycle, uncommittedCount, workspacePrInfo]);
+	}, [activeLifecycle, uncommittedCount, workspacePrInfo]);
 
 	const commitButtonState = useMemo<CommitButtonState>(() => {
-		if (!commitLifecycle) return "idle";
-		switch (commitLifecycle.phase) {
+		if (!activeLifecycle) return "idle";
+		switch (activeLifecycle.phase) {
 			case "creating":
 			case "streaming":
 			case "verifying":
@@ -349,7 +357,7 @@ export function useWorkspaceCommitLifecycle({
 			case "error":
 				return "error";
 		}
-	}, [commitLifecycle]);
+	}, [activeLifecycle]);
 
 	return {
 		commitButtonMode,

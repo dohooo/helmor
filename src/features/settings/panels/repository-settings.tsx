@@ -1,6 +1,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, GitBranch, LoaderCircle } from "lucide-react";
+import {
+	Check,
+	ChevronDown,
+	GitBranch,
+	Loader2,
+	LoaderCircle,
+	Trash2,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import {
 	Command,
 	CommandEmpty,
@@ -8,6 +16,12 @@ import {
 	CommandItem,
 	CommandList,
 } from "@/components/ui/command";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import {
 	Popover,
 	PopoverContent,
@@ -21,6 +35,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+	deleteRepository,
 	listRemoteBranches,
 	listRepoRemotes,
 	loadRepoScripts,
@@ -35,9 +50,11 @@ import { cn } from "@/lib/utils";
 export function RepositorySettingsPanel({
 	repo,
 	onRepoSettingsChanged,
+	onRepoDeleted,
 }: {
 	repo: RepositoryCreateOption;
 	onRepoSettingsChanged: () => void;
+	onRepoDeleted: () => void;
 }) {
 	const [branches, setBranches] = useState<string[]>([]);
 	const [loading, setLoading] = useState(false);
@@ -246,6 +263,8 @@ export function RepositorySettingsPanel({
 			</div>
 
 			<ScriptsSection repoId={repo.id} />
+
+			<DeleteRepoSection repo={repo} onDeleted={onRepoDeleted} />
 		</div>
 	);
 }
@@ -416,5 +435,100 @@ function ScriptsSection({ repoId }: { repoId: string }) {
 				/>
 			</div>
 		</div>
+	);
+}
+
+function DeleteRepoSection({
+	repo,
+	onDeleted,
+}: {
+	repo: RepositoryCreateOption;
+	onDeleted: () => void;
+}) {
+	const [confirmOpen, setConfirmOpen] = useState(false);
+	const [deleting, setDeleting] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	const handleDelete = useCallback(async () => {
+		setDeleting(true);
+		setError(null);
+		try {
+			await deleteRepository(repo.id);
+			setConfirmOpen(false);
+			onDeleted();
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+			setDeleting(false);
+		}
+	}, [repo.id, onDeleted]);
+
+	return (
+		<>
+			<div className="rounded-xl border border-app-border/30 bg-app-base/20 px-5 py-4">
+				<div className="flex items-center gap-2 text-[13px] font-medium leading-snug text-app-foreground">
+					<Trash2 className="size-3.5 text-destructive" strokeWidth={1.8} />
+					Delete Repository
+				</div>
+				<div className="mt-1 text-[12px] leading-snug text-app-muted">
+					Permanently remove this repository and all its workspaces, sessions,
+					and messages.
+				</div>
+				<Button
+					variant="destructive"
+					size="sm"
+					className="mt-3"
+					onClick={() => {
+						setError(null);
+						setConfirmOpen(true);
+					}}
+				>
+					Delete Repository
+				</Button>
+				{error && (
+					<div className="mt-3 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-[12px] text-destructive">
+						{error}
+					</div>
+				)}
+			</div>
+
+			<Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+				<DialogContent className="max-w-[320px] gap-0 p-4">
+					<DialogTitle className="text-[13px] font-semibold">
+						Delete {repo.name}?
+					</DialogTitle>
+					<DialogDescription className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">
+						This will permanently delete all workspaces, sessions, and messages
+						associated with{" "}
+						<strong className="text-foreground/80">{repo.name}</strong>. This
+						cannot be undone.
+					</DialogDescription>
+					<div className="mt-3 flex justify-end gap-2">
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => setConfirmOpen(false)}
+							disabled={deleting}
+						>
+							Cancel
+						</Button>
+						<Button
+							variant="destructive"
+							size="sm"
+							onClick={() => void handleDelete()}
+							disabled={deleting}
+						>
+							{deleting ? (
+								<>
+									<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+									Deleting...
+								</>
+							) : (
+								"Delete"
+							)}
+						</Button>
+					</div>
+				</DialogContent>
+			</Dialog>
+		</>
 	);
 }

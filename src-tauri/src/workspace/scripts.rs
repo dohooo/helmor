@@ -274,8 +274,8 @@ mod tests {
     #[test]
     fn insert_with_different_workspace_ids_are_independent() {
         let mgr = ScriptProcessManager::new();
-        let child_a = StdCommand::new("sleep").arg("60").spawn().unwrap();
-        let child_b = StdCommand::new("sleep").arg("60").spawn().unwrap();
+        let child_a = StdCommand::new("/bin/sleep").arg("60").spawn().unwrap();
+        let child_b = StdCommand::new("/bin/sleep").arg("60").spawn().unwrap();
         let pid_b = child_b.id();
 
         let key_a = ("repo".into(), "setup".into(), Some("ws-a".into()));
@@ -300,9 +300,9 @@ mod tests {
     #[test]
     fn insert_same_key_kills_previous() {
         let mgr = ScriptProcessManager::new();
-        let child1 = StdCommand::new("sleep").arg("60").spawn().unwrap();
+        let child1 = StdCommand::new("/bin/sleep").arg("60").spawn().unwrap();
         let pid1 = child1.id();
-        let child2 = StdCommand::new("sleep").arg("60").spawn().unwrap();
+        let child2 = StdCommand::new("/bin/sleep").arg("60").spawn().unwrap();
         let pid2 = child2.id();
 
         let key = ("repo".into(), "setup".into(), Some("ws-1".into()));
@@ -328,8 +328,8 @@ mod tests {
     #[test]
     fn kill_process_group_terminates_child_tree() {
         // Spawn a shell that starts a background sleep, then waits.
-        let mut child = StdCommand::new("sh")
-            .args(["-c", "sleep 120 & wait"])
+        let mut child = StdCommand::new("/bin/sh")
+            .args(["-c", "/bin/sleep 120 & wait"])
             .spawn()
             .unwrap();
         let pid = child.id();

@@ -10,6 +10,7 @@ import {
 	Trash2,
 } from "lucide-react";
 import { memo, useEffect } from "react";
+import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
 import { Button } from "@/components/ui/button";
 import {
 	ContextMenu,
@@ -174,10 +175,7 @@ export const WorkspaceRowItem = memo(
 						title={row.title}
 					/>
 					{isSending && !isInteractionRequired ? (
-						<span className="relative flex size-[13px] shrink-0 items-center justify-center">
-							<span className="absolute inset-0 animate-spin rounded-full border border-transparent border-t-[var(--workspace-sidebar-status-progress)]" />
-							<span className="size-1 rounded-full bg-[var(--workspace-sidebar-status-progress)]" />
-						</span>
+						<HelmorThinkingIndicator size={13} />
 					) : (
 						<GitBranch
 							className={cn(

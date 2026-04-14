@@ -315,4 +315,28 @@ describe("WorkspacePanel", () => {
 			),
 		).toBe(true);
 	});
+
+	it("shows the Helmor thinking indicator for the active sending session", () => {
+		render(
+			<TooltipProvider delayDuration={0}>
+				<QueryClientProvider client={createHelmorQueryClient()}>
+					<WorkspacePanel
+						workspace={WORKSPACE}
+						sessions={SESSIONS}
+						selectedSessionId="session-1"
+						sessionPanes={[]}
+						sending
+					/>
+				</QueryClientProvider>
+			</TooltipProvider>,
+		);
+
+		const activeSessions = screen.getAllByRole("tab", { name: "Session 1" });
+		expect(
+			activeSessions.some(
+				(tab) =>
+					tab.querySelector('[data-slot="helmor-thinking-indicator"]') !== null,
+			),
+		).toBe(true);
+	});
 });

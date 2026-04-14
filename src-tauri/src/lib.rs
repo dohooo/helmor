@@ -132,10 +132,12 @@ pub fn run() {
 
             // Background cleanup: compress old logs, purge > 7 days
             let cleanup_dir = logs_dir;
-            std::thread::Builder::new()
+            if let Err(error) = std::thread::Builder::new()
                 .name("log-cleanup".into())
                 .spawn(move || logging::cleanup(&cleanup_dir))
-                .ok();
+            {
+                tracing::error!(error = %error, "Failed to spawn log cleanup thread");
+            }
 
             // Initialize database schema
             let db_path = data_dir::db_path().expect("Failed to resolve database path");
@@ -172,7 +174,7 @@ pub fn run() {
 
             // Start git filesystem watchers for all ready workspaces.
             let watcher_handle = app.handle().clone();
-            std::thread::Builder::new()
+            if let Err(error) = std::thread::Builder::new()
                 .name("git-watcher-init".into())
                 .spawn(move || {
                     let manager = watcher_handle.state::<git_watcher::GitWatcherManager>();
@@ -180,7 +182,9 @@ pub fn run() {
                         tracing::error!("Failed to initialize git watchers: {e:#}");
                     }
                 })
-                .ok();
+            {
+                tracing::error!(error = %error, "Failed to spawn git watcher init thread");
+            }
 
             Ok(())
         })
@@ -218,6 +222,7 @@ pub fn run() {
             commands::repository_commands::list_repo_remotes,
             commands::repository_commands::load_repo_scripts,
             commands::repository_commands::update_repo_scripts,
+            commands::repository_commands::delete_repository,
             commands::script_commands::execute_repo_script,
             commands::script_commands::stop_repo_script,
             commands::session_commands::list_session_attachments,

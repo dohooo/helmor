@@ -111,7 +111,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 			<DialogContent className="h-[min(80vh,640px)] w-[min(80vw,860px)] max-w-[860px] overflow-hidden rounded-2xl border-border/60 bg-background p-0 shadow-2xl sm:max-w-[860px]">
 				<SidebarProvider className="flex h-full min-h-0 w-full gap-0">
 					{/* Nav sidebar */}
-					<nav className="flex w-[200px] shrink-0 flex-col overflow-y-auto border-r border-sidebar-border bg-sidebar pt-14 pb-6">
+					<nav className="scrollbar-stable flex w-[200px] shrink-0 flex-col overflow-y-auto border-r border-sidebar-border bg-sidebar pt-14 pb-6">
 						<SidebarGroup>
 							<SidebarGroupContent>
 								<SidebarMenu>
@@ -367,6 +367,15 @@ export const SettingsDialog = memo(function SettingsDialog({
 										// open panels pick up the new remote/branch.
 										void queryClient.invalidateQueries({
 											predicate: (q) => q.queryKey[0] === "workspaceDetail",
+										});
+									}}
+									onRepoDeleted={() => {
+										setActiveSection("appearance");
+										void queryClient.invalidateQueries({
+											queryKey: helmorQueryKeys.repositories,
+										});
+										void queryClient.invalidateQueries({
+											queryKey: helmorQueryKeys.workspaceGroups,
 										});
 									}}
 								/>
