@@ -93,18 +93,8 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
     let workspace_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let workspace_dir = crate::data_dir::workspace_dir(&repository.name, &directory_name)?;
-    let logs_dir = crate::data_dir::workspace_logs_dir(&workspace_id)?;
-    let initialization_log_path = logs_dir.join("initialization.log");
-    let setup_log_path = logs_dir.join("setup.log");
     let timestamp = db::current_timestamp()?;
     let mut created_worktree = false;
-
-    fs::create_dir_all(&logs_dir).with_context(|| {
-        format!(
-            "Failed to create workspace log directory {}",
-            logs_dir.display()
-        )
-    })?;
 
     workspace_models::insert_initializing_workspace_and_session(
         &repository,
@@ -114,18 +104,14 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
         &branch,
         &default_branch,
         &timestamp,
-        &initialization_log_path,
-        &setup_log_path,
     )?;
 
     let create_result = (|| -> Result<CreateWorkspaceResponse> {
         if workspace_dir.exists() {
-            let error = format!(
+            bail!(
                 "Workspace target already exists at {}",
                 workspace_dir.display()
             );
-            let _ = write_log_file(&initialization_log_path, &error);
-            bail!("{error}");
         }
 
         git_ops::ensure_git_repository(&repo_root)?;
@@ -135,32 +121,19 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
             &start_ref,
             &format!("Default branch is missing in source repo: {default_branch}"),
         )?;
-        let init_log = match git_ops::create_worktree_from_start_point(
+        match git_ops::create_worktree_from_start_point(
             &repo_root,
             &workspace_dir,
             &branch,
             &start_ref,
         ) {
-            Ok(output) => {
+            Ok(_) => {
                 created_worktree = true;
-                output
             }
             Err(error) => {
-                let _ = write_log_file(&initialization_log_path, &format!("{error:#}"));
                 return Err(error);
             }
         };
-        write_log_file(
-            &initialization_log_path,
-            &format!(
-                "Repository: {}\nWorkspace: {}\nBranch: {}\nStart point: {}\n\n{}",
-                repository.name,
-                workspace_dir.display(),
-                branch,
-                start_ref,
-                init_log
-            ),
-        )?;
 
         helpers::create_workspace_context_scaffold(&workspace_dir)?;
         let initialization_files_copied = git_ops::tracked_file_count(&workspace_dir)?;
@@ -789,14 +762,4 @@ fn load_setup_script_from_project_config(workspace_dir: &Path) -> Result<Option<
         }
     }
     Ok(None)
-}
-
-fn write_log_file(path: &Path, contents: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create log directory {}", parent.display()))?;
-    }
-
-    fs::write(path, contents)
-        .with_context(|| format!("Failed to write log file {}", path.display()))
 }

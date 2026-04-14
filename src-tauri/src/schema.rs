@@ -157,6 +157,58 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to deduplicate repos and create unique index on root_path")?;
     }
 
+    // Migration: drop dead workspace log path columns.
+    // These stored temp-file paths for git-worktree and setup-script output
+    // that were never read back. The files themselves lived in /tmp and were
+    // cleaned up by the OS on reboot.
+    let has_setup_log: bool = connection
+        .prepare("SELECT 1 FROM pragma_table_info('workspaces') WHERE name = 'setup_log_path'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+
+    if has_setup_log {
+        connection
+            .execute_batch(
+                r#"
+                ALTER TABLE workspaces DROP COLUMN setup_log_path;
+                ALTER TABLE workspaces DROP COLUMN initialization_log_path;
+                "#,
+            )
+            .context("Failed to drop workspace log path columns")?;
+    }
+
+    // Migration: drop all remaining DEPRECATED_ columns.
+    let has_city_name: bool = connection
+        .prepare(
+            "SELECT 1 FROM pragma_table_info('workspaces') WHERE name = 'DEPRECATED_city_name'",
+        )
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+
+    if has_city_name {
+        connection
+            .execute_batch(
+                r#"
+                ALTER TABLE workspaces DROP COLUMN DEPRECATED_city_name;
+                ALTER TABLE workspaces DROP COLUMN DEPRECATED_archived;
+                "#,
+            )
+            .context("Failed to drop deprecated workspace columns")?;
+    }
+
+    let has_update_memory: bool = connection
+        .prepare(
+            "SELECT 1 FROM pragma_table_info('diff_comments') WHERE name = 'DEPRECATED_update_memory'",
+        )
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+
+    if has_update_memory {
+        connection
+            .execute_batch("ALTER TABLE diff_comments DROP COLUMN DEPRECATED_update_memory")
+            .context("Failed to drop deprecated diff_comments column")?;
+    }
+
     Ok(())
 }
 
@@ -217,8 +269,6 @@ CREATE TABLE IF NOT EXISTS workspaces (
     placeholder_branch_name TEXT,
     initialization_parent_branch TEXT,
     big_terminal_mode INTEGER DEFAULT 0,
-    setup_log_path TEXT,
-    initialization_log_path TEXT,
     initialization_files_copied INTEGER,
     pinned_at TEXT,
     linked_workspace_ids TEXT,
@@ -230,9 +280,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     secondary_directory_name TEXT,
     linked_directory_paths TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    DEPRECATED_city_name TEXT,
-    DEPRECATED_archived INTEGER DEFAULT 0
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -305,8 +353,7 @@ CREATE TABLE IF NOT EXISTS diff_comments (
     reply_to_comment_id TEXT,
     is_outdated INTEGER,
     is_resolved INTEGER,
-    end_line_number INTEGER,
-    DEPRECATED_update_memory INTEGER
+    end_line_number INTEGER
 );
 
 -- Indexes

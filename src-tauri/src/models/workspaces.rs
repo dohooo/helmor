@@ -150,7 +150,6 @@ pub fn load_archived_workspace_records() -> Result<Vec<WorkspaceRecord>> {
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_initializing_workspace_and_session(
     repository: &repos::RepositoryRecord,
     workspace_id: &str,
@@ -159,8 +158,6 @@ pub(crate) fn insert_initializing_workspace_and_session(
     branch: &str,
     default_branch: &str,
     timestamp: &str,
-    initialization_log_path: &Path,
-    setup_log_path: &Path,
 ) -> Result<()> {
     let mut connection = db::open_connection(true)?;
     let transaction = connection
@@ -182,12 +179,10 @@ pub(crate) fn insert_initializing_workspace_and_session(
               intended_target_branch,
               derived_status,
               unread,
-              setup_log_path,
-              initialization_log_path,
               initialization_files_copied,
               created_at,
               updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'initializing', ?7, ?8, 'in-progress', 0, ?9, ?10, 0, ?11, ?11)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'initializing', ?7, ?8, 'in-progress', 0, 0, ?9, ?9)
             "#,
             (
                 workspace_id,
@@ -198,8 +193,6 @@ pub(crate) fn insert_initializing_workspace_and_session(
                 branch,
                 default_branch,
                 default_branch,
-                setup_log_path.display().to_string(),
-                initialization_log_path.display().to_string(),
                 timestamp,
             ),
         )

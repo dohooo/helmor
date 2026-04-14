@@ -157,11 +157,6 @@ pub fn archived_context_dir(repo_name: &str, directory_name: &str) -> Result<Pat
         .join(directory_name))
 }
 
-/// Returns the workspace logs directory.
-pub fn workspace_logs_dir(workspace_id: &str) -> Result<PathBuf> {
-    Ok(logs_dir()?.join("workspaces").join(workspace_id))
-}
-
 /// Returns a human-readable description of the data mode.
 pub fn data_mode_label() -> &'static str {
     if cfg!(debug_assertions) {
