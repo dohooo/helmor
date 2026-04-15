@@ -1357,7 +1357,7 @@ export type MessagePart =
 
 export type CollapsedGroupPart = {
 	type: "collapsed-group";
-	category: "search" | "read" | "mixed";
+	category: "search" | "read" | "shell" | "mixed";
 	tools: ToolCallPart[];
 	active: boolean;
 	summary: string;

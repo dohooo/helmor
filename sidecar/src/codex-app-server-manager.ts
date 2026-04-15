@@ -226,6 +226,24 @@ export class CodexAppServerManager implements SessionManager {
 			};
 
 			const handleNotification = (n: JsonRpcNotification) => {
+				// Codex sends errors as {method:"error", params:{error:{message:"..."}}}
+				// Extract the nested message and emit a proper error event.
+				if (n.method === "error") {
+					const errObj = deepGet(n.params, "error");
+					const nested =
+						typeof errObj === "object" && errObj !== null
+							? (errObj as Record<string, unknown>).message
+							: undefined;
+					const msg =
+						typeof nested === "string" ? nested : "Unknown Codex error";
+					emitter.error(requestId, msg);
+					ctx.activeTurnId = null;
+					ctx.turnResolve?.();
+					ctx.turnResolve = null;
+					ctx.turnReject = null;
+					return;
+				}
+
 				const flat = flattenNotification(n, ctx.providerThreadId);
 				emit(flat);
 

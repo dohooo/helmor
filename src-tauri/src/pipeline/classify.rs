@@ -103,6 +103,8 @@ const READ_TOOLS: &[&str] = &[
 pub enum ToolCategory {
     Search,
     Read,
+    /// Read-only shell command (e.g. `cat`, `nl`, `grep` via Bash tool).
+    Shell,
     Other,
 }
 
@@ -162,6 +164,203 @@ pub fn is_collapsible(raw_name: &str) -> bool {
     matches!(
         classify_tool(raw_name),
         ToolCategory::Search | ToolCategory::Read
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Shell command inspection
+// ---------------------------------------------------------------------------
+
+/// Commands that are always read-only regardless of arguments.
+const SHELL_READONLY_COMMANDS: &[&str] = &[
+    // file viewing
+    "cat", "head", "tail", "nl", "less", "more", "bat", "tac", // directory listing
+    "ls", "dir", "tree", "exa", "eza", // file info
+    "stat", "file", "wc", "du", "df", // search
+    "grep", "egrep", "fgrep", "rg", "ag", "ack", "find", "fd", "locate", "which", "whereis",
+    // text filters (read-only in pipelines)
+    "sed", "awk", "sort", "uniq", "cut", "tr", "rev", "paste", "join", "column", "fmt", "fold",
+    "comm", "diff", "cmp", // output
+    "echo", "printf", // system info
+    "pwd", "whoami", "hostname", "uname", "env", "printenv", "date", "id", "uptime",
+    // json/yaml
+    "jq", "yq",
+];
+
+/// Tool names that indicate a bash/shell execution tool.
+const SHELL_TOOL_NAMES: &[&str] = &["bash", "run", "shell", "execute", "command", "exec"];
+
+/// Strip shell wrappers like `/bin/zsh -lc "actual command"`.
+fn unwrap_shell(cmd: &str) -> &str {
+    let t = cmd.trim();
+    let first_end = t.find(char::is_whitespace).unwrap_or(t.len());
+    let base = t[..first_end].rsplit('/').next().unwrap_or(&t[..first_end]);
+
+    if !matches!(base, "sh" | "bash" | "zsh" | "fish" | "dash") {
+        return t;
+    }
+
+    // Skip flags (tokens starting with -)
+    let mut rest = t[first_end..].trim_start();
+    while rest.starts_with('-') {
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        rest = rest[end..].trim_start();
+    }
+
+    // Strip outer quotes
+    let bytes = rest.as_bytes();
+    if bytes.len() >= 2 {
+        let (first, last) = (bytes[0], bytes[bytes.len() - 1]);
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return &rest[1..rest.len() - 1];
+        }
+    }
+    rest
+}
+
+/// Extract the base command name from a pipeline segment,
+/// skipping leading env-var assignments like `FOO=bar cmd`.
+fn segment_command(segment: &str) -> Option<&str> {
+    segment
+        .split_whitespace()
+        .find(|w| !w.contains('=') || w.starts_with('-'))
+        .map(|w| w.rsplit('/').next().unwrap_or(w))
+}
+
+/// Check for `>` or `>>` outside of quoted strings — indicates output redirect.
+fn has_output_redirect(cmd: &str) -> bool {
+    let bytes = cmd.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\'' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'\'' {
+                    i += 1;
+                }
+            }
+            b'"' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'"' {
+                    if bytes[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+            }
+            b'>' => return true,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Split a command string by `&&` and `;` while skipping quoted strings.
+///
+/// Intentionally does NOT split by `|` — pipe is ambiguous with regex
+/// alternation (e.g. `rg "foo|bar"`), and shell quoting after
+/// `unwrap_shell` makes it impossible to distinguish reliably.
+/// The first command in each pipeline already determines intent.
+fn split_shell_segments(cmd: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let bytes = cmd.as_bytes();
+    let len = bytes.len();
+    let mut start = 0;
+    let mut i = 0;
+
+    while i < len {
+        match bytes[i] {
+            b'\\' => {
+                i += 2;
+            }
+            b'\'' => {
+                i += 1;
+                while i < len && bytes[i] != b'\'' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'"' => {
+                i += 1;
+                while i < len && bytes[i] != b'"' {
+                    if bytes[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'&' if i + 1 < len && bytes[i + 1] == b'&' => {
+                segments.push(&cmd[start..i]);
+                i += 2;
+                start = i;
+            }
+            b';' => {
+                segments.push(&cmd[start..i]);
+                i += 1;
+                start = i;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    if start <= len {
+        segments.push(&cmd[start..]);
+    }
+    segments
+}
+
+/// Classify a shell command string by inspecting all pipeline components.
+fn classify_shell_command(command: &str) -> ToolCategory {
+    let inner = unwrap_shell(command);
+
+    if has_output_redirect(inner) {
+        return ToolCategory::Other;
+    }
+
+    let mut has_any = false;
+    for seg in split_shell_segments(inner) {
+        let seg = seg.trim();
+        if seg.is_empty() {
+            continue;
+        }
+        has_any = true;
+        match segment_command(seg) {
+            Some(cmd) if SHELL_READONLY_COMMANDS.contains(&cmd) => {}
+            _ => return ToolCategory::Other,
+        }
+    }
+
+    if has_any {
+        ToolCategory::Shell
+    } else {
+        ToolCategory::Other
+    }
+}
+
+/// Classify a tool, inspecting shell command args when the tool is a
+/// bash/run executor.
+pub fn classify_tool_with_args(raw_name: &str, args: &serde_json::Value) -> ToolCategory {
+    let base = classify_tool(raw_name);
+    if base != ToolCategory::Other {
+        return base;
+    }
+    let normalized = normalize_tool_name(raw_name);
+    if SHELL_TOOL_NAMES.contains(&normalized.as_str()) {
+        if let Some(cmd) = args.get("command").and_then(serde_json::Value::as_str) {
+            return classify_shell_command(cmd);
+        }
+    }
+    ToolCategory::Other
+}
+
+/// Whether a tool call can be collapsed, with args-aware shell inspection.
+pub fn is_collapsible_with_args(raw_name: &str, args: &serde_json::Value) -> bool {
+    matches!(
+        classify_tool_with_args(raw_name, args),
+        ToolCategory::Search | ToolCategory::Read | ToolCategory::Shell
     )
 }
 
@@ -257,5 +456,175 @@ mod tests {
         assert!(is_collapsible("Read"));
         assert!(!is_collapsible("edit"));
         assert!(!is_collapsible("Bash"));
+    }
+
+    // -- Shell command classification tests ------------------------------------
+
+    #[test]
+    fn unwrap_shell_zsh() {
+        assert_eq!(
+            unwrap_shell(r#"/bin/zsh -lc "nl -ba src/App.tsx""#),
+            "nl -ba src/App.tsx"
+        );
+    }
+
+    #[test]
+    fn unwrap_shell_bash() {
+        assert_eq!(unwrap_shell(r#"bash -c 'cat foo.txt'"#), "cat foo.txt");
+    }
+
+    #[test]
+    fn unwrap_shell_no_wrapper() {
+        assert_eq!(unwrap_shell("cat foo.txt"), "cat foo.txt");
+    }
+
+    #[test]
+    fn classify_shell_readonly_simple() {
+        assert_eq!(classify_shell_command("cat foo.txt"), ToolCategory::Shell);
+        assert_eq!(
+            classify_shell_command("nl -ba src/App.tsx"),
+            ToolCategory::Shell
+        );
+        assert_eq!(
+            classify_shell_command("head -20 file.rs"),
+            ToolCategory::Shell
+        );
+        assert_eq!(classify_shell_command("ls -la"), ToolCategory::Shell);
+    }
+
+    #[test]
+    fn classify_shell_readonly_pipeline() {
+        assert_eq!(
+            classify_shell_command("nl -ba src/App.tsx | sed -n '50,100p'"),
+            ToolCategory::Shell
+        );
+        assert_eq!(
+            classify_shell_command("cat foo | grep bar | sort | uniq"),
+            ToolCategory::Shell
+        );
+    }
+
+    #[test]
+    fn classify_shell_readonly_wrapped() {
+        assert_eq!(
+            classify_shell_command(r#"/bin/zsh -lc "nl -ba src/App.tsx | sed -n '1,10p'""#),
+            ToolCategory::Shell
+        );
+    }
+
+    #[test]
+    fn classify_shell_write_rejected() {
+        assert_eq!(
+            classify_shell_command("rm -rf /tmp/foo"),
+            ToolCategory::Other
+        );
+        assert_eq!(classify_shell_command("npm install"), ToolCategory::Other);
+        assert_eq!(classify_shell_command("cargo build"), ToolCategory::Other);
+    }
+
+    #[test]
+    fn classify_shell_redirect_rejected() {
+        assert_eq!(
+            classify_shell_command("echo hello > /tmp/file.txt"),
+            ToolCategory::Other
+        );
+        assert_eq!(
+            classify_shell_command("cat foo >> output.txt"),
+            ToolCategory::Other
+        );
+    }
+
+    #[test]
+    fn classify_shell_redirect_in_quotes_ok() {
+        // `>` inside quotes is not a redirect
+        assert_eq!(
+            classify_shell_command(r#"grep ">" file.txt"#),
+            ToolCategory::Shell
+        );
+    }
+
+    #[test]
+    fn classify_shell_rg_with_pipe_in_pattern() {
+        // `|` inside regex pattern is NOT a pipe operator
+        assert_eq!(
+            classify_shell_command(
+                r#"rg -n "from 'showToast'|function showToast|export .*showToast" src/"#
+            ),
+            ToolCategory::Shell
+        );
+    }
+
+    #[test]
+    fn classify_shell_rg_with_escaped_quotes_and_pipes() {
+        // Real Codex command with complex quoting
+        assert_eq!(
+            classify_shell_command(
+                r#"rg -n \"from '@hddr/utils/showToast'|from \\\"@hddr/utils/showToast\\\"|function showToast\" packages-pc/hddr"#
+            ),
+            ToolCategory::Shell
+        );
+    }
+
+    #[test]
+    fn classify_shell_chained_commands() {
+        assert_eq!(
+            classify_shell_command("cat a.txt && cat b.txt"),
+            ToolCategory::Shell
+        );
+        assert_eq!(
+            classify_shell_command("cat a.txt && rm b.txt"),
+            ToolCategory::Other
+        );
+    }
+
+    #[test]
+    fn classify_tool_with_args_bash_readonly() {
+        use serde_json::json;
+        assert_eq!(
+            classify_tool_with_args("Bash", &json!({"command": "cat foo.txt"})),
+            ToolCategory::Shell
+        );
+        assert_eq!(
+            classify_tool_with_args("Run", &json!({"command": "nl -ba src/App.tsx"})),
+            ToolCategory::Shell
+        );
+    }
+
+    #[test]
+    fn classify_tool_with_args_bash_write() {
+        use serde_json::json;
+        assert_eq!(
+            classify_tool_with_args("Bash", &json!({"command": "npm install"})),
+            ToolCategory::Other
+        );
+    }
+
+    #[test]
+    fn classify_tool_with_args_non_shell() {
+        use serde_json::json;
+        // Non-shell tools still classified by name
+        assert_eq!(
+            classify_tool_with_args("grep", &json!({"pattern": "foo"})),
+            ToolCategory::Search
+        );
+        assert_eq!(
+            classify_tool_with_args("edit", &json!({})),
+            ToolCategory::Other
+        );
+    }
+
+    #[test]
+    fn is_collapsible_with_args_check() {
+        use serde_json::json;
+        assert!(is_collapsible_with_args(
+            "Bash",
+            &json!({"command": "cat foo"})
+        ));
+        assert!(is_collapsible_with_args("grep", &json!({"pattern": "x"})));
+        assert!(!is_collapsible_with_args(
+            "Bash",
+            &json!({"command": "npm install"})
+        ));
+        assert!(!is_collapsible_with_args("edit", &json!({})));
     }
 }
