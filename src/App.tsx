@@ -180,11 +180,27 @@ function App() {
 							if (key[0] === "slashCommands") {
 								return false;
 							}
+							// Workspace lists are fast local DB queries — always
+							// load fresh to avoid "ghost workspace" errors on startup.
+							if (
+								key[0] === "workspaceGroups" ||
+								key[0] === "archivedWorkspaces"
+							) {
+								return false;
+							}
 							return query.state.status === "success";
 						},
 					},
 				}}
 				onSuccess={() => {
+					// Discard any leftover workspace list data from older
+					// cache snapshots so we never select a ghost workspace.
+					queryClient.removeQueries({
+						queryKey: helmorQueryKeys.workspaceGroups,
+					});
+					queryClient.removeQueries({
+						queryKey: helmorQueryKeys.archivedWorkspaces,
+					});
 					// Cache restored — silently refresh model list from sidecar
 					// so stale persisted data gets updated without a loading flash.
 					void queryClient.invalidateQueries({
