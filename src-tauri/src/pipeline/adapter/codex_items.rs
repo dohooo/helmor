@@ -208,7 +208,11 @@ fn render_web_search(msg: &IntermediateMessage, item: &Value, result: &mut Vec<T
             }
         }
         let summary = lines.join("\n");
-        if summary.is_empty() { None } else { Some(Value::String(summary)) }
+        if summary.is_empty() {
+            None
+        } else {
+            Some(Value::String(summary))
+        }
     };
     result.push(ThreadMessageLike {
         role: MessageRole::Assistant,
