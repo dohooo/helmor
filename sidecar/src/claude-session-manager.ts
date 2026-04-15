@@ -44,12 +44,17 @@ import {
  * than just showing an empty list. Without this bound, a missing or
  * unresponsive `claude-code` binary parks the request forever and the popup
  * spinner never resolves.
- *
- * 8s gives a cold-start `claude-code` child enough room to bind without
- * making the user wait noticeably long. The frontend retries twice on top
- * of this with backoff, so a transient hiccup self-recovers.
  */
 const SLASH_COMMANDS_TIMEOUT_MS = 8_000;
+
+/**
+ * `supportedModels()` resolves noticeably slower than `supportedCommands()`
+ * on cold Claude Code startups because the SDK waits for the full
+ * initialization payload, including model metadata. In production logs we
+ * routinely see 8.5s-10.5s responses, so reusing the slash-command timeout
+ * makes model loading flap and the Claude model section render empty.
+ */
+const MODEL_LIST_TIMEOUT_MS = 15_000;
 
 /**
  * Resolve the path to `@anthropic-ai/claude-code`'s `cli.js`, used as the
@@ -769,6 +774,7 @@ export class ClaudeSessionManager implements SessionManager {
 				permissionMode: "bypassPermissions",
 				allowDangerouslySkipPermissions: true,
 				includePartialMessages: false,
+				settingSources: ["user", "project", "local"],
 			},
 		});
 
@@ -784,10 +790,11 @@ export class ClaudeSessionManager implements SessionManager {
 			}
 		})();
 
-		const timeout = setTimeout(
-			() => abortController.abort(),
-			SLASH_COMMANDS_TIMEOUT_MS,
-		);
+		let timedOut = false;
+		const timeout = setTimeout(() => {
+			timedOut = true;
+			abortController.abort();
+		}, MODEL_LIST_TIMEOUT_MS);
 
 		try {
 			const models = await q.supportedModels();
@@ -805,6 +812,11 @@ export class ClaudeSessionManager implements SessionManager {
 						: fallbackEffortLevels(m.value),
 			}));
 		} catch (err) {
+			if (timedOut) {
+				throw new Error(
+					`listModels timed out after ${MODEL_LIST_TIMEOUT_MS}ms — claude-code initialization is slower than the current timeout`,
+				);
+			}
 			logger.error("Claude listModels failed", errorDetails(err));
 			throw err;
 		} finally {
