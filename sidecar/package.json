@@ -13,8 +13,7 @@
 	"dependencies": {
 		"@anthropic-ai/claude-agent-sdk": "^0.2.92",
 		"@anthropic-ai/claude-code": "2.1.96",
-		"@openai/codex": "0.118.0",
-		"@openai/codex-sdk": "^0.118.0"
+		"@openai/codex": "0.118.0"
 	},
 	"devDependencies": {
 		"@types/bun": "^1.3.11",

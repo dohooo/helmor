@@ -144,6 +144,13 @@ pub fn run() {
                 "Helmor started"
             );
 
+            // Purge workspaces whose directory was deleted outside the app.
+            match workspace::workspaces::purge_orphaned_workspaces() {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(count = n, "Purged orphaned workspaces"),
+                Err(e) => tracing::warn!("Failed to purge orphaned workspaces: {e:#}"),
+            }
+
             // On macOS, GUI-launched apps only see the minimal system PATH.
             // Capture the user's login-shell PATH (Homebrew, nvm, pnpm, cargo,
             // etc.) so every child process — sidecar, git, workspace scripts —

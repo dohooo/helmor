@@ -1,0 +1,12 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: system
+  id: msg-1
+  content_length: 1
+  content:
+    - type: text
+      text: "Error: API rate limit exceeded"
+  status: ~
+  streaming: ~

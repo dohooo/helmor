@@ -2,7 +2,6 @@ import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persi
 import { focusManager, QueryClient, queryOptions } from "@tanstack/react-query";
 import {
 	type AgentProvider,
-	DEFAULT_AGENT_MODEL_SECTIONS,
 	DEFAULT_WORKSPACE_GROUPS,
 	listRepositories,
 	listSlashCommands,
@@ -140,9 +139,9 @@ export function agentModelSectionsQueryOptions() {
 	return queryOptions({
 		queryKey: helmorQueryKeys.agentModelSections,
 		queryFn: loadAgentModelSections,
-		initialData: DEFAULT_AGENT_MODEL_SECTIONS,
-		initialDataUpdatedAt: 0,
-		staleTime: 5 * 60_000,
+		staleTime: Infinity,
+		refetchOnWindowFocus: false,
+		retry: 2,
 	});
 }
 

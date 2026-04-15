@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -471,4 +473,156 @@ fn spawn_background_refresh(
 
 fn open_write_connection() -> Result<rusqlite::Connection> {
     crate::models::db::open_connection(true)
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic model list
+// ---------------------------------------------------------------------------
+
+use super::catalog::{AgentModelOption, AgentModelSection};
+
+/// Per-provider cached model options. Each provider is cached independently
+/// so a transient failure in one doesn't wipe the other's good data.
+static CLAUDE_CACHE: Mutex<Vec<AgentModelOption>> = Mutex::new(Vec::new());
+static CODEX_CACHE: Mutex<Vec<AgentModelOption>> = Mutex::new(Vec::new());
+
+/// Fetch models from both providers via sidecar. Each provider's result is
+/// cached independently — if a provider fails, its last good cache is used.
+pub fn fetch_agent_model_sections(
+    sidecar: &crate::sidecar::ManagedSidecar,
+) -> Vec<AgentModelSection> {
+    let claude_models = resolve_with_cache(
+        fetch_models_for_provider(sidecar, "claude"),
+        &CLAUDE_CACHE,
+        "claude",
+    );
+    let codex_models = resolve_with_cache(
+        fetch_models_for_provider(sidecar, "codex"),
+        &CODEX_CACHE,
+        "codex",
+    );
+
+    vec![
+        AgentModelSection {
+            id: "claude".to_string(),
+            label: "Claude Code".to_string(),
+            options: claude_models,
+        },
+        AgentModelSection {
+            id: "codex".to_string(),
+            label: "Codex".to_string(),
+            options: codex_models,
+        },
+    ]
+}
+
+/// If `fresh` is non-empty, update the cache and return it.
+/// Otherwise return the last cached value.
+fn resolve_with_cache(
+    fresh: Vec<AgentModelOption>,
+    cache: &Mutex<Vec<AgentModelOption>>,
+    provider: &str,
+) -> Vec<AgentModelOption> {
+    let mut cached = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if !fresh.is_empty() {
+        *cached = fresh.clone();
+        fresh
+    } else if !cached.is_empty() {
+        tracing::info!(provider, "Using cached model list (fresh fetch failed)");
+        cached.clone()
+    } else {
+        vec![]
+    }
+}
+
+fn fetch_models_for_provider(
+    sidecar: &crate::sidecar::ManagedSidecar,
+    provider: &str,
+) -> Vec<AgentModelOption> {
+    let request_id = Uuid::new_v4().to_string();
+
+    let mut params = serde_json::Map::new();
+    params.insert("provider".into(), Value::String(provider.to_string()));
+
+    let sidecar_req = crate::sidecar::SidecarRequest {
+        id: request_id.clone(),
+        method: "listModels".to_string(),
+        params: Value::Object(params),
+    };
+
+    let rx = sidecar.subscribe(&request_id);
+    if let Err(e) = sidecar.send(&sidecar_req) {
+        sidecar.unsubscribe(&request_id);
+        tracing::warn!("listModels sidecar send failed for {provider}: {e}");
+        return vec![];
+    }
+
+    let timeout = std::time::Duration::from_secs(15);
+    let mut models: Vec<AgentModelOption> = Vec::new();
+
+    loop {
+        match rx.recv_timeout(timeout) {
+            Ok(event) => match event.event_type() {
+                "modelsListed" => {
+                    if let Some(entries) = event.raw.get("models").and_then(Value::as_array) {
+                        for entry in entries {
+                            let Some(id) = entry.get("id").and_then(Value::as_str) else {
+                                continue;
+                            };
+                            let label = entry
+                                .get("label")
+                                .and_then(Value::as_str)
+                                .unwrap_or(id)
+                                .to_string();
+                            let cli_model = entry
+                                .get("cliModel")
+                                .and_then(Value::as_str)
+                                .unwrap_or(id)
+                                .to_string();
+                            let effort_levels = entry
+                                .get("effortLevels")
+                                .and_then(Value::as_array)
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(Value::as_str)
+                                        .map(str::to_string)
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            models.push(AgentModelOption {
+                                id: id.to_string(),
+                                provider: provider.to_string(),
+                                label,
+                                cli_model,
+                                effort_levels,
+                            });
+                        }
+                    }
+                    tracing::info!(provider, count = models.len(), "Dynamic model list loaded");
+                    break;
+                }
+                "error" => {
+                    let msg = event
+                        .raw
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Unknown error");
+                    tracing::warn!("listModels failed for {provider}: {msg}");
+                    break;
+                }
+                _ => {}
+            },
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                tracing::warn!("listModels timed out for {provider}");
+                break;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                tracing::warn!("Sidecar disconnected while fetching models for {provider}");
+                break;
+            }
+        }
+    }
+
+    sidecar.unsubscribe(&request_id);
+    models
 }

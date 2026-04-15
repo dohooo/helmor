@@ -837,3 +837,147 @@ fn codex_item_completed_full_session_with_text_and_commands() {
     ];
     assert_yaml_snapshot!(run_normalized(msgs));
 }
+
+// ============================================================================
+// 9b. Codex plan item, MCP tool call, web search, turn lifecycle
+// ============================================================================
+
+#[test]
+fn codex_plan_item_renders_as_plan_review() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "plan_1",
+            "type": "plan",
+            "text": "## Implementation Plan\n\n1. Read codebase\n2. Write tests\n3. Fix bugs"
+        }
+    });
+    let msgs = vec![make_record(
+        "p1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn codex_plan_item_empty_text_is_skipped() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "plan_2",
+            "type": "plan",
+            "text": ""
+        }
+    });
+    let msgs = vec![make_record(
+        "p2",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    let result = run_normalized(msgs);
+    assert!(
+        result.is_empty(),
+        "Empty plan text should produce no output"
+    );
+}
+
+#[test]
+fn codex_web_search_item_renders_as_tool_call() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "ws_1",
+            "type": "web_search",
+            "query": "rust testing frameworks"
+        }
+    });
+    let msgs = vec![make_record(
+        "ws1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn codex_mcp_tool_call_renders_as_tool_call() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "mcp_1",
+            "type": "mcp_tool_call",
+            "server": "myserver",
+            "tool": "query",
+            "arguments": {"q": "hello"},
+            "status": "completed",
+            "result": {"text": "world"}
+        }
+    });
+    let msgs = vec![make_record(
+        "mcp1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn codex_turn_completed_with_duration_shows_result_label() {
+    let parsed = json!({
+        "type": "turn/completed",
+        "duration_ms": 5432.0,
+        "usage": {"input_tokens": 1000, "output_tokens": 200}
+    });
+    let msgs = vec![make_record(
+        "tc1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn codex_turn_completed_empty_produces_no_output() {
+    // turn/completed with no duration or meaningful data → empty label → skipped
+    let parsed = json!({"type": "turn/completed"});
+    let msgs = vec![make_record(
+        "tc2",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    let result = run_normalized(msgs);
+    assert!(
+        result.is_empty(),
+        "turn/completed with no data should produce no output"
+    );
+}
+
+#[test]
+fn codex_turn_failed_renders_error() {
+    let parsed = json!({
+        "type": "turn/failed",
+        "error": {"message": "API rate limit exceeded"}
+    });
+    let msgs = vec![make_record(
+        "tf1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn codex_legacy_turn_dot_completed_still_works() {
+    // Legacy format with dot separator should still be handled
+    let parsed = json!({
+        "type": "turn.completed",
+        "duration_ms": 3000.0
+    });
+    let msgs = vec![make_record(
+        "tc3",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}

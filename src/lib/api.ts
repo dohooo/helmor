@@ -58,7 +58,7 @@ export type AgentModelOption = {
 	provider: AgentProvider;
 	label: string;
 	cliModel: string;
-	badge?: string | null;
+	effortLevels?: string[];
 };
 
 export type AgentModelSection = {
@@ -336,89 +336,6 @@ const DEFAULT_WORKSPACE_GROUPS: WorkspaceGroup[] = [
 	{ id: "progress", label: "In progress", tone: "progress", rows: [] },
 	{ id: "backlog", label: "Backlog", tone: "backlog", rows: [] },
 	{ id: "canceled", label: "Canceled", tone: "canceled", rows: [] },
-];
-
-const DEFAULT_AGENT_MODEL_SECTIONS: AgentModelSection[] = [
-	{
-		id: "claude",
-		label: "Claude Code",
-		options: [
-			{
-				id: "opus-1m",
-				provider: "claude",
-				label: "Opus 4.6 1M",
-				cliModel: "opus[1m]",
-				badge: "NEW",
-			},
-			{
-				id: "opus",
-				provider: "claude",
-				label: "Opus 4.6",
-				cliModel: "opus",
-			},
-			{
-				id: "sonnet",
-				provider: "claude",
-				label: "Sonnet 4.6",
-				cliModel: "sonnet",
-			},
-			{
-				id: "haiku",
-				provider: "claude",
-				label: "Haiku 4.5",
-				cliModel: "haiku",
-			},
-		],
-	},
-	{
-		id: "codex",
-		label: "Codex",
-		options: [
-			{
-				id: "gpt-5.4",
-				provider: "codex",
-				label: "GPT-5.4",
-				cliModel: "gpt-5.4",
-				badge: "NEW",
-			},
-			{
-				id: "gpt-5.4-mini",
-				provider: "codex",
-				label: "GPT-5.4-Mini",
-				cliModel: "gpt-5.4-mini",
-			},
-			{
-				id: "gpt-5.3-codex",
-				provider: "codex",
-				label: "GPT-5.3-Codex",
-				cliModel: "gpt-5.3-codex",
-			},
-			{
-				id: "gpt-5.2-codex",
-				provider: "codex",
-				label: "GPT-5.2-Codex",
-				cliModel: "gpt-5.2-codex",
-			},
-			{
-				id: "gpt-5.2",
-				provider: "codex",
-				label: "GPT-5.2",
-				cliModel: "gpt-5.2",
-			},
-			{
-				id: "gpt-5.1-codex-max",
-				provider: "codex",
-				label: "GPT-5.1-Codex-Max",
-				cliModel: "gpt-5.1-codex-max",
-			},
-			{
-				id: "gpt-5.1-codex-mini",
-				provider: "codex",
-				label: "GPT-5.1-Codex-Mini",
-				cliModel: "gpt-5.1-codex-mini",
-			},
-		],
-	},
 ];
 
 export async function loadWorkspaceGroups(): Promise<WorkspaceGroup[]> {
@@ -1278,10 +1195,15 @@ export async function saveAutoCloseOptInAsked(kinds: string[]): Promise<void> {
 
 export async function updateSessionSettings(
 	sessionId: string,
-	settings: { effortLevel?: string; permissionMode?: string },
+	settings: {
+		model?: string;
+		effortLevel?: string;
+		permissionMode?: string;
+	},
 ): Promise<void> {
 	await invoke("update_session_settings", {
 		sessionId,
+		model: settings.model ?? null,
 		effortLevel: settings.effortLevel ?? null,
 		permissionMode: settings.permissionMode ?? null,
 	});
@@ -1687,13 +1609,15 @@ export type CreateSessionResponse = {
 
 export async function createSession(
 	workspaceId: string,
-	actionKind?: string | null,
-	permissionMode?: string | null,
+	options?: {
+		actionKind?: string | null;
+		permissionMode?: string | null;
+	},
 ): Promise<CreateSessionResponse> {
 	return invoke<CreateSessionResponse>("create_session", {
 		workspaceId,
-		actionKind: actionKind ?? null,
-		permissionMode: permissionMode ?? null,
+		actionKind: options?.actionKind ?? null,
+		permissionMode: options?.permissionMode ?? null,
 	});
 }
 
@@ -1832,7 +1756,7 @@ export async function stopRepoScript(
 	});
 }
 
-export { DEFAULT_AGENT_MODEL_SECTIONS, DEFAULT_WORKSPACE_GROUPS };
+export { DEFAULT_WORKSPACE_GROUPS };
 
 function describeInvokeError(error: unknown, fallback: string): string {
 	if (error instanceof Error && error.message.trim()) {

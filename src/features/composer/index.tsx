@@ -25,6 +25,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ShimmerText } from "@/components/ui/shimmer-text";
 import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
 import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
 import type { AgentModelSection, SlashCommandEntry } from "@/lib/api";
@@ -34,6 +35,7 @@ import type {
 } from "@/lib/composer-insert";
 import { recordComposerRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
+import { clampEffort } from "@/lib/workspace-helpers";
 import { ComposerButton } from "./button";
 import type {
 	DeferredToolResponseHandler,
@@ -76,6 +78,7 @@ type WorkspaceComposerProps = {
 	sending?: boolean;
 	selectedModelId: string | null;
 	modelSections: AgentModelSection[];
+	modelsLoading?: boolean;
 	onSelectModel: (modelId: string) => void;
 	provider?: string;
 	effortLevel: string;
@@ -133,8 +136,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	sending = false,
 	selectedModelId,
 	modelSections,
+	modelsLoading = false,
 	onSelectModel,
-	provider = "claude",
+	provider: _provider = "claude",
 	effortLevel,
 	onSelectEffort,
 	permissionMode,
@@ -169,18 +173,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const editorRef = useRef<LexicalEditor | null>(null);
 	const consumedInsertRequestIdsRef = useRef<Set<string>>(new Set());
 	const [hasContent, setHasContent] = useState(false);
-	const isOpus = selectedModelId === "opus-1m" || selectedModelId === "opus";
-	const effectiveEffort = useMemo(() => {
-		let level = effortLevel;
-		if (provider === "codex") {
-			if (level === "max") level = "xhigh";
-		} else {
-			if (level === "xhigh") level = isOpus ? "max" : "high";
-			if (level === "minimal") level = "low";
-			if (level === "max" && !isOpus) level = "high";
-		}
-		return level;
-	}, [effortLevel, isOpus, provider]);
 	const selectedModel = useMemo(() => {
 		for (const section of modelSections) {
 			for (const option of section.options) {
@@ -189,6 +181,22 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		}
 		return null;
 	}, [modelSections, selectedModelId]);
+	const availableEffortLevels = useMemo(
+		() => selectedModel?.effortLevels ?? ["low", "medium", "high"],
+		[selectedModel],
+	);
+	const effectiveEffort = useMemo(
+		() => clampEffort(effortLevel, availableEffortLevels),
+		[effortLevel, availableEffortLevels],
+	);
+	// When model changes and effort gets clamped, write it back — but only
+	// after model metadata has loaded, otherwise fallback levels kill max/xhigh.
+	useEffect(() => {
+		if (!selectedModel) return;
+		if (effectiveEffort !== effortLevel) {
+			onSelectEffort(effectiveEffort);
+		}
+	}, [selectedModel, effectiveEffort, effortLevel, onSelectEffort]);
 	const hasPendingElicitation = pendingElicitation !== null;
 	const hasPendingDeferredTool = pendingDeferredTool !== null;
 	const hasPendingInteraction = hasPendingElicitation || hasPendingDeferredTool;
@@ -341,7 +349,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			});
 		}
 		if (!feedback.trim()) return;
-		onSubmit(feedback.trim(), [], [], []);
+		onSubmit(feedback.trim(), [], [], [], {
+			permissionModeOverride: "plan",
+		});
 		if (editor) {
 			editor.update(() => {
 				$getRoot().clear();
@@ -455,144 +465,154 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 
 					<div className="mt-2.5 flex items-end justify-between gap-3">
 						<div className="flex flex-wrap items-center gap-2">
-							<DropdownMenu>
-								<DropdownMenuTrigger
-									disabled={toolbarDisabled}
-									className={cn(
-										"flex items-center gap-1.5 rounded-lg px-1 py-0.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
-										toolbarDisabled &&
-											"cursor-not-allowed opacity-45 hover:text-muted-foreground",
-									)}
-								>
-									{selectedModel?.provider === "codex" ? (
-										<OpenAIIcon className="size-[14px]" />
-									) : (
-										<ClaudeIcon className="size-[14px]" />
-									)}
-									<span>{selectedModel?.label ?? "Select model"}</span>
-									<ChevronDown className="size-3 opacity-40" strokeWidth={2} />
-								</DropdownMenuTrigger>
+							{modelsLoading ? (
+								<ShimmerText className="px-1 py-0.5 text-[13px] text-muted-foreground">
+									Loading models…
+								</ShimmerText>
+							) : (
+								<>
+									<DropdownMenu>
+										<DropdownMenuTrigger
+											disabled={toolbarDisabled}
+											className={cn(
+												"flex items-center gap-1.5 rounded-lg px-1 py-0.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
+												toolbarDisabled &&
+													"cursor-not-allowed opacity-45 hover:text-muted-foreground",
+											)}
+										>
+											{selectedModel?.provider === "codex" ? (
+												<OpenAIIcon className="size-[14px]" />
+											) : (
+												<ClaudeIcon className="size-[14px]" />
+											)}
+											<span>
+												{selectedModel?.label ?? selectedModelId ?? ""}
+											</span>
+											<ChevronDown
+												className="size-3 opacity-40"
+												strokeWidth={2}
+											/>
+										</DropdownMenuTrigger>
 
-								<DropdownMenuContent
-									side="top"
-									align="start"
-									sideOffset={8}
-									className="min-w-[17rem]"
-								>
-									{modelSections.map((section, index) => (
-										<DropdownMenuGroup key={section.id}>
-											{index > 0 ? <DropdownMenuSeparator /> : null}
-											<DropdownMenuLabel>{section.label}</DropdownMenuLabel>
-											{section.options.map((option) => (
-												<DropdownMenuItem
-													key={option.id}
-													disabled={toolbarDisabled}
-													onClick={() => {
-														onSelectModel(option.id);
-													}}
-													className="flex items-center justify-between gap-3"
-												>
-													<div className="flex items-center gap-3">
-														<span className="text-muted-foreground">
-															{option.provider === "codex" ? (
-																<OpenAIIcon className="size-4" />
-															) : (
-																<ClaudeIcon className="size-4" />
-															)}
-														</span>
-														<span className="font-medium">{option.label}</span>
-													</div>
-
-													{option.badge ? (
-														<span className="rounded-md border border-border/70 bg-muted/70 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-															{option.badge}
-														</span>
-													) : null}
-												</DropdownMenuItem>
+										<DropdownMenuContent
+											side="top"
+											align="start"
+											sideOffset={8}
+											className="min-w-[17rem]"
+										>
+											{modelSections.map((section, index) => (
+												<DropdownMenuGroup key={section.id}>
+													{index > 0 ? <DropdownMenuSeparator /> : null}
+													<DropdownMenuLabel>{section.label}</DropdownMenuLabel>
+													{section.options.map((option) => (
+														<DropdownMenuItem
+															key={option.id}
+															disabled={toolbarDisabled}
+															onClick={() => {
+																onSelectModel(option.id);
+															}}
+															className="flex items-center justify-between gap-3"
+														>
+															<div className="flex items-center gap-3">
+																<span className="text-muted-foreground">
+																	{option.provider === "codex" ? (
+																		<OpenAIIcon className="size-4" />
+																	) : (
+																		<ClaudeIcon className="size-4" />
+																	)}
+																</span>
+																<span className="font-medium">
+																	{option.label}
+																</span>
+															</div>
+														</DropdownMenuItem>
+													))}
+												</DropdownMenuGroup>
 											))}
-										</DropdownMenuGroup>
-									))}
-								</DropdownMenuContent>
-							</DropdownMenu>
+										</DropdownMenuContent>
+									</DropdownMenu>
 
-							<DropdownMenu>
-								<DropdownMenuTrigger
-									disabled={toolbarDisabled}
-									className={cn(
-										"flex items-center gap-0.5 px-1 py-0.5 text-[13px] font-medium focus-visible:outline-none",
-										toolbarDisabled ? "cursor-not-allowed opacity-45" : null,
-									)}
-								>
-									<span
-										className={cn(
-											"capitalize",
-											effectiveEffort === "max" || effectiveEffort === "xhigh"
-												? "effort-max-text"
-												: "text-muted-foreground",
-										)}
-									>
-										{effectiveEffort === "xhigh"
-											? "Extra High"
-											: effectiveEffort}
-									</span>
-									<ChevronDown
-										className="size-3 text-muted-foreground/40"
-										strokeWidth={2}
-									/>
-								</DropdownMenuTrigger>
-								<DropdownMenuContent
-									side="top"
-									align="start"
-									sideOffset={8}
-									className="min-w-[11rem]"
-								>
-									<DropdownMenuGroup>
-										<DropdownMenuLabel>Effort</DropdownMenuLabel>
-										{(provider === "codex"
-											? (["minimal", "low", "medium", "high", "xhigh"] as const)
-											: isOpus
-												? (["low", "medium", "high", "max"] as const)
-												: (["low", "medium", "high"] as const)
-										).map((level) => (
-											<DropdownMenuItem
-												key={level}
-												disabled={toolbarDisabled}
-												onClick={() => onSelectEffort(level)}
-												className="flex items-center justify-between gap-3"
+									<DropdownMenu>
+										<DropdownMenuTrigger
+											disabled={toolbarDisabled}
+											className={cn(
+												"flex items-center gap-0.5 px-1 py-0.5 text-[13px] font-medium focus-visible:outline-none",
+												toolbarDisabled
+													? "cursor-not-allowed opacity-45"
+													: null,
+											)}
+										>
+											<span
+												className={cn(
+													"capitalize",
+													effectiveEffort === "max" ||
+														effectiveEffort === "xhigh"
+														? "effort-max-text"
+														: "text-muted-foreground",
+												)}
 											>
-												<div className="flex items-center gap-2.5">
-													<EffortBrainIcon level={level} />
-													<span className="font-medium capitalize">
-														{level === "xhigh" ? "Extra High" : level}
-													</span>
-												</div>
-												{level === effectiveEffort ? (
-													<span className="text-[11px] text-foreground">✓</span>
-												) : null}
-											</DropdownMenuItem>
-										))}
-									</DropdownMenuGroup>
-								</DropdownMenuContent>
-							</DropdownMenu>
-
-							<ComposerButton
-								aria-label="Plan mode"
-								disabled={toolbarDisabled}
-								className={cn(
-									"cursor-pointer gap-1.5 rounded-full px-2 py-0.5 text-[13px] font-medium transition-colors",
-									permissionMode === "plan"
-										? "text-plan ring-1 ring-plan/40 hover:bg-plan/10 hover:text-plan"
-										: "text-muted-foreground/55 hover:bg-accent/60 hover:text-muted-foreground",
-								)}
-								onClick={() =>
-									onChangePermissionMode(
-										permissionMode === "plan" ? "bypassPermissions" : "plan",
-									)
-								}
-							>
-								<ClipboardList className="size-[14px]" strokeWidth={1.8} />
-								<span>Plan</span>
-							</ComposerButton>
+												{effectiveEffort === "xhigh"
+													? "Extra High"
+													: effectiveEffort}
+											</span>
+											<ChevronDown
+												className="size-3 text-muted-foreground/40"
+												strokeWidth={2}
+											/>
+										</DropdownMenuTrigger>
+										<DropdownMenuContent
+											side="top"
+											align="start"
+											sideOffset={8}
+											className="min-w-[11rem]"
+										>
+											<DropdownMenuGroup>
+												<DropdownMenuLabel>Effort</DropdownMenuLabel>
+												{availableEffortLevels.map((level) => (
+													<DropdownMenuItem
+														key={level}
+														disabled={toolbarDisabled}
+														onClick={() => onSelectEffort(level)}
+														className="flex items-center justify-between gap-3"
+													>
+														<div className="flex items-center gap-2.5">
+															<EffortBrainIcon level={level} />
+															<span className="font-medium capitalize">
+																{level === "xhigh" ? "Extra High" : level}
+															</span>
+														</div>
+														{level === effectiveEffort ? (
+															<span className="text-[11px] text-foreground">
+																✓
+															</span>
+														) : null}
+													</DropdownMenuItem>
+												))}
+											</DropdownMenuGroup>
+										</DropdownMenuContent>
+									</DropdownMenu>
+									<ComposerButton
+										aria-label="Plan mode"
+										disabled={toolbarDisabled}
+										className={cn(
+											"cursor-pointer gap-1.5 rounded-full px-2 py-0.5 text-[13px] font-medium transition-colors",
+											permissionMode === "plan"
+												? "text-plan ring-1 ring-plan/40 hover:bg-plan/10 hover:text-plan"
+												: "text-muted-foreground/55 hover:bg-accent/60 hover:text-muted-foreground",
+										)}
+										onClick={() =>
+											onChangePermissionMode(
+												permissionMode === "plan"
+													? "bypassPermissions"
+													: "plan",
+											)
+										}
+									>
+										<ClipboardList className="size-[14px]" strokeWidth={1.8} />
+										<span>Plan</span>
+									</ComposerButton>
+								</>
+							)}
 						</div>
 
 						<div className="flex items-center gap-2">

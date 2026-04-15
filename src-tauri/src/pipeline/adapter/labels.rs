@@ -300,7 +300,7 @@ pub(super) fn build_result_label(parsed: Option<&Value>) -> String {
     }
 
     if bits.is_empty() {
-        "Done".to_string()
+        String::new()
     } else {
         bits.join(" \u{2022} ")
     }

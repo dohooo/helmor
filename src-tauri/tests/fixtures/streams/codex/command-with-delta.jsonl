@@ -1,0 +1,11 @@
+{"type":"item/started","itemId":"msg1","item":{"type":"agentMessage","id":"msg1"}}
+{"type":"item/agentMessage/delta","itemId":"msg1","text":"Let me check."}
+{"type":"item/completed","itemId":"msg1","item":{"type":"agentMessage","id":"msg1","text":"Let me check."}}
+{"type":"item/started","itemId":"cmd1","item":{"type":"commandExecution","id":"cmd1","command":"ls -la"}}
+{"type":"item/commandExecution/outputDelta","itemId":"cmd1","output":"total 4\n"}
+{"type":"item/commandExecution/outputDelta","itemId":"cmd1","output":"README.md\n"}
+{"type":"item/completed","itemId":"cmd1","item":{"type":"commandExecution","id":"cmd1","command":"ls -la","exitCode":0,"aggregatedOutput":"total 4\nREADME.md\n"}}
+{"type":"item/started","itemId":"msg2","item":{"type":"agentMessage","id":"msg2"}}
+{"type":"item/agentMessage/delta","itemId":"msg2","text":"Found the files."}
+{"type":"item/completed","itemId":"msg2","item":{"type":"agentMessage","id":"msg2","text":"Found the files."}}
+{"type":"turn/completed","turn":{"id":"t1","status":"completed"},"usage":{"input_tokens":500,"output_tokens":100}}

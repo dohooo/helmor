@@ -417,6 +417,48 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
     }
 }
 
+/// Remove DB records for workspaces whose directory no longer exists on disk.
+///
+/// Called once at startup so that externally-deleted directories don't cause
+/// repeated errors (e.g. git-status polling a missing path every 10 s).
+pub fn purge_orphaned_workspaces() -> Result<usize> {
+    let connection = db::open_connection(false)?;
+    let mut stmt = connection.prepare(
+        "SELECT w.id, r.name, w.directory_name
+         FROM workspaces w
+         JOIN repos r ON r.id = w.repository_id",
+    )?;
+    let orphans: Vec<(String, String, String)> = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .filter_map(|r| r.ok())
+        .filter(|(_, repo_name, dir_name)| {
+            crate::data_dir::workspace_dir(repo_name, dir_name)
+                .map(|p| !p.is_dir())
+                .unwrap_or(false)
+        })
+        .collect();
+
+    let count = orphans.len();
+    for (id, repo_name, dir_name) in &orphans {
+        if let Err(e) = permanently_delete_workspace(id) {
+            tracing::warn!(workspace_id = %id, "Failed to purge orphaned workspace: {e:#}");
+        } else {
+            tracing::info!(
+                workspace_id = %id,
+                path = %format!("{}/{}", repo_name, dir_name),
+                "Purged orphaned workspace (directory missing)"
+            );
+        }
+    }
+    Ok(count)
+}
+
 /// Permanently delete a workspace and all its data (sessions, messages,
 /// attachments, diff_comments) from the database, plus any filesystem
 /// artifacts (worktree directory, archived context).

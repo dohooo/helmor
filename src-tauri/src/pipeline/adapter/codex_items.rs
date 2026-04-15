@@ -16,7 +16,7 @@ use serde_json::Value;
 use super::blocks::parse_codex_todolist_items;
 use crate::pipeline::types::{
     ExtendedMessagePart, IntermediateMessage, MessagePart, MessageRole, MessageStatus,
-    ThreadMessageLike,
+    PlanAllowedPrompt, ThreadMessageLike,
 };
 
 /// Render a single `item.completed` IntermediateMessage. Pushes 0 or 1
@@ -56,6 +56,7 @@ pub(super) fn render_item_completed(
         Some("file_change") => render_file_change(msg, item, result),
         Some("web_search") => render_web_search(msg, item, result),
         Some("mcp_tool_call") => render_mcp_tool_call(msg, item, result),
+        Some("plan") => render_plan(msg, item, result),
         _ => {}
     }
 }
@@ -66,8 +67,7 @@ fn render_command_execution(
     result: &mut Vec<ThreadMessageLike>,
 ) {
     let command = item.get("command").and_then(Value::as_str).unwrap_or("");
-    // Real Codex SDK sends `aggregated_output`. The legacy fixture/older
-    // builds used `output`. Read both, prefer the new name.
+    // Prefer `aggregated_output`; fall back to `output` for older data.
     let output = item
         .get("aggregated_output")
         .or_else(|| item.get("output"))
@@ -252,6 +252,30 @@ fn render_mcp_tool_call(
             is_error: if failed { Some(true) } else { None },
             streaming_status: None,
             children: Vec::new(),
+        })],
+        status: Some(MessageStatus {
+            status_type: "complete".to_string(),
+            reason: Some("stop".to_string()),
+        }),
+        streaming: None,
+    });
+}
+
+fn render_plan(msg: &IntermediateMessage, item: &Value, result: &mut Vec<ThreadMessageLike>) {
+    let text = item.get("text").and_then(Value::as_str).unwrap_or("");
+    if text.is_empty() {
+        return;
+    }
+    result.push(ThreadMessageLike {
+        role: MessageRole::Assistant,
+        id: Some(msg.id.clone()),
+        created_at: Some(msg.created_at.clone()),
+        content: vec![ExtendedMessagePart::Basic(MessagePart::PlanReview {
+            tool_use_id: format!("codex-plan-{}", msg.id),
+            tool_name: "CodexPlan".to_string(),
+            plan: Some(text.to_string()),
+            plan_file_path: None,
+            allowed_prompts: Vec::<PlanAllowedPrompt>::new(),
         })],
         status: Some(MessageStatus {
             status_type: "complete".to_string(),

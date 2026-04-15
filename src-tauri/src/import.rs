@@ -405,6 +405,13 @@ fn import_workspace_db_records(conn: &Connection, workspace_id: &str) -> Result<
     )
     .context("Failed to import sessions")?;
 
+    // 3b. Remap legacy "opus-1m" model ID (CLI no longer accepts it)
+    conn.execute(
+        "UPDATE main.sessions SET model = 'default' WHERE model = 'opus-1m' AND workspace_id = ?1",
+        [workspace_id],
+    )
+    .ok();
+
     // 4. Insert session_messages
     let (msg_main, msg_src) = import_column_lists(conn, "session_messages")?;
     conn.execute(

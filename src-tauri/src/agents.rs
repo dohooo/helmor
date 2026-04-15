@@ -12,16 +12,15 @@ mod slash_commands;
 mod streaming;
 mod support;
 
-pub use self::catalog::{
-    find_model_definition, AgentModelDefinition, AgentModelOption, AgentModelSection,
-};
+pub use self::catalog::{resolve_model, AgentModelOption, AgentModelSection, ResolvedModel};
 pub use self::queries::{
     GenerateSessionTitleRequest, GenerateSessionTitleResponse, ListSlashCommandsRequest,
     SlashCommandEntry, SlashCommandsResponse,
 };
 pub use self::slash_commands::SlashCommandCache;
 pub use self::streaming::{
-    abort_all_active_streams_blocking, bridge_elicitation_request_event, ActiveStreams,
+    abort_all_active_streams_blocking, bridge_elicitation_request_event,
+    convert_elicitation_content_to_codex_answers, ActiveStreams,
 };
 
 use self::persistence::{
@@ -166,8 +165,10 @@ struct ExchangeContext {
 }
 
 #[tauri::command]
-pub fn list_agent_model_sections() -> Vec<AgentModelSection> {
-    catalog::list_agent_model_sections()
+pub async fn list_agent_model_sections(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+) -> CmdResult<Vec<AgentModelSection>> {
+    Ok(queries::fetch_agent_model_sections(&sidecar))
 }
 
 #[tauri::command]
@@ -182,8 +183,7 @@ pub async fn send_agent_message_stream(
         return Err(anyhow::anyhow!("Prompt cannot be empty.").into());
     }
 
-    let model = find_model_definition(&request.model_id)
-        .ok_or_else(|| anyhow::anyhow!("Unknown model id: {}", request.model_id))?;
+    let model = resolve_model(&request.model_id);
 
     if request.provider != model.provider {
         return Err(anyhow::anyhow!(
@@ -204,7 +204,7 @@ pub async fn send_agent_message_stream(
         &sidecar,
         &active_streams,
         &stream_id,
-        model,
+        &model,
         &prompt,
         &request,
         &working_directory,
@@ -355,10 +355,34 @@ pub async fn respond_to_elicitation_request(
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
     request: ElicitationResponseRequest,
 ) -> CmdResult<()> {
-    let req = build_elicitation_response_sidecar_request(&request);
-    sidecar
-        .send(&req)
-        .map_err(|e| anyhow::anyhow!("Failed to send elicitation response: {e}"))?;
+    if request.elicitation_id.starts_with("codex-input-") {
+        // Codex user-input: convert form content → answers, send via separate channel.
+        let answers = if request.action == "accept" {
+            request
+                .content
+                .as_ref()
+                .map(convert_elicitation_content_to_codex_answers)
+                .unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        };
+        let req = crate::sidecar::SidecarRequest {
+            id: Uuid::new_v4().to_string(),
+            method: "userInputResponse".to_string(),
+            params: serde_json::json!({
+                "userInputId": request.elicitation_id,
+                "answers": answers,
+            }),
+        };
+        sidecar
+            .send(&req)
+            .map_err(|e| anyhow::anyhow!("Failed to send user-input response: {e}"))?;
+    } else {
+        let req = build_elicitation_response_sidecar_request(&request);
+        sidecar
+            .send(&req)
+            .map_err(|e| anyhow::anyhow!("Failed to send elicitation response: {e}"))?;
+    }
     Ok(())
 }
 
@@ -455,9 +479,9 @@ mod tests {
     #[test]
     fn parse_codex_output_extracts_agent_message() {
         let stdout = r#"
-            {"type":"thread.started","thread_id":"thread-abc"}
-            {"type":"item.completed","item":{"type":"agent_message","text":"Hello from Codex"}}
-            {"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":20}}
+            {"type":"thread/started","thread":{"id":"thread-abc"}}
+            {"type":"item/completed","itemId":"i1","item":{"type":"agentMessage","id":"i1","text":"Hello from Codex"}}
+            {"type":"turn/completed","turn":{"id":"t1","status":"completed"},"usage":{"input_tokens":100,"output_tokens":20}}
         "#;
 
         let output = parse_codex_output(stdout, None, "gpt-5.4");
@@ -468,11 +492,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_codex_output_uses_thread_resumed() {
+    fn parse_codex_output_uses_thread_started_for_resume() {
         let stdout = r#"
-            {"type":"thread.resumed","thread_id":"thread-xyz"}
-            {"type":"item.completed","item":{"type":"agent_message","text":"Resumed"}}
-            {"type":"turn.completed","usage":{}}
+            {"type":"thread/started","thread":{"id":"thread-xyz"}}
+            {"type":"item/completed","itemId":"i1","item":{"type":"agentMessage","id":"i1","text":"Resumed"}}
+            {"type":"turn/completed","turn":{"id":"t1","status":"completed"},"usage":{}}
         "#;
 
         let output = parse_codex_output(stdout, None, "gpt-5.4");
@@ -481,7 +505,7 @@ mod tests {
 
     #[test]
     fn parse_codex_output_returns_empty_text_on_no_agent_message() {
-        let stdout = r#"{"type":"thread.started","thread_id":"t1"}"#;
+        let stdout = r#"{"type":"thread/started","thread":{"id":"t1"}}"#;
         let output = parse_codex_output(stdout, None, "gpt-5.4");
         assert!(output.assistant_text.is_empty());
         assert_eq!(output.session_id.as_deref(), Some("t1"));
@@ -490,9 +514,9 @@ mod tests {
     #[test]
     fn parse_codex_output_joins_multiple_messages() {
         let stdout = r#"
-            {"type":"item.completed","item":{"type":"agent_message","text":"Part 1"}}
-            {"type":"item.completed","item":{"type":"agent_message","text":"Part 2"}}
-            {"type":"turn.completed","usage":{}}
+            {"type":"item/completed","itemId":"i1","item":{"type":"agentMessage","id":"i1","text":"Part 1"}}
+            {"type":"item/completed","itemId":"i2","item":{"type":"agentMessage","id":"i2","text":"Part 2"}}
+            {"type":"turn/completed","turn":{"id":"t1","status":"completed"},"usage":{}}
         "#;
 
         let output = parse_codex_output(stdout, None, "gpt-5.4");
@@ -519,38 +543,40 @@ mod tests {
     #[test]
     fn parse_codex_output_collects_text_and_result() {
         let stdout = r#"
-            {"type":"thread.started","thread_id":"t1"}
-            {"type":"item.completed","item":{"type":"agent_message","text":"Hello"}}
-            {"type":"item.completed","item":{"type":"command_execution","command":"ls"}}
-            {"type":"item.completed","item":{"type":"agent_message","text":"Done"}}
-            {"type":"turn.completed","usage":{"input_tokens":50,"output_tokens":10}}
+            {"type":"thread/started","thread":{"id":"t1"}}
+            {"type":"item/completed","itemId":"i1","item":{"type":"agentMessage","id":"i1","text":"Hello"}}
+            {"type":"item/completed","itemId":"i2","item":{"type":"commandExecution","id":"i2","command":"ls"}}
+            {"type":"item/completed","itemId":"i3","item":{"type":"agentMessage","id":"i3","text":"Done"}}
+            {"type":"turn/completed","turn":{"id":"t1","status":"completed"},"usage":{"input_tokens":50,"output_tokens":10}}
         "#;
 
         let output = parse_codex_output(stdout, None, "gpt-5.4");
         // Assistant text should combine all agent_message texts
         assert!(output.assistant_text.contains("Hello"));
         assert!(output.assistant_text.contains("Done"));
-        // result_json should be the turn.completed line
+        // result_json should be the turn/completed line
         assert!(output.result_json.is_some());
-        assert!(output.result_json.unwrap().contains("turn.completed"));
+        assert!(output.result_json.unwrap().contains("turn/completed"));
         // Usage should be captured
         assert_eq!(output.usage.input_tokens, Some(50));
         assert_eq!(output.usage.output_tokens, Some(10));
     }
 
     // -----------------------------------------------------------------------
-    // find_model_definition — provider lookup
+    // resolve_model — provider inference
     // -----------------------------------------------------------------------
 
     #[test]
-    fn find_model_definition_resolves_providers() {
-        let claude = find_model_definition("opus-1m").unwrap();
+    fn resolve_model_infers_provider() {
+        let claude = resolve_model("default");
         assert_eq!(claude.provider, "claude");
+        assert_eq!(claude.cli_model, "default");
 
-        let codex = find_model_definition("gpt-5.4").unwrap();
+        let codex = resolve_model("gpt-5.4");
         assert_eq!(codex.provider, "codex");
 
-        assert!(find_model_definition("nonexistent").is_none());
+        let unknown_claude = resolve_model("sonnet[1m]");
+        assert_eq!(unknown_claude.provider, "claude");
     }
 
     // -----------------------------------------------------------------------
@@ -839,19 +865,6 @@ mod tests {
         assert_eq!(msg_count, 3, "Should have user + 2 turn messages");
 
         std::env::remove_var("HELMOR_DATA_DIR");
-    }
-
-    #[test]
-    fn model_definitions_have_unique_ids() {
-        let sections = catalog::list_agent_model_sections();
-        let mut ids: Vec<&str> = sections
-            .iter()
-            .flat_map(|section| section.options.iter().map(|model| model.id.as_str()))
-            .collect();
-        let len_before = ids.len();
-        ids.sort();
-        ids.dedup();
-        assert_eq!(ids.len(), len_before, "Duplicate model IDs found");
     }
 
     #[test]

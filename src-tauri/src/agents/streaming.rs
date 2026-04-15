@@ -14,8 +14,8 @@ use crate::pipeline::types::{
 
 use super::{
     finalize_session_metadata, open_write_connection, persist_exit_plan_message,
-    persist_result_and_finalize, persist_turn_message, persist_user_message, AgentModelDefinition,
-    AgentSendRequest, AgentStreamEvent, CmdResult, ExchangeContext,
+    persist_result_and_finalize, persist_turn_message, persist_user_message, AgentSendRequest,
+    AgentStreamEvent, CmdResult, ExchangeContext,
 };
 
 #[derive(Debug, Clone)]
@@ -143,6 +143,113 @@ pub fn bridge_elicitation_request_event(
     }
 }
 
+/// Build a JSON Schema from Codex `requestUserInput` questions so the
+/// frontend's ElicitationPanel can render them as form fields.
+fn build_user_input_schema(questions: &Value) -> Value {
+    let arr = match questions.as_array() {
+        Some(a) => a,
+        None => return Value::Null,
+    };
+
+    let mut properties = serde_json::Map::new();
+    let mut required = Vec::new();
+
+    for (i, q) in arr.iter().enumerate() {
+        let header = q.get("header").and_then(Value::as_str).unwrap_or("");
+        let question_text = q
+            .get("question")
+            .and_then(Value::as_str)
+            .unwrap_or("Question");
+        let is_other = q.get("isOther").and_then(Value::as_bool).unwrap_or(false);
+        let options = q.get("options").and_then(Value::as_array);
+        // Use question id as key so responses map back to Codex question ids
+        let key = q
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("q{i}"));
+
+        // header → title (tab label), question → description (subtitle)
+        let title = if header.is_empty() {
+            question_text
+        } else {
+            header
+        };
+        let description = if header.is_empty() { "" } else { question_text };
+
+        let has_options = options.is_some_and(|o| !o.is_empty());
+
+        let prop = if has_options {
+            let opts = options.unwrap();
+            let one_of: Vec<Value> = opts
+                .iter()
+                .map(|opt| {
+                    let label = opt.get("label").and_then(Value::as_str).unwrap_or("");
+                    let desc = opt.get("description").and_then(Value::as_str).unwrap_or("");
+                    serde_json::json!({
+                        "const": label,
+                        "title": label,
+                        "description": desc,
+                    })
+                })
+                .collect();
+
+            let mut p = serde_json::json!({
+                "type": "string",
+                "title": title,
+                "description": description,
+                "oneOf": one_of,
+            });
+            if is_other {
+                p["x-allow-other"] = Value::Bool(true);
+            }
+            p
+        } else if is_other {
+            serde_json::json!({
+                "type": "string",
+                "title": title,
+                "description": description,
+            })
+        } else {
+            serde_json::json!({
+                "type": "string",
+                "title": title,
+                "description": description,
+                "oneOf": [
+                    { "const": "yes", "title": "Yes" },
+                    { "const": "no", "title": "No" },
+                ],
+            })
+        };
+
+        required.push(Value::String(key.clone()));
+        properties.insert(key, prop);
+    }
+
+    serde_json::json!({
+        "type": "object",
+        "properties": properties,
+        "required": required,
+    })
+}
+
+/// Convert an ElicitationResponse content back to Codex answer format.
+///
+/// Codex expects: `{ "question_id": { "answers": ["value"] }, ... }`
+/// Frontend sends: `{ "question_id": "value", ... }`
+pub fn convert_elicitation_content_to_codex_answers(content: &Value) -> Value {
+    let obj = match content.as_object() {
+        Some(o) => o,
+        None => return Value::Null,
+    };
+    let mut answers = serde_json::Map::new();
+    for (key, value) in obj {
+        let answer_str = value.as_str().unwrap_or("").to_string();
+        answers.insert(key.clone(), serde_json::json!({ "answers": [answer_str] }));
+    }
+    Value::Object(answers)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn stream_via_sidecar(
     app: AppHandle,
@@ -150,7 +257,7 @@ pub(super) fn stream_via_sidecar(
     sidecar: &crate::sidecar::ManagedSidecar,
     active_streams: &ActiveStreams,
     stream_id: &str,
-    model: &AgentModelDefinition,
+    model: &super::ResolvedModel,
     prompt: &str,
     request: &AgentSendRequest,
     working_directory: &Path,
@@ -224,9 +331,9 @@ pub(super) fn stream_via_sidecar(
         provider: model.provider.to_string(),
     });
 
-    let model_id = model.id.to_string();
-    let provider = model.provider.to_string();
-    let model_copy = *model;
+    let model_id = model.id.clone();
+    let provider = model.provider.clone();
+    let model_copy = model.clone();
     let prompt_copy = prompt.to_string();
     let working_dir_str = working_directory.display().to_string();
     let hsid_copy = helmor_session_id;
@@ -246,7 +353,7 @@ pub(super) fn stream_via_sidecar(
         let mut pipeline = hsid_copy.as_ref().map(|_| {
             crate::pipeline::MessagePipeline::new(
                 provider.as_str(),
-                model_copy.cli_model,
+                &model_copy.cli_model,
                 &context_key,
                 &pipeline_session_id,
             )
@@ -344,6 +451,7 @@ pub(super) fn stream_via_sidecar(
                         pipeline_state.accumulator.flush_pending();
 
                         if is_aborted {
+                            pipeline_state.accumulator.flush_codex_in_progress();
                             pipeline_state.materialize_partial();
                             pipeline_state.accumulator.append_aborted_notice();
                         }
@@ -660,6 +768,39 @@ pub(super) fn stream_via_sidecar(
                         &event.raw,
                     ));
                 }
+                "userInputRequest" => {
+                    let resolved_model = pipeline
+                        .as_ref()
+                        .map(|state| state.accumulator.resolved_model().to_string())
+                        .unwrap_or_else(|| model_copy.cli_model.to_string());
+                    let user_input_id = event
+                        .raw
+                        .get("userInputId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let questions = event
+                        .raw
+                        .get("questions")
+                        .cloned()
+                        .unwrap_or(Value::Array(Vec::new()));
+                    let schema = build_user_input_schema(&questions);
+                    let message = "Codex needs your input".to_string();
+
+                    let _ = on_event.send(AgentStreamEvent::ElicitationRequest {
+                        provider: provider.to_string(),
+                        model_id: model_id.to_string(),
+                        resolved_model,
+                        session_id: resolved_session_id.clone(),
+                        working_directory: working_dir_str.clone(),
+                        elicitation_id: Some(user_input_id),
+                        server_name: "Codex".to_string(),
+                        message,
+                        mode: Some("form".to_string()),
+                        url: None,
+                        requested_schema: Some(schema),
+                    });
+                }
                 "error" => {
                     let message = event
                         .raw
@@ -839,5 +980,157 @@ url: ~
 working_directory: /tmp/helmor
             "#
         );
+    }
+
+    #[test]
+    fn user_input_schema_yes_no_question() {
+        let questions = serde_json::json!([
+            { "question": "Approve this plan?" }
+        ]);
+        let schema = build_user_input_schema(&questions);
+        // Verify structure without relying on key order
+        assert_eq!(schema["type"], "object");
+        let q0 = &schema["properties"]["q0"];
+        assert_eq!(q0["type"], "string");
+        assert_eq!(q0["title"], "Approve this plan?");
+        let options = q0["oneOf"].as_array().unwrap();
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0]["const"], "yes");
+        assert_eq!(options[1]["const"], "no");
+        assert_eq!(schema["required"][0], "q0");
+    }
+
+    #[test]
+    fn user_input_schema_free_text_question() {
+        let questions = serde_json::json!([
+            { "question": "What changes?", "isOther": true }
+        ]);
+        let schema = build_user_input_schema(&questions);
+        assert_eq!(schema["type"], "object");
+        let q0 = &schema["properties"]["q0"];
+        assert_eq!(q0["type"], "string");
+        assert_eq!(q0["title"], "What changes?");
+        assert!(q0.get("oneOf").is_none());
+    }
+
+    #[test]
+    fn user_input_schema_mixed_questions() {
+        let questions = serde_json::json!([
+            { "question": "Continue?" },
+            { "question": "Describe approach", "isOther": true },
+        ]);
+        let schema = build_user_input_schema(&questions);
+        let props = &schema["properties"];
+        assert!(props["q0"].get("oneOf").is_some());
+        assert!(props["q1"].get("oneOf").is_none());
+        assert_eq!(schema["required"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn user_input_schema_empty_returns_empty_object() {
+        let schema = build_user_input_schema(&serde_json::json!([]));
+        // Empty questions → empty schema (properties exist but empty)
+        assert_eq!(schema["type"], "object");
+        assert!(schema["properties"].as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn user_input_schema_non_array_returns_null() {
+        assert_eq!(
+            build_user_input_schema(&serde_json::json!("not array")),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn convert_answers_maps_to_codex_format() {
+        let content = serde_json::json!({
+            "project_shape": "新项目",
+            "app_goal": "验证需求",
+        });
+        let answers = convert_elicitation_content_to_codex_answers(&content);
+        let obj = answers.as_object().unwrap();
+        assert_eq!(
+            obj["project_shape"],
+            serde_json::json!({ "answers": ["新项目"] }),
+        );
+        assert_eq!(
+            obj["app_goal"],
+            serde_json::json!({ "answers": ["验证需求"] }),
+        );
+    }
+
+    #[test]
+    fn convert_answers_wraps_each_value() {
+        let content = serde_json::json!({
+            "q0": "a",
+            "q1": "b",
+        });
+        let answers = convert_elicitation_content_to_codex_answers(&content);
+        let obj = answers.as_object().unwrap();
+        assert_eq!(obj.len(), 2);
+        assert_eq!(obj["q0"]["answers"][0], "a");
+        assert_eq!(obj["q1"]["answers"][0], "b");
+    }
+
+    #[test]
+    fn convert_answers_null_input() {
+        assert_eq!(
+            convert_elicitation_content_to_codex_answers(&Value::Null),
+            Value::Null,
+        );
+    }
+
+    #[test]
+    fn user_input_schema_with_options() {
+        let questions = serde_json::json!([{
+            "id": "project_shape",
+            "header": "项目形态",
+            "question": "选择项目类型",
+            "isOther": false,
+            "options": [
+                { "label": "新项目", "description": "从零开始" },
+                { "label": "改造", "description": "基于现有代码" },
+            ]
+        }]);
+        let schema = build_user_input_schema(&questions);
+        // Key should be the question id
+        let field = &schema["properties"]["project_shape"];
+        assert_eq!(field["title"], "项目形态");
+        assert_eq!(field["description"], "选择项目类型");
+        let opts = field["oneOf"].as_array().unwrap();
+        assert_eq!(opts.len(), 2);
+        assert_eq!(opts[0]["const"], "新项目");
+        assert_eq!(opts[0]["description"], "从零开始");
+        assert!(field.get("x-allow-other").is_none());
+    }
+
+    #[test]
+    fn user_input_schema_options_with_is_other() {
+        let questions = serde_json::json!([{
+            "header": "终端选择",
+            "question": "首发终端？",
+            "isOther": true,
+            "options": [
+                { "label": "H5", "description": "最快" },
+            ]
+        }]);
+        let schema = build_user_input_schema(&questions);
+        let q0 = &schema["properties"]["q0"];
+        assert_eq!(q0["title"], "终端选择");
+        assert_eq!(q0["x-allow-other"], true);
+        assert_eq!(q0["oneOf"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn user_input_schema_header_fallback() {
+        let questions = serde_json::json!([
+            { "question": "Simple question?" }
+        ]);
+        let schema = build_user_input_schema(&questions);
+        let q0 = &schema["properties"]["q0"];
+        // No header → title falls back to question, description is empty
+        assert_eq!(q0["title"], "Simple question?");
+        assert_eq!(q0["description"], "");
     }
 }

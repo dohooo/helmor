@@ -1,0 +1,86 @@
+---
+source: tests/pipeline_streams.rs
+expression: snapshot
+input_file: tests/fixtures/streams/codex/plan-mode.jsonl
+---
+line_count: 17
+checkpoint_count: 6
+checkpoints:
+  - line_index: 4
+    event_type: item/completed
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+  - line_index: 10
+    event_type: item/completed
+    roles:
+      - assistant
+      - assistant
+    last_part_types:
+      - plan-review
+  - line_index: 11
+    event_type: turn/plan/updated
+    roles:
+      - assistant
+      - assistant
+      - assistant
+    last_part_types:
+      - todo-list
+  - line_index: 14
+    event_type: item/completed
+    roles:
+      - assistant
+      - assistant
+      - assistant
+    last_part_types:
+      - todo-list
+      - text
+  - line_index: 15
+    event_type: turn/plan/updated
+    roles:
+      - assistant
+      - assistant
+      - assistant
+    last_part_types:
+      - todo-list
+      - text
+  - line_index: 16
+    event_type: turn/completed
+    roles:
+      - assistant
+      - assistant
+      - assistant
+      - system
+    last_part_types:
+      - text
+final_state:
+  message_count: 4
+  roles:
+    - assistant
+    - assistant
+    - assistant
+    - system
+  total_parts: 5
+persisted_turns:
+  turn_count: 3
+  total_blocks: 0
+  turns:
+    - role: assistant
+      block_types: []
+    - role: assistant
+      block_types: []
+    - role: assistant
+      block_types: []
+historical_render:
+  message_count: 3
+  messages:
+    - role: assistant
+      part_types:
+        - reasoning
+    - role: assistant
+      part_types:
+        - plan-review
+    - role: assistant
+      part_types:
+        - text

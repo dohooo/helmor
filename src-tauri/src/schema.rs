@@ -208,6 +208,11 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .execute_batch("ALTER TABLE diff_comments DROP COLUMN DEPRECATED_update_memory")
             .context("Failed to drop deprecated diff_comments column")?;
     }
+    // Migration: remap legacy "opus-1m" model ID — the CLI no longer accepts it.
+    // "opus" still works as an alias, so only "opus-1m" needs remapping.
+    connection
+        .execute_batch("UPDATE sessions SET model = 'default' WHERE model = 'opus-1m'")
+        .ok();
 
     Ok(())
 }

@@ -1,8 +1,22 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Minus, Monitor, Moon, Plus, Settings, Sun } from "lucide-react";
+import {
+	ChevronDown,
+	Minus,
+	Monitor,
+	Moon,
+	Plus,
+	Settings,
+	Sun,
+} from "lucide-react";
 import { memo, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Field, FieldContent, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -28,9 +42,14 @@ import {
 	loadGithubIdentitySession,
 	type RepositoryCreateOption,
 } from "@/lib/api";
-import { helmorQueryKeys, repositoriesQueryOptions } from "@/lib/query-client";
+import {
+	agentModelSectionsQueryOptions,
+	helmorQueryKeys,
+	repositoriesQueryOptions,
+} from "@/lib/query-client";
 import type { ThemeMode } from "@/lib/settings";
 import { useSettings } from "@/lib/settings";
+import { clampEffort, findModelOption } from "@/lib/workspace-helpers";
 import { CliInstallPanel } from "./panels/cli-install";
 import { ConductorImportPanel } from "./panels/conductor-import";
 import { DevToolsPanel } from "./panels/dev-tools";
@@ -38,6 +57,7 @@ import { RepositorySettingsPanel } from "./panels/repository-settings";
 
 const MIN_FONT_SIZE = 12;
 const MAX_FONT_SIZE = 20;
+const FALLBACK_EFFORT_LEVELS = ["low", "medium", "high"];
 
 type SettingsSection =
 	| "appearance"
@@ -77,6 +97,36 @@ export const SettingsDialog = memo(function SettingsDialog({
 		enabled: open,
 	});
 	const repositories = reposQuery.data ?? [];
+	const modelSectionsQuery = useQuery({
+		...agentModelSectionsQueryOptions(),
+		enabled: open,
+	});
+	const allModels = (modelSectionsQuery.data ?? []).flatMap((s) => s.options);
+	const selectedDefaultModel = findModelOption(
+		modelSectionsQuery.data ?? [],
+		settings.defaultModelId,
+	);
+	const defaultEffortLevels =
+		selectedDefaultModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS;
+	// Auto-clamp effort when model changes — but only after model metadata
+	// has actually loaded, otherwise the fallback levels silently kill max/xhigh.
+	useEffect(() => {
+		if (!selectedDefaultModel) return;
+		const current = settings.defaultEffort ?? "high";
+		if (
+			defaultEffortLevels.length > 0 &&
+			!defaultEffortLevels.includes(current)
+		) {
+			updateSettings({
+				defaultEffort: clampEffort(current, defaultEffortLevels),
+			});
+		}
+	}, [
+		selectedDefaultModel,
+		settings.defaultEffort,
+		defaultEffortLevels,
+		updateSettings,
+	]);
 
 	useEffect(() => {
 		if (open) {
@@ -340,6 +390,70 @@ export const SettingsDialog = memo(function SettingsDialog({
 											<RadioOption value="none" label="None" />
 										</RadioGroup>
 									</div>
+
+									{/* Default Model */}
+									<div className="flex items-center justify-between rounded-xl border border-border/30 bg-muted/30 px-5 py-4">
+										<div className="mr-8">
+											<div className="text-[13px] font-medium leading-snug text-foreground">
+												Default model
+											</div>
+											<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
+												Model for new chats
+											</div>
+										</div>
+										<div className="flex items-center gap-2">
+											<DropdownMenu>
+												<DropdownMenuTrigger className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-border/50 bg-muted/30 px-3 py-1.5 text-[13px] text-foreground hover:bg-muted/50">
+													<span>
+														{selectedDefaultModel?.label ??
+															settings.defaultModelId ??
+															"Loading…"}
+													</span>
+													<ChevronDown className="size-3 opacity-40" />
+												</DropdownMenuTrigger>
+												<DropdownMenuContent
+													align="end"
+													sideOffset={4}
+													className="min-w-[10rem]"
+												>
+													{allModels.map((m) => (
+														<DropdownMenuItem
+															key={m.id}
+															onClick={() =>
+																updateSettings({ defaultModelId: m.id })
+															}
+														>
+															{m.label}
+														</DropdownMenuItem>
+													))}
+												</DropdownMenuContent>
+											</DropdownMenu>
+											<DropdownMenu>
+												<DropdownMenuTrigger className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-border/50 bg-muted/30 px-3 py-1.5 text-[13px] text-foreground hover:bg-muted/50">
+													<span>
+														{effortLabel(settings.defaultEffort ?? "high")}
+													</span>
+													<ChevronDown className="size-3 opacity-40" />
+												</DropdownMenuTrigger>
+												<DropdownMenuContent
+													align="end"
+													sideOffset={4}
+													className="min-w-[8rem]"
+												>
+													{defaultEffortLevels.map((l) => (
+														<DropdownMenuItem
+															key={l}
+															onClick={() =>
+																updateSettings({ defaultEffort: l })
+															}
+														>
+															{effortLabel(l)}
+														</DropdownMenuItem>
+													))}
+												</DropdownMenuContent>
+											</DropdownMenu>
+										</div>
+									</div>
 								</div>
 							)}
 
@@ -414,6 +528,11 @@ function RadioOption({
 			</FieldContent>
 		</Field>
 	);
+}
+
+function effortLabel(level: string): string {
+	if (level === "xhigh") return "Extra High";
+	return level.charAt(0).toUpperCase() + level.slice(1);
 }
 
 export function SettingsButton({ onClick }: { onClick: () => void }) {

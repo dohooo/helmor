@@ -27,12 +27,4 @@ final_messages:
       type: complete
       reason: stop
     streaming: ~
-  - role: system
-    id: msg-2
-    content_length: 1
-    content:
-      - type: text
-        text: Done
-    status: ~
-    streaming: ~
 dropped_event_types: []

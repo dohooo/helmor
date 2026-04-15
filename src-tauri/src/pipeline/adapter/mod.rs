@@ -100,9 +100,12 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
             continue;
         }
 
-        // result (session summary)
+        // result (session summary) — only render when there's meaningful info (duration etc.)
         if msg_type == Some("result") {
-            result.push(make_system(msg, &build_result_label(parsed)));
+            let label = build_result_label(parsed);
+            if !label.is_empty() {
+                result.push(make_system(msg, &label));
+            }
             i += 1;
             continue;
         }
@@ -306,15 +309,18 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
             continue;
         }
 
-        // Codex: turn.completed — render as session summary
-        if msg_type == Some("turn.completed") {
-            result.push(make_system(msg, &build_result_label(parsed)));
+        // Codex: turn/completed — only render when there's meaningful info
+        if matches!(msg_type, Some("turn/completed") | Some("turn.completed")) {
+            let label = build_result_label(parsed);
+            if !label.is_empty() {
+                result.push(make_system(msg, &label));
+            }
             i += 1;
             continue;
         }
 
-        // Codex: turn.failed — fatal turn-level error.
-        if msg_type == Some("turn.failed") {
+        // Codex: turn/failed — fatal turn-level error.
+        if matches!(msg_type, Some("turn/failed") | Some("turn.failed")) {
             let message = parsed
                 .and_then(|p| p.get("error"))
                 .and_then(|e| e.get("message"))

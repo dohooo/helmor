@@ -181,6 +181,13 @@ function App() {
 						},
 					},
 				}}
+				onSuccess={() => {
+					// Cache restored — silently refresh model list from sidecar
+					// so stale persisted data gets updated without a loading flash.
+					void queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.agentModelSections,
+					});
+				}}
 			>
 				<AppShell onOpenSettings={() => setSettingsOpen(true)} />
 				{splashMounted && <SplashScreen visible={splashVisible} />}
