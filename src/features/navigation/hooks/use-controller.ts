@@ -210,7 +210,7 @@ export function useWorkspacesSidebarController({
 	}, [queryClient]);
 
 	const invalidateWorkspaceSummary = useCallback(
-		async (workspaceId: string) => {
+		async (workspaceId: string, opts?: { skipSidebarFlush?: boolean }) => {
 			await Promise.all([
 				queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
@@ -219,7 +219,7 @@ export function useWorkspacesSidebarController({
 					queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
 				}),
 			]);
-			if (sidebarMutationCountRef.current === 0) {
+			if (!opts?.skipSidebarFlush && sidebarMutationCountRef.current === 0) {
 				flushSidebarLists();
 			}
 		},
@@ -298,7 +298,11 @@ export function useWorkspacesSidebarController({
 			);
 
 			void markWorkspaceRead(workspaceId)
-				.then(() => invalidateWorkspaceSummary(workspaceId))
+				.then(() =>
+					invalidateWorkspaceSummary(workspaceId, {
+						skipSidebarFlush: true,
+					}),
+				)
 				.catch((error) => {
 					queryClient.setQueryData(
 						helmorQueryKeys.workspaceGroups,
@@ -427,7 +431,11 @@ export function useWorkspacesSidebarController({
 			}
 
 			void markWorkspaceUnread(workspaceId)
-				.then(() => invalidateWorkspaceSummary(workspaceId))
+				.then(() =>
+					invalidateWorkspaceSummary(workspaceId, {
+						skipSidebarFlush: true,
+					}),
+				)
 				.catch((error) => {
 					queryClient.setQueryData(
 						helmorQueryKeys.workspaceGroups,
@@ -497,7 +505,7 @@ export function useWorkspacesSidebarController({
 
 				return withoutRow.map((group) =>
 					group.id === targetGroupId
-						? { ...group, rows: [...group.rows, updatedRow] }
+						? { ...group, rows: [updatedRow, ...group.rows] }
 						: group,
 				);
 			});
@@ -553,7 +561,7 @@ export function useWorkspacesSidebarController({
 
 				return withoutRow.map((group) =>
 					group.id === targetGroupId
-						? { ...group, rows: [...group.rows, movedRow] }
+						? { ...group, rows: [movedRow, ...group.rows] }
 						: group,
 				);
 			});
