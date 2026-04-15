@@ -13,7 +13,6 @@ import type {
 	SlashCommandEntry,
 } from "@/lib/api";
 import { createSession, saveAutoCloseActionKinds } from "@/lib/api";
-import { describeActionKind } from "@/lib/commit-button-prompts";
 import type {
 	ComposerCustomTag,
 	ResolvedComposerInsertRequest,
@@ -448,12 +447,8 @@ export const WorkspaceComposerContainer = memo(
 			[onChangePermissionMode, composerContextKey],
 		);
 
-		const actionDisplayName = sessionActionKind
-			? describeActionKind(sessionActionKind)
-			: null;
-		const autoCloseHelpText = autoCloseEnabled
-			? `Completed ${actionDisplayName ?? "action"} sessions are hidden automatically.`
-			: `Hide completed ${actionDisplayName ?? "action"} sessions in this workspace.`;
+		const autoCloseHelpText =
+			"When enabled, action sessions will close automatically when finished.";
 
 		return (
 			<div className="flex flex-col">
