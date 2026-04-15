@@ -13,6 +13,12 @@ import type {
 export type RenderedMessage = ThreadMessageLike;
 export type StreamdownMode = "static" | "streaming";
 
+export type FileChangeInfo = {
+	name: string;
+	diffAdd?: number;
+	diffDel?: number;
+};
+
 export type ToolInfo = {
 	action: string;
 	file?: string;
@@ -23,6 +29,7 @@ export type ToolInfo = {
 	diffAdd?: number;
 	diffDel?: number;
 	body?: string;
+	files?: FileChangeInfo[];
 };
 
 // --- type guards ---

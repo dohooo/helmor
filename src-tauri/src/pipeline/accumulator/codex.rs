@@ -519,6 +519,22 @@ fn handle_reasoning(
     }
 }
 
+fn web_search_summary(query: &str, action: Option<&Value>) -> String {
+    let mut lines = Vec::new();
+    if !query.is_empty() {
+        lines.push(query.to_string());
+    }
+    if let Some(a) = action {
+        if let Some(url) = a.get("url").and_then(Value::as_str) {
+            lines.push(url.to_string());
+        }
+        if let Some(pattern) = a.get("pattern").and_then(Value::as_str) {
+            lines.push(format!("Pattern: {pattern}"));
+        }
+    }
+    lines.join("\n")
+}
+
 fn handle_web_search(
     acc: &mut StreamAccumulator,
     raw_line: &str,
@@ -531,12 +547,17 @@ fn handle_web_search(
         .map(|id| format!("codex-search-{id}"))
         .unwrap_or_else(|| format!("codex-search-{}", acc.line_count));
 
+    let mut input = serde_json::json!({"query": query});
+    if let Some(action) = item.get("action") {
+        input["action"] = action.clone();
+    }
+
     let is_running = !persist;
     let mut tool_use = serde_json::json!({
         "type": "tool_use",
         "id": synthetic_id,
         "name": "WebSearch",
-        "input": {"query": query},
+        "input": input,
     });
     if is_running {
         tool_use["__streaming_status"] = Value::String("running".to_string());
@@ -554,13 +575,14 @@ fn handle_web_search(
     acc.collect_or_replace(&sa_str, &synthetic_assistant, "assistant", asst_id);
 
     if persist {
+        let summary = web_search_summary(query, item.get("action"));
         let synthetic_result = serde_json::json!({
             "type": "user",
             "message": {
                 "content": [{
                     "type": "tool_result",
                     "tool_use_id": synthetic_id,
-                    "content": "Search completed",
+                    "content": summary,
                 }]
             }
         });

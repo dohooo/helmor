@@ -8,13 +8,14 @@ expression: run_normalized(msgs)
   content:
     - type: tool-call
       tool_name: WebSearch
-      tool_call_id: codex-search-ws1
+      tool_call_id: codex-search-ws2
       args_keys:
+        - action
         - query
-      args_text_length: 35
+      args_text_length: 86
       has_result: true
       result_kind: string
-      result_preview: rust testing frameworks
+      result_preview: "openai codex\nhttps://openai.com/codex"
       streaming_status: ~
   status:
     type: complete

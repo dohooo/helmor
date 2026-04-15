@@ -189,8 +189,27 @@ fn render_file_change(
 
 fn render_web_search(msg: &IntermediateMessage, item: &Value, result: &mut Vec<ThreadMessageLike>) {
     let query = item.get("query").and_then(Value::as_str).unwrap_or("");
-    let args = serde_json::json!({"query": query});
+    let mut args = serde_json::json!({"query": query});
+    if let Some(action) = item.get("action") {
+        args["action"] = action.clone();
+    }
     let args_text = serde_json::to_string(&args).unwrap_or_default();
+    let tool_result = {
+        let mut lines = Vec::new();
+        if !query.is_empty() {
+            lines.push(query.to_string());
+        }
+        if let Some(a) = item.get("action") {
+            if let Some(url) = a.get("url").and_then(Value::as_str) {
+                lines.push(url.to_string());
+            }
+            if let Some(pattern) = a.get("pattern").and_then(Value::as_str) {
+                lines.push(format!("Pattern: {pattern}"));
+            }
+        }
+        let summary = lines.join("\n");
+        if summary.is_empty() { None } else { Some(Value::String(summary)) }
+    };
     result.push(ThreadMessageLike {
         role: MessageRole::Assistant,
         id: Some(msg.id.clone()),
@@ -200,7 +219,7 @@ fn render_web_search(msg: &IntermediateMessage, item: &Value, result: &mut Vec<T
             tool_name: "WebSearch".to_string(),
             args,
             args_text,
-            result: Some(Value::String("Search completed".to_string())),
+            result: tool_result,
             is_error: None,
             streaming_status: None,
             children: Vec::new(),

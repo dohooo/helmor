@@ -173,6 +173,8 @@ pub fn run() {
             // server spun up inside `start_github_oauth_redirect`, so no
             // deep-link `on_open_url` handler is needed here.
 
+            agents::prewarm_slash_command_cache(app.handle());
+
             // Start git filesystem watchers for all ready workspaces.
             let watcher_handle = app.handle().clone();
             if let Err(error) = std::thread::Builder::new()

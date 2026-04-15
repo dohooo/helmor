@@ -3,6 +3,18 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
 
+const apiMockState = vi.hoisted(() => ({
+	listSlashCommands: vi.fn(),
+}));
+
+vi.mock("@/lib/api", async () => {
+	const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+	return {
+		...actual,
+		listSlashCommands: apiMockState.listSlashCommands,
+	};
+});
+
 const composerMockState = vi.hoisted(() => ({
 	renders: [] as string[],
 	mounts: 0,
@@ -152,6 +164,11 @@ describe("WorkspaceComposerContainer", () => {
 		composerMockState.renders = [];
 		composerMockState.mounts = 0;
 		composerMockState.unmounts = 0;
+		apiMockState.listSlashCommands.mockReset();
+		apiMockState.listSlashCommands.mockResolvedValue({
+			commands: [],
+			isComplete: true,
+		});
 	});
 
 	afterEach(() => {
@@ -277,5 +294,52 @@ describe("WorkspaceComposerContainer", () => {
 			}),
 		);
 		expect(onPendingPromptConsumed).toHaveBeenCalledTimes(1);
+	});
+
+	it("loads slash commands when the composer mounts", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			WORKSPACE_SESSIONS,
+		);
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-1"
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{}}
+					effortLevels={{}}
+					permissionModes={{}}
+					onSelectModel={vi.fn()}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onSubmit={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await waitFor(() =>
+			expect(apiMockState.listSlashCommands).toHaveBeenCalledWith({
+				provider: "claude",
+				workingDirectory: "/tmp/helmor",
+				modelId: "opus-1m",
+			}),
+		);
 	});
 });

@@ -35,6 +35,10 @@ use self::support::{non_empty, parse_claude_output, parse_codex_output};
 
 type CmdResult<T> = std::result::Result<T, CommandError>;
 
+pub fn prewarm_slash_command_cache(app: &AppHandle) {
+    queries::prewarm_slash_command_cache(app);
+}
+
 // ---------------------------------------------------------------------------
 // Streaming event types
 // ---------------------------------------------------------------------------
