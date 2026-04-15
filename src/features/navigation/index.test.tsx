@@ -165,7 +165,7 @@ describe("WorkspacesSidebar", () => {
 		const virtualList = container.querySelector(
 			'[data-slot="workspace-groups-scroll"] > div',
 		);
-		expect(virtualList).toHaveStyle({ height: "192px" });
+		expect(virtualList).toHaveStyle({ height: "252px" });
 	});
 
 	it("persists section collapse state in localStorage", async () => {
@@ -253,6 +253,177 @@ describe("WorkspacesSidebar", () => {
 		).toBeInTheDocument();
 		expect(
 			within(otherRow).getByLabelText("Interaction required"),
+		).toBeInTheDocument();
+	});
+
+	it("does not auto-expand a collapsed group when groups data refreshes", async () => {
+		const user = userEvent.setup();
+		const groups: WorkspaceGroup[] = [
+			{
+				id: "progress",
+				label: "In Progress",
+				tone: "progress",
+				rows: [workspaceRow],
+			},
+		];
+
+		const { rerender } = render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={groups}
+					archivedRows={[]}
+					selectedWorkspaceId="workspace-1"
+				/>
+			</TooltipProvider>,
+		);
+
+		expect(
+			screen.getByRole("button", { name: "Workspace 1" }),
+		).toBeInTheDocument();
+
+		// Collapse the group
+		await user.click(screen.getByRole("button", { name: /^In Progress/ }));
+		expect(
+			screen.queryByRole("button", { name: "Workspace 1" }),
+		).not.toBeInTheDocument();
+
+		// Simulate a groups refetch (new array reference, same data)
+		rerender(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={[...groups.map((g) => ({ ...g, rows: [...g.rows] }))]}
+					archivedRows={[]}
+					selectedWorkspaceId="workspace-1"
+				/>
+			</TooltipProvider>,
+		);
+
+		// Group should stay collapsed
+		expect(
+			screen.queryByRole("button", { name: "Workspace 1" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("does not auto-expand destination group when workspace moves between groups", async () => {
+		const user = userEvent.setup();
+		const ws = { ...workspaceRow, id: "ws-move", title: "Moving WS" };
+		const initialGroups: WorkspaceGroup[] = [
+			{
+				id: "done",
+				label: "Done",
+				tone: "done",
+				rows: [{ ...workspaceRow, id: "ws-completed", title: "Completed WS" }],
+			},
+			{
+				id: "progress",
+				label: "In Progress",
+				tone: "progress",
+				rows: [ws],
+			},
+		];
+
+		const { rerender } = render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={initialGroups}
+					archivedRows={[]}
+					selectedWorkspaceId="ws-move"
+				/>
+			</TooltipProvider>,
+		);
+
+		// Collapse the "Done" group
+		await user.click(screen.getByRole("button", { name: /^Done/ }));
+		expect(
+			screen.queryByRole("button", { name: "Completed WS" }),
+		).not.toBeInTheDocument();
+
+		// Move workspace from progress to done (simulating status change)
+		const afterMoveGroups: WorkspaceGroup[] = [
+			{
+				id: "done",
+				label: "Done",
+				tone: "done",
+				rows: [
+					ws,
+					{ ...workspaceRow, id: "ws-completed", title: "Completed WS" },
+				],
+			},
+			{
+				id: "progress",
+				label: "In Progress",
+				tone: "progress",
+				rows: [],
+			},
+		];
+
+		rerender(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={afterMoveGroups}
+					archivedRows={[]}
+					selectedWorkspaceId="ws-move"
+				/>
+			</TooltipProvider>,
+		);
+
+		// "Done" should stay collapsed — the workspace moved there but
+		// selectedWorkspaceId didn't change
+		expect(
+			screen.queryByRole("button", { name: "Moving WS" }),
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Completed WS" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("auto-expands a collapsed group when a new workspace is selected in it", async () => {
+		const user = userEvent.setup();
+		const groups: WorkspaceGroup[] = [
+			{
+				id: "done",
+				label: "Done",
+				tone: "done",
+				rows: [{ ...workspaceRow, id: "ws-completed", title: "Completed WS" }],
+			},
+			{
+				id: "progress",
+				label: "In Progress",
+				tone: "progress",
+				rows: [workspaceRow],
+			},
+		];
+
+		const { rerender } = render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={groups}
+					archivedRows={[]}
+					selectedWorkspaceId="workspace-1"
+				/>
+			</TooltipProvider>,
+		);
+
+		// Collapse "Done"
+		await user.click(screen.getByRole("button", { name: /^Done/ }));
+		expect(
+			screen.queryByRole("button", { name: "Completed WS" }),
+		).not.toBeInTheDocument();
+
+		// Select a workspace inside the collapsed "Done" group
+		rerender(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={groups}
+					archivedRows={[]}
+					selectedWorkspaceId="ws-completed"
+				/>
+			</TooltipProvider>,
+		);
+
+		// Group should expand because selectedWorkspaceId changed
+		expect(
+			screen.getByRole("button", { name: "Completed WS" }),
 		).toBeInTheDocument();
 	});
 
