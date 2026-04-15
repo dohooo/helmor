@@ -348,8 +348,7 @@ pub fn create_session(
     let default_model = settings::load_setting_value("app.default_model_id")
         .ok()
         .flatten()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "default".to_string());
+        .filter(|s| !s.is_empty() && s != "default");
     let default_effort = settings::load_setting_value("app.default_effort")
         .ok()
         .flatten()

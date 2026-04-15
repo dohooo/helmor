@@ -108,6 +108,9 @@ export const SettingsDialog = memo(function SettingsDialog({
 	);
 	const defaultEffortLevels =
 		selectedDefaultModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS;
+	const defaultModelLabel =
+		selectedDefaultModel?.label ??
+		(modelSectionsQuery.isPending ? "Loading…" : "Select model");
 	// Auto-clamp effort when model changes — but only after model metadata
 	// has actually loaded, otherwise the fallback levels silently kill max/xhigh.
 	useEffect(() => {
@@ -404,11 +407,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 										<div className="flex items-center gap-2">
 											<DropdownMenu>
 												<DropdownMenuTrigger className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-border/50 bg-muted/30 px-3 py-1.5 text-[13px] text-foreground hover:bg-muted/50">
-													<span>
-														{selectedDefaultModel?.label ??
-															settings.defaultModelId ??
-															"Loading…"}
-													</span>
+													<span>{defaultModelLabel}</span>
 													<ChevronDown className="size-3 opacity-40" />
 												</DropdownMenuTrigger>
 												<DropdownMenuContent
