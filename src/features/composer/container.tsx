@@ -459,18 +459,14 @@ export const WorkspaceComposerContainer = memo(
 			<div className="flex flex-col">
 				{isActionSession ? (
 					<ActionRow
-						className="relative z-10 mx-auto -mb-px w-[90%] rounded-t-[14px]"
+						className="relative z-10 mx-auto -mb-px w-[90%] rounded-t-[14px] border-b-0"
 						overlay={
 							autoCloseEnabled ? (
 								<>
 									<ShineBorder
 										borderWidth={1}
 										duration={8}
-										shineColor={[
-											"oklch(0.88 0.08 98)",
-											"oklch(0.84 0.1 92)",
-											"oklch(0.8 0.09 84)",
-										]}
+										shineColor="var(--primary)"
 									/>
 									<div className="pointer-events-none absolute inset-x-px bottom-0 z-[1] h-[2px] bg-background" />
 								</>
@@ -507,11 +503,6 @@ export const WorkspaceComposerContainer = memo(
 								onClick={() => {
 									void handleToggleAutoClose();
 								}}
-								className={
-									autoCloseEnabled
-										? "border-[color:oklch(0.76_0.17_88_/_0.45)] bg-[color:oklch(0.76_0.17_88_/_0.12)] text-[color:oklch(0.84_0.11_96)] hover:bg-[color:oklch(0.76_0.17_88_/_0.16)] hover:text-[color:oklch(0.9_0.08_96)]"
-										: undefined
-								}
 							>
 								<TimerReset
 									className="size-[13px] shrink-0"
