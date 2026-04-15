@@ -1,0 +1,19 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: plan-review
+      tool_use_id: codex-plan-p1
+      tool_name: CodexPlan
+      plan_length: 67
+      plan_preview: "## Implementation Plan\n\n1. Read codebase\n2. Write tests\n3. Fix bugs"
+      plan_file_path: ~
+      allowed_prompt_tools: []
+  status:
+    type: complete
+    reason: stop
+  streaming: ~

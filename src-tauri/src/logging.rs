@@ -1,6 +1,6 @@
 //! Structured JSON logging with daily rotation.
 //!
-//! Files: `rust-{error,info,debug}.YYYY-MM-DD.jsonl` under the data-dir `logs/` folder.
+//! Single file per component: `rust.YYYY-MM-DD.jsonl` under the data-dir `logs/` folder.
 //! Dev builds also print human-readable output to stderr.
 //! Old log files are gzip-compressed on startup; files older than 7 days are purged.
 //!
@@ -19,8 +19,8 @@ use tracing_subscriber::{
 
 /// Set up the global tracing subscriber.
 ///
-/// Dev:  stderr (human-readable) + three JSONL files at `debug` level.
-/// Prod: three JSONL files only, default `info` (override via `HELMOR_LOG`).
+/// Dev:  stderr (human-readable) + JSONL file at `debug` level.
+/// Prod: JSONL file only, default `info` (override via `HELMOR_LOG`).
 pub fn init(logs_dir: &Path) -> Result<()> {
     let is_dev = crate::data_dir::is_dev();
     let level = resolve_level(is_dev);
@@ -56,9 +56,7 @@ pub fn init(logs_dir: &Path) -> Result<()> {
     });
 
     tracing_subscriber::registry()
-        .with(file_layer!("rust-error", LevelFilter::ERROR))
-        .with(file_layer!("rust-info", LevelFilter::INFO))
-        .with(file_layer!("rust-debug", level))
+        .with(file_layer!("rust", level))
         .with(stderr_layer)
         .init();
 

@@ -1,7 +1,10 @@
+use std::collections::HashSet;
+use std::sync::Mutex;
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 use super::CmdResult;
@@ -274,48 +277,117 @@ pub async fn list_slash_commands(
     cache: tauri::State<'_, super::slash_commands::SlashCommandCache>,
     request: ListSlashCommandsRequest,
 ) -> CmdResult<SlashCommandsResponse> {
-    let cache_key = (
-        request.provider.clone(),
-        request.working_directory.clone().unwrap_or_default(),
-        request.model_id.clone().unwrap_or_default(),
+    tracing::debug!(
+        provider = %request.provider,
+        cwd = request.working_directory.as_deref().unwrap_or(""),
+        model = request.model_id.as_deref().unwrap_or(""),
+        "list_slash_commands request"
     );
-
-    // Non-claude providers (e.g. Codex): the sidecar scan is already fast
-    // (pure filesystem, no MCP wait), so fall through to the blocking path.
-    if request.provider != "claude" {
-        let commands = fetch_from_sidecar(&sidecar, &request)?;
-        return Ok(SlashCommandsResponse {
-            commands,
-            is_complete: true,
-        });
-    }
-
-    // --- Claude provider: progressive loading ---
+    let cache_key = super::slash_commands::cache_key(
+        &request.provider,
+        request.working_directory.as_deref(),
+        request.model_id.as_deref(),
+    );
 
     // 1. Check cache
     if let Some((commands, is_complete)) = cache.get(&cache_key) {
-        // Cache hit — return immediately.  Spawn a background refresh to
-        // keep the cache fresh (stale-while-revalidate).
-        if is_complete {
-            spawn_background_refresh(&app, &cache, &request, cache_key);
-        }
+        tracing::debug!(
+            provider = %request.provider,
+            cwd = request.working_directory.as_deref().unwrap_or(""),
+            model = request.model_id.as_deref().unwrap_or(""),
+            count = commands.len(),
+            is_complete,
+            "list_slash_commands cache hit"
+        );
+        // Cache hit — return immediately and revalidate in the background.
+        // The frontend does not cache slash commands; a later request will
+        // pick up whatever this refresh writes into the backend cache.
+        spawn_background_refresh(&app, &cache, &request, cache_key);
         return Ok(SlashCommandsResponse {
             commands,
             is_complete,
         });
     }
 
-    // 2. Cache miss — scan local skills from disk (fast, < 5 ms)
-    let local = super::slash_commands::scan_local_commands(request.working_directory.as_deref());
-    cache.set(cache_key.clone(), local.clone(), false);
-
-    // 3. Spawn background sidecar refresh
-    spawn_background_refresh(&app, &cache, &request, cache_key);
-
+    tracing::debug!(
+        provider = %request.provider,
+        cwd = request.working_directory.as_deref().unwrap_or(""),
+        model = request.model_id.as_deref().unwrap_or(""),
+        "list_slash_commands cache miss; fetching full result synchronously"
+    );
+    let commands = fetch_from_sidecar(&sidecar, &request)?;
+    tracing::debug!(
+        provider = %request.provider,
+        cwd = request.working_directory.as_deref().unwrap_or(""),
+        model = request.model_id.as_deref().unwrap_or(""),
+        count = commands.len(),
+        "list_slash_commands sync fetch succeeded"
+    );
+    cache.set(cache_key, commands.clone(), true);
     Ok(SlashCommandsResponse {
-        commands: local,
-        is_complete: false,
+        commands,
+        is_complete: true,
     })
+}
+
+pub fn prewarm_slash_command_cache(app: &AppHandle) {
+    let app = app.clone();
+    let _ = std::thread::Builder::new()
+        .name("slash-cmd-prewarm".into())
+        .spawn(move || {
+            let cache: tauri::State<'_, super::slash_commands::SlashCommandCache> = app.state();
+            let mut seen_roots = HashSet::new();
+            let mut roots = Vec::new();
+            for workspace in crate::models::workspaces::load_workspace_records().unwrap_or_default() {
+                if let Some(root_path) = workspace.root_path {
+                    let trimmed = root_path.trim();
+                    if !trimmed.is_empty() && seen_roots.insert(trimmed.to_string()) {
+                        roots.push(trimmed.to_string());
+                    }
+                }
+            }
+
+            tracing::debug!(
+                workspace_count = roots.len(),
+                claude_model = "default",
+                "Slash-command prewarm started"
+            );
+            for root_path in roots {
+                tracing::debug!(cwd = %root_path, "Slash-command prewarm workspace");
+                let claude_key = super::slash_commands::cache_key(
+                    "claude",
+                    Some(root_path.as_str()),
+                    Some("default"),
+                );
+                let claude_request = ListSlashCommandsRequest {
+                    provider: "claude".to_string(),
+                    working_directory: Some(root_path.clone()),
+                    model_id: Some("default".to_string()),
+                };
+                tracing::debug!(
+                    provider = "claude",
+                    cwd = %root_path,
+                    model = "default",
+                    "Slash-command prewarm dispatching background refresh"
+                );
+                spawn_background_refresh(&app, &cache, &claude_request, claude_key);
+
+                let codex_key =
+                    super::slash_commands::cache_key("codex", Some(root_path.as_str()), None);
+                let codex_request = ListSlashCommandsRequest {
+                    provider: "codex".to_string(),
+                    working_directory: Some(root_path.clone()),
+                    model_id: None,
+                };
+                tracing::debug!(
+                    provider = "codex",
+                    cwd = %root_path,
+                    "Slash-command prewarm dispatching background refresh"
+                );
+                spawn_background_refresh(&app, &cache, &codex_request, codex_key);
+            }
+            tracing::debug!("Slash-command prewarm finished");
+        });
 }
 
 /// Run the sidecar `listSlashCommands` call synchronously (blocking the
@@ -426,12 +498,26 @@ fn spawn_background_refresh(
     request: &ListSlashCommandsRequest,
     cache_key: (String, String, String),
 ) {
-    if !cache.try_start_refresh() {
+    if !cache.try_start_refresh(&cache_key) {
+        tracing::debug!(
+            provider = %request.provider,
+            cwd = request.working_directory.as_deref().unwrap_or(""),
+            model = request.model_id.as_deref().unwrap_or(""),
+            "Background slash command refresh skipped; another refresh is in flight"
+        );
         return; // another refresh already in flight
     }
 
+    tracing::debug!(
+        provider = %request.provider,
+        cwd = request.working_directory.as_deref().unwrap_or(""),
+        model = request.model_id.as_deref().unwrap_or(""),
+        "Background slash command refresh started"
+    );
+
     let app = app.clone();
     let request = request.clone();
+    let refresh_key = cache_key.clone();
 
     std::thread::Builder::new()
         .name("slash-cmd-refresh".into())
@@ -443,20 +529,13 @@ fn spawn_background_refresh(
             match fetch_from_sidecar(&sidecar_state, &request) {
                 Ok(commands) => {
                     tracing::debug!(
+                        provider = %request.provider,
+                        cwd = request.working_directory.as_deref().unwrap_or(""),
+                        model = request.model_id.as_deref().unwrap_or(""),
                         count = commands.len(),
                         "Background slash command refresh succeeded"
                     );
                     cache_state.set(cache_key, commands, true);
-
-                    // Notify the frontend so it can invalidate its React Query cache.
-                    let payload = serde_json::json!({
-                        "provider": request.provider,
-                        "cwd": request.working_directory.as_deref().unwrap_or(""),
-                        "model": request.model_id.as_deref().unwrap_or(""),
-                    });
-                    if let Err(e) = app.emit("slash-commands-refreshed", payload) {
-                        tracing::warn!("Failed to emit slash-commands-refreshed: {e}");
-                    }
                 }
                 Err(e) => {
                     // Don't clear the cache — stale local data is better than nothing.
@@ -464,11 +543,163 @@ fn spawn_background_refresh(
                 }
             }
 
-            cache_state.finish_refresh();
+            cache_state.finish_refresh(&refresh_key);
         })
         .ok();
 }
 
 fn open_write_connection() -> Result<rusqlite::Connection> {
     crate::models::db::open_connection(true)
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic model list
+// ---------------------------------------------------------------------------
+
+use super::catalog::{AgentModelOption, AgentModelSection};
+
+/// Per-provider cached model options. Each provider is cached independently
+/// so a transient failure in one doesn't wipe the other's good data.
+static CLAUDE_CACHE: Mutex<Vec<AgentModelOption>> = Mutex::new(Vec::new());
+static CODEX_CACHE: Mutex<Vec<AgentModelOption>> = Mutex::new(Vec::new());
+
+/// Fetch models from both providers via sidecar. Each provider's result is
+/// cached independently — if a provider fails, its last good cache is used.
+pub fn fetch_agent_model_sections(
+    sidecar: &crate::sidecar::ManagedSidecar,
+) -> Vec<AgentModelSection> {
+    let claude_models = resolve_with_cache(
+        fetch_models_for_provider(sidecar, "claude"),
+        &CLAUDE_CACHE,
+        "claude",
+    );
+    let codex_models = resolve_with_cache(
+        fetch_models_for_provider(sidecar, "codex"),
+        &CODEX_CACHE,
+        "codex",
+    );
+
+    vec![
+        AgentModelSection {
+            id: "claude".to_string(),
+            label: "Claude Code".to_string(),
+            options: claude_models,
+        },
+        AgentModelSection {
+            id: "codex".to_string(),
+            label: "Codex".to_string(),
+            options: codex_models,
+        },
+    ]
+}
+
+/// If `fresh` is non-empty, update the cache and return it.
+/// Otherwise return the last cached value.
+fn resolve_with_cache(
+    fresh: Vec<AgentModelOption>,
+    cache: &Mutex<Vec<AgentModelOption>>,
+    provider: &str,
+) -> Vec<AgentModelOption> {
+    let mut cached = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if !fresh.is_empty() {
+        *cached = fresh.clone();
+        fresh
+    } else if !cached.is_empty() {
+        tracing::info!(provider, "Using cached model list (fresh fetch failed)");
+        cached.clone()
+    } else {
+        vec![]
+    }
+}
+
+fn fetch_models_for_provider(
+    sidecar: &crate::sidecar::ManagedSidecar,
+    provider: &str,
+) -> Vec<AgentModelOption> {
+    let request_id = Uuid::new_v4().to_string();
+
+    let mut params = serde_json::Map::new();
+    params.insert("provider".into(), Value::String(provider.to_string()));
+
+    let sidecar_req = crate::sidecar::SidecarRequest {
+        id: request_id.clone(),
+        method: "listModels".to_string(),
+        params: Value::Object(params),
+    };
+
+    let rx = sidecar.subscribe(&request_id);
+    if let Err(e) = sidecar.send(&sidecar_req) {
+        sidecar.unsubscribe(&request_id);
+        tracing::warn!("listModels sidecar send failed for {provider}: {e}");
+        return vec![];
+    }
+
+    let timeout = std::time::Duration::from_secs(15);
+    let mut models: Vec<AgentModelOption> = Vec::new();
+
+    loop {
+        match rx.recv_timeout(timeout) {
+            Ok(event) => match event.event_type() {
+                "modelsListed" => {
+                    if let Some(entries) = event.raw.get("models").and_then(Value::as_array) {
+                        for entry in entries {
+                            let Some(id) = entry.get("id").and_then(Value::as_str) else {
+                                continue;
+                            };
+                            let label = entry
+                                .get("label")
+                                .and_then(Value::as_str)
+                                .unwrap_or(id)
+                                .to_string();
+                            let cli_model = entry
+                                .get("cliModel")
+                                .and_then(Value::as_str)
+                                .unwrap_or(id)
+                                .to_string();
+                            let effort_levels = entry
+                                .get("effortLevels")
+                                .and_then(Value::as_array)
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(Value::as_str)
+                                        .map(str::to_string)
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            models.push(AgentModelOption {
+                                id: id.to_string(),
+                                provider: provider.to_string(),
+                                label,
+                                cli_model,
+                                effort_levels,
+                            });
+                        }
+                    }
+                    tracing::info!(provider, count = models.len(), "Dynamic model list loaded");
+                    break;
+                }
+                "error" => {
+                    let msg = event
+                        .raw
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Unknown error");
+                    tracing::warn!("listModels failed for {provider}: {msg}");
+                    break;
+                }
+                _ => {}
+            },
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                tracing::warn!("listModels timed out for {provider}");
+                break;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                tracing::warn!("Sidecar disconnected while fetching models for {provider}");
+                break;
+            }
+        }
+    }
+
+    sidecar.unsubscribe(&request_id);
+    models
 }

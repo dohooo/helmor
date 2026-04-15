@@ -78,8 +78,8 @@ describe("normalizeElicitation", () => {
 					description: "",
 					required: false,
 					options: [
-						{ value: "sdk", label: "sdk" },
-						{ value: "mcp", label: "mcp" },
+						{ value: "sdk", label: "sdk", description: "" },
+						{ value: "mcp", label: "mcp", description: "" },
 					],
 					minItems: null,
 					maxItems: null,
@@ -138,5 +138,105 @@ describe("normalizeElicitation", () => {
 			url: "https://example.com/authorize",
 			host: "example.com",
 		});
+	});
+
+	it("normalizes number fields with min/max constraints", () => {
+		const result = normalizeElicitation(
+			createFormElicitation({
+				type: "object",
+				properties: {
+					count: {
+						type: "number",
+						title: "Item count",
+						minimum: 1,
+						maximum: 100,
+					},
+				},
+				required: ["count"],
+			}),
+		);
+
+		expect(result.kind).toBe("form");
+		if (result.kind === "form") {
+			expect(result.fields).toHaveLength(1);
+			expect(result.fields[0]).toEqual({
+				kind: "number",
+				key: "count",
+				label: "Item count",
+				description: "",
+				required: true,
+				minimum: 1,
+				maximum: 100,
+				defaultValue: "",
+			});
+		}
+	});
+
+	it("normalizes single-select (oneOf) fields", () => {
+		const result = normalizeElicitation(
+			createFormElicitation({
+				type: "object",
+				properties: {
+					color: {
+						type: "string",
+						title: "Favorite color",
+						oneOf: [
+							{ const: "red", title: "Red" },
+							{ const: "blue", title: "Blue" },
+							{ const: "green", title: "Green" },
+						],
+					},
+				},
+				required: ["color"],
+			}),
+		);
+
+		expect(result.kind).toBe("form");
+		if (result.kind === "form") {
+			expect(result.fields[0]).toMatchObject({
+				kind: "single-select",
+				key: "color",
+				label: "Favorite color",
+				options: [
+					{ value: "red", label: "Red" },
+					{ value: "blue", label: "Blue" },
+					{ value: "green", label: "Green" },
+				],
+			});
+		}
+	});
+
+	it("uses property key as label when title is missing", () => {
+		const result = normalizeElicitation(
+			createFormElicitation({
+				type: "object",
+				properties: {
+					myField: { type: "string" },
+				},
+				required: [],
+			}),
+		);
+
+		expect(result.kind).toBe("form");
+		if (result.kind === "form") {
+			expect(result.fields[0]?.label).toBe("myField");
+		}
+	});
+
+	it("marks non-required fields correctly", () => {
+		const result = normalizeElicitation(
+			createFormElicitation({
+				type: "object",
+				properties: {
+					optional_field: { type: "string", title: "Notes" },
+				},
+				required: [],
+			}),
+		);
+
+		expect(result.kind).toBe("form");
+		if (result.kind === "form") {
+			expect(result.fields[0]?.required).toBe(false);
+		}
 	});
 });

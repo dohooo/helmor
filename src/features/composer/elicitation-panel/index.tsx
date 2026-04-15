@@ -39,6 +39,7 @@ type FormResponseState = {
 	booleanValues: Record<string, boolean | null>;
 	singleSelectValues: Record<string, string | null>;
 	multiSelectValues: Record<string, string[]>;
+	otherValues: Record<string, string>;
 };
 
 type FieldValidationState = {
@@ -54,6 +55,7 @@ function buildInitialResponseState(
 		booleanValues: {},
 		singleSelectValues: {},
 		multiSelectValues: {},
+		otherValues: {},
 	};
 
 	for (const field of viewModel.fields) {
@@ -91,6 +93,12 @@ function getFieldValidationState(
 
 	if (field.kind === "single-select") {
 		const value = responses.singleSelectValues[field.key] ?? null;
+		if (value === "__other__") {
+			const otherText = (responses.otherValues[field.key] ?? "").trim();
+			return otherText.length === 0
+				? { blocking: true, message: "Enter a custom value." }
+				: { blocking: false, message: null };
+		}
 		return field.required && !value
 			? { blocking: true, message: "Choose one option to continue." }
 			: { blocking: false, message: null };
@@ -230,7 +238,12 @@ function buildResponseContent(
 			}
 			case "single-select": {
 				const value = responses.singleSelectValues[field.key] ?? null;
-				if (value) {
+				if (value === "__other__") {
+					const otherText = (responses.otherValues[field.key] ?? "").trim();
+					if (otherText) {
+						content[field.key] = otherText;
+					}
+				} else if (value) {
 					content[field.key] = value;
 				}
 				break;
@@ -334,6 +347,20 @@ function FormElicitationPanel({
 				},
 			};
 		});
+	}, []);
+
+	const updateOtherValue = useCallback((key: string, value: string) => {
+		setResponses((current) => ({
+			...current,
+			singleSelectValues: {
+				...current.singleSelectValues,
+				[key]: "__other__",
+			},
+			otherValues: {
+				...current.otherValues,
+				[key]: value,
+			},
+		}));
 	}, []);
 
 	const progressLabel = canSubmit
@@ -543,14 +570,16 @@ function FormElicitationPanel({
 									<button
 										type="button"
 										disabled={disabled}
-										onClick={() =>
-											currentField.kind === "single-select"
-												? updateSingleSelectValue(
-														currentField.key,
-														option.value,
-													)
-												: toggleMultiSelectValue(currentField.key, option.value)
-										}
+										onClick={() => {
+											if (currentField.kind === "single-select") {
+												updateSingleSelectValue(currentField.key, option.value);
+												if (fieldIndex < viewModel.fields.length - 1) {
+													setFieldIndex(fieldIndex + 1);
+												}
+											} else {
+												toggleMultiSelectValue(currentField.key, option.value);
+											}
+										}}
 										className="flex w-full items-start gap-2 text-left"
 									>
 										<span className="mt-0.5 shrink-0 text-muted-foreground">
@@ -575,21 +604,80 @@ function FormElicitationPanel({
 												/>
 											)}
 										</span>
-										<p className="text-[13px] font-medium text-foreground">
-											{option.label}
-										</p>
+										<div className="min-w-0 flex-1">
+											<p className="text-[13px] font-medium text-foreground">
+												{option.label}
+											</p>
+											{option.description ? (
+												<p className="mt-0.5 text-[12px] leading-5 text-muted-foreground">
+													{option.description}
+												</p>
+											) : null}
+										</div>
 									</button>
 								</div>
 							);
 						})}
+						{currentField.kind === "single-select" &&
+						currentField.allowOther ? (
+							<div
+								className={cn(
+									"rounded-lg px-2.5 py-2 transition-colors",
+									responses.singleSelectValues[currentField.key] === "__other__"
+										? "bg-accent/55"
+										: "hover:bg-accent/30",
+									disabled && "opacity-60",
+								)}
+							>
+								<div className="flex items-center gap-2">
+									<span className="mt-0.5 shrink-0 text-muted-foreground">
+										{responses.singleSelectValues[currentField.key] ===
+										"__other__" ? (
+											<CircleDot
+												className="size-3.5 text-foreground"
+												strokeWidth={1.9}
+											/>
+										) : (
+											<Circle
+												className="size-3.5 text-muted-foreground/60"
+												strokeWidth={1.9}
+											/>
+										)}
+									</span>
+									<Input
+										disabled={disabled}
+										placeholder="Other"
+										value={responses.otherValues[currentField.key] ?? ""}
+										onFocus={() => {
+											if (
+												responses.singleSelectValues[currentField.key] !==
+												"__other__"
+											) {
+												updateOtherValue(
+													currentField.key,
+													responses.otherValues[currentField.key] ?? "",
+												);
+											}
+										}}
+										onChange={(event) =>
+											updateOtherValue(currentField.key, event.target.value)
+										}
+										className="h-auto rounded-none border-0 !bg-transparent px-1 py-0.5 text-[13px] leading-5 shadow-none placeholder:text-muted-foreground/55 focus-visible:ring-0"
+									/>
+								</div>
+							</div>
+						) : null}
 					</div>
 				) : null}
 
-				{currentValidation?.message ? (
-					<p className="px-3 pt-1 text-[11px] leading-5 text-muted-foreground">
-						{currentValidation.message}
-					</p>
-				) : null}
+				<p
+					className={cn(
+						"px-3 pt-1 text-[11px] leading-5 min-h-5",
+						currentValidation?.message ? "text-muted-foreground" : "invisible",
+					)}
+				>
+					{currentValidation?.message || "\u00A0"}
+				</p>
 			</div>
 
 			<div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/30 px-1 pt-2">

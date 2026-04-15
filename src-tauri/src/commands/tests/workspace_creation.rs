@@ -36,14 +36,13 @@ fn create_workspace_from_repo_creates_ready_workspace_and_initial_session() {
         initialization_parent_branch,
         intended_target_branch,
         initialization_files_copied,
-        initialization_log_path,
         active_session_id,
-    ): (String, String, String, String, String, i64, String, String) = connection
+    ): (String, String, String, String, String, i64, String) = connection
         .query_row(
             r#"
             SELECT state, branch, placeholder_branch_name, initialization_parent_branch,
               intended_target_branch, initialization_files_copied,
-              initialization_log_path, active_session_id
+              active_session_id
             FROM workspaces WHERE id = ?1
             "#,
             [&response.created_workspace_id],
@@ -56,7 +55,6 @@ fn create_workspace_from_repo_creates_ready_workspace_and_initial_session() {
                     row.get(4)?,
                     row.get(5)?,
                     row.get(6)?,
-                    row.get(7)?,
                 ))
             },
         )
@@ -84,7 +82,6 @@ fn create_workspace_from_repo_creates_ready_workspace_and_initial_session() {
     assert_eq!(initialization_parent_branch, "main");
     assert_eq!(intended_target_branch, "main");
     assert!(initialization_files_copied > 0);
-    assert!(Path::new(&initialization_log_path).is_file());
     assert_eq!(session_title, "Untitled");
     assert_eq!(session_model, None, "new session should have no model");
     assert_eq!(

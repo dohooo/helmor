@@ -6,6 +6,7 @@ import {
 	FileText,
 	LoaderCircle,
 	Search,
+	Terminal,
 } from "lucide-react";
 import { memo, useEffect, useMemo, useState } from "react";
 import {
@@ -187,6 +188,8 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 		);
 	}
 
+	const hasFiles = (info.files?.length ?? 0) > 0;
+
 	if (compact) {
 		const detail = info.file ?? info.command ?? info.detail ?? null;
 		return (
@@ -251,6 +254,33 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 					</div>
 				) : null}
 			</details>
+			{hasFiles ? (
+				<div className="ml-5 flex flex-col gap-0.5 border-l border-border/30 pl-3">
+					{info.files!.map((f, i) => (
+						<div
+							key={`${f.name}-${i}`}
+							className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground"
+						>
+							<img
+								src={getMaterialFileIcon(f.name)}
+								alt=""
+								className="size-3.5 shrink-0"
+							/>
+							<span className="truncate">{f.name}</span>
+							{f.diffAdd != null || f.diffDel != null ? (
+								<span className="flex items-center gap-1 text-[11px]">
+									{f.diffAdd != null ? (
+										<span className="text-chart-2">+{f.diffAdd}</span>
+									) : null}
+									{f.diffDel != null ? (
+										<span className="text-destructive">-{f.diffDel}</span>
+									) : null}
+								</span>
+							) : null}
+						</div>
+					))}
+				</div>
+			) : null}
 			{isError === true ? <ToolCallErrorRow result={result} /> : null}
 		</>
 	);
@@ -542,6 +572,8 @@ export function CollapsedToolGroup({
 	const icon =
 		group.category === "search" ? (
 			<Search className={collapsedGroupIconClassName} strokeWidth={1.8} />
+		) : group.category === "shell" ? (
+			<Terminal className={collapsedGroupIconClassName} strokeWidth={1.8} />
 		) : (
 			<FileText className={collapsedGroupIconClassName} strokeWidth={1.8} />
 		);

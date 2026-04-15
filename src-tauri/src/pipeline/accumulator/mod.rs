@@ -1,23 +1,29 @@
 //! Stream accumulation: raw sidecar JSON events → IntermediateMessage snapshots.
 //!
-//! Replaces BOTH the TypeScript `StreamAccumulator` class AND the Rust
-//! `ClaudeOutputAccumulator` / `CodexOutputAccumulator` structs.
-//!
 //! Responsibilities (split across submodules):
 //! - `streaming` — Claude block-level streaming (content_block_*) +
 //!   `build_partial_*` snapshot constructors + Claude text extractors.
-//! - `codex` — Codex `item.*` synthesis (every supported `item.type`).
+//! - `codex` — Codex App Server event handling: delta accumulation,
+//!   camelCase→snake_case normalization, Claude-format synthesis.
 //! - This file — struct definition, public API, top-level `push_event`
-//!   dispatch, lifecycle (`finish_output`), the small Claude full-message
-//!   handlers (assistant/user/result/error/system/etc.), and the shared
+//!   dispatch, lifecycle, Claude full-message handlers, and the shared
 //!   collection helpers used by both submodules.
 
 mod codex;
 mod streaming;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
+
+fn now_ms() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+        * 1000.0
+}
 
 use super::types::{AgentUsage, CollectedTurn, IntermediateMessage, ParsedAgentOutput};
 use streaming::StreamingBlock;
@@ -121,14 +127,16 @@ pub struct StreamAccumulator {
     /// or Codex `turn.completed`), used by `sync_result_id`.
     result_collected_idx: Option<usize>,
 
-    // ── Codex partial tracking ──────────────────────────────────────
+    // ── Codex state ──────────────────────────────────────────────────
+    /// Per-item delta accumulation for Codex App Server streaming.
+    codex_items: HashMap<String, codex::CodexItemState>,
     /// Index into `collected[]` of the entry most recently written by
-    /// `collect_or_replace` during a Codex `item.started` /
-    /// `item.updated` event. Consumed by `build_codex_partial` to
-    /// render only the last-touched entry as a streaming partial,
-    /// matching Claude's `StreamingDelta` pattern. Cleared explicitly
-    /// on `item.completed` (Finalized) events.
+    /// `collect_or_replace`. Used by `build_codex_partial` to render
+    /// only the last-touched entry as a streaming partial.
     codex_partial_idx: Option<usize>,
+    /// Timestamp (ms since epoch) when the current Codex turn started.
+    /// Used to compute turn duration since the App Server doesn't provide it.
+    pub(super) codex_turn_started_at: Option<f64>,
 
     // ── Coverage guard ───────────────────────────────────────────────
     /// Top-level event types that fell through `push_event`'s match
@@ -224,7 +232,9 @@ impl StreamAccumulator {
             cur_asst_template: None,
             pending_turn_collected_idx: None,
             result_collected_idx: None,
+            codex_items: codex::new_item_states(),
             codex_partial_idx: None,
+            codex_turn_started_at: None,
             dropped_event_types: Vec::new(),
         }
     }
@@ -326,56 +336,75 @@ impl StreamAccumulator {
                 PushOutcome::Finalized
             }
 
-            // ── Codex item / turn events ───────────────────────────────
-            // `item.completed` is the terminal event — it persists to DB
-            // and needs a full adapter + collapse render pass (Finalized).
-            //
-            // `item.started` / `item.updated` are in-progress snapshots.
-            // They go through `collect_or_replace` which tracks the
-            // last-touched index in `codex_partial_idx`. Returning
-            // `StreamingDelta` lets `emit_partial` render only that
-            // single entry via `build_codex_partial`, matching Claude's
-            // lightweight partial-render pattern. This reduces full
-            // re-renders by ~60-75% per Codex turn.
-            Some("item.completed") => {
+            // ── Codex App Server item events ──────────────────────────
+            Some("item/completed") => {
                 codex::handle_item_completed(self, raw_line, value);
-                // Terminal event — clear the partial index so a stale
-                // entry from the completed handler's collect_or_replace
-                // call doesn't leak into the next StreamingDelta cycle.
                 self.codex_partial_idx = None;
                 PushOutcome::Finalized
             }
-            Some("item.started") | Some("item.updated") => {
-                codex::handle_item_snapshot(self, raw_line, value, false);
+            Some("item/started") => {
+                codex::handle_item_started(self, raw_line, value);
                 PushOutcome::StreamingDelta
             }
-            Some("turn.completed") => {
-                self.handle_turn_completed(value, raw_line);
-                PushOutcome::Finalized
+
+            // ── Codex App Server delta streaming ─────────────────────
+            Some("item/agentMessage/delta") => {
+                codex::handle_text_delta(self, value);
+                PushOutcome::StreamingDelta
             }
-            Some("turn.failed") => {
-                self.handle_codex_turn_failed(raw_line, value);
+            Some("item/commandExecution/outputDelta") => {
+                codex::handle_cmd_output_delta(self, value);
+                PushOutcome::StreamingDelta
+            }
+            Some("item/reasoning/textDelta") | Some("item/reasoning/summaryTextDelta") => {
+                codex::handle_reasoning_delta(self, value);
+                PushOutcome::StreamingDelta
+            }
+            Some("item/fileChange/outputDelta") => {
+                codex::handle_file_change_delta(self, value);
+                PushOutcome::StreamingDelta
+            }
+            Some("item/plan/delta") => {
+                codex::handle_plan_delta(self, value);
+                PushOutcome::StreamingDelta
+            }
+            Some("turn/plan/updated") => {
+                codex::handle_turn_plan_updated(self, raw_line, value);
                 PushOutcome::Finalized
             }
 
-            // ── No-op control / lifecycle markers ──────────────────────
-            // Codex turn-lifecycle marker. The SDK emits this immediately
-            // before the first item.* event; it carries no rendering
-            // content (the assistant text comes from item.completed
-            // /agent_message). Pure no-op.
-            Some("turn.started") => PushOutcome::NoOp,
-            // Codex thread lifecycle: only updates session_id (already
-            // captured above). No render impact.
-            Some("thread.started") | Some("thread.resumed") => {
-                if let Some(tid) = value.get("thread_id").and_then(Value::as_str) {
+            // ── Codex App Server turn/thread lifecycle ───────────────
+            Some("turn/completed") => {
+                codex::handle_turn_completed(self, raw_line, value);
+                PushOutcome::Finalized
+            }
+            Some("turn/started") => {
+                self.codex_turn_started_at = Some(now_ms());
+                PushOutcome::NoOp
+            }
+            Some("thread/started") => {
+                if let Some(tid) = value
+                    .get("thread")
+                    .and_then(|t| t.get("id"))
+                    .and_then(Value::as_str)
+                {
                     self.session_id = Some(tid.to_string());
                 }
                 PushOutcome::NoOp
             }
-            // Sidecar protocol control events. These are NOT SDK messages —
-            // they're framing markers the sidecar emits to signal terminal
-            // state. The agents.rs event loop reacts to them; the pipeline
-            // accumulator intentionally has nothing to render.
+
+            // ── Codex informational notifications (no render) ────────
+            Some("thread/status/changed")
+            | Some("thread/tokenUsage/updated")
+            | Some("thread/name/updated")
+            | Some("account/rateLimits/updated")
+            | Some("account/updated")
+            | Some("mcpServer/startupStatus/updated")
+            | Some("mcpServer/oauthLogin/completed")
+            | Some("model/rerouted")
+            | Some("configWarning") => PushOutcome::NoOp,
+
+            // Sidecar protocol control events.
             Some("end")
             | Some("aborted")
             | Some("ready")
@@ -607,6 +636,12 @@ impl StreamAccumulator {
         self.flush_assistant();
     }
 
+    /// Flush all in-progress Codex items as completed so they get persisted
+    /// on abort. No-op when no items are in flight.
+    pub fn flush_codex_in_progress(&mut self) {
+        codex::flush_in_progress(self);
+    }
+
     /// Convert any active streaming partial into a finalized assistant
     /// message so terminal notices can land after it in the rendered thread.
     /// Used by abort handling, where no final provider `assistant` event will
@@ -763,12 +798,7 @@ impl StreamAccumulator {
         self.finalize_blocks();
         self.collect_message(raw_line, value, "assistant", partial_id.as_deref());
 
-        // SDKAssistantMessage.error: turn-level failure category. Reshape
-        // into the same `{type: error, message}` envelope `handle_error`
-        // and `handle_codex_turn_failed` use, so the rendered output is
-        // identical regardless of which provider produced the failure.
-        // Frontend never branches on provider — both Claude assistant
-        // errors and Codex turn.failed flow through the same SystemNotice.
+        // Turn-level failure category → error envelope.
         if let Some(category) = value.get("error").and_then(Value::as_str) {
             let label = assistant_error_message(category);
             let synthetic = serde_json::json!({
@@ -815,32 +845,6 @@ impl StreamAccumulator {
 
     fn handle_error(&mut self, raw_line: &str, value: &Value) {
         self.collect_message(raw_line, value, "error", None);
-    }
-
-    /// Codex `turn.failed` carries `{error: {message}}`. Re-shape into a
-    /// generic `{type: error, message}` so it routes through the same
-    /// `build_error_label` path the Claude error events use, and persist
-    /// the original line so the historical loader can replay it.
-    fn handle_codex_turn_failed(&mut self, raw_line: &str, value: &Value) {
-        let message = value
-            .get("error")
-            .and_then(|e| e.get("message"))
-            .and_then(Value::as_str)
-            .unwrap_or("Codex turn failed")
-            .to_string();
-        let synthetic = serde_json::json!({
-            "type": "error",
-            "message": message,
-        });
-        let s = serde_json::to_string(&synthetic).unwrap_or_default();
-        self.collect_message(&s, &synthetic, "error", None);
-
-        self.turns.push(CollectedTurn {
-            id: uuid::Uuid::new_v4().to_string(),
-            role: "error".to_string(),
-            content_json: raw_line.to_string(),
-            collected_idx: None,
-        });
     }
 
     fn handle_rate_limit_event(&mut self, raw_line: &str, value: &Value) {
@@ -894,19 +898,6 @@ impl StreamAccumulator {
         });
         let s = serde_json::to_string(&synthetic).unwrap_or_default();
         self.collect_message(&s, &synthetic, "system", None);
-    }
-
-    fn handle_turn_completed(&mut self, value: &Value, raw_line: &str) {
-        // Persistence
-        if let Some(parsed_usage) = value.get("usage") {
-            self.usage.input_tokens = parsed_usage.get("input_tokens").and_then(Value::as_i64);
-            self.usage.output_tokens = parsed_usage.get("output_tokens").and_then(Value::as_i64);
-        }
-        self.result_json = Some(raw_line.to_string());
-
-        // Rendering — Codex equivalent of handle_result
-        self.result_collected_idx = Some(self.collected.len());
-        self.collect_message(raw_line, value, "assistant", None);
     }
 
     // =====================================================================
@@ -967,9 +958,8 @@ impl StreamAccumulator {
     }
 
     /// Collect a message OR replace the most recent existing entry whose
-    /// id matches `override_id`. Used by Codex item.* snapshots so a
-    /// later item.updated overwrites the earlier item.started/updated for
-    /// the same logical item, instead of pushing a new copy.
+    /// id matches `override_id`. Used by Codex items so a later snapshot
+    /// overwrites the earlier one for the same logical item.
     pub(super) fn collect_or_replace(
         &mut self,
         raw: &str,

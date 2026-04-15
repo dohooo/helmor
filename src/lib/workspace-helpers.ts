@@ -10,8 +10,7 @@ import type {
 	WorkspaceSummary,
 } from "./api";
 
-const DEFAULT_CLAUDE_MODEL_ID = "opus-1m";
-const DEFAULT_CODEX_MODEL_ID = "gpt-5.4";
+const DEFAULT_CLAUDE_MODEL_ID = "default";
 
 export function findInitialWorkspaceId(
 	groups: WorkspaceGroup[],
@@ -264,15 +263,27 @@ export function getComposerContextKey(
 export function inferDefaultModelId(
 	session: WorkspaceSessionSummary | null,
 	modelSections: AgentModelSection[],
+	settingsDefaultModelId?: string | null,
 ): string {
-	const preferredModelId = session?.model ?? null;
-	if (preferredModelId && findModelOption(modelSections, preferredModelId)) {
-		return preferredModelId;
+	// Existing session with history → respect whatever model it used
+	if (!isNewSession(session)) {
+		const sessionModel = session?.model ?? null;
+		if (sessionModel && findModelOption(modelSections, sessionModel)) {
+			return sessionModel;
+		}
 	}
 
-	return session?.agentType === "codex"
-		? DEFAULT_CODEX_MODEL_ID
-		: DEFAULT_CLAUDE_MODEL_ID;
+	// New session or no history → user setting takes priority
+	if (
+		settingsDefaultModelId &&
+		findModelOption(modelSections, settingsDefaultModelId)
+	) {
+		return settingsDefaultModelId;
+	}
+
+	// Ultimate fallback: first Claude model
+	const claudeSection = modelSections.find((s) => s.id === "claude");
+	return claudeSection?.options[0]?.id ?? DEFAULT_CLAUDE_MODEL_ID;
 }
 
 export function describeUnknownError(error: unknown, fallback: string): string {
@@ -398,23 +409,23 @@ const EFFORT_RANK: Record<string, number> = {
 	max: 4,
 };
 
+const DEFAULT_EFFORT_LEVELS = ["low", "medium", "high"];
+
 export function getAvailableEffortLevels(
 	modelId: string | null,
-	provider: string,
+	modelSections?: AgentModelSection[],
 ): string[] {
-	if (modelId === "gpt-5.1-codex-mini") return ["medium", "high"];
-	if (provider === "codex") return ["low", "medium", "high", "xhigh"];
-	if (modelId === "opus-1m" || modelId === "opus")
-		return ["low", "medium", "high", "max"];
-	return ["low", "medium", "high"];
+	if (!modelId || !modelSections) return DEFAULT_EFFORT_LEVELS;
+	const model = findModelOption(modelSections, modelId);
+	if (model?.effortLevels && model.effortLevels.length > 0) {
+		return [...model.effortLevels];
+	}
+	return DEFAULT_EFFORT_LEVELS;
 }
 
-export function clampEffortToModel(
-	rawEffort: string,
-	modelId: string | null,
-	provider: string,
-): string {
-	const available = getAvailableEffortLevels(modelId, provider);
+/** Clamp an effort level to the nearest available one. */
+export function clampEffort(rawEffort: string, available: string[]): string {
+	if (available.includes(rawEffort)) return rawEffort;
 	const rank = EFFORT_RANK[rawEffort] ?? 3;
 	const ranked = available.map((l) => ({
 		level: l,
@@ -426,5 +437,16 @@ export function clampEffortToModel(
 	return (
 		ranked.find((a) => a.rank === clamped)?.level ??
 		available[available.length - 1]!
+	);
+}
+
+export function clampEffortToModel(
+	rawEffort: string,
+	modelId: string | null,
+	modelSections?: AgentModelSection[],
+): string {
+	return clampEffort(
+		rawEffort,
+		getAvailableEffortLevels(modelId, modelSections),
 	);
 }

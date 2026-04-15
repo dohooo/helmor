@@ -1,7 +1,7 @@
 import "./App.css";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+
 import {
 	Check,
 	ChevronDown,
@@ -18,6 +18,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { ConductorOnboarding } from "@/components/conductor-onboarding";
+import { QuitConfirmDialog } from "@/components/quit-confirm-dialog";
 import { SplashScreen } from "@/components/splash-screen";
 import { Button } from "@/components/ui/button";
 import {
@@ -62,8 +63,8 @@ import {
 	listenGitBranchChanged,
 	listenGitRefsChanged,
 	openWorkspaceInEditor,
-	prefetchRemoteRefs,
 	setWorkspaceManualStatus,
+	triggerWorkspaceFetch,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "./lib/api";
@@ -176,9 +177,35 @@ function App() {
 							) {
 								return false;
 							}
+							if (key[0] === "slashCommands") {
+								return false;
+							}
+							// Workspace lists are fast local DB queries — always
+							// load fresh to avoid "ghost workspace" errors on startup.
+							if (
+								key[0] === "workspaceGroups" ||
+								key[0] === "archivedWorkspaces"
+							) {
+								return false;
+							}
 							return query.state.status === "success";
 						},
 					},
+				}}
+				onSuccess={() => {
+					// Discard any leftover workspace list data from older
+					// cache snapshots so we never select a ghost workspace.
+					queryClient.removeQueries({
+						queryKey: helmorQueryKeys.workspaceGroups,
+					});
+					queryClient.removeQueries({
+						queryKey: helmorQueryKeys.archivedWorkspaces,
+					});
+					// Cache restored — silently refresh model list from sidecar
+					// so stale persisted data gets updated without a loading flash.
+					void queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.agentModelSections,
+					});
 				}}
 			>
 				<AppShell onOpenSettings={() => setSettingsOpen(true)} />
@@ -205,7 +232,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const warmedWorkspaceIdsRef = useRef<Set<string>>(new Set());
 	const selectedWorkspaceIdRef = useRef<string | null>(null);
 	const selectedSessionIdRef = useRef<string | null>(null);
-	const sessionCloseShortcutRequestedAtRef = useRef(0);
+
 	const workspaceViewModeRef = useRef<"conversation" | "editor">(
 		"conversation",
 	);
@@ -713,6 +740,11 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 			const status = options?.fileStatus ?? "M";
 
+			// Background fetch so the next view reflects latest remote state
+			if (selectedWorkspaceId) {
+				triggerWorkspaceFetch(selectedWorkspaceId);
+			}
+
 			setWorkspaceViewMode("editor");
 			setEditorSession({
 				kind: "diff",
@@ -728,6 +760,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			confirmDiscardEditorChanges,
 			editorSession?.path,
 			pushWorkspaceToast,
+			selectedWorkspaceId,
 			workspaceRootPath,
 		],
 	);
@@ -962,6 +995,11 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			selectedSessionIdRef.current = immediateSessionId;
 			setSelectedWorkspaceId(workspaceId);
 			setSelectedSessionId(immediateSessionId);
+
+			if (workspaceId) {
+				triggerWorkspaceFetch(workspaceId);
+			}
+
 			// Session-level completed dots are cleared reactively via the
 			// displayedSessionId effect — only the actually-viewed session
 			// loses its dot, not every session in the workspace.
@@ -1363,11 +1401,11 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 		void import("@tauri-apps/api/event").then(({ listen }) => {
 			void listen("tauri://focus", async () => {
-				// Smart fetch: refresh remote refs for the active workspace
-				// so file tree diffs stay current after terminal pushes.
+				// Smart fetch: refresh target branch for the active workspace
+				// so file tree diffs stay current after the user returns.
 				const wsId = selectedWorkspaceIdRef.current;
 				if (wsId) {
-					prefetchRemoteRefs({ workspaceId: wsId }).catch(() => {});
+					triggerWorkspaceFetch(wsId);
 				}
 
 				try {
@@ -1429,33 +1467,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		queuePendingPromptForSession,
 	]);
 
-	useEffect(() => {
-		let disposed = false;
-		let unlisten: (() => void) | undefined;
-
-		void getCurrentWindow()
-			.onCloseRequested(async (event) => {
-				if (Date.now() - sessionCloseShortcutRequestedAtRef.current > 1_000) {
-					return;
-				}
-
-				sessionCloseShortcutRequestedAtRef.current = 0;
-				event.preventDefault();
-			})
-			.then((fn) => {
-				if (disposed) {
-					fn();
-					return;
-				}
-
-				unlisten = fn;
-			});
-
-		return () => {
-			disposed = true;
-			unlisten?.();
-		};
-	}, []);
+	// Close-confirmation is handled by <QuitConfirmDialog /> which registers
+	// its own onCloseRequested listener.  No need for a separate hook here.
 
 	useEffect(() => {
 		if (!isIdentityConnected || workspaceViewMode === "editor") {
@@ -1528,7 +1541,6 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 				return;
 			}
 
-			sessionCloseShortcutRequestedAtRef.current = Date.now();
 			event.preventDefault();
 			void handleCloseSelectedSession();
 		};
@@ -2020,6 +2032,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 					/>
 				</ComposerInsertProvider>
 			</WorkspaceToastProvider>
+			<QuitConfirmDialog sendingSessionIds={sendingSessionIds} />
 		</TooltipProvider>
 	);
 }

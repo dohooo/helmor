@@ -1,0 +1,5 @@
+{"type":"item/started","itemId":"msg1","item":{"type":"agentMessage","id":"msg1"}}
+{"type":"item/agentMessage/delta","itemId":"msg1","text":"Let me analyze "}
+{"type":"item/agentMessage/delta","itemId":"msg1","text":"the codebase."}
+{"type":"item/completed","itemId":"msg1","item":{"type":"agentMessage","id":"msg1","text":"Let me analyze the codebase."}}
+{"type":"turn/completed","turn":{"id":"t1","status":"completed"},"usage":{"input_tokens":100,"output_tokens":20}}

@@ -8,7 +8,6 @@
         "@anthropic-ai/claude-agent-sdk": "^0.2.92",
         "@anthropic-ai/claude-code": "2.1.96",
         "@openai/codex": "0.118.0",
-        "@openai/codex-sdk": "^0.118.0",
       },
       "devDependencies": {
         "@types/bun": "^1.3.11",
@@ -70,8 +69,6 @@
     "@openai/codex-linux-arm64": ["@openai/codex@0.118.0-linux-arm64", "", { "os": "linux", "cpu": "arm64" }, "sha512-YKWmIqLBu9mmBhN3JHQNkLzk0BtAtV6LBPvhnL5eeHkNrChvA6PKrhsjy0O7wvRkiByZY/1dD14qVdAUfxcbiA=="],
 
     "@openai/codex-linux-x64": ["@openai/codex@0.118.0-linux-x64", "", { "os": "linux", "cpu": "x64" }, "sha512-vzU2d/gwAmZbf/DnwVzfQiNN3Ri04XpaZiJkHElIvGoqFbdrxRQFYTtslGDISYIO3o+POADZcFZIfamFsZj9yQ=="],
-
-    "@openai/codex-sdk": ["@openai/codex-sdk@0.118.0", "", { "dependencies": { "@openai/codex": "0.118.0" } }, "sha512-cMisxx4CGQL44yv2USqdgcPhxPOhv227+CJiF9snn2X7nL+6wary4g38OknornjlrPob7LyzdIFB7dXqjkXKxg=="],
 
     "@openai/codex-win32-arm64": ["@openai/codex@0.118.0-win32-arm64", "", { "os": "win32", "cpu": "arm64" }, "sha512-AU7GPVFqd0Ml3P2OXfy6K6TONcxfCZLUh1zjYkkoPGWJ4A3BVMkOmMP9CAdSiQsnU/RQfdV/9IGqo1xwUQDdjA=="],
 

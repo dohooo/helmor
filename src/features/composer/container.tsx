@@ -12,11 +12,7 @@ import type {
 	AgentProvider,
 	SlashCommandEntry,
 } from "@/lib/api";
-import {
-	createSession,
-	listenSlashCommandsRefreshed,
-	saveAutoCloseActionKinds,
-} from "@/lib/api";
+import { createSession, saveAutoCloseActionKinds } from "@/lib/api";
 import { describeActionKind } from "@/lib/commit-button-prompts";
 import type {
 	ComposerCustomTag,
@@ -30,6 +26,7 @@ import {
 	workspaceDetailQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
+import { useSettings } from "@/lib/settings";
 import {
 	clampEffortToModel,
 	findModelOption,
@@ -130,6 +127,7 @@ export const WorkspaceComposerContainer = memo(
 		onPendingInsertRequestsConsumed,
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
+		const { settings } = useSettings();
 		const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
 		const workspaceDetailQuery = useQuery({
 			...workspaceDetailQueryOptions(displayedWorkspaceId ?? "__none__"),
@@ -141,6 +139,9 @@ export const WorkspaceComposerContainer = memo(
 		});
 
 		const modelSections = modelSectionsQuery.data ?? EMPTY_MODEL_SECTIONS;
+		const modelsLoading =
+			modelSectionsQuery.isLoading &&
+			modelSections.every((s) => s.options.length === 0);
 		const currentSession =
 			(sessionsQuery.data ?? []).find(
 				(session) => session.id === displayedSessionId,
@@ -149,9 +150,19 @@ export const WorkspaceComposerContainer = memo(
 			displayedWorkspaceId,
 			displayedSessionId,
 		);
+		// Only use cached model selection for session-level keys.
+		// Workspace-level keys are transient (pre-session-creation) and
+		// should always defer to the user's default setting.
+		const cachedModelId = composerContextKey.startsWith("session:")
+			? modelSelections[composerContextKey]
+			: undefined;
 		const selectedModelId =
-			modelSelections[composerContextKey] ??
-			inferDefaultModelId(currentSession, modelSections);
+			cachedModelId ??
+			inferDefaultModelId(
+				currentSession,
+				modelSections,
+				settings.defaultModelId,
+			);
 		const selectedModel = useMemo(
 			() => findModelOption(modelSections, selectedModelId),
 			[modelSections, selectedModelId],
@@ -174,18 +185,28 @@ export const WorkspaceComposerContainer = memo(
 		const effectiveSelectedModelId = effectiveModel?.id ?? selectedModelId;
 		const provider =
 			effectiveModel?.provider ?? currentSession?.agentType ?? "claude";
+		const cachedEffort = composerContextKey.startsWith("session:")
+			? effortLevels[composerContextKey]
+			: undefined;
+		// For new sessions, use user setting; for existing sessions with history, use session's effort
+		const sessionEffort =
+			(!isNewSession(currentSession) && currentSession?.effortLevel) || null;
 		const rawEffort =
-			effortLevels[composerContextKey] ?? currentSession?.effortLevel ?? "high";
+			cachedEffort ?? sessionEffort ?? settings.defaultEffort ?? "high";
 		const effortLevel = clampEffortToModel(
 			rawEffort,
 			effectiveSelectedModelId,
-			provider,
+			modelSections,
 		);
+		const cachedPermissionMode = composerContextKey.startsWith("session:")
+			? permissionModes[composerContextKey]
+			: undefined;
+		const sessionPermissionMode = !isNewSession(currentSession)
+			? currentSession?.permissionMode
+			: null;
 		const permissionMode =
-			permissionModes[composerContextKey] ??
-			(currentSession?.permissionMode === "plan"
-				? "plan"
-				: "bypassPermissions");
+			cachedPermissionMode ??
+			(sessionPermissionMode === "plan" ? "plan" : "bypassPermissions");
 		const effectivePermissionMode =
 			pendingOverrideActive && pendingPromptForSession?.permissionMode
 				? pendingPromptForSession.permissionMode
@@ -318,32 +339,6 @@ export const WorkspaceComposerContainer = memo(
 			void slashCommandsQuery.refetch();
 		}, [slashCommandsQuery]);
 
-		// Listen for background sidecar refresh completion → invalidate query
-		// so the popup updates with the full list (including built-in commands).
-		useEffect(() => {
-			let disposed = false;
-			let unlisten: (() => void) | undefined;
-			void listenSlashCommandsRefreshed(() => {
-				if (disposed) return;
-				void queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.slashCommands(
-						slashProvider,
-						workingDirectory,
-						selectedModelId,
-					),
-				});
-			}).then((fn) => {
-				if (disposed) {
-					fn();
-					return;
-				}
-				unlisten = fn;
-			});
-			return () => {
-				disposed = true;
-				unlisten?.();
-			};
-		}, [queryClient, slashProvider, workingDirectory, selectedModelId]);
 		const handleComposerSubmit = useCallback(
 			(
 				prompt: string,
@@ -539,6 +534,7 @@ export const WorkspaceComposerContainer = memo(
 					sending={sending}
 					selectedModelId={effectiveSelectedModelId}
 					modelSections={modelSections}
+					modelsLoading={modelsLoading}
 					onSelectModel={handleSelectModelInner}
 					provider={provider}
 					effortLevel={effortLevel}

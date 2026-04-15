@@ -13,7 +13,7 @@ import {
 	Search,
 	SquareTerminal,
 } from "lucide-react";
-import type { ToolInfo } from "./shared";
+import type { FileChangeInfo, ToolInfo } from "./shared";
 import { basename, isObj, str, truncate } from "./shared";
 
 const fallbackIcon = (
@@ -52,6 +52,47 @@ export function getToolInfo(
 			icon: <Pencil className={neutralToolIconClassName} strokeWidth={1.8} />,
 			diffAdd,
 			diffDel: diffDelete,
+		};
+	}
+
+	if (name === "apply_patch") {
+		const changes = Array.isArray(input.changes) ? input.changes : [];
+		const parsed = changes.filter(isObj).map((c) => {
+			const path = str(c.path);
+			const diff = typeof c.diff === "string" ? c.diff : "";
+			let add = 0;
+			let del = 0;
+			for (const line of diff.split("\n")) {
+				if (line.startsWith("+") && !line.startsWith("+++")) add++;
+				else if (line.startsWith("-") && !line.startsWith("---")) del++;
+			}
+			return {
+				name: path ? basename(path) : "unknown",
+				diffAdd: add || undefined,
+				diffDel: del || undefined,
+			} satisfies FileChangeInfo;
+		});
+		const totalAdd = parsed.reduce((s, f) => s + (f.diffAdd ?? 0), 0);
+		const totalDel = parsed.reduce((s, f) => s + (f.diffDel ?? 0), 0);
+		const icon = (
+			<Pencil className={neutralToolIconClassName} strokeWidth={1.8} />
+		);
+
+		if (parsed.length <= 1) {
+			return {
+				action: "Edit",
+				file: parsed[0]?.name,
+				icon,
+				diffAdd: totalAdd || undefined,
+				diffDel: totalDel || undefined,
+			};
+		}
+		return {
+			action: `Edit ${parsed.length} files`,
+			icon,
+			diffAdd: totalAdd || undefined,
+			diffDel: totalDel || undefined,
+			files: parsed,
 		};
 	}
 
@@ -120,10 +161,31 @@ export function getToolInfo(
 	}
 
 	if (name === "WebSearch") {
+		const icon = (
+			<Globe className={neutralToolIconClassName} strokeWidth={1.8} />
+		);
+		const action = isObj(input.action) ? input.action : null;
+		const actionType = action ? str(action.type) : null;
+		if (actionType === "openPage") {
+			const url = str(action!.url);
+			return {
+				action: "Open page",
+				icon,
+				detail: url ? truncate(url, 60) : undefined,
+			};
+		}
+		if (actionType === "findInPage") {
+			const pattern = str(action!.pattern) ?? str(action!.url);
+			return {
+				action: "Find in page",
+				icon,
+				detail: pattern ? truncate(pattern, 60) : undefined,
+			};
+		}
 		const query = str(input.query);
 		return {
 			action: "WebSearch",
-			icon: <Globe className={neutralToolIconClassName} strokeWidth={1.8} />,
+			icon,
 			detail: query ? truncate(query, 50) : undefined,
 		};
 	}

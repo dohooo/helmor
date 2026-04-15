@@ -1,0 +1,8 @@
+{"type":"item/started","itemId":"plan1","item":{"type":"plan","id":"plan1"}}
+{"type":"item/plan/delta","itemId":"plan1","delta":"Step 1: Read files\n"}
+{"type":"item/plan/delta","itemId":"plan1","delta":"Step 2: Write tests"}
+{"type":"item/completed","itemId":"plan1","item":{"type":"plan","id":"plan1","text":"Step 1: Read files\nStep 2: Write tests"}}
+{"type":"item/started","itemId":"msg1","item":{"type":"agentMessage","id":"msg1"}}
+{"type":"item/agentMessage/delta","itemId":"msg1","text":"I'll follow the plan."}
+{"type":"item/completed","itemId":"msg1","item":{"type":"agentMessage","id":"msg1","text":"I'll follow the plan."}}
+{"type":"turn/completed","turn":{"id":"t1","status":"completed"},"usage":{"input_tokens":200,"output_tokens":50}}

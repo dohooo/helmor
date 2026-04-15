@@ -180,6 +180,8 @@ pub enum TodoStatus {
 pub enum CollapseCategory {
     Search,
     Read,
+    /// Read-only shell commands executed via Bash/Run tools.
+    Shell,
     Mixed,
 }
 

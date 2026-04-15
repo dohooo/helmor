@@ -10,8 +10,9 @@
 
 import { createInterface } from "node:readline";
 import type { PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
+import { isAbortError } from "./abort.js";
 import { ClaudeSessionManager } from "./claude-session-manager.js";
-import { CodexSessionManager } from "./codex-session-manager.js";
+import { CodexAppServerManager } from "./codex-app-server-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
 import { errorDetails, logger } from "./logger.js";
 import {
@@ -28,9 +29,10 @@ import {
 import type { Provider, SessionManager } from "./session-manager.js";
 
 const claudeManager = new ClaudeSessionManager();
+const codexManager = new CodexAppServerManager();
 const managers: Record<Provider, SessionManager> = {
 	claude: claudeManager,
-	codex: new CodexSessionManager(),
+	codex: codexManager,
 };
 
 const emitter = createSidecarEmitter((event) => {
@@ -85,6 +87,10 @@ async function handleSendMessage(
 		await managers[provider].sendMessage(id, sendParams, emitter);
 		logger.debug(`[${id}] sendMessage completed`);
 	} catch (err) {
+		if (isAbortError(err)) {
+			logger.debug(`[${id}] sendMessage aborted by user`);
+			return;
+		}
 		const msg = errorMessage(err);
 		logger.error(`[${id}] sendMessage FAILED: ${msg}`, errorDetails(err));
 		emitter.error(id, msg);
@@ -117,6 +123,23 @@ async function handleGenerateTitle(
 	} catch (err) {
 		const msg = errorMessage(err);
 		logger.error(`[${id}] generateTitle FAILED: ${msg}`, errorDetails(err));
+		emitter.error(id, msg);
+	}
+}
+
+async function handleListModels(
+	id: string,
+	params: Record<string, unknown>,
+): Promise<void> {
+	try {
+		const provider = parseProvider(params.provider);
+		logger.debug(`[${id}] listModels`, { provider });
+		const models = await managers[provider].listModels();
+		emitter.modelsListed(id, provider, models);
+		logger.debug(`[${id}] listModels → ${models.length} entries (${provider})`);
+	} catch (err) {
+		const msg = errorMessage(err);
+		logger.error(`[${id}] listModels FAILED: ${msg}`, errorDetails(err));
 		emitter.error(id, msg);
 	}
 }
@@ -254,6 +277,9 @@ for await (const line of rl) {
 			case "listSlashCommands":
 				trackHandler(handleListSlashCommands(id, params));
 				break;
+			case "listModels":
+				trackHandler(handleListModels(id, params));
+				break;
 			case "stopSession":
 				await handleStopSession(id, params);
 				break;
@@ -269,12 +295,17 @@ for await (const line of rl) {
 				const message =
 					typeof params.message === "string" ? params.message : undefined;
 				logger.debug(`[${id}] permissionResponse`, { permissionId, behavior });
-				claudeManager.resolvePermission(
-					permissionId,
-					behavior,
-					updatedPermissions,
-					message,
-				);
+				// Route to the right provider — Codex permissions use "codex-" prefix
+				if (permissionId.startsWith("codex-")) {
+					codexManager.resolvePermission(permissionId, behavior);
+				} else {
+					claudeManager.resolvePermission(
+						permissionId,
+						behavior,
+						updatedPermissions,
+						message,
+					);
+				}
 				break;
 			}
 			case "elicitationResponse": {
@@ -289,6 +320,13 @@ for await (const line of rl) {
 					action,
 					...(content ? { content } : {}),
 				});
+				break;
+			}
+			case "userInputResponse": {
+				const userInputId = requireString(params, "userInputId");
+				const answers = params.answers ?? null;
+				logger.debug(`[${id}] userInputResponse`, { userInputId });
+				codexManager.resolveUserInput(userInputId, answers);
 				break;
 			}
 			case "deferredToolResponse": {

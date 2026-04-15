@@ -58,7 +58,7 @@ export type AgentModelOption = {
 	provider: AgentProvider;
 	label: string;
 	cliModel: string;
-	badge?: string | null;
+	effortLevels?: string[];
 };
 
 export type AgentModelSection = {
@@ -338,89 +338,6 @@ const DEFAULT_WORKSPACE_GROUPS: WorkspaceGroup[] = [
 	{ id: "canceled", label: "Canceled", tone: "canceled", rows: [] },
 ];
 
-const DEFAULT_AGENT_MODEL_SECTIONS: AgentModelSection[] = [
-	{
-		id: "claude",
-		label: "Claude Code",
-		options: [
-			{
-				id: "opus-1m",
-				provider: "claude",
-				label: "Opus 4.6 1M",
-				cliModel: "opus[1m]",
-				badge: "NEW",
-			},
-			{
-				id: "opus",
-				provider: "claude",
-				label: "Opus 4.6",
-				cliModel: "opus",
-			},
-			{
-				id: "sonnet",
-				provider: "claude",
-				label: "Sonnet 4.6",
-				cliModel: "sonnet",
-			},
-			{
-				id: "haiku",
-				provider: "claude",
-				label: "Haiku 4.5",
-				cliModel: "haiku",
-			},
-		],
-	},
-	{
-		id: "codex",
-		label: "Codex",
-		options: [
-			{
-				id: "gpt-5.4",
-				provider: "codex",
-				label: "GPT-5.4",
-				cliModel: "gpt-5.4",
-				badge: "NEW",
-			},
-			{
-				id: "gpt-5.4-mini",
-				provider: "codex",
-				label: "GPT-5.4-Mini",
-				cliModel: "gpt-5.4-mini",
-			},
-			{
-				id: "gpt-5.3-codex",
-				provider: "codex",
-				label: "GPT-5.3-Codex",
-				cliModel: "gpt-5.3-codex",
-			},
-			{
-				id: "gpt-5.2-codex",
-				provider: "codex",
-				label: "GPT-5.2-Codex",
-				cliModel: "gpt-5.2-codex",
-			},
-			{
-				id: "gpt-5.2",
-				provider: "codex",
-				label: "GPT-5.2",
-				cliModel: "gpt-5.2",
-			},
-			{
-				id: "gpt-5.1-codex-max",
-				provider: "codex",
-				label: "GPT-5.1-Codex-Max",
-				cliModel: "gpt-5.1-codex-max",
-			},
-			{
-				id: "gpt-5.1-codex-mini",
-				provider: "codex",
-				label: "GPT-5.1-Codex-Mini",
-				cliModel: "gpt-5.1-codex-mini",
-			},
-		],
-	},
-];
-
 export async function loadWorkspaceGroups(): Promise<WorkspaceGroup[]> {
 	try {
 		return await invoke<WorkspaceGroup[]>("list_workspace_groups");
@@ -539,6 +456,10 @@ export type DevResetResult = {
 	directoriesRemoved: string[];
 };
 
+export async function requestQuit(force: boolean): Promise<void> {
+	return await invoke("request_quit", { force });
+}
+
 export async function devResetAllData(): Promise<DevResetResult> {
 	return await invoke<DevResetResult>("dev_reset_all_data");
 }
@@ -631,10 +552,7 @@ export type SlashCommandsResponse = {
  * provider + workspace.
  *
  * The Rust backend returns local skills instantly from a disk scan and
- * fetches the full list (including built-in commands) from the sidecar in
- * the background.  When `isComplete` is `false`, a background refresh is
- * still in flight — listen for the `slash-commands-refreshed` event and
- * invalidate the query when it fires.
+ * refreshes the backend cache from the sidecar in the background.
  */
 export async function listSlashCommands(input: {
 	provider: AgentProvider;
@@ -654,12 +572,6 @@ export async function listSlashCommands(input: {
 			describeInvokeError(error, "Unable to load slash commands."),
 		);
 	}
-}
-
-export async function listenSlashCommandsRefreshed(
-	callback: () => void,
-): Promise<UnlistenFn> {
-	return listen("slash-commands-refreshed", () => callback());
 }
 
 export async function loadWorkspaceDetail(
@@ -866,6 +778,10 @@ export async function readEditorFile(
 			describeInvokeError(error, "Unable to open the selected file."),
 		);
 	}
+}
+
+export function triggerWorkspaceFetch(workspaceId: string): void {
+	void invoke("trigger_workspace_fetch", { workspaceId });
 }
 
 export async function readFileAtRef(
@@ -1270,10 +1186,15 @@ export async function saveAutoCloseOptInAsked(kinds: string[]): Promise<void> {
 
 export async function updateSessionSettings(
 	sessionId: string,
-	settings: { effortLevel?: string; permissionMode?: string },
+	settings: {
+		model?: string;
+		effortLevel?: string;
+		permissionMode?: string;
+	},
 ): Promise<void> {
 	await invoke("update_session_settings", {
 		sessionId,
+		model: settings.model ?? null,
 		effortLevel: settings.effortLevel ?? null,
 		permissionMode: settings.permissionMode ?? null,
 	});
@@ -1436,7 +1357,7 @@ export type MessagePart =
 
 export type CollapsedGroupPart = {
 	type: "collapsed-group";
-	category: "search" | "read" | "mixed";
+	category: "search" | "read" | "shell" | "mixed";
 	tools: ToolCallPart[];
 	active: boolean;
 	summary: string;
@@ -1679,13 +1600,15 @@ export type CreateSessionResponse = {
 
 export async function createSession(
 	workspaceId: string,
-	actionKind?: string | null,
-	permissionMode?: string | null,
+	options?: {
+		actionKind?: string | null;
+		permissionMode?: string | null;
+	},
 ): Promise<CreateSessionResponse> {
 	return invoke<CreateSessionResponse>("create_session", {
 		workspaceId,
-		actionKind: actionKind ?? null,
-		permissionMode: permissionMode ?? null,
+		actionKind: options?.actionKind ?? null,
+		permissionMode: options?.permissionMode ?? null,
 	});
 }
 
@@ -1824,7 +1747,7 @@ export async function stopRepoScript(
 	});
 }
 
-export { DEFAULT_AGENT_MODEL_SECTIONS, DEFAULT_WORKSPACE_GROUPS };
+export { DEFAULT_WORKSPACE_GROUPS };
 
 function describeInvokeError(error: unknown, fallback: string): string {
 	if (error instanceof Error && error.message.trim()) {

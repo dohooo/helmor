@@ -57,15 +57,14 @@ checkpoints:
     event_type: result
     roles:
       - assistant
-      - system
     last_part_types:
+      - tool-call
       - text
 final_state:
-  message_count: 2
+  message_count: 1
   roles:
     - assistant
-    - system
-  total_parts: 3
+  total_parts: 2
 persisted_turns:
   turn_count: 5
   total_blocks: 5

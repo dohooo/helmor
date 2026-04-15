@@ -67,15 +67,14 @@ type VirtualItem =
 	| { kind: "group-gap"; size: number }
 	| { kind: "bottom-padding" };
 
-const HEADER_HEIGHT = 34; // tighter header + minimal gap below
-const EMPTY_HEADER_HEIGHT = 24; // tighter header for empty groups
+const HEADER_HEIGHT = 34; // unified header height for all groups
 const ROW_HEIGHT = 32; // 30px (h-7.5) + 2px gap
 const GROUP_GAP = 8; // tighter gap between populated groups
 const EMPTY_GROUP_GAP = 8; // tighter spacing around empty groups
 const BOTTOM_PADDING = 8;
 
-function getGroupHeaderHeight(hasRows: boolean) {
-	return hasRows ? HEADER_HEIGHT : EMPTY_HEADER_HEIGHT;
+function getGroupHeaderHeight(_hasRows: boolean) {
+	return HEADER_HEIGHT;
 }
 
 function getGroupGapSize(previousHasRows: boolean, nextHasRows: boolean) {
@@ -171,7 +170,19 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		writeStoredSectionOpenState(sectionOpenState);
 	}, [sectionOpenState]);
 
+	// Auto-expand the group containing the selected workspace, but ONLY when
+	// the selection actually changes — not on every groups refetch (window
+	// focus, invalidation, status change). Without this guard, collapsed
+	// groups reopen whenever their data refreshes.
+	const lastAutoExpandedIdRef = useRef<string | null>(null);
 	useEffect(() => {
+		if (
+			!selectedWorkspaceId ||
+			selectedWorkspaceId === lastAutoExpandedIdRef.current
+		) {
+			return;
+		}
+
 		const selectedSectionId = findSelectedSectionId(
 			selectedWorkspaceId,
 			groups,
@@ -182,6 +193,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			return;
 		}
 
+		lastAutoExpandedIdRef.current = selectedWorkspaceId;
 		setSectionOpenState((current) =>
 			current[selectedSectionId]
 				? current
@@ -348,7 +360,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						type="button"
 						className={cn(
 							"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
-							isEmptyGroup ? "py-0.5" : "py-1",
+							"py-1",
 							item.canCollapse ? "cursor-pointer" : "cursor-default",
 						)}
 						data-empty-group={isEmptyGroup ? "true" : "false"}

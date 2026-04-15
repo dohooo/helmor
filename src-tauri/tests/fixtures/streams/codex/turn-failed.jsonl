@@ -1,0 +1,3 @@
+{"type":"item/started","itemId":"msg1","item":{"type":"agentMessage","id":"msg1"}}
+{"type":"item/agentMessage/delta","itemId":"msg1","text":"Starting work..."}
+{"type":"turn/completed","turn":{"id":"t1","status":"failed","error":{"message":"Rate limit exceeded"}}}

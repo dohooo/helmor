@@ -60,7 +60,7 @@ const MODEL_SECTIONS = [
 				provider: "claude",
 				label: "Opus 4.6 1M",
 				cliModel: "opus-1m",
-				badge: null,
+				effortLevels: ["low", "medium", "high", "max"],
 			},
 		],
 	},

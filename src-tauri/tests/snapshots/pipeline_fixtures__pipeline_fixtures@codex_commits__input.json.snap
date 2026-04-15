@@ -110,9 +110,3 @@ input_file: tests/fixtures/pipeline/codex_commits/input.json
   status:
     type: complete
     reason: stop
-- role: system
-  id: 2f846a36-9fb1-4c4b-aebd-4ceafb465564
-  createdAt: "2026-04-05T03:45:28.970Z"
-  content:
-    - type: text
-      text: Done

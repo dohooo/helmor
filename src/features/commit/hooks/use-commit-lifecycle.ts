@@ -185,7 +185,9 @@ export function useWorkspaceCommitLifecycle({
 			});
 
 			try {
-				const { sessionId } = await createSession(workspaceId, mode);
+				const { sessionId } = await createSession(workspaceId, {
+					actionKind: mode,
+				});
 				console.log("[commitButton] session created", { sessionId });
 
 				await queryClient.invalidateQueries({

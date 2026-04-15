@@ -5,8 +5,10 @@ import {
 	ClipboardList,
 	MessageSquareText,
 } from "lucide-react";
+import { Suspense } from "react";
 import type { ImagePart, PlanReviewPart, TodoListPart } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { LazyStreamdown } from "./streamdown-loader";
 
 export function TodoList({ part }: { part: TodoListPart }) {
 	if (part.items.length === 0) {
@@ -67,9 +69,19 @@ export function PlanReviewCard({ part }: { part: PlanReviewPart }) {
 					{part.planFilePath}
 				</p>
 			) : null}
-			<pre className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground">
-				{part.plan?.trim() || "No plan content."}
-			</pre>
+			<div className="conversation-markdown mt-2 max-w-none break-words text-[13px] leading-6 text-foreground">
+				<Suspense
+					fallback={
+						<pre className="whitespace-pre-wrap break-words">
+							{part.plan?.trim() || "No plan content."}
+						</pre>
+					}
+				>
+					<LazyStreamdown className="conversation-streamdown" mode="static">
+						{part.plan?.trim() || "No plan content."}
+					</LazyStreamdown>
+				</Suspense>
+			</div>
 			{(part.allowedPrompts ?? []).length > 0 ? (
 				<div className="mt-3 grid gap-2 rounded-lg border border-border/50 bg-muted/20 p-2.5">
 					<p className="text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">

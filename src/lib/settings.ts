@@ -11,6 +11,8 @@ export type AppSettings = {
 	notifications: boolean;
 	lastWorkspaceId: string | null;
 	lastSessionId: string | null;
+	defaultModelId: string | null;
+	defaultEffort: string | null;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -21,6 +23,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	notifications: true,
 	lastWorkspaceId: null,
 	lastSessionId: null,
+	defaultModelId: "default",
+	defaultEffort: "high",
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
@@ -33,6 +37,8 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	notifications: "app.notifications",
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
+	defaultModelId: "app.default_model_id",
+	defaultEffort: "app.default_effort",
 };
 
 export async function loadSettings(): Promise<AppSettings> {
@@ -59,6 +65,10 @@ export async function loadSettings(): Promise<AppSettings> {
 					: DEFAULT_SETTINGS.notifications,
 			lastWorkspaceId: raw[SETTINGS_KEY_MAP.lastWorkspaceId] || null,
 			lastSessionId: raw[SETTINGS_KEY_MAP.lastSessionId] || null,
+			defaultModelId:
+				raw[SETTINGS_KEY_MAP.defaultModelId] || DEFAULT_SETTINGS.defaultModelId,
+			defaultEffort:
+				raw[SETTINGS_KEY_MAP.defaultEffort] || DEFAULT_SETTINGS.defaultEffort,
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS };

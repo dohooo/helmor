@@ -15,6 +15,9 @@ mod shell_env;
 pub mod sidecar;
 pub mod workspace;
 
+#[cfg(test)]
+pub(crate) mod testkit;
+
 pub use git::ops as git_ops;
 pub use git::watcher as git_watcher;
 pub use github::auth;
@@ -28,18 +31,8 @@ pub use workspace::files as editor_files;
 pub use workspace::helpers;
 pub use workspace::workspaces;
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::path::BaseDirectory;
 use tauri::Manager;
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-
-/// Set once the user has confirmed quitting. Short-circuits the
-/// `CloseRequested` handler on the second pass so it skips the dialog.
-static SHUTDOWN_CONFIRMED: AtomicBool = AtomicBool::new(false);
-
-/// Set while the shutdown confirmation dialog is on screen. Prevents
-/// stacking duplicates from rapid-fire `CloseRequested` events.
-static SHUTDOWN_DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
 
 /// Initialise the database schema (call once at startup).
 pub fn schema_init(conn: &rusqlite::Connection) {
@@ -151,6 +144,13 @@ pub fn run() {
                 "Helmor started"
             );
 
+            // Purge workspaces whose directory was deleted outside the app.
+            match workspace::workspaces::purge_orphaned_workspaces() {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(count = n, "Purged orphaned workspaces"),
+                Err(e) => tracing::warn!("Failed to purge orphaned workspaces: {e:#}"),
+            }
+
             // On macOS, GUI-launched apps only see the minimal system PATH.
             // Capture the user's login-shell PATH (Homebrew, nvm, pnpm, cargo,
             // etc.) so every child process — sidecar, git, workspace scripts —
@@ -172,6 +172,8 @@ pub fn run() {
             // OAuth callback is now handled by a one-shot localhost HTTP
             // server spun up inside `start_github_oauth_redirect`, so no
             // deep-link `on_open_url` handler is needed here.
+
+            agents::prewarm_slash_command_cache(app.handle());
 
             // Start git filesystem watchers for all ready workspaces.
             let watcher_handle = app.handle().clone();
@@ -264,6 +266,7 @@ pub fn run() {
             commands::editor_commands::read_editor_file,
             commands::editor_commands::read_file_at_ref,
             commands::workspace_commands::set_workspace_manual_status,
+            commands::workspace_commands::trigger_workspace_fetch,
             commands::system_commands::detect_installed_editors,
             commands::system_commands::open_workspace_in_editor,
             commands::workspace_commands::permanently_delete_workspace,
@@ -276,6 +279,7 @@ pub fn run() {
             commands::conductor_commands::list_conductor_workspaces,
             commands::conductor_commands::import_conductor_workspaces,
             commands::system_commands::save_pasted_image,
+            commands::system_commands::request_quit,
             commands::system_commands::dev_reset_all_data,
             commands::settings_commands::update_app_settings,
             commands::session_commands::update_session_settings,
@@ -288,105 +292,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    // Hook `WindowEvent::CloseRequested` — not `ExitRequested`, which only
-    // fires after all windows are destroyed. The dialog is dispatched via
-    // the async `show(callback)` form; `blocking_show()` would freeze the
-    // app when called from the main thread.
-    app.run(|app_handle, event| {
-        let tauri::RunEvent::WindowEvent {
-            label,
-            event: tauri::WindowEvent::CloseRequested { api, .. },
-            ..
-        } = &event
-        else {
-            return;
-        };
-
-        // Second pass after the user confirmed — don't re-prompt.
-        if SHUTDOWN_CONFIRMED.load(Ordering::Acquire) {
-            tracing::debug!(window = %label, "CloseRequested — confirmed, letting through");
-            return;
-        }
-
-        let active = app_handle.state::<agents::ActiveStreams>();
-        let count = active.len();
-        tracing::info!(window = %label, count, "CloseRequested");
-
-        if count == 0 {
-            // Stop git filesystem watchers before tearing down the sidecar.
-            app_handle
-                .state::<git_watcher::GitWatcherManager>()
-                .shutdown();
-
-            // No active streams, but still shut down the sidecar cooperatively
-            // so Bun and any child CLIs get a chance to exit cleanly instead of
-            // being SIGKILL'd by the Drop impl.
-            let sidecar = app_handle.state::<sidecar::ManagedSidecar>();
-            sidecar.shutdown(
-                std::time::Duration::from_millis(500),
-                std::time::Duration::from_millis(200),
-            );
-            return;
-        }
-
-        // Streams in flight — keep the window open and ask the user.
-        api.prevent_close();
-
-        // Guard against duplicate dialogs from rapid-fire CloseRequested
-        // events (multiple windows, double Cmd+Q, etc.).
-        if SHUTDOWN_DIALOG_OPEN.swap(true, Ordering::AcqRel) {
-            tracing::debug!("Shutdown dialog already on screen, swallowing duplicate");
-            return;
-        }
-
-        let app_handle_clone = app_handle.clone();
-        let message = if count == 1 {
-            "There is 1 task in progress. Quitting now will cancel it.".to_string()
-        } else {
-            format!("There are {count} tasks in progress. Quitting now will cancel them.")
-        };
-
-        tracing::info!("Showing shutdown confirmation dialog");
-        app_handle
-            .dialog()
-            .message(message)
-            .title("Quit Helmor?")
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                "Quit anyway".to_string(),
-                "Cancel".to_string(),
-            ))
-            .show(move |confirmed| {
-                SHUTDOWN_DIALOG_OPEN.store(false, Ordering::Release);
-
-                if !confirmed {
-                    tracing::info!("Shutdown cancelled by user");
-                    return;
-                }
-
-                tracing::info!("User confirmed shutdown — aborting active streams");
-                app_handle_clone
-                    .state::<git_watcher::GitWatcherManager>()
-                    .shutdown();
-                // We're on a worker thread now, so the blocking helpers are
-                // safe to call.
-                let sidecar = app_handle_clone.state::<sidecar::ManagedSidecar>();
-                let active = app_handle_clone.state::<agents::ActiveStreams>();
-                agents::abort_all_active_streams_blocking(
-                    &sidecar,
-                    &active,
-                    std::time::Duration::from_millis(1500),
-                );
-                // Cooperative sidecar teardown — let bun close every live
-                // SDK Query so the spawned claude-code / codex CLIs get a
-                // chance to exit on their own. Ladder: shutdown RPC (2s) →
-                // SIGTERM (500ms) → SIGKILL via Drop.
-                sidecar.shutdown(
-                    std::time::Duration::from_millis(2000),
-                    std::time::Duration::from_millis(500),
-                );
-                SHUTDOWN_CONFIRMED.store(true, Ordering::Release);
-                tracing::info!("Shutdown cleanup done, calling exit(0)");
-                app_handle_clone.exit(0);
-            });
-    });
+    // The frontend's onCloseRequested always calls preventDefault(), so
+    // the JS layer never destroys the window on its own.  All quit logic
+    // lives in the `request_quit` Tauri command (called from the frontend
+    // quit-confirmation dialog).  Nothing to do here.
+    app.run(|_app_handle, _event| {});
 }

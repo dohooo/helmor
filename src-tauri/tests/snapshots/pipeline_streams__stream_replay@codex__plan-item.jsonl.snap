@@ -1,53 +1,51 @@
 ---
 source: tests/pipeline_streams.rs
 expression: snapshot
-input_file: tests/fixtures/streams/codex/error-item.jsonl
+input_file: tests/fixtures/streams/codex/plan-item.jsonl
 ---
-line_count: 5
+line_count: 8
 checkpoint_count: 3
 checkpoints:
-  - line_index: 2
-    event_type: item.completed
-    roles:
-      - assistant
-    last_part_types:
-      - text
   - line_index: 3
-    event_type: item.completed
+    event_type: item/completed
     roles:
       - assistant
-      - system
+    last_part_types:
+      - plan-review
+  - line_index: 6
+    event_type: item/completed
+    roles:
+      - assistant
+      - assistant
     last_part_types:
       - text
-  - line_index: 4
-    event_type: turn.completed
+  - line_index: 7
+    event_type: turn/completed
     roles:
       - assistant
-      - system
-      - system
+      - assistant
     last_part_types:
       - text
 final_state:
-  message_count: 3
+  message_count: 2
   roles:
     - assistant
-    - system
-    - system
-  total_parts: 3
+    - assistant
+  total_parts: 2
 persisted_turns:
   turn_count: 2
   total_blocks: 0
   turns:
     - role: assistant
       block_types: []
-    - role: error
+    - role: assistant
       block_types: []
 historical_render:
   message_count: 2
   messages:
     - role: assistant
       part_types:
-        - text
-    - role: system
+        - plan-review
+    - role: assistant
       part_types:
         - text

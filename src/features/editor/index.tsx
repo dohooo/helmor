@@ -102,10 +102,7 @@ export function WorkspaceEditorSurface({
 							)
 						: Promise.resolve(null)
 					: status !== "D"
-						? api
-								.readEditorFile(editorSession.path)
-								.then((r) => r.content)
-								.catch(() => null)
+						? api.readEditorFile(editorSession.path).then((r) => r.content)
 						: Promise.resolve(null);
 
 				const [original, modified] = await Promise.all([

@@ -61,6 +61,7 @@ vi.mock("./lib/api", async (importOriginal) => {
 		loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
 		loadSessionMessages: apiMocks.loadSessionThreadMessages,
 		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
+		requestQuit: vi.fn(),
 	};
 });
 
@@ -649,6 +650,7 @@ describe("App global navigation shortcuts", () => {
 		expect(apiMocks.hideSession).toHaveBeenCalledWith("session-done-1");
 		expect(apiMocks.deleteSession).not.toHaveBeenCalled();
 
+		// QuitConfirmDialog always prevents the JS-layer close.
 		const preventDefault = vi.fn();
 		await windowApiMocks.closeRequestedHandler?.({ preventDefault });
 

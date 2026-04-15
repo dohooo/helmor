@@ -1,0 +1,17 @@
+{"type":"thread/started","thread":{"id":"plan-thread-001","preview":"","ephemeral":false,"modelProvider":"openai","createdAt":1776190936,"updatedAt":1776190936,"status":{"type":"idle"},"cwd":"/tmp/test","cliVersion":"0.120.0","turns":[]},"session_id":"plan-thread-001"}
+{"type":"turn/started","turn":{"id":"turn-001","threadId":"plan-thread-001","status":"in_progress"},"session_id":"plan-thread-001"}
+{"type":"item/started","item":{"type":"reasoning","id":"reason-001"},"session_id":"plan-thread-001"}
+{"type":"item/reasoning/textDelta","itemId":"reason-001","delta":"Let me think about the plan...","session_id":"plan-thread-001"}
+{"type":"item/completed","item":{"type":"reasoning","id":"reason-001","text":"Let me think about the plan..."},"session_id":"plan-thread-001"}
+{"type":"item/started","item":{"type":"plan","id":"plan-001"},"session_id":"plan-thread-001"}
+{"type":"item/plan/delta","itemId":"plan-001","delta":"## Implementation Plan\n\n","session_id":"plan-thread-001"}
+{"type":"item/plan/delta","itemId":"plan-001","delta":"1. Read the existing code\n","session_id":"plan-thread-001"}
+{"type":"item/plan/delta","itemId":"plan-001","delta":"2. Add new feature\n","session_id":"plan-thread-001"}
+{"type":"item/plan/delta","itemId":"plan-001","delta":"3. Write tests\n","session_id":"plan-thread-001"}
+{"type":"item/completed","item":{"type":"plan","id":"plan-001","text":"## Implementation Plan\n\n1. Read the existing code\n2. Add new feature\n3. Write tests\n"},"session_id":"plan-thread-001"}
+{"type":"turn/plan/updated","turnId":"turn-001","plan":[{"step":"Read the existing code","status":"completed"},{"step":"Add new feature","status":"inProgress"},{"step":"Write tests","status":"pending"}],"session_id":"plan-thread-001"}
+{"type":"item/started","item":{"type":"agentMessage","id":"msg-001"},"session_id":"plan-thread-001"}
+{"type":"item/agentMessage/delta","itemId":"msg-001","delta":"I've read the code and I'm now implementing the feature.","session_id":"plan-thread-001"}
+{"type":"item/completed","item":{"type":"agentMessage","id":"msg-001","text":"I've read the code and I'm now implementing the feature."},"session_id":"plan-thread-001"}
+{"type":"turn/plan/updated","turnId":"turn-001","plan":[{"step":"Read the existing code","status":"completed"},{"step":"Add new feature","status":"completed"},{"step":"Write tests","status":"inProgress"}],"session_id":"plan-thread-001"}
+{"type":"turn/completed","turn":{"id":"turn-001","threadId":"plan-thread-001","status":"completed","usage":{"inputTokens":100,"outputTokens":200}},"session_id":"plan-thread-001"}

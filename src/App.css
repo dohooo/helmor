@@ -50,6 +50,9 @@ body {
 [data-sonner-toast][data-styled="true"]:has([data-button]) [data-content] {
 	flex: 1 0 100%;
 }
+[data-sonner-toast][data-styled="true"] [data-title] {
+	padding-right: 16px;
+}
 [data-sonner-toast][data-styled="true"] [data-button] {
 	margin-top: 4px;
 }
@@ -132,16 +135,17 @@ body {
 .helmor-shimmer-text {
 	color: transparent;
 	background-image: linear-gradient(
-		110deg,
-		color-mix(in oklch, var(--muted-foreground) 72%, transparent) 0%,
-		color-mix(in oklch, var(--foreground) 88%, transparent) 42%,
-		color-mix(in oklch, var(--muted-foreground) 72%, transparent) 68%
+		90deg,
+		color-mix(in oklch, var(--muted-foreground) 60%, transparent) 0%,
+		color-mix(in oklch, var(--muted-foreground) 60%, transparent) 35%,
+		color-mix(in oklch, var(--foreground) 85%, transparent) 50%,
+		color-mix(in oklch, var(--muted-foreground) 60%, transparent) 65%,
+		color-mix(in oklch, var(--muted-foreground) 60%, transparent) 100%
 	);
-	background-size: 220% 100%;
-	background-position: 100% 50%;
+	background-size: 300% 100%;
 	background-clip: text;
 	-webkit-background-clip: text;
-	animation: helmor-shimmer-sweep 1.9s linear infinite;
+	animation: helmor-shimmer-sweep 2.4s ease-in-out infinite;
 }
 
 .assistant-markdown-scale {
@@ -203,12 +207,11 @@ body {
 }
 
 @keyframes helmor-shimmer-sweep {
-	from {
+	0% {
 		background-position: 100% 50%;
 	}
-
-	to {
-		background-position: -120% 50%;
+	100% {
+		background-position: 0% 50%;
 	}
 }
 

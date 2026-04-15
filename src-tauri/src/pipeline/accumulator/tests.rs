@@ -154,12 +154,14 @@ fn full_assistant_clears_blocks() {
 fn codex_command_execution_synthesis() {
     let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
     let event = json!({
-        "type": "item.completed",
+        "type": "item/completed",
+        "itemId": "cmd1",
         "item": {
-            "type": "command_execution",
+            "type": "commandExecution",
+            "id": "cmd1",
             "command": "ls -la",
             "output": "file1.txt\nfile2.txt",
-            "exit_code": 0
+            "exitCode": 0
         }
     });
     let raw = serde_json::to_string(&event).unwrap();
@@ -557,9 +559,10 @@ fn delta_assistant_events_with_different_msg_id_flush_then_replace() {
 fn codex_todo_list_synthesizes_claude_todowrite_tool_use() {
     let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
     let event = json!({
-        "type": "item.completed",
+        "type": "item/completed",
+        "itemId": "todo_evt_1",
         "item": {
-            "type": "todo_list",
+            "type": "todoList",
             "id": "todo_evt_1",
             "items": [
                 {"text": "Plan the work", "completed": true},
@@ -684,9 +687,10 @@ fn mark_pending_tools_aborted_flips_claude_live_block() {
 fn mark_pending_tools_aborted_flips_codex_collected_tool_use() {
     let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
     let started = json!({
-        "type": "item.started",
+        "type": "item/started",
+        "itemId": "item1",
         "item": {
-            "type": "command_execution",
+            "type": "commandExecution",
             "id": "item1",
             "command": "sleep 60",
         }
@@ -715,21 +719,23 @@ fn mark_pending_tools_aborted_flips_codex_collected_tool_use() {
 fn mark_pending_tools_aborted_no_clobber_when_tool_result_present() {
     let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
     let completed = json!({
-        "type": "item.completed",
+        "type": "item/completed",
+        "itemId": "item1",
         "item": {
-            "type": "command_execution",
+            "type": "commandExecution",
             "id": "item1",
             "command": "ls",
-            "exit_code": 0,
-            "aggregated_output": "file.txt",
+            "exitCode": 0,
+            "aggregatedOutput": "file.txt",
         }
     });
     acc.push_event(&completed, &completed.to_string());
 
     let running = json!({
-        "type": "item.started",
+        "type": "item/started",
+        "itemId": "item2",
         "item": {
-            "type": "command_execution",
+            "type": "commandExecution",
             "id": "item2",
             "command": "sleep 60",
         }
@@ -798,9 +804,10 @@ fn abort_end_to_end_contract() {
     let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
 
     let started = json!({
-        "type": "item.started",
+        "type": "item/started",
+        "itemId": "item1",
         "item": {
-            "type": "command_execution",
+            "type": "commandExecution",
             "id": "item1",
             "command": "sleep 60",
         }
@@ -1100,15 +1107,9 @@ fn turn_ids_are_unique_across_turns() {
 // Codex vs Claude full-render frequency comparison.
 //
 // These tests quantify the core architectural difference: Codex fires
-// `PushOutcome::Finalized` on every single item event (started, updated,
-// completed), while Claude reserves `Finalized` for terminal events and
-// uses `StreamingDelta` for mid-stream deltas.
-//
-// Each `Finalized` triggers a full adapter + collapse render pass and a
-// complete message-array IPC to the frontend, causing the virtual
-// scroller to recalculate ALL row positions. Excessive full renders with
-// stale height measurements produce the text-overlap bug observed only
-// in Codex sessions.
+// `PushOutcome::Finalized` on terminal item events (item/completed,
+// turn/completed), while in-progress events (item/started, deltas)
+// use `StreamingDelta`, matching Claude's pattern.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1259,10 +1260,11 @@ fn codex_streaming_fires_finalized_on_every_event() {
     let mut finalized_count = 0u32;
     let mut streaming_delta_count = 0u32;
 
-    // 1. agent_message item.started
+    // 1. agent_message item/started
     let event = json!({
-        "type": "item.started",
-        "item": {"type": "agent_message", "id": "msg1", "text": ""}
+        "type": "item/started",
+        "itemId": "msg1",
+        "item": {"type": "agentMessage", "id": "msg1", "text": ""}
     });
     let outcome = acc.push_event(&event, &event.to_string());
     match outcome {
@@ -1271,10 +1273,11 @@ fn codex_streaming_fires_finalized_on_every_event() {
         _ => {}
     }
 
-    // 2. agent_message item.updated (partial text)
+    // 2. agent_message delta (replaces item.updated)
     let event = json!({
-        "type": "item.updated",
-        "item": {"type": "agent_message", "id": "msg1", "text": "Let me analyze..."}
+        "type": "item/agentMessage/delta",
+        "itemId": "msg1",
+        "delta": "Let me analyze..."
     });
     let outcome = acc.push_event(&event, &event.to_string());
     match outcome {
@@ -1283,10 +1286,11 @@ fn codex_streaming_fires_finalized_on_every_event() {
         _ => {}
     }
 
-    // 3. agent_message item.completed
+    // 3. agent_message item/completed
     let event = json!({
-        "type": "item.completed",
-        "item": {"type": "agent_message", "id": "msg1", "text": "Let me analyze the codebase."}
+        "type": "item/completed",
+        "itemId": "msg1",
+        "item": {"type": "agentMessage", "id": "msg1", "text": "Let me analyze the codebase."}
     });
     let outcome = acc.push_event(&event, &event.to_string());
     match outcome {
@@ -1295,10 +1299,11 @@ fn codex_streaming_fires_finalized_on_every_event() {
         _ => {}
     }
 
-    // 4. command_execution item.started (command running)
+    // 4. command_execution item/started
     let event = json!({
-        "type": "item.started",
-        "item": {"type": "command_execution", "id": "cmd1", "command": "ls -la"}
+        "type": "item/started",
+        "itemId": "cmd1",
+        "item": {"type": "commandExecution", "id": "cmd1", "command": "ls -la"}
     });
     let outcome = acc.push_event(&event, &event.to_string());
     match outcome {
@@ -1307,15 +1312,16 @@ fn codex_streaming_fires_finalized_on_every_event() {
         _ => {}
     }
 
-    // 5. command_execution item.completed
+    // 5. command_execution item/completed
     let event = json!({
-        "type": "item.completed",
+        "type": "item/completed",
+        "itemId": "cmd1",
         "item": {
-            "type": "command_execution",
+            "type": "commandExecution",
             "id": "cmd1",
             "command": "ls -la",
-            "exit_code": 0,
-            "aggregated_output": "file1.txt\nfile2.txt"
+            "exitCode": 0,
+            "aggregatedOutput": "file1.txt\nfile2.txt"
         }
     });
     let outcome = acc.push_event(&event, &event.to_string());
@@ -1325,10 +1331,11 @@ fn codex_streaming_fires_finalized_on_every_event() {
         _ => {}
     }
 
-    // 6. Second agent_message item.started
+    // 6. Second agent_message item/started
     let event = json!({
-        "type": "item.started",
-        "item": {"type": "agent_message", "id": "msg2", "text": ""}
+        "type": "item/started",
+        "itemId": "msg2",
+        "item": {"type": "agentMessage", "id": "msg2", "text": ""}
     });
     let outcome = acc.push_event(&event, &event.to_string());
     match outcome {
@@ -1337,10 +1344,11 @@ fn codex_streaming_fires_finalized_on_every_event() {
         _ => {}
     }
 
-    // 7. Second agent_message item.completed
+    // 7. Second agent_message item/completed
     let event = json!({
-        "type": "item.completed",
-        "item": {"type": "agent_message", "id": "msg2", "text": "The directory contains two files."}
+        "type": "item/completed",
+        "itemId": "msg2",
+        "item": {"type": "agentMessage", "id": "msg2", "text": "The directory contains two files."}
     });
     let outcome = acc.push_event(&event, &event.to_string());
     match outcome {
@@ -1349,8 +1357,8 @@ fn codex_streaming_fires_finalized_on_every_event() {
         _ => {}
     }
 
-    // 8. turn.completed
-    let event = json!({"type": "turn.completed"});
+    // 8. turn/completed
+    let event = json!({"type": "turn/completed", "turn": {"id": "t1", "status": "completed"}});
     let outcome = acc.push_event(&event, &event.to_string());
     match outcome {
         PushOutcome::Finalized => finalized_count += 1,
@@ -1358,33 +1366,34 @@ fn codex_streaming_fires_finalized_on_every_event() {
         _ => {}
     }
 
-    // After the fix: item.started and item.updated use StreamingDelta,
-    // only item.completed and turn.completed use Finalized.
-    // Events: started(msg1)=SD, updated(msg1)=SD, completed(msg1)=F,
+    // item/started and item/agentMessage/delta use StreamingDelta,
+    // only item/completed and turn/completed use Finalized.
+    // Events: started(msg1)=SD, delta(msg1)=SD, completed(msg1)=F,
     //         started(cmd1)=SD, completed(cmd1)=F,
-    //         started(msg2)=SD, completed(msg2)=F, turn.completed=F
+    //         started(msg2)=SD, completed(msg2)=F, turn/completed=F
     assert_eq!(
         streaming_delta_count, 4,
-        "item.started and item.updated should be StreamingDelta"
+        "item/started and delta events should be StreamingDelta"
     );
     assert_eq!(
         finalized_count, 4,
-        "Only item.completed and turn.completed should be Finalized"
+        "Only item/completed and turn/completed should be Finalized"
     );
 }
 
-/// Verify that item.started and item.updated return StreamingDelta
-/// while item.completed stays Finalized, matching Claude's pattern.
+/// Verify that item/started and delta events return StreamingDelta
+/// while item/completed stays Finalized, matching Claude's pattern.
 #[test]
 fn codex_fixed_uses_streaming_delta_for_in_progress_items() {
     let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
     let mut finalized_count = 0u32;
     let mut streaming_delta_count = 0u32;
 
-    // item.started → should be StreamingDelta after fix
+    // item/started -> StreamingDelta
     let event = json!({
-        "type": "item.started",
-        "item": {"type": "command_execution", "id": "cmd1", "command": "ls"}
+        "type": "item/started",
+        "itemId": "cmd1",
+        "item": {"type": "commandExecution", "id": "cmd1", "command": "ls"}
     });
     let outcome = acc.push_event(&event, &event.to_string());
     match outcome {
@@ -1393,10 +1402,11 @@ fn codex_fixed_uses_streaming_delta_for_in_progress_items() {
         _ => {}
     }
 
-    // item.updated → should be StreamingDelta after fix
+    // output delta -> StreamingDelta (replaces item.updated)
     let event = json!({
-        "type": "item.updated",
-        "item": {"type": "command_execution", "id": "cmd1", "command": "ls"}
+        "type": "item/commandExecution/outputDelta",
+        "itemId": "cmd1",
+        "delta": "file.txt\n"
     });
     let outcome = acc.push_event(&event, &event.to_string());
     match outcome {
@@ -1405,15 +1415,16 @@ fn codex_fixed_uses_streaming_delta_for_in_progress_items() {
         _ => {}
     }
 
-    // item.completed → stays Finalized (terminal event, like Claude's assistant)
+    // item/completed -> Finalized (terminal event, like Claude's assistant)
     let event = json!({
-        "type": "item.completed",
+        "type": "item/completed",
+        "itemId": "cmd1",
         "item": {
-            "type": "command_execution",
+            "type": "commandExecution",
             "id": "cmd1",
             "command": "ls",
-            "exit_code": 0,
-            "aggregated_output": "file.txt"
+            "exitCode": 0,
+            "aggregatedOutput": "file.txt"
         }
     });
     let outcome = acc.push_event(&event, &event.to_string());
@@ -1423,14 +1434,475 @@ fn codex_fixed_uses_streaming_delta_for_in_progress_items() {
         _ => {}
     }
 
-    // Post-fix expectation: 2 StreamingDelta + 1 Finalized
+    // 2 StreamingDelta + 1 Finalized
     // (matching Claude's pattern: deltas are light, only terminal is full)
     assert_eq!(
         streaming_delta_count, 2,
-        "item.started and item.updated should be StreamingDelta"
+        "item/started and delta events should be StreamingDelta"
     );
     assert_eq!(
         finalized_count, 1,
-        "Only item.completed should be Finalized"
+        "Only item/completed should be Finalized"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Codex delta-based accumulation — item/started → deltas → item/completed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn codex_text_delta_accumulates_into_agent_message() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+
+    // item/started
+    acc.push_event(
+        &json!({
+            "type": "item/started",
+            "itemId": "msg1",
+            "item": {"type": "agentMessage", "id": "msg1"}
+        }),
+        "",
+    );
+
+    // text deltas
+    acc.push_event(
+        &json!({
+            "type": "item/agentMessage/delta",
+            "itemId": "msg1",
+            "text": "Hello "
+        }),
+        "",
+    );
+    acc.push_event(
+        &json!({
+            "type": "item/agentMessage/delta",
+            "itemId": "msg1",
+            "text": "world"
+        }),
+        "",
+    );
+
+    // Mid-stream snapshot should show accumulated text
+    let snapshot = acc.snapshot("ctx", "sess");
+    assert_eq!(snapshot.len(), 1);
+    let parsed = snapshot[0].parsed.as_ref().unwrap();
+    let item = &parsed["item"];
+    assert_eq!(item["type"].as_str(), Some("agent_message"));
+    assert_eq!(item["text"].as_str(), Some("Hello world"));
+}
+
+#[test]
+fn codex_command_output_delta_accumulates() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+
+    acc.push_event(
+        &json!({
+            "type": "item/started",
+            "itemId": "cmd1",
+            "item": {"type": "commandExecution", "id": "cmd1", "command": "ls -la"}
+        }),
+        "",
+    );
+
+    acc.push_event(
+        &json!({
+            "type": "item/commandExecution/outputDelta",
+            "itemId": "cmd1",
+            "output": "file1.txt\n"
+        }),
+        "",
+    );
+    acc.push_event(
+        &json!({
+            "type": "item/commandExecution/outputDelta",
+            "itemId": "cmd1",
+            "output": "file2.txt\n"
+        }),
+        "",
+    );
+
+    let snapshot = acc.snapshot("ctx", "sess");
+    // Should have a synthetic Bash tool_use in the snapshot
+    assert!(!snapshot.is_empty());
+    let asst = snapshot.iter().find(|m| m.role == "assistant").unwrap();
+    let block = &asst.parsed.as_ref().unwrap()["message"]["content"][0];
+    assert_eq!(block["name"].as_str(), Some("Bash"));
+    assert_eq!(block["input"]["command"].as_str(), Some("ls -la"));
+}
+
+#[test]
+fn codex_reasoning_delta_accumulates() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+
+    acc.push_event(
+        &json!({
+            "type": "item/started",
+            "itemId": "r1",
+            "item": {"type": "reasoning", "id": "r1"}
+        }),
+        "",
+    );
+
+    acc.push_event(
+        &json!({
+            "type": "item/reasoning/textDelta",
+            "itemId": "r1",
+            "text": "Let me think "
+        }),
+        "",
+    );
+    acc.push_event(
+        &json!({
+            "type": "item/reasoning/textDelta",
+            "itemId": "r1",
+            "text": "about this..."
+        }),
+        "",
+    );
+
+    let snapshot = acc.snapshot("ctx", "sess");
+    assert_eq!(snapshot.len(), 1);
+    let parsed = snapshot[0].parsed.as_ref().unwrap();
+    let thinking = &parsed["message"]["content"][0];
+    assert_eq!(thinking["type"].as_str(), Some("thinking"));
+    assert_eq!(
+        thinking["thinking"].as_str(),
+        Some("Let me think about this...")
+    );
+}
+
+#[test]
+fn codex_plan_delta_accumulates() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+
+    acc.push_event(
+        &json!({
+            "type": "item/started",
+            "itemId": "plan1",
+            "item": {"type": "plan", "id": "plan1"}
+        }),
+        "",
+    );
+
+    acc.push_event(
+        &json!({
+            "type": "item/plan/delta",
+            "itemId": "plan1",
+            "delta": "Step 1: Read files\n"
+        }),
+        "",
+    );
+    acc.push_event(
+        &json!({
+            "type": "item/plan/delta",
+            "itemId": "plan1",
+            "delta": "Step 2: Write tests"
+        }),
+        "",
+    );
+
+    let snapshot = acc.snapshot("ctx", "sess");
+    assert_eq!(snapshot.len(), 1);
+    let parsed = snapshot[0].parsed.as_ref().unwrap();
+    let item = &parsed["item"];
+    assert_eq!(item["type"].as_str(), Some("plan"));
+    assert_eq!(
+        item["text"].as_str(),
+        Some("Step 1: Read files\nStep 2: Write tests")
+    );
+}
+
+#[test]
+fn codex_item_completed_clears_delta_state() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+
+    // Start and accumulate
+    acc.push_event(
+        &json!({
+            "type": "item/started",
+            "itemId": "msg1",
+            "item": {"type": "agentMessage", "id": "msg1"}
+        }),
+        "",
+    );
+    acc.push_event(
+        &json!({
+            "type": "item/agentMessage/delta",
+            "itemId": "msg1",
+            "text": "Hello"
+        }),
+        "",
+    );
+
+    // Complete — should clear delta state for this item
+    let completed = json!({
+        "type": "item/completed",
+        "itemId": "msg1",
+        "item": {"type": "agentMessage", "id": "msg1", "text": "Hello world"}
+    });
+    acc.push_event(&completed, &completed.to_string());
+
+    // Should persist a turn
+    assert!(acc.turns_len() > 0);
+    let turn = acc.turn_at(acc.turns_len() - 1);
+    assert_eq!(turn.role, "assistant");
+}
+
+#[test]
+fn codex_turn_completed_extracts_usage_tokens() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+
+    // Push a message first
+    let msg = json!({
+        "type": "item/completed",
+        "itemId": "msg1",
+        "item": {"type": "agentMessage", "id": "msg1", "text": "Done"}
+    });
+    acc.push_event(&msg, &msg.to_string());
+
+    // turn/completed with usage
+    let turn = json!({
+        "type": "turn/completed",
+        "turn": {"id": "t1", "status": "completed"},
+        "usage": {"input_tokens": 1500, "output_tokens": 300}
+    });
+    acc.push_event(&turn, &turn.to_string());
+
+    let output = acc.drain_output(Some("sess"));
+    assert_eq!(output.usage.input_tokens, Some(1500));
+    assert_eq!(output.usage.output_tokens, Some(300));
+}
+
+#[test]
+fn codex_turn_failed_produces_error_message() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+
+    let event = json!({
+        "type": "turn/completed",
+        "turn": {
+            "id": "t1",
+            "status": "failed",
+            "error": {"message": "Rate limit exceeded"}
+        }
+    });
+    acc.push_event(&event, &event.to_string());
+
+    let snapshot = acc.snapshot("ctx", "sess");
+    assert!(!snapshot.is_empty());
+    let err = snapshot.iter().find(|m| m.role == "error").unwrap();
+    let parsed = err.parsed.as_ref().unwrap();
+    assert_eq!(parsed["type"].as_str(), Some("error"));
+    assert_eq!(parsed["message"].as_str(), Some("Rate limit exceeded"));
+}
+
+#[test]
+fn codex_normalize_camel_case_item_types() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+
+    // Push camelCase items and verify they're normalized
+    let event = json!({
+        "type": "item/completed",
+        "itemId": "cmd1",
+        "item": {
+            "type": "commandExecution",
+            "id": "cmd1",
+            "command": "echo hi",
+            "exitCode": 0,
+            "aggregatedOutput": "hi"
+        }
+    });
+    acc.push_event(&event, &event.to_string());
+
+    // The persisted turn should have snake_case fields
+    assert!(acc.turns_len() > 0);
+    let turn = acc.turn_at(acc.turns_len() - 1);
+    let parsed: Value = serde_json::from_str(&turn.content_json).unwrap();
+    let item = &parsed["item"];
+    assert_eq!(item["type"].as_str(), Some("command_execution"));
+    assert_eq!(item["exit_code"].as_i64(), Some(0));
+    assert_eq!(item["aggregated_output"].as_str(), Some("hi"));
+}
+
+#[test]
+fn codex_flush_in_progress_drains_delta_items() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+
+    // Start items but don't complete them
+    acc.push_event(
+        &json!({
+            "type": "item/started",
+            "itemId": "msg1",
+            "item": {"type": "agentMessage", "id": "msg1"}
+        }),
+        "",
+    );
+    acc.push_event(
+        &json!({
+            "type": "item/agentMessage/delta",
+            "itemId": "msg1",
+            "text": "Partial text"
+        }),
+        "",
+    );
+
+    acc.push_event(
+        &json!({
+            "type": "item/started",
+            "itemId": "cmd1",
+            "item": {"type": "commandExecution", "id": "cmd1", "command": "sleep 60"}
+        }),
+        "",
+    );
+
+    let turns_before = acc.turns_len();
+
+    // flush_in_progress should drain both items
+    super::codex::flush_in_progress(&mut acc);
+
+    // Should have persisted turns for both items
+    assert!(acc.turns_len() > turns_before);
+}
+
+#[test]
+fn codex_turn_plan_updated_maps_to_todo_list() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+
+    let event = json!({
+        "type": "turn/plan/updated",
+        "turnId": "turn-1",
+        "plan": [
+            {"step": "Read the codebase", "status": "completed"},
+            {"step": "Write tests", "status": "inProgress"},
+            {"step": "Fix bugs", "status": "pending"},
+        ]
+    });
+    acc.push_event(&event, &event.to_string());
+
+    let snapshot = acc.snapshot("ctx", "sess");
+    assert_eq!(snapshot.len(), 1);
+    let parsed = snapshot[0].parsed.as_ref().unwrap();
+    let block = &parsed["message"]["content"][0];
+    assert_eq!(block["name"].as_str(), Some("TodoWrite"));
+    let todos = block["input"]["todos"].as_array().unwrap();
+    assert_eq!(todos.len(), 3);
+    assert_eq!(todos[0]["status"].as_str(), Some("completed"));
+    assert_eq!(todos[1]["status"].as_str(), Some("in_progress"));
+    assert_eq!(todos[2]["status"].as_str(), Some("pending"));
+}
+
+#[test]
+fn codex_web_search_item_lifecycle() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+
+    // item/started
+    acc.push_event(
+        &json!({
+            "type": "item/started",
+            "itemId": "ws1",
+            "item": {"type": "webSearch", "id": "ws1", "query": "rust testing"}
+        }),
+        "",
+    );
+
+    let snapshot = acc.snapshot("ctx", "sess");
+    let asst = snapshot.iter().find(|m| m.role == "assistant").unwrap();
+    let block = &asst.parsed.as_ref().unwrap()["message"]["content"][0];
+    assert_eq!(block["name"].as_str(), Some("WebSearch"));
+    assert_eq!(block["__streaming_status"].as_str(), Some("running"));
+
+    // item/completed
+    let completed = json!({
+        "type": "item/completed",
+        "itemId": "ws1",
+        "item": {"type": "webSearch", "id": "ws1", "query": "rust testing"}
+    });
+    acc.push_event(&completed, &completed.to_string());
+
+    let snapshot = acc.snapshot("ctx", "sess");
+    // Should have assistant (tool_use) + user (tool_result)
+    let user = snapshot.iter().find(|m| m.role == "user");
+    assert!(user.is_some(), "Should have search result");
+}
+
+#[test]
+fn codex_mcp_tool_call_item_lifecycle() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+
+    let started = json!({
+        "type": "item/started",
+        "itemId": "mcp1",
+        "item": {
+            "type": "mcpToolCall",
+            "id": "mcp1",
+            "server": "context7",
+            "tool": "query-docs",
+            "arguments": {"query": "React hooks"},
+            "status": "inProgress"
+        }
+    });
+    acc.push_event(&started, &started.to_string());
+
+    let snapshot = acc.snapshot("ctx", "sess");
+    let asst = snapshot.iter().find(|m| m.role == "assistant").unwrap();
+    let block = &asst.parsed.as_ref().unwrap()["message"]["content"][0];
+    assert_eq!(block["name"].as_str(), Some("mcp__context7__query-docs"));
+    assert_eq!(block["__streaming_status"].as_str(), Some("running"));
+
+    let completed = json!({
+        "type": "item/completed",
+        "itemId": "mcp1",
+        "item": {
+            "type": "mcpToolCall",
+            "id": "mcp1",
+            "server": "context7",
+            "tool": "query-docs",
+            "arguments": {"query": "React hooks"},
+            "status": "completed",
+            "result": {"docs": "..."}
+        }
+    });
+    acc.push_event(&completed, &completed.to_string());
+
+    let snapshot = acc.snapshot("ctx", "sess");
+    let user = snapshot.iter().find(|m| m.role == "user");
+    assert!(user.is_some(), "Should have MCP tool result");
+}
+
+#[test]
+fn codex_error_item_produces_error_message() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+
+    let event = json!({
+        "type": "item/completed",
+        "itemId": "err1",
+        "item": {
+            "type": "error",
+            "id": "err1",
+            "message": "API key expired"
+        }
+    });
+    acc.push_event(&event, &event.to_string());
+
+    let snapshot = acc.snapshot("ctx", "sess");
+    let err = snapshot.iter().find(|m| m.role == "error").unwrap();
+    let parsed = err.parsed.as_ref().unwrap();
+    assert_eq!(parsed["message"].as_str(), Some("API key expired"));
+}
+
+#[test]
+fn codex_delta_for_unknown_item_id_is_ignored() {
+    let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
+
+    // Delta for an item that was never started — should not panic
+    acc.push_event(
+        &json!({
+            "type": "item/agentMessage/delta",
+            "itemId": "ghost",
+            "text": "orphan delta"
+        }),
+        "",
+    );
+
+    let snapshot = acc.snapshot("ctx", "sess");
+    assert!(snapshot.is_empty(), "Orphan delta should be ignored");
 }

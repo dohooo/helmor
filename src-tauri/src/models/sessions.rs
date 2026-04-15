@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::pipeline::types::HistoricalRecord;
 
-use super::db;
+use super::{db, settings};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -343,6 +343,19 @@ pub fn create_session(
     permission_mode: Option<&str>,
 ) -> Result<CreateSessionResponse> {
     let mut connection = db::open_connection(true)?;
+
+    // Read user's default model/effort from settings
+    let default_model = settings::load_setting_value("app.default_model_id")
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "default".to_string());
+    let default_effort = settings::load_setting_value("app.default_effort")
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "high".to_string());
+
     let transaction = connection
         .transaction()
         .context("Failed to start create-session transaction")?;
@@ -366,14 +379,16 @@ pub fn create_session(
     transaction
         .execute(
             r#"
-            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind)
-            VALUES (?1, ?2, 'idle', 'Untitled', ?3, ?4)
+            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind, model, effort_level)
+            VALUES (?1, ?2, 'idle', 'Untitled', ?3, ?4, ?5, ?6)
             "#,
             (
                 &session_id,
                 workspace_id,
                 permission_mode.unwrap_or("default"),
                 action_kind,
+                &default_model,
+                &default_effort,
             ),
         )
         .context("Failed to create session")?;
@@ -395,6 +410,19 @@ pub fn create_session(
         .context("Failed to commit create-session")?;
 
     Ok(CreateSessionResponse { session_id })
+}
+
+/// Read the `model` column from a session row.
+pub fn get_session_model(session_id: &str) -> Result<Option<String>> {
+    let conn = db::open_connection(false)?;
+    let model: Option<String> = conn
+        .query_row(
+            "SELECT model FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .with_context(|| format!("Failed to read model for session {session_id}"))?;
+    Ok(model.filter(|s| !s.is_empty()))
 }
 
 pub fn rename_session(session_id: &str, title: &str) -> Result<()> {

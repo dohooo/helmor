@@ -3,6 +3,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, extname } from "node:path";
 import {
@@ -21,11 +22,14 @@ import { resolveGitAccessDirectories } from "./git-access.js";
 import { readImageWithResize } from "./image-resize.js";
 import { parseImageRefs } from "./images.js";
 import { errorDetails, logger } from "./logger.js";
-import type {
-	ListSlashCommandsParams,
-	SendMessageParams,
-	SessionManager,
-	SlashCommandInfo,
+import {
+	fallbackEffortLevels,
+	formatModelLabel,
+	type ListSlashCommandsParams,
+	type ProviderModelInfo,
+	type SendMessageParams,
+	type SessionManager,
+	type SlashCommandInfo,
 } from "./session-manager.js";
 import {
 	buildTitlePrompt,
@@ -431,10 +435,7 @@ export class ClaudeSessionManager implements SessionManager {
 					// Intercept ExitPlanMode: capture plan content and deny to
 					// end the turn cleanly. The user starts a new turn to act.
 					if (_toolName === "ExitPlanMode") {
-						const plan =
-							typeof input?.plan === "string" && input.plan.trim()
-								? input.plan
-								: null;
+						const plan = extractExitPlanContent(input);
 						if (plan) {
 							emitter.planCaptured(requestId, options.toolUseID, plan);
 						}
@@ -576,6 +577,11 @@ export class ClaudeSessionManager implements SessionManager {
 			}
 
 			const { title, branchName } = parseTitleAndBranch(raw);
+			logger.info(`[${requestId}] titleGenerated`, {
+				title,
+				branchName: branchName ?? "(empty)",
+				rawPreview: raw.slice(0, 200),
+			});
 			emitter.titleGenerated(requestId, title, branchName);
 		} finally {
 			clearTimeout(timeout);
@@ -742,6 +748,82 @@ export class ClaudeSessionManager implements SessionManager {
 		}
 	}
 
+	async listModels(): Promise<readonly ProviderModelInfo[]> {
+		const abortController = new AbortController();
+		let resolveDone: () => void = () => undefined;
+		const donePromise = new Promise<void>((resolve) => {
+			resolveDone = resolve;
+		});
+		const promptIter: AsyncIterable<SDKUserMessage> =
+			(async function* (): AsyncGenerator<never> {
+				await donePromise;
+				yield* [];
+			})();
+
+		const q = query({
+			prompt: promptIter,
+			options: {
+				abortController,
+				pathToClaudeCodeExecutable: CLAUDE_CLI_PATH,
+				...executableOptions(),
+				permissionMode: "bypassPermissions",
+				allowDangerouslySkipPermissions: true,
+				includePartialMessages: false,
+			},
+		});
+
+		const drain = (async () => {
+			try {
+				for await (const _ of q) {
+					void _;
+				}
+			} catch (err) {
+				if (!isAbortError(err)) {
+					logger.error("Claude listModels drain failed", errorDetails(err));
+				}
+			}
+		})();
+
+		const timeout = setTimeout(
+			() => abortController.abort(),
+			SLASH_COMMANDS_TIMEOUT_MS,
+		);
+
+		try {
+			const models = await q.supportedModels();
+			logger.info("Claude supportedModels", {
+				count: models.length,
+				ids: models.map((m) => m.value).join(", "),
+			});
+			return models.map((m) => ({
+				id: m.value,
+				label: formatModelLabel(m.value, m.displayName || m.value),
+				cliModel: m.value,
+				effortLevels:
+					m.supportedEffortLevels && m.supportedEffortLevels.length > 0
+						? m.supportedEffortLevels
+						: fallbackEffortLevels(m.value),
+			}));
+		} catch (err) {
+			logger.error("Claude listModels failed", errorDetails(err));
+			throw err;
+		} finally {
+			clearTimeout(timeout);
+			resolveDone();
+			try {
+				abortController.abort();
+			} catch {
+				/* noop */
+			}
+			try {
+				q.close();
+			} catch {
+				/* noop */
+			}
+			await drain.catch(() => {});
+		}
+	}
+
 	async stopSession(sessionId: string): Promise<void> {
 		const session = this.sessions.get(sessionId);
 		if (session) {
@@ -868,4 +950,26 @@ function isDeferredToolUseBlock(block: unknown): boolean {
 		typeof value.name === "string" &&
 		DEFERRED_TOOL_NAMES.has(value.name)
 	);
+}
+
+/**
+ * Extract plan text from ExitPlanMode input.
+ * Supports both inline `plan` (v1) and file-based `filePath` (v2).
+ */
+function extractExitPlanContent(
+	input: Record<string, unknown> | undefined,
+): string | null {
+	if (!input) return null;
+	if (typeof input.plan === "string" && input.plan.trim()) {
+		return input.plan;
+	}
+	if (typeof input.filePath === "string" && input.filePath.trim()) {
+		try {
+			const content = readFileSync(input.filePath, "utf-8").trim();
+			return content || null;
+		} catch {
+			return null;
+		}
+	}
+	return null;
 }

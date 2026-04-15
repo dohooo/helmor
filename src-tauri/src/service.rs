@@ -159,10 +159,19 @@ pub fn send_message(
         },
     };
 
-    // 3. Resolve model
-    let model_id = params.model.as_deref().unwrap_or("opus-1m");
-    let model = crate::agents::find_model_definition(model_id)
-        .with_context(|| format!("Unknown model: {model_id}"))?;
+    // 3. Resolve model — explicit param > session row > user setting > "default"
+    let model_id = params
+        .model
+        .as_deref()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            crate::models::sessions::get_session_model(&session_id)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "default".to_string())
+        });
+    let model_id = model_id.as_str();
+    let model = crate::agents::resolve_model(model_id);
 
     // ── App delegation ──────────────────────────────────────────────
     // When the desktop app is running, queue the prompt as a pending
@@ -263,8 +272,8 @@ pub fn send_message(
 
     // 7. Event loop
     let mut pipeline = crate::pipeline::MessagePipeline::new(
-        model.provider,
-        model.cli_model,
+        &model.provider,
+        &model.cli_model,
         &request_id,
         &session_id,
     );
@@ -317,8 +326,8 @@ pub fn send_message(
                 let _ = finalize_session(
                     &conn,
                     &session_id,
-                    model.id,
-                    model.provider,
+                    &model.id,
+                    &model.provider,
                     "idle",
                     params.permission_mode.as_deref(),
                 );
@@ -383,8 +392,8 @@ pub fn send_message(
                 let _ = finalize_session(
                     &conn,
                     &session_id,
-                    model.id,
-                    model.provider,
+                    &model.id,
+                    &model.provider,
                     "idle",
                     params.permission_mode.as_deref(),
                 );

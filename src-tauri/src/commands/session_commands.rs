@@ -81,6 +81,7 @@ pub async fn mark_session_read(session_id: String) -> CmdResult<()> {
 #[tauri::command]
 pub async fn update_session_settings(
     session_id: String,
+    model: Option<String>,
     effort_level: Option<String>,
     permission_mode: Option<String>,
 ) -> CmdResult<()> {
@@ -90,11 +91,12 @@ pub async fn update_session_settings(
             .execute(
                 r#"
                 UPDATE sessions SET
-                  effort_level = COALESCE(?2, effort_level),
-                  permission_mode = COALESCE(?3, permission_mode)
+                  model = COALESCE(?2, model),
+                  effort_level = COALESCE(?3, effort_level),
+                  permission_mode = COALESCE(?4, permission_mode)
                 WHERE id = ?1
                 "#,
-                rusqlite::params![session_id, effort_level, permission_mode],
+                rusqlite::params![session_id, model, effort_level, permission_mode],
             )
             .context("Failed to update session settings")?;
         Ok(())

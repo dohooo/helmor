@@ -9,6 +9,7 @@ export type ElicitationResponseHandler = (
 type ElicitationEnumOption = {
 	value: string;
 	label: string;
+	description: string;
 };
 
 type ElicitationBaseField = {
@@ -42,6 +43,7 @@ export type ElicitationSingleSelectField = ElicitationBaseField & {
 	kind: "single-select";
 	options: ElicitationEnumOption[];
 	defaultValue: string | null;
+	allowOther: boolean;
 };
 
 export type ElicitationMultiSelectField = ElicitationBaseField & {
@@ -129,6 +131,7 @@ function normalizeEnumOptions(
 				return {
 					value,
 					label: readString(option.title) ?? value,
+					description: readString(option.description) ?? "",
 				} satisfies ElicitationEnumOption;
 			})
 			.filter((option): option is ElicitationEnumOption => option !== null);
@@ -139,6 +142,7 @@ function normalizeEnumOptions(
 	return enumValues.map((value, index) => ({
 		value,
 		label: enumNames[index] ?? value,
+		description: "",
 	}));
 }
 
@@ -165,6 +169,7 @@ function normalizeMultiSelectOptions(
 				return {
 					value,
 					label: readString(option.title) ?? value,
+					description: readString(option.description) ?? "",
 				} satisfies ElicitationEnumOption;
 			})
 			.filter((option): option is ElicitationEnumOption => option !== null);
@@ -173,6 +178,7 @@ function normalizeMultiSelectOptions(
 	return readStringArray(items.enum).map((value) => ({
 		value,
 		label: value,
+		description: "",
 	}));
 }
 
@@ -212,6 +218,7 @@ function normalizeFormField(
 				required,
 				options,
 				defaultValue: readString(schema.default),
+				allowOther: isRecord(schema) && schema["x-allow-other"] === true,
 			};
 		}
 

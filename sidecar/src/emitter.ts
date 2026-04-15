@@ -102,6 +102,28 @@ export type PlanCapturedEvent = {
 	readonly plan: string | null;
 };
 
+export type UserInputRequestEvent = {
+	readonly id: string;
+	readonly type: "userInputRequest";
+	readonly userInputId: string;
+	readonly questions: ReadonlyArray<{
+		readonly question: string;
+		readonly isOther?: boolean;
+	}>;
+};
+
+export type ModelsListedEvent = {
+	readonly id: string;
+	readonly type: "modelsListed";
+	readonly provider: string;
+	readonly models: ReadonlyArray<{
+		readonly id: string;
+		readonly label: string;
+		readonly cliModel: string;
+		readonly effortLevels?: readonly string[];
+	}>;
+};
+
 export type SidecarControlEvent =
 	| ReadyEvent
 	| EndEvent
@@ -115,7 +137,9 @@ export type SidecarControlEvent =
 	| ElicitationRequestEvent
 	| DeferredToolUseEvent
 	| PermissionModeChangedEvent
-	| PlanCapturedEvent;
+	| PlanCapturedEvent
+	| ModelsListedEvent
+	| UserInputRequestEvent;
 
 /**
  * Typed emitter for the sidecar's stdout protocol.
@@ -165,6 +189,21 @@ export interface SidecarEmitter {
 	): void;
 	permissionModeChanged(requestId: string, permissionMode: string): void;
 	planCaptured(requestId: string, toolUseId: string, plan: string | null): void;
+	userInputRequest(
+		requestId: string,
+		userInputId: string,
+		questions: ReadonlyArray<{ question: string; isOther?: boolean }>,
+	): void;
+	modelsListed(
+		requestId: string,
+		provider: string,
+		models: ReadonlyArray<{
+			id: string;
+			label: string;
+			cliModel: string;
+			effortLevels?: readonly string[];
+		}>,
+	): void;
 	/**
 	 * Forward a raw provider SDK message. `id` is appended LAST so an SDK
 	 * field named `id` can never override our request id.
@@ -251,6 +290,15 @@ export function createSidecarEmitter(
 			}),
 		planCaptured: (requestId, toolUseId, plan) =>
 			write({ id: requestId, type: "planCaptured", toolUseId, plan }),
+		userInputRequest: (requestId, userInputId, questions) =>
+			write({
+				id: requestId,
+				type: "userInputRequest",
+				userInputId,
+				questions,
+			}),
+		modelsListed: (requestId, provider, models) =>
+			write({ id: requestId, type: "modelsListed", provider, models }),
 		passthrough: (requestId, message) =>
 			write({ ...(message as Record<string, unknown>), id: requestId }),
 	};

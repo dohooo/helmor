@@ -111,13 +111,26 @@ pub async fn rename_workspace_branch(
 
 #[tauri::command]
 pub async fn update_intended_target_branch(
+    app: AppHandle,
     workspace_id: String,
     target_branch: String,
 ) -> CmdResult<workspaces::UpdateIntendedTargetBranchResponse> {
     let ws_lock = db::workspace_mutation_lock(&workspace_id);
     let _lock = ws_lock.lock().await;
-    run_blocking(move || workspaces::update_intended_target_branch(&workspace_id, &target_branch))
-        .await
+    let result = run_blocking(move || {
+        workspaces::update_intended_target_branch(&workspace_id, &target_branch)
+    })
+    .await?;
+    git_watcher::notify_workspace_changed(&app);
+    Ok(result)
+}
+
+/// Trigger an async background fetch for a workspace's target branch.
+/// Returns immediately — the fetch runs in a detached thread.
+#[tauri::command]
+pub async fn trigger_workspace_fetch(workspace_id: String) -> CmdResult<()> {
+    git_watcher::trigger_fetch_for_workspace(&workspace_id);
+    Ok(())
 }
 
 #[tauri::command]
