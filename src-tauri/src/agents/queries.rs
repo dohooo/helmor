@@ -1,9 +1,10 @@
+use std::collections::HashSet;
 use std::sync::Mutex;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 use super::CmdResult;
@@ -276,48 +277,117 @@ pub async fn list_slash_commands(
     cache: tauri::State<'_, super::slash_commands::SlashCommandCache>,
     request: ListSlashCommandsRequest,
 ) -> CmdResult<SlashCommandsResponse> {
-    let cache_key = (
-        request.provider.clone(),
-        request.working_directory.clone().unwrap_or_default(),
-        request.model_id.clone().unwrap_or_default(),
+    tracing::debug!(
+        provider = %request.provider,
+        cwd = request.working_directory.as_deref().unwrap_or(""),
+        model = request.model_id.as_deref().unwrap_or(""),
+        "list_slash_commands request"
     );
-
-    // Non-claude providers (e.g. Codex): the sidecar scan is already fast
-    // (pure filesystem, no MCP wait), so fall through to the blocking path.
-    if request.provider != "claude" {
-        let commands = fetch_from_sidecar(&sidecar, &request)?;
-        return Ok(SlashCommandsResponse {
-            commands,
-            is_complete: true,
-        });
-    }
-
-    // --- Claude provider: progressive loading ---
+    let cache_key = super::slash_commands::cache_key(
+        &request.provider,
+        request.working_directory.as_deref(),
+        request.model_id.as_deref(),
+    );
 
     // 1. Check cache
     if let Some((commands, is_complete)) = cache.get(&cache_key) {
-        // Cache hit — return immediately.  Spawn a background refresh to
-        // keep the cache fresh (stale-while-revalidate).
-        if is_complete {
-            spawn_background_refresh(&app, &cache, &request, cache_key);
-        }
+        tracing::debug!(
+            provider = %request.provider,
+            cwd = request.working_directory.as_deref().unwrap_or(""),
+            model = request.model_id.as_deref().unwrap_or(""),
+            count = commands.len(),
+            is_complete,
+            "list_slash_commands cache hit"
+        );
+        // Cache hit — return immediately and revalidate in the background.
+        // The frontend does not cache slash commands; a later request will
+        // pick up whatever this refresh writes into the backend cache.
+        spawn_background_refresh(&app, &cache, &request, cache_key);
         return Ok(SlashCommandsResponse {
             commands,
             is_complete,
         });
     }
 
-    // 2. Cache miss — scan local skills from disk (fast, < 5 ms)
-    let local = super::slash_commands::scan_local_commands(request.working_directory.as_deref());
-    cache.set(cache_key.clone(), local.clone(), false);
-
-    // 3. Spawn background sidecar refresh
-    spawn_background_refresh(&app, &cache, &request, cache_key);
-
+    tracing::debug!(
+        provider = %request.provider,
+        cwd = request.working_directory.as_deref().unwrap_or(""),
+        model = request.model_id.as_deref().unwrap_or(""),
+        "list_slash_commands cache miss; fetching full result synchronously"
+    );
+    let commands = fetch_from_sidecar(&sidecar, &request)?;
+    tracing::debug!(
+        provider = %request.provider,
+        cwd = request.working_directory.as_deref().unwrap_or(""),
+        model = request.model_id.as_deref().unwrap_or(""),
+        count = commands.len(),
+        "list_slash_commands sync fetch succeeded"
+    );
+    cache.set(cache_key, commands.clone(), true);
     Ok(SlashCommandsResponse {
-        commands: local,
-        is_complete: false,
+        commands,
+        is_complete: true,
     })
+}
+
+pub fn prewarm_slash_command_cache(app: &AppHandle) {
+    let app = app.clone();
+    let _ = std::thread::Builder::new()
+        .name("slash-cmd-prewarm".into())
+        .spawn(move || {
+            let cache: tauri::State<'_, super::slash_commands::SlashCommandCache> = app.state();
+            let mut seen_roots = HashSet::new();
+            let mut roots = Vec::new();
+            for workspace in crate::models::workspaces::load_workspace_records().unwrap_or_default() {
+                if let Some(root_path) = workspace.root_path {
+                    let trimmed = root_path.trim();
+                    if !trimmed.is_empty() && seen_roots.insert(trimmed.to_string()) {
+                        roots.push(trimmed.to_string());
+                    }
+                }
+            }
+
+            tracing::debug!(
+                workspace_count = roots.len(),
+                claude_model = "default",
+                "Slash-command prewarm started"
+            );
+            for root_path in roots {
+                tracing::debug!(cwd = %root_path, "Slash-command prewarm workspace");
+                let claude_key = super::slash_commands::cache_key(
+                    "claude",
+                    Some(root_path.as_str()),
+                    Some("default"),
+                );
+                let claude_request = ListSlashCommandsRequest {
+                    provider: "claude".to_string(),
+                    working_directory: Some(root_path.clone()),
+                    model_id: Some("default".to_string()),
+                };
+                tracing::debug!(
+                    provider = "claude",
+                    cwd = %root_path,
+                    model = "default",
+                    "Slash-command prewarm dispatching background refresh"
+                );
+                spawn_background_refresh(&app, &cache, &claude_request, claude_key);
+
+                let codex_key =
+                    super::slash_commands::cache_key("codex", Some(root_path.as_str()), None);
+                let codex_request = ListSlashCommandsRequest {
+                    provider: "codex".to_string(),
+                    working_directory: Some(root_path.clone()),
+                    model_id: None,
+                };
+                tracing::debug!(
+                    provider = "codex",
+                    cwd = %root_path,
+                    "Slash-command prewarm dispatching background refresh"
+                );
+                spawn_background_refresh(&app, &cache, &codex_request, codex_key);
+            }
+            tracing::debug!("Slash-command prewarm finished");
+        });
 }
 
 /// Run the sidecar `listSlashCommands` call synchronously (blocking the
@@ -428,12 +498,26 @@ fn spawn_background_refresh(
     request: &ListSlashCommandsRequest,
     cache_key: (String, String, String),
 ) {
-    if !cache.try_start_refresh() {
+    if !cache.try_start_refresh(&cache_key) {
+        tracing::debug!(
+            provider = %request.provider,
+            cwd = request.working_directory.as_deref().unwrap_or(""),
+            model = request.model_id.as_deref().unwrap_or(""),
+            "Background slash command refresh skipped; another refresh is in flight"
+        );
         return; // another refresh already in flight
     }
 
+    tracing::debug!(
+        provider = %request.provider,
+        cwd = request.working_directory.as_deref().unwrap_or(""),
+        model = request.model_id.as_deref().unwrap_or(""),
+        "Background slash command refresh started"
+    );
+
     let app = app.clone();
     let request = request.clone();
+    let refresh_key = cache_key.clone();
 
     std::thread::Builder::new()
         .name("slash-cmd-refresh".into())
@@ -445,20 +529,13 @@ fn spawn_background_refresh(
             match fetch_from_sidecar(&sidecar_state, &request) {
                 Ok(commands) => {
                     tracing::debug!(
+                        provider = %request.provider,
+                        cwd = request.working_directory.as_deref().unwrap_or(""),
+                        model = request.model_id.as_deref().unwrap_or(""),
                         count = commands.len(),
                         "Background slash command refresh succeeded"
                     );
                     cache_state.set(cache_key, commands, true);
-
-                    // Notify the frontend so it can invalidate its React Query cache.
-                    let payload = serde_json::json!({
-                        "provider": request.provider,
-                        "cwd": request.working_directory.as_deref().unwrap_or(""),
-                        "model": request.model_id.as_deref().unwrap_or(""),
-                    });
-                    if let Err(e) = app.emit("slash-commands-refreshed", payload) {
-                        tracing::warn!("Failed to emit slash-commands-refreshed: {e}");
-                    }
                 }
                 Err(e) => {
                     // Don't clear the cache — stale local data is better than nothing.
@@ -466,7 +543,7 @@ fn spawn_background_refresh(
                 }
             }
 
-            cache_state.finish_refresh();
+            cache_state.finish_refresh(&refresh_key);
         })
         .ok();
 }

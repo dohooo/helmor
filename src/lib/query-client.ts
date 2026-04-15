@@ -55,9 +55,8 @@ export const helmorQueryKeys = {
 	slashCommands: (
 		provider: AgentProvider,
 		workingDirectory: string | null,
-		modelId: string | null,
-	) =>
-		["slashCommands", provider, workingDirectory ?? "", modelId ?? ""] as const,
+		_modelId: string | null,
+	) => ["slashCommands", provider, workingDirectory ?? "", ""] as const,
 };
 
 export function createHelmorQueryClient() {
@@ -197,18 +196,12 @@ export function slashCommandsQueryOptions(
 				workingDirectory,
 				modelId,
 			}),
-		// Slash commands rarely change within a workspace; cache aggressively.
-		staleTime: 5 * 60_000,
-		gcTime: DEFAULT_GC_TIME,
-		// The Rust backend always succeeds now (returns local skills from
-		// disk even if the sidecar is unreachable), so retries are no longer
-		// necessary. The background sidecar refresh handles recovery by
-		// emitting a `slash-commands-refreshed` event which triggers a
-		// query invalidation.
+		// The backend owns slash-command caching and background refresh. Keep
+		// the frontend layer as a thin request shell only.
+		staleTime: 0,
+		gcTime: 0,
 		retry: 0,
-		// Refetch on mount so re-opening a workspace tab gets a fresh shot
-		// at upgrading a partial cache to a complete one.
-		refetchOnMount: "always",
+		refetchOnWindowFocus: false,
 	});
 }
 

@@ -901,6 +901,25 @@ fn codex_web_search_item_renders_as_tool_call() {
 }
 
 #[test]
+fn codex_web_search_with_action_passes_through() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "ws_2",
+            "type": "web_search",
+            "query": "openai codex",
+            "action": { "type": "openPage", "url": "https://openai.com/codex" }
+        }
+    });
+    let msgs = vec![make_record(
+        "ws2",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
 fn codex_mcp_tool_call_renders_as_tool_call() {
     let parsed = json!({
         "type": "item.completed",
@@ -976,6 +995,93 @@ fn codex_legacy_turn_dot_completed_still_works() {
     });
     let msgs = vec![make_record(
         "tc3",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+// ---------------------------------------------------------------------------
+// Codex file_change → apply_patch
+// ---------------------------------------------------------------------------
+
+#[test]
+fn codex_file_change_single_file_renders_as_apply_patch() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "fc_1",
+            "type": "file_change",
+            "changes": [
+                { "path": "/src/lib.rs", "kind": "modify", "diff": "-old\n+new\n+extra" }
+            ],
+            "status": "completed"
+        }
+    });
+    let msgs = vec![make_record(
+        "fc1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn codex_file_change_multi_file() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "fc_2",
+            "type": "file_change",
+            "changes": [
+                { "path": "/src/a.ts", "kind": "modify", "diff": "-old\n+new" },
+                { "path": "/src/b.ts", "kind": "create", "diff": "+line1\n+line2" }
+            ],
+            "status": "completed"
+        }
+    });
+    let msgs = vec![make_record(
+        "fc2",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn codex_file_change_failed() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "fc_3",
+            "type": "file_change",
+            "changes": [
+                { "path": "/src/main.rs", "kind": "modify", "diff": "-x\n+y" }
+            ],
+            "status": "failed"
+        }
+    });
+    let msgs = vec![make_record(
+        "fc3",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn codex_file_change_empty_changes() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "fc_4",
+            "type": "file_change",
+            "changes": [],
+            "status": "completed"
+        }
+    });
+    let msgs = vec![make_record(
+        "fc4",
         "assistant",
         &serde_json::to_string(&parsed).unwrap(),
     )];

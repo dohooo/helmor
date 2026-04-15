@@ -552,10 +552,7 @@ export type SlashCommandsResponse = {
  * provider + workspace.
  *
  * The Rust backend returns local skills instantly from a disk scan and
- * fetches the full list (including built-in commands) from the sidecar in
- * the background.  When `isComplete` is `false`, a background refresh is
- * still in flight — listen for the `slash-commands-refreshed` event and
- * invalidate the query when it fires.
+ * refreshes the backend cache from the sidecar in the background.
  */
 export async function listSlashCommands(input: {
 	provider: AgentProvider;
@@ -575,12 +572,6 @@ export async function listSlashCommands(input: {
 			describeInvokeError(error, "Unable to load slash commands."),
 		);
 	}
-}
-
-export async function listenSlashCommandsRefreshed(
-	callback: () => void,
-): Promise<UnlistenFn> {
-	return listen("slash-commands-refreshed", () => callback());
 }
 
 export async function loadWorkspaceDetail(

@@ -12,11 +12,7 @@ import type {
 	AgentProvider,
 	SlashCommandEntry,
 } from "@/lib/api";
-import {
-	createSession,
-	listenSlashCommandsRefreshed,
-	saveAutoCloseActionKinds,
-} from "@/lib/api";
+import { createSession, saveAutoCloseActionKinds } from "@/lib/api";
 import { describeActionKind } from "@/lib/commit-button-prompts";
 import type {
 	ComposerCustomTag,
@@ -343,32 +339,6 @@ export const WorkspaceComposerContainer = memo(
 			void slashCommandsQuery.refetch();
 		}, [slashCommandsQuery]);
 
-		// Listen for background sidecar refresh completion → invalidate query
-		// so the popup updates with the full list (including built-in commands).
-		useEffect(() => {
-			let disposed = false;
-			let unlisten: (() => void) | undefined;
-			void listenSlashCommandsRefreshed(() => {
-				if (disposed) return;
-				void queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.slashCommands(
-						slashProvider,
-						workingDirectory,
-						selectedModelId,
-					),
-				});
-			}).then((fn) => {
-				if (disposed) {
-					fn();
-					return;
-				}
-				unlisten = fn;
-			});
-			return () => {
-				disposed = true;
-				unlisten?.();
-			};
-		}, [queryClient, slashProvider, workingDirectory, selectedModelId]);
 		const handleComposerSubmit = useCallback(
 			(
 				prompt: string,

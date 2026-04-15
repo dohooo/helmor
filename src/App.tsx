@@ -177,6 +177,9 @@ function App() {
 							) {
 								return false;
 							}
+							if (key[0] === "slashCommands") {
+								return false;
+							}
 							return query.state.status === "success";
 						},
 					},

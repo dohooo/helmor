@@ -7,14 +7,14 @@ expression: run_normalized(msgs)
   content_length: 1
   content:
     - type: tool-call
-      tool_name: WebSearch
-      tool_call_id: codex-search-ws1
+      tool_name: apply_patch
+      tool_call_id: codex-patch-fc3
       args_keys:
-        - query
-      args_text_length: 35
+        - changes
+      args_text_length: 69
       has_result: true
       result_kind: string
-      result_preview: rust testing frameworks
+      result_preview: Patch failed
       streaming_status: ~
   status:
     type: complete
