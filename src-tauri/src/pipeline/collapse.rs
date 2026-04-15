@@ -6,7 +6,7 @@
 
 use serde_json::Value;
 
-use super::classify::{classify_tool, is_collapsible, ToolCategory};
+use super::classify::{classify_tool_with_args, is_collapsible_with_args, ToolCategory};
 use super::types::{
     CollapseCategory, CollapsedGroupPart, ExtendedMessagePart, MessagePart, MessageRole,
     ThreadMessageLike,
@@ -64,11 +64,16 @@ fn extract_file_path(args: &Value) -> Option<&str> {
 pub fn build_group_summary(tools: &[MessagePart], active: bool) -> String {
     let mut search_tools: Vec<&MessagePart> = Vec::new();
     let mut read_tools: Vec<&MessagePart> = Vec::new();
+    let mut shell_tools: Vec<&MessagePart> = Vec::new();
 
     for t in tools {
-        if let MessagePart::ToolCall { tool_name, .. } = t {
-            match classify_tool(tool_name) {
+        if let MessagePart::ToolCall {
+            tool_name, args, ..
+        } = t
+        {
+            match classify_tool_with_args(tool_name, args) {
                 ToolCategory::Search => search_tools.push(t),
+                ToolCategory::Shell => shell_tools.push(t),
                 _ => read_tools.push(t),
             }
         }
@@ -144,6 +149,23 @@ pub fn build_group_summary(tools: &[MessagePart], active: bool) -> String {
         parts.push(format!("{verb} {count} file{plural}"));
     }
 
+    // Shell summary
+    if !shell_tools.is_empty() {
+        let verb = if parts.is_empty() {
+            if active {
+                "Running"
+            } else {
+                "Ran"
+            }
+        } else if active {
+            "running"
+        } else {
+            "ran"
+        };
+        let plural = if shell_tools.len() > 1 { "s" } else { "" };
+        parts.push(format!("{verb} {} command{plural}", shell_tools.len()));
+    }
+
     if parts.is_empty() {
         return if active {
             "Working...".to_string()
@@ -188,18 +210,28 @@ fn collapse_tool_calls_in_parts(
             if group.len() >= 2 {
                 let mut has_search = false;
                 let mut has_read = false;
+                let mut has_shell = false;
                 for t in group.iter() {
-                    if let MessagePart::ToolCall { tool_name, .. } = t {
-                        match classify_tool(tool_name) {
+                    if let MessagePart::ToolCall {
+                        tool_name, args, ..
+                    } = t
+                    {
+                        match classify_tool_with_args(tool_name, args) {
                             ToolCategory::Search => has_search = true,
+                            ToolCategory::Shell => has_shell = true,
                             _ => has_read = true,
                         }
                     }
                 }
-                let category = match (has_search, has_read) {
-                    (true, true) => CollapseCategory::Mixed,
-                    (true, false) => CollapseCategory::Search,
-                    _ => CollapseCategory::Read,
+                let pure_count = has_search as u8 + has_read as u8 + has_shell as u8;
+                let category = if pure_count > 1 {
+                    CollapseCategory::Mixed
+                } else if has_search {
+                    CollapseCategory::Search
+                } else if has_shell {
+                    CollapseCategory::Shell
+                } else {
+                    CollapseCategory::Read
                 };
 
                 let active = is_streaming
@@ -221,9 +253,9 @@ fn collapse_tool_calls_in_parts(
 
     for part in parts {
         match &part {
-            ExtendedMessagePart::Basic(MessagePart::ToolCall { tool_name, .. })
-                if is_collapsible(tool_name) =>
-            {
+            ExtendedMessagePart::Basic(MessagePart::ToolCall {
+                tool_name, args, ..
+            }) if is_collapsible_with_args(tool_name, args) => {
                 if let ExtendedMessagePart::Basic(mp) = part {
                     current_group.push(mp);
                 }
@@ -248,10 +280,11 @@ fn collapse_tool_calls_in_parts(
         if let ExtendedMessagePart::Basic(MessagePart::ToolCall {
             children,
             tool_name,
+            args,
             ..
         }) = part
         {
-            if !children.is_empty() && !is_collapsible(tool_name) {
+            if !children.is_empty() && !is_collapsible_with_args(tool_name, args) {
                 let child_parts = std::mem::take(children);
                 *children = collapse_tool_calls_in_parts(child_parts, is_streaming);
             }
@@ -371,6 +404,102 @@ mod tests {
             tc(
                 "read",
                 json!({"file_path": "/a.txt"}),
+                Some(json!("content")),
+            ),
+        ];
+        let result = collapse_tool_calls_in_parts(parts, false);
+        assert_eq!(result.len(), 1);
+        if let ExtendedMessagePart::CollapsedGroup(g) = &result[0] {
+            assert_eq!(g.category, CollapseCategory::Mixed);
+        } else {
+            panic!("expected collapsed group");
+        }
+    }
+
+    #[test]
+    fn collapse_shell_readonly_commands() {
+        let parts = vec![
+            tc(
+                "Bash",
+                json!({"command": "nl -ba src/App.tsx"}),
+                Some(json!("output1")),
+            ),
+            tc(
+                "Bash",
+                json!({"command": "nl -ba src/foo.tsx | sed -n '1,10p'"}),
+                Some(json!("output2")),
+            ),
+            tc(
+                "Bash",
+                json!({"command": "cat src/bar.tsx"}),
+                Some(json!("output3")),
+            ),
+        ];
+        let result = collapse_tool_calls_in_parts(parts, false);
+        assert_eq!(result.len(), 1);
+        if let ExtendedMessagePart::CollapsedGroup(g) = &result[0] {
+            assert_eq!(g.category, CollapseCategory::Shell);
+            assert_eq!(g.tools.len(), 3);
+            assert_eq!(g.summary, "Ran 3 commands");
+        } else {
+            panic!("expected collapsed group");
+        }
+    }
+
+    #[test]
+    fn collapse_shell_rg_with_regex_pipe() {
+        // Real Codex pattern: rg with | in regex should NOT be split as pipe
+        let parts = vec![
+            tc(
+                "Bash",
+                json!({"command": r#"/bin/zsh -lc "rg -n \"from '@hddr/utils/showToast'|from \\\"@hddr/utils/showToast\\\"|function showToast|export .*showToast|const showToast|showToast =\" packages-pc/hddr packages-harbor -g '"'!**/dist/**'"' -g '"'!**/node_modules/**'"'""#}),
+                Some(json!("result1")),
+            ),
+            tc(
+                "Bash",
+                json!({"command": r#"/bin/zsh -lc "rg -n \"right-bottom|bottom-right|placement|to: 'bottom'|position: fixed\" packages-pc/hddr/src""#}),
+                Some(json!("result2")),
+            ),
+            tc(
+                "Bash",
+                json!({"command": r#"/bin/zsh -lc "sed -n '1,220p' packages-pc/hddr/src/utils/showToast.ts""#}),
+                Some(json!("result3")),
+            ),
+        ];
+        let result = collapse_tool_calls_in_parts(parts, false);
+        assert_eq!(result.len(), 1);
+        if let ExtendedMessagePart::CollapsedGroup(g) = &result[0] {
+            assert_eq!(g.category, CollapseCategory::Shell);
+            assert_eq!(g.tools.len(), 3);
+            assert_eq!(g.summary, "Ran 3 commands");
+        } else {
+            panic!("expected collapsed group");
+        }
+    }
+
+    #[test]
+    fn shell_write_not_collapsed() {
+        let parts = vec![
+            tc("Bash", json!({"command": "cat foo.txt"}), Some(json!("ok"))),
+            tc("Bash", json!({"command": "npm install"}), Some(json!("ok"))),
+        ];
+        let result = collapse_tool_calls_in_parts(parts, false);
+        // cat is collapsible but npm install breaks the group
+        // single collapsible + non-collapsible → no collapse (group of 1)
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn mixed_shell_and_read() {
+        let parts = vec![
+            tc(
+                "read",
+                json!({"file_path": "/a.txt"}),
+                Some(json!("content")),
+            ),
+            tc(
+                "Bash",
+                json!({"command": "cat /b.txt"}),
                 Some(json!("content")),
             ),
         ];

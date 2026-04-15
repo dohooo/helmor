@@ -6,6 +6,7 @@ import {
 	FileText,
 	LoaderCircle,
 	Search,
+	Terminal,
 } from "lucide-react";
 import { memo, useEffect, useMemo, useState } from "react";
 import {
@@ -571,6 +572,8 @@ export function CollapsedToolGroup({
 	const icon =
 		group.category === "search" ? (
 			<Search className={collapsedGroupIconClassName} strokeWidth={1.8} />
+		) : group.category === "shell" ? (
+			<Terminal className={collapsedGroupIconClassName} strokeWidth={1.8} />
 		) : (
 			<FileText className={collapsedGroupIconClassName} strokeWidth={1.8} />
 		);

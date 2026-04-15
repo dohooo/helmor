@@ -81,8 +81,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
   - line_index: 141
     event_type: user
     roles:
@@ -90,8 +89,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
   - line_index: 155
     event_type: assistant
@@ -100,9 +98,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
   - line_index: 160
     event_type: user
     roles:
@@ -110,9 +106,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
   - line_index: 179
     event_type: assistant
@@ -121,10 +115,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
   - line_index: 183
     event_type: user
     roles:
@@ -132,10 +123,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
   - line_index: 235
     event_type: assistant
     roles:
@@ -143,11 +131,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
   - line_index: 240
     event_type: user
     roles:
@@ -155,11 +139,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
   - line_index: 277
     event_type: assistant
@@ -168,12 +148,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
   - line_index: 281
     event_type: user
     roles:
@@ -181,12 +156,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
   - line_index: 313
     event_type: assistant
     roles:
@@ -194,13 +164,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
   - line_index: 318
     event_type: user
     roles:
@@ -208,13 +172,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
   - line_index: 350
     event_type: assistant
@@ -223,14 +181,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
   - line_index: 355
     event_type: user
     roles:
@@ -238,14 +189,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
   - line_index: 376
     event_type: assistant
@@ -254,15 +198,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
   - line_index: 380
     event_type: user
     roles:
@@ -270,15 +206,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
   - line_index: 415
     event_type: assistant
     roles:
@@ -286,16 +214,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
   - line_index: 420
     event_type: user
     roles:
@@ -303,16 +222,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
   - line_index: 468
     event_type: assistant
@@ -321,16 +231,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
   - line_index: 473
     event_type: user
@@ -339,16 +240,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
       - tool-call
   - line_index: 518
@@ -358,16 +250,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
       - tool-call
   - line_index: 522
@@ -377,16 +260,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
       - tool-call
   - line_index: 541
@@ -396,16 +270,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
       - tool-call
       - tool-call
@@ -416,16 +281,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
       - tool-call
       - tool-call
@@ -437,16 +293,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
       - tool-call
       - tool-call
@@ -458,16 +305,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
       - tool-call
       - tool-call
@@ -480,16 +318,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
       - tool-call
       - tool-call
@@ -502,16 +331,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
       - tool-call
       - tool-call
@@ -524,16 +344,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
       - tool-call
       - tool-call
@@ -547,16 +358,7 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
       - tool-call
       - tool-call
@@ -571,23 +373,13 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
+      - collapsed-group
       - tool-call
       - tool-call
       - tool-call
       - tool-call
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
   - line_index: 681
     event_type: user
     roles:
@@ -595,23 +387,13 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
+      - collapsed-group
       - tool-call
       - tool-call
       - tool-call
       - tool-call
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
   - line_index: 696
     event_type: assistant
@@ -620,24 +402,13 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
+      - collapsed-group
       - tool-call
       - tool-call
       - tool-call
       - tool-call
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
   - line_index: 700
     event_type: user
     roles:
@@ -645,24 +416,13 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
+      - collapsed-group
       - tool-call
       - tool-call
       - tool-call
       - tool-call
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
   - line_index: 734
     event_type: assistant
     roles:
@@ -670,25 +430,14 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
       - tool-call
       - tool-call
       - tool-call
       - tool-call
       - reasoning
+      - collapsed-group
   - line_index: 772
     event_type: assistant
     roles:
@@ -696,25 +445,14 @@ checkpoints:
     last_part_types:
       - reasoning
       - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
-      - tool-call
+      - collapsed-group
       - tool-call
       - tool-call
       - tool-call
       - tool-call
       - tool-call
       - reasoning
+      - collapsed-group
       - text
   - line_index: 776
     event_type: result
@@ -728,7 +466,7 @@ final_state:
   roles:
     - assistant
     - system
-  total_parts: 23
+  total_parts: 12
 persisted_turns:
   turn_count: 40
   total_blocks: 42
@@ -862,25 +600,14 @@ historical_render:
       part_types:
         - reasoning
         - tool-call
-        - tool-call
-        - tool-call
-        - tool-call
-        - tool-call
-        - tool-call
-        - tool-call
-        - tool-call
-        - tool-call
-        - tool-call
-        - tool-call
-        - tool-call
-        - tool-call
-        - tool-call
+        - collapsed-group
         - tool-call
         - tool-call
         - tool-call
         - tool-call
         - tool-call
         - reasoning
+        - collapsed-group
         - text
       children_tool_names:
         - Prompt

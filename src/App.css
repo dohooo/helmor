@@ -50,6 +50,9 @@ body {
 [data-sonner-toast][data-styled="true"]:has([data-button]) [data-content] {
 	flex: 1 0 100%;
 }
+[data-sonner-toast][data-styled="true"] [data-title] {
+	padding-right: 16px;
+}
 [data-sonner-toast][data-styled="true"] [data-button] {
 	margin-top: 4px;
 }
