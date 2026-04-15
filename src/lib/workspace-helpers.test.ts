@@ -78,8 +78,8 @@ describe("inferDefaultModelId", () => {
 		);
 	});
 
-	it("returns 'default' when model sections are empty", () => {
-		expect(inferDefaultModelId(null, [])).toBe("default");
+	it("returns null when model sections are empty", () => {
+		expect(inferDefaultModelId(null, [])).toBeNull();
 	});
 });
 
