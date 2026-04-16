@@ -1688,12 +1688,14 @@ export async function renameWorkspaceBranch(
 
 export type GenerateSessionTitleResponse = {
 	title: string | null;
+	branchRenamed: boolean;
 	skipped: boolean;
 };
 
 /**
- * Ask the backend to auto-generate a title for a session based on the user's
- * first message. No-ops if the session already has a non-"Untitled" title.
+ * Ask the backend to perform one best-effort naming pass for a session based
+ * on the user's message. It may update the session title, workspace branch,
+ * both, or neither.
  */
 export async function generateSessionTitle(
 	sessionId: string,

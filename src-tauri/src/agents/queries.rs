@@ -20,6 +20,7 @@ pub struct GenerateSessionTitleRequest {
 #[serde(rename_all = "camelCase")]
 pub struct GenerateSessionTitleResponse {
     pub title: Option<String>,
+    pub branch_renamed: bool,
     pub skipped: bool,
 }
 
@@ -32,23 +33,61 @@ pub async fn generate_session_title(
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
     request: GenerateSessionTitleRequest,
 ) -> CmdResult<GenerateSessionTitleResponse> {
-    {
-        let connection =
-            open_write_connection().map_err(|e| anyhow::anyhow!("Failed to open DB: {e}"))?;
-        let current_title: String = connection
-            .query_row(
-                "SELECT title FROM sessions WHERE id = ?1",
-                [&request.session_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| anyhow::anyhow!("Session not found: {e}"))?;
+    let connection =
+        open_write_connection().map_err(|e| anyhow::anyhow!("Failed to open DB: {e}"))?;
+    let (current_title, action_kind): (String, Option<String>) = connection
+        .query_row(
+            "SELECT title, action_kind FROM sessions WHERE id = ?1",
+            [&request.session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| anyhow::anyhow!("Session not found: {e}"))?;
 
-        if current_title != "Untitled" {
-            return Ok(GenerateSessionTitleResponse {
-                title: None,
-                skipped: true,
+    let should_generate_title = action_kind.is_none() && current_title == "Untitled";
+
+    let workspace_info: Option<(String, Option<String>, String, Option<String>)> =
+        if action_kind.is_none() {
+            connection
+                .query_row(
+                    r#"SELECT w.id, r.root_path, w.directory_name, w.branch
+                       FROM workspaces w
+                       JOIN repos r ON r.id = w.repository_id
+                       JOIN sessions s ON s.workspace_id = w.id
+                       WHERE s.id = ?1 AND w.state = 'ready'"#,
+                    [&request.session_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .ok()
+        } else {
+            None
+        };
+
+    let branch_settings = crate::settings::load_branch_prefix_settings().unwrap_or(
+        crate::settings::BranchPrefixSettings {
+            branch_prefix_type: None,
+            branch_prefix_custom: None,
+        },
+    );
+
+    let should_generate_branch =
+        workspace_info
+            .as_ref()
+            .is_some_and(|(_, _, directory_name, branch)| {
+                branch.as_deref().is_some_and(|current_branch| {
+                    crate::helpers::is_default_branch_name(
+                        current_branch,
+                        directory_name,
+                        &branch_settings,
+                    )
+                })
             });
-        }
+
+    if !should_generate_title && !should_generate_branch {
+        return Ok(GenerateSessionTitleResponse {
+            title: None,
+            branch_renamed: false,
+            skipped: true,
+        });
     }
 
     let request_id = Uuid::new_v4().to_string();
@@ -126,38 +165,18 @@ pub async fn generate_session_title(
 
     let (generated_title, generated_branch) = result;
 
-    if let Some(ref title) = generated_title {
-        crate::sessions::rename_session(&session_id, title)
-            .map_err(|e| anyhow::anyhow!("Failed to rename session: {e}"))?;
+    if should_generate_title {
+        if let Some(ref title) = generated_title {
+            crate::sessions::rename_session(&session_id, title)
+                .map_err(|e| anyhow::anyhow!("Failed to rename session: {e}"))?;
+        }
     }
 
-    if let Some(ref branch_segment) = generated_branch {
-        // Look up workspace via sessions.workspace_id — works for any session,
-        // not just the currently active one.
-        let workspace_info: Option<(String, Option<String>, String)> = {
-            let connection =
-                open_write_connection().map_err(|e| anyhow::anyhow!("Failed to open DB: {e}"))?;
-            connection
-                .query_row(
-                    r#"SELECT w.id, r.root_path, w.directory_name
-                       FROM workspaces w
-                       JOIN repos r ON r.id = w.repository_id
-                       JOIN sessions s ON s.workspace_id = w.id
-                       WHERE s.id = ?1 AND w.state = 'ready'"#,
-                    [&session_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .ok()
-        };
-
-        if let Some((workspace_id, root_path, directory_name)) = workspace_info {
-            let branch_settings = crate::settings::load_branch_prefix_settings().unwrap_or(
-                crate::settings::BranchPrefixSettings {
-                    branch_prefix_type: None,
-                    branch_prefix_custom: None,
-                },
-            );
-
+    let mut branch_renamed = false;
+    if should_generate_branch {
+        if let (Some(branch_segment), Some((workspace_id, root_path, directory_name, _))) =
+            (generated_branch.as_deref(), workspace_info)
+        {
             // Acquire per-workspace lock so concurrent title-gens serialise
             // their branch renames instead of racing on `git branch -m`.
             let ws_lock = crate::models::db::workspace_mutation_lock(&workspace_id);
@@ -232,6 +251,8 @@ pub async fn generate_session_title(
                                     }
                                 }
                             }
+                        } else {
+                            branch_renamed = true;
                         }
                     }
                 }
@@ -240,7 +261,8 @@ pub async fn generate_session_title(
     }
 
     Ok(GenerateSessionTitleResponse {
-        title: generated_title,
+        title: should_generate_title.then_some(generated_title).flatten(),
+        branch_renamed,
         skipped: false,
     })
 }

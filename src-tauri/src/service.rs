@@ -698,6 +698,36 @@ mod tests {
     }
 
     #[test]
+    fn create_action_session_uses_local_default_title() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _dir = TestDataDir::new("create-session-action-title");
+
+        let db_path = crate::data_dir::db_path().unwrap();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name, root_path) VALUES ('r1', 'test-repo', '/tmp/test-repo')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, derived_status) VALUES ('w1', 'r1', 'test-dir', 'ready', 'in-progress')",
+            [],
+        )
+        .unwrap();
+
+        let response = create_session("w1", Some("create-pr"), None).unwrap();
+        let title: String = conn
+            .query_row(
+                "SELECT title FROM sessions WHERE id = ?1",
+                [response.session_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(title, "Create PR");
+    }
+
+    #[test]
     fn is_port_listening_returns_false_when_no_listener() {
         // Bind an ephemeral port, release it, then probe — nothing should
         // be listening on a port we just closed. This used to hard-code
