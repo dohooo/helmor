@@ -7,6 +7,7 @@ import { renderWithProviders } from "@/test/render-with-providers";
 
 const apiMocks = vi.hoisted(() => ({
 	createSession: vi.fn(),
+	loadRepoScripts: vi.fn(),
 	loadWorkspaceDetail: vi.fn(),
 	loadWorkspaceSessions: vi.fn(),
 	loadSessionMessages: vi.fn(),
@@ -21,6 +22,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	return {
 		...actual,
 		createSession: apiMocks.createSession,
+		loadRepoScripts: apiMocks.loadRepoScripts,
 		loadWorkspaceDetail: apiMocks.loadWorkspaceDetail,
 		loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
 		loadSessionMessages: apiMocks.loadSessionThreadMessages,
@@ -252,11 +254,20 @@ describe("WorkspacePanelContainer loading semantics", () => {
 	beforeEach(() => {
 		panelRenderSpy.mockReset();
 		apiMocks.createSession.mockReset();
+		apiMocks.loadRepoScripts.mockReset();
 		apiMocks.loadWorkspaceDetail.mockReset();
 		apiMocks.loadWorkspaceSessions.mockReset();
 		apiMocks.loadSessionThreadMessages.mockReset();
 
 		apiMocks.createSession.mockResolvedValue({ sessionId: "session-created" });
+		apiMocks.loadRepoScripts.mockResolvedValue({
+			setupScript: "pnpm install",
+			runScript: "pnpm dev",
+			archiveScript: "true",
+			setupFromProject: false,
+			runFromProject: false,
+			archiveFromProject: false,
+		});
 		apiMocks.loadWorkspaceDetail.mockImplementation((workspaceId?: string) =>
 			Promise.resolve(createWorkspaceDetail(workspaceId)),
 		);
@@ -408,6 +419,33 @@ describe("WorkspacePanelContainer loading semantics", () => {
 				resumeSessionAt: null,
 				isHidden: false,
 				isCompacting: false,
+				active: true,
+			},
+		]);
+		apiMocks.loadWorkspaceSessions.mockResolvedValue([
+			{
+				id: "session-new",
+				workspaceId: "workspace-1",
+				title: "Untitled",
+				agentType: null,
+				status: "idle",
+				model: null,
+				permissionMode: "default",
+				providerSessionId: null,
+				effortLevel: null,
+				unreadCount: 0,
+				contextTokenCount: 0,
+				contextUsedPercent: null,
+				thinkingEnabled: true,
+				fastMode: false,
+				agentPersonality: null,
+				createdAt: "2026-04-05T00:00:00Z",
+				updatedAt: "2026-04-05T00:00:00Z",
+				lastUserMessageAt: null,
+				resumeSessionAt: null,
+				isHidden: false,
+				isCompacting: false,
+				actionKind: null,
 				active: true,
 			},
 		]);

@@ -7,6 +7,7 @@ import type {
 	WorkspaceSessionSummary,
 } from "@/lib/api";
 import { HelmorProfiler } from "@/lib/dev-react-profiler";
+import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
 import { WorkspacePanelHeader } from "./header";
 import { EmptyState, preloadStreamdown } from "./message-components";
 import {
@@ -44,6 +45,8 @@ type WorkspacePanelProps = {
 	onWorkspaceChanged?: () => void;
 	headerActions?: ReactNode;
 	headerLeading?: ReactNode;
+	missingScriptTypes?: WorkspaceScriptType[];
+	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 };
 
 export const WorkspacePanel = memo(function WorkspacePanel({
@@ -69,6 +72,8 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	onWorkspaceChanged,
 	headerActions,
 	headerLeading,
+	missingScriptTypes = [],
+	onInitializeScript,
 }: WorkspacePanelProps) {
 	const selectedSession =
 		sessions.find((session) => session.id === selectedSessionId) ?? null;
@@ -131,12 +136,18 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 						<ActiveThreadViewport
 							hasSession={!!selectedSession}
 							pane={activePane}
+							missingScriptTypes={missingScriptTypes}
+							onInitializeScript={onInitializeScript}
 						/>
 					) : loadingWorkspace || loadingSession ? (
 						<ConversationColdPlaceholder />
 					) : (
 						<div className="flex min-h-full flex-1 items-center justify-center px-8">
-							<EmptyState hasSession={!!selectedSession} />
+							<EmptyState
+								hasSession={!!selectedSession}
+								missingScriptTypes={missingScriptTypes}
+								onInitializeScript={onInitializeScript}
+							/>
 						</div>
 					)}
 				</div>

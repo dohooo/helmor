@@ -1314,14 +1314,15 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 		try {
 			const { sessionId } = await createSession(workspaceId);
+			const cachedWorkspace =
+				queryClient.getQueryData<WorkspaceDetail | null>(
+					helmorQueryKeys.workspaceDetail(workspaceId),
+				) ?? null;
 			seedNewSessionInCache({
 				queryClient,
 				workspaceId,
 				sessionId,
-				workspace:
-					queryClient.getQueryData<WorkspaceDetail | null>(
-						helmorQueryKeys.workspaceDetail(workspaceId),
-					) ?? null,
+				workspace: cachedWorkspace,
 				existingSessions:
 					queryClient.getQueryData<WorkspaceSessionSummary[]>(
 						helmorQueryKeys.workspaceSessions(workspaceId),
@@ -1330,6 +1331,16 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 			handleSelectSession(sessionId);
 
 			void Promise.all([
+				...(cachedWorkspace
+					? [
+							queryClient.invalidateQueries({
+								queryKey: helmorQueryKeys.repoScripts(
+									cachedWorkspace.repoId,
+									workspaceId,
+								),
+							}),
+						]
+					: []),
 				queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
 				}),
@@ -1866,6 +1877,9 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 												pendingInsertRequests={pendingComposerInserts}
 												onPendingInsertRequestsConsumed={
 													handlePendingComposerInsertsConsumed
+												}
+												onQueuePendingPromptForSession={
+													queuePendingPromptForSession
 												}
 												headerLeading={
 													sidebarCollapsed ? (

@@ -198,6 +198,9 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				createdAt: new Date().toISOString(),
 			});
 
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.repoScripts(workspace.repoId, workspace.id),
+			});
 			onSessionsChanged?.();
 			onSelectSession?.(result.sessionId);
 		} catch (error) {

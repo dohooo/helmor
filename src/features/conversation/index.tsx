@@ -54,6 +54,12 @@ type WorkspaceConversationContainerProps = {
 	onPendingPromptConsumed?: () => void;
 	pendingInsertRequests?: ResolvedComposerInsertRequest[];
 	onPendingInsertRequestsConsumed?: (ids: string[]) => void;
+	onQueuePendingPromptForSession?: (request: {
+		sessionId: string;
+		prompt: string;
+		modelId?: string | null;
+		permissionMode?: string | null;
+	}) => void;
 };
 
 export const WorkspaceConversationContainer = memo(
@@ -78,6 +84,7 @@ export const WorkspaceConversationContainer = memo(
 		onPendingPromptConsumed,
 		pendingInsertRequests = [],
 		onPendingInsertRequestsConsumed,
+		onQueuePendingPromptForSession,
 	}: WorkspaceConversationContainerProps) {
 		const [composerModelSelections, setComposerModelSelections] = useState<
 			Record<string, string>
@@ -226,6 +233,7 @@ export const WorkspaceConversationContainer = memo(
 					workspacePrInfo={workspacePrInfo}
 					onSelectSession={onSelectSession}
 					onResolveDisplayedSession={onResolveDisplayedSession}
+					onQueuePendingPromptForSession={onQueuePendingPromptForSession}
 					headerActions={headerActions}
 					headerLeading={headerLeading}
 				/>

@@ -271,6 +271,77 @@ describe("WorkspacePanel", () => {
 		);
 	});
 
+	it("renders only the missing workspace script actions in the empty state", () => {
+		render(
+			<TooltipProvider delayDuration={0}>
+				<QueryClientProvider client={createHelmorQueryClient()}>
+					<WorkspacePanel
+						workspace={WORKSPACE}
+						sessions={SESSIONS}
+						selectedSessionId="session-1"
+						sessionPanes={[
+							{
+								sessionId: "session-1",
+								messages: [],
+								sending: false,
+								hasLoaded: true,
+								presentationState: "presented",
+							},
+						]}
+						missingScriptTypes={["setup", "archive"]}
+						onInitializeScript={vi.fn()}
+						sending={false}
+					/>
+				</QueryClientProvider>
+			</TooltipProvider>,
+		);
+
+		expect(
+			screen.getByRole("button", { name: /Create setup script/i }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: /Create archive script/i }),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: /Create run script/i }),
+		).toBeNull();
+	});
+
+	it("calls the initialize handler when a missing script action is clicked", async () => {
+		const user = userEvent.setup();
+		const onInitializeScript = vi.fn();
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<QueryClientProvider client={createHelmorQueryClient()}>
+					<WorkspacePanel
+						workspace={WORKSPACE}
+						sessions={SESSIONS}
+						selectedSessionId="session-1"
+						sessionPanes={[
+							{
+								sessionId: "session-1",
+								messages: [],
+								sending: false,
+								hasLoaded: true,
+								presentationState: "presented",
+							},
+						]}
+						missingScriptTypes={["run"]}
+						onInitializeScript={onInitializeScript}
+						sending={false}
+					/>
+				</QueryClientProvider>
+			</TooltipProvider>,
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: /Create run script/i }),
+		);
+
+		expect(onInitializeScript).toHaveBeenCalledWith("run");
+	});
+
 	it("shows a yellow dot for sessions waiting on user interaction", () => {
 		const sessions = [
 			SESSIONS[0],
