@@ -312,10 +312,10 @@ pub fn run() {
         tauri::RunEvent::Resumed => {
             updater::maybe_trigger_on_resume(app_handle.clone());
         }
-        tauri::RunEvent::WindowEvent { label, event, .. } => {
-            if label == "main" && matches!(event, tauri::WindowEvent::Focused(true)) {
-                updater::maybe_trigger_on_focus(app_handle.clone());
-            }
+        tauri::RunEvent::WindowEvent { label, event, .. }
+            if label == "main" && matches!(event, tauri::WindowEvent::Focused(true)) =>
+        {
+            updater::maybe_trigger_on_focus(app_handle.clone());
         }
         _ => {}
     });
