@@ -1,0 +1,95 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+
+concurrency:
+  group: quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CI: true
+
+jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      lint: ${{ steps.filter.outputs.lint }}
+      typecheck: ${{ steps.filter.outputs.typecheck }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Filter changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            lint:
+              - '.github/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'biome.json'
+              - 'tsconfig.json'
+              - 'tsconfig.node.json'
+              - 'vite.config.ts'
+              - 'vitest.shims.d.ts'
+              - 'components.json'
+              - 'index.html'
+              - '.storybook/**'
+              - 'src/**'
+              - 'sidecar/**'
+              - 'src-tauri/**'
+            typecheck:
+              - '.github/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'tsconfig.json'
+              - 'tsconfig.node.json'
+              - 'vite.config.ts'
+              - 'vitest.shims.d.ts'
+              - 'components.json'
+              - 'index.html'
+              - '.storybook/**'
+              - 'src/**'
+              - 'sidecar/**'
+
+  lint:
+    name: Lint
+    needs: changes
+    if: needs.changes.outputs.lint == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Setup Rust Tauri
+        uses: ./.github/actions/setup-rust-tauri
+
+      - name: Run lint
+        run: pnpm run lint
+
+  typecheck:
+    name: Typecheck
+    needs: changes
+    if: needs.changes.outputs.typecheck == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Run typecheck
+        run: pnpm run typecheck
