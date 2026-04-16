@@ -315,6 +315,7 @@ pub(super) fn stream_via_sidecar(
             "provider": model.provider,
             "effortLevel": request.effort_level,
             "permissionMode": request.permission_mode,
+            "fastMode": request.fast_mode.unwrap_or(false),
         }),
     };
 
@@ -339,6 +340,7 @@ pub(super) fn stream_via_sidecar(
     let hsid_copy = helmor_session_id;
     let effort_copy = request.effort_level.clone();
     let mut permission_mode_copy = request.permission_mode.clone();
+    let fast_mode = request.fast_mode.unwrap_or(false);
     let user_message_id_copy = request.user_message_id.clone();
     let files_copy = request.files.clone().unwrap_or_default();
     let resume_only = request.resume_only;
@@ -380,6 +382,14 @@ pub(super) fn stream_via_sidecar(
                     .clone()
                     .unwrap_or_else(|| Uuid::new_v4().to_string()),
             };
+
+            // Persist fast_mode toggle to session
+            if let Err(e) = conn.execute(
+                "UPDATE sessions SET fast_mode = ?1 WHERE id = ?2",
+                rusqlite::params![fast_mode, &ctx.helmor_session_id],
+            ) {
+                tracing::error!(rid = %rid, "Failed to update fast_mode: {e}");
+            }
 
             if resume_only {
                 exchange_ctx = Some(ctx);

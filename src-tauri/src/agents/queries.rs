@@ -667,12 +667,17 @@ fn fetch_models_for_provider(
                                         .collect()
                                 })
                                 .unwrap_or_default();
+                            let supports_fast_mode = entry
+                                .get("supportsFastMode")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false);
                             models.push(AgentModelOption {
                                 id: id.to_string(),
                                 provider: provider.to_string(),
                                 label,
                                 cli_model,
                                 effort_levels,
+                                supports_fast_mode,
                             });
                         }
                     }

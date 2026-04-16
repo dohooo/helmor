@@ -70,6 +70,7 @@ export function getToolInfo(
 				name: path ? basename(path) : "unknown",
 				diffAdd: add || undefined,
 				diffDel: del || undefined,
+				rawDiff: diff || undefined,
 			} satisfies FileChangeInfo;
 		});
 		const totalAdd = parsed.reduce((s, f) => s + (f.diffAdd ?? 0), 0);
@@ -85,6 +86,7 @@ export function getToolInfo(
 				icon,
 				diffAdd: totalAdd || undefined,
 				diffDel: totalDel || undefined,
+				rawDiff: parsed[0]?.rawDiff,
 			};
 		}
 		return {

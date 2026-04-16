@@ -87,11 +87,14 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 }: AssistantToolCallProps) {
 	const info = getToolInfo(toolName, args);
 	const isEdit = toolName === "Edit";
+	const isApplyPatch = toolName === "apply_patch";
 	const oldStr =
 		isEdit && typeof args.old_string === "string" ? args.old_string : null;
 	const newStr =
 		isEdit && typeof args.new_string === "string" ? args.new_string : null;
-	const hasDiff = oldStr != null || newStr != null;
+	const unifiedDiff =
+		isApplyPatch && typeof info.rawDiff === "string" ? info.rawDiff : null;
+	const hasDiff = oldStr != null || newStr != null || unifiedDiff != null;
 
 	const resultStr = useMemo(
 		() =>
@@ -134,6 +137,7 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 						diffDel={info.diffDel}
 						oldStr={oldStr}
 						newStr={newStr}
+						unifiedDiff={unifiedDiff}
 						icon={
 							<img
 								src={getMaterialFileIcon(info.file)}
@@ -256,29 +260,48 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 			</details>
 			{hasFiles ? (
 				<div className="ml-5 flex flex-col gap-0.5 border-l border-border/30 pl-3">
-					{info.files!.map((f, i) => (
-						<div
-							key={`${f.name}-${i}`}
-							className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground"
-						>
-							<img
-								src={getMaterialFileIcon(f.name)}
-								alt=""
-								className="size-3.5 shrink-0"
+					{info.files!.map((f, i) =>
+						f.rawDiff ? (
+							<EditDiffTrigger
+								key={`${f.name}-${i}`}
+								file={f.name}
+								diffAdd={f.diffAdd}
+								diffDel={f.diffDel}
+								oldStr={null}
+								newStr={null}
+								unifiedDiff={f.rawDiff}
+								icon={
+									<img
+										src={getMaterialFileIcon(f.name)}
+										alt=""
+										className="size-3.5 shrink-0"
+									/>
+								}
 							/>
-							<span className="truncate">{f.name}</span>
-							{f.diffAdd != null || f.diffDel != null ? (
-								<span className="flex items-center gap-1 text-[11px]">
-									{f.diffAdd != null ? (
-										<span className="text-chart-2">+{f.diffAdd}</span>
-									) : null}
-									{f.diffDel != null ? (
-										<span className="text-destructive">-{f.diffDel}</span>
-									) : null}
-								</span>
-							) : null}
-						</div>
-					))}
+						) : (
+							<div
+								key={`${f.name}-${i}`}
+								className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground"
+							>
+								<img
+									src={getMaterialFileIcon(f.name)}
+									alt=""
+									className="size-3.5 shrink-0"
+								/>
+								<span className="truncate">{f.name}</span>
+								{f.diffAdd != null || f.diffDel != null ? (
+									<span className="flex items-center gap-1 text-[11px]">
+										{f.diffAdd != null ? (
+											<span className="text-chart-2">+{f.diffAdd}</span>
+										) : null}
+										{f.diffDel != null ? (
+											<span className="text-destructive">-{f.diffDel}</span>
+										) : null}
+									</span>
+								) : null}
+							</div>
+						),
+					)}
 				</div>
 			) : null}
 			{isError === true ? <ToolCallErrorRow result={result} /> : null}

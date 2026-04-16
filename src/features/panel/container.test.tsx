@@ -2,6 +2,7 @@ import { waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
+import { DEFAULT_SETTINGS, SettingsContext } from "@/lib/settings";
 import { renderWithProviders } from "@/test/render-with-providers";
 
 const apiMocks = vi.hoisted(() => ({
@@ -313,6 +314,96 @@ describe("WorkspacePanelContainer loading semantics", () => {
 				}>
 			).find((pane) => pane.sessionId === "session-2")?.messages,
 		).toEqual(createMessages("session-2"));
+	});
+
+	it("derives the new-session tab provider from the default model setting", () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(helmorQueryKeys.agentModelSections, [
+			{
+				id: "claude",
+				label: "Claude",
+				options: [
+					{
+						id: "opus-1m",
+						provider: "claude",
+						label: "Opus",
+						cliModel: "opus-1m",
+					},
+				],
+			},
+			{
+				id: "codex",
+				label: "Codex",
+				options: [
+					{
+						id: "gpt-5.4",
+						provider: "codex",
+						label: "GPT-5.4",
+						cliModel: "gpt-5.4",
+					},
+				],
+			},
+		]);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			createWorkspaceDetail("workspace-1", "session-new"),
+		);
+		queryClient.setQueryData(helmorQueryKeys.workspaceSessions("workspace-1"), [
+			{
+				id: "session-new",
+				workspaceId: "workspace-1",
+				title: "Untitled",
+				agentType: null,
+				status: "idle",
+				model: null,
+				permissionMode: "default",
+				providerSessionId: null,
+				unreadCount: 0,
+				contextTokenCount: 0,
+				contextUsedPercent: null,
+				thinkingEnabled: true,
+				fastMode: false,
+				agentPersonality: null,
+				createdAt: "2026-04-05T00:00:00Z",
+				updatedAt: "2026-04-05T00:00:00Z",
+				lastUserMessageAt: null,
+				resumeSessionAt: null,
+				isHidden: false,
+				isCompacting: false,
+				active: true,
+			},
+		]);
+		queryClient.setQueryData(
+			[...helmorQueryKeys.sessionMessages("session-new"), "thread"],
+			[],
+		);
+
+		renderWithProviders(
+			<SettingsContext.Provider
+				value={{
+					settings: {
+						...DEFAULT_SETTINGS,
+						defaultModelId: "gpt-5.4",
+					},
+					updateSettings: vi.fn(),
+				}}
+			>
+				<WorkspacePanelContainer
+					selectedWorkspaceId="workspace-1"
+					displayedWorkspaceId="workspace-1"
+					selectedSessionId="session-new"
+					displayedSessionId="session-new"
+					sending={false}
+					onSelectSession={vi.fn()}
+					onResolveDisplayedSession={vi.fn()}
+				/>
+			</SettingsContext.Provider>,
+			{ queryClient },
+		);
+
+		expect(getLatestPanelProps().sessionDisplayProviders).toEqual({
+			"session-new": "codex",
+		});
 	});
 
 	it("falls back to loading when revisiting a session after query cache eviction", async () => {

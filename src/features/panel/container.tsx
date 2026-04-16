@@ -1,6 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type {
+	AgentModelSection,
+	AgentProvider,
 	PullRequestInfo,
 	ThreadMessageLike,
 	WorkspaceDetail,
@@ -13,6 +15,8 @@ import {
 	workspaceDetailQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
+import { useSettings } from "@/lib/settings";
+import { resolveSessionDisplayProvider } from "@/lib/workspace-helpers";
 import { WorkspacePanel } from "./index";
 
 const EMPTY_MESSAGES: ThreadMessageLike[] = [];
@@ -27,7 +31,7 @@ type WorkspacePanelContainerProps = {
 	sendingSessionIds?: Set<string>;
 	completedSessionIds?: Set<string>;
 	interactionRequiredSessionIds?: Set<string>;
-	selectedProvider?: string | null;
+	modelSelections?: Record<string, string>;
 	workspacePrInfo?: PullRequestInfo | null;
 	onSelectSession: (sessionId: string | null) => void;
 	onResolveDisplayedSession: (sessionId: string | null) => void;
@@ -45,7 +49,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	sendingSessionIds,
 	completedSessionIds,
 	interactionRequiredSessionIds,
-	selectedProvider = null,
+	modelSelections = {},
 	workspacePrInfo = null,
 	onSelectSession,
 	onResolveDisplayedSession,
@@ -53,6 +57,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	headerLeading,
 }: WorkspacePanelContainerProps) {
 	const queryClient = useQueryClient();
+	const { settings } = useSettings();
 	const autoTitleAttemptedRef = useRef<Set<string>>(new Set());
 
 	const detailQuery = useQuery({
@@ -251,6 +256,25 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	});
 
 	const messages = messagesQuery.data ?? EMPTY_MESSAGES;
+	const sessionDisplayProviders = useMemo<Record<string, AgentProvider>>(() => {
+		const modelSections =
+			queryClient.getQueryData<AgentModelSection[]>(
+				helmorQueryKeys.agentModelSections,
+			) ?? [];
+		return Object.fromEntries(
+			sessions
+				.map((session) => {
+					const provider = resolveSessionDisplayProvider({
+						session,
+						modelSelections,
+						modelSections,
+						settingsDefaultModelId: settings.defaultModelId,
+					});
+					return provider ? [session.id, provider] : null;
+				})
+				.filter((entry): entry is [string, AgentProvider] => entry !== null),
+		);
+	}, [modelSelections, queryClient, sessions, settings.defaultModelId]);
 
 	const preferredPaneSessionId = selectedSessionId ?? threadSessionId;
 	const sessionPanes = useMemo(() => {
@@ -465,7 +489,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			workspace={workspace}
 			sessions={sessions}
 			selectedSessionId={selectedSessionIdForPanel}
-			selectedProvider={selectedProvider}
+			sessionDisplayProviders={sessionDisplayProviders}
 			sessionPanes={sessionPanes}
 			loadingWorkspace={loadingWorkspace}
 			loadingSession={loadingSession}

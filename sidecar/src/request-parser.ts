@@ -53,6 +53,14 @@ export function optionalString(
 	return typeof value === "string" ? value : undefined;
 }
 
+function optionalBoolean(
+	params: Record<string, unknown>,
+	key: string,
+): boolean | undefined {
+	const value = params[key];
+	return typeof value === "boolean" ? value : undefined;
+}
+
 function optionalObject(
 	params: Record<string, unknown>,
 	key: string,
@@ -116,6 +124,7 @@ export function parseSendMessageParams(
 		resume: optionalString(params, "resume"),
 		permissionMode: optionalString(params, "permissionMode"),
 		effortLevel: optionalString(params, "effortLevel"),
+		fastMode: optionalBoolean(params, "fastMode"),
 	};
 }
 

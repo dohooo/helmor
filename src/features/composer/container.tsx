@@ -31,8 +31,8 @@ import {
 	clampEffortToModel,
 	findModelOption,
 	getComposerContextKey,
-	inferDefaultModelId,
 	isNewSession,
+	resolveSessionSelectedModelId,
 } from "@/lib/workspace-helpers";
 import type { DeferredToolResponseHandler } from "./deferred-tool";
 import type { ElicitationResponseHandler } from "./elicitation";
@@ -62,9 +62,11 @@ type WorkspaceComposerContainerProps = {
 	modelSelections: Record<string, string>;
 	effortLevels: Record<string, string>;
 	permissionModes: Record<string, string>;
+	fastModes: Record<string, boolean>;
 	onSelectModel: (contextKey: string, modelId: string) => void;
 	onSelectEffort: (contextKey: string, level: string) => void;
 	onChangePermissionMode: (contextKey: string, mode: string) => void;
+	onChangeFastMode: (contextKey: string, enabled: boolean) => void;
 	onSwitchSession?: (sessionId: string) => void;
 	onSubmit: (payload: {
 		prompt: string;
@@ -75,6 +77,7 @@ type WorkspaceComposerContainerProps = {
 		workingDirectory: string | null;
 		effortLevel: string;
 		permissionMode: string;
+		fastMode: boolean;
 	}) => void;
 	/** Prompt queued by an external caller to auto-submit once the displayed
 	 * session matches `sessionId`. */
@@ -116,9 +119,11 @@ export const WorkspaceComposerContainer = memo(
 		modelSelections,
 		effortLevels = {},
 		permissionModes = {},
+		fastModes = {},
 		onSelectModel,
 		onSelectEffort,
 		onChangePermissionMode,
+		onChangeFastMode,
 		onSwitchSession,
 		onSubmit,
 		pendingPromptForSession = null,
@@ -150,19 +155,12 @@ export const WorkspaceComposerContainer = memo(
 			displayedWorkspaceId,
 			displayedSessionId,
 		);
-		// Only use cached model selection for session-level keys.
-		// Workspace-level keys are transient (pre-session-creation) and
-		// should always defer to the user's default setting.
-		const cachedModelId = composerContextKey.startsWith("session:")
-			? modelSelections[composerContextKey]
-			: undefined;
-		const selectedModelId =
-			cachedModelId ??
-			inferDefaultModelId(
-				currentSession,
-				modelSections,
-				settings.defaultModelId,
-			);
+		const selectedModelId = resolveSessionSelectedModelId({
+			session: currentSession,
+			modelSelections,
+			modelSections,
+			settingsDefaultModelId: settings.defaultModelId,
+		});
 		const selectedModel = useMemo(
 			() => findModelOption(modelSections, selectedModelId),
 			[modelSections, selectedModelId],
@@ -211,6 +209,16 @@ export const WorkspaceComposerContainer = memo(
 			pendingOverrideActive && pendingPromptForSession?.permissionMode
 				? pendingPromptForSession.permissionMode
 				: permissionMode;
+		const supportsFastMode = effectiveModel?.supportsFastMode === true;
+		const cachedFastMode = composerContextKey.startsWith("session:")
+			? fastModes[composerContextKey]
+			: undefined;
+		const sessionFastMode = !isNewSession(currentSession)
+			? currentSession?.fastMode
+			: undefined;
+		const fastMode = supportsFastMode
+			? (cachedFastMode ?? sessionFastMode ?? false)
+			: false;
 		const loadingConversationContext =
 			Boolean(displayedWorkspaceId) &&
 			(workspaceDetailQuery.isPending || sessionsQuery.isPending);
@@ -360,6 +368,7 @@ export const WorkspaceComposerContainer = memo(
 					effortLevel,
 					permissionMode:
 						options?.permissionModeOverride ?? effectivePermissionMode,
+					fastMode: supportsFastMode ? fastMode : false,
 				});
 			},
 			[
@@ -368,6 +377,8 @@ export const WorkspaceComposerContainer = memo(
 				workingDirectory,
 				effortLevel,
 				effectivePermissionMode,
+				fastMode,
+				supportsFastMode,
 			],
 		);
 
@@ -413,6 +424,7 @@ export const WorkspaceComposerContainer = memo(
 				workingDirectory,
 				effortLevel,
 				permissionMode: effectivePermissionMode,
+				fastMode: supportsFastMode ? fastMode : false,
 			});
 			onPendingPromptConsumed?.();
 		}, [
@@ -420,10 +432,12 @@ export const WorkspaceComposerContainer = memo(
 			effectiveModel,
 			effectivePermissionMode,
 			effortLevel,
+			fastMode,
 			onPendingPromptConsumed,
 			onSubmit,
 			pendingModel,
 			pendingPromptForSession,
+			supportsFastMode,
 			workingDirectory,
 		]);
 
@@ -446,6 +460,13 @@ export const WorkspaceComposerContainer = memo(
 				onChangePermissionMode(composerContextKey, mode);
 			},
 			[onChangePermissionMode, composerContextKey],
+		);
+
+		const handleChangeFastModeInner = useCallback(
+			(enabled: boolean) => {
+				onChangeFastMode(composerContextKey, enabled);
+			},
+			[onChangeFastMode, composerContextKey],
 		);
 
 		const autoCloseHelpText =
@@ -531,6 +552,10 @@ export const WorkspaceComposerContainer = memo(
 					onSelectEffort={handleSelectEffortInner}
 					permissionMode={effectivePermissionMode}
 					onChangePermissionMode={handleChangePermissionModeInner}
+					fastMode={fastMode}
+					onChangeFastMode={
+						supportsFastMode ? handleChangeFastModeInner : undefined
+					}
 					sendError={sendError}
 					restoreDraft={restoreDraft}
 					restoreImages={restoreImages}

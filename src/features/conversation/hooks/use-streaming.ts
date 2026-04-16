@@ -70,6 +70,7 @@ type SubmitPayload = {
 	workingDirectory: string | null;
 	effortLevel: string;
 	permissionMode: string;
+	fastMode: boolean;
 };
 
 type UseConversationStreamingArgs = {
@@ -865,6 +866,7 @@ export function useConversationStreaming({
 			workingDirectory,
 			effortLevel,
 			permissionMode,
+			fastMode,
 		}: SubmitPayload) => {
 			const trimmedPrompt = prompt.trim();
 			if (!trimmedPrompt || selectionPending || !displayedSessionId) {
@@ -1005,6 +1007,7 @@ export function useConversationStreaming({
 						workingDirectory,
 						effortLevel,
 						permissionMode,
+						fastMode,
 						userMessageId,
 						files: filePaths,
 					},

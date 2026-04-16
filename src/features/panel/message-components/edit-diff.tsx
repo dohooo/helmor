@@ -8,6 +8,7 @@ export function EditDiffTrigger({
 	diffDel,
 	oldStr,
 	newStr,
+	unifiedDiff,
 	icon,
 }: {
 	file: string;
@@ -15,6 +16,7 @@ export function EditDiffTrigger({
 	diffDel?: number;
 	oldStr: string | null;
 	newStr: string | null;
+	unifiedDiff?: string | null;
 	icon?: ReactNode;
 }) {
 	const triggerRef = useRef<HTMLSpanElement>(null);
@@ -104,6 +106,62 @@ export function EditDiffTrigger({
 												<span className="min-w-0 text-chart-2">{line}</span>
 											</div>
 										))
+									: null}
+								{!oldStr && !newStr && unifiedDiff
+									? unifiedDiff.split("\n").map((line, index) => {
+											const isAdd =
+												line.startsWith("+") && !line.startsWith("+++");
+											const isDel =
+												line.startsWith("-") && !line.startsWith("---");
+											const isHeader =
+												line.startsWith("@@") ||
+												line.startsWith("diff --git") ||
+												line.startsWith("index ") ||
+												line.startsWith("--- ") ||
+												line.startsWith("+++ ");
+											return (
+												<div
+													key={`u${index}`}
+													className={
+														isAdd
+															? "flex whitespace-pre-wrap bg-chart-2/10"
+															: isDel
+																? "flex whitespace-pre-wrap bg-destructive/10"
+																: isHeader
+																	? "flex whitespace-pre-wrap bg-accent/35"
+																	: "flex whitespace-pre-wrap"
+													}
+												>
+													<span className="w-8 shrink-0 select-none border-r border-border/20 pr-1 text-right text-muted-foreground/35">
+														{index + 1}
+													</span>
+													<span
+														className={
+															isAdd
+																? "w-4 shrink-0 select-none text-center text-chart-2/70"
+																: isDel
+																	? "w-4 shrink-0 select-none text-center text-destructive/60"
+																	: "w-4 shrink-0 select-none text-center text-muted-foreground/35"
+														}
+													>
+														{isAdd ? "+" : isDel ? "-" : ""}
+													</span>
+													<span
+														className={
+															isAdd
+																? "min-w-0 text-chart-2"
+																: isDel
+																	? "min-w-0 text-destructive/80"
+																	: isHeader
+																		? "min-w-0 text-muted-foreground"
+																		: "min-w-0 text-foreground/80"
+														}
+													>
+														{line}
+													</span>
+												</div>
+											);
+										})
 									: null}
 							</div>
 						</div>,

@@ -9,6 +9,8 @@ pub struct AgentModelOption {
     pub cli_model: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effort_levels: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub supports_fast_mode: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

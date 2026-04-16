@@ -61,6 +61,7 @@ const MODEL_SECTIONS = [
 				label: "Opus 4.6 1M",
 				cliModel: "opus-1m",
 				effortLevels: ["low", "medium", "high", "max"],
+				supportsFastMode: true,
 			},
 		],
 	},
@@ -233,6 +234,95 @@ describe("WorkspaceComposer", () => {
 				},
 			],
 		);
+	});
+
+	it("only renders fast mode controls for supported models", () => {
+		const queryClient = createHelmorQueryClient();
+		const { rerender } = render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={[
+						...MODEL_SECTIONS,
+						{
+							id: "codex",
+							label: "Codex",
+							options: [
+								{
+									id: "custom-nofast",
+									provider: "codex",
+									label: "Custom",
+									cliModel: "custom-nofast",
+									effortLevels: ["low", "medium"],
+									supportsFastMode: false,
+								},
+							],
+						},
+					]}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="acceptEdits"
+					onChangePermissionMode={vi.fn()}
+					fastMode={false}
+					onChangeFastMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(screen.getByLabelText("Fast mode")).toBeInTheDocument();
+
+		rerender(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="custom-nofast"
+					modelSections={[
+						...MODEL_SECTIONS,
+						{
+							id: "codex",
+							label: "Codex",
+							options: [
+								{
+									id: "custom-nofast",
+									provider: "codex",
+									label: "Custom",
+									cliModel: "custom-nofast",
+									effortLevels: ["low", "medium"],
+									supportsFastMode: false,
+								},
+							],
+						},
+					]}
+					onSelectModel={vi.fn()}
+					provider="codex"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="acceptEdits"
+					onChangePermissionMode={vi.fn()}
+					fastMode={false}
+					onChangeFastMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(screen.queryByLabelText("Fast mode")).not.toBeInTheDocument();
 	});
 
 	it("shows a hover preview for inserted image badges", async () => {
