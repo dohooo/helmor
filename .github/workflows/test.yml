@@ -3,6 +3,8 @@ name: Test
 on:
   pull_request:
   push:
+    branches:
+      - main
 
 concurrency:
   group: test-${{ github.event.pull_request.number || github.ref }}

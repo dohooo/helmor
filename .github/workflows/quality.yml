@@ -3,6 +3,8 @@ name: Quality
 on:
   pull_request:
   push:
+    branches:
+      - main
 
 concurrency:
   group: quality-${{ github.event.pull_request.number || github.ref }}

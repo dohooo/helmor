@@ -3,6 +3,8 @@ name: Build
 on:
   pull_request:
   push:
+    branches:
+      - main
 
 concurrency:
   group: build-${{ github.event.pull_request.number || github.ref }}
