@@ -28,5 +28,8 @@ if (cargoToml === nextCargoToml) {
 
 const tauriConfig = JSON.parse(fs.readFileSync(tauriConfigPath, "utf8"));
 tauriConfig.version = version;
-fs.writeFileSync(tauriConfigPath, `${JSON.stringify(tauriConfig, null, "\t")}\n`);
+fs.writeFileSync(
+	tauriConfigPath,
+	`${JSON.stringify(tauriConfig, null, "\t")}\n`,
+);
 console.log(`Updated src-tauri/tauri.conf.json to ${version}`);

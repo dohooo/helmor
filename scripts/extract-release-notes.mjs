@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 const requestedVersion = process.argv.slice(2).find((arg) => arg !== "--");
-const packageJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+const packageJson = JSON.parse(
+	fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"),
+);
 const version = requestedVersion ?? packageJson.version;
 const changelogPath = path.join(process.cwd(), "CHANGELOG.md");
 

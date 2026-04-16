@@ -12,6 +12,14 @@ function toastIdForUpdate(status: AppUpdateStatus): string | null {
 	return status.update ? `app-update-${status.update.version}` : null;
 }
 
+function isDownloadedUpdateReady(
+	status: AppUpdateStatus | null | undefined,
+): status is AppUpdateStatus & {
+	update: NonNullable<AppUpdateStatus["update"]>;
+} {
+	return status?.stage === "downloaded" && status.update != null;
+}
+
 export function useAppUpdater() {
 	const notifiedVersionRef = useRef<string | null>(null);
 
@@ -19,8 +27,8 @@ export function useAppUpdater() {
 		let cleanup: (() => void) | undefined;
 		let mounted = true;
 
-		const handleStatus = (status: AppUpdateStatus) => {
-			if (!mounted || status.stage !== "downloaded" || !status.update) return;
+		const handleStatus = (status: AppUpdateStatus | null | undefined) => {
+			if (!mounted || !isDownloadedUpdateReady(status)) return;
 			if (notifiedVersionRef.current === status.update.version) return;
 
 			notifiedVersionRef.current = status.update.version;
@@ -51,10 +59,14 @@ export function useAppUpdater() {
 			});
 		};
 
-		void getAppUpdateStatus().then(handleStatus);
-		void listenAppUpdateStatus(handleStatus).then((unlisten) => {
-			cleanup = unlisten;
-		});
+		void getAppUpdateStatus()
+			.then(handleStatus)
+			.catch(() => {});
+		void listenAppUpdateStatus(handleStatus)
+			.then((unlisten) => {
+				cleanup = unlisten;
+			})
+			.catch(() => {});
 
 		return () => {
 			mounted = false;
