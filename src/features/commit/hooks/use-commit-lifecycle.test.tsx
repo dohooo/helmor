@@ -79,7 +79,6 @@ describe("useWorkspaceCommitLifecycle", () => {
 			title: "Fix overflow",
 			url: "https://github.com/example/repo/pull/53",
 			state: "OPEN",
-			isDraft: false,
 			isMerged: false,
 		} satisfies PullRequestInfo);
 		apiMocks.hideSession.mockResolvedValue(undefined);
