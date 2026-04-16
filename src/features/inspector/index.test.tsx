@@ -73,6 +73,7 @@ function renderInspector(
 			workspaceRootPath="/tmp/workspace"
 			workspaceBranch="feature/actions"
 			workspaceTargetBranch="main"
+			workspaceRemote="origin"
 			editorMode={false}
 			onOpenEditorFile={vi.fn()}
 			{...props}
@@ -125,11 +126,11 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 	it("shows clean git rows with passed status icons", async () => {
 		renderInspector();
 
-		await screen.findByText("Up to date with main");
+		await screen.findByText("Up to date with origin/main");
 
 		const actions = screen.getByLabelText("Inspector section Actions");
 		expect(
-			within(actions).getByText("Up to date with main"),
+			within(actions).getByText("Up to date with origin/main"),
 		).toBeInTheDocument();
 		expect(
 			within(actions).getByText("Waiting for PR review"),
@@ -170,7 +171,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 
 		renderInspector();
 
-		await screen.findByText("2 commits behind main");
+		await screen.findByText("2 commits behind origin/main");
 		await user.click(screen.getByRole("button", { name: "Pull" }));
 
 		await waitFor(() => {
@@ -332,6 +333,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 					workspaceRootPath="/tmp/workspace"
 					workspaceBranch="feature/actions"
 					workspaceTargetBranch="main"
+					workspaceRemote="origin"
 					editorMode={false}
 					onOpenEditorFile={vi.fn()}
 				/>
@@ -372,5 +374,19 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 			],
 			behavior: "append",
 		});
+	});
+
+	it("uses the workspace remote when formatting sync target labels", async () => {
+		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
+			uncommittedCount: 0,
+			conflictCount: 0,
+			syncTargetBranch: "main",
+			syncStatus: "upToDate",
+			behindTargetCount: 0,
+		});
+
+		renderInspector({ workspaceRemote: "upstream" });
+
+		await screen.findByText("Up to date with upstream/main");
 	});
 });

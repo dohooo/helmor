@@ -3,18 +3,21 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	addRepositoryFromLocalPath,
-	archiveWorkspace,
 	createWorkspaceFromRepo,
+	listenArchiveExecutionFailed,
+	listenArchiveExecutionSucceeded,
 	loadAddRepositoryDefaults,
 	markWorkspaceRead,
 	markWorkspaceUnread,
 	permanentlyDeleteWorkspace,
 	pinWorkspace,
+	prepareArchiveWorkspace,
 	restoreWorkspace,
 	setWorkspaceManualStatus,
+	startArchiveWorkspace,
 	unpinWorkspace,
-	validateArchiveWorkspace,
 	validateRestoreWorkspace,
+	type WorkspaceRow,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
 import {
@@ -70,6 +73,9 @@ export function useWorkspacesSidebarController({
 	const [creatingWorkspaceRepoId, setCreatingWorkspaceRepoId] = useState<
 		string | null
 	>(null);
+	const [archivingWorkspaceIds, setArchivingWorkspaceIds] = useState<
+		Set<string>
+	>(() => new Set());
 	const [markingReadWorkspaceId, setMarkingReadWorkspaceId] = useState<
 		string | null
 	>(null);
@@ -77,6 +83,16 @@ export function useWorkspacesSidebarController({
 		string | null
 	>(null);
 
+	const archiveRollbackRef = useRef<
+		Map<
+			string,
+			{
+				row: WorkspaceRow;
+				sourceGroupId: string;
+				sourceIndex: number;
+			}
+		>
+	>(new Map());
 	const sidebarMutationCountRef = useRef(0);
 
 	const flushSidebarLists = useCallback(() => {
@@ -106,12 +122,164 @@ export function useWorkspacesSidebarController({
 	const archivedQuery = useQuery(archivedWorkspacesQueryOptions());
 	const repositoriesQuery = useQuery(repositoriesQueryOptions());
 
-	const groups = groupsQuery.data ?? [];
-	const archivedSummaries = archivedQuery.data ?? [];
+	const baseGroups = groupsQuery.data ?? [];
+	const baseArchivedSummaries = archivedQuery.data ?? [];
+	const pendingArchivedEntries = Array.from(
+		archiveRollbackRef.current.entries(),
+	);
+	const pendingArchivedIds = new Set(
+		pendingArchivedEntries.map(([workspaceId]) => workspaceId),
+	);
+	const groups =
+		pendingArchivedIds.size === 0
+			? baseGroups
+			: baseGroups.map((group) => ({
+					...group,
+					rows: group.rows.filter((row) => !pendingArchivedIds.has(row.id)),
+				}));
+	const archivedSummaries =
+		pendingArchivedEntries.length === 0
+			? baseArchivedSummaries
+			: [
+					...pendingArchivedEntries
+						.filter(
+							([workspaceId]) =>
+								!baseArchivedSummaries.some(
+									(summary) => summary.id === workspaceId,
+								),
+						)
+						.map(([, rollback]) =>
+							rowToWorkspaceSummary(rollback.row, {
+								state: "archived",
+							}),
+						),
+					...baseArchivedSummaries,
+				];
 	const archivedRows = useMemo(
 		() => archivedSummaries.map(summaryToArchivedRow),
 		[archivedSummaries],
 	);
+
+	const updateArchivingWorkspaceId = useCallback(
+		(workspaceId: string, active: boolean) => {
+			setArchivingWorkspaceIds((current) => {
+				const next = new Set(current);
+				if (active) {
+					next.add(workspaceId);
+				} else {
+					next.delete(workspaceId);
+				}
+				return next;
+			});
+		},
+		[],
+	);
+
+	const rollbackArchivedWorkspace = useCallback(
+		(workspaceId: string, error: unknown, fallbackMessage: string) => {
+			updateArchivingWorkspaceId(workspaceId, false);
+			const rollback = archiveRollbackRef.current.get(workspaceId);
+			archiveRollbackRef.current.delete(workspaceId);
+
+			if (!rollback) {
+				flushSidebarLists();
+				pushWorkspaceToast(
+					describeUnknownError(error, fallbackMessage),
+					"Archive failed",
+					"destructive",
+				);
+				return;
+			}
+
+			queryClient.setQueryData(helmorQueryKeys.archivedWorkspaces, (current) =>
+				Array.isArray(current)
+					? (current as typeof archivedSummaries).filter(
+							(summary) => summary.id !== workspaceId,
+						)
+					: current,
+			);
+
+			queryClient.setQueryData(helmorQueryKeys.workspaceGroups, (current) => {
+				if (!Array.isArray(current)) {
+					return current;
+				}
+				return (current as typeof groups).map((group) => {
+					if (group.id !== rollback.sourceGroupId) {
+						return group;
+					}
+					if (group.rows.some((row) => row.id === workspaceId)) {
+						return group;
+					}
+					const nextRows = [...group.rows];
+					const insertAt = Math.min(
+						Math.max(rollback.sourceIndex, 0),
+						nextRows.length,
+					);
+					nextRows.splice(insertAt, 0, rollback.row);
+					return {
+						...group,
+						rows: nextRows,
+					};
+				});
+			});
+
+			pushWorkspaceToast(
+				describeUnknownError(error, fallbackMessage),
+				"Archive failed",
+				"destructive",
+			);
+		},
+		[
+			archivedSummaries,
+			flushSidebarLists,
+			groups,
+			pushWorkspaceToast,
+			queryClient,
+			updateArchivingWorkspaceId,
+		],
+	);
+
+	useEffect(() => {
+		let disposed = false;
+		let unlistenFailure: (() => void) | undefined;
+		let unlistenSuccess: (() => void) | undefined;
+
+		void listenArchiveExecutionFailed((payload) => {
+			if (disposed) {
+				return;
+			}
+			rollbackArchivedWorkspace(
+				payload.workspaceId,
+				new Error(payload.message),
+				"Unable to archive workspace.",
+			);
+		}).then((cleanup) => {
+			if (disposed) {
+				cleanup();
+				return;
+			}
+			unlistenFailure = cleanup;
+		});
+
+		void listenArchiveExecutionSucceeded((payload) => {
+			if (disposed) {
+				return;
+			}
+			archiveRollbackRef.current.delete(payload.workspaceId);
+		}).then((cleanup) => {
+			if (disposed) {
+				cleanup();
+				return;
+			}
+			unlistenSuccess = cleanup;
+		});
+
+		return () => {
+			disposed = true;
+			unlistenFailure?.();
+			unlistenSuccess?.();
+		};
+	}, [rollbackArchivedWorkspace]);
 
 	useEffect(() => {
 		if (
@@ -769,26 +937,30 @@ export function useWorkspacesSidebarController({
 	const handleArchiveWorkspace = useCallback(
 		(workspaceId: string) => {
 			void (async () => {
+				if (archivingWorkspaceIds.has(workspaceId)) {
+					return;
+				}
+
+				updateArchivingWorkspaceId(workspaceId, true);
+
 				try {
-					await validateArchiveWorkspace(workspaceId);
+					await prepareArchiveWorkspace(workspaceId);
 				} catch (error) {
-					pushPermanentDeleteRecoveryToast(
-						workspaceId,
+					updateArchivingWorkspaceId(workspaceId, false);
+					pushWorkspaceToast(
+						describeUnknownError(error, "Unable to archive workspace."),
 						"Archive failed",
-						error,
-						"Unable to archive workspace.",
+						"destructive",
 					);
 					return;
 				}
 
-				const previousGroups = queryClient.getQueryData(
-					helmorQueryKeys.workspaceGroups,
-				);
-				const previousArchived = queryClient.getQueryData(
-					helmorQueryKeys.archivedWorkspaces,
-				);
+				const previousGroups =
+					queryClient.getQueryData(helmorQueryKeys.workspaceGroups) ?? groups;
 
-				let movedRow: (typeof groups)[number]["rows"][number] | null = null;
+				let movedRow: WorkspaceRow | null = null;
+				let sourceGroupId: string | null = null;
+				let sourceIndex = -1;
 				const optimisticGroups = Array.isArray(previousGroups)
 					? (previousGroups as typeof groups).map((group) => {
 							const index = group.rows.findIndex(
@@ -798,6 +970,8 @@ export function useWorkspacesSidebarController({
 								return group;
 							}
 							movedRow = group.rows[index];
+							sourceGroupId = group.id;
+							sourceIndex = index;
 							return {
 								...group,
 								rows: [
@@ -808,18 +982,18 @@ export function useWorkspacesSidebarController({
 						})
 					: undefined;
 
-				if (!movedRow || !optimisticGroups) {
-					beginSidebarMutation();
-					void archiveWorkspace(workspaceId)
-						.catch((error) => {
-							pushPermanentDeleteRecoveryToast(
-								workspaceId,
-								"Archive failed",
-								error,
-								"Unable to archive workspace.",
-							);
-						})
-						.finally(endSidebarMutation);
+				if (
+					!movedRow ||
+					!optimisticGroups ||
+					sourceGroupId === null ||
+					sourceIndex < 0
+				) {
+					updateArchivingWorkspaceId(workspaceId, false);
+					pushWorkspaceToast(
+						"Unable to find workspace in the sidebar cache.",
+						"Archive failed",
+						"destructive",
+					);
 					return;
 				}
 
@@ -830,6 +1004,11 @@ export function useWorkspacesSidebarController({
 
 				const archivedPlaceholder = rowToWorkspaceSummary(movedRow, {
 					state: "archived",
+				});
+				archiveRollbackRef.current.set(workspaceId, {
+					row: movedRow,
+					sourceGroupId,
+					sourceIndex,
 				});
 				queryClient.setQueryData(
 					helmorQueryKeys.archivedWorkspaces,
@@ -857,35 +1036,29 @@ export function useWorkspacesSidebarController({
 					onSelectWorkspace(nextWorkspaceId);
 				}
 
-				beginSidebarMutation();
-				void archiveWorkspace(workspaceId)
+				void startArchiveWorkspace(workspaceId)
 					.catch((error) => {
-						queryClient.setQueryData(
-							helmorQueryKeys.workspaceGroups,
-							previousGroups,
-						);
-						queryClient.setQueryData(
-							helmorQueryKeys.archivedWorkspaces,
-							previousArchived,
-						);
-						pushPermanentDeleteRecoveryToast(
+						rollbackArchivedWorkspace(
 							workspaceId,
-							"Archive failed",
 							error,
 							"Unable to archive workspace.",
 						);
 					})
-					.finally(endSidebarMutation);
+					.finally(() => {
+						updateArchivingWorkspaceId(workspaceId, false);
+					});
 			})();
 		},
 		[
-			beginSidebarMutation,
-			endSidebarMutation,
+			archivingWorkspaceIds,
+			groups,
 			onSelectWorkspace,
 			prefetchWorkspace,
-			pushPermanentDeleteRecoveryToast,
+			pushWorkspaceToast,
 			queryClient,
+			rollbackArchivedWorkspace,
 			selectedWorkspaceId,
+			updateArchivingWorkspaceId,
 		],
 	);
 
@@ -1039,6 +1212,7 @@ export function useWorkspacesSidebarController({
 
 	return {
 		addingRepository,
+		archivingWorkspaceIds,
 		archivedRows,
 		availableRepositories: repositoriesQuery.data ?? [],
 		creatingWorkspaceRepoId,

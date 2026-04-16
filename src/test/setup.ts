@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import { createElement, type SVGProps } from "react";
 import { vi } from "vitest";
 
 vi.mock("lottie-web/build/player/lottie_svg", () => ({
@@ -7,6 +8,11 @@ vi.mock("lottie-web/build/player/lottie_svg", () => ({
 			destroy: vi.fn(),
 		})),
 	},
+}));
+
+vi.mock("@lobehub/icons", () => ({
+	Github: (props: SVGProps<SVGSVGElement>) =>
+		createElement("svg", { ...props, "data-testid": "mock-github-icon" }),
 }));
 
 // @tanstack/react-virtual requires a layout engine to determine visible items.

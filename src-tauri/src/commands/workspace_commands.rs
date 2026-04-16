@@ -177,24 +177,35 @@ pub async fn validate_restore_workspace(
 }
 
 #[tauri::command]
-pub async fn archive_workspace(
+pub async fn prepare_archive_workspace(
     app: AppHandle,
     workspace_id: String,
-) -> CmdResult<workspaces::ArchiveWorkspaceResponse> {
-    let ws_lock = db::workspace_mutation_lock(&workspace_id);
-    let _lock = ws_lock.lock().await;
-    // Stop the git watcher BEFORE removing the worktree to avoid race
-    // conditions between the watcher's debouncer and directory deletion.
-    let manager = app.state::<git_watcher::GitWatcherManager>();
-    manager.unwatch(&workspace_id);
-    let result = run_blocking(move || workspaces::archive_workspace_impl(&workspace_id)).await?;
-    git_watcher::notify_workspace_changed(&app);
-    Ok(result)
+) -> CmdResult<workspaces::PrepareArchiveWorkspaceResponse> {
+    let app_handle = app.clone();
+    run_blocking(move || {
+        let manager = app_handle.state::<workspaces::ArchiveJobManager>();
+        manager.prepare(&workspace_id)
+    })
+    .await
 }
 
 #[tauri::command]
-pub async fn validate_archive_workspace(workspace_id: String) -> CmdResult<()> {
-    run_blocking(move || workspaces::validate_archive_workspace(&workspace_id)).await
+pub async fn start_archive_workspace(app: AppHandle, workspace_id: String) -> CmdResult<()> {
+    workspaces::start_archive_workspace(&app, &workspace_id)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn validate_archive_workspace(
+    workspace_id: String,
+) -> CmdResult<workspaces::PrepareArchiveWorkspaceResponse> {
+    run_blocking(move || {
+        workspaces::validate_archive_workspace(&workspace_id)?;
+        Ok(workspaces::PrepareArchiveWorkspaceResponse {
+            workspace_id: workspace_id.clone(),
+        })
+    })
+    .await
 }
 
 #[tauri::command]

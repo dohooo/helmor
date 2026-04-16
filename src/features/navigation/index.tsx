@@ -105,7 +105,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onDeleteWorkspace,
 	onTogglePin,
 	onSetManualStatus,
-	archivingWorkspaceId,
+	archivingWorkspaceIds,
 	markingUnreadWorkspaceId,
 	restoringWorkspaceId,
 }: {
@@ -128,7 +128,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onDeleteWorkspace?: (workspaceId: string) => void;
 	onTogglePin?: (workspaceId: string, currentlyPinned: boolean) => void;
 	onSetManualStatus?: (workspaceId: string, status: string | null) => void;
-	archivingWorkspaceId?: string | null;
+	archivingWorkspaceIds?: Set<string>;
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
 }) {
@@ -323,10 +323,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	}, [selectedWorkspaceId, sectionOpenState, flatItems, virtualizer]);
 
 	const workspaceActionsBusy = Boolean(
-		addingRepository ||
-			archivingWorkspaceId ||
-			markingUnreadWorkspaceId ||
-			restoringWorkspaceId,
+		addingRepository || markingUnreadWorkspaceId || restoringWorkspaceId,
 	);
 	const createBusy = Boolean(creatingWorkspaceRepoId);
 	const addRepositoryBusy = Boolean(addingRepository);
@@ -417,12 +414,11 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						onMarkWorkspaceUnread={onMarkWorkspaceUnread}
 						onTogglePin={onTogglePin}
 						onSetManualStatus={onSetManualStatus}
-						archivingWorkspaceId={archivingWorkspaceId}
+						archivingWorkspaceIds={archivingWorkspaceIds}
 						markingUnreadWorkspaceId={markingUnreadWorkspaceId}
 						restoringWorkspaceId={restoringWorkspaceId}
 						workspaceActionsDisabled={Boolean(
 							creatingWorkspaceRepoId ||
-								archivingWorkspaceId ||
 								markingUnreadWorkspaceId ||
 								restoringWorkspaceId,
 						)}
@@ -451,7 +447,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			onDeleteWorkspace,
 			onTogglePin,
 			onSetManualStatus,
-			archivingWorkspaceId,
+			archivingWorkspaceIds,
 			markingUnreadWorkspaceId,
 			restoringWorkspaceId,
 			creatingWorkspaceRepoId,

@@ -2019,6 +2019,9 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 										workspaceBranch={
 											selectedWorkspaceDetailQuery.data?.branch ?? null
 										}
+										workspaceRemote={
+											selectedWorkspaceDetailQuery.data?.remote ?? null
+										}
 										workspaceTargetBranch={(() => {
 											const d = selectedWorkspaceDetailQuery.data;
 											const target =

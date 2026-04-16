@@ -611,7 +611,7 @@ describe("App", () => {
 				]}
 				archivedRows={[]}
 				onArchiveWorkspace={onArchiveWorkspace}
-				archivingWorkspaceId="ready-workspace"
+				archivingWorkspaceIds={new Set(["ready-workspace"])}
 			/>,
 		);
 

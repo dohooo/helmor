@@ -32,6 +32,7 @@ export const WorkspacesSidebarContainer = memo(
 	}: WorkspacesSidebarContainerProps) {
 		const {
 			addingRepository,
+			archivingWorkspaceIds,
 			archivedRows,
 			availableRepositories,
 			creatingWorkspaceRepoId,
@@ -58,6 +59,7 @@ export const WorkspacesSidebarContainer = memo(
 				archivedRows={archivedRows}
 				availableRepositories={availableRepositories}
 				addingRepository={addingRepository}
+				archivingWorkspaceIds={archivingWorkspaceIds}
 				selectedWorkspaceId={selectedWorkspaceId}
 				sendingWorkspaceIds={sendingWorkspaceIds}
 				completedWorkspaceIds={completedWorkspaceIds}

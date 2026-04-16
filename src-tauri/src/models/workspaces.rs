@@ -322,7 +322,7 @@ pub(crate) fn update_archived_workspace_state(
             SET state = 'archived',
                 archive_commit = ?2,
                 updated_at = datetime('now')
-            WHERE id = ?1 AND state = 'ready'
+            WHERE id = ?1 AND state IN ('ready', 'setup_pending')
             "#,
             (workspace_id, archive_commit),
         )

@@ -1,3 +1,4 @@
+pub(crate) mod archive;
 pub(crate) mod branching;
 pub mod files;
 pub mod helpers;

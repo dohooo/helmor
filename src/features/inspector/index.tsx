@@ -17,6 +17,7 @@ type WorkspaceInspectorSidebarProps = {
 	workspaceRootPath?: string | null;
 	workspaceBranch?: string | null;
 	workspaceTargetBranch?: string | null;
+	workspaceRemote?: string | null;
 	workspaceState?: string | null;
 	repoId?: string | null;
 	editorMode: boolean;
@@ -35,6 +36,7 @@ export function WorkspaceInspectorSidebar({
 	workspaceRootPath,
 	workspaceBranch,
 	workspaceTargetBranch,
+	workspaceRemote,
 	workspaceState,
 	repoId,
 	editorMode,
@@ -107,6 +109,7 @@ export function WorkspaceInspectorSidebar({
 
 			<ActionsSection
 				workspaceId={workspaceId ?? null}
+				workspaceRemote={workspaceRemote ?? null}
 				sectionRef={actionsRef}
 				bodyHeight={actionsHeight}
 				expanded={!tabsOpen}

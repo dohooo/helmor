@@ -280,6 +280,19 @@ export type ArchiveWorkspaceResponse = {
 	archivedState: string;
 };
 
+export type PrepareArchiveWorkspaceResponse = {
+	workspaceId: string;
+};
+
+export type ArchiveExecutionFailedPayload = {
+	workspaceId: string;
+	message: string;
+};
+
+export type ArchiveExecutionSucceededPayload = {
+	workspaceId: string;
+};
+
 export type CreateWorkspaceResponse = {
 	createdWorkspaceId: string;
 	selectedWorkspaceId: string;
@@ -732,21 +745,44 @@ export async function validateRestoreWorkspace(
 	});
 }
 
-export async function archiveWorkspace(
+export async function prepareArchiveWorkspace(
 	workspaceId: string,
-): Promise<ArchiveWorkspaceResponse> {
-	return invoke<ArchiveWorkspaceResponse>("archive_workspace", {
+): Promise<PrepareArchiveWorkspaceResponse> {
+	return invoke<PrepareArchiveWorkspaceResponse>("prepare_archive_workspace", {
 		workspaceId,
 	});
 }
 
-/**
- * Read-only preflight for archive — see `validateRestoreWorkspace`.
- */
-export async function validateArchiveWorkspace(
+export async function startArchiveWorkspace(
 	workspaceId: string,
 ): Promise<void> {
-	await invoke<void>("validate_archive_workspace", { workspaceId });
+	await invoke<void>("start_archive_workspace", { workspaceId });
+}
+
+export async function validateArchiveWorkspace(
+	workspaceId: string,
+): Promise<PrepareArchiveWorkspaceResponse> {
+	return invoke<PrepareArchiveWorkspaceResponse>("validate_archive_workspace", {
+		workspaceId,
+	});
+}
+
+export async function listenArchiveExecutionFailed(
+	callback: (payload: ArchiveExecutionFailedPayload) => void,
+): Promise<UnlistenFn> {
+	return listen<ArchiveExecutionFailedPayload>(
+		"archive-execution-failed",
+		(event) => callback(event.payload),
+	);
+}
+
+export async function listenArchiveExecutionSucceeded(
+	callback: (payload: ArchiveExecutionSucceededPayload) => void,
+): Promise<UnlistenFn> {
+	return listen<ArchiveExecutionSucceededPayload>(
+		"archive-execution-succeeded",
+		(event) => callback(event.payload),
+	);
 }
 
 export type DetectedEditor = {

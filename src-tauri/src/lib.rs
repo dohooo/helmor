@@ -114,6 +114,7 @@ pub fn run() {
         .manage(sidecar::ManagedSidecar::new())
         .manage(agents::ActiveStreams::new())
         .manage(agents::SlashCommandCache::new())
+        .manage(workspace::archive::ArchiveJobManager::new())
         .manage(git_watcher::GitWatcherManager::new())
         .manage(workspace::scripts::ScriptProcessManager::new())
         .setup(|app| {
@@ -200,7 +201,8 @@ pub fn run() {
             agents::respond_to_elicitation_request,
             agents::generate_session_title,
             agents::list_slash_commands,
-            commands::workspace_commands::archive_workspace,
+            commands::workspace_commands::prepare_archive_workspace,
+            commands::workspace_commands::start_archive_workspace,
             commands::workspace_commands::validate_archive_workspace,
             commands::workspace_commands::validate_restore_workspace,
             commands::github_commands::cancel_github_identity_connect,

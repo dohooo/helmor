@@ -7,6 +7,10 @@ use crate::{
     sessions,
 };
 
+pub use super::archive::{
+    start_archive_workspace, ArchiveExecutionFailedPayload, ArchiveExecutionSucceededPayload,
+    ArchiveJobManager, PrepareArchiveWorkspaceResponse,
+};
 pub use super::branching::{
     _reset_prefetch_rate_limit, list_remote_branches, prefetch_remote_refs,
     refresh_remote_and_realign, rename_workspace_branch, sync_workspace_with_target_branch,
@@ -15,10 +19,10 @@ pub use super::branching::{
     UpdateIntendedTargetBranchResponse,
 };
 pub use super::lifecycle::{
-    archive_workspace_impl, create_workspace_from_repo_impl, restore_workspace_impl,
-    validate_archive_workspace, validate_restore_workspace, ArchiveWorkspaceResponse, BranchRename,
-    CreateWorkspaceResponse, RestoreWorkspaceResponse, TargetBranchConflict,
-    ValidateRestoreResponse,
+    archive_workspace_impl, create_workspace_from_repo_impl, prepare_archive_plan,
+    restore_workspace_impl, validate_archive_workspace, validate_restore_workspace,
+    ArchivePreparedPlan, ArchiveWorkspaceResponse, BranchRename, CreateWorkspaceResponse,
+    RestoreWorkspaceResponse, TargetBranchConflict, ValidateRestoreResponse,
 };
 
 #[derive(Debug, Clone, Serialize)]

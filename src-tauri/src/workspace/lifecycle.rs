@@ -181,12 +181,17 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
     }
 }
 
-struct ArchivePreflightData {
+#[derive(Debug, Clone)]
+pub struct ArchivePreparedPlan {
+    pub workspace_id: String,
     repo_root: PathBuf,
     branch: String,
     workspace_dir: PathBuf,
     archived_context_dir: PathBuf,
-    archive_commit: String,
+}
+
+fn is_archive_eligible_state(state: &str) -> bool {
+    matches!(state, "ready" | "setup_pending")
 }
 
 /// Best-effort archive hook: load the repo's archive_script and run it
@@ -245,12 +250,15 @@ fn run_archive_hook(workspace_id: &str, workspace_dir: &Path, repo_root: &Path) 
     }
 }
 
-fn archive_workspace_preflight(workspace_id: &str) -> Result<ArchivePreflightData> {
+pub fn prepare_archive_plan(workspace_id: &str) -> Result<ArchivePreparedPlan> {
     let record = workspace_models::load_workspace_record_by_id(workspace_id)?
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
 
-    if record.state != "ready" {
-        bail!("Workspace is not ready: {workspace_id}");
+    if !is_archive_eligible_state(&record.state) {
+        bail!(
+            "Workspace is not archive-ready: {workspace_id} (state: {})",
+            record.state
+        );
     }
 
     let repo_root = helpers::non_empty(&record.root_path)
@@ -277,33 +285,42 @@ fn archive_workspace_preflight(workspace_id: &str) -> Result<ArchivePreflightDat
         );
     }
 
-    let archive_commit = git_ops::current_workspace_head_commit(&workspace_dir)?;
-    git_ops::verify_commit_exists(&repo_root, &archive_commit)?;
-
-    Ok(ArchivePreflightData {
+    Ok(ArchivePreparedPlan {
+        workspace_id: workspace_id.to_string(),
         repo_root,
         branch,
         workspace_dir,
         archived_context_dir,
-        archive_commit,
     })
 }
 
 pub fn validate_archive_workspace(workspace_id: &str) -> Result<()> {
-    archive_workspace_preflight(workspace_id).map(|_| ())
+    prepare_archive_plan(workspace_id).map(|_| ())
 }
 
 pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResponse> {
-    let ArchivePreflightData {
-        repo_root,
-        branch,
-        workspace_dir,
-        archived_context_dir,
-        archive_commit,
-    } = archive_workspace_preflight(workspace_id)?;
+    let plan = prepare_archive_plan(workspace_id)?;
+    execute_archive_plan(&plan)
+}
+
+pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspaceResponse> {
+    let repo_root = &plan.repo_root;
+    let branch = &plan.branch;
+    let workspace_dir = &plan.workspace_dir;
+    let archived_context_dir = &plan.archived_context_dir;
+    let workspace_id = &plan.workspace_id;
+    let timing = std::time::Instant::now();
+    let archive_commit = git_ops::current_workspace_head_commit(workspace_dir)?;
+    git_ops::verify_commit_exists(repo_root, &archive_commit)?;
 
     // Run archive script (best-effort, don't block archive on script failure).
-    run_archive_hook(workspace_id, &workspace_dir, &repo_root);
+    let hook_started = std::time::Instant::now();
+    run_archive_hook(workspace_id, workspace_dir, repo_root);
+    tracing::info!(
+        workspace_id,
+        elapsed_ms = hook_started.elapsed().as_millis(),
+        "Archive hook finished"
+    );
 
     fs::create_dir_all(archived_context_dir.parent().with_context(|| {
         format!(
@@ -319,13 +336,25 @@ pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResp
     })?;
 
     let workspace_context_dir = workspace_dir.join(".context");
-    let staged_archive_dir = helpers::staged_archive_context_dir(&archived_context_dir);
+    let staged_archive_dir = helpers::staged_archive_context_dir(archived_context_dir);
+    let context_copy_started = std::time::Instant::now();
     create_staged_archive_context(&workspace_context_dir, &staged_archive_dir)?;
+    tracing::info!(
+        workspace_id,
+        elapsed_ms = context_copy_started.elapsed().as_millis(),
+        "Archive context staging finished"
+    );
 
-    if let Err(error) = git_ops::remove_worktree(&repo_root, &workspace_dir) {
+    let remove_worktree_started = std::time::Instant::now();
+    if let Err(error) = git_ops::remove_worktree(repo_root, workspace_dir) {
         let _ = fs::remove_dir_all(&staged_archive_dir);
         return Err(error);
     }
+    tracing::info!(
+        workspace_id,
+        elapsed_ms = remove_worktree_started.elapsed().as_millis(),
+        "Archive worktree removal finished"
+    );
 
     git_ops::run_git(
         [
@@ -333,21 +362,21 @@ pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResp
             &repo_root.display().to_string(),
             "branch",
             "-D",
-            &branch,
+            branch,
         ],
         None,
     )
     .ok();
 
-    if let Err(error) = fs::rename(&staged_archive_dir, &archived_context_dir) {
+    if let Err(error) = fs::rename(&staged_archive_dir, archived_context_dir) {
         cleanup_failed_archive(
-            &repo_root,
-            &workspace_dir,
+            repo_root,
+            workspace_dir,
             &workspace_context_dir,
-            &branch,
+            branch,
             &archive_commit,
             &staged_archive_dir,
-            &archived_context_dir,
+            archived_context_dir,
         );
         bail!(
             "Failed to move archived context into {}: {error}",
@@ -359,16 +388,22 @@ pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResp
         workspace_models::update_archived_workspace_state(workspace_id, &archive_commit)
     {
         cleanup_failed_archive(
-            &repo_root,
-            &workspace_dir,
+            repo_root,
+            workspace_dir,
             &workspace_context_dir,
-            &branch,
+            branch,
             &archive_commit,
             &staged_archive_dir,
-            &archived_context_dir,
+            archived_context_dir,
         );
         return Err(error);
     }
+
+    tracing::info!(
+        workspace_id,
+        elapsed_ms = timing.elapsed().as_millis(),
+        "Archive execution finished"
+    );
 
     Ok(ArchiveWorkspaceResponse {
         archived_workspace_id: workspace_id.to_string(),
