@@ -57,7 +57,12 @@ export function EditDiffTrigger({
 				{icon}
 				<span className="min-w-0 truncate">{file}</span>
 				{diffAdd != null || diffDel != null ? (
-					<span className="ml-auto flex shrink-0 items-center gap-1 text-[11px]">
+					<span
+						className={cn(
+							"flex shrink-0 items-center gap-1 text-[11px]",
+							variant === "row" ? "" : "ml-auto",
+						)}
+					>
 						{diffAdd != null ? (
 							<span className="text-chart-2">+{diffAdd}</span>
 						) : null}

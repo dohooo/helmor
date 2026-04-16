@@ -487,7 +487,7 @@ describe("WorkspaceComposer", () => {
 		expect(screen.queryByLabelText("Fast mode")).not.toBeInTheDocument();
 	});
 
-	it("renders the fast mode lottie overlay inside the lightning button", () => {
+	it("renders the fast mode lottie overlay inside the lightning button when enabled", () => {
 		const queryClient = createHelmorQueryClient();
 
 		render(
@@ -521,9 +521,51 @@ describe("WorkspaceComposer", () => {
 		const overlay = fastModeButton.querySelector(
 			"[data-testid='fast-mode-lottie-icon']",
 		);
+		const zapIcon = fastModeButton.querySelector("svg");
 
 		expect(overlay).not.toBeNull();
 		expect(overlay).toHaveClass("absolute", "inset-[-5px]", "z-10");
+		expect(zapIcon).not.toHaveClass("opacity-55");
+	});
+
+	it("only dims the fast mode lightning icon when disabled", () => {
+		const queryClient = createHelmorQueryClient();
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<QueryClientProvider client={queryClient}>
+					<WorkspaceComposer
+						contextKey="session:session-1"
+						onSubmit={vi.fn()}
+						disabled={false}
+						submitDisabled={false}
+						sending={false}
+						selectedModelId="opus-1m"
+						modelSections={MODEL_SECTIONS}
+						onSelectModel={vi.fn()}
+						provider="claude"
+						effortLevel="high"
+						onSelectEffort={vi.fn()}
+						permissionMode="acceptEdits"
+						onChangePermissionMode={vi.fn()}
+						fastMode={false}
+						onChangeFastMode={vi.fn()}
+						restoreImages={[]}
+						restoreFiles={[]}
+						restoreCustomTags={[]}
+					/>
+				</QueryClientProvider>
+			</TooltipProvider>,
+		);
+
+		const fastModeButton = screen.getByRole("button", { name: "Fast mode" });
+		const overlay = fastModeButton.querySelector(
+			"[data-testid='fast-mode-lottie-icon']",
+		);
+		const zapIcon = fastModeButton.querySelector("svg");
+
+		expect(overlay).toBeNull();
+		expect(zapIcon).toHaveClass("opacity-55");
 	});
 
 	it("shows a hover preview for inserted image badges", async () => {

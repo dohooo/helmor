@@ -489,15 +489,23 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 														fastMode
 															? "text-amber-500 hover:bg-amber-500/10 hover:text-amber-500"
 															: "text-muted-foreground",
+														toolbarDisabled
+															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
+															: null,
 													)}
 													onClick={() => onChangeFastMode(!fastMode)}
 												>
 													<span className="relative block size-[14px]">
 														<Zap
-															className="absolute inset-0 z-0 size-[14px] opacity-55"
+															className={cn(
+																"absolute inset-0 z-0 size-[14px]",
+																fastMode ? null : "opacity-55",
+															)}
 															strokeWidth={1.8}
 														/>
-														<FastModeLottieIcon className="absolute inset-[-5px] z-10 drop-shadow-[0_0_4px_rgba(245,158,11,0.5)]" />
+														{fastMode ? (
+															<FastModeLottieIcon className="absolute inset-[-5px] z-10 drop-shadow-[0_0_4px_rgba(245,158,11,0.5)]" />
+														) : null}
 													</span>
 												</ComposerButton>
 											</TooltipTrigger>
@@ -568,7 +576,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											`gap-1 px-1.5 text-[11px] ${composerToolbarTriggerClassName}`,
 											permissionMode === "plan"
 												? "text-plan hover:bg-accent/60 hover:text-plan"
-												: "text-muted-foreground",
+												: "text-muted-foreground opacity-55",
 										)}
 										onClick={() =>
 											onChangePermissionMode(
