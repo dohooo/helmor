@@ -143,8 +143,9 @@ impl MessagePipeline {
             None => return PipelineEmit::None,
         };
 
-        // Adapt only this single partial message — no collapse needed
-        // during streaming (collapse runs on full renders).
+        // Adapt only this single partial message. Cross-message
+        // stabilization of streaming tails happens in the frontend cache
+        // layer where the base snapshot and pending partial are combined.
         let rendered = adapter::convert(&[partial]);
         let mut msg = match rendered.into_iter().next() {
             Some(m) => m,

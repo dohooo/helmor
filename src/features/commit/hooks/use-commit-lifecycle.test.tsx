@@ -98,6 +98,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				},
 			},
 		});
+		const invalidateQueriesSpy = vi.spyOn(queryClient, "invalidateQueries");
 		queryClient.setQueryData(helmorQueryKeys.workspaceDetail("workspace-1"), {
 			id: "workspace-1",
 			activeSessionId: "session-after-close",
@@ -169,6 +170,14 @@ describe("useWorkspaceCommitLifecycle", () => {
 
 		await waitFor(() => {
 			expect(apiMocks.lookupWorkspacePr).toHaveBeenCalledWith("workspace-1");
+		});
+		await waitFor(() => {
+			expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+				queryKey: helmorQueryKeys.workspacePr("workspace-1"),
+			});
+			expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+				queryKey: helmorQueryKeys.workspacePrActionStatus("workspace-1"),
+			});
 		});
 		await waitFor(() => {
 			expect(apiMocks.setWorkspaceManualStatus).toHaveBeenCalledWith(
