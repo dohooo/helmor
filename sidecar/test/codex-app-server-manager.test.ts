@@ -16,8 +16,6 @@ const serverState = {
 class MockCodexAppServer {
 	killed = false;
 
-	constructor(_opts: unknown) {}
-
 	async sendRequest(method: string, params: unknown): Promise<unknown> {
 		serverState.requests.push({ method, params });
 

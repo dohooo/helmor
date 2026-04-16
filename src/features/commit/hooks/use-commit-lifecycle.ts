@@ -398,7 +398,12 @@ export function useWorkspaceCommitLifecycle({
 			phase === "done" ? 1200 : 1600,
 		);
 		return () => window.clearTimeout(timeoutId);
-	}, [commitLifecycle, onSelectSession, queryClient, refreshWorkspaceRemoteStatus]);
+	}, [
+		commitLifecycle,
+		onSelectSession,
+		queryClient,
+		refreshWorkspaceRemoteStatus,
+	]);
 
 	// Only honour the lifecycle if it belongs to the currently-selected workspace.
 	const activeLifecycle =
