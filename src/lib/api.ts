@@ -1047,11 +1047,13 @@ export type WorkspaceGitActionStatus = {
 export type SyncWorkspaceTargetOutcome =
 	| "updated"
 	| "alreadyUpToDate"
-	| "conflict";
+	| "conflict"
+	| "dirtyWorktree";
 
 export type SyncWorkspaceTargetResponse = {
 	outcome: SyncWorkspaceTargetOutcome;
 	targetBranch: string;
+	conflictedFiles: string[];
 };
 
 export type PushWorkspaceToRemoteResponse = {

@@ -7,6 +7,7 @@ import type {
 	WorkspacePrActionStatus,
 } from "@/lib/api";
 import { ComposerInsertProvider } from "@/lib/composer-insert-context";
+import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import { renderWithProviders } from "@/test/render-with-providers";
 import { WorkspaceInspectorSidebar } from "./index";
 
@@ -76,9 +77,11 @@ function renderInspector(
 			workspaceRootPath="/tmp/workspace"
 			workspaceBranch="feature/actions"
 			workspaceTargetBranch="main"
-			workspaceRemote="origin"
+			workspaceRemote="nathan"
 			editorMode={false}
 			onOpenEditorFile={vi.fn()}
+			currentSessionId="session-1"
+			sendingSessionIds={new Set<string>()}
 			{...props}
 		/>,
 	);
@@ -118,6 +121,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		apiMocks.syncWorkspaceWithTargetBranch.mockResolvedValue({
 			outcome: "updated",
 			targetBranch: "main",
+			conflictedFiles: [],
 		});
 	});
 
@@ -142,11 +146,11 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 	it("shows clean git rows with passed status icons", async () => {
 		renderInspector();
 
-		await screen.findByText("Up to date with origin/main");
+		await screen.findByText("Up to date with nathan/main");
 
 		const actions = screen.getByLabelText("Inspector section Actions");
 		expect(
-			within(actions).getByText("Up to date with origin/main"),
+			within(actions).getByText("Up to date with nathan/main"),
 		).toBeInTheDocument();
 		expect(
 			within(actions).getByText("Waiting for PR review"),
@@ -160,7 +164,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 	it("keeps the actions scroll area shrinkable when tabs are collapsed", async () => {
 		renderInspector();
 
-		await screen.findByText("Up to date with origin/main");
+		await screen.findByText("Up to date with nathan/main");
 
 		const actionsBody = screen.getByLabelText("Actions panel body");
 		expect(actionsBody).toHaveClass("min-h-0");
@@ -199,7 +203,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 
 		renderInspector();
 
-		await screen.findByText("2 commits behind origin/main");
+		await screen.findByText("2 commits behind nathan/main");
 		await user.click(screen.getByRole("button", { name: "Pull" }));
 
 		await waitFor(() => {
@@ -207,6 +211,133 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 				"workspace-1",
 			);
 		});
+	});
+
+	it("queues the pull task into the current chat when the worktree is dirty", async () => {
+		const user = userEvent.setup();
+		const onQueuePendingPromptForSession = vi.fn();
+		apiMocks.syncWorkspaceWithTargetBranch.mockResolvedValue({
+			outcome: "dirtyWorktree",
+			targetBranch: "main",
+			conflictedFiles: [],
+		});
+		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
+			uncommittedCount: 1,
+			conflictCount: 0,
+			syncTargetBranch: "main",
+			syncStatus: "behind",
+			behindTargetCount: 2,
+		});
+
+		renderInspector({ onQueuePendingPromptForSession });
+
+		await screen.findByText("1 uncommitted change");
+		await user.click(screen.getByRole("button", { name: "Pull" }));
+
+		await waitFor(() => {
+			expect(onQueuePendingPromptForSession).toHaveBeenCalledWith({
+				sessionId: "session-1",
+				prompt:
+					"Commit uncommitted changes, then merge nathan/main into this branch. Then push.",
+			});
+		});
+	});
+
+	it("queues the conflict-resolution task into the current chat", async () => {
+		const user = userEvent.setup();
+		const onQueuePendingPromptForSession = vi.fn();
+		apiMocks.syncWorkspaceWithTargetBranch.mockResolvedValue({
+			outcome: "conflict",
+			targetBranch: "main",
+			conflictedFiles: ["README.md", "src/App.tsx"],
+		});
+		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
+			uncommittedCount: 0,
+			conflictCount: 0,
+			syncTargetBranch: "main",
+			syncStatus: "behind",
+			behindTargetCount: 2,
+		});
+
+		renderInspector({ onQueuePendingPromptForSession });
+
+		await screen.findByText("2 commits behind nathan/main");
+		await user.click(screen.getByRole("button", { name: "Pull" }));
+
+		await waitFor(() => {
+			expect(onQueuePendingPromptForSession).toHaveBeenCalledWith({
+				sessionId: "session-1",
+				prompt: "Merge nathan/main into this branch. Then push.",
+			});
+		});
+	});
+
+	it("prefixes the real remote even when the branch name itself contains slashes", async () => {
+		const user = userEvent.setup();
+		const onQueuePendingPromptForSession = vi.fn();
+		apiMocks.syncWorkspaceWithTargetBranch.mockResolvedValue({
+			outcome: "conflict",
+			targetBranch: "nathan/testing",
+			conflictedFiles: ["README.md"],
+		});
+		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
+			uncommittedCount: 0,
+			conflictCount: 0,
+			syncTargetBranch: "nathan/testing",
+			syncStatus: "behind",
+			behindTargetCount: 2,
+		});
+
+		renderInspector({
+			onQueuePendingPromptForSession,
+			workspaceRemote: "Origin",
+		});
+
+		await screen.findByText("2 commits behind nathan/testing");
+		await user.click(screen.getByRole("button", { name: "Pull" }));
+
+		await waitFor(() => {
+			expect(onQueuePendingPromptForSession).toHaveBeenCalledWith({
+				sessionId: "session-1",
+				prompt: "Merge Origin/nathan/testing into this branch. Then push.",
+			});
+		});
+	});
+
+	it("shows a workspace toast instead of queueing when the current chat is still streaming", async () => {
+		const user = userEvent.setup();
+		const onQueuePendingPromptForSession = vi.fn();
+		const pushToast = vi.fn() as PushWorkspaceToast;
+		apiMocks.syncWorkspaceWithTargetBranch.mockResolvedValue({
+			outcome: "conflict",
+			targetBranch: "main",
+			conflictedFiles: ["README.md"],
+		});
+		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
+			uncommittedCount: 0,
+			conflictCount: 0,
+			syncTargetBranch: "main",
+			syncStatus: "behind",
+			behindTargetCount: 2,
+		});
+
+		renderInspector({
+			onQueuePendingPromptForSession,
+			pushToast,
+			sendingSessionIds: new Set(["session-1"]),
+		});
+
+		await screen.findByText("2 commits behind nathan/main");
+		await user.click(screen.getByRole("button", { name: "Pull" }));
+
+		await waitFor(() => {
+			expect(pushToast).toHaveBeenCalledWith(
+				expect.stringContaining("AI is still responding in the current chat"),
+				"AI is still responding",
+			);
+		});
+		expect(apiMocks.syncWorkspaceWithTargetBranch).not.toHaveBeenCalled();
+		expect(onQueuePendingPromptForSession).not.toHaveBeenCalled();
 	});
 
 	it("shows push when local branch is ahead of its remote tracking ref", async () => {
@@ -283,7 +414,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		);
 		expectTextBefore(
 			actions,
-			"23 commits behind origin/main",
+			"23 commits behind nathan/main",
 			"No uncommitted changes",
 		);
 		expectTextBefore(actions, "No uncommitted changes", "Review approved");
@@ -400,6 +531,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		let resolveSync = (_value: {
 			outcome: "updated";
 			targetBranch: string;
+			conflictedFiles: string[];
 		}) => {};
 		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
 			uncommittedCount: 0,
@@ -431,7 +563,11 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		).toBeInTheDocument();
 		expect(pullButton).not.toHaveTextContent("Pull");
 
-		resolveSync({ outcome: "updated", targetBranch: "main" });
+		resolveSync({
+			outcome: "updated",
+			targetBranch: "main",
+			conflictedFiles: [],
+		});
 	});
 
 	it("renders running and failed remote status colors with accessible labels", async () => {
