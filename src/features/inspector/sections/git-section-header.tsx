@@ -45,6 +45,7 @@ export function GitSectionHeader({
 		<div
 			className={cn(
 				INSPECTOR_SECTION_HEADER_CLASS,
+				"transition-[background-color,border-color,color,box-shadow] duration-300 ease-out",
 				gitHeaderHighlightClass,
 				className,
 			)}
@@ -60,7 +61,7 @@ export function GitSectionHeader({
 						variant="outline"
 						size="xs"
 						className={cn(
-							"self-center translate-y-px bg-transparent font-normal tracking-[0.01em] hover:bg-transparent hover:opacity-80",
+							"self-center translate-y-px bg-transparent font-normal tracking-[0.01em] transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-transparent hover:opacity-80",
 							(commitButtonMode === "fix" || commitButtonMode === "closed") &&
 								"border-[var(--workspace-pr-closed-accent)] text-[var(--workspace-pr-closed-accent)] hover:text-[var(--workspace-pr-closed-accent)]",
 							commitButtonMode === "resolve-conflicts" &&

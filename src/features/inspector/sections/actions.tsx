@@ -101,6 +101,9 @@ export function ActionsSection({
 	const reviewRows = buildReviewRows(prStatus, prInfo);
 	const sortedDeployments = sortActionItems(prStatus.deployments);
 	const sortedChecks = sortActionItems(prStatus.checks);
+	const bottomSpacerHeight = expanded
+		? 0
+		: Math.max(0, Math.round(bodyHeight * 0.3));
 	const actionDisabled = commitButtonState === "busy";
 	const handleSync = useCallback(async () => {
 		if (!workspaceId || syncPending) {
@@ -279,6 +282,13 @@ export function ActionsSection({
 							/>
 						))}
 					</>
+				)}
+				{bottomSpacerHeight > 0 && (
+					<div
+						aria-hidden="true"
+						className="shrink-0"
+						style={{ height: `${bottomSpacerHeight}px` }}
+					/>
 				)}
 			</ScrollArea>
 		</section>

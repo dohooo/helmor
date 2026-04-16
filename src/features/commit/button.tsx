@@ -177,13 +177,13 @@ function getModeClassName(mode: WorkspaceCommitButtonMode): string | undefined {
 	switch (mode) {
 		case "fix":
 		case "closed":
-			return "bg-[var(--workspace-pr-closed-accent)] text-white hover:bg-[var(--workspace-pr-closed-accent)]";
+			return "bg-[var(--workspace-pr-closed-accent)] text-white transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-[var(--workspace-pr-closed-accent)]";
 		case "resolve-conflicts":
-			return "bg-[var(--workspace-pr-conflicts-accent)] text-white hover:bg-[var(--workspace-pr-conflicts-accent)]";
+			return "bg-[var(--workspace-pr-conflicts-accent)] text-white transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-[var(--workspace-pr-conflicts-accent)]";
 		case "merge":
-			return "bg-[var(--workspace-pr-open-accent)] text-white hover:bg-[var(--workspace-pr-open-accent)]";
+			return "bg-[var(--workspace-pr-open-accent)] text-white transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-[var(--workspace-pr-open-accent)]";
 		case "merged":
-			return "bg-[var(--workspace-pr-merged-accent)] text-white hover:bg-[var(--workspace-pr-merged-accent)]";
+			return "bg-[var(--workspace-pr-merged-accent)] text-white transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-[var(--workspace-pr-merged-accent)]";
 		default:
 			return undefined;
 	}

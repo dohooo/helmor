@@ -20,7 +20,7 @@ export function ActionRow({
 	return (
 		<div
 			className={cn(
-				"relative flex items-center justify-between overflow-hidden border border-primary/40 bg-sidebar px-3 pb-1 pt-1.5",
+				"relative flex items-center justify-between overflow-hidden border border-primary/40 bg-background px-3 pb-1 pt-1.5",
 				className,
 			)}
 		>
