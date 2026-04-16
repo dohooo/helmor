@@ -675,7 +675,10 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 							<History className="size-3.5" strokeWidth={1.8} />
 						</Button>
 					</DropdownMenuTrigger>
-					<DropdownMenuContent align="end" className="w-56">
+					<DropdownMenuContent
+						align="end"
+						className="max-h-96 w-56 overscroll-contain"
+					>
 						{hiddenSessions.length > 0 ? (
 							hiddenSessions.map((session) => (
 								<Tooltip key={session.id}>
