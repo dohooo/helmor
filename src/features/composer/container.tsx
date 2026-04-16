@@ -456,8 +456,8 @@ export const WorkspaceComposerContainer = memo(
 				{isActionSession ? (
 					<ActionRow
 						className={cn(
-							"relative z-10 mx-auto -mb-px w-[90%] rounded-t-[14px] border-b-0",
-							autoCloseEnabled ? "border-primary/40" : "border-secondary/80",
+							"relative z-10 mx-auto -mb-px w-[90%] rounded-t-2xl border-b-0",
+							autoCloseEnabled ? "border-transparent" : "border-secondary/80",
 						)}
 						overlay={
 							autoCloseEnabled ? (
