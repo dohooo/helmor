@@ -344,6 +344,12 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 	const [completedSessions, setCompletedSessions] = useState<
 		Map<string, string>
 	>(() => new Map());
+	// Tracks sessions that have reached a terminal "done" event at least once.
+	// This is separate from `completedSessions`, which only drives away-from-tab
+	// UI badges and intentionally excludes the currently-viewed session.
+	const [settledSessionIds, setSettledSessionIds] = useState<Set<string>>(
+		() => new Set(),
+	);
 	const [interactionRequiredSessions, setInteractionRequiredSessions] =
 		useState<Map<string, string>>(() => new Map());
 	const completedSessionIds = useMemo(
@@ -1151,7 +1157,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		workspacePrInfo,
 		workspacePrActionStatus,
 		workspaceGitActionStatus,
-		completedSessionIds,
+		completedSessionIds: settledSessionIds,
 		interactionRequiredSessionIds,
 		sendingSessionIds,
 		onSelectSession: handleSelectSession,
@@ -1159,6 +1165,13 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 	const handleSessionCompleted = useCallback(
 		(sessionId: string, workspaceId: string) => {
+			setSettledSessionIds((prev) => {
+				if (prev.has(sessionId)) return prev;
+				const next = new Set(prev);
+				next.add(sessionId);
+				return next;
+			});
+
 			const isCurrentSession = sessionId === selectedSessionIdRef.current;
 			// Green dot only for sessions the user isn't viewing
 			if (!isCurrentSession) {
