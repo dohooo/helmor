@@ -24,6 +24,7 @@ import {
 	type ActionStatusKind,
 	getWorkspacePrCheckInsertText,
 	type PullRequestInfo,
+	type SyncWorkspaceTargetResponse,
 	syncWorkspaceWithTargetBranch,
 	type WorkspaceGitActionStatus,
 	type WorkspacePrActionItem,
@@ -36,6 +37,7 @@ import {
 	workspacePrActionStatusQueryOptions,
 } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
+import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import {
 	INSPECTOR_SECTION_HEADER_CLASS,
 	INSPECTOR_SECTION_TITLE_CLASS,
@@ -94,10 +96,42 @@ type ActionsSectionProps = {
 	bodyHeight: number;
 	expanded: boolean;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
+	currentSessionId?: string | null;
+	sendingSessionIds?: Set<string>;
+	onQueuePendingPromptForSession?: (request: {
+		sessionId: string;
+		prompt: string;
+		modelId?: string | null;
+		permissionMode?: string | null;
+	}) => void;
+	pushToast?: PushWorkspaceToast;
 	commitButtonMode?: WorkspaceCommitButtonMode;
 	commitButtonState?: CommitButtonState;
 	prInfo: PullRequestInfo | null;
 };
+
+function buildSyncResolutionPrompt(
+	result: SyncWorkspaceTargetResponse,
+	workspaceRemote?: string | null,
+): string {
+	const remote = workspaceRemote?.trim();
+	const targetBranch = result.targetBranch.trim();
+	const targetRef =
+		remote &&
+		(targetBranch === remote ||
+			targetBranch.startsWith(`${remote}/`) ||
+			targetBranch.startsWith(`refs/remotes/${remote}/`))
+			? targetBranch
+			: remote
+				? `${remote}/${targetBranch}`
+				: targetBranch;
+
+	if (result.outcome === "dirtyWorktree") {
+		return `Commit uncommitted changes, then merge ${targetRef} into this branch. Then push.`;
+	}
+
+	return `Merge ${targetRef} into this branch. Then push.`;
+}
 
 export function ActionsSection({
 	workspaceId,
@@ -106,6 +140,10 @@ export function ActionsSection({
 	bodyHeight,
 	expanded,
 	onCommitAction,
+	currentSessionId,
+	sendingSessionIds,
+	onQueuePendingPromptForSession,
+	pushToast,
 	commitButtonMode,
 	commitButtonState,
 	prInfo,
@@ -130,8 +168,42 @@ export function ActionsSection({
 		? 0
 		: Math.max(0, Math.round(bodyHeight * 0.3));
 	const actionDisabled = commitButtonState === "busy";
+	const queueSyncResolutionPrompt = useCallback(
+		(result: SyncWorkspaceTargetResponse) => {
+			if (!currentSessionId || !onQueuePendingPromptForSession) {
+				return false;
+			}
+			if (sendingSessionIds?.has(currentSessionId)) {
+				pushToast?.(
+					"AI is still responding in the current chat. Wait for that reply to finish, then retry Pull so Helmor can send the merge task in this conversation.",
+					"AI is still responding",
+				);
+				return false;
+			}
+
+			onQueuePendingPromptForSession({
+				sessionId: currentSessionId,
+				prompt: buildSyncResolutionPrompt(result, workspaceRemote),
+			});
+			return true;
+		},
+		[
+			currentSessionId,
+			onQueuePendingPromptForSession,
+			pushToast,
+			sendingSessionIds,
+			workspaceRemote,
+		],
+	);
 	const handleSync = useCallback(async () => {
 		if (!workspaceId || syncPending) {
+			return;
+		}
+		if (currentSessionId && sendingSessionIds?.has(currentSessionId)) {
+			pushToast?.(
+				"AI is still responding in the current chat. Wait for that reply to finish, then retry Pull so Helmor can send the merge task in this conversation.",
+				"AI is still responding",
+			);
 			return;
 		}
 
@@ -143,8 +215,10 @@ export function ActionsSection({
 				toast.success(`Pulled latest from ${target}`);
 			} else if (result.outcome === "alreadyUpToDate") {
 				toast(`Already up to date with ${target}`);
+			} else if (result.outcome === "conflict") {
+				queueSyncResolutionPrompt(result);
 			} else {
-				toast.error(`Conflicts detected while pulling ${target}`);
+				queueSyncResolutionPrompt(result);
 			}
 		} catch (error) {
 			const message =
@@ -173,7 +247,7 @@ export function ActionsSection({
 			]);
 			setSyncPending(false);
 		}
-	}, [queryClient, syncPending, workspaceId]);
+	}, [queryClient, queueSyncResolutionPrompt, syncPending, workspaceId]);
 	const handleInsertCheck = useCallback(
 		async (item: WorkspacePrActionItem) => {
 			if (!workspaceId) {

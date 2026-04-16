@@ -29,6 +29,11 @@ pub struct PushBranchResult {
     pub target_ref: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergePreflightResult {
+    pub conflicted_files: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum WorkspaceSyncStatus {
@@ -981,6 +986,73 @@ pub fn merge_ref_no_edit(workspace_dir: &Path, target_ref: &str) -> Result<()> {
     )
     .map(|_| ())
     .with_context(|| format!("Failed to merge {target_ref} into {workspace_dir}"))
+}
+
+pub fn abort_merge(workspace_dir: &Path) -> Result<()> {
+    let workspace_dir = workspace_dir.display().to_string();
+    run_git(["-C", workspace_dir.as_str(), "merge", "--abort"], None)
+        .map(|_| ())
+        .with_context(|| format!("Failed to abort merge in {workspace_dir}"))
+}
+
+pub fn preflight_merge_ref(workspace_dir: &Path, target_ref: &str) -> Result<MergePreflightResult> {
+    let head_sha = current_workspace_head_commit(workspace_dir)?;
+    let preflight_dir =
+        std::env::temp_dir().join(format!("helmor-merge-preflight-{}", uuid::Uuid::new_v4()));
+    refresh_repo_setup_root(workspace_dir, &preflight_dir, &head_sha)?;
+
+    let merge_result = run_git(
+        [
+            "-C",
+            preflight_dir.to_string_lossy().as_ref(),
+            "merge",
+            "--no-commit",
+            "--no-ff",
+            target_ref,
+        ],
+        None,
+    );
+
+    let outcome = match merge_result {
+        Ok(_) => Ok(MergePreflightResult {
+            conflicted_files: Vec::new(),
+        }),
+        Err(error) => {
+            let conflict_output = run_git(
+                [
+                    "-C",
+                    preflight_dir.to_string_lossy().as_ref(),
+                    "ls-files",
+                    "-u",
+                ],
+                None,
+            )
+            .unwrap_or_default();
+            let conflicted_files = parse_unmerged_paths(&conflict_output)
+                .into_iter()
+                .collect::<Vec<_>>();
+            if conflicted_files.is_empty() {
+                Err(error).with_context(|| {
+                    format!(
+                        "Failed to preflight-merge {target_ref} into {}",
+                        workspace_dir.display()
+                    )
+                })
+            } else {
+                Ok(MergePreflightResult { conflicted_files })
+            }
+        }
+    };
+
+    let _ = abort_merge(&preflight_dir);
+    if let Err(error) = remove_worktree(workspace_dir, &preflight_dir) {
+        tracing::warn!(
+            path = %preflight_dir.display(),
+            "Failed to clean up merge preflight worktree: {error:#}"
+        );
+    }
+
+    outcome
 }
 
 /// Hard-reset the currently checked-out branch in the workspace to `target_ref`.
