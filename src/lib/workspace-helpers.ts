@@ -1,6 +1,7 @@
 import type {
 	AgentModelOption,
 	AgentModelSection,
+	AgentProvider,
 	MessagePart,
 	PullRequestInfo,
 	ThreadMessageLike,
@@ -194,6 +195,65 @@ export function summaryToArchivedRow(summary: WorkspaceSummary): WorkspaceRow {
 	};
 }
 
+export function resolveSessionSelectedModelId({
+	session,
+	modelSelections,
+	modelSections,
+	settingsDefaultModelId,
+}: {
+	session: Pick<
+		WorkspaceSessionSummary,
+		"id" | "agentType" | "model" | "lastUserMessageAt"
+	> | null;
+	modelSelections: Record<string, string>;
+	modelSections: AgentModelSection[];
+	settingsDefaultModelId?: string | null;
+}): string | null {
+	const selectedModelId = session
+		? (modelSelections[getComposerContextKey(null, session.id)] ?? null)
+		: null;
+	return (
+		selectedModelId ??
+		inferDefaultModelId(session, modelSections, settingsDefaultModelId)
+	);
+}
+
+export function resolveSessionDisplayProvider({
+	session,
+	modelSelections,
+	modelSections,
+	settingsDefaultModelId,
+}: {
+	session: Pick<
+		WorkspaceSessionSummary,
+		"id" | "agentType" | "model" | "lastUserMessageAt"
+	>;
+	modelSelections: Record<string, string>;
+	modelSections: AgentModelSection[];
+	settingsDefaultModelId?: string | null;
+}): AgentProvider | null {
+	const selectedModelId = resolveSessionSelectedModelId({
+		session,
+		modelSelections,
+		modelSections,
+		settingsDefaultModelId,
+	});
+	const selectedProvider = findModelOption(
+		modelSections,
+		selectedModelId,
+	)?.provider;
+	if (selectedProvider) {
+		return selectedProvider;
+	}
+	if (session.agentType === "codex") {
+		return "codex";
+	}
+	if (session.agentType === "claude") {
+		return "claude";
+	}
+	return null;
+}
+
 /**
  * Reverse of `summaryToArchivedRow` — used for optimistic archive updates,
  * where we know a workspace is moving from the live groups into the archived
@@ -259,7 +319,10 @@ export function getComposerContextKey(
 }
 
 export function inferDefaultModelId(
-	session: WorkspaceSessionSummary | null,
+	session: Pick<
+		WorkspaceSessionSummary,
+		"agentType" | "model" | "lastUserMessageAt"
+	> | null,
 	modelSections: AgentModelSection[],
 	settingsDefaultModelId?: string | null,
 ): string | null {

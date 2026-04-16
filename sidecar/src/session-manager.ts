@@ -17,6 +17,7 @@ export interface SendMessageParams {
 	readonly resume: string | undefined;
 	readonly permissionMode: string | undefined;
 	readonly effortLevel: string | undefined;
+	readonly fastMode: boolean | undefined;
 }
 
 export interface ListSlashCommandsParams {
@@ -42,6 +43,7 @@ export interface ProviderModelInfo {
 	readonly label: string;
 	readonly cliModel: string;
 	readonly effortLevels?: readonly string[];
+	readonly supportsFastMode?: boolean;
 }
 
 /**

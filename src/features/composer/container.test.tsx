@@ -206,9 +206,11 @@ describe("WorkspaceComposerContainer", () => {
 					modelSelections={{}}
 					effortLevels={{}}
 					permissionModes={{}}
+					fastModes={{}}
 					onSelectModel={vi.fn()}
 					onSelectEffort={vi.fn()}
 					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
 					onSubmit={vi.fn()}
 				/>
 			</QueryClientProvider>
@@ -267,9 +269,11 @@ describe("WorkspaceComposerContainer", () => {
 					modelSelections={{}}
 					effortLevels={{}}
 					permissionModes={{}}
+					fastModes={{}}
 					onSelectModel={vi.fn()}
 					onSelectEffort={vi.fn()}
 					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
 					onSubmit={onSubmit}
 					pendingPromptForSession={{
 						sessionId: "session-1",
@@ -326,9 +330,11 @@ describe("WorkspaceComposerContainer", () => {
 					modelSelections={{}}
 					effortLevels={{}}
 					permissionModes={{}}
+					fastModes={{}}
 					onSelectModel={vi.fn()}
 					onSelectEffort={vi.fn()}
 					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
 					onSubmit={vi.fn()}
 				/>
 			</QueryClientProvider>,

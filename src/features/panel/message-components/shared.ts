@@ -17,6 +17,7 @@ export type FileChangeInfo = {
 	name: string;
 	diffAdd?: number;
 	diffDel?: number;
+	rawDiff?: string;
 };
 
 export type ToolInfo = {
@@ -28,6 +29,7 @@ export type ToolInfo = {
 	icon: React.ReactNode;
 	diffAdd?: number;
 	diffDel?: number;
+	rawDiff?: string;
 	body?: string;
 	files?: FileChangeInfo[];
 };

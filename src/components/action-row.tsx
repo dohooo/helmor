@@ -20,7 +20,7 @@ export function ActionRow({
 	return (
 		<div
 			className={cn(
-				"relative flex items-center justify-between overflow-hidden border border-primary/40 bg-background px-3 pb-1 pt-1.5",
+				"relative flex items-center justify-between overflow-hidden border border-primary/40 bg-sidebar px-3 pb-1 pt-1.5",
 				className,
 			)}
 		>
@@ -43,16 +43,22 @@ export function ActionRowButton({
 	children,
 	...props
 }: ActionRowButtonProps) {
+	const isActive = active ?? props["aria-pressed"] === true;
 	const buttonColorClass =
 		"h-7 cursor-pointer gap-1 rounded-[3px] px-2.5 text-[12px] leading-none tracking-[0.02em] disabled:cursor-not-allowed disabled:opacity-60";
 
 	return (
 		<Button
 			type="button"
-			variant="outline"
+			variant={isActive ? "default" : "outline"}
 			size="sm"
-			className={cn(buttonColorClass, className)}
-			aria-pressed={active}
+			className={cn(
+				buttonColorClass,
+				!isActive &&
+					"bg-transparent text-muted-foreground hover:text-foreground dark:bg-transparent",
+				className,
+			)}
+			aria-pressed={isActive}
 			{...props}
 		>
 			{children}

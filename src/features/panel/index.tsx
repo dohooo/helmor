@@ -1,5 +1,6 @@
 import { memo, type ReactNode, useEffect } from "react";
 import type {
+	AgentProvider,
 	PullRequestInfo,
 	SessionAttachmentRecord,
 	WorkspaceDetail,
@@ -25,7 +26,7 @@ type WorkspacePanelProps = {
 	prInfo?: PullRequestInfo | null;
 	sessions: WorkspaceSessionSummary[];
 	selectedSessionId: string | null;
-	selectedProvider?: string | null;
+	sessionDisplayProviders?: Record<string, AgentProvider>;
 	sessionPanes: PresentedSessionPane[];
 	attachments?: SessionAttachmentRecord[];
 	loadingWorkspace?: boolean;
@@ -50,7 +51,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	prInfo = null,
 	sessions,
 	selectedSessionId,
-	selectedProvider,
+	sessionDisplayProviders,
 	sessionPanes,
 	attachments: _attachments,
 	loadingWorkspace = false,
@@ -110,7 +111,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 					prInfo={prInfo}
 					sessions={sessions}
 					selectedSessionId={selectedSessionId}
-					selectedProvider={selectedProvider}
+					sessionDisplayProviders={sessionDisplayProviders}
 					sending={sending}
 					sendingSessionIds={sendingSessionIds}
 					completedSessionIds={completedSessionIds}

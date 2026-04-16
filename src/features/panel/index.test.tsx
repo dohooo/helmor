@@ -355,15 +355,11 @@ describe("WorkspacePanel", () => {
 
 	it("keeps each tab icon aligned with that session's composer selection", () => {
 		const sessions = [
-			{
-				...SESSIONS[0],
-				agentType: "codex",
-			},
+			SESSIONS[0],
 			{
 				...SESSIONS[0],
 				id: "session-2",
 				title: "Session 2",
-				agentType: "claude",
 				active: false,
 			},
 		];
@@ -375,6 +371,10 @@ describe("WorkspacePanel", () => {
 						workspace={WORKSPACE}
 						sessions={sessions}
 						selectedSessionId="session-2"
+						sessionDisplayProviders={{
+							"session-1": "codex",
+							"session-2": "claude",
+						}}
 						sessionPanes={[]}
 						sending={false}
 					/>

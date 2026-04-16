@@ -33,6 +33,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+	type AgentProvider,
 	createSession,
 	deleteSession,
 	listRemoteBranches,
@@ -61,7 +62,7 @@ type WorkspacePanelHeaderProps = {
 	prInfo?: PullRequestInfo | null;
 	sessions: WorkspaceSessionSummary[];
 	selectedSessionId: string | null;
-	selectedProvider?: string | null;
+	sessionDisplayProviders?: Record<string, AgentProvider>;
 	sending: boolean;
 	sendingSessionIds?: Set<string>;
 	completedSessionIds?: Set<string>;
@@ -81,7 +82,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	prInfo = null,
 	sessions,
 	selectedSessionId,
-	selectedProvider,
+	sessionDisplayProviders,
 	sending,
 	sendingSessionIds,
 	completedSessionIds,
@@ -549,9 +550,8 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 														<span className="tab-content-fade flex min-w-0 flex-1 items-center gap-1.5">
 															<SessionProviderIcon
 																agentType={
-																	selected
-																		? (selectedProvider ?? session.agentType)
-																		: session.agentType
+																	sessionDisplayProviders?.[session.id] ??
+																	session.agentType
 																}
 																active={isActive}
 															/>

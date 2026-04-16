@@ -88,6 +88,9 @@ export const WorkspaceConversationContainer = memo(
 		const [composerPermissionModes, setComposerPermissionModes] = useState<
 			Record<string, string>
 		>({});
+		const [composerFastModes, setComposerFastModes] = useState<
+			Record<string, boolean>
+		>({});
 
 		const composerContextKey = getComposerContextKey(
 			displayedWorkspaceId,
@@ -115,7 +118,6 @@ export const WorkspaceConversationContainer = memo(
 			restoreFiles,
 			restoreImages,
 			restoreNonce,
-			selectedProvider,
 			sendingSessionIds,
 		} = useConversationStreaming({
 			composerContextKey,
@@ -181,6 +183,16 @@ export const WorkspaceConversationContainer = memo(
 			[],
 		);
 
+		const handleChangeFastMode = useCallback(
+			(contextKey: string, enabled: boolean) => {
+				setComposerFastModes((current) => ({
+					...current,
+					[contextKey]: enabled,
+				}));
+			},
+			[],
+		);
+
 		const handleComposerSubmitWrapper = useCallback(
 			(payload: Parameters<typeof handleComposerSubmit>[0]) => {
 				void handleComposerSubmit(payload);
@@ -209,7 +221,7 @@ export const WorkspaceConversationContainer = memo(
 					sendingSessionIds={sendingSessionIds}
 					completedSessionIds={completedSessionIds}
 					interactionRequiredSessionIds={interactionRequiredSessionIds}
-					selectedProvider={selectedProvider}
+					modelSelections={composerModelSelections}
 					workspacePrInfo={workspacePrInfo}
 					onSelectSession={onSelectSession}
 					onResolveDisplayedSession={onResolveDisplayedSession}
@@ -299,9 +311,11 @@ export const WorkspaceConversationContainer = memo(
 							modelSelections={composerModelSelections}
 							effortLevels={composerEffortLevels}
 							permissionModes={composerPermissionModes}
+							fastModes={composerFastModes}
 							onSelectModel={handleSelectModel}
 							onSelectEffort={handleSelectEffort}
 							onChangePermissionMode={handleChangePermissionMode}
+							onChangeFastMode={handleChangeFastMode}
 							onSwitchSession={onSelectSession}
 							onSubmit={handleComposerSubmitWrapper}
 							onStop={handleStopStream}

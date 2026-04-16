@@ -172,6 +172,7 @@ describe("useConversationStreaming", () => {
 				workingDirectory: "/tmp/helmor",
 				effortLevel: "medium",
 				permissionMode: "default",
+				fastMode: false,
 			});
 		});
 
@@ -307,6 +308,7 @@ describe("useConversationStreaming", () => {
 				workingDirectory: "/tmp/helmor",
 				effortLevel: "medium",
 				permissionMode: "plan",
+				fastMode: false,
 			});
 		});
 
@@ -343,6 +345,7 @@ describe("useConversationStreaming", () => {
 				workingDirectory: "/tmp/helmor",
 				effortLevel: "medium",
 				permissionMode: "plan",
+				fastMode: false,
 			});
 		});
 
@@ -362,6 +365,7 @@ describe("useConversationStreaming", () => {
 				workingDirectory: "/tmp/helmor",
 				effortLevel: "medium",
 				permissionMode: "bypassPermissions",
+				fastMode: false,
 			});
 		});
 
@@ -403,6 +407,7 @@ describe("useConversationStreaming", () => {
 				workingDirectory: "/tmp/helmor",
 				effortLevel: "medium",
 				permissionMode: "default",
+				fastMode: false,
 			});
 		});
 

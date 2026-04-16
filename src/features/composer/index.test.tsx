@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
 import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
 import { createHelmorQueryClient } from "@/lib/query-client";
@@ -61,6 +62,7 @@ const MODEL_SECTIONS = [
 				label: "Opus 4.6 1M",
 				cliModel: "opus-1m",
 				effortLevels: ["low", "medium", "high", "max"],
+				supportsFastMode: true,
 			},
 		],
 	},
@@ -233,6 +235,99 @@ describe("WorkspaceComposer", () => {
 				},
 			],
 		);
+	});
+
+	it("only renders fast mode controls for supported models", () => {
+		const queryClient = createHelmorQueryClient();
+		const { rerender } = render(
+			<TooltipProvider delayDuration={0}>
+				<QueryClientProvider client={queryClient}>
+					<WorkspaceComposer
+						contextKey="session:session-1"
+						onSubmit={vi.fn()}
+						disabled={false}
+						submitDisabled={false}
+						sending={false}
+						selectedModelId="opus-1m"
+						modelSections={[
+							...MODEL_SECTIONS,
+							{
+								id: "codex",
+								label: "Codex",
+								options: [
+									{
+										id: "custom-nofast",
+										provider: "codex",
+										label: "Custom",
+										cliModel: "custom-nofast",
+										effortLevels: ["low", "medium"],
+										supportsFastMode: false,
+									},
+								],
+							},
+						]}
+						onSelectModel={vi.fn()}
+						provider="claude"
+						effortLevel="high"
+						onSelectEffort={vi.fn()}
+						permissionMode="acceptEdits"
+						onChangePermissionMode={vi.fn()}
+						fastMode={false}
+						onChangeFastMode={vi.fn()}
+						restoreImages={[]}
+						restoreFiles={[]}
+						restoreCustomTags={[]}
+					/>
+				</QueryClientProvider>
+			</TooltipProvider>,
+		);
+
+		expect(screen.getByLabelText("Fast mode")).toBeInTheDocument();
+
+		rerender(
+			<TooltipProvider delayDuration={0}>
+				<QueryClientProvider client={queryClient}>
+					<WorkspaceComposer
+						contextKey="session:session-1"
+						onSubmit={vi.fn()}
+						disabled={false}
+						submitDisabled={false}
+						sending={false}
+						selectedModelId="custom-nofast"
+						modelSections={[
+							...MODEL_SECTIONS,
+							{
+								id: "codex",
+								label: "Codex",
+								options: [
+									{
+										id: "custom-nofast",
+										provider: "codex",
+										label: "Custom",
+										cliModel: "custom-nofast",
+										effortLevels: ["low", "medium"],
+										supportsFastMode: false,
+									},
+								],
+							},
+						]}
+						onSelectModel={vi.fn()}
+						provider="codex"
+						effortLevel="high"
+						onSelectEffort={vi.fn()}
+						permissionMode="acceptEdits"
+						onChangePermissionMode={vi.fn()}
+						fastMode={false}
+						onChangeFastMode={vi.fn()}
+						restoreImages={[]}
+						restoreFiles={[]}
+						restoreCustomTags={[]}
+					/>
+				</QueryClientProvider>
+			</TooltipProvider>,
+		);
+
+		expect(screen.queryByLabelText("Fast mode")).not.toBeInTheDocument();
 	});
 
 	it("shows a hover preview for inserted image badges", async () => {

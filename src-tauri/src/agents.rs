@@ -149,6 +149,7 @@ pub struct AgentSendRequest {
     pub working_directory: Option<String>,
     pub effort_level: Option<String>,
     pub permission_mode: Option<String>,
+    pub fast_mode: Option<bool>,
     pub user_message_id: Option<String>,
     /// Workspace-relative paths from the @-mention picker.
     #[serde(default)]
@@ -707,6 +708,7 @@ mod tests {
             working_directory: Some(provided_dir.display().to_string()),
             effort_level: None,
             permission_mode: Some("plan".to_string()),
+            fast_mode: None,
             user_message_id: None,
             files: None,
         };
@@ -741,6 +743,7 @@ mod tests {
             working_directory: None,
             effort_level: None,
             permission_mode: Some("plan".to_string()),
+            fast_mode: None,
             user_message_id: None,
             files: None,
         };

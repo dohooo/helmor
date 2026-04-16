@@ -684,6 +684,7 @@ describe("ClaudeSessionManager.stopSession", () => {
 				resume: undefined,
 				permissionMode: undefined,
 				effortLevel: undefined,
+				fastMode: undefined,
 			},
 			emitter,
 		);
@@ -781,6 +782,7 @@ describe("ClaudeSessionManager.stopSession", () => {
 				resume: undefined,
 				permissionMode: undefined,
 				effortLevel: undefined,
+				fastMode: undefined,
 			},
 			emitter,
 		);
@@ -1032,6 +1034,7 @@ describe("Claude full-fixture round-trip", () => {
 					resume: undefined,
 					permissionMode: undefined,
 					effortLevel: undefined,
+					fastMode: undefined,
 				},
 				emitter,
 			);

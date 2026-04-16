@@ -7,6 +7,8 @@ import {
 	getWorkspaceBranchTone,
 	inferDefaultModelId,
 	isNewSession,
+	resolveSessionDisplayProvider,
+	resolveSessionSelectedModelId,
 	splitTextWithFiles,
 	workspaceGroupIdFromStatus,
 } from "./workspace-helpers";
@@ -239,6 +241,90 @@ describe("findModelOption", () => {
 
 	it("returns null for null modelId", () => {
 		expect(findModelOption(MODEL_SECTIONS, null)).toBeNull();
+	});
+});
+
+describe("resolveSessionSelectedModelId", () => {
+	it("prefers the composer-selected model for the session", () => {
+		expect(
+			resolveSessionSelectedModelId({
+				session: {
+					id: "session-1",
+					agentType: "claude",
+					model: null,
+					lastUserMessageAt: null,
+				},
+				modelSelections: {
+					"session:session-1": "gpt-4o",
+				},
+				modelSections: MODEL_SECTIONS,
+			}),
+		).toBe("gpt-4o");
+	});
+
+	it("falls back to the persisted session model", () => {
+		expect(
+			resolveSessionSelectedModelId({
+				session: {
+					id: "session-2",
+					agentType: "claude",
+					model: "default",
+					lastUserMessageAt: "2026-04-16T00:00:00Z",
+				},
+				modelSelections: {},
+				modelSections: MODEL_SECTIONS,
+			}),
+		).toBe("default");
+	});
+
+	it("uses the settings default for a new session with no persisted model yet", () => {
+		expect(
+			resolveSessionSelectedModelId({
+				session: {
+					id: "session-3",
+					agentType: null,
+					model: null,
+					lastUserMessageAt: null,
+				},
+				modelSelections: {},
+				modelSections: MODEL_SECTIONS,
+				settingsDefaultModelId: "gpt-4o",
+			}),
+		).toBe("gpt-4o");
+	});
+});
+
+describe("resolveSessionDisplayProvider", () => {
+	it("maps the resolved model to the provider", () => {
+		expect(
+			resolveSessionDisplayProvider({
+				session: {
+					id: "session-1",
+					agentType: "claude",
+					model: null,
+					lastUserMessageAt: null,
+				},
+				modelSelections: {
+					"session:session-1": "gpt-4o",
+				},
+				modelSections: MODEL_SECTIONS,
+			}),
+		).toBe("codex");
+	});
+
+	it("falls back to persisted agent type when model resolution is unavailable", () => {
+		expect(
+			resolveSessionDisplayProvider({
+				session: {
+					id: "session-2",
+					agentType: "claude",
+					model: null,
+					lastUserMessageAt: null,
+				},
+				modelSelections: {},
+				modelSections: [],
+			}),
+		).toBe("claude");
 	});
 });
 

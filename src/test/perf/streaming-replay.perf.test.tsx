@@ -218,7 +218,7 @@ describe("streaming replay perf", () => {
 						workspace={workspace}
 						sessions={sessions}
 						selectedSessionId={sessionA.id}
-						selectedProvider="claude-code"
+						sessionDisplayProviders={{ [sessionA.id]: "claude" }}
 						sessionPanes={[
 							{
 								sessionId: sessionA.id,

@@ -12,6 +12,7 @@ import {
 	ClipboardList,
 	MessageSquareMore,
 	Square,
+	Zap,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
@@ -26,6 +27,11 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ShimmerText } from "@/components/ui/shimmer-text";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
 import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
 import type { AgentModelSection, SlashCommandEntry } from "@/lib/api";
@@ -85,6 +91,8 @@ type WorkspaceComposerProps = {
 	onSelectEffort: (level: string) => void;
 	permissionMode: string;
 	onChangePermissionMode: (mode: string) => void;
+	fastMode?: boolean;
+	onChangeFastMode?: (enabled: boolean) => void;
 	sendError?: string | null;
 	restoreDraft?: string | null;
 	restoreImages?: string[];
@@ -143,6 +151,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	onSelectEffort,
 	permissionMode,
 	onChangePermissionMode,
+	fastMode = false,
+	onChangeFastMode,
 	sendError,
 	restoreDraft,
 	restoreImages = [],
@@ -185,6 +195,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		() => selectedModel?.effortLevels ?? ["low", "medium", "high"],
 		[selectedModel],
 	);
+	const supportsFastMode = selectedModel?.supportsFastMode === true;
 	const effectiveEffort = useMemo(
 		() => clampEffort(effortLevel, availableEffortLevels),
 		[effortLevel, availableEffortLevels],
@@ -531,6 +542,29 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											))}
 										</DropdownMenuContent>
 									</DropdownMenu>
+
+									{onChangeFastMode && supportsFastMode && (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<ComposerButton
+													aria-label="Fast mode"
+													disabled={toolbarDisabled}
+													className={cn(
+														"cursor-pointer rounded-full p-1 transition-colors",
+														fastMode
+															? "text-amber-500 hover:bg-amber-500/10 hover:text-amber-500"
+															: "text-muted-foreground/55 hover:bg-accent/60 hover:text-muted-foreground",
+													)}
+													onClick={() => onChangeFastMode(!fastMode)}
+												>
+													<Zap className="size-[14px]" strokeWidth={1.8} />
+												</ComposerButton>
+											</TooltipTrigger>
+											<TooltipContent side="top" sideOffset={6}>
+												<span>Fast mode{fastMode ? " (on)" : ""}</span>
+											</TooltipContent>
+										</Tooltip>
+									)}
 
 									<DropdownMenu>
 										<DropdownMenuTrigger

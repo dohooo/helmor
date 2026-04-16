@@ -190,6 +190,7 @@ describe("parseSendMessageParams", () => {
 			resume: "sdk-123",
 			permissionMode: "plan",
 			effortLevel: "high",
+			fastMode: undefined,
 		});
 	});
 

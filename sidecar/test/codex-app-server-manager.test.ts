@@ -61,7 +61,6 @@ class MockCodexAppServer {
 	}
 
 	writeNotification(_method: string, _params?: unknown): void {}
-
 	setHandlers(
 		onNotification: (notification: {
 			method: string;
@@ -75,7 +74,6 @@ class MockCodexAppServer {
 	setActiveRequestId(_id: string): void {}
 
 	sendResponse(_requestId: string | number, _result: unknown): void {}
-
 	kill(): void {
 		this.killed = true;
 	}

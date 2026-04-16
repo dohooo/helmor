@@ -59,6 +59,7 @@ export type AgentModelOption = {
 	label: string;
 	cliModel: string;
 	effortLevels?: string[];
+	supportsFastMode?: boolean;
 };
 
 export type AgentModelSection = {
@@ -77,6 +78,7 @@ export type AgentSendRequest = {
 	workingDirectory?: string | null;
 	effortLevel?: string | null;
 	permissionMode?: string | null;
+	fastMode?: boolean | null;
 	userMessageId?: string | null;
 	/** Workspace-relative paths from the @-mention picker. */
 	files?: string[] | null;
