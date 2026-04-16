@@ -1,17 +1,59 @@
-import { MessageSquareText } from "lucide-react";
+import {
+	Archive,
+	Hammer,
+	type LucideIcon,
+	MessageSquareText,
+	Play,
+} from "lucide-react";
 import {
 	Empty,
+	EmptyContent,
 	EmptyDescription,
 	EmptyHeader,
 	EmptyMedia,
 	EmptyTitle,
 } from "@/components/ui/empty";
+import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
 
-export function EmptyState({ hasSession }: { hasSession: boolean }) {
+const SCRIPT_ACTION_COPY: Record<
+	WorkspaceScriptType,
+	{ title: string; description: string; icon: LucideIcon }
+> = {
+	setup: {
+		title: "Create setup script",
+		description: "Bootstrap dependencies after a workspace is created.",
+		icon: Hammer,
+	},
+	run: {
+		title: "Create run script",
+		description: "Default command launched with Cmd+R.",
+		icon: Play,
+	},
+	archive: {
+		title: "Create archive script",
+		description: "Light cleanup or handoff before archiving.",
+		icon: Archive,
+	},
+};
+
+export function EmptyState({
+	hasSession,
+	missingScriptTypes = [],
+	onInitializeScript,
+}: {
+	hasSession: boolean;
+	missingScriptTypes?: WorkspaceScriptType[];
+	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
+}) {
+	const showScriptActions =
+		hasSession &&
+		missingScriptTypes.length > 0 &&
+		typeof onInitializeScript === "function";
+
 	return (
-		<Empty className="max-w-sm">
+		<Empty className="max-w-xl">
 			<EmptyHeader>
-				<EmptyMedia className="mb-1 text-app-foreground-soft/72 [&_svg:not([class*='size-'])]:size-7">
+				<EmptyMedia className="mb-1 text-muted-foreground [&_svg:not([class*='size-'])]:size-7">
 					<MessageSquareText strokeWidth={1.7} />
 				</EmptyMedia>
 				<EmptyTitle>
@@ -23,6 +65,40 @@ export function EmptyState({ hasSession }: { hasSession: boolean }) {
 						: "Choose a session from the header to inspect its timeline."}
 				</EmptyDescription>
 			</EmptyHeader>
+			{showScriptActions ? (
+				<EmptyContent className="mt-4 max-w-[22.25rem] items-stretch gap-2">
+					{missingScriptTypes.map((scriptType) => {
+						const item = SCRIPT_ACTION_COPY[scriptType];
+						const Icon = item.icon;
+
+						return (
+							<button
+								key={scriptType}
+								type="button"
+								onClick={() => onInitializeScript(scriptType)}
+								className="group flex w-full cursor-pointer items-center gap-2.5 rounded-lg border border-border/70 bg-background px-2.5 py-2 text-left transition-[background-color,border-color] hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+							>
+								<span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground/75 transition-colors group-hover:text-foreground">
+									<Icon className="size-5" strokeWidth={1.75} />
+								</span>
+								<span className="flex min-w-0 flex-1 flex-col">
+									<span className="block text-[12.5px] font-medium leading-[1.4] tracking-[-0.005em] text-foreground">
+										{item.title}
+									</span>
+									<span className="mt-0.5 block text-[11.5px] leading-[1.5] text-muted-foreground">
+										{item.description}
+									</span>
+								</span>
+							</button>
+						);
+					})}
+					<p className="mt-2 w-full text-center text-[11.5px] leading-[1.55] text-muted-foreground">
+						<span className="font-medium text-foreground/80">Tips:</span>{" "}
+						Configuring these scripts upgrades your dev loop — click any item
+						and let AI set it up for you.
+					</p>
+				</EmptyContent>
+			) : null}
 		</Empty>
 	);
 }

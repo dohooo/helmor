@@ -20,6 +20,7 @@ import { estimateThreadRowHeights } from "@/lib/message-layout-estimator";
 import { measureSync } from "@/lib/perf-marks";
 import { hasUnresolvedPlanReview } from "@/lib/plan-review";
 import { useSettings } from "@/lib/settings";
+import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
 import { EmptyState, MemoConversationMessage } from "./message-components";
 
 export type PresentedSessionPane = {
@@ -46,9 +47,13 @@ const PROGRESSIVE_VIEWPORT_FOOTER_HEIGHT = 20;
 export function ActiveThreadViewport({
 	hasSession,
 	pane,
+	missingScriptTypes = [],
+	onInitializeScript,
 }: {
 	hasSession: boolean;
 	pane: PresentedSessionPane;
+	missingScriptTypes?: WorkspaceScriptType[];
+	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 }) {
 	const stackRef = useRef<HTMLDivElement | null>(null);
 	const [widthBucket, setWidthBucket] = useState(0);
@@ -94,6 +99,8 @@ export function ActiveThreadViewport({
 					hasSession={hasSession}
 					layoutCacheKey={getSessionLayoutCacheKey(pane.sessionId, widthBucket)}
 					messages={pane.messages}
+					missingScriptTypes={missingScriptTypes}
+					onInitializeScript={onInitializeScript}
 					paneWidth={paneWidth}
 					sessionId={pane.sessionId}
 					sending={pane.sending}
@@ -107,6 +114,8 @@ function ChatThread({
 	layoutCacheKey,
 	messages,
 	hasSession,
+	missingScriptTypes,
+	onInitializeScript,
 	paneWidth,
 	sessionId,
 	sending,
@@ -114,6 +123,8 @@ function ChatThread({
 	layoutCacheKey: string;
 	messages: ThreadMessageLike[];
 	hasSession: boolean;
+	missingScriptTypes: WorkspaceScriptType[];
+	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 	paneWidth: number;
 	sessionId: string;
 	sending: boolean;
@@ -210,6 +221,8 @@ function ChatThread({
 				hasSession={hasSession}
 				itemContent={itemContent}
 				layoutCacheKey={layoutCacheKey}
+				missingScriptTypes={missingScriptTypes}
+				onInitializeScript={onInitializeScript}
 				paneWidth={paneWidth}
 				pinTailRows={pinTailRows}
 				scrollRef={handleScrollRef}
@@ -244,6 +257,8 @@ function ConversationViewport({
 	hasSession,
 	itemContent,
 	layoutCacheKey,
+	missingScriptTypes,
+	onInitializeScript,
 	paneWidth,
 	pinTailRows,
 	scrollRef,
@@ -260,6 +275,8 @@ function ConversationViewport({
 	hasSession: boolean;
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
 	layoutCacheKey: string;
+	missingScriptTypes: WorkspaceScriptType[];
+	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 	paneWidth: number;
 	pinTailRows: boolean;
 	scrollRef: React.RefCallback<HTMLElement>;
@@ -287,7 +304,11 @@ function ConversationViewport({
 			: ConversationFooterSpacer;
 	const EmptyPlaceholder: ThreadViewportSlot = () => (
 		<div className="flex min-h-full flex-1 items-center justify-center px-8">
-			<EmptyState hasSession={hasSession} />
+			<EmptyState
+				hasSession={hasSession}
+				missingScriptTypes={missingScriptTypes}
+				onInitializeScript={onInitializeScript}
+			/>
 		</div>
 	);
 

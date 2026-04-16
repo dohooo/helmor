@@ -50,6 +50,9 @@ export async function closeWorkspaceSession({
 				replacementSessionId,
 				now,
 			);
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.repoScripts(workspace.repoId, workspace.id),
+			});
 
 			queryClient.setQueryData(
 				helmorQueryKeys.workspaceDetail(workspace.id),
