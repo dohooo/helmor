@@ -99,7 +99,7 @@ fn create_workspace_from_repo_defers_setup_when_script_configured() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
 
-    harness.commit_repo_files(&[("conductor.json", r#"{"scripts":{"setup":"echo hello"}}"#)]);
+    harness.commit_repo_files(&[("helmor.json", r#"{"scripts":{"setup":"echo hello"}}"#)]);
 
     let response = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap();
 

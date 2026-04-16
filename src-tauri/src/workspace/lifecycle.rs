@@ -224,17 +224,6 @@ fn run_archive_hook(workspace_id: &str, workspace_dir: &Path, repo_root: &Path) 
             "HELMOR_DEFAULT_BRANCH",
             record.default_branch.as_deref().unwrap_or("main"),
         )
-        // Legacy Conductor compatibility
-        .env("CONDUCTOR_ROOT_PATH", repo_root.display().to_string())
-        .env(
-            "CONDUCTOR_WORKSPACE_PATH",
-            workspace_dir.display().to_string(),
-        )
-        .env("CONDUCTOR_WORKSPACE_NAME", &record.directory_name)
-        .env(
-            "CONDUCTOR_DEFAULT_BRANCH",
-            record.default_branch.as_deref().unwrap_or("main"),
-        )
         .status();
 
     match status {
@@ -779,22 +768,17 @@ fn resolve_setup_hook(
 }
 
 fn load_setup_script_from_project_config(workspace_dir: &Path) -> Result<Option<String>> {
-    for filename in &["helmor.json", "conductor.json"] {
-        let config_path = workspace_dir.join(filename);
-        if !config_path.is_file() {
-            continue;
-        }
-        let contents = fs::read_to_string(&config_path)
-            .with_context(|| format!("Failed to read {}", config_path.display()))?;
-        let json: Value = serde_json::from_str(&contents)
-            .with_context(|| format!("Failed to parse {}", config_path.display()))?;
-        if let Some(setup) = json
-            .get("scripts")
-            .and_then(|v| v.get("setup"))
-            .and_then(Value::as_str)
-        {
-            return Ok(Some(setup.to_owned()));
-        }
+    let config_path = workspace_dir.join("helmor.json");
+    if !config_path.is_file() {
+        return Ok(None);
     }
-    Ok(None)
+    let contents = fs::read_to_string(&config_path)
+        .with_context(|| format!("Failed to read {}", config_path.display()))?;
+    let json: Value = serde_json::from_str(&contents)
+        .with_context(|| format!("Failed to parse {}", config_path.display()))?;
+    Ok(json
+        .get("scripts")
+        .and_then(|v| v.get("setup"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned))
 }
