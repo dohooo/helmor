@@ -266,6 +266,12 @@ export function useWorkspacesSidebarController({
 				return;
 			}
 			archiveRollbackRef.current.delete(payload.workspaceId);
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceGroups,
+			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.archivedWorkspaces,
+			});
 		}).then((cleanup) => {
 			if (disposed) {
 				cleanup();
@@ -279,7 +285,7 @@ export function useWorkspacesSidebarController({
 			unlistenFailure?.();
 			unlistenSuccess?.();
 		};
-	}, [rollbackArchivedWorkspace]);
+	}, [queryClient, rollbackArchivedWorkspace]);
 
 	useEffect(() => {
 		if (

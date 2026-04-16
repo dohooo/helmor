@@ -14,7 +14,7 @@ use anyhow::{bail, Context, Result};
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, Debouncer, RecommendedCache};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::{git_ops, models::db};
 
@@ -103,7 +103,7 @@ impl GitWatcherManager {
     }
 
     /// Sync watchers and auto-fetchers with the current DB state.
-    pub fn sync_from_db(&self, app: AppHandle) -> Result<()> {
+    pub fn sync_from_db<R: Runtime>(&self, app: AppHandle<R>) -> Result<()> {
         let workspaces = load_watchable_workspaces()?;
         let ready: Vec<&WatchableWorkspace> =
             workspaces.iter().filter(|w| w.state == "ready").collect();
@@ -238,6 +238,14 @@ impl GitWatcherManager {
             }
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn fetcher_count(&self) -> usize {
+        self.fetchers
+            .lock()
+            .map(|fetchers| fetchers.len())
+            .unwrap_or(0)
+    }
 }
 
 // -- Gitdir resolution --
@@ -297,7 +305,10 @@ fn read_head_branch(gitdir: &Path) -> Option<String> {
 
 // -- Watcher setup --
 
-fn start_watcher(app: &AppHandle, ws: &WatchableWorkspace) -> Result<WorkspaceWatcher> {
+fn start_watcher<R: Runtime>(
+    app: &AppHandle<R>,
+    ws: &WatchableWorkspace,
+) -> Result<WorkspaceWatcher> {
     let workspace_dir = crate::data_dir::workspace_dir(&ws.repo_name, &ws.directory_name)?;
     if !workspace_dir.is_dir() {
         bail!("Workspace directory missing: {}", workspace_dir.display());
@@ -569,7 +580,7 @@ fn sleep_interruptible(cancel: &AtomicBool, duration: Duration) -> bool {
 
 /// Detect branch name change from HEAD, update DB if needed, emit event.
 fn handle_head_change(
-    app: &AppHandle,
+    app: &AppHandle<impl Runtime>,
     workspace_id: &str,
     gitdir: &Path,
     last_branch: &Mutex<Option<String>>,
@@ -666,7 +677,7 @@ fn load_watchable_workspaces() -> Result<Vec<WatchableWorkspace>> {
 }
 
 /// Called from workspace lifecycle commands to keep watchers in sync.
-pub fn notify_workspace_changed(app: &AppHandle) {
+pub fn notify_workspace_changed<R: Runtime>(app: &AppHandle<R>) {
     let manager = app.state::<GitWatcherManager>();
     if let Err(e) = manager.sync_from_db(app.clone()) {
         tracing::warn!("Failed to sync git watchers after workspace change: {e:#}");
