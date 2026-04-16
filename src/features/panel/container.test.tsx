@@ -663,7 +663,7 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		});
 	});
 
-	it("sorts sessions before rendering the panel", async () => {
+	it("renders sessions in query order", async () => {
 		const queryClient = createHelmorQueryClient();
 		queryClient.setQueryData(
 			helmorQueryKeys.workspaceDetail("workspace-1"),
@@ -711,11 +711,11 @@ describe("WorkspacePanelContainer loading semantics", () => {
 				(getLatestPanelProps().sessions as Array<{ id: string }>).map(
 					(session) => session.id,
 				),
-			).toEqual(["unread", "running", "idle", "action-idle"]);
+			).toEqual(["action-idle", "idle", "running", "unread"]);
 		});
 	});
 
-	it("uses the sorted first session as the default displayed thread", async () => {
+	it("uses the first visible session as the default displayed thread", async () => {
 		const queryClient = createHelmorQueryClient();
 		const onResolveDisplayedSession = vi.fn();
 		const workspaceDetail = createWorkspaceDetail("workspace-1", null);
@@ -756,7 +756,6 @@ describe("WorkspacePanelContainer loading semantics", () => {
 				selectedSessionId={null}
 				displayedSessionId={null}
 				sending={false}
-				completedSessionIds={new Set(["unread"])}
 				onSelectSession={vi.fn()}
 				onResolveDisplayedSession={onResolveDisplayedSession}
 			/>,
@@ -764,7 +763,7 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		);
 
 		await waitFor(() => {
-			expect(onResolveDisplayedSession).toHaveBeenCalledWith("unread");
+			expect(onResolveDisplayedSession).toHaveBeenCalledWith("idle");
 		});
 	});
 
