@@ -9,6 +9,7 @@ import {
 	buildPendingElicitation,
 	type PendingElicitation,
 } from "@/features/conversation/pending-elicitation";
+import { stabilizeStreamingMessages } from "@/features/conversation/streaming-tail-collapse";
 import type { AgentModelOption, ThreadMessageLike } from "@/lib/api";
 import {
 	generateSessionTitle,
@@ -659,7 +660,7 @@ export function useConversationStreaming({
 					needsFlush = false;
 
 					const rendered = pendingPartial
-						? [...baseMessages, pendingPartial]
+						? stabilizeStreamingMessages([...baseMessages, pendingPartial])
 						: baseMessages;
 					const nextMessages = [...resumeBaseSnapshot, ...rendered];
 					queryClient.setQueryData<ThreadMessageLike[]>(
@@ -1001,7 +1002,7 @@ export function useConversationStreaming({
 					needsFlush = false;
 
 					const rendered = pendingPartial
-						? [...baseMessages, pendingPartial]
+						? stabilizeStreamingMessages([...baseMessages, pendingPartial])
 						: baseMessages;
 					replaceStreamingTail(queryClient, cacheSessionId, userMessageId, [
 						optimisticUserMessage,
