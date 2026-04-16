@@ -1,0 +1,43 @@
+name: Release Plan
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: release-plan-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  CI: true
+
+jobs:
+  release-plan:
+    name: Create or Update Release PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Verify release config tooling
+        run: pnpm run release:verify
+
+      - name: Create or update release PR
+        uses: changesets/action@v1
+        with:
+          version: pnpm run release:version
+          commit: "chore(release): version packages"
+          title: "chore(release): version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

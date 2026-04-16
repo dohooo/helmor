@@ -1,0 +1,146 @@
+name: Publish macOS Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: "Create the GitHub release as a draft"
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: publish-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CI: true
+
+jobs:
+  preflight:
+    name: Release Preflight
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release_body: ${{ steps.notes.outputs.release_body }}
+      draft: ${{ steps.release-mode.outputs.draft }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Verify release config
+        run: |
+          pnpm run release:verify
+          test -n "${HELMOR_UPDATER_PUBKEY}"
+          test -n "${HELMOR_UPDATER_ENDPOINTS}"
+          test -n "${TAURI_SIGNING_PRIVATE_KEY}"
+        env:
+          HELMOR_UPDATER_PUBKEY: ${{ secrets.HELMOR_UPDATER_PUBKEY }}
+          HELMOR_UPDATER_ENDPOINTS: ${{ secrets.HELMOR_UPDATER_ENDPOINTS }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      - name: Read version
+        id: version
+        run: echo "version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+
+      - name: Validate pushed tag matches app version
+        if: github.ref_type == 'tag'
+        run: |
+          expected="v${{ steps.version.outputs.version }}"
+          if [ "${GITHUB_REF_NAME}" != "${expected}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match app version ${expected}"
+            exit 1
+          fi
+
+      - name: Extract release notes
+        id: notes
+        run: |
+          {
+            echo 'release_body<<EOF'
+            pnpm run release:notes -- "${{ steps.version.outputs.version }}"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release mode
+        id: release-mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "draft=${{ inputs.draft }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "draft=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-and-publish:
+    name: Build and Publish macOS Release
+    needs: preflight
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          cache-workspace-crates: true
+          shared-key: macos-tauri-v1
+          workspaces: src-tauri -> target
+
+      - name: Prepare macOS signing keychain
+        id: signing
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          OUTPUT_FORMAT: github
+        run: |
+          chmod +x scripts/prepare-macos-signing.sh scripts/cleanup-macos-signing.sh
+          scripts/prepare-macos-signing.sh >> "$GITHUB_OUTPUT"
+
+      - name: Build and publish signed macOS release
+        id: tauri
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_KEYCHAIN_PATH: ${{ steps.signing.outputs.APPLE_KEYCHAIN_PATH }}
+          APPLE_KEYCHAIN_PASSWORD: ${{ steps.signing.outputs.APPLE_KEYCHAIN_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          HELMOR_UPDATER_PUBKEY: ${{ secrets.HELMOR_UPDATER_PUBKEY }}
+          HELMOR_UPDATER_ENDPOINTS: ${{ secrets.HELMOR_UPDATER_ENDPOINTS }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Helmor v__VERSION__
+          releaseBody: ${{ needs.preflight.outputs.release_body }}
+          releaseDraft: ${{ needs.preflight.outputs.draft == 'true' }}
+          prerelease: false
+          uploadUpdaterJson: true
+
+      - name: Cleanup macOS signing keychain
+        if: always()
+        run: scripts/cleanup-macos-signing.sh "${{ steps.signing.outputs.APPLE_KEYCHAIN_PATH }}"

@@ -9,6 +9,10 @@ export type AppSettings = {
 	branchPrefixCustom: string;
 	theme: ThemeMode;
 	notifications: boolean;
+	autoUpdateEnabled: boolean;
+	autoUpdateCheckOnLaunch: boolean;
+	autoUpdateCheckOnFocus: boolean;
+	autoUpdateIntervalMinutes: number;
 	lastWorkspaceId: string | null;
 	lastSessionId: string | null;
 	defaultModelId: string | null;
@@ -22,6 +26,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	branchPrefixCustom: "",
 	theme: "system",
 	notifications: true,
+	autoUpdateEnabled: true,
+	autoUpdateCheckOnLaunch: true,
+	autoUpdateCheckOnFocus: true,
+	autoUpdateIntervalMinutes: 360,
 	lastWorkspaceId: null,
 	lastSessionId: null,
 	defaultModelId: null,
@@ -37,6 +45,10 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	branchPrefixType: "branch_prefix_type",
 	branchPrefixCustom: "branch_prefix_custom",
 	notifications: "app.notifications",
+	autoUpdateEnabled: "app.auto_update_enabled",
+	autoUpdateCheckOnLaunch: "app.auto_update_check_on_launch",
+	autoUpdateCheckOnFocus: "app.auto_update_check_on_focus",
+	autoUpdateIntervalMinutes: "app.auto_update_interval_minutes",
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
 	defaultModelId: "app.default_model_id",
@@ -67,6 +79,22 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.notifications] !== undefined
 					? raw[SETTINGS_KEY_MAP.notifications] === "true"
 					: DEFAULT_SETTINGS.notifications,
+			autoUpdateEnabled:
+				raw[SETTINGS_KEY_MAP.autoUpdateEnabled] !== undefined
+					? raw[SETTINGS_KEY_MAP.autoUpdateEnabled] === "true"
+					: DEFAULT_SETTINGS.autoUpdateEnabled,
+			autoUpdateCheckOnLaunch:
+				raw[SETTINGS_KEY_MAP.autoUpdateCheckOnLaunch] !== undefined
+					? raw[SETTINGS_KEY_MAP.autoUpdateCheckOnLaunch] === "true"
+					: DEFAULT_SETTINGS.autoUpdateCheckOnLaunch,
+			autoUpdateCheckOnFocus:
+				raw[SETTINGS_KEY_MAP.autoUpdateCheckOnFocus] !== undefined
+					? raw[SETTINGS_KEY_MAP.autoUpdateCheckOnFocus] === "true"
+					: DEFAULT_SETTINGS.autoUpdateCheckOnFocus,
+			autoUpdateIntervalMinutes:
+				raw[SETTINGS_KEY_MAP.autoUpdateIntervalMinutes] !== undefined
+					? Number(raw[SETTINGS_KEY_MAP.autoUpdateIntervalMinutes])
+					: DEFAULT_SETTINGS.autoUpdateIntervalMinutes,
 			lastWorkspaceId: raw[SETTINGS_KEY_MAP.lastWorkspaceId] || null,
 			lastSessionId: raw[SETTINGS_KEY_MAP.lastSessionId] || null,
 			defaultModelId:

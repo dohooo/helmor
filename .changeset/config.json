@@ -1,0 +1,20 @@
+{
+	"$schema": "https://unpkg.com/@changesets/config@3.1.1/schema.json",
+	"changelog": [
+		"@changesets/changelog-github",
+		{
+			"repo": "dohooo/helmor"
+		}
+	],
+	"commit": false,
+	"fixed": [],
+	"linked": [],
+	"access": "restricted",
+	"baseBranch": "main",
+	"updateInternalDependencies": "patch",
+	"ignore": [],
+	"privatePackages": {
+		"version": true,
+		"tag": true
+	}
+}
