@@ -26,6 +26,7 @@ import {
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
+import { cn } from "@/lib/utils";
 import {
 	clampEffortToModel,
 	findModelOption,
@@ -454,7 +455,10 @@ export const WorkspaceComposerContainer = memo(
 			<div className="flex flex-col">
 				{isActionSession ? (
 					<ActionRow
-						className="relative z-10 mx-auto -mb-px w-[90%] rounded-t-[14px] border-b-0"
+						className={cn(
+							"relative z-10 mx-auto -mb-px w-[90%] rounded-t-[14px] border-b-0",
+							autoCloseEnabled ? "border-primary/40" : "border-secondary/80",
+						)}
 						overlay={
 							autoCloseEnabled ? (
 								<>

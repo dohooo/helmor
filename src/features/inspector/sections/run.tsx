@@ -5,7 +5,7 @@ import {
 	TerminalOutput,
 } from "@/components/terminal-output";
 import { Button } from "@/components/ui/button";
-import { TabsContent } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
 import {
 	attach,
 	detach,
@@ -89,10 +89,15 @@ export function RunTab({
 	const hasScript = !!runScript?.trim();
 
 	return (
-		<TabsContent
-			value="run"
-			forceMount
-			className="relative flex min-h-0 flex-1 flex-col data-[state=inactive]:invisible data-[state=inactive]:opacity-0 data-[state=inactive]:absolute data-[state=inactive]:inset-0 data-[state=inactive]:pointer-events-none"
+		<div
+			id="inspector-panel-run"
+			role="tabpanel"
+			aria-labelledby="inspector-tab-run"
+			hidden={!isActive}
+			className={cn(
+				"relative flex min-h-0 flex-1 flex-col",
+				!isActive && "pointer-events-none absolute inset-0 invisible opacity-0",
+			)}
 		>
 			{hasRun ? (
 				<>
@@ -153,6 +158,6 @@ export function RunTab({
 					</Button>
 				</div>
 			)}
-		</TabsContent>
+		</div>
 	);
 }
