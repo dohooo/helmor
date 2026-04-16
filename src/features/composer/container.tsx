@@ -63,6 +63,7 @@ type WorkspaceComposerContainerProps = {
 	effortLevels: Record<string, string>;
 	permissionModes: Record<string, string>;
 	fastModes: Record<string, boolean>;
+	activeFastPreludes?: Record<string, boolean>;
 	onSelectModel: (contextKey: string, modelId: string) => void;
 	onSelectEffort: (contextKey: string, level: string) => void;
 	onChangePermissionMode: (contextKey: string, mode: string) => void;
@@ -120,6 +121,7 @@ export const WorkspaceComposerContainer = memo(
 		effortLevels = {},
 		permissionModes = {},
 		fastModes = {},
+		activeFastPreludes = {},
 		onSelectModel,
 		onSelectEffort,
 		onChangePermissionMode,
@@ -219,6 +221,7 @@ export const WorkspaceComposerContainer = memo(
 		const fastMode = supportsFastMode
 			? (cachedFastMode ?? sessionFastMode ?? settings.defaultFastMode ?? false)
 			: false;
+		const showFastModePrelude = activeFastPreludes[composerContextKey] === true;
 		const loadingConversationContext =
 			Boolean(displayedWorkspaceId) &&
 			(workspaceDetailQuery.isPending || sessionsQuery.isPending);
@@ -554,6 +557,7 @@ export const WorkspaceComposerContainer = memo(
 						permissionMode={effectivePermissionMode}
 						onChangePermissionMode={handleChangePermissionModeInner}
 						fastMode={fastMode}
+						showFastModePrelude={showFastModePrelude}
 						onChangeFastMode={
 							supportsFastMode ? handleChangeFastModeInner : undefined
 						}

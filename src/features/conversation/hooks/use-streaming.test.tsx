@@ -495,6 +495,160 @@ describe("useConversationStreaming", () => {
 		expect(result.current.isSending).toBe(false);
 	});
 
+	it("tracks the fast prelude per session until the fast turn completes", async () => {
+		const streamCallbacks: Array<(event: unknown) => void> = [];
+		apiMocks.startAgentMessageStream.mockImplementation(
+			async (_payload: unknown, onEvent: (event: unknown) => void) => {
+				streamCallbacks.push(onEvent);
+			},
+		);
+
+		const { Wrapper } = createWrapper();
+		const { result, rerender } = renderHook(
+			({ composerContextKey, displayedSessionId }) =>
+				useConversationStreaming({
+					composerContextKey,
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId,
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+				}),
+			{
+				initialProps: {
+					composerContextKey: "session:session-1",
+					displayedSessionId: "session-1",
+				},
+				wrapper: Wrapper,
+			},
+		);
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "Ship it fast",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: true,
+			});
+		});
+
+		expect(result.current.activeFastPreludes["session:session-1"]).toBe(true);
+
+		rerender({
+			composerContextKey: "session:session-2",
+			displayedSessionId: "session-2",
+		});
+		expect(result.current.activeFastPreludes["session:session-1"]).toBe(true);
+
+		rerender({
+			composerContextKey: "session:session-1",
+			displayedSessionId: "session-1",
+		});
+
+		act(() => {
+			streamCallbacks[0]({
+				kind: "update",
+				messages: [
+					{
+						role: "user",
+						id: "user-1",
+						content: [{ type: "text", text: "Ship it fast" }],
+					},
+				],
+			});
+		});
+
+		expect(result.current.activeFastPreludes["session:session-1"]).toBe(true);
+
+		act(() => {
+			streamCallbacks[0]({
+				kind: "streamingPartial",
+				message: {
+					role: "assistant",
+					id: "assistant-1",
+					content: [{ type: "text", text: "Working on it" }],
+					streaming: true,
+				},
+			});
+		});
+
+		expect(result.current.activeFastPreludes["session:session-1"]).toBe(true);
+
+		act(() => {
+			streamCallbacks[0]({
+				kind: "done",
+				provider: "codex",
+				modelId: MODEL.id,
+				resolvedModel: MODEL.cliModel,
+				sessionId: "provider-session-1",
+				workingDirectory: "/tmp/helmor",
+				persisted: false,
+			});
+		});
+
+		expect(
+			result.current.activeFastPreludes["session:session-1"],
+		).toBeUndefined();
+	});
+
+	it("clears the fast prelude when a fast turn ends without assistant content", async () => {
+		const streamCallbacks: Array<(event: unknown) => void> = [];
+		apiMocks.startAgentMessageStream.mockImplementation(
+			async (_payload: unknown, onEvent: (event: unknown) => void) => {
+				streamCallbacks.push(onEvent);
+			},
+		);
+
+		const { Wrapper } = createWrapper();
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "Ship it fast",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: true,
+			});
+		});
+
+		expect(result.current.activeFastPreludes["session:session-1"]).toBe(true);
+
+		act(() => {
+			streamCallbacks[0]({
+				kind: "done",
+				provider: "codex",
+				modelId: MODEL.id,
+				resolvedModel: MODEL.cliModel,
+				sessionId: "provider-session-1",
+				workingDirectory: "/tmp/helmor",
+				persisted: false,
+			});
+		});
+
+		expect(
+			result.current.activeFastPreludes["session:session-1"],
+		).toBeUndefined();
+	});
+
 	it("responds to elicitation requests without using deferred tool flow", async () => {
 		const { Wrapper } = createWrapper();
 		const { result } = renderHook(

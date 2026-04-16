@@ -118,6 +118,7 @@ export const WorkspaceConversationContainer = memo(
 			restoreFiles,
 			restoreImages,
 			restoreNonce,
+			activeFastPreludes,
 			sendingSessionIds,
 		} = useConversationStreaming({
 			composerContextKey,
@@ -312,6 +313,7 @@ export const WorkspaceConversationContainer = memo(
 							effortLevels={composerEffortLevels}
 							permissionModes={composerPermissionModes}
 							fastModes={composerFastModes}
+							activeFastPreludes={activeFastPreludes}
 							onSelectModel={handleSelectModel}
 							onSelectEffort={handleSelectEffort}
 							onChangePermissionMode={handleChangePermissionMode}

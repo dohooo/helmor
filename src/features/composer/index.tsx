@@ -91,6 +91,7 @@ type WorkspaceComposerProps = {
 	permissionMode: string;
 	onChangePermissionMode: (mode: string) => void;
 	fastMode?: boolean;
+	showFastModePrelude?: boolean;
 	onChangeFastMode?: (enabled: boolean) => void;
 	sendError?: string | null;
 	restoreDraft?: string | null;
@@ -151,6 +152,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	permissionMode,
 	onChangePermissionMode,
 	fastMode = false,
+	showFastModePrelude = false,
 	onChangeFastMode,
 	sendError,
 	restoreDraft,
@@ -500,7 +502,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 															)}
 															strokeWidth={1.8}
 														/>
-														{fastMode ? (
+														{showFastModePrelude ? (
 															<FastModeLottieIcon className="absolute inset-[-5px] z-10 drop-shadow-[0_0_4px_rgba(245,158,11,0.5)]" />
 														) : null}
 													</span>

@@ -131,6 +131,9 @@ export function useConversationStreaming({
 	const [planReviewByContext, setPlanReviewByContext] = useState<
 		Record<string, boolean>
 	>({});
+	const [activeFastPreludes, setActiveFastPreludes] = useState<
+		Record<string, boolean>
+	>({});
 	const sendingWorkspaceMapRef = useRef<Map<string, string>>(new Map());
 	const activeSendError = sendErrorsByContext[composerContextKey] ?? null;
 	const isSending = sendingContextKeys.has(composerContextKey);
@@ -328,6 +331,22 @@ export function useConversationStreaming({
 		setPlanReviewByContext((current) => {
 			if (current[contextKey]) return current;
 			return { ...current, [contextKey]: true };
+		});
+	}, []);
+
+	const setFastPreludeActive = useCallback((contextKey: string) => {
+		setActiveFastPreludes((current) => {
+			if (current[contextKey]) return current;
+			return { ...current, [contextKey]: true };
+		});
+	}, []);
+
+	const clearFastPrelude = useCallback((contextKey: string) => {
+		setActiveFastPreludes((current) => {
+			if (!current[contextKey]) return current;
+			const next = { ...current };
+			delete next[contextKey];
+			return next;
 		});
 	}, []);
 
@@ -763,6 +782,7 @@ export function useConversationStreaming({
 							cleanup();
 							clearPendingPermissions(contextKey);
 							clearPendingElicitation(contextKey);
+							clearFastPrelude(contextKey);
 
 							if (event.kind === "done") {
 								const sid = event.sessionId ?? displayedSessionId;
@@ -920,6 +940,11 @@ export function useConversationStreaming({
 				next.add(contextKey);
 				return next;
 			});
+			if (fastMode) {
+				setFastPreludeActive(contextKey);
+			} else {
+				clearFastPrelude(contextKey);
+			}
 
 			try {
 				if (displayedSessionId) {
@@ -1091,6 +1116,7 @@ export function useConversationStreaming({
 							cleanup();
 							clearPendingPermissions(contextKey);
 							clearPendingElicitation(contextKey);
+							clearFastPrelude(contextKey);
 
 							if (event.kind === "done") {
 								const sid = event.sessionId ?? displayedSessionId;
@@ -1129,6 +1155,7 @@ export function useConversationStreaming({
 							cleanup();
 							clearPendingPermissions(contextKey);
 							clearPendingElicitation(contextKey);
+							clearFastPrelude(contextKey);
 							if (event.internal) {
 								pushToast(
 									"Something went wrong. Please try again.",
@@ -1181,6 +1208,7 @@ export function useConversationStreaming({
 					nonce: Date.now(),
 				});
 				restoreSnapshot(queryClient, cacheSessionId, rollbackSnapshot);
+				clearFastPrelude(contextKey);
 				clearSendingState(contextKey);
 			}
 		},
@@ -1191,6 +1219,7 @@ export function useConversationStreaming({
 			clearSendingState,
 			clearPendingElicitation,
 			clearPendingPermissions,
+			clearFastPrelude,
 			composerContextKey,
 			displayedSessionId,
 			displayedWorkspaceId,
@@ -1201,6 +1230,7 @@ export function useConversationStreaming({
 			rememberInteractionWorkspace,
 			selectionPending,
 			refreshSessionThreadFromDb,
+			setFastPreludeActive,
 		],
 	);
 
@@ -1210,6 +1240,7 @@ export function useConversationStreaming({
 
 	return {
 		activeSendError,
+		activeFastPreludes,
 		elicitationResponsePending,
 		handleComposerSubmit,
 		handleDeferredToolResponse,
