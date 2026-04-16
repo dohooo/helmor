@@ -78,6 +78,18 @@ export function useWorkspaceCommitLifecycle({
 	const prActionStatusRef = useRef(workspacePrActionStatus);
 	prActionStatusRef.current = workspacePrActionStatus;
 
+	const refreshWorkspaceRemoteStatus = useCallback(
+		(workspaceId: string) => {
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspacePr(workspaceId),
+			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspacePrActionStatus(workspaceId),
+			});
+		},
+		[queryClient],
+	);
+
 	const handleInspectorCommitAction = useCallback(
 		async (mode: WorkspaceCommitButtonMode) => {
 			const workspaceId = selectedWorkspaceIdRef.current;
@@ -312,6 +324,7 @@ export function useWorkspaceCommitLifecycle({
 					if (!prev || prev.workspaceId !== workspaceId) return prev;
 					return { ...prev, phase: "done", prInfo: pr ?? null };
 				});
+				refreshWorkspaceRemoteStatus(workspaceId);
 			} catch (error) {
 				console.error("[commitButton] PR lookup failed:", error);
 				setCommitLifecycle((prev) =>
@@ -321,7 +334,12 @@ export function useWorkspaceCommitLifecycle({
 				);
 			}
 		})();
-	}, [completedSessionIds, interactionRequiredSessionIds, sendingSessionIds]);
+	}, [
+		completedSessionIds,
+		interactionRequiredSessionIds,
+		refreshWorkspaceRemoteStatus,
+		sendingSessionIds,
+	]);
 
 	useEffect(() => {
 		if (!commitLifecycle) return;
@@ -333,9 +351,7 @@ export function useWorkspaceCommitLifecycle({
 
 		if (phase === "done") {
 			if (mode !== "merge" && mode !== "closed") {
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspacePr(workspaceId),
-				});
+				refreshWorkspaceRemoteStatus(workspaceId);
 			}
 			queryClient.invalidateQueries({
 				queryKey: ["workspaceChanges"],
@@ -382,7 +398,7 @@ export function useWorkspaceCommitLifecycle({
 			phase === "done" ? 1200 : 1600,
 		);
 		return () => window.clearTimeout(timeoutId);
-	}, [commitLifecycle, onSelectSession, queryClient]);
+	}, [commitLifecycle, onSelectSession, queryClient, refreshWorkspaceRemoteStatus]);
 
 	// Only honour the lifecycle if it belongs to the currently-selected workspace.
 	const activeLifecycle =
