@@ -11,7 +11,7 @@ import {
 	Pencil,
 	Plug,
 	Search,
-	SquareTerminal,
+	Terminal,
 } from "lucide-react";
 import type { FileChangeInfo, ToolInfo } from "./shared";
 import { basename, isObj, str, truncate } from "./shared";
@@ -120,12 +120,7 @@ export function getToolInfo(
 		const description = str(input.description);
 		return {
 			action: description ?? "Run",
-			icon: (
-				<SquareTerminal
-					className={neutralToolIconClassName}
-					strokeWidth={1.8}
-				/>
-			),
+			icon: <Terminal className={neutralToolIconClassName} strokeWidth={1.8} />,
 			command: command ? truncate(command, 80) : undefined,
 			fullCommand: command ?? undefined,
 		};

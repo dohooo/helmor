@@ -838,6 +838,45 @@ fn codex_item_completed_full_session_with_text_and_commands() {
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
+#[test]
+fn codex_item_completed_consecutive_git_show_commands_collapse() {
+    let command_1 = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "item_git_1",
+            "type": "command_execution",
+            "command": "/bin/zsh -lc 'git show --unified=80 --no-ext-diff 4ca2fe1 -- sidecar/src/claude-session-manager.ts sidecar/test/claude-session-manager.test.ts src-tauri/src/agents/queries.rs src/lib/workspace-helpers.test.ts'",
+            "aggregated_output": "diff --git a/sidecar/src/claude-session-manager.ts b/sidecar/src/claude-session-manager.ts",
+            "status": "completed",
+            "exit_code": 0
+        }
+    });
+    let command_2 = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "item_git_2",
+            "type": "command_execution",
+            "command": "/bin/zsh -lc 'git show --unified=80 --no-ext-diff 9b19755 -- src-tauri/src/models/sessions.rs src/lib/workspace-helpers.ts src/features/composer/container.tsx src/features/settings/panels/repository-settings.tsx src/features/settings/index.tsx src/features/composer/index.tsx'",
+            "aggregated_output": "diff --git a/src-tauri/src/models/sessions.rs b/src-tauri/src/models/sessions.rs",
+            "status": "completed",
+            "exit_code": 0
+        }
+    });
+    let msgs = vec![
+        make_record(
+            "c_git_1",
+            "assistant",
+            &serde_json::to_string(&command_1).unwrap(),
+        ),
+        make_record(
+            "c_git_2",
+            "assistant",
+            &serde_json::to_string(&command_2).unwrap(),
+        ),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
 // ============================================================================
 // 9b. Codex plan item, MCP tool call, web search, turn lifecycle
 // ============================================================================
