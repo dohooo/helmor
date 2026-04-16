@@ -16,8 +16,12 @@ runs:
       uses: Swatinem/rust-cache@v2
       with:
         cache-on-failure: true
+        cache-workspace-crates: true
         shared-key: ubuntu-tauri-v1
         workspaces: src-tauri -> target
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@nextest
 
     - name: Install Linux system packages
       shell: bash

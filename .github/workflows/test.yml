@@ -53,7 +53,10 @@ jobs:
               - 'tsconfig.json'
               - 'tsconfig.node.json'
             rust:
-              - '.github/**'
+              - '.github/workflows/test.yml'
+              - '.github/actions/setup-js/action.yml'
+              - '.github/actions/setup-rust-tauri/action.yml'
+              - '.github/actions/build-sidecar/action.yml'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'src-tauri/**'
@@ -110,5 +113,8 @@ jobs:
       - name: Build sidecar binary
         uses: ./.github/actions/build-sidecar
 
-      - name: Run Rust tests
-        run: pnpm run test:rust
+      - name: Run Rust tests with nextest
+        run: cd src-tauri && cargo nextest run
+
+      - name: Run Rust doctests
+        run: cd src-tauri && cargo test --doc
