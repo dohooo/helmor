@@ -8,6 +8,7 @@ import {
 	AppendContextButton,
 	type AppendContextPayloadResult,
 } from "@/components/append-context-button";
+import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type {
 	CommitButtonState,
@@ -456,6 +457,9 @@ function ActionStatusRow({
 		item: WorkspacePrActionItem,
 	) => AppendContextPayloadResult | Promise<AppendContextPayloadResult>;
 }) {
+	const actionButtonClassName =
+		"size-6 rounded-sm text-muted-foreground opacity-55 transition-[opacity,color,background-color] hover:bg-accent/60 hover:text-primary hover:opacity-100 focus-visible:opacity-100";
+
 	return (
 		<div className="group/check-row flex items-start justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
 			<div className="flex min-w-0 flex-1 items-start gap-1.5">
@@ -479,15 +483,14 @@ function ActionStatusRow({
 						subjectLabel={item.name}
 						getPayload={() => onInsertToComposer(item)}
 						errorTitle="Couldn't insert check"
-						className={cn(
-							"text-primary hover:bg-accent/60 hover:text-primary",
-							"opacity-0 group-hover/check-row:opacity-100 focus-visible:opacity-100",
-						)}
+						className={actionButtonClassName}
 					/>
 				)}
 				{item.url && (
-					<button
+					<Button
 						type="button"
+						variant="ghost"
+						size="icon-xs"
 						aria-label={`Open ${item.name}`}
 						onClick={() => {
 							if (!item.url) {
@@ -495,10 +498,10 @@ function ActionStatusRow({
 							}
 							void openUrl(item.url);
 						}}
-						className="shrink-0 text-muted-foreground transition-colors hover:text-primary"
+						className={cn("shrink-0", actionButtonClassName)}
 					>
 						<ArrowUpRightIcon className="size-3" strokeWidth={1.8} />
-					</button>
+					</Button>
 				)}
 			</div>
 		</div>

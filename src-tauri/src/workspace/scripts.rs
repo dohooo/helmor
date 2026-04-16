@@ -3,7 +3,11 @@ use std::io::{Read, Write};
 use std::os::unix::io::FromRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
@@ -22,23 +26,53 @@ pub enum ScriptEvent {
 /// Key = (repo_id, script_type, workspace_id)
 type ProcessKey = (String, String, Option<String>);
 
+const PROCESS_TERM_TIMEOUT: Duration = Duration::from_millis(200);
+const PROCESS_KILL_TIMEOUT: Duration = Duration::from_millis(500);
+const PTY_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
 #[derive(Clone, Default)]
 pub struct ScriptProcessManager {
     processes: Arc<Mutex<HashMap<ProcessKey, Child>>>,
 }
 
 /// Kill a child and its entire process group (child is session leader via setsid).
-fn kill_process_group(child: &Child) {
+fn kill_process_group(child: &mut Child) {
     let pid = child.id() as libc::pid_t;
+    let process_group = unsafe { libc::getpgid(pid) };
+    let current_process_group = unsafe { libc::getpgrp() };
+    let can_signal_group = process_group > 0 && process_group != current_process_group;
+
     unsafe {
-        libc::killpg(pid, libc::SIGTERM);
+        if can_signal_group {
+            libc::killpg(process_group, libc::SIGTERM);
+        }
         // Also signal the leader directly as a fallback.
         libc::kill(pid, libc::SIGTERM);
     }
-    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    if wait_for_child_exit(child, PROCESS_TERM_TIMEOUT) {
+        return;
+    }
+
     unsafe {
-        libc::killpg(pid, libc::SIGKILL);
+        if can_signal_group {
+            libc::killpg(process_group, libc::SIGKILL);
+        }
         libc::kill(pid, libc::SIGKILL);
+    }
+
+    let _ = wait_for_child_exit(child, PROCESS_KILL_TIMEOUT);
+}
+
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) if Instant::now() >= deadline => return false,
+            Ok(None) => std::thread::sleep(PTY_POLL_INTERVAL),
+            Err(_) => return false,
+        }
     }
 }
 
@@ -49,16 +83,16 @@ impl ScriptProcessManager {
 
     fn insert(&self, key: ProcessKey, child: Child) {
         let mut map = self.processes.lock().expect("process map poisoned");
-        if let Some(old) = map.remove(&key) {
-            kill_process_group(&old);
+        if let Some(mut old) = map.remove(&key) {
+            kill_process_group(&mut old);
         }
         map.insert(key, child);
     }
 
     pub fn kill(&self, key: &ProcessKey) -> bool {
         let mut map = self.processes.lock().expect("process map poisoned");
-        if let Some(child) = map.remove(key) {
-            kill_process_group(&child);
+        if let Some(mut child) = map.remove(key) {
+            kill_process_group(&mut child);
             return true;
         }
         false
@@ -98,6 +132,17 @@ fn open_pty() -> Result<(libc::c_int, libc::c_int)> {
     Ok((master, slave))
 }
 
+fn set_nonblocking(fd: libc::c_int) -> Result<()> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags == -1 {
+        bail!("fcntl(F_GETFL) failed: {}", std::io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+        bail!("fcntl(F_SETFL) failed: {}", std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Escape a string for safe embedding inside single quotes.
 fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
@@ -120,6 +165,7 @@ pub fn run_script(
     }
 
     let (master_fd, slave_fd) = open_pty()?;
+    set_nonblocking(master_fd)?;
 
     // Dup master for writing before the reader thread takes ownership.
     let write_fd = unsafe { libc::dup(master_fd) };
@@ -197,12 +243,18 @@ pub fn run_script(
 
     // Single reader on the PTY master — stdout+stderr are merged by the PTY.
     let ch = channel.clone();
+    let stop_reader = Arc::new(AtomicBool::new(false));
+    let stop_reader_in_thread = stop_reader.clone();
     let reader = std::thread::Builder::new()
         .name("script-pty".into())
         .spawn(move || {
             let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
             let mut buf = [0u8; 4096];
             loop {
+                if stop_reader_in_thread.load(Ordering::Relaxed) {
+                    break;
+                }
+
                 match master.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
@@ -213,6 +265,10 @@ pub fn run_script(
                         // EIO is expected when the child exits and slave closes.
                         if e.raw_os_error() != Some(libc::EIO) {
                             tracing::debug!(error = %e, "PTY read error");
+                        }
+                        if e.kind() == std::io::ErrorKind::WouldBlock {
+                            std::thread::sleep(PTY_POLL_INTERVAL);
+                            continue;
                         }
                         break;
                     }
@@ -234,10 +290,6 @@ pub fn run_script(
         // writer drops here, closing write_fd
     }
 
-    if let Some(h) = reader {
-        let _ = h.join();
-    }
-
     let exit_code = {
         let mut map = manager.processes.lock().expect("process map poisoned");
         if let Some(mut child) = map.remove(&key) {
@@ -247,6 +299,11 @@ pub fn run_script(
         }
     };
 
+    stop_reader.store(true, Ordering::Relaxed);
+    if let Some(h) = reader {
+        let _ = h.join();
+    }
+
     let _ = channel.send(ScriptEvent::Exited { code: exit_code });
     Ok(exit_code)
 }
@@ -254,8 +311,10 @@ pub fn run_script(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::process::CommandExt;
     use std::process::Command as StdCommand;
     use std::sync::mpsc;
+    use tempfile::NamedTempFile;
 
     // ── shell_escape ───────────────────────────────────────────────────────
 
@@ -315,8 +374,6 @@ mod tests {
         assert_eq!(map[&key].id(), pid2);
         drop(map);
 
-        // Reap the zombie so kill(pid, 0) reflects the true state.
-        unsafe { libc::waitpid(pid1 as libc::pid_t, std::ptr::null_mut(), 0) };
         let status = unsafe { libc::kill(pid1 as libc::pid_t, 0) };
         assert_eq!(status, -1, "old process should be dead");
 
@@ -327,26 +384,54 @@ mod tests {
 
     #[test]
     fn kill_process_group_terminates_child_tree() {
+        let pid_file = NamedTempFile::new().unwrap();
+        let pid_path = pid_file.path().display().to_string();
+
         // Spawn a shell that starts a background sleep, then waits.
-        let mut child = StdCommand::new("/bin/sh")
-            .args(["-c", "/bin/sleep 120 & wait"])
-            .spawn()
-            .unwrap();
+        let mut child = unsafe {
+            StdCommand::new("/bin/sh")
+                .args([
+                    "-c",
+                    &format!("/bin/sleep 120 & echo $! > {pid_path}; wait"),
+                ])
+                .pre_exec(|| {
+                    if libc::setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                })
+                .spawn()
+                .unwrap()
+        };
         let pid = child.id();
 
-        // Let the child start.
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let background_pid = loop {
+            if let Ok(contents) = std::fs::read_to_string(pid_file.path()) {
+                if let Ok(pid) = contents.trim().parse::<libc::pid_t>() {
+                    break pid;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "background child pid file was never written"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
 
-        kill_process_group(&child);
+        kill_process_group(&mut child);
 
         // The shell should exit.
-        let status = child.wait().unwrap();
+        let status = child.try_wait().unwrap().expect("shell should be reaped");
         assert!(!status.success());
 
-        // After a brief wait, the PID should be gone.
-        std::thread::sleep(std::time::Duration::from_millis(50));
         let alive = unsafe { libc::kill(pid as libc::pid_t, 0) };
         assert_eq!(alive, -1, "process should be dead after kill_process_group");
+        let background_alive = unsafe { libc::kill(background_pid, 0) };
+        assert_eq!(
+            background_alive, -1,
+            "background child should be dead after kill_process_group"
+        );
     }
 
     // ── run_script end-to-end ──────────────────────────────────────────────
@@ -389,6 +474,16 @@ mod tests {
     #[test]
     fn run_script_failing_command_exits_nonzero() {
         assert_eq!(run_simple("exit 42"), Some(42));
+    }
+
+    #[test]
+    fn run_script_returns_after_shell_exit_even_if_background_child_keeps_running() {
+        let start = Instant::now();
+        assert_eq!(run_simple("/bin/sleep 5 &"), Some(0));
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "run_script should not block on background children holding the PTY open"
+        );
     }
 
     #[test]

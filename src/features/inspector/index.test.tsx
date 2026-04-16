@@ -373,6 +373,37 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		});
 	});
 
+	it("uses matching icon button chrome for append and open actions", async () => {
+		apiMocks.loadWorkspacePrActionStatus.mockResolvedValue(
+			emptyPrStatus({
+				remoteState: "ok",
+				checks: [
+					{
+						id: "check-1",
+						name: "changes",
+						provider: "github",
+						status: "failure",
+						url: "https://github.com/acme/repo/actions/runs/1",
+					},
+				],
+			}),
+		);
+
+		renderInspector();
+
+		const appendButton = await screen.findByRole("button", {
+			name: "Append changes to composer",
+		});
+		const openButton = screen.getByRole("button", { name: "Open changes" });
+
+		for (const button of [appendButton, openButton]) {
+			expect(button).toHaveClass("cursor-pointer");
+			expect(button).toHaveClass("size-6");
+			expect(button).toHaveClass("opacity-55");
+			expect(button).toHaveClass("hover:opacity-100");
+		}
+	});
+
 	it("inserts check details into the composer and keeps deployments without insert buttons", async () => {
 		const user = userEvent.setup();
 		const insertIntoComposer = vi.fn();
