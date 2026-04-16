@@ -14,9 +14,9 @@ export function ComposerButton({
 		<Button
 			{...props}
 			variant="ghost"
-			size="sm"
+			size="xs"
 			className={cn(
-				"h-auto gap-1.5 rounded-lg text-muted-foreground hover:text-foreground",
+				"rounded-[9px] text-muted-foreground hover:text-foreground",
 				className,
 			)}
 		>

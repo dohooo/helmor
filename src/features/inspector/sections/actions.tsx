@@ -99,8 +99,8 @@ export function ActionsSection({
 	});
 	const gitStatus = gitStatusQuery.data ?? EMPTY_GIT_ACTION_STATUS;
 	const prStatus = prStatusQuery.data ?? EMPTY_PR_ACTION_STATUS;
-	const gitRows = buildGitRows(gitStatus, workspaceRemote);
-	const reviewRows = buildReviewRows(prStatus, prInfo);
+	const gitRows = sortStatusRows(buildGitRows(gitStatus, workspaceRemote));
+	const reviewRows = sortStatusRows(buildReviewRows(prStatus, prInfo));
 	const sortedDeployments = sortActionItems(prStatus.deployments);
 	const sortedChecks = sortActionItems(prStatus.checks);
 	const bottomSpacerHeight = expanded
@@ -557,6 +557,34 @@ function sortActionItems(
 
 		return left.name.localeCompare(right.name);
 	});
+}
+
+function sortStatusRows(items: GitStatusItem[]): GitStatusItem[] {
+	return [...items].sort((left, right) => {
+		const leftRank = statusRowPriority(left);
+		const rightRank = statusRowPriority(right);
+		if (leftRank !== rightRank) {
+			return leftRank - rightRank;
+		}
+
+		const statusDelta =
+			actionPriority(left.status) - actionPriority(right.status);
+		if (statusDelta !== 0) {
+			return statusDelta;
+		}
+
+		return left.label.localeCompare(right.label);
+	});
+}
+
+function statusRowPriority(item: GitStatusItem): number {
+	if (item.action) {
+		return 0;
+	}
+	if (item.status !== "success") {
+		return 1;
+	}
+	return 2;
 }
 
 function actionPriority(status: ActionStatusKind): number {

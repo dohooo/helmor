@@ -83,6 +83,19 @@ function renderInspector(
 	);
 }
 
+function expectTextBefore(
+	container: HTMLElement,
+	first: string,
+	second: string,
+) {
+	const firstNode = within(container).getByText(first);
+	const secondNode = within(container).getByText(second);
+	expect(
+		firstNode.compareDocumentPosition(secondNode) &
+			Node.DOCUMENT_POSITION_FOLLOWING,
+	).toBeTruthy();
+}
+
 describe("WorkspaceInspectorSidebar Actions section", () => {
 	beforeEach(() => {
 		apiMocks.listWorkspaceChangesWithContent.mockReset();
@@ -207,6 +220,58 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		await user.click(screen.getByRole("button", { name: "Push" }));
 
 		expect(onCommitAction).toHaveBeenCalledWith("push");
+	});
+
+	it("prioritizes actionable git rows ahead of passed checks", async () => {
+		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
+			uncommittedCount: 0,
+			conflictCount: 0,
+			syncTargetBranch: "main",
+			syncStatus: "behind",
+			behindTargetCount: 23,
+			remoteTrackingRef: "origin/dohooo/leo",
+			aheadOfRemoteCount: 6,
+		});
+		apiMocks.loadWorkspacePrActionStatus.mockResolvedValue(
+			emptyPrStatus({
+				remoteState: "ok",
+				reviewDecision: "APPROVED",
+			}),
+		);
+
+		renderInspector();
+
+		await screen.findByText("6 commits ahead of origin/dohooo/leo");
+
+		const actions = screen.getByLabelText("Inspector section Actions");
+		expectTextBefore(
+			actions,
+			"6 commits ahead of origin/dohooo/leo",
+			"No uncommitted changes",
+		);
+		expectTextBefore(
+			actions,
+			"23 commits behind origin/main",
+			"No uncommitted changes",
+		);
+		expectTextBefore(actions, "No uncommitted changes", "Review approved");
+	});
+
+	it("keeps failing review rows ahead of passed review rows", async () => {
+		apiMocks.loadWorkspacePrActionStatus.mockResolvedValue(
+			emptyPrStatus({
+				remoteState: "ok",
+				reviewDecision: "APPROVED",
+				mergeable: "CONFLICTING",
+			}),
+		);
+
+		renderInspector();
+
+		await screen.findByText("Review approved");
+
+		const actions = screen.getByLabelText("Inspector section Actions");
+		expectTextBefore(actions, "Merge conflicts detected", "Review approved");
 	});
 
 	it("hides pull when conflicts are present even if target is behind", async () => {
