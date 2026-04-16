@@ -50,6 +50,7 @@ import {
 import type { ThemeMode } from "@/lib/settings";
 import { useSettings } from "@/lib/settings";
 import { clampEffort, findModelOption } from "@/lib/workspace-helpers";
+import { AppUpdatesPanel } from "./panels/app-updates";
 import { CliInstallPanel } from "./panels/cli-install";
 import { ConductorImportPanel } from "./panels/conductor-import";
 import { DevToolsPanel } from "./panels/dev-tools";
@@ -477,6 +478,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 											</div>
 										</div>
 									</div>
+
+									<AppUpdatesPanel />
 								</div>
 							)}
 

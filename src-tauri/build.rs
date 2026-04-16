@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 const GITHUB_CLIENT_ID_KEY: &str = "HELMOR_GITHUB_CLIENT_ID";
 const GITHUB_CLIENT_SECRET_KEY: &str = "HELMOR_GITHUB_CLIENT_SECRET";
+const UPDATER_ENDPOINTS_KEY: &str = "HELMOR_UPDATER_ENDPOINTS";
+const UPDATER_PUBKEY_KEY: &str = "HELMOR_UPDATER_PUBKEY";
 
 fn main() {
     tauri_build::build();
@@ -18,6 +20,8 @@ fn main() {
         }
         load_env_var(&env_path, GITHUB_CLIENT_ID_KEY);
         load_env_var(&env_path, GITHUB_CLIENT_SECRET_KEY);
+        load_env_var(&env_path, UPDATER_ENDPOINTS_KEY);
+        load_env_var(&env_path, UPDATER_PUBKEY_KEY);
     }
 }
 

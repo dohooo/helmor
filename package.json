@@ -5,6 +5,7 @@
 	"packageManager": "pnpm@10.13.1",
 	"type": "module",
 	"scripts": {
+		"changeset": "changeset",
 		"dev": "tauri dev",
 		"dev:analyze": "VITE_HELMOR_PERF_HUD=1 tauri dev",
 		"build": "tsc && vite build",
@@ -28,6 +29,10 @@
 		"dev:cli:install": "cd src-tauri && cargo build --bin helmor-cli && cp target/debug/helmor-cli /usr/local/bin/helmor && cp ../sidecar/dist/helmor-sidecar /usr/local/bin/helmor-sidecar && echo 'Installed helmor + helmor-sidecar to /usr/local/bin/'",
 		"postinstall": "cd sidecar && bun install && node -e \"const{execSync}=require('child_process');try{execSync('sccache --version',{stdio:'pipe'})}catch{console.error('\\n\\x1b[33m⚠  sccache is not installed.\\x1b[0m Rust builds will be slower without cross-worktree compilation cache.\\n\\n  Install it:\\n\\n    brew install sccache\\n');process.exit(1)}\"",
 		"prepare": "husky",
+		"release:notes": "node scripts/extract-release-notes.mjs",
+		"release:sync-versions": "node scripts/sync-release-versions.mjs",
+		"release:verify": "node scripts/verify-release-config.mjs",
+		"release:version": "changeset version && pnpm run release:sync-versions",
 		"storybook": "storybook dev -p 6006",
 		"build-storybook": "storybook build"
 	},
@@ -91,6 +96,8 @@
 		"use-stick-to-bottom": "^1.1.3"
 	},
 	"devDependencies": {
+		"@changesets/changelog-github": "^0.5.1",
+		"@changesets/cli": "^2.29.7",
 		"@biomejs/biome": "^2.4.10",
 		"@chromatic-com/storybook": "^5.1.2",
 		"@rolldown/plugin-babel": "^0.2.2",

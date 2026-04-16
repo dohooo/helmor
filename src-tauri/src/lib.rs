@@ -13,6 +13,7 @@ mod schema;
 pub mod service;
 mod shell_env;
 pub mod sidecar;
+pub mod updater;
 pub mod workspace;
 
 #[cfg(test)]
@@ -104,7 +105,8 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build());
 
     #[cfg(debug_assertions)]
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
@@ -169,6 +171,10 @@ pub fn run() {
             // sidecar falls back to its own `createRequire` / SDK lookup
             // against `node_modules`.
             export_bundled_agent_paths(app.handle());
+
+            updater::configure()?;
+            updater::spawn_startup_check(app.handle().clone());
+            updater::spawn_interval_worker(app.handle().clone());
 
             // OAuth callback is now handled by a one-shot localhost HTTP
             // server spun up inside `start_github_oauth_redirect`, so no
@@ -289,6 +295,9 @@ pub fn run() {
             commands::settings_commands::save_auto_close_action_kinds,
             commands::settings_commands::load_auto_close_opt_in_asked,
             commands::settings_commands::save_auto_close_opt_in_asked,
+            commands::updater_commands::get_app_update_status,
+            commands::updater_commands::check_for_app_update,
+            commands::updater_commands::install_downloaded_app_update,
             commands::editor_commands::write_editor_file
         ])
         .build(tauri::generate_context!())
@@ -298,5 +307,15 @@ pub fn run() {
     // the JS layer never destroys the window on its own.  All quit logic
     // lives in the `request_quit` Tauri command (called from the frontend
     // quit-confirmation dialog).  Nothing to do here.
-    app.run(|_app_handle, _event| {});
+    app.run(|app_handle, event| match event {
+        tauri::RunEvent::Resumed => {
+            updater::maybe_trigger_on_resume(app_handle.clone());
+        }
+        tauri::RunEvent::WindowEvent { label, event, .. } => {
+            if label == "main" && matches!(event, tauri::WindowEvent::Focused(true)) {
+                updater::maybe_trigger_on_focus(app_handle.clone());
+            }
+        }
+        _ => {}
+    });
 }

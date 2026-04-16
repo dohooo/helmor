@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 *.local
+*.local.*
+.env.release.local
 .local-data/
 .local-docs/
 
