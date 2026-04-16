@@ -429,11 +429,19 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			defaultOptions: { queries: { retry: false } },
 		});
 		let resolveStart: (() => void) | null = null;
+		let archivedFromServer: WorkspaceSummary[] = [];
+		let groupsFromServer = workspaceGroups;
 		apiMocks.startArchiveWorkspace.mockImplementation(
 			() =>
 				new Promise<void>((resolve) => {
 					resolveStart = resolve;
 				}),
+		);
+		apiMocks.loadWorkspaceGroups.mockImplementation(
+			async () => groupsFromServer,
+		);
+		apiMocks.loadArchivedWorkspaces.mockImplementation(
+			async () => archivedFromServer,
 		);
 
 		const { result } = renderHook(
@@ -461,15 +469,11 @@ describe("useWorkspacesSidebarController archive flow", () => {
 		});
 
 		act(() => {
+			groupsFromServer = [
+				{ ...workspaceGroups[0], rows: [workspaceGroups[0].rows[1]] },
+			];
+			archivedFromServer = [makeArchivedSummary("ws-1")];
 			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-1" });
-			queryClient.setQueryData(
-				["workspaceGroups"],
-				[{ ...workspaceGroups[0], rows: [workspaceGroups[0].rows[1]] }],
-			);
-			queryClient.setQueryData(
-				["archivedWorkspaces"],
-				[makeArchivedSummary("ws-1")],
-			);
 		});
 
 		await waitFor(() => {
@@ -478,6 +482,8 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			]);
 		});
 		expect(result.current.archivedRows.map((row) => row.id)).toEqual(["ws-1"]);
+		expect(apiMocks.loadWorkspaceGroups).toHaveBeenCalledTimes(2);
+		expect(apiMocks.loadArchivedWorkspaces).toHaveBeenCalledTimes(2);
 
 		act(() => {
 			resolveStart?.();

@@ -3,7 +3,7 @@ use std::sync::Mutex;
 
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::git_watcher;
 
@@ -97,7 +97,7 @@ impl ArchiveJobManager {
     }
 }
 
-pub fn start_archive_workspace(app: &AppHandle, workspace_id: &str) -> Result<()> {
+pub fn start_archive_workspace<R: Runtime>(app: &AppHandle<R>, workspace_id: &str) -> Result<()> {
     let manager = app.state::<ArchiveJobManager>();
     let plan = manager.start_prepared(workspace_id)?;
     let app_handle = app.clone();
@@ -113,6 +113,7 @@ pub fn start_archive_workspace(app: &AppHandle, workspace_id: &str) -> Result<()
 
         match result {
             Ok(Ok(_)) => {
+                git_watcher::notify_workspace_changed(&app_handle);
                 let _ = app_handle.emit(
                     ARCHIVE_EXECUTION_SUCCEEDED_EVENT,
                     ArchiveExecutionSucceededPayload {
