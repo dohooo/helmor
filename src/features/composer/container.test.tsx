@@ -2,6 +2,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
+import { DEFAULT_SETTINGS, SettingsContext } from "@/lib/settings";
 
 const apiMockState = vi.hoisted(() => ({
 	listSlashCommands: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock("./index", async () => {
 		WorkspaceComposer: (props: {
 			contextKey: string;
 			selectedModelId: string | null;
+			fastMode?: boolean;
 		}) => {
 			composerMockState.renders.push(props.contextKey);
 			React.useEffect(() => {
@@ -38,7 +40,10 @@ vi.mock("./index", async () => {
 			}, []);
 
 			return (
-				<div data-testid="workspace-composer-mock">
+				<div
+					data-testid="workspace-composer-mock"
+					data-fast-mode={props.fastMode ? "on" : "off"}
+				>
 					{props.contextKey}:{props.selectedModelId ?? "none"}
 				</div>
 			);
@@ -72,6 +77,7 @@ const MODEL_SECTIONS = [
 				label: "GPT-5.4",
 				cliModel: "gpt-5.4",
 				effortLevels: ["low", "medium", "high"],
+				supportsFastMode: true,
 			},
 		],
 	},
@@ -346,6 +352,86 @@ describe("WorkspaceComposerContainer", () => {
 				workingDirectory: "/tmp/helmor",
 				modelId: "opus-1m",
 			}),
+		);
+	});
+
+	it("uses the default fast mode setting for new sessions", () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(helmorQueryKeys.workspaceSessions("workspace-1"), [
+			...WORKSPACE_SESSIONS,
+			{
+				id: "session-new",
+				workspaceId: "workspace-1",
+				title: "Untitled",
+				agentType: null,
+				status: "idle",
+				model: null,
+				permissionMode: "default",
+				providerSessionId: null,
+				unreadCount: 0,
+				contextTokenCount: 0,
+				contextUsedPercent: null,
+				thinkingEnabled: true,
+				codexThinkingLevel: null,
+				fastMode: false,
+				agentPersonality: null,
+				createdAt: "2026-04-05T00:00:00Z",
+				updatedAt: "2026-04-05T00:00:00Z",
+				lastUserMessageAt: null,
+				resumeSessionAt: null,
+				isHidden: false,
+				isCompacting: false,
+				active: false,
+			},
+		]);
+
+		render(
+			<SettingsContext.Provider
+				value={{
+					settings: {
+						...DEFAULT_SETTINGS,
+						defaultModelId: "gpt-5.4",
+						defaultFastMode: true,
+					},
+					updateSettings: vi.fn(),
+				}}
+			>
+				<QueryClientProvider client={queryClient}>
+					<WorkspaceComposerContainer
+						displayedWorkspaceId="workspace-1"
+						displayedSessionId="session-new"
+						disabled={false}
+						sending={false}
+						sendError={null}
+						restoreDraft={null}
+						restoreImages={[]}
+						restoreFiles={[]}
+						restoreNonce={0}
+						modelSelections={{}}
+						effortLevels={{}}
+						permissionModes={{}}
+						fastModes={{}}
+						onSelectModel={vi.fn()}
+						onSelectEffort={vi.fn()}
+						onChangePermissionMode={vi.fn()}
+						onChangeFastMode={vi.fn()}
+						onSubmit={vi.fn()}
+					/>
+				</QueryClientProvider>
+			</SettingsContext.Provider>,
+		);
+
+		expect(screen.getByTestId("workspace-composer-mock")).toHaveAttribute(
+			"data-fast-mode",
+			"on",
 		);
 	});
 });

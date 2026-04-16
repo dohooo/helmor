@@ -490,11 +490,13 @@ function ActionStatusRow({
 	) => AppendContextPayloadResult | Promise<AppendContextPayloadResult>;
 }) {
 	const actionButtonClassName =
-		"size-6 rounded-sm text-muted-foreground opacity-55 transition-[opacity,color,background-color] hover:bg-accent/60 hover:text-primary hover:opacity-100 focus-visible:opacity-100";
+		"size-5 rounded-sm text-muted-foreground opacity-55 transition-[opacity,color,background-color] hover:bg-accent/60 hover:text-primary hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3.5";
+	const appendActionButtonClassName =
+		"size-4 rounded-sm text-muted-foreground opacity-0 pointer-events-none group-hover/check-row:opacity-55 group-hover/check-row:pointer-events-auto group-focus-within/check-row:opacity-55 group-focus-within/check-row:pointer-events-auto hover:bg-accent/60 hover:text-primary hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3";
 
 	return (
-		<div className="group/check-row flex items-start justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
-			<div className="flex min-w-0 flex-1 items-start gap-1.5">
+		<div className="group/check-row flex items-center justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
+			<div className="flex min-w-0 flex-1 items-center gap-1.5">
 				<StatusIcon status={item.status} />
 				<ProviderIcon provider={item.provider} />
 				<span
@@ -504,18 +506,18 @@ function ActionStatusRow({
 					{item.name}
 				</span>
 				{item.duration && (
-					<span className="shrink-0 pt-px text-[10.5px] text-muted-foreground">
+					<span className="shrink-0 text-[10.5px] text-muted-foreground">
 						{item.duration}
 					</span>
 				)}
 			</div>
-			<div className="flex shrink-0 items-center justify-end gap-1.5">
+			<div className="flex shrink-0 items-center justify-end gap-0">
 				{onInsertToComposer && (
 					<AppendContextButton
 						subjectLabel={item.name}
 						getPayload={() => onInsertToComposer(item)}
 						errorTitle="Couldn't insert check"
-						className={actionButtonClassName}
+						className={appendActionButtonClassName}
 					/>
 				)}
 				{item.url && (
@@ -532,7 +534,7 @@ function ActionStatusRow({
 						}}
 						className={cn("shrink-0", actionButtonClassName)}
 					>
-						<ArrowUpRightIcon className="size-3" strokeWidth={1.8} />
+						<ArrowUpRightIcon strokeWidth={1.8} />
 					</Button>
 				)}
 			</div>

@@ -543,7 +543,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 														onFocus={() => {
 															onPrefetchSession?.(session.id);
 														}}
-														className="group/tab relative h-full w-auto max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
+														className="group/tab relative h-full w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
 													>
 														{/* Content wrapper: text fades out on the right when hovered so
 														    the action icons can sit on the tab's own background. */}
@@ -572,7 +572,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																	}}
 																	onBlur={() => void handleCommitRename()}
 																	onClick={(event) => event.stopPropagation()}
-																	className="h-6 w-20 truncate rounded-md border-border bg-background px-1.5 py-0 text-[13px] font-medium text-foreground"
+																	className="h-auto min-w-0 flex-1 truncate border-0 bg-transparent px-0 py-0 text-[13px] font-medium text-inherit shadow-none outline-none focus-visible:border-transparent focus-visible:ring-0 focus-visible:outline-none"
 																/>
 															) : (
 																<span

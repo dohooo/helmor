@@ -217,7 +217,7 @@ export const WorkspaceComposerContainer = memo(
 			? currentSession?.fastMode
 			: undefined;
 		const fastMode = supportsFastMode
-			? (cachedFastMode ?? sessionFastMode ?? false)
+			? (cachedFastMode ?? sessionFastMode ?? settings.defaultFastMode ?? false)
 			: false;
 		const loadingConversationContext =
 			Boolean(displayedWorkspaceId) &&

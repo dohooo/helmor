@@ -554,7 +554,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 														"relative",
 														composerToolbarTriggerClassName,
 														fastMode
-															? "text-amber-500 ring-1 ring-amber-500/30 hover:bg-amber-500/10 hover:text-amber-500"
+															? "text-amber-500 hover:bg-amber-500/10 hover:text-amber-500"
 															: "text-muted-foreground",
 													)}
 													onClick={() => onChangeFastMode(!fastMode)}
@@ -634,7 +634,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										className={cn(
 											`gap-1 px-1.5 text-[11px] ${composerToolbarTriggerClassName}`,
 											permissionMode === "plan"
-												? "text-plan ring-1 ring-plan/40 hover:bg-accent/60 hover:text-plan"
+												? "text-plan hover:bg-accent/60 hover:text-plan"
 												: "text-muted-foreground",
 										)}
 										onClick={() =>

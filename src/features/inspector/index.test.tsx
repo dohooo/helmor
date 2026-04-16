@@ -398,6 +398,45 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		).toBeTruthy();
 	});
 
+	it("vertically centers check row content and actions", async () => {
+		apiMocks.loadWorkspacePrActionStatus.mockResolvedValue(
+			emptyPrStatus({
+				remoteState: "ok",
+				checks: [
+					{
+						id: "check-centered",
+						name: "App Build",
+						provider: "github",
+						status: "success",
+						duration: "1m",
+						url: "https://github.com/acme/repo/actions/runs/1",
+					},
+				],
+			}),
+		);
+
+		renderInspector();
+
+		const checkName = await screen.findByText("App Build");
+		const row = checkName.closest(".group\\/check-row");
+		expect(row).toHaveClass("items-center");
+		expect(row).not.toHaveClass("items-start");
+
+		const content = checkName.parentElement;
+		expect(content).toHaveClass("items-center");
+		expect(content).not.toHaveClass("items-start");
+
+		const actions = screen.getByRole("button", {
+			name: "Open App Build",
+		}).parentElement;
+		expect(actions).toHaveClass("gap-0");
+		expect(screen.getByRole("button", { name: "Open App Build" })).toHaveClass(
+			"size-5",
+		);
+
+		expect(screen.getByText("1m")).not.toHaveClass("pt-px");
+	});
+
 	it("renders link buttons only for remote items with urls", async () => {
 		const user = userEvent.setup();
 		apiMocks.loadWorkspacePrActionStatus.mockResolvedValue(
@@ -439,7 +478,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		});
 	});
 
-	it("uses matching icon button chrome for append and open actions", async () => {
+	it("uses compact icon button chrome for append and open actions", async () => {
 		apiMocks.loadWorkspacePrActionStatus.mockResolvedValue(
 			emptyPrStatus({
 				remoteState: "ok",
@@ -462,12 +501,20 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		});
 		const openButton = screen.getByRole("button", { name: "Open changes" });
 
-		for (const button of [appendButton, openButton]) {
-			expect(button).toHaveClass("cursor-pointer");
-			expect(button).toHaveClass("size-6");
-			expect(button).toHaveClass("opacity-55");
-			expect(button).toHaveClass("hover:opacity-100");
-		}
+		expect(appendButton).toHaveClass("cursor-pointer");
+		expect(appendButton).toHaveClass("size-4");
+		expect(appendButton).toHaveClass("opacity-0");
+		expect(appendButton).toHaveClass("pointer-events-none");
+		expect(appendButton).toHaveClass("group-hover/check-row:opacity-55");
+		expect(appendButton).toHaveClass(
+			"group-focus-within/check-row:pointer-events-auto",
+		);
+		expect(appendButton).toHaveClass("hover:opacity-100");
+
+		expect(openButton).toHaveClass("cursor-pointer");
+		expect(openButton).toHaveClass("size-5");
+		expect(openButton).toHaveClass("opacity-55");
+		expect(openButton).toHaveClass("hover:opacity-100");
 	});
 
 	it("inserts check details into the composer and keeps deployments without insert buttons", async () => {

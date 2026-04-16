@@ -1,6 +1,7 @@
 import { type ReactNode, useCallback, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Separator } from "@/components/ui/separator";
+import { cn } from "@/lib/utils";
 
 export function EditDiffTrigger({
 	file,
@@ -10,6 +11,7 @@ export function EditDiffTrigger({
 	newStr,
 	unifiedDiff,
 	icon,
+	variant = "pill",
 }: {
 	file: string;
 	diffAdd?: number;
@@ -18,6 +20,7 @@ export function EditDiffTrigger({
 	newStr: string | null;
 	unifiedDiff?: string | null;
 	icon?: ReactNode;
+	variant?: "pill" | "row";
 }) {
 	const triggerRef = useRef<HTMLSpanElement>(null);
 	const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -40,15 +43,21 @@ export function EditDiffTrigger({
 	return (
 		<>
 			<span
+				data-variant={variant}
 				ref={triggerRef}
 				onMouseEnter={show}
 				onMouseLeave={hideDelayed}
-				className="inline-flex cursor-default items-center gap-1.5 rounded border border-border/60 px-1.5 py-0.5 transition-colors hover:border-muted-foreground/40 hover:bg-accent/40"
+				className={cn(
+					"items-center gap-1.5 text-[12px] leading-4 text-muted-foreground transition-colors",
+					variant === "row"
+						? "flex w-full cursor-pointer rounded-md px-2 py-1 hover:bg-accent/60"
+						: "inline-flex self-start rounded-md border border-border/60 px-1.5 py-0.5 hover:border-muted-foreground/40 hover:bg-accent/40",
+				)}
 			>
 				{icon}
-				<span className="truncate text-muted-foreground">{file}</span>
+				<span className="min-w-0 truncate">{file}</span>
 				{diffAdd != null || diffDel != null ? (
-					<span className="flex items-center gap-1 text-[11px]">
+					<span className="ml-auto flex shrink-0 items-center gap-1 text-[11px]">
 						{diffAdd != null ? (
 							<span className="text-chart-2">+{diffAdd}</span>
 						) : null}

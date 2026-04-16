@@ -80,6 +80,10 @@ type SessionFixture = {
 	id: string;
 	title: string;
 	active: boolean;
+	status?: string;
+	unreadCount?: number;
+	updatedAt?: string;
+	actionKind?: string | null;
 };
 
 const SESSION_FIXTURES: Record<WorkspaceFixtureId, readonly SessionFixture[]> =
@@ -239,11 +243,11 @@ function createWorkspaceSessions(workspaceId: WorkspaceFixtureId) {
 		workspaceId,
 		title: session.title,
 		agentType: "claude",
-		status: "idle",
+		status: session.status ?? "idle",
 		model: "opus-1m",
 		permissionMode: "default",
 		providerSessionId: null,
-		unreadCount: 0,
+		unreadCount: session.unreadCount ?? 0,
 		contextTokenCount: 0,
 		contextUsedPercent: null,
 		thinkingEnabled: true,
@@ -251,11 +255,12 @@ function createWorkspaceSessions(workspaceId: WorkspaceFixtureId) {
 		fastMode: false,
 		agentPersonality: null,
 		createdAt: "2026-04-05T00:00:00Z",
-		updatedAt: "2026-04-05T00:00:00Z",
+		updatedAt: session.updatedAt ?? "2026-04-05T00:00:00Z",
 		lastUserMessageAt: null,
 		resumeSessionAt: null,
 		isHidden: false,
 		isCompacting: false,
+		actionKind: session.actionKind ?? null,
 		active: session.active,
 	}));
 }
@@ -461,6 +466,50 @@ describe("App global navigation shortcuts", () => {
 
 		await waitFor(() => {
 			expectSelectedSession("Done session 2");
+		});
+	});
+
+	it("navigates sessions using the same reordered display order as the panel", async () => {
+		runtimeSessionFixtures[WORKSPACE_IDS.done] = [
+			{
+				id: "session-done-1",
+				title: "Done session 1",
+				active: true,
+				updatedAt: "2026-04-05T00:00:00Z",
+			},
+			{
+				id: "session-done-2",
+				title: "Done session 2",
+				active: false,
+				unreadCount: 2,
+				updatedAt: "2026-04-05T00:02:00Z",
+			},
+			{
+				id: "session-done-3",
+				title: "Done session 3",
+				active: false,
+				status: "running",
+				updatedAt: "2026-04-05T00:01:00Z",
+			},
+		];
+
+		await renderAppReady();
+		await userEvent.click(getSessionTab("Done session 2"));
+
+		await waitFor(() => {
+			expectSelectedSession("Done session 2");
+		});
+
+		pressGlobalShortcut("ArrowRight");
+
+		await waitFor(() => {
+			expectSelectedSession("Done session 3");
+		});
+
+		pressGlobalShortcut("ArrowRight");
+
+		await waitFor(() => {
+			expectSelectedSession("Done session 1");
 		});
 	});
 
