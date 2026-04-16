@@ -325,6 +325,13 @@ pub struct SyncWorkspaceTargetResponse {
     pub target_branch: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushWorkspaceToRemoteResponse {
+    pub target_ref: String,
+    pub head_commit: String,
+}
+
 pub fn prefetch_remote_refs(
     workspace_id: Option<&str>,
     repo_id: Option<&str>,
@@ -439,6 +446,43 @@ pub fn sync_workspace_with_target_branch(
             }
         }
     }
+}
+
+pub fn push_workspace_to_remote(workspace_id: &str) -> Result<PushWorkspaceToRemoteResponse> {
+    let record = workspace_models::load_workspace_record_by_id(workspace_id)?
+        .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+    if record.state != "ready" {
+        bail!("Cannot push branch: workspace is not in ready state");
+    }
+
+    let remote = record
+        .remote
+        .clone()
+        .unwrap_or_else(|| "origin".to_string());
+    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+    if !workspace_dir.is_dir() {
+        bail!("Workspace directory is missing for {workspace_id}");
+    }
+
+    let current_status = git_ops::workspace_action_status(
+        &workspace_dir,
+        Some(&remote),
+        record
+            .intended_target_branch
+            .as_deref()
+            .or(record.default_branch.as_deref()),
+    )?;
+    if current_status.conflict_count > 0 {
+        bail!("Cannot push branch while merge conflicts are present");
+    }
+
+    let push_result = git_ops::push_current_branch(&workspace_dir, &remote)?;
+    let head_commit = git_ops::current_workspace_head_commit(&workspace_dir)?;
+
+    Ok(PushWorkspaceToRemoteResponse {
+        target_ref: push_result.target_ref,
+        head_commit,
+    })
 }
 
 pub(crate) fn clear_prefetch_rate_limit(workspace_id: &str) {

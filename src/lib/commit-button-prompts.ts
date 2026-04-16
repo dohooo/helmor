@@ -1,21 +1,21 @@
 import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 
+type ActionSessionMode = Exclude<
+	WorkspaceCommitButtonMode,
+	"push" | "merge" | "closed" | "merged"
+>;
+
 /**
- * Full prompt templates dispatched to a freshly created session when the
- * inspector commit button is clicked. Keyed by the
- * {@link WorkspaceCommitButtonMode} that fired the action.
+ * Prompt templates for commit-button modes that still execute through an
+ * action session.
  *
  * These aren't terse starter messages — each one is a self-contained
  * instruction set the agent can execute without further clarification. We
  * dispatch them as the user message so they appear in the transcript and
  * the post-stream verifier has something concrete to check against.
- *
- * Modes not backed by a real action (`merged`) use short
- * placeholders so the dispatch contract stays exhaustive.
  */
-export const COMMIT_BUTTON_PROMPTS: Record<WorkspaceCommitButtonMode, string> =
-	{
-		"create-pr": `Create a pull request for the uncommitted work in this workspace.
+export const COMMIT_BUTTON_PROMPTS: Record<ActionSessionMode, string> = {
+	"create-pr": `Create a pull request for the uncommitted work in this workspace.
 
 Do the following, in order:
 1. Run \`git status\` and \`git diff\` to survey what's changed.
@@ -27,7 +27,7 @@ Do the following, in order:
 
 Don't stop to ask for confirmation — execute each step automatically. If you hit an unrecoverable error (e.g. merge conflict, pre-push hook failure), report it clearly so I can intervene.`,
 
-		"commit-and-push": `Commit and push all uncommitted work in this workspace.
+	"commit-and-push": `Commit and push all uncommitted work in this workspace.
 
 Do the following, in order:
 1. Run \`git status\` and \`git diff\` to survey what's changed.
@@ -38,17 +38,7 @@ Do the following, in order:
 
 Don't stop to ask for confirmation — execute each step automatically. If a pre-commit / pre-push hook fails, report the failure and stop without force-pushing.`,
 
-		push: `Push the current branch to its remote.
-
-Do the following, in order:
-1. Run \`git status\` to confirm the worktree is clean.
-2. Inspect the current branch and upstream tracking ref (\`git branch -vv\` or equivalent) so you know exactly what will be pushed.
-3. Push the current branch to its configured upstream with \`git push\`.
-4. Report the pushed ref and resulting HEAD commit SHA.
-
-Don't stop to ask for confirmation — execute each step automatically. If the push is rejected or a pre-push hook fails, report the failure clearly and stop without force-pushing.`,
-
-		fix: `CI is failing on the current branch. Diagnose and fix it.
+	fix: `CI is failing on the current branch. Diagnose and fix it.
 
 Do the following, in order:
 1. Use \`gh run list\` / \`gh run view\` to inspect the most recent failing run for this branch. Read the logs for each failing job.
@@ -57,7 +47,7 @@ Do the following, in order:
 4. Commit the fix with a clear \`fix(ci): …\` message and push to the same branch so CI re-runs.
 5. Report what was broken, what you changed, and whether the re-run is passing.`,
 
-		"resolve-conflicts": `This branch has merge conflicts with its target branch. Resolve them.
+	"resolve-conflicts": `This branch has merge conflicts with its target branch. Resolve them.
 
 Do the following, in order:
 1. Identify the target branch (usually \`main\` or \`master\` — check the repo's default branch).
@@ -69,24 +59,10 @@ Do the following, in order:
 
 If a conflict is too ambiguous to resolve automatically, stop and ask.`,
 
-		merge: `Merge this pull request into its base branch.
-
-Do the following:
-1. Confirm CI is green and all required reviews have been collected (\`gh pr checks\`, \`gh pr view\`).
-2. Merge using the repository's standard strategy (merge commit unless the repo convention says otherwise).
-3. Report the merge commit SHA and confirm the PR is closed.
-
-If CI is red or required reviews are missing, do NOT merge — report what's blocking and stop.`,
-
-		"open-pr": `Reopen the closed pull request for this branch and leave a short comment explaining why it's being reopened.
+	"open-pr": `Reopen the closed pull request for this branch and leave a short comment explaining why it's being reopened.
 
 Use \`gh pr reopen\` + \`gh pr comment\`. Report the PR URL when done.`,
-
-		merged: "This pull request has already been merged. No action required.",
-
-		closed:
-			"This pull request has been closed without merging. No action required.",
-	};
+};
 
 /**
  * Human-readable name for an action kind. Used in tooltips, toasts, and
