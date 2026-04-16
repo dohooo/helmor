@@ -28,7 +28,7 @@ pub(crate) const SUPPRESSED_EVENT_TYPES: &[&str] = &[
 /// Claude `system` subtypes that should be silently dropped.
 pub(crate) const SUPPRESSED_SYSTEM_SUBTYPES: &[&str] = &[
     // Session-start banner. Frontend already shows the model picker, so
-    // "Session initialized — claude-opus-4-6" is redundant.
+    // "Session initialized — claude-opus-4-7" is redundant.
     "init",
     // Hook lifecycle — fires on every PreToolUse / PostToolUse / etc.
     // Pure noise unless you're debugging the hook system itself.
@@ -44,7 +44,7 @@ pub(crate) const SUPPRESSED_SYSTEM_SUBTYPES: &[&str] = &[
     // surface the compacting indicator.
     "status",
     // Dead arm — `task_completed` is not in `@anthropic-ai/claude-agent-sdk`
-    // v0.2.92's `.d.ts`. The real lifecycle uses `task_notification`.
+    // v0.2.111's `.d.ts`. The real lifecycle uses `task_notification`.
     // Listed here defensively in case the SDK ever revives it.
     "task_completed",
     // ── To start showing one of these, comment out its line: ─────────

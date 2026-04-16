@@ -239,13 +239,13 @@ describe("ClaudeSessionManager.sendMessage", () => {
 						supportedEffortLevels: ["low", "medium", "high", "max"],
 					},
 					{
-						value: "claude-opus-4-6",
-						displayName: "Claude Opus 4.6",
+						value: "claude-opus-4-7",
+						displayName: "Claude Opus 4.7",
 						supportedEffortLevels: ["low", "medium", "high", "max"],
 					},
 					{
-						value: "claude-sonnet-4-6",
-						displayName: "Claude Sonnet 4.6",
+						value: "claude-sonnet-4-7",
+						displayName: "Claude Sonnet 4.7",
 						supportedEffortLevels: ["low", "medium", "high"],
 					},
 				],
@@ -259,11 +259,11 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				supportsFastMode: true,
 			}),
 			expect.objectContaining({
-				id: "claude-opus-4-6",
+				id: "claude-opus-4-7",
 				supportsFastMode: true,
 			}),
 			expect.objectContaining({
-				id: "claude-sonnet-4-6",
+				id: "claude-sonnet-4-7",
 				supportsFastMode: false,
 			}),
 		]);
@@ -277,7 +277,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			{
 				sessionId: "helmor-sess-fast-sonnet",
 				prompt: "test",
-				model: "claude-sonnet-4-6",
+				model: "claude-sonnet-4-7",
 				cwd: undefined,
 				resume: undefined,
 				permissionMode: undefined,
@@ -961,7 +961,7 @@ describe("ClaudeSessionManager.listModels", () => {
 		expect(models).toEqual([
 			{
 				id: "default",
-				label: "Opus 4.6 1M",
+				label: "Opus 4.7 1M",
 				cliModel: "default",
 				effortLevels: ["low", "medium", "high", "max"],
 				supportsFastMode: true,
