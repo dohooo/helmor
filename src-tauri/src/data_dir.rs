@@ -85,7 +85,7 @@ pub fn conductor_source_db_path() -> Option<PathBuf> {
 /// Returns the Conductor filesystem root directory.
 ///
 /// Reads `conductor_root_path` from the Conductor settings table.
-/// Falls back to `~/.conductor/` if the setting is absent.
+/// Falls back to `~/conductor/` if the setting is absent.
 pub fn conductor_root_path() -> Option<PathBuf> {
     let db_path = conductor_source_db_path()?;
     let conn = rusqlite::Connection::open_with_flags(
@@ -104,7 +104,7 @@ pub fn conductor_root_path() -> Option<PathBuf> {
 
     let path = match root {
         Some(ref s) if !s.is_empty() => PathBuf::from(s),
-        _ => dirs_home()?.join(".conductor"),
+        _ => dirs_home()?.join("conductor"),
     };
 
     if path.is_dir() {

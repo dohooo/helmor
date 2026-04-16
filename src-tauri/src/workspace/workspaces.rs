@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::Serialize;
 
 use crate::{
@@ -489,24 +489,32 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
             "DELETE FROM diff_comments WHERE workspace_id = ?1",
             [workspace_id],
         )
-        .ok();
-    transaction.execute(
-        "DELETE FROM attachments WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
-        [workspace_id],
-    ).ok();
-    transaction.execute(
-        "DELETE FROM session_messages WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
-        [workspace_id],
-    ).ok();
+        .context("Failed to delete workspace diff comments")?;
+    transaction
+        .execute(
+            "DELETE FROM attachments WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
+            [workspace_id],
+        )
+        .context("Failed to delete workspace attachments")?;
+    transaction
+        .execute(
+            "DELETE FROM session_messages WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
+            [workspace_id],
+        )
+        .context("Failed to delete workspace session messages")?;
     transaction
         .execute(
             "DELETE FROM sessions WHERE workspace_id = ?1",
             [workspace_id],
         )
-        .ok();
-    transaction
+        .context("Failed to delete workspace sessions")?;
+    let deleted_rows = transaction
         .execute("DELETE FROM workspaces WHERE id = ?1", [workspace_id])
-        .ok();
+        .context("Failed to delete workspace row")?;
+
+    if deleted_rows != 1 {
+        bail!("Workspace delete affected {deleted_rows} rows for {workspace_id}");
+    }
 
     transaction
         .commit()
