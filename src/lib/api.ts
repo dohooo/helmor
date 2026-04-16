@@ -981,6 +981,7 @@ export type PullRequestInfo = {
 export type ActionStatusKind = "success" | "pending" | "running" | "failure";
 export type ActionProvider = "github" | "vercel" | "unknown";
 export type WorkspaceGitSyncStatus = "upToDate" | "behind" | "unknown";
+export type WorkspacePushStatus = "published" | "unpublished" | "unknown";
 
 export type WorkspaceGitActionStatus = {
 	uncommittedCount: number;
@@ -990,6 +991,7 @@ export type WorkspaceGitActionStatus = {
 	behindTargetCount: number;
 	remoteTrackingRef?: string | null;
 	aheadOfRemoteCount: number;
+	pushStatus?: WorkspacePushStatus;
 };
 
 export type SyncWorkspaceTargetOutcome =
@@ -1000,6 +1002,11 @@ export type SyncWorkspaceTargetOutcome =
 export type SyncWorkspaceTargetResponse = {
 	outcome: SyncWorkspaceTargetOutcome;
 	targetBranch: string;
+};
+
+export type PushWorkspaceToRemoteResponse = {
+	targetRef: string;
+	headCommit: string;
 };
 
 export type WorkspacePrActionItem = {
@@ -1070,6 +1077,19 @@ export async function syncWorkspaceWithTargetBranch(
 		throw new Error(
 			describeInvokeError(error, "Unable to pull target branch updates."),
 		);
+	}
+}
+
+export async function pushWorkspaceToRemote(
+	workspaceId: string,
+): Promise<PushWorkspaceToRemoteResponse> {
+	try {
+		return await invoke<PushWorkspaceToRemoteResponse>(
+			"push_workspace_to_remote",
+			{ workspaceId },
+		);
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to push branch."));
 	}
 }
 

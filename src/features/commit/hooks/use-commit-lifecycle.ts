@@ -15,6 +15,7 @@ import {
 	lookupWorkspacePr,
 	mergeWorkspacePr,
 	type PullRequestInfo,
+	pushWorkspaceToRemote,
 	setWorkspaceManualStatus,
 	type WorkspaceDetail,
 	type WorkspaceGitActionStatus,
@@ -26,7 +27,41 @@ import {
 } from "@/lib/commit-button-logic";
 import { COMMIT_BUTTON_PROMPTS } from "@/lib/commit-button-prompts";
 import { helmorQueryKeys } from "@/lib/query-client";
+import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import type { CommitButtonState, WorkspaceCommitButtonMode } from "../button";
+
+function isActionSessionMode(
+	mode: WorkspaceCommitButtonMode,
+): mode is keyof typeof COMMIT_BUTTON_PROMPTS {
+	return mode in COMMIT_BUTTON_PROMPTS;
+}
+
+function getActionFailureTitle(mode: WorkspaceCommitButtonMode): string {
+	switch (mode) {
+		case "create-pr":
+			return "Create PR failed";
+		case "commit-and-push":
+			return "Commit and push failed";
+		case "push":
+			return "Push failed";
+		case "fix":
+			return "Fix CI failed";
+		case "resolve-conflicts":
+			return "Resolve conflicts failed";
+		case "merge":
+			return "Merge failed";
+		case "open-pr":
+			return "Open PR failed";
+		case "closed":
+			return "Close PR failed";
+		default:
+			return "Action failed";
+	}
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+	return error instanceof Error ? error.message : fallback;
+}
 
 type CommitLifecycle = {
 	workspaceId: string;
@@ -55,6 +90,7 @@ export function useWorkspaceCommitLifecycle({
 	interactionRequiredSessionIds,
 	sendingSessionIds,
 	onSelectSession,
+	pushToast,
 }: {
 	queryClient: QueryClient;
 	selectedWorkspaceId: string | null;
@@ -67,6 +103,7 @@ export function useWorkspaceCommitLifecycle({
 	interactionRequiredSessionIds: Set<string>;
 	sendingSessionIds: Set<string>;
 	onSelectSession: (sessionId: string | null) => void;
+	pushToast?: PushWorkspaceToast;
 }) {
 	const [pendingPromptForSession, setPendingPromptForSession] =
 		useState<PendingPromptForSession | null>(null);
@@ -81,10 +118,19 @@ export function useWorkspaceCommitLifecycle({
 	const refreshWorkspaceRemoteStatus = useCallback(
 		(workspaceId: string) => {
 			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceGitActionStatus(workspaceId),
+			});
+			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspacePr(workspaceId),
 			});
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspacePrActionStatus(workspaceId),
+			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceGroups,
 			});
 		},
 		[queryClient],
@@ -109,11 +155,21 @@ export function useWorkspaceCommitLifecycle({
 						console.warn(
 							"[commitButton] merge blocked: PR has merge conflicts",
 						);
+						pushToast?.(
+							"PR has merge conflicts and cannot be merged yet.",
+							"Merge blocked",
+							"destructive",
+						);
 						return;
 					}
 					if (currentMergeable === "UNKNOWN") {
 						console.warn(
 							"[commitButton] merge blocked: mergeable status still computing, please wait",
+						);
+						pushToast?.(
+							"Mergeability is still being calculated. Please wait and try again.",
+							"Merge blocked",
+							"destructive",
 						);
 						// Trigger a refresh so the status resolves sooner
 						void queryClient.invalidateQueries({
@@ -165,6 +221,11 @@ export function useWorkspaceCommitLifecycle({
 						);
 					} catch (error) {
 						console.error(`[commitButton] ${mode} failed:`, error);
+						pushToast?.(
+							getErrorMessage(error, "Unable to complete action."),
+							getActionFailureTitle(mode),
+							"destructive",
+						);
 						queryClient.setQueryData(
 							helmorQueryKeys.workspacePr(workspaceId),
 							currentPr,
@@ -185,14 +246,6 @@ export function useWorkspaceCommitLifecycle({
 				return;
 			}
 
-			const prompt = COMMIT_BUTTON_PROMPTS[mode];
-			if (!prompt) {
-				console.warn(
-					`[commitButton] action ignored: no prompt for mode ${mode}`,
-				);
-				return;
-			}
-
 			setCommitLifecycle({
 				workspaceId,
 				trackedSessionId: null,
@@ -200,6 +253,32 @@ export function useWorkspaceCommitLifecycle({
 				phase: "creating",
 				prInfo: null,
 			});
+
+			if (mode === "push") {
+				try {
+					await pushWorkspaceToRemote(workspaceId);
+					setCommitLifecycle((current) =>
+						current ? { ...current, phase: "done" } : current,
+					);
+				} catch (error) {
+					console.error("[commitButton] Failed to push branch:", error);
+					const message = getErrorMessage(error, "Unable to push branch.");
+					pushToast?.(message, "Push failed", "destructive");
+					setCommitLifecycle((current) =>
+						current ? { ...current, phase: "error" } : current,
+					);
+				}
+				return;
+			}
+
+			if (!isActionSessionMode(mode)) {
+				console.warn(
+					`[commitButton] action ignored: no prompt for mode ${mode}`,
+				);
+				setCommitLifecycle(null);
+				return;
+			}
+			const prompt = COMMIT_BUTTON_PROMPTS[mode];
 
 			try {
 				const { sessionId } = await createSession(workspaceId, {
@@ -221,6 +300,11 @@ export function useWorkspaceCommitLifecycle({
 				onSelectSession(sessionId);
 			} catch (error) {
 				console.error("[commitButton] Failed to start session:", error);
+				pushToast?.(
+					getErrorMessage(error, "Unable to start action."),
+					getActionFailureTitle(mode),
+					"destructive",
+				);
 				setCommitLifecycle((current) =>
 					current ? { ...current, phase: "error" } : current,
 				);
@@ -228,6 +312,7 @@ export function useWorkspaceCommitLifecycle({
 		},
 		[
 			onSelectSession,
+			pushToast,
 			queryClient,
 			selectedWorkspaceIdRef,
 			workspaceManualStatus,
@@ -327,6 +412,11 @@ export function useWorkspaceCommitLifecycle({
 				refreshWorkspaceRemoteStatus(workspaceId);
 			} catch (error) {
 				console.error("[commitButton] PR lookup failed:", error);
+				pushToast?.(
+					getErrorMessage(error, "Unable to verify action result."),
+					getActionFailureTitle(current.mode),
+					"destructive",
+				);
 				setCommitLifecycle((prev) =>
 					prev && prev.workspaceId === workspaceId
 						? { ...prev, phase: "error" }
@@ -337,6 +427,7 @@ export function useWorkspaceCommitLifecycle({
 	}, [
 		completedSessionIds,
 		interactionRequiredSessionIds,
+		pushToast,
 		refreshWorkspaceRemoteStatus,
 		sendingSessionIds,
 	]);

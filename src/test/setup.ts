@@ -119,6 +119,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 					syncTargetBranch: null,
 					syncStatus: "unknown",
 					behindTargetCount: 0,
+					aheadOfRemoteCount: 0,
+					remoteTrackingRef: null,
+					pushStatus: "unknown",
 				};
 			case "get_workspace_pr_action_status":
 				return {

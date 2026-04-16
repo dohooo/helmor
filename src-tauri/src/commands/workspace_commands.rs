@@ -154,6 +154,15 @@ pub async fn sync_workspace_with_target_branch(
 }
 
 #[tauri::command]
+pub async fn push_workspace_to_remote(
+    workspace_id: String,
+) -> CmdResult<workspaces::PushWorkspaceToRemoteResponse> {
+    let ws_lock = db::workspace_mutation_lock(&workspace_id);
+    let _lock = ws_lock.lock().await;
+    run_blocking(move || workspaces::push_workspace_to_remote(&workspace_id)).await
+}
+
+#[tauri::command]
 pub async fn restore_workspace(
     app: AppHandle,
     workspace_id: String,

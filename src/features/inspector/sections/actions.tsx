@@ -1,7 +1,12 @@
 import { MarkGithubIcon } from "@primer/octicons-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ArrowUpRightIcon, CheckIcon, TriangleIcon } from "lucide-react";
+import {
+	ArrowUpRightIcon,
+	CheckIcon,
+	LoaderCircleIcon,
+	TriangleIcon,
+} from "lucide-react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -46,6 +51,21 @@ interface GitStatusItem {
 	};
 }
 
+function loadingActionLabel(label: string): string {
+	switch (label) {
+		case "Push":
+			return "Pushing";
+		case "Pull":
+			return "Pulling";
+		case "Resolve":
+			return "Resolving";
+		case "Commit and push":
+			return "Committing";
+		default:
+			return "Loading";
+	}
+}
+
 const EMPTY_GIT_ACTION_STATUS: WorkspaceGitActionStatus = {
 	uncommittedCount: 0,
 	conflictCount: 0,
@@ -54,6 +74,7 @@ const EMPTY_GIT_ACTION_STATUS: WorkspaceGitActionStatus = {
 	behindTargetCount: 0,
 	remoteTrackingRef: null,
 	aheadOfRemoteCount: 0,
+	pushStatus: "unknown",
 };
 
 const EMPTY_PR_ACTION_STATUS: WorkspacePrActionStatus = {
@@ -73,6 +94,7 @@ type ActionsSectionProps = {
 	bodyHeight: number;
 	expanded: boolean;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
+	commitButtonMode?: WorkspaceCommitButtonMode;
 	commitButtonState?: CommitButtonState;
 	prInfo: PullRequestInfo | null;
 };
@@ -84,6 +106,7 @@ export function ActionsSection({
 	bodyHeight,
 	expanded,
 	onCommitAction,
+	commitButtonMode,
 	commitButtonState,
 	prInfo,
 }: ActionsSectionProps) {
@@ -203,6 +226,13 @@ export function ActionsSection({
 				</div>
 				{gitRows.map((item) => {
 					const action = item.action;
+					const isCommitActionBusy =
+						action?.kind === "commit" &&
+						action.mode != null &&
+						commitButtonMode === action.mode &&
+						commitButtonState === "busy";
+					const isSyncActionBusy = action?.kind === "sync" && syncPending;
+					const isActionBusy = isCommitActionBusy || isSyncActionBusy;
 					return (
 						<div
 							key={item.label}
@@ -230,10 +260,21 @@ export function ActionsSection({
 									disabled={
 										action.kind === "commit" ? actionDisabled : syncPending
 									}
+									aria-busy={isActionBusy ? true : undefined}
+									aria-label={
+										isActionBusy ? loadingActionLabel(action.label) : undefined
+									}
 								>
-									{action.kind === "sync" && syncPending
-										? "Pulling..."
-										: action.label}
+									<span className="inline-flex items-center gap-1">
+										{isActionBusy ? (
+											<LoaderCircleIcon
+												aria-hidden="true"
+												className="size-3 animate-spin text-current opacity-70"
+												strokeWidth={2}
+											/>
+										) : null}
+										{isActionBusy ? null : action.label}
+									</span>
 								</button>
 							)}
 						</div>
@@ -387,12 +428,9 @@ function buildGitRows(
 						mode: "commit-and-push",
 					},
 				},
-		(gitStatus.aheadOfRemoteCount ?? 0) > 0
+		gitStatus.pushStatus === "unpublished"
 			? {
-					label:
-						gitStatus.aheadOfRemoteCount === 1
-							? `1 commit ahead of ${gitStatus.remoteTrackingRef ?? "upstream"}`
-							: `${gitStatus.aheadOfRemoteCount} commits ahead of ${gitStatus.remoteTrackingRef ?? "upstream"}`,
+					label: "Branch not published to remote",
 					status: "pending",
 					action: {
 						label: "Push",
@@ -400,10 +438,23 @@ function buildGitRows(
 						mode: "push",
 					},
 				}
-			: {
-					label: "Branch fully pushed",
-					status: "success",
-				},
+			: (gitStatus.aheadOfRemoteCount ?? 0) > 0
+				? {
+						label:
+							gitStatus.aheadOfRemoteCount === 1
+								? `1 commit ahead of ${gitStatus.remoteTrackingRef ?? "upstream"}`
+								: `${gitStatus.aheadOfRemoteCount} commits ahead of ${gitStatus.remoteTrackingRef ?? "upstream"}`,
+						status: "pending",
+						action: {
+							label: "Push",
+							kind: "commit",
+							mode: "push",
+						},
+					}
+				: {
+						label: "Branch fully pushed",
+						status: "success",
+					},
 		conflictCount > 0
 			? {
 					label: "Merge conflicts detected",

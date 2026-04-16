@@ -114,6 +114,7 @@ export function WorkspaceInspectorSidebar({
 				bodyHeight={actionsHeight}
 				expanded={!tabsOpen}
 				onCommitAction={onCommitAction}
+				commitButtonMode={commitButtonMode}
 				commitButtonState={commitButtonState}
 				prInfo={prInfo ?? null}
 			/>

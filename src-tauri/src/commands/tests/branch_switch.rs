@@ -351,3 +351,121 @@ fn sync_workspace_target_branch_reports_conflict() {
         "merge conflict should remain visible"
     );
 }
+
+#[test]
+fn push_workspace_to_remote_publishes_unpublished_branch() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = BranchSwitchTestHarness::new();
+
+    let result = workspaces::push_workspace_to_remote(&harness.workspace_id).unwrap();
+
+    assert_eq!(result.target_ref, "origin/test/switch-branch");
+    assert_eq!(result.head_commit, harness.workspace_head());
+    assert!(
+        git_ops::verify_remote_ref_exists(&harness.workspace_dir(), "origin", "test/switch-branch")
+            .unwrap(),
+        "push should create the same-name remote branch"
+    );
+    let status =
+        git_ops::workspace_action_status(&harness.workspace_dir(), Some("origin"), Some("main"))
+            .unwrap();
+    assert_eq!(
+        status.remote_tracking_ref.as_deref(),
+        Some("origin/test/switch-branch")
+    );
+    assert_eq!(status.push_status, git_ops::WorkspacePushStatus::Published);
+}
+
+#[test]
+fn push_workspace_to_remote_updates_existing_remote_branch() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = BranchSwitchTestHarness::new();
+    workspaces::push_workspace_to_remote(&harness.workspace_id).unwrap();
+    harness.commit_in_workspace("push.txt", "second push", "second push");
+
+    let result = workspaces::push_workspace_to_remote(&harness.workspace_id).unwrap();
+
+    assert_eq!(result.target_ref, "origin/test/switch-branch");
+    assert_eq!(result.head_commit, harness.workspace_head());
+    assert_eq!(
+        git_ops::remote_ref_sha(&harness.workspace_dir(), "origin", "test/switch-branch").unwrap(),
+        harness.workspace_head()
+    );
+}
+
+#[test]
+fn push_workspace_to_remote_allows_uncommitted_changes() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = BranchSwitchTestHarness::new();
+    workspaces::push_workspace_to_remote(&harness.workspace_id).unwrap();
+    harness.commit_in_workspace("push.txt", "second push", "second push");
+    harness.dirty_tracked_file();
+
+    let result = workspaces::push_workspace_to_remote(&harness.workspace_id).unwrap();
+
+    assert_eq!(result.target_ref, "origin/test/switch-branch");
+    assert_eq!(result.head_commit, harness.workspace_head());
+    assert_eq!(
+        git_ops::remote_ref_sha(&harness.workspace_dir(), "origin", "test/switch-branch").unwrap(),
+        harness.workspace_head()
+    );
+    let readme = fs::read_to_string(harness.workspace_dir().join("README.md")).unwrap();
+    assert_eq!(readme, "user edits");
+}
+
+#[test]
+fn push_workspace_to_remote_preserves_existing_different_upstream() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = BranchSwitchTestHarness::new();
+    git_ops::run_git(
+        [
+            "-C",
+            harness.workspace_dir().to_str().unwrap(),
+            "push",
+            "--set-upstream",
+            "origin",
+            "HEAD:refs/heads/test/custom-remote-branch",
+        ],
+        None,
+    )
+    .unwrap();
+    harness.commit_in_workspace("push.txt", "second push", "second push");
+
+    let result = workspaces::push_workspace_to_remote(&harness.workspace_id).unwrap();
+
+    assert_eq!(result.target_ref, "origin/test/custom-remote-branch");
+    assert_eq!(result.head_commit, harness.workspace_head());
+    let status =
+        git_ops::workspace_action_status(&harness.workspace_dir(), Some("origin"), Some("main"))
+            .unwrap();
+    assert_eq!(
+        status.remote_tracking_ref.as_deref(),
+        Some("origin/test/custom-remote-branch")
+    );
+    assert_eq!(
+        git_ops::remote_ref_sha(
+            &harness.workspace_dir(),
+            "origin",
+            "test/custom-remote-branch"
+        )
+        .unwrap(),
+        harness.workspace_head()
+    );
+    assert!(
+        !git_ops::verify_remote_ref_exists(
+            &harness.workspace_dir(),
+            "origin",
+            "test/switch-branch"
+        )
+        .unwrap(),
+        "push should keep using the configured upstream instead of creating a same-name branch"
+    );
+}

@@ -1161,6 +1161,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		interactionRequiredSessionIds,
 		sendingSessionIds,
 		onSelectSession: handleSelectSession,
+		pushToast: pushWorkspaceToast,
 	});
 
 	const handleSessionCompleted = useCallback(
