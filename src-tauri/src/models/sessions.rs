@@ -478,7 +478,7 @@ pub fn hide_session(session_id: &str) -> Result<()> {
                 r#"
                 SELECT id FROM sessions
                 WHERE workspace_id = ?1 AND COALESCE(is_hidden, 0) = 0
-                ORDER BY datetime(updated_at) DESC, datetime(created_at) DESC
+                ORDER BY datetime(created_at) ASC
                 LIMIT 1
                 "#,
                 [&workspace_id],
@@ -569,7 +569,7 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
               s.resume_session_at, s.is_hidden, s.is_compacting, s.action_kind
             FROM sessions s
             WHERE s.workspace_id = ?1 AND s.is_hidden = 1
-            ORDER BY datetime(s.updated_at) DESC
+            ORDER BY datetime(s.created_at) ASC
             "#,
         )
         .context("Failed to prepare hidden sessions query")?;
@@ -711,7 +711,7 @@ mod tests {
     fn seed_two_sessions(conn: &Connection) {
         seed_with_active_session(conn);
         conn.execute(
-            "INSERT INTO sessions (id, workspace_id, status, title, updated_at) VALUES ('s2', 'w1', 'idle', 'Second Session', '2026-01-02T00:00:00')",
+            "INSERT INTO sessions (id, workspace_id, status, title, created_at, updated_at) VALUES ('s2', 'w1', 'idle', 'Second Session', '2026-01-02T00:00:00', '2026-01-02T00:00:00')",
             [],
         ).unwrap();
     }
@@ -755,7 +755,7 @@ mod tests {
 
         let next: Option<String> = conn
             .query_row(
-                "SELECT id FROM sessions WHERE workspace_id = 'w1' AND COALESCE(is_hidden, 0) = 0 ORDER BY datetime(updated_at) DESC LIMIT 1",
+                "SELECT id FROM sessions WHERE workspace_id = 'w1' AND COALESCE(is_hidden, 0) = 0 ORDER BY datetime(created_at) ASC LIMIT 1",
                 [],
                 |row| row.get(0),
             )
@@ -783,7 +783,7 @@ mod tests {
 
         let next: Option<String> = conn
             .query_row(
-                "SELECT id FROM sessions WHERE workspace_id = 'w1' AND COALESCE(is_hidden, 0) = 0 ORDER BY datetime(updated_at) DESC LIMIT 1",
+                "SELECT id FROM sessions WHERE workspace_id = 'w1' AND COALESCE(is_hidden, 0) = 0 ORDER BY datetime(created_at) ASC LIMIT 1",
                 [],
                 |row| row.get(0),
             )
@@ -886,9 +886,37 @@ mod tests {
                 "SELECT COUNT(*) FROM sessions WHERE workspace_id = 'w1' AND COALESCE(is_hidden, 0) = 0",
                 [],
                 |r| r.get(0),
+        )
+        .unwrap();
+        assert_eq!(visible, 1);
+    }
+
+    #[test]
+    fn list_hidden_sessions_orders_by_created_at() {
+        let (conn, _dir) = test_db();
+        seed_with_active_session(&conn);
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status, title, created_at, updated_at, is_hidden) VALUES ('s2', 'w1', 'idle', 'Second Session', '2026-01-02T00:00:00', '2026-01-03T00:00:00', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE sessions SET is_hidden = 1, updated_at = '2026-01-04T00:00:00' WHERE id = 's1'",
+            [],
+        )
+        .unwrap();
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM sessions WHERE workspace_id = 'w1' AND is_hidden = 1 ORDER BY datetime(created_at) ASC",
             )
             .unwrap();
-        assert_eq!(visible, 1);
+        let hidden_ids = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .collect::<Vec<String>>();
+        assert_eq!(hidden_ids, vec!["s2", "s1"]);
     }
 
     #[test]

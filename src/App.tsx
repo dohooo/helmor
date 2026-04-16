@@ -36,7 +36,6 @@ import { WorkspaceInspectorSidebar } from "@/features/inspector";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import { closeWorkspaceSession } from "@/features/panel/session-close";
-import { sortWorkspaceSessionsForDisplay } from "@/features/panel/session-sort";
 import { SettingsButton, SettingsDialog } from "@/features/settings";
 import { EditorIcon } from "@/shell/editor-icon";
 import { GithubIdentityGate } from "@/shell/github-identity-gate";
@@ -1360,16 +1359,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 				queryClient.getQueryData<WorkspaceSessionSummary[]>(
 					helmorQueryKeys.workspaceSessions(workspaceId),
 				) ?? [];
-			const sortedWorkspaceSessions = sortWorkspaceSessionsForDisplay(
-				workspaceSessions,
-				{
-					sendingSessionIds,
-					completedSessionIds: settledSessionIds,
-					interactionRequiredSessionIds,
-				},
-			);
 			const nextSessionId = findAdjacentSessionId(
-				sortedWorkspaceSessions,
+				workspaceSessions,
 				selectedSessionIdRef.current,
 				offset,
 			);
@@ -1380,13 +1371,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 			handleSelectSession(nextSessionId);
 		},
-		[
-			handleSelectSession,
-			interactionRequiredSessionIds,
-			queryClient,
-			settledSessionIds,
-			sendingSessionIds,
-		],
+		[handleSelectSession, queryClient],
 	);
 
 	const handleNavigateWorkspaces = useCallback(

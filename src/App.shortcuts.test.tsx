@@ -469,7 +469,7 @@ describe("App global navigation shortcuts", () => {
 		});
 	});
 
-	it("navigates sessions using the same reordered display order as the panel", async () => {
+	it("navigates sessions using query order", async () => {
 		runtimeSessionFixtures[WORKSPACE_IDS.done] = [
 			{
 				id: "session-done-1",
@@ -509,7 +509,7 @@ describe("App global navigation shortcuts", () => {
 		pressGlobalShortcut("ArrowRight");
 
 		await waitFor(() => {
-			expectSelectedSession("Done session 1");
+			expectSelectedSession("Done session 3");
 		});
 	});
 
