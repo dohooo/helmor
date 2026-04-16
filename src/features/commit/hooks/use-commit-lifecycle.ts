@@ -51,6 +51,8 @@ export function useWorkspaceCommitLifecycle({
 	workspacePrInfo,
 	workspacePrActionStatus,
 	workspaceGitActionStatus,
+	completedSessionIds,
+	interactionRequiredSessionIds,
 	sendingSessionIds,
 	onSelectSession,
 }: {
@@ -61,6 +63,8 @@ export function useWorkspaceCommitLifecycle({
 	workspacePrInfo: PullRequestInfo | null;
 	workspacePrActionStatus: WorkspacePrActionStatus | null;
 	workspaceGitActionStatus: WorkspaceGitActionStatus | null;
+	completedSessionIds: Set<string>;
+	interactionRequiredSessionIds: Set<string>;
 	sendingSessionIds: Set<string>;
 	onSelectSession: (sessionId: string | null) => void;
 }) {
@@ -82,6 +86,7 @@ export function useWorkspaceCommitLifecycle({
 				return;
 			}
 
+			completedSessionHandledRef.current = null;
 			console.log("[commitButton] begin", { mode, workspaceId });
 
 			if (mode === "merge" || mode === "closed") {
@@ -237,20 +242,25 @@ export function useWorkspaceCommitLifecycle({
 	const commitLifecycleRef = useRef(commitLifecycle);
 	commitLifecycleRef.current = commitLifecycle;
 	const hasObservedSendingRef = useRef(false);
+	const completedSessionHandledRef = useRef<string | null>(null);
 
 	useEffect(() => {
 		const current = commitLifecycleRef.current;
-		console.log("[commitButton] sendingSessionIds effect fired", {
+		console.log("[commitButton] action-session settlement check", {
 			sendingIds: Array.from(sendingSessionIds),
+			completedIds: Array.from(completedSessionIds),
+			interactionRequiredIds: Array.from(interactionRequiredSessionIds),
 			lifecyclePhase: current?.phase ?? null,
 			trackedSessionId: current?.trackedSessionId ?? null,
 			observedBefore: hasObservedSendingRef.current,
+			handledCompletedSessionId: completedSessionHandledRef.current,
 		});
 
 		if (!current?.trackedSessionId) return;
 		if (current.phase !== "creating" && current.phase !== "streaming") return;
 
-		const isSending = sendingSessionIds.has(current.trackedSessionId);
+		const trackedSessionId = current.trackedSessionId;
+		const isSending = sendingSessionIds.has(trackedSessionId);
 		if (isSending) {
 			console.log("[commitButton] tracked session is streaming");
 			hasObservedSendingRef.current = true;
@@ -264,10 +274,30 @@ export function useWorkspaceCommitLifecycle({
 			return;
 		}
 
+		if (!completedSessionIds.has(trackedSessionId)) {
+			console.log("[commitButton] tracked session not yet completed — waiting");
+			return;
+		}
+
+		if (interactionRequiredSessionIds.has(trackedSessionId)) {
+			console.log(
+				"[commitButton] tracked session still requires interaction — waiting",
+			);
+			return;
+		}
+
+		if (completedSessionHandledRef.current === trackedSessionId) {
+			console.log(
+				"[commitButton] tracked session completion already handled — skipping",
+			);
+			return;
+		}
+
 		console.log(
-			"[commitButton] stream ended — transitioning to verifying phase",
+			"[commitButton] tracked session completed and settled — transitioning to verifying phase",
 		);
 		hasObservedSendingRef.current = false;
+		completedSessionHandledRef.current = trackedSessionId;
 		setCommitLifecycle((prev) =>
 			prev ? { ...prev, phase: "verifying" } : prev,
 		);
@@ -291,7 +321,7 @@ export function useWorkspaceCommitLifecycle({
 				);
 			}
 		})();
-	}, [sendingSessionIds]);
+	}, [completedSessionIds, interactionRequiredSessionIds, sendingSessionIds]);
 
 	useEffect(() => {
 		if (!commitLifecycle) return;
