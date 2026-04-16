@@ -96,6 +96,8 @@ export function ActionsSection({
 	const prStatus = prStatusQuery.data ?? EMPTY_PR_ACTION_STATUS;
 	const gitRows = buildGitRows(gitStatus);
 	const reviewRows = buildReviewRows(prStatus, prInfo);
+	const sortedDeployments = sortActionItems(prStatus.deployments);
+	const sortedChecks = sortActionItems(prStatus.checks);
 	const actionDisabled = commitButtonState === "busy";
 	const handleSync = useCallback(async () => {
 		if (!workspaceId || syncPending) {
@@ -246,27 +248,27 @@ export function ActionsSection({
 					</>
 				)}
 
-				{prStatus.deployments.length > 0 && (
+				{sortedDeployments.length > 0 && (
 					<>
 						<div className="px-2.5 pb-1 pt-2.5">
 							<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
 								Deployments
 							</span>
 						</div>
-						{prStatus.deployments.map((item) => (
+						{sortedDeployments.map((item) => (
 							<ActionStatusRow key={item.id} item={item} />
 						))}
 					</>
 				)}
 
-				{prStatus.checks.length > 0 && (
+				{sortedChecks.length > 0 && (
 					<>
 						<div className="px-2.5 pb-1 pt-2.5">
 							<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
 								Checks
 							</span>
 						</div>
-						{prStatus.checks.map((item) => (
+						{sortedChecks.map((item) => (
 							<ActionStatusRow
 								key={item.id}
 								item={item}
@@ -436,13 +438,18 @@ function ActionStatusRow({
 	) => AppendContextPayloadResult | Promise<AppendContextPayloadResult>;
 }) {
 	return (
-		<div className="group/check-row flex items-center justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
-			<div className="flex min-w-0 items-center gap-1.5">
+		<div className="group/check-row flex items-start justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
+			<div className="flex min-w-0 flex-1 items-start gap-1.5">
 				<StatusIcon status={item.status} />
 				<ProviderIcon provider={item.provider} />
-				<span className="truncate text-primary">{item.name}</span>
+				<span
+					className="min-w-0 whitespace-normal break-words text-primary"
+					title={item.name}
+				>
+					{item.name}
+				</span>
 				{item.duration && (
-					<span className="shrink-0 text-[10.5px] text-muted-foreground">
+					<span className="shrink-0 pt-px text-[10.5px] text-muted-foreground">
 						{item.duration}
 					</span>
 				)}
@@ -477,4 +484,36 @@ function ActionStatusRow({
 			</div>
 		</div>
 	);
+}
+
+function sortActionItems(
+	items: WorkspacePrActionItem[],
+): WorkspacePrActionItem[] {
+	return [...items].sort((left, right) => {
+		const statusDelta =
+			actionPriority(left.status) - actionPriority(right.status);
+		if (statusDelta !== 0) {
+			return statusDelta;
+		}
+
+		const providerDelta = left.provider.localeCompare(right.provider);
+		if (providerDelta !== 0) {
+			return providerDelta;
+		}
+
+		return left.name.localeCompare(right.name);
+	});
+}
+
+function actionPriority(status: ActionStatusKind): number {
+	switch (status) {
+		case "failure":
+			return 0;
+		case "running":
+			return 1;
+		case "pending":
+			return 2;
+		case "success":
+			return 3;
+	}
 }

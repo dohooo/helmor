@@ -4,12 +4,20 @@ description: Setup Rust toolchain, Rust cache, and Linux system packages for Tau
 runs:
   using: composite
   steps:
+    - name: Enable sccache
+      shell: bash
+      run: |
+        echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+        echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+
     - name: Setup Rust toolchain
       uses: dtolnay/rust-toolchain@stable
 
     - name: Cache Rust artifacts
       uses: Swatinem/rust-cache@v2
       with:
+        cache-on-failure: true
+        shared-key: ubuntu-tauri-v1
         workspaces: src-tauri -> target
 
     - name: Install Linux system packages

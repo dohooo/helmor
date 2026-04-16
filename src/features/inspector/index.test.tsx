@@ -253,6 +253,57 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		});
 	});
 
+	it("sorts checks by urgency and keeps the full GitHub check names visible", async () => {
+		apiMocks.loadWorkspacePrActionStatus.mockResolvedValue(
+			emptyPrStatus({
+				remoteState: "ok",
+				checks: [
+					{
+						id: "check-success",
+						name: "Build / App Build (push)",
+						provider: "github",
+						status: "success",
+						url: null,
+					},
+					{
+						id: "check-running",
+						name: "Test / Frontend Test (push)",
+						provider: "github",
+						status: "running",
+						url: null,
+					},
+					{
+						id: "check-failure",
+						name: "Quality / Detect Changes (pull_request)",
+						provider: "github",
+						status: "failure",
+						url: null,
+					},
+				],
+			}),
+		);
+
+		renderInspector();
+
+		const failing = await screen.findByText(
+			"Quality / Detect Changes (pull_request)",
+		);
+		const running = screen.getByText("Test / Frontend Test (push)");
+		const success = screen.getByText("Build / App Build (push)");
+
+		expect(failing).toBeInTheDocument();
+		expect(running).toBeInTheDocument();
+		expect(success).toBeInTheDocument();
+		expect(
+			failing.compareDocumentPosition(running) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(
+			running.compareDocumentPosition(success) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+	});
+
 	it("renders link buttons only for remote items with urls", async () => {
 		const user = userEvent.setup();
 		apiMocks.loadWorkspacePrActionStatus.mockResolvedValue(

@@ -1,4 +1,4 @@
-import { Github } from "@lobehub/icons";
+import { MarkGithubIcon } from "@primer/octicons-react";
 import { ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -73,7 +73,7 @@ export function GitSectionHeader({
 						onClick={onPrClick}
 					>
 						<span className="inline-flex items-center gap-1.5 leading-none">
-							<Github size={12} className="shrink-0 self-center" />
+							<MarkGithubIcon size={12} className="shrink-0 self-center" />
 							<span className="inline-flex items-center leading-none tabular-nums text-sm font-light">
 								#{prInfo.number}
 							</span>

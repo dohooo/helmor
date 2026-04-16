@@ -10,9 +10,11 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 env:
   CI: true
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   changes:
@@ -74,6 +76,9 @@ jobs:
 
       - name: Setup Rust Tauri
         uses: ./.github/actions/setup-rust-tauri
+
+      - name: Build sidecar binary
+        uses: ./.github/actions/build-sidecar
 
       - name: Run lint
         run: pnpm run lint
