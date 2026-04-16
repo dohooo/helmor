@@ -29,9 +29,10 @@ export type CommitLifecycle = {
  *
  * Priority order when PR is OPEN (highest wins):
  *   1. resolve-conflicts  — conflicts block everything
- *   2. commit-and-push    — local changes need pushing first
- *   3. fix                — CI needs fixing before merge
- *   4. merge              — ready to merge
+ *   2. commit-and-push    — local dirty changes need committing first
+ *   3. push               — committed local work is ahead of origin
+ *   4. fix                — CI needs fixing before merge
+ *   5. merge              — ready to merge
  */
 export function deriveCommitButtonMode(
 	lifecycle: CommitLifecycle,
@@ -63,13 +64,18 @@ export function deriveCommitButtonMode(
 				return "commit-and-push";
 			}
 
-			// 3. Any failing CI check → show Fix CI
+			// 3. Local commits ahead of origin need pushing before CI / merge
+			if ((gitActionStatus?.aheadOfRemoteCount ?? 0) > 0) {
+				return "push";
+			}
+
+			// 4. Any failing CI check → show Fix CI
 			const hasFailingCheck = prActionStatus?.checks?.some(
 				(c) => c.status === "failure",
 			);
 			if (hasFailingCheck) return "fix";
 
-			// 4. Ready to merge
+			// 5. Ready to merge
 			return "merge";
 		}
 

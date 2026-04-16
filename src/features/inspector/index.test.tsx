@@ -46,6 +46,8 @@ function cleanGitStatus(): WorkspaceGitActionStatus {
 		syncTargetBranch: "main",
 		syncStatus: "upToDate",
 		behindTargetCount: 0,
+		remoteTrackingRef: "refs/remotes/origin/main",
+		aheadOfRemoteCount: 0,
 	};
 }
 
@@ -134,7 +136,10 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		expect(
 			within(actions).getByText("Waiting for PR review"),
 		).toBeInTheDocument();
-		expect(within(actions).getAllByLabelText("Passed")).toHaveLength(2);
+		expect(
+			within(actions).getByText("Branch fully pushed"),
+		).toBeInTheDocument();
+		expect(within(actions).getAllByLabelText("Passed")).toHaveLength(3);
 	});
 
 	it("shows dirty and conflicting git rows and reuses commit action handlers", async () => {
@@ -178,6 +183,29 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 				"workspace-1",
 			);
 		});
+	});
+
+	it("shows push when local branch is ahead of its remote tracking ref", async () => {
+		const user = userEvent.setup();
+		const onCommitAction = vi.fn();
+		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
+			uncommittedCount: 0,
+			conflictCount: 0,
+			syncTargetBranch: "main",
+			syncStatus: "upToDate",
+			behindTargetCount: 0,
+			remoteTrackingRef: "refs/remotes/origin/dohooo/short-reply-setting",
+			aheadOfRemoteCount: 2,
+		});
+
+		renderInspector({ onCommitAction });
+
+		await screen.findByText(
+			"2 commits ahead of refs/remotes/origin/dohooo/short-reply-setting",
+		);
+		await user.click(screen.getByRole("button", { name: "Push" }));
+
+		expect(onCommitAction).toHaveBeenCalledWith("push");
 	});
 
 	it("hides pull when conflicts are present even if target is behind", async () => {

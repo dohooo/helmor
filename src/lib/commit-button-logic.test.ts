@@ -61,6 +61,8 @@ function makeGitActionStatus(
 		syncTargetBranch: "main",
 		syncStatus: "upToDate",
 		behindTargetCount: 0,
+		remoteTrackingRef: "refs/remotes/origin/main",
+		aheadOfRemoteCount: 0,
 		...overrides,
 	};
 }
@@ -183,6 +185,40 @@ describe("deriveCommitButtonMode", () => {
 					makeGitActionStatus({ uncommittedCount: 1 }),
 				),
 			).toBe("commit-and-push");
+		});
+	});
+
+	describe("push priority", () => {
+		it("returns push when local branch is ahead of remote", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makePr({ state: "OPEN" }),
+					makePrActionStatus({ mergeable: "MERGEABLE" }),
+					makeGitActionStatus({ aheadOfRemoteCount: 2 }),
+				),
+			).toBe("push");
+		});
+
+		it("ahead-of-remote takes precedence over failing checks", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makePr({ state: "OPEN" }),
+					makePrActionStatus({
+						mergeable: "MERGEABLE",
+						checks: [
+							{
+								id: "ci-1",
+								name: "build",
+								provider: "github",
+								status: "failure",
+							},
+						],
+					}),
+					makeGitActionStatus({ aheadOfRemoteCount: 1 }),
+				),
+			).toBe("push");
 		});
 	});
 

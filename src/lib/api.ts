@@ -950,6 +950,8 @@ export type WorkspaceGitActionStatus = {
 	syncTargetBranch?: string | null;
 	syncStatus: WorkspaceGitSyncStatus;
 	behindTargetCount: number;
+	remoteTrackingRef?: string | null;
+	aheadOfRemoteCount: number;
 };
 
 export type SyncWorkspaceTargetOutcome =

@@ -51,6 +51,8 @@ const EMPTY_GIT_ACTION_STATUS: WorkspaceGitActionStatus = {
 	syncTargetBranch: null,
 	syncStatus: "unknown",
 	behindTargetCount: 0,
+	remoteTrackingRef: null,
+	aheadOfRemoteCount: 0,
 };
 
 const EMPTY_PR_ACTION_STATUS: WorkspacePrActionStatus = {
@@ -363,6 +365,23 @@ function buildGitRows(gitStatus: WorkspaceGitActionStatus): GitStatusItem[] {
 						kind: "commit",
 						mode: "commit-and-push",
 					},
+				},
+		(gitStatus.aheadOfRemoteCount ?? 0) > 0
+			? {
+					label:
+						gitStatus.aheadOfRemoteCount === 1
+							? `1 commit ahead of ${gitStatus.remoteTrackingRef ?? "upstream"}`
+							: `${gitStatus.aheadOfRemoteCount} commits ahead of ${gitStatus.remoteTrackingRef ?? "upstream"}`,
+					status: "pending",
+					action: {
+						label: "Push",
+						kind: "commit",
+						mode: "push",
+					},
+				}
+			: {
+					label: "Branch fully pushed",
+					status: "success",
 				},
 		conflictCount > 0
 			? {

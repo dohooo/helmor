@@ -17,6 +17,7 @@ export type CommitButtonState = "idle" | "busy" | "done" | "error" | "disabled";
 export type WorkspaceCommitButtonMode =
 	| "create-pr"
 	| "commit-and-push"
+	| "push"
 	| "fix"
 	| "resolve-conflicts"
 	| "merge"
@@ -60,6 +61,13 @@ const STATE_LABELS: Record<
 		done: "Pushed",
 		error: "Retry",
 		disabled: "Commit and Push",
+	},
+	push: {
+		idle: "Push",
+		busy: "Pushing...",
+		done: "Pushed",
+		error: "Retry",
+		disabled: "Push",
 	},
 	fix: {
 		idle: "Fix CI",
@@ -113,6 +121,15 @@ function getDefaultMenuItems(
 			{
 				id: "commit-and-push-manually",
 				label: "Commit and push manually",
+			},
+		];
+	}
+
+	if (mode === "push") {
+		return [
+			{
+				id: "push-manually",
+				label: "Push manually",
 			},
 		];
 	}
@@ -177,6 +194,7 @@ function getModeIcon(mode: WorkspaceCommitButtonMode) {
 		case "create-pr":
 			return null;
 		case "commit-and-push":
+		case "push":
 			return null;
 		case "fix":
 			return null;
@@ -279,19 +297,21 @@ export function WorkspaceCommitButton({
 	const optionsAriaLabel =
 		mode === "commit-and-push"
 			? "Commit and push options"
-			: mode === "fix"
-				? "Fix CI options"
-				: mode === "resolve-conflicts"
-					? "Resolve conflicts options"
-					: mode === "merge"
-						? "Merge options"
-						: mode === "open-pr"
-							? "Open PR options"
-							: mode === "merged"
-								? "Merged options"
-								: mode === "closed"
-									? "Closed options"
-									: "Create PR options";
+			: mode === "push"
+				? "Push options"
+				: mode === "fix"
+					? "Fix CI options"
+					: mode === "resolve-conflicts"
+						? "Resolve conflicts options"
+						: mode === "merge"
+							? "Merge options"
+							: mode === "open-pr"
+								? "Open PR options"
+								: mode === "merged"
+									? "Merged options"
+									: mode === "closed"
+										? "Closed options"
+										: "Create PR options";
 
 	const mainButton = (
 		<Button
