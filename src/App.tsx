@@ -110,6 +110,12 @@ import {
 function App() {
 	const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [settingsWorkspaceId, setSettingsWorkspaceId] = useState<string | null>(
+		null,
+	);
+	const [settingsWorkspaceRepoId, setSettingsWorkspaceRepoId] = useState<
+		string | null
+	>(null);
 	const [queryClient] = useState(() => createHelmorQueryClient());
 	const preloadSettings = useMemo<AppSettings>(() => {
 		const t = localStorage.getItem(THEME_STORAGE_KEY) as ThemeMode | null;
@@ -208,10 +214,18 @@ function App() {
 					});
 				}}
 			>
-				<AppShell onOpenSettings={() => setSettingsOpen(true)} />
+				<AppShell
+					onOpenSettings={(workspaceId, workspaceRepoId) => {
+						setSettingsWorkspaceId(workspaceId);
+						setSettingsWorkspaceRepoId(workspaceRepoId);
+						setSettingsOpen(true);
+					}}
+				/>
 				{splashMounted && <SplashScreen visible={splashVisible} />}
 				<SettingsDialog
 					open={settingsOpen}
+					workspaceId={settingsWorkspaceId}
+					workspaceRepoId={settingsWorkspaceRepoId}
 					onClose={() => {
 						setSettingsOpen(false);
 						void queryClient.invalidateQueries({
@@ -224,7 +238,14 @@ function App() {
 	);
 }
 
-function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
+function AppShell({
+	onOpenSettings,
+}: {
+	onOpenSettings: (
+		workspaceId: string | null,
+		workspaceRepoId: string | null,
+	) => void;
+}) {
 	const queryClient = useQueryClient();
 	const workspaceSelectionRequestRef = useRef(0);
 	const sessionSelectionRequestRef = useRef(0);
@@ -443,6 +464,16 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		...workspaceDetailQueryOptions(selectedWorkspaceId ?? "__none__"),
 		enabled: isIdentityConnected && selectedWorkspaceId !== null,
 	});
+	const handleOpenSettings = useCallback(() => {
+		onOpenSettings(
+			selectedWorkspaceId,
+			selectedWorkspaceDetailQuery.data?.repoId ?? null,
+		);
+	}, [
+		onOpenSettings,
+		selectedWorkspaceDetailQuery.data?.repoId,
+		selectedWorkspaceId,
+	]);
 	const workspaceRootPath =
 		selectedWorkspaceDetailQuery.data?.rootPath ??
 		(selectedWorkspaceId
@@ -1771,7 +1802,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 													/>
 												</Button>
 												<div className="flex shrink-0 items-center justify-between px-3 pb-3 pt-1">
-													<SettingsButton onClick={onOpenSettings} />
+													<SettingsButton onClick={handleOpenSettings} />
 													{githubIdentityState.status === "connected" ? (
 														<GithubStatusMenu
 															identityState={githubIdentityState}
@@ -2052,7 +2083,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 										commitButtonMode={commitButtonMode}
 										commitButtonState={commitButtonState}
 										prInfo={workspacePrInfo}
-										onOpenSettings={onOpenSettings}
+										onOpenSettings={handleOpenSettings}
 									/>
 								</aside>
 							</div>
