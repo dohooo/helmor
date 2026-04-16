@@ -24,8 +24,9 @@ pub use self::streaming::{
 };
 
 use self::persistence::{
-    finalize_session_metadata, open_write_connection, persist_exit_plan_message,
-    persist_result_and_finalize, persist_turn_message, persist_user_message,
+    finalize_session_metadata, open_write_connection, persist_error_message,
+    persist_exit_plan_message, persist_result_and_finalize, persist_turn_message,
+    persist_user_message,
 };
 use self::streaming::stream_via_sidecar;
 use self::support::{resolve_resume_working_directory, resolve_working_directory};

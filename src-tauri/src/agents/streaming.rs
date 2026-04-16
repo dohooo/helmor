@@ -13,9 +13,9 @@ use crate::pipeline::types::{
 };
 
 use super::{
-    finalize_session_metadata, open_write_connection, persist_exit_plan_message,
-    persist_result_and_finalize, persist_turn_message, persist_user_message, AgentSendRequest,
-    AgentStreamEvent, CmdResult, ExchangeContext,
+    finalize_session_metadata, open_write_connection, persist_error_message,
+    persist_exit_plan_message, persist_result_and_finalize, persist_turn_message,
+    persist_user_message, AgentSendRequest, AgentStreamEvent, CmdResult, ExchangeContext,
 };
 
 #[derive(Debug, Clone)]
@@ -824,9 +824,37 @@ pub(super) fn stream_via_sidecar(
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
                     tracing::debug!(rid = %rid, internal, "Sidecar error: {message}");
+                    let mut persisted = false;
+
+                    if let (Some(ctx), Some(conn)) = (&exchange_ctx, &db_conn) {
+                        let resolved_model = pipeline
+                            .as_ref()
+                            .map(|pipeline_state| {
+                                pipeline_state.accumulator.resolved_model().to_string()
+                            })
+                            .unwrap_or_else(|| model_copy.cli_model.to_string());
+
+                        match persist_error_message(conn, ctx, &resolved_model, &message) {
+                            Ok(_) => persisted = true,
+                            Err(error) => {
+                                tracing::error!(rid = %rid, "Failed to persist error message: {error}");
+                            }
+                        }
+
+                        if let Err(error) = finalize_session_metadata(
+                            conn,
+                            ctx,
+                            "idle",
+                            effort_copy.as_deref(),
+                            permission_mode_copy.as_deref(),
+                        ) {
+                            tracing::error!(rid = %rid, "Failed to finalize error exchange: {error}");
+                        }
+                    }
+
                     let _ = on_event.send(AgentStreamEvent::Error {
                         message,
-                        persisted: exchange_ctx.is_some(),
+                        persisted,
                         internal,
                     });
                     break;

@@ -7,10 +7,12 @@ import { ChatUserMessage } from "./user-message";
 
 function ConversationMessage({
 	message,
+	previousAssistantMessage,
 	sessionId,
 	itemIndex,
 }: {
 	message: RenderedMessage;
+	previousAssistantMessage?: RenderedMessage | null;
 	sessionId: string;
 	itemIndex: number;
 }) {
@@ -29,7 +31,12 @@ function ConversationMessage({
 		return <ChatAssistantMessage message={message} streaming={streaming} />;
 	}
 
-	return <ChatSystemMessage message={message} />;
+	return (
+		<ChatSystemMessage
+			message={message}
+			previousAssistantMessage={previousAssistantMessage}
+		/>
+	);
 }
 
 export const MemoConversationMessage = memo(
@@ -37,6 +44,7 @@ export const MemoConversationMessage = memo(
 	(prev, next) => {
 		return (
 			prev.message === next.message &&
+			prev.previousAssistantMessage === next.previousAssistantMessage &&
 			prev.sessionId === next.sessionId &&
 			prev.itemIndex === next.itemIndex
 		);

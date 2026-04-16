@@ -48,10 +48,12 @@ import type {
 	DeferredToolResponseOptions,
 } from "./deferred-tool";
 import { DeferredToolPanel } from "./deferred-tool-panel";
+import { clearPersistedDraft } from "./draft-storage";
 import { CustomTagBadgeNode } from "./editor/custom-tag-badge-node";
 import { FileBadgeNode } from "./editor/file-badge-node";
 import { ImageBadgeNode } from "./editor/image-badge-node";
 import { AutoResizePlugin } from "./editor/plugins/auto-resize-plugin";
+import { DraftPersistencePlugin } from "./editor/plugins/draft-persistence-plugin";
 import { DropFilePlugin } from "./editor/plugins/drop-file-plugin";
 import { EditablePlugin } from "./editor/plugins/editable-plugin";
 import { EditorRefPlugin } from "./editor/plugins/editor-ref-plugin";
@@ -61,11 +63,7 @@ import { PasteImagePlugin } from "./editor/plugins/paste-image-plugin";
 import { SlashCommandPlugin } from "./editor/plugins/slash-command-plugin";
 import { SubmitPlugin } from "./editor/plugins/submit-plugin";
 import { $extractComposerContent } from "./editor/utils";
-import {
-	$appendComposerInsertItems,
-	$setEditorContent,
-	draftCache,
-} from "./editor-ops";
+import { $appendComposerInsertItems, draftCache } from "./editor-ops";
 import type { ElicitationResponseHandler } from "./elicitation";
 import { ElicitationPanel } from "./elicitation-panel";
 import { FastModeLottieIcon } from "./fast-mode-lottie-icon";
@@ -232,83 +230,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		onError: onEditorError,
 	}).current;
 
-	// Save & restore drafts on context switch.
-	// Uses Lexical's native EditorState serialization so the full node tree
-	// (including badge positions, order, and cursor) is preserved exactly.
-	const prevContextKeyRef = useRef(contextKey);
-	useEffect(() => {
-		if (prevContextKeyRef.current !== contextKey) {
-			const prevKey = prevContextKeyRef.current;
-			prevContextKeyRef.current = contextKey;
-			const editor = editorRef.current;
-
-			// Save outgoing editor state
-			if (editor) {
-				let hasContent = false;
-				editor.read(() => {
-					const c = $extractComposerContent();
-					hasContent = Boolean(
-						c.text || c.images.length || c.files.length || c.customTags.length,
-					);
-				});
-				if (hasContent) {
-					draftCache.set(prevKey, editor.getEditorState().toJSON());
-				} else {
-					draftCache.delete(prevKey);
-				}
-			}
-
-			// Restore incoming editor state
-			const cached = draftCache.get(contextKey);
-			if (cached && editor) {
-				editor.setEditorState(editor.parseEditorState(cached));
-			} else {
-				editor?.update(() => {
-					$setEditorContent(
-						restoreDraft ?? "",
-						restoreImages,
-						restoreFiles,
-						restoreCustomTags,
-					);
-				});
-			}
-		}
-	}, [
-		contextKey,
-		restoreDraft,
-		restoreImages,
-		restoreFiles,
-		restoreCustomTags,
-	]);
-
-	// Restore on nonce change (error restore / draft restore)
-	const prevNonceRef = useRef(restoreNonce);
-	useEffect(() => {
-		if (restoreNonce === prevNonceRef.current) return;
-		prevNonceRef.current = restoreNonce;
-		if (
-			!restoreDraft &&
-			restoreImages.length === 0 &&
-			restoreFiles.length === 0 &&
-			restoreCustomTags.length === 0
-		)
-			return;
-		editorRef.current?.update(() => {
-			$setEditorContent(
-				restoreDraft ?? "",
-				restoreImages,
-				restoreFiles,
-				restoreCustomTags,
-			);
-		});
-	}, [
-		restoreNonce,
-		restoreDraft,
-		restoreImages,
-		restoreFiles,
-		restoreCustomTags,
-	]);
-
 	useEffect(() => {
 		const pendingIds = new Set(
 			pendingInsertRequests.map((request) => request.id),
@@ -348,10 +269,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const handlePlanImplement = useCallback(() => {
 		if (!hasPlanReview) return;
 		onChangePermissionMode("bypassPermissions");
+		draftCache.delete(contextKey);
+		clearPersistedDraft(contextKey);
 		onSubmit("Go ahead with the plan.", [], [], [], {
 			permissionModeOverride: "bypassPermissions",
 		});
-	}, [hasPlanReview, onChangePermissionMode, onSubmit]);
+	}, [contextKey, hasPlanReview, onChangePermissionMode, onSubmit]);
 
 	const handlePlanRequestChanges = useCallback(() => {
 		if (!hasPlanReview) return;
@@ -371,6 +294,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				$getRoot().clear();
 			});
 			draftCache.delete(contextKey);
+			clearPersistedDraft(contextKey);
 			setHasContent(false);
 		}
 	}, [hasPlanReview, onSubmit, contextKey]);
@@ -401,6 +325,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			$getRoot().clear();
 		});
 		draftCache.delete(contextKey);
+		clearPersistedDraft(contextKey);
 		setHasContent(false);
 	}, [onSubmit, contextKey]);
 
@@ -467,6 +392,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						<DropFilePlugin />
 						<AutoResizePlugin minHeight={64} maxHeight={240} />
 						<EditorRefPlugin editorRef={editorRef} />
+						<DraftPersistencePlugin
+							contextKey={contextKey}
+							restoreDraft={restoreDraft}
+							restoreImages={restoreImages}
+							restoreFiles={restoreFiles}
+							restoreCustomTags={restoreCustomTags}
+							restoreNonce={restoreNonce}
+						/>
 						<EditablePlugin disabled={inputDisabled} />
 						<HasContentPlugin onChange={setHasContent} />
 					</LexicalComposer>

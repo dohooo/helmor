@@ -12,6 +12,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
 import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
 import { createHelmorQueryClient } from "@/lib/query-client";
+import { getComposerDraftStorageKey } from "./draft-storage";
+import { draftCache } from "./editor-ops";
 
 vi.mock("@tauri-apps/api/core", () => ({
 	invoke: vi.fn(),
@@ -49,6 +51,9 @@ import { WorkspaceComposer } from "./index";
 
 afterEach(() => {
 	cleanup();
+	draftCache.clear();
+	window.localStorage.clear();
+	vi.useRealTimers();
 });
 
 const MODEL_SECTIONS = [
@@ -235,6 +240,158 @@ describe("WorkspaceComposer", () => {
 				},
 			],
 		);
+	});
+
+	it("persists drafts to localStorage and restores them after remount", async () => {
+		const queryClient = createHelmorQueryClient();
+		const handleSubmit = vi.fn();
+		const storageKey = getComposerDraftStorageKey("session:session-restore");
+		const { unmount } = render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-restore"
+					onSubmit={handleSubmit}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="acceptEdits"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingInsertRequests={[
+						{
+							id: "persist-insert-1",
+							workspaceId: "workspace-1",
+							sessionId: "session-restore",
+							behavior: "append",
+							createdAt: 0,
+							items: [
+								{
+									kind: "custom-tag",
+									key: "persist-tag-1",
+									label: "Requirements",
+									submitText: "Restore this draft after restart.",
+								},
+							],
+						},
+					]}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await waitFor(() => {
+			expect(window.localStorage.getItem(storageKey)).toContain(
+				"Restore this draft after restart.",
+			);
+		});
+
+		unmount();
+		draftCache.clear();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-restore"
+					onSubmit={handleSubmit}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="acceptEdits"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await screen.findByText("Requirements");
+		expect(window.localStorage.getItem(storageKey)).toContain(
+			"Restore this draft after restart.",
+		);
+		expect(handleSubmit).not.toHaveBeenCalled();
+	});
+
+	it("clears persisted drafts after submit", async () => {
+		const queryClient = createHelmorQueryClient();
+		const handleSubmit = vi.fn();
+		const contextKey = "session:session-send";
+		const storageKey = getComposerDraftStorageKey(contextKey);
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey={contextKey}
+					onSubmit={handleSubmit}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="acceptEdits"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingInsertRequests={[
+						{
+							id: "persist-insert-2",
+							workspaceId: "workspace-1",
+							sessionId: "session-send",
+							behavior: "append",
+							createdAt: 0,
+							items: [
+								{
+									kind: "custom-tag",
+									key: "persist-tag-2",
+									label: "Requirements",
+									submitText: "Send this persisted draft.",
+								},
+							],
+						},
+					]}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await waitFor(() => {
+			expect(window.localStorage.getItem(storageKey)).toContain(
+				"Send this persisted draft.",
+			);
+		});
+
+		fireEvent.click(screen.getByLabelText("Send"));
+
+		expect(handleSubmit).toHaveBeenCalledWith(
+			"Send this persisted draft.",
+			[],
+			[],
+			[
+				{
+					id: "persist-tag-2",
+					label: "Requirements",
+					submitText: "Send this persisted draft.",
+				},
+			],
+		);
+		expect(window.localStorage.getItem(storageKey)).toBeNull();
 	});
 
 	it("only renders fast mode controls for supported models", () => {

@@ -810,7 +810,8 @@ export function useConversationStreaming({
 							}
 							setSendErrorsByContext((current) => ({
 								...current,
-								[contextKey]: event.internal ? null : event.message,
+								[contextKey]:
+									event.internal || event.persisted ? null : event.message,
 							}));
 							clearSendingState(contextKey);
 
@@ -1137,7 +1138,8 @@ export function useConversationStreaming({
 							}
 							setSendErrorsByContext((current) => ({
 								...current,
-								[contextKey]: event.internal ? null : event.message,
+								[contextKey]:
+									event.internal || event.persisted ? null : event.message,
 							}));
 							clearSendingState(contextKey);
 
