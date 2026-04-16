@@ -135,6 +135,7 @@ export function WorkspaceInspectorSidebar({
 					workspaceState={workspaceState ?? null}
 					setupScript={repoScripts?.setupScript ?? null}
 					scriptsLoaded={scriptsLoaded}
+					isActive={activeTab === "setup"}
 					onOpenSettings={handleOpenSettings}
 				/>
 				<RunTab

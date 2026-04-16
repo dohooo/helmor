@@ -1,6 +1,5 @@
 import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 import { cn } from "@/lib/utils";
 
@@ -13,6 +12,8 @@ export const INSPECTOR_SECTION_HEADER_CLASS =
 	"flex h-8 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-muted/25 px-3";
 export const INSPECTOR_SECTION_TITLE_CLASS =
 	"text-[13px] leading-8 font-medium tracking-[-0.01em] text-muted-foreground";
+const INSPECTOR_TAB_BUTTON_CLASS =
+	"relative inline-flex h-full cursor-pointer items-center justify-center px-0 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0";
 
 export function getGitSectionHeaderHighlightClass(
 	mode: WorkspaceCommitButtonMode,
@@ -64,38 +65,70 @@ export function InspectorTabsSection({
 					open && "flex-1",
 				)}
 			>
-				<Tabs
-					value={activeTab}
-					onValueChange={onTabChange}
-					className={cn("flex min-h-0 flex-col gap-0", open && "flex-1")}
-				>
+				<div className={cn("flex min-h-0 flex-col gap-0", open && "flex-1")}>
 					<div
-						className={cn(INSPECTOR_SECTION_HEADER_CLASS, "relative z-10 pt-0")}
+						className={cn(
+							INSPECTOR_SECTION_HEADER_CLASS,
+							"relative z-10 items-stretch pt-0",
+						)}
 					>
-						<TabsList
-							variant="line"
-							className="h-8 gap-4 border-none bg-transparent p-0"
+						<div
+							role="tablist"
+							aria-orientation="horizontal"
+							className="flex h-full self-stretch items-stretch gap-4"
 						>
-							<TabsTrigger
-								value="setup"
-								className="h-8 w-auto gap-0 border-transparent px-0 text-[12px] font-medium text-muted-foreground after:bottom-[-1px] focus-visible:border-transparent focus-visible:ring-0 focus-visible:outline-none data-[state=active]:bg-transparent data-[state=active]:text-foreground"
+							<button
+								type="button"
+								role="tab"
+								id="inspector-tab-setup"
+								aria-controls="inspector-panel-setup"
+								aria-selected={activeTab === "setup"}
+								tabIndex={activeTab === "setup" ? 0 : -1}
+								className={cn(
+									INSPECTOR_TAB_BUTTON_CLASS,
+									activeTab === "setup" && "text-foreground",
+								)}
+								onClick={() => onTabChange("setup")}
 							>
 								Setup
-							</TabsTrigger>
-							<TabsTrigger
-								value="run"
-								className="h-8 w-auto gap-0 border-transparent px-0 text-[12px] font-medium text-muted-foreground after:bottom-[-1px] focus-visible:border-transparent focus-visible:ring-0 focus-visible:outline-none data-[state=active]:bg-transparent data-[state=active]:text-foreground"
+								<span
+									aria-hidden="true"
+									className={cn(
+										"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+										activeTab === "setup" && "opacity-100",
+									)}
+								/>
+							</button>
+							<button
+								type="button"
+								role="tab"
+								id="inspector-tab-run"
+								aria-controls="inspector-panel-run"
+								aria-selected={activeTab === "run"}
+								tabIndex={activeTab === "run" ? 0 : -1}
+								className={cn(
+									INSPECTOR_TAB_BUTTON_CLASS,
+									activeTab === "run" && "text-foreground",
+								)}
+								onClick={() => onTabChange("run")}
 							>
 								Run
-							</TabsTrigger>
-						</TabsList>
+								<span
+									aria-hidden="true"
+									className={cn(
+										"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+										activeTab === "run" && "opacity-100",
+									)}
+								/>
+							</button>
+						</div>
 						<Button
 							type="button"
 							aria-label="Toggle inspector tabs section"
 							onClick={onToggle}
 							variant="ghost"
 							size="icon-sm"
-							className="ml-auto shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+							className="ml-auto shrink-0 self-center text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 						>
 							<ChevronDown
 								className="size-3.5"
@@ -116,7 +149,7 @@ export function InspectorTabsSection({
 							{children}
 						</div>
 					)}
-				</Tabs>
+				</div>
 			</section>
 		</div>
 	);
