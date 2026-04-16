@@ -409,9 +409,9 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		threadSessionId,
 	]);
 
-	// Auto-generate title for existing sessions still named "Untitled".
-	// When a session is displayed and its messages are loaded, if the title
-	// is "Untitled" and there is at least one user message, trigger rename.
+	// When a non-action session is displayed and its first user message is
+	// available, do one best-effort naming check. The backend decides whether
+	// the session title and/or branch still need work.
 	useEffect(() => {
 		if (!threadSessionId || !displayedWorkspaceId) return;
 
@@ -420,7 +420,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		const currentSession = sessions.find(
 			(session) => session.id === threadSessionId,
 		);
-		if (!currentSession || currentSession.title !== "Untitled") return;
+		if (!currentSession || currentSession.actionKind) return;
 
 		const messages = messagesQuery.data;
 		if (!messages || messages.length === 0) return;
@@ -441,7 +441,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		if (!userText) return;
 
 		void generateSessionTitle(threadSessionId, userText).then((result) => {
-			if (result?.title) {
+			if (result?.title || result?.branchRenamed) {
 				void invalidateWorkspaceQueries();
 			}
 		});

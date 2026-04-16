@@ -7,6 +7,7 @@ import { renderWithProviders } from "@/test/render-with-providers";
 
 const apiMocks = vi.hoisted(() => ({
 	createSession: vi.fn(),
+	generateSessionTitle: vi.fn(),
 	loadRepoScripts: vi.fn(),
 	loadWorkspaceDetail: vi.fn(),
 	loadWorkspaceSessions: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	return {
 		...actual,
 		createSession: apiMocks.createSession,
+		generateSessionTitle: apiMocks.generateSessionTitle,
 		loadRepoScripts: apiMocks.loadRepoScripts,
 		loadWorkspaceDetail: apiMocks.loadWorkspaceDetail,
 		loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
@@ -254,12 +256,18 @@ describe("WorkspacePanelContainer loading semantics", () => {
 	beforeEach(() => {
 		panelRenderSpy.mockReset();
 		apiMocks.createSession.mockReset();
+		apiMocks.generateSessionTitle.mockReset();
 		apiMocks.loadRepoScripts.mockReset();
 		apiMocks.loadWorkspaceDetail.mockReset();
 		apiMocks.loadWorkspaceSessions.mockReset();
 		apiMocks.loadSessionThreadMessages.mockReset();
 
 		apiMocks.createSession.mockResolvedValue({ sessionId: "session-created" });
+		apiMocks.generateSessionTitle.mockResolvedValue({
+			title: null,
+			branchRenamed: false,
+			skipped: true,
+		});
 		apiMocks.loadRepoScripts.mockResolvedValue({
 			setupScript: "pnpm install",
 			runScript: "pnpm dev",
@@ -479,6 +487,96 @@ describe("WorkspacePanelContainer loading semantics", () => {
 
 		expect(getLatestPanelProps().sessionDisplayProviders).toEqual({
 			"session-new": "codex",
+		});
+	});
+
+	it("runs one naming check for a displayed non-action session with a user message", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			createWorkspaceDetail("workspace-1", "session-1"),
+		);
+		queryClient.setQueryData(helmorQueryKeys.workspaceSessions("workspace-1"), [
+			createWorkspaceSessionSummary("session-1", {
+				title: "Already named",
+				active: true,
+			}),
+		]);
+		queryClient.setQueryData(
+			[...helmorQueryKeys.sessionMessages("session-1"), "thread"],
+			[
+				{
+					role: "user" as const,
+					id: "user-1",
+					createdAt: "2026-04-05T00:00:00Z",
+					content: [{ type: "text" as const, text: "fix the failing tests" }],
+					status: { type: "complete", reason: "stop" },
+				},
+			],
+		);
+
+		renderWithProviders(
+			<WorkspacePanelContainer
+				selectedWorkspaceId="workspace-1"
+				displayedWorkspaceId="workspace-1"
+				selectedSessionId="session-1"
+				displayedSessionId="session-1"
+				sending={false}
+				onSelectSession={vi.fn()}
+				onResolveDisplayedSession={vi.fn()}
+			/>,
+			{ queryClient },
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.generateSessionTitle).toHaveBeenCalledWith(
+				"session-1",
+				"fix the failing tests",
+			);
+		});
+	});
+
+	it("skips AI naming checks for action sessions", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			createWorkspaceDetail("workspace-1", "session-1"),
+		);
+		queryClient.setQueryData(helmorQueryKeys.workspaceSessions("workspace-1"), [
+			createWorkspaceSessionSummary("session-1", {
+				title: "Create PR",
+				actionKind: "create-pr",
+				active: true,
+			}),
+		]);
+		queryClient.setQueryData(
+			[...helmorQueryKeys.sessionMessages("session-1"), "thread"],
+			[
+				{
+					role: "user" as const,
+					id: "user-1",
+					createdAt: "2026-04-05T00:00:00Z",
+					content: [{ type: "text" as const, text: "Create a pull request" }],
+					status: { type: "complete", reason: "stop" },
+				},
+			],
+		);
+
+		renderWithProviders(
+			<WorkspacePanelContainer
+				selectedWorkspaceId="workspace-1"
+				displayedWorkspaceId="workspace-1"
+				selectedSessionId="session-1"
+				displayedSessionId="session-1"
+				sending={false}
+				onSelectSession={vi.fn()}
+				onResolveDisplayedSession={vi.fn()}
+			/>,
+			{ queryClient },
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.generateSessionTitle).not.toHaveBeenCalled();
 		});
 	});
 

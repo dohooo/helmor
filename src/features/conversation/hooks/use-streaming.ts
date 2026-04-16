@@ -951,7 +951,7 @@ export function useConversationStreaming({
 				if (displayedSessionId) {
 					void generateSessionTitle(displayedSessionId, trimmedPrompt).then(
 						(result) => {
-							if (result?.title) {
+							if (result?.title || result?.branchRenamed) {
 								void Promise.all([
 									queryClient.invalidateQueries({
 										queryKey: helmorQueryKeys.workspaceGroups,

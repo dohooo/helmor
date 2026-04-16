@@ -21,7 +21,7 @@ Do the following, in order:
 1. Run \`git status\` and \`git diff\` to survey what's changed.
 2. Stage everything that should ship with \`git add\`.
 3. Commit with a concise, Conventional-Commits-style message (\`feat:\`, \`fix:\`, \`refactor:\`, \`chore:\`, etc.) that summarizes the change in one line.
-4. Push the current branch to \`origin\` with \`git push -u origin HEAD\` (create the remote tracking branch if it doesn't exist).
+4. Push the current branch to its remote. If needed, create the remote tracking branch with \`git push -u <remote> HEAD\`.
 5. Open a pull request against the repository's default branch using \`gh pr create\`. Use a clear PR title and a body that explains: what changed, why it changed, and any follow-up / test notes.
 6. Report the PR URL in your final message so I can click it.
 
@@ -33,7 +33,7 @@ Do the following, in order:
 1. Run \`git status\` and \`git diff\` to survey what's changed.
 2. Stage everything that should ship with \`git add\`.
 3. Commit with a concise, Conventional-Commits-style message (\`feat:\`, \`fix:\`, \`refactor:\`, etc.) summarizing the change.
-4. Push the current branch to \`origin\` with \`git push\`.
+4. Push the current branch to its remote. If needed, create the remote tracking branch with \`git push -u <remote> HEAD\`.
 5. Report the resulting commit SHA and pushed ref.
 
 Don't stop to ask for confirmation — execute each step automatically. If a pre-commit / pre-push hook fails, report the failure and stop without force-pushing.`,
@@ -51,7 +51,7 @@ Do the following, in order:
 
 Do the following, in order:
 1. Identify the target branch (usually \`main\` or \`master\` — check the repo's default branch).
-2. Fetch the latest from \`origin\` and rebase or merge the target into the current branch.
+2. Fetch the latest target branch from its remote, then rebase or merge it into the current branch.
 3. Resolve each conflict, preserving intent from both sides where possible. Explain your resolution choices briefly in the session.
 4. Run the relevant tests locally to confirm nothing broke.
 5. Commit the resolution and push.
