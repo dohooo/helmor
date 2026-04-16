@@ -87,6 +87,56 @@ fn archive_workspace_moves_context_and_removes_worktree() {
 }
 
 #[test]
+fn prepare_archive_plan_is_read_only() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = ArchiveTestHarness::new(true);
+
+    let _plan = workspaces::prepare_archive_plan(&harness.workspace_id).unwrap();
+
+    assert!(harness.workspace_dir().exists());
+    assert!(!harness.archived_context_dir().exists());
+
+    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+    let state: String = connection
+        .query_row(
+            "SELECT state FROM workspaces WHERE id = ?1",
+            [&harness.workspace_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "ready");
+}
+
+#[test]
+fn archive_workspace_allows_setup_pending_state() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = ArchiveTestHarness::new(true);
+    harness.set_state("setup_pending");
+
+    let response = workspaces::archive_workspace_impl(&harness.workspace_id).unwrap();
+
+    assert_eq!(response.archived_state, "archived");
+    assert!(!harness.workspace_dir().exists());
+}
+
+#[test]
+fn archive_workspace_rejects_initializing_state() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = ArchiveTestHarness::new(true);
+    harness.set_state("initializing");
+
+    let error = workspaces::prepare_archive_plan(&harness.workspace_id).unwrap_err();
+
+    assert!(error.to_string().contains("not archive-ready"));
+}
+
+#[test]
 fn restore_workspace_cleans_up_existing_target_directory() {
     let _guard = TEST_LOCK
         .lock()

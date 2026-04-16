@@ -168,6 +168,48 @@ describe("WorkspacesSidebar", () => {
 		expect(virtualList).toHaveStyle({ height: "252px" });
 	});
 
+	it("only disables the row whose workspace id is in archivingWorkspaceIds", async () => {
+		const user = userEvent.setup();
+		const onArchiveWorkspace = vi.fn();
+		const groups: WorkspaceGroup[] = [
+			{
+				id: "progress",
+				label: "In Progress",
+				tone: "progress",
+				rows: [
+					workspaceRow,
+					{
+						...workspaceRow,
+						id: "workspace-2",
+						title: "Workspace 2",
+					},
+				],
+			},
+		];
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={groups}
+					archivedRows={[]}
+					onArchiveWorkspace={onArchiveWorkspace}
+					archivingWorkspaceIds={new Set(["workspace-1"])}
+				/>
+			</TooltipProvider>,
+		);
+
+		const archiveButtons = screen.getAllByRole("button", {
+			name: "Archive workspace",
+		});
+
+		expect(archiveButtons).toHaveLength(2);
+		expect(archiveButtons[0]).toBeDisabled();
+		expect(archiveButtons[1]).toBeEnabled();
+
+		await user.click(archiveButtons[1]);
+		expect(onArchiveWorkspace).toHaveBeenCalledWith("workspace-2");
+	});
+
 	it("persists section collapse state in localStorage", async () => {
 		const user = userEvent.setup();
 		const collapsedGroups: WorkspaceGroup[] = [

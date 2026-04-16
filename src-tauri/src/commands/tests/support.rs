@@ -219,6 +219,16 @@ impl ArchiveTestHarness {
             .display()
             .to_string()
     }
+
+    pub(crate) fn set_state(&self, state: &str) {
+        let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+        connection
+            .execute(
+                "UPDATE workspaces SET state = ?2 WHERE id = ?1",
+                (&self.workspace_id, state),
+            )
+            .unwrap();
+    }
 }
 
 pub(crate) struct CreateTestHarness {

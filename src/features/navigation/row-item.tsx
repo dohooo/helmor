@@ -70,7 +70,7 @@ export type WorkspaceRowItemProps = {
 	onDeleteWorkspace?: (workspaceId: string) => void;
 	onTogglePin?: (workspaceId: string, currentlyPinned: boolean) => void;
 	onSetManualStatus?: (workspaceId: string, status: string | null) => void;
-	archivingWorkspaceId?: string | null;
+	archivingWorkspaceIds?: Set<string>;
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
 	workspaceActionsDisabled?: boolean;
@@ -92,7 +92,7 @@ export const WorkspaceRowItem = memo(
 		onDeleteWorkspace,
 		onTogglePin,
 		onSetManualStatus,
-		archivingWorkspaceId,
+		archivingWorkspaceIds,
 		markingUnreadWorkspaceId,
 		restoringWorkspaceId,
 		workspaceActionsDisabled,
@@ -102,7 +102,7 @@ export const WorkspaceRowItem = memo(
 		});
 		const actionLabel =
 			row.state === "archived" ? "Restore workspace" : "Archive workspace";
-		const isArchiving = archivingWorkspaceId === row.id;
+		const isArchiving = archivingWorkspaceIds?.has(row.id) ?? false;
 		const isMarkingUnread = markingUnreadWorkspaceId === row.id;
 		const isRestoring = restoringWorkspaceId === row.id;
 		const isRestoreAction = row.state === "archived";
@@ -222,10 +222,10 @@ export const WorkspaceRowItem = memo(
 							<TooltipTrigger asChild>
 								<Button
 									aria-label={actionLabel}
-									disabled={Boolean(workspaceActionsDisabled)}
+									disabled={Boolean(workspaceActionsDisabled || isBusy)}
 									onClick={(event) => {
 										event.stopPropagation();
-										if (workspaceActionsDisabled) return;
+										if (workspaceActionsDisabled || isBusy) return;
 										if (isRestoreAction) {
 											onRestoreWorkspace?.(row.id);
 										} else {
@@ -257,10 +257,10 @@ export const WorkspaceRowItem = memo(
 								<TooltipTrigger asChild>
 									<Button
 										aria-label="Delete permanently"
-										disabled={Boolean(workspaceActionsDisabled)}
+										disabled={Boolean(workspaceActionsDisabled || isBusy)}
 										onClick={(event) => {
 											event.stopPropagation();
-											if (workspaceActionsDisabled) return;
+											if (workspaceActionsDisabled || isBusy) return;
 											onDeleteWorkspace(row.id);
 										}}
 										variant="ghost"
@@ -368,7 +368,7 @@ export const WorkspaceRowItem = memo(
 			previous.isSending === next.isSending &&
 			previous.isCompleted === next.isCompleted &&
 			previous.isInteractionRequired === next.isInteractionRequired &&
-			previous.archivingWorkspaceId === next.archivingWorkspaceId &&
+			previous.archivingWorkspaceIds === next.archivingWorkspaceIds &&
 			previous.markingUnreadWorkspaceId === next.markingUnreadWorkspaceId &&
 			previous.restoringWorkspaceId === next.restoringWorkspaceId &&
 			previous.workspaceActionsDisabled === next.workspaceActionsDisabled

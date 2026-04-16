@@ -65,6 +65,7 @@ const EMPTY_PR_ACTION_STATUS: WorkspacePrActionStatus = {
 
 type ActionsSectionProps = {
 	workspaceId: string | null;
+	workspaceRemote?: string | null;
 	sectionRef?: React.RefObject<HTMLElement | null>;
 	bodyHeight: number;
 	expanded: boolean;
@@ -75,6 +76,7 @@ type ActionsSectionProps = {
 
 export function ActionsSection({
 	workspaceId,
+	workspaceRemote,
 	sectionRef,
 	bodyHeight,
 	expanded,
@@ -94,7 +96,7 @@ export function ActionsSection({
 	});
 	const gitStatus = gitStatusQuery.data ?? EMPTY_GIT_ACTION_STATUS;
 	const prStatus = prStatusQuery.data ?? EMPTY_PR_ACTION_STATUS;
-	const gitRows = buildGitRows(gitStatus);
+	const gitRows = buildGitRows(gitStatus, workspaceRemote);
 	const reviewRows = buildReviewRows(prStatus, prInfo);
 	const actionDisabled = commitButtonState === "busy";
 	const handleSync = useCallback(async () => {
@@ -338,11 +340,16 @@ function StatusIcon({ status }: { status: ActionStatusKind }) {
 	);
 }
 
-function buildGitRows(gitStatus: WorkspaceGitActionStatus): GitStatusItem[] {
+function buildGitRows(
+	gitStatus: WorkspaceGitActionStatus,
+	workspaceRemote?: string | null,
+): GitStatusItem[] {
 	const uncommittedCount = gitStatus.uncommittedCount;
 	const conflictCount = gitStatus.conflictCount;
-	const syncTargetBranch =
-		gitStatus.syncTargetBranch?.trim() || "target branch";
+	const syncTargetBranch = formatSyncTargetRef(
+		workspaceRemote,
+		gitStatus.syncTargetBranch,
+	);
 
 	return [
 		uncommittedCount === 0
@@ -394,6 +401,21 @@ function buildGitRows(gitStatus: WorkspaceGitActionStatus): GitStatusItem[] {
 							status: "pending",
 						},
 	];
+}
+
+function formatSyncTargetRef(
+	workspaceRemote?: string | null,
+	syncTargetBranch?: string | null,
+): string {
+	const branch = syncTargetBranch?.trim();
+	if (!branch) {
+		return "target branch";
+	}
+	if (branch.includes("/")) {
+		return branch;
+	}
+	const remote = workspaceRemote?.trim() || "origin";
+	return `${remote}/${branch}`;
 }
 
 function buildReviewRows(
