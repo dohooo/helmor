@@ -25,6 +25,24 @@ import { createSidecarEmitter, type SidecarEmitter } from "../src/emitter.js";
 // A closure variable lets each test supply its own async iterator.
 // ---------------------------------------------------------------------------
 
+type MockQueryResult = AsyncIterable<unknown> & {
+	supportedModels?: () => Promise<
+		Array<{
+			value: string;
+			displayName?: string;
+			supportedEffortLevels?: string[];
+		}>
+	>;
+	supportedCommands?: () => Promise<
+		Array<{
+			name: string;
+			description: string;
+			argumentHint?: string;
+		}>
+	>;
+	close?: () => void;
+};
+
 type MockQueryImpl = (options: {
 	prompt?: unknown;
 	options?: {
@@ -41,7 +59,7 @@ type MockQueryImpl = (options: {
 			options: { signal: AbortSignal },
 		) => Promise<{ action: string; content?: Record<string, unknown> }>;
 	};
-}) => AsyncIterable<unknown>;
+}) => MockQueryResult;
 
 let mockQueryImpl: MockQueryImpl = () => emptyAsyncIterable();
 let lastQueryArgs: unknown = null;
@@ -129,6 +147,26 @@ async function* asyncIterableFrom<T>(items: readonly T[]): AsyncGenerator<T> {
 
 function emptyAsyncIterable(): AsyncIterable<unknown> {
 	return asyncIterableFrom<unknown>([]);
+}
+
+function makeMockQuery({
+	stream = [],
+	supportedModels,
+	supportedCommands,
+	close,
+}: {
+	stream?: readonly unknown[];
+	supportedModels?: MockQueryResult["supportedModels"];
+	supportedCommands?: MockQueryResult["supportedCommands"];
+	close?: () => void;
+} = {}): MockQueryResult {
+	const iterable = asyncIterableFrom(stream);
+	return {
+		supportedModels,
+		supportedCommands,
+		close: close ?? (() => undefined),
+		[Symbol.asyncIterator]: () => iterable[Symbol.asyncIterator](),
+	};
 }
 
 async function waitForCondition(
@@ -824,6 +862,67 @@ describe("Claude fixture diversity guards", () => {
 			);
 		}).length;
 		expect(toolUseCount).toBeGreaterThanOrEqual(3);
+	});
+});
+
+describe("ClaudeSessionManager.listModels", () => {
+	test("returns formatted Claude model metadata", async () => {
+		const manager = new ClaudeSessionManager();
+		lastQueryArgs = null;
+		mockQueryImpl = () =>
+			makeMockQuery({
+				supportedModels: async () => [
+					{ value: "default", displayName: "Default" },
+					{
+						value: "sonnet",
+						displayName: "Sonnet (1M context)",
+						supportedEffortLevels: ["low", "medium", "high"],
+					},
+					{ value: "haiku", displayName: "Haiku" },
+				],
+			});
+
+		const models = await manager.listModels();
+
+		expect(models).toEqual([
+			{
+				id: "default",
+				label: "Opus 4.6 1M",
+				cliModel: "default",
+				effortLevels: ["low", "medium", "high", "max"],
+			},
+			{
+				id: "sonnet",
+				label: "Sonnet 1M",
+				cliModel: "sonnet",
+				effortLevels: ["low", "medium", "high"],
+			},
+			{
+				id: "haiku",
+				label: "Haiku",
+				cliModel: "haiku",
+				effortLevels: ["low", "medium", "high"],
+			},
+		]);
+		expect(lastQueryArgs).toMatchObject({
+			options: {
+				settingSources: ["user", "project", "local"],
+			},
+		});
+	});
+
+	test("propagates supportedModels failures", async () => {
+		const manager = new ClaudeSessionManager();
+		mockQueryImpl = () =>
+			makeMockQuery({
+				supportedModels: async () => {
+					throw new Error("supportedModels exploded");
+				},
+			});
+
+		await expect(manager.listModels()).rejects.toThrow(
+			"supportedModels exploded",
+		);
 	});
 });
 

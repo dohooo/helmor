@@ -10,8 +10,6 @@ import type {
 	WorkspaceSummary,
 } from "./api";
 
-const DEFAULT_CLAUDE_MODEL_ID = "default";
-
 export function findInitialWorkspaceId(
 	groups: WorkspaceGroup[],
 ): string | null {
@@ -264,7 +262,7 @@ export function inferDefaultModelId(
 	session: WorkspaceSessionSummary | null,
 	modelSections: AgentModelSection[],
 	settingsDefaultModelId?: string | null,
-): string {
+): string | null {
 	// Existing session with history → respect whatever model it used
 	if (!isNewSession(session)) {
 		const sessionModel = session?.model ?? null;
@@ -281,9 +279,11 @@ export function inferDefaultModelId(
 		return settingsDefaultModelId;
 	}
 
-	// Ultimate fallback: first Claude model
+	// Ultimate fallback: first Claude model, then first available model.
 	const claudeSection = modelSections.find((s) => s.id === "claude");
-	return claudeSection?.options[0]?.id ?? DEFAULT_CLAUDE_MODEL_ID;
+	return (
+		claudeSection?.options[0]?.id ?? modelSections[0]?.options[0]?.id ?? null
+	);
 }
 
 export function describeUnknownError(error: unknown, fallback: string): string {

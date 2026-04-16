@@ -338,7 +338,8 @@ pub fn prewarm_slash_command_cache(app: &AppHandle) {
             let cache: tauri::State<'_, super::slash_commands::SlashCommandCache> = app.state();
             let mut seen_roots = HashSet::new();
             let mut roots = Vec::new();
-            for workspace in crate::models::workspaces::load_workspace_records().unwrap_or_default() {
+            for workspace in crate::models::workspaces::load_workspace_records().unwrap_or_default()
+            {
                 if let Some(root_path) = workspace.root_path {
                     let trimmed = root_path.trim();
                     if !trimmed.is_empty() && seen_roots.insert(trimmed.to_string()) {

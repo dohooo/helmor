@@ -23,7 +23,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	notifications: true,
 	lastWorkspaceId: null,
 	lastSessionId: null,
-	defaultModelId: "default",
+	defaultModelId: null,
 	defaultEffort: "high",
 };
 
@@ -44,6 +44,7 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 export async function loadSettings(): Promise<AppSettings> {
 	try {
 		const raw = await invoke<Record<string, string>>("get_app_settings");
+		const rawDefaultModelId = raw[SETTINGS_KEY_MAP.defaultModelId];
 		return {
 			fontSize: raw[SETTINGS_KEY_MAP.fontSize]
 				? Number(raw[SETTINGS_KEY_MAP.fontSize])
@@ -66,7 +67,9 @@ export async function loadSettings(): Promise<AppSettings> {
 			lastWorkspaceId: raw[SETTINGS_KEY_MAP.lastWorkspaceId] || null,
 			lastSessionId: raw[SETTINGS_KEY_MAP.lastSessionId] || null,
 			defaultModelId:
-				raw[SETTINGS_KEY_MAP.defaultModelId] || DEFAULT_SETTINGS.defaultModelId,
+				rawDefaultModelId && rawDefaultModelId !== "default"
+					? rawDefaultModelId
+					: DEFAULT_SETTINGS.defaultModelId,
 			defaultEffort:
 				raw[SETTINGS_KEY_MAP.defaultEffort] || DEFAULT_SETTINGS.defaultEffort,
 		};
