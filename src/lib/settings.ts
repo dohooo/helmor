@@ -13,6 +13,7 @@ export type AppSettings = {
 	lastSessionId: string | null;
 	defaultModelId: string | null;
 	defaultEffort: string | null;
+	defaultFastMode: boolean;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -25,6 +26,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	lastSessionId: null,
 	defaultModelId: null,
 	defaultEffort: "high",
+	defaultFastMode: false,
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
@@ -39,6 +41,7 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	lastSessionId: "app.last_session_id",
 	defaultModelId: "app.default_model_id",
 	defaultEffort: "app.default_effort",
+	defaultFastMode: "app.default_fast_mode",
 };
 
 export async function loadSettings(): Promise<AppSettings> {
@@ -72,6 +75,10 @@ export async function loadSettings(): Promise<AppSettings> {
 					: DEFAULT_SETTINGS.defaultModelId,
 			defaultEffort:
 				raw[SETTINGS_KEY_MAP.defaultEffort] || DEFAULT_SETTINGS.defaultEffort,
+			defaultFastMode:
+				raw[SETTINGS_KEY_MAP.defaultFastMode] !== undefined
+					? raw[SETTINGS_KEY_MAP.defaultFastMode] === "true"
+					: DEFAULT_SETTINGS.defaultFastMode,
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS };

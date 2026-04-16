@@ -68,6 +68,7 @@ import {
 } from "./editor-ops";
 import type { ElicitationResponseHandler } from "./elicitation";
 import { ElicitationPanel } from "./elicitation-panel";
+import { FastModeLottieIcon } from "./fast-mode-lottie-icon";
 
 type WorkspaceComposerProps = {
 	contextKey: string;
@@ -214,7 +215,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const inputDisabled = disabled || hasPendingInteraction;
 	const toolbarDisabled = disabled || hasPendingInteraction;
 	const composerToolbarTriggerClassName =
-		"cursor-pointer rounded-lg px-1 py-0.5 text-[13px] font-medium transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50";
+		"cursor-pointer rounded-[9px] px-1 py-0.5 text-[13px] font-medium transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50";
 	const sendDisabled =
 		disabled ||
 		submitDisabled ||
@@ -494,9 +495,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											)}
 										>
 											{selectedModel?.provider === "codex" ? (
-												<OpenAIIcon className="size-[14px]" />
+												<OpenAIIcon className="size-[13px]" />
 											) : (
-												<ClaudeIcon className="size-[14px]" />
+												<ClaudeIcon className="size-[13px]" />
 											)}
 											<span>
 												{selectedModel?.label ?? selectedModelId ?? ""}
@@ -529,9 +530,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 															<div className="flex items-center gap-3">
 																<span className="text-muted-foreground">
 																	{option.provider === "codex" ? (
-																		<OpenAIIcon className="size-4" />
+																		<OpenAIIcon className="size-[13px]" />
 																	) : (
-																		<ClaudeIcon className="size-4" />
+																		<ClaudeIcon className="size-[13px]" />
 																	)}
 																</span>
 																<span>{option.label}</span>
@@ -550,14 +551,21 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													aria-label="Fast mode"
 													disabled={toolbarDisabled}
 													className={cn(
-														"cursor-pointer rounded-full p-1 transition-colors",
+														"relative",
+														composerToolbarTriggerClassName,
 														fastMode
 															? "text-amber-500 hover:bg-amber-500/10 hover:text-amber-500"
-															: "text-muted-foreground/55 hover:bg-accent/60 hover:text-muted-foreground",
+															: "text-muted-foreground",
 													)}
 													onClick={() => onChangeFastMode(!fastMode)}
 												>
-													<Zap className="size-[14px]" strokeWidth={1.8} />
+													<span className="relative block size-[14px]">
+														<Zap
+															className="absolute inset-0 z-0 size-[14px] opacity-55"
+															strokeWidth={1.8}
+														/>
+														<FastModeLottieIcon className="absolute inset-[-5px] z-10 drop-shadow-[0_0_4px_rgba(245,158,11,0.5)]" />
+													</span>
 												</ComposerButton>
 											</TooltipTrigger>
 											<TooltipContent side="top" sideOffset={6}>
@@ -624,9 +632,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										aria-label="Plan mode"
 										disabled={toolbarDisabled}
 										className={cn(
-											`gap-1.5 ${composerToolbarTriggerClassName}`,
+											`gap-1 px-1.5 text-[11px] ${composerToolbarTriggerClassName}`,
 											permissionMode === "plan"
-												? "text-plan ring-1 ring-plan/40 hover:bg-accent/60 hover:text-plan"
+												? "text-plan hover:bg-accent/60 hover:text-plan"
 												: "text-muted-foreground",
 										)}
 										onClick={() =>
@@ -637,7 +645,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											)
 										}
 									>
-										<ClipboardList className="size-[14px]" strokeWidth={1.8} />
+										<ClipboardList className="size-[13px]" strokeWidth={1.8} />
 										<span>Plan</span>
 									</ComposerButton>
 								</>

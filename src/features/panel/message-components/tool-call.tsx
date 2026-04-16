@@ -270,6 +270,7 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 								oldStr={null}
 								newStr={null}
 								unifiedDiff={f.rawDiff}
+								variant="row"
 								icon={
 									<img
 										src={getMaterialFileIcon(f.name)}
@@ -281,16 +282,16 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 						) : (
 							<div
 								key={`${f.name}-${i}`}
-								className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground"
+								className="flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-[12px] leading-4 text-muted-foreground transition-colors hover:bg-accent/60"
 							>
 								<img
 									src={getMaterialFileIcon(f.name)}
 									alt=""
 									className="size-3.5 shrink-0"
 								/>
-								<span className="truncate">{f.name}</span>
+								<span className="min-w-0 truncate">{f.name}</span>
 								{f.diffAdd != null || f.diffDel != null ? (
-									<span className="flex items-center gap-1 text-[11px]">
+									<span className="ml-auto flex shrink-0 items-center gap-1 text-[11px]">
 										{f.diffAdd != null ? (
 											<span className="text-chart-2">+{f.diffAdd}</span>
 										) : null}

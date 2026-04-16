@@ -2,6 +2,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ThreadMessageLike } from "@/lib/api";
 import { MemoConversationMessage } from "./message-components";
+import { AssistantToolCall } from "./message-components/tool-call";
 
 afterEach(() => {
 	cleanup();
@@ -37,5 +38,34 @@ describe("MemoConversationMessage plan review", () => {
 		expect(
 			screen.queryByRole("button", { name: "Approve" }),
 		).not.toBeInTheDocument();
+	});
+
+	it("renders multi-file edits as compact rows", () => {
+		render(
+			<AssistantToolCall
+				toolName="apply_patch"
+				args={{
+					changes: [
+						{
+							path: "/src/index.test.tsx",
+							kind: "modify",
+							diff: "+added line",
+						},
+						{
+							path: "/src/actions.tsx",
+							kind: "modify",
+							diff: "-removed line\n+added line",
+						},
+					],
+				}}
+			/>,
+		);
+
+		expect(
+			screen.getByText("index.test.tsx").closest("[data-variant='row']"),
+		).toBeInTheDocument();
+		expect(
+			screen.getByText("actions.tsx").closest("[data-variant='row']"),
+		).toBeInTheDocument();
 	});
 });

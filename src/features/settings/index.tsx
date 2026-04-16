@@ -108,6 +108,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 	);
 	const defaultEffortLevels =
 		selectedDefaultModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS;
+	const defaultModelSupportsFastMode =
+		selectedDefaultModel?.supportsFastMode === true;
 	const defaultModelLabel =
 		selectedDefaultModel?.label ??
 		(modelSectionsQuery.isPending ? "Loading…" : "Select model");
@@ -451,6 +453,28 @@ export const SettingsDialog = memo(function SettingsDialog({
 													))}
 												</DropdownMenuContent>
 											</DropdownMenu>
+											<div className="flex items-center gap-2 rounded-lg border border-border/50 bg-muted/30 px-3 py-1.5">
+												<span
+													className={
+														defaultModelSupportsFastMode
+															? "text-[13px] text-foreground"
+															: "text-[13px] text-muted-foreground"
+													}
+												>
+													Fast mode
+												</span>
+												<Switch
+													checked={
+														defaultModelSupportsFastMode &&
+														settings.defaultFastMode
+													}
+													disabled={!defaultModelSupportsFastMode}
+													onCheckedChange={(checked) =>
+														updateSettings({ defaultFastMode: checked })
+													}
+													aria-label="Default fast mode"
+												/>
+											</div>
 										</div>
 									</div>
 								</div>
