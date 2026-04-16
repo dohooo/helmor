@@ -2,12 +2,9 @@ import { formatDistanceToNow } from "date-fns";
 import {
 	AlertCircle,
 	AlertTriangle,
-	Check,
-	Copy,
 	Info,
 	MessageSquareText,
 } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	Tooltip,
@@ -20,6 +17,7 @@ import type {
 	SystemNoticePart,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { CopyMessageButton } from "./copy-message";
 import type { RenderedMessage } from "./shared";
 import {
 	isPromptSuggestionPart,
@@ -103,41 +101,6 @@ function SystemText({ text }: { text: string }) {
 	return <span>{text}</span>;
 }
 
-function CopyMessageButton() {
-	const [copied, setCopied] = useState(false);
-	const ref = useRef<HTMLButtonElement>(null);
-
-	const handleCopy = useCallback(() => {
-		const root =
-			ref.current?.closest("[data-message-role]") ?? ref.current?.parentElement;
-		if (!root) {
-			return;
-		}
-		const text = root.textContent ?? "";
-		void navigator.clipboard.writeText(text).then(() => {
-			setCopied(true);
-			setTimeout(() => setCopied(false), 1500);
-		});
-	}, []);
-
-	return (
-		<Button
-			ref={ref}
-			type="button"
-			variant="ghost"
-			size="icon-xs"
-			onClick={handleCopy}
-			className="size-5 shrink-0 text-muted-foreground/30 opacity-0 transition-all hover:text-muted-foreground group-hover/sys:opacity-100"
-		>
-			{copied ? (
-				<Check className="size-3" strokeWidth={2} />
-			) : (
-				<Copy className="size-3" strokeWidth={1.8} />
-			)}
-		</Button>
-	);
-}
-
 // --- ChatSystemMessage ---
 
 function MessageTimestamp({ createdAt }: { createdAt?: string }) {
@@ -154,8 +117,18 @@ function MessageTimestamp({ createdAt }: { createdAt?: string }) {
 	);
 }
 
-export function ChatSystemMessage({ message }: { message: RenderedMessage }) {
+export function ChatSystemMessage({
+	message,
+	previousAssistantMessage,
+}: {
+	message: RenderedMessage;
+	previousAssistantMessage?: RenderedMessage | null;
+}) {
 	const parts = message.content as MessagePart[];
+	const copyTarget =
+		previousAssistantMessage?.role === "assistant"
+			? previousAssistantMessage
+			: message;
 
 	return (
 		<div
@@ -178,7 +151,10 @@ export function ChatSystemMessage({ message }: { message: RenderedMessage }) {
 				})}
 			</div>
 			<MessageTimestamp createdAt={message.createdAt} />
-			<CopyMessageButton />
+			<CopyMessageButton
+				message={copyTarget}
+				className="size-5 shrink-0 text-muted-foreground/30 opacity-0 transition-all hover:text-muted-foreground group-hover/sys:opacity-100"
+			/>
 		</div>
 	);
 }

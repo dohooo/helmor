@@ -446,6 +446,55 @@ describe("useConversationStreaming", () => {
 		);
 	});
 
+	it("keeps persisted stream errors out of the composer error state", async () => {
+		const streamCallbacks: Array<(event: unknown) => void> = [];
+		apiMocks.startAgentMessageStream.mockImplementation(
+			async (_payload: unknown, onEvent: (event: unknown) => void) => {
+				streamCallbacks.push(onEvent);
+			},
+		);
+
+		const { Wrapper } = createWrapper();
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "trigger stream error",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: false,
+			});
+		});
+
+		act(() => {
+			streamCallbacks[0]({
+				kind: "error",
+				message: "Reconnecting... 1/5",
+				persisted: true,
+				internal: false,
+			});
+		});
+
+		expect(result.current.activeSendError).toBeNull();
+		expect(result.current.restoreDraft).toBeNull();
+		expect(result.current.isSending).toBe(false);
+	});
+
 	it("responds to elicitation requests without using deferred tool flow", async () => {
 		const { Wrapper } = createWrapper();
 		const { result } = renderHook(

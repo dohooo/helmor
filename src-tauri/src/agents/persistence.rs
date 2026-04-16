@@ -86,6 +86,40 @@ pub(super) fn persist_turn_message(
     Ok(msg_id)
 }
 
+pub(super) fn persist_error_message(
+    conn: &Connection,
+    ctx: &ExchangeContext,
+    resolved_model: &str,
+    message: &str,
+) -> Result<String> {
+    let now = current_timestamp_string()?;
+    let msg_id = uuid::Uuid::new_v4().to_string();
+    let payload = json!({
+        "type": "error",
+        "message": message,
+    })
+    .to_string();
+
+    conn.execute(
+        r#"
+            INSERT INTO session_messages (
+              id, session_id, role, content, created_at, sent_at,
+              model, turn_id, is_resumable_message
+            ) VALUES (?1, ?2, 'error', ?3, ?4, ?4, ?5, ?6, 0)
+            "#,
+        params![
+            msg_id,
+            ctx.helmor_session_id,
+            payload,
+            now,
+            resolved_model,
+            ctx.turn_id
+        ],
+    )?;
+
+    Ok(msg_id)
+}
+
 pub(super) fn persist_exit_plan_message(
     conn: &Connection,
     ctx: &ExchangeContext,
@@ -273,4 +307,67 @@ pub(super) fn open_write_connection() -> Result<Connection> {
 
 fn current_timestamp_string() -> Result<String> {
     crate::models::db::current_timestamp()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_exchange_context() -> ExchangeContext {
+        ExchangeContext {
+            helmor_session_id: "session-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            model_id: "gpt-5.4".to_string(),
+            model_provider: "codex".to_string(),
+            assistant_sdk_message_id: "assistant-1".to_string(),
+            user_message_id: "user-1".to_string(),
+        }
+    }
+
+    #[test]
+    fn persist_error_message_stores_thread_error_payload() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE session_messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT,
+                content TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                sent_at TEXT,
+                cancelled_at TEXT,
+                model TEXT,
+                sdk_message_id TEXT,
+                last_assistant_message_id TEXT,
+                turn_id TEXT,
+                is_resumable_message INTEGER
+            );
+            "#,
+        )
+        .unwrap();
+
+        let ctx = test_exchange_context();
+        let message_id =
+            persist_error_message(&conn, &ctx, "gpt-5.4", "Reconnecting... 1/5").unwrap();
+
+        let (role, content, model, turn_id): (String, String, String, String) = conn
+            .query_row(
+                "SELECT role, content, model, turn_id FROM session_messages WHERE id = ?1",
+                [message_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+
+        assert_eq!(role, "error");
+        assert_eq!(model, "gpt-5.4");
+        assert_eq!(turn_id, "turn-1");
+        assert_eq!(
+            serde_json::from_str::<Value>(&content).unwrap(),
+            json!({
+                "type": "error",
+                "message": "Reconnecting... 1/5",
+            })
+        );
+    }
 }

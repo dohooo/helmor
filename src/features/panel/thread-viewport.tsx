@@ -179,14 +179,26 @@ function ChatThread({
 	}, [scrollToBottom, sessionId, usePlainThread]);
 
 	const itemContent = useCallback(
-		(index: number, message: RenderedMessage) => (
-			<MemoConversationMessage
-				message={message}
-				sessionId={sessionId}
-				itemIndex={index}
-			/>
-		),
-		[sessionId],
+		(index: number, message: RenderedMessage) => {
+			let previousAssistantMessage: RenderedMessage | null = null;
+			for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+				const candidate = threadMessages[cursor];
+				if (candidate?.role === "assistant") {
+					previousAssistantMessage = candidate;
+					break;
+				}
+			}
+
+			return (
+				<MemoConversationMessage
+					message={message}
+					previousAssistantMessage={previousAssistantMessage}
+					sessionId={sessionId}
+					itemIndex={index}
+				/>
+			);
+		},
+		[sessionId, threadMessages],
 	);
 
 	return (
