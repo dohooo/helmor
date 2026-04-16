@@ -63,7 +63,7 @@ import { PasteImagePlugin } from "./editor/plugins/paste-image-plugin";
 import { SlashCommandPlugin } from "./editor/plugins/slash-command-plugin";
 import { SubmitPlugin } from "./editor/plugins/submit-plugin";
 import { $extractComposerContent } from "./editor/utils";
-import { $appendComposerInsertItems, draftCache } from "./editor-ops";
+import { $appendComposerInsertItems } from "./editor-ops";
 import type { ElicitationResponseHandler } from "./elicitation";
 import { ElicitationPanel } from "./elicitation-panel";
 import { FastModeLottieIcon } from "./fast-mode-lottie-icon";
@@ -269,7 +269,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const handlePlanImplement = useCallback(() => {
 		if (!hasPlanReview) return;
 		onChangePermissionMode("bypassPermissions");
-		draftCache.delete(contextKey);
 		clearPersistedDraft(contextKey);
 		onSubmit("Go ahead with the plan.", [], [], [], {
 			permissionModeOverride: "bypassPermissions",
@@ -293,7 +292,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			editor.update(() => {
 				$getRoot().clear();
 			});
-			draftCache.delete(contextKey);
 			clearPersistedDraft(contextKey);
 			setHasContent(false);
 		}
@@ -324,7 +322,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		editor.update(() => {
 			$getRoot().clear();
 		});
-		draftCache.delete(contextKey);
 		clearPersistedDraft(contextKey);
 		setHasContent(false);
 	}, [onSubmit, contextKey]);

@@ -7,7 +7,7 @@ import {
 	savePersistedDraft,
 } from "@/features/composer/draft-storage";
 import type { ComposerCustomTag } from "@/lib/composer-insert";
-import { $setEditorContent, draftCache } from "../../editor-ops";
+import { $setEditorContent } from "../../editor-ops";
 import { $extractComposerContent } from "../utils";
 
 const SAVE_DELAY_MS = 400;
@@ -45,20 +45,10 @@ export function DraftPersistencePlugin({
 }: DraftPersistencePluginProps) {
 	const [editor] = useLexicalComposerContext();
 	const activeContextKeyRef = useRef<string | null>(null);
-	const hydratedContextKeyRef = useRef<string | null>(null);
 	const saveTimerRef = useRef<number | null>(null);
 	const prevRestoreNonceRef = useRef(restoreNonce);
 
-	const persistEditorState = useCallback(
-		(targetContextKey: string, editorState: SerializedEditorState) => {
-			draftCache.set(targetContextKey, editorState);
-			savePersistedDraft(targetContextKey, editorState);
-		},
-		[],
-	);
-
 	const clearDraftState = useCallback((targetContextKey: string) => {
-		draftCache.delete(targetContextKey);
 		clearPersistedDraft(targetContextKey);
 	}, []);
 
@@ -72,14 +62,17 @@ export function DraftPersistencePlugin({
 			editor.read(() => {
 				const content = $extractComposerContent();
 				if (hasMeaningfulContent(content)) {
-					persistEditorState(targetContextKey, editorState);
+					savePersistedDraft(
+						targetContextKey,
+						editorState as SerializedEditorState,
+					);
 					return;
 				}
 
 				clearDraftState(targetContextKey);
 			});
 		},
-		[clearDraftState, editor, persistEditorState],
+		[clearDraftState, editor],
 	);
 
 	const cancelScheduledFlush = useCallback(() => {
@@ -100,28 +93,33 @@ export function DraftPersistencePlugin({
 		[cancelScheduledFlush, flushDraft],
 	);
 
-	const restoreDraftState = useCallback(
-		(targetContextKey: string) => {
-			const cached =
-				draftCache.get(targetContextKey) ??
-				loadPersistedDraft(targetContextKey);
-			if (cached) {
-				draftCache.set(targetContextKey, cached);
-				editor.setEditorState(editor.parseEditorState(cached));
-			} else {
-				editor.update(() => {
-					$setEditorContent(
-						restoreDraft ?? "",
-						restoreImages,
-						restoreFiles,
-						restoreCustomTags,
-					);
-				});
+	const applyRestorePayload = useCallback(() => {
+		editor.update(() => {
+			$setEditorContent(
+				restoreDraft ?? "",
+				restoreImages,
+				restoreFiles,
+				restoreCustomTags,
+			);
+		});
+	}, [editor, restoreCustomTags, restoreDraft, restoreFiles, restoreImages]);
+
+	const restorePersistedDraft = useCallback(
+		(targetContextKey: string): boolean => {
+			const persisted = loadPersistedDraft(targetContextKey);
+			if (!persisted) {
+				return false;
 			}
 
-			hydratedContextKeyRef.current = targetContextKey;
+			try {
+				editor.setEditorState(editor.parseEditorState(persisted));
+				return true;
+			} catch {
+				clearPersistedDraft(targetContextKey);
+				return false;
+			}
 		},
-		[editor, restoreCustomTags, restoreDraft, restoreFiles, restoreImages],
+		[editor],
 	);
 
 	useEffect(() => {
@@ -132,8 +130,16 @@ export function DraftPersistencePlugin({
 		}
 
 		activeContextKeyRef.current = contextKey;
-		restoreDraftState(contextKey);
-	}, [cancelScheduledFlush, contextKey, flushDraft, restoreDraftState]);
+		if (!restorePersistedDraft(contextKey)) {
+			applyRestorePayload();
+		}
+	}, [
+		applyRestorePayload,
+		cancelScheduledFlush,
+		contextKey,
+		flushDraft,
+		restorePersistedDraft,
+	]);
 
 	useEffect(() => {
 		if (restoreNonce === prevRestoreNonceRef.current) {
@@ -150,31 +156,11 @@ export function DraftPersistencePlugin({
 			return;
 		}
 
-		editor.update(() => {
-			$setEditorContent(
-				restoreDraft ?? "",
-				restoreImages,
-				restoreFiles,
-				restoreCustomTags,
-			);
-		});
-		hydratedContextKeyRef.current = contextKey;
-	}, [
-		contextKey,
-		editor,
-		restoreCustomTags,
-		restoreDraft,
-		restoreFiles,
-		restoreImages,
-		restoreNonce,
-	]);
+		applyRestorePayload();
+	}, [applyRestorePayload, restoreNonce]);
 
 	useEffect(() => {
 		return editor.registerUpdateListener(() => {
-			if (hydratedContextKeyRef.current !== contextKey) {
-				return;
-			}
-
 			scheduleFlush(contextKey);
 		});
 	}, [contextKey, editor, scheduleFlush]);

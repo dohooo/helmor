@@ -13,7 +13,6 @@ import type { PendingDeferredTool } from "@/features/conversation/pending-deferr
 import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
 import { createHelmorQueryClient } from "@/lib/query-client";
 import { getComposerDraftStorageKey } from "./draft-storage";
-import { draftCache } from "./editor-ops";
 
 vi.mock("@tauri-apps/api/core", () => ({
 	invoke: vi.fn(),
@@ -51,7 +50,6 @@ import { WorkspaceComposer } from "./index";
 
 afterEach(() => {
 	cleanup();
-	draftCache.clear();
 	window.localStorage.clear();
 	vi.useRealTimers();
 });
@@ -293,7 +291,6 @@ describe("WorkspaceComposer", () => {
 		});
 
 		unmount();
-		draftCache.clear();
 
 		render(
 			<QueryClientProvider client={queryClient}>
@@ -392,6 +389,105 @@ describe("WorkspaceComposer", () => {
 			],
 		);
 		expect(window.localStorage.getItem(storageKey)).toBeNull();
+	});
+
+	it("does not rehydrate the active draft when restore props change in-place", async () => {
+		const queryClient = createHelmorQueryClient();
+		const storageKey = getComposerDraftStorageKey("session:session-stable");
+		window.localStorage.setItem(
+			storageKey,
+			JSON.stringify({
+				root: {
+					type: "root",
+					version: 1,
+					format: "",
+					indent: 0,
+					direction: null,
+					children: [
+						{
+							type: "paragraph",
+							version: 1,
+							format: "",
+							indent: 0,
+							direction: null,
+							textFormat: 0,
+							textStyle: "",
+							children: [
+								{
+									type: "text",
+									version: 1,
+									text: "Keep the persisted draft.",
+									format: 0,
+									mode: "normal",
+									style: "",
+									detail: 0,
+								},
+							],
+						},
+					],
+				},
+			}),
+		);
+		const { rerender } = render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-stable"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="acceptEdits"
+					onChangePermissionMode={vi.fn()}
+					restoreDraft="stale restore payload"
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+				/>
+			</QueryClientProvider>,
+		);
+
+		await waitFor(() => {
+			expect(window.localStorage.getItem(storageKey)).toContain(
+				"Keep the persisted draft.",
+			);
+		});
+
+		rerender(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-stable"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="acceptEdits"
+					onChangePermissionMode={vi.fn()}
+					restoreDraft="stale restore payload"
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(window.localStorage.getItem(storageKey)).not.toContain(
+			"stale restore payload",
+		);
+		expect(window.localStorage.getItem(storageKey)).toContain(
+			"Keep the persisted draft.",
+		);
 	});
 
 	it("only renders fast mode controls for supported models", () => {

@@ -1,4 +1,4 @@
-import type { SerializedEditorState, TextNode } from "lexical";
+import type { TextNode } from "lexical";
 import {
 	$createParagraphNode,
 	$createTextNode,
@@ -13,8 +13,6 @@ import type {
 	ComposerCustomTag,
 	ComposerInsertItem,
 } from "@/lib/composer-insert";
-
-export const draftCache = new Map<string, SerializedEditorState>();
 
 export function $setEditorContent(
 	draft: string,
