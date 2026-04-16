@@ -95,6 +95,11 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 	const unifiedDiff =
 		isApplyPatch && typeof info.rawDiff === "string" ? info.rawDiff : null;
 	const hasDiff = oldStr != null || newStr != null || unifiedDiff != null;
+	const hasFiles = (info.files?.length ?? 0) > 0;
+	const suppressGenericPatchResult =
+		isApplyPatch &&
+		hasFiles &&
+		(result === "Patch applied" || result === "Patch failed");
 
 	const resultStr = useMemo(
 		() =>
@@ -106,13 +111,21 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 		[result],
 	);
 	const hasChildren = (childParts?.length ?? 0) > 0;
-	const resultText = hasChildren ? null : (info.body ?? resultStr);
+	const resultText =
+		hasChildren || suppressGenericPatchResult ? null : (info.body ?? resultStr);
 	const hasOutput = resultText != null && resultText.length > 5;
+	const canExpand = hasOutput || hasFiles;
 	const isLiveTool = isLiveStreamingStatus(streamingStatus);
-	const [isOpen, setIsOpen] = useState(isLiveTool);
+	const [isOpen, setIsOpen] = useState(isLiveTool || hasFiles);
 	useEffect(() => {
-		if (!isLiveTool) setIsOpen(false);
-	}, [isLiveTool]);
+		if (isLiveTool) {
+			setIsOpen(true);
+			return;
+		}
+		if (!canExpand) {
+			setIsOpen(false);
+		}
+	}, [canExpand, isLiveTool]);
 
 	const statusIndicator = isLiveTool ? (
 		<LoaderCircle
@@ -157,7 +170,9 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 					</>
 				)
 			) : null}
-			{!hasDiff && (info.diffAdd != null || info.diffDel != null) ? (
+			{!hasDiff &&
+			!hasFiles &&
+			(info.diffAdd != null || info.diffDel != null) ? (
 				<span className="flex items-center gap-1 text-[11px]">
 					{info.diffAdd != null ? (
 						<span className="text-chart-2">+{info.diffAdd}</span>
@@ -192,8 +207,6 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 		);
 	}
 
-	const hasFiles = (info.files?.length ?? 0) > 0;
-
 	if (compact) {
 		const detail = info.file ?? info.command ?? info.detail ?? null;
 		return (
@@ -219,11 +232,11 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 				<summary
 					className={cn(
 						"flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground [&::-webkit-details-marker]:hidden",
-						hasOutput ? "cursor-pointer" : "cursor-default",
+						canExpand ? "cursor-pointer" : "cursor-default",
 					)}
 				>
 					{toolLine}
-					{hasOutput ? (
+					{canExpand ? (
 						<span className="shrink-0 cursor-pointer text-muted-foreground/40 hover:text-muted-foreground">
 							<svg
 								className="size-2.5 group-open/out:rotate-90"
@@ -241,70 +254,76 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 						</span>
 					) : null}
 				</summary>
-				{hasOutput && (isLiveTool || isOpen) ? (
-					<div className="max-h-[16rem] overflow-auto rounded-md bg-accent/35 text-[11px] leading-5">
-						{info.fullCommand ? (
-							<div className="border-b border-border/20 px-2 py-1.5">
-								<span className="mr-1.5 text-chart-3/70">$</span>
-								<code className="font-mono text-muted-foreground">
-									{info.fullCommand}
-								</code>
+				{canExpand && (isLiveTool || isOpen) ? (
+					<div className="flex flex-col gap-1">
+						{hasOutput ? (
+							<div className="max-h-[16rem] overflow-auto rounded-md bg-accent/35 text-[11px] leading-5">
+								{info.fullCommand ? (
+									<div className="border-b border-border/20 px-2 py-1.5">
+										<span className="mr-1.5 text-chart-3/70">$</span>
+										<code className="font-mono text-muted-foreground">
+											{info.fullCommand}
+										</code>
+									</div>
+								) : null}
+								<pre className="whitespace-pre-wrap break-words p-1.5 text-muted-foreground/80">
+									{resultText!.slice(0, 2000)}
+									{resultText!.length > 2000 ? "…" : ""}
+								</pre>
 							</div>
 						) : null}
-						<pre className="whitespace-pre-wrap break-words p-1.5 text-muted-foreground/80">
-							{resultText!.slice(0, 2000)}
-							{resultText!.length > 2000 ? "…" : ""}
-						</pre>
+						{hasFiles ? (
+							<div className="ml-5 flex flex-col gap-0.5 border-l border-border/30 pl-3">
+								{info.files!.map((f, i) =>
+									f.rawDiff ? (
+										<EditDiffTrigger
+											key={`${f.name}-${i}`}
+											file={f.name}
+											diffAdd={f.diffAdd}
+											diffDel={f.diffDel}
+											oldStr={null}
+											newStr={null}
+											unifiedDiff={f.rawDiff}
+											variant="row"
+											icon={
+												<img
+													src={getMaterialFileIcon(f.name)}
+													alt=""
+													className="size-3.5 shrink-0"
+												/>
+											}
+										/>
+									) : (
+										<div
+											key={`${f.name}-${i}`}
+											className="flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-[12px] leading-4 text-muted-foreground transition-colors hover:bg-accent/60"
+										>
+											<img
+												src={getMaterialFileIcon(f.name)}
+												alt=""
+												className="size-3.5 shrink-0"
+											/>
+											<span className="min-w-0 truncate">{f.name}</span>
+											{f.diffAdd != null || f.diffDel != null ? (
+												<span className="flex shrink-0 items-center gap-1 text-[11px]">
+													{f.diffAdd != null ? (
+														<span className="text-chart-2">+{f.diffAdd}</span>
+													) : null}
+													{f.diffDel != null ? (
+														<span className="text-destructive">
+															-{f.diffDel}
+														</span>
+													) : null}
+												</span>
+											) : null}
+										</div>
+									),
+								)}
+							</div>
+						) : null}
 					</div>
 				) : null}
 			</details>
-			{hasFiles ? (
-				<div className="ml-5 flex flex-col gap-0.5 border-l border-border/30 pl-3">
-					{info.files!.map((f, i) =>
-						f.rawDiff ? (
-							<EditDiffTrigger
-								key={`${f.name}-${i}`}
-								file={f.name}
-								diffAdd={f.diffAdd}
-								diffDel={f.diffDel}
-								oldStr={null}
-								newStr={null}
-								unifiedDiff={f.rawDiff}
-								variant="row"
-								icon={
-									<img
-										src={getMaterialFileIcon(f.name)}
-										alt=""
-										className="size-3.5 shrink-0"
-									/>
-								}
-							/>
-						) : (
-							<div
-								key={`${f.name}-${i}`}
-								className="flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-[12px] leading-4 text-muted-foreground transition-colors hover:bg-accent/60"
-							>
-								<img
-									src={getMaterialFileIcon(f.name)}
-									alt=""
-									className="size-3.5 shrink-0"
-								/>
-								<span className="min-w-0 truncate">{f.name}</span>
-								{f.diffAdd != null || f.diffDel != null ? (
-									<span className="ml-auto flex shrink-0 items-center gap-1 text-[11px]">
-										{f.diffAdd != null ? (
-											<span className="text-chart-2">+{f.diffAdd}</span>
-										) : null}
-										{f.diffDel != null ? (
-											<span className="text-destructive">-{f.diffDel}</span>
-										) : null}
-									</span>
-								) : null}
-							</div>
-						),
-					)}
-				</div>
-			) : null}
 			{isError === true ? <ToolCallErrorRow result={result} /> : null}
 		</>
 	);
