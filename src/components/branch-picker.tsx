@@ -1,17 +1,13 @@
 import { LoaderCircle } from "lucide-react";
 import { useState } from "react";
 import {
-	Command,
 	CommandEmpty,
 	CommandInput,
 	CommandItem,
 	CommandList,
 } from "@/components/ui/command";
-import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "@/components/ui/popover";
+import { CommandPopoverContent } from "@/components/ui/command-popover";
+import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
 // Scoped thin scrollbar: 3px, sits in the right padding gap.
@@ -58,9 +54,9 @@ export function BranchPickerPopover({
 			}}
 		>
 			<PopoverTrigger asChild>{children}</PopoverTrigger>
-			<PopoverContent align={align} className="w-[260px] p-0">
+			<CommandPopoverContent align={align} className="w-[260px]">
 				<style>{scrollbarStyle}</style>
-				<Command className="branch-picker rounded-lg! p-1">
+				<div className="branch-picker">
 					<CommandInput placeholder="Search branches..." />
 					<CommandList className="max-h-52 px-1" style={{ marginRight: -3 }}>
 						{loading && branches.length === 0 ? (
@@ -95,8 +91,8 @@ export function BranchPickerPopover({
 							</CommandItem>
 						))}
 					</CommandList>
-				</Command>
-			</PopoverContent>
+				</div>
+			</CommandPopoverContent>
 		</Popover>
 	);
 }

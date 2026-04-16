@@ -217,6 +217,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				resume: undefined,
 				permissionMode: undefined,
 				effortLevel: undefined,
+				fastMode: undefined,
 			},
 			emitter,
 		);
@@ -226,6 +227,70 @@ describe("ClaudeSessionManager.sendMessage", () => {
 
 		const last = captured[captured.length - 1];
 		expect(last).toEqual({ id: "REQ-1", type: "end" });
+	});
+
+	test("lists fast mode support only for opus-class models", async () => {
+		mockQueryImpl = () =>
+			makeMockQuery({
+				supportedModels: async () => [
+					{
+						value: "default",
+						displayName: "Default",
+						supportedEffortLevels: ["low", "medium", "high", "max"],
+					},
+					{
+						value: "claude-opus-4-6",
+						displayName: "Claude Opus 4.6",
+						supportedEffortLevels: ["low", "medium", "high", "max"],
+					},
+					{
+						value: "claude-sonnet-4-6",
+						displayName: "Claude Sonnet 4.6",
+						supportedEffortLevels: ["low", "medium", "high"],
+					},
+				],
+			});
+
+		const models = await manager.listModels();
+
+		expect(models).toEqual([
+			expect.objectContaining({
+				id: "default",
+				supportsFastMode: true,
+			}),
+			expect.objectContaining({
+				id: "claude-opus-4-6",
+				supportsFastMode: true,
+			}),
+			expect.objectContaining({
+				id: "claude-sonnet-4-6",
+				supportsFastMode: false,
+			}),
+		]);
+	});
+
+	test("ignores fast mode for non-opus Claude models", async () => {
+		mockQueryImpl = () => makeMockQuery();
+
+		await manager.sendMessage(
+			"REQ-fast-sonnet",
+			{
+				sessionId: "helmor-sess-fast-sonnet",
+				prompt: "test",
+				model: "claude-sonnet-4-6",
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: true,
+			},
+			emitter,
+		);
+
+		const args = lastQueryArgs as {
+			options?: { settings?: Record<string, unknown> };
+		};
+		expect(args.options?.settings).toBeUndefined();
 	});
 
 	test("every forwarded event carries our requestId, never an SDK-supplied id", async () => {
@@ -242,6 +307,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				resume: undefined,
 				permissionMode: undefined,
 				effortLevel: undefined,
+				fastMode: undefined,
 			},
 			emitter,
 		);
@@ -268,6 +334,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				resume: undefined,
 				permissionMode: undefined,
 				effortLevel: undefined,
+				fastMode: undefined,
 			},
 			emitter,
 		);
@@ -305,6 +372,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				resume: undefined,
 				permissionMode: undefined,
 				effortLevel: undefined,
+				fastMode: undefined,
 			},
 			emitter,
 		);
@@ -336,6 +404,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 					resume: undefined,
 					permissionMode: undefined,
 					effortLevel: undefined,
+					fastMode: undefined,
 				},
 				emitter,
 			),
@@ -369,6 +438,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				resume: undefined,
 				permissionMode: "bypassPermissions",
 				effortLevel: undefined,
+				fastMode: undefined,
 			},
 			emitter,
 		);
@@ -429,6 +499,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				resume: undefined,
 				permissionMode: undefined,
 				effortLevel: undefined,
+				fastMode: undefined,
 			},
 			emitter,
 		);
@@ -512,6 +583,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				resume: undefined,
 				permissionMode: undefined,
 				effortLevel: undefined,
+				fastMode: undefined,
 			},
 			emitter,
 		);
@@ -890,18 +962,21 @@ describe("ClaudeSessionManager.listModels", () => {
 				label: "Opus 4.6 1M",
 				cliModel: "default",
 				effortLevels: ["low", "medium", "high", "max"],
+				supportsFastMode: true,
 			},
 			{
 				id: "sonnet",
 				label: "Sonnet 1M",
 				cliModel: "sonnet",
 				effortLevels: ["low", "medium", "high"],
+				supportsFastMode: false,
 			},
 			{
 				id: "haiku",
 				label: "Haiku",
 				cliModel: "haiku",
 				effortLevels: ["low", "medium", "high"],
+				supportsFastMode: false,
 			},
 		]);
 		expect(lastQueryArgs).toMatchObject({

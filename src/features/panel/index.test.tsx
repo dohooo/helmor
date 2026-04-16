@@ -11,6 +11,19 @@ const apiMocks = vi.hoisted(() => ({
 	hideSession: vi.fn(),
 }));
 
+vi.mock("@/components/icons", () => ({
+	ClaudeIcon: (props: { className?: string }) => (
+		<span data-testid="claude-icon" {...props}>
+			claude-icon
+		</span>
+	),
+	OpenAIIcon: (props: { className?: string }) => (
+		<span data-testid="codex-icon" {...props}>
+			codex-icon
+		</span>
+	),
+}));
+
 vi.mock("@/lib/api", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@/lib/api")>();
 
@@ -338,5 +351,47 @@ describe("WorkspacePanel", () => {
 					tab.querySelector('[data-slot="helmor-thinking-indicator"]') !== null,
 			),
 		).toBe(true);
+	});
+
+	it("keeps each tab icon aligned with that session's composer selection", () => {
+		const sessions = [
+			{
+				...SESSIONS[0],
+				agentType: "codex",
+			},
+			{
+				...SESSIONS[0],
+				id: "session-2",
+				title: "Session 2",
+				agentType: "claude",
+				active: false,
+			},
+		];
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<QueryClientProvider client={createHelmorQueryClient()}>
+					<WorkspacePanel
+						workspace={WORKSPACE}
+						sessions={sessions}
+						selectedSessionId="session-2"
+						sessionPanes={[]}
+						sending={false}
+					/>
+				</QueryClientProvider>
+			</TooltipProvider>,
+		);
+
+		const session1Tab = screen
+			.getAllByRole("tab", { name: /Session 1/i })
+			.find((tab) => within(tab).queryByTestId("codex-icon") !== null);
+		const session2Tab = screen
+			.getAllByRole("tab", { name: /Session 2/i })
+			.find((tab) => within(tab).queryByTestId("claude-icon") !== null);
+
+		expect(session1Tab).toBeDefined();
+		expect(session2Tab).toBeDefined();
+		expect(within(session1Tab!).getByTestId("codex-icon")).toBeInTheDocument();
+		expect(within(session2Tab!).getByTestId("claude-icon")).toBeInTheDocument();
 	});
 });

@@ -56,6 +56,12 @@ const SLASH_COMMANDS_TIMEOUT_MS = 8_000;
  */
 const MODEL_LIST_TIMEOUT_MS = 15_000;
 
+function claudeSupportsFastMode(model: string | undefined): boolean {
+	const id = model?.trim().toLowerCase();
+	if (!id) return false;
+	return id === "default" || id.includes("opus");
+}
+
 /**
  * Resolve the path to `@anthropic-ai/claude-code`'s `cli.js`, used as the
  * explicit `pathToClaudeCodeExecutable` for every SDK `query()` call.
@@ -370,6 +376,7 @@ export class ClaudeSessionManager implements SessionManager {
 			resume,
 			permissionMode,
 			effortLevel,
+			fastMode,
 		} = params;
 		const abortController = new AbortController();
 		const additionalDirectories = await resolveGitAccessDirectories(cwd);
@@ -381,6 +388,8 @@ export class ClaudeSessionManager implements SessionManager {
 				: (async function* () {
 						yield await buildUserMessageWithImages(text, imagePaths);
 					})();
+		const effectiveFastMode =
+			fastMode === true && claudeSupportsFastMode(model);
 
 		const q = query({
 			prompt: promptValue,
@@ -395,6 +404,7 @@ export class ClaudeSessionManager implements SessionManager {
 				permissionMode: parsePermissionMode(permissionMode),
 				allowDangerouslySkipPermissions: true,
 				effort: parseEffort(effortLevel),
+				...(effectiveFastMode ? { settings: { fastMode: true } } : {}),
 				hooks: {
 					PreToolUse: [
 						{
@@ -810,6 +820,7 @@ export class ClaudeSessionManager implements SessionManager {
 					m.supportedEffortLevels && m.supportedEffortLevels.length > 0
 						? m.supportedEffortLevels
 						: fallbackEffortLevels(m.value),
+				supportsFastMode: claudeSupportsFastMode(m.value),
 			}));
 		} catch (err) {
 			if (timedOut) {

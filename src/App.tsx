@@ -1960,7 +1960,7 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 																				editorId={editor.id}
 																				className="size-3.5 shrink-0"
 																			/>
-																			<span className="flex-1 font-medium">
+																			<span className="flex-1">
 																				{editor.name}
 																			</span>
 																			{editor.id === preferredEditor.id && (

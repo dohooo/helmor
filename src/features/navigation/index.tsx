@@ -18,16 +18,12 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-	Command,
 	CommandEmpty,
 	CommandItem,
 	CommandList,
 } from "@/components/ui/command";
-import {
-	Popover,
-	PopoverAnchor,
-	PopoverContent,
-} from "@/components/ui/popover";
+import { CommandPopoverContent } from "@/components/ui/command-popover";
+import { Popover, PopoverAnchor } from "@/components/ui/popover";
 import {
 	Tooltip,
 	TooltipContent,
@@ -562,46 +558,48 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 								</Tooltip>
 							</span>
 						</PopoverAnchor>
-						<PopoverContent
+						<CommandPopoverContent
 							align="end"
 							sideOffset={8}
-							className="w-[296px] p-0"
+							className="w-fit min-w-[220px] max-w-[min(90vw,28rem)]"
 						>
-							<Command>
-								<CommandList className="max-h-64">
-									<CommandEmpty>No repositories found.</CommandEmpty>
-									{repositories.map((repository) => (
-										<CommandItem
-											key={repository.id}
-											value={`${repository.name} ${repository.defaultBranch ?? ""}`}
-											onSelect={() => {
-												setIsRepoPickerOpen(false);
-												onCreateWorkspace?.(repository.id);
-											}}
-											className="rounded-lg"
-										>
-											<WorkspaceAvatar
-												repoIconSrc={repository.repoIconSrc}
-												repoInitials={repository.repoInitials}
-												repoName={repository.name}
-												title={repository.name}
-												className="size-5 rounded-md"
-												fallbackClassName="text-[8px]"
-											/>
-											<span className="min-w-0 flex-1 truncate font-medium">
-												{repository.name}
-											</span>
+							<CommandList className="max-h-64">
+								<CommandEmpty>No repositories found.</CommandEmpty>
+								{repositories.map((repository) => (
+									<CommandItem
+										key={repository.id}
+										value={`${repository.name} ${repository.defaultBranch ?? ""}`}
+										onSelect={() => {
+											setIsRepoPickerOpen(false);
+											onCreateWorkspace?.(repository.id);
+										}}
+										className="rounded-lg [&>svg:last-child]:hidden"
+									>
+										<div className="flex min-w-0 flex-1 items-center justify-between gap-3">
+											<div className="flex min-w-0 items-center gap-2">
+												<WorkspaceAvatar
+													repoIconSrc={repository.repoIconSrc}
+													repoInitials={repository.repoInitials}
+													repoName={repository.name}
+													title={repository.name}
+													className="size-5 rounded-md"
+													fallbackClassName="text-[8px]"
+												/>
+												<span className="truncate font-medium">
+													{repository.name}
+												</span>
+											</div>
 											{repository.defaultBranch ? (
-												<span className="shrink-0 text-xs text-muted-foreground">
+												<span className="shrink-0 text-right whitespace-nowrap text-xs text-muted-foreground">
 													{repository.remote ?? "origin"}/
 													{repository.defaultBranch.toLowerCase()}
 												</span>
 											) : null}
-										</CommandItem>
-									))}
-								</CommandList>
-							</Command>
-						</PopoverContent>
+										</div>
+									</CommandItem>
+								))}
+							</CommandList>
+						</CommandPopoverContent>
 					</Popover>
 				</div>
 			</div>

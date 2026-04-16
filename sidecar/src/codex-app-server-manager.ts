@@ -51,6 +51,12 @@ const RECOVERABLE_RESUME_SNIPPETS = [
 	"does not exist",
 ];
 
+function codexSupportsFastMode(model: string | undefined): boolean {
+	const id = model?.trim().toLowerCase();
+	if (!id) return true;
+	return id.startsWith("gpt-");
+}
+
 function isRecoverableResumeError(err: unknown): boolean {
 	const msg =
 		err instanceof Error
@@ -181,8 +187,10 @@ export class CodexAppServerManager implements SessionManager {
 			resume,
 			effortLevel,
 			permissionMode,
+			fastMode,
 		} = params;
 		const workDir = cwd ?? process.cwd();
+		const effectiveFastMode = fastMode === true && codexSupportsFastMode(model);
 
 		logger.debug(`[${requestId}] codex sendMessage`, {
 			sessionId,
@@ -198,6 +206,7 @@ export class CodexAppServerManager implements SessionManager {
 			resume,
 			model,
 			permissionMode,
+			effectiveFastMode,
 		);
 
 		const input = buildTurnInput(prompt);
@@ -207,6 +216,7 @@ export class CodexAppServerManager implements SessionManager {
 		};
 		if (model) turnStartParams.model = model;
 		if (effortLevel) turnStartParams.effort = effortLevel;
+		if (effectiveFastMode) turnStartParams.serviceTier = "fast";
 		const codexMode = toCodexCollaborationMode(permissionMode, model);
 		if (codexMode) turnStartParams.collaborationMode = codexMode;
 		const codexApproval = toCodexApprovalPolicy(permissionMode);
@@ -556,6 +566,7 @@ export class CodexAppServerManager implements SessionManager {
 		resume?: string,
 		model?: string,
 		permissionMode?: string,
+		fastMode?: boolean,
 	): Promise<AppServerContext> {
 		const existing = this.sessions.get(sessionId);
 		if (existing && !existing.server.killed) return existing;
@@ -611,6 +622,7 @@ export class CodexAppServerManager implements SessionManager {
 					permissionMode === "plan" ? "workspace-write" : "danger-full-access",
 			};
 			if (model) threadStartParams.model = model;
+			if (fastMode) threadStartParams.serviceTier = "fast";
 			const response = await server.sendRequest<Record<string, unknown>>(
 				"thread/start",
 				threadStartParams,
@@ -770,8 +782,12 @@ function parseModelListResponse(result: unknown): ProviderModelInfo[] {
 			parsedEfforts.length > 0
 				? parsedEfforts
 				: ["low", "medium", "high", "xhigh"];
+		const supportsFastMode =
+			typeof entry.supportsFastMode === "boolean"
+				? entry.supportsFastMode
+				: codexSupportsFastMode(id);
 
-		return [{ id, label, cliModel, effortLevels }];
+		return [{ id, label, cliModel, effortLevels, supportsFastMode }];
 	});
 	return sortModelsByVersion(models);
 }

@@ -33,16 +33,20 @@
 	--sidebar-accent-foreground: oklch(0.205 0 0);
 	--sidebar-border: oklch(0.922 0 0);
 	--sidebar-ring: oklch(0.708 0 0);
-	--workspace-sidebar-status-done: #6b80a4;
+	--workspace-sidebar-status-done: color-mix(
+		in srgb,
+		var(--workspace-pr-merged-accent) 72%,
+		white
+	);
 	--workspace-sidebar-status-review: #a09040;
 	--workspace-sidebar-status-progress: #508a5a;
 	--workspace-sidebar-status-backlog: #848f92;
 	--workspace-sidebar-status-canceled: #a86868;
 	--workspace-sidebar-status-neutral: #5b686b;
 	--workspace-sidebar-branch: #718687;
-	--workspace-branch-status-working: var(--workspace-sidebar-branch);
-	--workspace-branch-status-open: var(--chart-2);
-	--workspace-branch-status-merged: var(--chart-4);
+	--workspace-branch-status-working: var(--workspace-pr-open-accent);
+	--workspace-branch-status-open: var(--workspace-sidebar-status-review);
+	--workspace-branch-status-merged: var(--workspace-pr-merged-accent);
 	--workspace-branch-status-closed: var(--destructive);
 	--workspace-branch-status-inactive: var(--workspace-sidebar-status-neutral);
 	--workspace-pr-merged-accent: #8957e5;
@@ -134,16 +138,20 @@
 	--sidebar-accent-foreground: oklch(0.985 0 0);
 	--sidebar-border: oklch(1 0 0 / 10%);
 	--sidebar-ring: oklch(0.556 0 0);
-	--workspace-sidebar-status-done: #9ebcff;
+	--workspace-sidebar-status-done: color-mix(
+		in srgb,
+		var(--workspace-pr-merged-accent) 82%,
+		white
+	);
 	--workspace-sidebar-status-review: #f0ca52;
 	--workspace-sidebar-status-progress: #7fe08f;
 	--workspace-sidebar-status-backlog: #b6b2ae;
 	--workspace-sidebar-status-canceled: #ee9b9b;
 	--workspace-sidebar-status-neutral: #afaeac;
 	--workspace-sidebar-branch: #b09a84;
-	--workspace-branch-status-working: var(--workspace-sidebar-branch);
-	--workspace-branch-status-open: var(--chart-2);
-	--workspace-branch-status-merged: var(--chart-4);
+	--workspace-branch-status-working: var(--workspace-pr-open-accent);
+	--workspace-branch-status-open: var(--workspace-sidebar-status-review);
+	--workspace-branch-status-merged: var(--workspace-pr-merged-accent);
 	--workspace-branch-status-closed: var(--destructive);
 	--workspace-branch-status-inactive: var(--workspace-sidebar-status-neutral);
 	--workspace-pr-merged-accent: #8957e5;

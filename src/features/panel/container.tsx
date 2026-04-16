@@ -14,6 +14,7 @@ import {
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
 import { WorkspacePanel } from "./index";
+import { sortWorkspaceSessionsForDisplay } from "./session-sort";
 
 const EMPTY_MESSAGES: ThreadMessageLike[] = [];
 
@@ -66,12 +67,28 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 
 	const workspace = detailQuery.data ?? null;
 	const sessions = sessionsQuery.data ?? [];
+	const displaySessions = useMemo(
+		() =>
+			sortWorkspaceSessionsForDisplay(sessions, {
+				sendingSessionIds,
+				completedSessionIds,
+				interactionRequiredSessionIds,
+			}),
+		[
+			completedSessionIds,
+			interactionRequiredSessionIds,
+			sendingSessionIds,
+			sessions,
+		],
+	);
 	const rememberedSessionId = useMemo(() => {
-		if (sessionSelectionHistory.length === 0 || sessions.length === 0) {
+		if (sessionSelectionHistory.length === 0 || displaySessions.length === 0) {
 			return null;
 		}
 
-		const visibleSessionIds = new Set(sessions.map((session) => session.id));
+		const visibleSessionIds = new Set(
+			displaySessions.map((session) => session.id),
+		);
 		for (let i = sessionSelectionHistory.length - 1; i >= 0; i -= 1) {
 			const sessionId = sessionSelectionHistory[i];
 			if (visibleSessionIds.has(sessionId)) {
@@ -80,7 +97,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		}
 
 		return null;
-	}, [sessionSelectionHistory, sessions]);
+	}, [displaySessions, sessionSelectionHistory]);
 
 	const autoCreatingWorkspaceRef = useRef<Set<string>>(new Set());
 
@@ -209,7 +226,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 
 		if (
 			displayedSessionId &&
-			sessions.some((session) => session.id === displayedSessionId)
+			displaySessions.some((session) => session.id === displayedSessionId)
 		) {
 			return displayedSessionId;
 		}
@@ -217,15 +234,15 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		return (
 			rememberedSessionId ??
 			workspace?.activeSessionId ??
-			sessions.find((session) => session.active)?.id ??
-			sessions[0]?.id ??
+			displaySessions.find((session) => session.active)?.id ??
+			displaySessions[0]?.id ??
 			null
 		);
 	}, [
+		displaySessions,
 		displayedSessionId,
 		displayedWorkspaceId,
 		rememberedSessionId,
-		sessions,
 		workspace?.activeSessionId,
 	]);
 
@@ -463,7 +480,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	return (
 		<WorkspacePanel
 			workspace={workspace}
-			sessions={sessions}
+			sessions={displaySessions}
 			selectedSessionId={selectedSessionIdForPanel}
 			selectedProvider={selectedProvider}
 			sessionPanes={sessionPanes}
