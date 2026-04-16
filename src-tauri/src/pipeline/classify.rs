@@ -190,6 +190,20 @@ const SHELL_READONLY_COMMANDS: &[&str] = &[
 /// Tool names that indicate a bash/shell execution tool.
 const SHELL_TOOL_NAMES: &[&str] = &["bash", "run", "shell", "execute", "command", "exec"];
 
+/// Git subcommands that are read-only from the collapse classifier's perspective.
+const GIT_READONLY_SUBCOMMANDS: &[&str] = &[
+    "show",
+    "diff",
+    "log",
+    "status",
+    "blame",
+    "grep",
+    "rev-parse",
+    "ls-files",
+    "ls-tree",
+    "cat-file",
+];
+
 /// Strip shell wrappers like `/bin/zsh -lc "actual command"`.
 fn unwrap_shell(cmd: &str) -> &str {
     let t = cmd.trim();
@@ -225,6 +239,32 @@ fn segment_command(segment: &str) -> Option<&str> {
         .split_whitespace()
         .find(|w| !w.contains('=') || w.starts_with('-'))
         .map(|w| w.rsplit('/').next().unwrap_or(w))
+}
+
+fn git_subcommand(segment: &str) -> Option<&str> {
+    let mut tokens = segment.split_whitespace().peekable();
+    let first = tokens.next()?.rsplit('/').next().unwrap_or("");
+    if first != "git" {
+        return None;
+    }
+
+    while let Some(token) = tokens.next() {
+        if token.is_empty() {
+            continue;
+        }
+        if !token.starts_with('-') {
+            return Some(token);
+        }
+
+        if matches!(
+            token,
+            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace"
+        ) {
+            let _ = tokens.next();
+        }
+    }
+
+    None
 }
 
 /// Check for `>` or `>>` outside of quoted strings — indicates output redirect.
@@ -328,6 +368,10 @@ fn classify_shell_command(command: &str) -> ToolCategory {
         }
         has_any = true;
         match segment_command(seg) {
+            Some("git") => match git_subcommand(seg) {
+                Some(sub) if GIT_READONLY_SUBCOMMANDS.contains(&sub) => {}
+                _ => return ToolCategory::Other,
+            },
             Some(cmd) if SHELL_READONLY_COMMANDS.contains(&cmd) => {}
             _ => return ToolCategory::Other,
         }
@@ -513,6 +557,24 @@ mod tests {
     }
 
     #[test]
+    fn classify_shell_wrapped_git_show_readonly() {
+        assert_eq!(
+            classify_shell_command(
+                "/bin/zsh -lc 'git show --unified=80 --no-ext-diff 4ca2fe1 -- sidecar/src/claude-session-manager.ts sidecar/test/claude-session-manager.test.ts src-tauri/src/agents/queries.rs src/lib/workspace-helpers.test.ts'"
+            ),
+            ToolCategory::Shell
+        );
+    }
+
+    #[test]
+    fn classify_shell_git_show_with_pipe_readonly() {
+        assert_eq!(
+            classify_shell_command("git show --summary --format=raw 15719566ea | sed -n '1,12p'"),
+            ToolCategory::Shell
+        );
+    }
+
+    #[test]
     fn classify_shell_write_rejected() {
         assert_eq!(
             classify_shell_command("rm -rf /tmp/foo"),
@@ -520,6 +582,10 @@ mod tests {
         );
         assert_eq!(classify_shell_command("npm install"), ToolCategory::Other);
         assert_eq!(classify_shell_command("cargo build"), ToolCategory::Other);
+        assert_eq!(
+            classify_shell_command("/bin/zsh -lc 'git branch -m feature/new-name'"),
+            ToolCategory::Other
+        );
     }
 
     #[test]

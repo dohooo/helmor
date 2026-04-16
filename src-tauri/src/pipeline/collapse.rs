@@ -163,7 +163,10 @@ pub fn build_group_summary(tools: &[MessagePart], active: bool) -> String {
             "ran"
         };
         let plural = if shell_tools.len() > 1 { "s" } else { "" };
-        parts.push(format!("{verb} {} command{plural}", shell_tools.len()));
+        parts.push(format!(
+            "{verb} {} read-only command{plural}",
+            shell_tools.len()
+        ));
     }
 
     if parts.is_empty() {
@@ -440,7 +443,7 @@ mod tests {
         if let ExtendedMessagePart::CollapsedGroup(g) = &result[0] {
             assert_eq!(g.category, CollapseCategory::Shell);
             assert_eq!(g.tools.len(), 3);
-            assert_eq!(g.summary, "Ran 3 commands");
+            assert_eq!(g.summary, "Ran 3 read-only commands");
         } else {
             panic!("expected collapsed group");
         }
@@ -471,7 +474,7 @@ mod tests {
         if let ExtendedMessagePart::CollapsedGroup(g) = &result[0] {
             assert_eq!(g.category, CollapseCategory::Shell);
             assert_eq!(g.tools.len(), 3);
-            assert_eq!(g.summary, "Ran 3 commands");
+            assert_eq!(g.summary, "Ran 3 read-only commands");
         } else {
             panic!("expected collapsed group");
         }

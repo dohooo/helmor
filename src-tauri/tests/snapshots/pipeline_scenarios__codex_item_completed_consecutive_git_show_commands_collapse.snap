@@ -1,0 +1,17 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: collapsed-group
+      category: shell
+      tools_count: 2
+      active: false
+      summary: Ran 2 read-only commands
+  status:
+    type: complete
+    reason: stop
+  streaming: ~
