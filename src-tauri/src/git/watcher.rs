@@ -12,7 +12,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use notify::RecursiveMode;
-use notify_debouncer_full::{new_debouncer, Debouncer, FileIdMap};
+use notify_debouncer_full::{new_debouncer, Debouncer, RecommendedCache};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -45,7 +45,7 @@ type FetchKey = (String, String, String);
 // -- Internal state per workspace --
 
 struct WorkspaceWatcher {
-    _debouncer: Debouncer<notify::RecommendedWatcher, FileIdMap>,
+    _debouncer: Debouncer<notify::RecommendedWatcher, RecommendedCache>,
     /// Stored for change detection — if these change we restart the watcher.
     remote: Option<String>,
     target_branch: Option<String>,

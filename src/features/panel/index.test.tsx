@@ -382,15 +382,16 @@ describe("WorkspacePanel", () => {
 			</TooltipProvider>,
 		);
 
-		expect(
-			within(screen.getByRole("tab", { name: /Session 1/i })).getByTestId(
-				"codex-icon",
-			),
-		).toBeInTheDocument();
-		expect(
-			within(screen.getByRole("tab", { name: /Session 2/i })).getByTestId(
-				"claude-icon",
-			),
-		).toBeInTheDocument();
+		const session1Tab = screen
+			.getAllByRole("tab", { name: /Session 1/i })
+			.find((tab) => within(tab).queryByTestId("codex-icon") !== null);
+		const session2Tab = screen
+			.getAllByRole("tab", { name: /Session 2/i })
+			.find((tab) => within(tab).queryByTestId("claude-icon") !== null);
+
+		expect(session1Tab).toBeDefined();
+		expect(session2Tab).toBeDefined();
+		expect(within(session1Tab!).getByTestId("codex-icon")).toBeInTheDocument();
+		expect(within(session2Tab!).getByTestId("claude-icon")).toBeInTheDocument();
 	});
 });

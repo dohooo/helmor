@@ -41,6 +41,8 @@ const EMPTY_GIT_ACTION_STATUS: WorkspaceGitActionStatus = {
 	syncTargetBranch: "main",
 	syncStatus: "upToDate",
 	behindTargetCount: 0,
+	remoteTrackingRef: null,
+	aheadOfRemoteCount: 0,
 };
 
 const EMPTY_PR_ACTION_STATUS: WorkspacePrActionStatus = {

@@ -18,6 +18,8 @@ pub struct WorkspaceGitActionStatus {
     pub sync_target_branch: Option<String>,
     pub sync_status: WorkspaceSyncStatus,
     pub behind_target_count: u32,
+    pub remote_tracking_ref: Option<String>,
+    pub ahead_of_remote_count: u32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -627,6 +629,11 @@ pub fn workspace_action_status(
         .map(ToOwned::to_owned);
     let (sync_status, behind_target_count) =
         workspace_sync_status(workspace_dir, remote, sync_target_branch.as_deref());
+    let remote_tracking_ref = current_upstream_ref(workspace_dir);
+    let ahead_of_remote_count = remote_tracking_ref
+        .as_deref()
+        .and_then(|upstream| commits_ahead_of(workspace_dir, upstream).ok())
+        .unwrap_or(0);
 
     Ok(WorkspaceGitActionStatus {
         uncommitted_count,
@@ -634,6 +641,8 @@ pub fn workspace_action_status(
         sync_target_branch,
         sync_status,
         behind_target_count,
+        remote_tracking_ref,
+        ahead_of_remote_count,
     })
 }
 
@@ -663,6 +672,24 @@ fn workspace_sync_status(
         Ok(_) => (WorkspaceSyncStatus::UpToDate, 0),
         Err(_) => (WorkspaceSyncStatus::Unknown, 0),
     }
+}
+
+fn current_upstream_ref(workspace_dir: &Path) -> Option<String> {
+    let workspace_dir_arg = workspace_dir.display().to_string();
+    run_git(
+        [
+            "-C",
+            workspace_dir_arg.as_str(),
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
+        None,
+    )
+    .ok()
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
 }
 
 /// Counts how many commits are reachable from HEAD but not from `base_ref`.
@@ -880,6 +907,8 @@ mod tests {
         assert_eq!(status.conflict_count, 0);
         assert_eq!(status.sync_status, WorkspaceSyncStatus::Unknown);
         assert_eq!(status.behind_target_count, 0);
+        assert_eq!(status.remote_tracking_ref, None);
+        assert_eq!(status.ahead_of_remote_count, 0);
     }
 
     #[test]
@@ -928,6 +957,8 @@ mod tests {
         assert_eq!(status.sync_target_branch.as_deref(), Some("main"));
         assert_eq!(status.sync_status, WorkspaceSyncStatus::Behind);
         assert_eq!(status.behind_target_count, 1);
+        assert_eq!(status.remote_tracking_ref.as_deref(), Some("origin/main"));
+        assert_eq!(status.ahead_of_remote_count, 0);
     }
 
     #[test]
@@ -939,6 +970,21 @@ mod tests {
         assert_eq!(status.sync_target_branch.as_deref(), Some("main"));
         assert_eq!(status.sync_status, WorkspaceSyncStatus::UpToDate);
         assert_eq!(status.behind_target_count, 0);
+        assert_eq!(status.remote_tracking_ref.as_deref(), Some("origin/main"));
+        assert_eq!(status.ahead_of_remote_count, 0);
+    }
+
+    #[test]
+    fn workspace_action_status_reports_commits_ahead_of_remote() {
+        let (_origin, clone) = init_repo_with_remote();
+        std::fs::write(clone.path().join("local.txt"), "local\n").unwrap();
+        run(clone.path(), &["add", "local.txt"]);
+        run(clone.path(), &["commit", "-m", "local commit"]);
+
+        let status = workspace_action_status(clone.path(), Some("origin"), Some("main")).unwrap();
+
+        assert_eq!(status.remote_tracking_ref.as_deref(), Some("origin/main"));
+        assert_eq!(status.ahead_of_remote_count, 1);
     }
 
     /// Clone a repo so we have a real `origin` remote with tracking refs.

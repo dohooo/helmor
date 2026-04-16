@@ -213,6 +213,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const hasPendingInteraction = hasPendingElicitation || hasPendingDeferredTool;
 	const inputDisabled = disabled || hasPendingInteraction;
 	const toolbarDisabled = disabled || hasPendingInteraction;
+	const composerToolbarTriggerClassName =
+		"cursor-pointer rounded-lg px-1 py-0.5 text-[13px] font-medium transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50";
 	const sendDisabled =
 		disabled ||
 		submitDisabled ||
@@ -486,9 +488,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										<DropdownMenuTrigger
 											disabled={toolbarDisabled}
 											className={cn(
-												"flex items-center gap-1.5 rounded-lg px-1 py-0.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
+												`flex items-center gap-1.5 text-muted-foreground ${composerToolbarTriggerClassName}`,
 												toolbarDisabled &&
-													"cursor-not-allowed opacity-45 hover:text-muted-foreground",
+													"cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground",
 											)}
 										>
 											{selectedModel?.provider === "codex" ? (
@@ -532,9 +534,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 																		<ClaudeIcon className="size-4" />
 																	)}
 																</span>
-																<span className="font-medium">
-																	{option.label}
-																</span>
+																<span>{option.label}</span>
 															</div>
 														</DropdownMenuItem>
 													))}
@@ -570,21 +570,16 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										<DropdownMenuTrigger
 											disabled={toolbarDisabled}
 											className={cn(
-												"flex items-center gap-0.5 px-1 py-0.5 text-[13px] font-medium focus-visible:outline-none",
+												`flex items-center gap-0.5 ${composerToolbarTriggerClassName}`,
+												effectiveEffort === "max" || effectiveEffort === "xhigh"
+													? "effort-max-text"
+													: "text-muted-foreground",
 												toolbarDisabled
-													? "cursor-not-allowed opacity-45"
+													? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
 													: null,
 											)}
 										>
-											<span
-												className={cn(
-													"capitalize",
-													effectiveEffort === "max" ||
-														effectiveEffort === "xhigh"
-														? "effort-max-text"
-														: "text-muted-foreground",
-												)}
-											>
+											<span className="capitalize">
 												{effectiveEffort === "xhigh"
 													? "Extra High"
 													: effectiveEffort}
@@ -611,7 +606,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													>
 														<div className="flex items-center gap-2.5">
 															<EffortBrainIcon level={level} />
-															<span className="font-medium capitalize">
+															<span className="capitalize">
 																{level === "xhigh" ? "Extra High" : level}
 															</span>
 														</div>
@@ -629,10 +624,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										aria-label="Plan mode"
 										disabled={toolbarDisabled}
 										className={cn(
-											"cursor-pointer gap-1.5 rounded-full px-2 py-0.5 text-[13px] font-medium transition-colors",
+											`gap-1.5 ${composerToolbarTriggerClassName}`,
 											permissionMode === "plan"
-												? "text-plan ring-1 ring-plan/40 hover:bg-plan/10 hover:text-plan"
-												: "text-muted-foreground/55 hover:bg-accent/60 hover:text-muted-foreground",
+												? "text-plan ring-1 ring-plan/40 hover:bg-accent/60 hover:text-plan"
+												: "text-muted-foreground",
 										)}
 										onClick={() =>
 											onChangePermissionMode(

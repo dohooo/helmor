@@ -118,11 +118,11 @@ function createWorkspaceSessions(
 			model: "opus-1m",
 			permissionMode: "default",
 			providerSessionId: null,
+			effortLevel: null,
 			unreadCount: 0,
 			contextTokenCount: 0,
 			contextUsedPercent: null,
 			thinkingEnabled: true,
-			codexThinkingLevel: null,
 			fastMode: false,
 			agentPersonality: null,
 			createdAt: "2026-04-05T00:00:00Z",
@@ -131,6 +131,7 @@ function createWorkspaceSessions(
 			resumeSessionAt: null,
 			isHidden: false,
 			isCompacting: false,
+			actionKind: null,
 			active: true,
 		},
 		{
@@ -142,11 +143,11 @@ function createWorkspaceSessions(
 			model: "opus-1m",
 			permissionMode: "default",
 			providerSessionId: null,
+			effortLevel: null,
 			unreadCount: 0,
 			contextTokenCount: 0,
 			contextUsedPercent: null,
 			thinkingEnabled: true,
-			codexThinkingLevel: null,
 			fastMode: false,
 			agentPersonality: null,
 			createdAt: "2026-04-05T00:00:00Z",
@@ -155,9 +156,42 @@ function createWorkspaceSessions(
 			resumeSessionAt: null,
 			isHidden: false,
 			isCompacting: false,
+			actionKind: null,
 			active: false,
 		},
 	];
+}
+
+function createWorkspaceSessionSummary(
+	id: string,
+	overrides: Record<string, unknown> = {},
+) {
+	return {
+		id,
+		workspaceId: "workspace-1",
+		title: id,
+		agentType: "claude",
+		status: "idle",
+		model: "opus-1m",
+		permissionMode: "default",
+		providerSessionId: null,
+		effortLevel: null,
+		unreadCount: 0,
+		contextTokenCount: 0,
+		contextUsedPercent: null,
+		thinkingEnabled: true,
+		fastMode: false,
+		agentPersonality: null,
+		createdAt: "2026-04-05T00:00:00Z",
+		updatedAt: "2026-04-05T00:00:00Z",
+		lastUserMessageAt: null,
+		resumeSessionAt: null,
+		isHidden: false,
+		isCompacting: false,
+		actionKind: null,
+		active: false,
+		...overrides,
+	};
 }
 
 function createMessages(sessionId: string) {
@@ -228,6 +262,10 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		);
 		apiMocks.loadWorkspaceSessions.mockImplementation((workspaceId?: string) =>
 			Promise.resolve(createWorkspaceSessions(workspaceId)),
+		);
+		apiMocks.loadSessionThreadMessages.mockImplementation(
+			(sessionId?: string) =>
+				Promise.resolve(createMessages(sessionId ?? "session-1")),
 		);
 	});
 
@@ -622,6 +660,111 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		await waitFor(() => {
 			expect(getSessionPaneIds()).toEqual(["session-1"]);
 			expect(getLatestPanelProps().loadingSession).toBe(false);
+		});
+	});
+
+	it("sorts sessions before rendering the panel", async () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			createWorkspaceDetail("workspace-1", "idle"),
+		);
+		queryClient.setQueryData(helmorQueryKeys.workspaceSessions("workspace-1"), [
+			createWorkspaceSessionSummary("action-idle", {
+				actionKind: "create-pr",
+				updatedAt: "2026-04-05T00:00:00Z",
+			}),
+			createWorkspaceSessionSummary("idle", {
+				active: true,
+				updatedAt: "2026-04-06T00:00:00Z",
+			}),
+			createWorkspaceSessionSummary("running", {
+				updatedAt: "2026-04-07T00:00:00Z",
+			}),
+			createWorkspaceSessionSummary("unread", {
+				unreadCount: 2,
+				updatedAt: "2026-04-04T00:00:00Z",
+			}),
+		]);
+		queryClient.setQueryData(
+			[...helmorQueryKeys.sessionMessages("idle"), "thread"],
+			createMessages("idle"),
+		);
+
+		renderWithProviders(
+			<WorkspacePanelContainer
+				selectedWorkspaceId="workspace-1"
+				displayedWorkspaceId="workspace-1"
+				selectedSessionId="idle"
+				displayedSessionId="idle"
+				sending={false}
+				sendingSessionIds={new Set(["running"])}
+				completedSessionIds={new Set(["unread"])}
+				onSelectSession={vi.fn()}
+				onResolveDisplayedSession={vi.fn()}
+			/>,
+			{ queryClient },
+		);
+
+		await waitFor(() => {
+			expect(
+				(getLatestPanelProps().sessions as Array<{ id: string }>).map(
+					(session) => session.id,
+				),
+			).toEqual(["unread", "running", "idle", "action-idle"]);
+		});
+	});
+
+	it("uses the sorted first session as the default displayed thread", async () => {
+		const queryClient = createHelmorQueryClient();
+		const onResolveDisplayedSession = vi.fn();
+		const workspaceDetail = createWorkspaceDetail("workspace-1", null);
+		const workspaceSessions = [
+			createWorkspaceSessionSummary("idle", {
+				updatedAt: "2026-04-05T00:00:00Z",
+			}),
+			createWorkspaceSessionSummary("unread", {
+				unreadCount: 1,
+				updatedAt: "2026-04-04T00:00:00Z",
+			}),
+		];
+
+		apiMocks.loadWorkspaceDetail.mockResolvedValue(workspaceDetail);
+		apiMocks.loadWorkspaceSessions.mockResolvedValue(workspaceSessions);
+		apiMocks.loadSessionThreadMessages.mockImplementation(
+			(sessionId?: string) =>
+				Promise.resolve(createMessages(sessionId ?? "unread")),
+		);
+
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			workspaceDetail,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			workspaceSessions,
+		);
+		queryClient.setQueryData(
+			[...helmorQueryKeys.sessionMessages("unread"), "thread"],
+			createMessages("unread"),
+		);
+
+		renderWithProviders(
+			<WorkspacePanelContainer
+				selectedWorkspaceId="workspace-1"
+				displayedWorkspaceId="workspace-1"
+				selectedSessionId={null}
+				displayedSessionId={null}
+				sending={false}
+				completedSessionIds={new Set(["unread"])}
+				onSelectSession={vi.fn()}
+				onResolveDisplayedSession={onResolveDisplayedSession}
+			/>,
+			{ queryClient },
+		);
+
+		await waitFor(() => {
+			expect(onResolveDisplayedSession).toHaveBeenCalledWith("unread");
 		});
 	});
 

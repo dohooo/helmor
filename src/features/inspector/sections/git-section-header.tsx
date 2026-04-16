@@ -1,4 +1,4 @@
-import { Github } from "@lobehub/icons";
+import { MarkGithubIcon } from "@primer/octicons-react";
 import { ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -45,6 +45,7 @@ export function GitSectionHeader({
 		<div
 			className={cn(
 				INSPECTOR_SECTION_HEADER_CLASS,
+				"transition-[background-color,border-color,color,box-shadow] duration-300 ease-out",
 				gitHeaderHighlightClass,
 				className,
 			)}
@@ -60,7 +61,7 @@ export function GitSectionHeader({
 						variant="outline"
 						size="xs"
 						className={cn(
-							"self-center translate-y-px bg-transparent font-normal tracking-[0.01em] hover:bg-transparent hover:opacity-80",
+							"self-center translate-y-px bg-transparent font-normal tracking-[0.01em] transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-transparent hover:opacity-80",
 							(commitButtonMode === "fix" || commitButtonMode === "closed") &&
 								"border-[var(--workspace-pr-closed-accent)] text-[var(--workspace-pr-closed-accent)] hover:text-[var(--workspace-pr-closed-accent)]",
 							commitButtonMode === "resolve-conflicts" &&
@@ -73,7 +74,7 @@ export function GitSectionHeader({
 						onClick={onPrClick}
 					>
 						<span className="inline-flex items-center gap-1.5 leading-none">
-							<Github size={12} className="shrink-0 self-center" />
+							<MarkGithubIcon size={12} className="shrink-0 self-center" />
 							<span className="inline-flex items-center leading-none tabular-nums text-sm font-light">
 								#{prInfo.number}
 							</span>

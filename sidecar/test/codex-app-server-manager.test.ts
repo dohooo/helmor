@@ -70,6 +70,9 @@ class MockCodexAppServer {
 	): void {
 		serverState.onNotification = onNotification;
 	}
+
+	setActiveRequestId(_id: string): void {}
+
 	sendResponse(_requestId: string | number, _result: unknown): void {}
 	kill(): void {
 		this.killed = true;

@@ -12,6 +12,7 @@ use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::BTreeMap;
 
 use crate::{auth, models::workspaces as workspace_models};
 
@@ -960,12 +961,14 @@ fn build_action_status(node: ActionPullRequestNode) -> WorkspacePrActionStatus {
         .as_ref()
         .and_then(|commit| commit.status_check_rollup.as_ref())
         .map(|rollup| {
-            rollup
-                .contexts
-                .nodes
-                .iter()
-                .filter_map(normalize_check_context)
-                .collect()
+            dedupe_action_items(
+                rollup
+                    .contexts
+                    .nodes
+                    .iter()
+                    .filter_map(normalize_check_context)
+                    .collect(),
+            )
         })
         .unwrap_or_default();
 
@@ -1071,6 +1074,33 @@ fn normalize_deployment(node: &ActionDeploymentNode) -> WorkspacePrActionItem {
             .unwrap_or(ActionStatusKind::Pending),
         duration: None,
         url,
+    }
+}
+
+fn dedupe_action_items(items: Vec<WorkspacePrActionItem>) -> Vec<WorkspacePrActionItem> {
+    let mut deduped = BTreeMap::<String, WorkspacePrActionItem>::new();
+
+    for item in items {
+        let key = format!("{:?}::{}", item.provider, item.name);
+        match deduped.get(&key) {
+            Some(existing)
+                if action_status_priority(existing.status)
+                    < action_status_priority(item.status) => {}
+            _ => {
+                deduped.insert(key, item);
+            }
+        }
+    }
+
+    deduped.into_values().collect()
+}
+
+fn action_status_priority(status: ActionStatusKind) -> u8 {
+    match status {
+        ActionStatusKind::Failure => 0,
+        ActionStatusKind::Running => 1,
+        ActionStatusKind::Pending => 2,
+        ActionStatusKind::Success => 3,
     }
 }
 
@@ -1416,6 +1446,74 @@ mod tests {
         assert_eq!(status.checks[0].duration.as_deref(), Some("12s"));
         assert_eq!(status.deployments.len(), 1);
         assert_eq!(status.deployments[0].provider, ActionProvider::Vercel);
+    }
+
+    #[test]
+    fn deduplicates_duplicate_check_runs_with_same_name() {
+        let status = build_action_status(ActionPullRequestNode {
+            url: "https://github.com/octocat/hello-world/pull/1".to_string(),
+            number: 1,
+            state: "OPEN".to_string(),
+            title: "Update".to_string(),
+            merged: false,
+            review_decision: None,
+            mergeable: Some("MERGEABLE".to_string()),
+            commits: ActionCommitConnection {
+                nodes: vec![ActionPullRequestCommitNode {
+                    commit: ActionCommitNode {
+                        status_check_rollup: Some(ActionStatusCheckRollup {
+                            contexts: ActionCheckContextConnection {
+                                nodes: vec![
+                                    ActionCheckContextNode::CheckRun(ActionCheckRunNode {
+                                        database_id: Some(101),
+                                        name: "Lint".to_string(),
+                                        status: "COMPLETED".to_string(),
+                                        conclusion: Some("SUCCESS".to_string()),
+                                        details_url: Some(
+                                            "https://github.com/octocat/hello-world/actions/runs/1"
+                                                .to_string(),
+                                        ),
+                                        started_at: Some("2026-04-16T01:45:30Z".to_string()),
+                                        completed_at: Some("2026-04-16T01:45:36Z".to_string()),
+                                        check_suite: Some(ActionCheckSuite {
+                                            app: Some(ActionCheckApp {
+                                                name: "GitHub Actions".to_string(),
+                                            }),
+                                        }),
+                                    }),
+                                    ActionCheckContextNode::CheckRun(ActionCheckRunNode {
+                                        database_id: Some(202),
+                                        name: "Lint".to_string(),
+                                        status: "IN_PROGRESS".to_string(),
+                                        conclusion: None,
+                                        details_url: Some(
+                                            "https://github.com/octocat/hello-world/actions/runs/2"
+                                                .to_string(),
+                                        ),
+                                        started_at: Some("2026-04-16T01:46:00Z".to_string()),
+                                        completed_at: None,
+                                        check_suite: Some(ActionCheckSuite {
+                                            app: Some(ActionCheckApp {
+                                                name: "GitHub Actions".to_string(),
+                                            }),
+                                        }),
+                                    }),
+                                ],
+                            },
+                        }),
+                        deployments: ActionDeploymentConnection { nodes: vec![] },
+                    },
+                }],
+            },
+        });
+
+        assert_eq!(status.checks.len(), 1);
+        assert_eq!(status.checks[0].name, "Lint");
+        assert_eq!(status.checks[0].status, ActionStatusKind::Running);
+        assert_eq!(
+            status.checks[0].url.as_deref(),
+            Some("https://github.com/octocat/hello-world/actions/runs/2")
+        );
     }
 
     #[test]

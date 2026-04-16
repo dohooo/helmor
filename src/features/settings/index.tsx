@@ -162,9 +162,9 @@ export const SettingsDialog = memo(function SettingsDialog({
 	return (
 		<Dialog open={open} onOpenChange={onClose}>
 			<DialogContent className="h-[min(80vh,640px)] w-[min(80vw,860px)] max-w-[860px] overflow-hidden rounded-2xl border-border/60 bg-background p-0 shadow-2xl sm:max-w-[860px]">
-				<SidebarProvider className="flex h-full min-h-0 w-full gap-0">
+				<SidebarProvider className="flex h-full min-h-0 w-full min-w-0 gap-0 overflow-hidden">
 					{/* Nav sidebar */}
-					<nav className="scrollbar-stable flex w-[200px] shrink-0 flex-col overflow-y-auto border-r border-sidebar-border bg-sidebar pt-14 pb-6">
+					<nav className="scrollbar-stable flex w-[200px] shrink-0 flex-col overflow-x-hidden overflow-y-auto border-r border-sidebar-border bg-sidebar pt-14 pb-6">
 						<SidebarGroup>
 							<SidebarGroupContent>
 								<SidebarMenu>
@@ -222,7 +222,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 					</nav>
 
 					{/* Main content */}
-					<div className="flex flex-1 flex-col">
+					<div className="flex min-w-0 flex-1 flex-col overflow-hidden">
 						{/* Header */}
 						<div className="flex items-center border-b border-border/40 px-8 py-4">
 							<DialogTitle className="text-[15px] font-semibold text-foreground">
@@ -233,7 +233,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 						</div>
 
 						{/* Content area */}
-						<div className="flex-1 overflow-y-auto px-8 py-6">
+						<div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-8 py-6">
 							{activeSection === "appearance" && (
 								<div className="flex flex-col gap-3">
 									{/* Theme */}

@@ -624,7 +624,7 @@ describe("App", () => {
 		expect(onArchiveWorkspace).not.toHaveBeenCalled();
 	});
 
-	it("shows unread indicators in session tabs", () => {
+	it("shows unread indicators in inactive session tabs", () => {
 		renderWithProviders(
 			<WorkspacePanel
 				workspace={null}
@@ -647,7 +647,7 @@ describe("App", () => {
 						active: false,
 					},
 				]}
-				selectedSessionId="session-1"
+				selectedSessionId={null}
 				sessionPanes={[
 					{
 						sessionId: "session-1",

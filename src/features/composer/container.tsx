@@ -473,12 +473,12 @@ export const WorkspaceComposerContainer = memo(
 			"When enabled, action sessions will close automatically when finished.";
 
 		return (
-			<div className="flex flex-col">
+			<div className="relative isolate flex flex-col">
 				{isActionSession ? (
 					<ActionRow
 						className={cn(
-							"relative z-10 mx-auto -mb-px w-[90%] rounded-t-[14px] border-b-0",
-							autoCloseEnabled ? "border-primary/40" : "border-secondary/80",
+							"relative z-0 mx-auto -mb-px w-[90%] rounded-t-2xl border-b-0",
+							autoCloseEnabled ? "border-transparent" : "border-secondary/80",
 						)}
 						overlay={
 							autoCloseEnabled ? (
@@ -515,10 +515,10 @@ export const WorkspaceComposerContainer = memo(
 						}
 						trailing={
 							<ActionRowButton
+								active={autoCloseEnabled}
 								aria-label={
 									autoCloseEnabled ? "Disable Auto Close" : "Enable Auto Close"
 								}
-								aria-pressed={autoCloseEnabled}
 								disabled={composerDisabled}
 								onClick={() => {
 									void handleToggleAutoClose();
@@ -536,47 +536,49 @@ export const WorkspaceComposerContainer = memo(
 					/>
 				) : null}
 
-				<WorkspaceComposer
-					contextKey={composerContextKey}
-					onSubmit={handleComposerSubmit}
-					disabled={composerDisabled}
-					submitDisabled={disabled || loadingConversationContext}
-					onStop={onStop}
-					sending={sending}
-					selectedModelId={effectiveSelectedModelId}
-					modelSections={modelSections}
-					modelsLoading={modelsLoading}
-					onSelectModel={handleSelectModelInner}
-					provider={provider}
-					effortLevel={effortLevel}
-					onSelectEffort={handleSelectEffortInner}
-					permissionMode={effectivePermissionMode}
-					onChangePermissionMode={handleChangePermissionModeInner}
-					fastMode={fastMode}
-					onChangeFastMode={
-						supportsFastMode ? handleChangeFastModeInner : undefined
-					}
-					sendError={sendError}
-					restoreDraft={restoreDraft}
-					restoreImages={restoreImages}
-					restoreFiles={restoreFiles}
-					restoreCustomTags={restoreCustomTags}
-					restoreNonce={restoreNonce}
-					pendingElicitation={pendingElicitation}
-					onElicitationResponse={onElicitationResponse}
-					elicitationResponsePending={elicitationResponsePending}
-					pendingDeferredTool={pendingDeferredTool}
-					onDeferredToolResponse={onDeferredToolResponse}
-					hasPlanReview={hasPlanReview}
-					pendingInsertRequests={pendingInsertRequests}
-					onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
-					slashCommands={slashCommands}
-					slashCommandsLoading={slashCommandsLoading}
-					slashCommandsError={slashCommandsError}
-					slashCommandsRefreshing={slashCommandsRefreshing}
-					onRetrySlashCommands={refetchSlashCommands}
-					workspaceRootPath={workingDirectory}
-				/>
+				<div className="relative z-10">
+					<WorkspaceComposer
+						contextKey={composerContextKey}
+						onSubmit={handleComposerSubmit}
+						disabled={composerDisabled}
+						submitDisabled={disabled || loadingConversationContext}
+						onStop={onStop}
+						sending={sending}
+						selectedModelId={effectiveSelectedModelId}
+						modelSections={modelSections}
+						modelsLoading={modelsLoading}
+						onSelectModel={handleSelectModelInner}
+						provider={provider}
+						effortLevel={effortLevel}
+						onSelectEffort={handleSelectEffortInner}
+						permissionMode={effectivePermissionMode}
+						onChangePermissionMode={handleChangePermissionModeInner}
+						fastMode={fastMode}
+						onChangeFastMode={
+							supportsFastMode ? handleChangeFastModeInner : undefined
+						}
+						sendError={sendError}
+						restoreDraft={restoreDraft}
+						restoreImages={restoreImages}
+						restoreFiles={restoreFiles}
+						restoreCustomTags={restoreCustomTags}
+						restoreNonce={restoreNonce}
+						pendingElicitation={pendingElicitation}
+						onElicitationResponse={onElicitationResponse}
+						elicitationResponsePending={elicitationResponsePending}
+						pendingDeferredTool={pendingDeferredTool}
+						onDeferredToolResponse={onDeferredToolResponse}
+						hasPlanReview={hasPlanReview}
+						pendingInsertRequests={pendingInsertRequests}
+						onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
+						slashCommands={slashCommands}
+						slashCommandsLoading={slashCommandsLoading}
+						slashCommandsError={slashCommandsError}
+						slashCommandsRefreshing={slashCommandsRefreshing}
+						onRetrySlashCommands={refetchSlashCommands}
+						workspaceRootPath={workingDirectory}
+					/>
+				</div>
 			</div>
 		);
 	},

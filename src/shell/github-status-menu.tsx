@@ -39,11 +39,8 @@ export function GithubStatusMenu({
 				</span>
 			</DropdownMenuTrigger>
 
-			<DropdownMenuContent align="end" sideOffset={8} className="w-44 p-1.5">
-				<DropdownMenuItem
-					className="rounded-md px-2 py-2 text-muted-foreground focus:bg-accent/60 focus:text-foreground"
-					onClick={onDisconnectGithub}
-				>
+			<DropdownMenuContent align="end" sideOffset={8}>
+				<DropdownMenuItem onClick={onDisconnectGithub}>
 					Log out
 				</DropdownMenuItem>
 			</DropdownMenuContent>

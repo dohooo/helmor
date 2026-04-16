@@ -1,0 +1,37 @@
+name: Setup JS Toolchain
+description: Setup pnpm, Node.js, Bun, sccache, and install workspace dependencies
+
+inputs:
+  node-version:
+    description: Node.js version to install
+    required: false
+    default: "22"
+  pnpm-version:
+    description: pnpm version to install
+    required: false
+    default: "10.13.1"
+
+runs:
+  using: composite
+  steps:
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v5
+      with:
+        version: ${{ inputs.pnpm-version }}
+        run_install: false
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: pnpm
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+
+    - name: Install sccache
+      uses: taiki-e/install-action@sccache
+
+    - name: Install dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile

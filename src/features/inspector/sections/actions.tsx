@@ -8,6 +8,7 @@ import {
 	AppendContextButton,
 	type AppendContextPayloadResult,
 } from "@/components/append-context-button";
+import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type {
 	CommitButtonState,
@@ -51,6 +52,8 @@ const EMPTY_GIT_ACTION_STATUS: WorkspaceGitActionStatus = {
 	syncTargetBranch: null,
 	syncStatus: "unknown",
 	behindTargetCount: 0,
+	remoteTrackingRef: null,
+	aheadOfRemoteCount: 0,
 };
 
 const EMPTY_PR_ACTION_STATUS: WorkspacePrActionStatus = {
@@ -98,6 +101,11 @@ export function ActionsSection({
 	const prStatus = prStatusQuery.data ?? EMPTY_PR_ACTION_STATUS;
 	const gitRows = buildGitRows(gitStatus, workspaceRemote);
 	const reviewRows = buildReviewRows(prStatus, prInfo);
+	const sortedDeployments = sortActionItems(prStatus.deployments);
+	const sortedChecks = sortActionItems(prStatus.checks);
+	const bottomSpacerHeight = expanded
+		? 0
+		: Math.max(0, Math.round(bodyHeight * 0.3));
 	const actionDisabled = commitButtonState === "busy";
 	const handleSync = useCallback(async () => {
 		if (!workspaceId || syncPending) {
@@ -248,27 +256,27 @@ export function ActionsSection({
 					</>
 				)}
 
-				{prStatus.deployments.length > 0 && (
+				{sortedDeployments.length > 0 && (
 					<>
 						<div className="px-2.5 pb-1 pt-2.5">
 							<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
 								Deployments
 							</span>
 						</div>
-						{prStatus.deployments.map((item) => (
+						{sortedDeployments.map((item) => (
 							<ActionStatusRow key={item.id} item={item} />
 						))}
 					</>
 				)}
 
-				{prStatus.checks.length > 0 && (
+				{sortedChecks.length > 0 && (
 					<>
 						<div className="px-2.5 pb-1 pt-2.5">
 							<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
 								Checks
 							</span>
 						</div>
-						{prStatus.checks.map((item) => (
+						{sortedChecks.map((item) => (
 							<ActionStatusRow
 								key={item.id}
 								item={item}
@@ -276,6 +284,13 @@ export function ActionsSection({
 							/>
 						))}
 					</>
+				)}
+				{bottomSpacerHeight > 0 && (
+					<div
+						aria-hidden="true"
+						className="shrink-0"
+						style={{ height: `${bottomSpacerHeight}px` }}
+					/>
 				)}
 			</ScrollArea>
 		</section>
@@ -369,6 +384,23 @@ function buildGitRows(
 						mode: "commit-and-push",
 					},
 				},
+		(gitStatus.aheadOfRemoteCount ?? 0) > 0
+			? {
+					label:
+						gitStatus.aheadOfRemoteCount === 1
+							? `1 commit ahead of ${gitStatus.remoteTrackingRef ?? "upstream"}`
+							: `${gitStatus.aheadOfRemoteCount} commits ahead of ${gitStatus.remoteTrackingRef ?? "upstream"}`,
+					status: "pending",
+					action: {
+						label: "Push",
+						kind: "commit",
+						mode: "push",
+					},
+				}
+			: {
+					label: "Branch fully pushed",
+					status: "success",
+				},
 		conflictCount > 0
 			? {
 					label: "Merge conflicts detected",
@@ -457,14 +489,22 @@ function ActionStatusRow({
 		item: WorkspacePrActionItem,
 	) => AppendContextPayloadResult | Promise<AppendContextPayloadResult>;
 }) {
+	const actionButtonClassName =
+		"size-6 rounded-sm text-muted-foreground opacity-55 transition-[opacity,color,background-color] hover:bg-accent/60 hover:text-primary hover:opacity-100 focus-visible:opacity-100";
+
 	return (
-		<div className="group/check-row flex items-center justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
-			<div className="flex min-w-0 items-center gap-1.5">
+		<div className="group/check-row flex items-start justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
+			<div className="flex min-w-0 flex-1 items-start gap-1.5">
 				<StatusIcon status={item.status} />
 				<ProviderIcon provider={item.provider} />
-				<span className="truncate text-primary">{item.name}</span>
+				<span
+					className="min-w-0 whitespace-normal break-words text-primary"
+					title={item.name}
+				>
+					{item.name}
+				</span>
 				{item.duration && (
-					<span className="shrink-0 text-[10.5px] text-muted-foreground">
+					<span className="shrink-0 pt-px text-[10.5px] text-muted-foreground">
 						{item.duration}
 					</span>
 				)}
@@ -475,15 +515,14 @@ function ActionStatusRow({
 						subjectLabel={item.name}
 						getPayload={() => onInsertToComposer(item)}
 						errorTitle="Couldn't insert check"
-						className={cn(
-							"text-primary hover:bg-accent/60 hover:text-primary",
-							"opacity-0 group-hover/check-row:opacity-100 focus-visible:opacity-100",
-						)}
+						className={actionButtonClassName}
 					/>
 				)}
 				{item.url && (
-					<button
+					<Button
 						type="button"
+						variant="ghost"
+						size="icon-xs"
 						aria-label={`Open ${item.name}`}
 						onClick={() => {
 							if (!item.url) {
@@ -491,12 +530,44 @@ function ActionStatusRow({
 							}
 							void openUrl(item.url);
 						}}
-						className="shrink-0 text-muted-foreground transition-colors hover:text-primary"
+						className={cn("shrink-0", actionButtonClassName)}
 					>
 						<ArrowUpRightIcon className="size-3" strokeWidth={1.8} />
-					</button>
+					</Button>
 				)}
 			</div>
 		</div>
 	);
+}
+
+function sortActionItems(
+	items: WorkspacePrActionItem[],
+): WorkspacePrActionItem[] {
+	return [...items].sort((left, right) => {
+		const statusDelta =
+			actionPriority(left.status) - actionPriority(right.status);
+		if (statusDelta !== 0) {
+			return statusDelta;
+		}
+
+		const providerDelta = left.provider.localeCompare(right.provider);
+		if (providerDelta !== 0) {
+			return providerDelta;
+		}
+
+		return left.name.localeCompare(right.name);
+	});
+}
+
+function actionPriority(status: ActionStatusKind): number {
+	switch (status) {
+		case "failure":
+			return 0;
+		case "running":
+			return 1;
+		case "pending":
+			return 2;
+		case "success":
+			return 3;
+	}
 }

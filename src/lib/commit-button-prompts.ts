@@ -38,6 +38,16 @@ Do the following, in order:
 
 Don't stop to ask for confirmation — execute each step automatically. If a pre-commit / pre-push hook fails, report the failure and stop without force-pushing.`,
 
+		push: `Push the current branch to its remote.
+
+Do the following, in order:
+1. Run \`git status\` to confirm the worktree is clean.
+2. Inspect the current branch and upstream tracking ref (\`git branch -vv\` or equivalent) so you know exactly what will be pushed.
+3. Push the current branch to its configured upstream with \`git push\`.
+4. Report the pushed ref and resulting HEAD commit SHA.
+
+Don't stop to ask for confirmation — execute each step automatically. If the push is rejected or a pre-push hook fails, report the failure clearly and stop without force-pushing.`,
+
 		fix: `CI is failing on the current branch. Diagnose and fix it.
 
 Do the following, in order:
@@ -92,6 +102,8 @@ export function describeActionKind(actionKind: string): string {
 			return "Commit and Push";
 		case "fix":
 			return "Fix CI";
+		case "push":
+			return "Push";
 		case "resolve-conflicts":
 			return "Resolve Conflicts";
 		case "merge":

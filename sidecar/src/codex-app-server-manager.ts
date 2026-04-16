@@ -782,7 +782,6 @@ function parseModelListResponse(result: unknown): ProviderModelInfo[] {
 			parsedEfforts.length > 0
 				? parsedEfforts
 				: ["low", "medium", "high", "xhigh"];
-
 		const supportsFastMode =
 			typeof entry.supportsFastMode === "boolean"
 				? entry.supportsFastMode

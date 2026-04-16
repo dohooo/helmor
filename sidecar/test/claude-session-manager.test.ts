@@ -964,18 +964,21 @@ describe("ClaudeSessionManager.listModels", () => {
 				label: "Opus 4.6 1M",
 				cliModel: "default",
 				effortLevels: ["low", "medium", "high", "max"],
+				supportsFastMode: true,
 			},
 			{
 				id: "sonnet",
 				label: "Sonnet 1M",
 				cliModel: "sonnet",
 				effortLevels: ["low", "medium", "high"],
+				supportsFastMode: false,
 			},
 			{
 				id: "haiku",
 				label: "Haiku",
 				cliModel: "haiku",
 				effortLevels: ["low", "medium", "high"],
+				supportsFastMode: false,
 			},
 		]);
 		expect(lastQueryArgs).toMatchObject({

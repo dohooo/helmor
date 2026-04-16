@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <style>
@@ -36,8 +36,8 @@
 const W = window.innerWidth, H = window.innerHeight;
 const banner = document.getElementById('banner');
 const svg = document.getElementById('c');
-banner.style.width = W + 'px';
-banner.style.height = H + 'px';
+banner.style.width = `${W}px`;
+banner.style.height = `${H}px`;
 svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -72,7 +72,9 @@ for (let r = 0; r < ROWS; r++) {
 }
 
 function toChaos(el) {
-  el.getAnimations().forEach(a => a.cancel());
+  el.getAnimations().forEach(a => {
+    a.cancel();
+  });
   el.style.transition = 'none';
   el.style.fill = '';
   el.style.transform = '';
@@ -91,7 +93,9 @@ function placeLogos(n) {
   }
   const keys = new Set();
   for (const [bc, br] of placed)
-    H_SHAPE.forEach(([dc, dr]) => keys.add(`${bc+dc},${br+dr}`));
+    H_SHAPE.forEach(([dc, dr]) => {
+      keys.add(`${bc+dc},${br+dr}`);
+    });
   return keys;
 }
 
@@ -101,7 +105,9 @@ function settleAll(logoKeys) {
     const delay = Math.random() * 400;
     const isLogo = logoKeys.has(el.dataset.key);
     setTimeout(() => {
-      el.getAnimations().forEach(a => a.cancel());
+      el.getAnimations().forEach(a => {
+        a.cancel();
+      });
       el.style.animation = 'none';
       el.style.transition = 'transform 0.25s ease-out, fill 0.25s ease';
       el.style.transform = 'scaleX(1)';

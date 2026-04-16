@@ -1,0 +1,19 @@
+name: Build Sidecar
+description: Build the Bun sidecar binary and copy it to the Tauri externalBin target name
+
+inputs:
+  target-triple:
+    description: Rust target triple suffix used by Tauri externalBin on Linux
+    required: false
+    default: x86_64-unknown-linux-gnu
+
+runs:
+  using: composite
+  steps:
+    - name: Build sidecar binary
+      shell: bash
+      run: pnpm --dir sidecar run build
+
+    - name: Copy sidecar binary for Tauri externalBin
+      shell: bash
+      run: cp sidecar/dist/helmor-sidecar "sidecar/dist/helmor-sidecar-${{ inputs.target-triple }}"
