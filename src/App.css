@@ -55,6 +55,20 @@ body {
 }
 [data-sonner-toast][data-styled="true"] [data-button] {
 	margin-top: 4px;
+	margin-left: 0 !important;
+	margin-right: 0 !important;
+	margin-inline-start: 0 !important;
+	margin-inline-end: 0 !important;
+}
+[data-sonner-toast][data-styled="true"]:has([data-button])
+	[data-content]
+	+ [data-button] {
+	margin-left: auto !important;
+	margin-inline-start: auto !important;
+}
+[data-sonner-toast][data-styled="true"] [data-button] + [data-button] {
+	margin-left: 8px !important;
+	margin-inline-start: 8px !important;
 }
 
 /*

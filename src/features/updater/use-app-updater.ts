@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useRef } from "react";
+import { createElement, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import {
 	type AppUpdateStatus,
@@ -20,6 +20,49 @@ function isDownloadedUpdateReady(
 	return status?.stage === "downloaded" && status.update != null;
 }
 
+function showDownloadedUpdateToast(
+	status: AppUpdateStatus & {
+		update: NonNullable<AppUpdateStatus["update"]>;
+	},
+) {
+	toast("Update ready to install", {
+		id: toastIdForUpdate(status) ?? undefined,
+		description: `Helmor ${status.update.version} has been downloaded.`,
+		action: createElement(
+			"button",
+			{
+				type: "button",
+				"data-button": true,
+				"data-action": true,
+				onClick: () => {
+					void installDownloadedAppUpdate().catch((error: unknown) => {
+						toast.error("Install failed", {
+							description:
+								error instanceof Error
+									? error.message
+									: "Unable to install the downloaded update.",
+						});
+					});
+				},
+			},
+			"Update and restart",
+		),
+		cancel: status.update.releaseUrl
+			? createElement(
+					"button",
+					{
+						type: "button",
+						"data-button": true,
+						"data-cancel": true,
+						onClick: () => void openUrl(status.update.releaseUrl ?? ""),
+					},
+					"View change log",
+				)
+			: undefined,
+		duration: Number.POSITIVE_INFINITY,
+	});
+}
+
 export function useAppUpdater() {
 	const notifiedVersionRef = useRef<string | null>(null);
 
@@ -33,30 +76,7 @@ export function useAppUpdater() {
 
 			notifiedVersionRef.current = status.update.version;
 
-			toast("Update ready to install", {
-				id: toastIdForUpdate(status) ?? undefined,
-				description: `Helmor ${status.update.version} has been downloaded.`,
-				action: {
-					label: "Update and restart",
-					onClick: () => {
-						void installDownloadedAppUpdate().catch((error: unknown) => {
-							toast.error("Install failed", {
-								description:
-									error instanceof Error
-										? error.message
-										: "Unable to install the downloaded update.",
-							});
-						});
-					},
-				},
-				cancel: status.update.releaseUrl
-					? {
-							label: "View change log",
-							onClick: () => void openUrl(status.update?.releaseUrl ?? ""),
-						}
-					: undefined,
-				duration: Number.POSITIVE_INFINITY,
-			});
+			showDownloadedUpdateToast(status);
 		};
 
 		void getAppUpdateStatus()
