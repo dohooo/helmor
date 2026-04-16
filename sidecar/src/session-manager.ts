@@ -98,14 +98,6 @@ export function sortModelsByVersion(
 	});
 }
 
-/** Fallback effort levels when the SDK doesn't provide them. */
-export function fallbackEffortLevels(modelId: string): string[] {
-	const id = modelId.toLowerCase();
-	if (id === "default" || id.includes("opus"))
-		return ["low", "medium", "high", "max"];
-	return ["low", "medium", "high"];
-}
-
 export interface SessionManager {
 	/**
 	 * Stream a single user turn to the underlying provider SDK and forward

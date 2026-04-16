@@ -472,22 +472,22 @@ const EFFORT_RANK: Record<string, number> = {
 	max: 4,
 };
 
-const DEFAULT_EFFORT_LEVELS = ["low", "medium", "high"];
-
+// No fake default — when the SDK doesn't return effort levels for a model
+// (e.g. Claude Haiku), the composer hides the effort picker entirely instead
+// of inventing one. Callers must handle the empty-list case.
 export function getAvailableEffortLevels(
 	modelId: string | null,
 	modelSections?: AgentModelSection[],
 ): string[] {
-	if (!modelId || !modelSections) return DEFAULT_EFFORT_LEVELS;
+	if (!modelId || !modelSections) return [];
 	const model = findModelOption(modelSections, modelId);
-	if (model?.effortLevels && model.effortLevels.length > 0) {
-		return [...model.effortLevels];
-	}
-	return DEFAULT_EFFORT_LEVELS;
+	return model?.effortLevels ? [...model.effortLevels] : [];
 }
 
-/** Clamp an effort level to the nearest available one. */
+/** Clamp an effort level to the nearest available one. Empty `available`
+ * means the model doesn't expose effort — pass the raw value through. */
 export function clampEffort(rawEffort: string, available: string[]): string {
+	if (available.length === 0) return rawEffort;
 	if (available.includes(rawEffort)) return rawEffort;
 	const rank = EFFORT_RANK[rawEffort] ?? 3;
 	const ranked = available.map((l) => ({
