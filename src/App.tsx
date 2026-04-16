@@ -1151,6 +1151,8 @@ function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
 		workspacePrInfo,
 		workspacePrActionStatus,
 		workspaceGitActionStatus,
+		completedSessionIds,
+		interactionRequiredSessionIds,
 		sendingSessionIds,
 		onSelectSession: handleSelectSession,
 	});
