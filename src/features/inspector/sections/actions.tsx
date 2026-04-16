@@ -190,7 +190,10 @@ export function ActionsSection({
 
 			<ScrollArea
 				aria-label="Actions panel body"
-				className={cn("bg-muted/18 text-[11.5px]", expanded && "flex-1")}
+				className={cn(
+					"min-h-0 bg-muted/18 text-[11.5px]",
+					expanded && "flex-1",
+				)}
 				style={expanded ? undefined : { height: `${bodyHeight}px` }}
 			>
 				<div className="px-2.5 pb-1 pt-2">

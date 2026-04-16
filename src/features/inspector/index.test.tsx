@@ -156,6 +156,15 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		expect(within(actions).getAllByLabelText("Passed")).toHaveLength(3);
 	});
 
+	it("keeps the actions scroll area shrinkable when tabs are collapsed", async () => {
+		renderInspector();
+
+		await screen.findByText("Up to date with origin/main");
+
+		const actionsBody = screen.getByLabelText("Actions panel body");
+		expect(actionsBody).toHaveClass("min-h-0");
+	});
+
 	it("shows dirty and conflicting git rows and reuses commit action handlers", async () => {
 		const user = userEvent.setup();
 		const onCommitAction = vi.fn();
