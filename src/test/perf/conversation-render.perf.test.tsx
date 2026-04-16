@@ -290,7 +290,9 @@ describe("conversation render perf", () => {
 						workspace={workspace}
 						sessions={sessions}
 						selectedSessionId={params.selectedSessionId}
-						selectedProvider="claude-code"
+						sessionDisplayProviders={{
+							[params.selectedSessionId]: "claude",
+						}}
 						sessionPanes={[
 							{
 								sessionId: params.selectedSessionId,
