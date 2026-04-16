@@ -38,6 +38,7 @@ mod unix {
     /// commonly needed by toolchains that child processes invoke.
     const VARS_TO_MERGE: &[&str] = &[
         "PATH",
+        "SSH_AUTH_SOCK",
         "NVM_DIR",
         "PNPM_HOME",
         "GOPATH",
@@ -60,17 +61,7 @@ mod unix {
     pub fn inherit() {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
 
-        // Spawn a *login* shell (`-l`) that prints its full environment
-        // and exits. We deliberately avoid `-i` (interactive) because that
-        // may source `.inputrc`, start completion daemons, or wait for
-        // terminal input — none of which we want.
-        //
-        // The command is:
-        //   $SHELL -l -c '/usr/bin/env -0'
-        //
-        // `-0` (NUL-delimited) avoids ambiguity with multi-line values
-        // (rare but possible, e.g. BASH_FUNC_*).
-        let result = spawn_with_timeout(&shell, &["-l", "-c", "/usr/bin/env -0"], TIMEOUT);
+        let result = capture_shell_env(&shell);
 
         let output = match result {
             Ok(out) => out,
@@ -96,6 +87,8 @@ mod unix {
             if let Some(value) = env_map.get(var) {
                 if var == "PATH" {
                     merge_path(value);
+                } else if var == "SSH_AUTH_SOCK" {
+                    merge_missing_env(var, value);
                 } else {
                     // SAFETY: we're in `setup`, single-threaded.
                     unsafe { std::env::set_var(var, value) };
@@ -109,6 +102,24 @@ mod unix {
             total_captured = env_map.len(),
             "Inherited login-shell environment"
         );
+    }
+
+    fn capture_shell_env(shell: &str) -> anyhow::Result<Vec<u8>> {
+        let commands: &[&[&str]] = &[
+            &["-i", "-l", "-c", "/usr/bin/env -0"],
+            &["-i", "-c", "/usr/bin/env -0"],
+            &["-l", "-c", "/usr/bin/env -0"],
+        ];
+
+        let mut last_error = None;
+        for args in commands {
+            match spawn_with_timeout(shell, args, TIMEOUT) {
+                Ok(output) => return Ok(output),
+                Err(error) => last_error = Some(error),
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("no shell env capture command attempted")))
     }
 
     /// Merge the login shell's `PATH` with the current process `PATH`.
@@ -141,6 +152,15 @@ mod unix {
 
         // SAFETY: single-threaded setup phase.
         unsafe { std::env::set_var("PATH", &merged) };
+    }
+
+    fn merge_missing_env(var: &str, value: &str) {
+        let already_set = std::env::var_os(var).is_some_and(|current| !current.is_empty());
+        if already_set || value.is_empty() {
+            return;
+        }
+        // SAFETY: single-threaded setup phase.
+        unsafe { std::env::set_var(var, value) };
     }
 
     /// Spawn a process and wait for it with a timeout. Returns the
@@ -262,6 +282,26 @@ mod unix {
             assert!(result.contains("/plugin/bin"));
             // /usr/bin should appear only once
             assert_eq!(result.matches("/usr/bin").count(), 1);
+        }
+
+        #[test]
+        fn merge_missing_env_sets_value_when_absent() {
+            unsafe { std::env::remove_var("HELMOR_TEST_MISSING_ENV") };
+            merge_missing_env("HELMOR_TEST_MISSING_ENV", "/tmp/agent.sock");
+            assert_eq!(
+                std::env::var("HELMOR_TEST_MISSING_ENV").as_deref(),
+                Ok("/tmp/agent.sock")
+            );
+        }
+
+        #[test]
+        fn merge_missing_env_preserves_existing_value() {
+            unsafe { std::env::set_var("HELMOR_TEST_EXISTING_ENV", "/tmp/existing.sock") };
+            merge_missing_env("HELMOR_TEST_EXISTING_ENV", "/tmp/login.sock");
+            assert_eq!(
+                std::env::var("HELMOR_TEST_EXISTING_ENV").as_deref(),
+                Ok("/tmp/existing.sock")
+            );
         }
     }
 }
