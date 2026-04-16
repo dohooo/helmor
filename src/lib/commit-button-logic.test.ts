@@ -63,6 +63,7 @@ function makeGitActionStatus(
 		behindTargetCount: 0,
 		remoteTrackingRef: "refs/remotes/origin/main",
 		aheadOfRemoteCount: 0,
+		pushStatus: "published",
 		...overrides,
 	};
 }
@@ -189,6 +190,17 @@ describe("deriveCommitButtonMode", () => {
 	});
 
 	describe("push priority", () => {
+		it("returns push when the branch has not been published yet", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makePr({ state: "OPEN" }),
+					makePrActionStatus({ mergeable: "MERGEABLE" }),
+					makeGitActionStatus({ pushStatus: "unpublished" }),
+				),
+			).toBe("push");
+		});
+
 		it("returns push when local branch is ahead of remote", () => {
 			expect(
 				deriveCommitButtonMode(

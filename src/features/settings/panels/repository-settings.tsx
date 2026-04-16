@@ -37,10 +37,12 @@ import { cn } from "@/lib/utils";
 
 export function RepositorySettingsPanel({
 	repo,
+	workspaceId,
 	onRepoSettingsChanged,
 	onRepoDeleted,
 }: {
 	repo: RepositoryCreateOption;
+	workspaceId: string | null;
 	onRepoSettingsChanged: () => void;
 	onRepoDeleted: () => void;
 }) {
@@ -214,7 +216,7 @@ export function RepositorySettingsPanel({
 				</div>
 			</div>
 
-			<ScriptsSection repoId={repo.id} />
+			<ScriptsSection repoId={repo.id} workspaceId={workspaceId} />
 
 			<DeleteRepoSection repo={repo} onDeleted={onRepoDeleted} />
 		</div>
@@ -227,6 +229,7 @@ function ScriptField({
 	placeholder,
 	value,
 	locked,
+	lockedMessage,
 	onChange,
 }: {
 	label: string;
@@ -234,6 +237,7 @@ function ScriptField({
 	placeholder: string;
 	value: string;
 	locked: boolean;
+	lockedMessage: string;
 	onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
 }) {
 	const textarea = (
@@ -255,9 +259,7 @@ function ScriptField({
 				<TooltipProvider>
 					<Tooltip>
 						<TooltipTrigger asChild>{textarea}</TooltipTrigger>
-						<TooltipContent side="top">
-							来自项目配置 helmor.json，无法在此编辑
-						</TooltipContent>
+						<TooltipContent side="top">{lockedMessage}</TooltipContent>
 					</Tooltip>
 				</TooltipProvider>
 			) : (
@@ -267,11 +269,17 @@ function ScriptField({
 	);
 }
 
-function ScriptsSection({ repoId }: { repoId: string }) {
+function ScriptsSection({
+	repoId,
+	workspaceId,
+}: {
+	repoId: string;
+	workspaceId: string | null;
+}) {
 	const queryClient = useQueryClient();
 	const scriptsQuery = useQuery({
-		queryKey: ["repoScripts", repoId],
-		queryFn: () => loadRepoScripts(repoId),
+		queryKey: ["repoScripts", repoId, workspaceId],
+		queryFn: () => loadRepoScripts(repoId, workspaceId),
 		staleTime: 0,
 	});
 
@@ -367,6 +375,7 @@ function ScriptsSection({ repoId }: { repoId: string }) {
 					placeholder="e.g., npm install"
 					value={setupScript}
 					locked={setupLocked}
+					lockedMessage="来自当前 workspace 的 helmor.json，无法在此编辑"
 					onChange={handleSetupChange}
 				/>
 				<ScriptField
@@ -375,6 +384,7 @@ function ScriptsSection({ repoId }: { repoId: string }) {
 					placeholder="e.g., npm run dev"
 					value={runScript}
 					locked={runLocked}
+					lockedMessage="来自当前 workspace 的 helmor.json，无法在此编辑"
 					onChange={handleRunChange}
 				/>
 				<ScriptField
@@ -383,6 +393,7 @@ function ScriptsSection({ repoId }: { repoId: string }) {
 					placeholder="e.g., docker compose down"
 					value={archiveScript}
 					locked={archiveLocked}
+					lockedMessage="来自当前 workspace 的 helmor.json，无法在此编辑"
 					onChange={handleArchiveChange}
 				/>
 			</div>

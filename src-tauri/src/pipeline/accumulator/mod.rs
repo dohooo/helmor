@@ -52,7 +52,8 @@ pub enum PushOutcome {
     Finalized,
     /// Only the streaming buffer (`blocks` / `fallback_text` /
     /// `fallback_thinking`) changed. The pipeline can build just the
-    /// trailing partial message and emit a `Partial`, skipping collapse.
+    /// trailing partial message and emit a `Partial`, without re-running
+    /// the full thread render.
     StreamingDelta,
     /// Control event with no rendering effect (sidecar framing markers,
     /// SDK turn-lifecycle pings, etc.). The pipeline emits nothing.

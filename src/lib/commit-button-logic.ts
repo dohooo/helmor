@@ -65,7 +65,10 @@ export function deriveCommitButtonMode(
 			}
 
 			// 3. Local commits ahead of origin need pushing before CI / merge
-			if ((gitActionStatus?.aheadOfRemoteCount ?? 0) > 0) {
+			if (
+				gitActionStatus?.pushStatus === "unpublished" ||
+				(gitActionStatus?.aheadOfRemoteCount ?? 0) > 0
+			) {
 				return "push";
 			}
 

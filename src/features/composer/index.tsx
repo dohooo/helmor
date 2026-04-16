@@ -193,22 +193,31 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		return null;
 	}, [modelSections, selectedModelId]);
 	const availableEffortLevels = useMemo(
-		() => selectedModel?.effortLevels ?? ["low", "medium", "high"],
+		() => selectedModel?.effortLevels ?? [],
 		[selectedModel],
 	);
+	const supportsEffort = availableEffortLevels.length > 0;
 	const supportsFastMode = selectedModel?.supportsFastMode === true;
 	const effectiveEffort = useMemo(
 		() => clampEffort(effortLevel, availableEffortLevels),
 		[effortLevel, availableEffortLevels],
 	);
 	// When model changes and effort gets clamped, write it back — but only
-	// after model metadata has loaded, otherwise fallback levels kill max/xhigh.
+	// after model metadata has loaded and the model exposes effort levels,
+	// otherwise we'd loop on a value the user can't even change.
 	useEffect(() => {
 		if (!selectedModel) return;
+		if (!supportsEffort) return;
 		if (effectiveEffort !== effortLevel) {
 			onSelectEffort(effectiveEffort);
 		}
-	}, [selectedModel, effectiveEffort, effortLevel, onSelectEffort]);
+	}, [
+		selectedModel,
+		supportsEffort,
+		effectiveEffort,
+		effortLevel,
+		onSelectEffort,
+	]);
 	const hasPendingElicitation = pendingElicitation !== null;
 	const hasPendingDeferredTool = pendingDeferredTool !== null;
 	const hasPendingInteraction = hasPendingElicitation || hasPendingDeferredTool;
@@ -514,60 +523,63 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										</Tooltip>
 									)}
 
-									<DropdownMenu>
-										<DropdownMenuTrigger
-											disabled={toolbarDisabled}
-											className={cn(
-												`flex items-center gap-0.5 ${composerToolbarTriggerClassName}`,
-												effectiveEffort === "max" || effectiveEffort === "xhigh"
-													? "effort-max-text"
-													: "text-muted-foreground",
-												toolbarDisabled
-													? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
-													: null,
-											)}
-										>
-											<span className="capitalize">
-												{effectiveEffort === "xhigh"
-													? "Extra High"
-													: effectiveEffort}
-											</span>
-											<ChevronDown
-												className="size-3 text-muted-foreground/40"
-												strokeWidth={2}
-											/>
-										</DropdownMenuTrigger>
-										<DropdownMenuContent
-											side="top"
-											align="start"
-											sideOffset={8}
-											className="min-w-[11rem]"
-										>
-											<DropdownMenuGroup>
-												<DropdownMenuLabel>Effort</DropdownMenuLabel>
-												{availableEffortLevels.map((level) => (
-													<DropdownMenuItem
-														key={level}
-														disabled={toolbarDisabled}
-														onClick={() => onSelectEffort(level)}
-														className="flex items-center justify-between gap-3"
-													>
-														<div className="flex items-center gap-2.5">
-															<EffortBrainIcon level={level} />
-															<span className="capitalize">
-																{level === "xhigh" ? "Extra High" : level}
-															</span>
-														</div>
-														{level === effectiveEffort ? (
-															<span className="text-[11px] text-foreground">
-																✓
-															</span>
-														) : null}
-													</DropdownMenuItem>
-												))}
-											</DropdownMenuGroup>
-										</DropdownMenuContent>
-									</DropdownMenu>
+									{supportsEffort && (
+										<DropdownMenu>
+											<DropdownMenuTrigger
+												disabled={toolbarDisabled}
+												className={cn(
+													`flex items-center gap-0.5 ${composerToolbarTriggerClassName}`,
+													effectiveEffort === "max" ||
+														effectiveEffort === "xhigh"
+														? "effort-max-text"
+														: "text-muted-foreground",
+													toolbarDisabled
+														? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
+														: null,
+												)}
+											>
+												<span className="capitalize">
+													{effectiveEffort === "xhigh"
+														? "Extra High"
+														: effectiveEffort}
+												</span>
+												<ChevronDown
+													className="size-3 text-muted-foreground/40"
+													strokeWidth={2}
+												/>
+											</DropdownMenuTrigger>
+											<DropdownMenuContent
+												side="top"
+												align="start"
+												sideOffset={8}
+												className="min-w-[11rem]"
+											>
+												<DropdownMenuGroup>
+													<DropdownMenuLabel>Effort</DropdownMenuLabel>
+													{availableEffortLevels.map((level) => (
+														<DropdownMenuItem
+															key={level}
+															disabled={toolbarDisabled}
+															onClick={() => onSelectEffort(level)}
+															className="flex items-center justify-between gap-3"
+														>
+															<div className="flex items-center gap-2.5">
+																<EffortBrainIcon level={level} />
+																<span className="capitalize">
+																	{level === "xhigh" ? "Extra High" : level}
+																</span>
+															</div>
+															{level === effectiveEffort ? (
+																<span className="text-[11px] text-foreground">
+																	✓
+																</span>
+															) : null}
+														</DropdownMenuItem>
+													))}
+												</DropdownMenuGroup>
+											</DropdownMenuContent>
+										</DropdownMenu>
+									)}
 									<ComposerButton
 										aria-label="Plan mode"
 										disabled={toolbarDisabled}

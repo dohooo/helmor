@@ -185,20 +185,16 @@ pub fn run_script(
         .env("HISTFILE", "/dev/null")
         .env("SAVEHIST", "0")
         .env("HISTSIZE", "0")
-        .env("HELMOR_ROOT_PATH", &context.root_path)
-        .env("CONDUCTOR_ROOT_PATH", &context.root_path);
+        .env("HELMOR_ROOT_PATH", &context.root_path);
 
     if let Some(wp) = &context.workspace_path {
         cmd.env("HELMOR_WORKSPACE_PATH", wp);
-        cmd.env("CONDUCTOR_WORKSPACE_PATH", wp);
     }
     if let Some(wn) = &context.workspace_name {
         cmd.env("HELMOR_WORKSPACE_NAME", wn);
-        cmd.env("CONDUCTOR_WORKSPACE_NAME", wn);
     }
     if let Some(db) = &context.default_branch {
         cmd.env("HELMOR_DEFAULT_BRANCH", db);
-        cmd.env("CONDUCTOR_DEFAULT_BRANCH", db);
     }
 
     // Set up the child's session and controlling terminal before exec.

@@ -337,6 +337,21 @@ pub struct CreateSessionResponse {
     pub session_id: String,
 }
 
+fn default_session_title_for_action_kind(action_kind: Option<&str>) -> &'static str {
+    match action_kind {
+        Some("create-pr") => "Create PR",
+        Some("commit-and-push") => "Commit and Push",
+        Some("push") => "Push",
+        Some("fix") => "Fix CI",
+        Some("resolve-conflicts") => "Resolve Conflicts",
+        Some("merge") => "Merge",
+        Some("open-pr") => "Open PR",
+        Some("merged") => "Merged",
+        Some("closed") => "Closed",
+        _ => "Untitled",
+    }
+}
+
 pub fn create_session(
     workspace_id: &str,
     action_kind: Option<&str>,
@@ -374,16 +389,18 @@ pub fn create_session(
     }
 
     let session_id = uuid::Uuid::new_v4().to_string();
+    let title = default_session_title_for_action_kind(action_kind);
 
     transaction
         .execute(
             r#"
             INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind, model, effort_level)
-            VALUES (?1, ?2, 'idle', 'Untitled', ?3, ?4, ?5, ?6)
+            VALUES (?1, ?2, 'idle', ?3, ?4, ?5, ?6, ?7)
             "#,
             (
                 &session_id,
                 workspace_id,
+                title,
                 permission_mode.unwrap_or("default"),
                 action_kind,
                 &default_model,
@@ -865,6 +882,19 @@ mod tests {
             get_active_session_id(&conn, "w1"),
             Some("s_new".to_string())
         );
+    }
+
+    #[test]
+    fn action_session_uses_local_default_title() {
+        assert_eq!(
+            default_session_title_for_action_kind(Some("create-pr")),
+            "Create PR"
+        );
+        assert_eq!(
+            default_session_title_for_action_kind(Some("commit-and-push")),
+            "Commit and Push"
+        );
+        assert_eq!(default_session_title_for_action_kind(None), "Untitled");
     }
 
     #[test]

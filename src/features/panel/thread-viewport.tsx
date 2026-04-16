@@ -20,6 +20,7 @@ import { estimateThreadRowHeights } from "@/lib/message-layout-estimator";
 import { measureSync } from "@/lib/perf-marks";
 import { hasUnresolvedPlanReview } from "@/lib/plan-review";
 import { useSettings } from "@/lib/settings";
+import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
 import { EmptyState, MemoConversationMessage } from "./message-components";
 
 export type PresentedSessionPane = {
@@ -41,14 +42,20 @@ const CHAT_LAYOUT_CACHE_VERSION = "chat-layout-v1";
 const NON_VIRTUALIZED_THREAD_MESSAGE_LIMIT = 12;
 const PROGRESSIVE_VIEWPORT_DEFAULT_HEIGHT = 900;
 const PROGRESSIVE_VIEWPORT_HEADER_HEIGHT = 24;
-const PROGRESSIVE_VIEWPORT_FOOTER_HEIGHT = 20;
+const PROGRESSIVE_VIEWPORT_STREAMING_FOOTER_HEIGHT = 40;
+const CONVERSATION_BOTTOM_SPACER_HEIGHT = 40;
+const STICK_TO_BOTTOM_ESCAPE_OFFSET_PX = 54;
 
 export function ActiveThreadViewport({
 	hasSession,
 	pane,
+	missingScriptTypes = [],
+	onInitializeScript,
 }: {
 	hasSession: boolean;
 	pane: PresentedSessionPane;
+	missingScriptTypes?: WorkspaceScriptType[];
+	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 }) {
 	const stackRef = useRef<HTMLDivElement | null>(null);
 	const [widthBucket, setWidthBucket] = useState(0);
@@ -94,6 +101,8 @@ export function ActiveThreadViewport({
 					hasSession={hasSession}
 					layoutCacheKey={getSessionLayoutCacheKey(pane.sessionId, widthBucket)}
 					messages={pane.messages}
+					missingScriptTypes={missingScriptTypes}
+					onInitializeScript={onInitializeScript}
 					paneWidth={paneWidth}
 					sessionId={pane.sessionId}
 					sending={pane.sending}
@@ -107,6 +116,8 @@ function ChatThread({
 	layoutCacheKey,
 	messages,
 	hasSession,
+	missingScriptTypes,
+	onInitializeScript,
 	paneWidth,
 	sessionId,
 	sending,
@@ -114,6 +125,8 @@ function ChatThread({
 	layoutCacheKey: string;
 	messages: ThreadMessageLike[];
 	hasSession: boolean;
+	missingScriptTypes: WorkspaceScriptType[];
+	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 	paneWidth: number;
 	sessionId: string;
 	sending: boolean;
@@ -210,6 +223,8 @@ function ChatThread({
 				hasSession={hasSession}
 				itemContent={itemContent}
 				layoutCacheKey={layoutCacheKey}
+				missingScriptTypes={missingScriptTypes}
+				onInitializeScript={onInitializeScript}
 				paneWidth={paneWidth}
 				pinTailRows={pinTailRows}
 				scrollRef={handleScrollRef}
@@ -244,6 +259,8 @@ function ConversationViewport({
 	hasSession,
 	itemContent,
 	layoutCacheKey,
+	missingScriptTypes,
+	onInitializeScript,
 	paneWidth,
 	pinTailRows,
 	scrollRef,
@@ -260,6 +277,8 @@ function ConversationViewport({
 	hasSession: boolean;
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
 	layoutCacheKey: string;
+	missingScriptTypes: WorkspaceScriptType[];
+	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 	paneWidth: number;
 	pinTailRows: boolean;
 	scrollRef: React.RefCallback<HTMLElement>;
@@ -281,13 +300,20 @@ function ConversationViewport({
 
 	const Header: ThreadViewportSlot = ConversationHeaderSpacer;
 	const planReviewActive = useMemo(() => hasUnresolvedPlanReview(data), [data]);
-	const Footer: ThreadViewportSlot =
-		sending && !planReviewActive
-			? () => <StreamingFooter startTime={sendingStartTime} />
-			: ConversationFooterSpacer;
+	const showStreamingFooter = sending && !planReviewActive;
+	const Footer: ThreadViewportSlot = showStreamingFooter
+		? () => <StreamingFooter startTime={sendingStartTime} />
+		: ConversationFooterSpacer;
+	const footerHeight = showStreamingFooter
+		? PROGRESSIVE_VIEWPORT_STREAMING_FOOTER_HEIGHT
+		: 0;
 	const EmptyPlaceholder: ThreadViewportSlot = () => (
 		<div className="flex min-h-full flex-1 items-center justify-center px-8">
-			<EmptyState hasSession={hasSession} />
+			<EmptyState
+				hasSession={hasSession}
+				missingScriptTypes={missingScriptTypes}
+				onInitializeScript={onInitializeScript}
+			/>
 		</div>
 	);
 
@@ -312,6 +338,7 @@ function ConversationViewport({
 									</ConversationRowShell>
 								))}
 						{Footer ? createElement(Footer) : null}
+						<ConversationBottomSpacer />
 					</div>
 				) : (
 					<ProgressiveConversationViewport
@@ -319,6 +346,7 @@ function ConversationViewport({
 						data={data}
 						emptyPlaceholder={EmptyPlaceholder}
 						footer={Footer}
+						footerHeight={footerHeight}
 						fontSize={fontSize}
 						header={Header}
 						itemContent={itemContent}
@@ -341,6 +369,7 @@ function ProgressiveConversationViewport({
 	data,
 	emptyPlaceholder: EmptyPlaceholder,
 	footer: Footer,
+	footerHeight,
 	fontSize,
 	header: Header,
 	itemContent,
@@ -355,6 +384,7 @@ function ProgressiveConversationViewport({
 	data: RenderedMessage[];
 	emptyPlaceholder?: ThreadViewportSlot;
 	footer?: ThreadViewportSlot;
+	footerHeight: number;
 	fontSize: number;
 	header?: ThreadViewportSlot;
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
@@ -495,7 +525,6 @@ function ProgressiveConversationViewport({
 		if (!scrollParent || typeof window === "undefined") {
 			return;
 		}
-		const STICK_TO_BOTTOM_ESCAPE_OFFSET_PX = 24;
 		const escapeBottomLock = () => {
 			hasUserScrolledRef.current = true;
 			stopScroll();
@@ -599,7 +628,6 @@ function ProgressiveConversationViewport({
 			? rows[rows.length - 1]!.top + rows[rows.length - 1]!.height
 			: 0;
 	const headerHeight = Header ? PROGRESSIVE_VIEWPORT_HEADER_HEIGHT : 0;
-	const footerHeight = Footer ? PROGRESSIVE_VIEWPORT_FOOTER_HEIGHT : 0;
 	const effectiveViewportHeight =
 		viewportHeight > 0 ? viewportHeight : PROGRESSIVE_VIEWPORT_DEFAULT_HEIGHT;
 	const effectiveScrollTop =
@@ -663,7 +691,11 @@ function ProgressiveConversationViewport({
 			windowTop,
 		],
 	);
-	const totalContentHeight = headerHeight + totalRowsHeight + footerHeight;
+	const totalContentHeight =
+		headerHeight +
+		totalRowsHeight +
+		footerHeight +
+		CONVERSATION_BOTTOM_SPACER_HEIGHT;
 	const rowsRef = useRef(rows);
 	useLayoutEffect(() => {
 		rowsRef.current = rows;
@@ -732,6 +764,7 @@ function ProgressiveConversationViewport({
 				{Header ? createElement(Header) : null}
 				{EmptyPlaceholder ? createElement(EmptyPlaceholder) : null}
 				{Footer ? createElement(Footer) : null}
+				<ConversationBottomSpacer />
 			</div>
 		);
 	}
@@ -757,6 +790,7 @@ function ProgressiveConversationViewport({
 				))}
 			</div>
 			{Footer ? createElement(Footer) : null}
+			<ConversationBottomSpacer />
 		</div>
 	);
 }
@@ -862,7 +896,16 @@ function ConversationHeaderSpacer() {
 }
 
 function ConversationFooterSpacer() {
-	return <div className="h-5 shrink-0" />;
+	return null;
+}
+
+function ConversationBottomSpacer() {
+	return (
+		<div
+			className="shrink-0"
+			style={{ height: `${CONVERSATION_BOTTOM_SPACER_HEIGHT}px` }}
+		/>
+	);
 }
 
 function StreamingFooter({ startTime }: { startTime: number }) {

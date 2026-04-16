@@ -4,7 +4,12 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
 import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
-import type { AgentModelOption } from "@/lib/api";
+import type {
+	AgentModelOption,
+	ThreadMessageLike,
+	ToolCallPart,
+} from "@/lib/api";
+import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 import { WorkspaceToastProvider } from "@/lib/workspace-toast-context";
 import { useConversationStreaming } from "./use-streaming";
 
@@ -107,6 +112,34 @@ function createWrapper() {
 	}
 
 	return { Wrapper, queryClient, pushToast };
+}
+
+function toolCall(
+	id: string,
+	command: string,
+	streamingStatus: ToolCallPart["streamingStatus"] = "running",
+): ToolCallPart {
+	return {
+		type: "tool-call",
+		toolCallId: id,
+		toolName: "Bash",
+		args: { command },
+		argsText: JSON.stringify({ command }),
+		streamingStatus,
+	};
+}
+
+function assistantMessage(
+	id: string,
+	content: ThreadMessageLike["content"],
+	streaming = true,
+): ThreadMessageLike {
+	return {
+		id,
+		role: "assistant",
+		content,
+		streaming,
+	};
 }
 
 describe("useConversationStreaming", () => {
@@ -444,6 +477,116 @@ describe("useConversationStreaming", () => {
 		expect(getLastInteractionSnapshot(interactionSnapshots)).toEqual(
 			new Map([["session-1", "workspace-1"]]),
 		);
+	});
+
+	it("writes the second read-only codex command into cache as a collapsed tail immediately", async () => {
+		const streamCallbacks: Array<(event: unknown) => void> = [];
+		const rafCallbacks: FrameRequestCallback[] = [];
+		const rafSpy = vi
+			.spyOn(window, "requestAnimationFrame")
+			.mockImplementation((callback: FrameRequestCallback) => {
+				rafCallbacks.push(callback);
+				return rafCallbacks.length;
+			});
+		const cancelSpy = vi
+			.spyOn(window, "cancelAnimationFrame")
+			.mockImplementation(() => {});
+		const flushRaf = () => {
+			const callback = rafCallbacks.shift();
+			if (callback) {
+				callback(0);
+			}
+		};
+
+		apiMocks.startAgentMessageStream.mockImplementation(
+			async (_payload: unknown, onEvent: (event: unknown) => void) => {
+				streamCallbacks.push(onEvent);
+			},
+		);
+
+		const { Wrapper, queryClient } = createWrapper();
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "inspect files",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: false,
+			});
+		});
+
+		const first = assistantMessage(
+			"a1",
+			[toolCall("cmd1", "cat src/App.tsx")],
+			true,
+		);
+		const second = assistantMessage(
+			"a2",
+			[toolCall("cmd2", "sed -n '1,40p' src/lib/api.ts")],
+			true,
+		);
+
+		act(() => {
+			streamCallbacks[0]?.({
+				kind: "update",
+				messages: [first],
+			});
+		});
+		act(() => {
+			flushRaf();
+		});
+
+		// Tick 1 is the expected non-collapsed state: the first command
+		// should still render by itself.
+		const firstTick = queryClient.getQueryData<ThreadMessageLike[]>(
+			sessionThreadCacheKey("session-1"),
+		);
+		expect(firstTick).toHaveLength(2);
+		expect(firstTick?.[1]?.content[0]?.type).toBe("tool-call");
+
+		act(() => {
+			streamCallbacks[0]?.({
+				kind: "streamingPartial",
+				message: second,
+			});
+		});
+		act(() => {
+			flushRaf();
+		});
+
+		const cached = queryClient.getQueryData<ThreadMessageLike[]>(
+			sessionThreadCacheKey("session-1"),
+		);
+		expect(cached).toHaveLength(2);
+		const assistant = cached?.[1];
+		expect(assistant?.role).toBe("assistant");
+		expect(assistant?.content).toHaveLength(1);
+		const [part] = assistant?.content ?? [];
+		expect(part?.type).toBe("collapsed-group");
+		if (part?.type !== "collapsed-group") {
+			throw new Error("expected collapsed-group");
+		}
+		expect(part.tools).toHaveLength(2);
+		expect(part.summary).toBe("Running 2 read-only commands...");
+
+		rafSpy.mockRestore();
+		cancelSpy.mockRestore();
 	});
 
 	it("keeps persisted stream errors out of the composer error state", async () => {

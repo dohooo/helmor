@@ -50,6 +50,8 @@ export const helmorQueryKeys = {
 		["workspaceGitActionStatus", workspaceId] as const,
 	workspacePrActionStatus: (workspaceId: string) =>
 		["workspacePrActionStatus", workspaceId] as const,
+	repoScripts: (repoId: string, workspaceId: string | null) =>
+		["repoScripts", repoId, workspaceId ?? ""] as const,
 	autoCloseActionKinds: ["autoCloseActionKinds"] as const,
 	autoCloseOptInAsked: ["autoCloseOptInAsked"] as const,
 	slashCommands: (

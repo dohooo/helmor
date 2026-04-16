@@ -23,7 +23,6 @@ import { readImageWithResize } from "./image-resize.js";
 import { parseImageRefs } from "./images.js";
 import { errorDetails, logger } from "./logger.js";
 import {
-	fallbackEffortLevels,
 	formatModelLabel,
 	type ListSlashCommandsParams,
 	type ProviderModelInfo,
@@ -138,7 +137,7 @@ const VALID_PERMISSION_MODES = [
 ] as const;
 type ClaudePermissionMode = (typeof VALID_PERMISSION_MODES)[number];
 
-const VALID_EFFORT_LEVELS = ["low", "medium", "high", "max"] as const;
+const VALID_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 type ClaudeEffort = (typeof VALID_EFFORT_LEVELS)[number];
 
 const DEFERRED_TOOL_NAMES = new Set(["AskUserQuestion"]);
@@ -812,14 +811,14 @@ export class ClaudeSessionManager implements SessionManager {
 				count: models.length,
 				ids: models.map((m) => m.value).join(", "),
 			});
+			// Pass `supportedEffortLevels` through as-is. Empty / missing means
+			// the model doesn't expose effort selection — the composer drops the
+			// effort picker entirely for that model, mirroring Claude Code.
 			return models.map((m) => ({
 				id: m.value,
 				label: formatModelLabel(m.value, m.displayName || m.value),
 				cliModel: m.value,
-				effortLevels:
-					m.supportedEffortLevels && m.supportedEffortLevels.length > 0
-						? m.supportedEffortLevels
-						: fallbackEffortLevels(m.value),
+				effortLevels: m.supportedEffortLevels ?? [],
 				supportsFastMode: claudeSupportsFastMode(m.value),
 			}));
 		} catch (err) {

@@ -239,13 +239,13 @@ describe("ClaudeSessionManager.sendMessage", () => {
 						supportedEffortLevels: ["low", "medium", "high", "max"],
 					},
 					{
-						value: "claude-opus-4-6",
-						displayName: "Claude Opus 4.6",
+						value: "claude-opus-4-7",
+						displayName: "Claude Opus 4.7",
 						supportedEffortLevels: ["low", "medium", "high", "max"],
 					},
 					{
-						value: "claude-sonnet-4-6",
-						displayName: "Claude Sonnet 4.6",
+						value: "claude-sonnet-4-7",
+						displayName: "Claude Sonnet 4.7",
 						supportedEffortLevels: ["low", "medium", "high"],
 					},
 				],
@@ -259,11 +259,11 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				supportsFastMode: true,
 			}),
 			expect.objectContaining({
-				id: "claude-opus-4-6",
+				id: "claude-opus-4-7",
 				supportsFastMode: true,
 			}),
 			expect.objectContaining({
-				id: "claude-sonnet-4-6",
+				id: "claude-sonnet-4-7",
 				supportsFastMode: false,
 			}),
 		]);
@@ -277,7 +277,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			{
 				sessionId: "helmor-sess-fast-sonnet",
 				prompt: "test",
-				model: "claude-sonnet-4-6",
+				model: "claude-sonnet-4-7",
 				cwd: undefined,
 				resume: undefined,
 				permissionMode: undefined,
@@ -291,6 +291,56 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			options?: { settings?: Record<string, unknown> };
 		};
 		expect(args.options?.settings).toBeUndefined();
+	});
+
+	test.each([
+		"low",
+		"medium",
+		"high",
+		"xhigh",
+		"max",
+	])("forwards %s effort level to the SDK", async (level) => {
+		mockQueryImpl = () => makeMockQuery();
+
+		await manager.sendMessage(
+			`REQ-effort-${level}`,
+			{
+				sessionId: `helmor-sess-effort-${level}`,
+				prompt: "test",
+				model: "default",
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: level,
+				fastMode: undefined,
+			},
+			emitter,
+		);
+
+		const args = lastQueryArgs as { options?: { effort?: string } };
+		expect(args.options?.effort).toBe(level);
+	});
+
+	test("drops unknown effort levels instead of forwarding them", async () => {
+		mockQueryImpl = () => makeMockQuery();
+
+		await manager.sendMessage(
+			"REQ-effort-bogus",
+			{
+				sessionId: "helmor-sess-effort-bogus",
+				prompt: "test",
+				model: "default",
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "ultra",
+				fastMode: undefined,
+			},
+			emitter,
+		);
+
+		const args = lastQueryArgs as { options?: { effort?: string } };
+		expect(args.options?.effort).toBeUndefined();
 	});
 
 	test("every forwarded event carries our requestId, never an SDK-supplied id", async () => {
@@ -946,7 +996,11 @@ describe("ClaudeSessionManager.listModels", () => {
 		mockQueryImpl = () =>
 			makeMockQuery({
 				supportedModels: async () => [
-					{ value: "default", displayName: "Default" },
+					{
+						value: "default",
+						displayName: "Default",
+						supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+					},
 					{
 						value: "sonnet",
 						displayName: "Sonnet (1M context)",
@@ -961,9 +1015,9 @@ describe("ClaudeSessionManager.listModels", () => {
 		expect(models).toEqual([
 			{
 				id: "default",
-				label: "Opus 4.6 1M",
+				label: "Opus 4.7 1M",
 				cliModel: "default",
-				effortLevels: ["low", "medium", "high", "max"],
+				effortLevels: ["low", "medium", "high", "xhigh", "max"],
 				supportsFastMode: true,
 			},
 			{
@@ -977,7 +1031,7 @@ describe("ClaudeSessionManager.listModels", () => {
 				id: "haiku",
 				label: "Haiku",
 				cliModel: "haiku",
-				effortLevels: ["low", "medium", "high"],
+				effortLevels: [],
 				supportsFastMode: false,
 			},
 		]);

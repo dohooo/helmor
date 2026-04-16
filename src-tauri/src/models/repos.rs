@@ -450,14 +450,8 @@ struct HelmorJsonScripts {
     archive: Option<String>,
 }
 
-/// Try helmor.json first, then conductor.json as fallback.
 fn load_helmor_json_scripts(root_path: &Path) -> Option<HelmorJsonScripts> {
-    for filename in &["helmor.json", "conductor.json"] {
-        if let Some(result) = parse_project_config_scripts(&root_path.join(filename)) {
-            return Some(result);
-        }
-    }
-    None
+    parse_project_config_scripts(&root_path.join("helmor.json"))
 }
 
 fn parse_project_config_scripts(config_path: &Path) -> Option<HelmorJsonScripts> {

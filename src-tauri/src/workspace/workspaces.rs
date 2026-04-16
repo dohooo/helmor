@@ -13,8 +13,9 @@ pub use super::archive::{
 };
 pub use super::branching::{
     _reset_prefetch_rate_limit, list_remote_branches, prefetch_remote_refs,
-    refresh_remote_and_realign, rename_workspace_branch, sync_workspace_with_target_branch,
-    update_intended_target_branch, update_intended_target_branch_local, PrefetchRemoteRefsResponse,
+    push_workspace_to_remote, refresh_remote_and_realign, rename_workspace_branch,
+    sync_workspace_with_target_branch, update_intended_target_branch,
+    update_intended_target_branch_local, PrefetchRemoteRefsResponse, PushWorkspaceToRemoteResponse,
     SyncWorkspaceTargetOutcome, SyncWorkspaceTargetResponse, UpdateIntendedTargetBranchInternal,
     UpdateIntendedTargetBranchResponse,
 };

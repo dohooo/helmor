@@ -20,6 +20,13 @@ pub struct WorkspaceGitActionStatus {
     pub behind_target_count: u32,
     pub remote_tracking_ref: Option<String>,
     pub ahead_of_remote_count: u32,
+    pub push_status: WorkspacePushStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushBranchResult {
+    pub branch: String,
+    pub target_ref: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -27,6 +34,14 @@ pub struct WorkspaceGitActionStatus {
 pub enum WorkspaceSyncStatus {
     UpToDate,
     Behind,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspacePushStatus {
+    Published,
+    Unpublished,
     Unknown,
 }
 
@@ -552,6 +567,37 @@ pub fn current_workspace_head_commit(workspace_dir: &Path) -> Result<String> {
     Ok(commit)
 }
 
+pub fn current_branch_name(workspace_dir: &Path) -> Result<String> {
+    let workspace_dir = workspace_dir.display().to_string();
+    let branch = run_git(
+        ["-C", workspace_dir.as_str(), "branch", "--show-current"],
+        None,
+    )
+    .with_context(|| format!("Failed to resolve current branch for {}", workspace_dir))?;
+
+    let branch = branch.trim();
+    if branch.is_empty() {
+        bail!("Workspace {} is not on a branch", workspace_dir);
+    }
+
+    Ok(branch.to_string())
+}
+
+pub fn current_upstream_ref_name(workspace_dir: &Path) -> Option<String> {
+    current_upstream_ref(workspace_dir)
+}
+
+fn upstream_push_ref(upstream_ref: &str) -> Option<String> {
+    let branch = if let Some(branch) = upstream_ref.strip_prefix("refs/remotes/") {
+        let (_, branch) = branch.split_once('/')?;
+        branch
+    } else {
+        let (_, branch) = upstream_ref.split_once('/')?;
+        branch
+    };
+    Some(format!("HEAD:refs/heads/{branch}"))
+}
+
 pub fn default_branch_ref(remote: &str, default_branch: &str) -> String {
     format!("refs/remotes/{remote}/{default_branch}")
 }
@@ -629,11 +675,12 @@ pub fn workspace_action_status(
         .map(ToOwned::to_owned);
     let (sync_status, behind_target_count) =
         workspace_sync_status(workspace_dir, remote, sync_target_branch.as_deref());
-    let remote_tracking_ref = current_upstream_ref(workspace_dir);
+    let remote_tracking_ref = resolve_remote_tracking_ref(workspace_dir, remote);
     let ahead_of_remote_count = remote_tracking_ref
         .as_deref()
         .and_then(|upstream| commits_ahead_of(workspace_dir, upstream).ok())
         .unwrap_or(0);
+    let push_status = resolve_push_status(workspace_dir, remote, remote_tracking_ref.as_deref());
 
     Ok(WorkspaceGitActionStatus {
         uncommitted_count,
@@ -643,6 +690,7 @@ pub fn workspace_action_status(
         behind_target_count,
         remote_tracking_ref,
         ahead_of_remote_count,
+        push_status,
     })
 }
 
@@ -690,6 +738,84 @@ fn current_upstream_ref(workspace_dir: &Path) -> Option<String> {
     .ok()
     .map(|value| value.trim().to_string())
     .filter(|value| !value.is_empty())
+}
+
+fn resolve_remote_tracking_ref(workspace_dir: &Path, remote: Option<&str>) -> Option<String> {
+    if let Some(upstream) = current_upstream_ref(workspace_dir) {
+        return Some(upstream);
+    }
+
+    let remote = remote.map(str::trim).filter(|value| !value.is_empty())?;
+    let branch = current_branch_name(workspace_dir).ok()?;
+    verify_remote_ref_exists(workspace_dir, remote, &branch)
+        .ok()
+        .filter(|exists| *exists)
+        .map(|_| format!("{remote}/{branch}"))
+}
+
+fn resolve_push_status(
+    workspace_dir: &Path,
+    remote: Option<&str>,
+    remote_tracking_ref: Option<&str>,
+) -> WorkspacePushStatus {
+    if remote_tracking_ref.is_some() {
+        return WorkspacePushStatus::Published;
+    }
+
+    let Some(_remote) = remote.map(str::trim).filter(|value| !value.is_empty()) else {
+        return WorkspacePushStatus::Unknown;
+    };
+    if current_branch_name(workspace_dir).is_err() {
+        return WorkspacePushStatus::Unknown;
+    }
+
+    WorkspacePushStatus::Unpublished
+}
+
+pub fn push_current_branch(workspace_dir: &Path, remote: &str) -> Result<PushBranchResult> {
+    let branch = current_branch_name(workspace_dir)?;
+    let workspace_dir = workspace_dir.display().to_string();
+    let upstream = current_upstream_ref(Path::new(&workspace_dir));
+
+    if let Some(target_ref) = upstream {
+        let push_ref = upstream_push_ref(&target_ref)
+            .with_context(|| format!("Unsupported upstream ref for push: {target_ref}"))?;
+        return run_git_with_timeout(
+            [
+                "-C",
+                workspace_dir.as_str(),
+                "push",
+                remote,
+                push_ref.as_str(),
+            ],
+            None,
+            GIT_NETWORK_TIMEOUT,
+        )
+        .map(|_| PushBranchResult {
+            branch: branch.clone(),
+            target_ref,
+        })
+        .with_context(|| format!("Failed to push branch {branch} to its upstream"));
+    }
+
+    let push_ref = format!("HEAD:refs/heads/{branch}");
+    run_git_with_timeout(
+        [
+            "-C",
+            workspace_dir.as_str(),
+            "push",
+            "--set-upstream",
+            remote,
+            push_ref.as_str(),
+        ],
+        None,
+        GIT_NETWORK_TIMEOUT,
+    )
+    .map(|_| PushBranchResult {
+        branch: branch.clone(),
+        target_ref: format!("{remote}/{branch}"),
+    })
+    .with_context(|| format!("Failed to push branch {branch} to {remote}"))
 }
 
 /// Counts how many commits are reachable from HEAD but not from `base_ref`.
@@ -909,6 +1035,7 @@ mod tests {
         assert_eq!(status.behind_target_count, 0);
         assert_eq!(status.remote_tracking_ref, None);
         assert_eq!(status.ahead_of_remote_count, 0);
+        assert_eq!(status.push_status, WorkspacePushStatus::Unknown);
     }
 
     #[test]
@@ -959,6 +1086,7 @@ mod tests {
         assert_eq!(status.behind_target_count, 1);
         assert_eq!(status.remote_tracking_ref.as_deref(), Some("origin/main"));
         assert_eq!(status.ahead_of_remote_count, 0);
+        assert_eq!(status.push_status, WorkspacePushStatus::Published);
     }
 
     #[test]
@@ -972,6 +1100,7 @@ mod tests {
         assert_eq!(status.behind_target_count, 0);
         assert_eq!(status.remote_tracking_ref.as_deref(), Some("origin/main"));
         assert_eq!(status.ahead_of_remote_count, 0);
+        assert_eq!(status.push_status, WorkspacePushStatus::Published);
     }
 
     #[test]
@@ -985,6 +1114,64 @@ mod tests {
 
         assert_eq!(status.remote_tracking_ref.as_deref(), Some("origin/main"));
         assert_eq!(status.ahead_of_remote_count, 1);
+        assert_eq!(status.push_status, WorkspacePushStatus::Published);
+    }
+
+    #[test]
+    fn workspace_action_status_reports_unpublished_branch_without_upstream() {
+        let (_origin, clone) = init_repo_with_remote();
+        run(clone.path(), &["checkout", "-b", "feature/unpublished"]);
+
+        let status = workspace_action_status(clone.path(), Some("origin"), Some("main")).unwrap();
+
+        assert_eq!(status.remote_tracking_ref, None);
+        assert_eq!(status.ahead_of_remote_count, 0);
+        assert_eq!(status.push_status, WorkspacePushStatus::Unpublished);
+    }
+
+    #[test]
+    fn push_current_branch_sets_upstream_when_missing() {
+        let (_origin, clone) = init_repo_with_remote();
+        run(clone.path(), &["checkout", "-b", "feature/push-same-name"]);
+
+        let result = push_current_branch(clone.path(), "origin").unwrap();
+
+        assert_eq!(result.branch, "feature/push-same-name");
+        assert_eq!(result.target_ref, "origin/feature/push-same-name");
+        assert!(has_upstream(clone.path(), "feature/push-same-name"));
+        assert!(verify_remote_ref_exists(clone.path(), "origin", &result.branch).unwrap());
+    }
+
+    #[test]
+    fn push_current_branch_preserves_existing_differently_named_upstream() {
+        let (_origin, clone) = init_repo_with_remote();
+        run(clone.path(), &["checkout", "-b", "feature/local-name"]);
+        run(
+            clone.path(),
+            &[
+                "push",
+                "--set-upstream",
+                "origin",
+                "HEAD:refs/heads/feature/remote-name",
+            ],
+        );
+        std::fs::write(clone.path().join("follow-up.txt"), "next\n").unwrap();
+        run(clone.path(), &["add", "follow-up.txt"]);
+        run(clone.path(), &["commit", "-m", "follow up"]);
+
+        let result = push_current_branch(clone.path(), "origin").unwrap();
+
+        assert_eq!(result.branch, "feature/local-name");
+        assert_eq!(result.target_ref, "origin/feature/remote-name");
+        assert_eq!(
+            current_upstream_ref(clone.path()).as_deref(),
+            Some("origin/feature/remote-name")
+        );
+        assert_eq!(
+            remote_ref_sha(clone.path(), "origin", "feature/remote-name").unwrap(),
+            current_workspace_head_commit(clone.path()).unwrap()
+        );
+        assert!(!verify_remote_ref_exists(clone.path(), "origin", "feature/local-name").unwrap());
     }
 
     /// Clone a repo so we have a real `origin` remote with tracking refs.

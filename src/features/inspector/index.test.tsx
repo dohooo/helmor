@@ -48,6 +48,7 @@ function cleanGitStatus(): WorkspaceGitActionStatus {
 		behindTargetCount: 0,
 		remoteTrackingRef: "refs/remotes/origin/main",
 		aheadOfRemoteCount: 0,
+		pushStatus: "published",
 	};
 }
 
@@ -231,6 +232,28 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		expect(onCommitAction).toHaveBeenCalledWith("push");
 	});
 
+	it("shows push when the branch has not been published yet", async () => {
+		const user = userEvent.setup();
+		const onCommitAction = vi.fn();
+		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
+			uncommittedCount: 0,
+			conflictCount: 0,
+			syncTargetBranch: "main",
+			syncStatus: "upToDate",
+			behindTargetCount: 0,
+			remoteTrackingRef: null,
+			aheadOfRemoteCount: 0,
+			pushStatus: "unpublished",
+		});
+
+		renderInspector({ onCommitAction });
+
+		await screen.findByText("Branch not published to remote");
+		await user.click(screen.getByRole("button", { name: "Push" }));
+
+		expect(onCommitAction).toHaveBeenCalledWith("push");
+	});
+
 	it("prioritizes actionable git rows ahead of passed checks", async () => {
 		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
 			uncommittedCount: 0,
@@ -314,6 +337,101 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		expect(
 			await screen.findByRole("button", { name: "Commit and push" }),
 		).toBeDisabled();
+	});
+
+	it("shows a neutral loading spinner on push while the push lifecycle is busy", async () => {
+		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
+			uncommittedCount: 0,
+			conflictCount: 0,
+			syncTargetBranch: "main",
+			syncStatus: "upToDate",
+			behindTargetCount: 0,
+			remoteTrackingRef: "refs/remotes/origin/dohooo/short-reply-setting",
+			aheadOfRemoteCount: 2,
+			pushStatus: "published",
+		});
+
+		renderInspector({
+			commitButtonMode: "push",
+			commitButtonState: "busy",
+		});
+
+		const actions = screen.getByLabelText("Inspector section Actions");
+		const pushButton = await within(actions).findByRole("button", {
+			name: "Pushing",
+		});
+		expect(pushButton).toBeDisabled();
+		expect(pushButton).toHaveAttribute("aria-busy", "true");
+		expect(
+			pushButton.querySelector(".animate-spin.text-current"),
+		).toBeInTheDocument();
+		expect(pushButton).not.toHaveTextContent("Push");
+	});
+
+	it("shows a neutral loading spinner on commit-and-push while that lifecycle is busy", async () => {
+		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
+			uncommittedCount: 2,
+			conflictCount: 0,
+			syncTargetBranch: "main",
+			syncStatus: "upToDate",
+			behindTargetCount: 0,
+			pushStatus: "published",
+		});
+
+		renderInspector({
+			commitButtonMode: "commit-and-push",
+			commitButtonState: "busy",
+		});
+
+		const actions = screen.getByLabelText("Inspector section Actions");
+		const commitButton = await within(actions).findByRole("button", {
+			name: "Committing",
+		});
+		expect(commitButton).toBeDisabled();
+		expect(commitButton).toHaveAttribute("aria-busy", "true");
+		expect(
+			commitButton.querySelector(".animate-spin.text-current"),
+		).toBeInTheDocument();
+		expect(commitButton).not.toHaveTextContent("Commit and push");
+	});
+
+	it("shows a neutral loading spinner on pull while sync is pending", async () => {
+		const user = userEvent.setup();
+		let resolveSync = (_value: {
+			outcome: "updated";
+			targetBranch: string;
+		}) => {};
+		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
+			uncommittedCount: 0,
+			conflictCount: 0,
+			syncTargetBranch: "main",
+			syncStatus: "behind",
+			behindTargetCount: 2,
+			pushStatus: "published",
+		});
+		apiMocks.syncWorkspaceWithTargetBranch.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					resolveSync = resolve;
+				}),
+		);
+
+		renderInspector();
+
+		await user.click(await screen.findByRole("button", { name: "Pull" }));
+
+		const actions = screen.getByLabelText("Inspector section Actions");
+		const pullButton = await within(actions).findByRole("button", {
+			name: "Pulling",
+		});
+		expect(pullButton).toBeDisabled();
+		expect(pullButton).toHaveAttribute("aria-busy", "true");
+		expect(
+			pullButton.querySelector(".animate-spin.text-current"),
+		).toBeInTheDocument();
+		expect(pullButton).not.toHaveTextContent("Pull");
+
+		resolveSync({ outcome: "updated", targetBranch: "main" });
 	});
 
 	it("renders running and failed remote status colors with accessible labels", async () => {

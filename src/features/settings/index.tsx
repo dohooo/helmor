@@ -81,9 +81,13 @@ function sectionLabel(
 
 export const SettingsDialog = memo(function SettingsDialog({
 	open,
+	workspaceId,
+	workspaceRepoId,
 	onClose,
 }: {
 	open: boolean;
+	workspaceId: string | null;
+	workspaceRepoId: string | null;
 	onClose: () => void;
 }) {
 	const { settings, updateSettings } = useSettings();
@@ -496,6 +500,9 @@ export const SettingsDialog = memo(function SettingsDialog({
 							{activeRepo && (
 								<RepositorySettingsPanel
 									repo={activeRepo}
+									workspaceId={
+										activeRepo.id === workspaceRepoId ? workspaceId : null
+									}
 									onRepoSettingsChanged={() => {
 										void queryClient.invalidateQueries({
 											queryKey: helmorQueryKeys.repositories,

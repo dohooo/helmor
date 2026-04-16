@@ -1,4 +1,10 @@
 use super::support::*;
+use std::thread;
+use std::time::{Duration, Instant};
+use tauri::{
+    test::{mock_builder, mock_context, noop_assets},
+    Manager,
+};
 
 #[test]
 fn restore_workspace_recreates_worktree_and_context() {
@@ -302,6 +308,58 @@ fn archive_workspace_cleans_up_when_db_update_fails() {
         )
         .unwrap();
     assert_eq!(state, "ready");
+}
+
+#[test]
+fn start_archive_workspace_syncs_git_fetchers_after_success() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = ArchiveTestHarness::new(true);
+    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+    connection
+        .execute("UPDATE repos SET remote = 'origin' WHERE id = 'repo-1'", [])
+        .unwrap();
+    drop(connection);
+
+    let app = mock_builder()
+        .manage(workspaces::ArchiveJobManager::new())
+        .manage(crate::git_watcher::GitWatcherManager::new())
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let app_handle = app.handle().clone();
+    let watcher_manager = app_handle.state::<crate::git_watcher::GitWatcherManager>();
+
+    watcher_manager.sync_from_db(app_handle.clone()).unwrap();
+    assert_eq!(watcher_manager.fetcher_count(), 1);
+
+    let archive_manager = app_handle.state::<workspaces::ArchiveJobManager>();
+    archive_manager.prepare(&harness.workspace_id).unwrap();
+    workspaces::start_archive_workspace(&app_handle, &harness.workspace_id).unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+        let state: String = connection
+            .query_row(
+                "SELECT state FROM workspaces WHERE id = ?1",
+                [&harness.workspace_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(connection);
+
+        if state == "archived" && watcher_manager.fetcher_count() == 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Timed out waiting for archive success to sync git fetchers",
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    watcher_manager.shutdown();
 }
 
 #[test]

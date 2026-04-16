@@ -17,6 +17,7 @@ const apiMocks = vi.hoisted(() => ({
 	loadAutoCloseActionKinds: vi.fn(),
 	lookupWorkspacePr: vi.fn(),
 	mergeWorkspacePr: vi.fn(),
+	pushWorkspaceToRemote: vi.fn(),
 	setWorkspaceManualStatus: vi.fn(),
 }));
 
@@ -31,6 +32,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		loadAutoCloseActionKinds: apiMocks.loadAutoCloseActionKinds,
 		lookupWorkspacePr: apiMocks.lookupWorkspacePr,
 		mergeWorkspacePr: apiMocks.mergeWorkspacePr,
+		pushWorkspaceToRemote: apiMocks.pushWorkspaceToRemote,
 		setWorkspaceManualStatus: apiMocks.setWorkspaceManualStatus,
 	};
 });
@@ -43,6 +45,7 @@ const EMPTY_GIT_ACTION_STATUS: WorkspaceGitActionStatus = {
 	behindTargetCount: 0,
 	remoteTrackingRef: null,
 	aheadOfRemoteCount: 0,
+	pushStatus: "unknown",
 };
 
 const EMPTY_PR_ACTION_STATUS: WorkspacePrActionStatus = {
@@ -71,6 +74,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 		apiMocks.loadAutoCloseActionKinds.mockReset();
 		apiMocks.lookupWorkspacePr.mockReset();
 		apiMocks.mergeWorkspacePr.mockReset();
+		apiMocks.pushWorkspaceToRemote.mockReset();
 		apiMocks.setWorkspaceManualStatus.mockReset();
 
 		apiMocks.createSession.mockResolvedValue({ sessionId: "session-action" });
@@ -83,6 +87,10 @@ describe("useWorkspaceCommitLifecycle", () => {
 			state: "OPEN",
 			isMerged: false,
 		} satisfies PullRequestInfo);
+		apiMocks.pushWorkspaceToRemote.mockResolvedValue({
+			targetRef: "origin/feature/test",
+			headCommit: "abc123",
+		});
 		apiMocks.hideSession.mockResolvedValue(undefined);
 	});
 
@@ -98,6 +106,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				},
 			},
 		});
+		const invalidateQueriesSpy = vi.spyOn(queryClient, "invalidateQueries");
 		queryClient.setQueryData(helmorQueryKeys.workspaceDetail("workspace-1"), {
 			id: "workspace-1",
 			activeSessionId: "session-after-close",
@@ -171,6 +180,14 @@ describe("useWorkspaceCommitLifecycle", () => {
 			expect(apiMocks.lookupWorkspacePr).toHaveBeenCalledWith("workspace-1");
 		});
 		await waitFor(() => {
+			expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+				queryKey: helmorQueryKeys.workspacePr("workspace-1"),
+			});
+			expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+				queryKey: helmorQueryKeys.workspacePrActionStatus("workspace-1"),
+			});
+		});
+		await waitFor(() => {
 			expect(apiMocks.setWorkspaceManualStatus).toHaveBeenCalledWith(
 				"workspace-1",
 				"review",
@@ -181,6 +198,225 @@ describe("useWorkspaceCommitLifecycle", () => {
 		});
 		await waitFor(() => {
 			expect(onSelectSession).toHaveBeenCalledWith("session-after-close");
+		});
+	});
+
+	it("pushes directly without creating an action session", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: {
+				queries: {
+					retry: false,
+				},
+			},
+		});
+		const invalidateQueriesSpy = vi.spyOn(queryClient, "invalidateQueries");
+		const onSelectSession = vi.fn();
+		const pushToast = vi.fn();
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					selectedWorkspaceIdRef: { current: "workspace-1" },
+					workspaceManualStatus: null,
+					workspacePrInfo: null,
+					workspacePrActionStatus: EMPTY_PR_ACTION_STATUS,
+					workspaceGitActionStatus: {
+						...EMPTY_GIT_ACTION_STATUS,
+						pushStatus: "unpublished",
+					},
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					sendingSessionIds: new Set<string>(),
+					onSelectSession,
+					pushToast,
+				}),
+			{
+				wrapper: createWrapper(queryClient),
+			},
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorCommitAction("push");
+		});
+
+		expect(apiMocks.pushWorkspaceToRemote).toHaveBeenCalledWith("workspace-1");
+		expect(apiMocks.createSession).not.toHaveBeenCalled();
+		expect(result.current.pendingPromptForSession).toBeNull();
+		expect(onSelectSession).not.toHaveBeenCalled();
+
+		await waitFor(() => {
+			expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+				queryKey: helmorQueryKeys.workspaceGitActionStatus("workspace-1"),
+			});
+			expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+				queryKey: helmorQueryKeys.workspacePr("workspace-1"),
+			});
+			expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+				queryKey: helmorQueryKeys.workspacePrActionStatus("workspace-1"),
+			});
+			expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+				queryKey: helmorQueryKeys.workspaceDetail("workspace-1"),
+			});
+			expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+				queryKey: helmorQueryKeys.workspaceGroups,
+			});
+			expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+				queryKey: ["workspaceChanges"],
+			});
+		});
+		expect(pushToast).not.toHaveBeenCalled();
+	});
+
+	it("shows a destructive workspace toast when push fails", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: {
+				queries: {
+					retry: false,
+				},
+			},
+		});
+		const pushToast = vi.fn();
+		apiMocks.pushWorkspaceToRemote.mockRejectedValueOnce(
+			new Error(
+				"Cannot push branch while the workspace has uncommitted changes",
+			),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					selectedWorkspaceIdRef: { current: "workspace-1" },
+					workspaceManualStatus: null,
+					workspacePrInfo: null,
+					workspacePrActionStatus: EMPTY_PR_ACTION_STATUS,
+					workspaceGitActionStatus: {
+						...EMPTY_GIT_ACTION_STATUS,
+						pushStatus: "unpublished",
+					},
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					sendingSessionIds: new Set<string>(),
+					onSelectSession: vi.fn(),
+					pushToast,
+				}),
+			{
+				wrapper: createWrapper(queryClient),
+			},
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorCommitAction("push");
+		});
+
+		expect(pushToast).toHaveBeenCalledWith(
+			"Cannot push branch while the workspace has uncommitted changes",
+			"Push failed",
+			"destructive",
+		);
+	});
+
+	it("shows a destructive workspace toast when an action session fails to start", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: {
+				queries: {
+					retry: false,
+				},
+			},
+		});
+		const pushToast = vi.fn();
+		apiMocks.createSession.mockRejectedValueOnce(
+			new Error("Unable to create action session"),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					selectedWorkspaceIdRef: { current: "workspace-1" },
+					workspaceManualStatus: null,
+					workspacePrInfo: null,
+					workspacePrActionStatus: EMPTY_PR_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					sendingSessionIds: new Set<string>(),
+					onSelectSession: vi.fn(),
+					pushToast,
+				}),
+			{
+				wrapper: createWrapper(queryClient),
+			},
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorCommitAction("create-pr");
+		});
+
+		expect(pushToast).toHaveBeenCalledWith(
+			"Unable to create action session",
+			"Create PR failed",
+			"destructive",
+		);
+	});
+
+	it("shows a destructive workspace toast when merge fails", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: {
+				queries: {
+					retry: false,
+				},
+			},
+		});
+		const pushToast = vi.fn();
+		apiMocks.mergeWorkspacePr.mockRejectedValueOnce(
+			new Error("GitHub merge failed"),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					selectedWorkspaceIdRef: { current: "workspace-1" },
+					workspaceManualStatus: null,
+					workspacePrInfo: {
+						number: 53,
+						title: "Fix overflow",
+						url: "https://github.com/example/repo/pull/53",
+						state: "OPEN",
+						isMerged: false,
+					},
+					workspacePrActionStatus: {
+						...EMPTY_PR_ACTION_STATUS,
+						mergeable: "MERGEABLE",
+					},
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					sendingSessionIds: new Set<string>(),
+					onSelectSession: vi.fn(),
+					pushToast,
+				}),
+			{
+				wrapper: createWrapper(queryClient),
+			},
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorCommitAction("merge");
+		});
+
+		await waitFor(() => {
+			expect(pushToast).toHaveBeenCalledWith(
+				"GitHub merge failed",
+				"Merge failed",
+				"destructive",
+			);
 		});
 	});
 });

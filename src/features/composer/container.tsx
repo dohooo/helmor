@@ -282,9 +282,22 @@ export const WorkspaceComposerContainer = memo(
 					try {
 						const { sessionId: newSessionId } =
 							await createSession(displayedWorkspaceId);
-						await queryClient.invalidateQueries({
-							queryKey: helmorQueryKeys.workspaceSessions(displayedWorkspaceId),
-						});
+						await Promise.all([
+							queryClient.invalidateQueries({
+								queryKey:
+									helmorQueryKeys.workspaceSessions(displayedWorkspaceId),
+							}),
+							...(workspaceDetailQuery.data?.repoId
+								? [
+										queryClient.invalidateQueries({
+											queryKey: helmorQueryKeys.repoScripts(
+												workspaceDetailQuery.data.repoId,
+												displayedWorkspaceId,
+											),
+										}),
+									]
+								: []),
+						]);
 						onSwitchSession?.(newSessionId);
 						const newContextKey = getComposerContextKey(
 							displayedWorkspaceId,
@@ -309,6 +322,7 @@ export const WorkspaceComposerContainer = memo(
 				onSelectModel,
 				onSwitchSession,
 				queryClient,
+				workspaceDetailQuery.data?.repoId,
 			],
 		);
 

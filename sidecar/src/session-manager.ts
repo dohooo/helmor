@@ -48,13 +48,13 @@ export interface ProviderModelInfo {
 
 /**
  * Normalize a model display label for the UI.
- * - "default" → "Opus 4.6 1M"
+ * - "default" → "Opus 4.7 1M"
  * - "Sonnet (1M context)" → "Sonnet 1M"
  * - "gpt-5.4" → "GPT-5.4"
  * - "gpt-5.1-codex-mini" → "GPT-5.1-Codex-Mini"
  */
 export function formatModelLabel(id: string, rawLabel: string): string {
-	if (id === "default") return "Opus 4.6 1M";
+	if (id === "default") return "Opus 4.7 1M";
 
 	let label = rawLabel;
 
@@ -96,14 +96,6 @@ export function sortModelsByVersion(
 		if (vb !== va) return vb - va;
 		return a.id.localeCompare(b.id);
 	});
-}
-
-/** Fallback effort levels when the SDK doesn't provide them. */
-export function fallbackEffortLevels(modelId: string): string[] {
-	const id = modelId.toLowerCase();
-	if (id === "default" || id.includes("opus"))
-		return ["low", "medium", "high", "max"];
-	return ["low", "medium", "high"];
 }
 
 export interface SessionManager {

@@ -4,11 +4,16 @@ import type {
 	AgentModelSection,
 	AgentProvider,
 	PullRequestInfo,
+	RepoScripts,
 	ThreadMessageLike,
 	WorkspaceDetail,
 	WorkspaceSessionSummary,
 } from "@/lib/api";
-import { createSession, generateSessionTitle } from "@/lib/api";
+import {
+	createSession,
+	generateSessionTitle,
+	loadRepoScripts,
+} from "@/lib/api";
 import {
 	helmorQueryKeys,
 	sessionThreadMessagesQueryOptions,
@@ -17,6 +22,10 @@ import {
 } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { resolveSessionDisplayProvider } from "@/lib/workspace-helpers";
+import {
+	WORKSPACE_SCRIPT_PROMPTS,
+	type WorkspaceScriptType,
+} from "@/lib/workspace-script-actions";
 import { WorkspacePanel } from "./index";
 
 const EMPTY_MESSAGES: ThreadMessageLike[] = [];
@@ -35,6 +44,12 @@ type WorkspacePanelContainerProps = {
 	workspacePrInfo?: PullRequestInfo | null;
 	onSelectSession: (sessionId: string | null) => void;
 	onResolveDisplayedSession: (sessionId: string | null) => void;
+	onQueuePendingPromptForSession?: (request: {
+		sessionId: string;
+		prompt: string;
+		modelId?: string | null;
+		permissionMode?: string | null;
+	}) => void;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
 };
@@ -53,6 +68,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	workspacePrInfo = null,
 	onSelectSession,
 	onResolveDisplayedSession,
+	onQueuePendingPromptForSession,
 	headerActions,
 	headerLeading,
 }: WorkspacePanelContainerProps) {
@@ -254,6 +270,15 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		...sessionThreadMessagesQueryOptions(threadSessionId ?? "__none__"),
 		enabled: Boolean(threadSessionId),
 	});
+	const repoScriptsQuery = useQuery({
+		queryKey: helmorQueryKeys.repoScripts(
+			workspace?.repoId ?? "__none__",
+			displayedWorkspaceId,
+		),
+		queryFn: () => loadRepoScripts(workspace!.repoId, displayedWorkspaceId),
+		enabled: Boolean(workspace?.repoId && displayedWorkspaceId),
+		staleTime: 0,
+	});
 
 	const messages = messagesQuery.data ?? EMPTY_MESSAGES;
 	const sessionDisplayProviders = useMemo<Record<string, AgentProvider>>(() => {
@@ -384,9 +409,9 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		threadSessionId,
 	]);
 
-	// Auto-generate title for existing sessions still named "Untitled".
-	// When a session is displayed and its messages are loaded, if the title
-	// is "Untitled" and there is at least one user message, trigger rename.
+	// When a non-action session is displayed and its first user message is
+	// available, do one best-effort naming check. The backend decides whether
+	// the session title and/or branch still need work.
 	useEffect(() => {
 		if (!threadSessionId || !displayedWorkspaceId) return;
 
@@ -395,7 +420,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		const currentSession = sessions.find(
 			(session) => session.id === threadSessionId,
 		);
-		if (!currentSession || currentSession.title !== "Untitled") return;
+		if (!currentSession || currentSession.actionKind) return;
 
 		const messages = messagesQuery.data;
 		if (!messages || messages.length === 0) return;
@@ -416,7 +441,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		if (!userText) return;
 
 		void generateSessionTitle(threadSessionId, userText).then((result) => {
-			if (result?.title) {
+			if (result?.title || result?.branchRenamed) {
 				void invalidateWorkspaceQueries();
 			}
 		});
@@ -483,6 +508,44 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		void invalidateWorkspaceQueries();
 	}, [invalidateWorkspaceQueries]);
 	const selectedSessionIdForPanel = selectedSessionId ?? threadSessionId;
+	const selectedSession =
+		sessions.find((session) => session.id === selectedSessionIdForPanel) ??
+		null;
+	const missingScriptTypes = useMemo<WorkspaceScriptType[]>(() => {
+		if (!selectedSession) {
+			return [];
+		}
+
+		const scripts: RepoScripts | undefined = repoScriptsQuery.data;
+		if (!scripts) {
+			return [];
+		}
+
+		const missing: WorkspaceScriptType[] = [];
+		if (!scripts.setupScript?.trim()) {
+			missing.push("setup");
+		}
+		if (!scripts.runScript?.trim()) {
+			missing.push("run");
+		}
+		if (!scripts.archiveScript?.trim()) {
+			missing.push("archive");
+		}
+		return missing;
+	}, [repoScriptsQuery.data, selectedSession]);
+	const handleInitializeScript = useCallback(
+		(scriptType: WorkspaceScriptType) => {
+			if (!selectedSessionIdForPanel || !onQueuePendingPromptForSession) {
+				return;
+			}
+
+			onQueuePendingPromptForSession({
+				sessionId: selectedSessionIdForPanel,
+				prompt: WORKSPACE_SCRIPT_PROMPTS[scriptType],
+			});
+		},
+		[onQueuePendingPromptForSession, selectedSessionIdForPanel],
+	);
 
 	return (
 		<WorkspacePanel
@@ -506,6 +569,8 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			onWorkspaceChanged={handleWorkspaceChanged}
 			headerActions={headerActions}
 			headerLeading={headerLeading}
+			missingScriptTypes={missingScriptTypes}
+			onInitializeScript={handleInitializeScript}
 			prInfo={workspacePrInfo}
 		/>
 	);
