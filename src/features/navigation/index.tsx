@@ -296,7 +296,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				case "group-header":
 					return `header-${item.groupId}`;
 				case "row":
-					return `row-${item.row.id}`;
+					return `row-${item.groupId}-${item.row.id}`;
 				case "group-gap":
 					return `gap-${index}`;
 				case "bottom-padding":

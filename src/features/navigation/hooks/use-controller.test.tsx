@@ -11,6 +11,7 @@ import type {
 	WorkspaceSessionSummary,
 	WorkspaceSummary,
 } from "@/lib/api";
+import { helmorQueryKeys } from "@/lib/query-client";
 import { DEFAULT_SETTINGS, SettingsContext } from "@/lib/settings";
 import { useWorkspacesSidebarController } from "./use-controller";
 
@@ -314,6 +315,82 @@ describe("useWorkspacesSidebarController archive flow", () => {
 		expect(pushWorkspaceToast).not.toHaveBeenCalled();
 	});
 
+	it("连续 archive 时会按当前 sidebar 位置向下顺延，而不是跳到 archived", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onSelectWorkspace = vi.fn();
+		const pushWorkspaceToast = vi.fn();
+
+		apiMocks.loadWorkspaceGroups.mockResolvedValue([
+			{
+				id: "progress",
+				label: "In progress",
+				tone: "progress",
+				rows: [
+					{
+						...workspaceGroups[0].rows[0],
+						id: "ws-1",
+						title: "Workspace 1",
+					},
+					{
+						...workspaceGroups[0].rows[0],
+						id: "ws-2",
+						title: "Workspace 2",
+					},
+					{
+						...workspaceGroups[0].rows[0],
+						id: "ws-3",
+						title: "Workspace 3",
+					},
+				],
+			},
+		]);
+		apiMocks.loadArchivedWorkspaces.mockResolvedValue([
+			makeArchivedSummary("arch-1"),
+		]);
+
+		const { result, rerender } = renderHook(
+			({ selectedWorkspaceId }: { selectedWorkspaceId: string | null }) =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId,
+					onSelectWorkspace,
+					pushWorkspaceToast,
+				}),
+			{
+				initialProps: { selectedWorkspaceId: "ws-1" },
+				wrapper: createWrapper(queryClient),
+			},
+		);
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows.map((row) => row.id)).toEqual([
+				"ws-1",
+				"ws-2",
+				"ws-3",
+			]);
+		});
+
+		act(() => {
+			result.current.handleArchiveWorkspace("ws-1");
+		});
+
+		await waitFor(() => {
+			expect(onSelectWorkspace).toHaveBeenLastCalledWith("ws-2");
+		});
+
+		rerender({ selectedWorkspaceId: "ws-2" });
+
+		act(() => {
+			result.current.handleArchiveWorkspace("ws-2");
+		});
+
+		await waitFor(() => {
+			expect(onSelectWorkspace).toHaveBeenLastCalledWith("ws-3");
+		});
+		expect(pushWorkspaceToast).not.toHaveBeenCalled();
+	});
+
 	it("创建 workspace 时先插入 initializing 占位项，再切到真实 workspace", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false } },
@@ -387,6 +464,181 @@ describe("useWorkspacesSidebarController archive flow", () => {
 		});
 		expect(onSelectWorkspace).toHaveBeenCalledWith("ws-created");
 		expect(pushWorkspaceToast).not.toHaveBeenCalled();
+	});
+
+	it("创建成功后会直接把 optimistic row 升级成真实 workspace，避免 sidebar 真空期", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onSelectWorkspace = vi.fn();
+		let resolveCreate:
+			| ((value: {
+					createdWorkspaceId: string;
+					selectedWorkspaceId: string;
+					createdState: string;
+					directoryName: string;
+					branch: string;
+			  }) => void)
+			| null = null;
+
+		apiMocks.listRepositories.mockResolvedValue([
+			{
+				id: "repo-1",
+				name: "helmor",
+				defaultBranch: "main",
+				repoInitials: "HE",
+			},
+		]);
+		apiMocks.createWorkspaceFromRepo.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					resolveCreate = resolve;
+				}),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: null,
+					onSelectWorkspace,
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows.map((row) => row.id)).toEqual([
+				"ws-1",
+				"ws-2",
+			]);
+		});
+
+		act(() => {
+			void result.current.handleCreateWorkspaceFromRepo("repo-1");
+		});
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows[0]?.id).toMatch(
+				/^creating-workspace:/,
+			);
+		});
+
+		await act(async () => {
+			resolveCreate?.({
+				createdWorkspaceId: "ws-created",
+				selectedWorkspaceId: "ws-created",
+				createdState: "initializing",
+				directoryName: "caspian-helmor",
+				branch: "caspian/helmor",
+			});
+		});
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows[0]?.id).toBe("ws-created");
+		});
+
+		expect(
+			queryClient.getQueryData(helmorQueryKeys.workspaceDetail("ws-created")),
+		).toMatchObject({
+			id: "ws-created",
+			directoryName: "caspian-helmor",
+			branch: "caspian/helmor",
+		});
+		expect(
+			queryClient.getQueryData(helmorQueryKeys.workspaceSessions("ws-created")),
+		).toEqual([]);
+		expect(onSelectWorkspace).toHaveBeenCalledWith("ws-created");
+	});
+
+	it("创建成功时如果真实 workspace 已经进了 cache，也不会和 optimistic 升级项并存", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		let resolveCreate:
+			| ((value: {
+					createdWorkspaceId: string;
+					selectedWorkspaceId: string;
+					createdState: string;
+					directoryName: string;
+					branch: string;
+			  }) => void)
+			| null = null;
+
+		apiMocks.listRepositories.mockResolvedValue([
+			{
+				id: "repo-1",
+				name: "helmor",
+				defaultBranch: "main",
+				repoInitials: "HE",
+			},
+		]);
+		apiMocks.createWorkspaceFromRepo.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					resolveCreate = resolve;
+				}),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: null,
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows.map((row) => row.id)).toEqual([
+				"ws-1",
+				"ws-2",
+			]);
+		});
+
+		act(() => {
+			void result.current.handleCreateWorkspaceFromRepo("repo-1");
+		});
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows[0]?.id).toMatch(
+				/^creating-workspace:/,
+			);
+		});
+
+		act(() => {
+			queryClient.setQueryData(helmorQueryKeys.workspaceGroups, [
+				{
+					...workspaceGroups[0],
+					rows: [
+						{
+							...workspaceGroups[0].rows[0],
+							id: "ws-created",
+							title: "Workspace created",
+							state: "initializing",
+							branch: "caspian/helmor",
+						},
+						...workspaceGroups[0].rows,
+					],
+				},
+			]);
+		});
+
+		await act(async () => {
+			resolveCreate?.({
+				createdWorkspaceId: "ws-created",
+				selectedWorkspaceId: "ws-created",
+				createdState: "initializing",
+				directoryName: "caspian-helmor",
+				branch: "caspian/helmor",
+			});
+		});
+
+		await waitFor(() => {
+			expect(
+				result.current.groups[0]?.rows.filter((row) => row.id === "ws-created"),
+			).toHaveLength(1);
+		});
 	});
 
 	it("后台启动立即失败时会回滚乐观更新", async () => {
@@ -560,6 +812,72 @@ describe("useWorkspacesSidebarController archive flow", () => {
 		expect(result.current.archivedRows.map((row) => row.id)).toEqual(["ws-1"]);
 		expect(apiMocks.loadWorkspaceGroups).toHaveBeenCalledTimes(2);
 		expect(apiMocks.loadArchivedWorkspaces).toHaveBeenCalledTimes(2);
+
+		act(() => {
+			resolveStart?.();
+		});
+	});
+
+	it("成功事件先到、服务端快照未切换时，也不会把同一 workspace 同时渲染到 live 和 archived", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		let resolveStart: (() => void) | null = null;
+		apiMocks.startArchiveWorkspace.mockImplementation(
+			() =>
+				new Promise<void>((resolve) => {
+					resolveStart = resolve;
+				}),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: null,
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows.map((row) => row.id)).toEqual([
+				"ws-1",
+				"ws-2",
+			]);
+		});
+
+		act(() => {
+			result.current.handleArchiveWorkspace("ws-1");
+		});
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows.map((row) => row.id)).toEqual([
+				"ws-2",
+			]);
+			expect(result.current.archivedRows.map((row) => row.id)).toEqual([
+				"ws-1",
+			]);
+		});
+
+		act(() => {
+			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-1" });
+		});
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows.map((row) => row.id)).toEqual([
+				"ws-2",
+			]);
+			expect(result.current.archivedRows.map((row) => row.id)).toEqual([
+				"ws-1",
+			]);
+		});
+
+		const occurrences = [
+			...result.current.groups.flatMap((group) => group.rows),
+			...result.current.archivedRows,
+		].filter((row) => row.id === "ws-1");
+		expect(occurrences).toHaveLength(1);
 
 		act(() => {
 			resolveStart?.();

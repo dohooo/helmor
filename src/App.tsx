@@ -482,14 +482,18 @@ function AppShell({
 		selectedWorkspaceDetailQuery.data?.repoId,
 		selectedWorkspaceId,
 	]);
-	const workspaceRootPath =
-		selectedWorkspaceDetailQuery.data?.rootPath ??
+	const selectedWorkspaceDetail =
+		selectedWorkspaceDetailQuery.data ??
 		(selectedWorkspaceId
 			? queryClient.getQueryData<WorkspaceDetail | null>(
 					helmorQueryKeys.workspaceDetail(selectedWorkspaceId),
-				)?.rootPath
+				)
 			: null) ??
 		null;
+	const workspaceRootPath =
+		selectedWorkspaceDetail?.state === "archived"
+			? null
+			: (selectedWorkspaceDetail?.rootPath ?? null);
 
 	// Cmd+Shift+C to copy current workspace path
 	useEffect(() => {
@@ -536,7 +540,8 @@ function AppShell({
 		...workspaceGitActionStatusQueryOptions(selectedWorkspaceId ?? "__none__"),
 		enabled:
 			selectedWorkspaceId !== null &&
-			!isOptimisticCreatingWorkspaceId(selectedWorkspaceId),
+			!isOptimisticCreatingWorkspaceId(selectedWorkspaceId) &&
+			selectedWorkspaceDetail?.state !== "archived",
 	});
 	const workspaceGitActionStatus = workspaceGitActionStatusQuery.data ?? null;
 
