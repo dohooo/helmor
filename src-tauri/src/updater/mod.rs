@@ -3,6 +3,9 @@ mod events;
 mod service;
 mod state;
 
+#[cfg(test)]
+mod tests;
+
 pub use events::{UpdateStatusSnapshot, APP_UPDATE_STATUS_EVENT};
 pub use service::{
     configure, install_downloaded_update, maybe_trigger_on_focus, maybe_trigger_on_resume,

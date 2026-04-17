@@ -194,20 +194,64 @@ fn is_archive_eligible_state(state: &str) -> bool {
     matches!(state, "ready" | "setup_pending")
 }
 
-/// Best-effort archive hook: load the repo's archive_script and run it
-/// inside the workspace directory before tearing it down.
+/// Structured outcome of a single archive-hook invocation. Returned by the
+/// testable `run_archive_hook_inner` and collapsed to a log line by the public
+/// `run_archive_hook`. Phase 2's cross-platform refactor uses the same enum.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ArchiveHookOutcome {
+    /// Workspace record was not found in the DB.
+    WorkspaceMissing,
+    /// Repo scripts failed to load (DB error).
+    ScriptsLoadFailed,
+    /// No archive script is configured — nothing to run.
+    NoScript,
+    /// The shell exited zero.
+    Success,
+    /// The shell exited non-zero with the given code (if reported).
+    ScriptError { code: Option<i32> },
+    /// The shell failed to spawn (binary missing, permissions, etc.).
+    SpawnError { message: String },
+}
+
+/// Best-effort archive hook. Public wrapper that logs the outcome and discards it.
 fn run_archive_hook(workspace_id: &str, workspace_dir: &Path, repo_root: &Path) {
+    let outcome = run_archive_hook_inner(workspace_id, workspace_dir, repo_root);
+    match outcome {
+        ArchiveHookOutcome::Success => {
+            tracing::info!(workspace_id, "Archive hook succeeded");
+        }
+        ArchiveHookOutcome::ScriptError { code } => {
+            tracing::warn!(workspace_id, code = ?code, "Archive hook exited with error");
+        }
+        ArchiveHookOutcome::SpawnError { message } => {
+            tracing::warn!(workspace_id, error = %message, "Archive hook failed to spawn");
+        }
+        ArchiveHookOutcome::NoScript
+        | ArchiveHookOutcome::WorkspaceMissing
+        | ArchiveHookOutcome::ScriptsLoadFailed => {
+            // Silent no-ops by design.
+        }
+    }
+}
+
+/// Testable inner implementation. Returns a typed outcome without logging so
+/// tests can assert on it deterministically.
+pub(crate) fn run_archive_hook_inner(
+    workspace_id: &str,
+    workspace_dir: &Path,
+    repo_root: &Path,
+) -> ArchiveHookOutcome {
     let record = match workspace_models::load_workspace_record_by_id(workspace_id) {
         Ok(Some(r)) => r,
-        _ => return,
+        _ => return ArchiveHookOutcome::WorkspaceMissing,
     };
     let scripts = match repos::load_repo_scripts(&record.repo_id, Some(workspace_id)) {
         Ok(s) => s,
-        Err(_) => return,
+        Err(_) => return ArchiveHookOutcome::ScriptsLoadFailed,
     };
     let script = match scripts.archive_script.filter(|s| !s.trim().is_empty()) {
         Some(s) => s,
-        None => return,
+        None => return ArchiveHookOutcome::NoScript,
     };
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
@@ -227,15 +271,11 @@ fn run_archive_hook(workspace_id: &str, workspace_dir: &Path, repo_root: &Path) 
         .status();
 
     match status {
-        Ok(s) if s.success() => {
-            tracing::info!(workspace_id, "Archive hook succeeded");
-        }
-        Ok(s) => {
-            tracing::warn!(workspace_id, code = ?s.code(), "Archive hook exited with error");
-        }
-        Err(e) => {
-            tracing::warn!(workspace_id, error = %e, "Archive hook failed to spawn");
-        }
+        Ok(s) if s.success() => ArchiveHookOutcome::Success,
+        Ok(s) => ArchiveHookOutcome::ScriptError { code: s.code() },
+        Err(e) => ArchiveHookOutcome::SpawnError {
+            message: e.to_string(),
+        },
     }
 }
 
@@ -781,4 +821,55 @@ fn load_setup_script_from_project_config(workspace_dir: &Path) -> Result<Option<
         .and_then(|v| v.get("setup"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Phase 0 baseline tests. Exercise the archive-hook outcome enum without
+    //! requiring a real workspace in the database: the WorkspaceMissing path is
+    //! the easiest to reach deterministically from a unit test.
+    //!
+    //! Phase 2's per-OS shell refactor must keep these passing; the shell
+    //! selection change in Phase 2 should add `#[cfg(windows)]`-gated tests
+    //! that exercise the Success path with `cmd.exe /C`.
+    use super::*;
+
+    #[test]
+    fn archive_hook_inner_returns_workspace_missing_for_unknown_id() {
+        let tmp = std::env::temp_dir();
+        let outcome = run_archive_hook_inner("nonexistent-workspace-id", &tmp, &tmp);
+        // Whatever the DB state, an unknown workspace id must short-circuit to
+        // WorkspaceMissing or ScriptsLoadFailed — never spawn a shell or Success.
+        assert!(
+            matches!(
+                outcome,
+                ArchiveHookOutcome::WorkspaceMissing | ArchiveHookOutcome::ScriptsLoadFailed
+            ),
+            "unexpected outcome for unknown workspace id: {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn archive_hook_outcome_debug_is_stable() {
+        // Lock the debug representations that show up in logs/test diagnostics.
+        assert_eq!(format!("{:?}", ArchiveHookOutcome::Success), "Success");
+        assert_eq!(format!("{:?}", ArchiveHookOutcome::NoScript), "NoScript");
+        assert_eq!(
+            format!("{:?}", ArchiveHookOutcome::ScriptError { code: Some(7) }),
+            "ScriptError { code: Some(7) }"
+        );
+    }
+
+    #[test]
+    fn archive_hook_outcome_equality() {
+        assert_eq!(
+            ArchiveHookOutcome::ScriptError { code: Some(1) },
+            ArchiveHookOutcome::ScriptError { code: Some(1) }
+        );
+        assert_ne!(
+            ArchiveHookOutcome::ScriptError { code: Some(1) },
+            ArchiveHookOutcome::ScriptError { code: Some(2) }
+        );
+        assert_ne!(ArchiveHookOutcome::Success, ArchiveHookOutcome::NoScript);
+    }
 }
