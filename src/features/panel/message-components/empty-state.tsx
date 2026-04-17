@@ -1,6 +1,7 @@
 import {
 	Archive,
 	Hammer,
+	Lightbulb,
 	type LucideIcon,
 	MessageSquareText,
 	Play,
@@ -66,7 +67,17 @@ export function EmptyState({
 				</EmptyDescription>
 			</EmptyHeader>
 			{showScriptActions ? (
-				<EmptyContent className="mt-4 max-w-[22.25rem] items-stretch gap-2">
+				<div
+					aria-hidden="true"
+					className="flex w-full max-w-[24rem] items-center gap-2"
+				>
+					<span className="h-px flex-1 bg-muted-foreground/12" />
+					<span className="size-[3px] rounded-full bg-muted-foreground/12" />
+					<span className="h-px flex-1 bg-muted-foreground/12" />
+				</div>
+			) : null}
+			{showScriptActions ? (
+				<EmptyContent className="mt-1 max-w-[22.25rem] items-stretch gap-2">
 					{missingScriptTypes.map((scriptType) => {
 						const item = SCRIPT_ACTION_COPY[scriptType];
 						const Icon = item.icon;
@@ -92,10 +103,16 @@ export function EmptyState({
 							</button>
 						);
 					})}
-					<p className="mt-2 w-full text-center text-[11.5px] leading-[1.55] text-muted-foreground">
-						<span className="font-medium text-foreground/80">Tips:</span>{" "}
-						Configuring these scripts upgrades your dev loop — click any item
-						and let AI set it up for you.
+					<p className="mt-2 flex w-full items-center justify-center gap-1.5 whitespace-nowrap text-[11.5px] leading-[1.55] text-muted-foreground">
+						<Lightbulb
+							className="size-3 text-foreground/80"
+							fill="currentColor"
+							strokeWidth={1.5}
+						/>
+						<span>
+							<span className="font-medium text-foreground/80">Tips:</span>{" "}
+							Configuring these scripts upgrades your dev loop.
+						</span>
 					</p>
 				</EmptyContent>
 			) : null}
