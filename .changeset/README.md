@@ -10,7 +10,7 @@ the application version in sync across:
 Create a changeset for user-visible changes with:
 
 ```bash
-pnpm changeset
+bun run changeset
 ```
 
 Merge the generated release PR when the next Helmor release is ready, then run

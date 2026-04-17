@@ -37,7 +37,7 @@ jobs:
             frontend:
               - '.github/**'
               - 'package.json'
-              - 'pnpm-lock.yaml'
+              - 'bun.lock'
               - 'tsconfig.json'
               - 'tsconfig.node.json'
               - 'vite.config.ts'
@@ -50,7 +50,7 @@ jobs:
             sidecar:
               - '.github/**'
               - 'package.json'
-              - 'pnpm-lock.yaml'
+              - 'bun.lock'
               - 'sidecar/**'
               - 'tsconfig.json'
               - 'tsconfig.node.json'
@@ -60,7 +60,7 @@ jobs:
               - '.github/actions/setup-rust-tauri/action.yml'
               - '.github/actions/build-sidecar/action.yml'
               - 'package.json'
-              - 'pnpm-lock.yaml'
+              - 'bun.lock'
               - 'src-tauri/**'
               - 'sidecar/**'
 
@@ -78,7 +78,7 @@ jobs:
         uses: ./.github/actions/setup-js
 
       - name: Run frontend tests
-        run: pnpm run test:frontend
+        run: bun run test:frontend
 
   sidecar-test:
     name: Sidecar Test
@@ -94,7 +94,7 @@ jobs:
         uses: ./.github/actions/setup-js
 
       - name: Run sidecar tests
-        run: pnpm run test:sidecar
+        run: bun run test:sidecar
 
   rust-test:
     name: Rust Test

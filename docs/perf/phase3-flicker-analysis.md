@@ -165,7 +165,7 @@ Verify: chrome-devtools MCP scenario captures all 3 metrics in one run.
         upward without user input, total scrollHeight stable for ≥ 1s
         before declaring "done".
 
-Guard: pnpm tsc --noEmit && pnpm vitest run && pnpm run build
+Guard: bun x tsc --noEmit && bun x vitest run && bun run build
 ```
 
 ### Verification scenario script (chrome-devtools MCP)
@@ -225,7 +225,7 @@ function sampleStability({ ms, framesPerSample }) {
    - **Test**: temporarily disable content-visibility, see if cambridge-v3 still cascades.
 
 5. **H5**: Tauri WKWebView's first-frame slowness comes from cold lazy chunk imports + initial mount of Lexical/Streamdown deps. Pre-warming earlier helps.
-   - **Test**: cold-start Tauri (`pnpm tauri build` then run), measure first-mount FPS. Add aggressive preload, re-measure.
+   - **Test**: cold-start Tauri (`bun x tauri build` then run), measure first-mount FPS. Add aggressive preload, re-measure.
 
 ## Possible solutions to try (iter ideas)
 

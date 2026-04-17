@@ -2,7 +2,7 @@
 	"name": "helmor",
 	"private": true,
 	"version": "0.1.0",
-	"packageManager": "pnpm@10.13.1",
+	"packageManager": "bun@1.3.2",
 	"type": "module",
 	"scripts": {
 		"changeset": "changeset",
@@ -10,7 +10,7 @@
 		"dev:analyze": "VITE_HELMOR_PERF_HUD=1 tauri dev",
 		"build": "tsc && vite build",
 		"preview": "vite preview",
-		"test": "pnpm run test:frontend && pnpm run test:sidecar && pnpm run test:rust",
+		"test": "bun run test:frontend && bun run test:sidecar && bun run test:rust",
 		"test:frontend": "vitest run",
 		"test:frontend:watch": "vitest",
 		"test:sidecar": "cd sidecar && bun test",
@@ -32,7 +32,7 @@
 		"release:notes": "node scripts/extract-release-notes.mjs",
 		"release:sync-versions": "node scripts/sync-release-versions.mjs",
 		"release:verify": "node scripts/verify-release-config.mjs",
-		"release:version": "changeset version && pnpm run release:sync-versions",
+		"release:version": "changeset version && bun run release:sync-versions",
 		"storybook": "storybook dev -p 6006",
 		"build-storybook": "storybook build"
 	},
@@ -135,5 +135,12 @@
 			"bash -c 'cargo fmt --manifest-path src-tauri/Cargo.toml --all'",
 			"bash -c 'cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings'"
 		]
-	}
+	},
+	"trustedDependencies": [
+		"@tauri-apps/cli",
+		"playwright",
+		"esbuild",
+		"@parcel/watcher",
+		"husky"
+	]
 }

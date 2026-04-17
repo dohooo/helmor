@@ -12,7 +12,7 @@ runs:
   steps:
     - name: Build sidecar binary
       shell: bash
-      run: pnpm --dir sidecar run build
+      run: cd sidecar && bun run build
 
     - name: Copy sidecar binary for Tauri externalBin
       shell: bash

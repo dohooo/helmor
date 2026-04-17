@@ -25,7 +25,7 @@ The script will:
 - verify version alignment across release files
 - confirm the requested codesigning identity exists
 - verify `notarytool` is available
-- run `pnpm tauri build --bundles app,dmg --ci`
+- run `bun x tauri build --bundles app,dmg --ci`
 - re-sign nested vendored executables that ship inside `Resources/vendor`
 - notarize and staple the macOS app bundle
 
