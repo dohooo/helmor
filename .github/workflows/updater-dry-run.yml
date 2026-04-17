@@ -1,0 +1,130 @@
+name: Updater Manifest Dry-Run
+
+# Validates that the `latest.json` updater manifest on a given release has the
+# expected per-platform entries, reachable URLs, and well-formed minisign
+# signatures BEFORE users' auto-update pulls a broken release.
+#
+# Trigger manually via workflow_dispatch, pass a tag (e.g. v0.2.0-alpha) and
+# the workflow fetches + validates that release's manifest. No code is
+# changed; this is purely a pre-flight check.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag (e.g. v0.2.0) or 'latest' to validate"
+        required: false
+        default: "latest"
+        type: string
+      # Platforms expected in latest.json. Default reflects the v1
+      # multi-platform shape once Windows + Linux ship.
+      expected_platforms:
+        description: "Comma-separated platform keys the manifest MUST contain"
+        required: false
+        default: "darwin-aarch64,windows-x86_64,linux-x86_64"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CI: true
+
+jobs:
+  validate:
+    name: Validate latest.json
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Resolve release URL
+        id: release
+        run: |
+          TAG="${{ inputs.tag }}"
+          REPO="${GITHUB_REPOSITORY}"
+          if [ "${TAG}" = "latest" ]; then
+            URL="https://github.com/${REPO}/releases/latest/download/latest.json"
+          else
+            URL="https://github.com/${REPO}/releases/download/${TAG}/latest.json"
+          fi
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+          echo "Validating ${URL}"
+
+      - name: Fetch latest.json
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 -o latest.json "${{ steps.release.outputs.url }}"
+          echo "--- latest.json contents ---"
+          cat latest.json
+          echo "----------------------------"
+
+      - name: Assert top-level shape
+        run: |
+          set -euo pipefail
+          jq -e 'has("version") and has("platforms")' latest.json > /dev/null \
+            || (echo "::error::latest.json missing top-level version/platforms" && exit 1)
+          jq -r '.version' latest.json
+
+      - name: Assert expected platform entries present
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra EXPECTED <<< "${{ inputs.expected_platforms }}"
+          for key in "${EXPECTED[@]}"; do
+            if ! jq -e ".platforms[\"${key}\"]" latest.json > /dev/null; then
+              echo "::error::latest.json is missing platform entry: ${key}"
+              jq '.platforms | keys' latest.json
+              exit 1
+            fi
+            echo "✓ platforms.${key} present"
+          done
+
+      - name: Assert each entry has url + signature + reachable url
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra EXPECTED <<< "${{ inputs.expected_platforms }}"
+          for key in "${EXPECTED[@]}"; do
+            url=$(jq -r ".platforms[\"${key}\"].url" latest.json)
+            sig=$(jq -r ".platforms[\"${key}\"].signature" latest.json)
+            if [ -z "${url}" ] || [ "${url}" = "null" ]; then
+              echo "::error::platforms.${key}.url missing"
+              exit 1
+            fi
+            if [ -z "${sig}" ] || [ "${sig}" = "null" ]; then
+              echo "::error::platforms.${key}.signature missing"
+              exit 1
+            fi
+
+            # HEAD the artifact URL — do not download, just confirm 200 OK
+            # and a plausible Content-Length.
+            headers=$(curl -sLI "${url}")
+            http_status=$(printf '%s\n' "${headers}" | awk 'BEGIN{RS="\r\n\r\n"} NR==1 || /^HTTP\// {st=$2} END{print st}')
+            content_length=$(printf '%s\n' "${headers}" | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r')
+            if [ "${http_status}" != "200" ]; then
+              echo "::error::platforms.${key}.url ${url} returned HTTP ${http_status}"
+              exit 1
+            fi
+            if [ -z "${content_length}" ] || [ "${content_length}" -lt 1048576 ]; then
+              echo "::warning::platforms.${key}.url has Content-Length=${content_length:-unknown} (< 1MB) — suspicious"
+            fi
+            echo "✓ platforms.${key}.url ${url} → ${http_status} (${content_length:-?} bytes)"
+
+            # Signature must be a non-empty minisign trusted-comment block.
+            # A real minisign sig is 2 lines; we assert length > 40 chars as
+            # a cheap sanity check without needing minisign installed.
+            sig_len=${#sig}
+            if [ "${sig_len}" -lt 40 ]; then
+              echo "::error::platforms.${key}.signature is suspiciously short (${sig_len} chars)"
+              exit 1
+            fi
+            echo "✓ platforms.${key}.signature is ${sig_len} chars"
+          done
+
+      - name: Summary
+        run: |
+          echo "### latest.json dry-run passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- URL: ${{ steps.release.outputs.url }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Version: $(jq -r .version latest.json)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Platforms checked: ${{ inputs.expected_platforms }}" >> "$GITHUB_STEP_SUMMARY"
