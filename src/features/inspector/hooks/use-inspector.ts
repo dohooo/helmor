@@ -11,7 +11,12 @@ import { flushSync } from "react-dom";
 import { loadRepoScripts, type RepoScripts } from "@/lib/api";
 import type { InspectorFileItem } from "@/lib/editor-session";
 import { workspaceChangesQueryOptions } from "@/lib/query-client";
-import { MIN_SECTION_HEIGHT, TABS_ANIMATION_MS, TABS_EASING } from "../layout";
+import {
+	DEFAULT_TABS_BODY_HEIGHT,
+	MIN_SECTION_HEIGHT,
+	TABS_ANIMATION_MS,
+	TABS_EASING,
+} from "../layout";
 
 const DEFAULT_CHANGES_RATIO = 0.6;
 const DEFAULT_ACTIONS_RATIO = 0.4;
@@ -29,26 +34,16 @@ type UseWorkspaceInspectorSidebarArgs = {
 	workspaceRootPath?: string | null;
 	workspaceId: string | null;
 	repoId: string | null;
-	workspaceState?: string | null;
 };
 
 export function useWorkspaceInspectorSidebar({
 	workspaceRootPath,
 	workspaceId,
 	repoId,
-	workspaceState,
 }: UseWorkspaceInspectorSidebarArgs) {
 	const [tabsOpen, setTabsOpen] = useState(false);
 	const [activeTab, setActiveTab] = useState("setup");
 	const [pendingRunScript, setPendingRunScript] = useState(false);
-
-	// Auto-open the setup tab when workspace needs setup.
-	useEffect(() => {
-		if (workspaceState === "setup_pending") {
-			setTabsOpen(true);
-			setActiveTab("setup");
-		}
-	}, [workspaceState]);
 
 	// Listen for Cmd+R "run script" shortcut event.
 	useEffect(() => {
@@ -78,7 +73,7 @@ export function useWorkspaceInspectorSidebar({
 		const available = Math.max(0, element.clientHeight - overhead);
 		const resizableAvailable = Math.max(
 			MIN_SECTION_HEIGHT * 2,
-			available - MIN_SECTION_HEIGHT,
+			available - DEFAULT_TABS_BODY_HEIGHT,
 		);
 		setChangesHeight(Math.round(resizableAvailable * DEFAULT_CHANGES_RATIO));
 		setActionsHeight(Math.round(resizableAvailable * DEFAULT_ACTIONS_RATIO));
