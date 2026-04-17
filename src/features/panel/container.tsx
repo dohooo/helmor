@@ -17,7 +17,10 @@ import {
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
-import { resolveSessionDisplayProvider } from "@/lib/workspace-helpers";
+import {
+	isOptimisticCreatingWorkspaceId,
+	resolveSessionDisplayProvider,
+} from "@/lib/workspace-helpers";
 import {
 	WORKSPACE_SCRIPT_PROMPTS,
 	type WorkspaceScriptType,
@@ -73,11 +76,15 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 
 	const detailQuery = useQuery({
 		...workspaceDetailQueryOptions(displayedWorkspaceId ?? "__none__"),
-		enabled: Boolean(displayedWorkspaceId),
+		enabled:
+			Boolean(displayedWorkspaceId) &&
+			!isOptimisticCreatingWorkspaceId(displayedWorkspaceId),
 	});
 	const sessionsQuery = useQuery({
 		...workspaceSessionsQueryOptions(displayedWorkspaceId ?? "__none__"),
-		enabled: Boolean(displayedWorkspaceId),
+		enabled:
+			Boolean(displayedWorkspaceId) &&
+			!isOptimisticCreatingWorkspaceId(displayedWorkspaceId),
 	});
 
 	const workspace = detailQuery.data ?? null;
@@ -109,7 +116,11 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			return;
 		}
 
-		if (workspace.state === "archived" || sessions.length > 0) {
+		if (
+			workspace.state === "archived" ||
+			workspace.state === "initializing" ||
+			sessions.length > 0
+		) {
 			autoCreatingWorkspaceRef.current.delete(displayedWorkspaceId);
 			return;
 		}

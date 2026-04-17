@@ -144,6 +144,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 					) : (
 						<div className="flex min-h-full flex-1 items-center justify-center px-8">
 							<EmptyState
+								workspaceState={workspace?.state ?? null}
 								hasSession={!!selectedSession}
 								missingScriptTypes={missingScriptTypes}
 								onInitializeScript={onInitializeScript}

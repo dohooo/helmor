@@ -32,6 +32,7 @@ import {
 	findModelOption,
 	getComposerContextKey,
 	isNewSession,
+	isOptimisticCreatingWorkspaceId,
 	resolveSessionSelectedModelId,
 } from "@/lib/workspace-helpers";
 import type { DeferredToolResponseHandler } from "./deferred-tool";
@@ -138,11 +139,15 @@ export const WorkspaceComposerContainer = memo(
 		const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
 		const workspaceDetailQuery = useQuery({
 			...workspaceDetailQueryOptions(displayedWorkspaceId ?? "__none__"),
-			enabled: Boolean(displayedWorkspaceId),
+			enabled:
+				Boolean(displayedWorkspaceId) &&
+				!isOptimisticCreatingWorkspaceId(displayedWorkspaceId),
 		});
 		const sessionsQuery = useQuery({
 			...workspaceSessionsQueryOptions(displayedWorkspaceId ?? "__none__"),
-			enabled: Boolean(displayedWorkspaceId),
+			enabled:
+				Boolean(displayedWorkspaceId) &&
+				!isOptimisticCreatingWorkspaceId(displayedWorkspaceId),
 		});
 
 		const modelSections = modelSectionsQuery.data ?? EMPTY_MODEL_SECTIONS;
@@ -227,6 +232,8 @@ export const WorkspaceComposerContainer = memo(
 			(workspaceDetailQuery.isPending || sessionsQuery.isPending);
 		const composerDisabled =
 			displayedWorkspaceId === null ||
+			isOptimisticCreatingWorkspaceId(displayedWorkspaceId) ||
+			workspaceDetailQuery.data?.state === "initializing" ||
 			workspaceDetailQuery.data?.state === "archived";
 
 		// Auto-close opt-in state comes from settings: `auto_close_action_kinds`

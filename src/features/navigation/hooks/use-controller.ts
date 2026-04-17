@@ -12,11 +12,14 @@ import {
 	permanentlyDeleteWorkspace,
 	pinWorkspace,
 	prepareArchiveWorkspace,
+	type RepositoryCreateOption,
 	restoreWorkspace,
 	setWorkspaceManualStatus,
 	startArchiveWorkspace,
 	unpinWorkspace,
 	validateRestoreWorkspace,
+	type WorkspaceDetail,
+	type WorkspaceGroup,
 	type WorkspaceRow,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
@@ -33,10 +36,13 @@ import { useSettings } from "@/lib/settings";
 import {
 	clearWorkspaceUnreadFromGroups,
 	clearWorkspaceUnreadFromSummaries,
+	createOptimisticCreatingWorkspaceDetail,
+	createOptimisticCreatingWorkspaceId,
 	describeUnknownError,
 	findInitialWorkspaceId,
 	findWorkspaceRowById,
 	hasWorkspaceId,
+	isOptimisticCreatingWorkspaceId,
 	rowToWorkspaceSummary,
 	summaryToArchivedRow,
 	workspaceGroupIdFromStatus,
@@ -82,6 +88,17 @@ export function useWorkspacesSidebarController({
 	const [suppressedWorkspaceReadId, setSuppressedWorkspaceReadId] = useState<
 		string | null
 	>(null);
+	const creatingWorkspaceRollbackRef = useRef<
+		Map<
+			string,
+			{
+				row: WorkspaceRow;
+				repoId: string;
+				previousGroups: WorkspaceGroup[] | undefined;
+				previousSelection: string | null;
+			}
+		>
+	>(new Map());
 
 	const archiveRollbackRef = useRef<
 		Map<
@@ -124,19 +141,30 @@ export function useWorkspacesSidebarController({
 
 	const baseGroups = groupsQuery.data ?? [];
 	const baseArchivedSummaries = archivedQuery.data ?? [];
+	const pendingCreatingEntries = Array.from(
+		creatingWorkspaceRollbackRef.current.entries(),
+	);
 	const pendingArchivedEntries = Array.from(
 		archiveRollbackRef.current.entries(),
 	);
 	const pendingArchivedIds = new Set(
 		pendingArchivedEntries.map(([workspaceId]) => workspaceId),
 	);
-	const groups =
+	const groupsWithoutArchived =
 		pendingArchivedIds.size === 0
 			? baseGroups
 			: baseGroups.map((group) => ({
 					...group,
 					rows: group.rows.filter((row) => !pendingArchivedIds.has(row.id)),
 				}));
+	const groups =
+		pendingCreatingEntries.length === 0
+			? groupsWithoutArchived
+			: pendingCreatingEntries.reduce(
+					(currentGroups, [, rollback]) =>
+						insertOptimisticWorkspaceRow(currentGroups, rollback.row),
+					groupsWithoutArchived,
+				);
 	const archivedSummaries =
 		pendingArchivedEntries.length === 0
 			? baseArchivedSummaries
@@ -761,14 +789,93 @@ export function useWorkspacesSidebarController({
 				return;
 			}
 
+			const repository = (repositoriesQuery.data ?? []).find(
+				(item) => item.id === repoId,
+			);
+			if (!repository) {
+				pushWorkspaceToast(
+					"Unable to resolve repository for workspace creation.",
+				);
+				return;
+			}
+
+			const optimisticWorkspaceId = createOptimisticCreatingWorkspaceId(repoId);
+			const optimisticRow = createOptimisticWorkspaceRow(
+				repository,
+				optimisticWorkspaceId,
+			);
+			const previousGroups = queryClient.getQueryData<WorkspaceGroup[]>(
+				helmorQueryKeys.workspaceGroups,
+			);
+			creatingWorkspaceRollbackRef.current.set(optimisticWorkspaceId, {
+				row: optimisticRow,
+				repoId,
+				previousGroups,
+				previousSelection: selectedWorkspaceId,
+			});
+
+			queryClient.setQueryData(
+				helmorQueryKeys.workspaceGroups,
+				(current: WorkspaceGroup[] | undefined) =>
+					insertOptimisticWorkspaceRow(current ?? groups, optimisticRow),
+			);
+			queryClient.setQueryData<WorkspaceDetail | null>(
+				helmorQueryKeys.workspaceDetail(optimisticWorkspaceId),
+				createOptimisticCreatingWorkspaceDetail(optimisticRow, repoId),
+			);
+			queryClient.setQueryData<WorkspaceSessionSummary[]>(
+				helmorQueryKeys.workspaceSessions(optimisticWorkspaceId),
+				[],
+			);
+
 			setCreatingWorkspaceRepoId(repoId);
+			onSelectWorkspace(optimisticWorkspaceId);
 
 			try {
 				const response = await createWorkspaceFromRepo(repoId);
+				creatingWorkspaceRollbackRef.current.delete(optimisticWorkspaceId);
+				queryClient.setQueryData(
+					helmorQueryKeys.workspaceGroups,
+					(current: WorkspaceGroup[] | undefined) =>
+						removeOptimisticWorkspaceRow(
+							current ?? groups,
+							optimisticWorkspaceId,
+						),
+				);
+				queryClient.removeQueries({
+					queryKey: helmorQueryKeys.workspaceDetail(optimisticWorkspaceId),
+					exact: true,
+				});
+				queryClient.removeQueries({
+					queryKey: helmorQueryKeys.workspaceSessions(optimisticWorkspaceId),
+					exact: true,
+				});
 				await refetchNavigation();
 				prefetchWorkspace(response.selectedWorkspaceId);
 				onSelectWorkspace(response.selectedWorkspaceId);
 			} catch (error) {
+				const rollback =
+					creatingWorkspaceRollbackRef.current.get(optimisticWorkspaceId) ??
+					null;
+				creatingWorkspaceRollbackRef.current.delete(optimisticWorkspaceId);
+				queryClient.setQueryData(
+					helmorQueryKeys.workspaceGroups,
+					rollback?.previousGroups ??
+						removeOptimisticWorkspaceRow(groups, optimisticWorkspaceId),
+				);
+				queryClient.removeQueries({
+					queryKey: helmorQueryKeys.workspaceDetail(optimisticWorkspaceId),
+					exact: true,
+				});
+				queryClient.removeQueries({
+					queryKey: helmorQueryKeys.workspaceSessions(optimisticWorkspaceId),
+					exact: true,
+				});
+				if (selectedWorkspaceId === optimisticWorkspaceId) {
+					onSelectWorkspace(
+						rollback?.previousSelection ?? findInitialWorkspaceId(groups),
+					);
+				}
 				pushWorkspaceToast(
 					describeUnknownError(error, "Unable to create workspace."),
 				);
@@ -778,10 +885,14 @@ export function useWorkspacesSidebarController({
 		},
 		[
 			creatingWorkspaceRepoId,
+			groups,
 			onSelectWorkspace,
 			prefetchWorkspace,
 			pushWorkspaceToast,
+			queryClient,
+			repositoriesQuery.data,
 			refetchNavigation,
+			selectedWorkspaceId,
 		],
 	);
 
@@ -1241,4 +1352,70 @@ export function useWorkspacesSidebarController({
 		handleTogglePin,
 		prefetchWorkspace,
 	};
+}
+
+function createOptimisticWorkspaceRow(
+	repository: RepositoryCreateOption,
+	workspaceId: string,
+): WorkspaceRow {
+	return {
+		id: workspaceId,
+		title: `Creating ${repository.name}`,
+		directoryName: workspaceId,
+		repoName: repository.name,
+		repoIconSrc: repository.repoIconSrc ?? null,
+		repoInitials: repository.repoInitials ?? null,
+		state: "initializing",
+		hasUnread: false,
+		workspaceUnread: 0,
+		sessionUnreadTotal: 0,
+		unreadSessionCount: 0,
+		derivedStatus: "in-progress",
+		manualStatus: null,
+		branch: null,
+		activeSessionId: null,
+		activeSessionTitle: null,
+		activeSessionAgentType: null,
+		activeSessionStatus: null,
+		prTitle: null,
+		pinnedAt: null,
+		sessionCount: 0,
+		messageCount: 0,
+		attachmentCount: 0,
+	};
+}
+
+function insertOptimisticWorkspaceRow(
+	groups: WorkspaceGroup[],
+	row: WorkspaceRow,
+): WorkspaceGroup[] {
+	return groups.map((group) =>
+		group.id === "progress"
+			? {
+					...group,
+					rows: group.rows.some((item) => item.id === row.id)
+						? group.rows
+						: [row, ...group.rows],
+				}
+			: group.rows.some((item) => item.id === row.id)
+				? {
+						...group,
+						rows: group.rows.filter((item) => item.id !== row.id),
+					}
+				: group,
+	);
+}
+
+function removeOptimisticWorkspaceRow(
+	groups: WorkspaceGroup[],
+	workspaceId: string,
+): WorkspaceGroup[] {
+	if (!isOptimisticCreatingWorkspaceId(workspaceId)) {
+		return groups;
+	}
+
+	return groups.map((group) => ({
+		...group,
+		rows: group.rows.filter((row) => row.id !== workspaceId),
+	}));
 }
