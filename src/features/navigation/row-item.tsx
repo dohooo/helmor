@@ -135,13 +135,14 @@ export const WorkspaceRowItem = memo(
 			: "bg-chart-2";
 		const showStatusDot =
 			statusDotLabel !== null && (isInteractionRequired || !selected);
+		const displayTitle = row.branch ? humanizeBranch(row.branch) : row.title;
 
 		const rowBody = (
 			<div
 				ref={rowRef}
 				role="button"
 				tabIndex={0}
-				aria-label={row.title}
+				aria-label={displayTitle}
 				data-workspace-row-id={row.id}
 				data-has-unread={row.hasUnread ? "true" : "false"}
 				onMouseEnter={() => {
@@ -170,7 +171,7 @@ export const WorkspaceRowItem = memo(
 						repoIconSrc={row.repoIconSrc}
 						repoInitials={row.repoInitials ?? row.avatar ?? null}
 						repoName={row.repoName}
-						title={row.title}
+						title={displayTitle}
 					/>
 					{isSending && !isInteractionRequired ? (
 						<HelmorThinkingIndicator size={13} />
@@ -195,10 +196,7 @@ export const WorkspaceRowItem = memo(
 									: "font-medium",
 						)}
 					>
-						<HyperText
-							text={row.branch ? humanizeBranch(row.branch) : row.title}
-							className="inline"
-						/>
+						<HyperText text={displayTitle} className="inline" />
 					</span>
 					{showStatusDot ? (
 						<span

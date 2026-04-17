@@ -13,6 +13,7 @@ import { stabilizeStreamingMessages } from "@/features/conversation/streaming-ta
 import type { AgentModelOption, ThreadMessageLike } from "@/lib/api";
 import {
 	generateSessionTitle,
+	renameSession,
 	respondToDeferredTool,
 	respondToElicitationRequest,
 	respondToPermissionRequest,
@@ -42,6 +43,24 @@ import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 
 const EMPTY_IMAGES: string[] = [];
 const EMPTY_FILES: string[] = [];
+
+function buildTitleSeed(prompt: string): string {
+	const normalized = prompt
+		.trim()
+		.split(/\r?\n/g)[0]
+		?.trim()
+		.replace(/\s+/g, " ");
+
+	if (!normalized) {
+		return "Untitled";
+	}
+
+	if (normalized.length <= 36) {
+		return normalized;
+	}
+
+	return `${normalized.slice(0, 33).trimEnd()}...`;
+}
 
 type PendingPermission = {
 	permissionId: string;
@@ -146,6 +165,50 @@ export function useConversationStreaming({
 	const elicitationResponsePending =
 		elicitationResponsePendingByContext[composerContextKey] ?? false;
 	const hasPlanReview = planReviewByContext[composerContextKey] ?? false;
+
+	const seedSessionTitle = useCallback(
+		(sessionId: string, workspaceId: string | null, title: string) => {
+			queryClient.setQueryData(
+				helmorQueryKeys.workspaceSessions(workspaceId ?? "__none__"),
+				(current: Array<Record<string, unknown>> | undefined) =>
+					(current ?? []).map((session) =>
+						session.id === sessionId ? { ...session, title } : session,
+					),
+			);
+			if (workspaceId) {
+				queryClient.setQueryData(
+					helmorQueryKeys.workspaceDetail(workspaceId),
+					(current: Record<string, unknown> | undefined) => {
+						if (!current || current.activeSessionId !== sessionId) {
+							return current;
+						}
+						return {
+							...current,
+							activeSessionTitle: title,
+						};
+					},
+				);
+				queryClient.setQueryData(
+					helmorQueryKeys.workspaceGroups,
+					(current: Array<Record<string, unknown>> | undefined) =>
+						(current ?? []).map((group) => ({
+							...group,
+							rows: Array.isArray(group.rows)
+								? group.rows.map((row: Record<string, unknown>) =>
+										row.id === workspaceId && row.activeSessionId === sessionId
+											? {
+													...row,
+													activeSessionTitle: title,
+												}
+											: row,
+									)
+								: group.rows,
+						})),
+				);
+			}
+		},
+		[queryClient],
+	);
 
 	const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
 	const selectedProvider = useMemo(() => {
@@ -915,6 +978,30 @@ export function useConversationStreaming({
 			// workspace-level contextKey, which would share cache entries
 			// across sessions and leak provider session IDs on resume.
 			const cacheSessionId = displayedSessionId;
+			const currentThread = readSessionThread(queryClient, cacheSessionId);
+			const currentSessions = displayedWorkspaceId
+				? queryClient.getQueryData<Array<Record<string, unknown>>>(
+						helmorQueryKeys.workspaceSessions(displayedWorkspaceId),
+					)
+				: undefined;
+			const currentSession = currentSessions?.find(
+				(session) => session.id === displayedSessionId,
+			);
+			const currentTitle =
+				typeof currentSession?.title === "string"
+					? currentSession.title
+					: undefined;
+			const isFirstUserMessage =
+				(currentThread ?? []).every((message) => message.role !== "user") &&
+				(currentTitle == null || currentTitle === "Untitled");
+			let titleSeed: string | null = null;
+			if (isFirstUserMessage) {
+				titleSeed = buildTitleSeed(trimmedPrompt);
+				seedSessionTitle(displayedSessionId, displayedWorkspaceId, titleSeed);
+				void renameSession(displayedSessionId, titleSeed).catch((error) => {
+					console.warn("[conversation] failed to seed session title:", error);
+				});
+			}
 			const rollbackSnapshot: SessionThreadSnapshot = appendUserMessage(
 				queryClient,
 				cacheSessionId,
@@ -949,31 +1036,31 @@ export function useConversationStreaming({
 
 			try {
 				if (displayedSessionId) {
-					void generateSessionTitle(displayedSessionId, trimmedPrompt).then(
-						(result) => {
-							if (result?.title || result?.branchRenamed) {
-								void Promise.all([
-									queryClient.invalidateQueries({
-										queryKey: helmorQueryKeys.workspaceGroups,
-									}),
-									displayedWorkspaceId
-										? queryClient.invalidateQueries({
-												queryKey:
-													helmorQueryKeys.workspaceSessions(
-														displayedWorkspaceId,
-													),
-											})
-										: undefined,
-									displayedWorkspaceId
-										? queryClient.invalidateQueries({
-												queryKey:
-													helmorQueryKeys.workspaceDetail(displayedWorkspaceId),
-											})
-										: undefined,
-								]);
-							}
-						},
-					);
+					void generateSessionTitle(
+						displayedSessionId,
+						trimmedPrompt,
+						titleSeed,
+					).then((result) => {
+						if (result?.title || result?.branchRenamed) {
+							void Promise.all([
+								queryClient.invalidateQueries({
+									queryKey: helmorQueryKeys.workspaceGroups,
+								}),
+								displayedWorkspaceId
+									? queryClient.invalidateQueries({
+											queryKey:
+												helmorQueryKeys.workspaceSessions(displayedWorkspaceId),
+										})
+									: undefined,
+								displayedWorkspaceId
+									? queryClient.invalidateQueries({
+											queryKey:
+												helmorQueryKeys.workspaceDetail(displayedWorkspaceId),
+										})
+									: undefined,
+							]);
+						}
+					});
 				}
 
 				const stopSessionId = displayedSessionId;

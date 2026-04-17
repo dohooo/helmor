@@ -9,11 +9,7 @@ import type {
 	WorkspaceDetail,
 	WorkspaceSessionSummary,
 } from "@/lib/api";
-import {
-	createSession,
-	generateSessionTitle,
-	loadRepoScripts,
-} from "@/lib/api";
+import { createSession, loadRepoScripts } from "@/lib/api";
 import {
 	helmorQueryKeys,
 	sessionThreadMessagesQueryOptions,
@@ -74,7 +70,6 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 }: WorkspacePanelContainerProps) {
 	const queryClient = useQueryClient();
 	const { settings } = useSettings();
-	const autoTitleAttemptedRef = useRef<Set<string>>(new Set());
 
 	const detailQuery = useQuery({
 		...workspaceDetailQueryOptions(displayedWorkspaceId ?? "__none__"),
@@ -406,50 +401,6 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		displayedWorkspaceId,
 		invalidateWorkspaceQueries,
 		queryClient,
-		threadSessionId,
-	]);
-
-	// When a non-action session is displayed and its first user message is
-	// available, do one best-effort naming check. The backend decides whether
-	// the session title and/or branch still need work.
-	useEffect(() => {
-		if (!threadSessionId || !displayedWorkspaceId) return;
-
-		if (autoTitleAttemptedRef.current.has(threadSessionId)) return;
-
-		const currentSession = sessions.find(
-			(session) => session.id === threadSessionId,
-		);
-		if (!currentSession || currentSession.actionKind) return;
-
-		const messages = messagesQuery.data;
-		if (!messages || messages.length === 0) return;
-
-		const firstUserMessage = messages.find(
-			(message) => message.role === "user",
-		);
-		if (!firstUserMessage) return;
-
-		autoTitleAttemptedRef.current.add(threadSessionId);
-
-		const userText = firstUserMessage.content
-			.filter(
-				(part): part is { type: "text"; text: string } => part.type === "text",
-			)
-			.map((part) => part.text)
-			.join("\n");
-		if (!userText) return;
-
-		void generateSessionTitle(threadSessionId, userText).then((result) => {
-			if (result?.title || result?.branchRenamed) {
-				void invalidateWorkspaceQueries();
-			}
-		});
-	}, [
-		displayedWorkspaceId,
-		invalidateWorkspaceQueries,
-		messagesQuery.data,
-		sessions,
 		threadSessionId,
 	]);
 

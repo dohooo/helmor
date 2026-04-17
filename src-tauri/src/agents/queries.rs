@@ -14,6 +14,7 @@ use super::CmdResult;
 pub struct GenerateSessionTitleRequest {
     pub session_id: String,
     pub user_message: String,
+    pub title_seed: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -24,9 +25,17 @@ pub struct GenerateSessionTitleResponse {
     pub skipped: bool,
 }
 
-/// Sidecar response timeout — generous to cover LLM latency + sidecar's own
-/// 15 s abort, but bounded so we never block a Tauri command thread forever.
-const TITLE_GEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Sidecar response timeout. The sidecar gives Claude 30 s and Codex fallback
+/// another 30 s, so keep a small buffer here for request handoff and delivery.
+const TITLE_GEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(65);
+
+fn can_replace_session_title(current_title: &str, title_seed: Option<&str>) -> bool {
+    current_title == "Untitled"
+        || title_seed
+            .map(str::trim)
+            .filter(|seed| !seed.is_empty())
+            .is_some_and(|seed| current_title == seed)
+}
 
 pub async fn generate_session_title(
     app: AppHandle,
@@ -43,7 +52,15 @@ pub async fn generate_session_title(
         )
         .map_err(|e| anyhow::anyhow!("Session not found: {e}"))?;
 
-    let should_generate_title = action_kind.is_none() && current_title == "Untitled";
+    let should_generate_title = action_kind.is_none()
+        && can_replace_session_title(&current_title, request.title_seed.as_deref());
+    tracing::debug!(
+        session_id = %request.session_id,
+        current_title,
+        title_seed = request.title_seed.as_deref().unwrap_or(""),
+        should_generate_title,
+        "generate_session_title title gating resolved"
+    );
 
     let workspace_info: Option<(String, Option<String>, String, Option<String>)> =
         if action_kind.is_none() {
@@ -83,6 +100,10 @@ pub async fn generate_session_title(
             });
 
     if !should_generate_title && !should_generate_branch {
+        tracing::debug!(
+            session_id = %request.session_id,
+            "generate_session_title skipped: neither title nor branch needs generation"
+        );
         return Ok(GenerateSessionTitleResponse {
             title: None,
             branch_renamed: false,
@@ -109,6 +130,7 @@ pub async fn generate_session_title(
     let session_id = request.session_id.clone();
     let result: (Option<String>, Option<String>) = tauri::async_runtime::spawn_blocking({
         let rid = request_id;
+        let session_id_for_logs = session_id.clone();
         move || {
             let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
             let mut title: Option<String> = None;
@@ -130,6 +152,12 @@ pub async fn generate_session_title(
                                 .and_then(Value::as_str)
                                 .map(str::to_string)
                                 .filter(|branch| !branch.is_empty());
+                            tracing::debug!(
+                                session_id = %session_id_for_logs,
+                                generated_title = title.as_deref().unwrap_or(""),
+                                generated_branch = branch_name.as_deref().unwrap_or(""),
+                                "generate_session_title received titleGenerated"
+                            );
                             break;
                         }
                         "error" => {
@@ -167,8 +195,34 @@ pub async fn generate_session_title(
 
     if should_generate_title {
         if let Some(ref title) = generated_title {
-            crate::sessions::rename_session(&session_id, title)
-                .map_err(|e| anyhow::anyhow!("Failed to rename session: {e}"))?;
+            let connection =
+                open_write_connection().map_err(|e| anyhow::anyhow!("Failed to open DB: {e}"))?;
+            let latest_title: String = connection
+                .query_row(
+                    "SELECT title FROM sessions WHERE id = ?1",
+                    [&session_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| anyhow::anyhow!("Failed to re-read session title: {e}"))?;
+
+            if can_replace_session_title(&latest_title, request.title_seed.as_deref()) {
+                crate::sessions::rename_session(&session_id, title)
+                    .map_err(|e| anyhow::anyhow!("Failed to rename session: {e}"))?;
+                tracing::debug!(
+                    session_id = %session_id,
+                    title,
+                    latest_title,
+                    title_seed = request.title_seed.as_deref().unwrap_or(""),
+                    "Auto session rename applied"
+                );
+            } else {
+                tracing::debug!(
+                    session_id = %session_id,
+                    latest_title,
+                    title_seed = request.title_seed.as_deref().unwrap_or(""),
+                    "Skipping auto session rename: title changed while generation was in flight"
+                );
+            }
         }
     }
 

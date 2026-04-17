@@ -563,12 +563,10 @@ export class ClaudeSessionManager implements SessionManager {
 		requestId: string,
 		userMessage: string,
 		emitter: SidecarEmitter,
+		timeoutMs = TITLE_GENERATION_TIMEOUT_MS,
 	): Promise<void> {
 		const abortController = new AbortController();
-		const timeout = setTimeout(
-			() => abortController.abort(),
-			TITLE_GENERATION_TIMEOUT_MS,
-		);
+		const timeout = setTimeout(() => abortController.abort(), timeoutMs);
 
 		const q = query({
 			prompt: buildTitlePrompt(userMessage),
