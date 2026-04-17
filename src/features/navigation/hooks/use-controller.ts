@@ -902,21 +902,24 @@ export function useWorkspacesSidebarController({
 				prefetchWorkspace(response.selectedWorkspaceId);
 				void refetchNavigation();
 			} catch (error) {
-				let rollback: {
-					entry: PendingCreationEntry;
-					previousGroups: WorkspaceGroup[] | undefined;
-					previousSelection: string | null;
-				} | null = null;
+				const rollbackHolder = {
+					value: null as {
+						entry: PendingCreationEntry;
+						previousGroups: WorkspaceGroup[] | undefined;
+						previousSelection: string | null;
+					} | null,
+				};
 				setPendingCreations((current) => {
 					const pendingCreation = current.get(optimisticWorkspaceId) ?? null;
 					if (!pendingCreation) {
 						return current;
 					}
-					rollback = pendingCreation;
+					rollbackHolder.value = pendingCreation;
 					const next = new Map(current);
 					next.delete(optimisticWorkspaceId);
 					return next;
 				});
+				const rollback = rollbackHolder.value;
 				if (rollback?.previousGroups) {
 					queryClient.setQueryData(
 						helmorQueryKeys.workspaceGroups,
@@ -1149,9 +1152,11 @@ export function useWorkspacesSidebarController({
 				const previousGroups =
 					queryClient.getQueryData(helmorQueryKeys.workspaceGroups) ?? groups;
 
-				let movedRow: WorkspaceRow | null = null;
-				let sourceGroupId: string | null = null;
-				let sourceIndex = -1;
+				const moved = {
+					row: null as WorkspaceRow | null,
+					groupId: null as string | null,
+					index: -1,
+				};
 				const optimisticGroups = Array.isArray(previousGroups)
 					? (previousGroups as typeof groups).map((group) => {
 							const index = group.rows.findIndex(
@@ -1160,9 +1165,9 @@ export function useWorkspacesSidebarController({
 							if (index === -1) {
 								return group;
 							}
-							movedRow = group.rows[index];
-							sourceGroupId = group.id;
-							sourceIndex = index;
+							moved.row = group.rows[index];
+							moved.groupId = group.id;
+							moved.index = index;
 							return {
 								...group,
 								rows: [
@@ -1174,10 +1179,10 @@ export function useWorkspacesSidebarController({
 					: undefined;
 
 				if (
-					!movedRow ||
+					!moved.row ||
 					!optimisticGroups ||
-					sourceGroupId === null ||
-					sourceIndex < 0
+					moved.groupId === null ||
+					moved.index < 0
 				) {
 					updateArchivingWorkspaceId(workspaceId, false);
 					pushWorkspaceToast(
@@ -1191,11 +1196,11 @@ export function useWorkspacesSidebarController({
 				const sortTimestamp = Date.now();
 				const pendingArchive: PendingArchiveEntry = {
 					row: {
-						...movedRow,
+						...moved.row,
 						state: "archived",
 					},
-					sourceGroupId,
-					sourceIndex,
+					sourceGroupId: moved.groupId,
+					sourceIndex: moved.index,
 					stage: "running",
 					sortTimestamp,
 				};
