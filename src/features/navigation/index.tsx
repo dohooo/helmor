@@ -414,9 +414,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						markingUnreadWorkspaceId={markingUnreadWorkspaceId}
 						restoringWorkspaceId={restoringWorkspaceId}
 						workspaceActionsDisabled={Boolean(
-							creatingWorkspaceRepoId ||
-								markingUnreadWorkspaceId ||
-								restoringWorkspaceId,
+							markingUnreadWorkspaceId || restoringWorkspaceId,
 						)}
 						{...(item.isArchived
 							? {
