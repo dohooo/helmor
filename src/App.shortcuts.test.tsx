@@ -31,6 +31,17 @@ vi.mock("./App.css", () => ({}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
 	open: vi.fn(),
 }));
+// The shortcut suite is written against macOS conventions (metaKey = Cmd).
+// jsdom's default userAgent is Linux, so without this mock `isMac()` would
+// return false and the strict OS-aware isPrimaryModifier would expect
+// ctrlKey instead. Forcing platform="mac" here keeps the test intent
+// explicit: exercise the macOS shortcut path.
+vi.mock("./lib/platform", () => ({
+	getPlatform: () => "mac",
+	isMac: () => true,
+	isWindows: () => false,
+	isLinux: () => false,
+}));
 vi.mock("@tauri-apps/api/window", () => ({
 	getCurrentWindow: () => ({
 		onCloseRequested: windowApiMocks.onCloseRequested.mockImplementation(
@@ -645,32 +656,30 @@ describe("App global navigation shortcuts", () => {
 		});
 	});
 
-	it("only responds to the primary-mod + alt combination (rejects missing alt, missing primary, and shift)", async () => {
+	it("only responds to the exact meta+alt shortcut combination", async () => {
 		await renderAppReady();
 
-		// Missing alt — must NOT trigger.
 		fireEvent.keyDown(window, {
 			key: "ArrowRight",
 			metaKey: true,
 		});
-		// Missing primary modifier (no meta / no ctrl) — must NOT trigger.
 		fireEvent.keyDown(window, {
 			key: "ArrowRight",
 			altKey: true,
 		});
-		// Shift present — must NOT trigger (shift changes semantic).
 		fireEvent.keyDown(window, {
 			key: "ArrowDown",
 			metaKey: true,
 			altKey: true,
 			shiftKey: true,
 		});
-		// Post Phase 3: meta + ctrl + alt (no shift) IS valid loose-binding —
-		// we expect this keystroke to navigate, so dispatch a no-op key instead
-		// to keep the test's "no accidental nav" assertion honest.
+		// Strict OS-aware binding: on macOS ctrlKey is the "wrong" modifier
+		// and must reject the shortcut. Restored original pre-Phase-3 assertion.
 		fireEvent.keyDown(window, {
 			key: "ArrowDown",
-			shiftKey: true,
+			metaKey: true,
+			altKey: true,
+			ctrlKey: true,
 		});
 
 		await waitFor(() => {

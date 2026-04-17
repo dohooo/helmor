@@ -37,7 +37,10 @@ import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import { closeWorkspaceSession } from "@/features/panel/session-close";
 import { SettingsButton, SettingsDialog } from "@/features/settings";
 import { useAppUpdater } from "@/features/updater/use-app-updater";
-import { isPrimaryModifier } from "@/lib/keyboard-modifier";
+import {
+	hasSecondaryModifier,
+	isPrimaryModifier,
+} from "@/lib/keyboard-modifier";
 import { EditorIcon } from "@/shell/editor-icon";
 import { GithubIdentityGate } from "@/shell/github-identity-gate";
 import { GithubStatusMenu } from "@/shell/github-status-menu";
@@ -1566,7 +1569,14 @@ function AppShell({
 
 		const handleWindowKeyDown = (event: globalThis.KeyboardEvent) => {
 			// Cmd+Option (macOS) or Ctrl+Alt (Windows / Linux) +arrow to navigate.
-			if (!isPrimaryModifier(event) || !event.altKey || event.shiftKey) {
+			// hasSecondaryModifier preserves the pre-Phase-3 macOS reject for
+			// Cmd+Option+Ctrl+Arrow (ctrlKey was an explicit reject signal).
+			if (
+				!isPrimaryModifier(event) ||
+				!event.altKey ||
+				event.shiftKey ||
+				hasSecondaryModifier(event)
+			) {
 				return;
 			}
 
@@ -1617,11 +1627,13 @@ function AppShell({
 		}
 
 		const handleWindowKeyDown = (event: globalThis.KeyboardEvent) => {
-			// Cmd+W (macOS) / Ctrl+W (Windows / Linux). Reject alt/shift combos.
+			// Cmd+W (macOS) / Ctrl+W (Windows / Linux). Reject alt/shift combos
+			// and the opposite OS's modifier (macOS Ctrl / Win/Linux Cmd).
 			if (
 				!isPrimaryModifier(event) ||
 				event.altKey ||
 				event.shiftKey ||
+				hasSecondaryModifier(event) ||
 				event.key.toLowerCase() !== "w"
 			) {
 				return;
@@ -1658,6 +1670,7 @@ function AppShell({
 				!isPrimaryModifier(event) ||
 				event.altKey ||
 				event.shiftKey ||
+				hasSecondaryModifier(event) ||
 				event.key.toLowerCase() !== "t"
 			) {
 				return;
@@ -1685,6 +1698,7 @@ function AppShell({
 				!isPrimaryModifier(event) ||
 				event.altKey ||
 				event.shiftKey ||
+				hasSecondaryModifier(event) ||
 				event.key.toLowerCase() !== "r"
 			) {
 				return;

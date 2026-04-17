@@ -1,21 +1,37 @@
 /**
  * Cross-platform keyboard modifier helper.
  *
- * On macOS the primary modifier is Cmd (`event.metaKey`). On Windows and
- * Linux the convention is Ctrl (`event.ctrlKey`). Accepting both everywhere
- * (loose binding) lets the same shortcut list work on every platform with
- * zero per-component branching. Unix users on a Mac keyboard still get the
- * Cmd behavior they expect; Windows/Linux users get the Ctrl they expect.
+ * STRICT OS-aware binding: on macOS only Cmd (`event.metaKey`) counts,
+ * on Windows / Linux only Ctrl (`event.ctrlKey`) counts. This preserves
+ * the EXACT macOS shortcut behavior the app shipped with — Ctrl-based
+ * combos that were ignored before (e.g. Ctrl+W, Ctrl+Option+Arrow) stay
+ * ignored on macOS. Windows and Linux get Ctrl-based shortcuts that
+ * previously didn't work.
  *
- * Cmd+, on Windows is harmless (nothing binds it), so the extra permissive
- * match does not collide with native shortcuts.
+ * Rationale: loose binding (accept both) would have expanded the macOS
+ * accept set (e.g. Cmd+Ctrl+W would newly trigger session close), which
+ * is a behavior change even if no existing macOS convention uses that
+ * combo. Strict OS-aware keeps macOS byte-identical.
  */
 
-/** Returns true if the event carries the "primary" modifier for the host OS. */
+import { isMac } from "./platform";
+
+/** Returns true if the event carries the host OS's primary modifier:
+ *  Cmd on macOS, Ctrl on Windows / Linux. */
 export function isPrimaryModifier(
 	event: KeyboardEvent | { metaKey: boolean; ctrlKey: boolean },
 ): boolean {
-	return event.metaKey || event.ctrlKey;
+	return isMac() ? event.metaKey : event.ctrlKey;
+}
+
+/** Returns true if the event carries the "wrong" modifier for the host OS:
+ *  Ctrl on macOS, Win/Cmd on Windows / Linux. Used in strict shortcut
+ *  checks to match the pre-Phase-3 macOS behavior where `event.ctrlKey`
+ *  was an explicit reject signal on combos like Cmd+W / Cmd+Option+Arrow. */
+export function hasSecondaryModifier(
+	event: KeyboardEvent | { metaKey: boolean; ctrlKey: boolean },
+): boolean {
+	return isMac() ? event.ctrlKey : event.metaKey;
 }
 
 /**
