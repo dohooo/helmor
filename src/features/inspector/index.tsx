@@ -86,7 +86,6 @@ export function WorkspaceInspectorSidebar({
 		workspaceRootPath,
 		workspaceId: workspaceId ?? null,
 		repoId: repoId ?? null,
-		workspaceState,
 	});
 
 	const handleOpenSettings = onOpenSettings ?? (() => {});
