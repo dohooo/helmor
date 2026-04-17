@@ -144,24 +144,27 @@ jobs:
         shell: bash
         run: cd src-tauri && cargo nextest run
 
-      # Windows: Tauri drags in WebView2Loader.dll that webview2-com's build
-      # script places in `target/debug` next to the main exe — but nextest
-      # runs test binaries from `target/debug/deps` and Windows searches the
-      # binary's directory first. Fix: prepend target/debug to PATH so the
-      # DLL resolves. Without this, `helmor_lib-<hash>.exe --list` aborts
-      # with STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139) before any Rust code
-      # runs.
+      # Windows: Tauri's webview2-com build script places WebView2Loader.dll
+      # in `target/debug` next to the main exe — but nextest runs test
+      # binaries out of `target/debug/deps`, and Windows searches the
+      # binary's own directory first. An older version of WebView2Loader
+      # resolved from elsewhere on the system causes
+      # STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139). Fix: build the test
+      # binaries first (nextest --no-run creates them), then copy every
+      # DLL from target/debug into target/debug/deps so the test exes
+      # find the correct versions in their own directory. Cheap, reliable,
+      # idempotent on retry.
       - name: Run Rust tests with nextest (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: src-tauri
         run: |
-          # Compile first so target/debug exists with all Tauri-vendored DLLs
-          # (WebView2Loader.dll etc.) before we add it to PATH.
           cargo nextest run --no-run
-          $targetDebug = Join-Path $PWD "target\debug"
-          Write-Host "Adding $targetDebug to PATH for DLL resolution"
-          $env:PATH = "$targetDebug;$env:PATH"
+          $src = Join-Path $PWD "target\debug"
+          $dst = Join-Path $PWD "target\debug\deps"
+          Get-ChildItem -Path $src -Filter "*.dll" -File | ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination $dst -Force
+          }
           cargo nextest run
 
       - name: Run Rust doctests (unix)
@@ -174,6 +177,9 @@ jobs:
         shell: pwsh
         working-directory: src-tauri
         run: |
-          $targetDebug = Join-Path $PWD "target\debug"
-          $env:PATH = "$targetDebug;$env:PATH"
+          $src = Join-Path $PWD "target\debug"
+          $dst = Join-Path $PWD "target\debug\deps"
+          Get-ChildItem -Path $src -Filter "*.dll" -File | ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination $dst -Force
+          }
           cargo test --doc
