@@ -4,15 +4,25 @@ use crate::{db, git_watcher, workspaces};
 
 use super::common::{run_blocking, CmdResult};
 
+fn notify_workspace_changed_in_background(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            git_watcher::notify_workspace_changed(&app);
+        })
+        .await;
+    });
+}
+
 #[tauri::command]
 pub async fn create_workspace_from_repo(
     app: AppHandle,
     repo_id: String,
 ) -> CmdResult<workspaces::CreateWorkspaceResponse> {
-    let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
-    let result =
-        run_blocking(move || workspaces::create_workspace_from_repo_impl(&repo_id)).await?;
-    git_watcher::notify_workspace_changed(&app);
+    let result = {
+        let _lock = db::WORKSPACE_MUTATION_LOCK.lock().await;
+        run_blocking(move || workspaces::create_workspace_from_repo_impl(&repo_id)).await?
+    };
+    notify_workspace_changed_in_background(app);
     Ok(result)
 }
 

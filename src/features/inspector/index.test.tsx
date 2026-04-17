@@ -304,7 +304,42 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		});
 	});
 
-	it("shows a workspace toast instead of queueing when the current chat is still streaming", async () => {
+	it("still attempts pull while the current chat is streaming when no AI follow-up is needed", async () => {
+		const user = userEvent.setup();
+		const onQueuePendingPromptForSession = vi.fn();
+		const pushToast = vi.fn() as PushWorkspaceToast;
+		apiMocks.syncWorkspaceWithTargetBranch.mockResolvedValue({
+			outcome: "updated",
+			targetBranch: "main",
+			conflictedFiles: [],
+		});
+		apiMocks.loadWorkspaceGitActionStatus.mockResolvedValue({
+			uncommittedCount: 0,
+			conflictCount: 0,
+			syncTargetBranch: "main",
+			syncStatus: "behind",
+			behindTargetCount: 2,
+		});
+
+		renderInspector({
+			onQueuePendingPromptForSession,
+			pushToast,
+			sendingSessionIds: new Set(["session-1"]),
+		});
+
+		await screen.findByText("2 commits behind nathan/main");
+		await user.click(screen.getByRole("button", { name: "Pull" }));
+
+		await waitFor(() => {
+			expect(apiMocks.syncWorkspaceWithTargetBranch).toHaveBeenCalledWith(
+				"workspace-1",
+			);
+		});
+		expect(pushToast).not.toHaveBeenCalled();
+		expect(onQueuePendingPromptForSession).not.toHaveBeenCalled();
+	});
+
+	it("shows a workspace toast instead of queueing when pull needs AI follow-up and the current chat is still streaming", async () => {
 		const user = userEvent.setup();
 		const onQueuePendingPromptForSession = vi.fn();
 		const pushToast = vi.fn() as PushWorkspaceToast;
@@ -336,7 +371,9 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 				"AI is still responding",
 			);
 		});
-		expect(apiMocks.syncWorkspaceWithTargetBranch).not.toHaveBeenCalled();
+		expect(apiMocks.syncWorkspaceWithTargetBranch).toHaveBeenCalledWith(
+			"workspace-1",
+		);
 		expect(onQueuePendingPromptForSession).not.toHaveBeenCalled();
 	});
 

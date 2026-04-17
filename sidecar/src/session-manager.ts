@@ -119,6 +119,7 @@ export interface SessionManager {
 		requestId: string,
 		userMessage: string,
 		emitter: SidecarEmitter,
+		timeoutMs?: number,
 	): Promise<void>;
 
 	/**

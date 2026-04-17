@@ -6,6 +6,7 @@ import {
 	MessageSquareText,
 	Play,
 } from "lucide-react";
+import { HelmorLogoAnimated } from "@/components/helmor-logo-animated";
 import {
 	Empty,
 	EmptyContent,
@@ -39,15 +40,19 @@ const SCRIPT_ACTION_COPY: Record<
 
 export function EmptyState({
 	hasSession,
+	workspaceState = null,
 	missingScriptTypes = [],
 	onInitializeScript,
 }: {
 	hasSession: boolean;
+	workspaceState?: string | null;
 	missingScriptTypes?: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 }) {
+	const isCreatingWorkspace = workspaceState === "initializing";
 	const showScriptActions =
 		hasSession &&
+		!isCreatingWorkspace &&
 		missingScriptTypes.length > 0 &&
 		typeof onInitializeScript === "function";
 
@@ -55,15 +60,25 @@ export function EmptyState({
 		<Empty className="max-w-xl">
 			<EmptyHeader>
 				<EmptyMedia className="mb-1 text-muted-foreground [&_svg:not([class*='size-'])]:size-7">
-					<MessageSquareText strokeWidth={1.7} />
+					{isCreatingWorkspace ? (
+						<HelmorLogoAnimated size={28} className="opacity-85" />
+					) : (
+						<MessageSquareText strokeWidth={1.7} />
+					)}
 				</EmptyMedia>
 				<EmptyTitle>
-					{hasSession ? "Nothing here yet" : "No session selected"}
+					{isCreatingWorkspace
+						? "Creating workspace"
+						: hasSession
+							? "Nothing here yet"
+							: "No session selected"}
 				</EmptyTitle>
 				<EmptyDescription>
-					{hasSession
-						? "This session does not have any messages yet."
-						: "Choose a session from the header to inspect its timeline."}
+					{isCreatingWorkspace
+						? "Helmor is still preparing this workspace. Messaging will unlock automatically when setup finishes."
+						: hasSession
+							? "This session does not have any messages yet."
+							: "Choose a session from the header to inspect its timeline."}
 				</EmptyDescription>
 			</EmptyHeader>
 			{showScriptActions ? (

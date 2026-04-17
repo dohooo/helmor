@@ -210,6 +210,30 @@ describe("WorkspacesSidebar", () => {
 		expect(onArchiveWorkspace).toHaveBeenCalledWith("workspace-2");
 	});
 
+	it("keeps workspace actions enabled while a new workspace is being created", async () => {
+		const user = userEvent.setup();
+		const onArchiveWorkspace = vi.fn();
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={workspaceGroups}
+					archivedRows={[]}
+					onArchiveWorkspace={onArchiveWorkspace}
+					creatingWorkspaceRepoId="repo-1"
+				/>
+			</TooltipProvider>,
+		);
+
+		const [archiveButton] = screen.getAllByRole("button", {
+			name: "Archive workspace",
+		});
+		expect(archiveButton).toBeEnabled();
+
+		await user.click(archiveButton);
+		expect(onArchiveWorkspace).toHaveBeenCalledWith("workspace-1");
+	});
+
 	it("persists section collapse state in localStorage", async () => {
 		const user = userEvent.setup();
 		const collapsedGroups: WorkspaceGroup[] = [

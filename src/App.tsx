@@ -102,7 +102,10 @@ import {
 	useSettings,
 } from "./lib/settings";
 import { useOsNotifications } from "./lib/use-os-notifications";
-import { summaryToArchivedRow } from "./lib/workspace-helpers";
+import {
+	isOptimisticCreatingWorkspaceId,
+	summaryToArchivedRow,
+} from "./lib/workspace-helpers";
 import {
 	type WorkspaceToastOptions,
 	WorkspaceToastProvider,
@@ -464,7 +467,10 @@ function AppShell({
 	);
 	const selectedWorkspaceDetailQuery = useQuery({
 		...workspaceDetailQueryOptions(selectedWorkspaceId ?? "__none__"),
-		enabled: isIdentityConnected && selectedWorkspaceId !== null,
+		enabled:
+			isIdentityConnected &&
+			selectedWorkspaceId !== null &&
+			!isOptimisticCreatingWorkspaceId(selectedWorkspaceId),
 	});
 	const handleOpenSettings = useCallback(() => {
 		onOpenSettings(
@@ -507,7 +513,10 @@ function AppShell({
 	// commit button's resting mode and the "Git · PR #xxx" header badge.
 	const workspacePrQuery = useQuery({
 		...workspacePrQueryOptions(selectedWorkspaceId ?? "__none__"),
-		enabled: isIdentityConnected && selectedWorkspaceId !== null,
+		enabled:
+			isIdentityConnected &&
+			selectedWorkspaceId !== null &&
+			!isOptimisticCreatingWorkspaceId(selectedWorkspaceId),
 	});
 	const workspacePrInfo = workspacePrQuery.data ?? null;
 
@@ -516,13 +525,18 @@ function AppShell({
 	// button's mode derivation — shared cache with inspector's actions.tsx.
 	const workspacePrActionStatusQuery = useQuery({
 		...workspacePrActionStatusQueryOptions(selectedWorkspaceId ?? "__none__"),
-		enabled: isIdentityConnected && selectedWorkspaceId !== null,
+		enabled:
+			isIdentityConnected &&
+			selectedWorkspaceId !== null &&
+			!isOptimisticCreatingWorkspaceId(selectedWorkspaceId),
 	});
 	const workspacePrActionStatus = workspacePrActionStatusQuery.data ?? null;
 
 	const workspaceGitActionStatusQuery = useQuery({
 		...workspaceGitActionStatusQueryOptions(selectedWorkspaceId ?? "__none__"),
-		enabled: selectedWorkspaceId !== null,
+		enabled:
+			selectedWorkspaceId !== null &&
+			!isOptimisticCreatingWorkspaceId(selectedWorkspaceId),
 	});
 	const workspaceGitActionStatus = workspaceGitActionStatusQuery.data ?? null;
 
@@ -822,6 +836,13 @@ function AppShell({
 
 	const primeWorkspaceDisplay = useCallback(
 		async (workspaceId: string) => {
+			if (isOptimisticCreatingWorkspaceId(workspaceId)) {
+				return {
+					workspaceId,
+					sessionId: null,
+				};
+			}
+
 			const [workspaceDetail, workspaceSessions] = await Promise.all([
 				queryClient.ensureQueryData(workspaceDetailQueryOptions(workspaceId)),
 				queryClient.ensureQueryData(workspaceSessionsQueryOptions(workspaceId)),
@@ -868,6 +889,7 @@ function AppShell({
 				null;
 			const hasSessionMessages =
 				sessionId === null ||
+				isOptimisticCreatingWorkspaceId(workspaceId) ||
 				queryClient.getQueryData([
 					...helmorQueryKeys.sessionMessages(sessionId),
 					"thread",
@@ -1036,7 +1058,9 @@ function AppShell({
 			setSelectedSessionId(immediateSessionId);
 
 			if (workspaceId) {
-				triggerWorkspaceFetch(workspaceId);
+				if (!isOptimisticCreatingWorkspaceId(workspaceId)) {
+					triggerWorkspaceFetch(workspaceId);
+				}
 			}
 
 			// Session-level completed dots are cleared reactively via the
