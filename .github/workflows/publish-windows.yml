@@ -1,5 +1,7 @@
-name: Publish Windows Release
+name: Publish Windows Release (fallback)
 
+# Kept as a manual-only fallback after Phase 7's unified publish.yml
+# consolidation. Tag pushes now fire publish.yml instead.
 on:
   workflow_dispatch:
     inputs:
@@ -8,9 +10,6 @@ on:
         required: false
         default: true
         type: boolean
-  push:
-    tags:
-      - "v*"
 
 concurrency:
   # Serialise Windows publishes per ref so tauri-action's latest.json

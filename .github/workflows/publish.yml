@@ -1,20 +1,35 @@
-name: Publish macOS Release (fallback)
+name: Publish Release
 
-# Kept as a manual-only fallback after Phase 7's unified publish.yml
-# consolidation. Tag pushes now fire publish.yml (matrix of 4 targets)
-# instead of this single-platform workflow. Run this manually only if the
-# unified workflow has an outage and you need a macOS-only rollback.
+# Unified multi-platform publish. Matrix produces:
+#   - macOS aarch64 + x86_64 DMGs + .app.tar.gz updater artifacts
+#     (Intel support fixes the latent arm64-only DMG bug in publish-macos.yml)
+#   - Ubuntu 22.04 deb + rpm + AppImage (+ AppImage.tar.gz updater)
+#   - Windows x64 NSIS + MSI (+ .sig)
+# tauri-action@v1 merges each runner's per-platform entry into the same
+# latest.json on the release.
+#
+# The Phase 4 single-platform publish-{macos,linux,windows}.yml files still
+# exist as workflow_dispatch-only fallbacks — the push-tag trigger has been
+# removed from them so a tag push only fires THIS workflow.
+
 on:
   workflow_dispatch:
     inputs:
       draft:
         description: "Create the GitHub release as a draft"
         required: false
-        default: false
+        default: true
         type: boolean
+  push:
+    tags:
+      - "v*"
 
 concurrency:
-  group: publish-macos-${{ github.ref }}
+  # One publish per tag ref at a time. tauri-action merges latest.json
+  # atomically across matrix entries so concurrent matrix jobs within one
+  # workflow run are fine — we just want to reject retries of the same tag
+  # racing with the original run.
+  group: publish-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -83,9 +98,29 @@ jobs:
           fi
 
   build-and-publish:
-    name: Build and Publish macOS Release
+    name: Build and Publish (${{ matrix.platform }} ${{ matrix.target-triple }})
     needs: preflight
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS Apple Silicon
+          - platform: macos-latest
+            target-triple: aarch64-apple-darwin
+            tauri-args: "--target aarch64-apple-darwin"
+          # macOS Intel — fixes the latent arm64-only DMG bug
+          - platform: macos-latest
+            target-triple: x86_64-apple-darwin
+            tauri-args: "--target x86_64-apple-darwin"
+          # Linux x86_64
+          - platform: ubuntu-22.04
+            target-triple: x86_64-unknown-linux-gnu
+            tauri-args: ""
+          # Windows x86_64
+          - platform: windows-latest
+            target-triple: x86_64-pc-windows-msvc
+            tauri-args: ""
+    runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -95,18 +130,21 @@ jobs:
       - name: Setup JS toolchain
         uses: ./.github/actions/setup-js
 
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Add Rust target for cross-arch macOS build
+        if: startsWith(matrix.platform, 'macos-') && matrix.target-triple == 'x86_64-apple-darwin'
+        shell: bash
+        run: rustup target add x86_64-apple-darwin
 
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Setup Rust Tauri
+        uses: ./.github/actions/setup-rust-tauri
+
+      - name: Build + stage sidecar
+        uses: ./.github/actions/build-sidecar
         with:
-          cache-on-failure: true
-          cache-workspace-crates: true
-          shared-key: macos-tauri-v1
-          workspaces: src-tauri -> target
+          target-triple: ${{ matrix.target-triple }}
 
       - name: Prepare macOS signing keychain
+        if: startsWith(matrix.platform, 'macos-')
         id: signing
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -117,11 +155,12 @@ jobs:
           chmod +x scripts/prepare-macos-signing.sh scripts/cleanup-macos-signing.sh
           scripts/prepare-macos-signing.sh >> "$GITHUB_OUTPUT"
 
-      - name: Build and publish signed macOS release
+      - name: Build and publish (${{ matrix.target-triple }})
         id: tauri
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Apple env is harmless on non-macOS runners (unreferenced).
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -141,7 +180,12 @@ jobs:
           releaseDraft: ${{ needs.preflight.outputs.draft == 'true' }}
           prerelease: false
           uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: ${{ matrix.tauri-args }}
 
       - name: Cleanup macOS signing keychain
-        if: always()
-        run: scripts/cleanup-macos-signing.sh "${{ steps.signing.outputs.APPLE_KEYCHAIN_PATH }}"
+        if: always() && startsWith(matrix.platform, 'macos-')
+        run: |
+          if [ -n "${{ steps.signing.outputs.APPLE_KEYCHAIN_PATH }}" ]; then
+            scripts/cleanup-macos-signing.sh "${{ steps.signing.outputs.APPLE_KEYCHAIN_PATH }}"
+          fi
