@@ -1,5 +1,5 @@
 name: Setup Rust Tauri
-description: Setup Rust toolchain, Rust cache, and Linux system packages for Tauri builds
+description: Setup Rust toolchain, Rust cache, and per-OS system packages for Tauri builds
 
 runs:
   using: composite
@@ -17,13 +17,14 @@ runs:
       with:
         cache-on-failure: true
         cache-workspace-crates: true
-        shared-key: ubuntu-tauri-v1
+        shared-key: ${{ runner.os == 'Linux' && 'linux-tauri-v1' || (runner.os == 'Windows' && 'windows-tauri-v1' || 'macos-tauri-v1') }}
         workspaces: src-tauri -> target
 
     - name: Install cargo-nextest
       uses: taiki-e/install-action@nextest
 
     - name: Install Linux system packages
+      if: runner.os == 'Linux'
       shell: bash
       run: |
         sudo apt-get update

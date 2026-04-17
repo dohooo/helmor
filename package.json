@@ -27,7 +27,7 @@
 		"dev:cli": "cd src-tauri && cargo run --bin helmor-cli --",
 		"dev:cli:build": "cd src-tauri && cargo build --bin helmor-cli",
 		"dev:cli:install": "cd src-tauri && cargo build --bin helmor-cli && cp target/debug/helmor-cli /usr/local/bin/helmor && cp ../sidecar/dist/helmor-sidecar /usr/local/bin/helmor-sidecar && echo 'Installed helmor + helmor-sidecar to /usr/local/bin/'",
-		"postinstall": "cd sidecar && bun install && node -e \"const{execSync}=require('child_process');try{execSync('sccache --version',{stdio:'pipe'})}catch{console.error('\\n\\x1b[33m⚠  sccache is not installed.\\x1b[0m Rust builds will be slower without cross-worktree compilation cache.\\n\\n  Install it:\\n\\n    brew install sccache\\n');process.exit(1)}\"",
+		"postinstall": "cd sidecar && bun install && node -e \"const{execSync}=require('child_process');try{execSync('sccache --version',{stdio:'pipe'})}catch{const p=process.platform;const hint=p==='win32'?'scoop install sccache  (or: choco install sccache / cargo install sccache)':p==='linux'?'cargo install sccache  (or use your distro package manager)':'brew install sccache';console.warn('\\n\\x1b[33m⚠  sccache not found.\\x1b[0m Rust builds will be slower without cross-worktree cache.\\n\\n  Install it:\\n\\n    '+hint+'\\n')}\"",
 		"prepare": "husky",
 		"release:notes": "node scripts/extract-release-notes.mjs",
 		"release:sync-versions": "node scripts/sync-release-versions.mjs",

@@ -26,12 +26,6 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 flate2 = "1"
 clap = { version = "4", features = ["derive"] }
 rand = "0.10.0"
-
-# Used for sending SIGTERM to the sidecar child during graceful shutdown.
-# `std::process::Child::kill()` is SIGKILL only and gives the process no
-# chance to flush or clean up its own children.
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rusqlite = { version = "0.31", features = ["bundled", "backup"] }
 serde = { version = "1", features = ["derive"] }
@@ -50,6 +44,11 @@ tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "chrono"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+
+# Unix-only: libc is used for process-group SIGTERM/SIGKILL in sidecar.rs and
+# git/ops.rs. Windows uses std::process::Child::kill() fallback.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [[bin]]
 name = "helmor-cli"

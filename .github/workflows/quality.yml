@@ -24,6 +24,7 @@ jobs:
     outputs:
       lint: ${{ steps.filter.outputs.lint }}
       typecheck: ${{ steps.filter.outputs.typecheck }}
+      rust: ${{ steps.filter.outputs.rust }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -61,6 +62,12 @@ jobs:
               - '.storybook/**'
               - 'src/**'
               - 'sidecar/**'
+            rust:
+              - '.github/**'
+              - 'src-tauri/**'
+              - 'sidecar/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
 
   lint:
     name: Lint
@@ -99,3 +106,43 @@ jobs:
 
       - name: Run typecheck
         run: pnpm run typecheck
+
+  # Windows dep-resolution gate. Phase 1 proves that fixing the Cargo.toml
+  # `[target.'cfg(unix)'.dependencies]` dep-grouping bug lets `cargo check`
+  # resolve all crates on Windows. Compile errors from Unix-only source
+  # modules (e.g. workspace/scripts.rs) are expected until Phase 2 lands
+  # their `#[cfg(unix)]` guards — hence `continue-on-error: true`.
+  # Phase 2 MUST remove `continue-on-error` so the gate becomes strict.
+  rust-check-windows:
+    name: Rust Windows Check (Phase 1 soft gate)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Setup Rust Tauri
+        uses: ./.github/actions/setup-rust-tauri
+
+      - name: Build sidecar (Windows)
+        shell: bash
+        run: pnpm --dir sidecar run build
+
+      - name: Stage sidecar as Windows externalBin
+        shell: bash
+        run: |
+          # bun build --compile on Windows outputs .exe automatically. Tauri
+          # expects `helmor-sidecar-<target-triple>.exe` next to the crate.
+          cp "sidecar/dist/helmor-sidecar.exe" "sidecar/dist/helmor-sidecar-x86_64-pc-windows-msvc.exe" || \
+          cp "sidecar/dist/helmor-sidecar" "sidecar/dist/helmor-sidecar-x86_64-pc-windows-msvc.exe"
+
+      - name: cargo check for x86_64-pc-windows-msvc
+        shell: bash
+        working-directory: src-tauri
+        run: cargo check --lib --target x86_64-pc-windows-msvc
