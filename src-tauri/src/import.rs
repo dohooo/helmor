@@ -248,8 +248,9 @@ pub fn import_conductor_workspaces(workspace_ids: &[String]) -> Result<ImportWor
 
     helmor_conn.execute("DETACH DATABASE source", []).ok();
 
-    // Phase 2: Git worktree and filesystem copy (best-effort).
-    // DB records are already committed — failures here are logged but non-fatal.
+    // Phase 2: Git worktree and filesystem copy.
+    // If a workspace cannot be materialized locally, clean up the imported DB
+    // records so the UI does not show a broken "ready" workspace.
     for meta in &imported_workspaces {
         if let Err(e) = setup_workspace_filesystem(
             &meta.workspace_id,
@@ -261,6 +262,17 @@ pub fn import_conductor_workspaces(workspace_ids: &[String]) -> Result<ImportWor
             conductor_root.as_deref(),
             &helmor_data_dir,
         ) {
+            if let Err(cleanup_error) = delete_imported_workspace_records(&meta.workspace_id) {
+                errors.push(format!(
+                    "{}: {e} (cleanup failed: {cleanup_error})",
+                    meta.workspace_id
+                ));
+                continue;
+            }
+            // Cleanup succeeded — this workspace is no longer imported, so
+            // `imported_count` must reflect that or the UI will report a
+            // misleading "N imported, M failed" mix.
+            imported_count -= 1;
             errors.push(format!("{}: {e}", meta.workspace_id));
         }
     }
@@ -455,7 +467,6 @@ fn import_workspace_db_records(conn: &Connection, workspace_id: &str) -> Result<
 }
 
 /// Phase 2: Set up filesystem for an imported workspace (git worktree + context files).
-/// Best-effort — failures are reported but don't affect the committed DB records.
 #[allow(clippy::too_many_arguments)]
 fn setup_workspace_filesystem(
     workspace_id: &str,
@@ -472,57 +483,52 @@ fn setup_workspace_filesystem(
         let workspace_dir = crate::data_dir::workspace_dir(repo_name, directory_name)?;
 
         if !workspace_dir.exists() {
-            if let (Some(branch_name), Some(root)) = (branch, repo_root) {
-                if root.is_dir() {
-                    let source_branch = resolve_source_branch(
-                        root,
-                        branch_name,
-                        conductor_root,
-                        repo_name,
-                        directory_name,
-                    );
+            let branch_name = branch.with_context(|| {
+                format!("Imported workspace {repo_name}/{directory_name} is missing a branch")
+            })?;
+            let root = repo_root.with_context(|| {
+                format!("Imported workspace {repo_name}/{directory_name} is missing repo root")
+            })?;
+            if !root.is_dir() {
+                bail!(
+                    "Imported workspace {repo_name}/{directory_name} repo root is missing: {}",
+                    root.display()
+                );
+            }
 
-                    if source_branch.is_none() {
-                        tracing::error!(
-                            directory_name,
-                            "Could not resolve source branch — worktree not created"
-                        );
+            let source_branch =
+                resolve_source_branch(root, branch_name, conductor_root, repo_name, directory_name)
+                    .with_context(|| {
+                        format!(
+                            "Could not resolve source branch for imported workspace {repo_name}/{directory_name}"
+                        )
+                    })?;
+
+            let import_branch = format!("{source_branch}-copy");
+            setup_imported_worktree(root, &workspace_dir, &import_branch, &source_branch)
+                .with_context(|| {
+                    format!(
+                        "Failed to create worktree for imported workspace {repo_name}/{directory_name}"
+                    )
+                })?;
+
+            // Update branch in DB (best-effort, DB is already committed)
+            match crate::models::db::open_connection(true) {
+                Ok(conn) => {
+                    if let Err(e) = conn.execute(
+                        "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
+                        rusqlite::params![import_branch, workspace_id],
+                    ) {
+                        tracing::error!(directory_name, "Failed to update branch: {e}");
                     }
-                    if let Some(ref src) = source_branch {
-                        let import_branch = format!("{src}-copy");
-                        if let Err(e) =
-                            setup_imported_worktree(root, &workspace_dir, &import_branch, src)
-                        {
-                            tracing::error!(directory_name, "Worktree failed: {e}");
-                            // Non-fatal: we still copy .context/ below
-                        } else {
-                            // Update branch in DB (best-effort, DB is already committed)
-                            match crate::models::db::open_connection(true) {
-                                Ok(conn) => {
-                                    if let Err(e) = conn.execute(
-                                        "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
-                                        rusqlite::params![import_branch, workspace_id],
-                                    ) {
-                                        tracing::error!(
-                                            directory_name,
-                                            "Failed to update branch: {e}"
-                                        );
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::error!(
-                                        directory_name,
-                                        "Failed to open DB to update branch: {e}"
-                                    );
-                                }
-                            }
-                        }
-                    }
+                }
+                Err(e) => {
+                    tracing::error!(directory_name, "Failed to open DB to update branch: {e}");
                 }
             }
         }
 
-        // Copy .context/ (whether or not worktree succeeded)
+        // Copy .context/ after the worktree exists.
         if let Some(root) = conductor_root {
             let context_src = root
                 .join("workspaces")
@@ -593,6 +599,51 @@ fn setup_workspace_filesystem(
     }
 
     Ok(())
+}
+
+fn delete_imported_workspace_records(workspace_id: &str) -> Result<()> {
+    let conn = crate::models::db::open_connection(true)?;
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .context("Failed to start cleanup transaction")?;
+
+    let cleanup_result = (|| -> Result<()> {
+        conn.execute(
+            "DELETE FROM attachments WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
+            [workspace_id],
+        )
+        .context("Failed to delete imported attachments")?;
+        conn.execute(
+            "DELETE FROM session_messages WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
+            [workspace_id],
+        )
+        .context("Failed to delete imported messages")?;
+        conn.execute(
+            "DELETE FROM sessions WHERE workspace_id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to delete imported sessions")?;
+        conn.execute(
+            "DELETE FROM diff_comments WHERE workspace_id = ?1",
+            [workspace_id],
+        )
+        .context("Failed to delete imported diff comments")?;
+        conn.execute("DELETE FROM workspaces WHERE id = ?1", [workspace_id])
+            .context("Failed to delete imported workspace")?;
+        Ok(())
+    })();
+
+    match cleanup_result {
+        Ok(()) => {
+            conn.execute_batch("COMMIT")
+                .context("Failed to commit cleanup transaction")?;
+            crate::models::db::remove_workspace_lock(workspace_id);
+            Ok(())
+        }
+        Err(error) => {
+            conn.execute_batch("ROLLBACK").ok();
+            Err(error)
+        }
+    }
 }
 
 /// Encode a filesystem path into a Claude Code project directory name.
@@ -1064,7 +1115,9 @@ fn import_workspace_column_lists(conn: &Connection) -> Result<(String, String)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{env, fs};
 
+    use crate::testkit::{GitTestRepo, TestEnv};
     fn setup_test_db() -> (Connection, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
@@ -1372,5 +1425,92 @@ mod tests {
         let path2 = PathBuf::from("/Users/me/helmor-dev/workspaces/repo/ws");
         let encoded2 = encode_claude_project_dir(&path2);
         assert_eq!(encoded2, "-Users-me-helmor-dev-workspaces-repo-ws");
+    }
+
+    #[test]
+    fn import_conductor_workspaces_cleans_up_failed_active_workspace_imports() {
+        let _env = TestEnv::new("failed-import-cleanup");
+        let fake_home = tempfile::tempdir().unwrap();
+        let conductor_db_dir = fake_home
+            .path()
+            .join("Library/Application Support/com.conductor.app");
+        fs::create_dir_all(&conductor_db_dir).unwrap();
+        let conductor_db_path = conductor_db_dir.join("conductor.db");
+        let conductor_conn = Connection::open(&conductor_db_path).unwrap();
+        crate::schema::ensure_schema(&conductor_conn).unwrap();
+
+        let repo = GitTestRepo::init();
+        conductor_conn
+            .execute(
+                "INSERT INTO repos (id, name, root_path, created_at, updated_at) VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))",
+                rusqlite::params!["r1", "my-repo", repo.path().display().to_string()],
+            )
+            .unwrap();
+        conductor_conn
+            .execute(
+                "INSERT INTO workspaces (id, repository_id, directory_name, state, branch, created_at, updated_at) VALUES (?1, ?2, ?3, 'ready', ?4, datetime('now'), datetime('now'))",
+                rusqlite::params!["w1", "r1", "broken-import", "missing/branch"],
+            )
+            .unwrap();
+        conductor_conn
+            .execute(
+                "INSERT INTO sessions (id, workspace_id, created_at, updated_at) VALUES ('s1', 'w1', datetime('now'), datetime('now'))",
+                [],
+            )
+            .unwrap();
+        conductor_conn
+            .execute(
+                "INSERT INTO session_messages (id, session_id, role, content, created_at) VALUES ('m1', 's1', 'user', 'hello', datetime('now'))",
+                [],
+            )
+            .unwrap();
+        drop(conductor_conn);
+
+        let original_home = env::var_os("HOME");
+        env::set_var("HOME", fake_home.path());
+
+        let result = import_conductor_workspaces(&["w1".to_string()]).unwrap();
+
+        match original_home {
+            Some(home) => env::set_var("HOME", home),
+            None => env::remove_var("HOME"),
+        }
+
+        assert!(!result.success);
+        // After cleanup, the final imported count must be 0 — otherwise the
+        // UI would show "1 imported, 1 failed" even though nothing was kept.
+        assert_eq!(result.imported_count, 0);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.contains("Could not resolve source branch")),
+            "expected source branch resolution failure, got {:?}",
+            result.errors
+        );
+        let conn = crate::models::db::open_connection(true).unwrap();
+        let workspace_count: i64 = conn
+            .query_row("SELECT count(*) FROM workspaces WHERE id = 'w1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let session_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sessions WHERE workspace_id = 'w1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let message_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM session_messages WHERE session_id = 's1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(workspace_count, 0);
+        assert_eq!(session_count, 0);
+        assert_eq!(message_count, 0);
     }
 }
