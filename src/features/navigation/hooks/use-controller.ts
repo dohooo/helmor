@@ -40,13 +40,20 @@ import {
 	createOptimisticCreatingWorkspaceId,
 	describeUnknownError,
 	findInitialWorkspaceId,
+	findReplacementWorkspaceIdAfterRemoval,
 	findWorkspaceRowById,
 	hasWorkspaceId,
-	isOptimisticCreatingWorkspaceId,
 	rowToWorkspaceSummary,
 	summaryToArchivedRow,
 	workspaceGroupIdFromStatus,
 } from "@/lib/workspace-helpers";
+import {
+	type PendingArchiveEntry,
+	type PendingCreationEntry,
+	projectSidebarLists,
+	shouldReconcilePendingArchive,
+	shouldReconcilePendingCreation,
+} from "../sidebar-projection";
 
 type WorkspaceToastVariant = "default" | "destructive";
 
@@ -88,28 +95,19 @@ export function useWorkspacesSidebarController({
 	const [suppressedWorkspaceReadId, setSuppressedWorkspaceReadId] = useState<
 		string | null
 	>(null);
-	const creatingWorkspaceRollbackRef = useRef<
+	const [pendingArchives, setPendingArchives] = useState<
+		Map<string, PendingArchiveEntry>
+	>(() => new Map());
+	const [pendingCreations, setPendingCreations] = useState<
 		Map<
 			string,
 			{
-				row: WorkspaceRow;
-				repoId: string;
+				entry: PendingCreationEntry;
 				previousGroups: WorkspaceGroup[] | undefined;
 				previousSelection: string | null;
 			}
 		>
-	>(new Map());
-
-	const archiveRollbackRef = useRef<
-		Map<
-			string,
-			{
-				row: WorkspaceRow;
-				sourceGroupId: string;
-				sourceIndex: number;
-			}
-		>
-	>(new Map());
+	>(() => new Map());
 	const sidebarMutationCountRef = useRef(0);
 
 	const flushSidebarLists = useCallback(() => {
@@ -141,51 +139,32 @@ export function useWorkspacesSidebarController({
 
 	const baseGroups = groupsQuery.data ?? [];
 	const baseArchivedSummaries = archivedQuery.data ?? [];
-	const pendingCreatingEntries = Array.from(
-		creatingWorkspaceRollbackRef.current.entries(),
+	const projectedSidebar = useMemo(
+		() =>
+			projectSidebarLists({
+				baseGroups,
+				baseArchivedSummaries,
+				pendingArchives,
+				pendingCreations: new Map(
+					Array.from(pendingCreations.entries()).map(
+						([workspaceId, pendingCreation]) => [
+							workspaceId,
+							pendingCreation.entry,
+						],
+					),
+				),
+			}),
+		[baseArchivedSummaries, baseGroups, pendingArchives, pendingCreations],
 	);
-	const pendingArchivedEntries = Array.from(
-		archiveRollbackRef.current.entries(),
+	const groups = projectedSidebar.groups;
+	const archivedSummaries = useMemo(
+		() =>
+			projectedSidebar.archivedRows.map((row) => rowToWorkspaceSummary(row)),
+		[projectedSidebar.archivedRows],
 	);
-	const pendingArchivedIds = new Set(
-		pendingArchivedEntries.map(([workspaceId]) => workspaceId),
-	);
-	const groupsWithoutArchived =
-		pendingArchivedIds.size === 0
-			? baseGroups
-			: baseGroups.map((group) => ({
-					...group,
-					rows: group.rows.filter((row) => !pendingArchivedIds.has(row.id)),
-				}));
-	const groups =
-		pendingCreatingEntries.length === 0
-			? groupsWithoutArchived
-			: pendingCreatingEntries.reduce(
-					(currentGroups, [, rollback]) =>
-						insertOptimisticWorkspaceRow(currentGroups, rollback.row),
-					groupsWithoutArchived,
-				);
-	const archivedSummaries =
-		pendingArchivedEntries.length === 0
-			? baseArchivedSummaries
-			: [
-					...pendingArchivedEntries
-						.filter(
-							([workspaceId]) =>
-								!baseArchivedSummaries.some(
-									(summary) => summary.id === workspaceId,
-								),
-						)
-						.map(([, rollback]) =>
-							rowToWorkspaceSummary(rollback.row, {
-								state: "archived",
-							}),
-						),
-					...baseArchivedSummaries,
-				];
 	const archivedRows = useMemo(
-		() => archivedSummaries.map(summaryToArchivedRow),
-		[archivedSummaries],
+		() => projectedSidebar.archivedRows,
+		[projectedSidebar.archivedRows],
 	);
 
 	const updateArchivingWorkspaceId = useCallback(
@@ -206,8 +185,17 @@ export function useWorkspacesSidebarController({
 	const rollbackArchivedWorkspace = useCallback(
 		(workspaceId: string, error: unknown, fallbackMessage: string) => {
 			updateArchivingWorkspaceId(workspaceId, false);
-			const rollback = archiveRollbackRef.current.get(workspaceId);
-			archiveRollbackRef.current.delete(workspaceId);
+			let rollback: PendingArchiveEntry | null = null;
+			setPendingArchives((current) => {
+				const existing = current.get(workspaceId) ?? null;
+				if (!existing) {
+					return current;
+				}
+				rollback = existing;
+				const next = new Map(current);
+				next.delete(workspaceId);
+				return next;
+			});
 
 			if (!rollback) {
 				flushSidebarLists();
@@ -219,52 +207,13 @@ export function useWorkspacesSidebarController({
 				return;
 			}
 
-			queryClient.setQueryData(helmorQueryKeys.archivedWorkspaces, (current) =>
-				Array.isArray(current)
-					? (current as typeof archivedSummaries).filter(
-							(summary) => summary.id !== workspaceId,
-						)
-					: current,
-			);
-
-			queryClient.setQueryData(helmorQueryKeys.workspaceGroups, (current) => {
-				if (!Array.isArray(current)) {
-					return current;
-				}
-				return (current as typeof groups).map((group) => {
-					if (group.id !== rollback.sourceGroupId) {
-						return group;
-					}
-					if (group.rows.some((row) => row.id === workspaceId)) {
-						return group;
-					}
-					const nextRows = [...group.rows];
-					const insertAt = Math.min(
-						Math.max(rollback.sourceIndex, 0),
-						nextRows.length,
-					);
-					nextRows.splice(insertAt, 0, rollback.row);
-					return {
-						...group,
-						rows: nextRows,
-					};
-				});
-			});
-
 			pushWorkspaceToast(
 				describeUnknownError(error, fallbackMessage),
 				"Archive failed",
 				"destructive",
 			);
 		},
-		[
-			archivedSummaries,
-			flushSidebarLists,
-			groups,
-			pushWorkspaceToast,
-			queryClient,
-			updateArchivingWorkspaceId,
-		],
+		[flushSidebarLists, pushWorkspaceToast, updateArchivingWorkspaceId],
 	);
 
 	useEffect(() => {
@@ -293,7 +242,19 @@ export function useWorkspacesSidebarController({
 			if (disposed) {
 				return;
 			}
-			archiveRollbackRef.current.delete(payload.workspaceId);
+			setPendingArchives((current) => {
+				const existing = current.get(payload.workspaceId);
+				if (!existing || existing.stage === "confirmed") {
+					return current;
+				}
+				const next = new Map(current);
+				next.set(payload.workspaceId, {
+					...existing,
+					stage: "confirmed",
+					sortTimestamp: Date.now(),
+				});
+				return next;
+			});
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceGroups,
 			});
@@ -314,6 +275,65 @@ export function useWorkspacesSidebarController({
 			unlistenSuccess?.();
 		};
 	}, [queryClient, rollbackArchivedWorkspace]);
+
+	useEffect(() => {
+		if (pendingArchives.size === 0) {
+			return;
+		}
+
+		const resolvedIds: string[] = [];
+		for (const [workspaceId, pendingArchive] of pendingArchives) {
+			if (
+				pendingArchive.stage === "confirmed" &&
+				shouldReconcilePendingArchive(
+					workspaceId,
+					baseGroups,
+					baseArchivedSummaries,
+				)
+			) {
+				resolvedIds.push(workspaceId);
+			}
+		}
+
+		if (resolvedIds.length === 0) {
+			return;
+		}
+
+		setPendingArchives((current) => {
+			let changed = false;
+			const next = new Map(current);
+			for (const workspaceId of resolvedIds) {
+				changed = next.delete(workspaceId) || changed;
+			}
+			return changed ? next : current;
+		});
+	}, [baseArchivedSummaries, baseGroups, pendingArchives]);
+
+	useEffect(() => {
+		if (pendingCreations.size === 0) {
+			return;
+		}
+
+		const resolvedIds: string[] = [];
+		for (const [workspaceId, pendingCreation] of pendingCreations) {
+			if (shouldReconcilePendingCreation(pendingCreation.entry, baseGroups)) {
+				resolvedIds.push(workspaceId);
+			}
+		}
+
+		if (resolvedIds.length === 0) {
+			return;
+		}
+
+		setPendingCreations((current) => {
+			let changed = false;
+			const next = new Map(current);
+			for (const workspaceId of resolvedIds) {
+				changed = next.delete(workspaceId) || changed;
+			}
+			return changed ? next : current;
+		});
+	}, [baseGroups, pendingCreations]);
 
 	useEffect(() => {
 		if (
@@ -807,18 +827,21 @@ export function useWorkspacesSidebarController({
 			const previousGroups = queryClient.getQueryData<WorkspaceGroup[]>(
 				helmorQueryKeys.workspaceGroups,
 			);
-			creatingWorkspaceRollbackRef.current.set(optimisticWorkspaceId, {
-				row: optimisticRow,
-				repoId,
-				previousGroups,
-				previousSelection: selectedWorkspaceId,
+			setPendingCreations((current) => {
+				const next = new Map(current);
+				next.set(optimisticWorkspaceId, {
+					entry: {
+						repoId,
+						row: optimisticRow,
+						stage: "creating",
+						resolvedWorkspaceId: null,
+					},
+					previousGroups,
+					previousSelection: selectedWorkspaceId,
+				});
+				return next;
 			});
 
-			queryClient.setQueryData(
-				helmorQueryKeys.workspaceGroups,
-				(current: WorkspaceGroup[] | undefined) =>
-					insertOptimisticWorkspaceRow(current ?? groups, optimisticRow),
-			);
 			queryClient.setQueryData<WorkspaceDetail | null>(
 				helmorQueryKeys.workspaceDetail(optimisticWorkspaceId),
 				createOptimisticCreatingWorkspaceDetail(optimisticRow, repoId),
@@ -833,14 +856,39 @@ export function useWorkspacesSidebarController({
 
 			try {
 				const response = await createWorkspaceFromRepo(repoId);
-				creatingWorkspaceRollbackRef.current.delete(optimisticWorkspaceId);
-				queryClient.setQueryData(
-					helmorQueryKeys.workspaceGroups,
-					(current: WorkspaceGroup[] | undefined) =>
-						removeOptimisticWorkspaceRow(
-							current ?? groups,
-							optimisticWorkspaceId,
+				const resolvedOptimisticRow = createResolvedWorkspaceRow(
+					optimisticRow,
+					response,
+				);
+				setPendingCreations((current) => {
+					const pendingCreation = current.get(optimisticWorkspaceId);
+					if (!pendingCreation) {
+						return current;
+					}
+					const next = new Map(current);
+					next.set(optimisticWorkspaceId, {
+						...pendingCreation,
+						entry: {
+							...pendingCreation.entry,
+							row: resolvedOptimisticRow,
+							stage: "confirmed",
+							resolvedWorkspaceId: response.selectedWorkspaceId,
+						},
+					});
+					return next;
+				});
+				queryClient.setQueryData<WorkspaceDetail | null>(
+					helmorQueryKeys.workspaceDetail(response.selectedWorkspaceId),
+					(current) =>
+						current ??
+						createOptimisticResolvedWorkspaceDetail(
+							resolvedOptimisticRow,
+							repoId,
 						),
+				);
+				queryClient.setQueryData<WorkspaceSessionSummary[]>(
+					helmorQueryKeys.workspaceSessions(response.selectedWorkspaceId),
+					(current) => current ?? [],
 				);
 				queryClient.removeQueries({
 					queryKey: helmorQueryKeys.workspaceDetail(optimisticWorkspaceId),
@@ -850,19 +898,31 @@ export function useWorkspacesSidebarController({
 					queryKey: helmorQueryKeys.workspaceSessions(optimisticWorkspaceId),
 					exact: true,
 				});
-				await refetchNavigation();
-				prefetchWorkspace(response.selectedWorkspaceId);
 				onSelectWorkspace(response.selectedWorkspaceId);
+				prefetchWorkspace(response.selectedWorkspaceId);
+				void refetchNavigation();
 			} catch (error) {
-				const rollback =
-					creatingWorkspaceRollbackRef.current.get(optimisticWorkspaceId) ??
-					null;
-				creatingWorkspaceRollbackRef.current.delete(optimisticWorkspaceId);
-				queryClient.setQueryData(
-					helmorQueryKeys.workspaceGroups,
-					rollback?.previousGroups ??
-						removeOptimisticWorkspaceRow(groups, optimisticWorkspaceId),
-				);
+				let rollback: {
+					entry: PendingCreationEntry;
+					previousGroups: WorkspaceGroup[] | undefined;
+					previousSelection: string | null;
+				} | null = null;
+				setPendingCreations((current) => {
+					const pendingCreation = current.get(optimisticWorkspaceId) ?? null;
+					if (!pendingCreation) {
+						return current;
+					}
+					rollback = pendingCreation;
+					const next = new Map(current);
+					next.delete(optimisticWorkspaceId);
+					return next;
+				});
+				if (rollback?.previousGroups) {
+					queryClient.setQueryData(
+						helmorQueryKeys.workspaceGroups,
+						rollback.previousGroups,
+					);
+				}
 				queryClient.removeQueries({
 					queryKey: helmorQueryKeys.workspaceDetail(optimisticWorkspaceId),
 					exact: true,
@@ -946,7 +1006,14 @@ export function useWorkspacesSidebarController({
 	const handleDeleteWorkspace = useCallback(
 		(workspaceId: string) => {
 			const wasSelected = selectedWorkspaceId === workspaceId;
-			archiveRollbackRef.current.delete(workspaceId);
+			setPendingArchives((current) => {
+				if (!current.has(workspaceId)) {
+					return current;
+				}
+				const next = new Map(current);
+				next.delete(workspaceId);
+				return next;
+			});
 			const previousGroups = queryClient.getQueryData(
 				helmorQueryKeys.workspaceGroups,
 			);
@@ -1121,39 +1188,54 @@ export function useWorkspacesSidebarController({
 					return;
 				}
 
+				const sortTimestamp = Date.now();
+				const pendingArchive: PendingArchiveEntry = {
+					row: {
+						...movedRow,
+						state: "archived",
+					},
+					sourceGroupId,
+					sourceIndex,
+					stage: "running",
+					sortTimestamp,
+				};
+				setPendingArchives((current) => {
+					const next = new Map(current);
+					next.set(workspaceId, pendingArchive);
+					return next;
+				});
+
 				queryClient.setQueryData(
 					helmorQueryKeys.workspaceGroups,
 					optimisticGroups,
 				);
 
-				const archivedPlaceholder = rowToWorkspaceSummary(movedRow, {
-					state: "archived",
+				const optimisticArchived = projectSidebarLists({
+					baseGroups: optimisticGroups,
+					baseArchivedSummaries,
+					pendingArchives: new Map([
+						...pendingArchives,
+						[workspaceId, pendingArchive],
+					]),
+					pendingCreations: new Map(
+						Array.from(pendingCreations.entries()).map(
+							([optimisticWorkspaceId, pendingCreation]) => [
+								optimisticWorkspaceId,
+								pendingCreation.entry,
+							],
+						),
+					),
 				});
-				archiveRollbackRef.current.set(workspaceId, {
-					row: movedRow,
-					sourceGroupId,
-					sourceIndex,
-				});
-				queryClient.setQueryData(
-					helmorQueryKeys.archivedWorkspaces,
-					(current) =>
-						Array.isArray(current)
-							? [archivedPlaceholder, ...(current as typeof archivedSummaries)]
-							: [archivedPlaceholder],
-				);
-
-				const optimisticArchived =
-					(queryClient.getQueryData(
-						helmorQueryKeys.archivedWorkspaces,
-					) as typeof archivedSummaries) ?? [];
 				const shouldNavigate =
 					!selectedWorkspaceId || selectedWorkspaceId === workspaceId;
 				if (shouldNavigate) {
-					const nextWorkspaceId =
-						findInitialWorkspaceId(optimisticGroups) ??
-						optimisticArchived.find((summary) => summary.id !== workspaceId)
-							?.id ??
-						null;
+					const nextWorkspaceId = findReplacementWorkspaceIdAfterRemoval({
+						currentGroups: groups,
+						currentArchivedRows: archivedRows,
+						nextGroups: optimisticGroups,
+						nextArchivedRows: optimisticArchived.archivedRows,
+						removedWorkspaceId: workspaceId,
+					});
 					if (nextWorkspaceId) {
 						prefetchWorkspace(nextWorkspaceId);
 					}
@@ -1175,8 +1257,10 @@ export function useWorkspacesSidebarController({
 		},
 		[
 			archivingWorkspaceIds,
+			baseArchivedSummaries,
 			groups,
 			onSelectWorkspace,
+			pendingArchives,
 			prefetchWorkspace,
 			pushWorkspaceToast,
 			queryClient,
@@ -1290,6 +1374,7 @@ export function useWorkspacesSidebarController({
 			endSidebarMutation,
 			notifyBranchRename,
 			onSelectWorkspace,
+			pendingCreations,
 			prefetchWorkspace,
 			pushPermanentDeleteRecoveryToast,
 			queryClient,
@@ -1385,37 +1470,35 @@ function createOptimisticWorkspaceRow(
 	};
 }
 
-function insertOptimisticWorkspaceRow(
-	groups: WorkspaceGroup[],
+function createResolvedWorkspaceRow(
 	row: WorkspaceRow,
-): WorkspaceGroup[] {
-	return groups.map((group) =>
-		group.id === "progress"
-			? {
-					...group,
-					rows: group.rows.some((item) => item.id === row.id)
-						? group.rows
-						: [row, ...group.rows],
-				}
-			: group.rows.some((item) => item.id === row.id)
-				? {
-						...group,
-						rows: group.rows.filter((item) => item.id !== row.id),
-					}
-				: group,
-	);
+	response: {
+		selectedWorkspaceId: string;
+		createdState: string;
+		directoryName: string;
+		branch: string;
+	},
+): WorkspaceRow {
+	return {
+		...row,
+		id: response.selectedWorkspaceId,
+		title: row.repoName ? `${row.repoName} workspace` : row.title,
+		directoryName: response.directoryName,
+		state: response.createdState,
+		branch: response.branch,
+	};
 }
 
-function removeOptimisticWorkspaceRow(
-	groups: WorkspaceGroup[],
-	workspaceId: string,
-): WorkspaceGroup[] {
-	if (!isOptimisticCreatingWorkspaceId(workspaceId)) {
-		return groups;
-	}
-
-	return groups.map((group) => ({
-		...group,
-		rows: group.rows.filter((row) => row.id !== workspaceId),
-	}));
+function createOptimisticResolvedWorkspaceDetail(
+	row: WorkspaceRow,
+	repoId: string,
+): WorkspaceDetail {
+	return {
+		...createOptimisticCreatingWorkspaceDetail(row, repoId),
+		id: row.id,
+		title: row.title,
+		directoryName: row.directoryName ?? row.id,
+		state: row.state ?? "initializing",
+		branch: row.branch ?? null,
+	};
 }
