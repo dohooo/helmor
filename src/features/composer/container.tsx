@@ -333,7 +333,10 @@ export const WorkspaceComposerContainer = memo(
 			],
 		);
 
-		const workingDirectory = workspaceDetailQuery.data?.rootPath ?? null;
+		const workingDirectory =
+			workspaceDetailQuery.data?.state === "archived"
+				? null
+				: (workspaceDetailQuery.data?.rootPath ?? null);
 
 		// Narrow `provider` (which can be the loosely-typed agentType from a
 		// historical session) to a real AgentProvider before keying the
