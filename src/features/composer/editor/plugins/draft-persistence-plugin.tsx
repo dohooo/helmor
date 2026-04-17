@@ -45,6 +45,7 @@ export function DraftPersistencePlugin({
 }: DraftPersistencePluginProps) {
 	const [editor] = useLexicalComposerContext();
 	const activeContextKeyRef = useRef<string | null>(null);
+	const initializedContextKeyRef = useRef<string | null>(null);
 	const saveTimerRef = useRef<number | null>(null);
 	const prevRestoreNonceRef = useRef(restoreNonce);
 
@@ -127,9 +128,15 @@ export function DraftPersistencePlugin({
 		if (previousContextKey && previousContextKey !== contextKey) {
 			cancelScheduledFlush();
 			flushDraft(previousContextKey);
+			initializedContextKeyRef.current = null;
 		}
 
 		activeContextKeyRef.current = contextKey;
+		if (initializedContextKeyRef.current === contextKey) {
+			return;
+		}
+
+		initializedContextKeyRef.current = contextKey;
 		if (!restorePersistedDraft(contextKey)) {
 			applyRestorePayload();
 		}
