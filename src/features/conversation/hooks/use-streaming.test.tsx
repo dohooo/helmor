@@ -9,6 +9,7 @@ import type {
 	ThreadMessageLike,
 	ToolCallPart,
 } from "@/lib/api";
+import { helmorQueryKeys } from "@/lib/query-client";
 import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 import { WorkspaceToastProvider } from "@/lib/workspace-toast-context";
 import { useConversationStreaming } from "./use-streaming";
@@ -16,6 +17,7 @@ import { useConversationStreaming } from "./use-streaming";
 const apiMocks = vi.hoisted(() => ({
 	generateSessionTitle: vi.fn(),
 	loadSessionThreadMessages: vi.fn(),
+	renameSession: vi.fn(),
 	respondToDeferredTool: vi.fn(),
 	respondToElicitationRequest: vi.fn(),
 	respondToPermissionRequest: vi.fn(),
@@ -30,6 +32,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		...actual,
 		generateSessionTitle: apiMocks.generateSessionTitle,
 		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
+		renameSession: apiMocks.renameSession,
 		respondToDeferredTool: apiMocks.respondToDeferredTool,
 		respondToElicitationRequest: apiMocks.respondToElicitationRequest,
 		respondToPermissionRequest: apiMocks.respondToPermissionRequest,
@@ -146,6 +149,7 @@ describe("useConversationStreaming", () => {
 	beforeEach(() => {
 		apiMocks.generateSessionTitle.mockReset();
 		apiMocks.loadSessionThreadMessages.mockReset();
+		apiMocks.renameSession.mockReset();
 		apiMocks.respondToDeferredTool.mockReset();
 		apiMocks.respondToPermissionRequest.mockReset();
 		apiMocks.startAgentMessageStream.mockReset();
@@ -153,6 +157,7 @@ describe("useConversationStreaming", () => {
 
 		apiMocks.generateSessionTitle.mockResolvedValue(null);
 		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
+		apiMocks.renameSession.mockResolvedValue(undefined);
 		apiMocks.respondToDeferredTool.mockResolvedValue(undefined);
 		apiMocks.respondToElicitationRequest.mockResolvedValue(undefined);
 		apiMocks.respondToPermissionRequest.mockResolvedValue(undefined);
@@ -403,6 +408,151 @@ describe("useConversationStreaming", () => {
 		});
 
 		expect(result.current.hasPlanReview).toBe(false);
+	});
+
+	it("seeds the session title from the first prompt before async title generation", async () => {
+		apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+
+		const { Wrapper, queryClient } = createWrapper();
+		queryClient.setQueryData(helmorQueryKeys.workspaceSessions("workspace-1"), [
+			{
+				id: "session-1",
+				workspaceId: "workspace-1",
+				title: "Untitled",
+				agentType: "codex",
+				status: "idle",
+				model: "gpt-5.4",
+				permissionMode: "default",
+				providerSessionId: null,
+				effortLevel: null,
+				unreadCount: 0,
+				contextTokenCount: 0,
+				contextUsedPercent: null,
+				thinkingEnabled: true,
+				fastMode: false,
+				agentPersonality: null,
+				createdAt: "2026-04-17T00:00:00Z",
+				updatedAt: "2026-04-17T00:00:00Z",
+				lastUserMessageAt: null,
+				resumeSessionAt: null,
+				isHidden: false,
+				isCompacting: false,
+				actionKind: null,
+				active: true,
+			},
+		]);
+		queryClient.setQueryData(helmorQueryKeys.workspaceDetail("workspace-1"), {
+			id: "workspace-1",
+			title: "Workspace 1",
+			repoId: "repo-1",
+			repoName: "helmor",
+			repoIconSrc: null,
+			repoInitials: "HE",
+			remote: "origin",
+			remoteUrl: null,
+			defaultBranch: "main",
+			rootPath: "/tmp/helmor",
+			directoryName: "helmor",
+			state: "ready",
+			hasUnread: false,
+			workspaceUnread: 0,
+			sessionUnreadTotal: 0,
+			unreadSessionCount: 0,
+			derivedStatus: "in-progress",
+			manualStatus: null,
+			activeSessionId: "session-1",
+			activeSessionTitle: "Untitled",
+			activeSessionAgentType: "codex",
+			activeSessionStatus: "idle",
+			branch: "main",
+			initializationParentBranch: "main",
+			intendedTargetBranch: "main",
+			notes: null,
+			pinnedAt: null,
+			prTitle: null,
+			prDescription: null,
+			archiveCommit: null,
+			sessionCount: 1,
+			messageCount: 0,
+			attachmentCount: 0,
+		});
+		queryClient.setQueryData(helmorQueryKeys.workspaceGroups, [
+			{
+				id: "progress",
+				label: "In progress",
+				tone: "progress",
+				rows: [
+					{
+						id: "workspace-1",
+						title: "Workspace 1",
+						repoName: "helmor",
+						repoInitials: "HE",
+						state: "ready",
+						hasUnread: false,
+						workspaceUnread: 0,
+						sessionUnreadTotal: 0,
+						unreadSessionCount: 0,
+						derivedStatus: "in-progress",
+						manualStatus: null,
+						branch: "main",
+						activeSessionId: "session-1",
+						activeSessionTitle: "Untitled",
+						activeSessionAgentType: "codex",
+						activeSessionStatus: "idle",
+						prTitle: null,
+						sessionCount: 1,
+						messageCount: 0,
+						attachmentCount: 0,
+					},
+				],
+			},
+		]);
+
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "Investigate reconnect failures after restarting the session",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: false,
+			});
+		});
+
+		expect(apiMocks.renameSession).toHaveBeenCalledWith(
+			"session-1",
+			"Investigate reconnect failures af...",
+		);
+		expect(apiMocks.generateSessionTitle).toHaveBeenCalledWith(
+			"session-1",
+			"Investigate reconnect failures after restarting the session",
+			"Investigate reconnect failures af...",
+		);
+		expect(
+			queryClient.getQueryData<Array<{ title: string }>>(
+				helmorQueryKeys.workspaceSessions("workspace-1"),
+			)?.[0]?.title,
+		).toBe("Investigate reconnect failures af...");
+		expect(
+			queryClient.getQueryData<
+				Array<{ rows: Array<{ activeSessionTitle: string }> }>
+			>(helmorQueryKeys.workspaceGroups)?.[0]?.rows[0]?.activeSessionTitle,
+		).toBe("Investigate reconnect failures af...");
 	});
 
 	it("tracks pending elicitation separately from deferred tools", async () => {

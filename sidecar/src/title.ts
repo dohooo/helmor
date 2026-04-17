@@ -4,7 +4,8 @@
  * exchangeable results.
  */
 
-export const TITLE_GENERATION_TIMEOUT_MS = 15_000;
+export const TITLE_GENERATION_TIMEOUT_MS = 30_000;
+export const TITLE_GENERATION_FALLBACK_TIMEOUT_MS = 30_000;
 
 export function buildTitlePrompt(userMessage: string): string {
 	return [

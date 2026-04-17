@@ -44,7 +44,6 @@ type WorkspaceInspectorSidebarProps = {
 export function WorkspaceInspectorSidebar({
 	workspaceId,
 	workspaceRootPath,
-	workspaceBranch,
 	workspaceTargetBranch,
 	workspaceRemote,
 	workspaceState,
@@ -102,7 +101,6 @@ export function WorkspaceInspectorSidebar({
 				bodyHeight={changesHeight}
 				workspaceId={workspaceId ?? null}
 				workspaceRootPath={workspaceRootPath ?? null}
-				workspaceBranch={workspaceBranch ?? null}
 				workspaceTargetBranch={workspaceTargetBranch ?? null}
 				changes={changes}
 				editorMode={editorMode}

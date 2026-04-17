@@ -27,6 +27,10 @@ import {
 	requireString,
 } from "./request-parser.js";
 import type { Provider, SessionManager } from "./session-manager.js";
+import {
+	TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
+	TITLE_GENERATION_TIMEOUT_MS,
+} from "./title.js";
 
 const claudeManager = new ClaudeSessionManager();
 const codexManager = new CodexAppServerManager();
@@ -111,13 +115,23 @@ async function handleGenerateTitle(
 		// unavailable. Both implementations emit `titleGenerated` in the
 		// same shape, so the caller can't tell which one ran.
 		try {
-			await managers.claude.generateTitle(id, userMessage, emitter);
+			await managers.claude.generateTitle(
+				id,
+				userMessage,
+				emitter,
+				TITLE_GENERATION_TIMEOUT_MS,
+			);
 			logger.debug(`[${id}] generateTitle completed (claude)`);
 		} catch (claudeErr) {
 			logger.debug(
 				`[${id}] generateTitle claude failed, trying codex: ${errorMessage(claudeErr)}`,
 			);
-			await managers.codex.generateTitle(id, userMessage, emitter);
+			await managers.codex.generateTitle(
+				id,
+				userMessage,
+				emitter,
+				TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
+			);
 			logger.debug(`[${id}] generateTitle completed (codex fallback)`);
 		}
 	} catch (err) {
