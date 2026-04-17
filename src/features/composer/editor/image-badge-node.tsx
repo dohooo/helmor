@@ -19,6 +19,7 @@ import {
 } from "lexical";
 import { ImageIcon } from "lucide-react";
 import type { ReactNode } from "react";
+import { basename } from "@/lib/path-util";
 import { ComposerPreviewBadge } from "./composer-preview-badge";
 
 // ---------------------------------------------------------------------------
@@ -42,7 +43,7 @@ function ComposerImageBadge({
 	nodeKey: NodeKey;
 }) {
 	const [editor] = useLexicalComposerContext();
-	const fileName = imagePath.split("/").pop() ?? imagePath;
+	const fileName = basename(imagePath);
 
 	return (
 		<ComposerPreviewBadge

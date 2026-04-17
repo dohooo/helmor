@@ -6,6 +6,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Button } from "@/components/ui/button";
 import { KbdKey } from "@/components/ui/kbd-key";
 import {
@@ -390,8 +391,8 @@ export function WorkspaceEditorSurface({
 				className="flex h-9 items-center border-b border-[#2b2b2b]"
 				data-tauri-drag-region
 			>
-				{/* Traffic-light inset: macOS stoplight buttons sit at x=16, ~70px total width */}
-				<div className="w-[86px] shrink-0" data-tauri-drag-region />
+				{/* Traffic-light inset. macOS: left; Windows / Linux: right. */}
+				<TrafficLightSpacer side="left" width={86} />
 
 				<div className="min-w-0 flex-1" data-tauri-drag-region />
 

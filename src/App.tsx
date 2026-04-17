@@ -1,7 +1,6 @@
 import "./App.css";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
-
 import {
 	Check,
 	ChevronDown,
@@ -38,6 +37,7 @@ import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import { closeWorkspaceSession } from "@/features/panel/session-close";
 import { SettingsButton, SettingsDialog } from "@/features/settings";
 import { useAppUpdater } from "@/features/updater/use-app-updater";
+import { isPrimaryModifier } from "@/lib/keyboard-modifier";
 import { EditorIcon } from "@/shell/editor-icon";
 import { GithubIdentityGate } from "@/shell/github-identity-gate";
 import { GithubStatusMenu } from "@/shell/github-status-menu";
@@ -152,10 +152,10 @@ function App() {
 		);
 	}, []);
 
-	// Cmd+, to open settings (standard macOS convention)
+	// Cmd+, (macOS) / Ctrl+, (Windows / Linux) to open settings
 	useEffect(() => {
 		const handler = (e: KeyboardEvent) => {
-			if (e.metaKey && e.key === ",") {
+			if (isPrimaryModifier(e) && e.key === ",") {
 				e.preventDefault();
 				setSettingsOpen(true);
 			}
@@ -485,10 +485,10 @@ function AppShell({
 			: null) ??
 		null;
 
-	// Cmd+Shift+C to copy current workspace path
+	// Cmd+Shift+C (macOS) / Ctrl+Shift+C (Windows / Linux) to copy path
 	useEffect(() => {
 		const handler = (e: KeyboardEvent) => {
-			if (e.metaKey && e.shiftKey && e.key.toLowerCase() === "c") {
+			if (isPrimaryModifier(e) && e.shiftKey && e.key.toLowerCase() === "c") {
 				if (!workspaceRootPath) return;
 				e.preventDefault();
 				void navigator.clipboard.writeText(workspaceRootPath).then(() => {
@@ -1536,7 +1536,8 @@ function AppShell({
 		}
 
 		const handleWindowKeyDown = (event: globalThis.KeyboardEvent) => {
-			if (!event.metaKey || !event.altKey || event.ctrlKey || event.shiftKey) {
+			// Cmd+Option (macOS) or Ctrl+Alt (Windows / Linux) +arrow to navigate.
+			if (!isPrimaryModifier(event) || !event.altKey || event.shiftKey) {
 				return;
 			}
 
@@ -1587,10 +1588,10 @@ function AppShell({
 		}
 
 		const handleWindowKeyDown = (event: globalThis.KeyboardEvent) => {
+			// Cmd+W (macOS) / Ctrl+W (Windows / Linux). Reject alt/shift combos.
 			if (
-				!event.metaKey ||
+				!isPrimaryModifier(event) ||
 				event.altKey ||
-				event.ctrlKey ||
 				event.shiftKey ||
 				event.key.toLowerCase() !== "w"
 			) {
@@ -1623,10 +1624,10 @@ function AppShell({
 		}
 
 		const handleWindowKeyDown = (event: globalThis.KeyboardEvent) => {
+			// Cmd+T (macOS) / Ctrl+T (Windows / Linux).
 			if (
-				!event.metaKey ||
+				!isPrimaryModifier(event) ||
 				event.altKey ||
-				event.ctrlKey ||
 				event.shiftKey ||
 				event.key.toLowerCase() !== "t"
 			) {
@@ -1644,7 +1645,7 @@ function AppShell({
 		};
 	}, [handleCreateSession, isIdentityConnected, workspaceViewMode]);
 
-	// Cmd+R to run the configured run script
+	// Cmd+R (macOS) / Ctrl+R (Windows / Linux) to run the configured run script
 	useEffect(() => {
 		if (!isIdentityConnected) {
 			return;
@@ -1652,9 +1653,8 @@ function AppShell({
 
 		const handleWindowKeyDown = (event: globalThis.KeyboardEvent) => {
 			if (
-				!event.metaKey ||
+				!isPrimaryModifier(event) ||
 				event.altKey ||
-				event.ctrlKey ||
 				event.shiftKey ||
 				event.key.toLowerCase() !== "r"
 			) {

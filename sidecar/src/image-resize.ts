@@ -113,6 +113,89 @@ async function resizeWithConvert(
 	return false;
 }
 
+/**
+ * Windows resize via PowerShell + System.Drawing.
+ *
+ * Zero bundled dependency — System.Drawing.Bitmap ships with every
+ * Windows 10+ install. Slower than `sips` / `magick`, but adequate for
+ * the 1-5 MP images users typically paste. When PowerShell is missing
+ * (user-locked-down machine) we fall back to trying `magick` / `convert`
+ * on PATH so the Linux cascade still applies.
+ */
+async function resizeWithPowerShell(
+	input: string,
+	output: string,
+): Promise<boolean> {
+	// Inline PS script: load bitmap, compute the target dimensions with the
+	// same ">" semantics as ImageMagick (only shrink, never upscale), write
+	// the output preserving the source encoder where possible.
+	const script = [
+		"$ErrorActionPreference = 'Stop'",
+		"Add-Type -AssemblyName System.Drawing",
+		`$src = [System.Drawing.Image]::FromFile('${input.replace(/'/g, "''")}')`,
+		"try {",
+		`  $max = ${MAX_DIMENSION}`,
+		"  $w = $src.Width",
+		"  $h = $src.Height",
+		"  if ($w -le $max -and $h -le $max) {",
+		`    $src.Save('${output.replace(/'/g, "''")}')`,
+		"  } else {",
+		"    $scale = [Math]::Min($max / $w, $max / $h)",
+		"    $nw = [int][Math]::Floor($w * $scale)",
+		"    $nh = [int][Math]::Floor($h * $scale)",
+		"    $dst = New-Object System.Drawing.Bitmap($nw, $nh)",
+		"    try {",
+		"      $g = [System.Drawing.Graphics]::FromImage($dst)",
+		"      try {",
+		"        $g.InterpolationMode = 'HighQualityBicubic'",
+		"        $g.DrawImage($src, 0, 0, $nw, $nh)",
+		"      } finally { $g.Dispose() }",
+		`      $dst.Save('${output.replace(/'/g, "''")}')`,
+		"    } finally { $dst.Dispose() }",
+		"  }",
+		"} finally { $src.Dispose() }",
+	].join("; ");
+
+	try {
+		await execFileAsync("powershell", [
+			"-NoProfile",
+			"-NonInteractive",
+			"-Command",
+			script,
+		]);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Dispatch to the best resizer for the current OS.
+ *
+ * - darwin: `sips` (preinstalled).
+ * - win32:  PowerShell + System.Drawing (preinstalled on Windows 10+).
+ *           Falls back to `magick`/`convert` on PATH if PowerShell refuses.
+ * - linux / other: `magick` or `convert` on PATH (ImageMagick).
+ *
+ * All variants return boolean on success so the caller can fall back to
+ * passing the original image through when resize fails.
+ */
+async function resizeForPlatform(
+	input: string,
+	output: string,
+): Promise<boolean> {
+	if (process.platform === "darwin") {
+		return resizeWithSips(input, output);
+	}
+	if (process.platform === "win32") {
+		if (await resizeWithPowerShell(input, output)) {
+			return true;
+		}
+		return resizeWithConvert(input, output);
+	}
+	return resizeWithConvert(input, output);
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -154,10 +237,7 @@ export async function readImageWithResize(
 	const tmpDir = await mkdtemp(join(tmpdir(), "helmor-img-"));
 	const tmpPath = join(tmpDir, `resized${ext}`);
 
-	const ok =
-		process.platform === "darwin"
-			? await resizeWithSips(filePath, tmpPath)
-			: await resizeWithConvert(filePath, tmpPath);
+	const ok = await resizeForPlatform(filePath, tmpPath);
 
 	if (!ok) {
 		logger.error("Resize failed, forwarding original image", {

@@ -645,28 +645,32 @@ describe("App global navigation shortcuts", () => {
 		});
 	});
 
-	it("only responds to the exact meta+alt shortcut combination", async () => {
+	it("only responds to the primary-mod + alt combination (rejects missing alt, missing primary, and shift)", async () => {
 		await renderAppReady();
 
+		// Missing alt — must NOT trigger.
 		fireEvent.keyDown(window, {
 			key: "ArrowRight",
 			metaKey: true,
 		});
+		// Missing primary modifier (no meta / no ctrl) — must NOT trigger.
 		fireEvent.keyDown(window, {
 			key: "ArrowRight",
 			altKey: true,
 		});
+		// Shift present — must NOT trigger (shift changes semantic).
 		fireEvent.keyDown(window, {
 			key: "ArrowDown",
 			metaKey: true,
 			altKey: true,
 			shiftKey: true,
 		});
+		// Post Phase 3: meta + ctrl + alt (no shift) IS valid loose-binding —
+		// we expect this keystroke to navigate, so dispatch a no-op key instead
+		// to keep the test's "no accidental nav" assertion honest.
 		fireEvent.keyDown(window, {
 			key: "ArrowDown",
-			metaKey: true,
-			altKey: true,
-			ctrlKey: true,
+			shiftKey: true,
 		});
 
 		await waitFor(() => {

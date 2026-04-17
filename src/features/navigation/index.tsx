@@ -15,6 +15,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -456,7 +457,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				data-slot="window-safe-top"
 				className="flex h-9 shrink-0 items-center pr-3"
 			>
-				<div data-tauri-drag-region className="h-full w-[94px] shrink-0" />
+				<TrafficLightSpacer side="left" width={94} />
 				<div data-tauri-drag-region className="h-full flex-1" />
 			</div>
 

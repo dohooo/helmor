@@ -1,5 +1,6 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { isMac } from "@/lib/platform";
 import { KbdKey } from "./kbd-key";
 
 describe("KbdKey (baseline rendering)", () => {
@@ -12,28 +13,46 @@ describe("KbdKey (baseline rendering)", () => {
 		expect(container.querySelector("kbd svg")).toBeNull();
 	});
 
-	it("renders an svg icon for 'command'", () => {
+	it("'command' renders as ⌘ icon on macOS, 'Ctrl' text elsewhere", () => {
 		const { container } = render(<KbdKey name="command" />);
-		const svg = container.querySelector("kbd svg");
-		expect(svg).not.toBeNull();
-		expect(container.querySelector("kbd span")).toBeNull();
+		if (isMac()) {
+			expect(container.querySelector("kbd svg")).not.toBeNull();
+			expect(container.querySelector("kbd span")).toBeNull();
+		} else {
+			expect(container.querySelector("kbd svg")).toBeNull();
+			expect(container.querySelector("kbd span")?.textContent).toBe("Ctrl");
+		}
 	});
 
-	it("renders an svg icon for 'shift'", () => {
+	it("'option' renders as ⌥ icon on macOS, 'Alt' text elsewhere", () => {
+		const { container } = render(<KbdKey name="option" />);
+		if (isMac()) {
+			expect(container.querySelector("kbd svg")).not.toBeNull();
+			expect(container.querySelector("kbd span")).toBeNull();
+		} else {
+			expect(container.querySelector("kbd svg")).toBeNull();
+			expect(container.querySelector("kbd span")?.textContent).toBe("Alt");
+		}
+	});
+
+	it("'shift' renders as ArrowBigUp icon on every OS", () => {
 		const { container } = render(<KbdKey name="shift" />);
 		expect(container.querySelector("kbd svg")).not.toBeNull();
 	});
 
-	it("is case-insensitive on lookup", () => {
+	it("is case-insensitive on lookup for 'command'", () => {
 		const { container: lower } = render(<KbdKey name="command" />);
 		const { container: upper } = render(<KbdKey name="COMMAND" />);
 		const { container: symbol } = render(<KbdKey name="⌘" />);
-		expect(lower.querySelector("kbd svg")).not.toBeNull();
-		expect(upper.querySelector("kbd svg")).not.toBeNull();
-		expect(symbol.querySelector("kbd svg")).not.toBeNull();
+		// Whichever representation the OS uses, all three aliases must be identical.
+		const lowerHtml = lower.querySelector("kbd")?.innerHTML;
+		const upperHtml = upper.querySelector("kbd")?.innerHTML;
+		const symbolHtml = symbol.querySelector("kbd")?.innerHTML;
+		expect(lowerHtml).toBe(upperHtml);
+		expect(lowerHtml).toBe(symbolHtml);
 	});
 
-	it("renders an svg icon for 'enter' and its aliases", () => {
+	it("renders an svg icon for 'enter' and its aliases on every OS", () => {
 		for (const name of ["enter", "return", "⏎"]) {
 			const { container } = render(<KbdKey name={name} />);
 			expect(

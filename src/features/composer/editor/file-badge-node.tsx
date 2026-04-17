@@ -18,6 +18,7 @@ import {
 } from "lexical";
 import { FileText } from "lucide-react";
 import type { ReactNode } from "react";
+import { basename } from "@/lib/path-util";
 import { ComposerPreviewBadge } from "./composer-preview-badge";
 
 type SerializedFileBadgeNode = Spread<
@@ -33,7 +34,7 @@ function ComposerFileBadge({
 	nodeKey: NodeKey;
 }) {
 	const [editor] = useLexicalComposerContext();
-	const fileName = filePath.split("/").pop() ?? filePath;
+	const fileName = basename(filePath);
 
 	return (
 		<ComposerPreviewBadge

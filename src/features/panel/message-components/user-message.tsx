@@ -2,6 +2,7 @@ import { FileText } from "lucide-react";
 import { memo, useMemo } from "react";
 import { ImagePreviewBadge } from "@/components/image-preview";
 import type { MessagePart } from "@/lib/api";
+import { basename } from "@/lib/path-util";
 import { useSettings } from "@/lib/settings";
 import type { RenderedMessage } from "./shared";
 import { isFileMentionPart, isTextPart } from "./shared";
@@ -76,7 +77,7 @@ const UserTextInline = memo(function UserTextInline({
 });
 
 function FileBadgeInline({ path }: { path: string }) {
-	const fileName = path.split("/").pop() ?? path;
+	const fileName = basename(path);
 	return (
 		<span className="mx-0.5 inline-flex items-center gap-1 rounded border border-border/60 align-middle text-[12px]">
 			<span className="inline-flex items-center gap-1.5 px-1.5 py-0.5">

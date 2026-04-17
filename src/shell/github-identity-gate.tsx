@@ -4,6 +4,7 @@ import { Check, Copy, RefreshCw } from "lucide-react";
 import { useCallback, useState } from "react";
 import helmorLogoSrc from "@/assets/helmor-logo.png";
 import bannerHtml from "@/assets/render-banner.html?raw";
+import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Button } from "@/components/ui/button";
 import { TypingAnimation } from "@/components/ui/typing-animation";
 import type { GithubIdentityState } from "./types";
@@ -63,8 +64,9 @@ export function GithubIdentityGate({
 				aria-label="GitHub identity gate drag region"
 				className="absolute inset-x-0 top-0 z-10 flex h-11 items-center"
 			>
-				<div data-tauri-drag-region className="h-full w-[94px] shrink-0" />
+				<TrafficLightSpacer side="left" width={94} />
 				<div data-tauri-drag-region className="h-full flex-1" />
+				<TrafficLightSpacer side="right" width={140} />
 			</div>
 
 			<div className="relative z-10 flex h-full items-center justify-center px-6">

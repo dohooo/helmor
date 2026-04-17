@@ -3,6 +3,7 @@ import { ImageIcon, X } from "lucide-react";
 import { useCallback, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
+import { basename } from "@/lib/path-util";
 
 /** Regex matching an absolute image path (may appear anywhere in a string). */
 const IMAGE_PATH_RE =
@@ -39,7 +40,7 @@ export function ImagePreviewBadge({
 	onRemove?: () => void;
 }) {
 	const [open, setOpen] = useState(false);
-	const fileName = path.split("/").pop() ?? path;
+	const fileName = basename(path);
 
 	const handleClick = useCallback(() => setOpen(true), []);
 	const handleClose = useCallback(() => setOpen(false), []);
