@@ -128,9 +128,10 @@ jobs:
       - name: Setup Rust Tauri
         uses: ./.github/actions/setup-rust-tauri
 
-      - name: Stage sidecar via cross-platform prepare script
-        shell: bash
-        run: node scripts/prepare-sidecar.mjs
+      - name: Build + stage sidecar (Windows)
+        uses: ./.github/actions/build-sidecar
+        with:
+          target-triple: x86_64-pc-windows-msvc
 
       - name: cargo check for x86_64-pc-windows-msvc
         shell: bash

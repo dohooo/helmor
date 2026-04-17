@@ -1,19 +1,24 @@
 name: Build Sidecar
-description: Build the Bun sidecar binary and copy it to the Tauri externalBin target name
+description: Build the Bun sidecar binary and stage it under the Tauri externalBin name for the current host (cross-platform).
 
 inputs:
   target-triple:
-    description: Rust target triple suffix used by Tauri externalBin on Linux
+    description: |
+      Rust target triple suffix used by Tauri externalBin. Defaults are
+      wrong for Windows / macOS, so callers from publish workflows MUST
+      set this explicitly. Defaults to x86_64-unknown-linux-gnu to keep
+      the existing Linux rust-test job working without changes.
     required: false
     default: x86_64-unknown-linux-gnu
 
 runs:
   using: composite
   steps:
-    - name: Build sidecar binary
+    - name: Stage sidecar via cross-platform prepare script
       shell: bash
-      run: pnpm --dir sidecar run build
-
-    - name: Copy sidecar binary for Tauri externalBin
-      shell: bash
-      run: cp sidecar/dist/helmor-sidecar "sidecar/dist/helmor-sidecar-${{ inputs.target-triple }}"
+      env:
+        # prepare-sidecar.mjs reads this to pick the target triple suffix
+        # instead of asking rustc. Lets Windows / Linux runners override
+        # macOS-inherited defaults without editing the script.
+        TAURI_TARGET_TRIPLE: ${{ inputs.target-triple }}
+      run: node scripts/prepare-sidecar.mjs

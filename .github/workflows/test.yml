@@ -81,10 +81,18 @@ jobs:
         run: pnpm run test:frontend
 
   sidecar-test:
-    name: Sidecar Test
+    # Matrix across all three supported OSes so bun-native / process.platform
+    # branches (image-resize.ts, codex-app-server.ts, stage-vendor.ts) are
+    # exercised on every runner where they might behave differently. Ubuntu
+    # stays the default for gatekeeping; macOS and Windows add coverage.
+    name: Sidecar Test (${{ matrix.os }})
     needs: changes
     if: needs.changes.outputs.sidecar == 'true'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -94,13 +102,27 @@ jobs:
         uses: ./.github/actions/setup-js
 
       - name: Run sidecar tests
+        shell: bash
         run: pnpm run test:sidecar
 
   rust-test:
-    name: Rust Test
+    # Matrix: exercise the integration tests on every target OS so the
+    # #[cfg(target_os = ...)] branches added in Phase 2 (system_commands,
+    # sidecar path, scripts stub, archive shell) actually run in CI.
+    name: Rust Test (${{ matrix.os }})
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target-triple: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target-triple: aarch64-apple-darwin
+          - os: windows-latest
+            target-triple: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     steps:
       - name: Checkout
@@ -114,9 +136,13 @@ jobs:
 
       - name: Build sidecar binary
         uses: ./.github/actions/build-sidecar
+        with:
+          target-triple: ${{ matrix.target-triple }}
 
       - name: Run Rust tests with nextest
+        shell: bash
         run: cd src-tauri && cargo nextest run
 
       - name: Run Rust doctests
+        shell: bash
         run: cd src-tauri && cargo test --doc

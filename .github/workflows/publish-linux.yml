@@ -1,0 +1,151 @@
+name: Publish Linux Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: "Create the GitHub release as a draft"
+        required: false
+        default: true
+        type: boolean
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  # Serialise Linux publishes per ref so tauri-action's latest.json merges
+  # do not race against a retry of the same tag.
+  group: publish-linux-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CI: true
+
+jobs:
+  preflight:
+    name: Release Preflight
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release_body: ${{ steps.notes.outputs.release_body }}
+      draft: ${{ steps.release-mode.outputs.draft }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Verify release config
+        run: |
+          pnpm run release:verify
+          test -n "${HELMOR_UPDATER_PUBKEY}"
+          test -n "${HELMOR_UPDATER_ENDPOINTS}"
+          test -n "${TAURI_SIGNING_PRIVATE_KEY}"
+        env:
+          HELMOR_UPDATER_PUBKEY: ${{ secrets.HELMOR_UPDATER_PUBKEY }}
+          HELMOR_UPDATER_ENDPOINTS: ${{ secrets.HELMOR_UPDATER_ENDPOINTS }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      - name: Read version
+        id: version
+        run: echo "version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+
+      - name: Validate pushed tag matches app version
+        if: github.ref_type == 'tag'
+        run: |
+          expected="v${{ steps.version.outputs.version }}"
+          if [ "${GITHUB_REF_NAME}" != "${expected}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match app version ${expected}"
+            exit 1
+          fi
+
+      - name: Extract release notes
+        id: notes
+        run: |
+          {
+            echo 'release_body<<EOF'
+            pnpm run release:notes -- "${{ steps.version.outputs.version }}"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release mode
+        id: release-mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "draft=${{ inputs.draft }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "draft=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-and-publish:
+    name: Build and Publish Linux Release
+    needs: preflight
+    # ubuntu-22.04 pins glibc 2.35 so the resulting binaries run on
+    # Debian 12, Ubuntu 22.04+, Fedora 36+, Arch. 24.04+ would raise the
+    # glibc floor and cut off Debian 12 users.
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Setup Rust Tauri (installs libwebkit2gtk + friends on Linux)
+        uses: ./.github/actions/setup-rust-tauri
+
+      - name: Build + stage sidecar for x86_64-unknown-linux-gnu
+        uses: ./.github/actions/build-sidecar
+        with:
+          target-triple: x86_64-unknown-linux-gnu
+
+      - name: Build and publish Linux release
+        id: tauri
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          HELMOR_UPDATER_PUBKEY: ${{ secrets.HELMOR_UPDATER_PUBKEY }}
+          HELMOR_UPDATER_ENDPOINTS: ${{ secrets.HELMOR_UPDATER_ENDPOINTS }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Helmor v__VERSION__
+          releaseBody: ${{ needs.preflight.outputs.release_body }}
+          releaseDraft: ${{ needs.preflight.outputs.draft == 'true' }}
+          prerelease: false
+          uploadUpdaterJson: true
+
+      - name: AppImage smoke test (headless via xvfb)
+        # Sanity-check that the produced AppImage actually boots. Does not
+        # fail the job on crash — this is best-effort, it logs whatever
+        # startup errors come back so a human can look. Tauri apps often
+        # exit non-zero for "user closed the window" cases and a real
+        # regression would manifest as unparseable stderr anyway.
+        continue-on-error: true
+        run: |
+          set +e
+          APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name "*.AppImage" -type f | head -n 1 || true)
+          if [ -z "${APPIMAGE}" ]; then
+            echo "No AppImage produced — nothing to smoke-test"
+            exit 0
+          fi
+          sudo apt-get install -y xvfb
+          chmod +x "${APPIMAGE}"
+          timeout 15s xvfb-run --auto-servernum "${APPIMAGE}" &
+          APP_PID=$!
+          sleep 10
+          if kill -0 ${APP_PID} 2>/dev/null; then
+            echo "AppImage is running 10s after launch — likely healthy"
+            kill ${APP_PID} 2>/dev/null || true
+          else
+            echo "AppImage exited during startup — check logs above"
+          fi

@@ -1,0 +1,148 @@
+name: Publish Windows Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: "Create the GitHub release as a draft"
+        required: false
+        default: true
+        type: boolean
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  # Serialise Windows publishes per ref so tauri-action's latest.json
+  # merges do not race against a retry of the same tag.
+  group: publish-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CI: true
+
+jobs:
+  preflight:
+    name: Release Preflight
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release_body: ${{ steps.notes.outputs.release_body }}
+      draft: ${{ steps.release-mode.outputs.draft }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Verify release config
+        run: |
+          pnpm run release:verify
+          test -n "${HELMOR_UPDATER_PUBKEY}"
+          test -n "${HELMOR_UPDATER_ENDPOINTS}"
+          test -n "${TAURI_SIGNING_PRIVATE_KEY}"
+        env:
+          HELMOR_UPDATER_PUBKEY: ${{ secrets.HELMOR_UPDATER_PUBKEY }}
+          HELMOR_UPDATER_ENDPOINTS: ${{ secrets.HELMOR_UPDATER_ENDPOINTS }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      - name: Read version
+        id: version
+        run: echo "version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+
+      - name: Validate pushed tag matches app version
+        if: github.ref_type == 'tag'
+        run: |
+          expected="v${{ steps.version.outputs.version }}"
+          if [ "${GITHUB_REF_NAME}" != "${expected}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match app version ${expected}"
+            exit 1
+          fi
+
+      - name: Extract release notes
+        id: notes
+        run: |
+          {
+            echo 'release_body<<EOF'
+            pnpm run release:notes -- "${{ steps.version.outputs.version }}"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release mode
+        id: release-mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "draft=${{ inputs.draft }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "draft=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-and-publish:
+    name: Build and Publish Windows Release
+    needs: preflight
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Setup Rust Tauri
+        uses: ./.github/actions/setup-rust-tauri
+
+      - name: Build + stage sidecar for x86_64-pc-windows-msvc
+        uses: ./.github/actions/build-sidecar
+        with:
+          target-triple: x86_64-pc-windows-msvc
+
+      - name: Build and publish Windows release (unsigned v1)
+        # v1 ships unsigned. Users will see a SmartScreen "protected your PC"
+        # warning and must click "More info" → "Run anyway" to install.
+        # Planned follow-up: Azure Trusted Signing (see docs/release-secrets.md).
+        id: tauri
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          HELMOR_UPDATER_PUBKEY: ${{ secrets.HELMOR_UPDATER_PUBKEY }}
+          HELMOR_UPDATER_ENDPOINTS: ${{ secrets.HELMOR_UPDATER_ENDPOINTS }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Helmor v__VERSION__
+          releaseBody: ${{ needs.preflight.outputs.release_body }}
+          releaseDraft: ${{ needs.preflight.outputs.draft == 'true' }}
+          prerelease: false
+          uploadUpdaterJson: true
+          # NSIS is the preferred Windows updater target. MSI is still produced
+          # alongside for users who prefer it (same `tauri build` run).
+          updaterJsonPreferNsis: true
+
+      - name: Executable smoke test (process starts, stays alive 5s)
+        # Best-effort check that helmor.exe boots without exiting
+        # immediately. Windows CI can't render a GUI properly but the
+        # process should stay alive for at least a few seconds if the
+        # binary is not instantly crashing on missing sidecar / DLL / etc.
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $Exe = Get-ChildItem -Path "src-tauri/target/release" -Filter "helmor.exe" -Recurse | Select-Object -First 1
+          if (-not $Exe) { Write-Host "::warning::helmor.exe not found under src-tauri/target/release"; exit 0 }
+          Write-Host "Launching $($Exe.FullName)"
+          $proc = Start-Process -FilePath $Exe.FullName -PassThru
+          Start-Sleep -Seconds 5
+          if ($proc.HasExited) {
+            Write-Host "::warning::helmor.exe exited within 5s with code $($proc.ExitCode)"
+          } else {
+            Write-Host "helmor.exe is running 5s after launch — likely healthy"
+            Stop-Process -Id $proc.Id -Force
+          }
