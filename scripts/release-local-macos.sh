@@ -61,8 +61,8 @@ if ! command -v xcrun >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v pnpm >/dev/null 2>&1; then
-  echo "pnpm is required"
+if ! command -v bun >/dev/null 2>&1; then
+  echo "bun is required"
   exit 1
 fi
 
@@ -72,7 +72,7 @@ eval "${keychain_env}"
 trap 'scripts/cleanup-macos-signing.sh "${APPLE_KEYCHAIN_PATH:-}"' EXIT
 
 echo "Verifying local release configuration..."
-pnpm run release:verify
+bun run release:verify
 
 echo "Checking signing identity..."
 if ! security find-identity -v -p codesigning | grep -F "${APPLE_SIGNING_IDENTITY}" >/dev/null; then
@@ -85,7 +85,7 @@ echo "Checking notarization tool availability..."
 xcrun notarytool --version >/dev/null
 
 echo "Building Helmor macOS release..."
-pnpm tauri build --bundles app,dmg --ci
+bun x tauri build --bundles app,dmg --ci
 
 echo "macOS release build finished."
 echo

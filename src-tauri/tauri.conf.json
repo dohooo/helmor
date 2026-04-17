@@ -4,9 +4,9 @@
 	"version": "0.1.0",
 	"identifier": "ai.helmor.desktop",
 	"build": {
-		"beforeDevCommand": "pnpm exec vite",
+		"beforeDevCommand": "bun x vite",
 		"devUrl": "http://localhost:1420",
-		"beforeBuildCommand": "node scripts/prepare-sidecar.mjs && pnpm run build",
+		"beforeBuildCommand": "node scripts/prepare-sidecar.mjs && bun run build",
 		"frontendDist": "../dist"
 	},
 	"plugins": {

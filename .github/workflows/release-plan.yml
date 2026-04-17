@@ -31,12 +31,12 @@ jobs:
         uses: ./.github/actions/setup-js
 
       - name: Verify release config tooling
-        run: pnpm run release:verify
+        run: bun run release:verify
 
       - name: Create or update release PR
         uses: changesets/action@v1
         with:
-          version: pnpm run release:version
+          version: bun run release:version
           commit: "chore(release): version packages"
           title: "chore(release): version packages"
         env:

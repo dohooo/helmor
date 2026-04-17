@@ -57,7 +57,7 @@ jobs:
 
       - name: Verify release config
         run: |
-          pnpm run release:verify
+          bun run release:verify
           test -n "${HELMOR_UPDATER_PUBKEY}"
           test -n "${HELMOR_UPDATER_ENDPOINTS}"
           test -n "${TAURI_SIGNING_PRIVATE_KEY}"
@@ -84,7 +84,7 @@ jobs:
         run: |
           {
             echo 'release_body<<EOF'
-            pnpm run release:notes -- "${{ steps.version.outputs.version }}"
+            bun run release:notes -- "${{ steps.version.outputs.version }}"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
@@ -182,6 +182,8 @@ jobs:
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true
           args: ${{ matrix.tauri-args }}
+          # Force tauri-action to use bun instead of auto-detecting (it only knows npm/yarn/pnpm)
+          tauriScript: bun run tauri
 
       - name: Cleanup macOS signing keychain
         if: always() && startsWith(matrix.platform, 'macos-')

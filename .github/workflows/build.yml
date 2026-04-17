@@ -36,7 +36,7 @@ jobs:
             app_build:
               - '.github/**'
               - 'package.json'
-              - 'pnpm-lock.yaml'
+              - 'bun.lock'
               - 'tsconfig.json'
               - 'tsconfig.node.json'
               - 'vite.config.ts'
@@ -48,7 +48,7 @@ jobs:
             storybook_build:
               - '.github/**'
               - 'package.json'
-              - 'pnpm-lock.yaml'
+              - 'bun.lock'
               - 'tsconfig.json'
               - 'tsconfig.node.json'
               - 'vite.config.ts'
@@ -72,7 +72,7 @@ jobs:
         uses: ./.github/actions/setup-js
 
       - name: Run app build
-        run: pnpm run build
+        run: bun run build
 
   storybook-build:
     name: Storybook Build
@@ -88,4 +88,4 @@ jobs:
         uses: ./.github/actions/setup-js
 
       - name: Run Storybook build
-        run: pnpm run build-storybook
+        run: bun run build-storybook

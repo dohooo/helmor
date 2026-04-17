@@ -7,11 +7,11 @@ Helmor ships a standalone CLI binary (`helmor`) that manages workspaces, session
 ### Development
 
 ```bash
-pnpm run dev:cli:build                        # compile (debug)
-pnpm run dev:cli:install                      # compile + copy to /usr/local/bin/helmor
+bun run dev:cli:build                         # compile (debug)
+bun run dev:cli:install                       # compile + copy to /usr/local/bin/helmor
 ```
 
-The debug build reads `~/helmor-dev/` — same database as `pnpm run dev`.
+The debug build reads `~/helmor-dev/` — same database as `bun run dev`.
 
 ### Settings UI
 
