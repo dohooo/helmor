@@ -93,6 +93,97 @@ fn archive_workspace_moves_context_and_removes_worktree() {
 }
 
 #[test]
+fn permanently_delete_archived_workspace_removes_db_rows_and_context() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = ArchiveTestHarness::new(true);
+
+    workspaces::archive_workspace_impl(&harness.workspace_id).unwrap();
+    assert!(harness.archived_context_dir().exists());
+
+    workspaces::permanently_delete_workspace(&harness.workspace_id).unwrap();
+
+    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+    let workspace_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM workspaces WHERE id = ?1",
+            [&harness.workspace_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let session_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sessions WHERE workspace_id = ?1",
+            [&harness.workspace_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let message_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM session_messages WHERE session_id = ?1",
+            [&harness.session_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let attachment_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM attachments WHERE session_id = ?1",
+            [&harness.session_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    assert_eq!(workspace_count, 0);
+    assert_eq!(session_count, 0);
+    assert_eq!(message_count, 0);
+    assert_eq!(attachment_count, 0);
+    assert!(!harness.archived_context_dir().exists());
+}
+
+#[test]
+fn permanently_delete_workspace_surfaces_sql_errors() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = ArchiveTestHarness::new(true);
+    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+    connection
+        .execute(
+            r#"
+            CREATE TRIGGER block_workspace_delete
+            BEFORE DELETE ON workspaces
+            BEGIN
+                SELECT RAISE(FAIL, 'blocked delete');
+            END;
+            "#,
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let error = workspaces::permanently_delete_workspace(&harness.workspace_id)
+        .expect_err("delete should surface trigger failures");
+    let error_text = format!("{error:#}");
+
+    assert!(
+        error_text.contains("Failed to delete workspace row")
+            || error_text.contains("blocked delete"),
+        "Expected delete error context, got: {error_text}"
+    );
+
+    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+    let workspace_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM workspaces WHERE id = ?1",
+            [&harness.workspace_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(workspace_count, 1);
+}
+
+#[test]
 fn prepare_archive_plan_is_read_only() {
     let _guard = TEST_LOCK
         .lock()

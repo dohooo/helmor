@@ -305,6 +305,7 @@ fn sync_workspace_target_branch_reports_already_up_to_date() {
         workspaces::SyncWorkspaceTargetOutcome::AlreadyUpToDate
     );
     assert_eq!(result.target_branch, "main");
+    assert!(result.conflicted_files.is_empty());
 }
 
 #[test]
@@ -322,6 +323,7 @@ fn sync_workspace_target_branch_merges_latest_target() {
         result.outcome,
         workspaces::SyncWorkspaceTargetOutcome::Updated
     );
+    assert!(result.conflicted_files.is_empty());
     let merged_main = fs::read_to_string(harness.workspace_dir().join("main2.txt")).unwrap();
     let merged_feature = fs::read_to_string(harness.workspace_dir().join("feature.txt")).unwrap();
     assert_eq!(merged_main, "fresh");
@@ -343,13 +345,41 @@ fn sync_workspace_target_branch_reports_conflict() {
         result.outcome,
         workspaces::SyncWorkspaceTargetOutcome::Conflict
     );
+    assert_eq!(result.conflicted_files, vec!["README.md".to_string()]);
     let status =
         git_ops::workspace_action_status(&harness.workspace_dir(), Some("origin"), Some("main"))
             .unwrap();
     assert!(
-        status.conflict_count > 0,
-        "merge conflict should remain visible"
+        status.conflict_count == 0,
+        "preflight conflicts must not dirty the real workspace"
     );
+}
+
+#[test]
+fn sync_workspace_target_branch_reports_dirty_worktree_without_error() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = BranchSwitchTestHarness::new();
+    harness.dirty_tracked_file();
+    harness.upstream_advance("main", "main2.txt", "fresh", "advance main");
+
+    let result = workspaces::sync_workspace_with_target_branch(&harness.workspace_id).unwrap();
+
+    assert_eq!(
+        result.outcome,
+        workspaces::SyncWorkspaceTargetOutcome::DirtyWorktree
+    );
+    assert!(result.conflicted_files.is_empty());
+    assert_eq!(
+        harness.workspace_head(),
+        harness.workspace_remote_ref_sha("main")
+    );
+    let status =
+        git_ops::workspace_action_status(&harness.workspace_dir(), Some("origin"), Some("main"))
+            .unwrap();
+    assert_eq!(status.conflict_count, 0);
+    assert_eq!(status.uncommitted_count, 1);
 }
 
 #[test]

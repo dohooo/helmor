@@ -834,6 +834,8 @@ export function useWorkspacesSidebarController({
 
 	const handleDeleteWorkspace = useCallback(
 		(workspaceId: string) => {
+			const wasSelected = selectedWorkspaceId === workspaceId;
+			archiveRollbackRef.current.delete(workspaceId);
 			const previousGroups = queryClient.getQueryData(
 				helmorQueryKeys.workspaceGroups,
 			);
@@ -887,8 +889,13 @@ export function useWorkspacesSidebarController({
 						helmorQueryKeys.archivedWorkspaces,
 						previousArchived,
 					);
+					if (wasSelected) {
+						onSelectWorkspace(workspaceId);
+					}
 					pushWorkspaceToast(
 						describeUnknownError(error, "Unable to delete workspace."),
+						"Delete failed",
+						"destructive",
 					);
 				})
 				.finally(endSidebarMutation);

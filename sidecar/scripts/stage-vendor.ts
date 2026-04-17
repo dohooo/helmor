@@ -31,7 +31,7 @@
  * option at an absolute path inside `Contents/Resources/vendor/bun/`.
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import {
 	chmodSync,
 	cpSync,
@@ -161,6 +161,30 @@ function humanSize(path: string): string {
 	return `${bytes} B`;
 }
 
+function maybeSignMacBinary(path: string): void {
+	if (process.platform !== "darwin") return;
+
+	const identity = process.env.APPLE_SIGNING_IDENTITY?.trim();
+	if (!identity) return;
+
+	console.log(`[stage-vendor] signing ${path}`);
+	execFileSync(
+		"codesign",
+		[
+			"--force",
+			"--sign",
+			identity,
+			"--timestamp",
+			"--options",
+			"runtime",
+			path,
+		],
+		{
+			stdio: "inherit",
+		},
+	);
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -219,6 +243,7 @@ copyFile(codexSrc, codexDest);
 if (process.platform !== "win32") {
 	chmodSync(codexDest, 0o755);
 }
+maybeSignMacBinary(codexDest);
 
 // ----- Bun (JS runtime for cli.js) -----
 function locateHostBun(): string {
@@ -243,6 +268,24 @@ const bunDest = join(DIST_VENDOR, "bun", bunBin);
 copyFile(bunSrc, bunDest);
 if (process.platform !== "win32") {
 	chmodSync(bunDest, 0o755);
+}
+maybeSignMacBinary(bunDest);
+
+if (process.platform === "darwin") {
+	for (const rel of [
+		join(ccDest, "vendor", "ripgrep", target.ccVendorArch, "rg"),
+		join(
+			ccDest,
+			"vendor",
+			"audio-capture",
+			target.ccVendorArch,
+			"audio-capture.node",
+		),
+	]) {
+		if (existsSync(rel)) {
+			maybeSignMacBinary(rel);
+		}
+	}
 }
 
 // ----- Summary -----

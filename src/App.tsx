@@ -37,6 +37,7 @@ import { WorkspacesSidebarContainer } from "@/features/navigation/container";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import { closeWorkspaceSession } from "@/features/panel/session-close";
 import { SettingsButton, SettingsDialog } from "@/features/settings";
+import { useAppUpdater } from "@/features/updater/use-app-updater";
 import { EditorIcon } from "@/shell/editor-icon";
 import { GithubIdentityGate } from "@/shell/github-identity-gate";
 import { GithubStatusMenu } from "@/shell/github-status-menu";
@@ -420,6 +421,7 @@ function AppShell({
 	}, [showOnboarding]);
 
 	const { settings: appSettings } = useSettings();
+	useAppUpdater();
 	const notify = useOsNotifications(appSettings);
 	const [installedEditors, setInstalledEditors] = useState<DetectedEditor[]>(
 		[],
@@ -2080,6 +2082,12 @@ function AppShell({
 										activeEditorPath={editorSession?.path ?? null}
 										onOpenEditorFile={handleOpenEditorFile}
 										onCommitAction={handleInspectorCommitAction}
+										currentSessionId={displayedSessionId}
+										sendingSessionIds={sendingSessionIds}
+										onQueuePendingPromptForSession={
+											queuePendingPromptForSession
+										}
+										pushToast={pushWorkspaceToast}
 										commitButtonMode={commitButtonMode}
 										commitButtonState={commitButtonState}
 										prInfo={workspacePrInfo}

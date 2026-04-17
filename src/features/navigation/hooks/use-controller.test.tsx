@@ -256,6 +256,7 @@ describe("useWorkspacesSidebarController archive flow", () => {
 				workspaceId,
 			}),
 		);
+		apiMocks.permanentlyDeleteWorkspace.mockResolvedValue(undefined);
 		apiMocks.startArchiveWorkspace.mockResolvedValue(undefined);
 		apiMocks.validateRestoreWorkspace.mockResolvedValue({
 			targetBranchConflict: null,
@@ -488,5 +489,69 @@ describe("useWorkspacesSidebarController archive flow", () => {
 		act(() => {
 			resolveStart?.();
 		});
+	});
+
+	it("删除 archived placeholder 时会同步清掉本地 optimistic rollback 项", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onSelectWorkspace = vi.fn();
+		let resolveStart: (() => void) | null = null;
+		apiMocks.startArchiveWorkspace.mockImplementation(
+			() =>
+				new Promise<void>((resolve) => {
+					resolveStart = resolve;
+				}),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: "ws-1",
+					onSelectWorkspace,
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows).toHaveLength(2);
+		});
+
+		act(() => {
+			result.current.handleArchiveWorkspace("ws-1");
+		});
+
+		await waitFor(() => {
+			expect(result.current.archivedRows.map((row) => row.id)).toContain(
+				"ws-1",
+			);
+		});
+
+		act(() => {
+			resolveStart?.();
+		});
+
+		await waitFor(() => {
+			expect(result.current.archivingWorkspaceIds.has("ws-1")).toBe(false);
+		});
+
+		act(() => {
+			result.current.handleDeleteWorkspace("ws-1");
+		});
+
+		await waitFor(() => {
+			expect(apiMocks.permanentlyDeleteWorkspace).toHaveBeenCalledWith("ws-1");
+		});
+		await waitFor(() => {
+			expect(result.current.archivedRows).toHaveLength(0);
+		});
+
+		act(() => {
+			queryClient.setQueryData(["archivedWorkspaces"], []);
+		});
+
+		expect(result.current.archivedRows).toHaveLength(0);
+		expect(onSelectWorkspace).toHaveBeenCalledWith("ws-2");
 	});
 });

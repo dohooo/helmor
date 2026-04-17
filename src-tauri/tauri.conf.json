@@ -14,6 +14,12 @@
 			"desktop": {
 				"schemes": ["helmor", "helmor-dev"]
 			}
+		},
+		"updater": {
+			"pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM5QkE5MEUwRjc5N0EzQ0QKUldUTm81ZjM0SkM2T2RweXFnOTYvanRkSENTRW9Zc25sMXRmeFlxazN1MFNZdjZPb2crVWNISzMK",
+			"endpoints": [
+				"https://github.com/dohooo/helmor/releases/latest/download/latest.json"
+			]
 		}
 	},
 	"app": {
@@ -44,6 +50,7 @@
 	},
 	"bundle": {
 		"active": true,
+		"createUpdaterArtifacts": true,
 		"targets": "all",
 		"externalBin": ["../sidecar/dist/helmor-sidecar"],
 		"resources": {

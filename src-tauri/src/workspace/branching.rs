@@ -316,6 +316,7 @@ pub enum SyncWorkspaceTargetOutcome {
     Updated,
     AlreadyUpToDate,
     Conflict,
+    DirtyWorktree,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -323,6 +324,7 @@ pub enum SyncWorkspaceTargetOutcome {
 pub struct SyncWorkspaceTargetResponse {
     pub outcome: SyncWorkspaceTargetOutcome,
     pub target_branch: String,
+    pub conflicted_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -404,10 +406,15 @@ pub fn sync_workspace_with_target_branch(
         return Ok(SyncWorkspaceTargetResponse {
             outcome: SyncWorkspaceTargetOutcome::Conflict,
             target_branch,
+            conflicted_files: Vec::new(),
         });
     }
     if current_status.uncommitted_count > 0 {
-        bail!("Cannot pull updates while the workspace has uncommitted changes");
+        return Ok(SyncWorkspaceTargetResponse {
+            outcome: SyncWorkspaceTargetOutcome::DirtyWorktree,
+            target_branch,
+            conflicted_files: Vec::new(),
+        });
     }
 
     git_ops::fetch_remote_branch(&workspace_dir, &remote, &target_branch)?;
@@ -419,6 +426,19 @@ pub fn sync_workspace_with_target_branch(
         return Ok(SyncWorkspaceTargetResponse {
             outcome: SyncWorkspaceTargetOutcome::AlreadyUpToDate,
             target_branch,
+            conflicted_files: Vec::new(),
+        });
+    }
+
+    let preflight = git_ops::preflight_merge_ref(
+        &workspace_dir,
+        &format!("refs/remotes/{remote}/{target_branch}"),
+    )?;
+    if !preflight.conflicted_files.is_empty() {
+        return Ok(SyncWorkspaceTargetResponse {
+            outcome: SyncWorkspaceTargetOutcome::Conflict,
+            target_branch,
+            conflicted_files: preflight.conflicted_files,
         });
     }
 
@@ -429,6 +449,7 @@ pub fn sync_workspace_with_target_branch(
         Ok(()) => Ok(SyncWorkspaceTargetResponse {
             outcome: SyncWorkspaceTargetOutcome::Updated,
             target_branch,
+            conflicted_files: Vec::new(),
         }),
         Err(error) => {
             let merge_status = git_ops::workspace_action_status(
@@ -437,9 +458,11 @@ pub fn sync_workspace_with_target_branch(
                 Some(&target_branch),
             )?;
             if merge_status.conflict_count > 0 {
+                let _ = git_ops::abort_merge(&workspace_dir);
                 Ok(SyncWorkspaceTargetResponse {
                     outcome: SyncWorkspaceTargetOutcome::Conflict,
                     target_branch,
+                    conflicted_files: Vec::new(),
                 })
             } else {
                 Err(error)

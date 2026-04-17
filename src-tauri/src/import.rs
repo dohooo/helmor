@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::Serialize;
 
 use crate::{git_ops, helpers, workspace::helpers as ws_helpers};
@@ -370,7 +370,7 @@ fn import_workspace_db_records(conn: &Connection, workspace_id: &str) -> Result<
     }
 
     // Read workspace info from source
-    let (repo_id, directory_name, state, branch): (String, String, String, Option<String>) = conn
+    let (source_repo_id, directory_name, state, branch): (String, String, String, Option<String>) = conn
         .query_row(
             "SELECT repository_id, directory_name, state, branch FROM source.workspaces WHERE id = ?1",
             [workspace_id],
@@ -379,31 +379,28 @@ fn import_workspace_db_records(conn: &Connection, workspace_id: &str) -> Result<
         .with_context(|| format!("Workspace {workspace_id} not found in Conductor"))?;
 
     // Read repo name + root_path from source
-    let (repo_name, root_path): (String, Option<String>) = conn
+    let (source_repo_name, source_root_path): (String, Option<String>) = conn
         .query_row(
             "SELECT name, root_path FROM source.repos WHERE id = ?1",
-            [&repo_id],
+            [&source_repo_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .with_context(|| format!("Repo {repo_id} not found in Conductor"))?;
+        .with_context(|| format!("Repo {source_repo_id} not found in Conductor"))?;
 
-    // 1. Ensure parent repo exists
-    let (repo_main, repo_src) = import_column_lists(conn, "repos")?;
-    conn.execute(
-        &format!(
-            "INSERT OR IGNORE INTO main.repos ({repo_main}) SELECT {repo_src} FROM source.repos WHERE id = ?1"
-        ),
-        [&repo_id],
-    )
-    .context("Failed to import repo")?;
+    let canonical_repo = resolve_canonical_repo(
+        conn,
+        &source_repo_id,
+        &source_repo_name,
+        source_root_path.as_deref(),
+    )?;
 
     // 2. Insert workspace
-    let (ws_main, ws_src) = import_column_lists(conn, "workspaces")?;
+    let (ws_main, ws_src) = import_workspace_column_lists(conn)?;
     conn.execute(
         &format!(
             "INSERT OR IGNORE INTO main.workspaces ({ws_main}) SELECT {ws_src} FROM source.workspaces WHERE id = ?1"
         ),
-        [workspace_id],
+        rusqlite::params![workspace_id, canonical_repo.id],
     )
     .context("Failed to import workspace")?;
 
@@ -461,11 +458,11 @@ fn import_workspace_db_records(conn: &Connection, workspace_id: &str) -> Result<
 
     Ok(ImportDbResult::Imported(ImportedWorkspaceMeta {
         workspace_id: workspace_id.to_string(),
-        repo_name,
+        repo_name: canonical_repo.name,
         directory_name,
         state,
         branch,
-        repo_root: helpers::non_empty(&root_path).map(PathBuf::from),
+        repo_root: helpers::non_empty(&canonical_repo.root_path).map(PathBuf::from),
     }))
 }
 
@@ -979,6 +976,123 @@ fn import_column_lists(conn: &Connection, table: &str) -> Result<(String, String
     Ok((main_parts.join(", "), source_parts.join(", ")))
 }
 
+struct CanonicalRepo {
+    id: String,
+    name: String,
+    root_path: Option<String>,
+}
+
+fn resolve_canonical_repo(
+    conn: &Connection,
+    source_repo_id: &str,
+    source_repo_name: &str,
+    source_root_path: Option<&str>,
+) -> Result<CanonicalRepo> {
+    if let Some(repo) = load_main_repo(conn, "id = ?1", [source_repo_id])? {
+        return Ok(repo);
+    }
+
+    if let Some(root_path) = source_root_path.filter(|path| !path.trim().is_empty()) {
+        if let Some(repo) = load_main_repo(conn, "root_path = ?1", [root_path])? {
+            tracing::info!(
+                source_repo_id,
+                canonical_repo_id = %repo.id,
+                root_path,
+                "Resolved Conductor repo to existing Helmor repo by root_path"
+            );
+            return Ok(repo);
+        }
+    }
+
+    let (repo_main, repo_src) = import_column_lists(conn, "repos")?;
+    conn.execute(
+        &format!(
+            "INSERT OR IGNORE INTO main.repos ({repo_main}) SELECT {repo_src} FROM source.repos WHERE id = ?1"
+        ),
+        [source_repo_id],
+    )
+    .context("Failed to import repo")?;
+
+    load_main_repo(conn, "id = ?1", [source_repo_id])?.with_context(|| {
+        format!(
+            "Repo import did not create or resolve a Helmor repo for source repo {source_repo_name} ({source_repo_id})"
+        )
+    })
+}
+
+fn load_main_repo<P>(
+    conn: &Connection,
+    where_clause: &str,
+    params: P,
+) -> Result<Option<CanonicalRepo>>
+where
+    P: rusqlite::Params,
+{
+    conn.query_row(
+        &format!("SELECT id, name, root_path FROM main.repos WHERE {where_clause} LIMIT 1"),
+        params,
+        |row| {
+            Ok(CanonicalRepo {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                root_path: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .context("Failed to load canonical repo")
+}
+
+fn import_workspace_column_lists(conn: &Connection) -> Result<(String, String)> {
+    let main_cols = get_table_columns(conn, "workspaces")?;
+
+    let source_cols: Vec<String> = conn
+        .prepare("PRAGMA source.table_info(workspaces)")
+        .and_then(|mut stmt| {
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .map(|rows| rows.filter_map(Result::ok).collect())
+        })
+        .unwrap_or_default();
+
+    let source_set: std::collections::HashSet<&str> =
+        source_cols.iter().map(|s| s.as_str()).collect();
+
+    let mut main_parts = Vec::new();
+    let mut source_parts = Vec::new();
+
+    for col in &main_cols {
+        if col == "repository_id" {
+            main_parts.push(col.clone());
+            source_parts.push("?2 AS repository_id".to_string());
+            continue;
+        }
+
+        if source_set.contains(col.as_str()) {
+            main_parts.push(col.clone());
+            source_parts.push(col.clone());
+            continue;
+        }
+
+        let old_name = COLUMN_RENAMES
+            .iter()
+            .find(|(_, new)| *new == col.as_str())
+            .map(|(old, _)| *old);
+
+        if let Some(old) = old_name {
+            if source_set.contains(old) {
+                main_parts.push(col.clone());
+                source_parts.push(format!("{old} AS {col}"));
+            }
+        }
+    }
+
+    if main_parts.is_empty() {
+        bail!("No compatible columns found for table workspaces");
+    }
+
+    Ok((main_parts.join(", "), source_parts.join(", ")))
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1098,6 +1212,53 @@ mod tests {
             .query_row("SELECT count(*) FROM main.sessions", [], |r| r.get(0))
             .unwrap();
         assert_eq!(sess_count, 0);
+    }
+
+    #[test]
+    fn import_workspace_db_records_reuses_canonical_repo_by_root_path() {
+        let (conn, _dir) = setup_test_db();
+
+        conn.execute_batch(
+            r#"
+            INSERT INTO main.repos (id, name, root_path)
+            VALUES ('r-main', 'helmor', '/tmp/helmor');
+
+            ATTACH DATABASE ':memory:' AS source;
+            CREATE TABLE source.repos AS SELECT * FROM main.repos WHERE 0;
+            CREATE TABLE source.workspaces AS SELECT * FROM main.workspaces WHERE 0;
+            CREATE TABLE source.sessions AS SELECT * FROM main.sessions WHERE 0;
+            CREATE TABLE source.session_messages AS SELECT * FROM main.session_messages WHERE 0;
+            CREATE TABLE source.attachments AS SELECT * FROM main.attachments WHERE 0;
+            CREATE TABLE source.diff_comments AS SELECT * FROM main.diff_comments WHERE 0;
+
+            INSERT INTO source.repos (id, name, root_path, created_at, updated_at)
+            VALUES ('r-source', 'conductor-helmor', '/tmp/helmor', datetime('now'), datetime('now'));
+            INSERT INTO source.workspaces (id, repository_id, directory_name, state, created_at, updated_at)
+            VALUES ('w1', 'r-source', 'hyperion', 'ready', datetime('now'), datetime('now'));
+            "#,
+        )
+        .unwrap();
+
+        let result = import_workspace_db_records(&conn, "w1").unwrap();
+        let ImportDbResult::Imported(meta) = result else {
+            panic!("workspace should import");
+        };
+
+        let repo_count: i64 = conn
+            .query_row("SELECT count(*) FROM main.repos", [], |r| r.get(0))
+            .unwrap();
+        let workspace_repo_id: String = conn
+            .query_row(
+                "SELECT repository_id FROM main.workspaces WHERE id = 'w1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(repo_count, 1);
+        assert_eq!(workspace_repo_id, "r-main");
+        assert_eq!(meta.repo_name, "helmor");
+        assert_eq!(meta.repo_root, Some(PathBuf::from("/tmp/helmor")));
     }
 
     #[test]
@@ -1242,9 +1403,9 @@ mod tests {
 
     #[test]
     fn encode_claude_project_dir_encodes_correctly() {
-        let path = PathBuf::from("/Users/me/.conductor/workspaces/repo/ws");
+        let path = PathBuf::from("/Users/me/conductor/workspaces/repo/ws");
         let encoded = encode_claude_project_dir(&path);
-        assert_eq!(encoded, "-Users-me--conductor-workspaces-repo-ws");
+        assert_eq!(encoded, "-Users-me-conductor-workspaces-repo-ws");
 
         let path2 = PathBuf::from("/Users/me/helmor-dev/workspaces/repo/ws");
         let encoded2 = encode_claude_project_dir(&path2);

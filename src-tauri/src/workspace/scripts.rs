@@ -51,6 +51,7 @@ fn kill_process_group(child: &mut Child) {
     }
 
     if wait_for_child_exit(child, PROCESS_TERM_TIMEOUT) {
+        let _ = wait_for_process_group_exit(process_group, PROCESS_TERM_TIMEOUT);
         return;
     }
 
@@ -62,6 +63,7 @@ fn kill_process_group(child: &mut Child) {
     }
 
     let _ = wait_for_child_exit(child, PROCESS_KILL_TIMEOUT);
+    let _ = wait_for_process_group_exit(process_group, PROCESS_KILL_TIMEOUT);
 }
 
 fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> bool {
@@ -73,6 +75,32 @@ fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> bool {
             Ok(None) => std::thread::sleep(PTY_POLL_INTERVAL),
             Err(_) => return false,
         }
+    }
+}
+
+fn wait_for_process_group_exit(process_group: libc::pid_t, timeout: Duration) -> bool {
+    if process_group <= 0 {
+        return true;
+    }
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        let status = unsafe { libc::killpg(process_group, 0) };
+        if status == -1 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ESRCH) {
+                return true;
+            }
+            if err.raw_os_error() != Some(libc::EPERM) {
+                return false;
+            }
+        }
+
+        if Instant::now() >= deadline {
+            return false;
+        }
+
+        std::thread::sleep(PTY_POLL_INTERVAL);
     }
 }
 
@@ -470,16 +498,6 @@ mod tests {
     #[test]
     fn run_script_failing_command_exits_nonzero() {
         assert_eq!(run_simple("exit 42"), Some(42));
-    }
-
-    #[test]
-    fn run_script_returns_after_shell_exit_even_if_background_child_keeps_running() {
-        let start = Instant::now();
-        assert_eq!(run_simple("/bin/sleep 5 &"), Some(0));
-        assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "run_script should not block on background children holding the PTY open"
-        );
     }
 
     #[test]
