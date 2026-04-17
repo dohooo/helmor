@@ -6,7 +6,8 @@ import {
 } from "file-extension-icon-js";
 import {
 	ChevronRightIcon,
-	GitBranchIcon,
+	CloudIcon,
+	LaptopIcon,
 	ListIcon,
 	ListTreeIcon,
 	LoaderCircleIcon,
@@ -45,7 +46,6 @@ type ChangesSectionProps = {
 	bodyHeight: number;
 	workspaceId: string | null;
 	workspaceRootPath: string | null;
-	workspaceBranch: string | null;
 	workspaceTargetBranch: string | null;
 	changes: InspectorFileItem[];
 	editorMode: boolean;
@@ -62,7 +62,6 @@ export function ChangesSection({
 	bodyHeight,
 	workspaceId,
 	workspaceRootPath,
-	workspaceBranch,
 	workspaceTargetBranch,
 	changes,
 	editorMode,
@@ -272,6 +271,12 @@ export function ChangesSection({
 						{unstagedChanges.length > 0 && (
 							<ChangesGroup
 								label="Changes"
+								icon={
+									<LaptopIcon
+										className="size-3 shrink-0 text-muted-foreground"
+										strokeWidth={2}
+									/>
+								}
 								count={unstagedChanges.length}
 								open={changesOpen}
 								onToggle={() => setChangesOpen((current) => !current)}
@@ -293,7 +298,6 @@ export function ChangesSection({
 
 				{(committedChanges.length > 0 || branchSwitching) && (
 					<BranchDiffSection
-						branch={workspaceBranch}
 						targetBranch={workspaceTargetBranch}
 						count={committedChanges.length}
 						loading={branchSwitching}
@@ -323,6 +327,7 @@ type StageActionKind = "stage" | "unstage";
 
 function ChangesGroup({
 	label,
+	icon,
 	count,
 	open,
 	onToggle,
@@ -339,6 +344,7 @@ function ChangesGroup({
 	flashingPaths,
 }: {
 	label: string;
+	icon?: React.ReactNode;
 	count: number;
 	open: boolean;
 	onToggle: () => void;
@@ -373,6 +379,7 @@ function ChangesGroup({
 						)}
 						strokeWidth={2}
 					/>
+					{icon}
 					<span className="truncate">{label}</span>
 				</Button>
 				<ViewToggleButton treeView={treeView} onToggle={onToggleTreeView} />
@@ -430,7 +437,6 @@ function ChangesGroup({
 }
 
 function BranchDiffSection({
-	branch,
 	targetBranch,
 	count,
 	loading,
@@ -444,7 +450,6 @@ function BranchDiffSection({
 	onOpenEditorFile,
 	flashingPaths,
 }: {
-	branch: string | null;
 	targetBranch: string | null;
 	count: number;
 	loading: boolean;
@@ -458,9 +463,6 @@ function BranchDiffSection({
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 }) {
-	const branchLabel = branch ?? "HEAD";
-	const targetLabel = targetBranch ?? "main";
-
 	const handleOpenFile = useCallback(
 		(path: string, options?: DiffOpenOptions) => {
 			onOpenEditorFile(path, {
@@ -491,15 +493,11 @@ function BranchDiffSection({
 						)}
 						strokeWidth={2}
 					/>
-					<GitBranchIcon
+					<CloudIcon
 						className="size-3 shrink-0 text-muted-foreground"
 						strokeWidth={2}
 					/>
-					<span className="flex min-w-0 items-center">
-						<span className="shrink-0">{branchLabel}</span>
-						<span className="mx-1 shrink-0 text-muted-foreground">→</span>
-						<span className="min-w-0 truncate">{targetLabel}</span>
-					</span>
+					<span className="truncate">Remote</span>
 				</Button>
 				<ViewToggleButton treeView={treeView} onToggle={onToggleTreeView} />
 				<Badge
