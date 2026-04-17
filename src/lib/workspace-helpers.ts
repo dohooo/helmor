@@ -80,6 +80,49 @@ export function findInitialWorkspaceId(
 	return null;
 }
 
+export function flattenWorkspaceRowsForNavigation(
+	groups: WorkspaceGroup[],
+	archivedRows: WorkspaceRow[],
+) {
+	return [...groups.flatMap((group) => group.rows), ...archivedRows];
+}
+
+export function findReplacementWorkspaceIdAfterRemoval({
+	currentGroups,
+	currentArchivedRows,
+	nextGroups,
+	nextArchivedRows,
+	removedWorkspaceId,
+}: {
+	currentGroups: WorkspaceGroup[];
+	currentArchivedRows: WorkspaceRow[];
+	nextGroups: WorkspaceGroup[];
+	nextArchivedRows: WorkspaceRow[];
+	removedWorkspaceId: string;
+}): string | null {
+	const currentRows = flattenWorkspaceRowsForNavigation(
+		currentGroups,
+		currentArchivedRows,
+	);
+	const removedIndex = currentRows.findIndex(
+		(row) => row.id === removedWorkspaceId,
+	);
+	const nextRows = flattenWorkspaceRowsForNavigation(
+		nextGroups,
+		nextArchivedRows,
+	);
+
+	if (nextRows.length === 0) {
+		return null;
+	}
+
+	if (removedIndex === -1) {
+		return nextRows[0]?.id ?? null;
+	}
+
+	return nextRows[removedIndex]?.id ?? nextRows[removedIndex - 1]?.id ?? null;
+}
+
 export function hasWorkspaceId(
 	workspaceId: string,
 	groups: WorkspaceGroup[],
