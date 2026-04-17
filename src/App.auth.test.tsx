@@ -235,7 +235,12 @@ describe("App GitHub identity states", () => {
 			await screen.findByRole("main", { name: "GitHub identity gate" }),
 		).toBeInTheDocument();
 		expect(
-			await screen.findByText("GitHub account connection is not configured."),
+			await screen.findByRole("heading", {
+				name: "GitHub account connection is not configured",
+			}),
+		).toBeInTheDocument();
+		expect(
+			await screen.findByRole("button", { name: "Continue with GitHub" }),
 		).toBeInTheDocument();
 	});
 

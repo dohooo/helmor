@@ -4,6 +4,10 @@ import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 import { cn } from "@/lib/utils";
 
 export const MIN_SECTION_HEIGHT = 48;
+// Default body height reserved for the tabs section when first expanded.
+// Larger than MIN_SECTION_HEIGHT so the Setup/Run panel opens with enough
+// room to comfortably show its empty/idle state.
+export const DEFAULT_TABS_BODY_HEIGHT = 128;
 export const RESIZE_HIT_AREA = 10;
 export const TABS_ANIMATION_MS = 350;
 export const TABS_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
