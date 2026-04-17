@@ -9,27 +9,27 @@ Helmor is a local-first desktop app built with **Tauri v2** (Rust backend) + **R
 ## Commands
 
 ```bash
-pnpm install                 # Install deps (pnpm 10+). Also runs `bun install` in sidecar/ via postinstall.
-pnpm run dev                 # Full desktop app: Tauri + Vite (localhost:1420 in webview)
-pnpm run dev:analyze         # Same as dev, with perf HUD (VITE_HELMOR_PERF_HUD=1)
-pnpm run build               # tsc + vite build (frontend bundle to dist/)
-pnpm run typecheck           # tsc --noEmit for frontend AND sidecar
-pnpm run lint                # biome check . + cargo clippy -- -D warnings
-pnpm run lint:fix            # biome --write + cargo clippy --fix + cargo fmt
+bun install                  # Install deps (bun 1.3+). Also runs `bun install` in sidecar/ via postinstall.
+bun run dev                  # Full desktop app: Tauri + Vite (localhost:1420 in webview)
+bun run dev:analyze          # Same as dev, with perf HUD (VITE_HELMOR_PERF_HUD=1)
+bun run build                # tsc + vite build (frontend bundle to dist/)
+bun run typecheck            # tsc --noEmit for frontend AND sidecar
+bun run lint                 # biome check . + cargo clippy -- -D warnings
+bun run lint:fix             # biome --write + cargo clippy --fix + cargo fmt
 ```
 
-Tests are **three targets** — `pnpm run test` runs all three (frontend -> sidecar -> rust). Pre-commit hook runs biome on JS/TS and clippy/fmt on Rust.
+Tests are **three targets** — `bun run test` runs all three (frontend -> sidecar -> rust). Pre-commit hook runs biome on JS/TS and clippy/fmt on Rust.
 
 ```bash
-pnpm run test                # All three suites
-pnpm run test:frontend       # vitest run (jsdom, @testing-library/react)
-pnpm run test:sidecar        # cd sidecar && bun test
-pnpm run test:rust           # cd src-tauri && cargo test
-pnpm run test:rust:update-snapshots   # INSTA_UPDATE=always
-pnpm run test:watch          # vitest watch (frontend only)
+bun run test                 # All three suites
+bun run test:frontend        # vitest run (jsdom, @testing-library/react)
+bun run test:sidecar         # cd sidecar && bun test
+bun run test:rust            # cd src-tauri && cargo test
+bun run test:rust:update-snapshots    # INSTA_UPDATE=always
+bun run test:watch           # vitest watch (frontend only)
 ```
 
-Single test file: `pnpm vitest run src/App.test.tsx` | `cd sidecar && bun test src/foo.test.ts` | `cd src-tauri && cargo test --test pipeline_scenarios -- <name>`
+Single test file: `bun x vitest run src/App.test.tsx` | `cd sidecar && bun test src/foo.test.ts` | `cd src-tauri && cargo test --test pipeline_scenarios -- <name>`
 
 ## Architecture
 
@@ -151,7 +151,7 @@ When a snapshot drifts: look at the diff first. Only accept after confirming the
 
 ### Prerequisites
 
-1. **Debug build only.** MCP bridge is behind `#[cfg(debug_assertions)]`. Always `pnpm run dev`.
+1. **Debug build only.** MCP bridge is behind `#[cfg(debug_assertions)]`. Always `bun run dev`.
 2. **Open driver session first.** Call `driver_session action=status` before `start`. Default port `9223`, window `main`.
 3. **Sanity-check.** Call `ipc_get_backend_state` after connecting to confirm the right instance.
 
