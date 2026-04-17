@@ -5,11 +5,68 @@ import type {
 	MessagePart,
 	PullRequestInfo,
 	ThreadMessageLike,
+	WorkspaceDetail,
 	WorkspaceGroup,
 	WorkspaceRow,
 	WorkspaceSessionSummary,
 	WorkspaceSummary,
 } from "./api";
+
+export const OPTIMISTIC_CREATING_WORKSPACE_ID_PREFIX = "creating-workspace:";
+
+export function createOptimisticCreatingWorkspaceId(repoId: string): string {
+	return `${OPTIMISTIC_CREATING_WORKSPACE_ID_PREFIX}${repoId}:${crypto.randomUUID()}`;
+}
+
+export function isOptimisticCreatingWorkspaceId(
+	workspaceId: string | null | undefined,
+): boolean {
+	return (
+		typeof workspaceId === "string" &&
+		workspaceId.startsWith(OPTIMISTIC_CREATING_WORKSPACE_ID_PREFIX)
+	);
+}
+
+export function createOptimisticCreatingWorkspaceDetail(
+	row: WorkspaceRow,
+	repoId: string,
+): WorkspaceDetail {
+	return {
+		id: row.id,
+		title: row.title,
+		repoId,
+		repoName: row.repoName ?? "",
+		repoIconSrc: row.repoIconSrc ?? null,
+		repoInitials: row.repoInitials ?? null,
+		remote: null,
+		remoteUrl: null,
+		defaultBranch: null,
+		rootPath: null,
+		directoryName: row.directoryName ?? row.id,
+		state: "initializing",
+		hasUnread: false,
+		workspaceUnread: 0,
+		sessionUnreadTotal: 0,
+		unreadSessionCount: 0,
+		derivedStatus: row.derivedStatus ?? "in-progress",
+		manualStatus: row.manualStatus ?? null,
+		activeSessionId: null,
+		activeSessionTitle: null,
+		activeSessionAgentType: null,
+		activeSessionStatus: null,
+		branch: row.branch ?? null,
+		initializationParentBranch: null,
+		intendedTargetBranch: null,
+		notes: null,
+		pinnedAt: row.pinnedAt ?? null,
+		prTitle: null,
+		prDescription: null,
+		archiveCommit: null,
+		sessionCount: 0,
+		messageCount: 0,
+		attachmentCount: 0,
+	};
+}
 
 export function findInitialWorkspaceId(
 	groups: WorkspaceGroup[],
