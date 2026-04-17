@@ -139,10 +139,41 @@ jobs:
         with:
           target-triple: ${{ matrix.target-triple }}
 
-      - name: Run Rust tests with nextest
+      - name: Run Rust tests with nextest (unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: cd src-tauri && cargo nextest run
 
-      - name: Run Rust doctests
+      # Windows: Tauri drags in WebView2Loader.dll that webview2-com's build
+      # script places in `target/debug` next to the main exe — but nextest
+      # runs test binaries from `target/debug/deps` and Windows searches the
+      # binary's directory first. Fix: prepend target/debug to PATH so the
+      # DLL resolves. Without this, `helmor_lib-<hash>.exe --list` aborts
+      # with STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139) before any Rust code
+      # runs.
+      - name: Run Rust tests with nextest (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: src-tauri
+        run: |
+          # Compile first so target/debug exists with all Tauri-vendored DLLs
+          # (WebView2Loader.dll etc.) before we add it to PATH.
+          cargo nextest run --no-run
+          $targetDebug = Join-Path $PWD "target\debug"
+          Write-Host "Adding $targetDebug to PATH for DLL resolution"
+          $env:PATH = "$targetDebug;$env:PATH"
+          cargo nextest run
+
+      - name: Run Rust doctests (unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: cd src-tauri && cargo test --doc
+
+      - name: Run Rust doctests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: src-tauri
+        run: |
+          $targetDebug = Join-Path $PWD "target\debug"
+          $env:PATH = "$targetDebug;$env:PATH"
+          cargo test --doc

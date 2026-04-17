@@ -123,11 +123,14 @@ export function GithubIdentityGate({
 							</Button>
 						</div>
 					) : identityState.status === "unconfigured" ? (
-						<div className="mt-10 flex justify-center">
+						<div className="mt-10 flex flex-col items-center gap-3">
 							<Button disabled size="lg">
 								<MarkGithubIcon size={16} data-icon="inline-start" />
 								Continue with GitHub
 							</Button>
+							<p className="text-center text-xs text-muted-foreground">
+								{identityState.message}
+							</p>
 						</div>
 					) : identityState.status === "checking" ? (
 						<div className="mt-10 inline-flex items-center justify-center gap-2 text-sm text-muted-foreground">
