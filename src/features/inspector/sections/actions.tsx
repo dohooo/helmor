@@ -199,13 +199,6 @@ export function ActionsSection({
 		if (!workspaceId || syncPending) {
 			return;
 		}
-		if (currentSessionId && sendingSessionIds?.has(currentSessionId)) {
-			pushToast?.(
-				"AI is still responding in the current chat. Wait for that reply to finish, then retry Pull so Helmor can send the merge task in this conversation.",
-				"AI is still responding",
-			);
-			return;
-		}
 
 		setSyncPending(true);
 		try {
