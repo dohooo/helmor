@@ -193,6 +193,7 @@ pub async fn generate_session_title(
 
     let (generated_title, generated_branch) = result;
 
+    let mut title_renamed = false;
     if should_generate_title {
         if let Some(ref title) = generated_title {
             let connection =
@@ -208,6 +209,7 @@ pub async fn generate_session_title(
             if can_replace_session_title(&latest_title, request.title_seed.as_deref()) {
                 crate::sessions::rename_session(&session_id, title)
                     .map_err(|e| anyhow::anyhow!("Failed to rename session: {e}"))?;
+                title_renamed = true;
                 tracing::debug!(
                     session_id = %session_id,
                     title,
@@ -315,7 +317,7 @@ pub async fn generate_session_title(
     }
 
     Ok(GenerateSessionTitleResponse {
-        title: should_generate_title.then_some(generated_title).flatten(),
+        title: title_renamed.then_some(generated_title).flatten(),
         branch_renamed,
         skipped: false,
     })
