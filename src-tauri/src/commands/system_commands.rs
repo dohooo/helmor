@@ -32,12 +32,53 @@ pub struct DetectedEditor {
     pub path: String,
 }
 
+/// Where Helmor installs its CLI binary per OS.
+///
+/// - macOS & Linux: `/usr/local/bin/helmor` (matches the existing `dev:cli:install`
+///   script; Linux users with a writable `/usr/local/bin` or `sudo` get the
+///   same path semantics).
+/// - Windows: `%LOCALAPPDATA%\Helmor\bin\helmor.exe` — user-level, avoids the
+///   UAC prompt and admin requirement of Program Files. Users can add the
+///   directory to their PATH themselves (tracked for a later UX pass).
+fn cli_install_target() -> anyhow::Result<std::path::PathBuf> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        Ok(std::path::PathBuf::from("/usr/local/bin/helmor"))
+    }
+    #[cfg(windows)]
+    {
+        let base = std::env::var_os("LOCALAPPDATA")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("USERPROFILE")
+                    .map(|p| std::path::PathBuf::from(p).join("AppData").join("Local"))
+            })
+            .context("Cannot determine %LOCALAPPDATA% for CLI install target")?;
+        Ok(base.join("Helmor").join("bin").join("helmor.exe"))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        Ok(std::path::PathBuf::from("/usr/local/bin/helmor"))
+    }
+}
+
+/// Name of the compiled CLI binary produced by `cargo build --bin helmor-cli`
+/// on the current platform. Windows auto-appends `.exe`.
+fn cli_source_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "helmor-cli.exe"
+    } else {
+        "helmor-cli"
+    }
+}
+
 #[tauri::command]
 pub fn get_cli_status() -> CmdResult<CliStatus> {
-    let install_path = std::path::Path::new("/usr/local/bin/helmor");
+    let install_path = cli_install_target()?;
+    let installed = install_path.exists();
     Ok(CliStatus {
-        installed: install_path.exists(),
-        install_path: if install_path.exists() {
+        installed,
+        install_path: if installed {
             Some(install_path.display().to_string())
         } else {
             None
@@ -53,7 +94,7 @@ pub async fn install_cli() -> CmdResult<CliStatus> {
         let target_dir = source
             .parent()
             .context("Cannot determine binary directory")?;
-        let cli_binary = target_dir.join("helmor-cli");
+        let cli_binary = target_dir.join(cli_source_binary_name());
 
         if !cli_binary.exists() {
             anyhow::bail!(
@@ -62,14 +103,29 @@ pub async fn install_cli() -> CmdResult<CliStatus> {
             );
         }
 
-        let install_path = std::path::PathBuf::from("/usr/local/bin/helmor");
+        let install_path = cli_install_target()?;
+        if let Some(parent) = install_path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create install directory {}", parent.display())
+            })?;
+        }
         std::fs::copy(&cli_binary, &install_path).with_context(|| {
-            format!(
-                "Failed to copy CLI to {}. You may need to run: sudo cp {} {}",
-                install_path.display(),
-                cli_binary.display(),
-                install_path.display()
-            )
+            #[cfg(unix)]
+            {
+                format!(
+                    "Failed to copy CLI to {}. You may need to run: sudo cp {} {}",
+                    install_path.display(),
+                    cli_binary.display(),
+                    install_path.display()
+                )
+            }
+            #[cfg(windows)]
+            {
+                format!(
+                    "Failed to copy CLI to {}. Check that the target directory is writable.",
+                    install_path.display()
+                )
+            }
         })?;
 
         #[cfg(unix)]
@@ -104,6 +160,7 @@ pub async fn detect_installed_editors() -> CmdResult<Vec<DetectedEditor>> {
     run_blocking(detect_installed_editors_blocking).await
 }
 
+#[cfg(target_os = "macos")]
 fn detect_installed_editors_blocking() -> anyhow::Result<Vec<DetectedEditor>> {
     let mut editors = Vec::new();
 
@@ -189,6 +246,181 @@ fn detect_installed_editors_blocking() -> anyhow::Result<Vec<DetectedEditor>> {
     Ok(editors)
 }
 
+/// Windows editor detection: probe %LOCALAPPDATA%\Programs and
+/// %PROGRAMFILES% for VS Code-family installers and Cursor/Zed.
+/// Returns the first hit per id — users can re-pick in the UI.
+#[cfg(windows)]
+fn detect_installed_editors_blocking() -> anyhow::Result<Vec<DetectedEditor>> {
+    use std::path::PathBuf;
+    let mut editors = Vec::new();
+
+    let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    let program_files = std::env::var_os("ProgramFiles").map(PathBuf::from);
+    let program_files_x86 = std::env::var_os("ProgramFiles(x86)").map(PathBuf::from);
+    let user_home = std::env::var_os("USERPROFILE").map(PathBuf::from);
+
+    // Each candidate is (id, name, relative-paths-to-probe-under-base).
+    // We probe each base (LOCALAPPDATA, ProgramFiles, ProgramFiles(x86), USERPROFILE).
+    let candidates: &[(&str, &str, &[&str])] = &[
+        (
+            "cursor",
+            "Cursor",
+            &["Programs\\cursor\\Cursor.exe", "cursor\\Cursor.exe"],
+        ),
+        (
+            "vscode",
+            "VS Code",
+            &[
+                "Programs\\Microsoft VS Code\\Code.exe",
+                "Microsoft VS Code\\Code.exe",
+            ],
+        ),
+        (
+            "vscode-insiders",
+            "VS Code Insiders",
+            &[
+                "Programs\\Microsoft VS Code Insiders\\Code - Insiders.exe",
+                "Microsoft VS Code Insiders\\Code - Insiders.exe",
+            ],
+        ),
+        (
+            "windsurf",
+            "Windsurf",
+            &["Programs\\Windsurf\\Windsurf.exe", "Windsurf\\Windsurf.exe"],
+        ),
+        ("zed", "Zed", &["Programs\\Zed\\Zed.exe", "Zed\\Zed.exe"]),
+        (
+            "webstorm",
+            "WebStorm",
+            &[
+                "JetBrains\\WebStorm\\bin\\webstorm64.exe",
+                "JetBrains\\WebStorm\\bin\\webstorm.exe",
+            ],
+        ),
+        (
+            "sublime",
+            "Sublime Text",
+            &[
+                "Sublime Text\\sublime_text.exe",
+                "Sublime Text 3\\sublime_text.exe",
+            ],
+        ),
+        (
+            "warp",
+            "Warp",
+            &["Programs\\Warp\\warp.exe", "Warp\\warp.exe"],
+        ),
+    ];
+
+    for (id, name, rels) in candidates {
+        for base in [&local, &program_files, &program_files_x86, &user_home]
+            .iter()
+            .copied()
+            .flatten()
+        {
+            let mut found = None;
+            for rel in *rels {
+                let candidate = base.join(rel);
+                if candidate.is_file() {
+                    found = Some(candidate);
+                    break;
+                }
+            }
+            if let Some(path) = found {
+                editors.push(DetectedEditor {
+                    id: (*id).to_string(),
+                    name: (*name).to_string(),
+                    path: path.display().to_string(),
+                });
+                break;
+            }
+        }
+    }
+
+    Ok(editors)
+}
+
+/// Linux editor detection: parse the standard XDG `.desktop` locations
+/// (`~/.local/share/applications` and `/usr/share/applications`) and match
+/// well-known app ids to their `Exec=` line.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn detect_installed_editors_blocking() -> anyhow::Result<Vec<DetectedEditor>> {
+    use std::path::PathBuf;
+    let mut editors = Vec::new();
+
+    // Desktop-file-name → (id, display-name).
+    let targets: &[(&str, &str, &str)] = &[
+        ("cursor.desktop", "cursor", "Cursor"),
+        ("code.desktop", "vscode", "VS Code"),
+        (
+            "code-insiders.desktop",
+            "vscode-insiders",
+            "VS Code Insiders",
+        ),
+        ("windsurf.desktop", "windsurf", "Windsurf"),
+        ("dev.zed.Zed.desktop", "zed", "Zed"),
+        ("zed.desktop", "zed", "Zed"),
+        ("jetbrains-webstorm.desktop", "webstorm", "WebStorm"),
+        ("sublime_text.desktop", "sublime", "Sublime Text"),
+        ("dev.warp.Warp.desktop", "warp", "Warp"),
+    ];
+
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut search_dirs: Vec<PathBuf> = Vec::new();
+    if let Some(h) = &home {
+        search_dirs.push(h.join(".local/share/applications"));
+        search_dirs.push(h.join(".local/share/flatpak/exports/share/applications"));
+    }
+    search_dirs.push(PathBuf::from("/usr/share/applications"));
+    search_dirs.push(PathBuf::from("/usr/local/share/applications"));
+    search_dirs.push(PathBuf::from("/var/lib/flatpak/exports/share/applications"));
+
+    let mut seen_ids = std::collections::HashSet::new();
+    for (filename, id, name) in targets {
+        if seen_ids.contains(id) {
+            continue;
+        }
+        for dir in &search_dirs {
+            let candidate = dir.join(filename);
+            if !candidate.is_file() {
+                continue;
+            }
+            let Ok(contents) = std::fs::read_to_string(&candidate) else {
+                continue;
+            };
+            // Very small `.desktop` parser — just pluck `Exec=` up to the first
+            // non-path arg placeholder (%f / %u). The editor id is already in
+            // the known set, so we don't need a full ini parser.
+            let exec_line = contents
+                .lines()
+                .filter(|l| !l.starts_with('#'))
+                .find_map(|l| l.strip_prefix("Exec="))
+                .unwrap_or("");
+            let exec = exec_line
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_matches('"');
+            if exec.is_empty() {
+                continue;
+            }
+            editors.push(DetectedEditor {
+                id: (*id).to_string(),
+                name: (*name).to_string(),
+                path: exec.to_string(),
+            });
+            seen_ids.insert(*id);
+            break;
+        }
+    }
+
+    // Fall back to terminal + warp on PATH if not found via .desktop.
+    // (Intentionally limited — users on headless servers probably don't want
+    // a long list of shells as "editors".)
+
+    Ok(editors)
+}
+
 #[tauri::command]
 pub async fn open_workspace_in_editor(workspace_id: String, editor: String) -> CmdResult<()> {
     run_blocking(move || {
@@ -204,27 +436,105 @@ pub async fn open_workspace_in_editor(workspace_id: String, editor: String) -> C
             ));
         }
 
-        let dir_str = workspace_dir.display().to_string();
-        let app_name = match editor.as_str() {
-            "cursor" => "Cursor",
-            "vscode" => "Visual Studio Code",
-            "vscode-insiders" => "Visual Studio Code - Insiders",
-            "windsurf" => "Windsurf",
-            "zed" => "Zed",
-            "webstorm" => "WebStorm",
-            "sublime" => "Sublime Text",
-            "terminal" => "Terminal",
-            "warp" => "Warp",
-            _ => return Err(anyhow::anyhow!("Unsupported editor: {editor}")),
-        };
+        // Validate editor id against the allow-list shared with
+        // detect_installed_editors so we never spawn arbitrary binaries.
+        const KNOWN: &[&str] = &[
+            "cursor",
+            "vscode",
+            "vscode-insiders",
+            "windsurf",
+            "zed",
+            "webstorm",
+            "sublime",
+            "terminal",
+            "warp",
+        ];
+        if !KNOWN.contains(&editor.as_str()) {
+            return Err(anyhow::anyhow!("Unsupported editor: {editor}"));
+        }
 
-        std::process::Command::new("open")
-            .args(["-a", app_name, &dir_str])
-            .spawn()
-            .with_context(|| format!("Failed to open {editor}"))?;
-        Ok(())
+        launch_editor_with_dir(&editor, &workspace_dir)
+            .with_context(|| format!("Failed to open {editor}"))
     })
     .await
+}
+
+/// Platform-specific editor launcher. macOS keeps using `open -a` with a
+/// friendly app name so the existing Launch Services association is
+/// respected. Windows/Linux look the editor up via `detect_installed_editors`
+/// to find an absolute path, then spawn it directly with the directory as
+/// its first argument. If detection doesn't find the editor, we fall back to
+/// a `xdg-open <dir>` / `start "" <dir>` that opens the directory with the
+/// user's default handler — imperfect but graceful.
+#[cfg(target_os = "macos")]
+fn launch_editor_with_dir(editor: &str, dir: &std::path::Path) -> anyhow::Result<()> {
+    let app_name = mac_app_name_for_editor(editor)
+        .ok_or_else(|| anyhow::anyhow!("Unsupported editor: {editor}"))?;
+    let dir_str = dir.display().to_string();
+    std::process::Command::new("open")
+        .args(["-a", app_name, &dir_str])
+        .spawn()
+        .map(|_| ())
+        .context("open command failed")
+}
+
+#[cfg(target_os = "macos")]
+fn mac_app_name_for_editor(editor: &str) -> Option<&'static str> {
+    Some(match editor {
+        "cursor" => "Cursor",
+        "vscode" => "Visual Studio Code",
+        "vscode-insiders" => "Visual Studio Code - Insiders",
+        "windsurf" => "Windsurf",
+        "zed" => "Zed",
+        "webstorm" => "WebStorm",
+        "sublime" => "Sublime Text",
+        "terminal" => "Terminal",
+        "warp" => "Warp",
+        _ => return None,
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn launch_editor_with_dir(editor: &str, dir: &std::path::Path) -> anyhow::Result<()> {
+    // Look up the editor via the same detection pipeline used by the UI so
+    // the absolute path is canonical. If detection missed this editor we
+    // fall back to the OS default-handler opener.
+    let detected = detect_installed_editors_blocking().unwrap_or_default();
+    let editor_path = detected
+        .into_iter()
+        .find(|e| e.id == editor)
+        .map(|e| std::path::PathBuf::from(e.path));
+
+    let dir_str = dir.display().to_string();
+
+    if let Some(path) = editor_path {
+        std::process::Command::new(&path)
+            .arg(&dir_str)
+            .spawn()
+            .with_context(|| format!("Failed to spawn {}", path.display()))?;
+        return Ok(());
+    }
+
+    // Fallback: delegate to the system default handler.
+    #[cfg(windows)]
+    {
+        // `cmd /C start "" <dir>` opens the directory with Explorer's default.
+        // The empty title (`""`) is required because `start` otherwise
+        // interprets the quoted path as a window title.
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &dir_str])
+            .spawn()
+            .context("cmd /C start command failed")?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&dir_str)
+            .spawn()
+            .context("xdg-open command failed")?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

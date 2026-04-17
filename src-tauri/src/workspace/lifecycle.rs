@@ -194,6 +194,24 @@ fn is_archive_eligible_state(state: &str) -> bool {
     matches!(state, "ready" | "setup_pending")
 }
 
+/// Resolve the interpreter + single-command flag used to run the archive
+/// script. On Unix we respect `$SHELL` (falling back to `/bin/sh`) and use
+/// `-c`; on Windows we use `%COMSPEC%` (falling back to `cmd.exe`) and `/C`.
+/// Powershell would also work but `cmd /C` matches user expectation for
+/// single-line `archive_script` entries and has no startup latency.
+fn archive_shell() -> (String, &'static str) {
+    #[cfg(windows)]
+    {
+        let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+        (shell, "/C")
+    }
+    #[cfg(not(windows))]
+    {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        (shell, "-c")
+    }
+}
+
 /// Structured outcome of a single archive-hook invocation. Returned by the
 /// testable `run_archive_hook_inner` and collapsed to a log line by the public
 /// `run_archive_hook`. Phase 2's cross-platform refactor uses the same enum.
@@ -254,11 +272,11 @@ pub(crate) fn run_archive_hook_inner(
         None => return ArchiveHookOutcome::NoScript,
     };
 
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    tracing::info!(workspace_id, script = %script, "Running archive hook");
+    let (shell, shell_flag) = archive_shell();
+    tracing::info!(workspace_id, script = %script, shell = %shell, "Running archive hook");
 
     let status = Command::new(&shell)
-        .arg("-c")
+        .arg(shell_flag)
         .arg(&script)
         .current_dir(workspace_dir)
         .env("HELMOR_ROOT_PATH", repo_root.display().to_string())

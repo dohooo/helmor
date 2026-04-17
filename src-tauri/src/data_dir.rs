@@ -133,6 +133,12 @@ fn resolve_data_dir() -> Result<PathBuf> {
 }
 
 fn dirs_home() -> Option<PathBuf> {
+    // Windows: prefer %USERPROFILE% (the canonical home env var on Windows).
+    // Fall back to %HOME% for users who set it manually (e.g. in MSYS / Cygwin).
+    #[cfg(windows)]
+    if let Some(up) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+        return Some(up);
+    }
     std::env::var_os("HOME").map(PathBuf::from)
 }
 

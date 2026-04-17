@@ -107,19 +107,17 @@ jobs:
       - name: Run typecheck
         run: pnpm run typecheck
 
-  # Windows dep-resolution gate. Phase 1 proves that fixing the Cargo.toml
-  # `[target.'cfg(unix)'.dependencies]` dep-grouping bug lets `cargo check`
-  # resolve all crates on Windows. Compile errors from Unix-only source
-  # modules (e.g. workspace/scripts.rs) are expected until Phase 2 lands
-  # their `#[cfg(unix)]` guards — hence `continue-on-error: true`.
-  # Phase 2 MUST remove `continue-on-error` so the gate becomes strict.
+  # Windows dep-resolution + source-compile gate. Phase 1 unblocked Windows
+  # dep resolution (Cargo.toml cfg(unix) fix); Phase 2 added cfg guards on
+  # every Unix-only module (workspace/scripts.rs → stub, data_dir, sidecar
+  # path, archive shell, system_commands per-OS, helpers::copy_symlink). The
+  # gate is now STRICT — any Windows source-compile regression fails CI.
   rust-check-windows:
-    name: Rust Windows Check (Phase 1 soft gate)
+    name: Rust Windows Check
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: windows-latest
     timeout-minutes: 30
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -130,17 +128,9 @@ jobs:
       - name: Setup Rust Tauri
         uses: ./.github/actions/setup-rust-tauri
 
-      - name: Build sidecar (Windows)
+      - name: Stage sidecar via cross-platform prepare script
         shell: bash
-        run: pnpm --dir sidecar run build
-
-      - name: Stage sidecar as Windows externalBin
-        shell: bash
-        run: |
-          # bun build --compile on Windows outputs .exe automatically. Tauri
-          # expects `helmor-sidecar-<target-triple>.exe` next to the crate.
-          cp "sidecar/dist/helmor-sidecar.exe" "sidecar/dist/helmor-sidecar-x86_64-pc-windows-msvc.exe" || \
-          cp "sidecar/dist/helmor-sidecar" "sidecar/dist/helmor-sidecar-x86_64-pc-windows-msvc.exe"
+        run: node scripts/prepare-sidecar.mjs
 
       - name: cargo check for x86_64-pc-windows-msvc
         shell: bash

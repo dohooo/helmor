@@ -6,7 +6,7 @@
 	"build": {
 		"beforeDevCommand": "pnpm exec vite",
 		"devUrl": "http://localhost:1420",
-		"beforeBuildCommand": "cd sidecar && bun install --frozen-lockfile && bun run build && cp dist/helmor-sidecar dist/helmor-sidecar-$(rustc -vV | grep host | cut -d' ' -f2) && cd .. && pnpm run build",
+		"beforeBuildCommand": "node scripts/prepare-sidecar.mjs && pnpm run build",
 		"frontendDist": "../dist"
 	},
 	"plugins": {

@@ -609,7 +609,22 @@ fn copy_claude_sessions_for_workspace(
     repo_name: &str,
     directory_name: &str,
 ) {
-    let home = match std::env::var_os("HOME").map(PathBuf::from) {
+    // Claude Code config lives under the user's home directory. On Windows
+    // the canonical home env is %USERPROFILE%; fall back to %HOME% for
+    // MSYS / Cygwin setups.
+    let home = {
+        #[cfg(windows)]
+        {
+            std::env::var_os("USERPROFILE")
+                .or_else(|| std::env::var_os("HOME"))
+                .map(PathBuf::from)
+        }
+        #[cfg(not(windows))]
+        {
+            std::env::var_os("HOME").map(PathBuf::from)
+        }
+    };
+    let home = match home {
         Some(h) => h,
         None => return,
     };

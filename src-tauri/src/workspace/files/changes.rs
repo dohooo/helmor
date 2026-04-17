@@ -333,13 +333,16 @@ pub(super) fn resolve_target_ref(workspace_root: &Path) -> Result<String> {
         }
     }
 
-    // No target branch found — fall back to empty tree for initial commits.
-    let empty_tree = git_ops::run_git(
-        ["hash-object", "-t", "tree", "/dev/null"],
-        Some(workspace_root),
-    )
-    .context("Failed to generate empty tree hash")?;
-    Ok(empty_tree.trim().to_string())
+    // No target branch found — fall back to the canonical SHA1 empty-tree
+    // hash. This is a git constant (identical on every platform and every
+    // git version) so we avoid spawning `hash-object -t tree /dev/null`,
+    // which relied on `/dev/null` being mappable on Windows git-for-Windows.
+    // Reference: https://git-scm.com/book/en/v2/Git-Internals-Git-Objects
+    const EMPTY_TREE_SHA1: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+    // Silence unused-variable warning — workspace_root is no longer needed
+    // here, but we keep the outer signature stable.
+    let _ = workspace_root;
+    Ok(EMPTY_TREE_SHA1.to_string())
 }
 
 fn parse_name_status_into(output: &str, map: &mut BTreeMap<String, String>) {

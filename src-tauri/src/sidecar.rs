@@ -541,10 +541,18 @@ fn resolve_sidecar_path() -> Result<PathBuf> {
 
     // 3. Production: compiled binary placed by Tauri externalBin.
     //    Tauri puts external binaries next to the main executable
-    //    (e.g. Helmor.app/Contents/MacOS/helmor-sidecar).
+    //    (e.g. Helmor.app/Contents/MacOS/helmor-sidecar on macOS,
+    //     C:\Program Files\Helmor\helmor-sidecar.exe on Windows).
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
-            let binary = exe_dir.join("helmor-sidecar");
+            // Windows: Tauri CLI emits externalBins with the same .exe suffix
+            // as the parent Helmor binary. On Unix, no extension.
+            let binary_name = if cfg!(windows) {
+                "helmor-sidecar.exe"
+            } else {
+                "helmor-sidecar"
+            };
+            let binary = exe_dir.join(binary_name);
             if binary.is_file() {
                 return Ok(binary);
             }
