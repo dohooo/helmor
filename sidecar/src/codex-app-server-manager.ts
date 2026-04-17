@@ -363,6 +363,7 @@ export class CodexAppServerManager implements SessionManager {
 		requestId: string,
 		userMessage: string,
 		emitter: SidecarEmitter,
+		timeoutMs = TITLE_GENERATION_TIMEOUT_MS,
 	): Promise<void> {
 		const cwd = process.cwd();
 		const server = new CodexAppServer({
@@ -378,10 +379,7 @@ export class CodexAppServerManager implements SessionManager {
 			onError: () => {},
 		});
 
-		const timeout = setTimeout(
-			() => server.kill(),
-			TITLE_GENERATION_TIMEOUT_MS,
-		);
+		const timeout = setTimeout(() => server.kill(), timeoutMs);
 
 		try {
 			await server.sendRequest("initialize", HELMOR_CLIENT_INFO);
