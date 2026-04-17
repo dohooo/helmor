@@ -84,7 +84,7 @@ export default defineConfig(async () => ({
 		setupFiles: "./src/test/setup.ts",
 		css: true,
 		// Sidecar tests are written for `bun:test`, not vitest. Exclude them
-		// so `pnpm run test:frontend` doesn't trip on `import ... from "bun:test"`.
+		// so `bun run test:frontend` doesn't trip on `import ... from "bun:test"`.
 		// Same for the Rust + fixtures trees which contain no TS tests.
 		exclude: [
 			"**/node_modules/**",

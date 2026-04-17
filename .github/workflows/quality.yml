@@ -36,7 +36,7 @@ jobs:
             lint:
               - '.github/**'
               - 'package.json'
-              - 'pnpm-lock.yaml'
+              - 'bun.lock'
               - 'biome.json'
               - 'tsconfig.json'
               - 'tsconfig.node.json'
@@ -51,7 +51,7 @@ jobs:
             typecheck:
               - '.github/**'
               - 'package.json'
-              - 'pnpm-lock.yaml'
+              - 'bun.lock'
               - 'tsconfig.json'
               - 'tsconfig.node.json'
               - 'vite.config.ts'
@@ -82,7 +82,7 @@ jobs:
         uses: ./.github/actions/build-sidecar
 
       - name: Run lint
-        run: pnpm run lint
+        run: bun run lint
 
   typecheck:
     name: Typecheck
@@ -98,4 +98,4 @@ jobs:
         uses: ./.github/actions/setup-js
 
       - name: Run typecheck
-        run: pnpm run typecheck
+        run: bun run typecheck

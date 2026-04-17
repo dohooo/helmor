@@ -4,9 +4,9 @@
 	"version": "0.1.0",
 	"identifier": "ai.helmor.desktop",
 	"build": {
-		"beforeDevCommand": "pnpm exec vite",
+		"beforeDevCommand": "bun x vite",
 		"devUrl": "http://localhost:1420",
-		"beforeBuildCommand": "cd sidecar && bun install --frozen-lockfile && bun run build && cp dist/helmor-sidecar dist/helmor-sidecar-$(rustc -vV | grep host | cut -d' ' -f2) && cd .. && pnpm run build",
+		"beforeBuildCommand": "cd sidecar && bun install --frozen-lockfile && bun run build && cp dist/helmor-sidecar dist/helmor-sidecar-$(rustc -vV | grep host | cut -d' ' -f2) && cd .. && bun run build",
 		"frontendDist": "../dist"
 	},
 	"plugins": {
