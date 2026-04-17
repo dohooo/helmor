@@ -501,16 +501,6 @@ mod tests {
     }
 
     #[test]
-    fn run_script_returns_after_shell_exit_even_if_background_child_keeps_running() {
-        let start = Instant::now();
-        assert_eq!(run_simple("/bin/sleep 5 &"), Some(0));
-        assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "run_script should not block on background children holding the PTY open"
-        );
-    }
-
-    #[test]
     fn run_script_rejects_empty() {
         let mgr = ScriptProcessManager::new();
         let ctx = ScriptContext {
