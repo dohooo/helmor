@@ -1752,12 +1752,13 @@ export type GenerateSessionTitleResponse = {
 export async function generateSessionTitle(
 	sessionId: string,
 	userMessage: string,
+	titleSeed?: string | null,
 ): Promise<GenerateSessionTitleResponse | null> {
 	try {
 		return await invoke<GenerateSessionTitleResponse>(
 			"generate_session_title",
 			{
-				request: { sessionId, userMessage },
+				request: { sessionId, userMessage, titleSeed: titleSeed ?? null },
 			},
 		);
 	} catch (error) {

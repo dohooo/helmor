@@ -314,6 +314,81 @@ describe("useWorkspacesSidebarController archive flow", () => {
 		expect(pushWorkspaceToast).not.toHaveBeenCalled();
 	});
 
+	it("创建 workspace 时先插入 initializing 占位项，再切到真实 workspace", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onSelectWorkspace = vi.fn();
+		const pushWorkspaceToast = vi.fn();
+		let resolveCreate:
+			| ((value: {
+					createdWorkspaceId: string;
+					selectedWorkspaceId: string;
+					createdState: string;
+					directoryName: string;
+					branch: string;
+			  }) => void)
+			| null = null;
+
+		apiMocks.listRepositories.mockResolvedValue([
+			{
+				id: "repo-1",
+				name: "helmor",
+				defaultBranch: "main",
+				repoInitials: "HE",
+			},
+		]);
+		apiMocks.createWorkspaceFromRepo.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					resolveCreate = resolve;
+				}),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: null,
+					onSelectWorkspace,
+					pushWorkspaceToast,
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows).toHaveLength(2);
+		});
+
+		act(() => {
+			void result.current.handleCreateWorkspaceFromRepo("repo-1");
+		});
+
+		const optimisticRow = result.current.groups[0]?.rows[0];
+		expect(optimisticRow?.state).toBe("initializing");
+		expect(optimisticRow?.title).toContain("Creating helmor");
+		expect(onSelectWorkspace).toHaveBeenCalledWith(
+			expect.stringMatching(/^creating-workspace:/),
+		);
+
+		await act(async () => {
+			resolveCreate?.({
+				createdWorkspaceId: "ws-created",
+				selectedWorkspaceId: "ws-created",
+				createdState: "ready",
+				directoryName: "vega",
+				branch: "feature/vega",
+			});
+		});
+
+		await waitFor(() => {
+			expect(
+				apiMocks.loadWorkspaceGroups.mock.calls.length,
+			).toBeGreaterThanOrEqual(2);
+		});
+		expect(onSelectWorkspace).toHaveBeenCalledWith("ws-created");
+		expect(pushWorkspaceToast).not.toHaveBeenCalled();
+	});
+
 	it("后台启动立即失败时会回滚乐观更新", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false } },

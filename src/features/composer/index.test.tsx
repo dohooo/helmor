@@ -490,6 +490,106 @@ describe("WorkspaceComposer", () => {
 		);
 	});
 
+	it("does not rehydrate stale local drafts on same-context rerenders", async () => {
+		const queryClient = createHelmorQueryClient();
+		const contextKey = "session:session-rerender";
+		const storageKey = getComposerDraftStorageKey(contextKey);
+		window.localStorage.setItem(
+			storageKey,
+			JSON.stringify({
+				root: {
+					type: "root",
+					version: 1,
+					format: "",
+					indent: 0,
+					direction: null,
+					children: [
+						{
+							type: "paragraph",
+							version: 1,
+							format: "",
+							indent: 0,
+							direction: null,
+							textFormat: 0,
+							textStyle: "",
+							children: [
+								{
+									type: "text",
+									version: 1,
+									text: "stale draft",
+									format: 0,
+									mode: "normal",
+									style: "",
+									detail: 0,
+								},
+							],
+						},
+					],
+				},
+			}),
+		);
+
+		const renderComposer = (
+			pendingInsertRequests = [] as Array<{
+				id: string;
+				workspaceId: string;
+				sessionId: string | null;
+				items: import("@/lib/composer-insert").ComposerInsertItem[];
+				behavior: "append";
+				createdAt: number;
+			}>,
+		) => (
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey={contextKey}
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="acceptEdits"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					pendingInsertRequests={pendingInsertRequests}
+				/>
+			</QueryClientProvider>
+		);
+
+		const { rerender } = render(
+			renderComposer([
+				{
+					id: "insert-rerender-1",
+					workspaceId: "workspace-1",
+					sessionId: "session-rerender",
+					behavior: "append",
+					createdAt: 0,
+					items: [
+						{
+							kind: "custom-tag",
+							key: "rerender-tag-1",
+							label: "New context",
+							submitText: "Fresh insert",
+						},
+					],
+				},
+			]),
+		);
+
+		await screen.findByText("New context");
+
+		rerender(renderComposer());
+
+		expect(screen.getByText("New context")).toBeInTheDocument();
+		expect(window.localStorage.getItem(storageKey)).toContain("stale draft");
+	});
+
 	it("only renders fast mode controls for supported models", () => {
 		const queryClient = createHelmorQueryClient();
 		const { rerender } = render(

@@ -1,10 +1,12 @@
 import {
 	Archive,
 	Hammer,
+	Lightbulb,
 	type LucideIcon,
 	MessageSquareText,
 	Play,
 } from "lucide-react";
+import { HelmorLogoAnimated } from "@/components/helmor-logo-animated";
 import {
 	Empty,
 	EmptyContent,
@@ -38,15 +40,19 @@ const SCRIPT_ACTION_COPY: Record<
 
 export function EmptyState({
 	hasSession,
+	workspaceState = null,
 	missingScriptTypes = [],
 	onInitializeScript,
 }: {
 	hasSession: boolean;
+	workspaceState?: string | null;
 	missingScriptTypes?: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 }) {
+	const isCreatingWorkspace = workspaceState === "initializing";
 	const showScriptActions =
 		hasSession &&
+		!isCreatingWorkspace &&
 		missingScriptTypes.length > 0 &&
 		typeof onInitializeScript === "function";
 
@@ -54,19 +60,39 @@ export function EmptyState({
 		<Empty className="max-w-xl">
 			<EmptyHeader>
 				<EmptyMedia className="mb-1 text-muted-foreground [&_svg:not([class*='size-'])]:size-7">
-					<MessageSquareText strokeWidth={1.7} />
+					{isCreatingWorkspace ? (
+						<HelmorLogoAnimated size={28} className="opacity-85" />
+					) : (
+						<MessageSquareText strokeWidth={1.7} />
+					)}
 				</EmptyMedia>
 				<EmptyTitle>
-					{hasSession ? "Nothing here yet" : "No session selected"}
+					{isCreatingWorkspace
+						? "Creating workspace"
+						: hasSession
+							? "Nothing here yet"
+							: "No session selected"}
 				</EmptyTitle>
 				<EmptyDescription>
-					{hasSession
-						? "This session does not have any messages yet."
-						: "Choose a session from the header to inspect its timeline."}
+					{isCreatingWorkspace
+						? "Helmor is still preparing this workspace. Messaging will unlock automatically when setup finishes."
+						: hasSession
+							? "This session does not have any messages yet."
+							: "Choose a session from the header to inspect its timeline."}
 				</EmptyDescription>
 			</EmptyHeader>
 			{showScriptActions ? (
-				<EmptyContent className="mt-4 max-w-[22.25rem] items-stretch gap-2">
+				<div
+					aria-hidden="true"
+					className="flex w-full max-w-[24rem] items-center gap-2"
+				>
+					<span className="h-px flex-1 bg-muted-foreground/12" />
+					<span className="size-[3px] rounded-full bg-muted-foreground/12" />
+					<span className="h-px flex-1 bg-muted-foreground/12" />
+				</div>
+			) : null}
+			{showScriptActions ? (
+				<EmptyContent className="mt-1 max-w-[22.25rem] items-stretch gap-2">
 					{missingScriptTypes.map((scriptType) => {
 						const item = SCRIPT_ACTION_COPY[scriptType];
 						const Icon = item.icon;
@@ -92,10 +118,16 @@ export function EmptyState({
 							</button>
 						);
 					})}
-					<p className="mt-2 w-full text-center text-[11.5px] leading-[1.55] text-muted-foreground">
-						<span className="font-medium text-foreground/80">Tips:</span>{" "}
-						Configuring these scripts upgrades your dev loop — click any item
-						and let AI set it up for you.
+					<p className="mt-2 flex w-full items-center justify-center gap-1.5 whitespace-nowrap text-[11.5px] leading-[1.55] text-muted-foreground">
+						<Lightbulb
+							className="size-3 text-foreground/80"
+							fill="currentColor"
+							strokeWidth={1.5}
+						/>
+						<span>
+							<span className="font-medium text-foreground/80">Tips:</span>{" "}
+							Configuring these scripts upgrades your dev loop.
+						</span>
 					</p>
 				</EmptyContent>
 			) : null}
