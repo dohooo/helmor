@@ -121,10 +121,15 @@ export function GithubIdentityGate({
 							</Button>
 						</div>
 					) : identityState.status === "unconfigured" ? (
-						<div className="mt-10 flex w-full max-w-xs flex-col items-center gap-4">
-							<p className="text-center text-sm text-muted-foreground">
-								{identityState.message}
-							</p>
+						<div className="mt-10 flex w-full max-w-md flex-col items-center gap-3 text-center">
+							<div className="space-y-1">
+								<h1 className="text-lg font-semibold text-foreground">
+									GitHub account connection is not configured
+								</h1>
+								<p className="text-sm text-muted-foreground">
+									{identityState.message}
+								</p>
+							</div>
 							<Button disabled size="lg">
 								<MarkGithubIcon size={16} data-icon="inline-start" />
 								Continue with GitHub
