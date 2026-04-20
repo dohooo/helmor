@@ -17,6 +17,20 @@ use crate::pipeline::types::{
     ExtendedMessagePart, IntermediateMessage, MessagePart, MessageRole, ThreadMessageLike,
 };
 
+fn is_cumulative_same_id_snapshot(prev: &ThreadMessageLike, next: &ThreadMessageLike) -> bool {
+    if prev.id != next.id || next.content.len() < prev.content.len() {
+        return false;
+    }
+
+    prev.content
+        .iter()
+        .zip(next.content.iter())
+        .all(|(prev_part, next_part)| {
+            std::mem::discriminant(prev_part) == std::mem::discriminant(next_part)
+                && prev_part.part_id() == next_part.part_id()
+        })
+}
+
 pub(super) fn convert_user_message(
     msg: &IntermediateMessage,
     parsed: Option<&Value>,
@@ -278,12 +292,18 @@ pub(super) fn merge_adjacent_assistants(msgs: Vec<ThreadMessageLike>) -> Vec<Thr
 
         if should_merge {
             let prev = out.last_mut().unwrap();
-            prev.content.extend(msg.content);
-            if msg.status.is_some() {
+            if is_cumulative_same_id_snapshot(prev, &msg) {
+                prev.content = msg.content;
                 prev.status = msg.status;
-            }
-            if prev.streaming == Some(true) || msg.streaming == Some(true) {
-                prev.streaming = Some(true);
+                prev.streaming = msg.streaming;
+            } else {
+                prev.content.extend(msg.content);
+                if msg.status.is_some() {
+                    prev.status = msg.status;
+                }
+                if prev.streaming == Some(true) || msg.streaming == Some(true) {
+                    prev.streaming = Some(true);
+                }
             }
         } else {
             out.push(msg);

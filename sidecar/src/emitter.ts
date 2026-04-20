@@ -38,6 +38,14 @@ export type StoppedEvent = {
 	readonly sessionId: string;
 };
 
+export type SteeredEvent = {
+	readonly id: string;
+	readonly type: "steered";
+	readonly sessionId: string;
+	readonly accepted: boolean;
+	readonly reason?: string;
+};
+
 export type PongEvent = { readonly id: string; readonly type: "pong" };
 
 export type TitleGeneratedEvent = {
@@ -130,6 +138,7 @@ export type SidecarControlEvent =
 	| AbortedEvent
 	| ErrorEvent
 	| StoppedEvent
+	| SteeredEvent
 	| PongEvent
 	| TitleGeneratedEvent
 	| SlashCommandsListedEvent
@@ -154,6 +163,12 @@ export interface SidecarEmitter {
 	aborted(requestId: string, reason: string): void;
 	error(requestId: string | null, message: string, internal?: boolean): void;
 	stopped(requestId: string, sessionId: string): void;
+	steered(
+		requestId: string,
+		sessionId: string,
+		accepted: boolean,
+		reason?: string,
+	): void;
 	pong(requestId: string): void;
 	titleGenerated(
 		requestId: string,
@@ -233,6 +248,14 @@ export function createSidecarEmitter(
 			),
 		stopped: (requestId, sessionId) =>
 			write({ id: requestId, type: "stopped", sessionId }),
+		steered: (requestId, sessionId, accepted, reason) =>
+			write({
+				id: requestId,
+				type: "steered",
+				sessionId,
+				accepted,
+				...(reason ? { reason } : {}),
+			}),
 		pong: (requestId) => write({ id: requestId, type: "pong" }),
 		titleGenerated: (requestId, title, branchName) =>
 			write({ id: requestId, type: "titleGenerated", title, branchName }),

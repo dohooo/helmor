@@ -27,6 +27,7 @@ import { readImageWithResize } from "./image-resize.js";
 import { parseImageRefs } from "./images.js";
 import { errorDetails, logger } from "./logger.js";
 import { sortClaudeModels } from "./model-sort.js";
+import { createPushable, type Pushable } from "./pushable-iterable.js";
 import {
 	formatModelLabel,
 	type ListSlashCommandsParams,
@@ -124,6 +125,23 @@ function executableOptions(): {
 interface LiveSession {
 	readonly query: Query;
 	readonly abortController: AbortController;
+	/**
+	 * Streaming-input source. The initial prompt is pushed up front in
+	 * `sendMessage`; each `steer()` call pushes one more user message.
+	 * The SDK folds every pushed message into ONE extended turn and
+	 * emits a SINGLE terminal `result` when the whole trajectory is
+	 * done — verified empirically (steer mid-stream yields one merged
+	 * assistant message and one result, not per-push results). The
+	 * for-await loop therefore bails on the first result it sees.
+	 */
+	readonly promptSource: Pushable<SDKUserMessage>;
+	/** Request id owning this session; needed by `steer()` to synthesize
+	 *  a user passthrough event for the active stream. */
+	readonly requestId: string;
+	/** Emitter bound to the active stream — used by `steer()` to fan a
+	 *  synthetic user event to the pipeline so the UI renders the mid-turn
+	 *  bubble at the correct position instead of tacking it onto the end. */
+	readonly emitter: SidecarEmitter;
 }
 
 const VALID_PERMISSION_MODES = [
@@ -380,17 +398,27 @@ export class ClaudeSessionManager implements SessionManager {
 		const additionalDirectories = await resolveGitAccessDirectories(cwd);
 
 		const { text, imagePaths } = parseImageRefs(prompt);
-		const promptValue: string | AsyncIterable<SDKUserMessage> =
+		// Always use streaming-input mode so `steer()` can push additional
+		// `SDKUserMessage`s into the same turn. For Claude real steer, the
+		// SDK consumes subsequent pushes as part of the in-flight turn and
+		// emits ONE final `result` — so bail-on-first-result semantics are
+		// unchanged.
+		const promptSource = createPushable<SDKUserMessage>();
+		const initialMessage =
 			imagePaths.length === 0
-				? prompt
-				: (async function* () {
-						yield await buildUserMessageWithImages(text, imagePaths);
-					})();
+				? ({
+						type: "user",
+						message: { role: "user", content: text },
+						parent_tool_use_id: null,
+					} as SDKUserMessage)
+				: await buildUserMessageWithImages(text, imagePaths);
+		promptSource.push(initialMessage);
+
 		const effectiveFastMode =
 			fastMode === true && claudeModelSupportsFastMode(model);
 
 		const q = query({
-			prompt: promptValue,
+			prompt: promptSource,
 			options: {
 				abortController,
 				pathToClaudeCodeExecutable: CLAUDE_CLI_PATH,
@@ -506,7 +534,13 @@ export class ClaudeSessionManager implements SessionManager {
 			},
 		});
 
-		this.sessions.set(sessionId, { query: q, abortController });
+		this.sessions.set(sessionId, {
+			query: q,
+			abortController,
+			promptSource,
+			requestId,
+			emitter,
+		});
 
 		try {
 			for await (const message of q) {
@@ -525,6 +559,14 @@ export class ClaudeSessionManager implements SessionManager {
 					emitter.passthrough(requestId, passthroughMessage);
 				}
 				if (isTerminalSuccessResult(message)) {
+					// The SDK emits ONE terminal `result` for the entire
+					// streaming-input session, even when `steer()` pushed
+					// additional messages — all pushes fold into one
+					// extended turn. Bail on the first one we see; any
+					// steer() still in its image-load await at this point
+					// will find `promptSource.closed` via the finally
+					// block below and return false (see the re-check in
+					// `steer()`).
 					emitter.end(requestId);
 					return;
 				}
@@ -551,12 +593,85 @@ export class ClaudeSessionManager implements SessionManager {
 					...errorDetails(closeErr),
 				});
 			}
+			promptSource.close();
 			this.sessions.delete(sessionId);
 			for (const [elicitationId, resolve] of this.pendingElicitations) {
 				this.pendingElicitations.delete(elicitationId);
 				resolve({ action: "cancel" });
 			}
 		}
+	}
+
+	/**
+	 * Real mid-turn steer: push a `SDKUserMessage` into the active turn's
+	 * streaming-input queue so the SDK folds it into the current extended
+	 * turn, and emit a `user_prompt` passthrough event so the accumulator
+	 * renders the user bubble at the correct position AND streaming.rs
+	 * persists it exactly once (no extra DB path). Event shape matches
+	 * what the adapter's `user_prompt` branch reads on reload so
+	 * live/reload rendering stay identical — `files` included.
+	 *
+	 * Two correctness properties this method enforces:
+	 *
+	 *   1. **Ghost-steer rejection.** The SDK emits ONE terminal `result`
+	 *      for the whole streaming session; once the for-await loop sees
+	 *      it, the finally block closes `promptSource`. If our image-
+	 *      loading await straddles that boundary, a naive post-await
+	 *      emit would plant a synthetic event into the pipeline with no
+	 *      assistant response behind it. Re-check `promptSource.closed`
+	 *      after the await to refuse the steer in that window.
+	 *
+	 *   2. **Strict ordering with post-steer deltas.** Emit the synthetic
+	 *      event BEFORE `promptSource.push()`. Both are synchronous so
+	 *      no other JS code can interleave, and the accumulator observes
+	 *      `user_prompt` strictly before any deltas the SDK generates
+	 *      in response.
+	 *
+	 * Returns `true` on success, `false` when no active session or when
+	 * the turn finished while we were preparing the message.
+	 */
+	async steer(
+		sessionId: string,
+		prompt: string,
+		files: readonly string[],
+	): Promise<boolean> {
+		const session = this.sessions.get(sessionId);
+		if (!session || session.promptSource.closed) {
+			return false;
+		}
+
+		const { text, imagePaths } = parseImageRefs(prompt);
+		const sdkMessage =
+			imagePaths.length === 0
+				? ({
+						type: "user",
+						message: { role: "user", content: text },
+						parent_tool_use_id: null,
+					} as SDKUserMessage)
+				: await buildUserMessageWithImages(text, imagePaths);
+
+		// Re-check after the image-loading await — during those awaits
+		// the for-await loop may have hit the extended turn's single
+		// terminal result and closed our queue. Without this guard a
+		// late image-steer call would plant a ghost bubble.
+		if (session.promptSource.closed) {
+			return false;
+		}
+
+		const event: {
+			type: "user_prompt";
+			text: string;
+			steer: true;
+			files?: string[];
+		} = { type: "user_prompt", text, steer: true };
+		if (files.length > 0) event.files = [...files];
+		session.emitter.passthrough(session.requestId, event);
+		session.promptSource.push(sdkMessage);
+		logger.info(`steer ${sessionId}`, {
+			preview: text.slice(0, 60),
+			fileCount: files.length,
+		});
+		return true;
 	}
 
 	async generateTitle(

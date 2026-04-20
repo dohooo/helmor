@@ -661,8 +661,6 @@ export type SlashCommandEntry = {
 
 export type SlashCommandsResponse = {
 	commands: SlashCommandEntry[];
-	/** `false` while the background sidecar refresh is still in flight. */
-	isComplete: boolean;
 };
 
 /**
@@ -1722,6 +1720,37 @@ export async function stopAgentStream(
 	await invoke("stop_agent_stream", {
 		request: { sessionId, provider: provider ?? null },
 	});
+}
+
+export type AgentSteerRequest = {
+	sessionId: string;
+	provider?: string;
+	prompt: string;
+	files?: string[];
+};
+
+export type AgentSteerResponse = {
+	accepted: boolean;
+	reason?: string;
+};
+
+/**
+ * Inject an additional user message into an in-flight agent turn.
+ *
+ * On `{ accepted: true }` the sidecar has confirmed provider acceptance
+ * AND emitted a `user_prompt` passthrough event into the active stream,
+ * which the accumulator places at the current streaming position and
+ * `persist_turn_message` writes to the DB — no separate persistence path.
+ *
+ * On `{ accepted: false }` (turn already completed, provider rejected,
+ * RPC timeout), the pipeline is untouched. Callers should surface the
+ * rejection reason and restore the composer draft so the user can resend
+ * — do NOT silently auto-open a fresh `startAgentMessageStream`.
+ */
+export async function steerAgentStream(
+	request: AgentSteerRequest,
+): Promise<AgentSteerResponse> {
+	return await invoke<AgentSteerResponse>("steer_agent_stream", { request });
 }
 
 export async function respondToPermissionRequest(

@@ -200,6 +200,22 @@ fn patch_tool_use_block(block: &mut Value, resolved: &HashSet<String>) -> bool {
     true
 }
 
+fn assistant_block_type(block: &Value) -> Option<&str> {
+    block.get("type").and_then(Value::as_str)
+}
+
+fn cumulative_assistant_snapshot_prefix_matches(prev: &[Value], next: &[Value]) -> bool {
+    if next.len() < prev.len() {
+        return false;
+    }
+
+    prev.iter()
+        .zip(next.iter())
+        .all(|(prev_block, next_block)| {
+            assistant_block_type(prev_block) == assistant_block_type(next_block)
+        })
+}
+
 fn collect_resolved_id(block: &Value, resolved: &mut HashSet<String>) {
     let Some(obj) = block.as_object() else {
         return;
@@ -303,6 +319,17 @@ impl StreamAccumulator {
                 PushOutcome::Finalized
             }
             Some("user") => {
+                self.handle_user(raw_line, value);
+                PushOutcome::Finalized
+            }
+            // Mid-turn steer injection — same semantics as a regular user
+            // turn boundary (flush in-flight assistant, push a user turn,
+            // subsequent assistant events start a fresh message). The
+            // inner JSON shape matches what `persist_user_message` writes
+            // for initial prompts, so streaming persistence and reload
+            // both go through the adapter's existing `user_prompt` branch
+            // without any special-case handling.
+            Some("user_prompt") => {
                 self.handle_user(raw_line, value);
                 PushOutcome::Finalized
             }
@@ -776,19 +803,43 @@ impl StreamAccumulator {
             .and_then(|m| m.get("content"))
             .and_then(Value::as_array)
         {
-            if !same_msg_id {
+            let cumulative_snapshot = same_msg_id
+                && cumulative_assistant_snapshot_prefix_matches(&self.cur_asst_blocks, blocks);
+
+            // Cumulative: reset count so reused indices produce stable part_ids.
+            // Non-cumulative new-msg: clear buffer but keep count monotonic so
+            // part_ids don't collide with the previous message when two events
+            // share the same active turn_id (e.g. no explicit `message.id`).
+            if cumulative_snapshot {
                 self.cur_asst_blocks.clear();
                 self.cur_asst_block_count = 0;
+            } else if !same_msg_id {
+                self.cur_asst_blocks.clear();
             }
             let mut stamped_blocks = blocks.clone();
             for (i, block) in stamped_blocks.iter_mut().enumerate() {
                 if let Some(obj) = block.as_object_mut() {
-                    let part_id = format!("{turn_id}:blk:{}", self.cur_asst_block_count + i);
+                    let part_id = if cumulative_snapshot {
+                        self.cur_asst_blocks
+                            .get(i)
+                            .and_then(Value::as_object)
+                            .and_then(|prev| prev.get("__part_id"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                            .unwrap_or_else(|| format!("{turn_id}:blk:{i}"))
+                    } else {
+                        format!("{turn_id}:blk:{}", self.cur_asst_block_count + i)
+                    };
                     obj.insert("__part_id".to_string(), Value::String(part_id));
                 }
             }
-            self.cur_asst_block_count += stamped_blocks.len();
-            self.cur_asst_blocks.extend(stamped_blocks.iter().cloned());
+            if cumulative_snapshot {
+                self.cur_asst_block_count = stamped_blocks.len();
+                self.cur_asst_blocks = stamped_blocks.clone();
+            } else {
+                self.cur_asst_block_count += stamped_blocks.len();
+                self.cur_asst_blocks.extend(stamped_blocks.iter().cloned());
+            }
 
             // Also patch the value that goes into collected[] for rendering.
             if let Some(msg) = stamped_value.get_mut("message") {

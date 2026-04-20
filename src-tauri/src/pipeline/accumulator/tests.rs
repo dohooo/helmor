@@ -151,6 +151,81 @@ fn full_assistant_clears_blocks() {
 }
 
 #[test]
+fn mid_stream_user_prompt_event_splits_assistant_turn() {
+    // Locks in the steer positioning + persistence contract.
+    //
+    // The sidecar's `steer()` (Claude `streamInput`, Codex `turn/steer`)
+    // emits a `user_prompt` passthrough into the active stream AFTER the
+    // provider confirms acceptance. The accumulator must:
+    //   (a) flush the currently-streaming assistant message,
+    //   (b) push a user turn whose `content_json` is the raw event JSON
+    //       (which matches the adapter's `user_prompt` shape — same as
+    //       initial prompts, so streaming.rs persistence is one-shot),
+    //   (c) open a fresh assistant message for any subsequent events.
+    //
+    // This is the single contract that keeps the steer bubble in the
+    // right place AND prevents the double-persist bug that a separate
+    // `persist_steer_message` path introduced in a previous attempt.
+    let mut acc = StreamAccumulator::new("claude", "opus");
+
+    // Assistant's first segment (pre-steer).
+    let asst_first = json!({
+        "type": "assistant",
+        "message": {
+            "id": "msg_a",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Analyzing..."}]
+        }
+    });
+    acc.push_event(&asst_first, &asst_first.to_string());
+
+    // Synthetic steer event (matches what sidecar emits post-ack).
+    let steer_event = json!({
+        "type": "user_prompt",
+        "text": "stop analyzing",
+        "steer": true,
+        "files": ["src/foo.ts"],
+    });
+    let steer_raw = steer_event.to_string();
+    acc.push_event(&steer_event, &steer_raw);
+
+    // Assistant's response to the steer.
+    let asst_second = json!({
+        "type": "assistant",
+        "message": {
+            "id": "msg_b",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "OK, stopping."}]
+        }
+    });
+    acc.push_event(&asst_second, &asst_second.to_string());
+
+    // `result` / stream end flushes the trailing staged assistant.
+    acc.flush_pending();
+
+    assert_eq!(acc.turns_len(), 3, "expected assistant + user + assistant");
+
+    // Middle turn MUST carry the full `user_prompt` JSON (with `steer`
+    // marker AND files) as its content_json — this is what
+    // `persist_turn_message` writes to the DB, and what the adapter's
+    // `user_prompt` branch reads on reload. Breaks here = double-persist
+    // bug returning or files dropping on reload.
+    let middle_turn = acc.turn_at(1);
+    assert_eq!(middle_turn.role, MessageRole::User);
+    let middle_parsed: Value = serde_json::from_str(&middle_turn.content_json).unwrap();
+    assert_eq!(middle_parsed["type"], "user_prompt");
+    assert_eq!(middle_parsed["text"], "stop analyzing");
+    assert_eq!(middle_parsed["steer"], true);
+    assert_eq!(middle_parsed["files"], json!(["src/foo.ts"]));
+
+    let snapshot = acc.snapshot("ctx", "sess");
+    assert_eq!(snapshot.len(), 3);
+    assert_eq!(snapshot[0].role, MessageRole::Assistant);
+    assert_eq!(snapshot[1].role, MessageRole::User);
+    assert_eq!(snapshot[2].role, MessageRole::Assistant);
+}
+
+#[test]
 fn codex_command_execution_synthesis() {
     let mut acc = StreamAccumulator::new("codex", "gpt-5.4");
     let event = json!({

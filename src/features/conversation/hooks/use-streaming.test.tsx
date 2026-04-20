@@ -22,6 +22,7 @@ const apiMocks = vi.hoisted(() => ({
 	respondToElicitationRequest: vi.fn(),
 	respondToPermissionRequest: vi.fn(),
 	startAgentMessageStream: vi.fn(),
+	steerAgentStream: vi.fn(),
 	stopAgentStream: vi.fn(),
 }));
 
@@ -37,6 +38,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		respondToElicitationRequest: apiMocks.respondToElicitationRequest,
 		respondToPermissionRequest: apiMocks.respondToPermissionRequest,
 		startAgentMessageStream: apiMocks.startAgentMessageStream,
+		steerAgentStream: apiMocks.steerAgentStream,
 		stopAgentStream: apiMocks.stopAgentStream,
 	};
 });
@@ -153,6 +155,7 @@ describe("useConversationStreaming", () => {
 		apiMocks.respondToDeferredTool.mockReset();
 		apiMocks.respondToPermissionRequest.mockReset();
 		apiMocks.startAgentMessageStream.mockReset();
+		apiMocks.steerAgentStream.mockReset();
 		apiMocks.stopAgentStream.mockReset();
 
 		apiMocks.generateSessionTitle.mockResolvedValue(null);
@@ -161,6 +164,10 @@ describe("useConversationStreaming", () => {
 		apiMocks.respondToDeferredTool.mockResolvedValue(undefined);
 		apiMocks.respondToElicitationRequest.mockResolvedValue(undefined);
 		apiMocks.respondToPermissionRequest.mockResolvedValue(undefined);
+		// Default: steer claims the turn ended so tests that don't opt in to
+		// steer semantics fall through to the normal send path. Individual
+		// tests override this when they want to exercise the steer branch.
+		apiMocks.steerAgentStream.mockResolvedValue({ accepted: false });
 		apiMocks.stopAgentStream.mockResolvedValue(undefined);
 	});
 
@@ -408,6 +415,139 @@ describe("useConversationStreaming", () => {
 		});
 
 		expect(result.current.hasPlanReview).toBe(false);
+	});
+
+	it("routes a second submit while sending to steerAgentStream, not startAgentMessageStream", async () => {
+		// Stream mock returns without firing `done` → isSending stays true.
+		apiMocks.startAgentMessageStream.mockImplementation(
+			async (_payload: unknown, _onEvent: (event: unknown) => void) => {
+				return undefined;
+			},
+		);
+		apiMocks.steerAgentStream.mockResolvedValue({
+			accepted: true,
+			messageId: "steer-msg-1",
+		});
+
+		const { Wrapper } = createWrapper();
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "kick things off",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: false,
+			});
+		});
+
+		expect(result.current.isSending).toBe(true);
+		apiMocks.startAgentMessageStream.mockClear();
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "focus on failing tests first",
+				imagePaths: [],
+				filePaths: ["src/foo.ts"],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: false,
+			});
+		});
+
+		expect(apiMocks.steerAgentStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				sessionId: "session-1",
+				prompt: "focus on failing tests first",
+				files: ["src/foo.ts"],
+			}),
+		);
+		expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+	});
+
+	it("restores draft and surfaces error when steer is rejected", async () => {
+		apiMocks.startAgentMessageStream.mockImplementation(
+			async (_payload: unknown, _onEvent: (event: unknown) => void) => {
+				return undefined;
+			},
+		);
+		apiMocks.steerAgentStream.mockResolvedValue({
+			accepted: false,
+			reason: "no_active_turn",
+		});
+
+		const { Wrapper } = createWrapper();
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "first",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: false,
+			});
+		});
+
+		expect(result.current.isSending).toBe(true);
+		apiMocks.startAgentMessageStream.mockClear();
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "focus on failing tests",
+				imagePaths: [],
+				filePaths: ["src/foo.ts"],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: false,
+			});
+		});
+
+		expect(apiMocks.steerAgentStream).toHaveBeenCalledTimes(1);
+		// Rejected steer must NOT silently auto-open a new stream — user
+		// gets explicit control.
+		expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+		// Draft + files + error must all be surfaced back to the composer
+		// so the user can resend without retyping. Guards against the
+		// draft-loss bug flagged in review #4.
+		expect(result.current.restoreDraft).toBe("focus on failing tests");
+		expect(result.current.restoreFiles).toEqual(["src/foo.ts"]);
+		expect(result.current.activeSendError).toContain("no_active_turn");
 	});
 
 	it("seeds the session title from the first prompt before async title generation", async () => {

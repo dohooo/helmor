@@ -18,6 +18,7 @@ import {
 	respondToElicitationRequest,
 	respondToPermissionRequest,
 	startAgentMessageStream,
+	steerAgentStream,
 	stopAgentStream,
 } from "@/lib/api";
 import type { ComposerCustomTag } from "@/lib/composer-insert";
@@ -960,6 +961,98 @@ export function useConversationStreaming({
 
 			const contextKey = composerContextKey;
 
+			// Steer branch: if a stream is already running for this context,
+			// inject the new prompt into the active turn instead of opening a
+			// fresh one. On rejection (turn already completed or provider
+			// refused) we restore the composer draft + surface an error and
+			// STOP — the user explicitly decides whether to resend as a new
+			// turn. Do NOT silently auto-fallback; that was an earlier
+			// design and is no longer the contract.
+			const liveStream = activeSessionByContext[contextKey];
+			const hasPlanReviewForContext = planReviewByContext[contextKey] ?? false;
+			// Skip steer when a plan review is pending — the composer's
+			// plan-review UI (Request Changes / Implement) is the intended
+			// path for responding to plans, and submitting a free-form
+			// message there means "abandon the plan and start fresh".
+			// Fall through to the normal send path which clears plan state.
+			if (
+				sendingContextKeys.has(contextKey) &&
+				liveStream &&
+				!hasPlanReviewForContext
+			) {
+				// Real mid-turn steer. The sidecar routes to the provider's
+				// native steer API AND (only after provider ack) emits a
+				// `user_prompt` passthrough event into the active stream.
+				// The accumulator picks that up, splits the assistant turn,
+				// and streaming.rs persists via `persist_turn_message` —
+				// one event, one DB row, no separate persistence path.
+				//
+				// Optimistic bubble covers the RPC round-trip; the next
+				// flush replaces it with the accumulator's authoritative
+				// version that lives at the correct position in the thread.
+				const cacheSessionId = displayedSessionId;
+				const steerMessageId = crypto.randomUUID();
+				const optimisticSteer = createLiveThreadMessage({
+					id: steerMessageId,
+					role: "user",
+					text: trimmedPrompt,
+					createdAt: new Date().toISOString(),
+					files: filePaths,
+				});
+				const rollback = appendUserMessage(
+					queryClient,
+					cacheSessionId,
+					optimisticSteer,
+				);
+				setComposerRestoreState(null);
+
+				// Composer clears its editor synchronously after onSubmit.
+				// On steer failure we must seed `composerRestoreState` with
+				// the draft so the user's input isn't silently lost — same
+				// contract the normal send path upholds on its error path.
+				const restoreDraftOnFailure = () => {
+					restoreSnapshot(queryClient, cacheSessionId, rollback);
+					setComposerRestoreState({
+						contextKey,
+						draft: trimmedPrompt,
+						images: imagePaths,
+						files: filePaths,
+						customTags,
+						nonce: Date.now(),
+					});
+				};
+
+				try {
+					const response = await steerAgentStream({
+						sessionId: liveStream.stopSessionId,
+						provider: liveStream.provider,
+						prompt: trimmedPrompt,
+						files: filePaths,
+					});
+					if (!response.accepted) {
+						// Turn already completed / provider rejected —
+						// restore the draft so the user can resend it as
+						// a fresh turn (or edit before resending).
+						restoreDraftOnFailure();
+						if (response.reason) {
+							setSendErrorsByContext((current) => ({
+								...current,
+								[contextKey]: `Steer rejected: ${response.reason}`,
+							}));
+						}
+					}
+					return;
+				} catch (err) {
+					console.warn("[conversation] steer failed:", err);
+					restoreDraftOnFailure();
+					setSendErrorsByContext((current) => ({
+						...current,
+						[contextKey]: err instanceof Error ? err.message : String(err),
+					}));
+					return;
+				}
+			}
+
 			const now = new Date().toISOString();
 			const userMessageId = crypto.randomUUID();
 			const optimisticUserMessage = createLiveThreadMessage({
@@ -1319,6 +1412,9 @@ export function useConversationStreaming({
 			selectionPending,
 			refreshSessionThreadFromDb,
 			setFastPreludeActive,
+			activeSessionByContext,
+			sendingContextKeys,
+			planReviewByContext,
 		],
 	);
 

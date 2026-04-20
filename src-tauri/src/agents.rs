@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{ipc::Channel, AppHandle, Manager};
@@ -275,6 +277,128 @@ pub async fn stop_agent_stream(
         .send(&stop_req)
         .map_err(|e| anyhow::anyhow!("Failed to stop session: {e}"))?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSteerRequest {
+    pub session_id: String,
+    pub provider: Option<String>,
+    pub prompt: String,
+    #[serde(default)]
+    pub files: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSteerResponse {
+    pub accepted: bool,
+    pub reason: Option<String>,
+}
+
+/// Inject a user message into an in-flight turn (real mid-turn steer).
+/// Thin wrapper around the sidecar's `steerSession` RPC — the sidecar
+/// routes to provider-native APIs (`streamInput` for Claude, `turn/steer`
+/// for Codex) and emits a `user_prompt` passthrough event into the active
+/// stream ONLY after the provider has confirmed acceptance. That event
+/// flows through the same accumulator + `persist_turn_message` path as
+/// any other user turn, so there's no separate persistence path and no
+/// chance of a ghost steer from an emit-before-ack race.
+///
+/// Returns `{ accepted: false }` when the turn already completed or the
+/// provider rejected the input — the frontend uses that to roll back the
+/// optimistic bubble and restore the composer draft. Does NOT write to
+/// the database: persistence is owned entirely by the streaming pipeline.
+#[tauri::command]
+pub async fn steer_agent_stream(
+    app: AppHandle,
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    request: AgentSteerRequest,
+) -> CmdResult<AgentSteerResponse> {
+    let prompt = request.prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err(anyhow::anyhow!("Steer prompt cannot be empty.").into());
+    }
+
+    let active_streams = app.state::<ActiveStreams>();
+    let handle = active_streams
+        .lookup_by_sidecar_session_id(&request.session_id)
+        .ok_or_else(|| anyhow::anyhow!("No active stream for session {}", request.session_id))?;
+
+    let provider = request
+        .provider
+        .clone()
+        .unwrap_or_else(|| handle.provider.clone());
+    let request_id = Uuid::new_v4().to_string();
+    let files = request.files.clone().unwrap_or_default();
+
+    let steer_req = crate::sidecar::SidecarRequest {
+        id: request_id.clone(),
+        method: "steerSession".to_string(),
+        params: serde_json::json!({
+            "sessionId": request.session_id,
+            "provider": provider,
+            "prompt": prompt,
+            "files": files,
+        }),
+    };
+
+    let rx = sidecar.subscribe(&request_id);
+    if let Err(error) = sidecar.send(&steer_req) {
+        sidecar.unsubscribe(&request_id);
+        return Err(anyhow::anyhow!("Sidecar send failed: {error}").into());
+    }
+
+    let rid_for_worker = request_id.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(anyhow::anyhow!("Steer timed out waiting for sidecar"));
+            }
+            match rx.recv_timeout(remaining) {
+                Ok(event) => {
+                    if event.event_type() == "steered" {
+                        let accepted = event
+                            .raw
+                            .get("accepted")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        let reason = event
+                            .raw
+                            .get("reason")
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+                        return Ok((accepted, reason));
+                    }
+                    if event.event_type() == "error" {
+                        let msg = event
+                            .raw
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("sidecar error")
+                            .to_string();
+                        return Err(anyhow::anyhow!(msg));
+                    }
+                    // Other event types on this request id are noise —
+                    // keep waiting for the terminal `steered` response.
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    return Err(anyhow::anyhow!("Steer timed out waiting for sidecar"));
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(anyhow::anyhow!("Sidecar disconnected before responding"));
+                }
+            }
+        }
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("Steer worker join failed: {e}"))?;
+
+    sidecar.unsubscribe(&rid_for_worker);
+    let (accepted, reason) = outcome?;
+    Ok(AgentSteerResponse { accepted, reason })
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -885,6 +1009,126 @@ mod tests {
             )
             .unwrap();
         assert_eq!(msg_count, 3, "Should have user + 2 turn messages");
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    /// End-to-end: simulate the sidecar firing a `user_prompt` passthrough
+    /// event (what `ClaudeSessionManager.steer()` / `CodexAppServerManager
+    /// .steer()` emit after provider ack) into the accumulator, drain the
+    /// turns the streaming loop would persist, and assert DB contains
+    /// EXACTLY ONE row per logical user message (no double-persist, no
+    /// orphan `type: user` row) AND that reload returns a single bubble
+    /// per message with `files` + `steer` preserved.
+    ///
+    /// Explicitly exists to guard against the two bugs the code-review
+    /// flagged: (a) accumulator producing a turn + `persist_steer_message`
+    /// writing a second row, and (b) `type: user` wrapper drifting loose
+    /// from the `type: user_prompt` shape on reload.
+    #[test]
+    fn steer_user_prompt_event_persists_once_and_reloads_at_correct_position() {
+        use crate::pipeline::accumulator::StreamAccumulator;
+        use crate::pipeline::types::MessageRole as PipelineRole;
+
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+
+        let db_path = setup_test_db(dir.path());
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('s1', 'w1', 'idle', 'Test')",
+            [],
+        )
+        .unwrap();
+
+        let ctx = ExchangeContext {
+            helmor_session_id: "s1".to_string(),
+            turn_id: "turn-1".to_string(),
+            model_id: "opus-1m".to_string(),
+            model_provider: "claude".to_string(),
+            assistant_sdk_message_id: "assistant-1".to_string(),
+            user_message_id: "user-initial".to_string(),
+        };
+
+        // 1. Initial prompt persisted via the normal path.
+        persist_user_message(&conn, &ctx, "investigate the bug", &[]).unwrap();
+
+        // 2. Drive the accumulator the same way the streaming loop does:
+        //    assistant deltas, steer event, more assistant deltas, result.
+        let mut acc = StreamAccumulator::new("claude", "opus-1m");
+        let asst_first = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_a",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Checking files..."}]
+            }
+        });
+        acc.push_event(&asst_first, &asst_first.to_string());
+
+        let steer_event = serde_json::json!({
+            "type": "user_prompt",
+            "text": "focus on failing tests",
+            "steer": true,
+            "files": ["src/foo.ts"],
+        });
+        acc.push_event(&steer_event, &steer_event.to_string());
+
+        let asst_second = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_b",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Switching focus."}]
+            }
+        });
+        acc.push_event(&asst_second, &asst_second.to_string());
+
+        acc.flush_pending();
+
+        // 3. Persist every turn the accumulator produced — this mirrors
+        //    the `while persisted < turns_len { persist_turn_message(...) }`
+        //    loop in `streaming.rs`.
+        for i in 0..acc.turns_len() {
+            persist_turn_message(&conn, &ctx, acc.turn_at(i), &ctx.model_id).unwrap();
+        }
+
+        // 4. Assert one-shot persistence: exactly one DB row per user
+        //    message — the initial prompt + the steer. If the old
+        //    `persist_steer_message` path ever returns, this goes to 3.
+        let user_row_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM session_messages WHERE session_id = 's1' AND role = 'user'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            user_row_count, 2,
+            "expected initial prompt + steer user rows, no duplicates"
+        );
+
+        // 5. Reload via the exact production path and verify rendering.
+        let records = crate::models::sessions::list_session_historical_records("s1").unwrap();
+        let messages = crate::pipeline::MessagePipeline::convert_historical(&records);
+
+        // Message shape: [user: initial, assistant: first, user: steer, assistant: second]
+        let user_msgs: Vec<&crate::pipeline::types::ThreadMessageLike> = messages
+            .iter()
+            .filter(|m| m.role == PipelineRole::User)
+            .collect();
+        assert_eq!(
+            user_msgs.len(),
+            2,
+            "reload must show one bubble per user message, not two per steer"
+        );
+
+        // Sandwich order: initial user → assistant → steer user → assistant
+        assert_eq!(messages[0].role, PipelineRole::User);
+        assert_eq!(messages[1].role, PipelineRole::Assistant);
+        assert_eq!(messages[2].role, PipelineRole::User);
+        assert_eq!(messages[3].role, PipelineRole::Assistant);
 
         std::env::remove_var("HELMOR_DATA_DIR");
     }

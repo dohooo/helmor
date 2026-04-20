@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+	act,
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThreadMessageLike } from "@/lib/api";
 import { MemoConversationMessage } from "./message-components";
@@ -9,6 +15,7 @@ let writeTextMock: ReturnType<typeof vi.fn>;
 
 afterEach(() => {
 	cleanup();
+	vi.useRealTimers();
 });
 
 beforeEach(() => {
@@ -184,5 +191,74 @@ describe("MemoConversationMessage plan review", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
 
 		expect(writeTextMock).toHaveBeenCalledWith("Real assistant reply");
+	});
+
+	it("keeps a completed reasoning block open and shows elapsed time", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-04-20T12:00:00.000Z"));
+
+		const streamingMessage: ThreadMessageLike = {
+			id: "assistant-reasoning-1",
+			role: "assistant",
+			createdAt: "2026-04-20T12:00:00.000Z",
+			streaming: true,
+			content: [
+				{
+					type: "reasoning",
+					id: "assistant-reasoning-1:blk:0",
+					text: "Inspecting the streamed reasoning block.",
+					streaming: true,
+				},
+			],
+		};
+
+		const { rerender } = render(
+			<MemoConversationMessage
+				message={streamingMessage}
+				sessionId="session-1"
+				itemIndex={0}
+			/>,
+		);
+
+		expect(screen.getByText("Thinking...")).toBeInTheDocument();
+		expect(
+			screen.getByText("Inspecting the streamed reasoning block."),
+		).toBeInTheDocument();
+
+		act(() => {
+			vi.advanceTimersByTime(2_000);
+		});
+
+		const completedMessage: ThreadMessageLike = {
+			...streamingMessage,
+			streaming: undefined,
+			content: [
+				{
+					type: "reasoning",
+					id: "assistant-reasoning-1:blk:0",
+					text: "Inspecting the streamed reasoning block.",
+					streaming: false,
+				},
+				{
+					type: "text",
+					id: "assistant-reasoning-1:blk:1",
+					text: "Done.",
+				},
+			],
+		};
+
+		rerender(
+			<MemoConversationMessage
+				message={completedMessage}
+				sessionId="session-1"
+				itemIndex={0}
+			/>,
+		);
+
+		expect(screen.getByText("Thought for 2s")).toBeInTheDocument();
+		expect(
+			screen.getByText("Inspecting the streamed reasoning block."),
+		).toBeInTheDocument();
+		expect(screen.getByText("Done.")).toBeInTheDocument();
 	});
 });

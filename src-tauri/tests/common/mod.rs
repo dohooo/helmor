@@ -366,6 +366,17 @@ pub fn user_prompt_with_files(id: &str, text: &str, files: &[&str]) -> Historica
     make_record(id, "user", &serde_json::to_string(&parsed).unwrap())
 }
 
+/// Mid-turn steer prompt. Same shape as `user_prompt` but with the
+/// `steer: true` marker written by `persist_steer_message`.
+pub fn user_prompt_steer(id: &str, text: &str) -> HistoricalRecord {
+    let parsed = json!({
+        "type": "user_prompt",
+        "text": text,
+        "steer": true,
+    });
+    make_record(id, "user", &serde_json::to_string(&parsed).unwrap())
+}
+
 pub fn exit_plan_mode(
     id: &str,
     tool_use_id: &str,

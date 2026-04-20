@@ -22,7 +22,6 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - text
   - line_index: 13
     event_type: result
@@ -36,14 +35,13 @@ final_state:
   roles:
     - assistant
     - system
-  total_parts: 4
+  total_parts: 3
 persisted_turns:
   turn_count: 1
-  total_blocks: 3
+  total_blocks: 2
   turns:
     - role: assistant
       block_types:
-        - thinking
         - thinking
         - text
 historical_render:
@@ -51,6 +49,5 @@ historical_render:
   messages:
     - role: assistant
       part_types:
-        - reasoning
         - reasoning
         - text

@@ -400,9 +400,6 @@ pub struct SlashCommandEntry {
 #[serde(rename_all = "camelCase")]
 pub struct SlashCommandsResponse {
     pub commands: Vec<SlashCommandEntry>,
-    /// `false` while the background sidecar refresh is still in flight
-    /// (the commands shown are from a local disk scan only).
-    pub is_complete: bool,
 }
 
 pub async fn list_slash_commands(
@@ -430,16 +427,12 @@ pub async fn list_slash_commands(
         );
         if !repo_id.is_empty() {
             let rkey = super::slash_commands::repo_key(&request.provider, repo_id);
-            if let Some((commands, _)) = cache.get_repo(&rkey) {
-                return Ok(SlashCommandsResponse {
-                    commands,
-                    is_complete: false,
-                });
+            if let Some(commands) = cache.get_repo(&rkey) {
+                return Ok(SlashCommandsResponse { commands });
             }
         }
         return Ok(SlashCommandsResponse {
             commands: Vec::new(),
-            is_complete: true,
         });
     }
 
@@ -449,19 +442,15 @@ pub async fn list_slash_commands(
     );
 
     // 1. Workspace-level exact hit → return instantly + SWR refresh.
-    if let Some((commands, is_complete)) = cache.get_workspace(&ws_key) {
+    if let Some(commands) = cache.get_workspace(&ws_key) {
         spawn_background_refresh(&app, &cache, &request, ws_key);
-        return Ok(SlashCommandsResponse {
-            commands,
-            is_complete,
-        });
+        return Ok(SlashCommandsResponse { commands });
     }
 
     // 2. Repo-level fallback → return stale-but-plausible + SWR refresh.
-    //    `is_complete: false` tells the UI the list is still loading.
     if !repo_id.is_empty() {
         let rkey = super::slash_commands::repo_key(&request.provider, repo_id);
-        if let Some((commands, _)) = cache.get_repo(&rkey) {
+        if let Some(commands) = cache.get_repo(&rkey) {
             tracing::debug!(
                 provider = %request.provider,
                 cwd,
@@ -470,10 +459,7 @@ pub async fn list_slash_commands(
                 "list_slash_commands serving repo fallback"
             );
             spawn_background_refresh(&app, &cache, &request, ws_key);
-            return Ok(SlashCommandsResponse {
-                commands,
-                is_complete: false,
-            });
+            return Ok(SlashCommandsResponse { commands });
         }
     }
 
@@ -492,11 +478,8 @@ pub async fn list_slash_commands(
         count = commands.len(),
         "list_slash_commands sync fetch succeeded"
     );
-    cache.set(ws_key, request.repo_id.as_deref(), commands.clone(), true);
-    Ok(SlashCommandsResponse {
-        commands,
-        is_complete: true,
-    })
+    cache.set(ws_key, request.repo_id.as_deref(), commands.clone());
+    Ok(SlashCommandsResponse { commands })
 }
 
 /// Prewarm the slash-command cache for a single workspace (both providers).
@@ -730,7 +713,7 @@ fn spawn_background_refresh(
                         count = commands.len(),
                         "Background slash command refresh succeeded"
                     );
-                    cache_state.set(ws_key, request.repo_id.as_deref(), commands, true);
+                    cache_state.set(ws_key, request.repo_id.as_deref(), commands);
                 }
                 Err(e) => {
                     // Don't clear the cache — stale local data is better than nothing.

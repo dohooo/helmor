@@ -184,6 +184,38 @@ fn user_prompt_files_array_present_but_empty() {
 }
 
 #[test]
+fn user_prompt_steer_flag_renders_as_user() {
+    // A steer prompt is a regular user turn with `steer: true` added to
+    // the JSON payload. The adapter should ignore the flag for rendering
+    // (the marker only exists so the UI can later add a distinct badge).
+    let msgs = vec![user_prompt_steer("u1", "actually focus on failing tests")];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_prompt_steer_groups_in_same_turn() {
+    // Two user prompts in the same turn (initial + steer) + an assistant
+    // response between them. Shape check: the second prompt still renders
+    // as a user bubble and groups inline with the surrounding messages
+    // rather than truncating or dropping.
+    let msgs = vec![
+        user_prompt("u1", "start investigating"),
+        assistant_json(
+            "a1",
+            json!([{ "type": "text", "text": "Looking into it..." }]),
+            None,
+        ),
+        user_prompt_steer("u2", "focus on failing tests first"),
+        assistant_json(
+            "a2",
+            json!([{ "type": "text", "text": "OK, switching focus." }]),
+            None,
+        ),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
 fn user_json_text_swallowed() {
     // JSON user message with pure text content is dropped (the assistant
     // already has the prompt; this avoids double-rendering).

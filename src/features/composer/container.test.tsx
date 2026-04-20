@@ -177,7 +177,6 @@ describe("WorkspaceComposerContainer", () => {
 		apiMockState.listSlashCommands.mockReset();
 		apiMockState.listSlashCommands.mockResolvedValue({
 			commands: [],
-			isComplete: true,
 		});
 	});
 

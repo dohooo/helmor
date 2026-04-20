@@ -23,6 +23,7 @@ import {
 	parseProvider,
 	parseRequest,
 	parseSendMessageParams,
+	parseSteerSessionParams,
 	type RawRequest,
 	requireString,
 } from "./request-parser.js";
@@ -196,6 +197,35 @@ async function handleStopSession(
 	}
 }
 
+async function handleSteerSession(
+	id: string,
+	params: Record<string, unknown>,
+): Promise<void> {
+	try {
+		const provider = parseProvider(params.provider);
+		const { sessionId, prompt, files } = parseSteerSessionParams(params);
+		logger.debug(`[${id}] steerSession`, {
+			sessionId,
+			provider,
+			preview: prompt.slice(0, 80),
+			fileCount: files.length,
+		});
+		const accepted = await managers[provider].steer(sessionId, prompt, files);
+		emitter.steered(
+			id,
+			sessionId,
+			accepted,
+			accepted ? undefined : "no_active_turn",
+		);
+	} catch (err) {
+		const msg = errorMessage(err);
+		logger.error(`[${id}] steerSession FAILED: ${msg}`, errorDetails(err));
+		const sessionId =
+			typeof params.sessionId === "string" ? params.sessionId : "";
+		emitter.steered(id, sessionId, false, msg);
+	}
+}
+
 function optionalObject(
 	params: Record<string, unknown>,
 	key: string,
@@ -296,6 +326,9 @@ for await (const line of rl) {
 				break;
 			case "stopSession":
 				await handleStopSession(id, params);
+				break;
+			case "steerSession":
+				await handleSteerSession(id, params);
 				break;
 			case "shutdown":
 				await handleShutdown(id);

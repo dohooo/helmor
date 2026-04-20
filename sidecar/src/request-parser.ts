@@ -136,6 +136,26 @@ export function parseListSlashCommandsParams(
 	};
 }
 
+export interface SteerSessionParams {
+	readonly sessionId: string;
+	readonly prompt: string;
+	readonly files: readonly string[];
+}
+
+export function parseSteerSessionParams(
+	params: Record<string, unknown>,
+): SteerSessionParams {
+	const rawFiles = params.files;
+	const files: string[] = Array.isArray(rawFiles)
+		? rawFiles.filter((f): f is string => typeof f === "string")
+		: [];
+	return {
+		sessionId: requireString(params, "sessionId"),
+		prompt: requireString(params, "prompt"),
+		files,
+	};
+}
+
 export function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }

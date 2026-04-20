@@ -27,15 +27,9 @@ pub fn repo_key(provider: &str, repo_id: &str) -> RepoKey {
     (provider.to_string(), repo_id.to_string())
 }
 
-#[derive(Clone)]
-struct CachedResult {
-    commands: Vec<SlashCommandEntry>,
-    is_complete: bool,
-}
-
 pub struct SlashCommandCache {
-    workspaces: RwLock<HashMap<WorkspaceKey, CachedResult>>,
-    repos: RwLock<HashMap<RepoKey, CachedResult>>,
+    workspaces: RwLock<HashMap<WorkspaceKey, Vec<SlashCommandEntry>>>,
+    repos: RwLock<HashMap<RepoKey, Vec<SlashCommandEntry>>>,
     /// Prevents duplicate background refreshes for the same workspace key.
     refreshing: Mutex<HashSet<WorkspaceKey>>,
 }
@@ -56,30 +50,29 @@ impl SlashCommandCache {
     }
 
     /// Exact workspace-level lookup.
-    pub fn get_workspace(&self, key: &WorkspaceKey) -> Option<(Vec<SlashCommandEntry>, bool)> {
+    pub fn get_workspace(&self, key: &WorkspaceKey) -> Option<Vec<SlashCommandEntry>> {
         let map = self.workspaces.read().ok()?;
-        let cached = map.get(key)?;
+        let commands = map.get(key)?.clone();
         tracing::debug!(
             provider = %key.0,
             cwd = %key.1,
-            count = cached.commands.len(),
-            is_complete = cached.is_complete,
+            count = commands.len(),
             "Slash-command workspace cache hit"
         );
-        Some((cached.commands.clone(), cached.is_complete))
+        Some(commands)
     }
 
     /// Repo-level fallback lookup — used only when the workspace tier misses.
-    pub fn get_repo(&self, key: &RepoKey) -> Option<(Vec<SlashCommandEntry>, bool)> {
+    pub fn get_repo(&self, key: &RepoKey) -> Option<Vec<SlashCommandEntry>> {
         let map = self.repos.read().ok()?;
-        let cached = map.get(key)?;
+        let commands = map.get(key)?.clone();
         tracing::debug!(
             provider = %key.0,
             repo_id = %key.1,
-            count = cached.commands.len(),
+            count = commands.len(),
             "Slash-command repo-level fallback hit"
         );
-        Some((cached.commands.clone(), cached.is_complete))
+        Some(commands)
     }
 
     /// Write a result into the workspace tier, and also mirror it to the repo
@@ -90,19 +83,14 @@ impl SlashCommandCache {
         workspace_key: WorkspaceKey,
         repo_id: Option<&str>,
         commands: Vec<SlashCommandEntry>,
-        is_complete: bool,
     ) {
-        let entry = CachedResult {
-            commands,
-            is_complete,
-        };
         if let Ok(mut map) = self.workspaces.write() {
-            map.insert(workspace_key.clone(), entry.clone());
+            map.insert(workspace_key.clone(), commands.clone());
         }
         if let Some(repo_id) = repo_id.filter(|id| !id.is_empty()) {
             let rkey = repo_key(&workspace_key.0, repo_id);
             if let Ok(mut map) = self.repos.write() {
-                map.insert(rkey, entry);
+                map.insert(rkey, commands);
             }
         }
     }

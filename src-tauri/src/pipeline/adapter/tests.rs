@@ -304,6 +304,70 @@ fn merge_adjacent_assistant_messages() {
 }
 
 #[test]
+fn merge_adjacent_same_id_assistant_messages_replaces_with_latest_snapshot() {
+    let messages = vec![
+        im(
+            "same",
+            "assistant",
+            json!({
+                "type": "assistant",
+                "__streaming": true,
+                "message": {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "thinking",
+                        "thinking": "draft",
+                        "__part_id": "same:blk:0",
+                        "__is_streaming": true
+                    }]
+                }
+            }),
+        ),
+        im(
+            "same",
+            "assistant",
+            json!({
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "draft",
+                            "__part_id": "same:blk:0"
+                        },
+                        {
+                            "type": "text",
+                            "text": "done",
+                            "__part_id": "same:blk:1"
+                        }
+                    ]
+                }
+            }),
+        ),
+    ];
+
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].content.len(), 2);
+    assert_eq!(result[0].streaming, None);
+
+    match &result[0].content[0] {
+        ExtendedMessagePart::Basic(MessagePart::Reasoning { id, streaming, .. }) => {
+            assert_eq!(id, "same:blk:0");
+            assert_eq!(*streaming, None);
+        }
+        other => panic!("expected reasoning part, got {other:?}"),
+    }
+    match &result[0].content[1] {
+        ExtendedMessagePart::Basic(MessagePart::Text { text, .. }) => {
+            assert_eq!(text, "done");
+        }
+        other => panic!("expected text part, got {other:?}"),
+    }
+}
+
+#[test]
 fn result_label_formatting() {
     let label = build_result_label(Some(&json!({
         "type": "result",

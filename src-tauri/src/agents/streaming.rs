@@ -19,10 +19,10 @@ use super::{
 };
 
 #[derive(Debug, Clone)]
-struct ActiveStreamHandle {
-    request_id: String,
-    sidecar_session_id: String,
-    provider: String,
+pub(crate) struct ActiveStreamHandle {
+    pub request_id: String,
+    pub sidecar_session_id: String,
+    pub provider: String,
 }
 
 #[derive(Default)]
@@ -52,6 +52,17 @@ impl ActiveStreams {
             .lock()
             .map(|map| map.values().cloned().collect())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn lookup_by_sidecar_session_id(
+        &self,
+        sidecar_session_id: &str,
+    ) -> Option<ActiveStreamHandle> {
+        self.inner.lock().ok().and_then(|map| {
+            map.values()
+                .find(|h| h.sidecar_session_id == sidecar_session_id)
+                .cloned()
+        })
     }
 
     pub(crate) fn len(&self) -> usize {
