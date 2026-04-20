@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ClaudeDesignView } from "@/features/claude-design";
 import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-lifecycle";
 import { WorkspaceConversationContainer } from "@/features/conversation";
 import { useDockUnreadBadge } from "@/features/dock-badge";
@@ -345,6 +346,7 @@ function AppShell({
 	} = useShellPanels();
 	const [showOnboarding, setShowOnboarding] = useState(false);
 	const [onboardingPending, setOnboardingPending] = useState(false);
+	const [claudeDesignOpen, setClaudeDesignOpen] = useState(false);
 	const [conductorWorkspaces, setConductorWorkspaces] = useState<
 		ConductorWorkspace[]
 	>([]);
@@ -1840,6 +1842,7 @@ function AppShell({
 															interactionRequiredWorkspaceIds
 														}
 														onSelectWorkspace={handleSelectWorkspace}
+														onOpenClaudeDesign={() => setClaudeDesignOpen(true)}
 														pushWorkspaceToast={pushWorkspaceToast}
 													/>
 												</div>
@@ -2156,6 +2159,9 @@ function AppShell({
 					/>
 				</ComposerInsertProvider>
 			</WorkspaceToastProvider>
+			{claudeDesignOpen ? (
+				<ClaudeDesignView onClose={() => setClaudeDesignOpen(false)} />
+			) : null}
 			<QuitConfirmDialog sendingSessionIds={sendingSessionIds} />
 		</TooltipProvider>
 	);

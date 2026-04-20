@@ -1854,6 +1854,78 @@ export async function createSession(
 	});
 }
 
+// ---------------------------------------------------------------------------
+// Claude Design view (full-window overlay that embeds claude.ai/design)
+// ---------------------------------------------------------------------------
+
+export type ClaudeDesignViewBounds = {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+};
+
+export async function openClaudeDesignView(
+	bounds: ClaudeDesignViewBounds,
+): Promise<void> {
+	await invoke("open_claude_design_view", { bounds });
+}
+
+export async function setClaudeDesignViewBounds(
+	bounds: ClaudeDesignViewBounds,
+): Promise<void> {
+	await invoke("set_claude_design_view_bounds", { bounds });
+}
+
+export async function hideClaudeDesignView(): Promise<void> {
+	await invoke("hide_claude_design_view");
+}
+
+export async function closeClaudeDesignView(): Promise<void> {
+	await invoke("close_claude_design_view");
+}
+
+export async function reloadClaudeDesignView(): Promise<void> {
+	await invoke("reload_claude_design_view");
+}
+
+/** Emitted by the Rust backend when the embedded webview tries to
+ * `window.open(...)` — typically Google Identity Services launching its
+ * OAuth popup. The popup has already been denied by the time this fires;
+ * the frontend shows its own modal explaining what happened. */
+export type ClaudeDesignOAuthInterceptedPayload = {
+	url: string;
+	host: string;
+};
+
+export type ClaudeDesignCookieSource =
+	| "chrome"
+	| "arc"
+	| "brave"
+	| "edge"
+	| "firefox";
+
+export type ClaudeDesignImportCookiesResponse = {
+	browser: string;
+	imported: number;
+	skipped: number;
+	totalRead: number;
+};
+
+/** Pull claude.ai / anthropic.com cookies from the user's specified desktop
+ * browser and inject them into the embedded webview (including HttpOnly
+ * cookies, via `Webview::set_cookie`). Reloads the view on success. First
+ * call on macOS may trigger a Keychain prompt to authorize access to the
+ * browser's encryption key. */
+export async function importClaudeDesignCookies(
+	browser: ClaudeDesignCookieSource,
+): Promise<ClaudeDesignImportCookiesResponse> {
+	return invoke<ClaudeDesignImportCookiesResponse>(
+		"import_claude_design_cookies",
+		{ browser },
+	);
+}
+
 export async function renameSession(
 	sessionId: string,
 	title: string,

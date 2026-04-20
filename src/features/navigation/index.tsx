@@ -16,6 +16,7 @@ import {
 	useState,
 } from "react";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
+import { ClaudeIcon } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -94,6 +95,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	interactionRequiredWorkspaceIds,
 	creatingWorkspaceRepoId,
 	onAddRepository,
+	onOpenClaudeDesign,
 	onSelectWorkspace,
 	onPrefetchWorkspace,
 	onCreateWorkspace,
@@ -117,6 +119,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	interactionRequiredWorkspaceIds?: Set<string>;
 	creatingWorkspaceRepoId?: string | null;
 	onAddRepository?: () => void;
+	onOpenClaudeDesign?: () => void;
 	onSelectWorkspace?: (workspaceId: string) => void;
 	onPrefetchWorkspace?: (workspaceId: string) => void;
 	onCreateWorkspace?: (repoId: string) => void;
@@ -603,11 +606,28 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				</div>
 			</div>
 
+			{onOpenClaudeDesign ? (
+				<div className="px-2 pt-3">
+					<button
+						type="button"
+						onClick={onOpenClaudeDesign}
+						aria-label="Open Claude Design"
+						className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] font-medium text-foreground hover:bg-accent/60"
+					>
+						<ClaudeIcon
+							className="size-3.5 shrink-0 text-muted-foreground"
+							strokeWidth={1.9}
+						/>
+						<span>Claude Design</span>
+					</button>
+				</div>
+			) : null}
+
 			{/* Virtualized workspace list */}
 			<div
 				ref={scrollContainerRef}
 				data-slot="workspace-groups-scroll"
-				className="scrollbar-stable relative mt-4 min-h-0 flex-1 overflow-y-auto px-2 pr-1"
+				className="scrollbar-stable relative mt-2 min-h-0 flex-1 overflow-y-auto px-2 pr-1"
 			>
 				<div
 					style={{

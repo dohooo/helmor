@@ -4,29 +4,29 @@ expression: snapshot
 ---
 line_count: 5
 control_events:
-  - elicitationId: elicitation-form-1
-    kind: elicitationRequest
+  - kind: elicitationRequest
+    provider: claude
+    model_id: opus-1m
+    resolved_model: claude-opus-4-20250514
+    session_id: provider-session-1
+    working_directory: /tmp/helmor
+    elicitationId: elicitation-form-1
+    serverName: design-server
     message: Need structured input
     mode: form
-    model_id: opus-1m
-    provider: claude
+    url: ~
     requestedSchema:
+      type: object
       properties:
-        approved:
-          title: Approved
-          type: boolean
         name:
-          title: Project name
           type: string
+          title: Project name
+        approved:
+          type: boolean
+          title: Approved
       required:
         - name
         - approved
-      type: object
-    resolved_model: claude-opus-4-20250514
-    serverName: design-server
-    session_id: provider-session-1
-    url: ~
-    working_directory: /tmp/helmor
 final_messages:
   - role: assistant
     id: msg-1

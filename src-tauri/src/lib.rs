@@ -235,7 +235,13 @@ pub fn run() {
             commands::updater_commands::get_app_update_status,
             commands::updater_commands::check_for_app_update,
             commands::updater_commands::install_downloaded_app_update,
-            commands::editor_commands::write_editor_file
+            commands::editor_commands::write_editor_file,
+            commands::claude_design_commands::open_claude_design_view,
+            commands::claude_design_commands::set_claude_design_view_bounds,
+            commands::claude_design_commands::hide_claude_design_view,
+            commands::claude_design_commands::close_claude_design_view,
+            commands::claude_design_commands::reload_claude_design_view,
+            commands::claude_design_commands::import_claude_design_cookies
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -907,14 +907,14 @@ mod tests {
         assert_yaml_snapshot!(
             serialized,
             @r#"
-id: "<uuid>"
-method: elicitationResponse
-params:
-  action: accept
-  content:
-    approved: true
-    name: Helmor
-  elicitationId: elicitation-1
+        id: "<uuid>"
+        method: elicitationResponse
+        params:
+          elicitationId: elicitation-1
+          action: accept
+          content:
+            name: Helmor
+            approved: true
         "#
         );
     }

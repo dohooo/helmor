@@ -4,18 +4,18 @@ expression: snapshot
 ---
 line_count: 3
 control_events:
-  - elicitationId: elicitation-url-1
-    kind: elicitationRequest
+  - kind: elicitationRequest
+    provider: claude
+    model_id: opus-1m
+    resolved_model: claude-opus-4-20250514
+    session_id: provider-session-1
+    working_directory: /tmp/helmor
+    elicitationId: elicitation-url-1
+    serverName: auth-server
     message: Finish sign-in in the browser.
     mode: url
-    model_id: opus-1m
-    provider: claude
-    requestedSchema: ~
-    resolved_model: claude-opus-4-20250514
-    serverName: auth-server
-    session_id: provider-session-1
     url: "https://example.com/authorize"
-    working_directory: /tmp/helmor
+    requestedSchema: ~
 final_messages:
   - role: assistant
     id: msg-1

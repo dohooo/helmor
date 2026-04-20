@@ -1,3 +1,4 @@
+pub(crate) mod claude_design_commands;
 mod common;
 pub(crate) mod conductor_commands;
 pub(crate) mod editor_commands;

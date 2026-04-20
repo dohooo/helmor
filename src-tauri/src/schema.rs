@@ -80,6 +80,24 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add action_kind column")?;
     }
 
+    // Migration: add session_type column so we can distinguish demo session
+    // kinds (e.g. "browser") from the default chat flow. NULL is treated as
+    // 'chat' at the read site for backward compatibility; fresh rows get the
+    // explicit default from the SCHEMA_SQL definition below.
+    let has_session_type: bool = connection
+        .prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'session_type'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+
+    if !has_session_type {
+        // Intentionally NULL-able: the read path defaults NULL to 'chat', and
+        // NOT NULL would break imports from Conductor (whose source.sessions
+        // has no session_type values to copy).
+        connection
+            .execute_batch("ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'chat'")
+            .context("Failed to add session_type column")?;
+    }
+
     // Migration: wrap plain-text user prompts as JSON.
     //
     // Pre-migration, the `content` column held a union type: assistant/system/
@@ -310,6 +328,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     fast_mode INTEGER DEFAULT 0,
     agent_personality TEXT,
     action_kind TEXT,
+    session_type TEXT DEFAULT 'chat',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

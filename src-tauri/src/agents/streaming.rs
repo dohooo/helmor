@@ -1044,26 +1044,26 @@ mod tests {
 
         assert_yaml_snapshot!(
             serde_json::to_value(&event).unwrap(),
-            @r#"
-elicitationId: elicitation-1
-kind: elicitationRequest
-message: Need structured input
-mode: form
-model_id: opus-1m
-provider: claude
-requestedSchema:
-  properties:
-    name:
-      type: string
-  required:
-    - name
-  type: object
-resolved_model: claude-opus-4-20250514
-serverName: design-server
-session_id: provider-session-1
-url: ~
-working_directory: /tmp/helmor
-            "#
+            @"
+        kind: elicitationRequest
+        provider: claude
+        model_id: opus-1m
+        resolved_model: claude-opus-4-20250514
+        session_id: provider-session-1
+        working_directory: /tmp/helmor
+        elicitationId: elicitation-1
+        serverName: design-server
+        message: Need structured input
+        mode: form
+        url: ~
+        requestedSchema:
+          type: object
+          properties:
+            name:
+              type: string
+          required:
+            - name
+        "
         );
     }
 
