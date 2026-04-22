@@ -162,8 +162,20 @@ export function ChatAssistantMessage({
 					);
 				}
 				if (isReasoningPart(part)) {
+					// Backend-stamped duration (ms); prefer over client-side
+					// timer so historical reloads and immediate-finalize turns
+					// (where `isStreaming` is false on first mount) still show
+					// "Thought for N seconds".
+					const durationSeconds =
+						typeof part.durationMs === "number"
+							? Math.max(1, Math.ceil(part.durationMs / 1000))
+							: undefined;
 					return (
-						<Reasoning key={key} isStreaming={part.streaming === true}>
+						<Reasoning
+							key={key}
+							isStreaming={part.streaming === true}
+							duration={durationSeconds}
+						>
 							<ReasoningTrigger />
 							<ReasoningContent fontSize={settings.fontSize}>
 								{part.text}

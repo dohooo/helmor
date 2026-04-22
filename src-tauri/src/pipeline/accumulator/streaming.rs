@@ -101,6 +101,13 @@ fn handle_block_start(acc: &mut StreamAccumulator, event: &Value) {
             );
         }
         "thinking" => {
+            // Stamp the start ms so we can derive "Thought for N seconds"
+            // when the block finalizes (either via content_block_stop OR
+            // via the `assistant` event, whichever arrives first — in the
+            // real SDK the `assistant` event usually wins).
+            acc.thinking_start_ms
+                .entry(part_id.clone())
+                .or_insert_with(super::now_ms);
             acc.blocks.insert(
                 index,
                 StreamingBlock::Thinking {
@@ -181,6 +188,16 @@ fn handle_block_delta(acc: &mut StreamAccumulator, event: &Value) {
 
 fn handle_block_stop(acc: &mut StreamAccumulator, event: &Value) {
     let index = event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+    // Snapshot the thinking block's id + start ms BEFORE the mutable borrow
+    // so we can record the derived duration back into the accumulator below
+    // without juggling two &mut borrows of `acc`.
+    let thinking_finalize: Option<String> =
+        if let Some(StreamingBlock::Thinking { id, .. }) = acc.blocks.get(&index) {
+            Some(id.clone())
+        } else {
+            None
+        };
+
     match acc.blocks.get_mut(&index) {
         Some(StreamingBlock::Thinking { done, .. }) => {
             *done = true;
@@ -199,6 +216,26 @@ fn handle_block_stop(acc: &mut StreamAccumulator, event: &Value) {
             *status = "running";
         }
         _ => {}
+    }
+
+    if let Some(part_id) = thinking_finalize {
+        finalize_thinking_duration(acc, &part_id);
+    }
+}
+
+/// Compute `now - start` and store it in `thinking_duration_ms` if we have
+/// a start time and haven't recorded a duration yet. Idempotent — a second
+/// call for the same part id is a no-op so the value matches whichever
+/// event (content_block_stop or assistant-event finalization) arrived first.
+pub(super) fn finalize_thinking_duration(acc: &mut StreamAccumulator, part_id: &str) {
+    if acc.thinking_duration_ms.contains_key(part_id) {
+        return;
+    }
+    if let Some(start) = acc.thinking_start_ms.get(part_id).copied() {
+        let now = super::now_ms();
+        let elapsed = (now - start).max(0.0).round() as u64;
+        acc.thinking_duration_ms
+            .insert(part_id.to_string(), elapsed);
     }
 }
 
@@ -319,12 +356,16 @@ pub(super) fn build_partial_from_blocks(
             }
             StreamingBlock::Thinking { id, text, done } => {
                 if !text.is_empty() {
-                    content_blocks.push(serde_json::json!({
+                    let mut obj = serde_json::json!({
                         "type": "thinking",
                         "thinking": text,
                         "__is_streaming": !done,
                         "__part_id": id,
-                    }));
+                    });
+                    if let Some(duration) = acc.thinking_duration_ms.get(id).copied() {
+                        obj["__duration_ms"] = serde_json::json!(duration);
+                    }
+                    content_blocks.push(obj);
                 }
             }
             StreamingBlock::ToolUse {
@@ -394,11 +435,15 @@ pub(super) fn build_materialized_partial_from_blocks(
             }
             StreamingBlock::Thinking { id, text, .. } => {
                 if !text.is_empty() {
-                    content_blocks.push(serde_json::json!({
+                    let mut obj = serde_json::json!({
                         "type": "thinking",
                         "thinking": text,
                         "__part_id": id,
-                    }));
+                    });
+                    if let Some(duration) = acc.thinking_duration_ms.get(id).copied() {
+                        obj["__duration_ms"] = serde_json::json!(duration);
+                    }
+                    content_blocks.push(obj);
                 }
             }
             StreamingBlock::ToolUse {

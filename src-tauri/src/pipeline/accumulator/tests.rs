@@ -577,6 +577,82 @@ fn delta_assistant_events_with_same_msg_id_append_blocks() {
     assert_eq!(blocks[1]["id"].as_str(), Some("tool_1"));
 }
 
+/// Thinking-block duration (`__duration_ms`) is stamped onto the finalized
+/// block JSON so the frontend can render "Thought for N seconds" without a
+/// client-side timer. Live streaming stamps via `content_block_stop`; the
+/// `assistant` event stamps as a fallback when `stop` arrives later (the
+/// real Claude SDK ordering, confirmed via live trace against the Agent SDK).
+#[test]
+fn thinking_block_duration_stamped_on_finalized_assistant_event() {
+    let mut acc = StreamAccumulator::new("claude", "opus");
+    acc.push_event(
+        &json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "thinking"}
+            }
+        }),
+        "",
+    );
+    acc.push_event(
+        &json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": "hmm..."}
+            }
+        }),
+        "",
+    );
+    // `assistant` arrives BEFORE content_block_stop (real SDK ordering).
+    let asst = json!({
+        "type": "assistant",
+        "message": {
+            "id": "msg_1",
+            "role": "assistant",
+            "content": [{"type": "thinking", "thinking": "hmm..."}]
+        }
+    });
+    acc.push_event(&asst, &asst.to_string());
+    acc.flush_pending();
+
+    let turn = acc.turn_at(0);
+    let parsed: serde_json::Value = serde_json::from_str(&turn.content_json).unwrap();
+    let block = &parsed["message"]["content"][0];
+    assert_eq!(block["type"].as_str(), Some("thinking"));
+    assert!(
+        block
+            .get("__duration_ms")
+            .and_then(|v| v.as_u64())
+            .is_some(),
+        "assistant event must stamp __duration_ms onto the thinking block for persistence"
+    );
+
+    // Adapter should surface this as `duration_ms` on the Reasoning part.
+    let messages = acc.snapshot("ctx", "sess");
+    let rendered = crate::pipeline::adapter::convert(&messages);
+    let reasoning_duration = rendered
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .find_map(|p| {
+            if let crate::pipeline::types::ExtendedMessagePart::Basic(
+                crate::pipeline::types::MessagePart::Reasoning { duration_ms, .. },
+            ) = p
+            {
+                *duration_ms
+            } else {
+                None
+            }
+        });
+    assert!(
+        reasoning_duration.is_some(),
+        "adapter must plumb __duration_ms into MessagePart::Reasoning.duration_ms"
+    );
+}
+
 /// Different msg_id should still REPLACE, not append. Pins the boundary
 /// case so a future "always append" mistake gets caught.
 #[test]

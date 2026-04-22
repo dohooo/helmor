@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
-fn now_ms() -> f64 {
+pub(super) fn now_ms() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -88,6 +88,17 @@ pub struct StreamAccumulator {
     fallback_text: String,
     /// Fallback flat delta thinking text.
     fallback_thinking: String,
+    /// Wall-clock ms at which each thinking block started streaming. Keyed
+    /// by the block's stable `__part_id` (`{turn_id}:blk:{index}`). Populated
+    /// at `content_block_start` and consumed when the block is finalized
+    /// (assistant event or content_block_stop) to derive `__duration_ms`.
+    /// Survives `finalize_blocks` because the block's live state is cleared
+    /// mid-turn — the duration needs to outlive that clear.
+    pub(super) thinking_start_ms: HashMap<String, f64>,
+    /// Computed duration for each thinking block by `__part_id`. Set once
+    /// at finalization and then stamped onto both the live partial and the
+    /// collected assistant message for persistence.
+    pub(super) thinking_duration_ms: HashMap<String, u64>,
     /// Stable timestamp for the current streaming partial.
     partial_created_at: Option<String>,
     /// DB UUID for the currently in-flight assistant turn. Minted on first
@@ -240,6 +251,8 @@ impl StreamAccumulator {
             fallback_thinking: String::new(),
             partial_created_at: None,
             active_turn_id: None,
+            thinking_start_ms: HashMap::new(),
+            thinking_duration_ms: HashMap::new(),
             line_count: 0,
             turns: Vec::new(),
             session_id: None,
@@ -830,7 +843,21 @@ impl StreamAccumulator {
                     } else {
                         format!("{turn_id}:blk:{}", self.cur_asst_block_count + i)
                     };
-                    obj.insert("__part_id".to_string(), Value::String(part_id));
+                    obj.insert("__part_id".to_string(), Value::String(part_id.clone()));
+
+                    // The `assistant` event marks a thinking block as
+                    // complete (the SDK ships it here fully populated).
+                    // content_block_stop usually arrives AFTER this event,
+                    // so this is the earliest point at which we can stamp
+                    // a duration. `finalize_thinking_duration` is
+                    // idempotent: if content_block_stop happens to beat
+                    // the assistant event, the value set there wins.
+                    if obj.get("type").and_then(Value::as_str) == Some("thinking") {
+                        streaming::finalize_thinking_duration(self, &part_id);
+                        if let Some(duration) = self.thinking_duration_ms.get(&part_id).copied() {
+                            obj.insert("__duration_ms".to_string(), Value::Number(duration.into()));
+                        }
+                    }
                 }
             }
             if cumulative_snapshot {

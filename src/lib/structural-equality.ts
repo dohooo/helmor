@@ -61,7 +61,11 @@ export function partStructurallyEqual(
 		}
 		case "reasoning": {
 			const rb = b as Extract<MessagePart, { type: "reasoning" }>;
-			return a.text === rb.text && a.streaming === rb.streaming;
+			return (
+				a.text === rb.text &&
+				a.streaming === rb.streaming &&
+				a.durationMs === rb.durationMs
+			);
 		}
 		case "tool-call": {
 			const tb = b as ToolCallPart;

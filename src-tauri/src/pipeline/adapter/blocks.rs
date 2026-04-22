@@ -97,10 +97,12 @@ pub(super) fn parse_assistant_parts(parsed: Option<&Value>, msg_id: &str) -> Vec
                         .get("__is_streaming")
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
+                    let duration_ms = obj.get("__duration_ms").and_then(Value::as_u64);
                     parts.push(MessagePart::Reasoning {
                         id: resolve_part_id(obj, msg_id, idx),
                         text: text.to_string(),
                         streaming: if is_streaming { Some(true) } else { None },
+                        duration_ms,
                     });
                 }
             }
@@ -109,6 +111,7 @@ pub(super) fn parse_assistant_parts(parsed: Option<&Value>, msg_id: &str) -> Vec
                     id: resolve_part_id(obj, msg_id, idx),
                     text: "[Thinking redacted]".to_string(),
                     streaming: None,
+                    duration_ms: None,
                 });
             }
             "text" => {

@@ -119,13 +119,20 @@ pub enum MessagePart {
     Text { id: String, text: String },
 
     /// Extended thinking / reasoning block.
-    #[serde(rename = "reasoning")]
+    #[serde(rename = "reasoning", rename_all = "camelCase")]
     Reasoning {
         id: String,
         text: String,
         /// Per-part streaming state — only the active thinking block is streaming.
         #[serde(skip_serializing_if = "Option::is_none")]
         streaming: Option<bool>,
+        /// Elapsed ms from block start to finalization. Populated by the
+        /// accumulator when the SDK's `assistant` event (or
+        /// `content_block_stop`) lands — whichever arrives first. Persisted
+        /// into the block JSON so historical reloads keep the
+        /// "Thought for N seconds" label without needing a client-side timer.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
     },
 
     /// Tool invocation with optional result.

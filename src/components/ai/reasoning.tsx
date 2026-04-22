@@ -48,8 +48,10 @@ export const Reasoning = memo(
 		children,
 		...props
 	}: ReasoningProps) => {
-		// Historical (non-streaming) blocks start collapsed to avoid re-opening on remount.
-		const resolvedDefaultOpen = defaultOpen ?? isStreaming;
+		// Always default to open — users asked us NOT to auto-collapse
+		// completed thinking blocks. Callers can still pass `defaultOpen={false}`
+		// explicitly, or control `open` via the parent.
+		const resolvedDefaultOpen = defaultOpen ?? true;
 
 		const [isOpen, setIsOpen] = useControllableState({
 			prop: open,

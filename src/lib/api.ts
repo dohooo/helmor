@@ -1591,6 +1591,10 @@ export type ReasoningPart = {
 	text: string;
 	/** Per-part streaming state — only the active thinking block is streaming. */
 	streaming?: boolean;
+	/** Elapsed ms from block start to finalization, stamped by the Rust
+	 *  accumulator. Persisted, so historical reloads keep the "Thought for
+	 *  N seconds" label without needing a client-side timer. */
+	durationMs?: number;
 };
 export type ToolCallPart = {
 	type: "tool-call";

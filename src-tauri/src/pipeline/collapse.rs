@@ -343,6 +343,7 @@ mod tests {
             id: format!("r-{t}"),
             text: t.to_string(),
             streaming: None,
+            duration_ms: None,
         })
     }
 
