@@ -40,7 +40,7 @@ import { WorkspacesSidebarContainer } from "@/features/navigation/container";
 import { AppOnboarding } from "@/features/onboarding";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import { useConfirmSessionClose } from "@/features/panel/use-confirm-session-close";
-import { SettingsButton, SettingsDialog } from "@/features/settings";
+import { SettingsDialog } from "@/features/settings";
 import { getShortcut } from "@/features/shortcuts/registry";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import {
@@ -2196,14 +2196,7 @@ function AppShell({
 														</TooltipContent>
 													</Tooltip>
 												</div>
-												<div className="flex shrink-0 items-center justify-between px-3 pb-3 pt-1">
-													<SettingsButton
-														onClick={handleOpenSettings}
-														shortcut={getShortcut(
-															appSettings.shortcuts,
-															"settings.open",
-														)}
-													/>
+												<div className="flex shrink-0 items-center justify-end px-3 pb-3 pt-1">
 													{githubIdentityState.status === "connected" ? (
 														<GithubStatusMenu
 															identityState={githubIdentityState}
