@@ -137,6 +137,7 @@ import { StreamingFooterOverlapScenario } from "./test/e2e-scenarios/streaming-f
 
 const SETTINGS_RELOAD_EVENT = "helmor:reload-settings";
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
+const EMPTY_SENDING_SESSION_IDS = new Set<string>();
 
 function App() {
 	const e2eScenario =
@@ -306,7 +307,10 @@ function MainApp() {
 				}}
 			>
 				{appSettings === null ? null : !appSettings.onboardingCompleted ? (
-					<AppOnboarding onComplete={completeOnboarding} />
+					<>
+						<AppOnboarding onComplete={completeOnboarding} />
+						<QuitConfirmDialog sendingSessionIds={EMPTY_SENDING_SESSION_IDS} />
+					</>
 				) : (
 					<AppShell
 						onOpenSettings={(workspaceId, workspaceRepoId) => {
