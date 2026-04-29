@@ -117,6 +117,7 @@ pub(super) fn stream_via_sidecar(
         None => prompt.to_string(),
     };
 
+    let images_for_wire = request.images.clone().unwrap_or_default();
     let params = build_send_message_params(BuildSendMessageParamsInput {
         sidecar_session_id: &sidecar_session_id,
         prompt: &combined_prompt,
@@ -130,6 +131,7 @@ pub(super) fn stream_via_sidecar(
         helmor_session_id: request.helmor_session_id.as_deref(),
         claude_base_url: model.claude_base_url.as_deref(),
         claude_auth_token: model.claude_auth_token.as_deref(),
+        images: &images_for_wire,
     });
 
     // Surface the `/add-dir` decision in logs — we often debug linked-
@@ -183,6 +185,7 @@ pub(super) fn stream_via_sidecar(
     let fast_mode = request.fast_mode.unwrap_or(false);
     let user_message_id_copy = request.user_message_id.clone();
     let files_copy = request.files.clone().unwrap_or_default();
+    let images_copy = request.images.clone().unwrap_or_default();
     let resume_only = request.resume_only;
     let sidecar_session_id_copy = sidecar_session_id.clone();
     let rid = request_id.clone();
@@ -248,7 +251,13 @@ pub(super) fn stream_via_sidecar(
                     if resume_only {
                         exchange_ctx = Some(ctx);
                     } else {
-                        match persist_user_message(&conn, &ctx, &prompt_copy, &files_copy) {
+                        match persist_user_message(
+                            &conn,
+                            &ctx,
+                            &prompt_copy,
+                            &files_copy,
+                            &images_copy,
+                        ) {
                             Ok(()) => {
                                 tracing::debug!(rid = %rid, "User message persisted to DB");
                                 exchange_ctx = Some(ctx);

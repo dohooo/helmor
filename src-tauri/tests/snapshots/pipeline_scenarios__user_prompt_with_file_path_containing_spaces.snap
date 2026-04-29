@@ -1,0 +1,16 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: user
+  id: msg-1
+  content_length: 3
+  content:
+    - type: text
+      text: "open "
+    - type: file-mention
+      path: /Users/me/My Project/notes.md
+    - type: text
+      text: " please"
+  status: ~
+  streaming: ~

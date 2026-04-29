@@ -1,84 +1,20 @@
 import { FileText, ImageIcon } from "lucide-react";
-import { memo, useMemo } from "react";
+import { useMemo } from "react";
 import {
 	createFilePreviewLoader,
 	InlineBadge,
 } from "@/components/inline-badge";
 import type { MessagePart } from "@/lib/api";
-import { basename } from "@/lib/path-util";
+import { basename, isImageExtensionPath } from "@/lib/path-util";
 import { useSettings } from "@/lib/settings";
 import { CopyMessageButton } from "./copy-message";
 import type { RenderedMessage } from "./shared";
 import { isFileMentionPart, isTextPart } from "./shared";
 
-const USER_FILE_RE = /@(\/\S+)(?=\s|$)/gi;
-const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|svg|bmp|ico)$/i;
-
-type UserContentSegment =
-	| { type: "text"; value: string }
-	| { type: "image"; value: string }
-	| { type: "file"; value: string };
-
-function splitUserContent(text: string): UserContentSegment[] {
-	const segments: UserContentSegment[] = [];
-	let lastIndex = 0;
-	for (const match of text.matchAll(USER_FILE_RE)) {
-		const matchIndex = match.index ?? 0;
-		const before = text.slice(lastIndex, matchIndex);
-		if (before) {
-			segments.push({ type: "text", value: before });
-		}
-		const filePath = match[1];
-		segments.push({
-			type: IMAGE_EXT_RE.test(filePath) ? "image" : "file",
-			value: filePath,
-		});
-		lastIndex = matchIndex + match[0].length;
-	}
-	const after = text.slice(lastIndex);
-	if (after) {
-		segments.push({ type: "text", value: after });
-	}
-	return segments;
-}
-
-const UserTextInline = memo(function UserTextInline({
-	text,
-}: {
-	text: string;
-}) {
-	const segments = useMemo(() => splitUserContent(text), [text]);
-	if (
-		!segments.some(
-			(segment) => segment.type === "image" || segment.type === "file",
-		)
-	) {
-		return <>{text}</>;
-	}
-	return (
-		<>
-			{segments.map((segment, index) => {
-				if (segment.type === "image") {
-					return (
-						<BubbleImageBadge
-							key={`${segment.value}-${index}`}
-							path={segment.value}
-						/>
-					);
-				}
-				if (segment.type === "file") {
-					return (
-						<BubbleFileBadge
-							key={`${segment.value}-${index}`}
-							path={segment.value}
-						/>
-					);
-				}
-				return <span key={index}>{segment.value}</span>;
-			})}
-		</>
-	);
-});
+// Attachments arrive as structured `file-mention` parts (see
+// `splitTextWithFiles`); this renderer only routes to file vs image
+// badge by extension. Do not regex-scan text parts for `@<path>` —
+// it would truncate paths containing whitespace.
 
 function BubbleFileBadge({ path }: { path: string }) {
 	const fileName = basename(path);
@@ -133,10 +69,14 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 					<p className="whitespace-pre-wrap break-words">
 						{parts.map((part, index) => {
 							if (isTextPart(part)) {
-								return <UserTextInline key={index} text={part.text} />;
+								return <span key={index}>{part.text}</span>;
 							}
 							if (isFileMentionPart(part)) {
-								return <BubbleFileBadge key={index} path={part.path} />;
+								return isImageExtensionPath(part.path) ? (
+									<BubbleImageBadge key={index} path={part.path} />
+								) : (
+									<BubbleFileBadge key={index} path={part.path} />
+								);
 							}
 							return null;
 						})}

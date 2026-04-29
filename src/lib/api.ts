@@ -154,6 +154,11 @@ export type AgentSendRequest = {
 	userMessageId?: string | null;
 	/** Workspace-relative paths from the @-mention picker. */
 	files?: string[] | null;
+	/** Image attachment paths from the composer (drag-and-drop or
+	 *  paste). Travels alongside `prompt` so the sidecar can lift the
+	 *  matching `@<path>` substrings out as image attachments without
+	 *  re-parsing the text — paths may contain whitespace. */
+	images?: string[] | null;
 };
 
 export type WorkspaceSummary = {
@@ -2170,6 +2175,8 @@ export type AgentSteerRequest = {
 	provider?: string;
 	prompt: string;
 	files?: string[];
+	/** Image attachment paths — see `AgentSendRequest.images`. */
+	images?: string[];
 };
 
 export type AgentSteerResponse = {

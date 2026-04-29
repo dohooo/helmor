@@ -140,6 +140,7 @@ async function driveToSendMessage(sessionId: string) {
 			effortLevel: undefined,
 			permissionMode: undefined,
 			fastMode: undefined,
+			images: [],
 		},
 		emitter,
 	);
@@ -184,7 +185,7 @@ describe("CodexAppServerManager.steer gate — real manager wiring", () => {
 		const { manager, fake, events, sendMessagePromise } =
 			await driveToSendMessage("s1");
 
-		const steerPromise = manager.steer("s1", "focus on failing tests", []);
+		const steerPromise = manager.steer("s1", "focus on failing tests", [], []);
 		// Let steer() install the gate and park on sendRequest.
 		await new Promise((r) => setTimeout(r, 0));
 
@@ -223,7 +224,7 @@ describe("CodexAppServerManager.steer gate — real manager wiring", () => {
 		const { manager, fake, events, sendMessagePromise } =
 			await driveToSendMessage("s1");
 
-		const steerPromise = manager.steer("s1", "switch direction", []);
+		const steerPromise = manager.steer("s1", "switch direction", [], []);
 		await new Promise((r) => setTimeout(r, 0));
 
 		// Tool approval request mid-steer. Without handleRequest's
@@ -258,7 +259,7 @@ describe("CodexAppServerManager.steer gate — real manager wiring", () => {
 		const { manager, fake, events, sendMessagePromise } =
 			await driveToSendMessage("s1");
 
-		const steerPromise = manager.steer("s1", "bad steer", []);
+		const steerPromise = manager.steer("s1", "bad steer", [], []);
 		await new Promise((r) => setTimeout(r, 0));
 
 		fake.fireNotification("item/delta-1", {

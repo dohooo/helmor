@@ -131,6 +131,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: undefined,
 				effortLevel: "high",
 				fastMode: true,
+				images: [],
 			},
 			emitter,
 		);
@@ -165,6 +166,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: "plan",
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 				// Include cwd explicitly to verify dedupe, and a duplicate
 				// `/tmp/a` to verify we keep the first occurrence only.
 				additionalDirectories: ["/tmp/workspace", "/tmp/a", "/tmp/a", "/tmp/b"],
@@ -207,6 +209,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: "plan",
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 			},
 			emitter,
 		);
@@ -240,6 +243,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: "bypassPermissions",
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 				additionalDirectories: ["/tmp/a"],
 			},
 			emitter,
@@ -272,6 +276,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: "bypassPermissions",
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 				additionalDirectories: ["/abs/alpha", "/abs/bravo"],
 			},
 			emitter,
@@ -304,6 +309,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: "bypassPermissions",
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 			},
 			emitter,
 		);
@@ -331,6 +337,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: "plan",
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 			},
 			emitter,
 		);
@@ -378,6 +385,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: undefined,
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 			},
 			capturingEmitter,
 		);
@@ -429,6 +437,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: undefined,
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 			},
 			capturingEmitter,
 		);

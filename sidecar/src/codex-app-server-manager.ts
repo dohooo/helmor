@@ -247,6 +247,7 @@ export class CodexAppServerManager implements SessionManager {
 			permissionMode,
 			fastMode,
 			additionalDirectories,
+			images,
 		} = params;
 		const workDir = cwd ?? process.cwd();
 		const effectiveFastMode =
@@ -288,7 +289,7 @@ export class CodexAppServerManager implements SessionManager {
 			resolvedAdditionalDirectories,
 		);
 		const isCompactCommand = prompt.trim() === "/compact";
-		const input = buildTurnInput(promptWithContext);
+		const input = buildTurnInput(promptWithContext, images);
 		const turnStartParams: Record<string, unknown> = {
 			threadId: ctx.providerThreadId,
 			input,
@@ -729,16 +730,37 @@ export class CodexAppServerManager implements SessionManager {
 		sessionId: string,
 		prompt: string,
 		files: readonly string[],
+		// Codex's `turn/steer` RPC forwards text only; the SDK has no
+		// hook to attach images mid-turn. We still carry `images` on the
+		// synthetic `user_prompt` event below so the persisted shape
+		// matches the optimistic render — the badges remain visible on
+		// reload — but the model itself never sees the bytes. The
+		// frontend should warn the user before they steer with images
+		// attached on a Codex session.
+		images: readonly string[],
 	): Promise<boolean> {
 		const ctx = this.sessions.get(sessionId);
 		if (!ctx?.providerThreadId || !ctx.activeTurnId) {
 			return false;
+		}
+		if (images.length > 0) {
+			// `info` rather than a richer log level — the sidecar's
+			// `Logger` only exposes debug/info/error. Surface the
+			// limitation prominently so the user can correlate "Codex
+			// didn't see my image" with this line in the JSONL log.
+			logger.info(
+				`steer ${sessionId}: ${images.length} image(s) dropped (codex turn/steer is text-only)`,
+				{
+					note: "images are persisted to the DB so the bubble keeps its badge after reload, but the model itself does not see them",
+				},
+			);
 		}
 		logger.info(`steer ${sessionId}`, {
 			threadId: ctx.providerThreadId,
 			turnId: ctx.activeTurnId,
 			preview: prompt.slice(0, 60),
 			fileCount: files.length,
+			imageCount: images.length,
 		});
 
 		let releaseGate: () => void = () => {};
@@ -761,14 +783,19 @@ export class CodexAppServerManager implements SessionManager {
 
 			// Provider accepted. Emit the synthetic event BEFORE releasing
 			// the gate so queued notifications land after it in FIFO.
+			// `images` rides on the event purely for persistence/reload
+			// fidelity (see the steer() doc above) — Codex's turn/steer
+			// already returned without seeing them.
 			if (ctx.activeEmitter && ctx.activeRequestId) {
 				const event: {
 					type: "user_prompt";
 					text: string;
 					steer: true;
 					files?: string[];
+					images?: string[];
 				} = { type: "user_prompt", text: prompt, steer: true };
 				if (files.length > 0) event.files = [...files];
+				if (images.length > 0) event.images = [...images];
 				ctx.activeEmitter.passthrough(ctx.activeRequestId, event);
 			}
 			return true;
@@ -976,8 +1003,11 @@ function flattenNotification(
 	};
 }
 
-function buildTurnInput(prompt: string): Array<Record<string, unknown>> {
-	const { text, imagePaths } = parseImageRefs(prompt);
+function buildTurnInput(
+	prompt: string,
+	images: readonly string[],
+): Array<Record<string, unknown>> {
+	const { text, imagePaths } = parseImageRefs(prompt, images);
 	const parts: Array<Record<string, unknown>> = [];
 	if (text) {
 		parts.push({ type: "text", text, text_elements: [] });

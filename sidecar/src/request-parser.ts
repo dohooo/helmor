@@ -131,6 +131,11 @@ export function parseSendMessageParams(
 			params,
 			"additionalDirectories",
 		),
+		// Always normalize to an array. Symmetric with
+		// `parseSteerSessionParams` so neither path needs to disambiguate
+		// "field absent" vs "no images" — both mean `[]`. The structured
+		// list is the single source of truth (see `parseImageRefs`).
+		images: parseOptionalStringArray(params, "images") ?? [],
 	};
 }
 
@@ -200,6 +205,7 @@ export interface SteerSessionParams {
 	readonly sessionId: string;
 	readonly prompt: string;
 	readonly files: readonly string[];
+	readonly images: readonly string[];
 }
 
 export function parseSteerSessionParams(
@@ -209,10 +215,15 @@ export function parseSteerSessionParams(
 	const files: string[] = Array.isArray(rawFiles)
 		? rawFiles.filter((f): f is string => typeof f === "string")
 		: [];
+	const rawImages = params.images;
+	const images: string[] = Array.isArray(rawImages)
+		? rawImages.filter((i): i is string => typeof i === "string")
+		: [];
 	return {
 		sessionId: requireString(params, "sessionId"),
 		prompt: requireString(params, "prompt"),
 		files,
+		images,
 	};
 }
 
