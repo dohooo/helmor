@@ -14,11 +14,13 @@ export function GithubIdentityGate({
 	onConnectGithub,
 	onCopyGithubCode,
 	onCancelGithubConnect,
+	onSkip,
 }: {
 	identityState: GithubIdentityState;
 	onConnectGithub: () => void;
 	onCopyGithubCode: (userCode: string) => Promise<boolean>;
 	onCancelGithubConnect: () => void;
+	onSkip: () => void;
 }) {
 	const [codeCopied, setCodeCopied] = useState(false);
 
@@ -133,7 +135,7 @@ export function GithubIdentityGate({
 							Restoring your last session
 						</div>
 					) : (
-						<div className="mt-10 flex justify-center">
+						<div className="mt-10 flex flex-col items-center gap-3">
 							<Button
 								onClick={onConnectGithub}
 								size="lg"
@@ -143,6 +145,9 @@ export function GithubIdentityGate({
 								{identityState.status === "error"
 									? "Retry with GitHub"
 									: "Continue with GitHub"}
+							</Button>
+							<Button variant="ghost" size="sm" onClick={onSkip}>
+								Skip — Work locally
 							</Button>
 						</div>
 					)}

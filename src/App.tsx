@@ -345,6 +345,7 @@ function AppShell({
 }) {
 	useZoom();
 	const queryClient = useQueryClient();
+	const { settings: appSettings, updateSettings } = useSettings();
 	const workspaceSelectionRequestRef = useRef(0);
 	const sessionSelectionRequestRef = useRef(0);
 	const startupPrefetchedWorkspaceRef = useRef<string | null>(null);
@@ -2163,12 +2164,19 @@ function AppShell({
 		);
 	}, []);
 
+	const handleSkipGithubAuth = useCallback(() => {
+		void updateSettings({ requireGithubAuth: false });
+	}, [updateSettings]);
+
+	const shouldShowGithubGate =
+		appSettings.requireGithubAuth && !isIdentityConnected;
+
 	return (
 		<TooltipProvider delayDuration={0}>
 			<WorkspaceToastProvider value={pushWorkspaceToast}>
 				<SendingSessionsProvider value={sendingSessionIds}>
 					<ComposerInsertProvider value={handleInsertIntoComposer}>
-						{!isIdentityConnected ? (
+						{shouldShowGithubGate ? (
 							<GithubIdentityGate
 								identityState={githubIdentityState}
 								onConnectGithub={() => {
@@ -2178,6 +2186,7 @@ function AppShell({
 									handleCopyGithubDeviceCode(userCode)
 								}
 								onCancelGithubConnect={handleCancelGithubIdentityConnect}
+								onSkip={handleSkipGithubAuth}
 							/>
 						) : (
 							<main

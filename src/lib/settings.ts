@@ -38,6 +38,8 @@ export type AppSettings = {
 	alwaysShowContextUsage: boolean;
 	showUsageStats: boolean;
 	onboardingCompleted: boolean;
+	/** Require GitHub authentication. When false, user can work with local git repos without GitHub. */
+	requireGithubAuth: boolean;
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
 };
@@ -65,6 +67,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	alwaysShowContextUsage: true,
 	showUsageStats: true,
 	onboardingCompleted: false,
+	requireGithubAuth: true,
 	shortcuts: {},
 	claudeCustomProviders: {
 		builtinProviderApiKeys: {},
@@ -92,6 +95,7 @@ const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	alwaysShowContextUsage: "app.always_show_context_usage",
 	showUsageStats: "app.show_usage_stats",
 	onboardingCompleted: "app.onboarding_completed",
+	requireGithubAuth: "app.require_github_auth",
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
 };
@@ -199,6 +203,10 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.onboardingCompleted] !== undefined
 					? raw[SETTINGS_KEY_MAP.onboardingCompleted] === "true"
 					: DEFAULT_SETTINGS.onboardingCompleted,
+			requireGithubAuth:
+				raw[SETTINGS_KEY_MAP.requireGithubAuth] !== undefined
+					? raw[SETTINGS_KEY_MAP.requireGithubAuth] === "true"
+					: DEFAULT_SETTINGS.requireGithubAuth,
 			shortcuts: parseShortcutOverrides(raw[SETTINGS_KEY_MAP.shortcuts]),
 			claudeCustomProviders: parseClaudeCustomProviderSettings(
 				raw[SETTINGS_KEY_MAP.claudeCustomProviders],
