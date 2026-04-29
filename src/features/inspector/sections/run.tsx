@@ -1,5 +1,12 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ExternalLink, Play, RotateCcw, Settings2, Square } from "lucide-react";
+import {
+	ExternalLink,
+	Play,
+	RotateCcw,
+	Settings2,
+	Square,
+	SquareTerminal,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	type TerminalHandle,
@@ -27,6 +34,7 @@ import {
 	TRUNCATION_NOTICE,
 	writeStdin,
 } from "../script-store";
+import { ScriptEmptyState, ScriptPanelFrame } from "./script-panel";
 
 type RunTabProps = {
 	repoId: string | null;
@@ -248,18 +256,24 @@ export function RunTab({
 		>
 			{hasRun ? (
 				<>
-					<div className="min-h-0 flex-1">
+					<ScriptPanelFrame
+						title="Run"
+						subtitle="Development command"
+						status={status}
+						command={runScript}
+					>
 						<TerminalOutput
 							terminalRef={termRef}
 							className="h-full"
+							padding="10px 2px 12px 12px"
 							onData={handleData}
 							onResize={handleResize}
 						/>
-					</div>
+					</ScriptPanelFrame>
 
 					{isZoomPresented && (status === "running" || status === "exited") && (
 						<div
-							className="absolute bottom-3 right-4"
+							className="absolute right-3 bottom-3"
 							style={{
 								opacity: isHoverExpanded ? 1 : 0,
 								pointerEvents: isHoverExpanded ? "auto" : "none",
@@ -269,7 +283,7 @@ export function RunTab({
 							<Button
 								variant={status === "running" ? "destructive" : "secondary"}
 								size="sm"
-								className="text-[12px] shadow-sm backdrop-blur-sm transition-none"
+								className="h-8 gap-1.5 border border-border/50 bg-background/80 text-[12px] shadow-sm backdrop-blur-sm transition-none"
 								onClick={status === "running" ? handleStop : handleRun}
 								disabled={status === "exited" && !hasScript}
 							>
@@ -294,44 +308,47 @@ export function RunTab({
 					)}
 				</>
 			) : !hasScript ? (
-				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-					<Button
-						variant="outline"
-						size="sm"
-						className="gap-1.5 text-[12px]"
-						onClick={onOpenSettings}
-					>
-						<Settings2 className="size-3.5" strokeWidth={1.8} />
-						Add run script
-					</Button>
-					<p className="text-[12px] text-muted-foreground/70">
-						Run tests or a development server to test changes in this workspace.
-					</p>
-				</div>
+				<ScriptEmptyState
+					icon={Settings2}
+					eyebrow="Run"
+					title="No run script configured"
+					description="Add a command for tests, a dev server, or any repeatable workspace check."
+					action={
+						<Button
+							variant="outline"
+							size="sm"
+							className="h-8 gap-1.5 text-[12px]"
+							onClick={onOpenSettings}
+						>
+							<Settings2 className="size-3.5" strokeWidth={1.8} />
+							Add run script
+						</Button>
+					}
+				/>
 			) : (
-				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-					<p className="text-[13px] text-muted-foreground">
-						No run script output
-					</p>
-					<p className="text-[12px] text-muted-foreground/70">
-						Run script output will appear here after running.
-					</p>
-					<Button
-						variant="outline"
-						size="sm"
-						className="mt-1 gap-2 text-[12px]"
-						onClick={handleRun}
-					>
-						<Play className="size-3" strokeWidth={2} />
-						Run
-						{runShortcut ? (
-							<InlineShortcutDisplay
-								hotkey={runShortcut}
-								className="text-muted-foreground"
-							/>
-						) : null}
-					</Button>
-				</div>
+				<ScriptEmptyState
+					icon={SquareTerminal}
+					eyebrow="Ready"
+					title="No run script output"
+					description="Start the run script to stream command output and detect local dev server URLs."
+					action={
+						<Button
+							variant="outline"
+							size="sm"
+							className="h-8 gap-2 text-[12px]"
+							onClick={handleRun}
+						>
+							<Play className="size-3" strokeWidth={2} />
+							Run
+							{runShortcut ? (
+								<InlineShortcutDisplay
+									hotkey={runShortcut}
+									className="text-muted-foreground"
+								/>
+							) : null}
+						</Button>
+					}
+				/>
 			)}
 		</div>
 	);

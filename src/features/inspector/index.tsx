@@ -437,12 +437,14 @@ export function WorkspaceInspectorSidebar({
 					onStatusChange={setRunStatus}
 					onUrlsChange={setRunUrls}
 				/>
-				{terminalInstances.map((instance) => (
+				{terminalInstances.map((instance, index) => (
 					<TerminalInstancePanel
 						key={instance.id}
 						repoId={repoId ?? null}
 						workspaceId={workspaceId ?? null}
 						instance={instance}
+						index={index}
+						total={terminalInstances.length}
 						isActive={activeTab === instance.id}
 					/>
 				))}

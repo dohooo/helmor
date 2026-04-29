@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Play, RotateCcw, Settings2, Square } from "lucide-react";
+import { Play, RotateCcw, Settings2, Square, Wrench } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	type TerminalHandle,
@@ -20,6 +20,7 @@ import {
 	TRUNCATION_NOTICE,
 	writeStdin,
 } from "../script-store";
+import { ScriptEmptyState, ScriptPanelFrame } from "./script-panel";
 
 type SetupTabProps = {
 	repoId: string | null;
@@ -127,18 +128,24 @@ export function SetupTab({
 		>
 			{hasRun ? (
 				<>
-					<div className="min-h-0 flex-1">
+					<ScriptPanelFrame
+						title="Setup"
+						subtitle="Workspace preparation"
+						status={status}
+						command={setupScript}
+					>
 						<TerminalOutput
 							terminalRef={termRef}
 							className="h-full"
+							padding="10px 2px 12px 12px"
 							onData={handleData}
 							onResize={handleResize}
 						/>
-					</div>
+					</ScriptPanelFrame>
 
 					{isZoomPresented && (status === "running" || status === "exited") && (
 						<div
-							className="absolute bottom-3 right-4"
+							className="absolute right-3 bottom-3"
 							style={{
 								opacity: isHoverExpanded ? 1 : 0,
 								pointerEvents: isHoverExpanded ? "auto" : "none",
@@ -148,7 +155,7 @@ export function SetupTab({
 							<Button
 								variant={status === "running" ? "destructive" : "secondary"}
 								size="sm"
-								className="text-[12px] shadow-sm backdrop-blur-sm transition-none"
+								className="h-8 gap-1.5 border border-border/50 bg-background/80 text-[12px] shadow-sm backdrop-blur-sm transition-none"
 								onClick={status === "running" ? handleStop : handleRun}
 								disabled={status === "exited" && !hasScript}
 							>
@@ -163,41 +170,41 @@ export function SetupTab({
 					)}
 				</>
 			) : !hasScript ? (
-				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-					<p className="text-[13px] font-medium text-muted-foreground">
-						No setup script configured
-					</p>
-					<p className="text-[12px] text-muted-foreground/70">
-						Add a setup script in repository settings to run it here.
-					</p>
-					<Button
-						variant="outline"
-						size="sm"
-						className="mt-1 gap-1.5 text-[12px]"
-						onClick={onOpenSettings}
-					>
-						<Settings2 className="size-3.5" strokeWidth={1.8} />
-						Open settings
-					</Button>
-				</div>
+				<ScriptEmptyState
+					icon={Settings2}
+					eyebrow="Setup"
+					title="No setup script configured"
+					description="Add a setup script in repository settings to prepare this workspace from the inspector."
+					action={
+						<Button
+							variant="outline"
+							size="sm"
+							className="h-8 gap-1.5 text-[12px]"
+							onClick={onOpenSettings}
+						>
+							<Settings2 className="size-3.5" strokeWidth={1.8} />
+							Open settings
+						</Button>
+					}
+				/>
 			) : (
-				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-					<p className="text-[13px] text-muted-foreground">
-						No setup script output
-					</p>
-					<p className="text-[12px] text-muted-foreground/70">
-						Setup script output will appear here after running setup.
-					</p>
-					<Button
-						variant="outline"
-						size="sm"
-						className="mt-1 gap-1.5 text-[12px]"
-						onClick={handleRun}
-					>
-						<Play className="size-3" strokeWidth={2} />
-						Run setup
-					</Button>
-				</div>
+				<ScriptEmptyState
+					icon={Wrench}
+					eyebrow="Ready"
+					title="No setup script output"
+					description="Run setup once to install dependencies, generate files, or complete workspace preparation."
+					action={
+						<Button
+							variant="outline"
+							size="sm"
+							className="h-8 gap-1.5 text-[12px]"
+							onClick={handleRun}
+						>
+							<Play className="size-3" strokeWidth={2} />
+							Run setup
+						</Button>
+					}
+				/>
 			)}
 		</div>
 	);

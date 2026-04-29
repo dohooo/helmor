@@ -91,9 +91,7 @@ fn resolve_bundled_agent_paths() -> BundledAgentPaths {
 }
 
 fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledAgentPaths> {
-    let exe_dir = exe.parent()?;
-    let contents_dir = exe_dir.parent()?;
-    let resources_dir = contents_dir.join("Resources");
+    let resources_dir = bundled_resources_dir_for_exe(exe)?;
     let codex_bin_name = if cfg!(windows) { "codex.exe" } else { "codex" };
     let bun_bin_name = if cfg!(windows) { "bun.exe" } else { "bun" };
 
@@ -106,6 +104,26 @@ fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledA
         codex_bin: codex_bin.is_file().then_some(codex_bin),
         bun_bin: bun_bin.is_file().then_some(bun_bin),
     })
+}
+
+fn bundled_resources_dir_for_exe(exe: &std::path::Path) -> Option<PathBuf> {
+    let exe_dir = exe.parent()?;
+
+    #[cfg(target_os = "macos")]
+    {
+        let contents_dir = exe_dir.parent()?;
+        return Some(contents_dir.join("Resources"));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let candidates = [
+            exe_dir.join("resources"),
+            exe_dir.join("Resources"),
+            exe_dir.to_path_buf(),
+        ];
+        candidates.into_iter().find(|path| path.exists())
+    }
 }
 
 impl SidecarProcess {
@@ -131,11 +149,7 @@ impl SidecarProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
 
-        // Put the sidecar in its own process group so SIGTERM/SIGKILL
-        // reaches all child processes (Claude CLI, Codex CLI) instead
-        // of only hitting the Bun parent.
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
+        configure_sidecar_process_group(&mut cmd);
 
         // Pass log config to the sidecar process
         if let Ok(dir) = crate::data_dir::logs_dir() {
@@ -240,14 +254,12 @@ impl SidecarProcess {
         self.child.id()
     }
 
-    /// Force-kill (SIGKILL) the sidecar and its entire process group.
+    /// Force-kill the sidecar and its child process tree.
     /// Last-resort cleanup; the cooperative shutdown ladder lives in
     /// `ManagedSidecar::shutdown`. Kill the whole process group first so
     /// child CLIs don't get reparented to launchd as orphans.
     fn kill(&mut self) {
-        unsafe {
-            libc::kill(-(self.pid() as libc::pid_t), libc::SIGKILL);
-        }
+        force_kill_process_tree(self.pid());
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -270,16 +282,57 @@ impl SidecarProcess {
         }
     }
 
-    /// Send SIGTERM to the sidecar's process group. Targeting the group
-    /// (negative PID) ensures child CLIs spawned by Bun also receive the
-    /// signal.
+    /// Ask the sidecar process tree to terminate.
     fn send_sigterm(&self) {
-        // SAFETY: `pid()` is the live child's PID (== PGID since we set
-        // process_group(0) at spawn). Negative PID targets the whole group.
-        unsafe {
-            libc::kill(-(self.pid() as libc::pid_t), libc::SIGTERM);
-        }
+        terminate_process_tree(self.pid());
     }
+}
+
+#[cfg(unix)]
+fn configure_sidecar_process_group(cmd: &mut Command) {
+    // Put the sidecar in its own process group so signals reach child CLIs
+    // spawned by Bun/agent SDKs instead of only hitting the Bun parent.
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0);
+}
+
+#[cfg(windows)]
+fn configure_sidecar_process_group(_cmd: &mut Command) {}
+
+#[cfg(unix)]
+fn terminate_process_tree(pid: u32) {
+    // SAFETY: `pid` is the live child PID, which is also the process group id
+    // because `configure_sidecar_process_group` called `process_group(0)`.
+    unsafe {
+        libc::kill(-(pid as libc::pid_t), libc::SIGTERM);
+    }
+}
+
+#[cfg(windows)]
+fn terminate_process_tree(pid: u32) {
+    let _ = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+#[cfg(unix)]
+fn force_kill_process_tree(pid: u32) {
+    unsafe {
+        libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+    }
+}
+
+#[cfg(windows)]
+fn force_kill_process_tree(pid: u32) {
+    let _ = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 impl Drop for SidecarProcess {

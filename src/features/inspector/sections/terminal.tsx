@@ -6,11 +6,13 @@ import {
 import {
 	attach,
 	detach,
+	getTerminalDisplayTitle,
 	resize,
 	type TerminalInstance,
 	TRUNCATION_NOTICE,
 	writeStdin,
 } from "../terminal-store";
+import { ScriptPanelFrame } from "./script-panel";
 
 // Global queue serializing xterm mounts one-per-RAF. When a workspace
 // with N terminals re-mounts (e.g. on workspace switch), without this
@@ -50,6 +52,8 @@ type TerminalInstancePanelProps = {
 	repoId: string | null;
 	workspaceId: string | null;
 	instance: TerminalInstance;
+	index?: number;
+	total?: number;
 	isActive: boolean;
 };
 
@@ -58,6 +62,8 @@ export function TerminalInstancePanel({
 	repoId,
 	workspaceId,
 	instance,
+	index = 0,
+	total = 1,
 	isActive,
 }: TerminalInstancePanelProps) {
 	const termRef = useRef<TerminalHandle | null>(null);
@@ -155,12 +161,19 @@ export function TerminalInstancePanel({
 			className="relative flex min-h-0 flex-1 flex-col"
 		>
 			{renderXterm ? (
-				<TerminalOutput
-					terminalRef={termRef}
-					className="h-full"
-					onData={handleData}
-					onResize={handleResize}
-				/>
+				<ScriptPanelFrame
+					title={getTerminalDisplayTitle(index, total)}
+					subtitle="Interactive shell"
+					status="ready"
+				>
+					<TerminalOutput
+						terminalRef={termRef}
+						className="h-full"
+						padding="10px 2px 12px 12px"
+						onData={handleData}
+						onResize={handleResize}
+					/>
+				</ScriptPanelFrame>
 			) : null}
 		</div>
 	);
