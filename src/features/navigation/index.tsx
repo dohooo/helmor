@@ -1,10 +1,13 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
 	Archive,
+	Check,
 	ChevronRight,
 	Folder,
 	FolderPlus,
 	Globe,
+	LayoutList,
+	ListTree,
 	LoaderCircle,
 	Plus,
 } from "lucide-react";
@@ -49,6 +52,17 @@ import { cn } from "@/lib/utils";
 import { WorkspaceAvatar } from "./avatar";
 import { CloneFromUrlDialog } from "./clone-from-url-dialog";
 import {
+	findSelectedRepoSection,
+	groupByRepo,
+	type RepoGroup,
+	repoStatusSectionId,
+} from "./group-by-repo";
+import {
+	readStoredGroupingMode,
+	type SidebarGroupingMode,
+	writeStoredGroupingMode,
+} from "./grouping-mode";
+import {
 	createInitialSectionOpenState,
 	readStoredSectionOpenState,
 	writeStoredSectionOpenState,
@@ -70,8 +84,21 @@ type VirtualItem =
 			groupId: string;
 			group: WorkspaceGroup;
 			canCollapse: boolean;
+			indent?: number;
 	  }
-	| { kind: "row"; groupId: string; row: WorkspaceRow; isArchived: boolean }
+	| {
+			kind: "repo-header";
+			sectionId: string;
+			repo: RepoGroup;
+			canCollapse: boolean;
+	  }
+	| {
+			kind: "row";
+			groupId: string;
+			row: WorkspaceRow;
+			isArchived: boolean;
+			indent?: number;
+	  }
 	| { kind: "group-gap"; size: number }
 	| { kind: "bottom-padding" };
 
@@ -159,6 +186,10 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 }) {
 	const [isRepoPickerOpen, setIsRepoPickerOpen] = useState(false);
 	const [isAddRepositoryMenuOpen, setIsAddRepositoryMenuOpen] = useState(false);
+	const [isGroupingMenuOpen, setIsGroupingMenuOpen] = useState(false);
+	const [groupingMode, setGroupingModeState] = useState<SidebarGroupingMode>(
+		readStoredGroupingMode,
+	);
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
 	const repoCommandListRef = useRef<HTMLDivElement | null>(null);
 	const [sectionOpenState, setSectionOpenState] = useState(() => ({
@@ -166,32 +197,47 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		...readStoredSectionOpenState(),
 	}));
 
+	const setGroupingMode = useCallback((mode: SidebarGroupingMode) => {
+		setGroupingModeState(mode);
+		writeStoredGroupingMode(mode);
+	}, []);
+
+	// ── Re-bucketed view when "by-repo" mode is active ─────────────────
+	const repoView = useMemo(
+		() => (groupingMode === "by-repo" ? groupByRepo(groups) : null),
+		[groupingMode, groups],
+	);
+
 	useEffect(() => {
 		setSectionOpenState((current) => {
-			const next: Record<string, boolean> = {};
+			const next: Record<string, boolean> = { ...current };
 			let changed = false;
 
-			for (const group of groups) {
-				const nextValue = current[group.id] ?? true;
-				next[group.id] = nextValue;
-				if (current[group.id] !== nextValue) {
+			const ensure = (key: string, fallback: boolean) => {
+				if (next[key] === undefined) {
+					next[key] = fallback;
 					changed = true;
+				}
+			};
+
+			for (const group of groups) {
+				ensure(group.id, true);
+			}
+
+			if (repoView) {
+				for (const repo of repoView.repos) {
+					ensure(repo.id, true);
+					for (const statusGroup of repo.statusGroups) {
+						ensure(repoStatusSectionId(repo.repoKey, statusGroup.id), true);
+					}
 				}
 			}
 
-			const archivedValue = current[ARCHIVED_SECTION_ID] ?? false;
-			next[ARCHIVED_SECTION_ID] = archivedValue;
-			if (current[ARCHIVED_SECTION_ID] !== archivedValue) {
-				changed = true;
-			}
-
-			if (Object.keys(current).length !== Object.keys(next).length) {
-				changed = true;
-			}
+			ensure(ARCHIVED_SECTION_ID, false);
 
 			return changed ? next : current;
 		});
-	}, [archivedRows, groups]);
+	}, [archivedRows, groups, repoView]);
 
 	useEffect(() => {
 		writeStoredSectionOpenState(sectionOpenState);
@@ -210,72 +256,161 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			return;
 		}
 
-		const selectedSectionId = findSelectedSectionId(
-			selectedWorkspaceId,
-			groups,
-			archivedRows,
-		);
+		const sectionsToOpen: string[] = [];
 
-		if (!selectedSectionId) {
+		if (repoView) {
+			const match = findSelectedRepoSection(
+				selectedWorkspaceId,
+				repoView.repos,
+			);
+			if (match) {
+				sectionsToOpen.push(match.repoSectionId, match.statusSectionId);
+			}
+		}
+
+		if (sectionsToOpen.length === 0) {
+			const fallbackSectionId = findSelectedSectionId(
+				selectedWorkspaceId,
+				groups,
+				archivedRows,
+			);
+			if (fallbackSectionId) {
+				sectionsToOpen.push(fallbackSectionId);
+			}
+		}
+
+		if (sectionsToOpen.length === 0) {
 			return;
 		}
 
 		lastAutoExpandedIdRef.current = selectedWorkspaceId;
-		setSectionOpenState((current) =>
-			current[selectedSectionId]
-				? current
-				: { ...current, [selectedSectionId]: true },
-		);
-	}, [archivedRows, groups, selectedWorkspaceId]);
+		setSectionOpenState((current) => {
+			let next = current;
+			for (const sectionId of sectionsToOpen) {
+				if (!next[sectionId]) {
+					next = { ...next, [sectionId]: true };
+				}
+			}
+			return next;
+		});
+	}, [archivedRows, groups, repoView, selectedWorkspaceId]);
 
 	// ── Flatten groups into virtual items ──────────────────────────────
 	const flatItems = useMemo(() => {
 		const items: VirtualItem[] = [];
-		const visibleGroups = groups.filter(
-			(g) => g.id !== "pinned" || g.rows.length > 0,
-		);
+		let lastSectionHadRows = false;
 
-		for (let gi = 0; gi < visibleGroups.length; gi++) {
-			const group = visibleGroups[gi];
-			if (gi > 0) {
-				const previousGroup = visibleGroups[gi - 1];
+		const pushGap = (nextHasRows: boolean) => {
+			items.push({
+				kind: "group-gap",
+				size: getGroupGapSize(lastSectionHadRows, nextHasRows),
+			});
+		};
+
+		if (repoView) {
+			// 1. Pinned group always renders at the top when non-empty.
+			if (repoView.pinned && repoView.pinned.rows.length > 0) {
+				const pinnedGroup = repoView.pinned;
 				items.push({
-					kind: "group-gap",
-					size: getGroupGapSize(
-						previousGroup.rows.length > 0,
-						group.rows.length > 0,
-					),
+					kind: "group-header",
+					groupId: pinnedGroup.id,
+					group: pinnedGroup,
+					canCollapse: true,
 				});
+				if (sectionOpenState[pinnedGroup.id] !== false) {
+					for (const row of pinnedGroup.rows) {
+						items.push({
+							kind: "row",
+							groupId: pinnedGroup.id,
+							row,
+							isArchived: false,
+						});
+					}
+				}
+				lastSectionHadRows = pinnedGroup.rows.length > 0;
 			}
 
-			const canCollapse = group.rows.length > 0;
-			items.push({
-				kind: "group-header",
-				groupId: group.id,
-				group,
-				canCollapse,
-			});
-
-			if (sectionOpenState[group.id] !== false && group.rows.length > 0) {
-				for (const row of group.rows) {
-					items.push({
-						kind: "row",
-						groupId: group.id,
-						row,
-						isArchived: false,
-					});
+			// 2. Each repository as a top-level section, with status sub-groups.
+			for (const repo of repoView.repos) {
+				if (items.length > 0) {
+					pushGap(repo.totalCount > 0);
 				}
+				items.push({
+					kind: "repo-header",
+					sectionId: repo.id,
+					repo,
+					canCollapse: repo.totalCount > 0,
+				});
+
+				const repoOpen = sectionOpenState[repo.id] !== false;
+				if (repoOpen) {
+					for (const statusGroup of repo.statusGroups) {
+						if (statusGroup.rows.length === 0) {
+							continue;
+						}
+						const nestedSectionId = repoStatusSectionId(
+							repo.repoKey,
+							statusGroup.id,
+						);
+						items.push({
+							kind: "group-header",
+							groupId: nestedSectionId,
+							group: statusGroup,
+							canCollapse: true,
+							indent: 1,
+						});
+						if (sectionOpenState[nestedSectionId] !== false) {
+							for (const row of statusGroup.rows) {
+								items.push({
+									kind: "row",
+									groupId: nestedSectionId,
+									row,
+									isArchived: false,
+									indent: 1,
+								});
+							}
+						}
+					}
+				}
+				lastSectionHadRows = repo.totalCount > 0;
+			}
+		} else {
+			const visibleGroups = groups.filter(
+				(g) => g.id !== "pinned" || g.rows.length > 0,
+			);
+
+			for (let gi = 0; gi < visibleGroups.length; gi++) {
+				const group = visibleGroups[gi];
+				if (gi > 0) {
+					pushGap(group.rows.length > 0);
+				}
+
+				const canCollapse = group.rows.length > 0;
+				items.push({
+					kind: "group-header",
+					groupId: group.id,
+					group,
+					canCollapse,
+				});
+
+				if (sectionOpenState[group.id] !== false && group.rows.length > 0) {
+					for (const row of group.rows) {
+						items.push({
+							kind: "row",
+							groupId: group.id,
+							row,
+							isArchived: false,
+						});
+					}
+				}
+				lastSectionHadRows = group.rows.length > 0;
 			}
 		}
 
-		// Archived section
-		const previousGroup = visibleGroups.at(-1);
+		// Archived section (always at the bottom regardless of mode)
 		items.push({
 			kind: "group-gap",
-			size: getGroupGapSize(
-				(previousGroup?.rows.length ?? 0) > 0,
-				archivedRows.length > 0,
-			),
+			size: getGroupGapSize(lastSectionHadRows, archivedRows.length > 0),
 		});
 		items.push({
 			kind: "group-header",
@@ -302,7 +437,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 		items.push({ kind: "bottom-padding" });
 		return items;
-	}, [groups, archivedRows, sectionOpenState]);
+	}, [groups, archivedRows, sectionOpenState, repoView]);
 
 	// ── Virtualizer ───────────────────────────────────────────────────
 	const virtualizer = useVirtualizer({
@@ -313,6 +448,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			switch (item.kind) {
 				case "group-header":
 					return getGroupHeaderHeight(item.group.rows.length > 0);
+				case "repo-header":
+					return HEADER_HEIGHT;
 				case "row":
 					return ROW_HEIGHT;
 				case "group-gap":
@@ -326,6 +463,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			switch (item.kind) {
 				case "group-header":
 					return `header-${item.groupId}`;
+				case "repo-header":
+					return `repo-header-${item.sectionId}`;
 				case "row":
 					return `row-${item.groupId}-${item.row.id}`;
 				case "group-gap":
@@ -405,13 +544,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				return null;
 			}
 
-			if (item.kind === "group-header") {
-				const isOpen =
-					item.groupId === ARCHIVED_SECTION_ID
-						? (sectionOpenState[item.groupId] ?? false)
-						: (sectionOpenState[item.groupId] ?? true);
-				const isArchived = item.groupId === ARCHIVED_SECTION_ID;
-				const isEmptyGroup = item.group.rows.length === 0;
+			if (item.kind === "repo-header") {
+				const isOpen = sectionOpenState[item.sectionId] ?? true;
+				const isEmptyGroup = item.repo.totalCount === 0;
 
 				return (
 					<button
@@ -419,6 +554,63 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						className={cn(
 							"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
 							"py-1",
+							item.canCollapse ? "cursor-pointer" : "cursor-default",
+						)}
+						data-empty-group={isEmptyGroup ? "true" : "false"}
+						disabled={!item.canCollapse}
+						onClick={() => toggleSection(item.sectionId)}
+					>
+						<span className="flex min-w-0 items-center gap-2">
+							<WorkspaceAvatar
+								repoIconSrc={item.repo.repoIconSrc}
+								repoInitials={item.repo.repoInitials}
+								repoName={item.repo.label}
+								title={item.repo.label}
+								className="size-[14px] rounded-[4px]"
+								fallbackClassName="text-[7px]"
+							/>
+							<span className="truncate">{item.repo.label}</span>
+						</span>
+
+						{item.repo.totalCount > 0 ? (
+							<span className="relative flex h-5 min-w-5 items-center justify-center">
+								<Badge
+									variant="secondary"
+									className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none transition-opacity group-hover/trigger:opacity-0"
+								>
+									{item.repo.totalCount}
+								</Badge>
+								<ChevronRight
+									className={cn(
+										"absolute left-1/2 top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 text-muted-foreground opacity-0 transition-all group-hover/trigger:opacity-100",
+										isOpen && "rotate-90",
+									)}
+									strokeWidth={2}
+								/>
+							</span>
+						) : null}
+					</button>
+				);
+			}
+
+			if (item.kind === "group-header") {
+				const isOpen =
+					item.groupId === ARCHIVED_SECTION_ID
+						? (sectionOpenState[item.groupId] ?? false)
+						: (sectionOpenState[item.groupId] ?? true);
+				const isArchived = item.groupId === ARCHIVED_SECTION_ID;
+				const isEmptyGroup = item.group.rows.length === 0;
+				const isNested = Boolean(item.indent && item.indent > 0);
+
+				return (
+					<button
+						type="button"
+						className={cn(
+							"group/trigger flex select-none items-center justify-between rounded-lg px-2 text-[13px] tracking-[-0.01em] text-foreground hover:bg-accent/60",
+							"py-1",
+							isNested
+								? "ml-4 w-[calc(100%-1rem)] font-medium text-[12px]"
+								: "w-full font-semibold",
 							item.canCollapse ? "cursor-pointer" : "cursor-default",
 						)}
 						data-empty-group={isEmptyGroup ? "true" : "false"}
@@ -459,8 +651,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			}
 
 			// kind === "row"
+			const rowIndentClass = item.indent && item.indent > 0 ? "pl-6" : "pl-2";
 			return (
-				<div className="pl-2">
+				<div className={rowIndentClass}>
 					<WorkspaceRowItem
 						row={item.row}
 						selected={selectedWorkspaceId === item.row.id}
@@ -539,6 +732,72 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				</h2>
 
 				<div className="flex items-center gap-1 text-muted-foreground">
+					<DropdownMenu
+						open={isGroupingMenuOpen}
+						onOpenChange={setIsGroupingMenuOpen}
+					>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<DropdownMenuTrigger asChild>
+									<Button
+										type="button"
+										aria-label="Change grouping"
+										variant="ghost"
+										size="icon-xs"
+										className="text-muted-foreground"
+									>
+										{groupingMode === "by-repo" ? (
+											<ListTree className="size-4" strokeWidth={2} />
+										) : (
+											<LayoutList className="size-4" strokeWidth={2} />
+										)}
+									</Button>
+								</DropdownMenuTrigger>
+							</TooltipTrigger>
+							<TooltipContent
+								side="top"
+								sideOffset={4}
+								className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+							>
+								<span>
+									{groupingMode === "by-repo"
+										? "Grouped by repository"
+										: "Grouped by status"}
+								</span>
+							</TooltipContent>
+						</Tooltip>
+						<DropdownMenuContent align="end" className="min-w-44">
+							<DropdownMenuItem
+								onSelect={() => {
+									setGroupingMode("by-status");
+								}}
+							>
+								<Check
+									className={cn(
+										"size-4",
+										groupingMode === "by-status" ? "opacity-100" : "opacity-0",
+									)}
+									strokeWidth={2.4}
+								/>
+								<span>Group by status</span>
+							</DropdownMenuItem>
+							<DropdownMenuItem
+								onSelect={() => {
+									setGroupingMode("by-repo");
+								}}
+							>
+								<Check
+									className={cn(
+										"size-4",
+										groupingMode === "by-repo" ? "opacity-100" : "opacity-0",
+									)}
+									strokeWidth={2.4}
+								/>
+								<span>Group by repository</span>
+							</DropdownMenuItem>
+						</DropdownMenuContent>
+					</DropdownMenu>
+
 					<DropdownMenu
 						open={isAddRepositoryMenuOpen}
 						onOpenChange={setIsAddRepositoryMenuOpen}
