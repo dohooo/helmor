@@ -42,6 +42,7 @@ tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
 notify = "7"
 notify-debouncer-full = "0.4"
+toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "chrono"] }
 url = "2"

@@ -46,6 +46,10 @@ pub struct DataInfo {
 pub struct AgentLoginStatus {
     pub claude: bool,
     pub codex: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_auth_method: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -387,7 +391,9 @@ fn helmor_skills_status() -> anyhow::Result<HelmorSkillsStatus> {
     Ok(helmor_skills_status_for_agents(&ready_skill_agents(
         &AgentLoginStatus {
             claude: claude_login_ready(),
-            codex: codex_login_ready(),
+            codex: codex_auth_status().ready,
+            codex_provider: None,
+            codex_auth_method: None,
         },
     )))
 }
@@ -442,7 +448,9 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
     run_blocking(|| {
         let login = AgentLoginStatus {
             claude: claude_login_ready(),
-            codex: codex_login_ready(),
+            codex: codex_auth_status().ready,
+            codex_provider: None,
+            codex_auth_method: None,
         };
         let agents = ready_skill_agents(&login);
         let command = helmor_skills_install_command(&agents);
@@ -567,9 +575,12 @@ pub async fn open_agent_login_terminal(provider: String) -> CmdResult<()> {
 #[tauri::command]
 pub async fn get_agent_login_status() -> CmdResult<AgentLoginStatus> {
     run_blocking(|| {
+        let codex = codex_auth_status();
         Ok(AgentLoginStatus {
             claude: claude_login_ready(),
-            codex: codex_login_ready(),
+            codex: codex.ready,
+            codex_provider: codex.provider,
+            codex_auth_method: codex.auth_method.map(str::to_string),
         })
     })
     .await
@@ -592,6 +603,37 @@ fn claude_login_ready() -> bool {
             tracing::debug!("Claude auth status unavailable: {error}");
             false
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodexAuthStatus {
+    ready: bool,
+    provider: Option<String>,
+    auth_method: Option<&'static str>,
+}
+
+fn codex_auth_status() -> CodexAuthStatus {
+    if codex_login_ready() {
+        return CodexAuthStatus {
+            ready: true,
+            provider: None,
+            auth_method: Some("login"),
+        };
+    }
+
+    if let Some(provider) = codex_api_key_provider_ready() {
+        return CodexAuthStatus {
+            ready: true,
+            provider: Some(provider),
+            auth_method: Some("apiKey"),
+        };
+    }
+
+    CodexAuthStatus {
+        ready: false,
+        provider: None,
+        auth_method: None,
     }
 }
 
@@ -629,6 +671,52 @@ fn parse_claude_login_status(stdout: &[u8]) -> bool {
 fn parse_codex_login_status(output: &str) -> bool {
     let normalized = output.to_ascii_lowercase();
     normalized.contains("logged in") && !normalized.contains("not logged in")
+}
+
+fn codex_api_key_provider_ready() -> Option<String> {
+    let config = std::fs::read_to_string(codex_config_path()).ok()?;
+    let provider = codex_api_key_provider_from_config(&config)?;
+    env_var_is_present(&provider.env_key).then_some(provider.name)
+}
+
+fn codex_config_path() -> PathBuf {
+    std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".codex"))
+        .join("config.toml")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodexApiKeyProvider {
+    name: String,
+    env_key: String,
+}
+
+fn codex_api_key_provider_from_config(config: &str) -> Option<CodexApiKeyProvider> {
+    let value = toml::from_str::<toml::Value>(config).ok()?;
+    let provider = value
+        .get("model_provider")
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty())?;
+    let env_key = value
+        .get("model_providers")
+        .and_then(|providers| providers.get(provider))
+        .and_then(|provider_config| provider_config.get("env_key"))
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|env_key| !env_key.is_empty())?;
+
+    Some(CodexApiKeyProvider {
+        name: provider.to_string(),
+        env_key: env_key.to_string(),
+    })
+}
+
+fn env_var_is_present(key: &str) -> bool {
+    std::env::var_os(key)
+        .map(|value| !value.to_string_lossy().trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn agent_login_command(provider: &str) -> anyhow::Result<&'static str> {
@@ -1187,6 +1275,58 @@ mod tests {
             applescript_shell_arg(std::path::Path::new("/foo\"bar\\baz")),
             r#"'/foo\"bar\\baz'"#
         );
+    }
+
+    #[test]
+    fn codex_config_provider_reads_active_azure_env_key() {
+        let provider = codex_api_key_provider_from_config(
+            r#"
+model = "gpt-5.5"
+model_provider = "azure"
+
+[model_providers.azure]
+name = "Azure"
+base_url = "https://example.openai.azure.com/openai/v1"
+env_key = "AZURE_OPENAI_API_KEY"
+wire_api = "responses"
+"#,
+        );
+
+        assert_eq!(
+            provider,
+            Some(CodexApiKeyProvider {
+                name: "azure".to_string(),
+                env_key: "AZURE_OPENAI_API_KEY".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn codex_config_provider_ignores_missing_provider_section() {
+        let provider = codex_api_key_provider_from_config(
+            r#"
+model_provider = "azure"
+
+[model_providers.openai]
+env_key = "OPENAI_API_KEY"
+"#,
+        );
+
+        assert_eq!(provider, None);
+    }
+
+    #[test]
+    fn codex_config_provider_ignores_provider_without_env_key() {
+        let provider = codex_api_key_provider_from_config(
+            r#"
+model_provider = "azure"
+
+[model_providers.azure]
+base_url = "https://example.openai.azure.com/openai/v1"
+"#,
+        );
+
+        assert_eq!(provider, None);
     }
 
     #[cfg(target_os = "macos")]

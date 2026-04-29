@@ -799,6 +799,8 @@ export type AgentLoginProvider = "claude" | "codex";
 export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
+	codexProvider?: string | null;
+	codexAuthMethod?: "login" | "apiKey" | string | null;
 };
 
 export async function getAgentLoginStatus(): Promise<AgentLoginStatusResult> {
