@@ -1240,4 +1240,47 @@ mod tests {
         assert_eq!(reset.branch_prefix_type.as_deref(), Some("custom"));
         assert_eq!(reset.branch_prefix_custom.as_deref(), Some("team/"));
     }
+
+    #[test]
+    fn repo_preferences_round_trips_review_pr() {
+        let env = crate::testkit::TestEnv::new("repos-prefs-review-pr");
+        let repo = ResolvedRepositoryInput {
+            name: "review-pr-repo".to_string(),
+            normalized_root_path: env.root.join("review-repo").display().to_string(),
+            remote: None,
+            remote_url: None,
+            default_branch: "main".to_string(),
+            forge_provider: None,
+        };
+        let repo_id = insert_repository(&repo).unwrap();
+
+        // Default load returns None for the new field.
+        let initial = load_repo_preferences(&repo_id).unwrap();
+        assert_eq!(initial.review_pr, None);
+
+        // Round-trip a non-empty review prompt.
+        let prefs = RepoPreferences {
+            review_pr: Some("Focus on SQL injections and missing tests.".to_string()),
+            ..RepoPreferences::default()
+        };
+        update_repo_preferences(&repo_id, &prefs).unwrap();
+
+        let loaded = load_repo_preferences(&repo_id).unwrap();
+        assert_eq!(
+            loaded.review_pr.as_deref(),
+            Some("Focus on SQL injections and missing tests.")
+        );
+        // Other prompt slots remain untouched.
+        assert_eq!(loaded.create_pr, None);
+        assert_eq!(loaded.fix_errors, None);
+
+        // Whitespace-only override is normalized back to None.
+        let blanked = RepoPreferences {
+            review_pr: Some("   ".to_string()),
+            ..RepoPreferences::default()
+        };
+        update_repo_preferences(&repo_id, &blanked).unwrap();
+        let cleared = load_repo_preferences(&repo_id).unwrap();
+        assert_eq!(cleared.review_pr, None);
+    }
 }
