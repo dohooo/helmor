@@ -524,6 +524,7 @@ pub struct RepoScripts {
 #[serde(rename_all = "camelCase")]
 pub struct RepoPreferences {
     pub create_pr: Option<String>,
+    pub review_pr: Option<String>,
     pub fix_errors: Option<String>,
     pub resolve_conflicts: Option<String>,
     pub branch_rename: Option<String>,
@@ -704,6 +705,7 @@ pub fn load_repo_preferences(repo_id: &str) -> Result<RepoPreferences> {
             r#"
             SELECT
               custom_prompt_create_pr,
+              custom_prompt_review_pr,
               custom_prompt_fix_errors,
               custom_prompt_resolve_merge_conflicts,
               custom_prompt_rename_branch,
@@ -718,10 +720,11 @@ pub fn load_repo_preferences(repo_id: &str) -> Result<RepoPreferences> {
         .query_row([repo_id], |row| {
             Ok(RepoPreferences {
                 create_pr: row.get(0)?,
-                fix_errors: row.get(1)?,
-                resolve_conflicts: row.get(2)?,
-                branch_rename: row.get(3)?,
-                general: row.get(4)?,
+                review_pr: row.get(1)?,
+                fix_errors: row.get(2)?,
+                resolve_conflicts: row.get(3)?,
+                branch_rename: row.get(4)?,
+                general: row.get(5)?,
             })
         })
         .with_context(|| format!("Repository not found: {repo_id}"))
@@ -735,15 +738,17 @@ pub fn update_repo_preferences(repo_id: &str, preferences: &RepoPreferences) -> 
             UPDATE repos
             SET
               custom_prompt_create_pr = ?1,
-              custom_prompt_fix_errors = ?2,
-              custom_prompt_resolve_merge_conflicts = ?3,
-              custom_prompt_rename_branch = ?4,
-              custom_prompt_general = ?5,
+              custom_prompt_review_pr = ?2,
+              custom_prompt_fix_errors = ?3,
+              custom_prompt_resolve_merge_conflicts = ?4,
+              custom_prompt_rename_branch = ?5,
+              custom_prompt_general = ?6,
               updated_at = datetime('now')
-            WHERE id = ?6
+            WHERE id = ?7
             "#,
             rusqlite::params![
                 normalize_repo_preference(preferences.create_pr.as_deref()),
+                normalize_repo_preference(preferences.review_pr.as_deref()),
                 normalize_repo_preference(preferences.fix_errors.as_deref()),
                 normalize_repo_preference(preferences.resolve_conflicts.as_deref()),
                 normalize_repo_preference(preferences.branch_rename.as_deref()),
