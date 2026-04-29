@@ -70,5 +70,16 @@
 		"apiKeyUrl": "https://platform.xiaomimimo.com/#/console/api-keys",
 		"models": [{ "id": "mimo-v2.5-pro", "label": "MiMo V2.5 Pro" }],
 		"icon": "xiaomi"
+	},
+	{
+		"key": "deepseek",
+		"label": "DeepSeek",
+		"baseUrl": "https://api.deepseek.com/anthropic",
+		"apiKeyUrl": "https://platform.deepseek.com/api_keys",
+		"models": [
+			{ "id": "deepseek-v4-pro[1m]", "label": "DeepSeek V4 Pro 1M" },
+			{ "id": "deepseek-v4-flash", "label": "DeepSeek V4 Flash" }
+		],
+		"icon": "deepseek"
 	}
 ]
