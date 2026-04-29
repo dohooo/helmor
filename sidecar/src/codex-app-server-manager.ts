@@ -62,6 +62,19 @@ function isRecoverableResumeError(err: unknown): boolean {
 	return RECOVERABLE_RESUME_SNIPPETS.some((s) => msg.includes(s));
 }
 
+function codexErrorMessage(params: unknown): string {
+	const errObj = deepGet(params, "error");
+	const nested =
+		typeof errObj === "object" && errObj !== null
+			? (errObj as Record<string, unknown>).message
+			: undefined;
+	return typeof nested === "string" ? nested : "Unknown Codex error";
+}
+
+function isTransientReconnectNotice(message: string): boolean {
+	return /^reconnecting\.\.\.\s+\d+\/\d+$/i.test(message.trim());
+}
+
 // ---------------------------------------------------------------------------
 // Per-session context
 // ---------------------------------------------------------------------------
@@ -299,16 +312,17 @@ export class CodexAppServerManager implements SessionManager {
 					await ctx.notificationGate;
 				}
 
-				// Codex sends errors as {method:"error", params:{error:{message:"..."}}}
-				// Extract the nested message and emit a proper error event.
+				// Codex sends errors as {method:"error", params:{error:{message:"..."}}}.
+				// Reconnect progress notices are not terminal: the app-server keeps
+				// the turn alive and may emit more deltas after reconnecting.
 				if (n.method === "error") {
-					const errObj = deepGet(n.params, "error");
-					const nested =
-						typeof errObj === "object" && errObj !== null
-							? (errObj as Record<string, unknown>).message
-							: undefined;
-					const msg =
-						typeof nested === "string" ? nested : "Unknown Codex error";
+					const msg = codexErrorMessage(n.params);
+					if (isTransientReconnectNotice(msg)) {
+						logger.debug(`[${requestId}] codex reconnect notice`, {
+							message: msg,
+						});
+						return;
+					}
 					emitter.error(requestId, msg);
 					ctx.activeTurnId = null;
 					ctx.turnResolve?.();

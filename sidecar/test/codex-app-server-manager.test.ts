@@ -398,6 +398,51 @@ describe("CodexAppServerManager", () => {
 		});
 	});
 
+	test("does not terminate stream for Codex reconnect progress notices", async () => {
+		const manager = new CodexAppServerManager();
+		const events: Array<Record<string, unknown>> = [];
+		const capturingEmitter = createSidecarEmitter((event) => {
+			events.push(event as Record<string, unknown>);
+		});
+
+		serverState.beforeTurnCompleted = () => {
+			serverState.onNotification?.({
+				method: "error",
+				params: { error: { message: "Reconnecting... 1/5" } },
+			});
+			serverState.onNotification?.({
+				method: "item/agentMessage/delta",
+				params: {
+					threadId: "thread-1",
+					turnId: "turn-1",
+					itemId: "msg-1",
+					delta: "still streaming",
+				},
+			});
+		};
+
+		await manager.sendMessage(
+			"REQ-reconnect",
+			{
+				sessionId: "session-reconnect",
+				prompt: "hi",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+			},
+			capturingEmitter,
+		);
+
+		expect(events.map((event) => event.type)).toEqual(
+			expect.arrayContaining(["item/agentMessage/delta", "end"]),
+		);
+		expect(events.find((event) => event.type === "error")).toBeUndefined();
+		expect(events.at(-1)?.type).toBe("end");
+	});
+
 	test("skips contextUsageUpdated emit when tokenUsage payload is empty", async () => {
 		const manager = new CodexAppServerManager();
 		const events: Array<Record<string, unknown>> = [];
