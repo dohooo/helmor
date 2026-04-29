@@ -2,8 +2,10 @@
   description = "Helmor - Local-first desktop app development environment";
 
   inputs = {
-    # Use 24.11 (stable) instead of unstable to avoid SDK breaking changes
+    # Use 24.11 stable for reliable Darwin SDK - unstable has breaking changes as of 2026-04
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
+    # Keep nixpkgs-unstable available for bleeding-edge packages if needed
+    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -11,12 +13,16 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
+  outputs = { self, nixpkgs, nixpkgs-unstable, flake-utils, rust-overlay }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs {
           inherit system overlays;
+        };
+        # Make unstable packages available if needed
+        pkgs-unstable = import nixpkgs-unstable {
+          inherit system;
         };
 
         # Use stable Rust toolchain
@@ -25,6 +31,8 @@
         };
 
         # Common build inputs for all platforms
+        # Note: To use a package from unstable, use pkgs-unstable.packageName
+        # Example: pkgs-unstable.bun (if you need bleeding edge)
         commonBuildInputs = with pkgs; [
           # Bun runtime (JavaScript/TypeScript)
           bun
