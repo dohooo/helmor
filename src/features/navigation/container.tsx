@@ -1,5 +1,6 @@
 import { memo } from "react";
 import { openWorkspaceInFinder } from "@/lib/api";
+import { extractError } from "@/lib/errors";
 import { useWorkspacesSidebarController } from "./hooks/use-controller";
 import { WorkspacesSidebar } from "./index";
 
@@ -93,7 +94,8 @@ export const WorkspacesSidebarContainer = memo(
 				onDeleteWorkspace={handleDeleteWorkspace}
 				onOpenInFinder={(workspaceId) => {
 					void openWorkspaceInFinder(workspaceId).catch((error) => {
-						pushWorkspaceToast(String(error), "Failed to open Finder");
+						const { message } = extractError(error, "Failed to open Finder");
+						pushWorkspaceToast(message, "Failed to open Finder", "destructive");
 					});
 				}}
 				onTogglePin={(workspaceId, pinned) => {
