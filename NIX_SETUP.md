@@ -175,7 +175,7 @@ nix flake update
 The flake uses **NixOS 24.11 (stable)** as the primary channel to ensure reliable Darwin SDK frameworks. A separate **nixpkgs-unstable** input is available for bleeding-edge packages when needed.
 
 This dual-input approach gives you:
-- Stable, tested packages from `pkgs.*` (24.11)
+- Stable, tested packages from `pkgs.*` (24.11 - last working Darwin SDK)
 - Latest packages from `pkgs-unstable.*` when you need them
 
 To use a package from unstable, modify `flake.nix`:
@@ -187,8 +187,8 @@ commonBuildInputs = with pkgs; [
 ];
 ```
 
-**Why 24.11 instead of unstable?**  
-As of April 2026, nixpkgs-unstable has breaking changes in Darwin SDK that cause build failures. The stable 24.11 release provides a reliable base while still giving access to unstable when needed.
+**Why 24.11 instead of 25.11 or unstable?**  
+As of April 2026, both 25.11 and nixpkgs-unstable have breaking changes in Darwin SDK (`apple_sdk_11_0` removal) that cause build failures on macOS. The 24.11 release is the last known version with working Darwin SDK frameworks. This approach gives you stability by default with the option to pull newer packages when needed.
 
 ### Included Frameworks (macOS)
 - Security, CoreServices, CoreFoundation

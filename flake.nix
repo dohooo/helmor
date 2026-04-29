@@ -2,7 +2,8 @@
   description = "Helmor - Local-first desktop app development environment";
 
   inputs = {
-    # Use 24.11 stable for reliable Darwin SDK - unstable has breaking changes as of 2026-04
+    # Use 24.11 stable - last known release with working Darwin SDK
+    # Note: 25.11 exists but has breaking Darwin SDK changes as of 2026-04
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
     # Keep nixpkgs-unstable available for bleeding-edge packages if needed
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
