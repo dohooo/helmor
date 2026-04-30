@@ -18,7 +18,9 @@ mod streaming;
 mod support;
 
 pub use self::action_kind::ActionKind;
-pub use self::catalog::{resolve_model, AgentModelOption, AgentModelSection, ResolvedModel};
+pub use self::catalog::{
+    resolve_model, resolve_model_with_provider, AgentModelOption, AgentModelSection, ResolvedModel,
+};
 pub use self::queries::{
     fetch_agent_model_sections, fetch_live_context_usage, GenerateSessionTitleRequest,
     GenerateSessionTitleResponse, GetLiveContextUsageRequest, ListSlashCommandsRequest,
@@ -212,16 +214,7 @@ pub async fn send_agent_message_stream(
         return Err(anyhow::anyhow!("Prompt cannot be empty.").into());
     }
 
-    let model = resolve_model(&request.model_id);
-
-    if request.provider != model.provider {
-        return Err(anyhow::anyhow!(
-            "Model {} does not belong to provider {}.",
-            request.model_id,
-            request.provider
-        )
-        .into());
-    }
+    let model = resolve_model_with_provider(&request.model_id, &request.provider);
 
     let working_directory = resolve_stream_working_directory(&request)?;
     let stream_id = Uuid::new_v4().to_string();
@@ -730,8 +723,11 @@ mod tests {
         assert_eq!(claude.provider, "claude");
         assert_eq!(claude.cli_model, "default");
 
-        let codex = resolve_model("gpt-5.4");
-        assert_eq!(codex.provider, "codex");
+        // gpt-5.4 lives in the cursor section (cursor subscription access), so
+        // inference routes it there. Use resolve_model_with_provider("gpt-5.4", "codex")
+        // when the codex provider is explicitly requested.
+        let codex_via_cursor = resolve_model("gpt-5.4");
+        assert_eq!(codex_via_cursor.provider, "cursor");
 
         let unknown_claude = resolve_model("sonnet[1m]");
         assert_eq!(unknown_claude.provider, "claude");

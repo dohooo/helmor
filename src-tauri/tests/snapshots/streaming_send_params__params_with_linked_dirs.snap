@@ -1,5 +1,6 @@
 ---
 source: tests/streaming_send_params.rs
+assertion_line: 126
 expression: "&params"
 ---
 additionalDirectories:

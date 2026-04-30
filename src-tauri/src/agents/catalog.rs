@@ -14,6 +14,8 @@ pub struct AgentModelOption {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub supports_fast_mode: bool,
     pub supports_context_usage: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -46,6 +48,7 @@ fn model_sections_for_custom(
         .extend(custom_provider_options(custom));
     let mut sections = vec![claude_section];
     sections.push(codex_section());
+    sections.push(cursor_section());
 
     sections
 }
@@ -90,6 +93,77 @@ fn codex_section() -> AgentModelSection {
     }
 }
 
+fn cursor_section() -> AgentModelSection {
+    AgentModelSection {
+        id: "cursor".to_string(),
+        label: "Cursor".to_string(),
+        status: AgentModelSectionStatus::Ready,
+        options: vec![
+            cursor_model("composer-2-fast", "Composer 2 Fast", None),
+            cursor_model("composer-2", "Composer 2", None),
+            cursor_model_with_effort(
+                "claude-opus-4-7-thinking",
+                "Opus 4.7 Thinking",
+                &["low", "medium", "high", "xhigh", "max"],
+                Some("1M"),
+            ),
+            cursor_model_with_effort(
+                "claude-4.6-opus",
+                "Opus 4.6",
+                &["high", "max"],
+                Some("200k"),
+            ),
+            cursor_model("claude-4.6-sonnet-medium", "Sonnet 4.6", Some("200k")),
+            cursor_model_with_effort(
+                "gpt-5.5",
+                "Codex 5.5",
+                &["medium", "high", "extra-high"],
+                Some("1M"),
+            ),
+            cursor_model_with_effort(
+                "gpt-5.4",
+                "Codex 5.4",
+                &["low", "medium", "high", "xhigh"],
+                Some("1M"),
+            ),
+            cursor_model("gemini-3.1-pro", "Gemini 3.1 Pro", None),
+        ],
+    }
+}
+
+fn cursor_model(id: &str, label: &str, context_window: Option<&str>) -> AgentModelOption {
+    AgentModelOption {
+        id: id.to_string(),
+        provider: "cursor".to_string(),
+        label: label.to_string(),
+        cli_model: id.to_string(),
+        provider_key: None,
+        effort_levels: vec![],
+        supports_fast_mode: false,
+        supports_context_usage: false,
+        context_window: context_window.map(str::to_string),
+    }
+}
+
+fn cursor_model_with_effort(
+    id: &str,
+    label: &str,
+    effort_levels: &[&str],
+    context_window: Option<&str>,
+) -> AgentModelOption {
+    AgentModelOption {
+        id: id.to_string(),
+        provider: "cursor".to_string(),
+        label: label.to_string(),
+        cli_model: id.to_string(),
+        provider_key: None,
+        effort_levels: effort_levels.iter().map(|l| l.to_string()).collect(),
+        supports_fast_mode: false,
+        supports_context_usage: false,
+        context_window: context_window.map(str::to_string),
+    }
+}
+
 fn custom_provider_options(
     custom: Vec<super::custom_providers::ClaudeProviderModel>,
 ) -> Vec<AgentModelOption> {
@@ -104,6 +178,7 @@ fn custom_provider_options(
             effort_levels: claude_effort_levels(),
             supports_fast_mode: false,
             supports_context_usage: false,
+            context_window: None,
         })
         .collect()
 }
@@ -126,6 +201,7 @@ fn claude_model(
             .collect(),
         supports_fast_mode,
         supports_context_usage: true,
+        context_window: None,
     }
 }
 
@@ -142,6 +218,7 @@ fn codex_model(id: &str, label: &str) -> AgentModelOption {
             .collect(),
         supports_fast_mode: true,
         supports_context_usage: true,
+        context_window: None,
     }
 }
 
@@ -164,8 +241,9 @@ pub struct ResolvedModel {
 }
 
 /// Resolve a model ID to provider + cli_model. Provider is inferred from the
-/// ID: `gpt-*` → codex, everything else → claude. The ID is passed through
-/// as cli_model directly — the sidecar/SDK handles the actual mapping.
+/// ID: cursor catalog → cursor, `gpt-*` → codex, everything else → claude.
+/// The ID is passed through as cli_model directly — the sidecar/SDK handles
+/// the actual mapping.
 pub fn resolve_model(model_id: &str) -> ResolvedModel {
     if let Some(model) = super::custom_providers::resolve(model_id) {
         return ResolvedModel {
@@ -178,11 +256,40 @@ pub fn resolve_model(model_id: &str) -> ResolvedModel {
         };
     }
 
-    let provider = if model_id.starts_with("gpt-") {
+    let provider = if cursor_section().options.iter().any(|o| o.id == model_id) {
+        "cursor"
+    } else if model_id.starts_with("gpt-") {
         "codex"
     } else {
         "claude"
     };
+
+    ResolvedModel {
+        id: model_id.to_string(),
+        provider: provider.to_string(),
+        cli_model: model_id.to_string(),
+        supports_effort: true,
+        claude_base_url: None,
+        claude_auth_token: None,
+    }
+}
+
+/// Resolve a model ID to a `ResolvedModel`, using `provider` directly rather
+/// than inferring it. Use this when the caller already knows the provider
+/// (e.g., from a frontend request that sends `provider` explicitly). Custom
+/// provider models (those with a stored API key) are still resolved first.
+pub fn resolve_model_with_provider(model_id: &str, provider: &str) -> ResolvedModel {
+    if let Some(model) = super::custom_providers::resolve(model_id) {
+        return ResolvedModel {
+            id: model.id,
+            provider: "claude".to_string(),
+            cli_model: model.cli_model,
+            supports_effort: true,
+            claude_base_url: Some(model.base_url),
+            claude_auth_token: Some(model.api_key),
+        };
+    }
+
     ResolvedModel {
         id: model_id.to_string(),
         provider: provider.to_string(),
@@ -201,7 +308,7 @@ mod tests {
     fn static_model_sections_returns_hardcoded_catalog() {
         let sections = model_sections_for_custom(Vec::new());
 
-        assert_eq!(sections.len(), 2);
+        assert_eq!(sections.len(), 3);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].status, AgentModelSectionStatus::Ready);
         assert_eq!(
@@ -238,6 +345,79 @@ mod tests {
             .options
             .iter()
             .all(|model| model.supports_fast_mode));
+
+        assert_eq!(sections[2].id, "cursor");
+        assert_eq!(sections[2].status, AgentModelSectionStatus::Ready);
+        assert_eq!(
+            sections[2]
+                .options
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "composer-2-fast",
+                "composer-2",
+                "claude-opus-4-7-thinking",
+                "claude-4.6-opus",
+                "claude-4.6-sonnet-medium",
+                "gpt-5.5",
+                "gpt-5.4",
+                "gemini-3.1-pro",
+            ]
+        );
+        assert!(sections[2]
+            .options
+            .iter()
+            .all(|model| model.provider == "cursor"));
+        assert!(
+            sections[2]
+                .options
+                .iter()
+                .find(|m| m.id == "claude-opus-4-7-thinking")
+                .unwrap()
+                .effort_levels
+                == vec!["low", "medium", "high", "xhigh", "max"]
+        );
+        assert_eq!(
+            sections[2]
+                .options
+                .iter()
+                .find(|m| m.id == "claude-opus-4-7-thinking")
+                .unwrap()
+                .context_window
+                .as_deref(),
+            Some("1M")
+        );
+        assert_eq!(
+            sections[2]
+                .options
+                .iter()
+                .find(|m| m.id == "claude-4.6-opus")
+                .unwrap()
+                .context_window
+                .as_deref(),
+            Some("200k")
+        );
+        assert_eq!(
+            sections[2]
+                .options
+                .iter()
+                .find(|m| m.id == "gpt-5.5")
+                .unwrap()
+                .label
+                .as_str(),
+            "Codex 5.5"
+        );
+        assert_eq!(
+            sections[2]
+                .options
+                .iter()
+                .find(|m| m.id == "gpt-5.4")
+                .unwrap()
+                .label
+                .as_str(),
+            "Codex 5.4"
+        );
     }
 
     #[test]
@@ -252,7 +432,7 @@ mod tests {
                 api_key: "sk-test".to_string(),
             }]);
 
-        assert_eq!(sections.len(), 2);
+        assert_eq!(sections.len(), 3);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].label, "Claude Code");
         assert_eq!(
@@ -279,6 +459,7 @@ mod tests {
         );
         assert!(!sections[0].options[4].supports_context_usage);
         assert_eq!(sections[1].id, "codex");
+        assert_eq!(sections[2].id, "cursor");
     }
 
     #[test]
@@ -311,9 +492,26 @@ mod tests {
     }
 
     #[test]
-    fn resolve_gpt_5_4_routes_to_codex() {
+    fn resolve_gpt_5_4_routes_to_cursor_via_inference() {
+        // gpt-5.4 lives in the cursor section (accessible via Cursor subscription),
+        // so inference resolves it to cursor. Callers that know the intended provider
+        // (e.g. agent_send selecting from the codex section) use resolve_model_with_provider.
         let m = resolve_model("gpt-5.4");
+        assert_eq!(m.provider, "cursor");
+    }
+
+    #[test]
+    fn resolve_model_with_provider_overrides_inference() {
+        let m = resolve_model_with_provider("gpt-5.4", "codex");
         assert_eq!(m.provider, "codex");
+        assert_eq!(m.cli_model, "gpt-5.4");
+    }
+
+    #[test]
+    fn resolve_cursor_composer_model() {
+        let m = resolve_model("composer-2");
+        assert_eq!(m.provider, "cursor");
+        assert_eq!(m.cli_model, "composer-2");
     }
 
     #[test]
