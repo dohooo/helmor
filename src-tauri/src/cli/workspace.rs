@@ -31,7 +31,7 @@ pub fn dispatch(action: &WorkspaceAction, cli: &Cli) -> Result<()> {
             cli,
         ),
         WorkspaceAction::Show { workspace_ref } => show(workspace_ref, cli),
-        WorkspaceAction::New { repo } => new(repo, cli),
+        WorkspaceAction::New { repo, base_branch } => new(repo, base_branch.as_deref(), cli),
         WorkspaceAction::Delete { workspace_ref } => delete(workspace_ref, cli),
         WorkspaceAction::Archive { workspace_ref } => archive(workspace_ref, cli),
         WorkspaceAction::Restore {
@@ -192,9 +192,9 @@ fn show(workspace_ref: &str, cli: &Cli) -> Result<()> {
     })
 }
 
-fn new(repo_ref: &str, cli: &Cli) -> Result<()> {
+fn new(repo_ref: &str, base_branch: Option<&str>, cli: &Cli) -> Result<()> {
     let repo_id = service::resolve_repo_ref(repo_ref)?;
-    let response = service::create_workspace_from_repo_impl(&repo_id)?;
+    let response = service::create_workspace_from_repo_with_base_impl(&repo_id, base_branch)?;
     notify_ui_events([
         UiMutationEvent::WorkspaceListChanged,
         UiMutationEvent::WorkspaceChanged {

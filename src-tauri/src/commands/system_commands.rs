@@ -449,8 +449,7 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
 
         if agents.is_empty() {
             anyhow::bail!(
-                "No ready agent was found. Sign in to Claude Code or Codex first, then run:\n  {}",
-                command
+                "No ready agent was found. Sign in to Claude Code or Codex first, then run:\n  {command}"
             );
         }
 

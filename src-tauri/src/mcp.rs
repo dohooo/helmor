@@ -95,7 +95,8 @@ fn handle_tools_list(request: &Value) -> Value {
             "ref": { "type": "string", "description": "Workspace UUID or repo-name/directory-name" }
         }).as_object().map(|o| json!({ "type": "object", "properties": o, "required": ["ref"] })).unwrap()),
         tool_def("helmor_workspace_create", "Create a new workspace for a repository", json!({
-            "repo": { "type": "string", "description": "Repository UUID or name" }
+            "repo": { "type": "string", "description": "Repository UUID or name" },
+            "base_branch": { "type": "string", "description": "Optional remote branch to base this workspace on" }
         }).as_object().map(|o| json!({ "type": "object", "properties": o, "required": ["repo"] })).unwrap()),
         tool_def("helmor_session_list", "List sessions in a workspace", json!({
             "workspace": { "type": "string", "description": "Workspace UUID or repo-name/directory-name" }
@@ -179,7 +180,8 @@ fn dispatch_tool(name: &str, args: &Value) -> Result<String> {
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Missing required param: repo"))?;
             let repo_id = service::resolve_repo_ref(repo_ref)?;
-            let resp = service::create_workspace_from_repo_impl(&repo_id)?;
+            let base_branch = args["base_branch"].as_str();
+            let resp = service::create_workspace_from_repo_with_base_impl(&repo_id, base_branch)?;
             Ok(serde_json::to_string_pretty(&resp)?)
         }
         "helmor_session_list" => {

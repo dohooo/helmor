@@ -242,6 +242,9 @@ pub enum WorkspaceAction {
         /// Repo name or UUID.
         #[arg(long)]
         repo: String,
+        /// Remote branch to base this workspace on. Defaults to the repo setting.
+        #[arg(long = "base")]
+        base_branch: Option<String>,
     },
     /// Permanently delete a workspace (DB rows + git worktree + files).
     Delete {

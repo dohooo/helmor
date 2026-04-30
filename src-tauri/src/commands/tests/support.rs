@@ -358,6 +358,37 @@ impl CreateTestHarness {
         .unwrap();
         git_ops::run_git(["-C", root, "fetch", "origin"], None).unwrap();
     }
+
+    pub(crate) fn create_remote_branch_with_file(
+        &self,
+        branch: &str,
+        relative_path: &str,
+        contents: &str,
+    ) {
+        let root = self.source_repo_root.to_str().unwrap();
+        git_ops::run_git(["-C", root, "checkout", "-b", branch], None).unwrap();
+        fs::write(self.source_repo_root.join(relative_path), contents).unwrap();
+        git_ops::run_git(["-C", root, "add", relative_path], None).unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                root,
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Helmor",
+                "-c",
+                "user.email=helmor@example.com",
+                "commit",
+                "-m",
+                &format!("add {relative_path}"),
+            ],
+            None,
+        )
+        .unwrap();
+        git_ops::run_git(["-C", root, "checkout", "main"], None).unwrap();
+        git_ops::run_git(["-C", root, "fetch", "origin"], None).unwrap();
+    }
 }
 
 pub(crate) struct BranchSwitchTestHarness {

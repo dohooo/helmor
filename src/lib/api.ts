@@ -444,6 +444,7 @@ export type PrepareWorkspaceResponse = {
 	directoryName: string;
 	branch: string;
 	defaultBranch: string;
+	baseBranch?: string;
 	state: WorkspaceState;
 	repoScripts: RepoScripts;
 };
@@ -1803,9 +1804,11 @@ export async function updateSessionSettings(
 
 export async function createWorkspaceFromRepo(
 	repoId: string,
+	baseBranch?: string,
 ): Promise<CreateWorkspaceResponse> {
 	return invoke<CreateWorkspaceResponse>("create_workspace_from_repo", {
 		repoId,
+		baseBranch: baseBranch ?? null,
 	});
 }
 
@@ -1818,9 +1821,11 @@ export async function createWorkspaceFromRepo(
  */
 export async function prepareWorkspaceFromRepo(
 	repoId: string,
+	baseBranch?: string,
 ): Promise<PrepareWorkspaceResponse> {
 	return invoke<PrepareWorkspaceResponse>("prepare_workspace_from_repo", {
 		repoId,
+		baseBranch: baseBranch ?? null,
 	});
 }
 

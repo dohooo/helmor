@@ -662,7 +662,7 @@ export function useWorkspacesSidebarController({
 	);
 
 	const handleCreateWorkspaceFromRepo = useCallback(
-		async (repoId: string) => {
+		async (repoId: string, baseBranch?: string) => {
 			if (creatingWorkspaceRepoId) {
 				return;
 			}
@@ -686,7 +686,9 @@ export function useWorkspacesSidebarController({
 				// the real workspace/session ids, directory name, branch,
 				// and repo scripts. Nothing is painted yet; the sidebar +
 				// panel are still showing the previously selected workspace.
-				prepareResponse = await prepareWorkspaceFromRepo(repoId);
+				prepareResponse = baseBranch
+					? await prepareWorkspaceFromRepo(repoId, baseBranch)
+					: await prepareWorkspaceFromRepo(repoId);
 			} catch (error) {
 				setCreatingWorkspaceRepoId(null);
 				pushWorkspaceToast(
@@ -742,8 +744,10 @@ export function useWorkspacesSidebarController({
 					// intended target, matching what Phase 2 writes.
 					remote: repository.remote ?? "origin",
 					defaultBranch: prepareResponse.defaultBranch,
-					initializationParentBranch: prepareResponse.defaultBranch,
-					intendedTargetBranch: prepareResponse.defaultBranch,
+					initializationParentBranch:
+						prepareResponse.baseBranch ?? prepareResponse.defaultBranch,
+					intendedTargetBranch:
+						prepareResponse.baseBranch ?? prepareResponse.defaultBranch,
 				},
 			);
 			queryClient.setQueryData<WorkspaceSessionSummary[]>(

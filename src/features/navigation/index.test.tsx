@@ -6,7 +6,7 @@ import {
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
 	RepositoryCreateOption,
@@ -46,6 +46,29 @@ const repositories: RepositoryCreateOption[] = [
 		repoInitials: "DO",
 	},
 ];
+
+function createMemoryStorage(): Storage {
+	const values = new Map<string, string>();
+	return {
+		get length() {
+			return values.size;
+		},
+		clear: vi.fn(() => values.clear()),
+		getItem: vi.fn((key: string) => values.get(key) ?? null),
+		key: vi.fn((index: number) => Array.from(values.keys())[index] ?? null),
+		removeItem: vi.fn((key: string) => values.delete(key)),
+		setItem: vi.fn((key: string, value: string) => {
+			values.set(key, value);
+		}),
+	};
+}
+
+beforeEach(() => {
+	Object.defineProperty(window, "localStorage", {
+		configurable: true,
+		value: createMemoryStorage(),
+	});
+});
 
 afterEach(() => {
 	cleanup();
@@ -137,6 +160,42 @@ describe("WorkspacesSidebar", () => {
 
 		expect(onCreateWorkspace).toHaveBeenCalledWith("repo-1");
 		expect(screen.queryByRole("option", { name: /helmor/i })).toBeNull();
+	});
+
+	it("creates a workspace from a selected base branch", async () => {
+		const user = userEvent.setup();
+		const onCreateWorkspace = vi.fn();
+		const onFetchRepositoryBranches = vi
+			.fn()
+			.mockResolvedValue(["develop", "main"]);
+
+		const { container } = render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={workspaceGroups}
+					archivedRows={[]}
+					availableRepositories={repositories}
+					onCreateWorkspace={onCreateWorkspace}
+					onFetchRepositoryBranches={onFetchRepositoryBranches}
+				/>
+			</TooltipProvider>,
+		);
+
+		const [newWorkspaceButton] = within(container).getAllByRole("button", {
+			name: "New workspace",
+		});
+		await user.click(newWorkspaceButton);
+		await user.click(
+			screen.getByRole("button", {
+				name: "Create helmor workspace from branch",
+			}),
+		);
+		const branchOptions = await screen.findAllByRole("option");
+		expect(branchOptions[0]).toHaveTextContent("main");
+		await user.click(await screen.findByRole("option", { name: "develop" }));
+
+		expect(onFetchRepositoryBranches).toHaveBeenCalledWith("repo-1");
+		expect(onCreateWorkspace).toHaveBeenCalledWith("repo-1", "develop");
 	});
 
 	it("shows an Open in Finder action for active workspaces", async () => {

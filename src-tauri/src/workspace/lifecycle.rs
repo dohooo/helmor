@@ -71,6 +71,7 @@ pub struct PrepareWorkspaceResponse {
     pub directory_name: String,
     pub branch: String,
     pub default_branch: String,
+    pub base_branch: String,
     pub state: WorkspaceState,
     /// DB-level repo scripts. After Phase 2 (worktree creation) the frontend
     /// may refetch to pick up any `helmor.json` overrides copied into the
@@ -116,6 +117,13 @@ pub struct TargetBranchConflict {
 /// `Ready` / `SetupPending`. It can run in the background while the UI
 /// already shows the workspace.
 pub fn prepare_workspace_from_repo_impl(repo_id: &str) -> Result<PrepareWorkspaceResponse> {
+    prepare_workspace_from_repo_with_base_impl(repo_id, None)
+}
+
+pub fn prepare_workspace_from_repo_with_base_impl(
+    repo_id: &str,
+    base_branch: Option<&str>,
+) -> Result<PrepareWorkspaceResponse> {
     let repository = repos::load_repository_by_id(repo_id)?
         .with_context(|| format!("Repository not found: {repo_id}"))?;
     let repo_root = PathBuf::from(repository.root_path.trim());
@@ -141,6 +149,7 @@ pub fn prepare_workspace_from_repo_impl(repo_id: &str) -> Result<PrepareWorkspac
         .clone()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "main".to_string());
+    let base_branch = normalize_base_branch(base_branch, &remote, &default_branch);
     let workspace_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let timestamp = db::current_timestamp()?;
@@ -151,7 +160,7 @@ pub fn prepare_workspace_from_repo_impl(repo_id: &str) -> Result<PrepareWorkspac
         &session_id,
         &directory_name,
         &branch,
-        &default_branch,
+        &base_branch,
         &timestamp,
     )?;
 
@@ -184,9 +193,23 @@ pub fn prepare_workspace_from_repo_impl(repo_id: &str) -> Result<PrepareWorkspac
         directory_name,
         branch,
         default_branch,
+        base_branch,
         state: WorkspaceState::Initializing,
         repo_scripts,
     })
+}
+
+fn normalize_base_branch(base_branch: Option<&str>, remote: &str, default_branch: &str) -> String {
+    let Some(branch) = base_branch.map(str::trim).filter(|value| !value.is_empty()) else {
+        return default_branch.to_string();
+    };
+
+    branch
+        .strip_prefix(&format!("refs/remotes/{remote}/"))
+        .or_else(|| branch.strip_prefix(&format!("{remote}/")))
+        .or_else(|| branch.strip_prefix("refs/heads/"))
+        .unwrap_or(branch)
+        .to_string()
 }
 
 /// Phase 2 of workspace creation: creates the git worktree, probes
@@ -214,10 +237,16 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
         .remote
         .clone()
         .unwrap_or_else(|| "origin".to_string());
-    let default_branch = record
-        .default_branch
+    let base_branch = record
+        .initialization_parent_branch
         .clone()
         .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            record
+                .default_branch
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+        })
         .unwrap_or_else(|| "main".to_string());
     let branch = helpers::non_empty(&record.branch)
         .map(ToOwned::to_owned)
@@ -235,11 +264,11 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
         }
 
         git_ops::ensure_git_repository(&repo_root)?;
-        let start_ref = git_ops::default_branch_ref(&remote, &default_branch);
+        let start_ref = git_ops::default_branch_ref(&remote, &base_branch);
         git_ops::verify_commitish_exists(
             &repo_root,
             &start_ref,
-            &format!("Default branch is missing in source repo: {default_branch}"),
+            &format!("Base branch is missing in source repo: {base_branch}"),
         )?;
         match git_ops::create_worktree_from_start_point(
             &repo_root,
@@ -299,7 +328,14 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
 /// the old-shape response. Used by CLI, MCP, and `add_repository_from_local_path`
 /// — all non-UI callers that do not benefit from the prepare/finalize split.
 pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceResponse> {
-    let prepared = prepare_workspace_from_repo_impl(repo_id)?;
+    create_workspace_from_repo_with_base_impl(repo_id, None)
+}
+
+pub fn create_workspace_from_repo_with_base_impl(
+    repo_id: &str,
+    base_branch: Option<&str>,
+) -> Result<CreateWorkspaceResponse> {
+    let prepared = prepare_workspace_from_repo_with_base_impl(repo_id, base_branch)?;
     let finalized = finalize_workspace_from_repo_impl(&prepared.workspace_id)?;
 
     Ok(CreateWorkspaceResponse {

@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { openWorkspaceInFinder } from "@/lib/api";
+import { listRemoteBranches, openWorkspaceInFinder } from "@/lib/api";
 import { extractError } from "@/lib/errors";
 import { useWorkspacesSidebarController } from "./hooks/use-controller";
 import { WorkspacesSidebar } from "./index";
@@ -85,9 +85,10 @@ export const WorkspacesSidebarContainer = memo(
 				onSubmitClone={handleCloneFromUrl}
 				onSelectWorkspace={handleSelectWorkspace}
 				onPrefetchWorkspace={prefetchWorkspace}
-				onCreateWorkspace={(repoId) => {
-					void handleCreateWorkspaceFromRepo(repoId);
+				onCreateWorkspace={(repoId, baseBranch) => {
+					void handleCreateWorkspaceFromRepo(repoId, baseBranch);
 				}}
+				onFetchRepositoryBranches={(repoId) => listRemoteBranches({ repoId })}
 				onArchiveWorkspace={handleArchiveWorkspace}
 				onMarkWorkspaceUnread={handleMarkWorkspaceUnread}
 				onRestoreWorkspace={handleRestoreWorkspace}

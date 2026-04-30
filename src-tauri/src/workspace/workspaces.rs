@@ -27,8 +27,9 @@ pub use super::branching::{
 };
 pub use super::lifecycle::{
     archive_workspace_impl, cleanup_orphaned_initializing_workspaces,
-    create_workspace_from_repo_impl, finalize_workspace_from_repo_impl, prepare_archive_plan,
-    prepare_workspace_from_repo_impl, restore_workspace_impl, validate_archive_workspace,
+    create_workspace_from_repo_impl, create_workspace_from_repo_with_base_impl,
+    finalize_workspace_from_repo_impl, prepare_archive_plan, prepare_workspace_from_repo_impl,
+    prepare_workspace_from_repo_with_base_impl, restore_workspace_impl, validate_archive_workspace,
     validate_restore_workspace, ArchivePreparedPlan, ArchiveWorkspaceResponse, BranchRename,
     CreateWorkspaceResponse, FinalizeWorkspaceResponse, PrepareWorkspaceResponse,
     RestoreWorkspaceResponse, TargetBranchConflict, ValidateRestoreResponse,

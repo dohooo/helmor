@@ -84,6 +84,72 @@ fn create_workspace_from_repo_creates_ready_workspace_and_initial_session() {
 }
 
 #[test]
+fn create_workspace_from_repo_can_use_requested_base_branch() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.create_remote_branch_with_file("develop", "develop.txt", "from develop");
+
+    let response =
+        workspaces::create_workspace_from_repo_with_base_impl(&harness.repo_id, Some("develop"))
+            .unwrap();
+
+    let workspace_dir = harness.workspace_dir(&response.directory_name);
+    assert_eq!(
+        fs::read_to_string(workspace_dir.join("develop.txt")).unwrap(),
+        "from develop"
+    );
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let (initialization_parent_branch, intended_target_branch): (String, String) = connection
+        .query_row(
+            r#"
+            SELECT initialization_parent_branch, intended_target_branch
+            FROM workspaces WHERE id = ?1
+            "#,
+            [&response.created_workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+
+    assert_eq!(initialization_parent_branch, "develop");
+    assert_eq!(intended_target_branch, "develop");
+}
+
+#[test]
+fn create_workspace_from_repo_normalizes_remote_prefixed_base_branch() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.create_remote_branch_with_file("develop", "develop.txt", "from develop");
+
+    let prepared = workspaces::prepare_workspace_from_repo_with_base_impl(
+        &harness.repo_id,
+        Some("origin/develop"),
+    )
+    .unwrap();
+
+    assert_eq!(prepared.base_branch, "develop");
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let (initialization_parent_branch, intended_target_branch): (String, String) = connection
+        .query_row(
+            r#"
+            SELECT initialization_parent_branch, intended_target_branch
+            FROM workspaces WHERE id = ?1
+            "#,
+            [&prepared.workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+
+    assert_eq!(initialization_parent_branch, "develop");
+    assert_eq!(intended_target_branch, "develop");
+}
+
+#[test]
 fn create_workspace_from_repo_defers_setup_when_script_configured_by_default() {
     let _guard = TEST_LOCK
         .lock()

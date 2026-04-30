@@ -4,6 +4,7 @@ import {
 	ChevronRight,
 	Folder,
 	FolderPlus,
+	GitBranch,
 	Globe,
 	LoaderCircle,
 	Plus,
@@ -17,6 +18,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { BranchPickerPopover } from "@/components/branch-picker";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -89,6 +91,20 @@ function getGroupGapSize(previousHasRows: boolean, nextHasRows: boolean) {
 	return previousHasRows && nextHasRows ? GROUP_GAP : EMPTY_GROUP_GAP;
 }
 
+function orderBranchesWithDefaultFirst(
+	branches: string[],
+	defaultBranch: string,
+): string[] {
+	const seen = new Set<string>();
+	const ordered = [defaultBranch, ...branches].filter((branch) => {
+		if (seen.has(branch)) return false;
+		seen.add(branch);
+		return true;
+	});
+
+	return ordered;
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -113,6 +129,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onSelectWorkspace,
 	onPrefetchWorkspace,
 	onCreateWorkspace,
+	onFetchRepositoryBranches,
 	onArchiveWorkspace,
 	onMarkWorkspaceUnread,
 	onRestoreWorkspace,
@@ -145,7 +162,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	}) => Promise<void>;
 	onSelectWorkspace?: (workspaceId: string) => void;
 	onPrefetchWorkspace?: (workspaceId: string) => void;
-	onCreateWorkspace?: (repoId: string) => void;
+	onCreateWorkspace?: (repoId: string, baseBranch?: string) => void;
+	onFetchRepositoryBranches?: (repoId: string) => Promise<string[]>;
 	onArchiveWorkspace?: (workspaceId: string) => void;
 	onMarkWorkspaceUnread?: (workspaceId: string) => void;
 	onRestoreWorkspace?: (workspaceId: string) => void;
@@ -159,6 +177,12 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 }) {
 	const [isRepoPickerOpen, setIsRepoPickerOpen] = useState(false);
 	const [isAddRepositoryMenuOpen, setIsAddRepositoryMenuOpen] = useState(false);
+	const [repositoryBranches, setRepositoryBranches] = useState<
+		Record<string, string[]>
+	>({});
+	const [loadingBranchesRepoId, setLoadingBranchesRepoId] = useState<
+		string | null
+	>(null);
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
 	const repoCommandListRef = useRef<HTMLDivElement | null>(null);
 	const [sectionOpenState, setSectionOpenState] = useState(() => ({
@@ -355,6 +379,38 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	const createBusy = Boolean(creatingWorkspaceRepoId);
 	const addRepositoryBusy = Boolean(addingRepository);
 	const repositories = availableRepositories ?? [];
+
+	const loadRepositoryBranches = useCallback(
+		(repository: RepositoryCreateOption) => {
+			if (!onFetchRepositoryBranches || repositoryBranches[repository.id]) {
+				return;
+			}
+
+			setLoadingBranchesRepoId(repository.id);
+			void onFetchRepositoryBranches(repository.id)
+				.then((branches) => {
+					setRepositoryBranches((current) => ({
+						...current,
+						[repository.id]: orderBranchesWithDefaultFirst(
+							branches,
+							repository.defaultBranch ?? "main",
+						),
+					}));
+				})
+				.catch(() => {
+					setRepositoryBranches((current) => ({
+						...current,
+						[repository.id]: [repository.defaultBranch ?? "main"],
+					}));
+				})
+				.finally(() => {
+					setLoadingBranchesRepoId((current) =>
+						current === repository.id ? null : current,
+					);
+				});
+		},
+		[onFetchRepositoryBranches, repositoryBranches],
+	);
 
 	useEffect(() => {
 		const handleOpenNewWorkspace = () => {
@@ -703,10 +759,47 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 												</span>
 											</div>
 											{repository.defaultBranch ? (
-												<span className="shrink-0 text-right whitespace-nowrap text-xs text-muted-foreground">
-													{repository.remote ?? "origin"}/
-													{repository.defaultBranch.toLowerCase()}
-												</span>
+												<div
+													className="shrink-0"
+													onPointerDown={(event) => event.stopPropagation()}
+													onClick={(event) => event.stopPropagation()}
+													onKeyDown={(event) => event.stopPropagation()}
+												>
+													<BranchPickerPopover
+														currentBranch={repository.defaultBranch}
+														branches={
+															repositoryBranches[repository.id] ?? [
+																repository.defaultBranch,
+															]
+														}
+														loading={loadingBranchesRepoId === repository.id}
+														align="end"
+														onOpen={() => loadRepositoryBranches(repository)}
+														onSelect={(branch) => {
+															setIsRepoPickerOpen(false);
+															onCreateWorkspace?.(repository.id, branch);
+														}}
+													>
+														<button
+															type="button"
+															className="inline-flex max-w-40 cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-right text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+															aria-label={`Create ${repository.name} workspace from branch`}
+														>
+															<GitBranch
+																className="size-3 shrink-0"
+																strokeWidth={1.8}
+															/>
+															<span className="truncate">
+																{repository.remote ?? "origin"}/
+																{repository.defaultBranch.toLowerCase()}
+															</span>
+															<ChevronRight
+																className="size-3 shrink-0"
+																strokeWidth={2}
+															/>
+														</button>
+													</BranchPickerPopover>
+												</div>
 											) : null}
 										</div>
 									</CommandItem>

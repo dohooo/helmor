@@ -26,7 +26,8 @@ pub use crate::models::workspaces::load_workspace_records;
 pub use crate::repos::{add_repository_from_local_path, list_repositories};
 pub use crate::sessions::{create_session, list_workspace_sessions};
 pub use crate::workspaces::{
-    create_workspace_from_repo_impl, get_workspace, list_workspace_groups,
+    create_workspace_from_repo_impl, create_workspace_from_repo_with_base_impl, get_workspace,
+    list_workspace_groups,
 };
 
 /// Build [`DataInfo`] without needing a Tauri runtime.
