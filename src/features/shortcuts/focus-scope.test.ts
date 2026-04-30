@@ -144,4 +144,45 @@ describe("getActiveScopes", () => {
 		(document.getElementById("sidebar") as HTMLInputElement).focus();
 		expect(getActiveScopes()).toEqual([DEFAULT_FOCUS_SCOPE]);
 	});
+
+	it("prefers a clicked scope over a stale focus owner (xterm-textarea case)", () => {
+		// xterm keeps its hidden textarea focused after a click on chat —
+		// pointer engagement must override stale focus.
+		document.body.innerHTML = `
+			<div data-focus-scope="terminal">
+				<input id="terminal-textarea" />
+			</div>
+			<div data-focus-scope="chat">
+				<div id="chat-messages">streamed text...</div>
+			</div>
+		`;
+		(document.getElementById("terminal-textarea") as HTMLInputElement).focus();
+		expect(getActiveScopes()).toEqual(["terminal"]);
+
+		const messages = document.getElementById("chat-messages") as HTMLDivElement;
+		messages.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+		// Focus is still on the terminal textarea, but the user clicked chat.
+		expect(document.activeElement?.id).toBe("terminal-textarea");
+		expect(getActiveScopes()).toEqual(["chat"]);
+	});
+
+	it("keeps composer + chat active when clicking inside chat without moving focus", () => {
+		// Focus in composer, click in chat: chat is reachable via
+		// SCOPE_PARENTS so the focus chain wins (composer shortcuts stay).
+		document.body.innerHTML = `
+			<div data-focus-scope="chat">
+				<div id="chat-messages">streamed text...</div>
+			</div>
+			<div data-focus-scope="composer">
+				<input id="composer-input" />
+			</div>
+		`;
+		(document.getElementById("composer-input") as HTMLInputElement).focus();
+		expect(getActiveScopes()).toEqual(["composer", "chat"]);
+
+		document
+			.getElementById("chat-messages")
+			?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+		expect(getActiveScopes()).toEqual(["composer", "chat"]);
+	});
 });

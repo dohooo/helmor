@@ -33,6 +33,7 @@
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { COMMAND_PRIORITY_HIGH, KEY_ENTER_COMMAND } from "lexical";
 import { useEffect } from "react";
+import { normalizeShortcutEvent } from "@/features/shortcuts/format";
 
 const TYPEAHEAD_SELECTABLE_SELECTOR = "[data-typeahead-popup] [cmdk-item]";
 
@@ -43,9 +44,19 @@ function isTypeaheadSelectable(): boolean {
 
 export function SubmitPlugin({
 	onSubmit,
+	onSubmitOpposite,
+	toggleHotkey,
 	disabled,
 }: {
 	onSubmit: () => void;
+	/** Called when the toggle hotkey fires — submits with the opposite
+	 *  follow-up behavior (queue ↔ steer) for this single message. */
+	onSubmitOpposite?: () => void;
+	/** The customized "send with opposite follow-up" hotkey, normalized
+	 *  via `normalizeShortcutEvent` (e.g. "Mod+Enter"). Only honored here
+	 *  when the hotkey involves Enter — non-Enter hotkeys are caught by
+	 *  the composer wrapper's keydown-capture handler. */
+	toggleHotkey?: string | null;
 	disabled: boolean;
 }) {
 	const [editor] = useLexicalComposerContext();
@@ -55,15 +66,29 @@ export function SubmitPlugin({
 			KEY_ENTER_COMMAND,
 			(event) => {
 				if (event?.isComposing || event?.keyCode === 229) return false; // IME confirm — let the browser process it
-				if (event?.shiftKey) return false; // let Lexical handle newline
 				if (isTypeaheadSelectable()) return false; // let typeahead select
+
+				// Customized toggle hotkey (e.g. ⌘Enter) — submit with the
+				// opposite follow-up behavior for this message only. Checked
+				// before the Shift+Enter newline guard so a user-configured
+				// toggle on Shift+Enter wins over newline.
+				if (event && toggleHotkey && onSubmitOpposite) {
+					const eventHotkey = normalizeShortcutEvent(event);
+					if (eventHotkey === toggleHotkey) {
+						event.preventDefault();
+						if (!disabled) onSubmitOpposite();
+						return true;
+					}
+				}
+
+				if (event?.shiftKey) return false; // let Lexical handle newline
 				event?.preventDefault();
 				if (!disabled) onSubmit();
 				return true;
 			},
 			COMMAND_PRIORITY_HIGH,
 		);
-	}, [editor, onSubmit, disabled]);
+	}, [editor, onSubmit, onSubmitOpposite, toggleHotkey, disabled]);
 
 	return null;
 }

@@ -95,7 +95,12 @@ type WorkspaceComposerProps = {
 		imagePaths: string[],
 		filePaths: string[],
 		customTags: ComposerCustomTag[],
-		options?: { permissionModeOverride?: string },
+		options?: {
+			permissionModeOverride?: string;
+			/** Submit with the opposite follow-up behavior (queue ↔ steer)
+			 *  for this single message, leaving the persistent setting alone. */
+			oppositeFollowUp?: boolean;
+		},
 	) => void;
 	disabled?: boolean;
 	submitDisabled?: boolean;
@@ -152,6 +157,9 @@ type WorkspaceComposerProps = {
 	agentType?: "claude" | "codex" | null;
 	focusShortcut?: string | null;
 	togglePlanShortcut?: string | null;
+	/** Hotkey that submits the current draft with the opposite follow-up
+	 *  behavior (queue ↔ steer) for one message. */
+	toggleFollowUpShortcut?: string | null;
 };
 
 const EMPTY_SLASH_COMMANDS: readonly SlashCommandEntry[] = [];
@@ -226,6 +234,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	agentType = null,
 	focusShortcut = null,
 	togglePlanShortcut = null,
+	toggleFollowUpShortcut = null,
 }: WorkspaceComposerProps) {
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
@@ -424,45 +433,87 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		}
 	}, [hasPlanReview, onSubmit, contextKey]);
 
+	const submitDraft = useCallback(
+		(options?: { oppositeFollowUp?: boolean }) => {
+			const editor = editorRef.current;
+			if (!editor) return;
+			let prompt = "";
+			let images: string[] = [];
+			let files: string[] = [];
+			let customTags: ComposerCustomTag[] = [];
+			editor.read(() => {
+				const result = $extractComposerContent();
+				prompt = result.text;
+				images = result.images;
+				files = result.files;
+				customTags = result.customTags;
+			});
+			if (
+				!prompt &&
+				images.length === 0 &&
+				files.length === 0 &&
+				customTags.length === 0
+			)
+				return;
+			if (options?.oppositeFollowUp) {
+				onSubmit(prompt, images, files, customTags, {
+					oppositeFollowUp: true,
+				});
+			} else {
+				onSubmit(prompt, images, files, customTags);
+			}
+			editor.update(() => {
+				$getRoot().clear();
+			});
+			clearPersistedDraft(contextKey);
+			setHasContent(false);
+		},
+		[onSubmit, contextKey],
+	);
+
 	const handleSubmit = useCallback(() => {
-		const editor = editorRef.current;
-		if (!editor) return;
-		let prompt = "";
-		let images: string[] = [];
-		let files: string[] = [];
-		let customTags: ComposerCustomTag[] = [];
-		editor.read(() => {
-			const result = $extractComposerContent();
-			prompt = result.text;
-			images = result.images;
-			files = result.files;
-			customTags = result.customTags;
-		});
-		if (
-			!prompt &&
-			images.length === 0 &&
-			files.length === 0 &&
-			customTags.length === 0
-		)
-			return;
-		onSubmit(prompt, images, files, customTags);
-		editor.update(() => {
-			$getRoot().clear();
-		});
-		clearPersistedDraft(contextKey);
-		setHasContent(false);
-	}, [onSubmit, contextKey]);
+		submitDraft();
+	}, [submitDraft]);
+
+	const handleSubmitOpposite = useCallback(() => {
+		submitDraft({ oppositeFollowUp: true });
+	}, [submitDraft]);
 
 	const handleComposerKeyDownCapture = useCallback(
 		(event: React.KeyboardEvent<HTMLDivElement>) => {
-			if (!togglePlanShortcut || inputDisabled) return;
+			if (inputDisabled) return;
 			const hotkey = normalizeShortcutEvent(event.nativeEvent);
-			if (hotkey !== togglePlanShortcut) return;
-			event.preventDefault();
-			event.stopPropagation();
-			onChangePermissionMode(permissionMode === "plan" ? "default" : "plan");
+			if (!hotkey) return;
+
+			// Toggle follow-up behavior for one message. Skip when the
+			// hotkey is Enter-based — SubmitPlugin handles those via
+			// Lexical's KEY_ENTER_COMMAND so we don't double-fire.
+			if (
+				toggleFollowUpShortcut &&
+				hotkey === toggleFollowUpShortcut &&
+				event.nativeEvent.key !== "Enter"
+			) {
+				event.preventDefault();
+				event.stopPropagation();
+				if (submitEnabled) handleSubmitOpposite();
+				return;
+			}
+
+			if (togglePlanShortcut && hotkey === togglePlanShortcut) {
+				event.preventDefault();
+				event.stopPropagation();
+				onChangePermissionMode(permissionMode === "plan" ? "default" : "plan");
+			}
 		},
-		[inputDisabled, onChangePermissionMode, permissionMode, togglePlanShortcut],
+		[
+			inputDisabled,
+			onChangePermissionMode,
+			permissionMode,
+			togglePlanShortcut,
+			toggleFollowUpShortcut,
+			handleSubmitOpposite,
+			submitEnabled,
+		],
 	);
 
 	return (
@@ -602,6 +653,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						/>
 						<SubmitPlugin
 							onSubmit={handleSubmit}
+							onSubmitOpposite={handleSubmitOpposite}
+							toggleHotkey={toggleFollowUpShortcut}
 							disabled={submitDisabledForPlugin}
 						/>
 						<CompositionGuardPlugin />

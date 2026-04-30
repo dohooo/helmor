@@ -13,7 +13,7 @@ export type BuiltinClaudeProvider = {
 	baseUrl: string;
 	apiKeyUrl: string;
 	models: readonly BuiltinClaudeProviderModel[];
-	icon: "minimax" | "moonshot" | "zhipu" | "qwen" | "xiaomi";
+	icon: "minimax" | "moonshot" | "deepseek" | "zhipu" | "qwen" | "xiaomi";
 };
 
 export const BUILTIN_CLAUDE_PROVIDERS =

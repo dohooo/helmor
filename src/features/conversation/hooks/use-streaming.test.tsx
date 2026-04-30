@@ -1928,6 +1928,185 @@ describe("useConversationStreaming", () => {
 			expect(enqueued?.[0]?.prompt).toBe("Resolve conflict");
 		});
 
+		it("followUpBehaviorOverride='queue' flips a 'steer' default into the queue for one submit", async () => {
+			apiMocks.startAgentMessageStream.mockImplementation(
+				async (_payload: unknown, _onEvent: (event: unknown) => void) => {
+					// Leave the turn streaming.
+				},
+			);
+			apiMocks.steerAgentStream.mockResolvedValue({ accepted: true });
+			const queue = createFakeQueue();
+
+			const { Wrapper } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						// Default is steer — without the override the next
+						// submit would steer mid-turn.
+						followUpBehavior: "steer",
+						submitQueue: queue,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "Primary",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+			expect(result.current.isSending).toBe(true);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "One-shot queue",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+					followUpBehaviorOverride: "queue",
+				});
+			});
+
+			expect(apiMocks.steerAgentStream).not.toHaveBeenCalled();
+			const enqueued = queue.snapshot().get("session-1");
+			expect(enqueued).toHaveLength(1);
+			expect(enqueued?.[0]?.prompt).toBe("One-shot queue");
+		});
+
+		it("followUpBehaviorOverride='steer' flips a 'queue' default into a mid-turn steer", async () => {
+			apiMocks.startAgentMessageStream.mockImplementation(
+				async (_payload: unknown, _onEvent: (event: unknown) => void) => {
+					// Leave the turn streaming.
+				},
+			);
+			apiMocks.steerAgentStream.mockResolvedValue({ accepted: true });
+			const queue = createFakeQueue();
+
+			const { Wrapper } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "queue",
+						submitQueue: queue,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "Primary",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+			expect(result.current.isSending).toBe(true);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "One-shot steer",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+					followUpBehaviorOverride: "steer",
+				});
+			});
+
+			expect(apiMocks.steerAgentStream).toHaveBeenCalledTimes(1);
+			expect(queue.snapshot().get("session-1") ?? []).toHaveLength(0);
+		});
+
+		it("forceQueue takes precedence over followUpBehaviorOverride='steer'", async () => {
+			apiMocks.startAgentMessageStream.mockImplementation(
+				async (_payload: unknown, _onEvent: (event: unknown) => void) => {},
+			);
+			apiMocks.steerAgentStream.mockResolvedValue({ accepted: true });
+			const queue = createFakeQueue();
+
+			const { Wrapper } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "queue",
+						submitQueue: queue,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "Primary",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+			expect(result.current.isSending).toBe(true);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "Resolve conflict",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+					forceQueue: true,
+					followUpBehaviorOverride: "steer",
+				});
+			});
+
+			expect(apiMocks.steerAgentStream).not.toHaveBeenCalled();
+			const enqueued = queue.snapshot().get("session-1");
+			expect(enqueued).toHaveLength(1);
+			expect(enqueued?.[0]?.prompt).toBe("Resolve conflict");
+		});
+
 		it("handleSteerQueued re-enqueues the item when provider rejects the steer", async () => {
 			apiMocks.startAgentMessageStream.mockImplementation(
 				async (_payload: unknown, _onEvent: (event: unknown) => void) => {

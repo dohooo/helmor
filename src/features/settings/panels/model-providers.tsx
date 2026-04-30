@@ -10,6 +10,7 @@ import {
 import type { SVGProps } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
+	DeepSeekIcon,
 	KimiIcon,
 	MinimaxIcon,
 	QwenIcon,
@@ -343,7 +344,7 @@ function ConfiguredProvidersList({
 type ConfiguredItem = {
 	kind: ProviderKind;
 	label: string;
-	icon?: "minimax" | "moonshot" | "zhipu" | "qwen" | "xiaomi";
+	icon?: "minimax" | "moonshot" | "deepseek" | "zhipu" | "qwen" | "xiaomi";
 	keyPreview: string;
 };
 
@@ -438,13 +439,15 @@ function BuiltinProviderIcon({
 	icon,
 	className,
 }: {
-	icon: "minimax" | "moonshot" | "zhipu" | "qwen" | "xiaomi";
+	icon: "minimax" | "moonshot" | "deepseek" | "zhipu" | "qwen" | "xiaomi";
 	className?: string;
 }) {
 	const props: SVGProps<SVGSVGElement> = { className };
 	switch (icon) {
 		case "moonshot":
 			return <KimiIcon {...props} />;
+		case "deepseek":
+			return <DeepSeekIcon {...props} />;
 		case "zhipu":
 			return <ZhipuIcon {...props} />;
 		case "qwen":

@@ -29,6 +29,7 @@ export type ShortcutId =
 	| "composer.focus"
 	| "composer.togglePlanMode"
 	| "composer.openModelPicker"
+	| "composer.toggleFollowUpBehavior"
 	| "terminal.new"
 	| "terminal.close"
 	| "terminal.next"

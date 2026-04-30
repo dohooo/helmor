@@ -253,6 +253,14 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		editable: true,
 	},
 	{
+		id: "composer.toggleFollowUpBehavior",
+		title: "Send with opposite follow-up behavior",
+		group: "Composer",
+		defaultHotkey: "Mod+Enter",
+		scopes: ["composer"],
+		editable: true,
+	},
+	{
 		id: "terminal.new",
 		title: "New terminal",
 		group: "Terminal",

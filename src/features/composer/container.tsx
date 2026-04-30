@@ -122,6 +122,10 @@ type WorkspaceComposerContainerProps = {
 		fastMode: boolean;
 		/** Force queue (bypass `followUpBehavior`) if a turn is streaming. */
 		forceQueue?: boolean;
+		/** When set, override the user's `followUpBehavior` setting for this
+		 *  one submit (queue ↔ steer). Used by the "send with opposite
+		 *  follow-up" composer shortcut. Ignored when `forceQueue` is true. */
+		followUpBehaviorOverride?: "queue" | "steer";
 	}) => void;
 	/** Prompt queued by an external caller to auto-submit once the displayed
 	 * session matches `sessionId`. */
@@ -336,6 +340,11 @@ export const WorkspaceComposerContainer = memo(
 		]
 			? null
 			: getShortcut(settings.shortcuts, "composer.togglePlanMode");
+		const toggleFollowUpShortcut = shortcutConflicts.conflictById[
+			"composer.toggleFollowUpBehavior"
+		]
+			? null
+			: getShortcut(settings.shortcuts, "composer.toggleFollowUpBehavior");
 		const pendingOverrideActive =
 			pendingPromptForSession?.sessionId === displayedSessionId;
 		const pendingModel = useMemo(
@@ -567,11 +576,22 @@ export const WorkspaceComposerContainer = memo(
 				imagePaths: string[],
 				filePaths: string[],
 				customTags: ComposerCustomTag[],
-				options?: { permissionModeOverride?: string },
+				options?: {
+					permissionModeOverride?: string;
+					oppositeFollowUp?: boolean;
+				},
 			) => {
 				if (!effectiveModel) {
 					return;
 				}
+				// Translate the per-submit "opposite" toggle into a concrete
+				// override based on the user's persistent setting. The setting
+				// itself is left untouched.
+				const followUpBehaviorOverride = options?.oppositeFollowUp
+					? settings.followUpBehavior === "queue"
+						? "steer"
+						: "queue"
+					: undefined;
 				onSubmit({
 					prompt,
 					imagePaths,
@@ -583,6 +603,7 @@ export const WorkspaceComposerContainer = memo(
 					permissionMode:
 						options?.permissionModeOverride ?? effectivePermissionMode,
 					fastMode: supportsFastMode ? fastMode : false,
+					followUpBehaviorOverride,
 				});
 			},
 			[
@@ -593,6 +614,7 @@ export const WorkspaceComposerContainer = memo(
 				effectivePermissionMode,
 				fastMode,
 				supportsFastMode,
+				settings.followUpBehavior,
 			],
 		);
 
@@ -776,6 +798,7 @@ export const WorkspaceComposerContainer = memo(
 						}
 						focusShortcut={focusShortcut}
 						togglePlanShortcut={togglePlanShortcut}
+						toggleFollowUpShortcut={toggleFollowUpShortcut}
 						alwaysShowContextUsage={settings.alwaysShowContextUsage}
 						onSubmit={handleComposerSubmit}
 						disabled={composerUnavailable}

@@ -164,6 +164,10 @@ export function InspectorTabsSection({
 	const presentationClearTimerRef = useRef<number | null>(null);
 	const blurClearTimerRef = useRef<number | null>(null);
 	const pointerInsideContainerRef = useRef(false);
+	// Tracks whether the user is actively selecting text. When true, prevents
+	// the panel from collapsing on mouse-leave so text selection can extend
+	// beyond the container boundary without interruption.
+	const isSelectingRef = useRef(false);
 	// Holds the outstanding `suspendTerminalFit()` release while the CSS
 	// width/height transition is running, plus the timer that will release it
 	// and trigger the final fit.
@@ -289,13 +293,26 @@ export function InspectorTabsSection({
 		setZoomTarget,
 	]);
 
+	// Mark the start of a potential text selection. Used to prevent the panel
+	// from collapsing while the user is dragging to select text.
+	const handleBodyMouseDown = useCallback(() => {
+		isSelectingRef.current = true;
+	}, []);
+
 	// Un-zoom fires only when the cursor leaves the whole panel (header +
 	// body). Moving from body up into the header keeps the zoom alive so the
 	// Stop/Rerun action and the tab switcher stay reachable while zoomed.
+	// Also skips collapsing if the user is actively selecting text.
 	const handleContainerMouseLeave = useCallback(() => {
 		pointerInsideContainerRef.current = false;
 		const hadPendingHoverIntent = hoverTimerRef.current !== null;
 		clearHoverTimer();
+		// Don't collapse if user is selecting text — they might drag outside
+		// the container boundary during selection. The global mouseup handler
+		// will clear this flag, and then leaving will collapse normally.
+		if (isSelectingRef.current) {
+			return;
+		}
 		if (hadPendingHoverIntent || (!isHoverExpanded && !isZoomPresented)) {
 			return;
 		}
@@ -349,6 +366,17 @@ export function InspectorTabsSection({
 		beginZoomAnimation,
 		setZoomTarget,
 	]);
+
+	// Clear the selection flag on any mouseup, even if it happens outside the
+	// panel. This ensures the collapse-on-leave behavior resumes after the
+	// user finishes a text selection.
+	useEffect(() => {
+		const handleGlobalMouseUp = () => {
+			isSelectingRef.current = false;
+		};
+		document.addEventListener("mouseup", handleGlobalMouseUp);
+		return () => document.removeEventListener("mouseup", handleGlobalMouseUp);
+	}, []);
 
 	// Clean up any pending timer on unmount.
 	useEffect(() => {
@@ -679,6 +707,7 @@ export function InspectorTabsSection({
 							<div
 								aria-label="Inspector tabs body"
 								onMouseEnter={handleBodyMouseEnter}
+								onMouseDown={handleBodyMouseDown}
 								className="relative flex min-h-0 flex-1 flex-col bg-sidebar"
 							>
 								<TabsZoomContext.Provider

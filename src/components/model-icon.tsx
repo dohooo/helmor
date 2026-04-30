@@ -1,6 +1,7 @@
 import { Box } from "lucide-react";
 import {
 	ClaudeColorIcon,
+	DeepSeekIcon,
 	KimiIcon,
 	MinimaxIcon,
 	OpenAIColorIcon,
@@ -25,6 +26,8 @@ export function ModelIcon({
 		return <MinimaxIcon className={className} />;
 	if (model?.providerKey === "moonshot" || model?.providerKey === "moonshot-cn")
 		return <KimiIcon className={className} />;
+	if (model?.providerKey === "deepseek")
+		return <DeepSeekIcon className={className} />;
 	if (model?.providerKey === "zai" || model?.providerKey === "zai-cn")
 		return <ZhipuIcon className={className} />;
 	if (model?.providerKey === "qwen" || model?.providerKey === "qwen-intl")

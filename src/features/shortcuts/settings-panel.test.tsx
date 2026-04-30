@@ -12,7 +12,7 @@ describe("ShortcutsSettingsPanel", () => {
 		const user = userEvent.setup();
 		render(<ShortcutsSettingsPanel overrides={{}} onChange={vi.fn()} />);
 
-		expect(screen.getByText("Pinned")).toBeInTheDocument();
+		expect(screen.getByText("Global")).toBeInTheDocument();
 		expect(screen.getByText("Global hotkey")).toBeInTheDocument();
 
 		await user.type(

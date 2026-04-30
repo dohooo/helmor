@@ -374,7 +374,7 @@ export const WorkspaceRowItem = memo(
 						</ContextMenuItem>
 					) : null}
 
-					{onOpenInFinder ? (
+					{onOpenInFinder && !isRestoreAction ? (
 						<ContextMenuItem
 							disabled={isBusy || Boolean(workspaceActionsDisabled)}
 							onClick={() => onOpenInFinder(row.id)}

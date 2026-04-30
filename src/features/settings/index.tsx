@@ -38,6 +38,7 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { getShortcut } from "@/features/shortcuts/registry";
 import { ShortcutsSettingsPanel } from "@/features/shortcuts/settings-panel";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import {
@@ -307,7 +308,30 @@ export const SettingsDialog = memo(function SettingsDialog({
 									</SettingsRow>
 									<SettingsRow
 										title="Follow-up behavior"
-										description="Queue follow-ups while the agent runs, or steer the current run."
+										description={
+											<>
+												Queue follow-ups while the agent runs or steer the
+												current run.
+												{(() => {
+													const toggleHotkey = getShortcut(
+														settings.shortcuts,
+														"composer.toggleFollowUpBehavior",
+													);
+													if (!toggleHotkey) return null;
+													return (
+														<>
+															{" "}
+															Press{" "}
+															<InlineShortcutDisplay
+																hotkey={toggleHotkey}
+																className="align-baseline text-muted-foreground"
+															/>{" "}
+															to do the opposite for one message.
+														</>
+													);
+												})()}
+											</>
+										}
 									>
 										<ToggleGroup
 											type="single"

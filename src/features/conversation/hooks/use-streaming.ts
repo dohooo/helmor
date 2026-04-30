@@ -110,6 +110,10 @@ type SubmitPayload = {
 	 *  `followUpBehavior` setting. Set by host-triggered submits (e.g.
 	 *  git-pull conflict resolution) that must never interrupt the turn. */
 	forceQueue?: boolean;
+	/** Per-submit override for `followUpBehavior` — used by the composer's
+	 *  "send with opposite follow-up" shortcut. Ignored when `forceQueue`
+	 *  is set. */
+	followUpBehaviorOverride?: FollowUpBehavior;
 };
 
 type UseConversationStreamingArgs = {
@@ -1004,6 +1008,7 @@ export function useConversationStreaming({
 				permissionMode,
 				fastMode,
 				forceQueue,
+				followUpBehaviorOverride,
 			}: SubmitPayload,
 			// Override for drain / queued-steer. When present, all
 			// session/workspace lookups use the override instead of the
@@ -1052,7 +1057,11 @@ export function useConversationStreaming({
 				// the routing to the queue regardless of the user's
 				// `followUpBehavior` setting — used for host-triggered
 				// prompts (e.g. git-pull) that must never steer.
-				const effectiveBehavior = forceQueue ? "queue" : followUpBehavior;
+				// `followUpBehaviorOverride` is the per-submit "opposite"
+				// flip from the composer shortcut; subordinate to forceQueue.
+				const effectiveBehavior = forceQueue
+					? "queue"
+					: (followUpBehaviorOverride ?? followUpBehavior);
 				if (effectiveBehavior === "queue" && !isOverride) {
 					// App-level queue: capture the current (session,
 					// workspace, contextKey) so drain can replay faithfully

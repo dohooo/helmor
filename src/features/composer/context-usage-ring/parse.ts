@@ -240,7 +240,7 @@ function parseCodexNotes(
 			if (balance !== null) {
 				notes.push({ label: "Credits", value: formatCredits(balance) });
 			} else if (hasCredits === false) {
-				notes.push({ label: "Credits", value: "$0.00" });
+				notes.push({ label: "Credits", value: "0.00" });
 			}
 		}
 	}
@@ -261,7 +261,7 @@ function parseCreditsBalance(value: Json): number | null {
 
 function formatCredits(balance: number): string {
 	const safe = Math.max(0, balance);
-	return `$${safe.toFixed(2)}`;
+	return safe.toFixed(2);
 }
 
 function formatCodexPlan(value: Json): string | null {

@@ -26,12 +26,10 @@ const SCOPE_PARENTS: Partial<Record<ShortcutScope, readonly ShortcutScope[]>> =
 
 export const DEFAULT_FOCUS_SCOPE: ShortcutScope = "chat";
 
-// Sticky memory of the last container the user explicitly engaged with.
-// Closing the focused terminal tab destroys its xterm textarea, which sends
-// `activeElement` back to `body` without firing a meaningful focusin — without
-// this memory, the very next keystroke would route to chat (the default) and
-// e.g. Mod+W would silently start closing chat sessions.
-let lastEngagedScope: ShortcutScope = DEFAULT_FOCUS_SCOPE;
+// Most recently engaged scope (focus or click). Pointer is needed because
+// xterm keeps DOM focus on its hidden textarea even after the user clicks
+// elsewhere. `null` = no engagement yet (distinct from chat-the-default).
+let lastEngagedScope: ShortcutScope | null = null;
 
 function readScopesFrom(element: Element | null): ShortcutScope[] {
 	if (!element) return [];
@@ -62,6 +60,12 @@ function withInheritedParents(
 	return out;
 }
 
+function rememberEngagement(target: Element | null): void {
+	if (!target) return;
+	const scopes = readScopesFrom(target);
+	lastEngagedScope = scopes[0] ?? null;
+}
+
 if (typeof document !== "undefined") {
 	document.addEventListener(
 		"focusin",
@@ -71,8 +75,17 @@ if (typeof document !== "undefined") {
 			// removed (e.g. xterm unmounted on tab close). Treat that as a
 			// transient focus loss and keep the sticky memory.
 			if (!target || target === document.body) return;
-			const scopes = readScopesFrom(target);
-			lastEngagedScope = scopes[0] ?? DEFAULT_FOCUS_SCOPE;
+			rememberEngagement(target);
+		},
+		true,
+	);
+
+	// Click engagement: covers non-focusable click targets (chat messages,
+	// padding) where focusin doesn't fire and xterm holds DOM focus.
+	document.addEventListener(
+		"pointerdown",
+		(event) => {
+			rememberEngagement(event.target as Element | null);
 		},
 		true,
 	);
@@ -87,20 +100,41 @@ export function getActiveScopes(): ShortcutScope[] {
 }
 
 function computeActiveLeafScopes(): readonly ShortcutScope[] {
-	if (typeof document === "undefined") return [lastEngagedScope];
+	if (typeof document === "undefined") {
+		return [lastEngagedScope ?? DEFAULT_FOCUS_SCOPE];
+	}
 	const active = document.activeElement;
 	if (active && active !== document.body) {
 		const scopes = readScopesFrom(active);
-		if (scopes.length > 0) return scopes;
+		if (scopes.length > 0) {
+			// Trust focus if engagement agrees (or is unset); otherwise the
+			// click wins — handles xterm keeping focus on its textarea.
+			const expanded = withInheritedParents(scopes);
+			if (lastEngagedScope === null || expanded.includes(lastEngagedScope)) {
+				return scopes;
+			}
+			const stillMounted = document.querySelector(
+				`[${FOCUS_SCOPE_ATTRIBUTE}="${lastEngagedScope}"]`,
+			);
+			if (stillMounted) return [lastEngagedScope];
+			return scopes;
+		}
 		// Real focus owner lives outside any tagged scope (sidebar, top
-		// chrome). Fall back to the default.
+		// chrome). Honor a sticky engagement that still exists, otherwise
+		// fall back to the default.
+		if (lastEngagedScope !== null) {
+			const stillMounted = document.querySelector(
+				`[${FOCUS_SCOPE_ATTRIBUTE}="${lastEngagedScope}"]`,
+			);
+			if (stillMounted) return [lastEngagedScope];
+		}
 		return [DEFAULT_FOCUS_SCOPE];
 	}
 	// activeElement === body — transient focus loss (e.g. focused element
 	// just unmounted). Honor sticky only if its scope container still
 	// exists in the DOM; otherwise the panel is gone and the sticky memory
 	// is stale.
-	if (lastEngagedScope === DEFAULT_FOCUS_SCOPE) return [lastEngagedScope];
+	if (lastEngagedScope === null) return [DEFAULT_FOCUS_SCOPE];
 	const stillMounted = document.querySelector(
 		`[${FOCUS_SCOPE_ATTRIBUTE}="${lastEngagedScope}"]`,
 	);
@@ -109,5 +143,5 @@ function computeActiveLeafScopes(): readonly ShortcutScope[] {
 
 /** Test-only: reset the sticky scope memory between tests. */
 export function _resetActiveScopeForTesting() {
-	lastEngagedScope = DEFAULT_FOCUS_SCOPE;
+	lastEngagedScope = null;
 }

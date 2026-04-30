@@ -146,7 +146,7 @@ export function ShortcutsSettingsPanel({
 
 			<section className="pb-1">
 				<div className="pb-1 text-[12px] font-medium tracking-normal text-muted-foreground">
-					Pinned
+					Global
 				</div>
 				{pinnedDefinitions.map((definition, index) =>
 					renderShortcutRow(definition, index === pinnedDefinitions.length - 1),

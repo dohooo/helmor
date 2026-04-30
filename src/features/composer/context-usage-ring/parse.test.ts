@@ -244,7 +244,7 @@ describe("parseCodexRateLimits", () => {
 		expect(display?.secondary?.label).toBe("7d limit");
 		expect(display?.notes).toEqual([
 			{ label: "Plan", value: "Pro" },
-			{ label: "Credits", value: "$10.50" },
+			{ label: "Credits", value: "10.50" },
 		]);
 	});
 
@@ -261,7 +261,7 @@ describe("parseCodexRateLimits", () => {
 		expect(display?.secondary).toBeNull();
 		expect(display?.notes).toEqual([
 			{ label: "Plan", value: "Prolite" },
-			{ label: "Credits", value: "$0.00" },
+			{ label: "Credits", value: "0.00" },
 		]);
 	});
 

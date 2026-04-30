@@ -1,4 +1,5 @@
 import ClaudeColor from "@lobehub/icons/es/Claude/components/Color";
+import DeepSeekColor from "@lobehub/icons/es/DeepSeek/components/Color";
 import KimiMono from "@lobehub/icons/es/Kimi/components/Mono";
 import MinimaxColor from "@lobehub/icons/es/Minimax/components/Color";
 import OpenAIMono from "@lobehub/icons/es/OpenAI/components/Mono";
@@ -49,6 +50,10 @@ export function MinimaxIcon(props: SVGProps<SVGSVGElement>) {
 
 export function KimiIcon(props: SVGProps<SVGSVGElement>) {
 	return <KimiMono {...props} />;
+}
+
+export function DeepSeekIcon(props: SVGProps<SVGSVGElement>) {
+	return <DeepSeekColor {...props} />;
 }
 
 export function QwenIcon(props: SVGProps<SVGSVGElement>) {

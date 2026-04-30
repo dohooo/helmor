@@ -1,14 +1,20 @@
 // Stage claude-code + codex + bun + gh + glab into `sidecar/dist/vendor/`
 // for Tauri to ship as bundle resources. macOS host only.
+//
+// Cross-arch staging: in CI the host is always Apple Silicon (macos-26
+// runner), but we publish both aarch64-apple-darwin and x86_64-apple-darwin
+// bundles. We honor TAURI_TARGET_TRIPLE so the staged vendor binaries match
+// the bundle target — otherwise Intel users get arm64 binaries and
+// `gh auth login` fails with "bad CPU type in executable" (#293).
 
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import {
 	chmodSync,
 	cpSync,
 	existsSync,
 	mkdirSync,
 	readdirSync,
-	realpathSync,
+	readFileSync,
 	rmSync,
 	statSync,
 } from "node:fs";
@@ -20,9 +26,13 @@ const NODE_MODULES = join(SIDECAR_ROOT, "node_modules");
 const DIST_VENDOR = join(SIDECAR_ROOT, "dist", "vendor");
 const BUNDLE_CACHE = join(SIDECAR_ROOT, ".bundle-cache");
 
-// Bumping: update version + sha256, wipe sidecar/.bundle-cache. Checksums:
-//   gh:   github.com/cli/cli/releases/download/v$VER/gh_${VER}_checksums.txt
-//   glab: gitlab.com/gitlab-org/cli/-/releases/v$VER/downloads/checksums.txt
+// Bumping any version: update SHA256 below + wipe sidecar/.bundle-cache.
+//   gh:    github.com/cli/cli/releases/download/v$VER/gh_${VER}_checksums.txt
+//   glab:  gitlab.com/gitlab-org/cli/-/releases/v$VER/downloads/checksums.txt
+//   bun:   github.com/oven-sh/bun/releases/download/bun-v$VER/SHASUMS256.txt
+//   codex: shasum -a 256 of the npm tarball at
+//          registry.npmjs.org/@openai/codex/-/codex-$VER-darwin-{arm64,x64}.tgz
+
 const GH_VERSION = "2.91.0";
 const GH_SHA256 = {
 	arm64: "20446cd714d9fa1b69fbd410deade3731f38fe09a2b980c8488aa388dd320ada",
@@ -35,23 +45,71 @@ const GLAB_SHA256 = {
 	amd64: "79d1a4f933919689c5fb7774feb1dd08f30b9c896dff4283b4a7387689ee0531",
 } as const;
 
+const BUN_VERSION = "1.3.2";
+const BUN_SHA256 = {
+	arm64: "d85847982db574518130a45582bcf14d8e2be9610b66cb5046c20348578b0fe2",
+	x64: "78d4f0c8637427ac0be55639a697ff6a025e8eb940a6920ca508603c41a5a7b0",
+} as const;
+
+// Codex version is whatever sidecar/package.json pulled in. The SHAs below
+// must match THAT version — bump them together (or staging cross-arch will
+// abort with a clear error).
+const CODEX_SHA256: Readonly<Record<string, { arm64: string; x64: string }>> = {
+	"0.124.0": {
+		arm64: "8221653b5f1592007ff19a756cfd00afaa4005b3e944412a3ca2372d0abb3b5a",
+		x64: "eb9c0cf46fc9aa58592cd103f0cbc9535667087eb3369d0b99ae62b49f9133da",
+	},
+};
+
 // ---------------------------------------------------------------------------
-// Platform detection — macOS only, arch varies (arm64 / x64)
+// Target detection — honor TAURI_TARGET_TRIPLE so cross-arch CI stages the
+// right binaries. Falls back to the host arch for `bun run dev` / local
+// staging where no env var is set.
 // ---------------------------------------------------------------------------
 
-type NodeArch = "arm64" | "x64";
+type DarwinArch = "arm64" | "x64";
 
 interface TargetInfo {
+	arch: DarwinArch;
 	/** `@anthropic-ai/claude-code` uses `<arch>-darwin` naming. */
 	ccVendorArch: string;
 	/** `@openai/codex-darwin-<arch>` is the npm optional-dep package. */
 	codexPkg: string;
-	/** Target triple used as the subdir inside the codex platform package. */
+	/** Target triple inside the codex platform package. */
 	codexTriple: string;
-	/** `gh` release uses `arm64` / `amd64`. */
+	/** Codex npm tarball suffix: `darwin-arm64` / `darwin-x64`. */
+	codexNpmSuffix: string;
+	/** `gh` release naming: `arm64` / `amd64`. */
 	ghArch: "arm64" | "amd64";
-	/** `glab` release uses `arm64` / `amd64`. */
+	/** `glab` release naming: `arm64` / `amd64`. */
 	glabArch: "arm64" | "amd64";
+	/** `bun` release naming: `aarch64` / `x64`. */
+	bunArch: "aarch64" | "x64";
+}
+
+function infoForArch(arch: DarwinArch): TargetInfo {
+	if (arch === "arm64") {
+		return {
+			arch,
+			ccVendorArch: "arm64-darwin",
+			codexPkg: "@openai/codex-darwin-arm64",
+			codexTriple: "aarch64-apple-darwin",
+			codexNpmSuffix: "darwin-arm64",
+			ghArch: "arm64",
+			glabArch: "arm64",
+			bunArch: "aarch64",
+		};
+	}
+	return {
+		arch,
+		ccVendorArch: "x64-darwin",
+		codexPkg: "@openai/codex-darwin-x64",
+		codexTriple: "x86_64-apple-darwin",
+		codexNpmSuffix: "darwin-x64",
+		ghArch: "amd64",
+		glabArch: "amd64",
+		bunArch: "x64",
+	};
 }
 
 function detectTarget(): TargetInfo {
@@ -60,32 +118,29 @@ function detectTarget(): TargetInfo {
 			`[stage-vendor] Helmor only builds on macOS; host platform is ${process.platform}`,
 		);
 	}
-	const arch = process.arch as NodeArch;
 
-	switch (arch) {
-		case "arm64":
-			return {
-				ccVendorArch: "arm64-darwin",
-				codexPkg: "@openai/codex-darwin-arm64",
-				codexTriple: "aarch64-apple-darwin",
-				ghArch: "arm64",
-				glabArch: "arm64",
-			};
-		case "x64":
-			return {
-				ccVendorArch: "x64-darwin",
-				codexPkg: "@openai/codex-darwin-x64",
-				codexTriple: "x86_64-apple-darwin",
-				ghArch: "amd64",
-				glabArch: "amd64",
-			};
-		default:
-			throw new Error(`[stage-vendor] Unsupported macOS arch: ${arch}`);
+	// Read env in the same order prepare-sidecar.mjs does so they stay in sync.
+	const triple =
+		process.env.TAURI_TARGET_TRIPLE?.trim() ||
+		process.env.TAURI_ENV_TARGET_TRIPLE?.trim() ||
+		process.env.CARGO_BUILD_TARGET?.trim();
+
+	if (triple) {
+		if (triple === "aarch64-apple-darwin") return infoForArch("arm64");
+		if (triple === "x86_64-apple-darwin") return infoForArch("x64");
+		throw new Error(
+			`[stage-vendor] unsupported TAURI_TARGET_TRIPLE for macOS: ${triple}`,
+		);
 	}
+
+	const arch = process.arch;
+	if (arch === "arm64") return infoForArch("arm64");
+	if (arch === "x64") return infoForArch("x64");
+	throw new Error(`[stage-vendor] unsupported macOS host arch: ${arch}`);
 }
 
 // ---------------------------------------------------------------------------
-// Copy helpers
+// Copy + download helpers
 // ---------------------------------------------------------------------------
 
 function ensureExists(path: string, label: string): void {
@@ -135,10 +190,6 @@ const ENTITLEMENTS_PLIST = join(
 	"Entitlements.plist",
 );
 
-// ---------------------------------------------------------------------------
-// Forge CLI download (gh / glab) — pinned, cached at sidecar/.bundle-cache/
-// ---------------------------------------------------------------------------
-
 function ensureCacheDir(): void {
 	mkdirSync(BUNDLE_CACHE, { recursive: true });
 }
@@ -185,71 +236,6 @@ function freshExtractDir(path: string): void {
 	mkdirSync(path, { recursive: true });
 }
 
-function stageGhBinary(arch: "arm64" | "amd64"): string {
-	ensureCacheDir();
-	const slug = `gh_${GH_VERSION}_macOS_${arch}`;
-	const archive = join(BUNDLE_CACHE, `${slug}.zip`);
-	const url = `https://github.com/cli/cli/releases/download/v${GH_VERSION}/${slug}.zip`;
-	downloadAndVerify(url, archive, GH_SHA256[arch]);
-
-	// Unzip into a dedicated temp dir, then locate `bin/gh` regardless of
-	// whether the archive carries an internal wrapper directory. We strip
-	// the wrapper after the fact so changes upstream (with or without it)
-	// don't silently leave stale files in BUNDLE_CACHE.
-	const extractDir = join(BUNDLE_CACHE, slug);
-	freshExtractDir(extractDir);
-	execFileSync("unzip", ["-q", "-o", archive, "-d", extractDir], {
-		stdio: "inherit",
-	});
-
-	const binSrc = locateExtractedBin(extractDir, "gh");
-	const binDest = join(DIST_VENDOR, "gh", "gh");
-	copyFile(binSrc, binDest);
-	chmodSync(binDest, 0o755);
-	maybeSignMacBinary(binDest, false);
-	return binDest;
-}
-
-/// Find `bin/<name>` either at the archive root or one wrapper level deep.
-function locateExtractedBin(extractDir: string, name: string): string {
-	const direct = join(extractDir, "bin", name);
-	if (existsSync(direct)) return direct;
-	for (const entry of readdirSync(extractDir)) {
-		const nested = join(extractDir, entry, "bin", name);
-		if (existsSync(nested)) return nested;
-	}
-	throw new Error(
-		`[stage-vendor] could not locate bin/${name} under ${extractDir}`,
-	);
-}
-
-function stageGlabBinary(arch: "arm64" | "amd64"): string {
-	ensureCacheDir();
-	const slug = `glab_${GLAB_VERSION}_darwin_${arch}`;
-	const archive = join(BUNDLE_CACHE, `${slug}.tar.gz`);
-	const url = `https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/${slug}.tar.gz`;
-	downloadAndVerify(url, archive, GLAB_SHA256[arch]);
-
-	// glab's tarball has no wrapper dir; bin/glab is at the archive root.
-	const extractDir = join(BUNDLE_CACHE, slug);
-	freshExtractDir(extractDir);
-	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
-		stdio: "inherit",
-	});
-
-	const binSrc = join(extractDir, "bin", "glab");
-	if (!existsSync(binSrc)) {
-		throw new Error(
-			`[stage-vendor] glab binary missing after extract: ${binSrc}`,
-		);
-	}
-	const binDest = join(DIST_VENDOR, "glab", "glab");
-	copyFile(binSrc, binDest);
-	chmodSync(binDest, 0o755);
-	maybeSignMacBinary(binDest, false);
-	return binDest;
-}
-
 function maybeSignMacBinary(path: string, withEntitlements: boolean): void {
 	const identity = process.env.APPLE_SIGNING_IDENTITY?.trim();
 	if (!identity) return;
@@ -279,13 +265,185 @@ function maybeSignMacBinary(path: string, withEntitlements: boolean): void {
 }
 
 // ---------------------------------------------------------------------------
+// gh / glab — download from upstream releases for the target arch
+// ---------------------------------------------------------------------------
+
+/// Find `bin/<name>` either at the archive root or one wrapper level deep.
+function locateExtractedBin(extractDir: string, name: string): string {
+	const direct = join(extractDir, "bin", name);
+	if (existsSync(direct)) return direct;
+	for (const entry of readdirSync(extractDir)) {
+		const nested = join(extractDir, entry, "bin", name);
+		if (existsSync(nested)) return nested;
+	}
+	throw new Error(
+		`[stage-vendor] could not locate bin/${name} under ${extractDir}`,
+	);
+}
+
+function stageGhBinary(arch: "arm64" | "amd64"): string {
+	ensureCacheDir();
+	const slug = `gh_${GH_VERSION}_macOS_${arch}`;
+	const archive = join(BUNDLE_CACHE, `${slug}.zip`);
+	const url = `https://github.com/cli/cli/releases/download/v${GH_VERSION}/${slug}.zip`;
+	downloadAndVerify(url, archive, GH_SHA256[arch]);
+
+	const extractDir = join(BUNDLE_CACHE, slug);
+	freshExtractDir(extractDir);
+	execFileSync("unzip", ["-q", "-o", archive, "-d", extractDir], {
+		stdio: "inherit",
+	});
+
+	const binSrc = locateExtractedBin(extractDir, "gh");
+	const binDest = join(DIST_VENDOR, "gh", "gh");
+	copyFile(binSrc, binDest);
+	chmodSync(binDest, 0o755);
+	maybeSignMacBinary(binDest, false);
+	return binDest;
+}
+
+function stageGlabBinary(arch: "arm64" | "amd64"): string {
+	ensureCacheDir();
+	const slug = `glab_${GLAB_VERSION}_darwin_${arch}`;
+	const archive = join(BUNDLE_CACHE, `${slug}.tar.gz`);
+	const url = `https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/${slug}.tar.gz`;
+	downloadAndVerify(url, archive, GLAB_SHA256[arch]);
+
+	const extractDir = join(BUNDLE_CACHE, slug);
+	freshExtractDir(extractDir);
+	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
+		stdio: "inherit",
+	});
+
+	const binSrc = join(extractDir, "bin", "glab");
+	if (!existsSync(binSrc)) {
+		throw new Error(
+			`[stage-vendor] glab binary missing after extract: ${binSrc}`,
+		);
+	}
+	const binDest = join(DIST_VENDOR, "glab", "glab");
+	copyFile(binSrc, binDest);
+	chmodSync(binDest, 0o755);
+	maybeSignMacBinary(binDest, false);
+	return binDest;
+}
+
+// ---------------------------------------------------------------------------
+// bun — pinned download from oven-sh/bun releases for the target arch.
+// Was previously copied from `which bun`, which silently produced an arm64
+// binary for x86_64 builds whenever the runner host was Apple Silicon.
+// ---------------------------------------------------------------------------
+
+function stageBunBinary(target: TargetInfo): string {
+	ensureCacheDir();
+	const slug = `bun-darwin-${target.bunArch}`;
+	const archive = join(BUNDLE_CACHE, `${slug}-${BUN_VERSION}.zip`);
+	const url = `https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${slug}.zip`;
+	downloadAndVerify(url, archive, BUN_SHA256[target.arch]);
+
+	const extractDir = join(BUNDLE_CACHE, `bun-${BUN_VERSION}-${target.bunArch}`);
+	freshExtractDir(extractDir);
+	execFileSync("unzip", ["-q", "-o", archive, "-d", extractDir], {
+		stdio: "inherit",
+	});
+
+	// Archive layout: `bun-darwin-<arch>/bun`.
+	const binSrc = join(extractDir, slug, "bun");
+	if (!existsSync(binSrc)) {
+		throw new Error(
+			`[stage-vendor] bun binary missing after extract: ${binSrc}`,
+		);
+	}
+	const binDest = join(DIST_VENDOR, "bun", "bun");
+	copyFile(binSrc, binDest);
+	chmodSync(binDest, 0o755);
+	maybeSignMacBinary(binDest, true);
+	return binDest;
+}
+
+// ---------------------------------------------------------------------------
+// codex — prefer the npm package already on disk; fall back to downloading
+// the cross-arch tarball from npm when staging for a non-host architecture.
+// ---------------------------------------------------------------------------
+
+function readCodexVersion(): string {
+	const pkgJsonPath = join(NODE_MODULES, "@openai", "codex", "package.json");
+	ensureExists(pkgJsonPath, "@openai/codex package.json");
+	const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8")) as {
+		version?: string;
+	};
+	if (!pkg.version) {
+		throw new Error(`[stage-vendor] @openai/codex has no version field`);
+	}
+	return pkg.version;
+}
+
+function copyCodexBin(src: string): string {
+	const dest = join(DIST_VENDOR, "codex", "codex");
+	copyFile(src, dest);
+	chmodSync(dest, 0o755);
+	maybeSignMacBinary(dest, false);
+	return dest;
+}
+
+function stageCodexBinary(target: TargetInfo): string {
+	const installed = join(
+		NODE_MODULES,
+		target.codexPkg,
+		"vendor",
+		target.codexTriple,
+		"codex",
+		"codex",
+	);
+	if (existsSync(installed)) {
+		return copyCodexBin(installed);
+	}
+
+	// Cross-arch: download the platform tarball from npm.
+	const version = readCodexVersion();
+	const shaTable = CODEX_SHA256[version];
+	if (!shaTable) {
+		throw new Error(
+			`[stage-vendor] no pinned SHA256 for codex ${version} — add it to CODEX_SHA256 in stage-vendor.ts`,
+		);
+	}
+	ensureCacheDir();
+	const slug = `codex-${version}-${target.codexNpmSuffix}`;
+	const archive = join(BUNDLE_CACHE, `${slug}.tgz`);
+	const url = `https://registry.npmjs.org/@openai/codex/-/${slug}.tgz`;
+	downloadAndVerify(url, archive, shaTable[target.arch]);
+
+	const extractDir = join(BUNDLE_CACHE, slug);
+	freshExtractDir(extractDir);
+	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
+		stdio: "inherit",
+	});
+
+	// npm tarballs nest everything under `package/`.
+	const binSrc = join(
+		extractDir,
+		"package",
+		"vendor",
+		target.codexTriple,
+		"codex",
+		"codex",
+	);
+	if (!existsSync(binSrc)) {
+		throw new Error(
+			`[stage-vendor] codex binary missing after extract: ${binSrc}`,
+		);
+	}
+	return copyCodexBin(binSrc);
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
 const target = detectTarget();
 
 console.log(
-	`[stage-vendor] host=darwin/${process.arch} ccArch=${target.ccVendorArch} codexPkg=${target.codexPkg}`,
+	`[stage-vendor] host=darwin/${process.arch} target=darwin/${target.arch} (${target.codexTriple})`,
 );
 
 // Clean
@@ -299,9 +457,9 @@ ensureExists(join(ccSrc, "cli.js"), "@anthropic-ai/claude-code/cli.js");
 
 copyFile(join(ccSrc, "cli.js"), join(ccDest, "cli.js"));
 
-// Host-arch subset of claude-code's vendor dirs. cli.js resolves these
+// Target-arch subset of claude-code's vendor dirs. cli.js resolves these
 // relative to itself at runtime; any missing subdir just disables that
-// particular feature (ripgrep → /search, audio-capture → voice I/O).
+// particular feature (ripgrep -> /search, audio-capture -> voice I/O).
 const ccVendorSubdirs = ["ripgrep", "audio-capture"] as const;
 for (const sub of ccVendorSubdirs) {
 	const from = join(ccSrc, "vendor", sub, target.ccVendorArch);
@@ -311,43 +469,10 @@ for (const sub of ccVendorSubdirs) {
 }
 
 // ----- Codex -----
-const codexSrc = join(
-	NODE_MODULES,
-	target.codexPkg,
-	"vendor",
-	target.codexTriple,
-	"codex",
-	"codex",
-);
-ensureExists(codexSrc, `${target.codexPkg} codex binary`);
+stageCodexBinary(target);
 
-const codexDest = join(DIST_VENDOR, "codex", "codex");
-copyFile(codexSrc, codexDest);
-chmodSync(codexDest, 0o755);
-maybeSignMacBinary(codexDest, false);
-
-// ----- Bun (JS runtime for cli.js) -----
-function locateHostBun(): string {
-	try {
-		const raw =
-			execSync("which bun", { encoding: "utf8" }).trim().split("\n")[0] ?? "";
-		if (!raw) throw new Error("empty output");
-		// Homebrew ships bun as a symlink; resolve to the real Mach-O.
-		return realpathSync(raw);
-	} catch {
-		throw new Error(
-			"[stage-vendor] bun not found on PATH — install Bun (https://bun.sh) on the build host. " +
-				"The Claude Agent SDK needs a JS runtime to execute cli.js, and `.app` bundles cannot rely " +
-				"on the user's PATH. We ship the host's bun binary inside Helmor.app/Contents/Resources/vendor/bun/.",
-		);
-	}
-}
-
-const bunSrc = locateHostBun();
-const bunDest = join(DIST_VENDOR, "bun", "bun");
-copyFile(bunSrc, bunDest);
-chmodSync(bunDest, 0o755);
-maybeSignMacBinary(bunDest, true);
+// ----- Bun -----
+stageBunBinary(target);
 
 for (const rel of [
 	join(ccDest, "vendor", "ripgrep", target.ccVendorArch, "rg"),

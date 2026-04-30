@@ -3,6 +3,21 @@ import { createPortal } from "react-dom";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
+const TRIGGER_GAP = 4;
+const VIEWPORT_PADDING = 16;
+// If the space below the trigger is smaller than this and there's more room
+// above, flip the popover upward. Anything larger stays anchored below and
+// lets the body scroll within the available height.
+const FLIP_THRESHOLD = 240;
+const MIN_POPOVER_HEIGHT = 120;
+
+type PopoverPos = {
+	left: number;
+	top: number | null;
+	bottom: number | null;
+	maxHeight: number;
+};
+
 export function EditDiffTrigger({
 	file,
 	diffAdd,
@@ -24,17 +39,29 @@ export function EditDiffTrigger({
 }) {
 	const triggerRef = useRef<HTMLSpanElement>(null);
 	const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+	const [pos, setPos] = useState<PopoverPos | null>(null);
 
 	const show = useCallback(() => {
 		if (hideTimer.current) {
 			clearTimeout(hideTimer.current);
 			hideTimer.current = null;
 		}
-		if (triggerRef.current) {
-			const rect = triggerRef.current.getBoundingClientRect();
-			setPos({ x: rect.left, y: rect.bottom + 4 });
-		}
+		if (!triggerRef.current) return;
+		const rect = triggerRef.current.getBoundingClientRect();
+		const viewportHeight = window.innerHeight;
+		const spaceBelow =
+			viewportHeight - rect.bottom - TRIGGER_GAP - VIEWPORT_PADDING;
+		const spaceAbove = rect.top - TRIGGER_GAP - VIEWPORT_PADDING;
+		const placeAbove = spaceBelow < FLIP_THRESHOLD && spaceAbove > spaceBelow;
+		setPos({
+			left: rect.left,
+			top: placeAbove ? null : rect.bottom + TRIGGER_GAP,
+			bottom: placeAbove ? viewportHeight - rect.top + TRIGGER_GAP : null,
+			maxHeight: Math.max(
+				MIN_POPOVER_HEIGHT,
+				placeAbove ? spaceAbove : spaceBelow,
+			),
+		});
 	}, []);
 	const hideDelayed = useCallback(() => {
 		hideTimer.current = setTimeout(() => setPos(null), 120);
@@ -77,13 +104,18 @@ export function EditDiffTrigger({
 						<div
 							onMouseEnter={show}
 							onMouseLeave={hideDelayed}
-							className="fixed z-[100] w-[min(40rem,90vw)] rounded-lg border border-border bg-popover shadow-xl"
-							style={{ left: pos.x, top: pos.y }}
+							className="fixed z-[100] flex w-[min(40rem,90vw)] flex-col rounded-lg border border-border bg-popover shadow-xl"
+							style={{
+								left: pos.left,
+								top: pos.top ?? undefined,
+								bottom: pos.bottom ?? undefined,
+								maxHeight: pos.maxHeight,
+							}}
 						>
-							<div className="border-b border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">
+							<div className="shrink-0 border-b border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">
 								{file}
 							</div>
-							<div className="max-h-[24rem] overflow-auto font-mono text-[11px] leading-5">
+							<div className="min-h-0 max-h-[24rem] flex-1 overflow-auto font-mono text-[11px] leading-5">
 								{oldStr
 									? oldStr.split("\n").map((line, index) => (
 											<div
