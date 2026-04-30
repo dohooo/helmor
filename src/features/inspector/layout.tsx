@@ -1,4 +1,4 @@
-import { ChevronDown, Plus, X } from "lucide-react";
+import { ChevronDown, Maximize2, Minimize2, Plus, X } from "lucide-react";
 import {
 	createContext,
 	useCallback,
@@ -118,9 +118,11 @@ type InspectorTabsSectionProps = {
 	/** False when there's no repo/workspace context — disables the "+" button. */
 	canSpawnTerminal: boolean;
 	/**
-	 * Gate for the hover-to-zoom effect. When false, hovering the body does
-	 * nothing — used so we only zoom when there's actual terminal output worth
-	 * enlarging (and not on the empty "Run setup" / "Open settings" placeholders).
+	 * Gate for the explicit expand-panel control. When false, the expand-icon
+	 * toggle is hidden and any active zoom is dismissed — used so we only
+	 * surface the affordance when there's actual terminal output worth
+	 * enlarging (and not on the empty "Run setup" / "Open settings"
+	 * placeholders).
 	 */
 	canHoverExpand: boolean;
 	children?: React.ReactNode;
@@ -160,7 +162,6 @@ export function InspectorTabsSection({
 	// xterm's canvas is being GPU-scaled and then re-fit, which would
 	// otherwise look like "ugly stretched pixels, then a snap".
 	const [isContentBlurred, setIsContentBlurred] = useState(false);
-	const hoverTimerRef = useRef<number | null>(null);
 	const presentationClearTimerRef = useRef<number | null>(null);
 	const blurClearTimerRef = useRef<number | null>(null);
 	const pointerInsideContainerRef = useRef(false);
@@ -173,13 +174,6 @@ export function InspectorTabsSection({
 	// and trigger the final fit.
 	const terminalFitReleaseRef = useRef<(() => void) | null>(null);
 	const fitReleaseTimerRef = useRef<number | null>(null);
-
-	const clearHoverTimer = useCallback(() => {
-		if (hoverTimerRef.current !== null) {
-			window.clearTimeout(hoverTimerRef.current);
-			hoverTimerRef.current = null;
-		}
-	}, []);
 
 	const clearPresentationClearTimer = useCallback(() => {
 		if (presentationClearTimerRef.current !== null) {
@@ -271,24 +265,20 @@ export function InspectorTabsSection({
 		[clearPresentationClearTimer, triggerContentBlurPulse],
 	);
 
-	// Hover trigger is bound to the BODY only (not the header) so moving the
-	// cursor across the Setup/Run tabs or the chevron doesn't start a zoom.
-	// The 300ms "hover intent" timer still gives us the linger-to-engage feel,
-	// but the intent signal now requires engaging with the actual output area.
-	const handleBodyMouseEnter = useCallback(() => {
+	// Explicit zoom toggle bound to the header icon. Replaces the previous
+	// hover-intent trigger on the body — auto-zoom on body hover fired
+	// while the user was just navigating/typing in the terminal, which was
+	// disruptive (panel snapped to 200% mid-keystroke, xterm canvas was
+	// CSS-scaled with the FitAddon suspended, leaving a flash of empty
+	// `bg-sidebar`). Now the panel only enlarges on explicit user intent.
+	const handleToggleZoom = useCallback(() => {
 		if (!open || !canHoverExpand) return;
-		if (isHoverExpanded) return;
-		clearHoverTimer();
-		hoverTimerRef.current = window.setTimeout(() => {
-			beginZoomAnimation();
-			setZoomTarget(true);
-			hoverTimerRef.current = null;
-		}, TABS_HOVER_ACTIVATION_MS);
+		beginZoomAnimation();
+		setZoomTarget(!isHoverExpanded);
 	}, [
 		open,
 		canHoverExpand,
 		isHoverExpanded,
-		clearHoverTimer,
 		beginZoomAnimation,
 		setZoomTarget,
 	]);
@@ -305,26 +295,18 @@ export function InspectorTabsSection({
 	// Also skips collapsing if the user is actively selecting text.
 	const handleContainerMouseLeave = useCallback(() => {
 		pointerInsideContainerRef.current = false;
-		const hadPendingHoverIntent = hoverTimerRef.current !== null;
-		clearHoverTimer();
 		// Don't collapse if user is selecting text — they might drag outside
 		// the container boundary during selection. The global mouseup handler
 		// will clear this flag, and then leaving will collapse normally.
 		if (isSelectingRef.current) {
 			return;
 		}
-		if (hadPendingHoverIntent || (!isHoverExpanded && !isZoomPresented)) {
+		if (!isHoverExpanded && !isZoomPresented) {
 			return;
 		}
 		beginZoomAnimation();
 		setZoomTarget(false);
-	}, [
-		clearHoverTimer,
-		isHoverExpanded,
-		isZoomPresented,
-		beginZoomAnimation,
-		setZoomTarget,
-	]);
+	}, [isHoverExpanded, isZoomPresented, beginZoomAnimation, setZoomTarget]);
 
 	// When the panel collapses we must drop any pending/active zoom so it
 	// doesn't linger over the neighbouring sections. Also release any
@@ -332,7 +314,6 @@ export function InspectorTabsSection({
 	// unmount or change size and shouldn't be held back.
 	useEffect(() => {
 		if (!open) {
-			clearHoverTimer();
 			clearPresentationClearTimer();
 			clearBlurTimer();
 			releaseTerminalFitLock();
@@ -342,7 +323,6 @@ export function InspectorTabsSection({
 		}
 	}, [
 		open,
-		clearHoverTimer,
 		clearPresentationClearTimer,
 		clearBlurTimer,
 		releaseTerminalFitLock,
@@ -353,7 +333,6 @@ export function InspectorTabsSection({
 	// panel back to its resting size through the normal collapse transition.
 	useEffect(() => {
 		if (canHoverExpand) return;
-		clearHoverTimer();
 		if (pointerInsideContainerRef.current) return;
 		if (!isHoverExpanded && !isZoomPresented) return;
 		beginZoomAnimation();
@@ -362,7 +341,6 @@ export function InspectorTabsSection({
 		canHoverExpand,
 		isHoverExpanded,
 		isZoomPresented,
-		clearHoverTimer,
 		beginZoomAnimation,
 		setZoomTarget,
 	]);
@@ -381,17 +359,11 @@ export function InspectorTabsSection({
 	// Clean up any pending timer on unmount.
 	useEffect(() => {
 		return () => {
-			clearHoverTimer();
 			clearPresentationClearTimer();
 			clearBlurTimer();
 			releaseTerminalFitLock();
 		};
-	}, [
-		clearHoverTimer,
-		clearPresentationClearTimer,
-		clearBlurTimer,
-		releaseTerminalFitLock,
-	]);
+	}, [clearPresentationClearTimer, clearBlurTimer, releaseTerminalFitLock]);
 
 	const zoomedSize = `${TABS_HOVER_ZOOM_MULTIPLIER * 100}%`;
 
@@ -683,6 +655,41 @@ export function InspectorTabsSection({
 							</div>
 							<div className="ml-2 flex shrink-0 items-center gap-1 self-center">
 								{tabActions}
+								{open && canHoverExpand ? (
+									// Explicit zoom toggle. Dimmed by default so it doesn't
+									// compete visually with the tab labels; brightens on hover
+									// so the affordance is obvious. Click flips the panel
+									// between resting and 200% × 200% sizes — replaces the
+									// previous body-hover trigger that was firing while the
+									// user was just navigating or typing in the terminal.
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<Button
+												type="button"
+												aria-label={
+													isHoverExpanded ? "Collapse panel" : "Expand panel"
+												}
+												aria-pressed={isHoverExpanded}
+												onClick={handleToggleZoom}
+												variant="ghost"
+												size="icon-sm"
+												className="shrink-0 text-muted-foreground/45 transition-opacity hover:bg-accent/60 hover:text-foreground"
+											>
+												{isHoverExpanded ? (
+													<Minimize2 className="size-3.5" strokeWidth={1.9} />
+												) : (
+													<Maximize2 className="size-3.5" strokeWidth={1.9} />
+												)}
+											</Button>
+										</TooltipTrigger>
+										<TooltipContent
+											side="bottom"
+											className="flex h-[24px] items-center rounded-md px-2 text-[12px] leading-none"
+										>
+											{isHoverExpanded ? "Collapse panel" : "Expand panel"}
+										</TooltipContent>
+									</Tooltip>
+								) : null}
 								<Button
 									type="button"
 									aria-label="Toggle inspector tabs section"
@@ -706,7 +713,6 @@ export function InspectorTabsSection({
 						{open && (
 							<div
 								aria-label="Inspector tabs body"
-								onMouseEnter={handleBodyMouseEnter}
 								onMouseDown={handleBodyMouseDown}
 								className="relative flex min-h-0 flex-1 flex-col bg-sidebar"
 							>
