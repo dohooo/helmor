@@ -443,6 +443,14 @@ export function InspectorTabsSection({
 				style={{
 					width: isHoverExpanded ? zoomedSize : "100%",
 					height: isHoverExpanded ? zoomedSize : "100%",
+					// Cap the zoomed box to a fraction of the viewport so a
+					// large inspector on a wide display (e.g. 27" fullscreen)
+					// doesn't grow past the window edges. The right/bottom
+					// anchors stay pinned, so capping just shortens the up/left
+					// extent. Resting size (100%) is well below the caps so it's
+					// unaffected.
+					maxWidth: "min(85vw, 1400px)",
+					maxHeight: "min(75vh, 900px)",
 					// `height` only transitions during hover-zoom; outside of
 					// zoom the toggle's web-animation drives wrapper height
 					// and inner must follow instantly.
