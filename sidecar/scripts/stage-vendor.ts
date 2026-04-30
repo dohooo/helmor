@@ -35,29 +35,55 @@ const BUNDLE_CACHE = join(SIDECAR_ROOT, ".bundle-cache");
 
 const GH_VERSION = "2.91.0";
 const GH_SHA256 = {
-	arm64: "20446cd714d9fa1b69fbd410deade3731f38fe09a2b980c8488aa388dd320ada",
-	amd64: "8806784f93603fe6d3f95c3583a08df38f175df9ebc123dc8b15f919329980e2",
+	darwin: {
+		arm64: "20446cd714d9fa1b69fbd410deade3731f38fe09a2b980c8488aa388dd320ada",
+		amd64: "8806784f93603fe6d3f95c3583a08df38f175df9ebc123dc8b15f919329980e2",
+	},
+	linux: {
+		arm64: "304a0d2460f4a8847d2f192bad4e2a32cd9420d28716e7ae32198181b65b5f9c",
+		amd64: "304a0d2460f4a8847d2f192bad4e2a32cd9420d28716e7ae32198181b65b5f9c",
+	},
 } as const;
 
 const GLAB_VERSION = "1.93.0";
 const GLAB_SHA256 = {
-	arm64: "6d6ffa97d430b5e7ff912e64dbac14703acc57967df654be1950ae71858d5b6f",
-	amd64: "79d1a4f933919689c5fb7774feb1dd08f30b9c896dff4283b4a7387689ee0531",
+	darwin: {
+		arm64: "6d6ffa97d430b5e7ff912e64dbac14703acc57967df654be1950ae71858d5b6f",
+		amd64: "79d1a4f933919689c5fb7774feb1dd08f30b9c896dff4283b4a7387689ee0531",
+	},
+	linux: {
+		arm64: "300f3c12bd75f298747364f382f978bbe63809ef660bb2969925f343f9c20ae4",
+		amd64: "300f3c12bd75f298747364f382f978bbe63809ef660bb2969925f343f9c20ae4",
+	},
 } as const;
 
 const BUN_VERSION = "1.3.2";
 const BUN_SHA256 = {
-	arm64: "d85847982db574518130a45582bcf14d8e2be9610b66cb5046c20348578b0fe2",
-	x64: "78d4f0c8637427ac0be55639a697ff6a025e8eb940a6920ca508603c41a5a7b0",
+	darwin: {
+		arm64: "d85847982db574518130a45582bcf14d8e2be9610b66cb5046c20348578b0fe2",
+		x64: "78d4f0c8637427ac0be55639a697ff6a025e8eb940a6920ca508603c41a5a7b0",
+	},
+	linux: {
+		arm64: "0cb56a4484bd7764a3eef9b9e67ab457840981287b46794974d1e6612cbf6709",
+		x64: "0cb56a4484bd7764a3eef9b9e67ab457840981287b46794974d1e6612cbf6709",
+	},
 } as const;
 
 // Codex version is whatever sidecar/package.json pulled in. The SHAs below
 // must match THAT version — bump them together (or staging cross-arch will
 // abort with a clear error).
-const CODEX_SHA256: Readonly<Record<string, { arm64: string; x64: string }>> = {
+const CODEX_SHA256: Readonly<
+	Record<string, Record<"darwin" | "linux", { arm64: string; x64: string }>>
+> = {
 	"0.124.0": {
-		arm64: "8221653b5f1592007ff19a756cfd00afaa4005b3e944412a3ca2372d0abb3b5a",
-		x64: "eb9c0cf46fc9aa58592cd103f0cbc9535667087eb3369d0b99ae62b49f9133da",
+		darwin: {
+			arm64: "8221653b5f1592007ff19a756cfd00afaa4005b3e944412a3ca2372d0abb3b5a",
+			x64: "eb9c0cf46fc9aa58592cd103f0cbc9535667087eb3369d0b99ae62b49f9133da",
+		},
+		linux: {
+			arm64: "aee2637ad90e607737297d6da1a32245c14f731754c14bc15fcacc3b6b244fdc",
+			x64: "aee2637ad90e607737297d6da1a32245c14f731754c14bc15fcacc3b6b244fdc",
+		},
 	},
 };
 
@@ -67,17 +93,19 @@ const CODEX_SHA256: Readonly<Record<string, { arm64: string; x64: string }>> = {
 // staging where no env var is set.
 // ---------------------------------------------------------------------------
 
-type DarwinArch = "arm64" | "x64";
+type HostArch = "arm64" | "x64";
+type HostPlatform = "darwin" | "linux";
 
 interface TargetInfo {
-	arch: DarwinArch;
-	/** `@anthropic-ai/claude-code` uses `<arch>-darwin` naming. */
+	platform: HostPlatform;
+	arch: HostArch;
+	/** `@anthropic-ai/claude-code` uses `<arch>-<platform>` naming. */
 	ccVendorArch: string;
-	/** `@openai/codex-darwin-<arch>` is the npm optional-dep package. */
+	/** `@openai/codex-<platform>-<arch>` is the npm optional-dep package. */
 	codexPkg: string;
 	/** Target triple inside the codex platform package. */
 	codexTriple: string;
-	/** Codex npm tarball suffix: `darwin-arm64` / `darwin-x64`. */
+	/** Codex npm tarball suffix: `<platform>-<arch>`. */
 	codexNpmSuffix: string;
 	/** `gh` release naming: `arm64` / `amd64`. */
 	ghArch: "arm64" | "amd64";
@@ -87,25 +115,55 @@ interface TargetInfo {
 	bunArch: "aarch64" | "x64";
 }
 
-function infoForArch(arch: DarwinArch): TargetInfo {
+function infoForTarget(platform: HostPlatform, arch: HostArch): TargetInfo {
+	if (platform === "darwin") {
+		if (arch === "arm64") {
+			return {
+				platform,
+				arch,
+				ccVendorArch: "arm64-darwin",
+				codexPkg: "@openai/codex-darwin-arm64",
+				codexTriple: "aarch64-apple-darwin",
+				codexNpmSuffix: "darwin-arm64",
+				ghArch: "arm64",
+				glabArch: "arm64",
+				bunArch: "aarch64",
+			};
+		}
+		return {
+			platform,
+			arch,
+			ccVendorArch: "x64-darwin",
+			codexPkg: "@openai/codex-darwin-x64",
+			codexTriple: "x86_64-apple-darwin",
+			codexNpmSuffix: "darwin-x64",
+			ghArch: "amd64",
+			glabArch: "amd64",
+			bunArch: "x64",
+		};
+	}
+
+	// Linux
 	if (arch === "arm64") {
 		return {
+			platform,
 			arch,
-			ccVendorArch: "arm64-darwin",
-			codexPkg: "@openai/codex-darwin-arm64",
-			codexTriple: "aarch64-apple-darwin",
-			codexNpmSuffix: "darwin-arm64",
+			ccVendorArch: "arm64-linux",
+			codexPkg: "@openai/codex-linux-arm64",
+			codexTriple: "aarch64-unknown-linux-musl",
+			codexNpmSuffix: "linux-arm64",
 			ghArch: "arm64",
 			glabArch: "arm64",
 			bunArch: "aarch64",
 		};
 	}
 	return {
+		platform,
 		arch,
-		ccVendorArch: "x64-darwin",
-		codexPkg: "@openai/codex-darwin-x64",
-		codexTriple: "x86_64-apple-darwin",
-		codexNpmSuffix: "darwin-x64",
+		ccVendorArch: "x64-linux",
+		codexPkg: "@openai/codex-linux-x64",
+		codexTriple: "x86_64-unknown-linux-musl",
+		codexNpmSuffix: "linux-x64",
 		ghArch: "amd64",
 		glabArch: "amd64",
 		bunArch: "x64",
@@ -113,9 +171,10 @@ function infoForArch(arch: DarwinArch): TargetInfo {
 }
 
 function detectTarget(): TargetInfo {
-	if (process.platform !== "darwin") {
+	const platform = process.platform as HostPlatform;
+	if (platform !== "darwin" && platform !== "linux") {
 		throw new Error(
-			`[stage-vendor] Helmor only builds on macOS; host platform is ${process.platform}`,
+			`[stage-vendor] unsupported host platform: ${process.platform}`,
 		);
 	}
 
@@ -126,17 +185,23 @@ function detectTarget(): TargetInfo {
 		process.env.CARGO_BUILD_TARGET?.trim();
 
 	if (triple) {
-		if (triple === "aarch64-apple-darwin") return infoForArch("arm64");
-		if (triple === "x86_64-apple-darwin") return infoForArch("x64");
+		if (triple === "aarch64-apple-darwin")
+			return infoForTarget("darwin", "arm64");
+		if (triple === "x86_64-apple-darwin") return infoForTarget("darwin", "x64");
+		if (triple === "aarch64-unknown-linux-gnu")
+			return infoForTarget("linux", "arm64");
+		if (triple === "x86_64-unknown-linux-gnu")
+			return infoForTarget("linux", "x64");
 		throw new Error(
-			`[stage-vendor] unsupported TAURI_TARGET_TRIPLE for macOS: ${triple}`,
+			`[stage-vendor] unsupported TAURI_TARGET_TRIPLE: ${triple}`,
 		);
 	}
 
-	const arch = process.arch;
-	if (arch === "arm64") return infoForArch("arm64");
-	if (arch === "x64") return infoForArch("x64");
-	throw new Error(`[stage-vendor] unsupported macOS host arch: ${arch}`);
+	const arch = process.arch as HostArch;
+	if (arch !== "arm64" && arch !== "x64") {
+		throw new Error(`[stage-vendor] unsupported host arch: ${arch}`);
+	}
+	return infoForTarget(platform, arch);
 }
 
 // ---------------------------------------------------------------------------
@@ -281,16 +346,20 @@ function locateExtractedBin(extractDir: string, name: string): string {
 	);
 }
 
-function stageGhBinary(arch: "arm64" | "amd64"): string {
+function stageGhBinary(target: TargetInfo): string {
 	ensureCacheDir();
-	const slug = `gh_${GH_VERSION}_macOS_${arch}`;
-	const archive = join(BUNDLE_CACHE, `${slug}.zip`);
-	const url = `https://github.com/cli/cli/releases/download/v${GH_VERSION}/${slug}.zip`;
-	downloadAndVerify(url, archive, GH_SHA256[arch]);
+	const { platform, ghArch } = target;
+	const slug =
+		platform === "darwin"
+			? `gh_${GH_VERSION}_macOS_${ghArch}`
+			: `gh_${GH_VERSION}_linux_${ghArch}`;
+	const archive = join(BUNDLE_CACHE, `${slug}.tar.gz`);
+	const url = `https://github.com/cli/cli/releases/download/v${GH_VERSION}/${slug}.tar.gz`;
+	downloadAndVerify(url, archive, GH_SHA256[platform][ghArch]);
 
 	const extractDir = join(BUNDLE_CACHE, slug);
 	freshExtractDir(extractDir);
-	execFileSync("unzip", ["-q", "-o", archive, "-d", extractDir], {
+	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
 		stdio: "inherit",
 	});
 
@@ -302,12 +371,16 @@ function stageGhBinary(arch: "arm64" | "amd64"): string {
 	return binDest;
 }
 
-function stageGlabBinary(arch: "arm64" | "amd64"): string {
+function stageGlabBinary(target: TargetInfo): string {
 	ensureCacheDir();
-	const slug = `glab_${GLAB_VERSION}_darwin_${arch}`;
+	const { platform, glabArch } = target;
+	const slug =
+		platform === "darwin"
+			? `glab_${GLAB_VERSION}_darwin_${glabArch}`
+			: `glab_${GLAB_VERSION}_linux_${glabArch}`;
 	const archive = join(BUNDLE_CACHE, `${slug}.tar.gz`);
 	const url = `https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/${slug}.tar.gz`;
-	downloadAndVerify(url, archive, GLAB_SHA256[arch]);
+	downloadAndVerify(url, archive, GLAB_SHA256[platform][glabArch]);
 
 	const extractDir = join(BUNDLE_CACHE, slug);
 	freshExtractDir(extractDir);
@@ -336,10 +409,13 @@ function stageGlabBinary(arch: "arm64" | "amd64"): string {
 
 function stageBunBinary(target: TargetInfo): string {
 	ensureCacheDir();
-	const slug = `bun-darwin-${target.bunArch}`;
+	const slug =
+		target.platform === "darwin"
+			? `bun-darwin-${target.bunArch}`
+			: `bun-linux-${target.bunArch}`;
 	const archive = join(BUNDLE_CACHE, `${slug}-${BUN_VERSION}.zip`);
 	const url = `https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${slug}.zip`;
-	downloadAndVerify(url, archive, BUN_SHA256[target.arch]);
+	downloadAndVerify(url, archive, BUN_SHA256[target.platform][target.arch]);
 
 	const extractDir = join(BUNDLE_CACHE, `bun-${BUN_VERSION}-${target.bunArch}`);
 	freshExtractDir(extractDir);
@@ -347,7 +423,7 @@ function stageBunBinary(target: TargetInfo): string {
 		stdio: "inherit",
 	});
 
-	// Archive layout: `bun-darwin-<arch>/bun`.
+	// Archive layout: `bun-<platform>-<arch>/bun`.
 	const binSrc = join(extractDir, slug, "bun");
 	if (!existsSync(binSrc)) {
 		throw new Error(
@@ -401,10 +477,10 @@ function stageCodexBinary(target: TargetInfo): string {
 
 	// Cross-arch: download the platform tarball from npm.
 	const version = readCodexVersion();
-	const shaTable = CODEX_SHA256[version];
+	const shaTable = CODEX_SHA256[version]?.[target.platform];
 	if (!shaTable) {
 		throw new Error(
-			`[stage-vendor] no pinned SHA256 for codex ${version} — add it to CODEX_SHA256 in stage-vendor.ts`,
+			`[stage-vendor] no pinned SHA256 for codex ${version} on ${target.platform} — add it to CODEX_SHA256 in stage-vendor.ts`,
 		);
 	}
 	ensureCacheDir();
@@ -443,7 +519,7 @@ function stageCodexBinary(target: TargetInfo): string {
 const target = detectTarget();
 
 console.log(
-	`[stage-vendor] host=darwin/${process.arch} target=darwin/${target.arch} (${target.codexTriple})`,
+	`[stage-vendor] host=${process.platform}/${process.arch} target=${target.platform}/${target.arch} (${target.codexTriple})`,
 );
 
 // Clean
@@ -490,8 +566,8 @@ for (const rel of [
 }
 
 // ----- gh + glab (forge CLIs) -----
-stageGhBinary(target.ghArch);
-stageGlabBinary(target.glabArch);
+stageGhBinary(target);
+stageGlabBinary(target);
 
 // ----- Summary -----
 console.log(`[stage-vendor] ✓ staged → ${DIST_VENDOR}`);
