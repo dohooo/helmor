@@ -84,6 +84,36 @@ fn create_workspace_from_repo_creates_ready_workspace_and_initial_session() {
 }
 
 #[test]
+fn create_local_workspace_for_repo_reuses_source_checkout() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    let response = workspaces::create_local_workspace_for_repo_impl(&harness.repo_id).unwrap();
+    assert!(response.created_workspace);
+    assert_eq!(response.workspace_id, response.selected_workspace_id);
+
+    let detail = workspaces::get_workspace(&response.workspace_id).unwrap();
+    assert_eq!(detail.workspace_kind, "local");
+    assert_eq!(detail.directory_name, "local-checkout");
+    assert_eq!(
+        detail.root_path.as_deref(),
+        Some(harness.source_repo_root.to_str().unwrap())
+    );
+    assert_eq!(detail.branch.as_deref(), Some("main"));
+    assert!(response.initial_session_id.is_some());
+    assert!(
+        !harness.workspace_dir("local-checkout").exists(),
+        "local checkout should not create a Helmor worktree directory"
+    );
+
+    let reused = workspaces::create_local_workspace_for_repo_impl(&harness.repo_id).unwrap();
+    assert!(!reused.created_workspace);
+    assert_eq!(reused.workspace_id, response.workspace_id);
+}
+
+#[test]
 fn create_workspace_from_repo_defers_setup_when_script_configured_by_default() {
     let _guard = TEST_LOCK
         .lock()

@@ -56,6 +56,15 @@ pub struct CreateWorkspaceResponse {
     pub branch: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateLocalWorkspaceResponse {
+    pub workspace_id: String,
+    pub selected_workspace_id: String,
+    pub initial_session_id: Option<String>,
+    pub created_workspace: bool,
+}
+
 /// Response from the fast Phase 1 of workspace creation. Returned after
 /// the DB row has been inserted but before the git worktree has been
 /// materialized on disk. Contains everything the frontend needs to paint
@@ -186,6 +195,55 @@ pub fn prepare_workspace_from_repo_impl(repo_id: &str) -> Result<PrepareWorkspac
         default_branch,
         state: WorkspaceState::Initializing,
         repo_scripts,
+    })
+}
+
+pub fn create_local_workspace_for_repo_impl(repo_id: &str) -> Result<CreateLocalWorkspaceResponse> {
+    if let Some(existing) = workspace_models::load_workspace_records()?
+        .into_iter()
+        .find(|record| {
+            record.repo_id == repo_id
+                && record.workspace_kind == "local"
+                && record.state != WorkspaceState::Archived
+        })
+    {
+        return Ok(CreateLocalWorkspaceResponse {
+            workspace_id: existing.id.clone(),
+            selected_workspace_id: existing.id,
+            initial_session_id: existing.active_session_id,
+            created_workspace: false,
+        });
+    }
+
+    let repository = repos::load_repository_by_id(repo_id)?
+        .with_context(|| format!("Repository not found: {repo_id}"))?;
+    let repo_root = PathBuf::from(repository.root_path.trim());
+    git_ops::ensure_git_repository(&repo_root)?;
+
+    let workspace_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let timestamp = db::current_timestamp()?;
+    let default_branch = repository
+        .default_branch
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "main".to_string());
+    let branch = git_ops::current_branch_name(&repo_root).ok();
+
+    workspace_models::insert_local_workspace_and_session(
+        &repository,
+        &workspace_id,
+        &session_id,
+        branch.as_deref(),
+        &default_branch,
+        &timestamp,
+    )?;
+
+    Ok(CreateLocalWorkspaceResponse {
+        workspace_id: workspace_id.clone(),
+        selected_workspace_id: workspace_id,
+        initial_session_id: Some(session_id),
+        created_workspace: true,
     })
 }
 
@@ -362,6 +420,7 @@ pub struct ArchivePreparedPlan {
     repo_root: PathBuf,
     branch: String,
     workspace_dir: PathBuf,
+    is_local_checkout: bool,
 }
 
 fn is_archive_eligible_state(state: WorkspaceState) -> bool {
@@ -472,6 +531,21 @@ pub fn prepare_archive_plan(workspace_id: &str) -> Result<ArchivePreparedPlan> {
             record.state
         );
     }
+    if record.workspace_kind == "local" {
+        return Ok(ArchivePreparedPlan {
+            workspace_id: workspace_id.to_string(),
+            repo_root: helpers::non_empty(&record.root_path)
+                .map(PathBuf::from)
+                .with_context(|| format!("Workspace {workspace_id} is missing repo root_path"))?,
+            branch: helpers::non_empty(&record.branch)
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| "local".to_string()),
+            workspace_dir: helpers::non_empty(&record.root_path)
+                .map(PathBuf::from)
+                .with_context(|| format!("Workspace {workspace_id} is missing repo root_path"))?,
+            is_local_checkout: true,
+        });
+    }
 
     let repo_root = helpers::non_empty(&record.root_path)
         .map(PathBuf::from)
@@ -506,6 +580,7 @@ pub fn prepare_archive_plan(workspace_id: &str) -> Result<ArchivePreparedPlan> {
         repo_root,
         branch,
         workspace_dir,
+        is_local_checkout: false,
     })
 }
 
@@ -539,6 +614,14 @@ pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspa
         elapsed_ms = git_started.elapsed().as_millis(),
         "Archive: HEAD resolve + verify finished"
     );
+
+    if plan.is_local_checkout {
+        workspace_models::update_archived_workspace_state(workspace_id, &archive_commit)?;
+        return Ok(ArchiveWorkspaceResponse {
+            archived_workspace_id: workspace_id.to_string(),
+            archived_state: WorkspaceState::Archived,
+        });
+    }
 
     // Run archive script (best-effort, don't block archive on script failure).
     let hook_started = std::time::Instant::now();
@@ -691,6 +774,25 @@ pub fn restore_workspace_impl(
     workspace_id: &str,
     target_branch_override: Option<&str>,
 ) -> Result<RestoreWorkspaceResponse> {
+    if let Some(record) = workspace_models::load_workspace_record_by_id(workspace_id)? {
+        if record.workspace_kind == "local" {
+            if record.state != WorkspaceState::Archived {
+                bail!("Workspace is not archived: {workspace_id}");
+            }
+            workspace_models::update_restored_workspace_state(
+                workspace_id,
+                target_branch_override,
+            )?;
+            return Ok(RestoreWorkspaceResponse {
+                restored_workspace_id: workspace_id.to_string(),
+                restored_state: WorkspaceState::Ready,
+                selected_workspace_id: workspace_id.to_string(),
+                branch_rename: None,
+                restored_from_target_branch: None,
+            });
+        }
+    }
+
     let RestorePreflightData {
         repo_root,
         branch,

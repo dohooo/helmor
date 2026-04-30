@@ -42,6 +42,8 @@ export type WorkspaceStatus =
  */
 export type PrSyncState = "none" | "open" | "closed" | "merged";
 
+export type WorkspaceKind = "worktree" | "local";
+
 /**
  * Mirror of the Rust `ActionKind` enum
  * (`src-tauri/src/agents/action_kind.rs`). Non-null when the session was
@@ -86,6 +88,7 @@ export type WorkspaceRow = {
 	prTitle?: string | null;
 	prSyncState?: PrSyncState;
 	prUrl?: string | null;
+	workspaceKind?: WorkspaceKind;
 	pinnedAt?: string | null;
 	sessionCount?: number;
 	messageCount?: number;
@@ -179,6 +182,7 @@ export type WorkspaceSummary = {
 	prTitle?: string | null;
 	prSyncState?: PrSyncState;
 	prUrl?: string | null;
+	workspaceKind?: WorkspaceKind;
 	pinnedAt?: string | null;
 	sessionCount?: number;
 	messageCount?: number;
@@ -340,6 +344,13 @@ export type AddRepositoryResponse = {
 	createdWorkspaceState: WorkspaceState;
 };
 
+export type CreateLocalWorkspaceResponse = {
+	workspaceId: string;
+	selectedWorkspaceId: string;
+	initialSessionId?: string | null;
+	createdWorkspace: boolean;
+};
+
 export type WorkspaceDetail = {
 	id: string;
 	title: string;
@@ -368,6 +379,7 @@ export type WorkspaceDetail = {
 	prTitle?: string | null;
 	prSyncState?: PrSyncState;
 	prUrl?: string | null;
+	workspaceKind?: WorkspaceKind;
 	archiveCommit?: string | null;
 	sessionCount: number;
 	messageCount: number;
@@ -1807,6 +1819,17 @@ export async function createWorkspaceFromRepo(
 	return invoke<CreateWorkspaceResponse>("create_workspace_from_repo", {
 		repoId,
 	});
+}
+
+export async function createLocalWorkspaceForRepo(
+	repoId: string,
+): Promise<CreateLocalWorkspaceResponse> {
+	return invoke<CreateLocalWorkspaceResponse>(
+		"create_local_workspace_for_repo",
+		{
+			repoId,
+		},
+	);
 }
 
 /**

@@ -6,6 +6,7 @@ import {
 	type AddRepositoryResponse,
 	addRepositoryFromLocalPath,
 	cloneRepositoryFromUrl,
+	createLocalWorkspaceForRepo,
 	finalizeWorkspaceFromRepo,
 	listenArchiveExecutionFailed,
 	listenArchiveExecutionSucceeded,
@@ -959,6 +960,42 @@ export function useWorkspacesSidebarController({
 		],
 	);
 
+	const handleCreateLocalWorkspaceForRepo = useCallback(
+		async (repoId: string) => {
+			if (creatingWorkspaceRepoId) {
+				return;
+			}
+
+			setCreatingWorkspaceRepoId(repoId);
+			try {
+				const response = await createLocalWorkspaceForRepo(repoId);
+				await refetchNavigation();
+				prefetchWorkspace(response.selectedWorkspaceId);
+				onSelectWorkspace(response.selectedWorkspaceId);
+				if (!response.createdWorkspace) {
+					pushWorkspaceToast(
+						"Switched to the existing local checkout.",
+						"Local checkout already added",
+						"default",
+					);
+				}
+			} catch (error) {
+				pushWorkspaceToast(
+					describeUnknownError(error, "Unable to open local checkout."),
+				);
+			} finally {
+				setCreatingWorkspaceRepoId(null);
+			}
+		},
+		[
+			creatingWorkspaceRepoId,
+			onSelectWorkspace,
+			prefetchWorkspace,
+			pushWorkspaceToast,
+			refetchNavigation,
+		],
+	);
+
 	const applyAddRepositoryResponse = useCallback(
 		async (response: AddRepositoryResponse) => {
 			await refetchNavigation();
@@ -1498,6 +1535,7 @@ export function useWorkspacesSidebarController({
 		handleAddRepository,
 		handleArchiveWorkspace,
 		handleCloneFromUrl,
+		handleCreateLocalWorkspaceForRepo,
 		handleCreateWorkspaceFromRepo,
 		handleDeleteWorkspace,
 		handleMarkWorkspaceUnread,
@@ -1542,6 +1580,9 @@ function createPreparedWorkspaceRow(
 		activeSessionAgentType: null,
 		activeSessionStatus: "idle",
 		prTitle: null,
+		prSyncState: "none",
+		prUrl: null,
+		workspaceKind: "worktree",
 		pinnedAt: null,
 		sessionCount: 1,
 		messageCount: 0,

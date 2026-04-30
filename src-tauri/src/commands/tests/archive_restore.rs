@@ -102,6 +102,78 @@ fn archive_workspace_removes_worktree() {
 }
 
 #[test]
+fn archive_local_workspace_keeps_source_checkout() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let local = workspaces::create_local_workspace_for_repo_impl(&harness.repo_id).unwrap();
+    let head_commit = git_ops::run_git(
+        [
+            "-C",
+            harness.source_repo_root.to_str().unwrap(),
+            "rev-parse",
+            "HEAD",
+        ],
+        None,
+    )
+    .unwrap();
+
+    let response = workspaces::archive_workspace_impl(&local.workspace_id).unwrap();
+
+    assert_eq!(response.archived_workspace_id, local.workspace_id);
+    assert_eq!(response.archived_state, WorkspaceState::Archived);
+    assert!(harness.source_repo_root.exists());
+    assert!(
+        !harness.workspace_dir("local-checkout").exists(),
+        "local archive should not create or remove a Helmor worktree directory"
+    );
+
+    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+    let (state, archive_commit): (String, String) = connection
+        .query_row(
+            "SELECT state, archive_commit FROM workspaces WHERE id = ?1",
+            [&local.workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+
+    assert_eq!(state, "archived");
+    assert_eq!(archive_commit, head_commit);
+}
+
+#[test]
+fn restore_local_workspace_reactivates_without_worktree() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let local = workspaces::create_local_workspace_for_repo_impl(&harness.repo_id).unwrap();
+    workspaces::archive_workspace_impl(&local.workspace_id).unwrap();
+
+    let response = workspaces::restore_workspace_impl(&local.workspace_id, None).unwrap();
+
+    assert_eq!(response.restored_workspace_id, local.workspace_id);
+    assert_eq!(response.restored_state, WorkspaceState::Ready);
+    assert_eq!(response.selected_workspace_id, local.workspace_id);
+    assert!(response.branch_rename.is_none());
+    assert_eq!(response.restored_from_target_branch, None);
+    assert!(harness.source_repo_root.exists());
+    assert!(
+        !harness.workspace_dir("local-checkout").exists(),
+        "local restore should not create a Helmor worktree directory"
+    );
+
+    let detail = workspaces::get_workspace(&local.workspace_id).unwrap();
+    assert_eq!(detail.workspace_kind, "local");
+    assert_eq!(
+        detail.root_path.as_deref(),
+        Some(harness.source_repo_root.to_str().unwrap())
+    );
+    assert_eq!(detail.state, WorkspaceState::Ready);
+}
+
+#[test]
 fn archive_workspace_fails_cleanly_when_repo_root_is_missing() {
     let _guard = TEST_LOCK
         .lock()

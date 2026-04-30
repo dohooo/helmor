@@ -400,6 +400,16 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add pr_url column")?;
     }
 
+    if has_table(connection, "workspaces")
+        && !has_column(connection, "workspaces", "workspace_kind")
+    {
+        connection
+            .execute_batch(
+                "ALTER TABLE workspaces ADD COLUMN workspace_kind TEXT DEFAULT 'worktree'",
+            )
+            .context("Failed to add workspace_kind column")?;
+    }
+
     let had_workspace_status =
         has_table(connection, "workspaces") && has_column(connection, "workspaces", "status");
     if has_table(connection, "workspaces") && !had_workspace_status {
@@ -510,6 +520,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     pr_url TEXT,
     archive_commit TEXT,
     linked_directory_paths TEXT,
+    workspace_kind TEXT DEFAULT 'worktree',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

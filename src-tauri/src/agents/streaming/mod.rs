@@ -301,14 +301,8 @@ pub(super) fn stream_via_sidecar(
                     };
                     let (reason_log, user_message, should_stop_sidecar) = match kind {
                         state::AbnormalExit::HeartbeatTimeout => (
-                            format!(
-                                "heartbeat lost for {:?} — treating stream as dead",
-                                HEARTBEAT_TIMEOUT
-                            ),
-                            format!(
-                                "Sidecar stopped responding (no heartbeat for {:?}). You can retry the request.",
-                                HEARTBEAT_TIMEOUT,
-                            ),
+                            format!("heartbeat lost for {HEARTBEAT_TIMEOUT:?} — treating stream as dead"),
+                            format!("Sidecar stopped responding (no heartbeat for {HEARTBEAT_TIMEOUT:?}). You can retry the request."),
                             true,
                         ),
                         state::AbnormalExit::SidecarDisconnected => (

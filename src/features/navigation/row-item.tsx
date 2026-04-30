@@ -173,6 +173,19 @@ export const WorkspaceRowItem = memo(
 			: "bg-chart-2";
 		const showStatusDot = statusDotLabel !== null;
 		const displayTitle = row.branch ? humanizeBranch(row.branch) : row.title;
+		const isLocalCheckout = row.workspaceKind === "local";
+		const workspaceModeIcon = isLocalCheckout ? (
+			<FolderOpen
+				aria-label="Local checkout"
+				className="size-[13px] shrink-0 text-muted-foreground"
+				strokeWidth={1.9}
+			/>
+		) : (
+			<GitBranch
+				className={cn("size-[13px] shrink-0", branchToneClasses[branchTone])}
+				strokeWidth={1.9}
+			/>
+		);
 
 		const rowBody = (
 			<div
@@ -220,13 +233,7 @@ export const WorkspaceRowItem = memo(
 						{isSending && !isInteractionRequired ? (
 							<HelmorThinkingIndicator size={13} />
 						) : (
-							<GitBranch
-								className={cn(
-									"size-[13px] shrink-0",
-									branchToneClasses[branchTone],
-								)}
-								strokeWidth={1.9}
-							/>
+							workspaceModeIcon
 						)}
 						<span
 							className={cn(

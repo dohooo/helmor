@@ -113,6 +113,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onSelectWorkspace,
 	onPrefetchWorkspace,
 	onCreateWorkspace,
+	onCreateLocalWorkspace,
 	onArchiveWorkspace,
 	onMarkWorkspaceUnread,
 	onRestoreWorkspace,
@@ -146,6 +147,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onSelectWorkspace?: (workspaceId: string) => void;
 	onPrefetchWorkspace?: (workspaceId: string) => void;
 	onCreateWorkspace?: (repoId: string) => void;
+	onCreateLocalWorkspace?: (repoId: string) => void;
 	onArchiveWorkspace?: (workspaceId: string) => void;
 	onMarkWorkspaceUnread?: (workspaceId: string) => void;
 	onRestoreWorkspace?: (workspaceId: string) => void;
@@ -679,37 +681,55 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							>
 								<CommandEmpty>No repositories found.</CommandEmpty>
 								{repositories.map((repository) => (
-									<CommandItem
-										key={repository.id}
-										value={`${repository.name} ${repository.defaultBranch ?? ""}`}
-										onSelect={() => {
-											setIsRepoPickerOpen(false);
-											onCreateWorkspace?.(repository.id);
-										}}
-										className="rounded-lg [&>svg:last-child]:hidden"
-									>
-										<div className="flex min-w-0 flex-1 items-center justify-between gap-3">
-											<div className="flex min-w-0 items-center gap-2">
-												<WorkspaceAvatar
-													repoIconSrc={repository.repoIconSrc}
-													repoInitials={repository.repoInitials}
-													repoName={repository.name}
-													title={repository.name}
-													className="size-5 rounded-md"
-													fallbackClassName="text-[8px]"
-												/>
-												<span className="truncate font-medium">
-													{repository.name}
+									<div key={repository.id} className="contents">
+										<CommandItem
+											value={`${repository.name} local checkout`}
+											onSelect={() => {
+												setIsRepoPickerOpen(false);
+												onCreateLocalWorkspace?.(repository.id);
+											}}
+											className="rounded-lg [&>svg:last-child]:hidden"
+										>
+											<div className="flex min-w-0 flex-1 items-center justify-between gap-3">
+												<div className="flex min-w-0 items-center gap-2">
+													<WorkspaceAvatar
+														repoIconSrc={repository.repoIconSrc}
+														repoInitials={repository.repoInitials}
+														repoName={repository.name}
+														title={repository.name}
+														className="size-5 rounded-md"
+														fallbackClassName="text-[8px]"
+													/>
+													<span className="truncate font-medium">
+														{repository.name}
+													</span>
+												</div>
+												<span className="shrink-0 text-right whitespace-nowrap text-xs text-muted-foreground">
+													Local checkout
 												</span>
 											</div>
-											{repository.defaultBranch ? (
-												<span className="shrink-0 text-right whitespace-nowrap text-xs text-muted-foreground">
-													{repository.remote ?? "origin"}/
-													{repository.defaultBranch.toLowerCase()}
+										</CommandItem>
+										<CommandItem
+											value={`${repository.name} new worktree ${repository.defaultBranch ?? ""}`}
+											onSelect={() => {
+												setIsRepoPickerOpen(false);
+												onCreateWorkspace?.(repository.id);
+											}}
+											className="rounded-lg [&>svg:last-child]:hidden"
+										>
+											<div className="flex min-w-0 flex-1 items-center justify-between gap-3 pl-7">
+												<span className="truncate font-medium text-muted-foreground">
+													New worktree
 												</span>
-											) : null}
-										</div>
-									</CommandItem>
+												{repository.defaultBranch ? (
+													<span className="shrink-0 text-right whitespace-nowrap text-xs text-muted-foreground">
+														{repository.remote ?? "origin"}/
+														{repository.defaultBranch.toLowerCase()}
+													</span>
+												) : null}
+											</div>
+										</CommandItem>
+									</div>
 								))}
 							</CommandList>
 						</CommandPopoverContent>

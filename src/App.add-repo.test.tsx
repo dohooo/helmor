@@ -12,6 +12,7 @@ const apiMocks = vi.hoisted(() => ({
 	loadWorkspaceSessions: vi.fn(),
 	loadSessionThreadMessages: vi.fn(),
 	listRepositories: vi.fn(),
+	createLocalWorkspaceForRepo: vi.fn(),
 }));
 
 const dialogMocks = vi.hoisted(() => ({
@@ -42,6 +43,7 @@ vi.mock("./lib/api", async (importOriginal) => {
 		loadSessionMessages: apiMocks.loadSessionThreadMessages,
 		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 		listRepositories: apiMocks.listRepositories,
+		createLocalWorkspaceForRepo: apiMocks.createLocalWorkspaceForRepo,
 	};
 });
 

@@ -192,6 +192,7 @@ pub fn run() {
             commands::github_commands::cancel_github_identity_connect,
             commands::workspace_commands::complete_workspace_setup,
             commands::workspace_commands::create_workspace_from_repo,
+            commands::workspace_commands::create_local_workspace_for_repo,
             commands::workspace_commands::prepare_workspace_from_repo,
             commands::workspace_commands::finalize_workspace_from_repo,
             commands::github_commands::disconnect_github_identity,

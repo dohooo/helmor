@@ -41,6 +41,7 @@ pub struct WorkspaceRecord {
     pub pr_sync_state: PrSyncState,
     pub pr_url: Option<String>,
     pub archive_commit: Option<String>,
+    pub workspace_kind: String,
     pub session_count: i64,
     pub message_count: i64,
     pub remote: Option<String>,
@@ -145,6 +146,7 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       COALESCE(w.pr_sync_state, 'none') AS pr_sync_state,
       w.pr_url,
       w.archive_commit,
+      COALESCE(w.workspace_kind, 'worktree') AS workspace_kind,
       COALESCE(wss.session_count, 0) AS session_count,
       COALESCE(wss.message_count, 0) AS message_count,
       r.remote,
@@ -271,6 +273,75 @@ pub(crate) fn insert_initializing_workspace_and_session(
     transaction
         .commit()
         .context("Failed to commit create-workspace transaction")
+}
+
+pub(crate) fn insert_local_workspace_and_session(
+    repository: &repos::RepositoryRecord,
+    workspace_id: &str,
+    session_id: &str,
+    branch: Option<&str>,
+    default_branch: &str,
+    timestamp: &str,
+) -> Result<()> {
+    let mut connection = db::write_conn()?;
+    let transaction = connection
+        .transaction()
+        .context("Failed to start local workspace transaction")?;
+
+    transaction
+        .execute(
+            r#"
+            INSERT INTO workspaces (
+              id,
+              repository_id,
+              directory_name,
+              active_session_id,
+              branch,
+              state,
+              initialization_parent_branch,
+              intended_target_branch,
+              status,
+              unread,
+              workspace_kind,
+              created_at,
+              updated_at
+            ) VALUES (?1, ?2, 'local-checkout', ?3, ?4, ?5, ?6, ?6, 'in-progress', 0, 'local', ?7, ?7)
+            "#,
+            (
+                workspace_id,
+                repository.id.as_str(),
+                session_id,
+                branch,
+                WorkspaceState::Ready,
+                default_branch,
+                timestamp,
+            ),
+        )
+        .context("Failed to insert local workspace")?;
+
+    transaction
+        .execute(
+            r#"
+            INSERT INTO sessions (
+              id,
+              workspace_id,
+              title,
+              status,
+              permission_mode,
+              unread_count,
+              fast_mode,
+              created_at,
+              updated_at,
+              is_hidden
+            ) VALUES (?1, ?2, 'Untitled', 'idle', 'default', 0, 0, ?3, ?3, 0)
+            "#,
+            (session_id, workspace_id, timestamp),
+        )
+        .context("Failed to insert local workspace session")?;
+
+    transaction
+        .commit()
+        .context("Failed to commit local workspace transaction")
 }
 
 pub(crate) fn update_workspace_state(
@@ -458,12 +529,13 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         pr_sync_state: row.get(24)?,
         pr_url: row.get(25)?,
         archive_commit: row.get(26)?,
-        session_count: row.get(27)?,
-        message_count: row.get(28)?,
-        remote: row.get(29)?,
-        forge_provider: row.get(30)?,
-        created_at: row.get(31)?,
-        updated_at: row.get(32)?,
-        last_user_message_at: row.get(33)?,
+        workspace_kind: row.get(27)?,
+        session_count: row.get(28)?,
+        message_count: row.get(29)?,
+        remote: row.get(30)?,
+        forge_provider: row.get(31)?,
+        created_at: row.get(32)?,
+        updated_at: row.get(33)?,
+        last_user_message_at: row.get(34)?,
     })
 }

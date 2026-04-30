@@ -604,17 +604,11 @@ pub fn current_workspace_head_commit(workspace_dir: &Path) -> Result<String> {
     let workspace_dir = workspace_dir.display().to_string();
     let commit =
         run_git(["-C", workspace_dir.as_str(), "rev-parse", "HEAD"], None).with_context(|| {
-            format!(
-                "Failed to resolve archive commit from workspace {}",
-                workspace_dir
-            )
+            format!("Failed to resolve archive commit from workspace {workspace_dir}")
         })?;
 
     if commit.trim().is_empty() {
-        bail!(
-            "Resolved empty archive commit for workspace {}",
-            workspace_dir
-        );
+        bail!("Resolved empty archive commit for workspace {workspace_dir}");
     }
 
     Ok(commit)
@@ -626,11 +620,11 @@ pub fn current_branch_name(workspace_dir: &Path) -> Result<String> {
         ["-C", workspace_dir.as_str(), "branch", "--show-current"],
         None,
     )
-    .with_context(|| format!("Failed to resolve current branch for {}", workspace_dir))?;
+    .with_context(|| format!("Failed to resolve current branch for {workspace_dir}"))?;
 
     let branch = branch.trim();
     if branch.is_empty() {
-        bail!("Workspace {} is not on a branch", workspace_dir);
+        bail!("Workspace {workspace_dir} is not on a branch");
     }
 
     Ok(branch.to_string())
@@ -657,12 +651,8 @@ pub fn default_branch_ref(remote: &str, default_branch: &str) -> String {
 
 pub fn tracked_file_count(workspace_dir: &Path) -> Result<i64> {
     let workspace_dir = workspace_dir.display().to_string();
-    let output = run_git(["-C", workspace_dir.as_str(), "ls-files"], None).with_context(|| {
-        format!(
-            "Failed to count tracked files for workspace {}",
-            workspace_dir
-        )
-    })?;
+    let output = run_git(["-C", workspace_dir.as_str(), "ls-files"], None)
+        .with_context(|| format!("Failed to count tracked files for workspace {workspace_dir}"))?;
 
     Ok(output
         .lines()
@@ -684,7 +674,7 @@ pub fn working_tree_clean(workspace_dir: &Path) -> Result<bool> {
         ],
         None,
     )
-    .with_context(|| format!("Failed to read working tree status for {}", workspace_dir))?;
+    .with_context(|| format!("Failed to read working tree status for {workspace_dir}"))?;
 
     Ok(output.trim().is_empty())
 }
@@ -893,17 +883,12 @@ pub fn commits_ahead_of(workspace_dir: &Path, base_ref: &str) -> Result<u32> {
         ],
         None,
     )
-    .with_context(|| {
-        format!(
-            "Failed to count commits ahead of {} in {}",
-            base_ref, workspace_dir
-        )
-    })?;
+    .with_context(|| format!("Failed to count commits ahead of {base_ref} in {workspace_dir}"))?;
 
     output
         .trim()
         .parse::<u32>()
-        .with_context(|| format!("Unexpected rev-list count output: {}", output))
+        .with_context(|| format!("Unexpected rev-list count output: {output}"))
 }
 
 /// Counts how many commits are reachable from `base_ref` but not from HEAD.
@@ -921,17 +906,12 @@ pub fn commits_behind(workspace_dir: &Path, base_ref: &str) -> Result<u32> {
         ],
         None,
     )
-    .with_context(|| {
-        format!(
-            "Failed to count commits behind {} in {}",
-            base_ref, workspace_dir
-        )
-    })?;
+    .with_context(|| format!("Failed to count commits behind {base_ref} in {workspace_dir}"))?;
 
     output
         .trim()
         .parse::<u32>()
-        .with_context(|| format!("Unexpected rev-list count output: {}", output))
+        .with_context(|| format!("Unexpected rev-list count output: {output}"))
 }
 
 fn parse_porcelain_status_paths(output: &str) -> std::collections::BTreeSet<String> {
@@ -1019,9 +999,9 @@ pub fn remote_ref_sha(workspace_dir: &Path, remote: &str, branch: &str) -> Resul
         ["-C", workspace_dir.as_str(), "rev-parse", ref_name.as_str()],
         None,
     )
-    .with_context(|| format!("Failed to resolve {} in {}", ref_name, workspace_dir))?;
+    .with_context(|| format!("Failed to resolve {ref_name} in {workspace_dir}"))?;
     if sha.trim().is_empty() {
-        bail!("Empty SHA for {} in {}", ref_name, workspace_dir);
+        bail!("Empty SHA for {ref_name} in {workspace_dir}");
     }
     Ok(sha.trim().to_string())
 }
@@ -1118,12 +1098,7 @@ pub fn reset_current_branch_hard(workspace_dir: &Path, target_ref: &str) -> Resu
         None,
     )
     .map(|_| ())
-    .with_context(|| {
-        format!(
-            "Failed to reset workspace {} to {}",
-            workspace_dir, target_ref
-        )
-    })
+    .with_context(|| format!("Failed to reset workspace {workspace_dir} to {target_ref}"))
 }
 
 #[cfg(test)]

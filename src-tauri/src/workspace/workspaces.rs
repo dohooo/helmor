@@ -27,9 +27,10 @@ pub use super::branching::{
 };
 pub use super::lifecycle::{
     archive_workspace_impl, cleanup_orphaned_initializing_workspaces,
-    create_workspace_from_repo_impl, finalize_workspace_from_repo_impl, prepare_archive_plan,
-    prepare_workspace_from_repo_impl, restore_workspace_impl, validate_archive_workspace,
-    validate_restore_workspace, ArchivePreparedPlan, ArchiveWorkspaceResponse, BranchRename,
+    create_local_workspace_for_repo_impl, create_workspace_from_repo_impl,
+    finalize_workspace_from_repo_impl, prepare_archive_plan, prepare_workspace_from_repo_impl,
+    restore_workspace_impl, validate_archive_workspace, validate_restore_workspace,
+    ArchivePreparedPlan, ArchiveWorkspaceResponse, BranchRename, CreateLocalWorkspaceResponse,
     CreateWorkspaceResponse, FinalizeWorkspaceResponse, PrepareWorkspaceResponse,
     RestoreWorkspaceResponse, TargetBranchConflict, ValidateRestoreResponse,
 };
@@ -60,6 +61,7 @@ pub struct WorkspaceSidebarRow {
     pub pr_title: Option<String>,
     pub pr_sync_state: PrSyncState,
     pub pr_url: Option<String>,
+    pub workspace_kind: String,
     pub pinned_at: Option<String>,
     pub session_count: i64,
     pub message_count: i64,
@@ -102,6 +104,7 @@ pub struct WorkspaceSummary {
     pub pr_title: Option<String>,
     pub pr_sync_state: PrSyncState,
     pub pr_url: Option<String>,
+    pub workspace_kind: String,
     pub pinned_at: Option<String>,
     pub session_count: i64,
     pub message_count: i64,
@@ -140,6 +143,7 @@ pub struct WorkspaceDetail {
     pub pr_title: Option<String>,
     pub pr_sync_state: PrSyncState,
     pub pr_url: Option<String>,
+    pub workspace_kind: String,
     pub archive_commit: Option<String>,
     pub session_count: i64,
     pub message_count: i64,
@@ -463,10 +467,7 @@ pub fn list_candidate_directories(
         if exclude_workspace_id == Some(record.id.as_str()) {
             continue;
         }
-        // `workspace_dir` needs the data dir to be set. A single
-        // unresolvable row shouldn't hide the rest, so skip silently.
-        let Ok(path) = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
-        else {
+        let Some(path) = effective_workspace_root(&record) else {
             continue;
         };
         let title = helpers::display_title(&record);
@@ -732,6 +733,7 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         pr_title: record.pr_title,
         pr_sync_state: record.pr_sync_state,
         pr_url: record.pr_url,
+        workspace_kind: record.workspace_kind,
         pinned_at: record.pinned_at,
         session_count: record.session_count,
         message_count: record.message_count,
@@ -767,6 +769,7 @@ pub fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
         pr_title: record.pr_title,
         pr_sync_state: record.pr_sync_state,
         pr_url: record.pr_url,
+        workspace_kind: record.workspace_kind,
         pinned_at: record.pinned_at,
         session_count: record.session_count,
         message_count: record.message_count,
@@ -779,19 +782,17 @@ pub fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
 pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
     let repo_initials = helpers::repo_initials_for_name(&record.repo_name);
 
-    // Use the worktree path as root_path so Claude Code/Codex operate in the
-    // correct workspace directory, not the source repository.
-    // Archived workspaces have no worktree — return None so the frontend
-    // knows agent messaging is unavailable.
-    let worktree_path = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
-        .ok()
-        .and_then(|p| {
-            if p.is_dir() {
-                p.to_str().map(|s| s.to_string())
-            } else {
-                None
-            }
-        });
+    // Use the effective workspace path as root_path so Claude Code/Codex
+    // operate in the selected checkout. Local workspaces point at the repo
+    // root; generated workspaces point at their Helmor worktree.
+    let workspace_kind = record.workspace_kind.clone();
+    let effective_root_path = effective_workspace_root(&record).and_then(|p| {
+        if p.is_dir() {
+            p.to_str().map(|s| s.to_string())
+        } else {
+            None
+        }
+    });
 
     WorkspaceDetail {
         title: helpers::display_title(&record),
@@ -803,7 +804,7 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         remote: record.remote,
         remote_url: record.remote_url,
         default_branch: record.default_branch,
-        root_path: worktree_path,
+        root_path: effective_root_path,
         directory_name: record.directory_name,
         state: record.state,
         has_unread: record.has_unread,
@@ -821,10 +822,23 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         pr_title: record.pr_title,
         pr_sync_state: record.pr_sync_state,
         pr_url: record.pr_url,
+        workspace_kind,
         archive_commit: record.archive_commit,
         session_count: record.session_count,
         message_count: record.message_count,
     }
+}
+
+pub(crate) fn effective_workspace_root(record: &WorkspaceRecord) -> Option<std::path::PathBuf> {
+    if record.workspace_kind == "local" {
+        return record
+            .root_path
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(std::path::PathBuf::from);
+    }
+
+    crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name).ok()
 }
 
 /// Degrade operational workspaces whose directory no longer exists on disk
@@ -842,52 +856,35 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
 ///
 /// Returns the number of workspaces that were degraded.
 pub fn purge_orphaned_workspaces() -> Result<usize> {
-    let connection = db::read_conn()?;
-    let mut stmt = connection.prepare(&format!(
-        "SELECT w.id, r.name, w.directory_name, w.state
-         FROM workspaces w
-         JOIN repos r ON r.id = w.repository_id
-         WHERE w.state {}",
-        crate::workspace_state::OPERATIONAL_FILTER
-    ))?;
-    let orphans: Vec<(String, String, String, WorkspaceState)> = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, WorkspaceState>(3)?,
-            ))
-        })?
-        .filter_map(|r| r.ok())
-        .filter(|(_, repo_name, dir_name, _)| {
-            crate::data_dir::workspace_dir(repo_name, dir_name)
-                .map(|p| !p.is_dir())
+    let orphans = workspace_models::load_workspace_records()?
+        .into_iter()
+        .filter(|record| record.state != WorkspaceState::Archived)
+        .filter(|record| {
+            effective_workspace_root(record)
+                .map(|path| !path.is_dir())
                 .unwrap_or(false)
         })
-        .collect();
-    // Release the read connection so `degrade_workspace_to_archived`
-    // (which takes a write conn) doesn't deadlock on SQLite.
-    drop(stmt);
-    drop(connection);
+        .collect::<Vec<_>>();
 
     let mut count = 0;
-    for (id, repo_name, dir_name, state) in &orphans {
+    for record in &orphans {
         // Defense in depth: even if the SQL filter ever regresses, never
         // re-archive something that's already archived.
-        if *state == WorkspaceState::Archived {
+        if record.state == WorkspaceState::Archived {
             tracing::warn!(
-                workspace_id = %id,
+                workspace_id = %record.id,
                 "Skipping archived workspace in orphan reconcile"
             );
             continue;
         }
-        match degrade_workspace_to_archived(id) {
+        match degrade_workspace_to_archived(&record.id) {
             Ok(true) => {
                 count += 1;
                 tracing::info!(
-                    workspace_id = %id,
-                    path = %format!("{}/{}", repo_name, dir_name),
+                    workspace_id = %record.id,
+                    path = %effective_workspace_root(record)
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|| format!("{}/{}", record.repo_name, record.directory_name)),
                     "Degraded orphaned workspace to archived (directory missing; chat history preserved)"
                 );
             }
@@ -896,7 +893,7 @@ pub fn purge_orphaned_workspaces() -> Result<usize> {
             }
             Err(e) => {
                 tracing::warn!(
-                    workspace_id = %id,
+                    workspace_id = %record.id,
                     "Failed to degrade orphaned workspace: {e:#}"
                 );
             }

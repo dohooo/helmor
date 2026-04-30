@@ -70,6 +70,19 @@ pub async fn create_workspace_from_repo(
     Ok(result)
 }
 
+#[tauri::command]
+pub async fn create_local_workspace_for_repo(
+    app: AppHandle,
+    repo_id: String,
+) -> CmdResult<workspaces::CreateLocalWorkspaceResponse> {
+    let result = {
+        let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
+        run_blocking(move || workspaces::create_local_workspace_for_repo_impl(&repo_id)).await?
+    };
+    notify_workspace_changed_in_background(app);
+    Ok(result)
+}
+
 /// Transition a workspace from "setup_pending" to "ready" (e.g. when no
 /// setup script is configured but the workspace was created with that state).
 #[tauri::command]

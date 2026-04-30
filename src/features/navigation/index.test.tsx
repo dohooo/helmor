@@ -111,6 +111,7 @@ describe("WorkspacesSidebar", () => {
 	it("opens the repository picker and creates a workspace from the selected repository", async () => {
 		const user = userEvent.setup();
 		const onCreateWorkspace = vi.fn();
+		const onCreateLocalWorkspace = vi.fn();
 
 		const { container } = render(
 			<TooltipProvider delayDuration={0}>
@@ -119,6 +120,7 @@ describe("WorkspacesSidebar", () => {
 					archivedRows={[]}
 					availableRepositories={repositories}
 					onCreateWorkspace={onCreateWorkspace}
+					onCreateLocalWorkspace={onCreateLocalWorkspace}
 				/>
 			</TooltipProvider>,
 		);
@@ -130,10 +132,17 @@ describe("WorkspacesSidebar", () => {
 
 		expect(screen.queryByPlaceholderText("Search repositories")).toBeNull();
 		expect(screen.queryByText("Repositories")).toBeNull();
-		expect(screen.getByRole("option", { name: /helmor/i })).toBeInTheDocument();
+		expect(screen.getAllByRole("option", { name: /helmor/i })).toHaveLength(2);
 
-		const [firstRepositoryOption] = screen.getAllByRole("option");
-		await user.click(firstRepositoryOption);
+		await user.click(
+			screen.getByRole("option", { name: /helmor.*local checkout/i }),
+		);
+		expect(onCreateLocalWorkspace).toHaveBeenCalledWith("repo-1");
+
+		await user.click(newWorkspaceButton);
+		await user.click(
+			screen.getByRole("option", { name: /new worktree.*origin\/main/i }),
+		);
 
 		expect(onCreateWorkspace).toHaveBeenCalledWith("repo-1");
 		expect(screen.queryByRole("option", { name: /helmor/i })).toBeNull();
