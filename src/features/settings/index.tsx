@@ -477,10 +477,10 @@ export const SettingsDialog = memo(function SettingsDialog({
 																aria-label={opt.label}
 																aria-pressed={settings.darkTheme === opt.id}
 																className={cn(
-																	"h-7 w-7 cursor-pointer rounded-full border-2 transition-all",
+																	"h-7 w-7 cursor-pointer overflow-hidden rounded-full transition-all",
 																	settings.darkTheme === opt.id
-																		? "scale-110 border-foreground/70"
-																		: "border-transparent hover:scale-105 hover:border-border",
+																		? "scale-110 ring-2 ring-foreground/70 ring-offset-2 ring-offset-background"
+																		: "hover:scale-105 hover:ring-1 hover:ring-border hover:ring-offset-1 hover:ring-offset-background",
 																)}
 																style={{
 																	background: `linear-gradient(135deg, ${swatchBg}, ${swatchAccent})`,
