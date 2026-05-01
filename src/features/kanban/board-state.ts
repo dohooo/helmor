@@ -40,6 +40,52 @@ export function projectGroupsToKanbanColumns(
 	return columns;
 }
 
+export type KanbanTopPlacement = {
+	workspaceId: string;
+	columnId: KanbanColumnId;
+};
+
+export function applyKanbanTopPlacements(
+	columns: KanbanColumns,
+	placements: KanbanTopPlacement[],
+): KanbanColumns {
+	const next = createEmptyKanbanColumns();
+	const rowsById = new Map<string, WorkspaceRow>();
+
+	for (const column of KANBAN_COLUMNS) {
+		next[column.id] = [...columns[column.id]];
+		for (const row of columns[column.id]) {
+			rowsById.set(row.id, row);
+		}
+	}
+
+	for (const placement of [...placements].reverse()) {
+		const row = rowsById.get(placement.workspaceId);
+		if (!row) continue;
+
+		for (const column of KANBAN_COLUMNS) {
+			next[column.id] = next[column.id].filter(
+				(item) => item.id !== placement.workspaceId,
+			);
+		}
+
+		next[placement.columnId] = [
+			{ ...row, status: placement.columnId },
+			...next[placement.columnId],
+		];
+	}
+
+	return next;
+}
+
+export function moveWorkspaceToKanbanTop(
+	columns: KanbanColumns,
+	workspaceId: string,
+	columnId: KanbanColumnId,
+): KanbanColumns {
+	return applyKanbanTopPlacements(columns, [{ workspaceId, columnId }]);
+}
+
 function normalizeWorkspaceStatus(
 	status: WorkspaceStatus | undefined,
 ): KanbanColumnId {

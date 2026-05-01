@@ -1,3 +1,4 @@
+import { useDraggable } from "@dnd-kit/core";
 import { GitBranch, MessageSquare, Pin } from "lucide-react";
 import { memo } from "react";
 import { WorkspaceAvatar } from "@/features/navigation/avatar";
@@ -11,23 +12,48 @@ import { getWorkspaceBranchTone } from "@/lib/workspace-helpers";
 
 type KanbanCardProps = {
 	row: WorkspaceRow;
+	settling?: boolean;
 };
 
-export const KanbanCard = memo(function KanbanCard({ row }: KanbanCardProps) {
+export const KanbanCard = memo(function KanbanCard({
+	row,
+	settling = false,
+}: KanbanCardProps) {
 	const displayTitle = row.branch ? humanizeBranch(row.branch) : row.title;
+	const { attributes, isDragging, listeners, setNodeRef } = useDraggable({
+		id: row.id,
+		data: {
+			columnId: row.status,
+			type: "kanban-card",
+		},
+	});
 
 	return (
 		<div
+			ref={setNodeRef}
 			aria-label={displayTitle}
 			data-workspace-id={row.id}
-			className="relative block w-full rounded-lg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
+			className={cn(
+				"relative block w-full touch-none rounded-lg transition-opacity duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
+				"cursor-grab active:cursor-grabbing",
+				isDragging && !settling && "opacity-25",
+				settling && "pointer-events-none",
+			)}
+			{...attributes}
+			{...listeners}
 		>
 			<KanbanCardPreview row={row} />
 		</div>
 	);
 });
 
-export function KanbanCardPreview({ row }: { row: WorkspaceRow }) {
+export function KanbanCardPreview({
+	className,
+	row,
+}: {
+	className?: string;
+	row: WorkspaceRow;
+}) {
 	const displayTitle = row.branch ? humanizeBranch(row.branch) : row.title;
 	const branchTone = getWorkspaceBranchTone({
 		workspaceState: row.state,
@@ -39,6 +65,7 @@ export function KanbanCardPreview({ row }: { row: WorkspaceRow }) {
 			className={cn(
 				"flex w-full flex-col gap-2 rounded-lg border border-border/70 bg-card px-3 py-2 text-left opacity-100 shadow-xs transition-[background-color,border-color,box-shadow]",
 				"hover:border-border hover:bg-accent/35",
+				className,
 			)}
 		>
 			<div className="flex min-w-0 items-start gap-2">

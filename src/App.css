@@ -90,6 +90,31 @@ body {
 	animation: conversation-scrollbar-fade-in 300ms ease-out 400ms both;
 }
 
+.kanban-drop-placeholder {
+	height: var(--kanban-placeholder-height, 76px);
+	animation: kanban-drop-placeholder-in 180ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+@keyframes kanban-drop-placeholder-in {
+	from {
+		height: 0;
+		opacity: 0;
+		transform: translate3d(0, -4px, 0) scaleY(0.98);
+	}
+
+	to {
+		height: var(--kanban-placeholder-height, 76px);
+		opacity: 1;
+		transform: translate3d(0, 0, 0) scaleY(1);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.kanban-drop-placeholder {
+		animation: none;
+	}
+}
+
 @keyframes conversation-scrollbar-fade-in {
 	from {
 		opacity: 0;
