@@ -326,7 +326,8 @@ pub enum SyncWorkspaceTargetOutcome {
     Updated,
     AlreadyUpToDate,
     Conflict,
-    DirtyWorktree,
+    /// Merge succeeded but restoring the user's stashed work hit conflicts.
+    StashPopConflict,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -427,6 +428,7 @@ pub fn sync_workspace_with_target_branch(
 
     let current_status =
         git_ops::workspace_action_status(&workspace_dir, Some(&remote), Some(&target_branch))?;
+    // Pre-existing in-progress merge — let the user/agent resolve before we touch it.
     if current_status.conflict_count > 0 {
         return Ok(SyncWorkspaceTargetResponse {
             outcome: SyncWorkspaceTargetOutcome::Conflict,
@@ -434,19 +436,11 @@ pub fn sync_workspace_with_target_branch(
             conflicted_files: Vec::new(),
         });
     }
-    if current_status.uncommitted_count > 0 {
-        return Ok(SyncWorkspaceTargetResponse {
-            outcome: SyncWorkspaceTargetOutcome::DirtyWorktree,
-            target_branch,
-            conflicted_files: Vec::new(),
-        });
-    }
+    let dirty = current_status.uncommitted_count > 0;
 
     git_ops::fetch_remote_branch(&workspace_dir, &remote, &target_branch)?;
-    let behind_count = git_ops::commits_behind(
-        &workspace_dir,
-        &format!("refs/remotes/{remote}/{target_branch}"),
-    )?;
+    let target_remote_ref = format!("refs/remotes/{remote}/{target_branch}");
+    let behind_count = git_ops::commits_behind(&workspace_dir, &target_remote_ref)?;
     if behind_count == 0 {
         return Ok(SyncWorkspaceTargetResponse {
             outcome: SyncWorkspaceTargetOutcome::AlreadyUpToDate,
@@ -455,10 +449,11 @@ pub fn sync_workspace_with_target_branch(
         });
     }
 
-    let preflight = git_ops::preflight_merge_ref(
-        &workspace_dir,
-        &format!("refs/remotes/{remote}/{target_branch}"),
-    )?;
+    // Preflight in a temp worktree against HEAD only — dirty work isn't
+    // visible there, so a clean preflight doesn't guarantee a clean stash
+    // pop. We still gate on it to catch HEAD-vs-target conflicts cheaply
+    // before touching the user's worktree.
+    let preflight = git_ops::preflight_merge_ref(&workspace_dir, &target_remote_ref)?;
     if !preflight.conflicted_files.is_empty() {
         return Ok(SyncWorkspaceTargetResponse {
             outcome: SyncWorkspaceTargetOutcome::Conflict,
@@ -467,33 +462,67 @@ pub fn sync_workspace_with_target_branch(
         });
     }
 
-    match git_ops::merge_ref_no_edit(
-        &workspace_dir,
-        &format!("refs/remotes/{remote}/{target_branch}"),
-    ) {
-        Ok(()) => Ok(SyncWorkspaceTargetResponse {
-            outcome: SyncWorkspaceTargetOutcome::Updated,
-            target_branch,
-            conflicted_files: Vec::new(),
-        }),
-        Err(error) => {
-            let merge_status = git_ops::workspace_action_status(
-                &workspace_dir,
-                Some(&remote),
-                Some(&target_branch),
-            )?;
-            if merge_status.conflict_count > 0 {
-                let _ = git_ops::abort_merge(&workspace_dir);
-                Ok(SyncWorkspaceTargetResponse {
-                    outcome: SyncWorkspaceTargetOutcome::Conflict,
+    let stash_message = format!("helmor-sync-{workspace_id}");
+    let stashed = if dirty {
+        git_ops::stash_push_include_untracked(&workspace_dir, &stash_message)?
+    } else {
+        false
+    };
+
+    if let Err(error) = git_ops::merge_ref_no_edit(&workspace_dir, &target_remote_ref) {
+        let merge_status =
+            git_ops::workspace_action_status(&workspace_dir, Some(&remote), Some(&target_branch))?;
+        let merge_conflict = merge_status.conflict_count > 0;
+        if merge_conflict {
+            let _ = git_ops::abort_merge(&workspace_dir);
+        }
+        if stashed {
+            // Best-effort restore of the user's work. If this somehow fails
+            // the stash entry is preserved on the stack for manual recovery.
+            match git_ops::stash_pop(&workspace_dir) {
+                Ok(git_ops::StashPopOutcome::Clean) => {}
+                Ok(git_ops::StashPopOutcome::Conflict) => {
+                    tracing::warn!(
+                        workspace_id,
+                        "stash pop hit conflicts on merge-error path; worktree has unmerged paths"
+                    );
+                }
+                Err(pop_error) => {
+                    tracing::warn!(
+                        workspace_id,
+                        "stash pop failed on merge-error path; stash preserved for manual recovery: {pop_error:#}"
+                    );
+                }
+            }
+        }
+        if merge_conflict {
+            return Ok(SyncWorkspaceTargetResponse {
+                outcome: SyncWorkspaceTargetOutcome::Conflict,
+                target_branch,
+                conflicted_files: Vec::new(),
+            });
+        }
+        return Err(error);
+    }
+
+    if stashed {
+        match git_ops::stash_pop(&workspace_dir)? {
+            git_ops::StashPopOutcome::Clean => {}
+            git_ops::StashPopOutcome::Conflict => {
+                return Ok(SyncWorkspaceTargetResponse {
+                    outcome: SyncWorkspaceTargetOutcome::StashPopConflict,
                     target_branch,
                     conflicted_files: Vec::new(),
-                })
-            } else {
-                Err(error)
+                });
             }
         }
     }
+
+    Ok(SyncWorkspaceTargetResponse {
+        outcome: SyncWorkspaceTargetOutcome::Updated,
+        target_branch,
+        conflicted_files: Vec::new(),
+    })
 }
 
 pub fn push_workspace_to_remote(workspace_id: &str) -> Result<PushWorkspaceToRemoteResponse> {

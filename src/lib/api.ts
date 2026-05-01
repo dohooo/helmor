@@ -1529,7 +1529,7 @@ export type SyncWorkspaceTargetOutcome =
 	| "updated"
 	| "alreadyUpToDate"
 	| "conflict"
-	| "dirtyWorktree";
+	| "stashPopConflict";
 
 export type SyncWorkspaceTargetResponse = {
 	outcome: SyncWorkspaceTargetOutcome;

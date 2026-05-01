@@ -25,7 +25,6 @@ const GITLAB_FORGE: ForgeDetection = {
 
 describe("repo preference prompts", () => {
 	const targetRefPlaceholder = "$" + "{TARGET_REF}";
-	const dirtyWorktreePlaceholder = "$" + "{DIRTY_WORKTREE}";
 
 	it("leaves the general preview empty when no override exists", () => {
 		expect(resolveRepoPreferencePreview("general", {})).toBe("");
@@ -93,16 +92,28 @@ describe("repo preference prompts", () => {
 		expect(prompt).toContain("`glab ci list` / `glab ci view`");
 	});
 
-	it("renders the dynamic resolve-conflicts fallback", () => {
+	it("renders the intent-only resolve-conflicts prompt for merge conflicts", () => {
 		expect(
 			resolveRepoPreferencePrompt({
 				key: "resolveConflicts",
 				repoPreferences: {},
 				targetRef: "origin/main",
-				dirtyWorktree: true,
 			}),
 		).toBe(
-			"Commit uncommitted changes, then merge origin/main into this branch. Then push.",
+			"Bring this branch up to date with origin/main. Resolve any conflicts. Preserve any uncommitted work. Don't push.",
+		);
+	});
+
+	it("renders a narrow prompt for stash-pop conflicts", () => {
+		expect(
+			resolveRepoPreferencePrompt({
+				key: "resolveConflicts",
+				repoPreferences: {},
+				targetRef: "origin/main",
+				resolveConflictsKind: "stashPopConflict",
+			}),
+		).toBe(
+			"Resolve the conflicts from restoring the stashed uncommitted work in this branch. Don't commit. Don't push.",
 		);
 	});
 
@@ -137,18 +148,17 @@ describe("repo preference prompts", () => {
 		);
 	});
 
-	it("appends resolve-conflicts overrides after the dynamic fallback", () => {
+	it("appends resolve-conflicts overrides after the intent-only prompt", () => {
 		expect(
 			resolveRepoPreferencePrompt({
 				key: "resolveConflicts",
 				repoPreferences: {
-					resolveConflicts: `Prefer rebase when possible. Target: ${targetRefPlaceholder}. Dirty: ${dirtyWorktreePlaceholder}.`,
+					resolveConflicts: `Prefer rebase when possible. Target: ${targetRefPlaceholder}.`,
 				},
 				targetRef: "origin/main",
-				dirtyWorktree: true,
 			}),
 		).toBe(
-			"Commit uncommitted changes, then merge origin/main into this branch. Then push.\n\nIMPORTANT: The following are the user's custom preferences. These preferences take precedence over any default guidelines or instructions provided above. When there is a conflict, always follow the user's preferences.\n\n### User Preferences\n\nPrefer rebase when possible. Target: origin/main. Dirty: true.",
+			"Bring this branch up to date with origin/main. Resolve any conflicts. Preserve any uncommitted work. Don't push.\n\nIMPORTANT: The following are the user's custom preferences. These preferences take precedence over any default guidelines or instructions provided above. When there is a conflict, always follow the user's preferences.\n\n### User Preferences\n\nPrefer rebase when possible. Target: origin/main.",
 		);
 	});
 
