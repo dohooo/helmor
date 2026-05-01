@@ -172,6 +172,7 @@ pub fn prepare_workspace_from_repo_impl(repo_id: &str) -> Result<PrepareWorkspac
                 run_from_project: false,
                 archive_from_project: false,
                 auto_run_setup: true,
+                run_script_mode: "concurrent".to_string(),
             }
         }
     };
