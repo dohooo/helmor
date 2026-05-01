@@ -7,6 +7,7 @@ import { useUiSyncBridge } from "./use-ui-sync-bridge";
 
 const apiMocks = vi.hoisted(() => ({
 	subscribeUiMutations: vi.fn(),
+	unlistenUiMutations: vi.fn(),
 }));
 
 let capturedSubscription: ((event: UiMutationEvent) => void) | null = null;
@@ -18,6 +19,7 @@ vi.mock("@/lib/api", async () => {
 		subscribeUiMutations: apiMocks.subscribeUiMutations.mockImplementation(
 			async (callback: (event: UiMutationEvent) => void) => {
 				capturedSubscription = callback;
+				return apiMocks.unlistenUiMutations;
 			},
 		),
 	};
@@ -33,6 +35,7 @@ describe("useUiSyncBridge", () => {
 	beforeEach(() => {
 		capturedSubscription = null;
 		apiMocks.subscribeUiMutations.mockClear();
+		apiMocks.unlistenUiMutations.mockClear();
 	});
 
 	it("invalidates the expected query families for workspace git state changes", async () => {
@@ -208,5 +211,25 @@ describe("useUiSyncBridge", () => {
 		await waitFor(() => {
 			expect(reloadSettings).toHaveBeenCalledOnce();
 		});
+	});
+
+	it("unsubscribes from backend mutations on unmount", async () => {
+		const queryClient = makeClient();
+
+		const { unmount } = renderHook(() =>
+			useUiSyncBridge({
+				queryClient,
+				processPendingCliSends: vi.fn(),
+				reloadSettings: vi.fn(),
+			}),
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.subscribeUiMutations).toHaveBeenCalledOnce();
+		});
+
+		unmount();
+
+		expect(apiMocks.unlistenUiMutations).toHaveBeenCalledOnce();
 	});
 });

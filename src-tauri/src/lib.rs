@@ -345,6 +345,7 @@ pub fn run() {
             commands::settings_commands::save_auto_close_opt_in_asked,
             global_hotkey::sync_global_hotkey,
             ui_sync::subscribe_ui_mutations,
+            ui_sync::unsubscribe_ui_mutations,
             commands::updater_commands::get_app_update_status,
             commands::updater_commands::check_for_app_update,
             commands::updater_commands::install_downloaded_app_update,

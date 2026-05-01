@@ -1130,11 +1130,16 @@ export async function listenGitRefsChanged(
 
 export async function subscribeUiMutations(
 	callback: (event: UiMutationEvent) => void,
-): Promise<void> {
+): Promise<UnlistenFn> {
 	const { Channel } = await import("@tauri-apps/api/core");
+	const subscriptionId = crypto.randomUUID();
 	const onEvent = new Channel<UiMutationEvent>();
 	onEvent.onmessage = callback;
-	await invoke("subscribe_ui_mutations", { onEvent });
+	await invoke("subscribe_ui_mutations", { subscriptionId, onEvent });
+	return () => {
+		onEvent.onmessage = () => {};
+		void invoke("unsubscribe_ui_mutations", { subscriptionId });
+	};
 }
 
 export type PrefetchRemoteRefsResponse = {

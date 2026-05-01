@@ -12,6 +12,7 @@ const apiMockState = vi.hoisted(() => ({
 	getSessionContextUsage: vi.fn(),
 	getLiveContextUsage: vi.fn(),
 	subscribeUiMutations: vi.fn(),
+	unlistenUiMutations: vi.fn(),
 	capturedCallback: null as null | ((event: unknown) => void),
 }));
 
@@ -69,11 +70,13 @@ describe("ContextUsageRing end-to-end with UI sync bridge", () => {
 		apiMockState.getSessionContextUsage.mockReset();
 		apiMockState.getLiveContextUsage.mockReset();
 		apiMockState.subscribeUiMutations.mockReset();
+		apiMockState.unlistenUiMutations.mockReset();
 		apiMockState.capturedCallback = null;
 
 		apiMockState.subscribeUiMutations.mockImplementation(
 			async (callback: (event: unknown) => void) => {
 				apiMockState.capturedCallback = callback;
+				return apiMockState.unlistenUiMutations;
 			},
 		);
 	});
