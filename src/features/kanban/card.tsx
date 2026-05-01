@@ -80,7 +80,7 @@ export function KanbanCardPreview({
 	return (
 		<div
 			className={cn(
-				"flex w-full flex-col gap-2 rounded-lg border border-border/70 bg-card px-3 py-2 text-left opacity-100 shadow-xs transition-[background-color,border-color,box-shadow]",
+				"flex w-full flex-col gap-2 rounded-lg border border-border/70 bg-card px-3 py-2 text-left opacity-100 shadow-xs",
 				"hover:border-border hover:bg-accent/35",
 				className,
 			)}

@@ -19,7 +19,7 @@ export function SourceCard({ card }: { card: ContextCard }) {
 		<article
 			aria-label={card.title}
 			className={cn(
-				"group relative flex flex-col gap-2 overflow-hidden rounded-lg border border-border/70 bg-[var(--sidebar)] px-3 pt-2.5 pb-2 text-left shadow-xs transition-[border-color,background-color,opacity,box-shadow]",
+				"group relative flex flex-col gap-2 overflow-hidden rounded-lg border border-border/70 bg-[var(--sidebar)] px-3 pt-2.5 pb-2 text-left shadow-xs",
 				"hover:border-border hover:bg-[var(--accent)]",
 			)}
 		>
