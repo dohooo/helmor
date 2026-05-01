@@ -533,7 +533,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				<div data-tauri-drag-region className="h-full flex-1" />
 			</div>
 
-			<div className="flex items-center justify-between px-3">
+			<div className="mt-1 flex items-center justify-between px-3">
 				<h2 className="text-[14px] font-medium tracking-[-0.01em] text-muted-foreground">
 					Workspaces
 				</h2>

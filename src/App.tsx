@@ -8,6 +8,7 @@ import {
 	ChevronDown,
 	CircleAlertIcon,
 	FolderOpen,
+	Kanban,
 	PanelLeftClose,
 	PanelLeftOpen,
 	PanelRightClose,
@@ -37,6 +38,7 @@ import { WorkspaceConversationContainer } from "@/features/conversation";
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
 import { WorkspaceInspectorSidebar } from "@/features/inspector";
+import { KanbanPage } from "@/features/kanban";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
 import { AppOnboarding } from "@/features/onboarding";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
@@ -55,6 +57,7 @@ import {
 import { useGlobalHotkeySync } from "@/features/shortcuts/use-global-hotkey-sync";
 import { AppUpdateButton } from "@/features/updater/app-update-button";
 import { useAppUpdater } from "@/features/updater/use-app-updater";
+import { cn } from "@/lib/utils";
 import { EditorIcon } from "@/shell/editor-icon";
 import { useEnsureDefaultModel } from "@/shell/hooks/use-ensure-default-model";
 import { useShellPanels } from "@/shell/hooks/use-panels";
@@ -137,6 +140,7 @@ import { StreamingFooterOverlapScenario } from "./test/e2e-scenarios/streaming-f
 
 const SETTINGS_RELOAD_EVENT = "helmor:reload-settings";
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
+type WorkspaceViewMode = "conversation" | "editor" | "kanban";
 const EMPTY_SENDING_SESSION_IDS = new Set<string>();
 
 function App() {
@@ -355,6 +359,51 @@ function MainApp() {
 	);
 }
 
+function KanbanNavButton({
+	active,
+	onClick,
+	shortcut,
+}: {
+	active: boolean;
+	onClick: () => void;
+	shortcut?: string | null;
+}) {
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					type="button"
+					aria-label="Open Kanban"
+					aria-pressed={active}
+					variant="ghost"
+					size="xs"
+					onClick={onClick}
+					className={cn(
+						"text-muted-foreground hover:text-foreground",
+						active && "text-foreground",
+					)}
+				>
+					<Kanban className="size-[15px]" strokeWidth={1.8} />
+					<span className="text-[13px] leading-none">Kanban</span>
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent
+				side="top"
+				sideOffset={4}
+				className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+			>
+				<span className="leading-none">Kanban</span>
+				{shortcut ? (
+					<InlineShortcutDisplay
+						hotkey={shortcut}
+						className="text-background/60"
+					/>
+				) : null}
+			</TooltipContent>
+		</Tooltip>
+	);
+}
+
 function AppShell({
 	onOpenSettings,
 }: {
@@ -382,9 +431,7 @@ function AppShell({
 	const [workspaceReselectTick, setWorkspaceReselectTick] = useState(0);
 	const lastMarkedReadReselectTickRef = useRef(0);
 
-	const workspaceViewModeRef = useRef<"conversation" | "editor">(
-		"conversation",
-	);
+	const workspaceViewModeRef = useRef<WorkspaceViewMode>("conversation");
 	const sessionSelectionHistoryByWorkspaceRef = useRef<
 		Record<string, string[]>
 	>({});
@@ -465,9 +512,8 @@ function AppShell({
 	const [displayedSessionId, setDisplayedSessionId] = useState<string | null>(
 		null,
 	);
-	const [workspaceViewMode, setWorkspaceViewMode] = useState<
-		"conversation" | "editor"
-	>("conversation");
+	const [workspaceViewMode, setWorkspaceViewMode] =
+		useState<WorkspaceViewMode>("conversation");
 	const [editorSession, setEditorSession] = useState<EditorSessionState | null>(
 		null,
 	);
@@ -1285,6 +1331,10 @@ function AppShell({
 
 	const handleSelectWorkspace = useCallback(
 		(workspaceId: string | null) => {
+			if (workspaceViewModeRef.current === "kanban") {
+				setWorkspaceViewMode("conversation");
+			}
+
 			if (workspaceId === selectedWorkspaceIdRef.current) {
 				// Re-clicking the currently selected workspace: force the
 				// mark-session-read effect to re-evaluate so a lingering dot
@@ -1793,6 +1843,12 @@ function AppShell({
 		[archivedRows, handleSelectWorkspace, workspaceGroups],
 	);
 
+	const handleToggleKanban = useCallback(() => {
+		setWorkspaceViewMode((mode) =>
+			mode === "kanban" ? "conversation" : "kanban",
+		);
+	}, []);
+
 	const globalShortcutHandlers = useMemo<ShortcutHandler[]>(
 		() => [
 			{
@@ -1818,6 +1874,11 @@ function AppShell({
 				id: "workspace.addRepository" as const,
 				callback: () =>
 					window.dispatchEvent(new Event("helmor:open-add-repository")),
+			},
+			{
+				id: "workspace.toggleKanban" as const,
+				callback: handleToggleKanban,
+				enabled: workspaceViewMode !== "editor",
 			},
 			{
 				id: "workspace.previous" as const,
@@ -1945,6 +2006,7 @@ function AppShell({
 			handleOpenSettings,
 			handlePullLatest,
 			handleReopenClosedSession,
+			handleToggleKanban,
 			handleToggleTheme,
 			handleToggleZenMode,
 			preferredEditor,
@@ -2053,7 +2115,7 @@ function AppShell({
 	// its own onCloseRequested listener.  No need for a separate hook here.
 
 	useEffect(() => {
-		if (workspaceViewMode === "editor") {
+		if (workspaceViewMode !== "conversation") {
 			return;
 		}
 
@@ -2149,7 +2211,7 @@ function AppShell({
 							className="relative h-screen overflow-hidden bg-background font-sans text-foreground antialiased"
 						>
 							<div className="relative flex h-full min-h-0 bg-background">
-								{workspaceViewMode === "conversation" && (
+								{workspaceViewMode !== "editor" && (
 									<>
 										{!sidebarCollapsed && (
 											<aside
@@ -2210,6 +2272,14 @@ function AppShell({
 															"settings.open",
 														)}
 													/>
+													<KanbanNavButton
+														active={workspaceViewMode === "kanban"}
+														onClick={handleToggleKanban}
+														shortcut={getShortcut(
+															appSettings.shortcuts,
+															"workspace.toggleKanban",
+														)}
+													/>
 												</div>
 											</aside>
 										)}
@@ -2248,7 +2318,7 @@ function AppShell({
 									aria-label="Workspace panel"
 									className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
 								>
-									{workspaceViewMode === "conversation" && (
+									{workspaceViewMode !== "editor" && (
 										<div
 											aria-label="Workspace panel drag region"
 											className="absolute inset-x-0 top-0 z-10 h-9 bg-transparent"
@@ -2260,6 +2330,7 @@ function AppShell({
 										aria-label="Workspace viewport"
 										className="flex min-h-0 flex-1 flex-col bg-background"
 									>
+										{workspaceViewMode === "kanban" && <KanbanPage />}
 										{workspaceViewMode === "editor" && editorSession && (
 											<WorkspaceEditorSurface
 												editorSession={editorSession}
@@ -2272,7 +2343,7 @@ function AppShell({
 										<div
 											data-focus-scope="chat"
 											className={
-												workspaceViewMode === "editor"
+												workspaceViewMode !== "conversation"
 													? "hidden"
 													: "flex min-h-0 flex-1 flex-col"
 											}
@@ -2524,7 +2595,7 @@ function AppShell({
 									</div>
 								</section>
 
-								{!inspectorCollapsed && (
+								{workspaceViewMode !== "kanban" && !inspectorCollapsed && (
 									<>
 										<div
 											role="separator"

@@ -5,6 +5,7 @@ export type ShortcutId =
 	| "workspace.addRepository"
 	| "workspace.copyPath"
 	| "workspace.openInEditor"
+	| "workspace.toggleKanban"
 	| "session.previous"
 	| "session.next"
 	| "session.new"
