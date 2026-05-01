@@ -294,6 +294,7 @@ function getDropPreview({
 }) {
 	if (settlingDrop?.columnId === columnId) {
 		return {
+			fadeMs: DROP_SETTLE_MS,
 			height: settlingDrop.height,
 			mode: "settling" as const,
 			row: settlingDrop.row,

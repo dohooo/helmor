@@ -11,11 +11,13 @@ import { cn } from "@/lib/utils";
 import { getWorkspaceBranchTone } from "@/lib/workspace-helpers";
 
 type KanbanCardProps = {
+	className?: string;
 	row: WorkspaceRow;
 	settling?: boolean;
 };
 
 export const KanbanCard = memo(function KanbanCard({
+	className,
 	row,
 	settling = false,
 }: KanbanCardProps) {
@@ -38,6 +40,7 @@ export const KanbanCard = memo(function KanbanCard({
 				"cursor-grab active:cursor-grabbing",
 				isDragging && !settling && "opacity-25",
 				settling && "pointer-events-none",
+				className,
 			)}
 			{...attributes}
 			{...listeners}

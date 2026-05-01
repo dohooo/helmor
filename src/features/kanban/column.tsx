@@ -5,7 +5,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { GroupIcon } from "@/features/navigation/shared";
 import type { GroupTone, WorkspaceRow } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { KanbanCard, KanbanCardPreview } from "./card";
+import { KanbanCard } from "./card";
 import type { KanbanColumnId } from "./types";
 
 type KanbanColumnProps = {
@@ -19,6 +19,7 @@ type KanbanColumnProps = {
 };
 
 export type KanbanDropPreview = {
+	fadeMs?: number;
 	height: number | null;
 	mode: "hover" | "settling";
 	row: WorkspaceRow;
@@ -76,12 +77,13 @@ export function KanbanColumn({
 				>
 					{dropPreview ? (
 						dropPreview.mode === "settling" ? (
-							<KanbanCard row={dropPreview.row} settling />
-						) : (
-							<KanbanDropPlaceholder
+							<KanbanSettlingPlaceholder
+								fadeMs={dropPreview.fadeMs}
 								height={dropPreview.height}
 								row={dropPreview.row}
 							/>
+						) : (
+							<KanbanDropPlaceholder height={dropPreview.height} />
 						)
 					) : null}
 					{rows.length > 0 ? (
@@ -101,17 +103,45 @@ export function KanbanColumn({
 	);
 }
 
-function KanbanDropPlaceholder({
+function KanbanSettlingPlaceholder({
+	fadeMs,
 	height,
 	row,
 }: {
+	fadeMs?: number;
 	height: number | null;
 	row: WorkspaceRow;
 }) {
 	return (
 		<div
+			className="relative"
+			style={
+				fadeMs || height
+					? ({
+							...(fadeMs
+								? { "--kanban-placeholder-fade-ms": `${fadeMs}ms` }
+								: {}),
+							...(height
+								? { "--kanban-placeholder-height": `${height}px` }
+								: {}),
+						} as CSSProperties)
+					: undefined
+			}
+		>
+			<KanbanCard className="opacity-0" row={row} settling />
+			<div
+				aria-hidden="true"
+				className="kanban-drop-placeholder-out pointer-events-none absolute inset-0 rounded-lg border border-dashed border-primary/30"
+			/>
+		</div>
+	);
+}
+
+function KanbanDropPlaceholder({ height }: { height: number | null }) {
+	return (
+		<div
 			aria-hidden="true"
-			className="kanban-drop-placeholder relative overflow-hidden rounded-lg border border-dashed border-primary/45 bg-primary/10 shadow-inner"
+			className="kanban-drop-placeholder rounded-lg border border-dashed border-primary/30"
 			style={
 				height
 					? ({
@@ -119,12 +149,6 @@ function KanbanDropPlaceholder({
 						} as CSSProperties)
 					: undefined
 			}
-		>
-			<KanbanCardPreview
-				row={row}
-				className="pointer-events-none h-full border-primary/20 bg-primary/5 opacity-30 shadow-none"
-			/>
-			<div className="absolute inset-0 rounded-lg bg-gradient-to-br from-primary/10 to-transparent" />
-		</div>
+		/>
 	);
 }
