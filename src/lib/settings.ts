@@ -3,6 +3,8 @@ import { createContext, useContext } from "react";
 
 export type ThemeMode = "system" | "light" | "dark";
 
+export type DarkTheme = "default" | "midnight" | "forest" | "ember" | "aurora";
+
 /** Behavior when submitting a message while the agent is still responding.
  *  - `steer`: inject into the active turn (provider-native mid-turn steer).
  *  - `queue`: stash locally; auto-fire as a new turn once the agent finishes.
@@ -21,6 +23,7 @@ export type ClaudeCustomProviderSettings = {
 export type AppSettings = {
 	fontSize: number;
 	theme: ThemeMode;
+	darkTheme: DarkTheme;
 	notifications: boolean;
 	lastWorkspaceId: string | null;
 	lastSessionId: string | null;
@@ -50,6 +53,7 @@ export const CONTEXT_USAGE_AUTO_REVEAL_THRESHOLD = 70;
 export const DEFAULT_SETTINGS: AppSettings = {
 	fontSize: 14,
 	theme: "system",
+	darkTheme: "default",
 	notifications: true,
 	lastWorkspaceId: null,
 	lastSessionId: null,
@@ -71,9 +75,21 @@ export const DEFAULT_SETTINGS: AppSettings = {
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
+export const DARK_THEME_STORAGE_KEY = "helmor-dark-theme";
 
-// theme is stored in localStorage (sync read for flash-free boot), not SQLite
-const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
+const VALID_DARK_THEMES: readonly DarkTheme[] = [
+	"default",
+	"midnight",
+	"forest",
+	"ember",
+	"aurora",
+];
+
+// theme + darkTheme are stored in localStorage (sync read for flash-free boot), not SQLite
+const SETTINGS_KEY_MAP: Record<
+	Exclude<keyof AppSettings, "theme" | "darkTheme">,
+	string
+> = {
 	fontSize: "app.font_size",
 	notifications: "app.notifications",
 	lastWorkspaceId: "app.last_workspace_id",
@@ -148,6 +164,12 @@ export async function loadSettings(): Promise<AppSettings> {
 			theme:
 				(localStorage.getItem(THEME_STORAGE_KEY) as AppSettings["theme"]) ??
 				DEFAULT_SETTINGS.theme,
+			darkTheme: (() => {
+				const raw = localStorage.getItem(DARK_THEME_STORAGE_KEY);
+				return VALID_DARK_THEMES.includes(raw as DarkTheme)
+					? (raw as DarkTheme)
+					: DEFAULT_SETTINGS.darkTheme;
+			})(),
 			notifications:
 				raw[SETTINGS_KEY_MAP.notifications] !== undefined
 					? raw[SETTINGS_KEY_MAP.notifications] === "true"
@@ -207,9 +229,20 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 		}
 	}
 
+	if (patch.darkTheme !== undefined) {
+		try {
+			localStorage.setItem(DARK_THEME_STORAGE_KEY, patch.darkTheme);
+		} catch (error) {
+			console.error(
+				`[helmor] dark theme save failed for "${DARK_THEME_STORAGE_KEY}"`,
+				error,
+			);
+		}
+	}
+
 	const settings: Record<string, string> = {};
 	for (const [key, dbKey] of Object.entries(SETTINGS_KEY_MAP)) {
-		const value = patch[key as keyof Omit<AppSettings, "theme">];
+		const value = patch[key as keyof Omit<AppSettings, "theme" | "darkTheme">];
 		if (value !== undefined) {
 			settings[dbKey] =
 				key === "shortcuts" || key === "claudeCustomProviders"
