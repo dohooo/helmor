@@ -36,7 +36,9 @@ mod types;
 
 use self::api::{command_detail, encode_path_component, glab_api, looks_like_auth_error};
 use self::context::load_gitlab_context;
-use self::merge_request::{find_workspace_mr, gitlab_mergeable, mr_info};
+use self::merge_request::{
+    determine_squash_choice, find_workspace_mr, gitlab_mergeable, mr_info, SquashChoice,
+};
 use self::pipeline::{
     build_gitlab_check_insert_text, load_job_trace, load_pipeline_jobs, pipeline_item,
 };
@@ -276,7 +278,12 @@ pub(super) fn merge_workspace_mr(workspace_id: &str) -> Result<Option<ChangeRequ
         encode_path_component(&context.full_path),
         mr.iid
     );
-    let output = glab_api(&context.remote.host, ["--method", "PUT", endpoint.as_str()])?;
+    let squash = determine_squash_choice(&context);
+    let mut args: Vec<&str> = vec!["--method", "PUT", endpoint.as_str()];
+    if matches!(squash, SquashChoice::Squash) {
+        args.extend(["--field", "squash=true"]);
+    }
+    let output = glab_api(&context.remote.host, args)?;
     if !output.success {
         let detail = command_detail(&output);
         tracing::warn!(
@@ -284,6 +291,7 @@ pub(super) fn merge_workspace_mr(workspace_id: &str) -> Result<Option<ChangeRequ
             host = %context.remote.host,
             iid = mr.iid,
             detail = %detail,
+            squash = ?squash,
             "GitLab MR merge API failed"
         );
         bail!("GitLab MR merge failed: {detail}");
