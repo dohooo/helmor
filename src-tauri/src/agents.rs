@@ -184,6 +184,11 @@ pub struct AgentSendRequest {
     /// Workspace-relative paths from the @-mention picker.
     #[serde(default)]
     pub files: Option<Vec<String>>,
+    /// Image attachment paths from the composer (drag-and-drop or
+    /// paste). Travels structurally so paths with whitespace
+    /// round-trip without regex re-extraction.
+    #[serde(default)]
+    pub images: Option<Vec<String>>,
 }
 
 #[cfg(test)]
@@ -294,6 +299,8 @@ pub struct AgentSteerRequest {
     pub prompt: String,
     #[serde(default)]
     pub files: Option<Vec<String>>,
+    #[serde(default)]
+    pub images: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -338,6 +345,7 @@ pub async fn steer_agent_stream(
         .unwrap_or_else(|| handle.provider.clone());
     let request_id = Uuid::new_v4().to_string();
     let files = request.files.clone().unwrap_or_default();
+    let images = request.images.clone().unwrap_or_default();
 
     let steer_req = crate::sidecar::SidecarRequest {
         id: request_id.clone(),
@@ -347,6 +355,7 @@ pub async fn steer_agent_stream(
             "provider": provider,
             "prompt": prompt,
             "files": files,
+            "images": images,
         }),
     };
 
@@ -776,7 +785,7 @@ mod tests {
         };
 
         // 1. Persist user message
-        persist_user_message(&conn, &ctx, "Hello", &[]).unwrap();
+        persist_user_message(&conn, &ctx, "Hello", &[], &[]).unwrap();
 
         persist_result_and_finalize(
             &conn,
@@ -862,6 +871,7 @@ mod tests {
             fast_mode: None,
             user_message_id: None,
             files: None,
+            images: None,
         };
 
         let resolved = resolve_stream_working_directory(&request).unwrap();
@@ -898,6 +908,7 @@ mod tests {
             fast_mode: None,
             user_message_id: None,
             files: None,
+            images: None,
         };
 
         let error = resolve_stream_working_directory(&request).unwrap_err();
@@ -932,7 +943,7 @@ mod tests {
             user_message_id: Uuid::new_v4().to_string(),
         };
 
-        persist_user_message(&conn, &ctx, "Hi", &[]).unwrap();
+        persist_user_message(&conn, &ctx, "Hi", &[], &[]).unwrap();
         persist_result_and_finalize(
             &conn,
             &ctx,
@@ -991,7 +1002,7 @@ mod tests {
         };
 
         // Persist user message
-        persist_user_message(&conn, &ctx, "Do something", &[]).unwrap();
+        persist_user_message(&conn, &ctx, "Do something", &[], &[]).unwrap();
 
         // Persist two intermediate turns
         let turn1 = CollectedTurn {
@@ -1062,7 +1073,7 @@ mod tests {
         };
 
         // 1. Initial prompt persisted via the normal path.
-        persist_user_message(&conn, &ctx, "investigate the bug", &[]).unwrap();
+        persist_user_message(&conn, &ctx, "investigate the bug", &[], &[]).unwrap();
 
         // 2. Drive the accumulator the same way the streaming loop does:
         //    assistant deltas, steer event, more assistant deltas, result.

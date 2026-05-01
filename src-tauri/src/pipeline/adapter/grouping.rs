@@ -82,31 +82,39 @@ pub(super) fn convert_user_message(
 
 /// Split `text` on `@<path>` substrings (longer paths win on overlap),
 /// returning interleaved Text and FileMention parts.
+///
+/// `files` and `images` are merged into a single needle pool — the
+/// renderer routes by extension. Both must be passed in: paths
+/// containing whitespace can only round-trip when matched against a
+/// structured needle, never via regex. Mirrors the TypeScript
+/// `splitTextWithFiles(text, files, msgId, images)` so optimistic and
+/// persisted renders stay byte-identical.
 pub(crate) fn split_user_text_with_files(
     text: &str,
     files: &[String],
+    images: &[String],
     msg_id: &str,
 ) -> Vec<MessagePart> {
     let text_id = |idx: usize| format!("{msg_id}:txt:{idx}");
     let mention_id = |idx: usize| format!("{msg_id}:mention:{idx}");
 
-    if files.is_empty() || text.is_empty() {
+    if (files.is_empty() && images.is_empty()) || text.is_empty() {
         return vec![MessagePart::Text {
             id: text_id(0),
             text: text.to_string(),
         }];
     }
 
-    let mut sorted_files: Vec<&String> = files.iter().collect();
-    sorted_files.sort_by_key(|f| std::cmp::Reverse(f.len()));
+    let mut needles: Vec<&String> = files.iter().chain(images.iter()).collect();
+    needles.sort_by_key(|f| std::cmp::Reverse(f.len()));
 
     // (start_byte, end_byte, path) — kept non-overlapping by construction.
     let mut matches: Vec<(usize, usize, String)> = Vec::new();
-    for file in &sorted_files {
-        if file.is_empty() {
+    for needle_str in &needles {
+        if needle_str.is_empty() {
             continue;
         }
-        let needle = format!("@{file}");
+        let needle = format!("@{needle_str}");
         let mut search_start = 0usize;
         while let Some(rel) = text[search_start..].find(&needle) {
             let abs_start = search_start + rel;
@@ -115,7 +123,7 @@ pub(crate) fn split_user_text_with_files(
                 .iter()
                 .any(|(s, e, _)| !(abs_end <= *s || abs_start >= *e));
             if !overlaps {
-                matches.push((abs_start, abs_end, (*file).clone()));
+                matches.push((abs_start, abs_end, (*needle_str).clone()));
             }
             search_start = abs_end;
         }

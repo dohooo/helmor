@@ -1,0 +1,17 @@
+---
+source: src/agents/streaming/event_loop_tests.rs
+expression: entries
+---
+- event_type: turn/started
+  emitted: []
+  side_effects: []
+- event_type: error
+  emitted:
+    - kind: Error
+      message: Reconnecting... 1/5
+      persisted: true
+      internal: false
+  side_effects: []
+- event_type: end
+  emitted: []
+  side_effects: []

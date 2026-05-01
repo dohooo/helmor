@@ -1,0 +1,18 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: user
+  id: msg-1
+  content_length: 4
+  content:
+    - type: text
+      text: "compare "
+    - type: file-mention
+      path: /abs path/notes.md
+    - type: text
+      text: " with "
+    - type: file-mention
+      path: /abs path/shot.png
+  status: ~
+  streaming: ~

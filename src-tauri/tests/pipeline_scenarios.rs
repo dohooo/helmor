@@ -184,6 +184,60 @@ fn user_prompt_files_array_present_but_empty() {
 }
 
 #[test]
+fn user_prompt_with_image_path_containing_spaces() {
+    let msgs = vec![user_prompt_with_files_and_images(
+        "u1",
+        "Clicking on @/Users/me/Library/Application Support/CleanShot/CleanShot 2026-04-29 at 08.24.35@2x.jpg queues",
+        &[],
+        &[
+            "/Users/me/Library/Application Support/CleanShot/CleanShot 2026-04-29 at 08.24.35@2x.jpg",
+        ],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_prompt_with_file_path_containing_spaces() {
+    let msgs = vec![user_prompt_with_files_and_images(
+        "u1",
+        "open @/Users/me/My Project/notes.md please",
+        &["/Users/me/My Project/notes.md"],
+        &[],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_prompt_with_files_and_images_mixed() {
+    let msgs = vec![user_prompt_with_files_and_images(
+        "u1",
+        "compare @/abs path/notes.md with @/abs path/shot.png",
+        &["/abs path/notes.md"],
+        &["/abs path/shot.png"],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_prompt_steer_with_image_path_containing_spaces() {
+    // Mid-turn steer with an image attachment whose absolute path
+    // contains whitespace. Persisted JSON carries `images: [...]`
+    // because the sidecar's synthetic event MUST forward both `files`
+    // and `images` — without `images`, the adapter has no needle to
+    // find the `@<path>` substring with and the badge would vanish on
+    // reload while still appearing in the optimistic render.
+    let msgs = vec![user_prompt_steer_with_files_and_images(
+        "u1",
+        "actually look at @/Users/me/Library/Application Support/CleanShot/CleanShot 2026-04-29 at 08.24.35@2x.jpg first",
+        &[],
+        &[
+            "/Users/me/Library/Application Support/CleanShot/CleanShot 2026-04-29 at 08.24.35@2x.jpg",
+        ],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
 fn user_prompt_steer_flag_renders_as_user() {
     // A steer prompt is a regular user turn with `steer: true` added to
     // the JSON payload. The adapter should ignore the flag for rendering

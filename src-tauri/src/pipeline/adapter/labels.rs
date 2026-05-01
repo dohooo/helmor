@@ -233,6 +233,7 @@ pub(super) fn build_system_notice(parsed: Option<&Value>, msg_id: &str) -> Optio
                 .filter(|s| !s.trim().is_empty())
                 .map(str::to_string),
         }),
+        "codex_reconnecting" => Some(build_codex_reconnecting_notice(parsed, msg_id)),
         "api_retry" => Some(build_api_retry_notice(parsed, msg_id)),
         _ => None,
     }
@@ -271,10 +272,36 @@ fn build_compact_boundary_notice(parsed: &Value, msg_id: &str) -> MessagePart {
     }
 }
 
+fn build_codex_reconnecting_notice(parsed: &Value, msg_id: &str) -> MessagePart {
+    let attempt = parsed.get("attempt").and_then(Value::as_i64).unwrap_or(0);
+    let max = parsed
+        .get("max_retries")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let message = parsed
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or("Reconnecting...");
+    let body = if attempt > 0 && max > 0 {
+        Some(format!("Attempt {attempt}/{max}"))
+    } else if message.trim().is_empty() {
+        None
+    } else {
+        Some(message.to_string())
+    };
+
+    MessagePart::SystemNotice {
+        id: notice_part_id(msg_id),
+        severity: NoticeSeverity::Warning,
+        label: "Reconnecting...".to_string(),
+        body,
+    }
+}
+
 /// `SDKAPIRetryMessage { attempt, max_retries, retry_delay_ms,
 /// error_status, error }`. Renders as a Warning notice during transient
-/// API failures — Claude-only at the source (Codex retries are
-/// SDK-internal and never surface).
+/// API failures — Claude-only at the source (Codex reconnects use
+/// `codex_reconnecting` so the UI names that state explicitly).
 fn build_api_retry_notice(parsed: &Value, msg_id: &str) -> MessagePart {
     let attempt = parsed.get("attempt").and_then(Value::as_i64).unwrap_or(0);
     let max = parsed
