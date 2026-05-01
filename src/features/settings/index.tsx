@@ -44,8 +44,8 @@ import {
 	helmorQueryKeys,
 	repositoriesQueryOptions,
 } from "@/lib/query-client";
-import type { ThemeMode } from "@/lib/settings";
-import { useSettings } from "@/lib/settings";
+import type { DarkTheme, ThemeMode } from "@/lib/settings";
+import { resolveTheme, useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { clampEffort, findModelOption } from "@/lib/workspace-helpers";
 import { SettingsGroup, SettingsRow } from "./components/settings-row";
@@ -60,6 +60,58 @@ import { RepositorySettingsPanel } from "./panels/repository-settings";
 const MIN_FONT_SIZE = 12;
 const MAX_FONT_SIZE = 20;
 const FALLBACK_EFFORT_LEVELS = ["low", "medium", "high"];
+
+const DARK_THEME_OPTIONS: Array<{
+	id: DarkTheme;
+	label: string;
+	/** Gradient stop colors for dark-mode swatch (vivid, hue-family) */
+	bg: string;
+	accent: string;
+	/** Gradient stop colors for light-mode swatch (vivid, hue-family) */
+	lightBg: string;
+	lightAccent: string;
+}> = [
+	{
+		id: "default",
+		label: "Default",
+		bg: "oklch(0.38 0 0)",
+		accent: "oklch(0.18 0 0)",
+		lightBg: "oklch(0.88 0 0)",
+		lightAccent: "oklch(0.52 0 0)",
+	},
+	{
+		id: "midnight",
+		label: "Midnight",
+		bg: "oklch(0.62 0.14 258)",
+		accent: "oklch(0.30 0.10 260)",
+		lightBg: "oklch(0.82 0.09 258)",
+		lightAccent: "oklch(0.46 0.20 255)",
+	},
+	{
+		id: "forest",
+		label: "Forest",
+		bg: "oklch(0.58 0.13 150)",
+		accent: "oklch(0.28 0.08 155)",
+		lightBg: "oklch(0.80 0.09 152)",
+		lightAccent: "oklch(0.44 0.17 148)",
+	},
+	{
+		id: "ember",
+		label: "Ember",
+		bg: "oklch(0.66 0.15 55)",
+		accent: "oklch(0.32 0.09 48)",
+		lightBg: "oklch(0.84 0.11 60)",
+		lightAccent: "oklch(0.52 0.19 50)",
+	},
+	{
+		id: "aurora",
+		label: "Aurora",
+		bg: "oklch(0.60 0.15 286)",
+		accent: "oklch(0.28 0.09 292)",
+		lightBg: "oklch(0.80 0.10 289)",
+		lightAccent: "oklch(0.46 0.20 284)",
+	},
+];
 
 export type SettingsSection =
 	| "general"
@@ -409,6 +461,45 @@ export const SettingsDialog = memo(function SettingsDialog({
 												</ToggleGroupItem>
 											))}
 										</ToggleGroup>
+									</SettingsRow>
+									<SettingsRow
+										title="Color Theme"
+										description="Choose an accent palette"
+									>
+										{(() => {
+											const isLight = resolveTheme(settings.theme) === "light";
+											return (
+												<div className="flex gap-2">
+													{DARK_THEME_OPTIONS.map((opt) => {
+														const swatchBg = isLight ? opt.lightBg : opt.bg;
+														const swatchAccent = isLight
+															? opt.lightAccent
+															: opt.accent;
+														return (
+															<button
+																key={opt.id}
+																type="button"
+																title={opt.label}
+																aria-label={opt.label}
+																aria-pressed={settings.darkTheme === opt.id}
+																className={cn(
+																	"h-7 w-7 cursor-pointer overflow-hidden rounded-full transition-all",
+																	settings.darkTheme === opt.id
+																		? "scale-110 ring-2 ring-foreground/70 ring-offset-2 ring-offset-background"
+																		: "hover:scale-105 hover:ring-1 hover:ring-border hover:ring-offset-1 hover:ring-offset-background",
+																)}
+																style={{
+																	background: `linear-gradient(135deg, ${swatchBg}, ${swatchAccent})`,
+																}}
+																onClick={() =>
+																	updateSettings({ darkTheme: opt.id })
+																}
+															/>
+														);
+													})}
+												</div>
+											);
+										})()}
 									</SettingsRow>
 									<SettingsRow
 										title="Font Size"

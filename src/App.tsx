@@ -110,6 +110,7 @@ import {
 import { SendingSessionsProvider } from "./lib/sending-sessions-context";
 import {
 	type AppSettings,
+	type DarkTheme,
 	DEFAULT_SETTINGS,
 	loadSettings,
 	resolveTheme,
@@ -931,6 +932,21 @@ function AppShell({
 			return () => mq.removeEventListener("change", apply);
 		}
 	}, [appSettings.theme]);
+
+	useEffect(() => {
+		const DARK_THEME_CLASSES: DarkTheme[] = [
+			"midnight",
+			"forest",
+			"ember",
+			"aurora",
+		];
+		for (const t of DARK_THEME_CLASSES) {
+			document.documentElement.classList.remove(`theme-${t}`);
+		}
+		if (appSettings.darkTheme && appSettings.darkTheme !== "default") {
+			document.documentElement.classList.add(`theme-${appSettings.darkTheme}`);
+		}
+	}, [appSettings.darkTheme]);
 
 	const confirmDiscardEditorChanges = useCallback(
 		(action: string) => {
