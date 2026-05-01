@@ -151,7 +151,7 @@ pub fn merge_workspace_pr(workspace_id: &str) -> Result<Option<ChangeRequestInfo
     let Some(pr_node_id) = fetch_open_pr_node_id(&context)? else {
         bail!("Could not resolve PR node ID for #{}", pr.number);
     };
-    merge_pull_request(&context.login, &pr_node_id).context("mergePullRequest failed")?;
+    merge_pull_request(&context, &pr_node_id).context("mergePullRequest failed")?;
     lookup_workspace_pr(workspace_id)
 }
 
