@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::{
-    forge::{self, remote::parse_remote, ForgeCliStatus, ForgeProvider},
+    forge::{self, remote::parse_remote, ForgeProvider},
     git_ops,
     models::workspaces::WorkspaceRecord,
     workspace_status::WorkspaceStatus,
@@ -501,22 +501,25 @@ pub fn branch_name_for_directory(
     directory_name: &str,
     settings: &crate::settings::EffectiveBranchPrefixSettings,
 ) -> String {
+    use crate::settings::BranchPrefixType;
+
+    // NULL / unrecognised values default to Username — keeps legacy
+    // rows that predate the per-repo column behaving the same as the
+    // explicit default.
     let prefix_type = settings
         .branch_prefix_type
-        .as_deref()
-        .map(|value| value.trim().to_ascii_lowercase());
+        .unwrap_or(BranchPrefixType::Username);
 
-    let prefix = match prefix_type.as_deref() {
-        Some("custom") => settings
+    let prefix = match prefix_type {
+        BranchPrefixType::Custom => settings
             .branch_prefix_custom
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or("")
             .to_string(),
-        Some("none") => String::new(),
-        // Default: use the matching forge account login as prefix.
-        _ => {
+        BranchPrefixType::None => String::new(),
+        BranchPrefixType::Username => {
             if let Ok(Some(login)) = resolve_forge_login(settings) {
                 format!("{login}/")
             } else {
@@ -555,6 +558,19 @@ pub fn is_auto_generated_branch_name(
 fn resolve_forge_login(
     settings: &crate::settings::EffectiveBranchPrefixSettings,
 ) -> Result<Option<String>> {
+    // Prefer the per-repo binding (set at repo creation by
+    // `forge::accounts::auto_bind_repo_account` and updatable via the
+    // Connect flow). Fall back to the bundled `glab auth status` for
+    // GitLab when the repo predates the binding feature.
+    if let Some(login) = settings
+        .forge_login
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(Some(login.to_string()));
+    }
+
     let provider = settings
         .forge_provider
         .as_deref()
@@ -566,7 +582,7 @@ fn resolve_forge_login(
         ForgeProvider::Unknown if remote_url_looks_like_gitlab(settings) => {
             resolve_gitlab_login(settings)
         }
-        ForgeProvider::Github | ForgeProvider::Unknown => resolve_github_login(),
+        ForgeProvider::Github | ForgeProvider::Unknown => Ok(None),
     }
 }
 
@@ -578,17 +594,11 @@ fn remote_url_looks_like_gitlab(settings: &crate::settings::EffectiveBranchPrefi
         .is_some_and(|remote| remote.host.contains("gitlab"))
 }
 
-/// Read the GitHub login from the stored identity metadata.
-fn resolve_github_login() -> Result<Option<String>> {
-    let raw = crate::settings::load_setting_value("github_identity_meta")?;
-    let raw = match raw {
-        Some(v) => v,
-        None => return Ok(None),
-    };
-    let meta: serde_json::Value = serde_json::from_str(&raw)?;
-    Ok(meta.get("login").and_then(|v| v.as_str()).map(String::from))
-}
-
+/// Legacy fallback for repo rows that predate `forge_login`: probe
+/// glab directly. Transient `list_logins` failures collapse to
+/// `Ok(None)` so the branch-prefix path degrades to "no prefix"
+/// rather than bubbling — caller already treats `Err` and `Ok(None)`
+/// the same way (`if let Ok(Some(...))`).
 fn resolve_gitlab_login(
     settings: &crate::settings::EffectiveBranchPrefixSettings,
 ) -> Result<Option<String>> {
@@ -599,12 +609,13 @@ fn resolve_gitlab_login(
         .map(|remote| remote.host)
         .unwrap_or_else(|| "gitlab.com".to_string());
 
-    Ok(
-        match forge::get_forge_cli_status(ForgeProvider::Gitlab, Some(&host))? {
-            ForgeCliStatus::Ready { login, .. } => Some(login),
-            _ => None,
-        },
-    )
+    let Some(backend) = forge::accounts::backend_for(ForgeProvider::Gitlab) else {
+        return Ok(None);
+    };
+    Ok(backend
+        .list_logins(&host)
+        .ok()
+        .and_then(|logins| logins.into_iter().next()))
 }
 
 pub fn allocate_directory_name_for_repo(repo_id: &str) -> Result<String> {
@@ -702,10 +713,11 @@ mod tests {
     #[test]
     fn auto_generated_branch_name_accepts_version_suffixes() {
         let settings = crate::settings::EffectiveBranchPrefixSettings {
-            branch_prefix_type: Some("custom".to_string()),
+            branch_prefix_type: Some(crate::settings::BranchPrefixType::Custom),
             branch_prefix_custom: Some("user/".to_string()),
             forge_provider: Some("github".to_string()),
             remote_url: None,
+            forge_login: None,
         };
 
         assert!(is_auto_generated_branch_name(

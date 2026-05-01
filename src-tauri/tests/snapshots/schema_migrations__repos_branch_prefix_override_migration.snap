@@ -4,3 +4,5 @@ expression: repos_branch_prefix_columns(&connection)
 ---
 - - branch_prefix_custom
   - TEXT
+- - branch_prefix_type
+  - TEXT

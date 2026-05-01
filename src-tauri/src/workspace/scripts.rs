@@ -310,6 +310,7 @@ pub fn run_script(
         channel,
         &shell,
         &["-i", "-l"],
+        None,
     )
 }
 
@@ -333,6 +334,7 @@ pub fn run_terminal_session(
     working_dir: &str,
     context: &ScriptContext,
     channel: Channel<ScriptEvent>,
+    boot_input: Option<&str>,
 ) -> Result<Option<i32>> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     run_script_with_shell(
@@ -346,6 +348,7 @@ pub fn run_terminal_session(
         channel,
         &shell,
         &["-i", "-l"],
+        boot_input,
     )
 }
 
@@ -357,7 +360,12 @@ pub fn run_terminal_session(
 /// once the command completes. When `script` is `None`, the shell starts
 /// blank — used by the Terminal tab (user types commands directly) and by
 /// the onboarding embedded auth terminals (caller drives input via
-/// `write_stdin`).
+/// `write_stdin` or via `boot_input`).
+///
+/// `boot_input` is written to the PTY master right after the shell is
+/// spawned and registered. Use it to seed an interactive shell with an
+/// initial command (e.g. `gh auth login\n`) without racing against
+/// `write_stdin`'s "process not yet registered" polling.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_script_with_shell(
     manager: &ScriptProcessManager,
@@ -370,6 +378,7 @@ pub(crate) fn run_script_with_shell(
     channel: Channel<ScriptEvent>,
     shell_path: &str,
     shell_args: &[&str],
+    boot_input: Option<&str>,
 ) -> Result<Option<i32>> {
     if let Some(s) = script {
         if s.trim().is_empty() {
@@ -512,7 +521,7 @@ pub(crate) fn run_script_with_shell(
     //
     // Skipped when `script == None` (Terminal tab / onboarding auth terminals):
     // the shell stays at its prompt and waits for input — the user typing
-    // directly in the Terminal tab, or the caller driving via `write_stdin`.
+    // directly in the Terminal tab, or `boot_input` seeding it below.
     if let Some(script) = script {
         let wrapped = format!(
             "eval {}; __helmor_ec=$?; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
@@ -521,6 +530,17 @@ pub(crate) fn run_script_with_shell(
         let mut file = stdin.lock().expect("stdin mutex poisoned");
         if let Err(e) = file.write_all(wrapped.as_bytes()) {
             tracing::warn!(error = %e, "initial PTY write failed");
+        }
+    } else if let Some(input) = boot_input {
+        // Bytes go into the PTY master here — synchronously, while we
+        // still own the only handle. The shell will read them once its
+        // init completes. Doing this inline (instead of via a spawned
+        // polling thread that calls `write_stdin`) means a
+        // re-render-driven cleanup → respawn cycle on the frontend can't
+        // race ahead and drop the bytes.
+        let mut file = stdin.lock().expect("stdin mutex poisoned");
+        if let Err(e) = file.write_all(input.as_bytes()) {
+            tracing::warn!(error = %e, "boot_input PTY write failed");
         }
     }
 
@@ -743,6 +763,7 @@ mod tests {
                 make_channel(),
                 "/bin/sh",
                 &[],
+                None,
             )
         });
 
@@ -822,6 +843,7 @@ mod tests {
                 ch,
                 "/bin/sh",
                 &[],
+                None,
             )
         });
 
@@ -909,6 +931,7 @@ mod tests {
                 ch,
                 "/bin/sh",
                 &[],
+                None,
             )
         });
 
@@ -973,6 +996,7 @@ mod tests {
             // makes tests flaky under `cargo test` parallelism.
             "/bin/sh",
             &[],
+            None,
         )
         .unwrap()
     }

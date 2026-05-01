@@ -58,6 +58,23 @@ pub fn user_prompt_with_files(id: &str, text: &str, files: &[&str]) -> Historica
     make_record(id, "user", &serde_json::to_string(&parsed).unwrap())
 }
 
+/// Post-migration user prompt with structured file AND image
+/// attachment paths.
+pub fn user_prompt_with_files_and_images(
+    id: &str,
+    text: &str,
+    files: &[&str],
+    images: &[&str],
+) -> HistoricalRecord {
+    let parsed = json!({
+        "type": "user_prompt",
+        "text": text,
+        "files": files,
+        "images": images,
+    });
+    make_record(id, "user", &serde_json::to_string(&parsed).unwrap())
+}
+
 /// Mid-turn steer prompt. Same shape as `user_prompt` but with the
 /// `steer: true` marker written by `persist_steer_message`.
 pub fn user_prompt_steer(id: &str, text: &str) -> HistoricalRecord {
@@ -65,6 +82,27 @@ pub fn user_prompt_steer(id: &str, text: &str) -> HistoricalRecord {
         "type": "user_prompt",
         "text": text,
         "steer": true,
+    });
+    make_record(id, "user", &serde_json::to_string(&parsed).unwrap())
+}
+
+/// Mid-turn steer prompt with structured file AND image attachment
+/// paths. Mirrors what the sidecar's synthetic `user_prompt` event
+/// emits when the user steers with attachments — we keep both arrays
+/// so the persisted DB row matches the optimistic render and image
+/// badges survive a reload.
+pub fn user_prompt_steer_with_files_and_images(
+    id: &str,
+    text: &str,
+    files: &[&str],
+    images: &[&str],
+) -> HistoricalRecord {
+    let parsed = json!({
+        "type": "user_prompt",
+        "text": text,
+        "steer": true,
+        "files": files,
+        "images": images,
     });
     make_record(id, "user", &serde_json::to_string(&parsed).unwrap())
 }

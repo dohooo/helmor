@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import {
 	cleanup,
 	fireEvent,
@@ -953,6 +954,35 @@ describe("App global navigation shortcuts", () => {
 		await waitFor(() => {
 			expect(apiMocks.requestQuit).toHaveBeenCalledWith(false);
 		});
+	});
+
+	it("quits from onboarding when Rust emits quit-requested", async () => {
+		const invokeMock = vi.mocked(invoke);
+		const baseInvokeImpl = invokeMock.getMockImplementation();
+		invokeMock.mockImplementation(
+			async (command: string, ...args: unknown[]) => {
+				if (command === "get_app_settings") {
+					return {
+						"app.onboarding_completed": "false",
+					};
+				}
+				return baseInvokeImpl?.(command, args[0] as undefined);
+			},
+		);
+
+		try {
+			apiMocks.requestQuit.mockReset();
+			render(<App />);
+			await screen.findByLabelText("Helmor onboarding");
+
+			emitTauriEvent("helmor://quit-requested");
+
+			await waitFor(() => {
+				expect(apiMocks.requestQuit).toHaveBeenCalledWith(false);
+			});
+		} finally {
+			invokeMock.mockImplementation(baseInvokeImpl ?? (async () => undefined));
+		}
 	});
 
 	it("closes the current session when macOS emits the close-current-session event", async () => {

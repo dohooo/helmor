@@ -25,9 +25,7 @@ pub mod workspace;
 pub(crate) mod testkit;
 
 pub use forge as forge_ops;
-pub use forge::github::auth;
-pub use forge::github::cli as github_cli;
-pub use forge::github::graphql as github_graphql;
+pub use forge::github as github_pr;
 pub use git::ops as git_ops;
 pub use git::watcher as git_watcher;
 pub use models::db;
@@ -63,7 +61,6 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
 
     let app = builder
-        .manage(auth::GithubIdentityFlowRuntime::default())
         .manage(sidecar::ManagedSidecar::new())
         .manage(agents::ActiveStreams::new())
         .manage(agents::SlashCommandCache::new())
@@ -135,6 +132,41 @@ pub fn run() {
 
             forge::init_bundled_cli_paths();
 
+            // Background backfill: re-run auto-bind for repos whose
+            // forge_login is still NULL. Covers (a) repos added before
+            // the multi-account migration shipped, and (b) repos whose
+            // initial bind found no candidate but the user has since
+            // run `gh/glab auth login`. Spawned blocking so the CLI
+            // probes don't stall the UI thread.
+            let backfill_handle = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                match forge::accounts::backfill_unbound_repos() {
+                    Ok(summary) if summary.bound > 0 => {
+                        tracing::info!(
+                            examined = summary.examined,
+                            bound = summary.bound,
+                            "Forge binding backfill bound new repos"
+                        );
+                        ui_sync::publish(
+                            &backfill_handle,
+                            ui_sync::UiMutationEvent::RepositoryListChanged,
+                        );
+                    }
+                    Ok(summary) => {
+                        tracing::debug!(
+                            examined = summary.examined,
+                            "Forge binding backfill found nothing to bind"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            error = %format!("{error:#}"),
+                            "Forge binding backfill failed"
+                        );
+                    }
+                }
+            });
+
             updater::configure()?;
             updater::spawn_startup_check(app.handle().clone());
             updater::spawn_interval_worker(app.handle().clone());
@@ -189,12 +221,10 @@ pub fn run() {
             commands::workspace_commands::start_archive_workspace,
             commands::workspace_commands::validate_archive_workspace,
             commands::workspace_commands::validate_restore_workspace,
-            commands::github_commands::cancel_github_identity_connect,
             commands::workspace_commands::complete_workspace_setup,
             commands::workspace_commands::create_workspace_from_repo,
             commands::workspace_commands::prepare_workspace_from_repo,
             commands::workspace_commands::finalize_workspace_from_repo,
-            commands::github_commands::disconnect_github_identity,
             commands::repository_commands::get_add_repository_defaults,
             commands::settings_commands::get_app_settings,
             commands::settings_commands::get_claude_rate_limits,
@@ -212,14 +242,15 @@ pub fn run() {
             commands::system_commands::stop_agent_login_terminal,
             commands::system_commands::write_agent_login_terminal_stdin,
             commands::system_commands::resize_agent_login_terminal,
-            commands::github_commands::get_github_cli_status,
-            commands::github_commands::get_github_cli_user,
-            commands::github_commands::get_github_identity_session,
             commands::forge_commands::get_workspace_forge,
-            commands::forge_commands::get_forge_cli_status,
-            commands::forge_commands::open_forge_cli_auth_terminal,
+            commands::forge_commands::list_forge_accounts,
+            commands::forge_commands::get_workspace_account_profile,
+            commands::forge_commands::cache_forge_avatar,
+            commands::forge_commands::list_forge_logins,
+            commands::forge_commands::backfill_forge_repo_bindings,
             commands::forge_commands::spawn_forge_cli_auth_terminal,
             commands::forge_commands::stop_forge_cli_auth_terminal,
+            commands::forge_commands::invalidate_forge_caches,
             commands::forge_commands::write_forge_cli_auth_terminal_stdin,
             commands::forge_commands::resize_forge_cli_auth_terminal,
             commands::forge_commands::refresh_workspace_change_request,
@@ -230,7 +261,6 @@ pub fn run() {
             commands::workspace_commands::get_workspace,
             commands::repository_commands::add_repository_from_local_path,
             commands::repository_commands::clone_repository_from_url,
-            commands::github_commands::list_github_accessible_repositories,
             commands::workspace_commands::list_archived_workspaces,
             commands::repository_commands::list_repositories,
             commands::repository_commands::update_repository_default_branch,
@@ -243,6 +273,7 @@ pub fn run() {
             commands::repository_commands::update_repo_auto_run_setup,
             commands::repository_commands::update_repo_preferences,
             commands::repository_commands::delete_repository,
+            commands::repository_commands::retry_repo_forge_binding,
             commands::script_commands::execute_repo_script,
             commands::script_commands::stop_repo_script,
             commands::script_commands::write_repo_script_stdin,
@@ -297,7 +328,6 @@ pub fn run() {
             commands::workspace_commands::permanently_delete_workspace,
             commands::workspace_commands::restore_workspace,
             commands::editor_commands::stat_editor_file,
-            commands::github_commands::start_github_identity_connect,
             commands::conductor_commands::conductor_source_available,
             commands::conductor_commands::list_conductor_repos,
             commands::conductor_commands::list_conductor_workspaces,

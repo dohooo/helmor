@@ -21,12 +21,12 @@ use anyhow::{bail, Context, Result};
 
 use crate::error::ErrorCode;
 
-use super::cli_status::gitlab_status;
 use super::types::{
     ActionProvider, ActionStatusKind, ChangeRequestInfo, ForgeActionItem, ForgeActionStatus,
-    ForgeCliStatus, RemoteState,
+    RemoteState,
 };
 
+pub(super) mod accounts;
 mod api;
 mod context;
 mod merge_request;
@@ -35,26 +35,22 @@ mod review;
 mod types;
 
 use self::api::{command_detail, encode_path_component, glab_api, looks_like_auth_error};
-use self::context::load_gitlab_context;
-use self::merge_request::{find_workspace_mr, gitlab_mergeable, mr_info};
+use self::context::{load_gitlab_context, GitlabContext, GitlabResolution};
+use self::merge_request::{
+    determine_squash_choice, find_workspace_mr, gitlab_mergeable, mr_info, SquashChoice,
+};
 use self::pipeline::{
     build_gitlab_check_insert_text, load_job_trace, load_pipeline_jobs, pipeline_item,
 };
 use self::review::load_review_decision;
 
 pub(super) fn lookup_workspace_mr(workspace_id: &str) -> Result<Option<ChangeRequestInfo>> {
-    let context = load_gitlab_context(workspace_id)?;
-    tracing::debug!(
-        workspace_id,
-        host = %context.remote.host,
-        full_path = %context.full_path,
-        branch = %context.branch,
-        published = context.published,
-        "Looking up GitLab MR"
-    );
-    if !context.published {
-        return Ok(None);
-    }
+    let context = match load_gitlab_context(workspace_id)? {
+        GitlabResolution::Ready(ctx) if ctx.published => ctx,
+        // Lookup paths degrade non-Ready/unpublished to "no MR" — the
+        // primary auth surface is the action-status path.
+        _ => return Ok(None),
+    };
     let mr = match find_workspace_mr(&context) {
         Ok(Some(mr)) => mr,
         Ok(None) => return Ok(None),
@@ -76,23 +72,36 @@ pub(super) fn lookup_workspace_mr(workspace_id: &str) -> Result<Option<ChangeReq
 }
 
 pub(super) fn lookup_workspace_mr_action_status(workspace_id: &str) -> Result<ForgeActionStatus> {
-    let context = match load_gitlab_context(workspace_id) {
-        Ok(context) => {
-            tracing::debug!(
-                workspace_id,
-                host = %context.remote.host,
-                full_path = %context.full_path,
-                branch = %context.branch,
-                published = context.published,
-                "Looking up GitLab MR action status"
-            );
-            context
+    let context = match load_gitlab_context(workspace_id)? {
+        GitlabResolution::Ready(ctx) => ctx,
+        GitlabResolution::Initializing => return Ok(ForgeActionStatus::no_change_request()),
+        GitlabResolution::Unavailable(message) => {
+            return Ok(ForgeActionStatus::unavailable(message));
         }
-        Err(error) => {
-            tracing::warn!(workspace_id, error = %error, "GitLab context lookup failed");
-            return Ok(ForgeActionStatus::unavailable(format!("{error:#}")));
+        GitlabResolution::Unauthenticated => {
+            return Ok(ForgeActionStatus::unauthenticated(
+                "GitLab account is not connected for this repository",
+            ));
         }
     };
+
+    // Auth probe runs BEFORE the published short-circuit so an
+    // unpublished workspace whose bound login was logged out still
+    // surfaces Connect. Only `LoggedOut` (definitive) flips the CTA;
+    // `Indeterminate` falls through and lets the API call try.
+    if gitlab_login_definitely_logged_out(&context) {
+        tracing::warn!(
+            workspace_id,
+            host = %context.remote.host,
+            login = %context.login,
+            "glab account no longer logged in; reporting unauthenticated"
+        );
+        return Ok(ForgeActionStatus::unauthenticated(format!(
+            "Not connected to GitLab on {}",
+            context.remote.host
+        )));
+    }
+
     if !context.published {
         return Ok(ForgeActionStatus::no_change_request());
     }
@@ -193,10 +202,17 @@ pub(super) fn lookup_workspace_mr_check_insert_text(
     workspace_id: &str,
     item_id: &str,
 ) -> Result<String> {
-    let context = load_gitlab_context(workspace_id)?;
-    if !context.published {
-        bail!("Workspace branch is not published");
-    }
+    let context = match load_gitlab_context(workspace_id)? {
+        GitlabResolution::Ready(ctx) if ctx.published => ctx,
+        GitlabResolution::Ready(_) | GitlabResolution::Initializing => {
+            bail!("Workspace branch is not published");
+        }
+        GitlabResolution::Unavailable(message) => bail!("{message}"),
+        GitlabResolution::Unauthenticated => crate::bail_coded!(
+            ErrorCode::ForgeOnboarding,
+            "GitLab account is not connected for this repository"
+        ),
+    };
     let status = lookup_workspace_mr_action_status(workspace_id)?;
     let item = status
         .checks
@@ -215,18 +231,10 @@ pub(super) fn lookup_workspace_mr_check_insert_text(
 }
 
 pub(super) fn merge_workspace_mr(workspace_id: &str) -> Result<Option<ChangeRequestInfo>> {
-    let context = load_gitlab_context(workspace_id)?;
-    tracing::info!(
-        workspace_id,
-        host = %context.remote.host,
-        full_path = %context.full_path,
-        branch = %context.branch,
-        "GitLab MR merge requested"
-    );
-    if !context.published {
+    let Some(context) = mutation_context(workspace_id, "merge")? else {
         return Ok(None);
-    }
-    ensure_gitlab_cli_ready(&context.remote.host, "merge")?;
+    };
+    ensure_gitlab_cli_ready(&context, "merge")?;
     let Some(mr) = find_workspace_mr(&context)? else {
         return Ok(None);
     };
@@ -239,7 +247,12 @@ pub(super) fn merge_workspace_mr(workspace_id: &str) -> Result<Option<ChangeRequ
         encode_path_component(&context.full_path),
         mr.iid
     );
-    let output = glab_api(&context.remote.host, ["--method", "PUT", endpoint.as_str()])?;
+    let squash = determine_squash_choice(&context);
+    let mut args: Vec<&str> = vec!["--method", "PUT", endpoint.as_str()];
+    if matches!(squash, SquashChoice::Squash) {
+        args.extend(["--field", "squash=true"]);
+    }
+    let output = glab_api(&context.remote.host, args)?;
     if !output.success {
         let detail = command_detail(&output);
         tracing::warn!(
@@ -247,6 +260,7 @@ pub(super) fn merge_workspace_mr(workspace_id: &str) -> Result<Option<ChangeRequ
             host = %context.remote.host,
             iid = mr.iid,
             detail = %detail,
+            squash = ?squash,
             "GitLab MR merge API failed"
         );
         bail!("GitLab MR merge failed: {detail}");
@@ -262,18 +276,10 @@ pub(super) fn merge_workspace_mr(workspace_id: &str) -> Result<Option<ChangeRequ
 }
 
 pub(super) fn close_workspace_mr(workspace_id: &str) -> Result<Option<ChangeRequestInfo>> {
-    let context = load_gitlab_context(workspace_id)?;
-    tracing::info!(
-        workspace_id,
-        host = %context.remote.host,
-        full_path = %context.full_path,
-        branch = %context.branch,
-        "GitLab MR close requested"
-    );
-    if !context.published {
+    let Some(context) = mutation_context(workspace_id, "close")? else {
         return Ok(None);
-    }
-    ensure_gitlab_cli_ready(&context.remote.host, "close")?;
+    };
+    ensure_gitlab_cli_ready(&context, "close")?;
     let Some(mr) = find_workspace_mr(&context)? else {
         return Ok(None);
     };
@@ -317,32 +323,57 @@ pub(super) fn close_workspace_mr(workspace_id: &str) -> Result<Option<ChangeRequ
     lookup_workspace_mr(workspace_id)
 }
 
-fn ensure_gitlab_cli_ready(host: &str, operation: &str) -> Result<()> {
-    match gitlab_status(host)? {
-        ForgeCliStatus::Ready { login, .. } => {
-            tracing::debug!(host, operation, login, "GitLab CLI auth ready");
-            Ok(())
-        }
-        ForgeCliStatus::Unauthenticated { message, .. } => {
-            tracing::warn!(
-                host,
+/// Common entry for the merge / close paths. `Ok(None)` means
+/// "preconditions not met" (caller short-circuits with `Ok(None)`).
+/// Mirrors `forge::github::mod::mutation_context`.
+fn mutation_context(workspace_id: &str, operation: &'static str) -> Result<Option<GitlabContext>> {
+    match load_gitlab_context(workspace_id)? {
+        GitlabResolution::Ready(ctx) if ctx.published => {
+            tracing::info!(
+                workspace_id,
+                host = %ctx.remote.host,
+                full_path = %ctx.full_path,
+                branch = %ctx.branch,
                 operation,
-                message = %message,
-                "GitLab CLI unauthenticated"
+                "GitLab MR mutation requested"
             );
-            crate::bail_coded!(
-                ErrorCode::ForgeOnboarding,
-                "GitLab CLI authentication required: {message}"
-            );
+            Ok(Some(ctx))
         }
-        ForgeCliStatus::Error { message, .. } => {
-            tracing::warn!(
-                host,
-                operation,
-                message = %message,
-                "GitLab CLI auth check failed"
-            );
-            bail!("GitLab CLI auth check failed: {message}");
-        }
+        _ => Ok(None),
     }
+}
+
+/// Bail with a `ForgeOnboarding` error only when `check_auth` is
+/// definitively `LoggedOut`. `Indeterminate` falls through so the
+/// actual API call gets a chance — transient glab hiccups don't block
+/// a legitimate merge.
+fn ensure_gitlab_cli_ready(context: &GitlabContext, operation: &str) -> Result<()> {
+    use crate::forge::accounts;
+    use crate::forge::types::ForgeProvider;
+
+    let backend = accounts::backend_for(ForgeProvider::Gitlab).context("GitLab backend missing")?;
+    if backend
+        .check_auth(&context.remote.host, &context.login)
+        .is_definitely_logged_out()
+    {
+        let host = &context.remote.host;
+        tracing::warn!(host = %host, operation, login = %context.login, "GitLab CLI unauthenticated");
+        crate::bail_coded!(
+            ErrorCode::ForgeOnboarding,
+            "GitLab CLI authentication required for {host}. Run `glab auth login --hostname {host}` to connect."
+        );
+    }
+    Ok(())
+}
+
+/// Routes through `check_auth`; `Indeterminate` and `LoggedIn`
+/// preserve the binding.
+fn gitlab_login_definitely_logged_out(context: &GitlabContext) -> bool {
+    let Some(backend) = crate::forge::accounts::backend_for(crate::forge::ForgeProvider::Gitlab)
+    else {
+        return false;
+    };
+    backend
+        .check_auth(&context.remote.host, &context.login)
+        .is_definitely_logged_out()
 }
