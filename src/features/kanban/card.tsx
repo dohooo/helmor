@@ -1,14 +1,10 @@
 import { useDraggable } from "@dnd-kit/core";
-import { GitBranch, MessageSquare, Pin } from "lucide-react";
+import { MessageSquare, Pin } from "lucide-react";
 import { memo } from "react";
 import { WorkspaceAvatar } from "@/features/navigation/avatar";
-import {
-	branchToneClasses,
-	humanizeBranch,
-} from "@/features/navigation/shared";
+import { humanizeBranch } from "@/features/navigation/shared";
 import type { WorkspaceRow } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { getWorkspaceBranchTone } from "@/lib/workspace-helpers";
 
 type KanbanCardProps = {
 	className?: string;
@@ -58,10 +54,6 @@ export function KanbanCardPreview({
 	row: WorkspaceRow;
 }) {
 	const displayTitle = row.branch ? humanizeBranch(row.branch) : row.title;
-	const branchTone = getWorkspaceBranchTone({
-		workspaceState: row.state,
-		status: row.status,
-	});
 
 	return (
 		<div
@@ -72,14 +64,6 @@ export function KanbanCardPreview({
 			)}
 		>
 			<div className="flex min-w-0 items-start gap-2">
-				<WorkspaceAvatar
-					repoIconSrc={row.repoIconSrc}
-					repoInitials={row.repoInitials ?? row.avatar ?? null}
-					repoName={row.repoName}
-					title={displayTitle}
-					className="mt-0.5 size-6 rounded-md"
-					fallbackClassName="text-[9px]"
-				/>
 				<div className="min-w-0 flex-1">
 					<div className="flex min-w-0 items-center gap-1.5">
 						<span className="truncate text-[13px] font-medium leading-5 text-foreground">
@@ -103,9 +87,13 @@ export function KanbanCardPreview({
 
 			<div className="flex min-w-0 items-center justify-between gap-2 text-[11px] text-muted-foreground">
 				<div className="flex min-w-0 items-center gap-1.5">
-					<GitBranch
-						className={cn("size-3 shrink-0", branchToneClasses[branchTone])}
-						strokeWidth={2}
+					<WorkspaceAvatar
+						repoIconSrc={row.repoIconSrc}
+						repoInitials={row.repoInitials ?? row.avatar ?? null}
+						repoName={row.repoName}
+						title={displayTitle}
+						className="size-3 rounded-[3px]"
+						fallbackClassName="text-[5px]"
 					/>
 					<span className="truncate">
 						{row.branch ? humanizeBranch(row.branch) : "No branch"}

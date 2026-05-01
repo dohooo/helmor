@@ -1,9 +1,5 @@
-import { GitPullRequest, MessageSquareText } from "lucide-react";
-import {
-	GithubBrandIcon,
-	LinearBrandIcon,
-	SlackBrandIcon,
-} from "@/components/brand-icon";
+import { CircleDot, GitPullRequest, MessagesSquare } from "lucide-react";
+import { LinearBrandIcon, SlackBrandIcon } from "@/components/brand-icon";
 import type { ContextCardSource } from "@/lib/sources/types";
 
 export function SourceIcon({
@@ -19,14 +15,14 @@ export function SourceIcon({
 		case "linear":
 			return <LinearBrandIcon className={className} size={size} />;
 		case "github_issue":
-			return <GithubBrandIcon className={className} size={size} />;
+			return <CircleDot className={className} size={size} strokeWidth={2} />;
 		case "github_pr":
 			return (
 				<GitPullRequest className={className} size={size} strokeWidth={2} />
 			);
 		case "github_discussion":
 			return (
-				<MessageSquareText className={className} size={size} strokeWidth={2} />
+				<MessagesSquare className={className} size={size} strokeWidth={2} />
 			);
 		case "slack_thread":
 			return <SlackBrandIcon className={className} size={size} />;

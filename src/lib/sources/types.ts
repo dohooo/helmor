@@ -24,7 +24,6 @@ export type ContextCard = {
 	subtitle?: string;
 	state?: { label: string; tone: ContextCardStateTone };
 	lastActivityAt: number;
-	transformedWorkspaceIds: string[];
 	meta: ContextCardMeta;
 };
 
@@ -41,7 +40,6 @@ export type GitHubIssueMeta = {
 	type: "github_issue";
 	repo: string;
 	number: number;
-	commentCount: number;
 	labels: { name: string; color: string }[];
 };
 
@@ -52,7 +50,6 @@ export type GitHubPRMeta = {
 	additions: number;
 	deletions: number;
 	changedFiles: number;
-	commentCount: number;
 	ciStatus?: "success" | "failure" | "pending" | "neutral";
 };
 
@@ -61,8 +58,6 @@ export type GitHubDiscussionMeta = {
 	repo: string;
 	number: number;
 	category: { name: string; emoji: string };
-	commentCount: number;
-	upvoteCount: number;
 };
 
 export type SlackThreadMeta = {
@@ -70,7 +65,6 @@ export type SlackThreadMeta = {
 	workspaceName: string;
 	channelName: string;
 	rootAuthor: { name: string };
-	replyCount: number;
 };
 
 export type ContextCardMeta =

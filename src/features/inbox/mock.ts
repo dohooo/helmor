@@ -13,7 +13,6 @@ export const inboxMockCards: ContextCard[] = [
 		subtitle: "Helmor Core",
 		state: { label: "Started", tone: "open" },
 		lastActivityAt: now - hours(1.4),
-		transformedWorkspaceIds: ["workspace-1"],
 		meta: {
 			type: "linear",
 			identifier: "HEL-184",
@@ -35,7 +34,6 @@ export const inboxMockCards: ContextCard[] = [
 		subtitle: "Helmor Product",
 		state: { label: "Backlog", tone: "neutral" },
 		lastActivityAt: now - hours(7),
-		transformedWorkspaceIds: [],
 		meta: {
 			type: "linear",
 			identifier: "HEL-197",
@@ -54,7 +52,6 @@ export const inboxMockCards: ContextCard[] = [
 		subtitle: "helmor/desktop",
 		state: { label: "Review", tone: "open" },
 		lastActivityAt: now - hours(2.2),
-		transformedWorkspaceIds: [],
 		meta: {
 			type: "github_pr",
 			repo: "helmor/desktop",
@@ -62,7 +59,6 @@ export const inboxMockCards: ContextCard[] = [
 			additions: 482,
 			deletions: 91,
 			changedFiles: 14,
-			commentCount: 6,
 			ciStatus: "pending",
 		},
 	},
@@ -75,12 +71,10 @@ export const inboxMockCards: ContextCard[] = [
 		subtitle: "helmor/desktop",
 		state: { label: "Open", tone: "urgent" },
 		lastActivityAt: now - hours(12),
-		transformedWorkspaceIds: ["workspace-2"],
 		meta: {
 			type: "github_issue",
 			repo: "helmor/desktop",
 			number: 391,
-			commentCount: 11,
 			labels: [
 				{ name: "bug", color: "#D73A4A" },
 				{ name: "frontend", color: "#A2EEEF" },
@@ -96,14 +90,11 @@ export const inboxMockCards: ContextCard[] = [
 		subtitle: "helmor/desktop · Discussions",
 		state: { label: "Unanswered", tone: "unanswered" },
 		lastActivityAt: now - hours(28),
-		transformedWorkspaceIds: [],
 		meta: {
 			type: "github_discussion",
 			repo: "helmor/desktop",
 			number: 54,
 			category: { name: "Q&A", emoji: "?" },
-			commentCount: 4,
-			upvoteCount: 9,
 		},
 	},
 	{
@@ -115,13 +106,11 @@ export const inboxMockCards: ContextCard[] = [
 		subtitle: "#engineering",
 		state: { label: "Thread", tone: "neutral" },
 		lastActivityAt: now - hours(3.5),
-		transformedWorkspaceIds: [],
 		meta: {
 			type: "slack_thread",
 			workspaceName: "Helmor",
 			channelName: "#engineering",
 			rootAuthor: { name: "Mira" },
-			replyCount: 8,
 		},
 	},
 ];

@@ -55,7 +55,7 @@ export function KanbanColumn({
 					"border-primary/35 bg-sidebar/80 ring-1 ring-primary/15",
 			)}
 		>
-			<header className="flex h-10 shrink-0 items-center justify-between border-border/50 border-b px-3">
+			<header className="flex h-[37px] shrink-0 items-center justify-between border-border/50 border-b px-2.5">
 				<div className="flex min-w-0 items-center gap-2">
 					<GroupIcon tone={tone} />
 					<h2 className="truncate text-[13px] font-semibold text-foreground">

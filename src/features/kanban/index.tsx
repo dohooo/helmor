@@ -212,12 +212,12 @@ export function KanbanPage() {
 				aria-label="Kanban page"
 				className="flex min-h-0 flex-1 flex-col bg-background"
 			>
-				<div className="flex h-9 shrink-0 items-center border-border/50 border-b px-4">
+				<div className="flex h-8 shrink-0 items-center border-border/50 border-b px-4">
 					<h1 className="text-[13px] font-medium text-muted-foreground">
 						Kanban
 					</h1>
 				</div>
-				<div className="scrollbar-stable flex min-h-0 flex-1 gap-3 overflow-x-auto p-3 [scrollbar-width:thin]">
+				<div className="scrollbar-stable flex min-h-0 flex-1 gap-3 overflow-x-auto px-3 pt-2 pb-1 [scrollbar-width:thin]">
 					{KANBAN_COLUMNS.map((column) => (
 						<KanbanColumn
 							key={column.id}

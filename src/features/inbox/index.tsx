@@ -113,7 +113,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 				</div>
 			</div>
 
-			<div className="scrollbar-stable mt-2 min-h-0 flex-1 overflow-x-hidden overflow-y-auto pr-4 pl-3 [scrollbar-width:thin]">
+			<div className="scrollbar-stable mt-[7px] min-h-0 flex-1 overflow-x-hidden overflow-y-auto pr-4 pl-3 [scrollbar-width:thin]">
 				<div className="flex w-[calc(100%+12px)] flex-col gap-2 pb-3">
 					{filteredCards.length > 0 ? (
 						filteredCards.map((card) => (
