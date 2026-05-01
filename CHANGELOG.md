@@ -13,6 +13,8 @@
 
 ### Patch Changes
 
+- [#291](https://github.com/dohooo/helmor/pull/291) [`a0015b6`](https://github.com/dohooo/helmor/commit/a0015b6daa7188c8dc73df29eacaeac2f39df2f3) Thanks [@habibyuri](https://github.com/habibyuri)! - Fix in-flight Codex turns being killed by transient upstream provider hiccups (e.g. Azure OpenAI mini-outages) — Helmor now surfaces a brief reconnecting notice and lets Codex's own retry loop recover instead of terminating the turn.
+
 - [#307](https://github.com/dohooo/helmor/pull/307) [`0f9fe7a`](https://github.com/dohooo/helmor/commit/0f9fe7a478aa3994e31707c73007e3665c94d017) Thanks [@baptisteArno](https://github.com/baptisteArno)! - Fix file and image attachments whose absolute paths contain whitespace (a common case for macOS Finder drops like `Application Support/...` or CleanShot screenshots) — they now round-trip end-to-end without being truncated, and steer turns keep their image badges after a reload.
 
 - [#348](https://github.com/dohooo/helmor/pull/348) [`eeeaa81`](https://github.com/dohooo/helmor/commit/eeeaa812eb71d30dc5a73eaaca4bbe7298390687) Thanks [@alantoa](https://github.com/alantoa)! - Fix the sidebar, inspector, and inspector section dividers starting a resize on right-click or middle-click — they now only respond to a primary (left) mouse button press.
