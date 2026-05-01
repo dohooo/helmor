@@ -37,6 +37,7 @@ import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-
 import { WorkspaceConversationContainer } from "@/features/conversation";
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
+import { InboxSidebar } from "@/features/inbox";
 import { WorkspaceInspectorSidebar } from "@/features/inspector";
 import { KanbanPage } from "@/features/kanban";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
@@ -379,8 +380,8 @@ function KanbanNavButton({
 					size="xs"
 					onClick={onClick}
 					className={cn(
-						"text-muted-foreground hover:text-foreground",
-						active && "text-foreground",
+						!active && "text-muted-foreground hover:text-foreground",
+						active && "bg-muted text-foreground hover:bg-muted",
 					)}
 				>
 					<Kanban className="size-[15px]" strokeWidth={1.8} />
@@ -2220,7 +2221,12 @@ function AppShell({
 												className="relative flex h-full shrink-0 flex-col overflow-hidden bg-sidebar"
 												style={{ width: `${sidebarWidth}px` }}
 											>
-												<div className="min-h-0 flex-1">
+												<div
+													className={cn(
+														"min-h-0 flex-1",
+														workspaceViewMode === "kanban" ? "hidden" : "block",
+													)}
+												>
 													<WorkspacesSidebarContainer
 														selectedWorkspaceId={selectedWorkspaceId}
 														sendingWorkspaceIds={sendingWorkspaceIds}
@@ -2233,6 +2239,9 @@ function AppShell({
 														pushWorkspaceToast={pushWorkspaceToast}
 													/>
 												</div>
+												{workspaceViewMode === "kanban" ? (
+													<InboxSidebar className="flex flex-1" />
+												) : null}
 												<div className="absolute right-[12px] top-[6px] z-20 flex items-center gap-[2px]">
 													<AppUpdateButton status={appUpdateStatus} />
 													<Tooltip>

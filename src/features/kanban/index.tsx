@@ -217,7 +217,7 @@ export function KanbanPage() {
 						Kanban
 					</h1>
 				</div>
-				<div className="scrollbar-stable flex min-h-0 flex-1 gap-3 overflow-x-auto p-4 [scrollbar-width:thin]">
+				<div className="scrollbar-stable flex min-h-0 flex-1 gap-3 overflow-x-auto p-3 [scrollbar-width:thin]">
 					{KANBAN_COLUMNS.map((column) => (
 						<KanbanColumn
 							key={column.id}
