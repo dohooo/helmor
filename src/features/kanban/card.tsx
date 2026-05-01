@@ -5,17 +5,25 @@ import { WorkspaceAvatar } from "@/features/navigation/avatar";
 import { humanizeBranch } from "@/features/navigation/shared";
 import type { WorkspaceRow } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { KanbanPlaceholder } from "./placeholder";
 
 type KanbanCardProps = {
 	className?: string;
+	dragPlaceholderHeight?: number | null;
 	row: WorkspaceRow;
 	settling?: boolean;
+	settlingPlaceholder?: {
+		fadeMs?: number;
+		height: number | null;
+	} | null;
 };
 
 export const KanbanCard = memo(function KanbanCard({
 	className,
+	dragPlaceholderHeight,
 	row,
 	settling = false,
+	settlingPlaceholder = null,
 }: KanbanCardProps) {
 	const displayTitle = row.branch ? humanizeBranch(row.branch) : row.title;
 	const { attributes, isDragging, listeners, setNodeRef } = useDraggable({
@@ -34,14 +42,28 @@ export const KanbanCard = memo(function KanbanCard({
 			className={cn(
 				"relative block w-full touch-none rounded-lg transition-opacity duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
 				"cursor-grab active:cursor-grabbing",
-				isDragging && !settling && "opacity-25",
+				isDragging &&
+					!settling &&
+					dragPlaceholderHeight === undefined &&
+					"opacity-25",
 				settling && "pointer-events-none",
+				settlingPlaceholder && "pointer-events-none",
 				className,
 			)}
 			{...attributes}
 			{...listeners}
 		>
-			<KanbanCardPreview row={row} />
+			{settlingPlaceholder ? (
+				<KanbanPlaceholder
+					fadeMs={settlingPlaceholder.fadeMs}
+					height={settlingPlaceholder.height}
+					phase="out"
+				/>
+			) : isDragging && !settling && dragPlaceholderHeight !== undefined ? (
+				<KanbanPlaceholder height={dragPlaceholderHeight} />
+			) : (
+				<KanbanCardPreview row={row} />
+			)}
 		</div>
 	);
 });

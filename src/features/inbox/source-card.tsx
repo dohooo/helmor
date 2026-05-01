@@ -18,8 +18,8 @@ export function SourceCard({ card }: { card: ContextCard }) {
 		<article
 			aria-label={card.title}
 			className={cn(
-				"group relative flex cursor-grab flex-col gap-2 rounded-lg border border-border/70 bg-card px-3 pt-2.5 pb-2 text-left shadow-xs transition-[border-color,background-color,opacity,box-shadow]",
-				"hover:border-border hover:bg-accent/35 active:cursor-grabbing",
+				"group relative flex flex-col gap-2 rounded-lg border border-border/70 bg-[var(--sidebar)] px-3 pt-2.5 pb-2 text-left shadow-xs transition-[border-color,background-color,opacity,box-shadow]",
+				"hover:border-border hover:bg-[var(--accent)]",
 			)}
 		>
 			<div className="min-w-0 flex-1">

@@ -37,7 +37,6 @@ import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-
 import { WorkspaceConversationContainer } from "@/features/conversation";
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
-import { InboxSidebar } from "@/features/inbox";
 import { WorkspaceInspectorSidebar } from "@/features/inspector";
 import { KanbanPage } from "@/features/kanban";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
@@ -2212,116 +2211,109 @@ function AppShell({
 							className="relative h-screen overflow-hidden bg-background font-sans text-foreground antialiased"
 						>
 							<div className="relative flex h-full min-h-0 bg-background">
-								{workspaceViewMode !== "editor" && (
-									<>
-										{!sidebarCollapsed && (
-											<aside
-												aria-label="Workspace sidebar"
-												data-helmor-sidebar-root
-												className="relative flex h-full shrink-0 flex-col overflow-hidden bg-sidebar"
-												style={{ width: `${sidebarWidth}px` }}
-											>
-												<div
-													className={cn(
-														"min-h-0 flex-1",
-														workspaceViewMode === "kanban" ? "hidden" : "block",
-													)}
+								{workspaceViewMode !== "editor" &&
+									workspaceViewMode !== "kanban" && (
+										<>
+											{!sidebarCollapsed && (
+												<aside
+													aria-label="Workspace sidebar"
+													data-helmor-sidebar-root
+													className="relative flex h-full shrink-0 flex-col overflow-hidden bg-sidebar"
+													style={{ width: `${sidebarWidth}px` }}
 												>
-													<WorkspacesSidebarContainer
-														selectedWorkspaceId={selectedWorkspaceId}
-														sendingWorkspaceIds={sendingWorkspaceIds}
-														interactionRequiredWorkspaceIds={
-															interactionRequiredWorkspaceIds
-														}
-														newWorkspaceShortcut={newWorkspaceShortcut}
-														addRepositoryShortcut={addRepositoryShortcut}
-														onSelectWorkspace={handleSelectWorkspace}
-														pushWorkspaceToast={pushWorkspaceToast}
-													/>
-												</div>
-												{workspaceViewMode === "kanban" ? (
-													<InboxSidebar className="flex flex-1" />
-												) : null}
-												<div className="absolute right-[12px] top-[6px] z-20 flex items-center gap-[2px]">
-													<AppUpdateButton status={appUpdateStatus} />
-													<Tooltip>
-														<TooltipTrigger asChild>
-															<Button
-																aria-label="Collapse left sidebar"
-																onClick={() => setSidebarCollapsed(true)}
-																variant="ghost"
-																size="icon-xs"
-																className="text-muted-foreground hover:text-foreground"
+													<div className="min-h-0 flex-1">
+														<WorkspacesSidebarContainer
+															selectedWorkspaceId={selectedWorkspaceId}
+															sendingWorkspaceIds={sendingWorkspaceIds}
+															interactionRequiredWorkspaceIds={
+																interactionRequiredWorkspaceIds
+															}
+															newWorkspaceShortcut={newWorkspaceShortcut}
+															addRepositoryShortcut={addRepositoryShortcut}
+															onSelectWorkspace={handleSelectWorkspace}
+															pushWorkspaceToast={pushWorkspaceToast}
+														/>
+													</div>
+													<div className="absolute right-[12px] top-[6px] z-20 flex items-center gap-[2px]">
+														<AppUpdateButton status={appUpdateStatus} />
+														<Tooltip>
+															<TooltipTrigger asChild>
+																<Button
+																	aria-label="Collapse left sidebar"
+																	onClick={() => setSidebarCollapsed(true)}
+																	variant="ghost"
+																	size="icon-xs"
+																	className="text-muted-foreground hover:text-foreground"
+																>
+																	<PanelLeftClose
+																		className="size-4"
+																		strokeWidth={1.8}
+																	/>
+																</Button>
+															</TooltipTrigger>
+															<TooltipContent
+																side="bottom"
+																className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
 															>
-																<PanelLeftClose
-																	className="size-4"
-																	strokeWidth={1.8}
-																/>
-															</Button>
-														</TooltipTrigger>
-														<TooltipContent
-															side="bottom"
-															className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-														>
-															<span>Collapse left sidebar</span>
-															{leftSidebarToggleShortcut ? (
-																<InlineShortcutDisplay
-																	hotkey={leftSidebarToggleShortcut}
-																	className="text-background/60"
-																/>
-															) : null}
-														</TooltipContent>
-													</Tooltip>
-												</div>
-												<div className="flex shrink-0 items-center justify-between px-3 pb-3 pt-1">
-													<SettingsButton
-														onClick={handleOpenSettings}
-														shortcut={getShortcut(
-															appSettings.shortcuts,
-															"settings.open",
-														)}
-													/>
-													<KanbanNavButton
-														active={workspaceViewMode === "kanban"}
-														onClick={handleToggleKanban}
-														shortcut={getShortcut(
-															appSettings.shortcuts,
-															"workspace.toggleKanban",
-														)}
-													/>
-												</div>
-											</aside>
-										)}
+																<span>Collapse left sidebar</span>
+																{leftSidebarToggleShortcut ? (
+																	<InlineShortcutDisplay
+																		hotkey={leftSidebarToggleShortcut}
+																		className="text-background/60"
+																	/>
+																) : null}
+															</TooltipContent>
+														</Tooltip>
+													</div>
+													<div className="flex shrink-0 items-center justify-between px-3 pb-3 pt-1">
+														<SettingsButton
+															onClick={handleOpenSettings}
+															shortcut={getShortcut(
+																appSettings.shortcuts,
+																"settings.open",
+															)}
+														/>
+														<KanbanNavButton
+															active={false}
+															onClick={handleToggleKanban}
+															shortcut={getShortcut(
+																appSettings.shortcuts,
+																"workspace.toggleKanban",
+															)}
+														/>
+													</div>
+												</aside>
+											)}
 
-										{!sidebarCollapsed && (
-											<div
-												role="separator"
-												tabIndex={0}
-												aria-label="Resize sidebar"
-												aria-orientation="vertical"
-												aria-valuemin={MIN_SIDEBAR_WIDTH}
-												aria-valuemax={MAX_SIDEBAR_WIDTH}
-												aria-valuenow={sidebarWidth}
-												onMouseDown={handleResizeStart("sidebar")}
-												onKeyDown={handleResizeKeyDown("sidebar")}
-												className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
-												style={{
-													left: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
-													width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
-												}}
-											>
-												<span
-													aria-hidden="true"
-													className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
-														isSidebarResizing
-															? "w-[2px] bg-foreground/80 shadow-[0_0_12px_rgba(0,0,0,0.12)] dark:shadow-[0_0_12px_rgba(255,255,255,0.16)]"
-															: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
-													}`}
-												/>
-											</div>
-										)}
-									</>
-								)}
+											{!sidebarCollapsed && (
+												<div
+													role="separator"
+													tabIndex={0}
+													aria-label="Resize sidebar"
+													aria-orientation="vertical"
+													aria-valuemin={MIN_SIDEBAR_WIDTH}
+													aria-valuemax={MAX_SIDEBAR_WIDTH}
+													aria-valuenow={sidebarWidth}
+													onMouseDown={handleResizeStart("sidebar")}
+													onKeyDown={handleResizeKeyDown("sidebar")}
+													className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+													style={{
+														left: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
+														width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
+													}}
+												>
+													<span
+														aria-hidden="true"
+														className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
+															isSidebarResizing
+																? "w-[2px] bg-foreground/80 shadow-[0_0_12px_rgba(0,0,0,0.12)] dark:shadow-[0_0_12px_rgba(255,255,255,0.16)]"
+																: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
+														}`}
+													/>
+												</div>
+											)}
+										</>
+									)}
 
 								<section
 									aria-label="Workspace panel"
@@ -2352,19 +2344,13 @@ function AppShell({
 										<div
 											data-focus-scope="chat"
 											className={
-												workspaceViewMode === "editor"
+												workspaceViewMode === "editor" ||
+												workspaceViewMode === "kanban"
 													? "hidden"
-													: workspaceViewMode === "kanban"
-														? "pointer-events-none absolute inset-0 z-20 flex min-h-0 flex-col"
-														: "flex min-h-0 flex-1 flex-col"
+													: "flex min-h-0 flex-1 flex-col"
 											}
 										>
 											<WorkspaceConversationContainer
-												presentation={
-													workspaceViewMode === "kanban"
-														? "composerOverlay"
-														: "conversation"
-												}
 												selectedWorkspaceId={selectedWorkspaceId}
 												displayedWorkspaceId={displayedWorkspaceId}
 												selectedSessionId={selectedSessionId}

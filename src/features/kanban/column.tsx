@@ -1,19 +1,22 @@
 import { useDroppable } from "@dnd-kit/core";
-import type { CSSProperties } from "react";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { GroupIcon } from "@/features/navigation/shared";
 import type { GroupTone, WorkspaceRow } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { KanbanCard } from "./card";
+import { KanbanPlaceholder } from "./placeholder";
 import type { KanbanColumnId } from "./types";
 
 type KanbanColumnProps = {
+	activePlaceholderHeight: number | null;
+	activePlaceholderRowId: string | null;
 	dropPreview: KanbanDropPreview | null;
 	hiddenRowId: string | null;
 	id: KanbanColumnId;
 	isDropTarget: boolean;
 	label: string;
+	settlingPlaceholder: KanbanSettlingInlinePlaceholder | null;
 	tone: GroupTone;
 	rows: WorkspaceRow[];
 };
@@ -25,16 +28,25 @@ export type KanbanDropPreview = {
 	row: WorkspaceRow;
 };
 
+type KanbanSettlingInlinePlaceholder = {
+	fadeMs?: number;
+	height: number | null;
+	workspaceId: string;
+};
+
 export function columnDropId(id: KanbanColumnId) {
 	return `kanban-column:${id}`;
 }
 
 export function KanbanColumn({
+	activePlaceholderHeight,
+	activePlaceholderRowId,
 	dropPreview,
 	hiddenRowId,
 	id,
 	isDropTarget,
 	label,
+	settlingPlaceholder,
 	tone,
 	rows,
 }: KanbanColumnProps) {
@@ -50,9 +62,9 @@ export function KanbanColumn({
 		<section
 			aria-label={label}
 			className={cn(
-				"flex min-h-0 w-[280px] shrink-0 flex-col rounded-lg border border-border/60 bg-sidebar/60 transition-[border-color,background-color,box-shadow] duration-150",
+				"flex min-h-0 w-[280px] shrink-0 flex-col rounded-lg border border-border/60 bg-sidebar transition-[border-color,background-color,box-shadow] duration-150",
 				(isDropTarget || isOver) &&
-					"border-primary/35 bg-sidebar/80 ring-1 ring-primary/15",
+					"border-primary/35 bg-sidebar ring-1 ring-primary/15",
 			)}
 		>
 			<header className="flex h-[37px] shrink-0 items-center justify-between border-border/50 border-b px-2.5">
@@ -73,7 +85,7 @@ export function KanbanColumn({
 			<ScrollArea className="min-h-0 flex-1 [&_[data-orientation=vertical]]:w-2 [&_[data-slot=scroll-area-scrollbar]]:p-0.5">
 				<div
 					ref={setNodeRef}
-					className="flex min-h-20 w-full flex-col gap-2 rounded-md px-2 pt-2 pb-[280px]"
+					className="flex min-h-20 w-full flex-col gap-2 rounded-md p-2"
 				>
 					{dropPreview ? (
 						dropPreview.mode === "settling" ? (
@@ -83,13 +95,26 @@ export function KanbanColumn({
 								row={dropPreview.row}
 							/>
 						) : (
-							<KanbanDropPlaceholder height={dropPreview.height} />
+							<KanbanPlaceholder height={dropPreview.height} />
 						)
 					) : null}
 					{rows.length > 0 ? (
 						rows.map((row) =>
 							row.id === hiddenRowId ? null : (
-								<KanbanCard key={row.id} row={row} />
+								<KanbanCard
+									key={row.id}
+									dragPlaceholderHeight={
+										row.id === activePlaceholderRowId
+											? activePlaceholderHeight
+											: undefined
+									}
+									row={row}
+									settlingPlaceholder={
+										settlingPlaceholder?.workspaceId === row.id
+											? settlingPlaceholder
+											: null
+									}
+								/>
 							),
 						)
 					) : isDropTarget ? null : (
@@ -113,42 +138,14 @@ function KanbanSettlingPlaceholder({
 	row: WorkspaceRow;
 }) {
 	return (
-		<div
-			className="relative"
-			style={
-				fadeMs || height
-					? ({
-							...(fadeMs
-								? { "--kanban-placeholder-fade-ms": `${fadeMs}ms` }
-								: {}),
-							...(height
-								? { "--kanban-placeholder-height": `${height}px` }
-								: {}),
-						} as CSSProperties)
-					: undefined
-			}
-		>
+		<div className="relative">
 			<KanbanCard className="opacity-0" row={row} settling />
-			<div
-				aria-hidden="true"
-				className="kanban-drop-placeholder-out pointer-events-none absolute inset-0 rounded-lg border border-dashed border-primary/30"
+			<KanbanPlaceholder
+				className="pointer-events-none absolute inset-0"
+				fadeMs={fadeMs}
+				height={height}
+				phase="out"
 			/>
 		</div>
-	);
-}
-
-function KanbanDropPlaceholder({ height }: { height: number | null }) {
-	return (
-		<div
-			aria-hidden="true"
-			className="kanban-drop-placeholder rounded-lg border border-dashed border-primary/30"
-			style={
-				height
-					? ({
-							"--kanban-placeholder-height": `${height}px`,
-						} as CSSProperties)
-					: undefined
-			}
-		/>
 	);
 }

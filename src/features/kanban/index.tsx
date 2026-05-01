@@ -2,6 +2,7 @@ import {
 	type CollisionDetection,
 	closestCorners,
 	DndContext,
+	type DragCancelEvent,
 	type DragEndEvent,
 	type DragOverEvent,
 	DragOverlay,
@@ -16,6 +17,7 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { InboxSidebar } from "@/features/inbox";
 import type { WorkspaceDetail, WorkspaceGroup, WorkspaceRow } from "@/lib/api";
 import { setWorkspaceStatus } from "@/lib/api";
 import {
@@ -35,6 +37,21 @@ import type { KanbanColumnId } from "./types";
 
 const DROP_SETTLE_MS = 190;
 
+type SettlingDrop =
+	| {
+			columnId: KanbanColumnId;
+			height: number | null;
+			placement: "inline";
+			workspaceId: string;
+	  }
+	| {
+			columnId: KanbanColumnId;
+			height: number | null;
+			placement: "top";
+			row: WorkspaceRow;
+			workspaceId: string;
+	  };
+
 const kanbanCollisionDetection: CollisionDetection = (args) => {
 	const pointerCollisions = pointerWithin(args);
 	return pointerCollisions.length > 0
@@ -45,18 +62,21 @@ const kanbanCollisionDetection: CollisionDetection = (args) => {
 export function KanbanPage() {
 	const queryClient = useQueryClient();
 	const groupsQuery = useQuery(workspaceGroupsQueryOptions());
+	const sensors = useSensors(
+		useSensor(PointerSensor, {
+			activationConstraint: {
+				distance: 6,
+			},
+		}),
+		useSensor(KeyboardSensor),
+	);
 	const [activeId, setActiveId] = useState<string | null>(null);
 	const [overColumnId, setOverColumnId] = useState<KanbanColumnId | null>(null);
 	const [activeCardRect, setActiveCardRect] = useState<{
 		height: number;
 		width: number;
 	} | null>(null);
-	const [settlingDrop, setSettlingDrop] = useState<{
-		columnId: KanbanColumnId;
-		height: number | null;
-		row: WorkspaceRow;
-		workspaceId: string;
-	} | null>(null);
+	const [settlingDrop, setSettlingDrop] = useState<SettlingDrop | null>(null);
 	const [topPlacements, setTopPlacements] = useState<KanbanTopPlacement[]>([]);
 	const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const baseColumns = useMemo(
@@ -89,15 +109,6 @@ export function KanbanPage() {
 		};
 	}, []);
 
-	const sensors = useSensors(
-		useSensor(PointerSensor, {
-			activationConstraint: {
-				distance: 6,
-			},
-		}),
-		useSensor(KeyboardSensor),
-	);
-
 	const resetDragState = useCallback(() => {
 		setActiveId(null);
 		setOverColumnId(null);
@@ -110,6 +121,19 @@ export function KanbanPage() {
 			settleTimerRef.current = null;
 		}
 		setSettlingDrop(null);
+	}, []);
+
+	const startSettlingDrop = useCallback((drop: SettlingDrop) => {
+		if (settleTimerRef.current) {
+			clearTimeout(settleTimerRef.current);
+		}
+		setSettlingDrop(drop);
+		settleTimerRef.current = setTimeout(() => {
+			setSettlingDrop((current) =>
+				current?.workspaceId === drop.workspaceId ? null : current,
+			);
+			settleTimerRef.current = null;
+		}, DROP_SETTLE_MS);
 	}, []);
 
 	const handleDragStart = useCallback(
@@ -132,6 +156,13 @@ export function KanbanPage() {
 		setOverColumnId(getColumnIdFromOver(event.over));
 	}, []);
 
+	const handleDragCancel = useCallback(
+		(_event: DragCancelEvent) => {
+			resetDragState();
+		},
+		[resetDragState],
+	);
+
 	const handleDragEnd = useCallback(
 		(event: DragEndEvent) => {
 			const workspaceId = String(event.active.id);
@@ -139,23 +170,28 @@ export function KanbanPage() {
 			const targetColumnId = getColumnIdFromOver(event.over);
 			resetDragState();
 
-			if (!row || !targetColumnId || targetColumnId === row.status) {
+			if (!row || !targetColumnId) {
+				return;
+			}
+
+			if (targetColumnId === row.status) {
+				startSettlingDrop({
+					columnId: row.status,
+					height: activeCardRect?.height ?? null,
+					placement: "inline",
+					workspaceId,
+				});
 				return;
 			}
 
 			const settledRow: WorkspaceRow = { ...row, status: targetColumnId };
-			setSettlingDrop({
+			startSettlingDrop({
 				columnId: targetColumnId,
 				height: activeCardRect?.height ?? null,
+				placement: "top",
 				row: settledRow,
 				workspaceId,
 			});
-			settleTimerRef.current = setTimeout(() => {
-				setSettlingDrop((current) =>
-					current?.workspaceId === workspaceId ? null : current,
-				);
-				settleTimerRef.current = null;
-			}, DROP_SETTLE_MS);
 			setTopPlacements((placements) => [
 				{ workspaceId, columnId: targetColumnId },
 				...placements.filter(
@@ -196,13 +232,19 @@ export function KanbanPage() {
 					toast(describeUnknownError(error, "Unable to move workspace card."));
 				});
 		},
-		[activeCardRect?.height, queryClient, resetDragState, rowsById],
+		[
+			activeCardRect?.height,
+			queryClient,
+			resetDragState,
+			rowsById,
+			startSettlingDrop,
+		],
 	);
 
 	return (
 		<DndContext
 			collisionDetection={kanbanCollisionDetection}
-			onDragCancel={resetDragState}
+			onDragCancel={handleDragCancel}
 			onDragEnd={handleDragEnd}
 			onDragOver={handleDragOver}
 			onDragStart={handleDragStart}
@@ -210,39 +252,64 @@ export function KanbanPage() {
 		>
 			<div
 				aria-label="Kanban page"
-				className="flex min-h-0 flex-1 flex-col bg-background"
+				className="flex min-h-0 flex-1 bg-background"
 			>
-				<div className="flex h-8 shrink-0 items-center border-border/50 border-b px-4">
-					<h1 className="text-[13px] font-medium text-muted-foreground">
-						Kanban
-					</h1>
-				</div>
-				<div className="scrollbar-stable flex min-h-0 flex-1 gap-3 overflow-x-auto px-3 pt-2 pb-1 [scrollbar-width:thin]">
-					{KANBAN_COLUMNS.map((column) => (
-						<KanbanColumn
-							key={column.id}
-							dropPreview={getDropPreview({
-								activeRow,
-								columnId: column.id,
-								placeholderHeight: activeCardRect?.height ?? null,
-								previewColumnId,
-								settlingDrop,
-							})}
-							hiddenRowId={
-								settlingDrop?.columnId === column.id
-									? settlingDrop.workspaceId
-									: null
-							}
-							id={column.id}
-							isDropTarget={
-								previewColumnId === column.id ||
-								settlingDrop?.columnId === column.id
-							}
-							label={column.label}
-							tone={column.tone}
-							rows={columns[column.id]}
-						/>
-					))}
+				<aside
+					aria-label="Kanban inbox"
+					className="flex h-full w-[280px] shrink-0 flex-col overflow-hidden border-border/60 border-r bg-sidebar"
+				>
+					<InboxSidebar className="flex flex-1" />
+				</aside>
+				<div className="relative flex min-w-0 flex-1 flex-col">
+					<div className="flex h-8 shrink-0 items-center border-border/50 border-b px-4">
+						<h1 className="text-[13px] font-medium text-muted-foreground">
+							Kanban
+						</h1>
+					</div>
+					<div className="scrollbar-stable flex min-h-0 flex-1 gap-3 overflow-x-auto px-3 pt-2 pb-1 [scrollbar-width:thin]">
+						{KANBAN_COLUMNS.map((column) => (
+							<KanbanColumn
+								key={column.id}
+								activePlaceholderHeight={activeCardRect?.height ?? null}
+								activePlaceholderRowId={
+									activeRow && column.id === activeColumnId
+										? activeRow.id
+										: null
+								}
+								dropPreview={getDropPreview({
+									activeRow,
+									columnId: column.id,
+									placeholderHeight: activeCardRect?.height ?? null,
+									previewColumnId,
+									settlingDrop,
+								})}
+								hiddenRowId={
+									settlingDrop?.placement === "top" &&
+									settlingDrop.columnId === column.id
+										? settlingDrop.workspaceId
+										: null
+								}
+								id={column.id}
+								isDropTarget={
+									previewColumnId === column.id ||
+									settlingDrop?.columnId === column.id
+								}
+								label={column.label}
+								settlingPlaceholder={
+									settlingDrop?.placement === "inline" &&
+									settlingDrop.columnId === column.id
+										? {
+												fadeMs: DROP_SETTLE_MS,
+												height: settlingDrop.height,
+												workspaceId: settlingDrop.workspaceId,
+											}
+										: null
+								}
+								tone={column.tone}
+								rows={columns[column.id]}
+							/>
+						))}
+					</div>
 				</div>
 			</div>
 			<DragOverlay
@@ -266,7 +333,7 @@ export function KanbanPage() {
 					>
 						<KanbanCardPreview
 							row={activeRow}
-							className="border-primary/30 bg-card shadow-lg ring-1 ring-primary/10"
+							className="border-border/70 bg-card shadow-lg"
 						/>
 					</div>
 				) : null}
@@ -286,13 +353,9 @@ function getDropPreview({
 	columnId: KanbanColumnId;
 	placeholderHeight: number | null;
 	previewColumnId: KanbanColumnId | null;
-	settlingDrop: {
-		columnId: KanbanColumnId;
-		height: number | null;
-		row: WorkspaceRow;
-	} | null;
+	settlingDrop: SettlingDrop | null;
 }) {
-	if (settlingDrop?.columnId === columnId) {
+	if (settlingDrop?.placement === "top" && settlingDrop.columnId === columnId) {
 		return {
 			fadeMs: DROP_SETTLE_MS,
 			height: settlingDrop.height,
@@ -312,7 +375,7 @@ function getDropPreview({
 	return null;
 }
 
-type KanbanDndEntry = {
+type KanbanCollisionEntry = {
 	data: {
 		current?: {
 			columnId?: unknown;
@@ -322,7 +385,7 @@ type KanbanDndEntry = {
 };
 
 function getColumnIdFromOver(
-	over: KanbanDndEntry | null,
+	over: KanbanCollisionEntry | null,
 ): KanbanColumnId | null {
 	if (!over) return null;
 

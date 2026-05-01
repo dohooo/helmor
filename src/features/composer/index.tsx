@@ -125,7 +125,6 @@ type WorkspaceComposerProps = {
 	restoreFiles?: string[];
 	restoreCustomTags?: ComposerCustomTag[];
 	restoreNonce?: number;
-	persistDrafts?: boolean;
 	pendingInsertRequests?: ResolvedComposerInsertRequest[];
 	onPendingInsertRequestsConsumed?: (ids: string[]) => void;
 	slashCommands?: readonly SlashCommandEntry[];
@@ -221,7 +220,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	restoreFiles = [],
 	restoreCustomTags = [],
 	restoreNonce = 0,
-	persistDrafts = true,
 	pendingInsertRequests = [],
 	onPendingInsertRequestsConsumed,
 	slashCommands = EMPTY_SLASH_COMMANDS,
@@ -685,16 +683,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						<DropFilePlugin />
 						<AutoResizePlugin minHeight={64} maxHeight={240} />
 						<EditorRefPlugin editorRef={editorRef} />
-						{persistDrafts ? (
-							<DraftPersistencePlugin
-								contextKey={contextKey}
-								restoreDraft={restoreDraft}
-								restoreImages={restoreImages}
-								restoreFiles={restoreFiles}
-								restoreCustomTags={restoreCustomTags}
-								restoreNonce={restoreNonce}
-							/>
-						) : null}
+						<DraftPersistencePlugin
+							contextKey={contextKey}
+							restoreDraft={restoreDraft}
+							restoreImages={restoreImages}
+							restoreFiles={restoreFiles}
+							restoreCustomTags={restoreCustomTags}
+							restoreNonce={restoreNonce}
+						/>
 						<EditablePlugin disabled={inputDisabled} />
 						<HasContentPlugin onChange={setHasContent} />
 					</LexicalComposer>

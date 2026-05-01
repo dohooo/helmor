@@ -21,7 +21,6 @@ import { hasUnresolvedPlanReview } from "@/lib/plan-review";
 import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { EMPTY_QUEUE, useSubmitQueue } from "@/lib/use-submit-queue";
-import { cn } from "@/lib/utils";
 import { getComposerContextKey } from "@/lib/workspace-helpers";
 import { useConversationStreaming } from "./hooks/use-streaming";
 import {
@@ -78,7 +77,6 @@ type WorkspaceConversationContainerProps = {
 	onRequestCloseSession?: (request: SessionCloseRequest) => void;
 	workspaceRootPath?: string | null;
 	onOpenFileReference?: (path: string, line?: number, column?: number) => void;
-	presentation?: "conversation" | "composerOverlay";
 };
 
 export const WorkspaceConversationContainer = memo(
@@ -108,7 +106,6 @@ export const WorkspaceConversationContainer = memo(
 		onRequestCloseSession,
 		workspaceRootPath,
 		onOpenFileReference,
-		presentation = "conversation",
 	}: WorkspaceConversationContainerProps) {
 		const [composerModelSelections, setComposerModelSelections] = useState<
 			Record<string, string>
@@ -311,16 +308,6 @@ export const WorkspaceConversationContainer = memo(
 				[handlePermissionResponse, handleDeferredToolResponse],
 			);
 
-		const showPanel = presentation === "conversation";
-		const composerWrapperClassName =
-			presentation === "composerOverlay"
-				? "pointer-events-none absolute inset-x-0 bottom-8 z-30 mt-0 flex justify-center px-6 pb-5 pt-0"
-				: "mt-auto px-4 pb-4 pt-0";
-		const composerInnerClassName =
-			presentation === "composerOverlay"
-				? "pointer-events-auto w-full max-w-[720px] rounded-2xl shadow-[0_24px_80px_rgba(0,0,0,0.45),0_10px_28px_rgba(0,0,0,0.28)]"
-				: undefined;
-
 		return (
 			<FileLinkProvider
 				value={{
@@ -328,68 +315,63 @@ export const WorkspaceConversationContainer = memo(
 					workspaceRootPath,
 				}}
 			>
-				{showPanel ? (
-					<WorkspacePanelContainer
-						selectedWorkspaceId={selectedWorkspaceId}
-						displayedWorkspaceId={displayedWorkspaceId}
-						selectedSessionId={selectedSessionId}
-						displayedSessionId={displayedSessionId}
-						sessionSelectionHistory={sessionSelectionHistory}
-						sending={isSending}
-						sendingSessionIds={sendingSessionIds}
-						interactionRequiredSessionIds={interactionRequiredSessionIds}
-						modelSelections={composerModelSelections}
-						workspaceChangeRequest={workspaceChangeRequest}
-						onSelectSession={onSelectSession}
-						onResolveDisplayedSession={onResolveDisplayedSession}
-						onQueuePendingPromptForSession={onQueuePendingPromptForSession}
-						onRequestCloseSession={onRequestCloseSession}
-						headerActions={headerActions}
-						headerLeading={headerLeading}
-					/>
-				) : null}
+				<WorkspacePanelContainer
+					selectedWorkspaceId={selectedWorkspaceId}
+					displayedWorkspaceId={displayedWorkspaceId}
+					selectedSessionId={selectedSessionId}
+					displayedSessionId={displayedSessionId}
+					sessionSelectionHistory={sessionSelectionHistory}
+					sending={isSending}
+					sendingSessionIds={sendingSessionIds}
+					interactionRequiredSessionIds={interactionRequiredSessionIds}
+					modelSelections={composerModelSelections}
+					workspaceChangeRequest={workspaceChangeRequest}
+					onSelectSession={onSelectSession}
+					onResolveDisplayedSession={onResolveDisplayedSession}
+					onQueuePendingPromptForSession={onQueuePendingPromptForSession}
+					onRequestCloseSession={onRequestCloseSession}
+					headerActions={headerActions}
+					headerLeading={headerLeading}
+				/>
 
-				<div className={composerWrapperClassName}>
-					<div className={cn(composerInnerClassName)}>
-						<WorkspaceComposerContainer
-							displayedWorkspaceId={displayedWorkspaceId}
-							displayedSessionId={displayedSessionId}
-							disabled={selectionPending}
-							sending={isSending}
-							sendError={activeSendError}
-							restoreDraft={restoreDraft}
-							restoreImages={restoreImages}
-							restoreFiles={restoreFiles}
-							restoreCustomTags={restoreCustomTags}
-							restoreNonce={restoreNonce}
-							persistDrafts={presentation !== "composerOverlay"}
-							pendingElicitation={pendingElicitation}
-							onElicitationResponse={handleElicitationResponse}
-							elicitationResponsePending={elicitationResponsePending}
-							pendingDeferredTool={effectivePendingDeferredTool}
-							onDeferredToolResponse={effectiveDeferredToolResponse}
-							hasPlanReview={hasPlanReview}
-							modelSelections={composerModelSelections}
-							effortLevels={composerEffortLevels}
-							permissionModes={composerPermissionModes}
-							fastModes={composerFastModes}
-							activeFastPreludes={activeFastPreludes}
-							onSelectModel={handleSelectModel}
-							onSelectEffort={handleSelectEffort}
-							onChangePermissionMode={handleChangePermissionMode}
-							onChangeFastMode={handleChangeFastMode}
-							onSwitchSession={onSelectSession}
-							onSubmit={handleComposerSubmitWrapper}
-							onStop={handleStopStream}
-							pendingPromptForSession={pendingPromptForSession}
-							onPendingPromptConsumed={onPendingPromptConsumed}
-							pendingInsertRequests={relevantPendingInsertRequests}
-							onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
-							queueItems={queueItems}
-							onSteerQueued={handleSteerQueued}
-							onRemoveQueued={handleRemoveQueued}
-						/>
-					</div>
+				<div className="mt-auto px-4 pb-4 pt-0">
+					<WorkspaceComposerContainer
+						displayedWorkspaceId={displayedWorkspaceId}
+						displayedSessionId={displayedSessionId}
+						disabled={selectionPending}
+						sending={isSending}
+						sendError={activeSendError}
+						restoreDraft={restoreDraft}
+						restoreImages={restoreImages}
+						restoreFiles={restoreFiles}
+						restoreCustomTags={restoreCustomTags}
+						restoreNonce={restoreNonce}
+						pendingElicitation={pendingElicitation}
+						onElicitationResponse={handleElicitationResponse}
+						elicitationResponsePending={elicitationResponsePending}
+						pendingDeferredTool={effectivePendingDeferredTool}
+						onDeferredToolResponse={effectiveDeferredToolResponse}
+						hasPlanReview={hasPlanReview}
+						modelSelections={composerModelSelections}
+						effortLevels={composerEffortLevels}
+						permissionModes={composerPermissionModes}
+						fastModes={composerFastModes}
+						activeFastPreludes={activeFastPreludes}
+						onSelectModel={handleSelectModel}
+						onSelectEffort={handleSelectEffort}
+						onChangePermissionMode={handleChangePermissionMode}
+						onChangeFastMode={handleChangeFastMode}
+						onSwitchSession={onSelectSession}
+						onSubmit={handleComposerSubmitWrapper}
+						onStop={handleStopStream}
+						pendingPromptForSession={pendingPromptForSession}
+						onPendingPromptConsumed={onPendingPromptConsumed}
+						pendingInsertRequests={relevantPendingInsertRequests}
+						onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
+						queueItems={queueItems}
+						onSteerQueued={handleSteerQueued}
+						onRemoveQueued={handleRemoveQueued}
+					/>
 				</div>
 			</FileLinkProvider>
 		);

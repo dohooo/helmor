@@ -1,5 +1,6 @@
 import { Inbox } from "lucide-react";
 import { memo, useMemo, useState } from "react";
+import { GithubBrandIcon } from "@/components/brand-icon";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Badge } from "@/components/ui/badge";
 import type { ContextCardSource } from "@/lib/sources/types";
@@ -95,7 +96,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 								{filter.id === "all" ? (
 									<Inbox className="size-3.5" strokeWidth={2} />
 								) : filter.id === "github" ? (
-									<SourceIcon source="github_issue" size={14} />
+									<GithubBrandIcon size={14} />
 								) : filter.id === "slack" ? (
 									<SourceIcon source="slack_thread" size={14} />
 								) : (

@@ -92,27 +92,12 @@ body {
 
 .kanban-drop-placeholder {
 	height: var(--kanban-placeholder-height, 76px);
-	animation: kanban-drop-placeholder-in 180ms cubic-bezier(0.2, 0, 0, 1) both;
 }
 
 .kanban-drop-placeholder-out {
 	height: var(--kanban-placeholder-height, 76px);
 	animation: kanban-drop-placeholder-out
 		var(--kanban-placeholder-fade-ms, 190ms) cubic-bezier(0.2, 0, 0, 1) forwards;
-}
-
-@keyframes kanban-drop-placeholder-in {
-	from {
-		height: 0;
-		opacity: 0;
-		transform: translate3d(0, -4px, 0) scaleY(0.98);
-	}
-
-	to {
-		height: var(--kanban-placeholder-height, 76px);
-		opacity: 1;
-		transform: translate3d(0, 0, 0) scaleY(1);
-	}
 }
 
 @keyframes kanban-drop-placeholder-out {
@@ -126,7 +111,6 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.kanban-drop-placeholder,
 	.kanban-drop-placeholder-out {
 		animation: none;
 	}
