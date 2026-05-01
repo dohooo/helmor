@@ -79,6 +79,17 @@ pub fn generated_images_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// Returns the avatar cache directory inside the data dir. Forge account
+/// avatars (gh / glab) are downloaded once and served via `asset://` so
+/// page navigations don't re-trigger HTTP fetch + image decode.
+pub fn avatar_cache_dir() -> Result<PathBuf> {
+    let dir = data_dir()?.join("cache").join("avatars");
+    if !dir.exists() {
+        fs::create_dir_all(&dir).context("Failed to create avatar cache directory")?;
+    }
+    Ok(dir)
+}
+
 /// Returns the Conductor source database path for import.
 /// This is the real Conductor database on the local machine.
 pub fn conductor_source_db_path() -> Option<PathBuf> {

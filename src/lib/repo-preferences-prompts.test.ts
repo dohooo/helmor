@@ -19,7 +19,6 @@ const GITLAB_FORGE: ForgeDetection = {
 		changeRequestFullName: "merge request",
 		connectAction: "Connect GitLab",
 	},
-	cli: null,
 	detectionSignals: [],
 };
 

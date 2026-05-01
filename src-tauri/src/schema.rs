@@ -46,7 +46,9 @@ const DEAD_COLUMNS: &[(&str, &str)] = &[
     ("repos", "conductor_config"),
     ("repos", "custom_prompt_code_review"),
     ("repos", "icon"),
-    ("repos", "branch_prefix_type"),
+    // `branch_prefix_type` was once a stub here. The multi-account
+    // refactor revived it as a real per-repo column — keep it OUT of
+    // this list so the column survives startup.
     ("repos", "run_script_mode"),
     ("repos", "storage_version"),
     // workspaces: legacy fields with no read path in production.
@@ -377,10 +379,31 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add forge_provider column")?;
     }
 
+    // Migration: forge_login — the gh/glab account login bound to this
+    // repo. Auto-detected on add-repo by probing each logged-in account
+    // for access; NULL means no account had access (or detection hasn't
+    // run yet). Used to set GH_TOKEN per-spawn so multi-account users
+    // don't have to manually `gh auth switch` between repos.
+    if has_table(connection, "repos") && !has_column(connection, "repos", "forge_login") {
+        connection
+            .execute_batch("ALTER TABLE repos ADD COLUMN forge_login TEXT")
+            .context("Failed to add forge_login column")?;
+    }
+
     if has_table(connection, "repos") && !has_column(connection, "repos", "branch_prefix_custom") {
         connection
             .execute_batch("ALTER TABLE repos ADD COLUMN branch_prefix_custom TEXT")
             .context("Failed to add branch_prefix_custom column")?;
+    }
+
+    // Re-add the per-repo `branch_prefix_type` column. Earlier shipped
+    // releases dropped it via DEAD_COLUMNS; the multi-account refactor
+    // brings it back as the canonical place for the override. No data
+    // back-fill — no prior release wrote a value worth preserving.
+    if has_table(connection, "repos") && !has_column(connection, "repos", "branch_prefix_type") {
+        connection
+            .execute_batch("ALTER TABLE repos ADD COLUMN branch_prefix_type TEXT")
+            .context("Failed to add branch_prefix_type column")?;
     }
 
     if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "pr_sync_state")
@@ -448,6 +471,15 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         .execute_batch("UPDATE sessions SET model = 'default' WHERE model = 'opus-1m'")
         .ok();
 
+    // Migration: drop the old OAuth identity rows. The device-flow login
+    // is gone — auth is now per-repo via the bundled `gh` CLI's own
+    // credential store. Idempotent: DELETE on absent rows is a no-op.
+    connection
+        .execute_batch(
+            "DELETE FROM settings WHERE key IN ('github_identity_meta', 'github_identity_secret');",
+        )
+        .ok();
+
     Ok(())
 }
 
@@ -471,6 +503,8 @@ CREATE TABLE IF NOT EXISTS repos (
     custom_prompt_resolve_merge_conflicts TEXT,
     auto_run_setup INTEGER DEFAULT 1,
     forge_provider TEXT,
+    forge_login TEXT,
+    branch_prefix_type TEXT,
     branch_prefix_custom TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -1112,6 +1146,26 @@ mod tests {
         let (connection, _dir) = open_test_db();
         ensure_schema(&connection).unwrap();
         assert!(column_exists(&connection, "repos", "forge_provider"));
+    }
+
+    #[test]
+    fn forge_login_added_to_legacy_and_idempotent() {
+        let (connection, _dir) = open_test_db();
+        create_legacy_schema(&connection);
+        assert!(!column_exists(&connection, "repos", "forge_login"));
+
+        run_migrations(&connection).unwrap();
+        assert!(column_exists(&connection, "repos", "forge_login"));
+
+        run_migrations(&connection).unwrap();
+        assert!(column_exists(&connection, "repos", "forge_login"));
+    }
+
+    #[test]
+    fn forge_login_present_on_fresh_install() {
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+        assert!(column_exists(&connection, "repos", "forge_login"));
     }
 
     #[test]
