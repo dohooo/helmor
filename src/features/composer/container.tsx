@@ -108,6 +108,7 @@ type WorkspaceComposerContainerProps = {
 	restoreFiles: string[];
 	restoreCustomTags?: ComposerCustomTag[];
 	restoreNonce: number;
+	persistDrafts?: boolean;
 	pendingElicitation?: PendingElicitation | null;
 	onElicitationResponse?: ElicitationResponseHandler;
 	elicitationResponsePending?: boolean;
@@ -184,6 +185,7 @@ export const WorkspaceComposerContainer = memo(
 		restoreFiles,
 		restoreCustomTags = [],
 		restoreNonce,
+		persistDrafts = true,
 		pendingElicitation = null,
 		onElicitationResponse = noopElicitationResponse,
 		elicitationResponsePending = false,
@@ -971,6 +973,7 @@ export const WorkspaceComposerContainer = memo(
 						restoreFiles={restoreFiles}
 						restoreCustomTags={restoreCustomTags}
 						restoreNonce={restoreNonce}
+						persistDrafts={persistDrafts}
 						pendingElicitation={pendingElicitation}
 						onElicitationResponse={onElicitationResponse}
 						elicitationResponsePending={elicitationResponsePending}

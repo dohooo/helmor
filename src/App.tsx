@@ -2352,12 +2352,19 @@ function AppShell({
 										<div
 											data-focus-scope="chat"
 											className={
-												workspaceViewMode !== "conversation"
+												workspaceViewMode === "editor"
 													? "hidden"
-													: "flex min-h-0 flex-1 flex-col"
+													: workspaceViewMode === "kanban"
+														? "pointer-events-none absolute inset-0 z-20 flex min-h-0 flex-col"
+														: "flex min-h-0 flex-1 flex-col"
 											}
 										>
 											<WorkspaceConversationContainer
+												presentation={
+													workspaceViewMode === "kanban"
+														? "composerOverlay"
+														: "conversation"
+												}
 												selectedWorkspaceId={selectedWorkspaceId}
 												displayedWorkspaceId={displayedWorkspaceId}
 												selectedSessionId={selectedSessionId}
