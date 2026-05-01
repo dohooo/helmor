@@ -1,11 +1,15 @@
 <p align="center">
-  <img src="src/assets/readme-banner.png" alt="Helmor" width="100%" />
+  <img src="src/assets/helmor-logo-light.png" alt="Helmor logo" width="120" style="margin-bottom: 28px;" />
 </p>
 
 <h1 align="center">Helmor</h1>
 
 <p align="center">
   Helmor is an open-source local workbench for multi-agent software development.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/discord/1499667625267957920?style=flat&logo=discord&label=Discord&color=5865F2" alt="Discord" />
 </p>
 
 > AI made coding faster.
@@ -19,7 +23,7 @@
 ## Install
 
 <p align="center">
-  <img src="src/assets/helmor-screenshot-mix.png" alt="Helmor screenshot" width="100%" />
+  <img src="src/assets/helmor-screenshot-light.png" alt="Helmor screenshot" width="100%" />
 </p>
 
 [**Download for macOS** →](https://github.com/dohooo/helmor/releases)

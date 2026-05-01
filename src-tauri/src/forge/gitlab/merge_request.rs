@@ -91,6 +91,76 @@ pub(super) fn gitlab_mr_state(state: &str) -> &'static str {
     }
 }
 
+/// What value (if any) we should send as `squash` on the merge API,
+/// derived from the project's `squash_option`.
+///
+/// GitLab refuses the merge if we send a value incompatible with the
+/// project setting (e.g. `squash=true` when the project is `"never"`,
+/// or omitting it on `"always"`). We can't override the project-level
+/// `merge_method` (merge / rebase_merge / ff) — that's enforced
+/// server-side without an API knob — so this is the only knob we tune.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SquashChoice {
+    /// Pass `squash=true`. Required for `"always"`; honors project
+    /// preference for `"default_on"`.
+    Squash,
+    /// Omit `squash` (server default = false). Right for `"never"`,
+    /// `"default_off"`, missing fields, or older GitLab without the flag.
+    Default,
+}
+
+impl SquashChoice {
+    fn for_option(option: Option<&str>) -> Self {
+        match option {
+            Some("always") | Some("default_on") => Self::Squash,
+            _ => Self::Default,
+        }
+    }
+}
+
+/// Best-effort: ask GitLab for the project's `squash_option` and map it
+/// to a `SquashChoice`. Any failure (network, auth, parse) degrades to
+/// `Default` with a warning log — we'd rather attempt the merge with no
+/// squash flag and let GitLab surface the real error than block the
+/// user on a project-info lookup.
+pub(super) fn determine_squash_choice(context: &GitlabContext) -> SquashChoice {
+    let endpoint = format!("projects/{}", encode_path_component(&context.full_path));
+    let output = match glab_api(&context.remote.host, [endpoint.as_str()]) {
+        Ok(output) => output,
+        Err(error) => {
+            tracing::warn!(
+                host = %context.remote.host,
+                full_path = %context.full_path,
+                error = %format!("{error:#}"),
+                "Failed to fetch GitLab project for squash_option; using default"
+            );
+            return SquashChoice::Default;
+        }
+    };
+    if !output.success {
+        tracing::warn!(
+            host = %context.remote.host,
+            full_path = %context.full_path,
+            detail = %command_detail(&output),
+            "GitLab project lookup unsuccessful; using default squash choice"
+        );
+        return SquashChoice::Default;
+    }
+    let value: serde_json::Value = match serde_json::from_str(&output.stdout) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(
+                host = %context.remote.host,
+                full_path = %context.full_path,
+                error = %format!("{error:#}"),
+                "Failed to parse GitLab project response; using default squash choice"
+            );
+            return SquashChoice::Default;
+        }
+    };
+    SquashChoice::for_option(value.get("squash_option").and_then(|v| v.as_str()))
+}
+
 /// Map GitLab's merge status to the same three-way enum GitHub's
 /// `mergeable` field uses (`MERGEABLE` / `CONFLICTING` / `UNKNOWN`).
 pub(super) fn gitlab_mergeable(mr: &GitlabMergeRequest) -> Option<String> {
@@ -138,6 +208,34 @@ mod tests {
             detailed_merge_status: detailed_merge_status.map(str::to_string),
             has_conflicts,
             head_pipeline: None,
+        }
+    }
+
+    #[test]
+    fn squash_choice_required_when_project_demands_it() {
+        // The original bug shape: project requires squash, we used to send
+        // no params and GitLab rejected.
+        assert_eq!(
+            SquashChoice::for_option(Some("always")),
+            SquashChoice::Squash
+        );
+    }
+
+    #[test]
+    fn squash_choice_honors_default_on_preference() {
+        assert_eq!(
+            SquashChoice::for_option(Some("default_on")),
+            SquashChoice::Squash
+        );
+    }
+
+    #[test]
+    fn squash_choice_omits_flag_when_forbidden_or_optional() {
+        // never  → sending true would be rejected; default false matches.
+        // default_off → user-overridable but server default is false.
+        // None / unknown → older GitLab or missing field; safest is default.
+        for option in [Some("never"), Some("default_off"), None, Some("garbled")] {
+            assert_eq!(SquashChoice::for_option(option), SquashChoice::Default);
         }
     }
 
