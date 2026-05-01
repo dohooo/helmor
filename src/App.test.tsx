@@ -265,7 +265,9 @@ describe("App", () => {
 			await screen.findByRole("main", { name: "Application shell" });
 
 			expect(
-				screen.getByRole("button", { name: "Update Helmor to 1.1.0" }),
+				await screen.findByRole("button", {
+					name: "Update Helmor to 1.1.0",
+				}),
 			).toBeInTheDocument();
 
 			await user.click(
@@ -273,7 +275,9 @@ describe("App", () => {
 			);
 
 			expect(
-				screen.getByRole("button", { name: "Update Helmor to 1.1.0" }),
+				await screen.findByRole("button", {
+					name: "Update Helmor to 1.1.0",
+				}),
 			).toBeInTheDocument();
 		} finally {
 			invokeMock.mockImplementation(baseInvokeImpl ?? (async () => undefined));

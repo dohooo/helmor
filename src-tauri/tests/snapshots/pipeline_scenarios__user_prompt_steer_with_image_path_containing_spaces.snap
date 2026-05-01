@@ -1,0 +1,16 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: user
+  id: msg-1
+  content_length: 3
+  content:
+    - type: text
+      text: "actually look at "
+    - type: file-mention
+      path: /Users/me/Library/Application Support/CleanShot/CleanShot 2026-04-29 at 08.24.35@2x.jpg
+    - type: text
+      text: " first"
+  status: ~
+  streaming: ~

@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import { type RefObject, useCallback, useEffect, useRef } from "react";
 import {
 	type TerminalHandle,
@@ -27,6 +28,7 @@ export function OnboardingTerminalPreview({
 	panelClassName,
 	onData,
 	onResize,
+	onClose,
 	terminalRef,
 	padding = "16px 0 72px 20px",
 }: {
@@ -38,6 +40,9 @@ export function OnboardingTerminalPreview({
 	panelClassName?: string;
 	onData?: (data: string) => void;
 	onResize?: (cols: number, rows: number) => void;
+	/** When provided, the leftmost macOS-style dot becomes a real
+	 *  "close" button (red on hover with an `×` mark). */
+	onClose?: () => void;
 	terminalRef: RefObject<TerminalHandle | null>;
 	padding?: string;
 }) {
@@ -60,7 +65,24 @@ export function OnboardingTerminalPreview({
 				)}
 			>
 				<div className="flex h-10 items-center gap-2 border-b border-border/55 bg-background px-4">
-					<span className="size-2.5 rounded-full bg-muted-foreground/35" />
+					{onClose ? (
+						// Hover scoped to the close circle itself —
+						// landing on the title bar elsewhere shouldn't
+						// flash the × in (felt twitchy in testing).
+						<button
+							type="button"
+							onClick={onClose}
+							aria-label="Close login terminal"
+							className="group/close grid size-2.5 cursor-pointer place-items-center rounded-full bg-muted-foreground/35 leading-none transition-colors hover:bg-[#ff5c5f]"
+						>
+							<X
+								strokeWidth={4.5}
+								className="size-[7px] text-black/0 group-hover/close:text-black/85"
+							/>
+						</button>
+					) : (
+						<span className="size-2.5 rounded-full bg-muted-foreground/35" />
+					)}
 					<span className="size-2.5 rounded-full bg-muted-foreground/25" />
 					<span className="size-2.5 rounded-full bg-muted-foreground/20" />
 					<span className="ml-2 text-xs font-medium text-muted-foreground">
@@ -88,15 +110,41 @@ export function LoginTerminalPreview({
 	active,
 	onExit,
 	onError,
+	onClose,
 }: {
 	provider: AgentLoginProvider | null;
 	instanceId: string | null;
 	active: boolean;
 	onExit: (code: number | null) => void;
 	onError: (message: string) => void;
+	onClose?: () => void;
 }) {
 	const termRef = useRef<TerminalHandle | null>(null);
 	const resolvedProvider = provider ?? "codex";
+
+	// Keep onExit/onError out of the spawn effect's deps — the parent's
+	// `handleTerminalExit` is memoised against `activeLoginProvider`,
+	// which we *just* changed by clicking the login button. Including
+	// it in the deps caused the spawn effect to immediately tear down
+	// and respawn, so codex would launch and get killed in the same
+	// frame ("flash-crash" on click).
+	const onExitRef = useRef(onExit);
+	const onErrorRef = useRef(onError);
+	useEffect(() => {
+		onExitRef.current = onExit;
+		onErrorRef.current = onError;
+	}, [onExit, onError]);
+
+	// Auto-focus the xterm viewport on activation (RAF-deferred so the
+	// slot's height transition + xterm's textarea attach finish first;
+	// inline focus from the spawn effect raced layout and didn't take).
+	useEffect(() => {
+		if (!active || !provider || !instanceId) return;
+		const id = requestAnimationFrame(() => {
+			termRef.current?.focus();
+		});
+		return () => cancelAnimationFrame(id);
+	}, [active, provider, instanceId]);
 
 	useEffect(() => {
 		if (!active || !provider || !instanceId) return;
@@ -119,10 +167,10 @@ export function LoginTerminalPreview({
 					break;
 				case "error":
 					termRef.current?.write(`\r\n${event.message}\r\n`);
-					onError(event.message);
+					onErrorRef.current(event.message);
 					break;
 				case "exited":
-					onExit(event.code);
+					onExitRef.current(event.code);
 					break;
 				case "started":
 					break;
@@ -132,14 +180,14 @@ export function LoginTerminalPreview({
 			const message =
 				error instanceof Error ? error.message : "Unable to start login.";
 			termRef.current?.write(`\r\n${message}\r\n`);
-			onError(message);
+			onErrorRef.current(message);
 		});
 
 		return () => {
 			cancelled = true;
 			void stopAgentLoginTerminal(provider, instanceId);
 		};
-	}, [active, provider, instanceId, onExit, onError]);
+	}, [active, provider, instanceId]);
 
 	const handleData = useCallback(
 		(data: string) => {
@@ -164,6 +212,7 @@ export function LoginTerminalPreview({
 			terminalRef={termRef}
 			onData={handleData}
 			onResize={handleResize}
+			onClose={onClose}
 		/>
 	);
 }

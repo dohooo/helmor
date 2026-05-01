@@ -21,6 +21,9 @@ pub struct BuildSendMessageParamsInput<'a> {
     pub helmor_session_id: Option<&'a str>,
     pub claude_base_url: Option<&'a str>,
     pub claude_auth_token: Option<&'a str>,
+    /// Image attachments to forward to the sidecar. Omitted from the
+    /// wire payload when empty.
+    pub images: &'a [String],
 }
 
 /// Build the `sendMessage` request params that the sidecar receives.
@@ -48,6 +51,11 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
                 "additionalDirectories".to_string(),
                 Value::from(additional_directories),
             );
+        }
+    }
+    if !input.images.is_empty() {
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("images".to_string(), Value::from(input.images.to_vec()));
         }
     }
     if let (Some(base_url), Some(auth_token)) = (input.claude_base_url, input.claude_auth_token) {

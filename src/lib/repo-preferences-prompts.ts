@@ -5,7 +5,6 @@ import {
 } from "@/lib/forge-dialect";
 
 const TARGET_REF_PLACEHOLDER = "$" + "{TARGET_REF}";
-const DIRTY_WORKTREE_PLACEHOLDER = "$" + "{DIRTY_WORKTREE}";
 
 export type RepoPreferenceKey =
 	| "createPr"
@@ -14,12 +13,17 @@ export type RepoPreferenceKey =
 	| "branchRename"
 	| "general";
 
+/** Which conflict path is being prompted. `mergeConflict` is the default
+ *  (target ↔ HEAD conflict). `stashPopConflict` fires only when Helmor
+ *  successfully merged but couldn't restore the user's stashed work cleanly. */
+export type ResolveConflictsKind = "mergeConflict" | "stashPopConflict";
+
 type ResolveRepoPreferencePromptArgs = {
 	key: RepoPreferenceKey;
 	repoPreferences?: RepoPreferences | null;
 	targetBranch?: string | null;
 	targetRef?: string | null;
-	dirtyWorktree?: boolean;
+	resolveConflictsKind?: ResolveConflictsKind;
 	forge?: ForgeDetection | null;
 	/** Git remote name for this workspace (e.g. "origin"). Falls back to
 	 *  "origin" when unknown — matches the default git produces for a
@@ -109,16 +113,16 @@ Do the following, in order:
 function resolveConflictsPrompt({
 	targetBranch,
 	targetRef,
-	dirtyWorktree,
+	resolveConflictsKind,
 	remote,
 }: Pick<
 	ResolveRepoPreferencePromptArgs,
-	"targetBranch" | "targetRef" | "dirtyWorktree" | "remote"
+	"targetBranch" | "targetRef" | "resolveConflictsKind" | "remote"
 >): string {
 	if (targetRef) {
-		return dirtyWorktree
-			? `Commit uncommitted changes, then merge ${targetRef} into this branch. Then push.`
-			: `Merge ${targetRef} into this branch. Then push.`;
+		return resolveConflictsKind === "stashPopConflict"
+			? `Resolve the conflicts from restoring the stashed uncommitted work in this branch. Don't commit. Don't push.`
+			: `Bring this branch up to date with ${targetRef}. Resolve any conflicts. Preserve any uncommitted work. Don't push.`;
 	}
 
 	const branch = requireTargetBranch("resolveConflicts", targetBranch);
@@ -219,7 +223,7 @@ export function resolveRepoPreferencePrompt({
 	repoPreferences,
 	targetBranch,
 	targetRef,
-	dirtyWorktree = false,
+	resolveConflictsKind = "mergeConflict",
 	forge,
 	remote,
 }: ResolveRepoPreferencePromptArgs): string {
@@ -227,12 +231,7 @@ export function resolveRepoPreferencePrompt({
 	const targetPlaceholderValue = targetRef ?? targetBranch ?? null;
 	const resolvedOverride =
 		key === "resolveConflicts" && targetPlaceholderValue && override
-			? override
-					.replaceAll(TARGET_REF_PLACEHOLDER, targetPlaceholderValue)
-					.replaceAll(
-						DIRTY_WORKTREE_PLACEHOLDER,
-						dirtyWorktree ? "true" : "false",
-					)
+			? override.replaceAll(TARGET_REF_PLACEHOLDER, targetPlaceholderValue)
 			: override;
 
 	switch (key) {
@@ -241,7 +240,7 @@ export function resolveRepoPreferencePrompt({
 				resolveConflictsPrompt({
 					targetBranch,
 					targetRef,
-					dirtyWorktree,
+					resolveConflictsKind,
 					remote,
 				}),
 				resolvedOverride,

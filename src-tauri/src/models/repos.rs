@@ -22,8 +22,16 @@ pub struct RepositoryCreateOption {
     pub remote: Option<String>,
     pub remote_url: Option<String>,
     pub default_branch: Option<String>,
+    /// Per-repo branch prefix mode. Serialized as the lowercase enum
+    /// variant ("username" / "custom" / "none"). NULL is treated as
+    /// `Username` by the resolver, matching the explicit default.
+    pub branch_prefix_type: Option<crate::settings::BranchPrefixType>,
     pub branch_prefix_custom: Option<String>,
     pub forge_provider: Option<String>,
+    /// gh/glab account login bound to this repo. NULL when no logged-in
+    /// account had access at add-repo time; UI surfaces a "Connect"
+    /// affordance.
+    pub forge_login: Option<String>,
     pub repo_icon_src: Option<String>,
     pub repo_initials: String,
 }
@@ -74,6 +82,11 @@ pub(crate) struct RepositoryRecord {
     /// re-runs detection on demand in that case.
     #[allow(dead_code)]
     pub forge_provider: Option<String>,
+    /// gh/glab account login bound to this repo. NULL when no logged-in
+    /// account had access (auto-detect failed) or the repo predates the
+    /// feature. See `crate::forge::accounts`.
+    #[allow(dead_code)]
+    pub forge_login: Option<String>,
 }
 
 pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>> {
@@ -89,6 +102,8 @@ pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>> {
               remote,
               remote_url,
               forge_provider,
+              forge_login,
+              branch_prefix_type,
               branch_prefix_custom
             FROM repos
             WHERE COALESCE(hidden, 0) = 0
@@ -99,10 +114,16 @@ pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>> {
 
     let rows = statement
         .query_map([], |row| {
+            use std::str::FromStr;
             let name: String = row.get(1)?;
             let root_path: Option<String> = row.get(3)?;
             let initials = helpers::repo_initials_for_name(&name);
             let icon_src = helpers::repo_icon_src_for_root_path(root_path.as_deref());
+            // Storage-string → enum (silently drops unrecognised values).
+            let branch_prefix_type_raw: Option<String> = row.get(8)?;
+            let branch_prefix_type = branch_prefix_type_raw
+                .as_deref()
+                .and_then(|value| crate::settings::BranchPrefixType::from_str(value).ok());
 
             Ok(RepositoryCreateOption {
                 id: row.get(0)?,
@@ -110,7 +131,9 @@ pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>> {
                 remote: row.get(4)?,
                 remote_url: row.get(5)?,
                 forge_provider: row.get(6)?,
-                branch_prefix_custom: row.get(7)?,
+                forge_login: row.get(7)?,
+                branch_prefix_type,
+                branch_prefix_custom: row.get(9)?,
                 default_branch: row.get(2)?,
                 repo_icon_src: icon_src,
                 repo_initials: initials,
@@ -127,7 +150,7 @@ pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRe
     let mut statement = connection
         .prepare(
             r#"
-            SELECT id, name, remote, default_branch, root_path, setup_script, run_script, auto_run_setup, forge_provider
+            SELECT id, name, remote, default_branch, root_path, setup_script, run_script, auto_run_setup, forge_provider, forge_login
             FROM repos
             WHERE id = ?1
             "#,
@@ -146,6 +169,7 @@ pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRe
                 run_script: row.get(6)?,
                 auto_run_setup: row.get::<_, Option<i64>>(7)?.unwrap_or(1) != 0,
                 forge_provider: row.get(8)?,
+                forge_login: row.get(9)?,
             })
         })
         .with_context(|| format!("Failed to query repository {repo_id}"))?;
@@ -197,7 +221,7 @@ fn query_repository_by_root_path(
     let mut statement = connection
         .prepare(
             r#"
-            SELECT id, name, remote, default_branch, root_path, setup_script, run_script, auto_run_setup, forge_provider
+            SELECT id, name, remote, default_branch, root_path, setup_script, run_script, auto_run_setup, forge_provider, forge_login
             FROM repos
             WHERE root_path = ?1
             ORDER BY created_at ASC
@@ -218,6 +242,7 @@ fn query_repository_by_root_path(
                 run_script: row.get(6)?,
                 auto_run_setup: row.get::<_, Option<i64>>(7)?.unwrap_or(1) != 0,
                 forge_provider: row.get(8)?,
+                forge_login: row.get(9)?,
             })
         })
         .with_context(|| format!("Failed to query repository row for {root_path}"))?;
@@ -238,7 +263,7 @@ fn query_repository_candidates_by_name(
     let mut statement = connection
         .prepare(
             r#"
-            SELECT id, name, remote, default_branch, root_path, setup_script, run_script, auto_run_setup, forge_provider
+            SELECT id, name, remote, default_branch, root_path, setup_script, run_script, auto_run_setup, forge_provider, forge_login
             FROM repos
             WHERE name = ?1 OR root_path LIKE ?2
             ORDER BY created_at ASC
@@ -260,6 +285,7 @@ fn query_repository_candidates_by_name(
                 run_script: row.get(6)?,
                 auto_run_setup: row.get::<_, Option<i64>>(7)?.unwrap_or(1) != 0,
                 forge_provider: row.get(8)?,
+                forge_login: row.get(9)?,
             })
         })
         .with_context(|| format!("Failed to query repository candidates for {repository_name}"))?;
@@ -418,6 +444,89 @@ pub fn update_repository_forge_provider(repo_id: &str, provider: &str) -> Result
     Ok(())
 }
 
+/// IDs of repos that look like a forge repo (provider is github/gitlab)
+/// but haven't been bound to an account yet. Drives the startup backfill
+/// in `forge::accounts::backfill_unbound_repos` and the post-login retry
+/// triggered after Settings → Account adds a fresh CLI login.
+pub fn list_repos_needing_forge_binding() -> Result<Vec<String>> {
+    let connection = db::read_conn()?;
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT id
+            FROM repos
+            WHERE forge_login IS NULL
+              AND forge_provider IN ('github', 'gitlab')
+              AND COALESCE(hidden, 0) = 0
+            ORDER BY created_at ASC
+            "#,
+        )
+        .context("Failed to prepare list_repos_needing_forge_binding query")?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .context("Failed to query repos needing forge binding")?
+        .collect::<rusqlite::Result<Vec<String>>>()
+        .context("Failed to collect repo ids needing forge binding")?;
+    Ok(ids)
+}
+
+/// Snapshot of a forge-bound repo: id + provider + bound login. Used by
+/// the backfill sweep to detect bindings that have gone stale (login
+/// no longer present in `gh / glab auth status`) and re-run auto-bind
+/// against whatever fresh logins do exist.
+#[derive(Debug, Clone)]
+pub struct ForgeBoundRepo {
+    pub id: String,
+    pub provider: String,
+    pub login: String,
+}
+
+/// Repos with a non-NULL `forge_login` and a known forge provider.
+/// Companion to [`list_repos_needing_forge_binding`] for the second
+/// pass of the backfill — a binding can rot if the user runs
+/// `gh auth logout octocat` outside of Helmor; this query surfaces
+/// those rows so the sweep can re-evaluate them.
+pub fn list_forge_bound_repos() -> Result<Vec<ForgeBoundRepo>> {
+    let connection = db::read_conn()?;
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT id, forge_provider, forge_login
+            FROM repos
+            WHERE forge_login IS NOT NULL
+              AND forge_provider IN ('github', 'gitlab')
+              AND COALESCE(hidden, 0) = 0
+            ORDER BY created_at ASC
+            "#,
+        )
+        .context("Failed to prepare list_forge_bound_repos query")?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(ForgeBoundRepo {
+                id: row.get(0)?,
+                provider: row.get(1)?,
+                login: row.get(2)?,
+            })
+        })
+        .context("Failed to query forge-bound repos")?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("Failed to collect forge-bound repo rows")?;
+    Ok(rows)
+}
+
+/// Bind / unbind the gh/glab account login for a repo. Pass `None` to
+/// clear the binding (e.g. when auto-detect found no account with access).
+pub fn update_repository_forge_login(repo_id: &str, login: Option<&str>) -> Result<()> {
+    let connection = db::write_conn()?;
+    connection
+        .execute(
+            "UPDATE repos SET forge_login = ?1, updated_at = datetime('now') WHERE id = ?2",
+            rusqlite::params![login, repo_id],
+        )
+        .with_context(|| format!("Failed to update forge_login for {repo_id}"))?;
+    Ok(())
+}
+
 pub fn update_repository_default_branch(repo_id: &str, default_branch: &str) -> Result<()> {
     let connection = db::write_conn()?;
     let updated = connection
@@ -437,65 +546,63 @@ pub fn update_repository_default_branch(repo_id: &str, default_branch: &str) -> 
 pub fn load_repo_branch_prefix_settings(
     repo_id: &str,
 ) -> Result<crate::settings::EffectiveBranchPrefixSettings> {
+    use std::str::FromStr;
+
     let connection = db::read_conn()?;
     let mut statement = connection
-        .prepare("SELECT branch_prefix_custom, forge_provider, remote_url FROM repos WHERE id = ?1")
+        .prepare(
+            "SELECT branch_prefix_type, branch_prefix_custom, forge_provider, remote_url, forge_login \
+             FROM repos WHERE id = ?1",
+        )
         .with_context(|| format!("Failed to prepare branch prefix lookup for {repo_id}"))?;
 
-    let repo_settings: crate::settings::EffectiveBranchPrefixSettings = statement
+    statement
         .query_row([repo_id], |row| {
+            // Parse the storage string into the enum here so the rest of
+            // the codebase only ever sees the typed form. Unknown /
+            // legacy values land as `None` and the resolver falls back
+            // to the default.
+            let prefix_type_raw: Option<String> = row.get(0)?;
+            let prefix_type = prefix_type_raw
+                .as_deref()
+                .and_then(|value| crate::settings::BranchPrefixType::from_str(value).ok());
             Ok(crate::settings::EffectiveBranchPrefixSettings {
-                branch_prefix_type: None,
-                branch_prefix_custom: row.get(0)?,
-                forge_provider: row.get(1)?,
-                remote_url: row.get(2)?,
+                branch_prefix_type: prefix_type,
+                branch_prefix_custom: row.get(1)?,
+                forge_provider: row.get(2)?,
+                remote_url: row.get(3)?,
+                forge_login: row.get(4)?,
             })
         })
-        .with_context(|| format!("Repository not found: {repo_id}"))?;
-
-    let custom_override = repo_settings
-        .branch_prefix_custom
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-
-    if let Some(custom) = custom_override {
-        return Ok(crate::settings::EffectiveBranchPrefixSettings {
-            branch_prefix_type: Some("custom".to_string()),
-            branch_prefix_custom: Some(custom.to_string()),
-            forge_provider: repo_settings.forge_provider,
-            remote_url: repo_settings.remote_url,
-        });
-    }
-
-    let fallback = crate::settings::load_branch_prefix_settings().unwrap_or(
-        crate::settings::BranchPrefixSettings {
-            branch_prefix_type: None,
-            branch_prefix_custom: None,
-        },
-    );
-
-    Ok(crate::settings::EffectiveBranchPrefixSettings {
-        branch_prefix_type: fallback.branch_prefix_type,
-        branch_prefix_custom: fallback.branch_prefix_custom,
-        forge_provider: repo_settings.forge_provider,
-        remote_url: repo_settings.remote_url,
-    })
+        .with_context(|| format!("Repository not found: {repo_id}"))
 }
 
+/// Persist a repo's branch-prefix preferences. The enum guarantees only
+/// `Username` / `Custom` / `None` reach storage. When `prefix_type` is
+/// anything other than `Custom`, `prefix_custom` is cleared so the
+/// column doesn't keep stale data.
 pub fn update_repository_branch_prefix(
     repo_id: &str,
-    branch_prefix_custom: Option<&str>,
+    prefix_type: Option<crate::settings::BranchPrefixType>,
+    prefix_custom: Option<&str>,
 ) -> Result<()> {
-    let branch_prefix_custom = branch_prefix_custom
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+    use crate::settings::BranchPrefixType;
+
+    let stored_type = prefix_type.map(|t| t.as_storage_str());
+    let stored_custom = if prefix_type == Some(BranchPrefixType::Custom) {
+        prefix_custom
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    } else {
+        None
+    };
 
     let connection = db::write_conn()?;
     let updated = connection
         .execute(
-            "UPDATE repos SET branch_prefix_custom = ?1, updated_at = datetime('now') WHERE id = ?2",
-            rusqlite::params![branch_prefix_custom, repo_id],
+            "UPDATE repos SET branch_prefix_type = ?1, branch_prefix_custom = ?2, \
+             updated_at = datetime('now') WHERE id = ?3",
+            rusqlite::params![stored_type, stored_custom, repo_id],
         )
         .with_context(|| format!("Failed to update branch prefix for {repo_id}"))?;
 
@@ -964,6 +1071,35 @@ pub fn add_repository_from_local_path(folder_path: &str) -> Result<AddRepository
 
     let repository_id = insert_repository(&resolved_repository)
         .with_context(|| format!("Failed to persist repository {}", resolved_repository.name))?;
+
+    // Auto-bind a gh/glab account to the repo. Best-effort — failures
+    // (no CLI installed, no auth, no candidate with access) leave
+    // forge_login NULL and the UI prompts the user to Connect when
+    // needed. Don't propagate the error: a working bind is a nice-to-
+    // have, not a precondition for the repo existing in the database.
+    match crate::forge::accounts::auto_bind_repo_account(&repository_id) {
+        Ok(Some(login)) => {
+            tracing::debug!(
+                repo_id = %repository_id,
+                login = %login,
+                "Auto-bound forge account on repo creation"
+            );
+        }
+        Ok(None) => {
+            tracing::debug!(
+                repo_id = %repository_id,
+                "No forge account auto-bound; user must Connect"
+            );
+        }
+        Err(error) => {
+            tracing::warn!(
+                repo_id = %repository_id,
+                error = %format!("{error:#}"),
+                "Forge auto-bind failed during repo creation"
+            );
+        }
+    }
+
     let create_result = crate::workspaces::create_workspace_from_repo_impl(&repository_id);
 
     match create_result {
@@ -1198,8 +1334,6 @@ mod tests {
     #[test]
     fn repository_branch_prefix_round_trips() {
         let env = crate::testkit::TestEnv::new("repos-branch-prefix");
-        crate::settings::upsert_setting_value("branch_prefix_type", "custom").unwrap();
-        crate::settings::upsert_setting_value("branch_prefix_custom", "team/").unwrap();
 
         let repo = ResolvedRepositoryInput {
             name: "prefix-repo".to_string(),
@@ -1210,29 +1344,49 @@ mod tests {
             forge_provider: Some("github".to_string()),
         };
 
+        use crate::settings::BranchPrefixType;
+
+        // Fresh row defaults to "no per-repo override". Resolver treats
+        // a None type as Username, so legacy rows keep the old behavior.
         let repo_id = insert_repository(&repo).unwrap();
         let loaded = load_repo_branch_prefix_settings(&repo_id).unwrap();
-        assert_eq!(loaded.branch_prefix_type.as_deref(), Some("custom"));
-        assert_eq!(loaded.branch_prefix_custom.as_deref(), Some("team/"));
+        assert_eq!(loaded.branch_prefix_type, None);
+        assert_eq!(loaded.branch_prefix_custom, None);
 
-        let listed = list_repositories().unwrap();
-        let listed_repo = listed.iter().find(|repo| repo.id == repo_id).unwrap();
-        assert_eq!(listed_repo.branch_prefix_custom.as_deref(), None);
-
-        update_repository_branch_prefix(&repo_id, Some("repo/")).unwrap();
-
+        // Setting Custom persists both type and custom string.
+        update_repository_branch_prefix(&repo_id, Some(BranchPrefixType::Custom), Some("repo/"))
+            .unwrap();
         let updated = load_repo_branch_prefix_settings(&repo_id).unwrap();
-        assert_eq!(updated.branch_prefix_type.as_deref(), Some("custom"));
+        assert_eq!(updated.branch_prefix_type, Some(BranchPrefixType::Custom));
         assert_eq!(updated.branch_prefix_custom.as_deref(), Some("repo/"));
-
         let listed = list_repositories().unwrap();
-        let listed_repo = listed.iter().find(|repo| repo.id == repo_id).unwrap();
+        let listed_repo = listed.iter().find(|r| r.id == repo_id).unwrap();
+        assert_eq!(
+            listed_repo.branch_prefix_type,
+            Some(BranchPrefixType::Custom),
+        );
         assert_eq!(listed_repo.branch_prefix_custom.as_deref(), Some("repo/"));
 
-        update_repository_branch_prefix(&repo_id, None).unwrap();
+        // Switching back to Username clears the now-stale custom string.
+        update_repository_branch_prefix(&repo_id, Some(BranchPrefixType::Username), None).unwrap();
+        let username = load_repo_branch_prefix_settings(&repo_id).unwrap();
+        assert_eq!(
+            username.branch_prefix_type,
+            Some(BranchPrefixType::Username)
+        );
+        assert_eq!(username.branch_prefix_custom, None);
 
-        let reset = load_repo_branch_prefix_settings(&repo_id).unwrap();
-        assert_eq!(reset.branch_prefix_type.as_deref(), Some("custom"));
-        assert_eq!(reset.branch_prefix_custom.as_deref(), Some("team/"));
+        // None also clears the custom column.
+        update_repository_branch_prefix(&repo_id, Some(BranchPrefixType::None), Some("ignored"))
+            .unwrap();
+        let none = load_repo_branch_prefix_settings(&repo_id).unwrap();
+        assert_eq!(none.branch_prefix_type, Some(BranchPrefixType::None));
+        assert_eq!(none.branch_prefix_custom, None);
+
+        // Passing None as the type clears the column entirely.
+        update_repository_branch_prefix(&repo_id, None, Some("garbage/")).unwrap();
+        let cleared = load_repo_branch_prefix_settings(&repo_id).unwrap();
+        assert_eq!(cleared.branch_prefix_type, None);
+        assert_eq!(cleared.branch_prefix_custom, None);
     }
 }

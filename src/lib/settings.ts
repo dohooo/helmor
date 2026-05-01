@@ -20,8 +20,6 @@ export type ClaudeCustomProviderSettings = {
 
 export type AppSettings = {
 	fontSize: number;
-	branchPrefixType: "github" | "custom" | "none";
-	branchPrefixCustom: string;
 	theme: ThemeMode;
 	notifications: boolean;
 	lastWorkspaceId: string | null;
@@ -51,8 +49,6 @@ export const CONTEXT_USAGE_AUTO_REVEAL_THRESHOLD = 70;
 
 export const DEFAULT_SETTINGS: AppSettings = {
 	fontSize: 14,
-	branchPrefixType: "github",
-	branchPrefixCustom: "",
 	theme: "system",
 	notifications: true,
 	lastWorkspaceId: null,
@@ -79,8 +75,6 @@ export const THEME_STORAGE_KEY = "helmor-theme";
 // theme is stored in localStorage (sync read for flash-free boot), not SQLite
 const SETTINGS_KEY_MAP: Record<Exclude<keyof AppSettings, "theme">, string> = {
 	fontSize: "app.font_size",
-	branchPrefixType: "branch_prefix_type",
-	branchPrefixCustom: "branch_prefix_custom",
 	notifications: "app.notifications",
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
@@ -151,14 +145,6 @@ export async function loadSettings(): Promise<AppSettings> {
 			fontSize: raw[SETTINGS_KEY_MAP.fontSize]
 				? Number(raw[SETTINGS_KEY_MAP.fontSize])
 				: DEFAULT_SETTINGS.fontSize,
-			branchPrefixType:
-				(raw[
-					SETTINGS_KEY_MAP.branchPrefixType
-				] as AppSettings["branchPrefixType"]) ??
-				DEFAULT_SETTINGS.branchPrefixType,
-			branchPrefixCustom:
-				raw[SETTINGS_KEY_MAP.branchPrefixCustom] ??
-				DEFAULT_SETTINGS.branchPrefixCustom,
 			theme:
 				(localStorage.getItem(THEME_STORAGE_KEY) as AppSettings["theme"]) ??
 				DEFAULT_SETTINGS.theme,

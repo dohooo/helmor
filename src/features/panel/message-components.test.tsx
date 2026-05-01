@@ -403,3 +403,59 @@ describe("MemoConversationMessage plan review", () => {
 		expect(screen.queryByText("Old thinking content.")).toBeNull();
 	});
 });
+
+describe("ChatUserMessage with spaces in attachment paths", () => {
+	it("renders a raw `@<path with spaces>` text segment verbatim", () => {
+		const message: ThreadMessageLike = {
+			id: "user-raw-1",
+			role: "user",
+			createdAt: "2026-04-29T08:24:35.000Z",
+			content: [
+				{
+					type: "text",
+					id: "user-raw-1:txt:0",
+					text: "Clicking on pull @/Users/me/Library/Application Support/foo.jpg queues",
+				},
+			],
+		};
+
+		render(
+			<MemoConversationMessage
+				message={message}
+				sessionId="session-1"
+				itemIndex={0}
+			/>,
+		);
+
+		// A whitespace-truncating regex would chip-render "Application".
+		expect(screen.queryByText("Application")).toBeNull();
+		expect(screen.getByText(/Clicking on pull/)).toBeInTheDocument();
+	});
+
+	it("renders an image badge with its full filename for an image-extension mention", () => {
+		const path =
+			"/Users/me/Library/Application Support/CleanShot/CleanShot 2026-04-29 at 08.24.35@2x.jpg";
+		const message: ThreadMessageLike = {
+			id: "user-image-1",
+			role: "user",
+			createdAt: "2026-04-29T08:24:35.000Z",
+			content: [
+				{ type: "text", id: "user-image-1:txt:0", text: "look " },
+				{ type: "file-mention", id: "user-image-1:mention:0", path },
+			],
+		};
+
+		render(
+			<MemoConversationMessage
+				message={message}
+				sessionId="session-1"
+				itemIndex={0}
+			/>,
+		);
+
+		expect(
+			screen.getAllByText(/CleanShot 2026-04-29 at 08\.24\.35@2x\.jpg/),
+		).toHaveLength(1);
+		expect(screen.queryByText(/Support\/CleanShot\/CleanShot/)).toBeNull();
+	});
+});
