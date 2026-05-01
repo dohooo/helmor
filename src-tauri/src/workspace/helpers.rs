@@ -594,10 +594,11 @@ fn remote_url_looks_like_gitlab(settings: &crate::settings::EffectiveBranchPrefi
         .is_some_and(|remote| remote.host.contains("gitlab"))
 }
 
-/// Fallback for legacy repo rows that predate `forge_login`: probe the
-/// glab login set on this host directly. Returns `None` if no glab
-/// account is configured for the host (caller's branch prefix
-/// degrades to "no prefix").
+/// Legacy fallback for repo rows that predate `forge_login`: probe
+/// glab directly. Transient `list_logins` failures collapse to
+/// `Ok(None)` so the branch-prefix path degrades to "no prefix"
+/// rather than bubbling — caller already treats `Err` and `Ok(None)`
+/// the same way (`if let Ok(Some(...))`).
 fn resolve_gitlab_login(
     settings: &crate::settings::EffectiveBranchPrefixSettings,
 ) -> Result<Option<String>> {
@@ -611,8 +612,10 @@ fn resolve_gitlab_login(
     let Some(backend) = forge::accounts::backend_for(ForgeProvider::Gitlab) else {
         return Ok(None);
     };
-    let logins = backend.list_logins(&host)?;
-    Ok(logins.into_iter().next())
+    Ok(backend
+        .list_logins(&host)
+        .ok()
+        .and_then(|logins| logins.into_iter().next()))
 }
 
 pub fn allocate_directory_name_for_repo(repo_id: &str) -> Result<String> {

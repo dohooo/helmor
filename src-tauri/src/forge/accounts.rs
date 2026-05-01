@@ -33,6 +33,22 @@ pub struct ForgeAccount {
     pub active: bool,
 }
 
+/// Tristate auth probe result. `LoggedOut` only when we definitively
+/// read the CLI account store and the entry is absent; everything else
+/// (process error, transient state, parse failure) is `Indeterminate`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuthCheck {
+    LoggedIn,
+    LoggedOut,
+    Indeterminate,
+}
+
+impl AuthCheck {
+    pub(crate) fn is_definitely_logged_out(self) -> bool {
+        matches!(self, AuthCheck::LoggedOut)
+    }
+}
+
 /// Provider-agnostic account operations. Each method may interpret
 /// `host` / `login` slightly differently — GitLab ignores `login` since
 /// it has at most one account per host, while GitHub uses `(host,
@@ -46,6 +62,11 @@ pub(crate) trait ForgeAccountBackend: Sync {
     /// Login names for `host`. Used by auto-bind to iterate candidates
     /// without paying the per-account profile fetch.
     fn list_logins(&self, host: &str) -> Result<Vec<String>>;
+
+    /// Single source of truth for "is `(host, login)` still in the CLI
+    /// account store?". Implementations must surface transient CLI
+    /// failures as `Indeterminate`, never `LoggedOut`.
+    fn check_auth(&self, host: &str, login: &str) -> AuthCheck;
 
     /// 200 → `Ok(true)`, 404 / auth-rejected → `Ok(false)`, anything
     /// else → `Err`.
@@ -259,64 +280,9 @@ pub struct BackfillSummary {
     pub bound: usize,
 }
 
-/// Phase-2 cache value: keep the success / failure distinction so a
-/// `list_logins` failure can't be misread as "no accounts on this
-/// host". `anyhow::Error` isn't `Clone`, so we drop the message after
-/// logging once — the cache only needs to remember "we tried, it
-/// didn't work, don't clobber".
-enum CachedLogins {
-    Ok(Vec<String>),
-    Failed,
-}
-
-/// What phase 2 should do with one stale-binding candidate, given
-/// the cached `list_logins` result for its host. Pulled out as an
-/// enum + pure helper so the regression-prone branch can be unit
-/// tested without standing up a fake `ForgeAccountBackend`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StaleBindingAction {
-    /// `list_logins` failed — leave the binding alone.
-    Skip,
-    /// Bound login still authenticated; binding is healthy.
-    Keep,
-    /// Bound login no longer authenticated; clear and re-bind.
-    ClearAndRebind,
-}
-
-fn classify_stale_binding(bound_login: &str, cached: &CachedLogins) -> StaleBindingAction {
-    match cached {
-        CachedLogins::Failed => StaleBindingAction::Skip,
-        CachedLogins::Ok(logins) => {
-            if logins.iter().any(|login| login == bound_login) {
-                StaleBindingAction::Keep
-            } else {
-                StaleBindingAction::ClearAndRebind
-            }
-        }
-    }
-}
-
-/// Re-run [`auto_bind_repo_account`] for every repo whose binding is
-/// either missing or stale. Two phases:
-///
-///   1. **Unbound** (`forge_login IS NULL`) — covers fresh imports
-///      from before the multi-account migration plus any post-login
-///      retries triggered when the user adds a new gh / glab account.
-///   2. **Stale** (`forge_login` set but the login is no longer in
-///      `gh / glab auth status`) — covers the user running
-///      `gh auth logout <login>` outside of Helmor. Without this
-///      pass, the inspector would keep showing "Unauthenticated" for
-///      that repo until the user manually re-bound it via Settings →
-///      Repository, even though a different logged-in account might
-///      already have access.
-///
-/// Per-host `list_logins` results are cached across phase 2 so the
-/// sweep makes one CLI call per host instead of one per stale repo.
-///
-/// Errors on individual repos are swallowed (logged at warn) so one
-/// bad row doesn't break the rest of the sweep. Returns the totals
-/// so the caller can publish a single `RepositoryListChanged` if
-/// anything actually changed.
+/// Two phases: bind repos with NULL `forge_login`, then re-bind ones
+/// whose stored login `check_auth` reports definitively gone.
+/// Per-row errors are swallowed (logged at warn).
 pub fn backfill_unbound_repos() -> Result<BackfillSummary> {
     let unbound = repos::list_repos_needing_forge_binding()
         .context("Failed to list repos needing forge binding")?;
@@ -354,18 +320,8 @@ pub fn backfill_unbound_repos() -> Result<BackfillSummary> {
         }
     }
 
-    // Phase 2: stale bindings. Group by (provider, host) so we issue
-    // one `list_logins` per host even with many repos pointing at it.
-    //
-    // CRITICAL: `list_logins` failure is NOT the same as
-    // "no accounts on this host". A network blip / `gh auth status`
-    // timeout / Keychain unlock delay during boot must not collapse
-    // into an empty Vec — that would let the loop below treat every
-    // bound repo as stale and clear all GitHub bindings on disk.
-    // Cache the `CachedLogins` enum so a single failure is logged
-    // once per host instead of N times for N repos.
-    use std::collections::HashMap;
-    let mut logins_by_host: HashMap<(ForgeProvider, String), CachedLogins> = HashMap::new();
+    // Phase 2: stale bindings. Backend `check_auth` shares the
+    // per-process logins cache (2s TTL) so repeated calls dedupe.
     for entry in &stale {
         let Some(record) = repos::load_repository_by_id(&entry.id).ok().flatten() else {
             continue;
@@ -376,46 +332,18 @@ pub fn backfill_unbound_repos() -> Result<BackfillSummary> {
         ) else {
             continue;
         };
-        let cache_key = (target.provider, target.host.clone());
-        let cached = logins_by_host.entry(cache_key).or_insert_with(|| {
-            match backend_for(target.provider) {
-                Some(backend) => match backend.list_logins(&target.host) {
-                    Ok(logins) => CachedLogins::Ok(logins),
-                    Err(error) => {
-                        tracing::warn!(
-                            provider = target.provider.as_storage_str(),
-                            host = %target.host,
-                            error = %format!("{error:#}"),
-                            "Backfill phase 2: list_logins failed; preserving existing bindings on this host"
-                        );
-                        CachedLogins::Failed
-                    }
-                },
-                None => CachedLogins::Ok(Vec::new()),
-            }
-        });
-        match classify_stale_binding(&entry.login, cached) {
-            StaleBindingAction::Skip => {
-                // Conservative: a transient `list_logins` failure
-                // shouldn't silently clobber the user's binding.
-                // Same defensive instinct as the `repo_accessible`
-                // skip elsewhere — one-time hiccups don't get to
-                // mutate ground truth.
-                continue;
-            }
-            StaleBindingAction::Keep => {
-                // Bound login is still authenticated — leave it
-                // alone. We deliberately don't re-probe
-                // `repo_accessible`; a one-time perms hiccup
-                // shouldn't silently steal the binding from one
-                // signed-in account to another.
-                continue;
-            }
-            StaleBindingAction::ClearAndRebind => {
-                // Fall through to the clear + re-bind block below.
-            }
+        let Some(backend) = backend_for(target.provider) else {
+            continue;
+        };
+        if !backend
+            .check_auth(&target.host, &entry.login)
+            .is_definitely_logged_out()
+        {
+            // LoggedIn or Indeterminate — preserve the binding.
+            continue;
         }
-        // The bound login is gone from the CLI. Clear and re-bind.
+        // The bound login is definitively gone from the CLI. Clear
+        // and re-bind.
         if let Err(error) = repos::update_repository_forge_login(&entry.id, None) {
             tracing::warn!(
                 repo_id = %entry.id,
@@ -515,42 +443,15 @@ mod tests {
         assert!(forge_target_from(None, Some("git@github.com:x/y.git")).is_none());
     }
 
-    // Regression coverage for the phase-2 bug where a transient
-    // `list_logins` failure (network blip, glab process killed, slow
-    // bundled binary on first launch) would clobber every binding on
-    // the host. `Failed` must always map to `Skip`.
+    // Stale-binding judgement now lives inside each backend's
+    // `check_auth`; see `forge::github::accounts::tests` and
+    // `forge::gitlab::accounts::tests` for the per-state coverage.
+    // The Phase-2 loop here just consumes the boolean
+    // `is_definitely_logged_out()`.
     #[test]
-    fn classify_stale_binding_skips_when_list_logins_failed() {
-        assert_eq!(
-            classify_stale_binding("octocat", &CachedLogins::Failed),
-            StaleBindingAction::Skip,
-        );
-    }
-
-    #[test]
-    fn classify_stale_binding_keeps_when_login_still_authenticated() {
-        let logins = CachedLogins::Ok(vec!["octocat".to_string(), "hubot".to_string()]);
-        assert_eq!(
-            classify_stale_binding("octocat", &logins),
-            StaleBindingAction::Keep,
-        );
-    }
-
-    #[test]
-    fn classify_stale_binding_clears_when_login_absent() {
-        let logins = CachedLogins::Ok(vec!["hubot".to_string()]);
-        assert_eq!(
-            classify_stale_binding("octocat", &logins),
-            StaleBindingAction::ClearAndRebind,
-        );
-    }
-
-    #[test]
-    fn classify_stale_binding_clears_when_no_one_is_signed_in() {
-        let logins = CachedLogins::Ok(Vec::new());
-        assert_eq!(
-            classify_stale_binding("octocat", &logins),
-            StaleBindingAction::ClearAndRebind,
-        );
+    fn auth_check_is_definitely_logged_out_only_for_logged_out() {
+        assert!(AuthCheck::LoggedOut.is_definitely_logged_out());
+        assert!(!AuthCheck::LoggedIn.is_definitely_logged_out());
+        assert!(!AuthCheck::Indeterminate.is_definitely_logged_out());
     }
 }

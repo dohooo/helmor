@@ -10,7 +10,7 @@
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
-use crate::forge::accounts::{ForgeAccount, ForgeAccountBackend};
+use crate::forge::accounts::{AuthCheck, ForgeAccount, ForgeAccountBackend};
 use crate::forge::command::{command_detail, run_command, CommandOutput};
 use crate::forge::types::ForgeProvider;
 
@@ -75,6 +75,10 @@ impl ForgeAccountBackend for GitlabAccountBackend {
         list_gitlab_logins(host)
     }
 
+    fn check_auth(&self, host: &str, login: &str) -> AuthCheck {
+        check_gitlab_auth(host, login)
+    }
+
     fn repo_accessible(&self, host: &str, _login: &str, owner: &str, name: &str) -> Result<bool> {
         gitlab_repo_accessible(host, owner, name)
     }
@@ -118,24 +122,19 @@ fn list_gitlab_logins(host: &str) -> Result<Vec<String>> {
     if let Some(cached) = logins_cache::get(host) {
         return Ok(cached);
     }
-    let auth_output = match run_command("glab", ["auth", "status", "--hostname", host]) {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(anyhow!(
-                "Failed to spawn `glab auth status --hostname {host}`: {error}"
-            ));
-        }
-    };
+    // glab missing must surface as `Err` (Indeterminate downstream),
+    // not `Ok(empty)` — the latter would let `check_gitlab_auth`
+    // judge every bound login as `LoggedOut` and clear bindings.
+    let auth_output =
+        run_command("glab", ["auth", "status", "--hostname", host]).map_err(|error| {
+            anyhow!("Failed to spawn `glab auth status --hostname {host}`: {error}")
+        })?;
     if !auth_output.success {
-        // Distinguish "not logged in on this host" (a real Ok-empty
-        // outcome) from a transient failure (network blip, glab
-        // crashing, etc). The latter must surface as `Err` so callers
-        // like `backfill_unbound_repos` phase 2 don't mistake a
-        // failed status check for "user logged out" and clobber
-        // existing bindings.
+        // Only `Ok(empty)` for unambiguous "no credentials" output;
+        // ambiguous failures (401/403/network) surface as `Err` →
+        // `Indeterminate` downstream.
         let signal = format!("{}\n{}", auth_output.stderr, auth_output.stdout);
-        if looks_like_auth_error(&signal) {
+        if looks_like_definitively_unauthenticated(&signal) {
             logins_cache::put(host, Vec::new());
             return Ok(Vec::new());
         }
@@ -163,6 +162,40 @@ fn list_gitlab_logins(host: &str) -> Result<Vec<String>> {
     };
     logins_cache::put(host, logins.clone());
     Ok(logins)
+}
+
+/// Tight subset of [`looks_like_auth_error`]: matches only patterns
+/// that mean "no credentials at all on this host", not transient
+/// 401/403/network failures.
+fn looks_like_definitively_unauthenticated(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("no token found")
+        || normalized.contains("not logged in")
+        || normalized.contains("not logged into")
+}
+
+/// Mirrors `check_github_auth`: any `list_gitlab_logins` failure
+/// degrades to `Indeterminate` so transient glab issues preserve
+/// the binding.
+fn check_gitlab_auth(host: &str, login: &str) -> AuthCheck {
+    match list_gitlab_logins(host) {
+        Ok(logins) => {
+            if logins.iter().any(|candidate| candidate == login) {
+                AuthCheck::LoggedIn
+            } else {
+                AuthCheck::LoggedOut
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                host = %host,
+                login = %login,
+                error = %format!("{error:#}"),
+                "glab auth probe failed; treating as Indeterminate"
+            );
+            AuthCheck::Indeterminate
+        }
+    }
 }
 
 /// Per-process rate limiter for `glab auth status` (per-host). Mirrors
@@ -578,6 +611,44 @@ mod tests {
     fn parse_glab_logged_in_pairs_empty_on_no_logins() {
         assert!(parse_glab_logged_in_pairs("").is_empty());
         assert!(parse_glab_logged_in_pairs("✗ Not logged in to any host").is_empty());
+    }
+
+    // ---------------- looks_like_definitively_unauthenticated ----------------
+    //
+    // The tighter check that gates `list_gitlab_logins`'s `Ok(empty)`
+    // branch. Anything not matched here surfaces as `Err` so the
+    // AuthCheck layer maps it to `Indeterminate` instead of clobbering
+    // the user's binding on a transient hiccup.
+
+    #[test]
+    fn definitive_unauth_matches_no_token_and_not_logged_in() {
+        assert!(looks_like_definitively_unauthenticated(
+            "! No token found (checked config file, keyring, and environment variables)."
+        ));
+        assert!(looks_like_definitively_unauthenticated(
+            "✗ Not logged in to gitlab.com"
+        ));
+        assert!(looks_like_definitively_unauthenticated(
+            "you are not logged into any GitLab hosts"
+        ));
+    }
+
+    #[test]
+    fn definitive_unauth_does_not_match_transient_failures() {
+        // The bug we're fixing: a 401 from the validation probe could
+        // be transient (server hiccup, rate limit, brief token-rotation
+        // window). Treating it as definitive logout is what flickered
+        // the inspector's Connect CTA and cleared bindings.
+        assert!(!looks_like_definitively_unauthenticated(
+            "API call failed: GET https://gitlab.example.com/api/v4/user: 401 {message: 401 Unauthorized}"
+        ));
+        assert!(!looks_like_definitively_unauthenticated(
+            "could not authenticate to one or more of the configured GitLab instances"
+        ));
+        assert!(!looks_like_definitively_unauthenticated(
+            "HTTP 403 Forbidden"
+        ));
+        assert!(!looks_like_definitively_unauthenticated("connection reset"));
     }
 
     // ---------------- parse_project_push_permission ----------------
