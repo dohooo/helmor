@@ -1,4 +1,4 @@
-import { ChevronDown, Plus, X } from "lucide-react";
+import { ChevronDown, Plus, X, ZoomIn, ZoomOut } from "lucide-react";
 import {
 	createContext,
 	useCallback,
@@ -9,6 +9,13 @@ import {
 } from "react";
 import { suspendTerminalFit } from "@/components/terminal-output";
 import { Button } from "@/components/ui/button";
+import {
+	ContextMenu,
+	ContextMenuContent,
+	ContextMenuItem,
+	ContextMenuSeparator,
+	ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
 	Tooltip,
 	TooltipContent,
@@ -115,6 +122,9 @@ type InspectorTabsSectionProps = {
 	onAddTerminal: () => void;
 	/** SIGTERM the shell and remove its tab. */
 	onCloseTerminal: (instanceId: string) => void;
+	/** Disable / enable the inspector's hover-to-zoom enlargement for a single
+	 * terminal. */
+	onToggleTerminalHoverZoom: (instanceId: string, disabled: boolean) => void;
 	/** False when there's no repo/workspace context — disables the "+" button. */
 	canSpawnTerminal: boolean;
 	/**
@@ -138,6 +148,7 @@ export function InspectorTabsSection({
 	terminalInstances,
 	onAddTerminal,
 	onCloseTerminal,
+	onToggleTerminalHoverZoom,
 	canSpawnTerminal,
 	canHoverExpand,
 	children,
@@ -460,6 +471,14 @@ export function InspectorTabsSection({
 				style={{
 					width: isHoverExpanded ? zoomedSize : "100%",
 					height: isHoverExpanded ? zoomedSize : "100%",
+					// Cap the zoomed box to a fraction of the viewport so a
+					// large inspector on a wide display (e.g. 27" fullscreen)
+					// doesn't grow past the window edges. The right/bottom
+					// anchors stay pinned, so capping just shortens the up/left
+					// extent. Resting size (100%) is well below the caps so it's
+					// unaffected.
+					maxWidth: "min(85vw, 1400px)",
+					maxHeight: "min(75vh, 900px)",
 					// `height` only transitions during hover-zoom; outside of
 					// zoom the toggle's web-animation drives wrapper height
 					// and inner must follow instantly.
@@ -605,53 +624,105 @@ export function InspectorTabsSection({
 											terminalInstances.length,
 										);
 										const isActive = activeTab === instance.id;
+										const isHoverZoomDisabled = instance.hoverZoomDisabled;
 										return (
-											<div
-												key={instance.id}
-												role="tab"
-												id={`inspector-tab-terminal-${instance.id}`}
-												aria-controls={`inspector-panel-terminal-${instance.id}`}
-												aria-selected={isActive}
-												tabIndex={isActive ? 0 : -1}
-												// Mirrors session-tab layout (no hover color, layout
-												// stable on mask toggle). `transform-gpu` keeps it
-												// on its own compositing layer.
-												className={cn(
-													"group/tab relative flex h-full min-w-[5rem] shrink-0 transform-gpu cursor-pointer items-center overflow-hidden px-3 text-[12px] font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-0",
-													isActive && "text-foreground",
-												)}
-												onClick={() => handleTabClick(instance.id)}
-												onKeyDown={(e) => {
-													if (e.key === "Enter" || e.key === " ") {
-														e.preventDefault();
-														handleTabClick(instance.id);
-													}
-												}}
-											>
-												<span className="terminal-tab-fade flex min-w-0 flex-1 items-center justify-center">
-													<span className="truncate">{label}</span>
-												</span>
-												<button
-													type="button"
-													aria-label={`Close ${label}`}
-													onClick={(e) => {
-														e.stopPropagation();
-														onCloseTerminal(instance.id);
-													}}
-													// Visibility-only toggle (no opacity transition) —
-													// matches session-tab + workspace-row patterns.
-													className="pointer-events-none invisible absolute inset-y-0 right-0 flex w-3 cursor-pointer items-center justify-center text-muted-foreground/70 hover:text-foreground group-hover/tab:pointer-events-auto group-hover/tab:visible focus-visible:pointer-events-auto focus-visible:visible"
-												>
-													<X className="size-3" strokeWidth={2} />
-												</button>
-												<span
-													aria-hidden="true"
-													className={cn(
-														"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
-														isActive && "opacity-100",
-													)}
-												/>
-											</div>
+											<ContextMenu key={instance.id}>
+												<ContextMenuTrigger asChild>
+													<div
+														role="tab"
+														id={`inspector-tab-terminal-${instance.id}`}
+														aria-controls={`inspector-panel-terminal-${instance.id}`}
+														aria-selected={isActive}
+														tabIndex={isActive ? 0 : -1}
+														// Mirrors session-tab layout (no hover color, layout
+														// stable on mask toggle). `transform-gpu` keeps it
+														// on its own compositing layer.
+														className={cn(
+															"group/tab relative flex h-full min-w-[5rem] shrink-0 transform-gpu cursor-pointer items-center overflow-hidden px-3 text-[12px] font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-0",
+															isActive && "text-foreground",
+														)}
+														onClick={() => handleTabClick(instance.id)}
+														onMouseDown={(e) => {
+															if (e.button === 1) {
+																// Middle-click closes the tab (matches
+																// browser tab UX). preventDefault stops
+																// the browser's autoscroll-anchor cursor.
+																e.preventDefault();
+																onCloseTerminal(instance.id);
+															}
+														}}
+														onKeyDown={(e) => {
+															if (e.key === "Enter" || e.key === " ") {
+																e.preventDefault();
+																handleTabClick(instance.id);
+															}
+														}}
+													>
+														<span className="terminal-tab-fade flex min-w-0 flex-1 items-center justify-center">
+															<span className="truncate">{label}</span>
+														</span>
+														<button
+															type="button"
+															aria-label={`Close ${label}`}
+															onClick={(e) => {
+																e.stopPropagation();
+																onCloseTerminal(instance.id);
+															}}
+															// Visibility-only toggle (no opacity transition) —
+															// matches session-tab + workspace-row patterns.
+															className="pointer-events-none invisible absolute inset-y-0 right-0 flex w-3 cursor-pointer items-center justify-center text-muted-foreground/70 hover:text-foreground group-hover/tab:pointer-events-auto group-hover/tab:visible focus-visible:pointer-events-auto focus-visible:visible"
+														>
+															<X className="size-3" strokeWidth={2} />
+														</button>
+														<span
+															aria-hidden="true"
+															className={cn(
+																"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+																isActive && "opacity-100",
+															)}
+														/>
+													</div>
+												</ContextMenuTrigger>
+												<ContextMenuContent className="min-w-44 rounded-xl p-1.5">
+													<ContextMenuItem
+														onClick={() =>
+															onToggleTerminalHoverZoom(
+																instance.id,
+																!isHoverZoomDisabled,
+															)
+														}
+														className="gap-2.5 rounded-md px-2.5 py-1.5 text-[13px]"
+													>
+														{isHoverZoomDisabled ? (
+															<ZoomIn
+																className="size-3.5 shrink-0"
+																strokeWidth={1.6}
+															/>
+														) : (
+															<ZoomOut
+																className="size-3.5 shrink-0"
+																strokeWidth={1.6}
+															/>
+														)}
+														<span>
+															{isHoverZoomDisabled
+																? "Enable hover zoom"
+																: "Disable hover zoom"}
+														</span>
+													</ContextMenuItem>
+													<ContextMenuSeparator />
+													<ContextMenuItem
+														onClick={() => onCloseTerminal(instance.id)}
+														className="gap-2.5 rounded-md px-2.5 py-1.5 text-[13px]"
+													>
+														<X
+															className="size-3.5 shrink-0"
+															strokeWidth={1.6}
+														/>
+														<span>Close terminal</span>
+													</ContextMenuItem>
+												</ContextMenuContent>
+											</ContextMenu>
 										);
 									})
 								)}

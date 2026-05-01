@@ -30,6 +30,7 @@ describe("InspectorTabsSection", () => {
 				terminalInstances={[]}
 				onAddTerminal={vi.fn()}
 				onCloseTerminal={vi.fn()}
+				onToggleTerminalHoverZoom={vi.fn()}
 				canSpawnTerminal={false}
 				canHoverExpand
 			>
@@ -75,6 +76,7 @@ describe("InspectorTabsSection", () => {
 				terminalInstances={[]}
 				onAddTerminal={vi.fn()}
 				onCloseTerminal={vi.fn()}
+				onToggleTerminalHoverZoom={vi.fn()}
 				canSpawnTerminal={false}
 				canHoverExpand
 			>
@@ -108,6 +110,7 @@ describe("InspectorTabsSection", () => {
 				terminalInstances={[]}
 				onAddTerminal={vi.fn()}
 				onCloseTerminal={vi.fn()}
+				onToggleTerminalHoverZoom={vi.fn()}
 				canSpawnTerminal={false}
 				canHoverExpand={false}
 			>
