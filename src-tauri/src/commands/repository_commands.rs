@@ -1,6 +1,6 @@
 use tauri::AppHandle;
 
-use crate::{db, git_watcher, repos, settings};
+use crate::{db, forge, git_watcher, repos, settings};
 
 use super::common::{run_blocking, CmdResult};
 
@@ -51,10 +51,15 @@ pub async fn update_repository_default_branch(
 #[tauri::command]
 pub async fn update_repository_branch_prefix(
     repo_id: String,
+    branch_prefix_type: Option<crate::settings::BranchPrefixType>,
     branch_prefix_custom: Option<String>,
 ) -> CmdResult<()> {
     run_blocking(move || {
-        repos::update_repository_branch_prefix(&repo_id, branch_prefix_custom.as_deref())
+        repos::update_repository_branch_prefix(
+            &repo_id,
+            branch_prefix_type,
+            branch_prefix_custom.as_deref(),
+        )
     })
     .await
 }
@@ -123,4 +128,18 @@ pub async fn update_repo_preferences(
 pub async fn delete_repository(repo_id: String) -> CmdResult<()> {
     let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
     run_blocking(move || repos::delete_repository_cascade(&repo_id)).await
+}
+
+/// Re-run forge auto-bind for a repo. Frontend calls this after the user
+/// completes a `gh auth login` / `glab auth login` flow so the repo
+/// picks up the freshly-added account without an app restart. Returns
+/// the bound login (or `None` when no logged-in account had access).
+#[tauri::command]
+pub async fn retry_repo_forge_binding(
+    app: AppHandle,
+    repo_id: String,
+) -> CmdResult<Option<String>> {
+    let bound = run_blocking(move || forge::accounts::auto_bind_repo_account(&repo_id)).await?;
+    git_watcher::notify_workspace_changed(&app);
+    Ok(bound)
 }

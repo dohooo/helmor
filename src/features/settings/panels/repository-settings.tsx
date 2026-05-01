@@ -4,10 +4,14 @@ import {
 	ChevronDown,
 	GitBranch,
 	HelpCircle,
+	LoaderCircle,
 	Trash2,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BranchPickerPopover } from "@/components/branch-picker";
+import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
+import { CachedAvatar } from "@/components/cached-avatar";
+import { ForgeConnectDialog } from "@/components/forge-connect-dialog";
 import { Button } from "@/components/ui/button";
 import {
 	Command,
@@ -16,12 +20,14 @@ import {
 	CommandList,
 } from "@/components/ui/command";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Field, FieldContent, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
 	Popover,
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -31,8 +37,10 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+	type BranchPrefixType,
 	deleteRepository,
-	getForgeCliStatus,
+	type ForgeAccount,
+	type ForgeProvider,
 	listRemoteBranches,
 	listRepoRemotes,
 	loadRepoScripts,
@@ -44,7 +52,9 @@ import {
 	updateRepositoryDefaultBranch,
 	updateRepositoryRemote,
 } from "@/lib/api";
-import { useSettings } from "@/lib/settings";
+import { initialsFor } from "@/lib/initials";
+import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
+import { useForgeLoginsHealth } from "@/lib/use-forge-logins-health";
 import { cn } from "@/lib/utils";
 import { SettingsGroup } from "../components/settings-row";
 import { parseRemoteHost } from "./cli-install-gitlab-hosts";
@@ -52,17 +62,18 @@ import { RepositoryPreferencesSection } from "./repository-preferences-section";
 
 export function RepositorySettingsPanel({
 	repo,
-	githubLogin,
 	workspaceId,
 	onRepoSettingsChanged,
 	onRepoDeleted,
 }: {
 	repo: RepositoryCreateOption;
-	githubLogin: string | null;
 	workspaceId: string | null;
 	onRepoSettingsChanged: () => void;
 	onRepoDeleted: () => void;
 }) {
+	// The bound gh/glab account login lives on the repo row now;
+	// no more global OAuth identity.
+	const githubLogin = repo.forgeLogin ?? null;
 	const [branches, setBranches] = useState<string[]>([]);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -138,6 +149,8 @@ export function RepositorySettingsPanel({
 
 	return (
 		<SettingsGroup>
+			<ForgeAccountHeader repo={repo} workspaceId={workspaceId} />
+
 			<div className="py-5">
 				<div className="text-[13px] font-medium leading-snug text-foreground">
 					Remote origin
@@ -247,6 +260,195 @@ export function RepositorySettingsPanel({
 	);
 }
 
+/// Account card pinned to the top of the repo settings panel. Shows
+/// the bound account when present (avatar + name + @login + provider
+/// logo); otherwise collapses to a Connect CTA matching the inspector's
+/// flow. Couples a focus-driven `useForgeLoginsHealth` probe so that
+/// external auth changes are reflected the moment the user returns to
+/// the window — the bound login disappearing from the live set is
+/// treated as "not connected" client-side, even before the backend
+/// forge_login column gets cleaned up.
+function ForgeAccountHeader({
+	repo,
+	workspaceId,
+}: {
+	repo: RepositoryCreateOption;
+	workspaceId: string | null;
+}) {
+	// Shared cache entry with the Settings → Accounts roster + the
+	// onboarding step. See `useForgeAccountsAll` for why we don't
+	// derive the query key from this single repo.
+	const accountsQuery = useForgeAccountsAll();
+	const accounts = accountsQuery.data ?? [];
+
+	const provider = repo.forgeProvider ?? "unknown";
+	const providerIcon =
+		provider === "gitlab" ? (
+			<GitlabBrandIcon size={14} className="text-[#FC6D26]" />
+		) : (
+			<GithubBrandIcon size={14} />
+		);
+	const providerLabel =
+		provider === "gitlab" ? "GitLab" : provider === "github" ? "GitHub" : "Git";
+
+	// Probe the live login set for this repo's host so external auth
+	// changes are reflected right away. The hook itself owns the
+	// downstream cache invalidation (forgeAccounts / repositories);
+	// we use its data to decide whether the persisted forge_login is
+	// still valid.
+	const probeProvider = provider === "unknown" ? "github" : provider;
+	const probeHost =
+		parseRemoteHost(repo.remoteUrl) ?? defaultHostFor(probeProvider);
+	const liveLoginsQuery = useForgeLoginsHealth(probeProvider, probeHost);
+	const persistedLogin = repo.forgeLogin;
+	const liveLoginsData = liveLoginsQuery.data;
+	// Treat the binding as "active" when:
+	//   - the column has a value, AND
+	//   - we don't yet have a live probe answer (assume good — avoids
+	//     a flash of "not connected" on first paint), OR
+	//   - the live answer contains the persisted login.
+	const liveLoginIsActive =
+		!!persistedLogin &&
+		(liveLoginsData === undefined || liveLoginsData.includes(persistedLogin));
+	const effectiveLogin = liveLoginIsActive ? persistedLogin : null;
+
+	const account = useMemo(() => {
+		if (!effectiveLogin) return null;
+		const host = parseRemoteHost(repo.remoteUrl);
+		return (
+			accounts.find(
+				(a: ForgeAccount) =>
+					a.login === effectiveLogin && (host == null || a.host === host),
+			) ?? null
+		);
+	}, [accounts, effectiveLogin, repo.remoteUrl]);
+
+	if (!effectiveLogin) {
+		return (
+			<div className="flex items-center gap-3 py-5">
+				<div className="min-w-0 flex-1">
+					<div className="flex items-center gap-1.5 text-[13px] font-medium text-foreground">
+						{providerIcon}
+						<span>{providerLabel} not connected</span>
+					</div>
+					<div className="mt-0.5 text-[12px] text-muted-foreground">
+						Connect a {providerLabel} account to enable the {providerLabel}{" "}
+						workflow for this repo.
+					</div>
+				</div>
+				<NotConnectedConnectButton repo={repo} workspaceId={workspaceId} />
+			</div>
+		);
+	}
+
+	const displayName = account?.name?.trim() || effectiveLogin;
+
+	return (
+		<div className="flex items-center gap-3 py-5">
+			{/* Initials fallback for missing URL or <img> errors (e.g.
+			 * self-hosted GitLab gating /uploads/ behind a session cookie). */}
+			<CachedAvatar
+				size="lg"
+				className="size-10"
+				src={account?.avatarUrl}
+				alt={effectiveLogin}
+				fallback={initialsFor(displayName)}
+				fallbackClassName="bg-muted text-[15px] font-semibold uppercase text-muted-foreground"
+			/>
+			<div className="min-w-0 flex-1">
+				<div className="flex items-center gap-1.5">
+					<span className="truncate text-[13px] font-semibold text-foreground">
+						{displayName}
+					</span>
+					<span className="truncate text-[12px] text-muted-foreground">
+						@{effectiveLogin}
+					</span>
+				</div>
+				<div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+					{providerIcon}
+					<span className="truncate">{providerLabel}</span>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+/// The "no account bound" CTA. Opens the embedded ForgeConnectDialog,
+/// which owns the post-auth refresh logic (per-repo rebind + cache
+/// invalidations) shared with the inspector's Git header trigger.
+/// Mirrors `ForgeCliTrigger`'s "Connecting" state so the user gets the
+/// same visual feedback while the dialog's post-close verification
+/// runs.
+function NotConnectedConnectButton({
+	repo,
+	workspaceId,
+}: {
+	repo: RepositoryCreateOption;
+	workspaceId: string | null;
+}) {
+	const provider: ForgeProvider = (repo.forgeProvider ??
+		"github") as ForgeProvider;
+	const host = parseRemoteHost(repo.remoteUrl) ?? defaultHostFor(provider);
+	const [open, setOpen] = useState(false);
+	const [connecting, setConnecting] = useState(false);
+
+	return (
+		<>
+			<Button
+				type="button"
+				size="sm"
+				variant="default"
+				onClick={() => setOpen(true)}
+				disabled={connecting}
+				className="gap-1.5 px-5"
+			>
+				{connecting ? (
+					<LoaderCircle
+						size={12}
+						className="self-center animate-spin"
+						strokeWidth={2}
+					/>
+				) : null}
+				{connecting ? "Connecting" : "Connect"}
+			</Button>
+			<ForgeConnectDialog
+				open={open}
+				onOpenChange={(next) => {
+					if (!next) setConnecting(true);
+					setOpen(next);
+				}}
+				provider={provider}
+				host={host}
+				repoId={repo.id}
+				workspaceId={workspaceId}
+				onCloseSettled={({ connected }) => {
+					// On success the parent re-renders into `ForgeAccountHeader`
+					// (avatar + name) and this button unmounts; only the
+					// "no new login" path needs to flip back.
+					if (!connected) setConnecting(false);
+				}}
+			/>
+		</>
+	);
+}
+
+function defaultHostFor(provider: ForgeProvider): string {
+	return provider === "gitlab" ? "gitlab.com" : "github.com";
+}
+
+const PREFIX_TYPES: BranchPrefixType[] = ["username", "custom", "none"];
+
+function effectivePrefixType(repo: RepositoryCreateOption): BranchPrefixType {
+	const stored = repo.branchPrefixType;
+	if (stored === "username" || stored === "custom" || stored === "none") {
+		return stored;
+	}
+	// NULL is treated as "username" by the backend resolver — mirror here
+	// so the radio reflects the value the workspace branch generator
+	// will use.
+	return "username";
+}
+
 function BranchPrefixSection({
 	repo,
 	githubLogin,
@@ -256,37 +458,16 @@ function BranchPrefixSection({
 	githubLogin: string | null;
 	onChanged: () => void;
 }) {
-	const { settings } = useSettings();
+	const initialType = effectivePrefixType(repo);
+	const [prefixType, setPrefixType] = useState<BranchPrefixType>(initialType);
 	const [customPrefix, setCustomPrefix] = useState(
 		repo.branchPrefixCustom ?? "",
 	);
 	const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const gitlabHost = parseRemoteHost(repo.remoteUrl);
-	const isGitLabRepo =
-		repo.forgeProvider === "gitlab" ||
-		(repo.forgeProvider !== "github" && !!gitlabHost?.includes("gitlab"));
-	const gitlabStatusQuery = useQuery({
-		queryKey: ["forgeCliStatus", "gitlab", gitlabHost ?? "gitlab.com"],
-		queryFn: () => getForgeCliStatus("gitlab", gitlabHost),
-		// The global "github" option means "use the current provider login"
-		// once it is resolved through this repository's forge.
-		enabled: isGitLabRepo && settings.branchPrefixType === "github",
-		staleTime: 2000,
-	});
-	const gitlabLogin =
-		gitlabStatusQuery.data?.status === "ready"
-			? gitlabStatusQuery.data.login
-			: null;
-	const inheritedPrefix = resolveInheritedBranchPrefix({
-		type: settings.branchPrefixType,
-		custom: settings.branchPrefixCustom,
-		githubLogin,
-		gitlabLogin,
-		isGitLabRepo,
-	});
-	const inheritedPlaceholder = inheritedPrefix || "No prefix";
 
+	// Reset local state when switching repos.
 	useEffect(() => {
+		setPrefixType(effectivePrefixType(repo));
 		setCustomPrefix(repo.branchPrefixCustom ?? "");
 	}, [repo.id]);
 
@@ -296,66 +477,189 @@ function BranchPrefixSection({
 		};
 	}, [repo.id]);
 
-	const save = useCallback(
-		(nextCustom: string) => {
+	const persist = useCallback(
+		(type: BranchPrefixType, custom: string) => {
 			if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 			saveTimerRef.current = setTimeout(() => {
 				void updateRepositoryBranchPrefix(
 					repo.id,
-					nextCustom.trim() || null,
+					type,
+					type === "custom" ? custom.trim() || null : null,
 				).then(onChanged);
 			}, 400);
 		},
 		[repo.id, onChanged],
 	);
 
+	const handleTypeChange = useCallback(
+		(value: string) => {
+			if (!PREFIX_TYPES.includes(value as BranchPrefixType)) return;
+			const next = value as BranchPrefixType;
+			setPrefixType(next);
+			// Switching mode is intent — persist immediately rather than
+			// debouncing (debounce is for in-progress typing).
+			if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+			void updateRepositoryBranchPrefix(
+				repo.id,
+				next,
+				next === "custom" ? customPrefix.trim() || null : null,
+			).then(onChanged);
+		},
+		[customPrefix, onChanged, repo.id],
+	);
+
+	const handleCustomChange = useCallback(
+		(value: string) => {
+			setCustomPrefix(value);
+			persist("custom", value);
+		},
+		[persist],
+	);
+
+	const previewBase = "tokyo";
+	const previewPrefix =
+		prefixType === "custom"
+			? customPrefix.trim()
+			: prefixType === "username"
+				? githubLogin
+					? `${githubLogin}/`
+					: ""
+				: "";
+
+	const customId = `repo-${repo.id}-branch-prefix-custom`;
+	const customActive = prefixType === "custom";
+
+	const activateCustom = useCallback(() => {
+		if (prefixType === "custom") return;
+		setPrefixType("custom");
+		if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+		void updateRepositoryBranchPrefix(
+			repo.id,
+			"custom",
+			customPrefix.trim() || null,
+		).then(onChanged);
+	}, [customPrefix, onChanged, prefixType, repo.id]);
+
 	return (
 		<div className="py-5">
-			<div className="text-[13px] font-medium leading-snug text-foreground">
-				Branch prefix
-			</div>
-			<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
-				Leave empty to inherit the global prefix.
-			</div>
-			<div className="mt-4">
-				<Input
-					type="text"
-					value={customPrefix}
-					onChange={(event) => {
-						const value = event.target.value;
-						setCustomPrefix(value);
-						save(value);
-					}}
-					placeholder={inheritedPlaceholder}
-					className="w-full bg-app-base/30 text-[13px] text-app-foreground placeholder:text-muted-foreground/50"
-				/>
-				{customPrefix ? (
-					<div className="mt-1.5 text-[12px] text-muted-foreground">
-						Preview: {customPrefix}tokyo
+			<div className="flex items-start justify-between gap-4">
+				<div className="min-w-0 flex-1">
+					<div className="text-[13px] font-medium leading-snug text-foreground">
+						Branch prefix
 					</div>
-				) : null}
+					<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
+						Prefix added to branch names when creating new workspaces in this
+						repo.
+					</div>
+				</div>
+				<BranchPrefixPreview
+					prefixType={prefixType}
+					previewPrefix={previewPrefix}
+					previewBase={previewBase}
+				/>
 			</div>
+			<RadioGroup
+				value={prefixType}
+				onValueChange={handleTypeChange}
+				className="mt-3 gap-0"
+			>
+				<PrefixRadioOption repoId={repo.id} value="username" label="Username" />
+				{/*
+				 * Custom row inlines its own input so the panel height stays
+				 * fixed across all three options. When Custom isn't
+				 * selected the input is hidden via `invisible` (NOT
+				 * unmounted) — that keeps it occupying the same vertical
+				 * footprint, so flipping radios doesn't reflow the
+				 * surrounding layout.
+				 */}
+				<Field
+					orientation="horizontal"
+					className="items-center gap-3 rounded-lg px-1 py-0.5"
+				>
+					<RadioGroupItem value="custom" id={customId} />
+					<FieldLabel htmlFor={customId} className="shrink-0 text-foreground">
+						Custom
+					</FieldLabel>
+					<Input
+						type="text"
+						value={customPrefix}
+						onChange={(event) => handleCustomChange(event.target.value)}
+						onFocus={() => activateCustom()}
+						placeholder="e.g. feat/"
+						aria-label="Custom branch prefix"
+						aria-hidden={!customActive}
+						tabIndex={customActive ? 0 : -1}
+						className={cn(
+							"h-7 w-48 bg-muted/30 text-[13px] text-foreground placeholder:text-muted-foreground/50",
+							!customActive && "invisible pointer-events-none",
+						)}
+					/>
+				</Field>
+				<PrefixRadioOption repoId={repo.id} value="none" label="None" />
+			</RadioGroup>
 		</div>
 	);
 }
 
-function resolveInheritedBranchPrefix({
-	type,
-	custom,
-	githubLogin,
-	gitlabLogin,
-	isGitLabRepo,
+/// Right-aligned preview chip rendered next to the section title.
+/// Pulled out so the title row stays at a fixed height regardless of
+/// which radio mode is active (None hides the chip via `invisible`,
+/// not unmount, so the row's metrics don't shift).
+function BranchPrefixPreview({
+	prefixType,
+	previewPrefix,
+	previewBase,
 }: {
-	type: "github" | "custom" | "none";
-	custom: string;
-	githubLogin: string | null;
-	gitlabLogin: string | null;
-	isGitLabRepo: boolean;
-}): string {
-	if (type === "custom") return custom.trim();
-	if (type === "none") return "";
-	const login = isGitLabRepo ? gitlabLogin : githubLogin;
-	return login ? `${login}/` : "";
+	prefixType: BranchPrefixType;
+	previewPrefix: string;
+	previewBase: string;
+}) {
+	const hidden = prefixType === "none";
+	return (
+		<div
+			className={cn(
+				"shrink-0 text-[12px] leading-snug text-muted-foreground",
+				hidden && "invisible",
+			)}
+			aria-hidden={hidden}
+		>
+			Preview:{" "}
+			<span className="font-mono text-foreground/80">
+				{previewPrefix}
+				{previewBase}
+			</span>
+			{prefixType === "username" && !previewPrefix ? (
+				<span className="ml-1 text-muted-foreground/70">
+					(connect an account)
+				</span>
+			) : null}
+		</div>
+	);
+}
+
+function PrefixRadioOption({
+	repoId,
+	value,
+	label,
+}: {
+	repoId: string;
+	value: BranchPrefixType;
+	label: string;
+}) {
+	const id = `repo-${repoId}-branch-prefix-${value}`;
+	return (
+		<Field
+			orientation="horizontal"
+			className="items-center gap-3 rounded-lg px-1 py-0.5"
+		>
+			<RadioGroupItem value={value} id={id} />
+			<FieldContent>
+				<FieldLabel htmlFor={id} className="text-foreground">
+					{label}
+				</FieldLabel>
+			</FieldContent>
+		</Field>
+	);
 }
 
 function ScriptField({

@@ -663,22 +663,16 @@ fn create_workspace_fixture_db(
     repo_name: &str,
 ) {
     let connection = open_fixture_db(db_path);
+    // Prefix lives on the repo row in the multi-account world. Pin
+    // `custom + testuser/` directly on the repo so create_workspace
+    // produces the `testuser/<directory>` branch the assertions expect.
     connection
         .execute(
-            r#"INSERT INTO repos (id, remote_url, name, default_branch, root_path, display_order, hidden) VALUES (?1, NULL, ?2, 'main', ?3, 1, 0)"#,
+            r#"INSERT INTO repos (
+                id, remote_url, name, default_branch, root_path, display_order, hidden,
+                branch_prefix_type, branch_prefix_custom
+              ) VALUES (?1, NULL, ?2, 'main', ?3, 1, 0, 'custom', 'testuser/')"#,
             (repo_id, repo_name, source_repo_root.to_str().unwrap()),
-        )
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO settings (key, value) VALUES ('branch_prefix_type', 'custom')",
-            [],
-        )
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO settings (key, value) VALUES ('branch_prefix_custom', 'testuser/')",
-            [],
         )
         .unwrap();
 }

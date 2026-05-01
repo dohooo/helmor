@@ -76,6 +76,7 @@ pub async fn spawn_terminal(
             &working_dir,
             &context,
             channel.clone(),
+            None,
         ) {
             let _ = channel.send(ScriptEvent::Error {
                 message: e.to_string(),

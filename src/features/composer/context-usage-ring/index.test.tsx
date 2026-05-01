@@ -60,7 +60,6 @@ function BridgeHost({
 		queryClient,
 		processPendingCliSends: vi.fn(),
 		reloadSettings: vi.fn(),
-		refreshGithubIdentity: vi.fn(),
 	});
 	return null;
 }

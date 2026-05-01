@@ -477,6 +477,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: undefined,
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 			},
 			capturingEmitter,
 		);
@@ -522,6 +523,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: undefined,
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 			},
 			capturingEmitter,
 		);

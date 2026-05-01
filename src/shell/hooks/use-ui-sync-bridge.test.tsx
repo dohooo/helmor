@@ -44,7 +44,6 @@ describe("useUiSyncBridge", () => {
 				queryClient,
 				processPendingCliSends: vi.fn(),
 				reloadSettings: vi.fn(),
-				refreshGithubIdentity: vi.fn(),
 			}),
 		);
 
@@ -86,7 +85,6 @@ describe("useUiSyncBridge", () => {
 				queryClient,
 				processPendingCliSends,
 				reloadSettings: vi.fn(),
-				refreshGithubIdentity: vi.fn(),
 			}),
 		);
 
@@ -115,7 +113,6 @@ describe("useUiSyncBridge", () => {
 				queryClient,
 				processPendingCliSends: vi.fn(),
 				reloadSettings: vi.fn(),
-				refreshGithubIdentity: vi.fn(),
 			}),
 		);
 
@@ -131,11 +128,11 @@ describe("useUiSyncBridge", () => {
 				queryKey: helmorQueryKeys.workspaceForge("workspace-1"),
 			});
 		});
-		// Settings → Account stores CLI auth under a separate cache key; the
-		// bridge fans the same backend signal out to it so a stale "ready"
-		// in Account can't survive an auth flip detected elsewhere.
+		// Settings → Account renders the per-account roster from this
+		// cache; the bridge fans the same backend signal out so a fresh
+		// auth flip detected elsewhere shows up there too.
 		expect(invalidateQueries).toHaveBeenCalledWith({
-			queryKey: helmorQueryKeys.forgeCliStatusAll,
+			queryKey: helmorQueryKeys.forgeAccountsAll,
 		});
 	});
 
@@ -148,7 +145,6 @@ describe("useUiSyncBridge", () => {
 				queryClient,
 				processPendingCliSends: vi.fn(),
 				reloadSettings: vi.fn(),
-				refreshGithubIdentity: vi.fn(),
 			}),
 		);
 
@@ -182,7 +178,6 @@ describe("useUiSyncBridge", () => {
 				queryClient,
 				processPendingCliSends: vi.fn(),
 				reloadSettings,
-				refreshGithubIdentity: vi.fn(),
 			}),
 		);
 
