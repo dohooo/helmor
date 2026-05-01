@@ -514,6 +514,7 @@ function AppShell({
 	);
 	const [workspaceViewMode, setWorkspaceViewMode] =
 		useState<WorkspaceViewMode>("conversation");
+	const [kanbanComposerVisible, setKanbanComposerVisible] = useState(false);
 	const [editorSession, setEditorSession] = useState<EditorSessionState | null>(
 		null,
 	);
@@ -921,6 +922,26 @@ function AppShell({
 	useEffect(() => {
 		workspaceViewModeRef.current = workspaceViewMode;
 	}, [workspaceViewMode]);
+
+	useEffect(() => {
+		if (workspaceViewMode !== "kanban") {
+			setKanbanComposerVisible(false);
+		}
+	}, [workspaceViewMode]);
+
+	useEffect(() => {
+		if (workspaceViewMode !== "kanban" || !kanbanComposerVisible) {
+			return;
+		}
+
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key !== "Escape") return;
+			setKanbanComposerVisible(false);
+		};
+
+		window.addEventListener("keydown", handleKeyDown);
+		return () => window.removeEventListener("keydown", handleKeyDown);
+	}, [kanbanComposerVisible, workspaceViewMode]);
 
 	// Persist last workspace/session for restore-on-launch
 	useEffect(() => {
@@ -2173,6 +2194,10 @@ function AppShell({
 			});
 			if (items.length === 0) return;
 
+			if (workspaceViewMode === "kanban") {
+				setKanbanComposerVisible(true);
+			}
+
 			setPendingComposerInserts((current) => [
 				...current,
 				{
@@ -2190,6 +2215,7 @@ function AppShell({
 			displayedWorkspaceId,
 			pushWorkspaceToast,
 			selectedWorkspaceId,
+			workspaceViewMode,
 		],
 	);
 
@@ -2345,9 +2371,12 @@ function AppShell({
 											data-focus-scope="chat"
 											className={
 												workspaceViewMode === "editor" ||
-												workspaceViewMode === "kanban"
+												(workspaceViewMode === "kanban" &&
+													!kanbanComposerVisible)
 													? "hidden"
-													: "flex min-h-0 flex-1 flex-col"
+													: workspaceViewMode === "kanban"
+														? "pointer-events-none absolute right-0 bottom-16 left-[280px] z-30 flex justify-center px-6"
+														: "flex min-h-0 flex-1 flex-col"
 											}
 										>
 											<WorkspaceConversationContainer
@@ -2392,6 +2421,12 @@ function AppShell({
 												onRequestCloseSession={requestCloseSession}
 												workspaceRootPath={workspaceRootPath}
 												onOpenFileReference={handleOpenFileReference}
+												composerOnly={workspaceViewMode === "kanban"}
+												composerWrapperClassName={
+													workspaceViewMode === "kanban"
+														? "pointer-events-auto w-full max-w-3xl rounded-2xl shadow-[0_16px_44px_rgba(0,0,0,0.18),0_5px_18px_rgba(0,0,0,0.12),0_0_0_1px_rgba(255,255,255,0.025)] dark:shadow-[0_18px_52px_rgba(0,0,0,0.38),0_6px_20px_rgba(0,0,0,0.22),0_0_0_1px_rgba(255,255,255,0.035)]"
+														: undefined
+												}
 												headerLeading={
 													sidebarCollapsed ? (
 														<>

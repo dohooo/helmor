@@ -85,7 +85,7 @@ export function KanbanColumn({
 			<ScrollArea className="min-h-0 flex-1 [&_[data-orientation=vertical]]:w-2 [&_[data-slot=scroll-area-scrollbar]]:p-0.5">
 				<div
 					ref={setNodeRef}
-					className="flex min-h-20 w-full flex-col gap-2 rounded-md p-2"
+					className="flex min-h-20 w-full flex-col gap-2 rounded-md px-2 pt-2 pb-[280px]"
 				>
 					{dropPreview ? (
 						dropPreview.mode === "settling" ? (

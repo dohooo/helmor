@@ -21,6 +21,7 @@ import { hasUnresolvedPlanReview } from "@/lib/plan-review";
 import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { EMPTY_QUEUE, useSubmitQueue } from "@/lib/use-submit-queue";
+import { cn } from "@/lib/utils";
 import { getComposerContextKey } from "@/lib/workspace-helpers";
 import { useConversationStreaming } from "./hooks/use-streaming";
 import {
@@ -77,6 +78,8 @@ type WorkspaceConversationContainerProps = {
 	onRequestCloseSession?: (request: SessionCloseRequest) => void;
 	workspaceRootPath?: string | null;
 	onOpenFileReference?: (path: string, line?: number, column?: number) => void;
+	composerOnly?: boolean;
+	composerWrapperClassName?: string;
 };
 
 export const WorkspaceConversationContainer = memo(
@@ -106,6 +109,8 @@ export const WorkspaceConversationContainer = memo(
 		onRequestCloseSession,
 		workspaceRootPath,
 		onOpenFileReference,
+		composerOnly = false,
+		composerWrapperClassName,
 	}: WorkspaceConversationContainerProps) {
 		const [composerModelSelections, setComposerModelSelections] = useState<
 			Record<string, string>
@@ -315,26 +320,33 @@ export const WorkspaceConversationContainer = memo(
 					workspaceRootPath,
 				}}
 			>
-				<WorkspacePanelContainer
-					selectedWorkspaceId={selectedWorkspaceId}
-					displayedWorkspaceId={displayedWorkspaceId}
-					selectedSessionId={selectedSessionId}
-					displayedSessionId={displayedSessionId}
-					sessionSelectionHistory={sessionSelectionHistory}
-					sending={isSending}
-					sendingSessionIds={sendingSessionIds}
-					interactionRequiredSessionIds={interactionRequiredSessionIds}
-					modelSelections={composerModelSelections}
-					workspaceChangeRequest={workspaceChangeRequest}
-					onSelectSession={onSelectSession}
-					onResolveDisplayedSession={onResolveDisplayedSession}
-					onQueuePendingPromptForSession={onQueuePendingPromptForSession}
-					onRequestCloseSession={onRequestCloseSession}
-					headerActions={headerActions}
-					headerLeading={headerLeading}
-				/>
+				{composerOnly ? null : (
+					<WorkspacePanelContainer
+						selectedWorkspaceId={selectedWorkspaceId}
+						displayedWorkspaceId={displayedWorkspaceId}
+						selectedSessionId={selectedSessionId}
+						displayedSessionId={displayedSessionId}
+						sessionSelectionHistory={sessionSelectionHistory}
+						sending={isSending}
+						sendingSessionIds={sendingSessionIds}
+						interactionRequiredSessionIds={interactionRequiredSessionIds}
+						modelSelections={composerModelSelections}
+						workspaceChangeRequest={workspaceChangeRequest}
+						onSelectSession={onSelectSession}
+						onResolveDisplayedSession={onResolveDisplayedSession}
+						onQueuePendingPromptForSession={onQueuePendingPromptForSession}
+						onRequestCloseSession={onRequestCloseSession}
+						headerActions={headerActions}
+						headerLeading={headerLeading}
+					/>
+				)}
 
-				<div className="mt-auto px-4 pb-4 pt-0">
+				<div
+					className={cn(
+						composerOnly ? "w-full" : "mt-auto px-4 pb-4 pt-0",
+						composerWrapperClassName,
+					)}
+				>
 					<WorkspaceComposerContainer
 						displayedWorkspaceId={displayedWorkspaceId}
 						displayedSessionId={displayedSessionId}
