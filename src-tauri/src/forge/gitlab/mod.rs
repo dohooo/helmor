@@ -21,12 +21,12 @@ use anyhow::{bail, Context, Result};
 
 use crate::error::ErrorCode;
 
-use super::cli_status::gitlab_status;
 use super::types::{
     ActionProvider, ActionStatusKind, ChangeRequestInfo, ForgeActionItem, ForgeActionStatus,
-    ForgeCliStatus, RemoteState,
+    RemoteState,
 };
 
+pub(super) mod accounts;
 mod api;
 mod context;
 mod merge_request;
@@ -36,7 +36,9 @@ mod types;
 
 use self::api::{command_detail, encode_path_component, glab_api, looks_like_auth_error};
 use self::context::load_gitlab_context;
-use self::merge_request::{find_workspace_mr, gitlab_mergeable, mr_info};
+use self::merge_request::{
+    determine_squash_choice, find_workspace_mr, gitlab_mergeable, mr_info, SquashChoice,
+};
 use self::pipeline::{
     build_gitlab_check_insert_text, load_job_trace, load_pipeline_jobs, pipeline_item,
 };
@@ -93,6 +95,43 @@ pub(super) fn lookup_workspace_mr_action_status(workspace_id: &str) -> Result<Fo
             return Ok(ForgeActionStatus::unavailable(format!("{error:#}")));
         }
     };
+
+    // Host-level liveness check runs FIRST — even before the published
+    // short-circuit. Otherwise an unpublished GitLab workspace (no
+    // remote-tracking branch, no MR) would always return
+    // `no_change_request` and the inspector would never surface a
+    // Connect CTA, even after the user logs out of glab. We want
+    // `unauthenticated` to win so the user sees they need to reconnect
+    // before anything else can happen.
+    //
+    // Mirrors the GitHub side, where `token_for_user_on_host`'s
+    // `is_login_in_hosts` guard plays the same role on every API call.
+    if let Some(backend) = crate::forge::accounts::backend_for(crate::forge::ForgeProvider::Gitlab)
+    {
+        match backend.list_logins(&context.remote.host) {
+            Ok(logins) if logins.is_empty() => {
+                tracing::warn!(
+                    workspace_id,
+                    host = %context.remote.host,
+                    "No glab account on host; reporting unauthenticated"
+                );
+                return Ok(ForgeActionStatus::unauthenticated(format!(
+                    "Not connected to GitLab on {}",
+                    context.remote.host
+                )));
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(
+                    workspace_id,
+                    host = %context.remote.host,
+                    error = %format!("{error:#}"),
+                    "Failed to probe glab logins; falling through to API call"
+                );
+            }
+        }
+    }
+
     if !context.published {
         return Ok(ForgeActionStatus::no_change_request());
     }
@@ -239,7 +278,12 @@ pub(super) fn merge_workspace_mr(workspace_id: &str) -> Result<Option<ChangeRequ
         encode_path_component(&context.full_path),
         mr.iid
     );
-    let output = glab_api(&context.remote.host, ["--method", "PUT", endpoint.as_str()])?;
+    let squash = determine_squash_choice(&context);
+    let mut args: Vec<&str> = vec!["--method", "PUT", endpoint.as_str()];
+    if matches!(squash, SquashChoice::Squash) {
+        args.extend(["--field", "squash=true"]);
+    }
+    let output = glab_api(&context.remote.host, args)?;
     if !output.success {
         let detail = command_detail(&output);
         tracing::warn!(
@@ -247,6 +291,7 @@ pub(super) fn merge_workspace_mr(workspace_id: &str) -> Result<Option<ChangeRequ
             host = %context.remote.host,
             iid = mr.iid,
             detail = %detail,
+            squash = ?squash,
             "GitLab MR merge API failed"
         );
         bail!("GitLab MR merge failed: {detail}");
@@ -317,32 +362,25 @@ pub(super) fn close_workspace_mr(workspace_id: &str) -> Result<Option<ChangeRequ
     lookup_workspace_mr(workspace_id)
 }
 
+/// Pre-check before mutating MR state (merge / close): the host must
+/// have at least one logged-in glab account. Multi-account aware via
+/// the shared accounts module — single source of truth for "is this
+/// host authenticated".
 fn ensure_gitlab_cli_ready(host: &str, operation: &str) -> Result<()> {
-    match gitlab_status(host)? {
-        ForgeCliStatus::Ready { login, .. } => {
-            tracing::debug!(host, operation, login, "GitLab CLI auth ready");
-            Ok(())
-        }
-        ForgeCliStatus::Unauthenticated { message, .. } => {
-            tracing::warn!(
-                host,
-                operation,
-                message = %message,
-                "GitLab CLI unauthenticated"
-            );
-            crate::bail_coded!(
-                ErrorCode::ForgeOnboarding,
-                "GitLab CLI authentication required: {message}"
-            );
-        }
-        ForgeCliStatus::Error { message, .. } => {
-            tracing::warn!(
-                host,
-                operation,
-                message = %message,
-                "GitLab CLI auth check failed"
-            );
-            bail!("GitLab CLI auth check failed: {message}");
-        }
+    use crate::forge::accounts;
+    use crate::forge::types::ForgeProvider;
+
+    let backend = accounts::backend_for(ForgeProvider::Gitlab).context("GitLab backend missing")?;
+    let logins = backend
+        .list_logins(host)
+        .with_context(|| format!("Failed to probe `glab auth status --hostname {host}`"))?;
+    if logins.is_empty() {
+        tracing::warn!(host, operation, "GitLab CLI unauthenticated");
+        crate::bail_coded!(
+            ErrorCode::ForgeOnboarding,
+            "GitLab CLI authentication required for {host}. Run `glab auth login --hostname {host}` to connect."
+        );
     }
+    tracing::debug!(host, operation, login = %logins[0], "GitLab CLI auth ready");
+    Ok(())
 }

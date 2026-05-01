@@ -74,7 +74,6 @@ function forgeDetection(
 			changeRequestFullName: "pull request",
 			connectAction: "Connect GitHub",
 		},
-		cli: null,
 		detectionSignals: [],
 		...overrides,
 	};

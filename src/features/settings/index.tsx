@@ -18,9 +18,6 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Field, FieldContent, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
 	SidebarGroup,
 	SidebarGroupContent,
@@ -41,11 +38,7 @@ import {
 import { getShortcut } from "@/features/shortcuts/registry";
 import { ShortcutsSettingsPanel } from "@/features/shortcuts/settings-panel";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
-import {
-	isConductorAvailable,
-	loadGithubIdentitySession,
-	type RepositoryCreateOption,
-} from "@/lib/api";
+import { isConductorAvailable, type RepositoryCreateOption } from "@/lib/api";
 import {
 	agentModelSectionsQueryOptions,
 	helmorQueryKeys,
@@ -73,12 +66,25 @@ export type SettingsSection =
 	| "shortcuts"
 	| "appearance"
 	| "model"
-	| "git"
 	| "experimental"
 	| "import"
 	| "developer"
 	| "account"
 	| `repo:${string}`;
+
+/// Display labels for settings sections in the sidebar / dialog title.
+/// Most match the section key with a leading capital, but a few names
+/// don't pluralise nicely under that rule — keep the overrides explicit.
+const SECTION_LABEL_OVERRIDES: Partial<Record<SettingsSection, string>> = {
+	account: "Accounts",
+};
+
+/// Optional muted-caption next to the title in the dialog header.
+/// Lets a panel surface a one-liner without rendering its own header
+/// row (which otherwise duplicates the section name).
+const SECTION_TITLE_CAPTIONS: Partial<Record<SettingsSection, string>> = {
+	account: "Synced with your local gh / glab CLI.",
+};
 
 function sidebarSectionLabel(
 	section: SettingsSection,
@@ -88,6 +94,8 @@ function sidebarSectionLabel(
 		const repoId = section.slice(5);
 		return repos.find((r) => r.id === repoId)?.name ?? "Repository";
 	}
+	const override = SECTION_LABEL_OVERRIDES[section];
+	if (override) return override;
 	return section.charAt(0).toUpperCase() + section.slice(1);
 }
 
@@ -115,7 +123,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 	const queryClient = useQueryClient();
 	const [activeSection, setActiveSection] =
 		useState<SettingsSection>("general");
-	const [githubLogin, setGithubLogin] = useState<string | null>(null);
 	const [conductorEnabled, setConductorEnabled] = useState(false);
 
 	useEffect(() => {
@@ -167,11 +174,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 
 	useEffect(() => {
 		if (open) {
-			void loadGithubIdentitySession().then((snapshot) => {
-				if (snapshot.status === "connected") {
-					setGithubLogin(snapshot.session.login);
-				}
-			});
 			void isConductorAvailable().then(setConductorEnabled);
 		}
 	}, [open]);
@@ -183,11 +185,10 @@ export const SettingsDialog = memo(function SettingsDialog({
 		"appearance",
 		"model",
 		"shortcuts",
-		"git",
-		"experimental",
 		...(conductorEnabled ? (["import"] as const) : []),
 		...(isDev ? (["developer"] as const) : []),
 		"account",
+		"experimental",
 	];
 
 	const activeRepoId = activeSection.startsWith("repo:")
@@ -261,12 +262,17 @@ export const SettingsDialog = memo(function SettingsDialog({
 					{/* Main content */}
 					<div className="flex min-w-0 flex-1 flex-col overflow-hidden">
 						{/* Header */}
-						<div className="flex items-center border-b border-border/40 px-8 py-4">
+						<div className="flex items-baseline gap-3 border-b border-border/40 px-8 py-4">
 							<DialogTitle className="text-[15px] font-semibold text-foreground">
 								{activeRepo
 									? activeRepo.name
 									: titleSectionLabel(activeSection, repositories)}
 							</DialogTitle>
+							{!activeRepo && SECTION_TITLE_CAPTIONS[activeSection] ? (
+								<span className="truncate text-[12px] text-muted-foreground/70">
+									{SECTION_TITLE_CAPTIONS[activeSection]}
+								</span>
+							) : null}
 						</div>
 
 						{/* Content area */}
@@ -553,58 +559,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 								</SettingsGroup>
 							)}
 
-							{activeSection === "git" && (
-								<SettingsGroup>
-									<div className="py-5">
-										<div className="text-[13px] font-medium leading-snug text-foreground">
-											Branch Prefix
-										</div>
-										<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
-											Prefix added to branch names when creating new workspaces
-										</div>
-										<RadioGroup
-											value={settings.branchPrefixType}
-											onValueChange={(value: string) =>
-												updateSettings({
-													branchPrefixType: value as
-														| "github"
-														| "custom"
-														| "none",
-												})
-											}
-											className="mt-4 gap-1"
-										>
-											<RadioOption
-												value="github"
-												label={`GitHub username${githubLogin ? ` (${githubLogin})` : ""}`}
-											/>
-											<RadioOption value="custom" label="Custom" />
-											{settings.branchPrefixType === "custom" && (
-												<div className="ml-7">
-													<Input
-														type="text"
-														value={settings.branchPrefixCustom}
-														onChange={(e) =>
-															updateSettings({
-																branchPrefixCustom: e.target.value,
-															})
-														}
-														placeholder="e.g. feat/"
-														className="w-full bg-muted/30 text-[13px] text-foreground placeholder:text-muted-foreground/50"
-													/>
-													{settings.branchPrefixCustom && (
-														<div className="mt-1.5 text-[12px] text-muted-foreground">
-															Preview: {settings.branchPrefixCustom}tokyo
-														</div>
-													)}
-												</div>
-											)}
-											<RadioOption value="none" label="None" />
-										</RadioGroup>
-									</div>
-								</SettingsGroup>
-							)}
-
 							{activeSection === "experimental" && (
 								<div className="flex flex-col gap-3">
 									<CliInstallPanel />
@@ -616,16 +570,12 @@ export const SettingsDialog = memo(function SettingsDialog({
 							{activeSection === "developer" && <DevToolsPanel />}
 
 							{activeSection === "account" && (
-								<AccountPanel
-									repositories={repositories}
-									onSignedOut={onClose}
-								/>
+								<AccountPanel repositories={repositories} />
 							)}
 
 							{activeRepo && (
 								<RepositorySettingsPanel
 									repo={activeRepo}
-									githubLogin={githubLogin}
 									workspaceId={
 										activeRepo.id === workspaceRepoId ? workspaceId : null
 									}
@@ -664,30 +614,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 // ---------------------------------------------------------------------------
 // Shared sub-components
 // ---------------------------------------------------------------------------
-
-function RadioOption({
-	value,
-	label,
-}: {
-	value: "github" | "custom" | "none";
-	label: string;
-}) {
-	const id = `settings-branch-prefix-${value}`;
-
-	return (
-		<Field
-			orientation="horizontal"
-			className="items-center gap-3 rounded-lg px-1 py-1.5"
-		>
-			<RadioGroupItem value={value} id={id} />
-			<FieldContent>
-				<FieldLabel htmlFor={id} className="text-foreground">
-					{label}
-				</FieldLabel>
-			</FieldContent>
-		</Field>
-	);
-}
 
 function effortLabel(level: string): string {
 	if (level === "xhigh") return "Extra High";

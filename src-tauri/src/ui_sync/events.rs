@@ -36,7 +36,6 @@ pub enum UiMutationEvent {
     SettingsChanged {
         key: Option<String>,
     },
-    GithubIdentityChanged,
     PendingCliSendQueued {
         workspace_id: String,
         session_id: String,
@@ -139,10 +138,6 @@ mod tests {
             (
                 UiMutationEvent::RepositoryListChanged,
                 "repositoryListChanged",
-            ),
-            (
-                UiMutationEvent::GithubIdentityChanged,
-                "githubIdentityChanged",
             ),
         ];
         for (event, expected) in cases {

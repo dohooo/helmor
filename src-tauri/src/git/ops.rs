@@ -1049,6 +1049,57 @@ pub fn abort_merge(workspace_dir: &Path) -> Result<()> {
         .with_context(|| format!("Failed to abort merge in {workspace_dir}"))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StashPopOutcome {
+    Clean,
+    Conflict,
+}
+
+/// Push a stash entry that captures both tracked changes and untracked files.
+/// Returns `true` when a new stash entry was created, `false` if there was
+/// nothing to save.
+pub fn stash_push_include_untracked(workspace_dir: &Path, message: &str) -> Result<bool> {
+    let workspace_dir_arg = workspace_dir.display().to_string();
+    let output = run_git(
+        [
+            "-C",
+            workspace_dir_arg.as_str(),
+            "stash",
+            "push",
+            "--include-untracked",
+            "-m",
+            message,
+        ],
+        None,
+    )
+    .with_context(|| format!("Failed to git stash push in {}", workspace_dir.display()))?;
+    Ok(!output.contains("No local changes to save"))
+}
+
+/// Pop the most recent stash entry. Conflicts during pop leave the stash
+/// entry intact (git's default), so the caller / agent can retry.
+pub fn stash_pop(workspace_dir: &Path) -> Result<StashPopOutcome> {
+    let workspace_dir_arg = workspace_dir.display().to_string();
+    let output = Command::new("git")
+        .args(["-C", workspace_dir_arg.as_str(), "stash", "pop"])
+        .output()
+        .with_context(|| format!("Failed to git stash pop in {}", workspace_dir.display()))?;
+    if output.status.success() {
+        return Ok(StashPopOutcome::Clean);
+    }
+    let unmerged =
+        run_git(["-C", workspace_dir_arg.as_str(), "ls-files", "-u"], None).unwrap_or_default();
+    if unmerged.trim().is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "git stash pop failed in {}: {}",
+            workspace_dir.display(),
+            stderr.trim()
+        );
+    }
+    Ok(StashPopOutcome::Conflict)
+}
+
 pub fn preflight_merge_ref(workspace_dir: &Path, target_ref: &str) -> Result<MergePreflightResult> {
     let head_sha = current_workspace_head_commit(workspace_dir)?;
     let preflight_dir =

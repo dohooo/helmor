@@ -582,9 +582,12 @@ fn claude_login_ready() -> bool {
     {
         Ok(output) if output.status.success() => parse_claude_login_status(&output.stdout),
         Ok(output) => {
-            tracing::debug!(
-                "Claude auth status failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
+            // Claude exits non-zero when the user isn't authenticated —
+            // that's a normal "false" answer, not an error. Log at trace
+            // so it doesn't look like something went wrong.
+            tracing::trace!(
+                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                "Claude not logged in (auth status returned non-zero)"
             );
             false
         }
@@ -606,9 +609,15 @@ fn codex_login_ready() -> bool {
             parse_codex_login_status(&format!("{stdout}\n{stderr}"))
         }
         Ok(output) => {
-            tracing::debug!(
-                "Codex login status failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
+            // `codex login status` exits non-zero with stderr "Not
+            // logged in" when the user is signed out — that's a
+            // routine "no session" answer, not a check failure. Logging
+            // it as "failed" makes legitimate aborts (user closes the
+            // login terminal mid-flow) look like crashes. Demote to
+            // trace.
+            tracing::trace!(
+                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                "Codex not logged in (login status returned non-zero)"
             );
             false
         }
@@ -647,12 +656,31 @@ const AGENT_LOGIN_REPO_ID: &str = "__helmor_onboarding__";
 
 #[tauri::command]
 pub async fn spawn_agent_login_terminal(
+    app: tauri::AppHandle,
     manager: State<'_, ScriptProcessManager>,
     provider: String,
     instance_id: String,
     channel: Channel<ScriptEvent>,
 ) -> CmdResult<()> {
     let command = agent_login_command(&provider)?.to_string();
+    tracing::info!(
+        provider = %provider,
+        instance_id = %instance_id,
+        command = %command,
+        "spawn_agent_login_terminal: dispatching"
+    );
+
+    // Defensive: some agent CLIs (codex login in particular) shell out
+    // to the system `open` command for OAuth. On macOS that can let the
+    // browser steal foreground, and in some configurations the calling
+    // app gets implicitly hidden. Force the window back to front before
+    // we spawn so the embedded terminal stays visible regardless.
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+
     let working_dir = std::env::var("HOME")
         .ok()
         .filter(|home| !home.trim().is_empty())
@@ -672,27 +700,16 @@ pub async fn spawn_agent_login_terminal(
     let script_type = agent_login_script_type(&provider, &instance_id);
 
     tauri::async_runtime::spawn_blocking(move || {
-        let key = (
-            AGENT_LOGIN_REPO_ID.to_string(),
-            script_type.clone(),
-            None::<String>,
+        tracing::debug!(
+            provider = %provider,
+            instance_id = %instance_id,
+            "spawn_agent_login_terminal: entering run_terminal_session"
         );
-        let command_to_send = format!("{command}; exit\n");
-        let stdin_manager = mgr.clone();
-        std::thread::spawn(move || {
-            for _ in 0..80 {
-                match stdin_manager.write_stdin(&key, command_to_send.as_bytes()) {
-                    Ok(true) => return,
-                    Ok(false) => std::thread::sleep(std::time::Duration::from_millis(25)),
-                    Err(error) => {
-                        tracing::debug!("Agent login terminal stdin unavailable: {error}");
-                        return;
-                    }
-                }
-            }
-            tracing::debug!("Agent login terminal was not ready for initial command");
-        });
-
+        // Auto-type the login command via the run_terminal_session boot
+        // input — written synchronously to the PTY master right after
+        // the shell registers, so a frontend re-render-driven
+        // cleanup→respawn can't drop the bytes.
+        let boot_input = format!("{command}; exit\n");
         if let Err(error) = crate::workspace::scripts::run_terminal_session(
             &mgr,
             AGENT_LOGIN_REPO_ID,
@@ -701,10 +718,23 @@ pub async fn spawn_agent_login_terminal(
             &working_dir,
             &context,
             channel.clone(),
+            Some(&boot_input),
         ) {
+            tracing::warn!(
+                provider = %provider,
+                instance_id = %instance_id,
+                error = %format!("{error:#}"),
+                "spawn_agent_login_terminal: run_terminal_session failed"
+            );
             let _ = channel.send(ScriptEvent::Error {
                 message: error.to_string(),
             });
+        } else {
+            tracing::debug!(
+                provider = %provider,
+                instance_id = %instance_id,
+                "spawn_agent_login_terminal: run_terminal_session returned"
+            );
         }
     });
 

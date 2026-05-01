@@ -214,11 +214,11 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		});
 	});
 
-	it("queues the pull task into the current chat when the worktree is dirty", async () => {
+	it("queues a narrow stash-pop-conflict prompt when restoring stashed work fails", async () => {
 		const user = userEvent.setup();
 		const onQueuePendingPromptForSession = vi.fn();
 		apiMocks.syncWorkspaceWithTargetBranch.mockResolvedValue({
-			outcome: "dirtyWorktree",
+			outcome: "stashPopConflict",
 			targetBranch: "main",
 			conflictedFiles: [],
 		});
@@ -239,7 +239,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 			expect(onQueuePendingPromptForSession).toHaveBeenCalledWith({
 				sessionId: "session-1",
 				prompt:
-					"Commit uncommitted changes, then merge testuser/main into this branch. Then push.",
+					"Resolve the conflicts from restoring the stashed uncommitted work in this branch. Don't commit. Don't push.",
 				forceQueue: true,
 			});
 		});
@@ -269,7 +269,8 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		await waitFor(() => {
 			expect(onQueuePendingPromptForSession).toHaveBeenCalledWith({
 				sessionId: "session-1",
-				prompt: "Merge testuser/main into this branch. Then push.",
+				prompt:
+					"Bring this branch up to date with testuser/main. Resolve any conflicts. Preserve any uncommitted work. Don't push.",
 				forceQueue: true,
 			});
 		});
@@ -302,7 +303,8 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		await waitFor(() => {
 			expect(onQueuePendingPromptForSession).toHaveBeenCalledWith({
 				sessionId: "session-1",
-				prompt: "Merge Origin/testuser/testing into this branch. Then push.",
+				prompt:
+					"Bring this branch up to date with Origin/testuser/testing. Resolve any conflicts. Preserve any uncommitted work. Don't push.",
 				forceQueue: true,
 			});
 		});

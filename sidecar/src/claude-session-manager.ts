@@ -396,6 +396,7 @@ export class ClaudeSessionManager implements SessionManager {
 			effortLevel,
 			fastMode,
 			claudeEnvironment,
+			images,
 		} = params;
 		const abortController = new AbortController();
 		const additionalDirectories = [...(params.additionalDirectories ?? [])];
@@ -408,7 +409,7 @@ export class ClaudeSessionManager implements SessionManager {
 			additionalDirectories,
 		);
 
-		const { text, imagePaths } = parseImageRefs(promptWithContext);
+		const { text, imagePaths } = parseImageRefs(promptWithContext, images);
 		// Resume-only streams (AskUserQuestion answer submission) arrive with
 		// `prompt === ""` — the Rust command layer rejects empty prompts in
 		// every other case (see `agents.rs: "Prompt cannot be empty"`), so
@@ -680,6 +681,7 @@ export class ClaudeSessionManager implements SessionManager {
 		sessionId: string,
 		prompt: string,
 		files: readonly string[],
+		images: readonly string[],
 	): Promise<boolean> {
 		const session = this.sessions.get(sessionId);
 		if (!session || session.promptSource.closed) {
@@ -689,7 +691,7 @@ export class ClaudeSessionManager implements SessionManager {
 		// Strip image refs to build the SDK's base64 image content. Keep
 		// the raw prompt separately — that's what the synthetic event +
 		// DB row need so `@-refs` survive the round-trip.
-		const { text: stripped, imagePaths } = parseImageRefs(prompt);
+		const { text: stripped, imagePaths } = parseImageRefs(prompt, images);
 		const sdkMessage =
 			imagePaths.length === 0
 				? ({
@@ -707,13 +709,20 @@ export class ClaudeSessionManager implements SessionManager {
 			return false;
 		}
 
+		// Both `files` AND `images` must travel on the synthetic event so
+		// the persisted DB row matches what `createLiveThreadMessage`
+		// optimistically rendered. Without `images`, image badges in the
+		// steer bubble would vanish on reload because the adapter has no
+		// needle pool to find the `@<path>` substring with.
 		const event: {
 			type: "user_prompt";
 			text: string;
 			steer: true;
 			files?: string[];
+			images?: string[];
 		} = { type: "user_prompt", text: prompt, steer: true };
 		if (files.length > 0) event.files = [...files];
+		if (imagePaths.length > 0) event.images = [...imagePaths];
 		session.emitter.passthrough(session.requestId, event);
 		session.promptSource.push(sdkMessage);
 		logger.info(`steer ${sessionId}`, {

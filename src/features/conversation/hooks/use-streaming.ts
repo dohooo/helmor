@@ -1104,6 +1104,7 @@ export function useConversationStreaming({
 					text: trimmedPrompt,
 					createdAt: new Date().toISOString(),
 					files: filePaths,
+					images: imagePaths,
 				});
 				const rollback = appendUserMessage(
 					queryClient,
@@ -1138,6 +1139,7 @@ export function useConversationStreaming({
 						provider: liveStream.provider,
 						prompt: trimmedPrompt,
 						files: filePaths,
+						images: imagePaths,
 					});
 					if (!response.accepted) {
 						// Turn already completed / provider rejected —
@@ -1207,6 +1209,7 @@ export function useConversationStreaming({
 				text: trimmedPrompt,
 				createdAt: now,
 				files: filePaths,
+				images: imagePaths,
 			});
 			let titleSeed: string | null = null;
 			if (isFirstUserMessage && !isCompactCommand) {
@@ -1341,6 +1344,7 @@ export function useConversationStreaming({
 						fastMode,
 						userMessageId,
 						files: filePaths,
+						images: imagePaths,
 					},
 					(event) => {
 						if (event.kind === "update") {
@@ -1625,6 +1629,7 @@ export function useConversationStreaming({
 					provider: liveStream.provider,
 					prompt: item.payload.prompt,
 					files: item.payload.filePaths,
+					images: item.payload.imagePaths,
 				});
 				if (!response.accepted) {
 					submitQueue.enqueue(ctx, item.payload);

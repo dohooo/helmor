@@ -1,4 +1,5 @@
 {
 	"$schema": "https://openapi.vercel.sh/vercel.json",
-	"framework": "nextjs"
+	"framework": "nextjs",
+	"ignoreCommand": "git diff --quiet HEAD^ HEAD -- ':(top)apps/marketing'"
 }

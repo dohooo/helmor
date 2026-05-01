@@ -297,14 +297,21 @@ async function handleSteerSession(
 ): Promise<void> {
 	try {
 		const provider = parseProvider(params.provider);
-		const { sessionId, prompt, files } = parseSteerSessionParams(params);
+		const { sessionId, prompt, files, images } =
+			parseSteerSessionParams(params);
 		logger.debug(`[${id}] steerSession`, {
 			sessionId,
 			provider,
 			preview: prompt.slice(0, 80),
 			fileCount: files.length,
+			imageCount: images.length,
 		});
-		const accepted = await managers[provider].steer(sessionId, prompt, files);
+		const accepted = await managers[provider].steer(
+			sessionId,
+			prompt,
+			files,
+			images,
+		);
 		emitter.steered(
 			id,
 			sessionId,

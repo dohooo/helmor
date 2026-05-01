@@ -76,7 +76,7 @@ describe("ClaudeSessionManager.steer ghost-steer guards", () => {
 			emitter,
 		});
 
-		const accepted = await manager.steer("s1", "ignored prompt", []);
+		const accepted = await manager.steer("s1", "ignored prompt", [], []);
 
 		expect(accepted).toBe(false);
 		expect(passthroughs).toHaveLength(0);
@@ -98,8 +98,15 @@ describe("ClaudeSessionManager.steer ghost-steer guards", () => {
 		// Kick off a steer with an `@image` ref — this takes the
 		// `buildUserMessageWithImages` branch, which has an internal
 		// `await readImageWithResize(...)`. That await is our race
-		// window.
-		const promise = manager.steer("s1", "hey @/nonexistent-test-image.png", []);
+		// window. Pass the image via the structured `images` argument
+		// (the parseImageRefs regex fallback no longer fires for steer
+		// callers).
+		const promise = manager.steer(
+			"s1",
+			"hey @/nonexistent-test-image.png",
+			[],
+			["/nonexistent-test-image.png"],
+		);
 
 		// While steer's image-load await is in flight, the streaming
 		// loop terminates the turn — closes the prompt source before
@@ -127,9 +134,12 @@ describe("ClaudeSessionManager.steer ghost-steer guards", () => {
 			emitter,
 		});
 
-		const accepted = await manager.steer("s1", "focus on failing tests", [
-			"src/foo.ts",
-		]);
+		const accepted = await manager.steer(
+			"s1",
+			"focus on failing tests",
+			["src/foo.ts"],
+			[],
+		);
 
 		expect(accepted).toBe(true);
 		expect(passthroughs).toHaveLength(1);
@@ -168,7 +178,7 @@ describe("ClaudeSessionManager.steer @-ref preservation", () => {
 			emitter,
 		});
 
-		await manager.steer("s1", "check this @/tmp/foo.png please", []);
+		await manager.steer("s1", "check this @/tmp/foo.png please", [], []);
 
 		const [first] = passthroughs;
 		if (!first) throw new Error("expected emit");
@@ -196,10 +206,12 @@ describe("ClaudeSessionManager.steer @-ref preservation", () => {
 			emitter,
 		});
 
-		await manager.steer("s1", "review @src/foo.ts and @src/bar.ts", [
-			"src/foo.ts",
-			"src/bar.ts",
-		]);
+		await manager.steer(
+			"s1",
+			"review @src/foo.ts and @src/bar.ts",
+			["src/foo.ts", "src/bar.ts"],
+			[],
+		);
 
 		const [first] = passthroughs;
 		if (!first) throw new Error("expected emit");
@@ -231,7 +243,7 @@ describe("ClaudeSessionManager.steer @-ref preservation", () => {
 		// sidecar's viewpoint they look like any other text. The steer
 		// path must pass the whole thing through untouched.
 		const raw = "@tasks:cleanup inspect @/img.png for @src/a.ts issues";
-		await manager.steer("s1", raw, ["src/a.ts"]);
+		await manager.steer("s1", raw, ["src/a.ts"], []);
 
 		const [first] = passthroughs;
 		if (!first) throw new Error("expected emit");
