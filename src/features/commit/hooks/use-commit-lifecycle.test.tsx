@@ -746,8 +746,9 @@ describe("useWorkspaceCommitLifecycle", () => {
 			sessionId: "session-action",
 			modelId: "review-model",
 		});
+		// New review prompt diffs against the target ref, no PR/MR machinery.
 		expect(result.current.pendingPromptForSession?.prompt ?? "").toContain(
-			"Review the open",
+			"Review the changes on this branch relative to `origin/main`",
 		);
 		expect(onSelectSession).toHaveBeenCalledWith("session-action");
 	});
