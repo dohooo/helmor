@@ -8,6 +8,7 @@ import type {
 import {
 	changeRequestRefetchInterval,
 	forgeActionStatusRefetchInterval,
+	isVolatileForgeQueryKey,
 	workspaceForgeRefetchInterval,
 } from "./query-client";
 
@@ -235,5 +236,30 @@ describe("workspaceForgeRefetchInterval", () => {
 		expect(
 			workspaceForgeRefetchInterval(forgeDetection({ provider: "unknown" })),
 		).toBe(false);
+	});
+});
+
+describe("isVolatileForgeQueryKey", () => {
+	it("marks forge auth and identity queries as non-persistable", () => {
+		for (const key of [
+			["workspaceForge", "ws-1"],
+			["workspaceForgeActionStatus", "ws-1"],
+			["workspaceAccountProfile", "ws-1"],
+			["forgeLogins", "github", "github.com"],
+			["forgeAccounts", "gitlab.example.com"],
+		]) {
+			expect(isVolatileForgeQueryKey(key)).toBe(true);
+		}
+	});
+
+	it("leaves stable workspace and session queries persistable", () => {
+		for (const key of [
+			["workspaceDetail", "ws-1"],
+			["workspaceSessions", "ws-1"],
+			["sessionMessages", "session-1"],
+			["repositories"],
+		]) {
+			expect(isVolatileForgeQueryKey(key)).toBe(false);
+		}
 	});
 });
