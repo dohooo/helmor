@@ -268,6 +268,30 @@ describe("useWorkspacesSidebarController archive flow", () => {
 		vi.clearAllMocks();
 	});
 
+	it("does not auto-select a workspace when auto selection is disabled", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onSelectWorkspace = vi.fn();
+		const pushWorkspaceToast = vi.fn();
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: null,
+					autoSelectEnabled: false,
+					onSelectWorkspace,
+					pushWorkspaceToast,
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows[0]?.id).toBe("ws-1");
+		});
+		expect(onSelectWorkspace).not.toHaveBeenCalled();
+	});
+
 	it("optimistically moves the workspace after preflight success and switches to the next one", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false } },

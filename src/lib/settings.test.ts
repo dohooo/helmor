@@ -90,4 +90,26 @@ describe("settings", () => {
 			}),
 		);
 	});
+
+	it("hydrates and saves the last app surface", async () => {
+		invokeMock.mockResolvedValue({
+			"app.last_surface": "workspace-start",
+		});
+
+		const settings = await loadSettings();
+
+		expect(settings.lastSurface).toBe("workspace-start");
+
+		invokeMock.mockResolvedValue(undefined);
+		await saveSettings({ lastSurface: "workspace" });
+
+		expect(invokeMock).toHaveBeenLastCalledWith(
+			"update_app_settings",
+			expect.objectContaining({
+				settingsMap: expect.objectContaining({
+					"app.last_surface": "workspace",
+				}),
+			}),
+		);
+	});
 });

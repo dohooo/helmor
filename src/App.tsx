@@ -855,9 +855,12 @@ function AppShell({
 	// Persist last workspace/session for restore-on-launch
 	useEffect(() => {
 		if (selectedWorkspaceId) {
-			void saveSettings({ lastWorkspaceId: selectedWorkspaceId });
+			void updateSettings({
+				lastSurface: "workspace",
+				lastWorkspaceId: selectedWorkspaceId,
+			});
 		}
-	}, [selectedWorkspaceId]);
+	}, [selectedWorkspaceId, updateSettings]);
 
 	useEffect(() => {
 		if (selectedSessionId) {
@@ -2138,12 +2141,48 @@ function AppShell({
 		queryFn: () => listRemoteBranches({ repoId: startRepository!.id }),
 		enabled: Boolean(startRepository?.id),
 	});
-	const handleOpenWorkspaceStart = useCallback(() => {
-		if (!startRepositoryId && repositories[0]) {
-			setStartRepositoryId(repositories[0].id);
+	const handleOpenWorkspaceStart = useCallback(
+		(options?: { persist?: boolean }) => {
+			if (!startRepositoryId && repositories[0]) {
+				setStartRepositoryId(repositories[0].id);
+			}
+
+			workspaceSelectionRequestRef.current += 1;
+			sessionSelectionRequestRef.current += 1;
+			selectedWorkspaceIdRef.current = null;
+			selectedSessionIdRef.current = null;
+			setSelectedWorkspaceId(null);
+			setSelectedSessionId(null);
+			setDisplayedWorkspaceId(null);
+			setDisplayedSessionId(null);
+			setWorkspaceViewMode("start");
+
+			if (options?.persist !== false) {
+				void updateSettings({ lastSurface: "workspace-start" });
+			}
+		},
+		[repositories, startRepositoryId, updateSettings],
+	);
+	useEffect(() => {
+		if (!areSettingsLoaded || appSettings.lastSurface !== "workspace-start") {
+			return;
 		}
-		setWorkspaceViewMode("start");
-	}, [repositories, startRepositoryId]);
+		if (
+			workspaceViewMode === "start" &&
+			selectedWorkspaceId === null &&
+			displayedWorkspaceId === null
+		) {
+			return;
+		}
+		handleOpenWorkspaceStart({ persist: false });
+	}, [
+		appSettings.lastSurface,
+		areSettingsLoaded,
+		displayedWorkspaceId,
+		handleOpenWorkspaceStart,
+		selectedWorkspaceId,
+		workspaceViewMode,
+	]);
 	const handleStartSourceBranchSelect = useCallback(
 		(branch: string) => {
 			if (!startRepository) {
@@ -2251,6 +2290,10 @@ function AppShell({
 		() => ({ contextKey: startComposerContextKey }),
 		[startComposerContextKey],
 	);
+	const restoreStartSurface =
+		areSettingsLoaded && appSettings.lastSurface === "workspace-start";
+	const workspaceSidebarAutoSelectEnabled =
+		areSettingsLoaded && workspaceViewMode !== "start" && !restoreStartSurface;
 
 	return (
 		<TooltipProvider delayDuration={0}>
@@ -2273,7 +2316,14 @@ function AppShell({
 											>
 												<div className="min-h-0 flex-1">
 													<WorkspacesSidebarContainer
-														selectedWorkspaceId={selectedWorkspaceId}
+														selectedWorkspaceId={
+															workspaceViewMode === "start"
+																? null
+																: selectedWorkspaceId
+														}
+														autoSelectEnabled={
+															workspaceSidebarAutoSelectEnabled
+														}
 														sendingWorkspaceIds={sendingWorkspaceIds}
 														interactionRequiredWorkspaceIds={
 															interactionRequiredWorkspaceIds

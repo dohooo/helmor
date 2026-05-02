@@ -11,6 +11,7 @@ export type DarkTheme = "default" | "midnight" | "forest" | "ember" | "aurora";
  *  - `queue`: stash locally; auto-fire as a new turn once the agent finishes.
  */
 export type FollowUpBehavior = "steer" | "queue";
+export type AppSurface = "workspace" | "workspace-start";
 
 export type ShortcutOverrides = Record<string, string | null>;
 
@@ -82,6 +83,7 @@ export type AppSettings = {
 	notifications: boolean;
 	lastWorkspaceId: string | null;
 	lastSessionId: string | null;
+	lastSurface: AppSurface;
 	defaultModelId: string | null;
 	/** Model used when the inspector "Review changes" helper creates a session.
 	 *  When null, falls back to `defaultModelId`. */
@@ -133,6 +135,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	notifications: true,
 	lastWorkspaceId: null,
 	lastSessionId: null,
+	lastSurface: "workspace",
 	defaultModelId: null,
 	reviewModelId: null,
 	reviewEffort: null,
@@ -175,6 +178,7 @@ const SETTINGS_KEY_MAP: Record<
 	notifications: "app.notifications",
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
+	lastSurface: "app.last_surface",
 	defaultModelId: "app.default_model_id",
 	reviewModelId: "app.review_model_id",
 	reviewEffort: "app.review_effort",
@@ -360,6 +364,10 @@ export async function loadSettings(): Promise<AppSettings> {
 					: DEFAULT_SETTINGS.notifications,
 			lastWorkspaceId: raw[SETTINGS_KEY_MAP.lastWorkspaceId] || null,
 			lastSessionId: raw[SETTINGS_KEY_MAP.lastSessionId] || null,
+			lastSurface:
+				raw[SETTINGS_KEY_MAP.lastSurface] === "workspace-start"
+					? "workspace-start"
+					: DEFAULT_SETTINGS.lastSurface,
 			defaultModelId:
 				rawDefaultModelId && rawDefaultModelId !== "default"
 					? rawDefaultModelId

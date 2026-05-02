@@ -8,6 +8,7 @@ type WorkspaceToastVariant = "default" | "destructive";
 
 type WorkspacesSidebarContainerProps = {
 	selectedWorkspaceId: string | null;
+	autoSelectEnabled?: boolean;
 	sendingWorkspaceIds?: Set<string>;
 	interactionRequiredWorkspaceIds?: Set<string>;
 	newWorkspaceShortcut?: string | null;
@@ -28,6 +29,7 @@ type WorkspacesSidebarContainerProps = {
 export const WorkspacesSidebarContainer = memo(
 	function WorkspacesSidebarContainer({
 		selectedWorkspaceId,
+		autoSelectEnabled = true,
 		sendingWorkspaceIds,
 		interactionRequiredWorkspaceIds,
 		newWorkspaceShortcut,
@@ -58,6 +60,7 @@ export const WorkspacesSidebarContainer = memo(
 			setIsCloneDialogOpen,
 		} = useWorkspacesSidebarController({
 			selectedWorkspaceId,
+			autoSelectEnabled,
 			onSelectWorkspace,
 			pushWorkspaceToast,
 		});
