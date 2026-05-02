@@ -1,30 +1,27 @@
-import {
-	ChevronDown,
-	Funnel,
-	Loader2,
-	Pickaxe,
-	SlidersHorizontal,
-	X,
-} from "lucide-react";
+import { Loader2, Pickaxe, SlidersHorizontal } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { GithubBrandIcon } from "@/components/brand-icon";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuRadioGroup,
-	DropdownMenuRadioItem,
-	DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import type { InboxItem } from "@/lib/api";
 import type { ContextCard, ContextCardSource } from "@/lib/sources/types";
 import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
 import { cn } from "@/lib/utils";
 import { SourceCard } from "./source-card";
 import { SourceIcon } from "./source-icon";
-import { useInboxItems } from "./use-inbox-items";
+import {
+	type InboxItemWithDetailRef,
+	type InboxKind,
+	useInboxItems,
+} from "./use-inbox-items";
+
+/** Map the GitHub sub-tab id to the kind the inbox hook fetches. The
+ *  GitHubTypeFilter ids share the same string shape as `ContextCardSource`,
+ *  so a single literal table keeps them in sync. */
+const TAB_TO_INBOX_KIND: Record<GitHubTypeFilter["id"], InboxKind> = {
+	github_issue: "issues",
+	github_pr: "prs",
+	github_discussion: "discussions",
+};
 
 /** Matches the constant in App.tsx — keep these in sync (one of two
  * dispatchers in the codebase). Centralising would require a new shared
@@ -44,7 +41,7 @@ type SourceFilter = {
 };
 
 type GitHubTypeFilter = {
-	id: "all" | "github_issue" | "github_pr" | "github_discussion";
+	id: "github_issue" | "github_pr" | "github_discussion";
 	label: string;
 	sources: Extract<
 		ContextCardSource,
@@ -63,13 +60,8 @@ const SOURCE_FILTERS: SourceFilter[] = [
 ];
 
 const GITHUB_TYPE_FILTERS: GitHubTypeFilter[] = [
-	{
-		id: "all",
-		label: "All",
-		sources: ["github_issue", "github_pr", "github_discussion"],
-	},
 	{ id: "github_issue", label: "Issues", sources: ["github_issue"] },
-	{ id: "github_pr", label: "Pull requests", sources: ["github_pr"] },
+	{ id: "github_pr", label: "PRs", sources: ["github_pr"] },
 	{
 		id: "github_discussion",
 		label: "Discussions",
@@ -89,7 +81,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 	const [selectedSource, setSelectedSource] =
 		useState<SourceFilter["id"]>("github");
 	const [githubTypeFilter, setGithubTypeFilter] =
-		useState<GitHubTypeFilter["id"]>("all");
+		useState<GitHubTypeFilter["id"]>("github_issue");
 	const selectedFilter =
 		SOURCE_FILTERS.find((filter) => filter.id === selectedSource) ??
 		SOURCE_FILTERS[0];
@@ -102,17 +94,17 @@ export const InboxSidebar = memo(function InboxSidebar({
 		() => (accountsQuery.data ?? []).some((a) => a.provider === "github"),
 		[accountsQuery.data],
 	);
-	const inbox = useInboxItems();
-	const filteredCards = useMemo<ContextCard[]>(() => {
-		// The Rust adapter only emits github_* items today; the type-tab
-		// filter then narrows further to the user's selected sub-type.
-		const allowed = new Set(selectedGitHubTypeFilter.sources);
-		return inbox.items
-			.filter((item) =>
-				allowed.has(item.source as GitHubTypeFilter["sources"][number]),
-			)
-			.map(inboxItemToContextCard);
-	}, [inbox.items, selectedGitHubTypeFilter]);
+	// Each sub-tab drives its own infinite query: the backend's
+	// merge-then-truncate window otherwise crowds out kinds with less
+	// recent activity (issues + discussions get pushed past the visible
+	// page when PRs dominate). Keying the hook on the active tab also
+	// means TanStack reuses each tab's previous pages on switch-back.
+	const inboxKind = TAB_TO_INBOX_KIND[selectedGitHubTypeFilter.id];
+	const inbox = useInboxItems(inboxKind);
+	const filteredCards = useMemo<ContextCard[]>(
+		() => inbox.items.map(inboxItemToContextCard),
+		[inbox.items],
+	);
 
 	// IntersectionObserver-driven infinite scroll. Sentinel at the
 	// bottom of the list — entering the visible area pages forward.
@@ -185,54 +177,32 @@ export const InboxSidebar = memo(function InboxSidebar({
 			</div>
 
 			{selectedFilter.id === "github" ? (
-				<div className="mt-1.5 flex h-5 items-center justify-between gap-1.5 pr-4 pl-3">
-					{selectedGitHubTypeFilter.id !== "all" ? (
-						<Badge
-							variant="secondary"
-							className="h-5 max-w-[122px] rounded-md border border-border/50 bg-accent/50 px-1.5 py-0 text-[10.5px] leading-none text-muted-foreground"
-						>
-							<span className="truncate">{selectedGitHubTypeFilter.label}</span>
+				<div className="mt-1.5 pr-4 pl-3">
+					<div className="grid h-6 grid-cols-3 gap-0.5 rounded-md border border-border/45 bg-background/35 p-0.5">
+						{GITHUB_TYPE_FILTERS.map((filter) => (
 							<button
+								key={filter.id}
 								type="button"
-								aria-label={`Clear ${selectedGitHubTypeFilter.label} filter`}
-								onClick={() => setGithubTypeFilter("all")}
-								className="ml-0.5 flex size-3.5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground/75 hover:bg-foreground/10 hover:text-foreground"
+								aria-pressed={githubTypeFilter === filter.id}
+								onClick={() => setGithubTypeFilter(filter.id)}
+								className={cn(
+									"flex min-w-0 cursor-pointer items-center justify-center rounded-[5px] px-1 py-0.5 text-[10px] font-medium leading-none text-muted-foreground transition-[background-color,color,box-shadow]",
+									"hover:bg-accent/45 hover:text-foreground",
+									githubTypeFilter === filter.id &&
+										"bg-accent/75 text-foreground shadow-xs",
+								)}
 							>
-								<X className="size-2.5" strokeWidth={2} />
+								<span className="flex h-3.5 min-w-0 items-center justify-center gap-1 leading-none">
+									<SourceIcon
+										source={filter.sources[0]}
+										size={10}
+										className="block shrink-0"
+									/>
+									<span className="truncate leading-none">{filter.label}</span>
+								</span>
 							</button>
-						</Badge>
-					) : (
-						<div className="min-w-0" />
-					)}
-
-					<DropdownMenu>
-						<DropdownMenuTrigger asChild>
-							<Button
-								type="button"
-								variant="ghost"
-								size="xs"
-								className="h-5 gap-1 rounded-md px-1.5 text-[10.5px] leading-none text-muted-foreground hover:text-foreground"
-							>
-								<Funnel className="size-2.5" strokeWidth={2} />
-								Filter
-								<ChevronDown className="size-2.5" strokeWidth={2} />
-							</Button>
-						</DropdownMenuTrigger>
-						<DropdownMenuContent align="end" className="w-36">
-							<DropdownMenuRadioGroup
-								value={githubTypeFilter}
-								onValueChange={(value) =>
-									setGithubTypeFilter(value as GitHubTypeFilter["id"])
-								}
-							>
-								{GITHUB_TYPE_FILTERS.map((filter) => (
-									<DropdownMenuRadioItem key={filter.id} value={filter.id}>
-										{filter.label}
-									</DropdownMenuRadioItem>
-								))}
-							</DropdownMenuRadioGroup>
-						</DropdownMenuContent>
-					</DropdownMenu>
+						))}
+					</div>
 				</div>
 			) : null}
 
@@ -341,7 +311,7 @@ function InboxErrorState({
  * SourceCard renders. `meta` is synthesized as a minimal placeholder —
  * SourceCard reads only `source / externalId / title / state /
  * lastActivityAt`, so the meta variant only needs to satisfy types. */
-function inboxItemToContextCard(item: InboxItem): ContextCard {
+function inboxItemToContextCard(item: InboxItemWithDetailRef): ContextCard {
 	const externalId = item.externalId;
 	const number = parseExternalNumber(externalId);
 	const repo = parseExternalRepo(externalId);
@@ -354,6 +324,7 @@ function inboxItemToContextCard(item: InboxItem): ContextCard {
 		subtitle: item.subtitle ?? undefined,
 		state: item.state ?? undefined,
 		lastActivityAt: item.lastActivityAt,
+		detailRef: item.detailRef,
 	};
 	switch (item.source) {
 		case "github_issue":

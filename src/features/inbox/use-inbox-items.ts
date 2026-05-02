@@ -2,6 +2,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import {
 	type InboxItem,
+	type InboxItemDetailRef,
 	type InboxPage,
 	type InboxToggles,
 	listInboxItems,
@@ -45,7 +46,7 @@ function useEnabledGithubAccounts(): GithubAccountInboxArgs[] {
 }
 
 export type UseInboxItemsResult = {
-	items: InboxItem[];
+	items: InboxItemWithDetailRef[];
 	hasNextPage: boolean;
 	isLoading: boolean;
 	isFetching: boolean;
@@ -55,46 +56,57 @@ export type UseInboxItemsResult = {
 	refetch: () => void;
 };
 
-/** Drives the kanban-inbox list. Currently single-account (the picker
- * exposes one login at a time); the hook is kept account-aware so we
- * can fan out cleanly when multi-account inbox lands. */
-export function useInboxItems(): UseInboxItemsResult {
+export type InboxItemWithDetailRef = InboxItem & {
+	detailRef: InboxItemDetailRef;
+};
+
+/** Which sub-tab the inbox sidebar is showing. The Rust backend supports
+ * multi-source merging, but in practice an active developer's recent
+ * activity is dominated by PRs — merging into a single page-20 window
+ * crowds out issues and discussions to "page 2+" they'd never reach
+ * through the UI. So each tab gets its own dedicated infinite query
+ * with `toggles` set so the backend only fetches the requested kind. */
+export type InboxKind = "issues" | "prs" | "discussions";
+
+const KIND_TO_TOGGLES: Record<InboxKind, InboxToggles> = {
+	issues: { issues: true, prs: false, discussions: false },
+	prs: { issues: false, prs: true, discussions: false },
+	discussions: { issues: false, prs: false, discussions: true },
+};
+
+/** Drives the kanban-inbox list for ONE sub-tab at a time. The caller
+ * passes the current GitHub sub-type tab; switching tabs swaps to a
+ * different cached query (TanStack reuses prior pages on switch-back).
+ *
+ * Single-account today — picks the first GitHub login. The hook is
+ * shaped for future multi-account fan-out (run one infinite query per
+ * account-kind pair, merge in the consumer). */
+export function useInboxItems(kind: InboxKind): UseInboxItemsResult {
 	const accounts = useEnabledGithubAccounts();
-	// V1: single account. Pick the first one and run a per-account
-	// infinite query against it.
 	const primary = accounts[0] ?? null;
-	const enabled =
-		primary !== null &&
-		(primary.toggles.issues ||
-			primary.toggles.prs ||
-			primary.toggles.discussions);
+	// Honor the per-account settings toggle for THIS kind — flipping
+	// `Issues` off in Settings → Inbox disables this tab's fetch.
+	const settingsAllowsKind = primary
+		? kind === "issues"
+			? primary.toggles.issues
+			: kind === "prs"
+				? primary.toggles.prs
+				: primary.toggles.discussions
+		: false;
+	const enabled = primary !== null && settingsAllowsKind;
 
 	const query = useInfiniteQuery<InboxPage, Error>({
-		// Re-key on toggle changes so flipping a switch in Settings
-		// triggers a fresh first-page fetch.
-		queryKey: [
-			"inbox-items",
-			"github",
-			primary?.login ?? "",
-			primary?.toggles.issues ?? false,
-			primary?.toggles.prs ?? false,
-			primary?.toggles.discussions ?? false,
-		],
+		queryKey: ["inbox-items", "github", primary?.login ?? "", kind],
 		enabled,
 		initialPageParam: null as string | null,
 		queryFn: async ({ pageParam }) => {
 			if (!primary) {
 				return { items: [], nextCursor: null };
 			}
-			const toggles: InboxToggles = {
-				issues: primary.toggles.issues,
-				prs: primary.toggles.prs,
-				discussions: primary.toggles.discussions,
-			};
 			return listInboxItems({
 				provider: "github",
 				login: primary.login,
-				toggles,
+				toggles: KIND_TO_TOGGLES[kind],
 				cursor: typeof pageParam === "string" ? pageParam : null,
 				limit: PAGE_SIZE,
 			});
@@ -103,9 +115,20 @@ export function useInboxItems(): UseInboxItemsResult {
 		staleTime: STALE_MS,
 	});
 
-	const items = useMemo(
-		() => (query.data?.pages ?? []).flatMap((p) => p.items),
-		[query.data],
+	const items = useMemo<InboxItemWithDetailRef[]>(
+		() =>
+			(query.data?.pages ?? []).flatMap((p) =>
+				p.items.map((item) => ({
+					...item,
+					detailRef: {
+						provider: "github",
+						login: primary?.login ?? "",
+						source: item.source,
+						externalId: item.externalId,
+					},
+				})),
+			),
+		[primary?.login, query.data],
 	);
 
 	return {
