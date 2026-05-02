@@ -46,10 +46,10 @@ const DEAD_COLUMNS: &[(&str, &str)] = &[
     ("repos", "conductor_config"),
     ("repos", "custom_prompt_code_review"),
     ("repos", "icon"),
-    // `branch_prefix_type` was once a stub here. The multi-account
-    // refactor revived it as a real per-repo column — keep it OUT of
-    // this list so the column survives startup.
-    ("repos", "run_script_mode"),
+    // `branch_prefix_type` and `run_script_mode` were once stubs here.
+    // Both have since been revived as real per-repo columns (multi-account
+    // refactor and non-concurrent run mode respectively) — keep them OUT
+    // of this list so they survive startup.
     ("repos", "storage_version"),
     // workspaces: legacy fields with no read path in production.
     ("workspaces", "big_terminal_mode"),
@@ -426,6 +426,17 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add branch_prefix_type column")?;
     }
 
+    // Migration: per-repo run-script mode. 'concurrent' (default) preserves
+    // the historical behavior of allowing multiple workspaces in the same
+    // repo to run their scripts at once. 'non-concurrent' makes a new run
+    // stop any other run script in the same repo first — convenient when
+    // the script binds a fixed port.
+    if has_table(connection, "repos") && !has_column(connection, "repos", "run_script_mode") {
+        connection
+            .execute_batch("ALTER TABLE repos ADD COLUMN run_script_mode TEXT DEFAULT 'concurrent'")
+            .context("Failed to add run_script_mode column")?;
+    }
+
     if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "pr_sync_state")
     {
         connection
@@ -527,6 +538,7 @@ CREATE TABLE IF NOT EXISTS repos (
     forge_login TEXT,
     branch_prefix_type TEXT,
     branch_prefix_custom TEXT,
+    run_script_mode TEXT DEFAULT 'concurrent',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -1187,6 +1199,39 @@ mod tests {
         let (connection, _dir) = open_test_db();
         ensure_schema(&connection).unwrap();
         assert!(column_exists(&connection, "repos", "forge_login"));
+    }
+
+    #[test]
+    fn run_script_mode_present_on_fresh_install() {
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+        assert!(column_exists(&connection, "repos", "run_script_mode"));
+    }
+
+    #[test]
+    fn run_script_mode_retained_from_legacy_schema() {
+        // Conductor DBs already carry this column. Migration must keep it
+        // (and any persisted value) rather than dropping it.
+        let (connection, _dir) = open_test_db();
+        create_legacy_schema(&connection);
+        connection
+            .execute(
+                "INSERT INTO repos (id, name, run_script_mode) VALUES ('r1', 'x', 'non-concurrent')",
+                [],
+            )
+            .unwrap();
+
+        run_migrations(&connection).unwrap();
+        assert!(column_exists(&connection, "repos", "run_script_mode"));
+
+        let mode: String = connection
+            .query_row(
+                "SELECT run_script_mode FROM repos WHERE id = 'r1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(mode, "non-concurrent");
     }
 
     #[test]

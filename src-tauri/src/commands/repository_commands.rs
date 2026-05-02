@@ -117,6 +117,11 @@ pub async fn update_repo_auto_run_setup(repo_id: String, enabled: bool) -> CmdRe
 }
 
 #[tauri::command]
+pub async fn update_repo_run_script_mode(repo_id: String, mode: String) -> CmdResult<()> {
+    run_blocking(move || repos::update_repo_run_script_mode(&repo_id, &mode)).await
+}
+
+#[tauri::command]
 pub async fn update_repo_preferences(
     repo_id: String,
     preferences: repos::RepoPreferences,

@@ -625,6 +625,10 @@ pub struct RepoScripts {
     /// Auto-run setup on workspace creation. DB-only — not configurable
     /// from `helmor.json`. Defaults to true.
     pub auto_run_setup: bool,
+    /// "concurrent" (default) lets the run script run in many workspaces
+    /// at once. "non-concurrent" makes a new run stop any other live run
+    /// in the same repo first — useful when the script binds a fixed port.
+    pub run_script_mode: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -678,17 +682,19 @@ pub fn load_repo_scripts(repo_id: &str, workspace_id: Option<&str>) -> Result<Re
     let connection = db::read_conn()?;
     let mut statement = connection
         .prepare(
-            "SELECT setup_script, run_script, archive_script, auto_run_setup FROM repos WHERE id = ?1",
+            "SELECT setup_script, run_script, archive_script, auto_run_setup, run_script_mode FROM repos WHERE id = ?1",
         )
         .with_context(|| format!("Failed to prepare script lookup for {repo_id}"))?;
 
-    let (db_setup, db_run, db_archive, auto_run_setup) = statement
+    let (db_setup, db_run, db_archive, auto_run_setup, run_script_mode) = statement
         .query_row([repo_id], |row| {
             Ok((
                 row.get::<_, Option<String>>(0)?,
                 row.get::<_, Option<String>>(1)?,
                 row.get::<_, Option<String>>(2)?,
                 row.get::<_, Option<i64>>(3)?.unwrap_or(1) != 0,
+                row.get::<_, Option<String>>(4)?
+                    .unwrap_or_else(|| "concurrent".to_string()),
             ))
         })
         .with_context(|| format!("Repository not found: {repo_id}"))?;
@@ -710,6 +716,7 @@ pub fn load_repo_scripts(repo_id: &str, workspace_id: Option<&str>) -> Result<Re
         run_from_project,
         archive_from_project,
         auto_run_setup,
+        run_script_mode,
     })
 }
 
@@ -797,6 +804,28 @@ pub fn update_repo_auto_run_setup(repo_id: &str, enabled: bool) -> Result<()> {
             rusqlite::params![if enabled { 1 } else { 0 }, repo_id],
         )
         .with_context(|| format!("Failed to update auto_run_setup for {repo_id}"))?;
+
+    if updated != 1 {
+        bail!("Repository not found: {repo_id}");
+    }
+
+    Ok(())
+}
+
+/// Persist the per-repo run-script mode. Accepts "concurrent" or
+/// "non-concurrent"; anything else is rejected so the column never holds
+/// an unrecognized value.
+pub fn update_repo_run_script_mode(repo_id: &str, mode: &str) -> Result<()> {
+    if mode != "concurrent" && mode != "non-concurrent" {
+        bail!("Invalid run_script_mode: {mode}");
+    }
+    let connection = db::write_conn()?;
+    let updated = connection
+        .execute(
+            "UPDATE repos SET run_script_mode = ?1, updated_at = datetime('now') WHERE id = ?2",
+            rusqlite::params![mode, repo_id],
+        )
+        .with_context(|| format!("Failed to update run_script_mode for {repo_id}"))?;
 
     if updated != 1 {
         bail!("Repository not found: {repo_id}");

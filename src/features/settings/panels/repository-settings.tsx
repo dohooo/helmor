@@ -47,6 +47,7 @@ import {
 	prefetchRemoteRefs,
 	type RepositoryCreateOption,
 	updateRepoAutoRunSetup,
+	updateRepoRunScriptMode,
 	updateRepoScripts,
 	updateRepositoryBranchPrefix,
 	updateRepositoryDefaultBranch,
@@ -742,6 +743,7 @@ function ScriptsSection({
 	const [runScript, setRunScript] = useState("");
 	const [archiveScript, setArchiveScript] = useState("");
 	const [autoRunSetup, setAutoRunSetup] = useState(false);
+	const [runExclusive, setRunExclusive] = useState(false);
 	const initialized = useRef(false);
 
 	useEffect(() => {
@@ -752,7 +754,10 @@ function ScriptsSection({
 		if (shouldSyncSetup) setSetupScript(data.setupScript ?? "");
 		if (shouldSyncRun) setRunScript(data.runScript ?? "");
 		if (shouldSyncArchive) setArchiveScript(data.archiveScript ?? "");
-		if (!initialized.current) setAutoRunSetup(data.autoRunSetup);
+		if (!initialized.current) {
+			setAutoRunSetup(data.autoRunSetup);
+			setRunExclusive(data.runScriptMode === "non-concurrent");
+		}
 		if (!setupLocked && !runLocked && !archiveLocked) {
 			initialized.current = true;
 		}
@@ -823,7 +828,23 @@ function ScriptsSection({
 		[repoId, queryClient],
 	);
 
+	const handleRunExclusiveChange = useCallback(
+		(checked: boolean) => {
+			setRunExclusive(checked);
+			void updateRepoRunScriptMode(
+				repoId,
+				checked ? "non-concurrent" : "concurrent",
+			).then(() => {
+				void queryClient.invalidateQueries({
+					queryKey: ["repoScripts", repoId],
+				});
+			});
+		},
+		[repoId, queryClient],
+	);
+
 	const setupHasScript = !!setupScript.trim();
+	const runHasScript = !!runScript.trim();
 
 	return (
 		<div className="py-5">
@@ -880,6 +901,34 @@ function ScriptsSection({
 					locked={runLocked}
 					lockedMessage="Set by this workspace's helmor.json — edit it there"
 					onChange={handleRunChange}
+					headerRight={
+						<div className="flex items-center gap-1.5">
+							<span className="text-[11px] font-medium text-muted-foreground">
+								Exclusive
+							</span>
+							<TooltipProvider>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<HelpCircle
+											className="size-3 cursor-help text-muted-foreground/70"
+											strokeWidth={1.8}
+										/>
+									</TooltipTrigger>
+									<TooltipContent side="top" className="max-w-[240px]">
+										Only let one workspace run this script at a time. Starting a
+										new run stops any other run in this repository — useful when
+										the script binds a fixed port.
+									</TooltipContent>
+								</Tooltip>
+							</TooltipProvider>
+							<Switch
+								checked={runExclusive}
+								onCheckedChange={handleRunExclusiveChange}
+								disabled={!runHasScript}
+								aria-label="Stop other runs in this repository when starting a new run"
+							/>
+						</div>
+					}
 				/>
 				<ScriptField
 					label="Archive script"
