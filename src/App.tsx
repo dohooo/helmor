@@ -533,7 +533,7 @@ function AppShell({
 		useState<WorkspaceViewMode>("conversation");
 	const [kanbanComposerVisible, setKanbanComposerVisible] = useState(false);
 	const [kanbanInboxWidth, setKanbanInboxWidth] = useState(280);
-	const [kanbanBoardWidth, setKanbanBoardWidth] = useState(360);
+	const [kanbanBoardWidth, setKanbanBoardWidth] = useState(332);
 	const [kanbanResizeState, setKanbanResizeState] =
 		useState<KanbanResizeState | null>(null);
 	const [editorSession, setEditorSession] = useState<EditorSessionState | null>(

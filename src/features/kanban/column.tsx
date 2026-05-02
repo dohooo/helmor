@@ -62,7 +62,7 @@ export function KanbanColumn({
 		<section
 			aria-label={label}
 			className={cn(
-				"flex min-h-0 w-[280px] shrink-0 flex-col rounded-lg border border-border/60 bg-sidebar transition-[border-color,background-color,box-shadow] duration-150",
+				"flex min-h-0 w-[280px] shrink-0 snap-start flex-col rounded-lg border border-border/60 bg-sidebar transition-[border-color,background-color,box-shadow] duration-150 [scroll-snap-stop:always]",
 				(isDropTarget || isOver) &&
 					"border-primary/35 bg-sidebar ring-1 ring-primary/15",
 			)}
