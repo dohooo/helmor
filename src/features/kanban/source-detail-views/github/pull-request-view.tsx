@@ -1,22 +1,33 @@
+import { useQuery } from "@tanstack/react-query";
+import { getInboxItemDetail } from "@/lib/api";
+import { helmorQueryKeys } from "@/lib/query-client";
 import { GitHubDetailPage, type SourceDetailProps } from "../common";
 
-const PULL_REQUEST_DESCRIPTION = `## Summary
-
-This refines the GitHub inbox detail surface so opened pull requests read like a lightweight GitHub conversation view instead of an internal debug panel.
-
-The main change is replacing the table-based layout with a focused markdown description area. The header keeps the important scan targets: title, number, repository, state, and update time.
-
-## Test plan
-
-- [x] Open a GitHub pull request card from the inbox
-- [x] Confirm the header stays compact and readable
-- [x] Confirm markdown headings, lists, and checkboxes render correctly`;
-
 export function GitHubPullRequestView({ card }: SourceDetailProps) {
+	const detailRef =
+		card.detailRef?.source === "github_pr" ? card.detailRef : null;
+	const detailQuery = useQuery({
+		queryKey: detailRef
+			? helmorQueryKeys.inboxItemDetail(
+					detailRef.provider,
+					detailRef.login,
+					detailRef.source,
+					detailRef.externalId,
+				)
+			: ["inboxItemDetail", "missing", card.id],
+		queryFn: () => getInboxItemDetail(detailRef!),
+		enabled: detailRef !== null,
+		staleTime: 60_000,
+	});
+	const detail =
+		detailQuery.data?.type === "github_pr" ? detailQuery.data.data : null;
+
 	return (
 		<GitHubDetailPage
 			card={card}
-			description={PULL_REQUEST_DESCRIPTION}
+			description={detail?.body ?? undefined}
+			error={detailQuery.error}
+			isLoading={detailQuery.isLoading}
 			kindLabel="pull request"
 		/>
 	);

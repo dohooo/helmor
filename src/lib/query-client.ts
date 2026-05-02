@@ -95,6 +95,12 @@ export const helmorQueryKeys = {
 	/// invalidates the heavyweight `forgeAccounts` cache.
 	forgeLogins: (provider: string, host: string) =>
 		["forgeLogins", provider, host] as const,
+	inboxItemDetail: (
+		provider: string,
+		login: string,
+		source: string,
+		externalId: string,
+	) => ["inboxItemDetail", provider, login, source, externalId] as const,
 	workspaceGitActionStatus: (workspaceId: string) =>
 		["workspaceGitActionStatus", workspaceId] as const,
 	workspaceForgeActionStatus: (workspaceId: string) =>

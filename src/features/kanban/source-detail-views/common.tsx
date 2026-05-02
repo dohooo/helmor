@@ -1,6 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowUpRight, Clock3 } from "lucide-react";
 import { Suspense } from "react";
+import { HelmorLogoAnimated } from "@/components/helmor-logo-animated";
 import { LazyStreamdown } from "@/components/streamdown-loader";
 import { Button } from "@/components/ui/button";
 import { STATE_TONE_CLASS } from "@/features/inbox/state-tone";
@@ -14,16 +15,20 @@ export type SourceDetailProps = {
 export function GitHubDetailPage({
 	card,
 	description,
+	isLoading,
+	error,
 	kindLabel,
 }: {
 	card: ContextCard;
-	description: string;
+	description?: string;
+	isLoading?: boolean;
+	error?: Error | null;
 	kindLabel: string;
 }) {
 	const reference = parseExternalReference(card.externalId);
 
 	return (
-		<article className="mx-auto flex h-full w-full max-w-5xl flex-col overflow-hidden">
+		<article className="mx-auto flex h-full w-full max-w-5xl flex-col overflow-y-auto pr-1">
 			<header className="shrink-0 border-b border-border/70 pb-4">
 				<div className="flex min-w-0 items-start justify-between gap-4">
 					<div className="min-w-0 flex-1">
@@ -59,10 +64,39 @@ export function GitHubDetailPage({
 				</div>
 			</header>
 
-			<div className="min-h-0 flex-1 overflow-y-auto py-5">
-				<MarkdownBody body={description} />
+			<div
+				className={cn(
+					"min-h-0 flex-1",
+					isLoading || error ? "flex items-center justify-center" : "py-5",
+				)}
+			>
+				{isLoading ? (
+					<DetailLoadingState />
+				) : error ? (
+					<DetailErrorState error={error} />
+				) : (
+					<MarkdownBody
+						body={description?.trim() || "No description provided."}
+					/>
+				)}
 			</div>
 		</article>
+	);
+}
+
+function DetailLoadingState() {
+	return (
+		<div className="flex items-center justify-center">
+			<HelmorLogoAnimated size={42} className="opacity-30" />
+		</div>
+	);
+}
+
+function DetailErrorState({ error }: { error: Error }) {
+	return (
+		<div className="text-center text-[13px] text-muted-foreground">
+			{error.message}
+		</div>
 	);
 }
 

@@ -1,7 +1,7 @@
 use crate::forge::{
     self,
     accounts::{self, ForgeAccount},
-    github::inbox::{self as github_inbox, InboxPage, InboxToggles},
+    github::inbox::{self as github_inbox, InboxItemDetail, InboxPage, InboxSource, InboxToggles},
     ChangeRequestInfo, ForgeActionStatus, ForgeDetection, ForgeProvider, RemoteState,
 };
 // `accounts` re-exports the dispatchers; provider-specific work
@@ -63,6 +63,22 @@ pub async fn list_inbox_items(
             items: Vec::new(),
             next_cursor: None,
         }),
+    })
+    .await
+}
+
+/// Fetch native detail data for one inbox item. The command is a shared
+/// entry point, but each provider/source owns its own response shape.
+#[tauri::command]
+pub async fn get_inbox_item_detail(
+    provider: ForgeProvider,
+    login: String,
+    source: InboxSource,
+    external_id: String,
+) -> CmdResult<Option<InboxItemDetail>> {
+    run_blocking(move || match provider {
+        ForgeProvider::Github => github_inbox::get_inbox_item_detail(&login, source, &external_id),
+        ForgeProvider::Gitlab | ForgeProvider::Unknown => Ok(None),
     })
     .await
 }

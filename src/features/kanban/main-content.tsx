@@ -194,7 +194,7 @@ export function KanbanMainContent({
 				</div>
 			</header>
 
-			<div className="min-h-0 flex-1 px-4 py-3">
+			<div className="min-h-0 flex-1 pt-3 pr-0 pb-[11rem] pl-4">
 				<KanbanTabContent tab={activeTab} />
 			</div>
 		</div>

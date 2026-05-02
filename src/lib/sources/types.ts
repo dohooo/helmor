@@ -24,6 +24,15 @@ export type ContextCard = {
 	subtitle?: string;
 	state?: { label: string; tone: ContextCardStateTone };
 	lastActivityAt: number;
+	detailRef?: {
+		provider: "github";
+		login: string;
+		source: Extract<
+			ContextCardSource,
+			"github_issue" | "github_pr" | "github_discussion"
+		>;
+		externalId: string;
+	};
 	meta: ContextCardMeta;
 };
 

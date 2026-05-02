@@ -8,11 +8,15 @@
 //! fetches the next batch from each kind that's still ongoing, merges
 //! by `updatedAt` desc, and returns the top `limit` items.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 
-use super::api::{run_graphql, GraphqlOutcome};
+use super::{
+    accounts as gh_accounts,
+    api::{looks_like_auth_rejection, run_graphql, GraphqlOutcome, GITHUB_HOST},
+};
+use crate::forge::command::command_detail;
 
 /// Per-kind toggle the user picks in Settings → Inbox.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -48,7 +52,7 @@ pub struct InboxItem {
     pub last_activity_at: i64,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InboxSource {
     GithubIssue,
@@ -74,6 +78,43 @@ pub enum InboxStateTone {
     Unanswered,
     Urgent,
     Neutral,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum InboxItemDetail {
+    GithubIssue(GithubIssueDetail),
+    GithubPr(Box<GithubPullRequestDetail>),
+    GithubDiscussion(GithubDiscussionDetail),
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubIssueDetail {
+    pub external_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubPullRequestDetail {
+    pub external_id: String,
+    pub title: String,
+    pub body: Option<String>,
+    pub url: String,
+    pub state: String,
+    pub merged: bool,
+    pub draft: bool,
+    pub author_login: Option<String>,
+    pub base_ref_name: Option<String>,
+    pub head_ref_name: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubDiscussionDetail {
+    pub external_id: String,
 }
 
 /// Public entry point — driven by the `list_inbox_items` Tauri command.
@@ -209,6 +250,117 @@ pub fn list_inbox_items(
     );
 
     Ok(InboxPage { items, next_cursor })
+}
+
+/// Detail entry point for a single GitHub inbox item. The command shape
+/// is in place so each source can grow its native detail query without
+/// forcing a shared cross-provider schema.
+pub fn get_inbox_item_detail(
+    login: &str,
+    source: InboxSource,
+    external_id: &str,
+) -> Result<Option<InboxItemDetail>> {
+    let detail = match source {
+        InboxSource::GithubIssue => InboxItemDetail::GithubIssue(GithubIssueDetail {
+            external_id: external_id.to_string(),
+        }),
+        InboxSource::GithubPr => return fetch_pull_request_detail(login, external_id),
+        InboxSource::GithubDiscussion => {
+            InboxItemDetail::GithubDiscussion(GithubDiscussionDetail {
+                external_id: external_id.to_string(),
+            })
+        }
+    };
+    Ok(Some(detail))
+}
+
+fn fetch_pull_request_detail(login: &str, external_id: &str) -> Result<Option<InboxItemDetail>> {
+    let (owner, repo, number) = parse_external_reference(external_id)?;
+    let path = format!("/repos/{owner}/{repo}/pulls/{number}");
+    let args = [
+        "api",
+        "--hostname",
+        GITHUB_HOST,
+        "-H",
+        "Accept: application/vnd.github+json",
+        path.as_str(),
+    ];
+    let output = match gh_accounts::run_cli_with_login(GITHUB_HOST, login, &args) {
+        Ok(output) => output,
+        Err(error) => {
+            let message = format!("{error:#}");
+            if looks_like_auth_rejection(&message) {
+                return Ok(None);
+            }
+            return Err(error.context("Failed to spawn `gh api` for GitHub PR detail"));
+        }
+    };
+
+    if !output.success {
+        let detail = command_detail(&output);
+        if looks_like_auth_rejection(&detail) {
+            return Ok(None);
+        }
+        return Err(anyhow!("`gh api` failed for GitHub PR detail: {detail}"));
+    }
+
+    let response = serde_json::from_str::<PullRequestRestResponse>(&output.stdout)
+        .with_context(|| "Failed to decode GitHub PR detail response".to_string())?;
+    Ok(Some(InboxItemDetail::GithubPr(Box::new(
+        GithubPullRequestDetail {
+            external_id: external_id.to_string(),
+            title: response.title,
+            body: response.body,
+            url: response.html_url,
+            state: response.state,
+            merged: response.merged,
+            draft: response.draft.unwrap_or(false),
+            author_login: response.user.map(|user| user.login),
+            base_ref_name: response.base.map(|base| base.ref_name),
+            head_ref_name: response.head.map(|head| head.ref_name),
+            created_at: response.created_at,
+            updated_at: response.updated_at,
+        },
+    ))))
+}
+
+fn parse_external_reference(external_id: &str) -> Result<(String, String, i64)> {
+    let Some((repo_with_owner, number)) = external_id.rsplit_once('#') else {
+        return Err(anyhow!("invalid GitHub PR reference: {external_id}"));
+    };
+    let Some((owner, repo)) = repo_with_owner.split_once('/') else {
+        return Err(anyhow!("invalid GitHub PR repository: {external_id}"));
+    };
+    let number = number
+        .parse::<i64>()
+        .with_context(|| format!("invalid GitHub PR number in {external_id}"))?;
+    Ok((owner.to_string(), repo.to_string(), number))
+}
+
+#[derive(Debug, Deserialize)]
+struct PullRequestRestResponse {
+    html_url: String,
+    title: String,
+    body: Option<String>,
+    state: String,
+    merged: bool,
+    draft: Option<bool>,
+    user: Option<PullRequestRestUser>,
+    base: Option<PullRequestRestRef>,
+    head: Option<PullRequestRestRef>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PullRequestRestUser {
+    login: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PullRequestRestRef {
+    #[serde(rename = "ref")]
+    ref_name: String,
 }
 
 /// Multi-source cursor — JSON-encoded under base64url so the frontend

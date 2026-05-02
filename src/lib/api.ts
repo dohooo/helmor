@@ -933,6 +933,41 @@ export type InboxItem = {
 	lastActivityAt: number;
 };
 
+export type InboxItemDetailRef = {
+	provider: Extract<ForgeProvider, "github">;
+	login: string;
+	source: InboxItemSource;
+	externalId: string;
+};
+
+export type GitHubIssueDetail = {
+	externalId: string;
+};
+
+export type GitHubPullRequestDetail = {
+	externalId: string;
+	title: string;
+	body?: string | null;
+	url: string;
+	state: string;
+	merged: boolean;
+	draft: boolean;
+	authorLogin?: string | null;
+	baseRefName?: string | null;
+	headRefName?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
+};
+
+export type GitHubDiscussionDetail = {
+	externalId: string;
+};
+
+export type InboxItemDetail =
+	| { type: "github_issue"; data: GitHubIssueDetail }
+	| { type: "github_pr"; data: GitHubPullRequestDetail }
+	| { type: "github_discussion"; data: GitHubDiscussionDetail };
+
 export type InboxPage = {
 	items: InboxItem[];
 	/** Opaque cursor — pass back verbatim to fetch the next page. `null`
@@ -963,6 +998,23 @@ export async function listInboxItems(args: {
 		});
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to load inbox items."));
+	}
+}
+
+export async function getInboxItemDetail(
+	ref: InboxItemDetailRef,
+): Promise<InboxItemDetail | null> {
+	try {
+		return await invoke<InboxItemDetail | null>("get_inbox_item_detail", {
+			provider: ref.provider,
+			login: ref.login,
+			source: ref.source,
+			externalId: ref.externalId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load inbox item details."),
+		);
 	}
 }
 
