@@ -2,20 +2,10 @@ import {
 	AppendContextButton,
 	type AppendContextRequestPayload,
 } from "@/components/append-context-button";
-import type { ContextCard, ContextCardStateTone } from "@/lib/sources/types";
+import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
 import { SourceIcon } from "./source-icon";
-
-const STATE_TONE_CLASS: Record<ContextCardStateTone, string> = {
-	open: "text-[var(--workspace-pr-open-accent)]",
-	closed: "text-[var(--workspace-pr-merged-accent)]",
-	merged: "text-[var(--workspace-pr-merged-accent)]",
-	draft: "text-muted-foreground",
-	answered: "text-[var(--workspace-pr-open-accent)]",
-	unanswered: "text-[var(--workspace-pr-conflicts-accent)]",
-	urgent: "text-[var(--workspace-pr-closed-accent)]",
-	neutral: "text-muted-foreground",
-};
+import { STATE_TONE_CLASS } from "./state-tone";
 
 export function SourceCard({
 	card,

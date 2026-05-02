@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, GitBranch, X } from "lucide-react";
 import {
-	type ComponentType,
 	type PointerEvent as ReactPointerEvent,
 	useEffect,
 	useMemo,
@@ -25,7 +24,8 @@ import { WorkspaceAvatar } from "@/features/navigation/avatar";
 import type { RepositoryCreateOption } from "@/lib/api";
 import { listRemoteBranches } from "@/lib/api";
 import { repositoriesQueryOptions } from "@/lib/query-client";
-import type { ContextCard, ContextCardSource } from "@/lib/sources/types";
+import type { ContextCard } from "@/lib/sources/types";
+import { SourceDetailView } from "./source-detail-views";
 
 export type KanbanMainTab = { card: ContextCard; id: string; kind: "card" };
 
@@ -288,104 +288,5 @@ function KanbanTabContent({ tab }: { tab: KanbanMainTab | null }) {
 		return null;
 	}
 
-	const DetailView = SOURCE_DETAIL_VIEWS[tab.card.source];
-	return <DetailView card={tab.card} />;
-}
-
-const SOURCE_DETAIL_VIEWS: Record<
-	ContextCardSource,
-	ComponentType<{ card: ContextCard }>
-> = {
-	github_discussion: GitHubDiscussionView,
-	github_issue: GitHubIssueView,
-	github_pr: GitHubPullRequestView,
-	linear: LinearIssueView,
-	slack_thread: SlackThreadView,
-};
-
-function LinearIssueView({ card }: { card: ContextCard }) {
-	return (
-		<MockDetailView
-			card={card}
-			eyebrow="Linear issue"
-			rows={["Priority", "Team", "Labels"]}
-		/>
-	);
-}
-
-function GitHubIssueView({ card }: { card: ContextCard }) {
-	return (
-		<MockDetailView
-			card={card}
-			eyebrow="GitHub issue"
-			rows={["Repository", "Issue", "Labels"]}
-		/>
-	);
-}
-
-function GitHubPullRequestView({ card }: { card: ContextCard }) {
-	return (
-		<MockDetailView
-			card={card}
-			eyebrow="GitHub pull request"
-			rows={["Repository", "Review", "CI"]}
-		/>
-	);
-}
-
-function GitHubDiscussionView({ card }: { card: ContextCard }) {
-	return (
-		<MockDetailView
-			card={card}
-			eyebrow="GitHub discussion"
-			rows={["Repository", "Category", "Replies"]}
-		/>
-	);
-}
-
-function SlackThreadView({ card }: { card: ContextCard }) {
-	return (
-		<MockDetailView
-			card={card}
-			eyebrow="Slack thread"
-			rows={["Workspace", "Channel", "Participants"]}
-		/>
-	);
-}
-
-function MockDetailView({
-	card,
-	eyebrow,
-	rows,
-}: {
-	card: ContextCard;
-	eyebrow: string;
-	rows: string[];
-}) {
-	return (
-		<div className="max-w-2xl text-left">
-			<div className="mb-2 flex items-center gap-2 text-[12px] font-medium text-muted-foreground">
-				<SourceIcon source={card.source} size={14} />
-				<span>{eyebrow}</span>
-			</div>
-			<h2 className="text-[18px] font-semibold leading-7 text-foreground">
-				{card.title}
-			</h2>
-			<div className="mt-1 text-[13px] text-muted-foreground">
-				{card.externalId}
-				{card.subtitle ? ` · ${card.subtitle}` : ""}
-			</div>
-			<div className="mt-5 grid max-w-md gap-2">
-				{rows.map((row) => (
-					<div
-						key={row}
-						className="flex items-center justify-between rounded-md border border-border/60 bg-sidebar px-3 py-2 text-[12px]"
-					>
-						<span className="text-muted-foreground">{row}</span>
-						<span className="font-medium text-foreground">Mock</span>
-					</div>
-				))}
-			</div>
-		</div>
-	);
+	return <SourceDetailView card={tab.card} />;
 }
