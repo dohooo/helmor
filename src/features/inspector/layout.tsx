@@ -179,6 +179,10 @@ export function InspectorTabsSection({
 	// the panel from collapsing on mouse-leave so text selection can extend
 	// beyond the container boundary without interruption.
 	const isSelectingRef = useRef(false);
+	// Right-click menu portal renders outside the container, so mouseleave
+	// fires the moment the cursor crosses into a menu item. Hold the zoom open
+	// until the menu closes, then re-check the pointer.
+	const isTabContextMenuOpenRef = useRef(false);
 	// Holds the outstanding `suspendTerminalFit()` release while the CSS
 	// width/height transition is running, plus the timer that will release it
 	// and trigger the final fit.
@@ -324,6 +328,14 @@ export function InspectorTabsSection({
 		if (isSelectingRef.current) {
 			return;
 		}
+		// Don't collapse while a tab's right-click menu is open. The menu
+		// renders in a portal outside the container, so moving the cursor
+		// onto it triggers mouseleave even though the user is still
+		// interacting with our UI. The menu's onOpenChange handler re-checks
+		// the pointer once it closes.
+		if (isTabContextMenuOpenRef.current) {
+			return;
+		}
 		if (hadPendingHoverIntent || (!isHoverExpanded && !isZoomPresented)) {
 			return;
 		}
@@ -336,6 +348,20 @@ export function InspectorTabsSection({
 		beginZoomAnimation,
 		setZoomTarget,
 	]);
+
+	// On close, re-evaluate whether to collapse — the mouseleave that fired
+	// while the menu was open was suppressed.
+	const handleTabContextMenuOpenChange = useCallback(
+		(open: boolean) => {
+			isTabContextMenuOpenRef.current = open;
+			if (open) return;
+			if (pointerInsideContainerRef.current) return;
+			if (!isHoverExpanded && !isZoomPresented) return;
+			beginZoomAnimation();
+			setZoomTarget(false);
+		},
+		[isHoverExpanded, isZoomPresented, beginZoomAnimation, setZoomTarget],
+	);
 
 	// When the panel collapses we must drop any pending/active zoom so it
 	// doesn't linger over the neighbouring sections. Also release any
@@ -626,7 +652,10 @@ export function InspectorTabsSection({
 										const isActive = activeTab === instance.id;
 										const isHoverZoomDisabled = instance.hoverZoomDisabled;
 										return (
-											<ContextMenu key={instance.id}>
+											<ContextMenu
+												key={instance.id}
+												onOpenChange={handleTabContextMenuOpenChange}
+											>
 												<ContextMenuTrigger asChild>
 													<div
 														role="tab"
@@ -683,7 +712,7 @@ export function InspectorTabsSection({
 														/>
 													</div>
 												</ContextMenuTrigger>
-												<ContextMenuContent className="min-w-44 rounded-xl p-1.5">
+												<ContextMenuContent className="min-w-48">
 													<ContextMenuItem
 														onClick={() =>
 															onToggleTerminalHoverZoom(
@@ -691,16 +720,15 @@ export function InspectorTabsSection({
 																!isHoverZoomDisabled,
 															)
 														}
-														className="gap-2.5 rounded-md px-2.5 py-1.5 text-[13px]"
 													>
 														{isHoverZoomDisabled ? (
 															<ZoomIn
-																className="size-3.5 shrink-0"
+																className="size-4 shrink-0"
 																strokeWidth={1.6}
 															/>
 														) : (
 															<ZoomOut
-																className="size-3.5 shrink-0"
+																className="size-4 shrink-0"
 																strokeWidth={1.6}
 															/>
 														)}
@@ -713,12 +741,8 @@ export function InspectorTabsSection({
 													<ContextMenuSeparator />
 													<ContextMenuItem
 														onClick={() => onCloseTerminal(instance.id)}
-														className="gap-2.5 rounded-md px-2.5 py-1.5 text-[13px]"
 													>
-														<X
-															className="size-3.5 shrink-0"
-															strokeWidth={1.6}
-														/>
+														<X className="size-4 shrink-0" strokeWidth={1.6} />
 														<span>Close terminal</span>
 													</ContextMenuItem>
 												</ContextMenuContent>

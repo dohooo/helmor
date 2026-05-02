@@ -475,21 +475,23 @@ export const SettingsDialog = memo(function SettingsDialog({
 														const swatchAccent = isLight
 															? opt.lightAccent
 															: opt.accent;
+														const isSelected = settings.darkTheme === opt.id;
 														return (
 															<button
 																key={opt.id}
 																type="button"
 																title={opt.label}
 																aria-label={opt.label}
-																aria-pressed={settings.darkTheme === opt.id}
+																aria-pressed={isSelected}
 																className={cn(
-																	"h-7 w-7 cursor-pointer overflow-hidden rounded-full transition-all",
-																	settings.darkTheme === opt.id
-																		? "scale-110 ring-2 ring-foreground/70 ring-offset-2 ring-offset-background"
-																		: "hover:scale-105 hover:ring-1 hover:ring-border hover:ring-offset-1 hover:ring-offset-background",
+																	"h-7 w-7 cursor-pointer rounded-full transition-transform duration-150",
+																	isSelected ? "scale-105" : "hover:scale-105",
 																)}
 																style={{
 																	background: `linear-gradient(135deg, ${swatchBg}, ${swatchAccent})`,
+																	boxShadow: isSelected
+																		? `0 0 0 2px var(--background), 0 0 0 3.5px ${swatchBg}`
+																		: undefined,
 																}}
 																onClick={() =>
 																	updateSettings({ darkTheme: opt.id })
