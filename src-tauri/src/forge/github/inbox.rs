@@ -189,10 +189,22 @@ pub fn list_inbox_items(
         "list_inbox_items: starting page"
     );
 
+    // When the user has scoped to a single repo, the kanban inbox shows
+    // "everything in this repo" rather than "everything I'm personally
+    // involved in" — otherwise repos where the user has access but
+    // hasn't authored / commented on issues come back empty even though
+    // 17 issues exist (real-world helmor case). Without a repo filter
+    // the query stays narrow so the global feed isn't a firehose.
+    let involvement_qual = if repo_qual.is_empty() {
+        "involves:@me "
+    } else {
+        ""
+    };
+
     let mut items: Vec<InboxItem> = Vec::new();
 
     if toggles.issues && !state.issues.done {
-        let q = format!("{repo_qual}is:issue involves:@me archived:false");
+        let q = format!("{repo_qual}is:issue {involvement_qual}archived:false");
         match fetch_search(login, &q, &state.issues.cursor)? {
             FetchOutcome::Auth => {
                 tracing::warn!(target: "helmor::inbox", login, "issues search: auth required");
@@ -223,7 +235,7 @@ pub fn list_inbox_items(
     }
 
     if toggles.prs && !state.prs.done {
-        let q = format!("{repo_qual}is:pr involves:@me archived:false");
+        let q = format!("{repo_qual}is:pr {involvement_qual}archived:false");
         match fetch_search(login, &q, &state.prs.cursor)? {
             FetchOutcome::Auth => {
                 tracing::warn!(target: "helmor::inbox", login, "prs search: auth required");
@@ -254,7 +266,12 @@ pub fn list_inbox_items(
     }
 
     if toggles.discussions && !state.discussions.done {
-        match fetch_discussion_search(login, &state.discussions.cursor, &repo_qual)? {
+        match fetch_discussion_search(
+            login,
+            &state.discussions.cursor,
+            &repo_qual,
+            involvement_qual,
+        )? {
             FetchOutcome::Auth => {
                 tracing::warn!(target: "helmor::inbox", login, "discussions search: auth required");
             }
@@ -823,8 +840,9 @@ fn fetch_discussion_search(
     login: &str,
     cursor: &Option<String>,
     repo_qual: &str,
+    involvement_qual: &str,
 ) -> Result<FetchOutcome<SearchPage<DiscussionNode>>> {
-    let q = format!("{repo_qual}involves:@me sort:updated-desc");
+    let q = format!("{repo_qual}{involvement_qual}sort:updated-desc");
     let cursor_arg = cursor.clone().unwrap_or_default();
     let mut variables: Vec<(&str, &str)> = vec![("q", q.as_str())];
     if !cursor_arg.is_empty() {

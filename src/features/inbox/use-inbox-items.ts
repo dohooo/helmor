@@ -1,5 +1,5 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
 	type InboxItem,
 	type InboxItemDetailRef,
@@ -13,6 +13,7 @@ import {
 	useSettings,
 } from "@/lib/settings";
 import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
+import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 
 const PAGE_SIZE = 20;
 /** Stale window — keep cached pages fresh enough to feel live without
@@ -130,6 +131,28 @@ export function useInboxItems(
 		getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
 		staleTime: STALE_MS,
 	});
+
+	// Surface query failures as a toast so the user notices when a
+	// fetch silently dies (network, gh auth, GraphQL errors). The
+	// inline `<InboxErrorState>` still renders as the primary
+	// affordance — toast is an extra nudge in case the user is on a
+	// different sub-tab when the failure happens.
+	const pushToast = useWorkspaceToast();
+	const lastSurfacedErrorRef = useRef<unknown>(null);
+	useEffect(() => {
+		if (!query.error) {
+			lastSurfacedErrorRef.current = null;
+			return;
+		}
+		// Same error from a re-render — already toasted.
+		if (lastSurfacedErrorRef.current === query.error) return;
+		lastSurfacedErrorRef.current = query.error;
+		const message =
+			query.error instanceof Error
+				? query.error.message
+				: "Couldn't load inbox items.";
+		pushToast(message, "Inbox fetch failed", "destructive");
+	}, [query.error, pushToast]);
 
 	const items = useMemo<InboxItemWithDetailRef[]>(
 		() =>
