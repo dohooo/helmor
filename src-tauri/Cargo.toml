@@ -1,6 +1,6 @@
 [package]
 name = "helmor"
-version = "0.12.2"
+version = "0.13.1"
 description = "The local-first IDE for coding agent orchestration."
 authors = ["Caspian Zhao", "Nathan Lian"]
 edition = "2021"
@@ -32,6 +32,7 @@ r2d2 = "0.8"
 r2d2_sqlite = "0.24"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 tauri = { version = "2", features = ["protocol-asset", "test", "devtools"] }
 tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "2"

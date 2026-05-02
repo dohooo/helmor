@@ -138,7 +138,10 @@ function buildSyncResolutionPrompt(
 		key: "resolveConflicts",
 		repoPreferences,
 		targetRef,
-		dirtyWorktree: result.outcome === "dirtyWorktree",
+		resolveConflictsKind:
+			result.outcome === "stashPopConflict"
+				? "stashPopConflict"
+				: "mergeConflict",
 	});
 }
 
@@ -230,9 +233,9 @@ export function ActionsSection({
 				toast.success(`Pulled latest from ${target}`);
 			} else if (result.outcome === "alreadyUpToDate") {
 				toast(`Already up to date with ${target}`);
-			} else if (result.outcome === "conflict") {
-				await queueSyncResolutionPrompt(result);
 			} else {
+				// conflict or stashPopConflict — both hand off to the agent
+				// with a kind-specific narrow prompt.
 				await queueSyncResolutionPrompt(result);
 			}
 		} catch (error) {

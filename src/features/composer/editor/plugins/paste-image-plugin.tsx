@@ -22,7 +22,7 @@ import {
 import { useEffect } from "react";
 import { savePastedImage } from "@/lib/api";
 import { buildComposerPreviewInsertItem } from "@/lib/composer-insert";
-import { isImagePath } from "@/lib/image-path";
+import { isImagePath } from "@/lib/path-util";
 import { $createCustomTagBadgeNode } from "../custom-tag-badge-node";
 import { $createImageBadgeNode } from "../image-badge-node";
 

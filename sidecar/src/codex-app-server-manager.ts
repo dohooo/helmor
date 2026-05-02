@@ -36,6 +36,11 @@ import {
 
 const CODEX_BIN_PATH = process.env.HELMOR_CODEX_BIN_PATH || "codex";
 
+/** How long after a "Reconnecting…" stderr line we keep emitting
+ *  synthetic heartbeats while Codex owns its retry loop. */
+const RETRY_SUPPRESSION_MS = 30_000;
+const RETRY_NOTICE_DEDUPE_MS = 1_000;
+
 const HELMOR_CLIENT_INFO = {
 	clientInfo: {
 		name: "helmor_desktop",
@@ -60,6 +65,35 @@ function isRecoverableResumeError(err: unknown): boolean {
 			? err.message.toLowerCase()
 			: String(err).toLowerCase();
 	return RECOVERABLE_RESUME_SNIPPETS.some((s) => msg.includes(s));
+}
+
+function reconnectSuffix(message: string): string | null {
+	const trimmed = message.trimStart();
+	const prefix = trimmed.startsWith("Reconnecting...")
+		? "Reconnecting..."
+		: trimmed.startsWith("Reconnecting…")
+			? "Reconnecting…"
+			: null;
+	if (!prefix) return null;
+
+	return trimmed.slice(prefix.length).trimStart();
+}
+
+function isLegacyReconnectNotice(message: string): boolean {
+	const suffix = reconnectSuffix(message);
+	return suffix !== null && (suffix === "" || /^\d+\s*\/\s*\d+/.test(suffix));
+}
+
+function parseReconnectCounts(message: string): {
+	attempt: number;
+	max: number;
+} {
+	const suffix = reconnectSuffix(message);
+	const match = suffix?.match(/^(\d+)\s*\/\s*(\d+)/);
+	return {
+		attempt: match ? Number(match[1]) : 0,
+		max: match ? Number(match[2]) : 0,
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -95,6 +129,15 @@ interface AppServerContext {
 	notificationGate: Promise<void> | null;
 	/** Last send's model id; Codex usage notifications omit it. */
 	lastSentModel: string;
+	/** Wall-clock ms of the most recent "Reconnecting…" line on the
+	 *  Codex child process's stderr. Used to suppress the transient
+	 *  {method:"error"} notifications that Codex emits during its own
+	 *  SSE retry loop — Codex will recover on its own, so terminating
+	 *  the turn would be premature. */
+	lastRetryAt: number | null;
+	/** Last reconnect notice forwarded to the pipeline. Dedupe stderr +
+	 *  JSON-RPC echoes so the user sees liveness without duplicate rows. */
+	lastRetryNotice: { key: string; at: number } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -204,6 +247,7 @@ export class CodexAppServerManager implements SessionManager {
 			permissionMode,
 			fastMode,
 			additionalDirectories,
+			images,
 		} = params;
 		const workDir = cwd ?? process.cwd();
 		const effectiveFastMode =
@@ -245,7 +289,7 @@ export class CodexAppServerManager implements SessionManager {
 			resolvedAdditionalDirectories,
 		);
 		const isCompactCommand = prompt.trim() === "/compact";
-		const input = buildTurnInput(promptWithContext);
+		const input = buildTurnInput(promptWithContext, images);
 		const turnStartParams: Record<string, unknown> = {
 			threadId: ctx.providerThreadId,
 			input,
@@ -309,6 +353,31 @@ export class CodexAppServerManager implements SessionManager {
 							: undefined;
 					const msg =
 						typeof nested === "string" ? nested : "Unknown Codex error";
+					// App-server protocol marks retryable stream errors with
+					// params.willRetry=true. Older builds omit the structured bit,
+					// so only suppress their explicit reconnect progress messages.
+					// A recent stderr reconnect line is liveness context, not proof
+					// that an arbitrary later error is retryable.
+					const willRetry = deepGet(n.params, "willRetry");
+					const lastRetry = ctx.lastRetryAt ?? 0;
+					const suppressForProtocolRetry = willRetry === true;
+					const suppressForLegacyRetryWindow =
+						typeof willRetry !== "boolean" &&
+						Date.now() - lastRetry < RETRY_SUPPRESSION_MS &&
+						isLegacyReconnectNotice(msg);
+					if (suppressForProtocolRetry || suppressForLegacyRetryWindow) {
+						emitRetryNotice(ctx, requestId, msg);
+						logger.info(
+							"suppressing retryable Codex error; awaiting recovery",
+							{
+								requestId,
+								msg,
+								willRetry,
+								msSinceRetry: Date.now() - lastRetry,
+							},
+						);
+						return;
+					}
 					emitter.error(requestId, msg);
 					ctx.activeTurnId = null;
 					ctx.turnResolve?.();
@@ -471,6 +540,11 @@ export class CodexAppServerManager implements SessionManager {
 				emitter.aborted(requestId, "user_requested");
 			} else {
 				emitter.end(requestId);
+			}
+			if (ctx.activeRequestId === requestId) {
+				ctx.activeRequestId = null;
+				ctx.activeEmitter = null;
+				ctx.lastRetryNotice = null;
 			}
 		});
 	}
@@ -661,16 +735,37 @@ export class CodexAppServerManager implements SessionManager {
 		sessionId: string,
 		prompt: string,
 		files: readonly string[],
+		// Codex's `turn/steer` RPC forwards text only; the SDK has no
+		// hook to attach images mid-turn. We still carry `images` on the
+		// synthetic `user_prompt` event below so the persisted shape
+		// matches the optimistic render — the badges remain visible on
+		// reload — but the model itself never sees the bytes. The
+		// frontend should warn the user before they steer with images
+		// attached on a Codex session.
+		images: readonly string[],
 	): Promise<boolean> {
 		const ctx = this.sessions.get(sessionId);
 		if (!ctx?.providerThreadId || !ctx.activeTurnId) {
 			return false;
+		}
+		if (images.length > 0) {
+			// `info` rather than a richer log level — the sidecar's
+			// `Logger` only exposes debug/info/error. Surface the
+			// limitation prominently so the user can correlate "Codex
+			// didn't see my image" with this line in the JSONL log.
+			logger.info(
+				`steer ${sessionId}: ${images.length} image(s) dropped (codex turn/steer is text-only)`,
+				{
+					note: "images are persisted to the DB so the bubble keeps its badge after reload, but the model itself does not see them",
+				},
+			);
 		}
 		logger.info(`steer ${sessionId}`, {
 			threadId: ctx.providerThreadId,
 			turnId: ctx.activeTurnId,
 			preview: prompt.slice(0, 60),
 			fileCount: files.length,
+			imageCount: images.length,
 		});
 
 		let releaseGate: () => void = () => {};
@@ -693,14 +788,19 @@ export class CodexAppServerManager implements SessionManager {
 
 			// Provider accepted. Emit the synthetic event BEFORE releasing
 			// the gate so queued notifications land after it in FIFO.
+			// `images` rides on the event purely for persistence/reload
+			// fidelity (see the steer() doc above) — Codex's turn/steer
+			// already returned without seeing them.
 			if (ctx.activeEmitter && ctx.activeRequestId) {
 				const event: {
 					type: "user_prompt";
 					text: string;
 					steer: true;
 					files?: string[];
+					images?: string[];
 				} = { type: "user_prompt", text: prompt, steer: true };
 				if (files.length > 0) event.files = [...files];
+				if (images.length > 0) event.images = [...images];
 				ctx.activeEmitter.passthrough(ctx.activeRequestId, event);
 			}
 			return true;
@@ -733,6 +833,45 @@ export class CodexAppServerManager implements SessionManager {
 
 	// ── Private ──────────────────────────────────────────────────────────
 
+	private settleUnexpectedExit(
+		sessionId: string,
+		ctx: AppServerContext,
+		code: number | null,
+		signal: string | null,
+	): void {
+		const hasActiveTurn =
+			ctx.turnResolve !== null ||
+			ctx.turnReject !== null ||
+			ctx.activeTurnId !== null;
+		if (!hasActiveTurn) return;
+
+		for (const [id, p] of this.pendingApprovals) {
+			if (p.sessionId === sessionId) this.pendingApprovals.delete(id);
+		}
+		for (const [id, p] of this.pendingUserInputs) {
+			if (p.sessionId === sessionId) this.pendingUserInputs.delete(id);
+		}
+
+		const requestId = ctx.activeRequestId;
+		const emitter = ctx.activeEmitter;
+		logger.error("codex app-server exited during active turn", {
+			sessionId,
+			requestId: requestId ?? "(none)",
+			turnId: ctx.activeTurnId ?? "(none)",
+			code,
+			signal,
+		});
+		ctx.activeTurnId = null;
+		const resolve = ctx.turnResolve;
+		ctx.turnResolve = null;
+		ctx.turnReject = null;
+
+		if (requestId && emitter) {
+			emitter.error(requestId, "Codex app-server exited unexpectedly");
+		}
+		resolve?.();
+	}
+
 	/**
 	 * Get an existing session context or create a new one. When `resume`
 	 * is set (provider thread ID from a previous session), attempts
@@ -750,16 +889,41 @@ export class CodexAppServerManager implements SessionManager {
 		const existing = this.sessions.get(sessionId);
 		if (existing && !existing.server.killed) return existing;
 
+		// Forward-reference holder so the `onRetry` closure can reach the
+		// context that's constructed below — the callback only fires once
+		// the CodexAppServer is running, by which point `ctxRef.current`
+		// has been populated.
+		const ctxRef: { current: AppServerContext | null } = { current: null };
+
 		const server = new CodexAppServer({
 			binaryPath: CODEX_BIN_PATH,
 			cwd,
 			onNotification: () => {},
 			onRequest: () => {},
-			onExit: () => {
+			onExit: (code, signal) => {
+				const ctx = ctxRef.current;
+				if (ctx) {
+					this.settleUnexpectedExit(sessionId, ctx, code, signal);
+				}
 				this.sessions.delete(sessionId);
 			},
 			onError: (err) => {
 				logger.error("codex app-server error", errorDetails(err));
+			},
+			onRetry: (message) => {
+				const c = ctxRef.current;
+				if (!c) return;
+				c.lastRetryAt = Date.now();
+				// Pulse a synthetic heartbeat so Rust's 45s watchdog doesn't
+				// declare the sidecar dead while Codex is silently retrying
+				// against an upstream provider (e.g. Azure OpenAI mini-outage).
+				if (c.activeRequestId) {
+					emitRetryNotice(c, c.activeRequestId, message);
+				}
+				logger.debug("codex retry detected; suppression window armed", {
+					sessionId,
+					activeRequestId: c.activeRequestId,
+				});
 			},
 		});
 
@@ -820,9 +984,12 @@ export class CodexAppServerManager implements SessionManager {
 			activeEmitter: null,
 			notificationGate: null,
 			lastSentModel: model ?? "",
+			lastRetryAt: null,
+			lastRetryNotice: null,
 		};
 
 		this.sessions.set(sessionId, ctx);
+		ctxRef.current = ctx;
 		return ctx;
 	}
 }
@@ -830,6 +997,44 @@ export class CodexAppServerManager implements SessionManager {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function retryNoticeKey(message: string): string {
+	return message.replace(/…/g, "...").replace(/\s+/g, " ").trim();
+}
+
+function emitRetryNotice(
+	ctx: AppServerContext,
+	requestId: string,
+	message: string,
+): void {
+	if (!ctx.activeEmitter) return;
+
+	try {
+		ctx.activeEmitter.heartbeat(requestId);
+	} catch {
+		return;
+	}
+
+	const now = Date.now();
+	const key = retryNoticeKey(message);
+	if (
+		ctx.lastRetryNotice?.key === key &&
+		now - ctx.lastRetryNotice.at < RETRY_NOTICE_DEDUPE_MS
+	) {
+		return;
+	}
+	ctx.lastRetryNotice = { key, at: now };
+
+	const { attempt, max } = parseReconnectCounts(message);
+	ctx.activeEmitter.passthrough(requestId, {
+		type: "system",
+		subtype: "codex_reconnecting",
+		attempt,
+		max_retries: max,
+		retry_delay_ms: 0,
+		error: message,
+	});
+}
 
 function flattenNotification(
 	n: JsonRpcNotification,
@@ -846,8 +1051,11 @@ function flattenNotification(
 	};
 }
 
-function buildTurnInput(prompt: string): Array<Record<string, unknown>> {
-	const { text, imagePaths } = parseImageRefs(prompt);
+function buildTurnInput(
+	prompt: string,
+	images: readonly string[],
+): Array<Record<string, unknown>> {
+	const { text, imagePaths } = parseImageRefs(prompt, images);
 	const parts: Array<Record<string, unknown>> = [];
 	if (text) {
 		parts.push({ type: "text", text, text_elements: [] });

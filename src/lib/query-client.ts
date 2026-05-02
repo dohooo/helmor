@@ -7,16 +7,16 @@ import {
 	DEFAULT_WORKSPACE_GROUPS,
 	type DetectedEditor,
 	detectInstalledEditors,
+	type ForgeAccount,
 	type ForgeActionStatus,
-	type ForgeCliStatus,
 	type ForgeDetection,
-	type ForgeProvider,
 	getClaudeRateLimits,
 	getCodexRateLimits,
-	getForgeCliStatus,
 	getLiveContextUsage,
 	getSessionContextUsage,
+	getWorkspaceAccountProfile,
 	getWorkspaceForge,
+	listForgeAccounts,
 	listRepositories,
 	listSlashCommands,
 	listWorkspaceCandidateDirectories,
@@ -80,11 +80,17 @@ export const helmorQueryKeys = {
 		["workspaceChangeRequest", workspaceId] as const,
 	workspaceForge: (workspaceId: string) =>
 		["workspaceForge", workspaceId] as const,
-	forgeCliStatus: (provider: ForgeProvider, host: string) =>
-		["forgeCliStatus", provider, host] as const,
-	// Prefix for matching every `forgeCliStatus` cache entry — pass to
-	// `invalidateQueries` when an auth signal arrives from elsewhere.
-	forgeCliStatusAll: ["forgeCliStatus"] as const,
+	forgeAccounts: (gitlabHosts: string[]) =>
+		["forgeAccounts", ...gitlabHosts] as const,
+	forgeAccountsAll: ["forgeAccounts"] as const,
+	workspaceAccountProfile: (workspaceId: string) =>
+		["workspaceAccountProfile", workspaceId] as const,
+	/// Lightweight per-host login set probe (no profile fetch). Used as
+	/// the focus-driven auth liveness check: account / repo settings
+	/// surfaces refetch this on window focus, and a delta in the set
+	/// invalidates the heavyweight `forgeAccounts` cache.
+	forgeLogins: (provider: string, host: string) =>
+		["forgeLogins", provider, host] as const,
 	workspaceGitActionStatus: (workspaceId: string) =>
 		["workspaceGitActionStatus", workspaceId] as const,
 	workspaceForgeActionStatus: (workspaceId: string) =>
@@ -233,22 +239,69 @@ export function workspaceForgeQueryOptions(workspaceId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceForge(workspaceId),
 		queryFn: () => getWorkspaceForge(workspaceId),
-		staleTime: 30_000,
+		// Same identity-info contract: cache forever, refetch on focus.
+		// `refetchInterval` keeps the active workspace's chip in sync
+		// with backend-side polling (e.g. CI status changes).
+		staleTime: Number.POSITIVE_INFINITY,
 		refetchOnWindowFocus: "always",
 		refetchInterval: (query) => workspaceForgeRefetchInterval(query.state.data),
 	});
 }
 
-export function forgeCliStatusQueryOptions(
-	provider: ForgeProvider,
-	host: string,
+/** Profile (login / name / email / avatarUrl / active) for the
+ *  account bound to a workspace.
+ *
+ *  Cache strategy across **every identity-information query** in
+ *  this file (this one + `forgeAccountsQueryOptions` +
+ *  `workspaceForgeQueryOptions` + `workspaceForgeActionStatusQueryOptions`):
+ *
+ *    - `staleTime: Infinity` — once a value is in cache, never
+ *      mark it stale on its own. We don't want a flicker every
+ *      time some other component happens to mount.
+ *    - `refetchOnWindowFocus: "always"` — but *do* re-check on
+ *      window focus, every time. If the refetch fails (token
+ *      revoked / account logged out elsewhere), React Query keeps
+ *      the previous data + sets `error`; the consuming UI flips
+ *      to "Connect" by reading the new state from the next
+ *      successful response (the action-status backend returns
+ *      `remoteState: "unauthenticated"` for invalid tokens).
+ *
+ *  Backend has matching throttles on the underlying CLI calls
+ *  (`gh / glab auth status` and `gh / glab api user`) so a burst
+ *  of refocuses doesn't fan out N CLI invocations.
+ *
+ *  Avatar *image bytes* are a separate concern and cached on disk
+ *  by URL hash (`forge/avatar_cache.rs`); identity changes never
+ *  imply a new image, and an unchanged URL reuses the cached file
+ *  regardless of what this query returns. */
+export function workspaceAccountProfileQueryOptions(
+	workspaceId: string | null,
 ) {
-	return queryOptions<ForgeCliStatus>({
-		queryKey: helmorQueryKeys.forgeCliStatus(provider, host),
-		queryFn: () => getForgeCliStatus(provider, host),
-		staleTime: 30_000,
+	return queryOptions<ForgeAccount | null>({
+		queryKey: workspaceId
+			? helmorQueryKeys.workspaceAccountProfile(workspaceId)
+			: ["workspaceAccountProfile", "__none__"],
+		queryFn: () =>
+			workspaceId
+				? getWorkspaceAccountProfile(workspaceId)
+				: Promise.resolve(null),
+		enabled: workspaceId !== null,
+		staleTime: Number.POSITIVE_INFINITY,
 		refetchOnWindowFocus: "always",
-		refetchInterval: 60_000,
+		refetchOnReconnect: true,
+		retry: 0,
+	});
+}
+
+export function forgeAccountsQueryOptions(gitlabHosts: string[]) {
+	return queryOptions<ForgeAccount[]>({
+		queryKey: helmorQueryKeys.forgeAccounts(gitlabHosts),
+		queryFn: () => listForgeAccounts(gitlabHosts),
+		// Same cache contract as `workspaceAccountProfileQueryOptions`:
+		// cache forever, refetch on every window focus. Backend
+		// throttles the underlying CLI calls.
+		staleTime: Number.POSITIVE_INFINITY,
+		refetchOnWindowFocus: "always",
 	});
 }
 
@@ -533,8 +586,26 @@ export function workspaceForgeActionStatusQueryOptions(workspaceId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
 		queryFn: () => loadWorkspaceForgeActionStatus(workspaceId),
-		staleTime: 30_000,
+		// Same `staleTime: Infinity` + `refetchOnWindowFocus: "always"`
+		// baseline as the other three identity-info queries.
+		//
+		// Unique to this query: `refetchOnMount: "always"`. Inspector's
+		// `Connect` CTA reads `remoteState` from here, so the moment the
+		// user switches workspaces we MUST re-probe the new workspace's
+		// remote — otherwise the previously-visited workspace's stale
+		// cache (with the same `staleTime: Infinity` rule) would render
+		// the wrong CTA state until the next focus event. The cached
+		// value still shows immediately (no loading flicker), only
+		// `isFetching` flips while the background refetch lands.
+		//
+		// The other three queries intentionally don't get this: their
+		// data either rarely changes (chip avatar, GitHub-vs-GitLab
+		// label) or isn't workspace-scoped (Settings roster), so the
+		// extra mount-time IPC isn't worth the cost.
+		staleTime: Number.POSITIVE_INFINITY,
 		gcTime: DEFAULT_GC_TIME,
+		refetchOnWindowFocus: "always",
+		refetchOnMount: "always",
 		refetchInterval: (query) =>
 			forgeActionStatusRefetchInterval(query.state.data),
 		retry: 0,

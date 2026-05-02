@@ -15,9 +15,11 @@ const serverState = {
 	onNotification: null as
 		| null
 		| ((notification: { method: string; params?: unknown }) => void),
+	onExit: null as null | ((code: number | null, signal: string | null) => void),
 	/** Optional hook tests use to inject extra notifications between
 	 *  `turn/started` and `turn/completed` (e.g. `thread/tokenUsage/updated`). */
 	beforeTurnCompleted: null as null | (() => void),
+	exitAfterTurnStarted: false,
 };
 const gitAccessState = {
 	directories: [] as string[],
@@ -25,6 +27,12 @@ const gitAccessState = {
 
 class MockCodexAppServer {
 	killed = false;
+
+	constructor(opts: {
+		onExit: (code: number | null, signal: string | null) => void;
+	}) {
+		serverState.onExit = opts.onExit;
+	}
 
 	async sendRequest(method: string, params: unknown): Promise<unknown> {
 		serverState.requests.push({ method, params });
@@ -39,6 +47,10 @@ class MockCodexAppServer {
 					method: "turn/started",
 					params: { turn: { id: "turn-1" } },
 				});
+				if (serverState.exitAfterTurnStarted) {
+					serverState.onExit?.(1, null);
+					return;
+				}
 				serverState.beforeTurnCompleted?.();
 				serverState.onNotification?.({
 					method: "turn/completed",
@@ -87,7 +99,9 @@ describe("CodexAppServerManager", () => {
 	beforeEach(() => {
 		serverState.requests = [];
 		serverState.onNotification = null;
+		serverState.onExit = null;
 		serverState.beforeTurnCompleted = null;
+		serverState.exitAfterTurnStarted = false;
 		gitAccessState.directories = [];
 		emitter = createSidecarEmitter(() => {});
 	});
@@ -131,6 +145,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: undefined,
 				effortLevel: "high",
 				fastMode: true,
+				images: [],
 			},
 			emitter,
 		);
@@ -165,6 +180,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: "plan",
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 				// Include cwd explicitly to verify dedupe, and a duplicate
 				// `/tmp/a` to verify we keep the first occurrence only.
 				additionalDirectories: ["/tmp/workspace", "/tmp/a", "/tmp/a", "/tmp/b"],
@@ -207,6 +223,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: "plan",
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 			},
 			emitter,
 		);
@@ -240,6 +257,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: "bypassPermissions",
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 				additionalDirectories: ["/tmp/a"],
 			},
 			emitter,
@@ -272,6 +290,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: "bypassPermissions",
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 				additionalDirectories: ["/abs/alpha", "/abs/bravo"],
 			},
 			emitter,
@@ -304,6 +323,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: "bypassPermissions",
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 			},
 			emitter,
 		);
@@ -331,6 +351,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: "plan",
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 			},
 			emitter,
 		);
@@ -378,6 +399,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: undefined,
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 			},
 			capturingEmitter,
 		);
@@ -429,6 +451,7 @@ describe("CodexAppServerManager", () => {
 				permissionMode: undefined,
 				effortLevel: "medium",
 				fastMode: false,
+				images: [],
 			},
 			capturingEmitter,
 		);
@@ -436,5 +459,145 @@ describe("CodexAppServerManager", () => {
 		expect(
 			events.find((e) => e.type === "contextUsageUpdated"),
 		).toBeUndefined();
+	});
+
+	test("suppresses app-server errors when protocol says Codex will retry", async () => {
+		const manager = new CodexAppServerManager();
+		const events: Array<Record<string, unknown>> = [];
+		const capturingEmitter = createSidecarEmitter((event) => {
+			events.push(event as Record<string, unknown>);
+		});
+
+		serverState.beforeTurnCompleted = () => {
+			serverState.onNotification?.({
+				method: "error",
+				params: {
+					error: { message: "stream interrupted" },
+					willRetry: true,
+					threadId: "thread-1",
+					turnId: "turn-1",
+				},
+			});
+		};
+
+		await manager.sendMessage(
+			"REQ-retryable-error",
+			{
+				sessionId: "session-retryable-error",
+				prompt: "hi",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			capturingEmitter,
+		);
+
+		expect(events.find((e) => e.type === "error")).toBeUndefined();
+		expect(events).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: "REQ-retryable-error",
+					type: "heartbeat",
+				}),
+			]),
+		);
+	});
+
+	test("emits app-server errors when protocol says Codex will not retry", async () => {
+		const manager = new CodexAppServerManager();
+		const events: Array<Record<string, unknown>> = [];
+		const capturingEmitter = createSidecarEmitter((event) => {
+			events.push(event as Record<string, unknown>);
+		});
+
+		serverState.beforeTurnCompleted = () => {
+			serverState.onNotification?.({
+				method: "error",
+				params: {
+					error: { message: "fatal app-server failure" },
+					willRetry: false,
+					threadId: "thread-1",
+					turnId: "turn-1",
+				},
+			});
+		};
+
+		await manager.sendMessage(
+			"REQ-terminal-error",
+			{
+				sessionId: "session-terminal-error",
+				prompt: "hi",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			capturingEmitter,
+		);
+
+		expect(events).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: "REQ-terminal-error",
+					type: "error",
+					message: "fatal app-server failure",
+				}),
+			]),
+		);
+	});
+
+	test("settles an active turn when the app-server exits unexpectedly", async () => {
+		const manager = new CodexAppServerManager();
+		const events: Array<Record<string, unknown>> = [];
+		const capturingEmitter = createSidecarEmitter((event) => {
+			events.push(event as Record<string, unknown>);
+		});
+		serverState.exitAfterTurnStarted = true;
+
+		const sendPromise = manager.sendMessage(
+			"REQ-app-server-exit",
+			{
+				sessionId: "session-app-server-exit",
+				prompt: "hi",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			capturingEmitter,
+		);
+
+		const result = await Promise.race([
+			sendPromise.then(() => "settled" as const),
+			new Promise<"timed-out">((resolve) => {
+				setTimeout(() => resolve("timed-out"), 50);
+			}),
+		]);
+
+		expect(result).toBe("settled");
+		expect(events).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: "REQ-app-server-exit",
+					type: "error",
+					message: "Codex app-server exited unexpectedly",
+				}),
+				expect.objectContaining({
+					id: "REQ-app-server-exit",
+					type: "end",
+				}),
+			]),
+		);
+		expect(events.find((e) => e.type === "aborted")).toBeUndefined();
 	});
 });

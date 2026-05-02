@@ -7,7 +7,6 @@ type Options = {
 	queryClient: QueryClient;
 	processPendingCliSends: () => Promise<void> | void;
 	reloadSettings: () => Promise<void> | void;
-	refreshGithubIdentity: () => Promise<void> | void;
 };
 
 function invalidateAllWorkspaceChanges(queryClient: QueryClient) {
@@ -94,12 +93,10 @@ function handleUiMutation(
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceForge(event.workspaceId),
 			});
-			// CLI auth status lives in a separate cache (Settings → Account).
-			// Backend already debounces/edge-detects this event, so the bridge
-			// is the right place to fan out instead of redoing the check in
-			// individual feature components.
+			// Per-account roster (Settings → Account) re-renders too, since
+			// auth flips can mean a new login appeared / disappeared.
 			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.forgeCliStatusAll,
+				queryKey: helmorQueryKeys.forgeAccountsAll,
 			});
 			return;
 		case "workspaceChangeRequestChanged":
@@ -119,6 +116,23 @@ function handleUiMutation(
 		case "repositoryListChanged":
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.repositories,
+			});
+			// Backfill phase 2 also emits this when it clears /
+			// re-binds a stale `forge_login`. The chip header,
+			// inspector forge section, and inspector PR/MR action
+			// status all read off whichever login the workspace's
+			// repo is currently bound to — refresh them too so
+			// the chip swaps to the new account immediately
+			// instead of waiting for the next focus tick.
+			void queryClient.invalidateQueries({
+				predicate: (query) => {
+					const root = query.queryKey[0];
+					return (
+						root === "workspaceAccountProfile" ||
+						root === "workspaceForge" ||
+						root === "workspaceForgeActionStatus"
+					);
+				},
 			});
 			return;
 		case "repositoryChanged":
@@ -161,9 +175,6 @@ function handleUiMutation(
 				});
 			}
 			return;
-		case "githubIdentityChanged":
-			void options.refreshGithubIdentity();
-			return;
 		case "pendingCliSendQueued":
 			void options.processPendingCliSends();
 			return;
@@ -174,20 +185,18 @@ export function useUiSyncBridge({
 	queryClient,
 	processPendingCliSends,
 	reloadSettings,
-	refreshGithubIdentity,
 }: Options) {
 	const processPendingCliSendsRef = useRef(processPendingCliSends);
 	const reloadSettingsRef = useRef(reloadSettings);
-	const refreshGithubIdentityRef = useRef(refreshGithubIdentity);
 
 	useEffect(() => {
 		processPendingCliSendsRef.current = processPendingCliSends;
 		reloadSettingsRef.current = reloadSettings;
-		refreshGithubIdentityRef.current = refreshGithubIdentity;
-	}, [processPendingCliSends, refreshGithubIdentity, reloadSettings]);
+	}, [processPendingCliSends, reloadSettings]);
 
 	useEffect(() => {
 		let disposed = false;
+		let unlisten: (() => void) | null = null;
 
 		void subscribeUiMutations((event) => {
 			if (disposed) {
@@ -197,12 +206,19 @@ export function useUiSyncBridge({
 			handleUiMutation(event, queryClient, {
 				processPendingCliSends: () => processPendingCliSendsRef.current(),
 				reloadSettings: () => reloadSettingsRef.current(),
-				refreshGithubIdentity: () => refreshGithubIdentityRef.current(),
 			});
+		}).then((cleanup) => {
+			if (disposed) {
+				cleanup();
+				return;
+			}
+
+			unlisten = cleanup;
 		});
 
 		return () => {
 			disposed = true;
+			unlisten?.();
 		};
 	}, [queryClient]);
 }

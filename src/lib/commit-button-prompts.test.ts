@@ -15,7 +15,6 @@ const GITLAB_FORGE: ForgeDetection = {
 		changeRequestFullName: "merge request",
 		connectAction: "Connect GitLab",
 	},
-	cli: null,
 	detectionSignals: [],
 };
 
@@ -32,7 +31,6 @@ const GITHUB_FORGE: ForgeDetection = {
 		changeRequestFullName: "pull request",
 		connectAction: "Connect GitHub",
 	},
-	cli: null,
 	detectionSignals: [],
 };
 

@@ -293,6 +293,7 @@ export function useWorkspaceInspectorSidebar({
 
 	const handleResizeStart = useCallback(
 		(target: ResizeTarget) => (event: ReactMouseEvent<HTMLDivElement>) => {
+			if (event.button !== 0) return;
 			event.preventDefault();
 			setResizeState({
 				pointerY: event.clientY,

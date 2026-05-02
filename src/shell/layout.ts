@@ -3,7 +3,6 @@ import type {
 	WorkspaceRow,
 	WorkspaceSessionSummary,
 } from "@/lib/api";
-import type { GithubIdentityState } from "./types";
 
 export const SIDEBAR_WIDTH_STORAGE_KEY = "helmor.workspaceSidebarWidth";
 export const INSPECTOR_WIDTH_STORAGE_KEY = "helmor.workspaceInspectorWidth";
@@ -46,10 +45,6 @@ export function getInitialSidebarWidth(storageKey = SIDEBAR_WIDTH_STORAGE_KEY) {
 	} catch {
 		return DEFAULT_SIDEBAR_WIDTH;
 	}
-}
-
-export function getInitialGithubIdentityState(): GithubIdentityState {
-	return { status: "checking" };
 }
 
 export function findAdjacentSessionId(

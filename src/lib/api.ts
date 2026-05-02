@@ -155,6 +155,11 @@ export type AgentSendRequest = {
 	userMessageId?: string | null;
 	/** Workspace-relative paths from the @-mention picker. */
 	files?: string[] | null;
+	/** Image attachment paths from the composer (drag-and-drop or
+	 *  paste). Travels alongside `prompt` so the sidecar can lift the
+	 *  matching `@<path>` substrings out as image attachments without
+	 *  re-parsing the text — paths may contain whitespace. */
+	images?: string[] | null;
 };
 
 export type WorkspaceSummary = {
@@ -188,14 +193,22 @@ export type WorkspaceSummary = {
 	lastUserMessageAt?: string | null;
 };
 
+export type BranchPrefixType = "username" | "custom" | "none";
+
 export type RepositoryCreateOption = {
 	id: string;
 	name: string;
 	remote?: string | null;
 	remoteUrl?: string | null;
 	defaultBranch?: string | null;
+	/** Per-repo branch prefix mode. NULL is treated as "github" by the
+	 * backend resolver — keeps legacy rows behaving as before. */
+	branchPrefixType?: BranchPrefixType | null;
 	branchPrefixCustom?: string | null;
 	forgeProvider?: ForgeProvider | null;
+	/** gh/glab account login bound to this repo, or null when none had
+	 * access at add-time. UI shows a "Connect" prompt when null. */
+	forgeLogin?: string | null;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
 };
@@ -204,72 +217,18 @@ export type AddRepositoryDefaults = {
 	lastCloneDirectory?: string | null;
 };
 
-export type GithubIdentitySession = {
-	provider: string;
-	githubUserId: number;
+/** A single gh / glab account with display profile attached. Listed
+ * by `listForgeAccounts` for the Settings → Account panel. */
+export type ForgeAccount = {
+	provider: ForgeProvider;
+	host: string;
 	login: string;
-	name?: string | null;
-	avatarUrl?: string | null;
-	primaryEmail?: string | null;
-	tokenExpiresAt?: string | null;
-	refreshTokenExpiresAt?: string | null;
-};
-
-export type GithubIdentitySnapshot =
-	| { status: "connected"; session: GithubIdentitySession }
-	| { status: "disconnected" }
-	| { status: "unconfigured"; message: string }
-	| { status: "error"; message: string };
-
-export type GithubIdentityDeviceFlowStart = {
-	deviceCode: string;
-	userCode: string;
-	verificationUri: string;
-	verificationUriComplete?: string | null;
-	expiresAt: string;
-	intervalSeconds: number;
-};
-
-export type GithubCliStatus =
-	| {
-			status: "ready";
-			host: string;
-			login: string;
-			version: string;
-			message: string;
-	  }
-	| {
-			status: "unauthenticated";
-			host: string;
-			version?: string | null;
-			message: string;
-	  }
-	| { status: "unavailable"; host: string; message: string }
-	| {
-			status: "error";
-			host: string;
-			version?: string | null;
-			message: string;
-	  };
-
-export type GithubCliUser = {
-	login: string;
-	id: number;
 	name?: string | null;
 	avatarUrl?: string | null;
 	email?: string | null;
-};
-
-export type GithubRepositorySummary = {
-	id: number;
-	name: string;
-	fullName: string;
-	ownerLogin: string;
-	private: boolean;
-	defaultBranch?: string | null;
-	htmlUrl: string;
-	updatedAt?: string | null;
-	pushedAt?: string | null;
+	/** True for the gh account currently marked active by `gh auth
+	 * switch`. Always true for GitLab (one account per host). */
+	active: boolean;
 };
 
 export type ForgeProvider = "github" | "gitlab" | "unknown";
@@ -281,34 +240,6 @@ export type ForgeLabels = {
 	changeRequestFullName: string;
 	connectAction: string;
 };
-
-export type ForgeCliStatus =
-	| {
-			status: "ready";
-			provider: ForgeProvider;
-			host: string;
-			cliName: string;
-			login: string;
-			version: string;
-			message: string;
-	  }
-	| {
-			status: "unauthenticated";
-			provider: ForgeProvider;
-			host: string;
-			cliName: string;
-			version?: string | null;
-			message: string;
-			loginCommand: string;
-	  }
-	| {
-			status: "error";
-			provider: ForgeProvider;
-			host: string;
-			cliName: string;
-			version?: string | null;
-			message: string;
-	  };
 
 export type ForgeDetectionSignal = {
 	/** Layer that produced this signal (wellKnownHost, hostPattern, urlPath, repoFile, httpProbe, cliProbe). */
@@ -324,7 +255,6 @@ export type ForgeDetection = {
 	repo?: string | null;
 	remoteUrl?: string | null;
 	labels: ForgeLabels;
-	cli?: ForgeCliStatus | null;
 	/**
 	 * Signals that caused the current provider classification. Empty when
 	 * the provider is `unknown` or when the result came from the cached
@@ -372,6 +302,10 @@ export type WorkspaceDetail = {
 	archiveCommit?: string | null;
 	sessionCount: number;
 	messageCount: number;
+	forgeProvider?: ForgeProvider | null;
+	/** gh/glab account login bound to the parent repo. NULL means no
+	 * account is bound — UI shows the "Connect" prompt. */
+	forgeLogin?: string | null;
 };
 
 export type WorkspaceSessionSummary = {
@@ -536,73 +470,16 @@ export async function loadWorkspaceGroups(): Promise<WorkspaceGroup[]> {
 	}
 }
 
-export async function loadGithubIdentitySession(): Promise<GithubIdentitySnapshot> {
-	try {
-		return await invoke<GithubIdentitySnapshot>("get_github_identity_session");
-	} catch (error) {
-		return {
-			status: "error",
-			message: describeInvokeError(
-				error,
-				"Unable to load GitHub account state.",
-			),
-		};
-	}
-}
-
-export async function startGithubIdentityConnect(): Promise<GithubIdentityDeviceFlowStart> {
-	return invoke<GithubIdentityDeviceFlowStart>("start_github_identity_connect");
-}
-
-export async function cancelGithubIdentityConnect(): Promise<void> {
-	await invoke("cancel_github_identity_connect");
-}
-
-export async function disconnectGithubIdentity(): Promise<void> {
-	await invoke("disconnect_github_identity");
-}
-
-export async function listenGithubIdentityChanged(
-	callback: (snapshot: GithubIdentitySnapshot) => void,
-): Promise<UnlistenFn> {
-	return listen<GithubIdentitySnapshot>(
-		"github-identity-changed",
-		(tauriEvent) => {
-			callback(tauriEvent.payload);
-		},
-	);
-}
-
-export async function loadGithubCliStatus(): Promise<GithubCliStatus> {
-	try {
-		return await invoke<GithubCliStatus>("get_github_cli_status");
-	} catch (error) {
-		return {
-			status: "error",
-			host: "github.com",
-			message: describeInvokeError(error, "Unable to load GitHub CLI state."),
-		};
-	}
-}
-
-export async function loadGithubCliUser(): Promise<GithubCliUser | null> {
-	try {
-		return await invoke<GithubCliUser | null>("get_github_cli_user");
-	} catch {
-		return null;
-	}
-}
-
-export async function listGithubAccessibleRepositories(): Promise<
-	GithubRepositorySummary[]
-> {
-	try {
-		return await invoke<GithubRepositorySummary[]>(
-			"list_github_accessible_repositories",
-		);
-	} catch {
-		return [];
-	}
+/**
+ * Re-run the per-repo forge auto-bind. Frontend calls this after the
+ * user finishes a `gh auth login` / `glab auth login` flow so the repo
+ * picks up the new account without an app restart. Returns the bound
+ * login (or `null` when no logged-in account had access).
+ */
+export async function retryRepoForgeBinding(
+	repoId: string,
+): Promise<string | null> {
+	return invoke<string | null>("retry_repo_forge_binding", { repoId });
 }
 
 export async function getWorkspaceForge(
@@ -617,34 +494,85 @@ export async function getWorkspaceForge(
 	}
 }
 
-export async function getForgeCliStatus(
-	provider: ForgeProvider,
-	host?: string | null,
-): Promise<ForgeCliStatus> {
+/** Enumerate all gh accounts plus one glab account per known host.
+ * `gitlabHosts` is the list of GitLab hosts to probe (gathered from the
+ * repos table — we don't shell out to glab for hosts the user isn't
+ * actively using). */
+export async function listForgeAccounts(
+	gitlabHosts: string[],
+): Promise<ForgeAccount[]> {
 	try {
-		return await invoke<ForgeCliStatus>("get_forge_cli_status", {
-			provider,
-			host,
+		return await invoke<ForgeAccount[]>("list_forge_accounts", {
+			gitlabHosts,
 		});
 	} catch (error) {
 		throw new Error(
-			describeInvokeError(error, "Unable to load forge CLI state."),
+			describeInvokeError(error, "Unable to list forge accounts."),
 		);
 	}
 }
 
-export async function openForgeCliAuthTerminal(
-	provider: ForgeProvider,
-	host?: string | null,
-): Promise<void> {
+/** Spot-fetch the gh/glab account bound to a workspace's parent repo,
+ * with display profile (avatar / name / email). Returns null when the
+ * repo has no resolvable forge account. Backed by the same per-process
+ * cache that `listForgeAccounts` populates. */
+export async function getWorkspaceAccountProfile(
+	workspaceId: string,
+): Promise<ForgeAccount | null> {
 	try {
-		return await invoke<void>("open_forge_cli_auth_terminal", {
-			provider,
-			host,
+		return await invoke<ForgeAccount | null>("get_workspace_account_profile", {
+			workspaceId,
 		});
 	} catch (error) {
 		throw new Error(
-			describeInvokeError(error, "Unable to open forge CLI auth terminal."),
+			describeInvokeError(error, "Unable to load workspace account profile."),
+		);
+	}
+}
+
+/** Download a forge avatar URL into the local on-disk cache and return
+ * the absolute filesystem path. Idempotent: repeated calls with the
+ * same URL hit the cache. Pair with `convertFileSrc` to render via the
+ * `asset://` protocol so page navigations don't re-fetch + re-decode. */
+export async function cacheForgeAvatar(url: string): Promise<string> {
+	try {
+		return await invoke<string>("cache_forge_avatar", { url });
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to cache avatar."));
+	}
+}
+
+/** Lightweight login-only enumeration for `(provider, host)`. Used by
+ * the auth-terminal completion poll: take a snapshot before opening the
+ * terminal, then poll until the set grows. Skips the per-account
+ * profile fetch that `listForgeAccounts` does, so the poll loop stays
+ * cheap. */
+export async function listForgeLogins(
+	provider: ForgeProvider,
+	host: string,
+	options: { forceRefresh?: boolean } = {},
+): Promise<string[]> {
+	try {
+		return await invoke<string[]>("list_forge_logins", {
+			provider,
+			host,
+			forceRefresh: options.forceRefresh ?? false,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to list forge logins."));
+	}
+}
+
+/** Re-run auto-bind for every repo whose `forge_login` is still NULL.
+ * Triggered after Settings → Account adds a fresh CLI login so legacy
+ * repos pick up the new credentials without an app restart. Returns the
+ * count of repos that ended up newly bound on this sweep. */
+export async function backfillForgeRepoBindings(): Promise<number> {
+	try {
+		return await invoke<number>("backfill_forge_repo_bindings");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to backfill forge bindings."),
 		);
 	}
 }
@@ -675,6 +603,21 @@ export async function stopForgeCliAuthTerminal(
 		host,
 		instanceId,
 	});
+}
+
+/** Drop the per-process forge caches (login enumeration, status pairs,
+ * profile) for `(provider, host)` so the very next `listForgeLogins`
+ * poll bypasses the rate-limiter cache. Call this immediately after
+ * the auth terminal exits. */
+export async function invalidateForgeCaches(
+	provider: ForgeProvider,
+	host: string | null,
+): Promise<void> {
+	try {
+		await invoke<void>("invalidate_forge_caches", { provider, host });
+	} catch {
+		// Best-effort: stale cache only delays detection by the cache TTL.
+	}
 }
 
 export async function writeForgeCliAuthTerminalStdin(
@@ -934,10 +877,12 @@ export async function updateRepositoryDefaultBranch(
 
 export async function updateRepositoryBranchPrefix(
 	repoId: string,
-	branchPrefixCustom?: string | null,
+	branchPrefixType: BranchPrefixType | null,
+	branchPrefixCustom: string | null,
 ): Promise<void> {
 	await invoke<void>("update_repository_branch_prefix", {
 		repoId,
+		branchPrefixType,
 		branchPrefixCustom,
 	});
 }
@@ -1159,7 +1104,6 @@ export type UiMutationEvent =
 	| { type: "repositoryListChanged" }
 	| { type: "repositoryChanged"; repoId: string }
 	| { type: "settingsChanged"; key: string | null }
-	| { type: "githubIdentityChanged" }
 	| {
 			type: "pendingCliSendQueued";
 			workspaceId: string;
@@ -1187,11 +1131,16 @@ export async function listenGitRefsChanged(
 
 export async function subscribeUiMutations(
 	callback: (event: UiMutationEvent) => void,
-): Promise<void> {
+): Promise<UnlistenFn> {
 	const { Channel } = await import("@tauri-apps/api/core");
+	const subscriptionId = crypto.randomUUID();
 	const onEvent = new Channel<UiMutationEvent>();
 	onEvent.onmessage = callback;
-	await invoke("subscribe_ui_mutations", { onEvent });
+	await invoke("subscribe_ui_mutations", { subscriptionId, onEvent });
+	return () => {
+		onEvent.onmessage = () => {};
+		void invoke("unsubscribe_ui_mutations", { subscriptionId });
+	};
 }
 
 export type PrefetchRemoteRefsResponse = {
@@ -1525,7 +1474,7 @@ export type SyncWorkspaceTargetOutcome =
 	| "updated"
 	| "alreadyUpToDate"
 	| "conflict"
-	| "dirtyWorktree";
+	| "stashPopConflict";
 
 export type SyncWorkspaceTargetResponse = {
 	outcome: SyncWorkspaceTargetOutcome;
@@ -2171,6 +2120,8 @@ export type AgentSteerRequest = {
 	provider?: string;
 	prompt: string;
 	files?: string[];
+	/** Image attachment paths — see `AgentSendRequest.images`. */
+	images?: string[];
 };
 
 export type AgentSteerResponse = {

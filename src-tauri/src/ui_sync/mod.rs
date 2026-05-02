@@ -16,7 +16,13 @@ pub fn publish<R: Runtime>(app: &AppHandle<R>, event: UiMutationEvent) {
 #[tauri::command]
 pub fn subscribe_ui_mutations(
     manager: tauri::State<'_, UiSyncManager>,
+    subscription_id: String,
     on_event: Channel<UiMutationEvent>,
 ) {
-    manager.subscribe(on_event);
+    manager.subscribe(subscription_id, on_event);
+}
+
+#[tauri::command]
+pub fn unsubscribe_ui_mutations(manager: tauri::State<'_, UiSyncManager>, subscription_id: String) {
+    manager.unsubscribe(&subscription_id);
 }

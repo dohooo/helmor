@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::{forge::gitlab, github_graphql};
+use crate::forge::{github, gitlab};
 
 use super::types::{ChangeRequestInfo, ForgeActionStatus, ForgeProvider};
 
@@ -17,23 +17,23 @@ struct GitlabBackend;
 
 impl WorkspaceForgeBackend for GithubBackend {
     fn lookup_change_request(&self, workspace_id: &str) -> Result<Option<ChangeRequestInfo>> {
-        github_graphql::lookup_workspace_pr(workspace_id)
+        github::lookup_workspace_pr(workspace_id)
     }
 
     fn action_status(&self, workspace_id: &str) -> Result<ForgeActionStatus> {
-        github_graphql::lookup_workspace_pr_action_status(workspace_id)
+        github::lookup_workspace_pr_action_status(workspace_id)
     }
 
     fn check_insert_text(&self, workspace_id: &str, item_id: &str) -> Result<String> {
-        github_graphql::lookup_workspace_pr_check_insert_text(workspace_id, item_id)
+        github::lookup_workspace_pr_check_insert_text(workspace_id, item_id)
     }
 
     fn merge_change_request(&self, workspace_id: &str) -> Result<Option<ChangeRequestInfo>> {
-        github_graphql::merge_workspace_pr(workspace_id)
+        github::merge_workspace_pr(workspace_id)
     }
 
     fn close_change_request(&self, workspace_id: &str) -> Result<Option<ChangeRequestInfo>> {
-        github_graphql::close_workspace_pr(workspace_id)
+        github::close_workspace_pr(workspace_id)
     }
 }
 

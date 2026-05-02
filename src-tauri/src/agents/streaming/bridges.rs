@@ -14,7 +14,7 @@
 //! pure — anything that needs DB access or pipeline state belongs in the
 //! state machine, not in a bridge.
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::agents::AgentStreamEvent;
 
@@ -151,6 +151,79 @@ pub fn bridge_user_input_request_event(
         url: None,
         requested_schema: Some(schema),
     }
+}
+
+/// True for sidecar `error` events that are explicitly marked as retry
+/// progress notices rather than terminal failures. Newer sidecars suppress
+/// Codex app-server `willRetry=true` notifications before they reach Rust, but
+/// this guard keeps the stream alive if an older sidecar forwards the
+/// structured notice as `type:error`.
+pub(super) fn is_retryable_sidecar_error(raw: &Value) -> bool {
+    for key in ["willRetry", "will_retry"] {
+        if let Some(will_retry) = raw.get(key).and_then(Value::as_bool) {
+            return will_retry;
+        }
+    }
+
+    false
+}
+
+/// Build a non-terminal pipeline event for a structured retryable sidecar
+/// error. This keeps older sidecars that forwarded Codex reconnect progress as
+/// `type:error` with `willRetry=true` visible to the user without terminating
+/// the stream.
+pub(super) fn retry_notice_event_from_error(raw: &Value) -> Value {
+    let message = raw
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("Retrying provider request");
+    let (attempt, max_retries) = reconnect_counts_from_message(message).unwrap_or((0, 0));
+
+    json!({
+        "type": "system",
+        "subtype": "codex_reconnecting",
+        "attempt": attempt,
+        "max_retries": max_retries,
+        "retry_delay_ms": 0,
+        "error": message,
+    })
+}
+
+fn reconnect_counts_from_message(message: &str) -> Option<(u64, u64)> {
+    let message = message.trim_start();
+    let suffix = message
+        .strip_prefix("Reconnecting...")
+        .or_else(|| message.strip_prefix("Reconnecting…"));
+    reconnect_counts(suffix.unwrap_or(message).trim_start())
+}
+
+fn reconnect_counts(message: &str) -> Option<(u64, u64)> {
+    let mut chars = message.chars().peekable();
+    let attempt = consume_ascii_digits(&mut chars)?;
+    while chars.peek().is_some_and(|c| c.is_ascii_whitespace()) {
+        chars.next();
+    }
+    if chars.next() != Some('/') {
+        return None;
+    }
+    while chars.peek().is_some_and(|c| c.is_ascii_whitespace()) {
+        chars.next();
+    }
+    let max = consume_ascii_digits(&mut chars)?;
+    Some((attempt, max))
+}
+
+fn consume_ascii_digits<I>(chars: &mut std::iter::Peekable<I>) -> Option<u64>
+where
+    I: Iterator<Item = char>,
+{
+    let mut value = String::new();
+    while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
+        if let Some(ch) = chars.next() {
+            value.push(ch);
+        }
+    }
+    (!value.is_empty()).then(|| value.parse().unwrap_or(0))
 }
 
 /// Pure constructor for `AgentStreamEvent::Error`. Caller decides

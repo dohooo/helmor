@@ -1,15 +1,10 @@
-import {
-	cleanup,
-	render,
-	screen,
-	waitFor,
-	within,
-} from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({
-	getForgeCliStatus: vi.fn(),
+	listForgeAccounts: vi.fn(),
+	listForgeLogins: vi.fn(),
 	resizeForgeCliAuthTerminal: vi.fn(),
 	spawnForgeCliAuthTerminal: vi.fn(),
 	stopForgeCliAuthTerminal: vi.fn(),
@@ -20,7 +15,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@/lib/api")>();
 	return {
 		...actual,
-		getForgeCliStatus: apiMocks.getForgeCliStatus,
+		listForgeAccounts: apiMocks.listForgeAccounts,
+		listForgeLogins: apiMocks.listForgeLogins,
 		resizeForgeCliAuthTerminal: apiMocks.resizeForgeCliAuthTerminal,
 		spawnForgeCliAuthTerminal: apiMocks.spawnForgeCliAuthTerminal,
 		stopForgeCliAuthTerminal: apiMocks.stopForgeCliAuthTerminal,
@@ -35,15 +31,15 @@ vi.mock("sonner", () => ({
 	}),
 }));
 
+import { renderWithProviders } from "@/test/render-with-providers";
 import { RepositoryCliStep } from "./repository-cli-step";
 
 describe("RepositoryCliStep", () => {
 	beforeEach(() => {
-		apiMocks.getForgeCliStatus.mockReset();
-		apiMocks.resizeForgeCliAuthTerminal.mockReset();
-		apiMocks.spawnForgeCliAuthTerminal.mockReset();
-		apiMocks.stopForgeCliAuthTerminal.mockReset();
-		apiMocks.writeForgeCliAuthTerminalStdin.mockReset();
+		for (const mock of Object.values(apiMocks)) {
+			mock.mockReset();
+		}
+		apiMocks.listForgeAccounts.mockResolvedValue([]);
 	});
 
 	afterEach(() => {
@@ -51,70 +47,51 @@ describe("RepositoryCliStep", () => {
 		vi.clearAllMocks();
 	});
 
-	it("shows Ready when a repository CLI is already authenticated", async () => {
-		apiMocks.getForgeCliStatus.mockImplementation((provider: string) =>
-			Promise.resolve({
-				status: "ready",
-				provider,
-				host: provider === "gitlab" ? "gitlab.com" : "github.com",
-				cliName: provider === "gitlab" ? "glab" : "gh",
-				login: "octocat",
-				version: "test",
-				message: `${provider === "gitlab" ? "GitLab" : "GitHub"} CLI ready as octocat.`,
-			}),
+	it("lists existing forge logins by handle when checks complete", async () => {
+		// Per-provider so the GitLab probe (which also fires on mount)
+		// doesn't echo the same login back and double-render the row.
+		apiMocks.listForgeLogins.mockImplementation((provider: string) =>
+			Promise.resolve(provider === "github" ? ["octocat"] : []),
 		);
+		apiMocks.listForgeAccounts.mockResolvedValue([
+			{
+				provider: "github",
+				host: "github.com",
+				login: "octocat",
+				name: "Octocat",
+				avatarUrl: null,
+				email: null,
+				active: true,
+			},
+		]);
 
-		render(
+		renderWithProviders(
 			<RepositoryCliStep step="corner" onBack={vi.fn()} onNext={vi.fn()} />,
 		);
 
-		const githubItem = await screen.findByRole("group", {
-			name: "GitHub CLI (octocat)",
-		});
-
+		// Login handle is rendered next to the resolved profile name.
 		await waitFor(() => {
-			expect(within(githubItem).getByText("Ready")).toBeInTheDocument();
+			expect(screen.getByText("@octocat")).toBeInTheDocument();
 		});
-		expect(
-			within(githubItem).queryByText(/GitHub CLI ready as octocat/i),
-		).not.toBeInTheDocument();
-		expect(
-			within(githubItem).queryByRole("button", { name: "Set up" }),
-		).not.toBeInTheDocument();
+		expect(screen.getByText("Octocat")).toBeInTheDocument();
 	});
 
-	it("opens the embedded auth terminal from Set up when GitHub CLI is unauthenticated", async () => {
-		const user = userEvent.setup();
-		apiMocks.getForgeCliStatus.mockResolvedValue({
-			status: "unauthenticated",
-			provider: "github",
-			host: "github.com",
-			cliName: "gh",
-			version: "test",
-			message: "Run `gh auth login` to connect GitHub CLI.",
-			loginCommand: "gh auth login",
-		});
+	it("opens the embedded auth terminal when picking GitHub from the Add slot", async () => {
+		// Floating buttons are `pointer-events:none` until the picker
+		// slot is hovered — jsdom doesn't run real layout/hit testing,
+		// so the visibility flip from `user.hover` doesn't reach the
+		// buttons before user-event's strict pointer-events check
+		// fires. Disable the check here; the click behaviour is what
+		// this test is asserting on.
+		const user = userEvent.setup({ pointerEventsCheck: 0 });
+		apiMocks.listForgeLogins.mockResolvedValue([]);
 		apiMocks.spawnForgeCliAuthTerminal.mockResolvedValue(undefined);
 
-		render(
+		renderWithProviders(
 			<RepositoryCliStep step="corner" onBack={vi.fn()} onNext={vi.fn()} />,
 		);
 
-		const githubItem = screen.getByRole("group", { name: "GitHub CLI" });
-		await waitFor(() => {
-			expect(
-				within(githubItem).getByRole("button", { name: "Set up" }),
-			).toBeEnabled();
-		});
-		expect(
-			within(githubItem).queryByText(
-				/Run `gh auth login` to connect GitHub CLI/i,
-			),
-		).not.toBeInTheDocument();
-
-		await user.click(
-			within(githubItem).getByRole("button", { name: "Set up" }),
-		);
+		await user.click(screen.getByRole("button", { name: /^github$/i }));
 
 		await waitFor(() => {
 			expect(apiMocks.spawnForgeCliAuthTerminal).toHaveBeenCalledWith(
@@ -124,38 +101,21 @@ describe("RepositoryCliStep", () => {
 				expect.any(Function),
 			);
 		});
-		expect(screen.getByText("GitHub CLI login")).toBeInTheDocument();
+		expect(screen.getByText("gh auth login")).toBeInTheDocument();
 	});
 
-	it("asks for a GitLab domain before opening the embedded auth terminal", async () => {
-		const user = userEvent.setup();
-		apiMocks.getForgeCliStatus.mockResolvedValue({
-			status: "unauthenticated",
-			provider: "gitlab",
-			host: "gitlab.com",
-			cliName: "glab",
-			version: "test",
-			message: "Run `glab auth login --hostname gitlab.com`.",
-			loginCommand: "glab auth login --hostname gitlab.com",
-		});
+	it("asks for a GitLab domain before launching the GitLab auth terminal", async () => {
+		const user = userEvent.setup({ pointerEventsCheck: 0 });
+		apiMocks.listForgeLogins.mockResolvedValue([]);
 		apiMocks.spawnForgeCliAuthTerminal.mockResolvedValue(undefined);
 
-		render(
+		renderWithProviders(
 			<RepositoryCliStep step="corner" onBack={vi.fn()} onNext={vi.fn()} />,
 		);
 
-		const gitlabItem = screen.getByRole("group", { name: "GitLab CLI" });
-		await waitFor(() => {
-			expect(
-				within(gitlabItem).getByRole("button", { name: "Set up" }),
-			).toBeEnabled();
-		});
+		await user.click(screen.getByRole("button", { name: /^gitlab$/i }));
 
-		await user.click(
-			within(gitlabItem).getByRole("button", { name: "Set up" }),
-		);
-
-		const input = screen.getByRole("textbox", { name: "GitLab domain" });
+		const input = await screen.findByRole("textbox", { name: "GitLab domain" });
 		expect(input).toHaveValue("gitlab.com");
 
 		await user.clear(input);
@@ -171,7 +131,7 @@ describe("RepositoryCliStep", () => {
 			);
 		});
 		expect(
-			screen.getByText("GitLab CLI login · gitlab.example.com"),
+			screen.getByText("glab auth login · gitlab.example.com"),
 		).toBeInTheDocument();
 	});
 });
