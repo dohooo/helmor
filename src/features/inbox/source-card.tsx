@@ -1,16 +1,19 @@
-import { AppendContextButton } from "@/components/append-context-button";
+import {
+	AppendContextButton,
+	type AppendContextRequestPayload,
+} from "@/components/append-context-button";
 import type { ContextCard, ContextCardStateTone } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
 import { SourceIcon } from "./source-icon";
 
 const STATE_TONE_CLASS: Record<ContextCardStateTone, string> = {
-	open: "text-[var(--workspace-sidebar-status-progress)]",
-	closed: "text-[var(--workspace-sidebar-status-canceled)]",
-	merged: "text-[var(--workspace-sidebar-status-done)]",
+	open: "text-[var(--workspace-pr-open-accent)]",
+	closed: "text-[var(--workspace-pr-merged-accent)]",
+	merged: "text-[var(--workspace-pr-merged-accent)]",
 	draft: "text-muted-foreground",
-	answered: "text-[var(--workspace-sidebar-status-done)]",
-	unanswered: "text-[var(--workspace-sidebar-status-review)]",
-	urgent: "text-destructive",
+	answered: "text-[var(--workspace-pr-open-accent)]",
+	unanswered: "text-[var(--workspace-pr-conflicts-accent)]",
+	urgent: "text-[var(--workspace-pr-closed-accent)]",
 	neutral: "text-muted-foreground",
 };
 
@@ -45,26 +48,6 @@ export function SourceCard({
 				<div className="line-clamp-2 text-[13px] font-medium leading-[18px] text-foreground">
 					{card.title}
 				</div>
-				<div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] leading-4">
-					{card.state ? (
-						<span
-							className={cn(
-								"shrink-0 font-medium",
-								STATE_TONE_CLASS[card.state.tone],
-							)}
-						>
-							{card.state.label}
-						</span>
-					) : null}
-					{card.state && card.subtitle ? (
-						<span className="shrink-0 text-muted-foreground/60">·</span>
-					) : null}
-					{card.subtitle ? (
-						<span className="truncate text-muted-foreground">
-							{card.subtitle}
-						</span>
-					) : null}
-				</div>
 			</div>
 
 			<div className="flex min-w-0 items-center justify-between gap-2 text-[11px] text-muted-foreground">
@@ -72,7 +55,12 @@ export function SourceCard({
 					<SourceIcon
 						source={card.source}
 						size={11}
-						className="shrink-0 opacity-70"
+						className={cn(
+							"shrink-0",
+							card.state
+								? STATE_TONE_CLASS[card.state.tone]
+								: "text-muted-foreground",
+						)}
 					/>
 					<span className="truncate">{card.externalId}</span>
 				</div>
@@ -106,7 +94,9 @@ export function SourceCard({
 	);
 }
 
-function buildCardContextPayload(card: ContextCard) {
+function buildCardContextPayload(
+	card: ContextCard,
+): AppendContextRequestPayload {
 	const lines = [
 		`Inbox context: ${card.title}`,
 		`Source: ${card.externalId}`,
@@ -114,11 +104,23 @@ function buildCardContextPayload(card: ContextCard) {
 		card.state ? `State: ${card.state.label}` : null,
 		`URL: ${card.externalUrl}`,
 	].filter((line): line is string => Boolean(line));
+	const submitText = lines.join("\n");
 
 	return {
-		label: card.externalId,
-		submitText: lines.join("\n"),
-		key: `inbox:${card.id}`,
+		items: [
+			{
+				kind: "custom-tag",
+				label: card.externalId,
+				submitText,
+				key: `inbox:${card.id}`,
+				preview: {
+					kind: "text",
+					title: card.externalId,
+					text: submitText,
+				},
+			},
+		],
+		behavior: "append",
 	};
 }
 

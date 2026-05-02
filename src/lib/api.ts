@@ -903,6 +903,69 @@ export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Inbox (kanban-mode left sidebar)
+// ---------------------------------------------------------------------------
+
+export type InboxItemSource =
+	| "github_issue"
+	| "github_pr"
+	| "github_discussion";
+
+export type InboxItemStateTone =
+	| "open"
+	| "closed"
+	| "merged"
+	| "draft"
+	| "answered"
+	| "unanswered"
+	| "urgent"
+	| "neutral";
+
+export type InboxItem = {
+	id: string;
+	source: InboxItemSource;
+	externalId: string;
+	externalUrl: string;
+	title: string;
+	subtitle?: string | null;
+	state?: { label: string; tone: InboxItemStateTone } | null;
+	lastActivityAt: number;
+};
+
+export type InboxPage = {
+	items: InboxItem[];
+	/** Opaque cursor — pass back verbatim to fetch the next page. `null`
+	 * when there are no more pages from any enabled source. */
+	nextCursor: string | null;
+};
+
+export type InboxToggles = {
+	issues: boolean;
+	prs: boolean;
+	discussions: boolean;
+};
+
+export async function listInboxItems(args: {
+	provider: ForgeProvider;
+	login: string;
+	toggles: InboxToggles;
+	cursor?: string | null;
+	limit?: number;
+}): Promise<InboxPage> {
+	try {
+		return await invoke<InboxPage>("list_inbox_items", {
+			provider: args.provider,
+			login: args.login,
+			toggles: args.toggles,
+			cursor: args.cursor ?? null,
+			limit: args.limit ?? 20,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to load inbox items."));
+	}
+}
+
 export type SlashCommandEntry = {
 	name: string;
 	description: string;

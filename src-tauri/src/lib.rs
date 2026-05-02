@@ -244,6 +244,7 @@ pub fn run() {
             commands::system_commands::resize_agent_login_terminal,
             commands::forge_commands::get_workspace_forge,
             commands::forge_commands::list_forge_accounts,
+            commands::forge_commands::list_inbox_items,
             commands::forge_commands::get_workspace_account_profile,
             commands::forge_commands::cache_forge_avatar,
             commands::forge_commands::list_forge_logins,

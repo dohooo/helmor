@@ -20,6 +20,26 @@ export type ClaudeCustomProviderSettings = {
 	customModels: string;
 };
 
+/** Per-account toggles for which item kinds the inbox should pull from
+ * a given forge login. Keyed externally by `<provider>:<login>` (e.g.
+ * `github:octocat`). Missing keys default to all `true` — newly added
+ * accounts opt into everything until the user changes their mind. */
+export type InboxAccountSourceToggles = {
+	issues: boolean;
+	prs: boolean;
+	discussions: boolean;
+};
+
+export type InboxSourceConfig = {
+	accounts: Record<string, InboxAccountSourceToggles>;
+};
+
+export const DEFAULT_INBOX_ACCOUNT_TOGGLES: InboxAccountSourceToggles = {
+	issues: true,
+	prs: true,
+	discussions: true,
+};
+
 export type AppSettings = {
 	fontSize: number;
 	theme: ThemeMode;
@@ -50,6 +70,7 @@ export type AppSettings = {
 	onboardingCompleted: boolean;
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
+	inboxSourceConfig: InboxSourceConfig;
 };
 
 /**
@@ -84,6 +105,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		customApiKey: "",
 		customModels: "",
 	},
+	inboxSourceConfig: { accounts: {} },
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
@@ -119,6 +141,7 @@ const SETTINGS_KEY_MAP: Record<
 	onboardingCompleted: "app.onboarding_completed",
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
+	inboxSourceConfig: "app.inbox_source_config",
 };
 
 function parseShortcutOverrides(raw: string | undefined): ShortcutOverrides {
@@ -135,6 +158,37 @@ function parseShortcutOverrides(raw: string | undefined): ShortcutOverrides {
 		) as ShortcutOverrides;
 	} catch {
 		return DEFAULT_SETTINGS.shortcuts;
+	}
+}
+
+function parseInboxSourceConfig(raw: string | undefined): InboxSourceConfig {
+	if (!raw) return DEFAULT_SETTINGS.inboxSourceConfig;
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			return DEFAULT_SETTINGS.inboxSourceConfig;
+		}
+		const accountsRaw = (parsed as { accounts?: unknown }).accounts;
+		if (
+			!accountsRaw ||
+			typeof accountsRaw !== "object" ||
+			Array.isArray(accountsRaw)
+		) {
+			return { accounts: {} };
+		}
+		const accounts: Record<string, InboxAccountSourceToggles> = {};
+		for (const [key, value] of Object.entries(accountsRaw)) {
+			if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+			const v = value as Partial<InboxAccountSourceToggles>;
+			accounts[key] = {
+				issues: typeof v.issues === "boolean" ? v.issues : true,
+				prs: typeof v.prs === "boolean" ? v.prs : true,
+				discussions: typeof v.discussions === "boolean" ? v.discussions : true,
+			};
+		}
+		return { accounts };
+	} catch {
+		return DEFAULT_SETTINGS.inboxSourceConfig;
 	}
 }
 
@@ -243,6 +297,9 @@ export async function loadSettings(): Promise<AppSettings> {
 			claudeCustomProviders: parseClaudeCustomProviderSettings(
 				raw[SETTINGS_KEY_MAP.claudeCustomProviders],
 			),
+			inboxSourceConfig: parseInboxSourceConfig(
+				raw[SETTINGS_KEY_MAP.inboxSourceConfig],
+			),
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS };
@@ -277,7 +334,9 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 		const value = patch[key as keyof Omit<AppSettings, "theme" | "darkTheme">];
 		if (value !== undefined) {
 			settings[dbKey] =
-				key === "shortcuts" || key === "claudeCustomProviders"
+				key === "shortcuts" ||
+				key === "claudeCustomProviders" ||
+				key === "inboxSourceConfig"
 					? JSON.stringify(value)
 					: value === null
 						? ""

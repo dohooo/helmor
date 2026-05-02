@@ -1,6 +1,7 @@
 use crate::forge::{
     self,
     accounts::{self, ForgeAccount},
+    github::inbox::{self as github_inbox, InboxPage, InboxToggles},
     ChangeRequestInfo, ForgeActionStatus, ForgeDetection, ForgeProvider, RemoteState,
 };
 // `accounts` re-exports the dispatchers; provider-specific work
@@ -35,6 +36,35 @@ pub async fn get_workspace_forge(workspace_id: String) -> CmdResult<ForgeDetecti
 #[tauri::command]
 pub async fn list_forge_accounts(gitlab_hosts: Vec<String>) -> CmdResult<Vec<ForgeAccount>> {
     run_blocking(move || Ok(accounts::list_forge_accounts(&gitlab_hosts))).await
+}
+
+/// List inbox items for one GitHub account.
+///
+/// Toggles are mirrored 1:1 from `settings.inboxSourceConfig.accounts[<provider>:<login>]`.
+/// `cursor` is opaque on the JS side — pass back the previous response's
+/// `nextCursor` to fetch the next page. `limit` clamps to [1, 100].
+///
+/// Currently GitHub-only; future Linear / Slack go through their own
+/// adapters and a dispatcher here.
+#[tauri::command]
+pub async fn list_inbox_items(
+    provider: ForgeProvider,
+    login: String,
+    toggles: InboxToggles,
+    cursor: Option<String>,
+    limit: Option<u32>,
+) -> CmdResult<InboxPage> {
+    let limit = limit.unwrap_or(20).clamp(1, 100) as usize;
+    run_blocking(move || match provider {
+        ForgeProvider::Github => {
+            github_inbox::list_inbox_items(&login, toggles, cursor.as_deref(), limit)
+        }
+        ForgeProvider::Gitlab | ForgeProvider::Unknown => Ok(InboxPage {
+            items: Vec::new(),
+            next_cursor: None,
+        }),
+    })
+    .await
 }
 
 /// Resolve the gh/glab account bound to a workspace's parent repo and
