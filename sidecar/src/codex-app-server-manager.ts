@@ -541,6 +541,11 @@ export class CodexAppServerManager implements SessionManager {
 			} else {
 				emitter.end(requestId);
 			}
+			if (ctx.activeRequestId === requestId) {
+				ctx.activeRequestId = null;
+				ctx.activeEmitter = null;
+				ctx.lastRetryNotice = null;
+			}
 		});
 	}
 
@@ -828,6 +833,45 @@ export class CodexAppServerManager implements SessionManager {
 
 	// ── Private ──────────────────────────────────────────────────────────
 
+	private settleUnexpectedExit(
+		sessionId: string,
+		ctx: AppServerContext,
+		code: number | null,
+		signal: string | null,
+	): void {
+		const hasActiveTurn =
+			ctx.turnResolve !== null ||
+			ctx.turnReject !== null ||
+			ctx.activeTurnId !== null;
+		if (!hasActiveTurn) return;
+
+		for (const [id, p] of this.pendingApprovals) {
+			if (p.sessionId === sessionId) this.pendingApprovals.delete(id);
+		}
+		for (const [id, p] of this.pendingUserInputs) {
+			if (p.sessionId === sessionId) this.pendingUserInputs.delete(id);
+		}
+
+		const requestId = ctx.activeRequestId;
+		const emitter = ctx.activeEmitter;
+		logger.error("codex app-server exited during active turn", {
+			sessionId,
+			requestId: requestId ?? "(none)",
+			turnId: ctx.activeTurnId ?? "(none)",
+			code,
+			signal,
+		});
+		ctx.activeTurnId = null;
+		const resolve = ctx.turnResolve;
+		ctx.turnResolve = null;
+		ctx.turnReject = null;
+
+		if (requestId && emitter) {
+			emitter.error(requestId, "Codex app-server exited unexpectedly");
+		}
+		resolve?.();
+	}
+
 	/**
 	 * Get an existing session context or create a new one. When `resume`
 	 * is set (provider thread ID from a previous session), attempts
@@ -856,7 +900,11 @@ export class CodexAppServerManager implements SessionManager {
 			cwd,
 			onNotification: () => {},
 			onRequest: () => {},
-			onExit: () => {
+			onExit: (code, signal) => {
+				const ctx = ctxRef.current;
+				if (ctx) {
+					this.settleUnexpectedExit(sessionId, ctx, code, signal);
+				}
 				this.sessions.delete(sessionId);
 			},
 			onError: (err) => {

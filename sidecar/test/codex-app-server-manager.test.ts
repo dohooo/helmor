@@ -15,9 +15,11 @@ const serverState = {
 	onNotification: null as
 		| null
 		| ((notification: { method: string; params?: unknown }) => void),
+	onExit: null as null | ((code: number | null, signal: string | null) => void),
 	/** Optional hook tests use to inject extra notifications between
 	 *  `turn/started` and `turn/completed` (e.g. `thread/tokenUsage/updated`). */
 	beforeTurnCompleted: null as null | (() => void),
+	exitAfterTurnStarted: false,
 };
 const gitAccessState = {
 	directories: [] as string[],
@@ -25,6 +27,12 @@ const gitAccessState = {
 
 class MockCodexAppServer {
 	killed = false;
+
+	constructor(opts: {
+		onExit: (code: number | null, signal: string | null) => void;
+	}) {
+		serverState.onExit = opts.onExit;
+	}
 
 	async sendRequest(method: string, params: unknown): Promise<unknown> {
 		serverState.requests.push({ method, params });
@@ -39,6 +47,10 @@ class MockCodexAppServer {
 					method: "turn/started",
 					params: { turn: { id: "turn-1" } },
 				});
+				if (serverState.exitAfterTurnStarted) {
+					serverState.onExit?.(1, null);
+					return;
+				}
 				serverState.beforeTurnCompleted?.();
 				serverState.onNotification?.({
 					method: "turn/completed",
@@ -87,7 +99,9 @@ describe("CodexAppServerManager", () => {
 	beforeEach(() => {
 		serverState.requests = [];
 		serverState.onNotification = null;
+		serverState.onExit = null;
 		serverState.beforeTurnCompleted = null;
+		serverState.exitAfterTurnStarted = false;
 		gitAccessState.directories = [];
 		emitter = createSidecarEmitter(() => {});
 	});
@@ -537,5 +551,53 @@ describe("CodexAppServerManager", () => {
 				}),
 			]),
 		);
+	});
+
+	test("settles an active turn when the app-server exits unexpectedly", async () => {
+		const manager = new CodexAppServerManager();
+		const events: Array<Record<string, unknown>> = [];
+		const capturingEmitter = createSidecarEmitter((event) => {
+			events.push(event as Record<string, unknown>);
+		});
+		serverState.exitAfterTurnStarted = true;
+
+		const sendPromise = manager.sendMessage(
+			"REQ-app-server-exit",
+			{
+				sessionId: "session-app-server-exit",
+				prompt: "hi",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			capturingEmitter,
+		);
+
+		const result = await Promise.race([
+			sendPromise.then(() => "settled" as const),
+			new Promise<"timed-out">((resolve) => {
+				setTimeout(() => resolve("timed-out"), 50);
+			}),
+		]);
+
+		expect(result).toBe("settled");
+		expect(events).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: "REQ-app-server-exit",
+					type: "error",
+					message: "Codex app-server exited unexpectedly",
+				}),
+				expect.objectContaining({
+					id: "REQ-app-server-exit",
+					type: "end",
+				}),
+			]),
+		);
+		expect(events.find((e) => e.type === "aborted")).toBeUndefined();
 	});
 });
