@@ -160,6 +160,22 @@ type KanbanResizeState = {
 };
 const EMPTY_SENDING_SESSION_IDS = new Set<string>();
 
+function getKanbanBoardMaxWidth() {
+	if (typeof window === "undefined") {
+		return MAX_SIDEBAR_WIDTH;
+	}
+
+	return Math.max(MAX_SIDEBAR_WIDTH, window.innerWidth);
+}
+
+function clampKanbanResizeWidth(target: KanbanResizeTarget, width: number) {
+	if (target === "inbox") {
+		return clampSidebarWidth(width);
+	}
+
+	return Math.min(getKanbanBoardMaxWidth(), Math.max(MIN_SIDEBAR_WIDTH, width));
+}
+
 function App() {
 	const e2eScenario =
 		typeof window === "undefined"
@@ -531,9 +547,10 @@ function AppShell({
 	);
 	const [workspaceViewMode, setWorkspaceViewMode] =
 		useState<WorkspaceViewMode>("conversation");
-	const [kanbanComposerVisible, setKanbanComposerVisible] = useState(false);
 	const [kanbanInboxWidth, setKanbanInboxWidth] = useState(280);
 	const [kanbanBoardWidth, setKanbanBoardWidth] = useState(332);
+	const [kanbanBoardExpanded, setKanbanBoardExpanded] = useState(false);
+	const kanbanBoardRestoreWidthRef = useRef(332);
 	const [kanbanResizeState, setKanbanResizeState] =
 		useState<KanbanResizeState | null>(null);
 	const [editorSession, setEditorSession] = useState<EditorSessionState | null>(
@@ -945,26 +962,6 @@ function AppShell({
 	}, [workspaceViewMode]);
 
 	useEffect(() => {
-		if (workspaceViewMode !== "kanban") {
-			setKanbanComposerVisible(false);
-		}
-	}, [workspaceViewMode]);
-
-	useEffect(() => {
-		if (workspaceViewMode !== "kanban" || !kanbanComposerVisible) {
-			return;
-		}
-
-		const handleKeyDown = (event: KeyboardEvent) => {
-			if (event.key !== "Escape") return;
-			setKanbanComposerVisible(false);
-		};
-
-		window.addEventListener("keydown", handleKeyDown);
-		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [kanbanComposerVisible, workspaceViewMode]);
-
-	useEffect(() => {
 		if (!kanbanResizeState) {
 			return;
 		}
@@ -989,7 +986,7 @@ function AppShell({
 				kanbanResizeState.target === "inbox"
 					? kanbanResizeState.width + deltaX
 					: kanbanResizeState.width - deltaX;
-			pendingWidth = clampSidebarWidth(rawWidth);
+			pendingWidth = clampKanbanResizeWidth(kanbanResizeState.target, rawWidth);
 			if (rafId === null) {
 				rafId = window.requestAnimationFrame(flush);
 			}
@@ -1027,6 +1024,9 @@ function AppShell({
 			(event: ReactMouseEvent<HTMLDivElement>) => {
 				if (event.button !== 0) return;
 				event.preventDefault();
+				if (target === "board") {
+					setKanbanBoardExpanded(false);
+				}
 				setKanbanResizeState({
 					pointerX: event.clientX,
 					target,
@@ -1036,6 +1036,23 @@ function AppShell({
 		[kanbanBoardWidth, kanbanInboxWidth],
 	);
 
+	const handleKanbanBoardExpandToggle = useCallback(
+		(expandedWidth: number) => {
+			if (kanbanBoardExpanded) {
+				setKanbanBoardWidth(
+					clampKanbanResizeWidth("board", kanbanBoardRestoreWidthRef.current),
+				);
+				setKanbanBoardExpanded(false);
+				return;
+			}
+
+			kanbanBoardRestoreWidthRef.current = kanbanBoardWidth;
+			setKanbanBoardWidth(clampKanbanResizeWidth("board", expandedWidth));
+			setKanbanBoardExpanded(true);
+		},
+		[kanbanBoardExpanded, kanbanBoardWidth],
+	);
+
 	const handleKanbanResizeKeyDown = useCallback(
 		(target: KanbanResizeTarget) =>
 			(event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -1043,13 +1060,17 @@ function AppShell({
 					event.preventDefault();
 					if (target === "inbox") {
 						setKanbanInboxWidth((currentWidth) =>
-							clampSidebarWidth(currentWidth - SIDEBAR_RESIZE_STEP),
+							clampKanbanResizeWidth(
+								target,
+								currentWidth - SIDEBAR_RESIZE_STEP,
+							),
 						);
 						return;
 					}
 
+					setKanbanBoardExpanded(false);
 					setKanbanBoardWidth((currentWidth) =>
-						clampSidebarWidth(currentWidth + SIDEBAR_RESIZE_STEP),
+						clampKanbanResizeWidth(target, currentWidth + SIDEBAR_RESIZE_STEP),
 					);
 				}
 
@@ -1057,13 +1078,17 @@ function AppShell({
 					event.preventDefault();
 					if (target === "inbox") {
 						setKanbanInboxWidth((currentWidth) =>
-							clampSidebarWidth(currentWidth + SIDEBAR_RESIZE_STEP),
+							clampKanbanResizeWidth(
+								target,
+								currentWidth + SIDEBAR_RESIZE_STEP,
+							),
 						);
 						return;
 					}
 
+					setKanbanBoardExpanded(false);
 					setKanbanBoardWidth((currentWidth) =>
-						clampSidebarWidth(currentWidth - SIDEBAR_RESIZE_STEP),
+						clampKanbanResizeWidth(target, currentWidth - SIDEBAR_RESIZE_STEP),
 					);
 				}
 			},
@@ -2321,10 +2346,6 @@ function AppShell({
 			});
 			if (items.length === 0) return;
 
-			if (workspaceViewMode === "kanban") {
-				setKanbanComposerVisible(true);
-			}
-
 			setPendingComposerInserts((current) => [
 				...current,
 				{
@@ -2342,7 +2363,6 @@ function AppShell({
 			displayedWorkspaceId,
 			pushWorkspaceToast,
 			selectedWorkspaceId,
-			workspaceViewMode,
 		],
 	);
 
@@ -2472,7 +2492,7 @@ function AppShell({
 									aria-label="Workspace panel"
 									className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
 								>
-									{workspaceViewMode !== "editor" && (
+									{workspaceViewMode === "conversation" && (
 										<div
 											aria-label="Workspace panel drag region"
 											className="absolute inset-x-0 top-0 z-10 h-9 bg-transparent"
@@ -2486,12 +2506,15 @@ function AppShell({
 									>
 										{workspaceViewMode === "kanban" && (
 											<KanbanPage
+												boardMaxWidth={getKanbanBoardMaxWidth()}
 												boardWidth={kanbanBoardWidth}
 												inboxWidth={kanbanInboxWidth}
+												inboxMaxWidth={MAX_SIDEBAR_WIDTH}
+												isBoardExpanded={kanbanBoardExpanded}
 												isBoardResizing={kanbanResizeState?.target === "board"}
 												isInboxResizing={kanbanResizeState?.target === "inbox"}
-												maxWidth={MAX_SIDEBAR_WIDTH}
 												minWidth={MIN_SIDEBAR_WIDTH}
+												onBoardExpandToggle={handleKanbanBoardExpandToggle}
 												onBoardResizeKeyDown={handleKanbanResizeKeyDown(
 													"board",
 												)}
@@ -2515,12 +2538,10 @@ function AppShell({
 										<div
 											data-focus-scope="chat"
 											className={
-												workspaceViewMode === "editor" ||
-												(workspaceViewMode === "kanban" &&
-													!kanbanComposerVisible)
+												workspaceViewMode === "editor"
 													? "hidden"
 													: workspaceViewMode === "kanban"
-														? "pointer-events-none absolute bottom-16 z-30 flex justify-center px-6"
+														? "pointer-events-none absolute inset-y-0 z-30 flex min-h-0 flex-col"
 														: "flex min-h-0 flex-1 flex-col"
 											}
 											style={
@@ -2577,7 +2598,7 @@ function AppShell({
 												composerOnly={workspaceViewMode === "kanban"}
 												composerWrapperClassName={
 													workspaceViewMode === "kanban"
-														? "pointer-events-auto w-full max-w-3xl rounded-2xl shadow-[0_16px_44px_rgba(0,0,0,0.18),0_5px_18px_rgba(0,0,0,0.12),0_0_0_1px_rgba(255,255,255,0.025)] dark:shadow-[0_18px_52px_rgba(0,0,0,0.38),0_6px_20px_rgba(0,0,0,0.22),0_0_0_1px_rgba(255,255,255,0.035)]"
+														? "pointer-events-auto mt-auto px-4 pb-4 pt-0"
 														: undefined
 												}
 												headerLeading={

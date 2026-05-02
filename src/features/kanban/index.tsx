@@ -1,4 +1,5 @@
 import {
+	type AutoScrollOptions,
 	type CollisionDetection,
 	closestCorners,
 	DndContext,
@@ -15,6 +16,7 @@ import {
 	useSensors,
 } from "@dnd-kit/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Maximize2, Minimize2 } from "lucide-react";
 import {
 	type KeyboardEventHandler,
 	type MouseEventHandler,
@@ -45,14 +47,25 @@ import { columnDropId, KanbanColumn } from "./column";
 import type { KanbanColumnId } from "./types";
 
 const DROP_SETTLE_MS = 190;
+const KANBAN_AUTO_SCROLL: AutoScrollOptions = {
+	acceleration: 3,
+	interval: 16,
+	threshold: {
+		x: 0.12,
+		y: 0.18,
+	},
+};
 
 type KanbanPageProps = {
+	boardMaxWidth: number;
 	boardWidth: number;
 	inboxWidth: number;
+	inboxMaxWidth: number;
+	isBoardExpanded: boolean;
 	isBoardResizing: boolean;
 	isInboxResizing: boolean;
-	maxWidth: number;
 	minWidth: number;
+	onBoardExpandToggle: (expandedWidth: number) => void;
 	onBoardResizeKeyDown: KeyboardEventHandler<HTMLDivElement>;
 	onBoardResizeStart: MouseEventHandler<HTMLDivElement>;
 	onInboxResizeKeyDown: KeyboardEventHandler<HTMLDivElement>;
@@ -83,12 +96,15 @@ const kanbanCollisionDetection: CollisionDetection = (args) => {
 };
 
 export function KanbanPage({
+	boardMaxWidth,
 	boardWidth,
 	inboxWidth,
+	inboxMaxWidth,
+	isBoardExpanded,
 	isBoardResizing,
 	isInboxResizing,
-	maxWidth,
 	minWidth,
+	onBoardExpandToggle,
 	onBoardResizeKeyDown,
 	onBoardResizeStart,
 	onInboxResizeKeyDown,
@@ -97,6 +113,7 @@ export function KanbanPage({
 }: KanbanPageProps) {
 	const queryClient = useQueryClient();
 	const groupsQuery = useQuery(workspaceGroupsQueryOptions());
+	const pageRef = useRef<HTMLDivElement | null>(null);
 	const sensors = useSensors(
 		useSensor(PointerSensor, {
 			activationConstraint: {
@@ -135,6 +152,15 @@ export function KanbanPage({
 	const activeColumnId = activeRow?.status ?? null;
 	const previewColumnId =
 		overColumnId && overColumnId !== activeColumnId ? overColumnId : null;
+	const handleBoardExpandToggle = useCallback(() => {
+		const pageWidth =
+			pageRef.current?.clientWidth ?? boardMaxWidth + inboxWidth;
+		const expandedWidth = Math.min(
+			boardMaxWidth,
+			Math.max(minWidth, pageWidth - inboxWidth),
+		);
+		onBoardExpandToggle(expandedWidth);
+	}, [boardMaxWidth, inboxWidth, minWidth, onBoardExpandToggle]);
 
 	useEffect(() => {
 		return () => {
@@ -278,6 +304,7 @@ export function KanbanPage({
 
 	return (
 		<DndContext
+			autoScroll={KANBAN_AUTO_SCROLL}
 			collisionDetection={kanbanCollisionDetection}
 			onDragCancel={handleDragCancel}
 			onDragEnd={handleDragEnd}
@@ -286,6 +313,7 @@ export function KanbanPage({
 			sensors={sensors}
 		>
 			<div
+				ref={pageRef}
 				aria-label="Kanban page"
 				className="relative flex min-h-0 flex-1 bg-background"
 			>
@@ -298,7 +326,7 @@ export function KanbanPage({
 				</aside>
 				<KanbanResizeHandle
 					ariaLabel="Resize kanban inbox"
-					ariaValueMax={maxWidth}
+					ariaValueMax={inboxMaxWidth}
 					ariaValueMin={minWidth}
 					ariaValueNow={inboxWidth}
 					edge="right"
@@ -314,7 +342,7 @@ export function KanbanPage({
 				/>
 				<KanbanResizeHandle
 					ariaLabel="Resize kanban board"
-					ariaValueMax={maxWidth}
+					ariaValueMax={boardMaxWidth}
 					ariaValueMin={minWidth}
 					ariaValueNow={boardWidth}
 					edge="left"
@@ -328,12 +356,40 @@ export function KanbanPage({
 					className="relative flex h-full shrink-0 flex-col border-border/60 border-l bg-background"
 					style={{ width: `${boardWidth}px` }}
 				>
-					<div className="flex h-8 shrink-0 items-center border-border/50 border-b px-4">
+					<div className="flex h-8 shrink-0 items-center justify-between border-border/50 border-b px-3">
 						<h1 className="text-[13px] font-medium text-muted-foreground">
 							Kanban
 						</h1>
+						<button
+							type="button"
+							aria-label={
+								isBoardExpanded
+									? "Collapse kanban board"
+									: "Expand kanban board"
+							}
+							title={
+								isBoardExpanded
+									? "Collapse kanban board"
+									: "Expand kanban board"
+							}
+							className="inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
+							onClick={handleBoardExpandToggle}
+						>
+							{isBoardExpanded ? (
+								<Minimize2 className="size-3.5" strokeWidth={1.8} />
+							) : (
+								<Maximize2 className="size-3.5" strokeWidth={1.8} />
+							)}
+						</button>
 					</div>
-					<div className="flex min-h-0 flex-1 snap-x snap-mandatory scroll-pl-3 gap-3 overflow-x-auto scroll-smooth pt-2 pr-8 pb-1 pl-3 [scrollbar-width:thin]">
+					<div
+						className={cn(
+							"flex min-h-0 flex-1 scroll-pl-3 gap-3 overflow-x-auto p-3 pt-2 pb-1 [scrollbar-width:thin]",
+							activeId
+								? "snap-none scroll-auto overscroll-x-contain"
+								: "snap-x snap-mandatory scroll-smooth",
+						)}
+					>
 						{KANBAN_COLUMNS.map((column) => (
 							<KanbanColumn
 								key={column.id}
