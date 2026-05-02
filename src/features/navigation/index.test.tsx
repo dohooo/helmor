@@ -8,11 +8,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type {
-	RepositoryCreateOption,
-	WorkspaceGroup,
-	WorkspaceRow,
-} from "@/lib/api";
+import type { WorkspaceGroup, WorkspaceRow } from "@/lib/api";
 
 import { WorkspacesSidebar } from "./index";
 
@@ -29,21 +25,6 @@ const workspaceGroups: WorkspaceGroup[] = [
 		label: "In Progress",
 		tone: "progress",
 		rows: [workspaceRow],
-	},
-];
-
-const repositories: RepositoryCreateOption[] = [
-	{
-		id: "repo-1",
-		name: "helmor",
-		defaultBranch: "main",
-		repoInitials: "HE",
-	},
-	{
-		id: "repo-2",
-		name: "dosu-cli",
-		defaultBranch: "develop",
-		repoInitials: "DO",
 	},
 ];
 
@@ -108,17 +89,16 @@ describe("WorkspacesSidebar", () => {
 		expect(screen.getByLabelText("Unread")).toBeInTheDocument();
 	});
 
-	it("opens the repository picker and creates a workspace from the selected repository", async () => {
+	it("opens the workspace start page from the new workspace button", async () => {
 		const user = userEvent.setup();
-		const onCreateWorkspace = vi.fn();
+		const onOpenNewWorkspace = vi.fn();
 
 		const { container } = render(
 			<TooltipProvider delayDuration={0}>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[]}
-					availableRepositories={repositories}
-					onCreateWorkspace={onCreateWorkspace}
+					onOpenNewWorkspace={onOpenNewWorkspace}
 				/>
 			</TooltipProvider>,
 		);
@@ -130,13 +110,8 @@ describe("WorkspacesSidebar", () => {
 
 		expect(screen.queryByPlaceholderText("Search repositories")).toBeNull();
 		expect(screen.queryByText("Repositories")).toBeNull();
-		expect(screen.getByRole("option", { name: /helmor/i })).toBeInTheDocument();
-
-		const [firstRepositoryOption] = screen.getAllByRole("option");
-		await user.click(firstRepositoryOption);
-
-		expect(onCreateWorkspace).toHaveBeenCalledWith("repo-1");
 		expect(screen.queryByRole("option", { name: /helmor/i })).toBeNull();
+		expect(onOpenNewWorkspace).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows an Open in Finder action for active workspaces", async () => {

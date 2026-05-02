@@ -141,7 +141,7 @@ const SECTION_LABEL_OVERRIDES: Partial<Record<SettingsSection, string>> = {
 const SECTION_TITLE_CAPTIONS: Partial<Record<SettingsSection, string>> = {
 	account: "Synced with your local gh / glab CLI.",
 	inbox:
-		"Pick which items each connected account contributes to the kanban inbox.",
+		"Pick which items each connected account contributes to the context inbox.",
 };
 
 function sidebarSectionLabel(

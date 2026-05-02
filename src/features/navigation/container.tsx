@@ -13,6 +13,7 @@ type WorkspacesSidebarContainerProps = {
 	newWorkspaceShortcut?: string | null;
 	addRepositoryShortcut?: string | null;
 	onSelectWorkspace: (workspaceId: string | null) => void;
+	onOpenNewWorkspace?: () => void;
 	pushWorkspaceToast: (
 		description: string,
 		title?: string,
@@ -32,20 +33,19 @@ export const WorkspacesSidebarContainer = memo(
 		newWorkspaceShortcut,
 		addRepositoryShortcut,
 		onSelectWorkspace,
+		onOpenNewWorkspace,
 		pushWorkspaceToast,
 	}: WorkspacesSidebarContainerProps) {
 		const {
 			addingRepository,
 			archivingWorkspaceIds,
 			archivedRows,
-			availableRepositories,
 			creatingWorkspaceRepoId,
 			cloneDefaultDirectory,
 			groups,
 			handleAddRepository,
 			handleArchiveWorkspace,
 			handleCloneFromUrl,
-			handleCreateWorkspaceFromRepo,
 			handleDeleteWorkspace,
 			handleMarkWorkspaceUnread,
 			handleOpenCloneDialog,
@@ -66,7 +66,6 @@ export const WorkspacesSidebarContainer = memo(
 			<WorkspacesSidebar
 				groups={groups}
 				archivedRows={archivedRows}
-				availableRepositories={availableRepositories}
 				addingRepository={addingRepository}
 				archivingWorkspaceIds={archivingWorkspaceIds}
 				selectedWorkspaceId={selectedWorkspaceId}
@@ -85,9 +84,7 @@ export const WorkspacesSidebarContainer = memo(
 				onSubmitClone={handleCloneFromUrl}
 				onSelectWorkspace={handleSelectWorkspace}
 				onPrefetchWorkspace={prefetchWorkspace}
-				onCreateWorkspace={(repoId) => {
-					void handleCreateWorkspaceFromRepo(repoId);
-				}}
+				onOpenNewWorkspace={onOpenNewWorkspace}
 				onArchiveWorkspace={handleArchiveWorkspace}
 				onMarkWorkspaceUnread={handleMarkWorkspaceUnread}
 				onRestoreWorkspace={handleRestoreWorkspace}

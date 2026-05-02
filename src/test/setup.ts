@@ -80,6 +80,7 @@ vi.mock("@tanstack/react-virtual", () => ({
 		return {
 			getVirtualItems: () => items,
 			getTotalSize: () => offset,
+			measureElement: () => {},
 			scrollToIndex: () => {},
 		};
 	},

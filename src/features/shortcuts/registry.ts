@@ -95,14 +95,6 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		editable: true,
 	},
 	{
-		id: "workspace.toggleKanban",
-		title: "Toggle Kanban",
-		group: "Workspace",
-		defaultHotkey: "Mod+Shift+K",
-		scopes: ["app"],
-		editable: true,
-	},
-	{
 		id: "script.run",
 		title: "Run / stop script",
 		group: "Actions",

@@ -90,33 +90,13 @@ body {
 	animation: conversation-scrollbar-fade-in 300ms ease-out 400ms both;
 }
 
-.kanban-drop-placeholder {
-	height: var(--kanban-placeholder-height, 76px);
-}
-
-.kanban-drop-placeholder-out {
-	height: var(--kanban-placeholder-height, 76px);
-	animation: kanban-drop-placeholder-out
-		var(--kanban-placeholder-fade-ms, 190ms) cubic-bezier(0.2, 0, 0, 1) forwards;
-}
-
-@keyframes kanban-drop-placeholder-out {
-	from {
-		opacity: 1;
-	}
-
-	to {
-		opacity: 0;
-	}
-}
-
-.kanban-coming-soon-pickaxe {
+.inbox-coming-soon-pickaxe {
 	transform-origin: 70% 76%;
-	animation: kanban-coming-soon-pickaxe 1.55s cubic-bezier(0.4, 0, 0.2, 1)
+	animation: inbox-coming-soon-pickaxe 1.55s cubic-bezier(0.4, 0, 0.2, 1)
 		infinite;
 }
 
-@keyframes kanban-coming-soon-pickaxe {
+@keyframes inbox-coming-soon-pickaxe {
 	0%,
 	68%,
 	100% {
@@ -137,15 +117,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.kanban-drop-placeholder-out {
-		animation: none;
-	}
-
-	.kanban-drop-placeholder-out {
-		opacity: 0;
-	}
-
-	.kanban-coming-soon-pickaxe {
+	.inbox-coming-soon-pickaxe {
 		animation: none;
 		transform: translateY(0);
 	}

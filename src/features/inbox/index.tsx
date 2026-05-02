@@ -1,3 +1,4 @@
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
 	ChevronDown,
 	Loader2,
@@ -122,6 +123,7 @@ const GITHUB_STATE_FILTERS: Record<
 		{ id: "unanswered", label: "Unanswered" },
 	],
 };
+const SOURCE_CARD_ESTIMATED_HEIGHT = 88;
 
 function useDebouncedValue<T>(value: T, delayMs: number) {
 	const [debouncedValue, setDebouncedValue] = useState(value);
@@ -144,11 +146,13 @@ export const InboxSidebar = memo(function InboxSidebar({
 	stateFilterBySource,
 	onStateFilterBySourceChange,
 	appendContextTarget,
+	showWindowSafeTop = true,
 }: {
 	className?: string;
 	onOpenCard?: (card: ContextCard) => void;
 	selectedCardId?: string | null;
 	appendContextTarget?: ComposerInsertTarget;
+	showWindowSafeTop?: boolean;
 	/** GitHub `owner/name` to scope the inbox queries to a single repo,
 	 *  driven by the kanban header's repo picker. `null` = unfiltered
 	 *  (the user's global "involves:@me" feed). */
@@ -252,15 +256,12 @@ export const InboxSidebar = memo(function InboxSidebar({
 		setStateFilter("all");
 	}, [stateOptions, stateFilter]);
 
-	const showGitHubTypeTabs =
+	const showGitHubTypeSelect =
 		selectedFilter.id === "github" && enabledGitHubTypeFilters.length > 1;
-
-	const gitHubTypeTabsGridStyle = useMemo(
-		() => ({
-			gridTemplateColumns: `repeat(${enabledGitHubTypeFilters.length}, minmax(0, 1fr))`,
-		}),
-		[enabledGitHubTypeFilters.length],
-	);
+	const horizontalPaddingClass = showWindowSafeTop
+		? "pr-4 pl-3"
+		: "pr-3 pl-2.5";
+	const providerTabsCompact = !showWindowSafeTop;
 	// Each sub-tab drives its own infinite query: the backend's
 	// merge-then-truncate window otherwise crowds out kinds with less
 	// recent activity (issues + discussions get pushed past the visible
@@ -272,6 +273,14 @@ export const InboxSidebar = memo(function InboxSidebar({
 		() => inbox.items.map(inboxItemToContextCard),
 		[inbox.items],
 	);
+	const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+	const listVirtualizer = useVirtualizer({
+		count: filteredCards.length,
+		getScrollElement: () => scrollContainerRef.current,
+		estimateSize: () => SOURCE_CARD_ESTIMATED_HEIGHT,
+		getItemKey: (index) => filteredCards[index]?.id ?? index,
+		overscan: 0,
+	});
 
 	// IntersectionObserver-driven infinite scroll. Sentinel at the
 	// bottom of the list — entering the visible area pages forward.
@@ -281,6 +290,8 @@ export const InboxSidebar = memo(function InboxSidebar({
 		if (!inbox.hasNextPage || inbox.isFetchingNextPage) return;
 		const el = sentinelRef.current;
 		if (!el) return;
+		const root = scrollContainerRef.current;
+		if (!root) return;
 		const observer = new IntersectionObserver(
 			(entries) => {
 				for (const entry of entries) {
@@ -290,7 +301,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 					}
 				}
 			},
-			{ rootMargin: "120px 0px" },
+			{ root, rootMargin: "120px 0px" },
 		);
 		observer.observe(el);
 		return () => observer.disconnect();
@@ -304,16 +315,30 @@ export const InboxSidebar = memo(function InboxSidebar({
 
 	return (
 		<div className={cn("h-full min-h-0 flex-col overflow-hidden", className)}>
-			<div
-				data-slot="window-safe-top"
-				className="flex h-9 shrink-0 items-center pr-3"
-			>
-				<TrafficLightSpacer side="left" width={94} />
-				<div data-tauri-drag-region className="h-full flex-1" />
-			</div>
+			{showWindowSafeTop ? (
+				<div
+					data-slot="window-safe-top"
+					className="flex h-9 shrink-0 items-center pr-3"
+				>
+					<TrafficLightSpacer side="left" width={94} />
+					<div data-tauri-drag-region className="h-full flex-1" />
+				</div>
+			) : null}
 
-			<div className="-mt-1 pr-4 pl-3">
-				<div className="grid w-full grid-cols-3 gap-1 rounded-lg border border-border/60 bg-background/40 p-1">
+			<div
+				className={cn(
+					horizontalPaddingClass,
+					showWindowSafeTop ? "-mt-1" : "pt-1",
+				)}
+			>
+				<div
+					className={cn(
+						"grid w-full grid-cols-3 border border-border/60 bg-background/40",
+						providerTabsCompact
+							? "gap-0.5 rounded-md p-0.5"
+							: "gap-1 rounded-lg p-1",
+					)}
+				>
 					{SOURCE_FILTERS.map((filter) => (
 						<button
 							key={filter.id}
@@ -323,7 +348,8 @@ export const InboxSidebar = memo(function InboxSidebar({
 							title={filter.label}
 							onClick={() => setSelectedSource(filter.id)}
 							className={cn(
-								"relative flex h-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-[background-color,color,box-shadow]",
+								"relative flex cursor-pointer items-center justify-center text-muted-foreground transition-[background-color,color,box-shadow]",
+								providerTabsCompact ? "h-6 rounded-[5px]" : "h-7 rounded-md",
 								"hover:bg-accent/60 hover:text-foreground",
 								selectedSource === filter.id &&
 									"bg-accent text-foreground shadow-xs",
@@ -331,11 +357,17 @@ export const InboxSidebar = memo(function InboxSidebar({
 						>
 							<span className="relative inline-flex">
 								{filter.id === "github" ? (
-									<GithubBrandIcon size={14} />
+									<GithubBrandIcon size={providerTabsCompact ? 13 : 14} />
 								) : filter.id === "slack" ? (
-									<SourceIcon source="slack_thread" size={14} />
+									<SourceIcon
+										source="slack_thread"
+										size={providerTabsCompact ? 13 : 14}
+									/>
 								) : (
-									<SourceIcon source="linear" size={14} />
+									<SourceIcon
+										source="linear"
+										size={providerTabsCompact ? 13 : 14}
+									/>
 								)}
 							</span>
 						</button>
@@ -343,41 +375,8 @@ export const InboxSidebar = memo(function InboxSidebar({
 				</div>
 			</div>
 
-			{showGitHubTypeTabs ? (
-				<div className="mt-1.5 pr-4 pl-3">
-					<div
-						className="grid h-6 gap-0.5 rounded-md border border-border/45 bg-background/35 p-0.5"
-						style={gitHubTypeTabsGridStyle}
-					>
-						{enabledGitHubTypeFilters.map((filter) => (
-							<button
-								key={filter.id}
-								type="button"
-								aria-pressed={activeGitHubTypeFilter.id === filter.id}
-								onClick={() => setGithubTypeFilter(filter.id)}
-								className={cn(
-									"flex min-w-0 cursor-pointer items-center justify-center rounded-[5px] px-1 py-0.5 text-[10px] font-medium leading-none text-muted-foreground transition-[background-color,color,box-shadow]",
-									"hover:bg-accent/45 hover:text-foreground",
-									activeGitHubTypeFilter.id === filter.id &&
-										"bg-accent/75 text-foreground shadow-xs",
-								)}
-							>
-								<span className="flex h-3.5 min-w-0 items-center justify-center gap-1 leading-none">
-									<SourceIcon
-										source={filter.sources[0]}
-										size={10}
-										className="block shrink-0"
-									/>
-									<span className="truncate leading-none">{filter.label}</span>
-								</span>
-							</button>
-						))}
-					</div>
-				</div>
-			) : null}
-
 			{selectedFilter.id === "github" ? (
-				<div className="mt-1.5 pr-4 pl-3">
+				<div className={cn("mt-1.5", horizontalPaddingClass)}>
 					<div className="flex h-7 min-w-0 items-center gap-1.5">
 						<div className="flex min-w-0 flex-1 items-center rounded-md border border-border/45 bg-background/35 px-1.5 text-muted-foreground transition-colors focus-within:border-border/80 focus-within:bg-background/55">
 							<Search className="size-3 shrink-0" strokeWidth={1.9} />
@@ -400,6 +399,48 @@ export const InboxSidebar = memo(function InboxSidebar({
 								</button>
 							) : null}
 						</div>
+
+						{showGitHubTypeSelect ? (
+							<DropdownMenu>
+								<DropdownMenuTrigger asChild>
+									<button
+										type="button"
+										aria-label={`Filter by ${activeGitHubTypeFilter.label}`}
+										title={activeGitHubTypeFilter.label}
+										className="inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md border border-border/45 bg-background/35 text-muted-foreground transition-colors hover:bg-accent/45 hover:text-foreground"
+									>
+										<SourceIcon
+											source={activeGitHubTypeFilter.sources[0]}
+											size={13}
+											className="block"
+										/>
+									</button>
+								</DropdownMenuTrigger>
+								<DropdownMenuContent align="end" className="w-40">
+									<DropdownMenuRadioGroup
+										value={activeGitHubTypeFilter.id}
+										onValueChange={(value) =>
+											setGithubTypeFilter(value as GitHubTypeFilter["id"])
+										}
+									>
+										{enabledGitHubTypeFilters.map((filter) => (
+											<DropdownMenuRadioItem
+												key={filter.id}
+												value={filter.id}
+												className="gap-2 text-[11px]"
+											>
+												<SourceIcon
+													source={filter.sources[0]}
+													size={12}
+													className="shrink-0"
+												/>
+												<span>{filter.label}</span>
+											</DropdownMenuRadioItem>
+										))}
+									</DropdownMenuRadioGroup>
+								</DropdownMenuContent>
+							</DropdownMenu>
+						) : null}
 
 						<DropdownMenu>
 							<DropdownMenuTrigger asChild>
@@ -435,20 +476,18 @@ export const InboxSidebar = memo(function InboxSidebar({
 			) : null}
 
 			<div
+				ref={scrollContainerRef}
 				className={cn(
-					"scrollbar-stable min-h-0 flex-1 overflow-x-hidden overflow-y-auto pr-4 pl-3 [scrollbar-width:thin]",
-					selectedFilter.id === "github"
-						? "mt-1"
-						: showGitHubTypeTabs
-							? "mt-1"
-							: "mt-[7px]",
+					"scrollbar-stable min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-width:thin]",
+					horizontalPaddingClass,
+					selectedFilter.id === "github" ? "mt-1" : "mt-[7px]",
 				)}
 			>
 				<div className="flex w-[calc(100%+12px)] flex-col gap-2 pb-3">
 					{isComingSoonSource ? (
 						<div className="mt-8 flex w-full items-center justify-center gap-2 px-3 text-muted-foreground/65">
 							<Pickaxe
-								className="kanban-coming-soon-pickaxe size-3.5 shrink-0"
+								className="inbox-coming-soon-pickaxe size-3.5 shrink-0"
 								strokeWidth={2}
 							/>
 							<span className="text-[13px] font-medium">Coming Soon</span>
@@ -479,15 +518,33 @@ export const InboxSidebar = memo(function InboxSidebar({
 					) : filteredCards.length > 0 ? (
 						// State 5: list.
 						<>
-							{filteredCards.map((card) => (
-								<SourceCard
-									key={card.id}
-									card={card}
-									selected={card.id === selectedCardId}
-									onOpen={onOpenCard}
-									appendContextTarget={appendContextTarget}
-								/>
-							))}
+							<div
+								className="relative w-full"
+								style={{ height: `${listVirtualizer.getTotalSize()}px` }}
+							>
+								{listVirtualizer.getVirtualItems().map((virtualItem) => {
+									const card = filteredCards[virtualItem.index];
+									if (!card) return null;
+									return (
+										<div
+											key={virtualItem.key}
+											data-index={virtualItem.index}
+											ref={listVirtualizer.measureElement}
+											className="absolute top-0 left-0 w-full pb-2"
+											style={{
+												transform: `translateY(${virtualItem.start}px)`,
+											}}
+										>
+											<SourceCard
+												card={card}
+												selected={card.id === selectedCardId}
+												onOpen={onOpenCard}
+												appendContextTarget={appendContextTarget}
+											/>
+										</div>
+									);
+								})}
+							</div>
 							{inbox.hasNextPage ? (
 								<div
 									ref={sentinelRef}

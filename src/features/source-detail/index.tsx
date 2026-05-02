@@ -6,10 +6,9 @@ import { GitHubPullRequestView } from "./github/pull-request-view";
 import { UnsupportedSourceView } from "./unsupported-view";
 
 // `memo` keeps the markdown render in `GitHubDetailPage` from re-running
-// every time the kanban parent re-renders. Once a tab is open and the
+// when the surrounding start page changes state. Once a card is open and the
 // detail data has been fetched, the only reason to re-render is when the
-// `card` reference itself changes — which only happens on a real tab
-// switch.
+// `card` reference itself changes.
 export const SourceDetailView = memo(function SourceDetailView({
 	card,
 }: {
