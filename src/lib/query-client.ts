@@ -118,6 +118,17 @@ export const helmorQueryKeys = {
 		["workspaceCandidateDirectories", excludeWorkspaceId ?? ""] as const,
 };
 
+export function isVolatileForgeQueryKey(queryKey: readonly unknown[]): boolean {
+	const root = queryKey[0];
+	return (
+		root === "workspaceForge" ||
+		root === "workspaceForgeActionStatus" ||
+		root === "workspaceAccountProfile" ||
+		root === "forgeLogins" ||
+		root === "forgeAccounts"
+	);
+}
+
 export function createHelmorQueryClient() {
 	// Replace React Query's default focus listener (browser visibilitychange)
 	// with Tauri's native window focus/blur events. This is the official

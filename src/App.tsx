@@ -98,6 +98,7 @@ import {
 	detectedEditorsQueryOptions,
 	helmorQueryKeys,
 	helmorQueryPersister,
+	isVolatileForgeQueryKey,
 	sessionThreadMessagesQueryOptions,
 	workspaceChangeRequestQueryOptions,
 	workspaceDetailQueryOptions,
@@ -290,6 +291,9 @@ function MainApp() {
 							) {
 								return false;
 							}
+							if (isVolatileForgeQueryKey(key)) {
+								return false;
+							}
 							return query.state.status === "success";
 						},
 					},
@@ -302,6 +306,9 @@ function MainApp() {
 					});
 					queryClient.removeQueries({
 						queryKey: helmorQueryKeys.archivedWorkspaces,
+					});
+					queryClient.removeQueries({
+						predicate: (query) => isVolatileForgeQueryKey(query.queryKey),
 					});
 				}}
 			>

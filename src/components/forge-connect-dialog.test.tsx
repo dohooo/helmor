@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const apiMocks = vi.hoisted(() => ({
 	backfillForgeRepoBindings: vi.fn(),
 	listForgeLogins: vi.fn(),
+	loadWorkspaceDetail: vi.fn(),
 	resizeForgeCliAuthTerminal: vi.fn(),
 	retryRepoForgeBinding: vi.fn(),
 	spawnForgeCliAuthTerminal: vi.fn(),
@@ -21,6 +22,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		...actual,
 		backfillForgeRepoBindings: apiMocks.backfillForgeRepoBindings,
 		listForgeLogins: apiMocks.listForgeLogins,
+		loadWorkspaceDetail: apiMocks.loadWorkspaceDetail,
 		resizeForgeCliAuthTerminal: apiMocks.resizeForgeCliAuthTerminal,
 		retryRepoForgeBinding: apiMocks.retryRepoForgeBinding,
 		spawnForgeCliAuthTerminal: apiMocks.spawnForgeCliAuthTerminal,
@@ -47,6 +49,7 @@ describe("ForgeConnectDialog", () => {
 			mock.mockReset();
 		}
 		apiMocks.backfillForgeRepoBindings.mockResolvedValue(0);
+		apiMocks.loadWorkspaceDetail.mockResolvedValue(null);
 		apiMocks.retryRepoForgeBinding.mockResolvedValue("octocat");
 		apiMocks.stopForgeCliAuthTerminal.mockResolvedValue(true);
 	});
@@ -117,6 +120,149 @@ describe("ForgeConnectDialog", () => {
 		});
 		expect(invalidateSpy).toHaveBeenCalledWith({
 			queryKey: helmorQueryKeys.forgeAccountsAll,
+		});
+	});
+
+	it("refreshes repo binding when auth reuses an existing login", async () => {
+		let onTerminalEvent: ((event: ScriptEvent) => void) | null = null;
+		apiMocks.listForgeLogins
+			.mockResolvedValueOnce(["octocat"])
+			.mockResolvedValueOnce(["octocat"]);
+		apiMocks.spawnForgeCliAuthTerminal.mockImplementation(
+			async (_provider, _host, _instanceId, callback) => {
+				onTerminalEvent = callback;
+			},
+		);
+		const onConnected = vi.fn();
+		const onCloseSettled = vi.fn();
+
+		renderWithProviders(
+			<ForgeConnectDialog
+				open
+				onOpenChange={vi.fn()}
+				provider="github"
+				host="github.com"
+				repoId="repo-1"
+				workspaceId="workspace-1"
+				onConnected={onConnected}
+				onCloseSettled={onCloseSettled}
+			/>,
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.spawnForgeCliAuthTerminal).toHaveBeenCalled();
+		});
+
+		await act(async () => {
+			onTerminalEvent?.({ type: "exited", code: 0 });
+		});
+
+		await waitFor(() => {
+			expect(apiMocks.retryRepoForgeBinding).toHaveBeenCalledWith("repo-1");
+			expect(onConnected).toHaveBeenCalledWith({
+				provider: "github",
+				host: "github.com",
+				login: "octocat",
+			});
+			expect(onCloseSettled).toHaveBeenCalledWith({
+				provider: "github",
+				host: "github.com",
+				connected: true,
+				login: "octocat",
+			});
+		});
+	});
+
+	it("does not report connected when repo binding finds no accessible account", async () => {
+		let onTerminalEvent: ((event: ScriptEvent) => void) | null = null;
+		apiMocks.listForgeLogins
+			.mockResolvedValueOnce(["octocat"])
+			.mockResolvedValueOnce(["octocat"]);
+		apiMocks.retryRepoForgeBinding.mockResolvedValueOnce(null);
+		apiMocks.spawnForgeCliAuthTerminal.mockImplementation(
+			async (_provider, _host, _instanceId, callback) => {
+				onTerminalEvent = callback;
+			},
+		);
+		const onConnected = vi.fn();
+		const onCloseSettled = vi.fn();
+
+		renderWithProviders(
+			<ForgeConnectDialog
+				open
+				onOpenChange={vi.fn()}
+				provider="github"
+				host="github.com"
+				repoId="repo-1"
+				workspaceId="workspace-1"
+				onConnected={onConnected}
+				onCloseSettled={onCloseSettled}
+			/>,
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.spawnForgeCliAuthTerminal).toHaveBeenCalled();
+		});
+
+		await act(async () => {
+			onTerminalEvent?.({ type: "exited", code: 0 });
+		});
+
+		await waitFor(() => {
+			expect(apiMocks.retryRepoForgeBinding).toHaveBeenCalledWith("repo-1");
+			expect(onConnected).not.toHaveBeenCalled();
+			expect(onCloseSettled).toHaveBeenCalledWith({
+				provider: "github",
+				host: "github.com",
+				connected: false,
+				login: null,
+			});
+		});
+	});
+
+	it("does not report connected when workspace context cannot resolve a repo", async () => {
+		let onTerminalEvent: ((event: ScriptEvent) => void) | null = null;
+		apiMocks.listForgeLogins
+			.mockResolvedValueOnce(["octocat"])
+			.mockResolvedValueOnce(["octocat"]);
+		apiMocks.spawnForgeCliAuthTerminal.mockImplementation(
+			async (_provider, _host, _instanceId, callback) => {
+				onTerminalEvent = callback;
+			},
+		);
+		const onConnected = vi.fn();
+		const onCloseSettled = vi.fn();
+
+		renderWithProviders(
+			<ForgeConnectDialog
+				open
+				onOpenChange={vi.fn()}
+				provider="github"
+				host="github.com"
+				workspaceId="workspace-1"
+				onConnected={onConnected}
+				onCloseSettled={onCloseSettled}
+			/>,
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.spawnForgeCliAuthTerminal).toHaveBeenCalled();
+		});
+
+		await act(async () => {
+			onTerminalEvent?.({ type: "exited", code: 0 });
+		});
+
+		await waitFor(() => {
+			expect(apiMocks.loadWorkspaceDetail).toHaveBeenCalledWith("workspace-1");
+			expect(apiMocks.retryRepoForgeBinding).not.toHaveBeenCalled();
+			expect(onConnected).not.toHaveBeenCalled();
+			expect(onCloseSettled).toHaveBeenCalledWith({
+				provider: "github",
+				host: "github.com",
+				connected: false,
+				login: null,
+			});
 		});
 	});
 });
