@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.1
+
+### Patch Changes
+
+- [#352](https://github.com/dohooo/helmor/pull/352) [`8174a03`](https://github.com/dohooo/helmor/commit/8174a030ebdc958ada28dfda4f1d5a04ef588d4e) Thanks [@natllian](https://github.com/natllian)! - Small UI polish:
+  - Auto-bind existing repos when you connect a GitHub or GitLab account during onboarding.
+  - Show a spinner on the local-project onboarding card while a folder picker is open.
+  - Cleaner selected-state ring on the color theme picker so it stays visible across themes.
+  - Fix styling and behavior issues on the Terminal tab right-click menu.
+
 ## 0.13.0
 
 ### Minor Changes
