@@ -105,71 +105,33 @@ function codexTargetTriple(): string | null {
 
 const CODEX_BIN_PATH = resolveCodexBinPath();
 
-/** /goal slash-command parser. Maps to `thread/goal/*` JSON-RPC calls. */
-export type GoalCommand =
-	| { kind: "set"; objective: string; tokenBudget?: number }
-	| { kind: "pause" }
-	| { kind: "resume" }
-	| { kind: "clear" };
+/**
+ * `/goal <objective>` parses to a goal-set request. Other flows
+ * (pause / resume / clear / budget edits) go through `mutateCodexGoal`
+ * out-of-band so they don't show up in the chat as user messages.
+ */
+export type GoalCommand = { kind: "set"; objective: string };
 
 export function parseGoalCommand(prompt: string): GoalCommand | null {
 	const m = prompt.trim().match(/^\/goal(?:\s+([\s\S]+))?$/);
 	if (!m) return null;
-	const arg = (m[1] ?? "").trim();
-	if (arg === "") return null; // bare `/goal` — fall through to the agent
-	if (arg === "pause") return { kind: "pause" };
-	if (arg === "resume") return { kind: "resume" };
-	if (arg === "clear") return { kind: "clear" };
-	const budgetMatch = arg.match(/^--tokens\s+(\S+)\s+([\s\S]+)$/);
-	if (budgetMatch) {
-		const budget = parseTokenSpec(budgetMatch[1] ?? "");
-		const objective = (budgetMatch[2] ?? "").trim();
-		if (budget !== null && objective) {
-			return { kind: "set", objective, tokenBudget: budget };
-		}
-	}
-	return { kind: "set", objective: arg };
+	const objective = (m[1] ?? "").trim();
+	if (objective === "") return null;
+	return { kind: "set", objective };
 }
 
-/** Parse "98.5K" / "1M" / "10000" → integer token count. */
-function parseTokenSpec(spec: string): number | null {
-	const m = spec.match(/^(\d+(?:\.\d+)?)([KkMm]?)$/);
-	if (!m) return null;
-	const n = Number.parseFloat(m[1] ?? "0");
-	const suffix = (m[2] ?? "").toLowerCase();
-	if (suffix === "k") return Math.round(n * 1_000);
-	if (suffix === "m") return Math.round(n * 1_000_000);
-	return Math.round(n);
-}
-
-/**
- * Translate a parsed `/goal` command into the right `thread/goal/*` RPC.
- * `pause` and `resume` are aliases for `thread/goal/set` with a `status`
- * field — this matches the upstream TUI's own implementation.
- */
 function dispatchGoalCommand(
 	server: CodexAppServer,
 	threadId: string,
 	cmd: GoalCommand,
 ): { method: string; promise: Promise<unknown> } {
-	if (cmd.kind === "clear") {
-		return {
-			method: "thread/goal/clear",
-			promise: server.sendRequest("thread/goal/clear", { threadId }, 20_000),
-		};
-	}
-	const params: Record<string, unknown> = { threadId };
-	if (cmd.kind === "set") {
-		params.objective = cmd.objective;
-		if (cmd.tokenBudget !== undefined) params.tokenBudget = cmd.tokenBudget;
-	} else if (cmd.kind === "pause") {
-		params.status = "paused";
-	} else if (cmd.kind === "resume") {
-		params.status = "active";
-	}
 	return {
 		method: "thread/goal/set",
-		promise: server.sendRequest("thread/goal/set", params, 20_000),
+		promise: server.sendRequest(
+			"thread/goal/set",
+			{ threadId, objective: cmd.objective },
+			20_000,
+		),
 	};
 }
 
@@ -841,6 +803,38 @@ export class CodexAppServerManager implements SessionManager {
 
 	async listModels(): Promise<readonly ProviderModelInfo[]> {
 		return listProviderModels("codex");
+	}
+
+	// ── mutateGoal ───────────────────────────────────────────────────────
+
+	/**
+	 * Out-of-band Codex `/goal` lifecycle control. Called when the user
+	 * clicks Pause / Resume / Clear on the goal banner — these operations
+	 * shouldn't appear in chat history, so they bypass the prompt-parsing
+	 * path entirely and go straight to the right `thread/goal/*` RPC.
+	 */
+	async mutateGoal(
+		sessionId: string,
+		action: "pause" | "resume" | "clear",
+	): Promise<void> {
+		const ctx = this.sessions.get(sessionId);
+		if (!ctx) {
+			throw new Error(`No active Codex session for ${sessionId}`);
+		}
+		const threadId = ctx.providerThreadId;
+		if (!threadId) {
+			throw new Error("Codex thread has not started yet");
+		}
+		if (action === "clear") {
+			await ctx.server.sendRequest("thread/goal/clear", { threadId }, 20_000);
+			return;
+		}
+		const status = action === "pause" ? "paused" : "active";
+		await ctx.server.sendRequest(
+			"thread/goal/set",
+			{ threadId, status },
+			20_000,
+		);
 	}
 
 	// ── stopSession / shutdown ───────────────────────────────────────────

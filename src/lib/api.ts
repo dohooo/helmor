@@ -2364,6 +2364,15 @@ export async function getSessionCodexGoal(
 	}
 }
 
+/** Out-of-band Codex `/goal` lifecycle control — what the banner buttons
+ *  call. `pause` / `resume` flip the goal status; `clear` removes it. */
+export async function mutateCodexGoal(
+	sessionId: string,
+	action: "pause" | "resume" | "clear",
+): Promise<void> {
+	await invoke("mutate_codex_goal", { sessionId, action });
+}
+
 /** Read the account-global Codex rate-limit snapshot. Null until Codex has
  *  emitted at least one `account/rateLimits/updated` notification. */
 export async function getCodexRateLimits(): Promise<string | null> {

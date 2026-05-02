@@ -620,15 +620,6 @@ describe("parseGoalCommand", () => {
 		expect(parseGoalCommand("  /goal  ")).toBeNull();
 	});
 
-	test("recognises pause / resume / clear", async () => {
-		const { parseGoalCommand } = await import(
-			"../src/codex-app-server-manager.js"
-		);
-		expect(parseGoalCommand("/goal pause")).toEqual({ kind: "pause" });
-		expect(parseGoalCommand("/goal resume")).toEqual({ kind: "resume" });
-		expect(parseGoalCommand("/goal clear")).toEqual({ kind: "clear" });
-	});
-
 	test("treats free-form text as the objective", async () => {
 		const { parseGoalCommand } = await import(
 			"../src/codex-app-server-manager.js"
@@ -636,37 +627,6 @@ describe("parseGoalCommand", () => {
 		expect(parseGoalCommand("/goal improve benchmark coverage")).toEqual({
 			kind: "set",
 			objective: "improve benchmark coverage",
-		});
-	});
-
-	test("parses --tokens budget with K / M suffixes", async () => {
-		const { parseGoalCommand } = await import(
-			"../src/codex-app-server-manager.js"
-		);
-		expect(parseGoalCommand("/goal --tokens 98.5K refactor module")).toEqual({
-			kind: "set",
-			objective: "refactor module",
-			tokenBudget: 98_500,
-		});
-		expect(parseGoalCommand("/goal --tokens 1M big task")).toEqual({
-			kind: "set",
-			objective: "big task",
-			tokenBudget: 1_000_000,
-		});
-		expect(parseGoalCommand("/goal --tokens 50000 plain")).toEqual({
-			kind: "set",
-			objective: "plain",
-			tokenBudget: 50_000,
-		});
-	});
-
-	test("falls through to plain set when --tokens spec is malformed", async () => {
-		const { parseGoalCommand } = await import(
-			"../src/codex-app-server-manager.js"
-		);
-		expect(parseGoalCommand("/goal --tokens xyz objective text")).toEqual({
-			kind: "set",
-			objective: "--tokens xyz objective text",
 		});
 	});
 });

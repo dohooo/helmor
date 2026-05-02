@@ -81,7 +81,7 @@ const CODEX_GOAL_COMMAND: SlashCommandEntry = {
 	name: "goal",
 	description:
 		"Set a persistent goal Codex pursues turn-after-turn until done or paused",
-	argumentHint: "<objective> | pause | resume | clear",
+	argumentHint: "<objective>",
 	source: "builtin",
 	providers: ["codex"],
 };

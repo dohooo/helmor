@@ -74,6 +74,76 @@ pub async fn get_session_codex_goal(session_id: String) -> CmdResult<Option<Stri
     run_blocking(move || sessions::get_session_codex_goal(&session_id)).await
 }
 
+/// Out-of-band Codex `/goal` lifecycle control. The banner buttons
+/// (Pause / Resume / Clear) call this directly so the operations don't
+/// appear in chat history. Routes to the sidecar's `mutateCodexGoal`
+/// method, which then dispatches to the right `thread/goal/*` RPC.
+#[tauri::command]
+pub async fn mutate_codex_goal(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    session_id: String,
+    action: String,
+) -> CmdResult<()> {
+    if !matches!(action.as_str(), "pause" | "resume" | "clear") {
+        return Err(anyhow::anyhow!("Invalid mutateCodexGoal action: {action}").into());
+    }
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let req = crate::sidecar::SidecarRequest {
+        id: request_id.clone(),
+        method: "mutateCodexGoal".to_string(),
+        params: serde_json::json!({
+            "sessionId": session_id,
+            "action": action,
+        }),
+    };
+
+    let rx = sidecar.subscribe(&request_id);
+    if let Err(error) = sidecar.send(&req) {
+        sidecar.unsubscribe(&request_id);
+        return Err(anyhow::anyhow!("Sidecar send failed: {error}").into());
+    }
+
+    let rid = request_id.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(anyhow::anyhow!("mutateCodexGoal timed out"));
+            }
+            match rx.recv_timeout(remaining) {
+                Ok(event) => {
+                    if event.event_type() == "pong" {
+                        return Ok(());
+                    }
+                    if event.event_type() == "error" {
+                        let msg = event
+                            .raw
+                            .get("message")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("sidecar error")
+                            .to_string();
+                        return Err(anyhow::anyhow!(msg));
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    return Err(anyhow::anyhow!("mutateCodexGoal timed out"));
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(anyhow::anyhow!("Sidecar disconnected before responding"));
+                }
+            }
+        }
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("mutate_codex_goal worker join failed: {e}"))?;
+
+    sidecar.unsubscribe(&rid);
+    outcome?;
+    Ok(())
+}
+
 /// Ad-hoc Claude-only context-usage fetch for the hover popover. Pure
 /// passthrough to the sidecar — no DB write, no mutex, no TTL. The
 /// frontend caches the result for 30 s via React Query.
