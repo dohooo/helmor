@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, GitBranch, X } from "lucide-react";
 import {
+	memo,
 	type PointerEvent as ReactPointerEvent,
 	useEffect,
 	useState,
@@ -59,7 +60,13 @@ type KanbanMainContentProps = {
 	tabs: KanbanMainTab[];
 };
 
-export function KanbanMainContent({
+// `memo` skips re-rendering when the parent KanbanPage re-renders for a
+// reason that didn't actually change anything in main-content (most
+// kanban-page state changes — drag overlays, settling drops, top
+// placements — only affect the right-hand board, not this surface). The
+// shallow prop check short-circuits the entire tab-strip + detail-view
+// subtree, including the markdown render inside `<SourceDetailView>`.
+export const KanbanMainContent = memo(function KanbanMainContent({
 	activeTabId,
 	onActiveTabChange,
 	onCloseTab,
@@ -233,7 +240,7 @@ export function KanbanMainContent({
 			</div>
 		</div>
 	);
-}
+});
 
 function TabIcon({ tab }: { tab: KanbanMainTab }) {
 	return <SourceIcon source={tab.card.source} size={13} className="shrink-0" />;
