@@ -41,9 +41,15 @@ type Action = "pause" | "resume" | "clear";
 
 export function CodexGoalBanner({
 	sessionId,
+	hasQueueBelow,
 	disabled,
 }: {
 	sessionId: string;
+	/** When the submit-queue list renders directly below us, the banner
+	 *  becomes a standalone pill so the two stack as visually distinct
+	 *  rows. With no queue below, the banner glues itself to the top of
+	 *  the composer just like SubmitQueueList does on its own. */
+	hasQueueBelow?: boolean;
 	disabled?: boolean;
 }) {
 	const queryClient = useQueryClient();
@@ -97,7 +103,17 @@ export function CodexGoalBanner({
 	return (
 		<div
 			data-testid="codex-goal-banner"
-			className="pointer-events-auto mx-auto flex w-fit max-w-[90%] items-center gap-2 rounded-md border border-secondary/80 bg-background px-3 py-1 text-xs shadow-sm"
+			className={cn(
+				"pointer-events-auto flex items-center gap-2 border border-secondary/80 bg-background px-3 py-1 text-xs",
+				hasQueueBelow
+					? // Standalone pill — fully rounded, content-width, drop shadow
+						// to lift it visually off the queue row directly below.
+						"mx-auto w-fit max-w-[90%] rounded-md shadow-sm"
+					: // Glue to the composer top — same shape as SubmitQueueList's
+						// solo styling so a goal with no queue feels like a single
+						// continuous block above the input.
+						"mx-auto w-[90%] rounded-t-2xl border-b-0 py-1.5",
+			)}
 		>
 			<Target
 				className="size-3.5 shrink-0 text-muted-foreground/70"

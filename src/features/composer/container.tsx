@@ -796,6 +796,7 @@ export const WorkspaceComposerContainer = memo(
 						{displayedSessionId ? (
 							<CodexGoalBanner
 								sessionId={displayedSessionId}
+								hasQueueBelow={queueItems.length > 0}
 								disabled={composerUnavailable}
 							/>
 						) : null}
