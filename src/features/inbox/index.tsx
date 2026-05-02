@@ -3,6 +3,11 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { GithubBrandIcon } from "@/components/brand-icon";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Button } from "@/components/ui/button";
+import {
+	DEFAULT_INBOX_ACCOUNT_TOGGLES,
+	type InboxAccountSourceToggles,
+	useSettings,
+} from "@/lib/settings";
 import type { ContextCard, ContextCardSource } from "@/lib/sources/types";
 import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
 import { cn } from "@/lib/utils";
@@ -22,6 +27,13 @@ const TAB_TO_INBOX_KIND: Record<GitHubTypeFilter["id"], InboxKind> = {
 	github_pr: "prs",
 	github_discussion: "discussions",
 };
+
+function isGitHubTypeEnabled(
+	filter: GitHubTypeFilter,
+	toggles: InboxAccountSourceToggles,
+) {
+	return toggles[TAB_TO_INBOX_KIND[filter.id]];
+}
 
 /** Matches the constant in App.tsx — keep these in sync (one of two
  * dispatchers in the codebase). Centralising would require a new shared
@@ -90,16 +102,60 @@ export const InboxSidebar = memo(function InboxSidebar({
 		GITHUB_TYPE_FILTERS[0];
 	const isComingSoonSource = selectedFilter.id !== "github";
 	const accountsQuery = useForgeAccountsAll();
-	const hasGithubAccount = useMemo(
-		() => (accountsQuery.data ?? []).some((a) => a.provider === "github"),
+	const { settings } = useSettings();
+	const primaryGithubAccount = useMemo(
+		() => (accountsQuery.data ?? []).find((a) => a.provider === "github"),
 		[accountsQuery.data],
+	);
+	const hasGithubAccount = useMemo(
+		() => Boolean(primaryGithubAccount),
+		[primaryGithubAccount],
+	);
+	const currentInboxToggles = useMemo(() => {
+		if (!primaryGithubAccount) return DEFAULT_INBOX_ACCOUNT_TOGGLES;
+		const key = `${primaryGithubAccount.provider}:${primaryGithubAccount.login}`;
+		return (
+			settings.inboxSourceConfig?.accounts?.[key] ??
+			DEFAULT_INBOX_ACCOUNT_TOGGLES
+		);
+	}, [primaryGithubAccount, settings.inboxSourceConfig]);
+	const enabledGitHubTypeFilters = useMemo(
+		() =>
+			GITHUB_TYPE_FILTERS.filter((filter) =>
+				isGitHubTypeEnabled(filter, currentInboxToggles),
+			),
+		[currentInboxToggles],
+	);
+	const activeGitHubTypeFilter =
+		enabledGitHubTypeFilters.find((filter) => filter.id === githubTypeFilter) ??
+		enabledGitHubTypeFilters[0] ??
+		selectedGitHubTypeFilter;
+
+	useEffect(() => {
+		if (enabledGitHubTypeFilters.length === 0) return;
+		if (
+			enabledGitHubTypeFilters.some((filter) => filter.id === githubTypeFilter)
+		) {
+			return;
+		}
+		setGithubTypeFilter(enabledGitHubTypeFilters[0].id);
+	}, [enabledGitHubTypeFilters, githubTypeFilter]);
+
+	const showGitHubTypeTabs =
+		selectedFilter.id === "github" && enabledGitHubTypeFilters.length > 1;
+
+	const gitHubTypeTabsGridStyle = useMemo(
+		() => ({
+			gridTemplateColumns: `repeat(${enabledGitHubTypeFilters.length}, minmax(0, 1fr))`,
+		}),
+		[enabledGitHubTypeFilters.length],
 	);
 	// Each sub-tab drives its own infinite query: the backend's
 	// merge-then-truncate window otherwise crowds out kinds with less
 	// recent activity (issues + discussions get pushed past the visible
 	// page when PRs dominate). Keying the hook on the active tab also
 	// means TanStack reuses each tab's previous pages on switch-back.
-	const inboxKind = TAB_TO_INBOX_KIND[selectedGitHubTypeFilter.id];
+	const inboxKind = TAB_TO_INBOX_KIND[activeGitHubTypeFilter.id];
 	const inbox = useInboxItems(inboxKind);
 	const filteredCards = useMemo<ContextCard[]>(
 		() => inbox.items.map(inboxItemToContextCard),
@@ -176,19 +232,22 @@ export const InboxSidebar = memo(function InboxSidebar({
 				</div>
 			</div>
 
-			{selectedFilter.id === "github" ? (
+			{showGitHubTypeTabs ? (
 				<div className="mt-1.5 pr-4 pl-3">
-					<div className="grid h-6 grid-cols-3 gap-0.5 rounded-md border border-border/45 bg-background/35 p-0.5">
-						{GITHUB_TYPE_FILTERS.map((filter) => (
+					<div
+						className="grid h-6 gap-0.5 rounded-md border border-border/45 bg-background/35 p-0.5"
+						style={gitHubTypeTabsGridStyle}
+					>
+						{enabledGitHubTypeFilters.map((filter) => (
 							<button
 								key={filter.id}
 								type="button"
-								aria-pressed={githubTypeFilter === filter.id}
+								aria-pressed={activeGitHubTypeFilter.id === filter.id}
 								onClick={() => setGithubTypeFilter(filter.id)}
 								className={cn(
 									"flex min-w-0 cursor-pointer items-center justify-center rounded-[5px] px-1 py-0.5 text-[10px] font-medium leading-none text-muted-foreground transition-[background-color,color,box-shadow]",
 									"hover:bg-accent/45 hover:text-foreground",
-									githubTypeFilter === filter.id &&
+									activeGitHubTypeFilter.id === filter.id &&
 										"bg-accent/75 text-foreground shadow-xs",
 								)}
 							>
@@ -209,7 +268,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 			<div
 				className={cn(
 					"scrollbar-stable min-h-0 flex-1 overflow-x-hidden overflow-y-auto pr-4 pl-3 [scrollbar-width:thin]",
-					selectedFilter.id === "github" ? "mt-1" : "mt-[7px]",
+					showGitHubTypeTabs ? "mt-1" : "mt-[7px]",
 				)}
 			>
 				<div className="flex w-[calc(100%+12px)] flex-col gap-2 pb-3">
