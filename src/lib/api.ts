@@ -49,7 +49,7 @@ export type PrSyncState = "none" | "open" | "closed" | "merged";
  */
 export type ActionKind =
 	| "create-pr"
-	| "review-pr"
+	| "review"
 	| "commit-and-push"
 	| "push"
 	| "fix"
@@ -1467,6 +1467,10 @@ export type WorkspaceGitActionStatus = {
 	behindTargetCount: number;
 	remoteTrackingRef?: string | null;
 	aheadOfRemoteCount: number;
+	/** Commits this branch has on top of its target branch's remote ref
+	 *  (e.g. `origin/main`). Stays accurate for unpublished branches —
+	 *  unlike `aheadOfRemoteCount`, which reads as 0 without an upstream. */
+	aheadOfTargetCount: number;
 	pushStatus?: WorkspacePushStatus;
 };
 
@@ -2414,7 +2418,7 @@ export type RepoScripts = {
 
 export type RepoPreferences = {
 	createPr?: string | null;
-	reviewPr?: string | null;
+	review?: string | null;
 	fixErrors?: string | null;
 	resolveConflicts?: string | null;
 	branchRename?: string | null;

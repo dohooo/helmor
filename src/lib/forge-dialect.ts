@@ -16,16 +16,6 @@ export type ForgePromptDialect = {
 	reopenCommand: string;
 	/** Comment on a PR/MR, e.g. "gh pr comment" / "glab mr note". */
 	commentCommand: string;
-	/** Inspect a PR/MR, e.g. "gh pr view --json …" / "glab mr view". */
-	viewCommand: string;
-	/** Read the full diff of a PR/MR, e.g. "gh pr diff" / "glab mr diff". */
-	diffCommand: string;
-	/** Submit a review (forge command that posts a review with inline
-	 *  comments). For GitHub this is `gh pr review`; for GitLab there is no
-	 *  first-class equivalent in `glab`, so we point to the closest option
-	 *  (`glab mr note`) and the agent is expected to add per-line context
-	 *  in the body. */
-	reviewCommand: string;
 	/** List CI runs, e.g. "gh run list" / "glab ci list". */
 	ciListCommand: string;
 	/** Inspect a CI run, e.g. "gh run view" / "glab ci view". */
@@ -43,10 +33,6 @@ const GITHUB_DIALECT: ForgePromptDialect = {
 	createCommand: (branch) => `gh pr create --base ${branch}`,
 	reopenCommand: "gh pr reopen",
 	commentCommand: "gh pr comment",
-	viewCommand:
-		"gh pr view --json title,body,state,baseRefName,headRefName,url,number",
-	diffCommand: "gh pr diff",
-	reviewCommand: "gh pr review --comment",
 	ciListCommand: "gh run list",
 	ciViewCommand: "gh run view",
 	ciSystemName: "CI",
@@ -60,9 +46,6 @@ const GITLAB_DIALECT: ForgePromptDialect = {
 	createCommand: (branch) => `glab mr create --target-branch ${branch}`,
 	reopenCommand: "glab mr reopen",
 	commentCommand: "glab mr note",
-	viewCommand: "glab mr view",
-	diffCommand: "glab mr diff",
-	reviewCommand: "glab mr note",
 	ciListCommand: "glab ci list",
 	ciViewCommand: "glab ci view",
 	ciSystemName: "GitLab CI",

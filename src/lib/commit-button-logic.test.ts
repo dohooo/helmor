@@ -64,6 +64,7 @@ function makeGitActionStatus(
 		behindTargetCount: 0,
 		remoteTrackingRef: "refs/remotes/origin/main",
 		aheadOfRemoteCount: 0,
+		aheadOfTargetCount: 0,
 		pushStatus: "published",
 		...overrides,
 	};

@@ -197,14 +197,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 		modelSectionsQuery.data ?? [],
 		settings.defaultModelId,
 	);
-	const selectedReviewPrModel = findModelOption(
-		modelSectionsQuery.data ?? [],
-		settings.reviewPrModelId,
-	);
-	const reviewPrModelLabel = settings.reviewPrModelId
-		? (selectedReviewPrModel?.label ??
-			(modelSectionsQuery.isPending ? "Loading…" : "Select model"))
-		: "Use default";
 	const defaultEffortLevels =
 		selectedDefaultModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS;
 	const defaultModelSupportsFastMode =
@@ -212,6 +204,29 @@ export const SettingsDialog = memo(function SettingsDialog({
 	const defaultModelLabel =
 		selectedDefaultModel?.label ??
 		(modelSectionsQuery.isPending ? "Loading…" : "Select model");
+	// Review row mirrors the Default row's three-control combo *exactly*.
+	// `null` on a Review setting means "follow the default" — we resolve it
+	// here so the Review controls read identically to the Default ones,
+	// without a "Use default" affordance. Selecting the same value as the
+	// default snaps Review back to `null` (still following) so the user
+	// can return to follow-mode just by re-picking the default value.
+	const effectiveReviewModelId =
+		settings.reviewModelId ?? settings.defaultModelId;
+	const effectiveReviewModel = findModelOption(
+		modelSectionsQuery.data ?? [],
+		effectiveReviewModelId,
+	);
+	const reviewModelLabel =
+		effectiveReviewModel?.label ??
+		(modelSectionsQuery.isPending ? "Loading…" : "Select model");
+	const reviewEffortLevels =
+		effectiveReviewModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS;
+	const reviewModelSupportsFastMode =
+		effectiveReviewModel?.supportsFastMode === true;
+	const effectiveReviewEffort =
+		settings.reviewEffort ?? settings.defaultEffort ?? "high";
+	const effectiveReviewFastMode =
+		settings.reviewFastMode ?? settings.defaultFastMode;
 	// Auto-clamp effort when model changes — but only after model metadata
 	// has actually loaded, otherwise the fallback levels silently kill max/xhigh.
 	useEffect(() => {
@@ -657,8 +672,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 										</div>
 									</SettingsRow>
 									<SettingsRow
-										title="Review PR model"
-										description="Model used by the Review PR button. When unset, falls back to the default model above."
+										title="Review model"
+										description="Model for code review"
 									>
 										<div className="flex w-[360px] items-center gap-2">
 											<DropdownMenu>
@@ -669,14 +684,12 @@ export const SettingsDialog = memo(function SettingsDialog({
 													)}
 												>
 													<span className="flex min-w-0 items-center gap-1.5">
-														{selectedReviewPrModel ? (
-															<ModelIcon
-																model={selectedReviewPrModel}
-																className="size-[13px] shrink-0"
-															/>
-														) : null}
+														<ModelIcon
+															model={effectiveReviewModel}
+															className="size-[13px] shrink-0"
+														/>
 														<span className="min-w-0 truncate whitespace-nowrap">
-															{reviewPrModelLabel}
+															{reviewModelLabel}
 														</span>
 													</span>
 													<ChevronDown className="size-3 shrink-0 opacity-40" />
@@ -686,19 +699,19 @@ export const SettingsDialog = memo(function SettingsDialog({
 													sideOffset={4}
 													className="min-w-[10rem]"
 												>
-													<DropdownMenuItem
-														onClick={() =>
-															updateSettings({ reviewPrModelId: null })
-														}
-														className="gap-2 text-muted-foreground"
-													>
-														Use default
-													</DropdownMenuItem>
 													{allModels.map((m) => (
 														<DropdownMenuItem
 															key={m.id}
 															onClick={() =>
-																updateSettings({ reviewPrModelId: m.id })
+																updateSettings({
+																	// Picking the same value as the
+																	// default snaps Review back to `null`
+																	// (still following the default).
+																	reviewModelId:
+																		m.id === settings.defaultModelId
+																			? null
+																			: m.id,
+																})
 															}
 															className="gap-2"
 														>
@@ -708,6 +721,68 @@ export const SettingsDialog = memo(function SettingsDialog({
 													))}
 												</DropdownMenuContent>
 											</DropdownMenu>
+											<DropdownMenu>
+												<DropdownMenuTrigger
+													className={cn(
+														"flex h-8 cursor-pointer items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+														"shrink-0 gap-1.5",
+													)}
+												>
+													<span>{effortLabel(effectiveReviewEffort)}</span>
+													<ChevronDown className="size-3 opacity-40" />
+												</DropdownMenuTrigger>
+												<DropdownMenuContent
+													align="end"
+													sideOffset={4}
+													className="min-w-[8rem]"
+												>
+													{reviewEffortLevels.map((l) => (
+														<DropdownMenuItem
+															key={l}
+															onClick={() =>
+																updateSettings({
+																	reviewEffort:
+																		l === settings.defaultEffort ? null : l,
+																})
+															}
+														>
+															{effortLabel(l)}
+														</DropdownMenuItem>
+													))}
+												</DropdownMenuContent>
+											</DropdownMenu>
+											<div
+												className={cn(
+													"flex h-8 cursor-pointer items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+													"shrink-0 gap-2",
+												)}
+											>
+												<span
+													className={
+														reviewModelSupportsFastMode
+															? "text-[13px] text-foreground"
+															: "text-[13px] text-muted-foreground"
+													}
+												>
+													Fast mode
+												</span>
+												<Switch
+													checked={
+														reviewModelSupportsFastMode &&
+														effectiveReviewFastMode
+													}
+													disabled={!reviewModelSupportsFastMode}
+													onCheckedChange={(checked) =>
+														updateSettings({
+															reviewFastMode:
+																checked === settings.defaultFastMode
+																	? null
+																	: checked,
+														})
+													}
+													aria-label="Review fast mode"
+												/>
+											</div>
 										</div>
 									</SettingsRow>
 									<ClaudeCustomProvidersPanel />

@@ -221,23 +221,44 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add action_kind column")?;
     }
 
-    // Migration: add custom_prompt_review_pr column for the Review PR action
-    // (mirrors custom_prompt_create_pr — repo-level prompt override).
-    let has_repos_table_for_review: bool = connection
+    // Migration: ensure repos.custom_prompt_review exists.
+    //
+    // The column was originally introduced as `custom_prompt_review_pr`
+    // alongside the (removed) "Review PR" header button. The button is now
+    // a generic "Review changes" helper, so the column was renamed to
+    // `custom_prompt_review`. Three start states must converge cleanly:
+    //   1. Brand-new DB — CREATE TABLE already adds `custom_prompt_review`.
+    //   2. Old DB that picked up the previous migration — has the legacy
+    //      `custom_prompt_review_pr`. RENAME preserves any user-saved prompt.
+    //   3. Old DB that pre-dates either migration — neither column exists,
+    //      so we ADD the new one.
+    let has_repos_table: bool = connection
         .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'repos'")
         .and_then(|mut stmt| stmt.exists([]))
         .unwrap_or(false);
-    if has_repos_table_for_review {
-        let has_review_col: bool = connection
+    if has_repos_table {
+        let has_new_col: bool = connection
+            .prepare("SELECT 1 FROM pragma_table_info('repos') WHERE name = 'custom_prompt_review'")
+            .and_then(|mut stmt| stmt.exists([]))
+            .unwrap_or(false);
+        let has_legacy_col: bool = connection
             .prepare(
                 "SELECT 1 FROM pragma_table_info('repos') WHERE name = 'custom_prompt_review_pr'",
             )
             .and_then(|mut stmt| stmt.exists([]))
             .unwrap_or(false);
-        if !has_review_col {
-            connection
-                .execute_batch("ALTER TABLE repos ADD COLUMN custom_prompt_review_pr TEXT")
-                .context("Failed to add custom_prompt_review_pr column")?;
+        if !has_new_col {
+            if has_legacy_col {
+                connection
+                    .execute_batch(
+                        "ALTER TABLE repos RENAME COLUMN custom_prompt_review_pr TO custom_prompt_review",
+                    )
+                    .context("Failed to rename custom_prompt_review_pr -> custom_prompt_review")?;
+            } else {
+                connection
+                    .execute_batch("ALTER TABLE repos ADD COLUMN custom_prompt_review TEXT")
+                    .context("Failed to add custom_prompt_review column")?;
+            }
         }
     }
 
@@ -527,7 +548,7 @@ CREATE TABLE IF NOT EXISTS repos (
     run_script TEXT,
     remote TEXT,
     custom_prompt_create_pr TEXT,
-    custom_prompt_review_pr TEXT,
+    custom_prompt_review TEXT,
     custom_prompt_rename_branch TEXT,
     custom_prompt_general TEXT,
     hidden INTEGER DEFAULT 0,

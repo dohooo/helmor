@@ -1,5 +1,5 @@
 import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
-import type { ForgeDetection, RepoPreferences } from "@/lib/api";
+import type { ActionKind, ForgeDetection, RepoPreferences } from "@/lib/api";
 import { forgePromptDialect } from "@/lib/forge-dialect";
 import {
 	type RepoPreferenceKey,
@@ -10,14 +10,14 @@ type ButtonActionMode = Exclude<
 	WorkspaceCommitButtonMode,
 	"push" | "merge" | "closed" | "merged"
 >;
-type ActionSessionMode = ButtonActionMode | "review-pr";
+type ActionSessionMode = ButtonActionMode | "review";
 
 // Modes that delegate to a `RepoPreferenceKey`. The other action modes
 // (`commit-and-push`, `open-pr`) have no user-facing preference slot — they're
 // rendered inline below.
 type PreferenceBackedMode =
 	| "create-pr"
-	| "review-pr"
+	| "review"
 	| "fix"
 	| "resolve-conflicts";
 
@@ -26,7 +26,7 @@ const ACTION_MODE_TO_PREFERENCE_KEY: Record<
 	RepoPreferenceKey
 > = {
 	"create-pr": "createPr",
-	"review-pr": "reviewPr",
+	review: "review",
 	fix: "fixErrors",
 	"resolve-conflicts": "resolveConflicts",
 };
@@ -62,7 +62,7 @@ Use \`${dialect.reopenCommand}\` + \`${dialect.commentCommand}\`. Report the ${d
 		}
 
 		case "create-pr":
-		case "review-pr":
+		case "review":
 		case "fix":
 		case "resolve-conflicts":
 			return resolveRepoPreferencePrompt({
@@ -87,12 +87,26 @@ export function isActionSessionMode(
 	);
 }
 
+/** Whether a session created with this `ActionKind` is eligible for the
+ *  auto-hide flow (i.e. can be silently hidden once its post-stream verifier
+ *  passes). Auto-created action sessions still get fixed titles, but only a
+ *  subset are *also* auto-hideable.
+ *
+ *  Review is intentionally excluded: its whole reason to exist is to surface
+ *  a code-review *for the user to read*, so the session must stay visible.
+ *  The user's opt-in list (`loadAutoCloseActionKinds`) is filtered through
+ *  this gate at every hide call site (and the composer's "Auto Close"
+ *  toggle is hidden for non-hideable kinds). */
+export function isAutoHideableActionKind(kind: ActionKind): boolean {
+	return kind !== "review";
+}
+
 export function describeActionKind(actionKind: string): string {
 	switch (actionKind) {
 		case "create-pr":
 			return "Create PR";
-		case "review-pr":
-			return "Review PR";
+		case "review":
+			return "Review";
 		case "commit-and-push":
 			return "Commit and Push";
 		case "fix":

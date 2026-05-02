@@ -635,7 +635,7 @@ pub struct RepoScripts {
 #[serde(rename_all = "camelCase")]
 pub struct RepoPreferences {
     pub create_pr: Option<String>,
-    pub review_pr: Option<String>,
+    pub review: Option<String>,
     pub fix_errors: Option<String>,
     pub resolve_conflicts: Option<String>,
     pub branch_rename: Option<String>,
@@ -841,7 +841,7 @@ pub fn load_repo_preferences(repo_id: &str) -> Result<RepoPreferences> {
             r#"
             SELECT
               custom_prompt_create_pr,
-              custom_prompt_review_pr,
+              custom_prompt_review,
               custom_prompt_fix_errors,
               custom_prompt_resolve_merge_conflicts,
               custom_prompt_rename_branch,
@@ -856,7 +856,7 @@ pub fn load_repo_preferences(repo_id: &str) -> Result<RepoPreferences> {
         .query_row([repo_id], |row| {
             Ok(RepoPreferences {
                 create_pr: row.get(0)?,
-                review_pr: row.get(1)?,
+                review: row.get(1)?,
                 fix_errors: row.get(2)?,
                 resolve_conflicts: row.get(3)?,
                 branch_rename: row.get(4)?,
@@ -874,7 +874,7 @@ pub fn update_repo_preferences(repo_id: &str, preferences: &RepoPreferences) -> 
             UPDATE repos
             SET
               custom_prompt_create_pr = ?1,
-              custom_prompt_review_pr = ?2,
+              custom_prompt_review = ?2,
               custom_prompt_fix_errors = ?3,
               custom_prompt_resolve_merge_conflicts = ?4,
               custom_prompt_rename_branch = ?5,
@@ -884,7 +884,7 @@ pub fn update_repo_preferences(repo_id: &str, preferences: &RepoPreferences) -> 
             "#,
             rusqlite::params![
                 normalize_repo_preference(preferences.create_pr.as_deref()),
-                normalize_repo_preference(preferences.review_pr.as_deref()),
+                normalize_repo_preference(preferences.review.as_deref()),
                 normalize_repo_preference(preferences.fix_errors.as_deref()),
                 normalize_repo_preference(preferences.resolve_conflicts.as_deref()),
                 normalize_repo_preference(preferences.branch_rename.as_deref()),
@@ -1425,10 +1425,10 @@ mod tests {
     }
 
     #[test]
-    fn repo_preferences_round_trips_review_pr() {
-        let env = crate::testkit::TestEnv::new("repos-prefs-review-pr");
+    fn repo_preferences_round_trips_review() {
+        let env = crate::testkit::TestEnv::new("repos-prefs-review");
         let repo = ResolvedRepositoryInput {
-            name: "review-pr-repo".to_string(),
+            name: "review-repo".to_string(),
             normalized_root_path: env.root.join("review-repo").display().to_string(),
             remote: None,
             remote_url: None,
@@ -1439,18 +1439,18 @@ mod tests {
 
         // Default load returns None for the new field.
         let initial = load_repo_preferences(&repo_id).unwrap();
-        assert_eq!(initial.review_pr, None);
+        assert_eq!(initial.review, None);
 
         // Round-trip a non-empty review prompt.
         let prefs = RepoPreferences {
-            review_pr: Some("Focus on SQL injections and missing tests.".to_string()),
+            review: Some("Focus on SQL injections and missing tests.".to_string()),
             ..RepoPreferences::default()
         };
         update_repo_preferences(&repo_id, &prefs).unwrap();
 
         let loaded = load_repo_preferences(&repo_id).unwrap();
         assert_eq!(
-            loaded.review_pr.as_deref(),
+            loaded.review.as_deref(),
             Some("Focus on SQL injections and missing tests.")
         );
         // Other prompt slots remain untouched.
@@ -1459,11 +1459,11 @@ mod tests {
 
         // Whitespace-only override is normalized back to None.
         let blanked = RepoPreferences {
-            review_pr: Some("   ".to_string()),
+            review: Some("   ".to_string()),
             ..RepoPreferences::default()
         };
         update_repo_preferences(&repo_id, &blanked).unwrap();
         let cleared = load_repo_preferences(&repo_id).unwrap();
-        assert_eq!(cleared.review_pr, None);
+        assert_eq!(cleared.review, None);
     }
 }

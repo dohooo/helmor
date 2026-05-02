@@ -62,7 +62,6 @@ type ChangesSectionProps = {
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
-	onReviewPrAction?: () => Promise<void>;
 	commitButtonMode?: WorkspaceCommitButtonMode;
 	commitButtonState?: CommitButtonState;
 	changeRequest: ChangeRequestInfo | null;
@@ -81,7 +80,6 @@ export function ChangesSection({
 	onOpenEditorFile,
 	flashingPaths,
 	onCommitAction,
-	onReviewPrAction,
 	commitButtonMode = "create-pr",
 	commitButtonState,
 	changeRequest,
@@ -360,7 +358,6 @@ export function ChangesSection({
 					changeRequest ? () => void openUrl(changeRequest.url) : undefined
 				}
 				onCommit={handleCommitButtonClick}
-				onReviewPr={onReviewPrAction}
 				onContinueWorkspace={handleContinueWorkspace}
 			/>
 

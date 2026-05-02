@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChangeRequestInfo, ForgeDetection } from "@/lib/api";
 import { renderWithProviders } from "@/test/render-with-providers";
@@ -222,65 +222,5 @@ describe("GitSectionHeader forge onboarding", () => {
 				screen.queryByTestId("git-header-shimmer"),
 			).not.toBeInTheDocument();
 		}
-	});
-
-	it("hides the Review PR button when there is no change request", () => {
-		renderWithProviders(
-			<GitSectionHeader
-				commitButtonMode="create-pr"
-				commitButtonState="idle"
-				changeRequest={null}
-				hasChanges
-				changeRequestName="PR"
-				forgeDetection={githubDetection()}
-				forgeRemoteState="ok"
-				workspaceId="workspace-1"
-				onReviewPr={vi.fn()}
-			/>,
-		);
-
-		expect(
-			screen.queryByRole("button", { name: /Review PR/i }),
-		).not.toBeInTheDocument();
-	});
-
-	it("hides the Review PR button when the change request is not open", () => {
-		renderWithProviders(
-			<GitSectionHeader
-				commitButtonMode="merged"
-				commitButtonState="idle"
-				changeRequest={{ ...changeRequest, state: "MERGED", isMerged: true }}
-				changeRequestName="MR"
-				forgeDetection={gitlabDetection()}
-				forgeRemoteState="ok"
-				workspaceId="workspace-1"
-				onReviewPr={vi.fn()}
-			/>,
-		);
-
-		expect(
-			screen.queryByRole("button", { name: /Review MR/i }),
-		).not.toBeInTheDocument();
-	});
-
-	it("shows the Review PR button on an open PR and fires onReviewPr on click", () => {
-		const onReviewPr = vi.fn();
-		renderWithProviders(
-			<GitSectionHeader
-				commitButtonMode="merge"
-				commitButtonState="idle"
-				changeRequest={changeRequest}
-				changeRequestName="MR"
-				forgeDetection={gitlabDetection()}
-				forgeRemoteState="ok"
-				workspaceId="workspace-1"
-				onReviewPr={onReviewPr}
-			/>,
-		);
-
-		const reviewButton = screen.getByRole("button", { name: /Review MR/i });
-		expect(reviewButton).toBeInTheDocument();
-		fireEvent.click(reviewButton);
-		expect(onReviewPr).toHaveBeenCalledTimes(1);
 	});
 });
