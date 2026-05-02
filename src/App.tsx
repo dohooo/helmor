@@ -14,7 +14,15 @@ import {
 	PanelRightClose,
 	PanelRightOpen,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type KeyboardEvent as ReactKeyboardEvent,
+	type MouseEvent as ReactMouseEvent,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { ForgeAccountsHealthSentinel } from "@/components/forge-accounts-health-sentinel";
 import { QuitConfirmDialog } from "@/components/quit-confirm-dialog";
@@ -63,6 +71,7 @@ import { useEnsureDefaultModel } from "@/shell/hooks/use-ensure-default-model";
 import { useShellPanels } from "@/shell/hooks/use-panels";
 import { useUiSyncBridge } from "@/shell/hooks/use-ui-sync-bridge";
 import {
+	clampSidebarWidth,
 	findAdjacentSessionId,
 	findAdjacentWorkspaceId,
 	flattenWorkspaceRows,
@@ -70,6 +79,7 @@ import {
 	MIN_SIDEBAR_WIDTH,
 	PREFERRED_EDITOR_STORAGE_KEY,
 	SIDEBAR_RESIZE_HIT_AREA,
+	SIDEBAR_RESIZE_STEP,
 } from "@/shell/layout";
 import { clampZoom, useZoom, ZOOM_STEP } from "@/shell/use-zoom";
 import {
@@ -141,6 +151,13 @@ import { StreamingFooterOverlapScenario } from "./test/e2e-scenarios/streaming-f
 const SETTINGS_RELOAD_EVENT = "helmor:reload-settings";
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
 type WorkspaceViewMode = "conversation" | "editor" | "kanban";
+type KanbanResizeTarget = "inbox" | "board";
+
+type KanbanResizeState = {
+	pointerX: number;
+	target: KanbanResizeTarget;
+	width: number;
+};
 const EMPTY_SENDING_SESSION_IDS = new Set<string>();
 
 function App() {
@@ -515,6 +532,10 @@ function AppShell({
 	const [workspaceViewMode, setWorkspaceViewMode] =
 		useState<WorkspaceViewMode>("conversation");
 	const [kanbanComposerVisible, setKanbanComposerVisible] = useState(false);
+	const [kanbanInboxWidth, setKanbanInboxWidth] = useState(280);
+	const [kanbanBoardWidth, setKanbanBoardWidth] = useState(360);
+	const [kanbanResizeState, setKanbanResizeState] =
+		useState<KanbanResizeState | null>(null);
 	const [editorSession, setEditorSession] = useState<EditorSessionState | null>(
 		null,
 	);
@@ -942,6 +963,112 @@ function AppShell({
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
 	}, [kanbanComposerVisible, workspaceViewMode]);
+
+	useEffect(() => {
+		if (!kanbanResizeState) {
+			return;
+		}
+
+		let pendingWidth: number | null = null;
+		let rafId: number | null = null;
+		const flush = () => {
+			rafId = null;
+			if (pendingWidth === null) return;
+			const nextWidth = pendingWidth;
+			pendingWidth = null;
+			if (kanbanResizeState.target === "inbox") {
+				setKanbanInboxWidth(nextWidth);
+			} else {
+				setKanbanBoardWidth(nextWidth);
+			}
+		};
+
+		const handleMouseMove = (event: globalThis.MouseEvent) => {
+			const deltaX = event.clientX - kanbanResizeState.pointerX;
+			const rawWidth =
+				kanbanResizeState.target === "inbox"
+					? kanbanResizeState.width + deltaX
+					: kanbanResizeState.width - deltaX;
+			pendingWidth = clampSidebarWidth(rawWidth);
+			if (rafId === null) {
+				rafId = window.requestAnimationFrame(flush);
+			}
+		};
+		const handleMouseUp = () => {
+			if (rafId !== null) {
+				window.cancelAnimationFrame(rafId);
+				rafId = null;
+			}
+			flush();
+			setKanbanResizeState(null);
+		};
+		const previousCursor = document.body.style.cursor;
+		const previousUserSelect = document.body.style.userSelect;
+
+		document.body.style.cursor = "ew-resize";
+		document.body.style.userSelect = "none";
+
+		window.addEventListener("mousemove", handleMouseMove);
+		window.addEventListener("mouseup", handleMouseUp);
+
+		return () => {
+			if (rafId !== null) {
+				window.cancelAnimationFrame(rafId);
+			}
+			document.body.style.cursor = previousCursor;
+			document.body.style.userSelect = previousUserSelect;
+			window.removeEventListener("mousemove", handleMouseMove);
+			window.removeEventListener("mouseup", handleMouseUp);
+		};
+	}, [kanbanResizeState]);
+
+	const handleKanbanResizeStart = useCallback(
+		(target: KanbanResizeTarget) =>
+			(event: ReactMouseEvent<HTMLDivElement>) => {
+				if (event.button !== 0) return;
+				event.preventDefault();
+				setKanbanResizeState({
+					pointerX: event.clientX,
+					target,
+					width: target === "inbox" ? kanbanInboxWidth : kanbanBoardWidth,
+				});
+			},
+		[kanbanBoardWidth, kanbanInboxWidth],
+	);
+
+	const handleKanbanResizeKeyDown = useCallback(
+		(target: KanbanResizeTarget) =>
+			(event: ReactKeyboardEvent<HTMLDivElement>) => {
+				if (event.key === "ArrowLeft") {
+					event.preventDefault();
+					if (target === "inbox") {
+						setKanbanInboxWidth((currentWidth) =>
+							clampSidebarWidth(currentWidth - SIDEBAR_RESIZE_STEP),
+						);
+						return;
+					}
+
+					setKanbanBoardWidth((currentWidth) =>
+						clampSidebarWidth(currentWidth + SIDEBAR_RESIZE_STEP),
+					);
+				}
+
+				if (event.key === "ArrowRight") {
+					event.preventDefault();
+					if (target === "inbox") {
+						setKanbanInboxWidth((currentWidth) =>
+							clampSidebarWidth(currentWidth + SIDEBAR_RESIZE_STEP),
+						);
+						return;
+					}
+
+					setKanbanBoardWidth((currentWidth) =>
+						clampSidebarWidth(currentWidth - SIDEBAR_RESIZE_STEP),
+					);
+				}
+			},
+		[],
+	);
 
 	// Persist last workspace/session for restore-on-launch
 	useEffect(() => {
@@ -2357,7 +2484,25 @@ function AppShell({
 										aria-label="Workspace viewport"
 										className="flex min-h-0 flex-1 flex-col bg-background"
 									>
-										{workspaceViewMode === "kanban" && <KanbanPage />}
+										{workspaceViewMode === "kanban" && (
+											<KanbanPage
+												boardWidth={kanbanBoardWidth}
+												inboxWidth={kanbanInboxWidth}
+												isBoardResizing={kanbanResizeState?.target === "board"}
+												isInboxResizing={kanbanResizeState?.target === "inbox"}
+												maxWidth={MAX_SIDEBAR_WIDTH}
+												minWidth={MIN_SIDEBAR_WIDTH}
+												onBoardResizeKeyDown={handleKanbanResizeKeyDown(
+													"board",
+												)}
+												onBoardResizeStart={handleKanbanResizeStart("board")}
+												onInboxResizeKeyDown={handleKanbanResizeKeyDown(
+													"inbox",
+												)}
+												onInboxResizeStart={handleKanbanResizeStart("inbox")}
+												resizeHitArea={SIDEBAR_RESIZE_HIT_AREA}
+											/>
+										)}
 										{workspaceViewMode === "editor" && editorSession && (
 											<WorkspaceEditorSurface
 												editorSession={editorSession}
@@ -2375,8 +2520,16 @@ function AppShell({
 													!kanbanComposerVisible)
 													? "hidden"
 													: workspaceViewMode === "kanban"
-														? "pointer-events-none absolute right-0 bottom-16 left-[280px] z-30 flex justify-center px-6"
+														? "pointer-events-none absolute bottom-16 z-30 flex justify-center px-6"
 														: "flex min-h-0 flex-1 flex-col"
+											}
+											style={
+												workspaceViewMode === "kanban"
+													? {
+															left: `${kanbanInboxWidth}px`,
+															right: `${kanbanBoardWidth}px`,
+														}
+													: undefined
 											}
 										>
 											<WorkspaceConversationContainer

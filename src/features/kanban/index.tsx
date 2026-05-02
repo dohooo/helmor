@@ -15,7 +15,15 @@ import {
 	useSensors,
 } from "@dnd-kit/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type KeyboardEventHandler,
+	type MouseEventHandler,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { InboxSidebar } from "@/features/inbox";
 import type { WorkspaceDetail, WorkspaceGroup, WorkspaceRow } from "@/lib/api";
@@ -24,6 +32,7 @@ import {
 	helmorQueryKeys,
 	workspaceGroupsQueryOptions,
 } from "@/lib/query-client";
+import { cn } from "@/lib/utils";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 import {
 	applyKanbanTopPlacements,
@@ -36,6 +45,20 @@ import { columnDropId, KanbanColumn } from "./column";
 import type { KanbanColumnId } from "./types";
 
 const DROP_SETTLE_MS = 190;
+
+type KanbanPageProps = {
+	boardWidth: number;
+	inboxWidth: number;
+	isBoardResizing: boolean;
+	isInboxResizing: boolean;
+	maxWidth: number;
+	minWidth: number;
+	onBoardResizeKeyDown: KeyboardEventHandler<HTMLDivElement>;
+	onBoardResizeStart: MouseEventHandler<HTMLDivElement>;
+	onInboxResizeKeyDown: KeyboardEventHandler<HTMLDivElement>;
+	onInboxResizeStart: MouseEventHandler<HTMLDivElement>;
+	resizeHitArea: number;
+};
 
 type SettlingDrop =
 	| {
@@ -59,7 +82,19 @@ const kanbanCollisionDetection: CollisionDetection = (args) => {
 		: closestCorners(args);
 };
 
-export function KanbanPage() {
+export function KanbanPage({
+	boardWidth,
+	inboxWidth,
+	isBoardResizing,
+	isInboxResizing,
+	maxWidth,
+	minWidth,
+	onBoardResizeKeyDown,
+	onBoardResizeStart,
+	onInboxResizeKeyDown,
+	onInboxResizeStart,
+	resizeHitArea,
+}: KanbanPageProps) {
 	const queryClient = useQueryClient();
 	const groupsQuery = useQuery(workspaceGroupsQueryOptions());
 	const sensors = useSensors(
@@ -252,21 +287,53 @@ export function KanbanPage() {
 		>
 			<div
 				aria-label="Kanban page"
-				className="flex min-h-0 flex-1 bg-background"
+				className="relative flex min-h-0 flex-1 bg-background"
 			>
 				<aside
 					aria-label="Kanban inbox"
-					className="flex h-full w-[280px] shrink-0 flex-col overflow-hidden border-border/60 border-r bg-sidebar"
+					className="flex h-full shrink-0 flex-col overflow-hidden border-border/60 border-r bg-sidebar"
+					style={{ width: `${inboxWidth}px` }}
 				>
 					<InboxSidebar className="flex flex-1" />
 				</aside>
-				<div className="relative flex min-w-0 flex-1 flex-col">
+				<KanbanResizeHandle
+					ariaLabel="Resize kanban inbox"
+					ariaValueMax={maxWidth}
+					ariaValueMin={minWidth}
+					ariaValueNow={inboxWidth}
+					edge="right"
+					isResizing={isInboxResizing}
+					onKeyDown={onInboxResizeKeyDown}
+					onMouseDown={onInboxResizeStart}
+					resizeHitArea={resizeHitArea}
+					style={{ left: `${inboxWidth - resizeHitArea / 2}px` }}
+				/>
+				<div
+					aria-label="Kanban main content"
+					className="min-w-0 flex-1 bg-background"
+				/>
+				<KanbanResizeHandle
+					ariaLabel="Resize kanban board"
+					ariaValueMax={maxWidth}
+					ariaValueMin={minWidth}
+					ariaValueNow={boardWidth}
+					edge="left"
+					isResizing={isBoardResizing}
+					onKeyDown={onBoardResizeKeyDown}
+					onMouseDown={onBoardResizeStart}
+					resizeHitArea={resizeHitArea}
+					style={{ right: `${boardWidth - resizeHitArea / 2}px` }}
+				/>
+				<aside
+					className="relative flex h-full shrink-0 flex-col border-border/60 border-l bg-background"
+					style={{ width: `${boardWidth}px` }}
+				>
 					<div className="flex h-8 shrink-0 items-center border-border/50 border-b px-4">
 						<h1 className="text-[13px] font-medium text-muted-foreground">
 							Kanban
 						</h1>
 					</div>
-					<div className="scrollbar-stable flex min-h-0 flex-1 gap-3 overflow-x-auto px-3 pt-2 pb-1 [scrollbar-width:thin]">
+					<div className="flex min-h-0 flex-1 gap-3 overflow-x-auto pt-2 pr-8 pb-1 pl-3 [scrollbar-width:thin]">
 						{KANBAN_COLUMNS.map((column) => (
 							<KanbanColumn
 								key={column.id}
@@ -310,7 +377,11 @@ export function KanbanPage() {
 							/>
 						))}
 					</div>
-				</div>
+					<div
+						aria-hidden="true"
+						className="pointer-events-none absolute inset-y-0 right-0 z-20 w-8 bg-gradient-to-l from-black/28 via-black/10 to-transparent dark:from-black/45 dark:via-black/16"
+					/>
+				</aside>
 			</div>
 			<DragOverlay
 				adjustScale={false}
@@ -339,6 +410,62 @@ export function KanbanPage() {
 				) : null}
 			</DragOverlay>
 		</DndContext>
+	);
+}
+
+function KanbanResizeHandle({
+	ariaLabel,
+	ariaValueMax,
+	ariaValueMin,
+	ariaValueNow,
+	edge,
+	isResizing,
+	onKeyDown,
+	onMouseDown,
+	resizeHitArea,
+	style,
+}: {
+	ariaLabel: string;
+	ariaValueMax: number;
+	ariaValueMin: number;
+	ariaValueNow: number;
+	edge: "left" | "right";
+	isResizing: boolean;
+	onKeyDown: KeyboardEventHandler<HTMLDivElement>;
+	onMouseDown: MouseEventHandler<HTMLDivElement>;
+	resizeHitArea: number;
+	style: React.CSSProperties;
+}) {
+	return (
+		<div
+			role="separator"
+			tabIndex={0}
+			aria-label={ariaLabel}
+			aria-orientation="vertical"
+			aria-valuemin={ariaValueMin}
+			aria-valuemax={ariaValueMax}
+			aria-valuenow={ariaValueNow}
+			onMouseDown={onMouseDown}
+			onKeyDown={onKeyDown}
+			className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+			style={{
+				...style,
+				width: `${resizeHitArea}px`,
+			}}
+		>
+			<span
+				aria-hidden="true"
+				className={cn(
+					"pointer-events-none absolute inset-y-0 transition-[width,background-color,box-shadow]",
+					"left-1/2 -translate-x-1/2",
+					isResizing
+						? edge === "right"
+							? "w-[2px] bg-foreground/80 shadow-[0_0_12px_rgba(0,0,0,0.12)] dark:shadow-[0_0_12px_rgba(255,255,255,0.16)]"
+							: "w-[2px] bg-transparent shadow-none"
+						: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75",
+				)}
+			/>
+		</div>
 	);
 }
 
