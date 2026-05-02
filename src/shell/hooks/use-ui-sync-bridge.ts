@@ -68,6 +68,11 @@ function handleUiMutation(
 					query.queryKey[1] === event.sessionId,
 			});
 			return;
+		case "codexGoalChanged":
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.sessionCodexGoal(event.sessionId),
+			});
+			return;
 		case "workspaceFilesChanged":
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceGitActionStatus(event.workspaceId),

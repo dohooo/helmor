@@ -8,6 +8,9 @@
  */
 
 import crypto from "node:crypto";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import {
 	CodexAppServer,
 	type JsonRpcNotification,
@@ -34,7 +37,141 @@ import {
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "./title.js";
 
-const CODEX_BIN_PATH = process.env.HELMOR_CODEX_BIN_PATH || "codex";
+/**
+ * Resolve the path to the Codex native binary, used as the spawn target for
+ * every `codex app-server` child process.
+ *
+ * Resolution order:
+ *   1. `HELMOR_CODEX_BIN_PATH` — set by the Tauri host in release builds,
+ *      pointing at `Helmor.app/Contents/Resources/vendor/codex/codex`.
+ *   2. `createRequire` lookup of the platform sub-package's binary inside
+ *      `node_modules`. Used in dev (`bun run src/index.ts`) and `bun test`.
+ *   3. Fall back to `"codex"` so the OS resolves it from PATH — last-resort
+ *      for unusual setups; surfaces as ENOENT if not installed.
+ */
+function resolveCodexBinPath(): string {
+	const override = process.env.HELMOR_CODEX_BIN_PATH;
+	if (override) {
+		return override;
+	}
+	const triple = codexTargetTriple();
+	if (triple) {
+		const platformPkg = `@openai/codex-${platformShort()}`;
+		try {
+			const require = createRequire(import.meta.url);
+			const pkgJson = require.resolve(`${platformPkg}/package.json`);
+			const candidate = join(
+				dirname(pkgJson),
+				"vendor",
+				triple,
+				"codex",
+				process.platform === "win32" ? "codex.exe" : "codex",
+			);
+			if (existsSync(candidate)) {
+				return candidate;
+			}
+		} catch {
+			// Platform sub-package missing (e.g. --omit=optional) — fall through.
+		}
+	}
+	return "codex";
+}
+
+function platformShort(): string {
+	const arch = process.arch === "x64" ? "x64" : "arm64";
+	if (process.platform === "darwin") return `darwin-${arch}`;
+	if (process.platform === "linux") return `linux-${arch}`;
+	if (process.platform === "win32") return `win32-${arch}`;
+	return "";
+}
+
+function codexTargetTriple(): string | null {
+	const arch = process.arch;
+	if (process.platform === "darwin") {
+		return arch === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin";
+	}
+	if (process.platform === "linux") {
+		return arch === "arm64"
+			? "aarch64-unknown-linux-musl"
+			: "x86_64-unknown-linux-musl";
+	}
+	if (process.platform === "win32") {
+		return arch === "arm64"
+			? "aarch64-pc-windows-msvc"
+			: "x86_64-pc-windows-msvc";
+	}
+	return null;
+}
+
+const CODEX_BIN_PATH = resolveCodexBinPath();
+
+/** /goal slash-command parser. Maps to `thread/goal/*` JSON-RPC calls. */
+export type GoalCommand =
+	| { kind: "set"; objective: string; tokenBudget?: number }
+	| { kind: "pause" }
+	| { kind: "resume" }
+	| { kind: "clear" };
+
+export function parseGoalCommand(prompt: string): GoalCommand | null {
+	const m = prompt.trim().match(/^\/goal(?:\s+([\s\S]+))?$/);
+	if (!m) return null;
+	const arg = (m[1] ?? "").trim();
+	if (arg === "") return null; // bare `/goal` — fall through to the agent
+	if (arg === "pause") return { kind: "pause" };
+	if (arg === "resume") return { kind: "resume" };
+	if (arg === "clear") return { kind: "clear" };
+	const budgetMatch = arg.match(/^--tokens\s+(\S+)\s+([\s\S]+)$/);
+	if (budgetMatch) {
+		const budget = parseTokenSpec(budgetMatch[1] ?? "");
+		const objective = (budgetMatch[2] ?? "").trim();
+		if (budget !== null && objective) {
+			return { kind: "set", objective, tokenBudget: budget };
+		}
+	}
+	return { kind: "set", objective: arg };
+}
+
+/** Parse "98.5K" / "1M" / "10000" → integer token count. */
+function parseTokenSpec(spec: string): number | null {
+	const m = spec.match(/^(\d+(?:\.\d+)?)([KkMm]?)$/);
+	if (!m) return null;
+	const n = Number.parseFloat(m[1] ?? "0");
+	const suffix = (m[2] ?? "").toLowerCase();
+	if (suffix === "k") return Math.round(n * 1_000);
+	if (suffix === "m") return Math.round(n * 1_000_000);
+	return Math.round(n);
+}
+
+/**
+ * Translate a parsed `/goal` command into the right `thread/goal/*` RPC.
+ * `pause` and `resume` are aliases for `thread/goal/set` with a `status`
+ * field — this matches the upstream TUI's own implementation.
+ */
+function dispatchGoalCommand(
+	server: CodexAppServer,
+	threadId: string,
+	cmd: GoalCommand,
+): { method: string; promise: Promise<unknown> } {
+	if (cmd.kind === "clear") {
+		return {
+			method: "thread/goal/clear",
+			promise: server.sendRequest("thread/goal/clear", { threadId }, 20_000),
+		};
+	}
+	const params: Record<string, unknown> = { threadId };
+	if (cmd.kind === "set") {
+		params.objective = cmd.objective;
+		if (cmd.tokenBudget !== undefined) params.tokenBudget = cmd.tokenBudget;
+	} else if (cmd.kind === "pause") {
+		params.status = "paused";
+	} else if (cmd.kind === "resume") {
+		params.status = "active";
+	}
+	return {
+		method: "thread/goal/set",
+		promise: server.sendRequest("thread/goal/set", params, 20_000),
+	};
+}
 
 /** How long after a "Reconnecting…" stderr line we keep emitting
  *  synthetic heartbeats while Codex owns its retry loop. */
@@ -288,7 +425,8 @@ export class CodexAppServerManager implements SessionManager {
 			prompt,
 			resolvedAdditionalDirectories,
 		);
-		const isCompactCommand = prompt.trim() === "/compact";
+		const goalCommand = parseGoalCommand(prompt);
+		const isCompactCommand = !goalCommand && prompt.trim() === "/compact";
 		const input = buildTurnInput(promptWithContext, images);
 		const turnStartParams: Record<string, unknown> = {
 			threadId: ctx.providerThreadId,
@@ -403,6 +541,24 @@ export class CodexAppServerManager implements SessionManager {
 					}
 				}
 
+				// Forward Codex goal state changes so the panel header banner
+				// can render the active goal. `thread/goal/updated` carries
+				// the full ThreadGoal payload; `thread/goal/cleared` flips it
+				// off (we send a null goal in the same event type).
+				if (n.method === "thread/goal/updated") {
+					const goal = deepGet(n.params, "goal");
+					if (goal && typeof goal === "object") {
+						emitter.codexGoalUpdated(
+							requestId,
+							sessionId,
+							JSON.stringify(goal),
+						);
+					}
+				}
+				if (n.method === "thread/goal/cleared") {
+					emitter.codexGoalUpdated(requestId, sessionId, null);
+				}
+
 				// Forward Codex token usage to the context-usage ring.
 				if (n.method === "thread/tokenUsage/updated") {
 					const tokenUsage = deepGet(n.params, "tokenUsage");
@@ -508,18 +664,43 @@ export class CodexAppServerManager implements SessionManager {
 			ctx.server.setHandlers(handleNotification, handleRequest);
 			ctx.server.setActiveRequestId(requestId);
 
-			if (isCompactCommand && !ctx.providerThreadId) {
-				reject(new Error("Cannot compact before a Codex thread has started"));
+			if ((isCompactCommand || goalCommand) && !ctx.providerThreadId) {
+				reject(
+					new Error(
+						`Cannot run /${isCompactCommand ? "compact" : "goal"} before a Codex thread has started`,
+					),
+				);
 				return;
 			}
 
-			const requestPromise = isCompactCommand
-				? ctx.server.sendRequest(
-						"thread/compact/start",
-						{ threadId: ctx.providerThreadId },
-						20_000,
-					)
-				: ctx.server.sendRequest("turn/start", turnStartParams);
+			const dispatchPrompt = (): {
+				method: string;
+				promise: Promise<unknown>;
+			} => {
+				if (isCompactCommand) {
+					return {
+						method: "thread/compact/start",
+						promise: ctx.server.sendRequest(
+							"thread/compact/start",
+							{ threadId: ctx.providerThreadId },
+							20_000,
+						),
+					};
+				}
+				if (goalCommand) {
+					return dispatchGoalCommand(
+						ctx.server,
+						ctx.providerThreadId as string,
+						goalCommand,
+					);
+				}
+				return {
+					method: "turn/start",
+					promise: ctx.server.sendRequest("turn/start", turnStartParams),
+				};
+			};
+
+			const { method, promise: requestPromise } = dispatchPrompt();
 
 			requestPromise
 				.then((response) => {
@@ -529,10 +710,7 @@ export class CodexAppServerManager implements SessionManager {
 					}
 				})
 				.catch((err) => {
-					logger.error(
-						`${isCompactCommand ? "thread/compact/start" : "turn/start"} failed`,
-						errorDetails(err),
-					);
+					logger.error(`${method} failed`, errorDetails(err));
 					reject(err);
 				});
 		}).finally(() => {

@@ -689,7 +689,7 @@ describe("WorkspaceComposerContainer", () => {
 			});
 		});
 
-		it("adds a built-in /compact command for Codex sessions", async () => {
+		it("adds built-in /compact and /goal commands for Codex sessions", async () => {
 			apiMockState.listSlashCommands.mockResolvedValue({
 				commands: [],
 				isComplete: true,
@@ -701,11 +701,20 @@ describe("WorkspaceComposerContainer", () => {
 				expect(composerMockState.lastSlashCommands.map((c) => c.name)).toEqual([
 					"add-dir",
 					"compact",
+					"goal",
 				]);
 			});
 			expect(composerMockState.lastSlashCommands[1]).toEqual({
 				name: "compact",
 				description: "Compact this Codex thread's context",
+				source: "builtin",
+				providers: ["codex"],
+			});
+			expect(composerMockState.lastSlashCommands[2]).toEqual({
+				name: "goal",
+				description:
+					"Set a persistent goal Codex pursues turn-after-turn until done or paused",
+				argumentHint: "<objective> | pause | resume | clear",
 				source: "builtin",
 				providers: ["codex"],
 			});

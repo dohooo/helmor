@@ -590,6 +590,21 @@ impl TurnSession {
         Ok(vec![Action::PersistContextUsage { raw: raw.clone() }])
     }
 
+    /// Handle a `codexGoalUpdated` sidecar event (Codex `/goal` lifecycle).
+    /// Persists the goal payload to the session row and broadcasts a
+    /// `CodexGoalChanged` invalidation so the panel-header banner refetches.
+    pub(super) fn handle_codex_goal_updated(
+        &mut self,
+        raw: &Value,
+    ) -> Result<Vec<Action>, TransitionError> {
+        if self.state.is_terminated() {
+            return Err(TransitionError::AlreadyTerminated {
+                event_kind: "codexGoalUpdated".into(),
+            });
+        }
+        Ok(vec![Action::PersistCodexGoal { raw: raw.clone() }])
+    }
+
     /// Handle a `permissionModeChanged` sidecar event.
     ///
     /// State-mutating with no frontend emit: stores the new mode in

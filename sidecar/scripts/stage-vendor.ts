@@ -55,9 +55,9 @@ const GLAB_SHA256 = {
 // must match THAT version — bump them together (or staging cross-arch will
 // abort with a clear error).
 const CODEX_SHA256: Readonly<Record<string, { arm64: string; x64: string }>> = {
-	"0.124.0": {
-		arm64: "8221653b5f1592007ff19a756cfd00afaa4005b3e944412a3ca2372d0abb3b5a",
-		x64: "eb9c0cf46fc9aa58592cd103f0cbc9535667087eb3369d0b99ae62b49f9133da",
+	"0.128.0": {
+		arm64: "25499d957ae18d317cd13012750e681a60a1d7ce45f577c6f07e53d374199d9b",
+		x64: "1f4ffa3c70c243c2993dedb67635f6a98c13d3f2b86a5caa445ef762532fc21f",
 	},
 };
 
@@ -426,25 +426,55 @@ function readCodexVersion(): string {
 	return pkg.version;
 }
 
-function copyCodexBin(src: string): string {
-	const dest = join(DIST_VENDOR, "codex", "codex");
-	copyFile(src, dest);
-	chmodSync(dest, 0o755);
-	maybeSignMacBinary(dest, false);
-	return dest;
+/**
+ * Stage codex out of `<vendorRoot>/<triple>/`.
+ *
+ * Source layout (npm tarball or installed package):
+ *   <triple>/codex/codex      — the binary
+ *   <triple>/path/rg          — ripgrep, expected on PATH at runtime
+ *                                (codex spawns it for /search)
+ *
+ * Output:
+ *   dist/vendor/codex/codex
+ *   dist/vendor/codex/path/rg
+ *
+ * The sidecar prepends `dist/vendor/codex/path/` to the codex child's PATH
+ * env when spawning, so codex finds `rg` without it being globally installed.
+ */
+function stageCodexFromVendorRoot(archRoot: string): void {
+	const binSrc = join(archRoot, "codex", "codex");
+	if (!existsSync(binSrc)) {
+		throw new Error(`[stage-vendor] codex binary missing at ${binSrc}`);
+	}
+	const binDest = join(DIST_VENDOR, "codex", "codex");
+	copyFile(binSrc, binDest);
+	chmodSync(binDest, 0o755);
+	maybeSignMacBinary(binDest, false);
+
+	const pathSrc = join(archRoot, "path");
+	if (existsSync(pathSrc)) {
+		const pathDest = join(DIST_VENDOR, "codex", "path");
+		cpSync(pathSrc, pathDest, { recursive: true });
+		for (const entry of readdirSync(pathDest)) {
+			const file = join(pathDest, entry);
+			if (statSync(file).isFile()) {
+				chmodSync(file, 0o755);
+				maybeSignMacBinary(file, false);
+			}
+		}
+	}
 }
 
-function stageCodexBinary(target: TargetInfo): string {
-	const installed = join(
+function stageCodexBinary(target: TargetInfo): void {
+	const installedRoot = join(
 		NODE_MODULES,
 		target.codexPkg,
 		"vendor",
 		target.codexTriple,
-		"codex",
-		"codex",
 	);
-	if (existsSync(installed)) {
-		return copyCodexBin(installed);
+	if (existsSync(join(installedRoot, "codex", "codex"))) {
+		stageCodexFromVendorRoot(installedRoot);
+		return;
 	}
 
 	// Cross-arch: download the platform tarball from npm.
@@ -468,20 +498,13 @@ function stageCodexBinary(target: TargetInfo): string {
 	});
 
 	// npm tarballs nest everything under `package/`.
-	const binSrc = join(
+	const extractedRoot = join(
 		extractDir,
 		"package",
 		"vendor",
 		target.codexTriple,
-		"codex",
-		"codex",
 	);
-	if (!existsSync(binSrc)) {
-		throw new Error(
-			`[stage-vendor] codex binary missing after extract: ${binSrc}`,
-		);
-	}
-	return copyCodexBin(binSrc);
+	stageCodexFromVendorRoot(extractedRoot);
 }
 
 // ---------------------------------------------------------------------------

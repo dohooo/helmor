@@ -1096,6 +1096,7 @@ export type UiMutationEvent =
 	| { type: "workspaceChanged"; workspaceId: string }
 	| { type: "sessionListChanged"; workspaceId: string }
 	| { type: "contextUsageChanged"; sessionId: string }
+	| { type: "codexGoalChanged"; sessionId: string }
 	| { type: "workspaceFilesChanged"; workspaceId: string }
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
 	| { type: "workspaceForgeChanged"; workspaceId: string }
@@ -2333,6 +2334,33 @@ export async function getSessionContextUsage(
 	return await invoke<string | null>("get_session_context_usage", {
 		sessionId,
 	});
+}
+
+/** Active Codex `/goal` payload as JSON. Null when no goal is set. */
+export type CodexGoalState = {
+	threadId: string;
+	objective: string;
+	status: "active" | "paused" | "budgetLimited" | "complete";
+	tokenBudget: number | null;
+	tokensUsed: number;
+	timeUsedSeconds: number;
+	createdAt: number;
+	updatedAt: number;
+};
+
+/** Read the active Codex `/goal` for one session. Null when no goal. */
+export async function getSessionCodexGoal(
+	sessionId: string,
+): Promise<CodexGoalState | null> {
+	const raw = await invoke<string | null>("get_session_codex_goal", {
+		sessionId,
+	});
+	if (!raw) return null;
+	try {
+		return JSON.parse(raw) as CodexGoalState;
+	} catch {
+		return null;
+	}
 }
 
 /** Read the account-global Codex rate-limit snapshot. Null until Codex has

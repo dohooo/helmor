@@ -17,6 +17,9 @@ pub enum UiMutationEvent {
     ContextUsageChanged {
         session_id: String,
     },
+    CodexGoalChanged {
+        session_id: String,
+    },
     WorkspaceFilesChanged {
         workspace_id: String,
     },
@@ -85,6 +88,9 @@ mod tests {
                 workspace_id: "w".into(),
             },
             UiMutationEvent::ContextUsageChanged {
+                session_id: "s".into(),
+            },
+            UiMutationEvent::CodexGoalChanged {
                 session_id: "s".into(),
             },
             UiMutationEvent::WorkspaceFilesChanged {

@@ -77,9 +77,19 @@ const CODEX_COMPACT_COMMAND: SlashCommandEntry = {
 	providers: ["codex"],
 };
 
+const CODEX_GOAL_COMMAND: SlashCommandEntry = {
+	name: "goal",
+	description:
+		"Set a persistent goal Codex pursues turn-after-turn until done or paused",
+	argumentHint: "<objective> | pause | resume | clear",
+	source: "builtin",
+	providers: ["codex"],
+};
+
 const BUILTIN_CLIENT_COMMANDS: readonly SlashCommandEntry[] = [
 	ADD_DIR_COMMAND,
 	CODEX_COMPACT_COMMAND,
+	CODEX_GOAL_COMMAND,
 ];
 
 type WorkspaceComposerContainerProps = {

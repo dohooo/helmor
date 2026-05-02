@@ -21,6 +21,7 @@ import { measureSync } from "@/lib/perf-marks";
 import { hasUnresolvedPlanReview } from "@/lib/plan-review";
 import { useSettings } from "@/lib/settings";
 import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
+import { CodexGoalBanner } from "./codex-goal-banner";
 import { EmptyState, MemoConversationMessage } from "./message-components";
 
 export type PresentedSessionPane = {
@@ -109,8 +110,9 @@ export function ActiveThreadViewport({
 	return (
 		<div
 			ref={stackRef}
-			className="relative flex min-h-0 flex-1 overflow-hidden"
+			className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
 		>
+			<CodexGoalBanner sessionId={pane.sessionId} />
 			<div className="relative z-10 flex min-h-0 min-w-0 flex-1">
 				<ChatThread
 					hasSession={hasSession}
