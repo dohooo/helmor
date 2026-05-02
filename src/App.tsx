@@ -2451,19 +2451,27 @@ function AppShell({
 	// React to know about kanban view-state changes again, so we bypass
 	// the context entirely and let SQLite be the source of truth across
 	// restarts.
+	// Debounced — collapses bursts of changes (rapid sub-tab clicks,
+	// drag-then-resize, opening several inbox cards in a row) into a
+	// single SQLite write. The cleanup cancels the pending write when a
+	// new change lands, so only the final blob within a 250ms window
+	// hits IPC.
 	useEffect(() => {
 		if (!kanbanFullyHydrated) return;
-		void saveSettings({
-			kanbanViewState: {
-				createState: kanbanCreateState,
-				repoId: kanbanRepository?.id ?? null,
-				inboxProviderTab: kanbanInboxProviderTab,
-				inboxProviderSourceTab: kanbanInboxProviderSourceTab,
-				sourceBranchByRepoId: kanbanSourceBranchByRepoId,
-				inboxStateFilterBySource: kanbanInboxStateFilterBySource,
-				openInboxCards: kanbanOpenInboxCards,
-			},
-		});
+		const timer = window.setTimeout(() => {
+			void saveSettings({
+				kanbanViewState: {
+					createState: kanbanCreateState,
+					repoId: kanbanRepository?.id ?? null,
+					inboxProviderTab: kanbanInboxProviderTab,
+					inboxProviderSourceTab: kanbanInboxProviderSourceTab,
+					sourceBranchByRepoId: kanbanSourceBranchByRepoId,
+					inboxStateFilterBySource: kanbanInboxStateFilterBySource,
+					openInboxCards: kanbanOpenInboxCards,
+				},
+			});
+		}, 250);
+		return () => window.clearTimeout(timer);
 	}, [
 		kanbanCreateState,
 		kanbanRepository?.id,
