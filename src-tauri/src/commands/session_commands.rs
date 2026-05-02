@@ -87,6 +87,7 @@ pub async fn mutate_codex_goal(
     if !matches!(action.as_str(), "pause" | "resume" | "clear") {
         return Err(anyhow::anyhow!("Invalid mutateCodexGoal action: {action}").into());
     }
+    tracing::info!(session_id = %session_id, action = %action, "mutate_codex_goal");
 
     let request_id = uuid::Uuid::new_v4().to_string();
     let req = crate::sidecar::SidecarRequest {

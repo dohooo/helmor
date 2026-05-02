@@ -818,8 +818,17 @@ export class CodexAppServerManager implements SessionManager {
 		action: "pause" | "resume" | "clear",
 	): Promise<void> {
 		const ctx = this.sessions.get(sessionId);
+		logger.info("mutateGoal request", {
+			sessionId,
+			action,
+			hasContext: !!ctx,
+			threadId: ctx?.providerThreadId ?? "(none)",
+			knownSessions: [...this.sessions.keys()],
+		});
 		if (!ctx) {
-			throw new Error(`No active Codex session for ${sessionId}`);
+			throw new Error(
+				"This Codex session has no active process — send a message first to wake it up, then try again.",
+			);
 		}
 		const threadId = ctx.providerThreadId;
 		if (!threadId) {

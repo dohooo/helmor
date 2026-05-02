@@ -48,6 +48,7 @@ import {
 	isNewSession,
 	resolveSessionSelectedModelId,
 } from "@/lib/workspace-helpers";
+import { CodexGoalBanner } from "../panel/codex-goal-banner";
 import type { DeferredToolResponseHandler } from "./deferred-tool";
 import type { AddDirPickerEntry } from "./editor/add-dir/typeahead-plugin";
 import type { ElicitationResponseHandler } from "./elicitation";
@@ -791,7 +792,14 @@ export const WorkspaceComposerContainer = memo(
 				) : null}
 
 				<div className="relative z-10">
-					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex justify-center">
+					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex flex-col items-center">
+						{displayedSessionId ? (
+							<CodexGoalBanner
+								sessionId={displayedSessionId}
+								hasQueueBelow={queueItems.length > 0}
+								disabled={composerUnavailable}
+							/>
+						) : null}
 						<SubmitQueueList
 							items={queueItems}
 							onSteer={(id) => onSteerQueued?.(id)}
