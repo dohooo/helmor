@@ -22,6 +22,14 @@ pub struct WorkspaceGitActionStatus {
     pub behind_target_count: u32,
     pub remote_tracking_ref: Option<String>,
     pub ahead_of_remote_count: u32,
+    /// How many commits this branch is ahead of its **target** branch's
+    /// remote-tracking ref (e.g. `origin/main`). Unlike `ahead_of_remote_count`
+    /// — which reads as 0 for unpublished branches because there is no upstream
+    /// — this measures user-introduced commits regardless of push state, so
+    /// frontends can tell "fresh empty branch" from "has unpushed work" even
+    /// before the first `git push`. 0 when the target branch ref can't be
+    /// resolved.
+    pub ahead_of_target_count: u32,
     pub push_status: WorkspacePushStatus,
 }
 
@@ -728,6 +736,8 @@ pub fn workspace_action_status(
         .map(ToOwned::to_owned);
     let (sync_status, behind_target_count) =
         workspace_sync_status(workspace_dir, remote, sync_target_branch.as_deref());
+    let ahead_of_target_count =
+        commits_ahead_of_target(workspace_dir, remote, sync_target_branch.as_deref());
     let remote_tracking_ref = resolve_remote_tracking_ref(workspace_dir, remote);
     let ahead_of_remote_count = remote_tracking_ref
         .as_deref()
@@ -743,8 +753,35 @@ pub fn workspace_action_status(
         behind_target_count,
         remote_tracking_ref,
         ahead_of_remote_count,
+        ahead_of_target_count,
         push_status,
     })
+}
+
+/// Count commits this workspace's HEAD has on top of the *target* branch's
+/// remote-tracking ref. Unlike `ahead_of_remote_count` (which compares to
+/// `current_upstream_ref` and is 0 for unpublished branches), this works even
+/// before the first push — useful for "does the user have anything to review"
+/// signals.
+fn commits_ahead_of_target(
+    workspace_dir: &Path,
+    remote: Option<&str>,
+    target_branch: Option<&str>,
+) -> u32 {
+    let Some(remote) = remote.map(str::trim).filter(|value| !value.is_empty()) else {
+        return 0;
+    };
+    let Some(target_branch) = target_branch
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return 0;
+    };
+    if !verify_remote_ref_exists(workspace_dir, remote, target_branch).unwrap_or(false) {
+        return 0;
+    }
+    let target_ref = format!("refs/remotes/{remote}/{target_branch}");
+    commits_ahead_of(workspace_dir, &target_ref).unwrap_or(0)
 }
 
 fn workspace_sync_status(
@@ -1303,7 +1340,41 @@ mod tests {
 
         assert_eq!(status.remote_tracking_ref, None);
         assert_eq!(status.ahead_of_remote_count, 0);
+        // Fresh branch identical to origin/main — nothing to review yet.
+        assert_eq!(status.ahead_of_target_count, 0);
         assert_eq!(status.push_status, WorkspacePushStatus::Unpublished);
+    }
+
+    #[test]
+    fn workspace_action_status_reports_ahead_of_target_for_unpublished_branch_with_commits() {
+        // Branch is unpublished (no upstream) but has local commits past
+        // origin/main. `ahead_of_remote_count` is 0 here (no upstream),
+        // but `ahead_of_target_count` must surface the unpushed work.
+        let (_origin, clone) = init_repo_with_remote();
+        run(clone.path(), &["checkout", "-b", "feature/local-only"]);
+        std::fs::write(clone.path().join("local.txt"), "local\n").unwrap();
+        run(clone.path(), &["add", "local.txt"]);
+        run(clone.path(), &["commit", "-m", "local-only commit"]);
+
+        let status = workspace_action_status(clone.path(), Some("origin"), Some("main")).unwrap();
+
+        assert_eq!(status.push_status, WorkspacePushStatus::Unpublished);
+        assert_eq!(status.ahead_of_remote_count, 0);
+        assert_eq!(status.ahead_of_target_count, 1);
+    }
+
+    #[test]
+    fn workspace_action_status_reports_ahead_of_target_for_published_branch() {
+        // Sanity: `ahead_of_target_count` works when the branch HAS an
+        // upstream too (shouldn't depend on `pushStatus`).
+        let (_origin, clone) = init_repo_with_remote();
+        std::fs::write(clone.path().join("pushed.txt"), "pushed\n").unwrap();
+        run(clone.path(), &["add", "pushed.txt"]);
+        run(clone.path(), &["commit", "-m", "pushed commit"]);
+
+        let status = workspace_action_status(clone.path(), Some("origin"), Some("main")).unwrap();
+
+        assert_eq!(status.ahead_of_target_count, 1);
     }
 
     #[test]

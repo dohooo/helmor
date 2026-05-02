@@ -24,6 +24,7 @@ import {
 	saveAutoCloseActionKinds,
 	setWorkspaceLinkedDirectories,
 } from "@/lib/api";
+import { isAutoHideableActionKind } from "@/lib/commit-button-prompts";
 import type {
 	ComposerCustomTag,
 	ResolvedComposerInsertRequest,
@@ -133,6 +134,12 @@ type WorkspaceComposerContainerProps = {
 		sessionId: string;
 		prompt: string;
 		modelId?: string | null;
+		/** Effort level forced for this pending submit. Takes precedence over
+		 *  cached/session/default effort. */
+		effort?: string | null;
+		/** Fast-mode forced for this pending submit. Takes precedence over
+		 *  cached/session/default fast-mode. */
+		fastMode?: boolean | null;
 		permissionMode?: string | null;
 		/** Force queue (bypass `followUpBehavior`) if a turn is streaming. */
 		forceQueue?: boolean;
@@ -369,8 +376,16 @@ export const WorkspaceComposerContainer = memo(
 		// For new sessions, use user setting; for existing sessions with history, use session's effort
 		const sessionEffort =
 			(!isNewSession(currentSession) && currentSession?.effortLevel) || null;
+		const pendingEffort =
+			pendingOverrideActive && pendingPromptForSession?.effort
+				? pendingPromptForSession.effort
+				: null;
 		const rawEffort =
-			cachedEffort ?? sessionEffort ?? settings.defaultEffort ?? "high";
+			pendingEffort ??
+			cachedEffort ??
+			sessionEffort ??
+			settings.defaultEffort ??
+			"high";
 		const effortLevel = clampEffortToModel(
 			rawEffort,
 			effectiveSelectedModelId,
@@ -396,8 +411,18 @@ export const WorkspaceComposerContainer = memo(
 		const sessionFastMode = !isNewSession(currentSession)
 			? currentSession?.fastMode
 			: undefined;
+		const pendingFastMode =
+			pendingOverrideActive &&
+			pendingPromptForSession?.fastMode !== undefined &&
+			pendingPromptForSession?.fastMode !== null
+				? pendingPromptForSession.fastMode
+				: undefined;
 		const fastMode = supportsFastMode
-			? (cachedFastMode ?? sessionFastMode ?? settings.defaultFastMode ?? false)
+			? (pendingFastMode ??
+				cachedFastMode ??
+				sessionFastMode ??
+				settings.defaultFastMode ??
+				false)
 			: false;
 		const showFastModePrelude = activeFastPreludes[composerContextKey] === true;
 		const loadingConversationContext =
@@ -431,7 +456,12 @@ export const WorkspaceComposerContainer = memo(
 			[autoCloseQuery.data],
 		);
 		const sessionActionKind = currentSession?.actionKind ?? null;
-		const isActionSession = Boolean(sessionActionKind);
+		// "Action session" here drives the Auto-Close composer affordance.
+		// Some kinds (e.g. "review") are auto-created but explicitly NOT
+		// auto-hideable — they exist for the user to read — so we hide the
+		// toggle UI for them.
+		const isActionSession =
+			sessionActionKind !== null && isAutoHideableActionKind(sessionActionKind);
 		const autoCloseEnabled = sessionActionKind
 			? autoCloseActionKinds.has(sessionActionKind)
 			: false;

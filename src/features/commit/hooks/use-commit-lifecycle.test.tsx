@@ -47,6 +47,7 @@ const EMPTY_GIT_ACTION_STATUS: WorkspaceGitActionStatus = {
 	behindTargetCount: 0,
 	remoteTrackingRef: null,
 	aheadOfRemoteCount: 0,
+	aheadOfTargetCount: 0,
 	pushStatus: "unknown",
 };
 
@@ -699,7 +700,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 		).toBe("review");
 	});
 
-	it("queues a review prompt with the configured modelId when handleInspectorReviewPrAction runs", async () => {
+	it("queues a review prompt with the configured modelId when handleInspectorReviewAction runs", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false } },
 		});
@@ -731,13 +732,15 @@ describe("useWorkspaceCommitLifecycle", () => {
 		);
 
 		await act(async () => {
-			await result.current.handleInspectorReviewPrAction({
+			await result.current.handleInspectorReviewAction({
 				modelId: "review-model",
 			});
 		});
 
+		// Review is an action session ("auto-created", fixed title), but it
+		// opts out of auto-hide via `isAutoHideableActionKind`.
 		expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1", {
-			actionKind: "review-pr",
+			actionKind: "review",
 		});
 		expect(result.current.pendingPromptForSession).toMatchObject({
 			sessionId: "session-action",
@@ -774,7 +777,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 		);
 
 		await act(async () => {
-			await result.current.handleInspectorReviewPrAction({ modelId: null });
+			await result.current.handleInspectorReviewAction({ modelId: null });
 		});
 
 		expect(result.current.pendingPromptForSession).toMatchObject({
@@ -783,7 +786,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 		});
 	});
 
-	it("ignores handleInspectorReviewPrAction when no workspace is selected", async () => {
+	it("ignores handleInspectorReviewAction when no workspace is selected", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false } },
 		});
@@ -808,7 +811,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 		);
 
 		await act(async () => {
-			await result.current.handleInspectorReviewPrAction({
+			await result.current.handleInspectorReviewAction({
 				modelId: "review-model",
 			});
 		});

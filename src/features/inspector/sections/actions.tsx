@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	ArrowUpRightIcon,
 	CheckIcon,
+	EyeIcon,
 	LoaderCircleIcon,
 	TriangleIcon,
 } from "lucide-react";
@@ -82,6 +83,7 @@ const EMPTY_GIT_ACTION_STATUS: WorkspaceGitActionStatus = {
 	behindTargetCount: 0,
 	remoteTrackingRef: null,
 	aheadOfRemoteCount: 0,
+	aheadOfTargetCount: 0,
 	pushStatus: "unknown",
 };
 
@@ -104,6 +106,7 @@ type ActionsSectionProps = {
 	bodyHeight: number;
 	expanded: boolean;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
+	onReviewAction?: () => Promise<void>;
 	currentSessionId?: string | null;
 	onQueuePendingPromptForSession?: (request: {
 		sessionId: string;
@@ -154,6 +157,7 @@ export function ActionsSection({
 	bodyHeight,
 	expanded,
 	onCommitAction,
+	onReviewAction,
 	currentSessionId,
 	onQueuePendingPromptForSession,
 	commitButtonMode,
@@ -162,6 +166,7 @@ export function ActionsSection({
 }: ActionsSectionProps) {
 	const queryClient = useQueryClient();
 	const [syncPending, setSyncPending] = useState(false);
+	const [reviewPending, setReviewPending] = useState(false);
 	const forgeQuery = useQuery({
 		...workspaceForgeQueryOptions(workspaceId ?? "__none__"),
 		enabled: workspaceId !== null,
@@ -179,6 +184,21 @@ export function ActionsSection({
 	});
 	const gitStatus = gitStatusQuery.data ?? EMPTY_GIT_ACTION_STATUS;
 	const forgeStatus = forgeStatusQuery.data ?? EMPTY_FORGE_ACTION_STATUS;
+	// "Reviewable" = the user actually has changes of their own to review.
+	// Two signals add up:
+	//   - `uncommittedCount` — dirty working tree.
+	//   - `aheadOfTargetCount` — commits past the target branch's remote ref.
+	//
+	// We deliberately do NOT use `aheadOfRemoteCount` (it reads as 0 on
+	// unpublished branches, missing the local-only-commits case) or the
+	// "branch unpublished" signal (a brand-new workspace branched from main
+	// is unpublished too, but has no user changes — must not show Review).
+	const hasReviewableChanges =
+		gitStatus.uncommittedCount > 0 || gitStatus.aheadOfTargetCount > 0;
+	const showReviewHelper = Boolean(onReviewAction) && hasReviewableChanges;
+	// Helpers group hides entirely when no helper has anything to do. New
+	// helpers should `||` into this — never render an empty group header.
+	const showHelpersGroup = showReviewHelper;
 	const changeRequestName = forgeQuery.data?.labels.changeRequestName ?? "PR";
 	const providerName = forgeQuery.data?.labels.providerName ?? "Forge";
 	// Auth-flip invalidation lives in the sync bridge — no frontend edge-detect.
@@ -266,6 +286,17 @@ export function ActionsSection({
 			setSyncPending(false);
 		}
 	}, [queryClient, queueSyncResolutionPrompt, syncPending, workspaceId]);
+	const handleReviewChanges = useCallback(async () => {
+		if (!onReviewAction || reviewPending) {
+			return;
+		}
+		setReviewPending(true);
+		try {
+			await onReviewAction();
+		} finally {
+			setReviewPending(false);
+		}
+	}, [onReviewAction, reviewPending]);
 	const handleInsertCheck = useCallback(
 		async (item: ForgeActionItem) => {
 			if (!workspaceId) {
@@ -310,6 +341,44 @@ export function ActionsSection({
 				)}
 				style={expanded ? undefined : { height: `${bodyHeight}px` }}
 			>
+				{showHelpersGroup && (
+					<>
+						<div className="px-2.5 pb-1 pt-2">
+							<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+								Helpers
+							</span>
+						</div>
+						{showReviewHelper && (
+							<div className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
+								<EyeIcon
+									aria-hidden="true"
+									className="size-3 shrink-0"
+									strokeWidth={2}
+								/>
+								<span className="truncate">Review changes</span>
+								<button
+									type="button"
+									onClick={() => void handleReviewChanges()}
+									disabled={reviewPending || workspaceId === null}
+									aria-busy={reviewPending ? true : undefined}
+									aria-label={reviewPending ? "Reviewing" : undefined}
+									className="ml-auto shrink-0 cursor-pointer text-[10.5px] text-primary transition-colors hover:text-primary/80 disabled:cursor-not-allowed disabled:opacity-50"
+								>
+									<span className="inline-flex items-center gap-1">
+										{reviewPending ? (
+											<LoaderCircleIcon
+												aria-hidden="true"
+												className="size-3 animate-spin text-current opacity-70"
+												strokeWidth={2}
+											/>
+										) : null}
+										{reviewPending ? null : "Review"}
+									</span>
+								</button>
+							</div>
+						)}
+					</>
+				)}
 				<div className="px-2.5 pb-1 pt-2">
 					<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
 						Git

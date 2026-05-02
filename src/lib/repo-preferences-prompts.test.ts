@@ -167,9 +167,9 @@ describe("repo preference prompts", () => {
 		);
 	});
 
-	it("returns the review-pr default prompt when no override is set", () => {
+	it("returns the review default prompt when no override is set", () => {
 		const prompt = resolveRepoPreferencePrompt({
-			key: "reviewPr",
+			key: "review",
 			repoPreferences: {},
 		});
 		expect(prompt).toContain("Review the open pull request");
@@ -178,10 +178,10 @@ describe("repo preference prompts", () => {
 		expect(prompt).not.toContain("### User Preferences");
 	});
 
-	it("appends review-pr overrides after the built-in prompt", () => {
+	it("appends review overrides after the built-in prompt", () => {
 		const prompt = resolveRepoPreferencePrompt({
-			key: "reviewPr",
-			repoPreferences: { reviewPr: "Always check for missing tests." },
+			key: "review",
+			repoPreferences: { review: "Always check for missing tests." },
 		});
 		expect(prompt).toContain("Review the open pull request");
 		expect(prompt).toContain(
@@ -189,9 +189,9 @@ describe("repo preference prompts", () => {
 		);
 	});
 
-	it("uses the GitLab dialect in the review-pr prompt when forge is GitLab", () => {
+	it("uses the GitLab dialect in the review prompt when forge is GitLab", () => {
 		const prompt = resolveRepoPreferencePrompt({
-			key: "reviewPr",
+			key: "review",
 			repoPreferences: {},
 			forge: GITLAB_FORGE,
 		});
@@ -200,8 +200,8 @@ describe("repo preference prompts", () => {
 		expect(prompt).not.toContain("`gh pr diff`");
 	});
 
-	it("uses generic prose in the review-pr preview", () => {
-		const preview = resolveRepoPreferencePreview("reviewPr", {});
+	it("uses generic prose in the review preview", () => {
+		const preview = resolveRepoPreferencePreview("review", {});
 		expect(preview).toContain("Review the open pull request");
 		expect(preview).toContain("IN THIS CHAT ONLY");
 	});

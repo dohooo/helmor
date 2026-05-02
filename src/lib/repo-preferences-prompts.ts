@@ -8,7 +8,7 @@ const TARGET_REF_PLACEHOLDER = "$" + "{TARGET_REF}";
 
 export type RepoPreferenceKey =
 	| "createPr"
-	| "reviewPr"
+	| "review"
 	| "fixErrors"
 	| "resolveConflicts"
 	| "branchRename"
@@ -68,7 +68,7 @@ Do the following, in order:
 
 Don't stop to ask for confirmation — execute each step automatically. If you hit an unrecoverable error (e.g. merge conflict, pre-push hook failure), report it clearly so I can intervene.`;
 
-const REVIEW_PR_PREVIEW = `Review the open pull request on this branch and report the review IN THIS CHAT ONLY.
+const REVIEW_PREVIEW = `Review the open pull request on this branch and report the review IN THIS CHAT ONLY.
 
 Do the following, in order:
 1. Inspect the pull request metadata (title, description, target branch, current state) using the relevant forge CLI.
@@ -112,7 +112,7 @@ Do the following, in order:
 Don't stop to ask for confirmation — execute each step automatically. If you hit an unrecoverable error (e.g. merge conflict, pre-push hook failure), report it clearly so I can intervene.`;
 }
 
-function reviewPrPrompt(dialect: ForgePromptDialect): string {
+function reviewPrompt(dialect: ForgePromptDialect): string {
 	return `Review the open ${dialect.changeRequestFullName} on this branch and report the review IN THIS CHAT ONLY.
 
 Do the following, in order:
@@ -172,7 +172,7 @@ export const DEFAULT_REPO_PREFERENCE_PROMPTS: Record<
 	string
 > = {
 	createPr: CREATE_PR_PREVIEW,
-	reviewPr: REVIEW_PR_PREVIEW,
+	review: REVIEW_PREVIEW,
 	fixErrors: fixErrorsPrompt(PREVIEW_DIALECT),
 	resolveConflicts: RESOLVE_CONFLICTS_PREVIEW,
 	branchRename: DEFAULT_BRANCH_RENAME_PROMPT,
@@ -181,7 +181,7 @@ export const DEFAULT_REPO_PREFERENCE_PROMPTS: Record<
 
 export const REPO_PREFERENCE_LABELS: Record<RepoPreferenceKey, string> = {
 	createPr: "Create PR preferences",
-	reviewPr: "Review PR preferences",
+	review: "Review preferences",
 	fixErrors: "Fix errors preferences",
 	resolveConflicts: "Resolve conflicts preferences",
 	branchRename: "Branch rename preferences",
@@ -191,8 +191,8 @@ export const REPO_PREFERENCE_LABELS: Record<RepoPreferenceKey, string> = {
 export const REPO_PREFERENCE_DESCRIPTIONS: Record<RepoPreferenceKey, string> = {
 	createPr:
 		"Add custom instructions sent to the agent when you click the Create PR button.",
-	reviewPr:
-		"Add custom instructions sent to the agent when you click the Review PR button.",
+	review:
+		"Add custom instructions sent to the agent when you click Review in the inspector.",
 	fixErrors:
 		"Add custom instructions sent to the agent when you click the Fix errors button.",
 	resolveConflicts:
@@ -280,9 +280,9 @@ export function resolveRepoPreferencePrompt({
 				createPrPrompt(forgePromptDialect(forge), targetBranch, remote),
 				resolvedOverride,
 			);
-		case "reviewPr":
+		case "review":
 			return appendUserPreferences(
-				reviewPrPrompt(forgePromptDialect(forge)),
+				reviewPrompt(forgePromptDialect(forge)),
 				resolvedOverride,
 			);
 		case "fixErrors":

@@ -200,8 +200,8 @@ describe("buildCommitButtonPrompt", () => {
 		expect(prompt).not.toContain("<remote>");
 	});
 
-	it("returns the review-pr built-in prompt for the GitHub default", () => {
-		const prompt = buildCommitButtonPrompt("review-pr", null);
+	it("returns the review built-in prompt for the GitHub default", () => {
+		const prompt = buildCommitButtonPrompt("review", null);
 		expect(prompt).toContain("Review the open pull request");
 		expect(prompt).toContain("IN THIS CHAT ONLY");
 		// Reads PR via gh, never posts back on the PR.
@@ -211,12 +211,7 @@ describe("buildCommitButtonPrompt", () => {
 	});
 
 	it("uses GitLab review commands when the forge is GitLab", () => {
-		const prompt = buildCommitButtonPrompt(
-			"review-pr",
-			null,
-			null,
-			GITLAB_FORGE,
-		);
+		const prompt = buildCommitButtonPrompt("review", null, null, GITLAB_FORGE);
 		expect(prompt).toContain("Review the open merge request");
 		expect(prompt).toContain("`glab mr view`");
 		expect(prompt).toContain("`glab mr diff`");
@@ -224,10 +219,10 @@ describe("buildCommitButtonPrompt", () => {
 		expect(prompt).not.toContain("`gh pr diff`");
 	});
 
-	it("appends review-pr preferences after the built-in prompt", () => {
+	it("appends review preferences after the built-in prompt", () => {
 		expect(
-			buildCommitButtonPrompt("review-pr", {
-				reviewPr: "Focus on security regressions.",
+			buildCommitButtonPrompt("review", {
+				review: "Focus on security regressions.",
 			}),
 		).toContain("### User Preferences\n\nFocus on security regressions.");
 	});
