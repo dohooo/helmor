@@ -3,7 +3,7 @@ import { memo, useMemo, useState } from "react";
 import { GithubBrandIcon } from "@/components/brand-icon";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Badge } from "@/components/ui/badge";
-import type { ContextCardSource } from "@/lib/sources/types";
+import type { ContextCard, ContextCardSource } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
 import { inboxMockCards } from "./mock";
 import { SourceCard } from "./source-card";
@@ -38,8 +38,12 @@ const SOURCE_FILTERS: SourceFilter[] = [
 
 export const InboxSidebar = memo(function InboxSidebar({
 	className,
+	onOpenCard,
+	selectedCardId,
 }: {
 	className?: string;
+	onOpenCard?: (card: ContextCard) => void;
+	selectedCardId?: string | null;
 }) {
 	const [selectedSource, setSelectedSource] =
 		useState<SourceFilter["id"]>("all");
@@ -75,7 +79,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 				<div data-tauri-drag-region className="h-full flex-1" />
 			</div>
 
-			<div className="mt-1 pr-4 pl-3">
+			<div className="-mt-1 pr-4 pl-3">
 				<div className="grid w-full grid-cols-4 gap-1 rounded-lg border border-border/60 bg-background/40 p-1">
 					{SOURCE_FILTERS.map((filter) => (
 						<button
@@ -118,7 +122,12 @@ export const InboxSidebar = memo(function InboxSidebar({
 				<div className="flex w-[calc(100%+12px)] flex-col gap-2 pb-3">
 					{filteredCards.length > 0 ? (
 						filteredCards.map((card) => (
-							<SourceCard key={card.id} card={card} />
+							<SourceCard
+								key={card.id}
+								card={card}
+								selected={card.id === selectedCardId}
+								onOpen={onOpenCard}
+							/>
 						))
 					) : (
 						<div className="mt-8 flex flex-col items-center gap-2 px-6 text-center">

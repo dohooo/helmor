@@ -14,13 +14,31 @@ const STATE_TONE_CLASS: Record<ContextCardStateTone, string> = {
 	neutral: "text-muted-foreground",
 };
 
-export function SourceCard({ card }: { card: ContextCard }) {
+export function SourceCard({
+	card,
+	onOpen,
+	selected = false,
+}: {
+	card: ContextCard;
+	onOpen?: (card: ContextCard) => void;
+	selected?: boolean;
+}) {
 	return (
 		<article
 			aria-label={card.title}
+			role={onOpen ? "button" : undefined}
+			tabIndex={onOpen ? 0 : undefined}
+			onClick={() => onOpen?.(card)}
+			onKeyDown={(event) => {
+				if (!onOpen || (event.key !== "Enter" && event.key !== " ")) return;
+				event.preventDefault();
+				onOpen(card);
+			}}
 			className={cn(
-				"group relative flex flex-col gap-2 overflow-hidden rounded-lg border border-border/70 bg-[var(--sidebar)] px-3 pt-2.5 pb-2 text-left shadow-xs",
+				"group relative flex flex-col gap-2 overflow-hidden rounded-lg border border-border/70 bg-[var(--sidebar)] px-3 pt-2.5 pb-2 text-left shadow-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/70",
+				onOpen && "cursor-pointer",
 				"hover:border-border hover:bg-[var(--accent)]",
+				selected && "border-border bg-[var(--accent)]",
 			)}
 		>
 			<div className="min-w-0 flex-1">
@@ -75,7 +93,7 @@ export function SourceCard({ card }: { card: ContextCard }) {
 				getPayload={() => buildCardContextPayload(card)}
 				errorTitle="Couldn't insert inbox card"
 				className={cn(
-					"absolute right-2 bottom-1.5 z-10 flex size-6 cursor-pointer items-center justify-center rounded-md",
+					"absolute right-1 bottom-0.5 z-10 flex size-7.5 cursor-pointer items-center justify-center rounded-md",
 					"border-0 bg-transparent text-muted-foreground opacity-0 shadow-none",
 					"transition-[background-color,color,opacity,transform] duration-150",
 					"group-hover:opacity-100 group-focus-within:opacity-100",

@@ -34,6 +34,7 @@ import {
 	helmorQueryKeys,
 	workspaceGroupsQueryOptions,
 } from "@/lib/query-client";
+import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 import {
@@ -44,6 +45,7 @@ import {
 } from "./board-state";
 import { KanbanCardPreview } from "./card";
 import { columnDropId, KanbanColumn } from "./column";
+import { KanbanMainContent, type KanbanMainTab } from "./main-content";
 import type { KanbanColumnId } from "./types";
 
 const DROP_SETTLE_MS = 190;
@@ -128,9 +130,20 @@ export function KanbanPage({
 		height: number;
 		width: number;
 	} | null>(null);
+	const [openedCards, setOpenedCards] = useState<ContextCard[]>([]);
+	const [activeMainTabId, setActiveMainTabId] = useState<string | null>(null);
 	const [settlingDrop, setSettlingDrop] = useState<SettlingDrop | null>(null);
 	const [topPlacements, setTopPlacements] = useState<KanbanTopPlacement[]>([]);
 	const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const mainTabs = useMemo<KanbanMainTab[]>(
+		() =>
+			openedCards.map((card) => ({
+				card,
+				id: card.id,
+				kind: "card",
+			})),
+		[openedCards],
+	);
 	const baseColumns = useMemo(
 		() => projectGroupsToKanbanColumns(groupsQuery.data ?? []),
 		[groupsQuery.data],
@@ -161,6 +174,29 @@ export function KanbanPage({
 		);
 		onBoardExpandToggle(expandedWidth);
 	}, [boardMaxWidth, inboxWidth, minWidth, onBoardExpandToggle]);
+	const handleOpenInboxCard = useCallback((card: ContextCard) => {
+		setOpenedCards((current) =>
+			current.some((openedCard) => openedCard.id === card.id)
+				? current
+				: [...current, card],
+		);
+		setActiveMainTabId(card.id);
+	}, []);
+	const handleCloseMainTab = useCallback((tabId: string) => {
+		setOpenedCards((current) => {
+			const closingIndex = current.findIndex((card) => card.id === tabId);
+			if (closingIndex === -1) return current;
+
+			const nextCards = current.filter((card) => card.id !== tabId);
+			setActiveMainTabId((activeTabId) => {
+				if (activeTabId !== tabId) return activeTabId;
+				return (
+					nextCards[closingIndex]?.id ?? nextCards[closingIndex - 1]?.id ?? null
+				);
+			});
+			return nextCards;
+		});
+	}, []);
 
 	useEffect(() => {
 		return () => {
@@ -322,7 +358,11 @@ export function KanbanPage({
 					className="flex h-full shrink-0 flex-col overflow-hidden border-border/60 border-r bg-sidebar"
 					style={{ width: `${inboxWidth}px` }}
 				>
-					<InboxSidebar className="flex flex-1" />
+					<InboxSidebar
+						className="flex flex-1"
+						onOpenCard={handleOpenInboxCard}
+						selectedCardId={activeMainTabId}
+					/>
 				</aside>
 				<KanbanResizeHandle
 					ariaLabel="Resize kanban inbox"
@@ -336,9 +376,11 @@ export function KanbanPage({
 					resizeHitArea={resizeHitArea}
 					style={{ left: `${inboxWidth - resizeHitArea / 2}px` }}
 				/>
-				<div
-					aria-label="Kanban main content"
-					className="min-w-0 flex-1 bg-background"
+				<KanbanMainContent
+					activeTabId={activeMainTabId}
+					onActiveTabChange={setActiveMainTabId}
+					onCloseTab={handleCloseMainTab}
+					tabs={mainTabs}
 				/>
 				<KanbanResizeHandle
 					ariaLabel="Resize kanban board"
