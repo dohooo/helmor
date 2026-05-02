@@ -1,8 +1,23 @@
 # Changelog
 
+## 0.14.0
+
+### Minor Changes
+
+- [#326](https://github.com/dohooo/helmor/pull/326) [`f28eb7f`](https://github.com/dohooo/helmor/commit/f28eb7f134b8bb33c23b433e0a92cc57241ee53e) Thanks [@lucasbastianik](https://github.com/lucasbastianik)! - Replace the PR-only "Review PR" header button with a general "Review changes" helper in the inspector — appears whenever the workspace has uncommitted changes or local commits ahead of the target branch (works before the first push), and Review now has its own model, effort level, and fast-mode controls in Settings (each falls back to the default when unset).
+
+### Patch Changes
+
+- [#347](https://github.com/dohooo/helmor/pull/347) [`3304785`](https://github.com/dohooo/helmor/commit/3304785a2451d4ee2b47b962d395e664bb32e56c) Thanks [@MartinRybergLaude](https://github.com/MartinRybergLaude)! - Add a per-repo Exclusive toggle on the run script that makes starting a new run stop any other live run in the same repository first — useful when the script binds a fixed port.
+
+- [#355](https://github.com/dohooo/helmor/pull/355) [`95e4b89`](https://github.com/dohooo/helmor/commit/95e4b8940aa7e32015fbf5001a8fc809e60cc38b) Thanks [@aidxun](https://github.com/aidxun)! - Fix GitHub connection state so workspaces stop showing Connect GitHub after a successful authorization or restart.
+
+- [#354](https://github.com/dohooo/helmor/pull/354) [`9ca6136`](https://github.com/dohooo/helmor/commit/9ca6136176d1fa10f1701080a0d75bd47647885a) Thanks [@habibyuri](https://github.com/habibyuri)! - Fix Codex sessions so the stream ends cleanly instead of hanging when the app-server exits during an active turn.
+
 ## 0.13.1
 
 ### Patch Changes
+
 - [#316](https://github.com/dohooo/helmor/pull/316) [`1e1bc30`](https://github.com/dohooo/helmor/commit/1e1bc303fdc9628702378e2ebcdc30f9d84de6ab) Thanks [@davidparys](https://github.com/davidparys)! - Add a Color Theme picker in Settings with four accent palettes — Midnight, Forest, Ember, and Aurora — each tuned for both light and dark mode.
 
 - [#351](https://github.com/dohooo/helmor/pull/351) [`6812cb8`](https://github.com/dohooo/helmor/commit/6812cb889000081827938e129572596601f1b803) Thanks [@habibyuri](https://github.com/habibyuri)! - Fix a UI sync subscription leak where unmounted components left stale Tauri Channel subscribers on the backend, slowly accumulating during long sessions and dev hot-reloads.
