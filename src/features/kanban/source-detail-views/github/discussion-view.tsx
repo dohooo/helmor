@@ -1,22 +1,35 @@
+import { useQuery } from "@tanstack/react-query";
+import { getInboxItemDetail } from "@/lib/api";
+import { helmorQueryKeys } from "@/lib/query-client";
 import { GitHubDetailPage, type SourceDetailProps } from "../common";
 
-const DISCUSSION_DESCRIPTION = `## Question
-
-How should GitHub inbox items be presented when Helmor only needs a fast triage view?
-
-The current direction is to keep the first screen close to GitHub's own conversation page:
-
-1. A direct title and metadata header.
-2. A single markdown description block.
-3. No sidebar until there is meaningful data to show.
-
-> The detail pane should feel like a readable source preview, not a settings table.`;
-
 export function GitHubDiscussionView({ card }: SourceDetailProps) {
+	const detailRef =
+		card.detailRef?.source === "github_discussion" ? card.detailRef : null;
+	const detailQuery = useQuery({
+		queryKey: detailRef
+			? helmorQueryKeys.inboxItemDetail(
+					detailRef.provider,
+					detailRef.login,
+					detailRef.source,
+					detailRef.externalId,
+				)
+			: ["inboxItemDetail", "missing", card.id],
+		queryFn: () => getInboxItemDetail(detailRef!),
+		enabled: detailRef !== null,
+		staleTime: 60_000,
+	});
+	const detail =
+		detailQuery.data?.type === "github_discussion"
+			? detailQuery.data.data
+			: null;
+
 	return (
 		<GitHubDetailPage
 			card={card}
-			description={DISCUSSION_DESCRIPTION}
+			description={detail?.body ?? undefined}
+			error={detailQuery.error}
+			isLoading={detailQuery.isLoading}
 			kindLabel="discussion"
 		/>
 	);

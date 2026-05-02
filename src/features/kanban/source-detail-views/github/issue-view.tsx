@@ -1,24 +1,33 @@
+import { useQuery } from "@tanstack/react-query";
+import { getInboxItemDetail } from "@/lib/api";
+import { helmorQueryKeys } from "@/lib/query-client";
 import { GitHubDetailPage, type SourceDetailProps } from "../common";
 
-const ISSUE_DESCRIPTION = `## Summary
-
-Track the broken inbox interaction where selecting a GitHub item opens the right card but the detail pane still feels unfinished.
-
-### Expected behavior
-
-- The title, repository, number, and state are visible at the top.
-- The description area renders markdown cleanly.
-- Empty sections are not shown as placeholder tables.
-
-### Notes
-
-This is a focused UI pass. Data shape changes should be handled separately.`;
-
 export function GitHubIssueView({ card }: SourceDetailProps) {
+	const detailRef =
+		card.detailRef?.source === "github_issue" ? card.detailRef : null;
+	const detailQuery = useQuery({
+		queryKey: detailRef
+			? helmorQueryKeys.inboxItemDetail(
+					detailRef.provider,
+					detailRef.login,
+					detailRef.source,
+					detailRef.externalId,
+				)
+			: ["inboxItemDetail", "missing", card.id],
+		queryFn: () => getInboxItemDetail(detailRef!),
+		enabled: detailRef !== null,
+		staleTime: 60_000,
+	});
+	const detail =
+		detailQuery.data?.type === "github_issue" ? detailQuery.data.data : null;
+
 	return (
 		<GitHubDetailPage
 			card={card}
-			description={ISSUE_DESCRIPTION}
+			description={detail?.body ?? undefined}
+			error={detailQuery.error}
+			isLoading={detailQuery.isLoading}
 			kindLabel="issue"
 		/>
 	);

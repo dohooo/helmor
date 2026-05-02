@@ -83,15 +83,24 @@ pub enum InboxStateTone {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum InboxItemDetail {
-    GithubIssue(GithubIssueDetail),
+    GithubIssue(Box<GithubIssueDetail>),
     GithubPr(Box<GithubPullRequestDetail>),
-    GithubDiscussion(GithubDiscussionDetail),
+    GithubDiscussion(Box<GithubDiscussionDetail>),
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GithubIssueDetail {
     pub external_id: String,
+    pub title: String,
+    pub body: Option<String>,
+    pub url: String,
+    pub state: String,
+    pub state_reason: Option<String>,
+    pub author_login: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub closed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -115,6 +124,15 @@ pub struct GithubPullRequestDetail {
 #[serde(rename_all = "camelCase")]
 pub struct GithubDiscussionDetail {
     pub external_id: String,
+    pub title: String,
+    pub body: Option<String>,
+    pub url: String,
+    pub answered: Option<bool>,
+    pub author_login: Option<String>,
+    pub category_name: Option<String>,
+    pub category_emoji: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
 }
 
 /// Public entry point — driven by the `list_inbox_items` Tauri command.
@@ -260,51 +278,20 @@ pub fn get_inbox_item_detail(
     source: InboxSource,
     external_id: &str,
 ) -> Result<Option<InboxItemDetail>> {
-    let detail = match source {
-        InboxSource::GithubIssue => InboxItemDetail::GithubIssue(GithubIssueDetail {
-            external_id: external_id.to_string(),
-        }),
-        InboxSource::GithubPr => return fetch_pull_request_detail(login, external_id),
-        InboxSource::GithubDiscussion => {
-            InboxItemDetail::GithubDiscussion(GithubDiscussionDetail {
-                external_id: external_id.to_string(),
-            })
-        }
-    };
-    Ok(Some(detail))
+    match source {
+        InboxSource::GithubIssue => fetch_issue_detail(login, external_id),
+        InboxSource::GithubPr => fetch_pull_request_detail(login, external_id),
+        InboxSource::GithubDiscussion => fetch_discussion_detail(login, external_id),
+    }
 }
 
 fn fetch_pull_request_detail(login: &str, external_id: &str) -> Result<Option<InboxItemDetail>> {
     let (owner, repo, number) = parse_external_reference(external_id)?;
     let path = format!("/repos/{owner}/{repo}/pulls/{number}");
-    let args = [
-        "api",
-        "--hostname",
-        GITHUB_HOST,
-        "-H",
-        "Accept: application/vnd.github+json",
-        path.as_str(),
-    ];
-    let output = match gh_accounts::run_cli_with_login(GITHUB_HOST, login, &args) {
-        Ok(output) => output,
-        Err(error) => {
-            let message = format!("{error:#}");
-            if looks_like_auth_rejection(&message) {
-                return Ok(None);
-            }
-            return Err(error.context("Failed to spawn `gh api` for GitHub PR detail"));
-        }
+    let Some(stdout) = run_github_api(login, &path, "GitHub PR detail")? else {
+        return Ok(None);
     };
-
-    if !output.success {
-        let detail = command_detail(&output);
-        if looks_like_auth_rejection(&detail) {
-            return Ok(None);
-        }
-        return Err(anyhow!("`gh api` failed for GitHub PR detail: {detail}"));
-    }
-
-    let response = serde_json::from_str::<PullRequestRestResponse>(&output.stdout)
+    let response = serde_json::from_str::<PullRequestRestResponse>(&stdout)
         .with_context(|| "Failed to decode GitHub PR detail response".to_string())?;
     Ok(Some(InboxItemDetail::GithubPr(Box::new(
         GithubPullRequestDetail {
@@ -322,6 +309,137 @@ fn fetch_pull_request_detail(login: &str, external_id: &str) -> Result<Option<In
             updated_at: response.updated_at,
         },
     ))))
+}
+
+fn fetch_issue_detail(login: &str, external_id: &str) -> Result<Option<InboxItemDetail>> {
+    let (owner, repo, number) = parse_external_reference(external_id)?;
+    let path = format!("/repos/{owner}/{repo}/issues/{number}");
+    let Some(stdout) = run_github_api(login, &path, "GitHub issue detail")? else {
+        return Ok(None);
+    };
+    let response = serde_json::from_str::<IssueRestResponse>(&stdout)
+        .with_context(|| "Failed to decode GitHub issue detail response".to_string())?;
+    Ok(Some(InboxItemDetail::GithubIssue(Box::new(
+        GithubIssueDetail {
+            external_id: external_id.to_string(),
+            title: response.title,
+            body: response.body,
+            url: response.html_url,
+            state: response.state,
+            state_reason: response.state_reason,
+            author_login: response.user.map(|user| user.login),
+            created_at: response.created_at,
+            updated_at: response.updated_at,
+            closed_at: response.closed_at,
+        },
+    ))))
+}
+
+fn fetch_discussion_detail(login: &str, external_id: &str) -> Result<Option<InboxItemDetail>> {
+    let (owner, repo, number) = parse_external_reference(external_id)?;
+    let args = vec![
+        "api".to_string(),
+        "--hostname".to_string(),
+        GITHUB_HOST.to_string(),
+        "graphql".to_string(),
+        "-f".to_string(),
+        format!("query={DISCUSSION_DETAIL_QUERY}"),
+        "-f".to_string(),
+        format!("owner={owner}"),
+        "-f".to_string(),
+        format!("name={repo}"),
+        "-F".to_string(),
+        format!("number={number}"),
+    ];
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = match gh_accounts::run_cli_with_login(GITHUB_HOST, login, &arg_refs) {
+        Ok(output) => output,
+        Err(error) => {
+            let message = format!("{error:#}");
+            if looks_like_auth_rejection(&message) {
+                return Ok(None);
+            }
+            return Err(
+                error.context("Failed to spawn `gh api graphql` for GitHub discussion detail")
+            );
+        }
+    };
+
+    if !output.success {
+        let detail = command_detail(&output);
+        if looks_like_auth_rejection(&detail) {
+            return Ok(None);
+        }
+        return Err(anyhow!(
+            "`gh api graphql` failed for GitHub discussion detail: {detail}"
+        ));
+    }
+
+    let envelope = serde_json::from_str::<DiscussionDetailEnvelope>(&output.stdout)
+        .with_context(|| "Failed to decode GitHub discussion detail response".to_string())?;
+    if let Some(errors) = envelope.errors {
+        if !errors.is_empty() {
+            return Err(anyhow!(
+                "GitHub discussion detail errors: {}",
+                errors
+                    .iter()
+                    .map(|error| error.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        }
+    }
+    let Some(discussion) = envelope.data.and_then(|data| data.repository?.discussion) else {
+        return Ok(None);
+    };
+    Ok(Some(InboxItemDetail::GithubDiscussion(Box::new(
+        GithubDiscussionDetail {
+            external_id: external_id.to_string(),
+            title: discussion.title,
+            body: discussion.body,
+            url: discussion.url,
+            answered: discussion.is_answered,
+            author_login: discussion.author.map(|author| author.login),
+            category_name: discussion
+                .category
+                .as_ref()
+                .map(|category| category.name.clone()),
+            category_emoji: discussion.category.and_then(|category| category.emoji),
+            created_at: discussion.created_at,
+            updated_at: discussion.updated_at,
+        },
+    ))))
+}
+
+fn run_github_api(login: &str, path: &str, label: &str) -> Result<Option<String>> {
+    let args = [
+        "api",
+        "--hostname",
+        GITHUB_HOST,
+        "-H",
+        "Accept: application/vnd.github+json",
+        path,
+    ];
+    let output = match gh_accounts::run_cli_with_login(GITHUB_HOST, login, &args) {
+        Ok(output) => output,
+        Err(error) => {
+            let message = format!("{error:#}");
+            if looks_like_auth_rejection(&message) {
+                return Ok(None);
+            }
+            return Err(error.context(format!("Failed to spawn `gh api` for {label}")));
+        }
+    };
+
+    if output.success {
+        return Ok(Some(output.stdout));
+    }
+
+    let detail = command_detail(&output);
+    if looks_like_auth_rejection(&detail) {
+        return Ok(None);
+    }
+    Err(anyhow!("`gh api` failed for {label}: {detail}"))
 }
 
 fn parse_external_reference(external_id: &str) -> Result<(String, String, i64)> {
@@ -362,6 +480,72 @@ struct PullRequestRestRef {
     #[serde(rename = "ref")]
     ref_name: String,
 }
+
+#[derive(Debug, Deserialize)]
+struct IssueRestResponse {
+    html_url: String,
+    title: String,
+    body: Option<String>,
+    state: String,
+    state_reason: Option<String>,
+    user: Option<PullRequestRestUser>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+    closed_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscussionDetailEnvelope {
+    data: Option<DiscussionDetailData>,
+    errors: Option<Vec<GraphqlSearchError>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscussionDetailData {
+    repository: Option<DiscussionDetailRepository>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscussionDetailRepository {
+    discussion: Option<DiscussionDetailNode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscussionDetailNode {
+    title: String,
+    body: Option<String>,
+    url: String,
+    #[serde(rename = "isAnswered")]
+    is_answered: Option<bool>,
+    #[serde(rename = "createdAt")]
+    created_at: Option<String>,
+    #[serde(rename = "updatedAt")]
+    updated_at: Option<String>,
+    author: Option<DiscussionDetailAuthor>,
+    category: Option<DiscussionCategory>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscussionDetailAuthor {
+    login: String,
+}
+
+const DISCUSSION_DETAIL_QUERY: &str = r#"
+query InboxDiscussionDetail($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    discussion(number: $number) {
+      title
+      body
+      url
+      isAnswered
+      createdAt
+      updatedAt
+      author { login }
+      category { name emoji }
+    }
+  }
+}
+"#;
 
 /// Multi-source cursor — JSON-encoded under base64url so the frontend
 /// treats it as opaque. Decoded server-side per page request.

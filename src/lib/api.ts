@@ -942,6 +942,15 @@ export type InboxItemDetailRef = {
 
 export type GitHubIssueDetail = {
 	externalId: string;
+	title: string;
+	body?: string | null;
+	url: string;
+	state: string;
+	stateReason?: string | null;
+	authorLogin?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
+	closedAt?: string | null;
 };
 
 export type GitHubPullRequestDetail = {
@@ -961,6 +970,15 @@ export type GitHubPullRequestDetail = {
 
 export type GitHubDiscussionDetail = {
 	externalId: string;
+	title: string;
+	body?: string | null;
+	url: string;
+	answered?: boolean | null;
+	authorLogin?: string | null;
+	categoryName?: string | null;
+	categoryEmoji?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
 };
 
 export type InboxItemDetail =
