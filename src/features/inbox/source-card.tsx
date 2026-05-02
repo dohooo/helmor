@@ -1,3 +1,4 @@
+import { memo } from "react";
 import {
 	AppendContextButton,
 	type AppendContextRequestPayload,
@@ -8,7 +9,12 @@ import { cn } from "@/lib/utils";
 import { SourceIcon } from "./source-icon";
 import { STATE_TONE_CLASS } from "./state-tone";
 
-export function SourceCard({
+// `memo` keeps a 20-card inbox list cheap to re-render: when the parent
+// `InboxSidebar` re-renders (which is frequent — every settings update
+// cascades into it via `useSettings()`), the shallow prop check on each
+// card short-circuits as long as `card`, `onOpen`, `selected`, and
+// `appendContextTarget` all keep referential identity.
+export const SourceCard = memo(function SourceCard({
 	card,
 	onOpen,
 	selected = false,
@@ -85,7 +91,7 @@ export function SourceCard({
 			/>
 		</article>
 	);
-}
+});
 
 function buildCardContextPayload(
 	card: ContextCard,
