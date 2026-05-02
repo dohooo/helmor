@@ -823,6 +823,7 @@ export class CodexAppServerManager implements SessionManager {
 			action,
 			hasContext: !!ctx,
 			threadId: ctx?.providerThreadId ?? "(none)",
+			activeTurnId: ctx?.activeTurnId ?? "(none)",
 			knownSessions: [...this.sessions.keys()],
 		});
 		if (!ctx) {
@@ -834,6 +835,29 @@ export class CodexAppServerManager implements SessionManager {
 		if (!threadId) {
 			throw new Error("Codex thread has not started yet");
 		}
+
+		// Codex's pause/clear semantics only stop the continuation loop —
+		// any in-flight turn keeps streaming until natural end. To match
+		// user intent ("pause = stop now"), we abort the active turn
+		// ourselves before flipping the goal state. The interrupt produces
+		// a normal turn/completed downstream, which lets the streaming
+		// pipeline transition out of the loading state.
+		if ((action === "pause" || action === "clear") && ctx.activeTurnId) {
+			try {
+				await ctx.server.sendRequest(
+					"turn/interrupt",
+					{ threadId, turnId: ctx.activeTurnId },
+					5_000,
+				);
+			} catch (err) {
+				// Best-effort — don't let an interrupt failure block the
+				// goal state change. Codex may have just finished naturally.
+				logger.debug("mutateGoal interrupt failed (best-effort)", {
+					...errorDetails(err),
+				});
+			}
+		}
+
 		if (action === "clear") {
 			await ctx.server.sendRequest("thread/goal/clear", { threadId }, 20_000);
 			return;

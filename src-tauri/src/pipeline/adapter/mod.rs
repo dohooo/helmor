@@ -162,6 +162,21 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
             continue;
         }
 
+        // codex /goal lifecycle markers (Goal paused / resumed / cleared
+        // / set: <objective>). Inserted by `codex_goal::write_codex_goal_meta`
+        // out-of-band whenever the goal state transitions in a way the
+        // user should see in chat history.
+        if msg_type == Some("goal_status") {
+            let text = parsed
+                .and_then(|p| p.get("text"))
+                .and_then(Value::as_str)
+                .unwrap_or("Goal updated")
+                .to_string();
+            result.push(make_system(msg, &text));
+            i += 1;
+            continue;
+        }
+
         // assistant (by JSON type or by role for plain-text live messages)
         if msg_type == Some("assistant") || (parsed.is_none() && msg.role == MessageRole::Assistant)
         {

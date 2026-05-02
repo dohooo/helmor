@@ -17,10 +17,15 @@ import {
 	type PendingElicitation,
 } from "@/features/conversation/pending-elicitation";
 import { stabilizeStreamingMessages } from "@/features/conversation/streaming-tail-collapse";
-import type { AgentModelOption, ThreadMessageLike } from "@/lib/api";
+import type {
+	AgentModelOption,
+	CodexGoalState,
+	ThreadMessageLike,
+} from "@/lib/api";
 import {
 	generateSessionTitle,
 	loadRepoPreferences,
+	mutateCodexGoal,
 	renameSession,
 	respondToDeferredTool,
 	respondToElicitationRequest,
@@ -469,8 +474,30 @@ export function useConversationStreaming({
 			return;
 		}
 
-		void stopAgentStream(activeSession.stopSessionId, activeSession.provider);
-	}, [activeSessionByContext, composerContextKey]);
+		// For codex sessions with an active (non-paused) goal, flip the goal
+		// to paused first so codex doesn't auto-spawn a fresh continuation
+		// turn the moment we abort the current one. The user can resume from
+		// the banner whenever they're ready.
+		const sessionId = activeSession.stopSessionId;
+		const goal =
+			activeSession.provider === "codex"
+				? queryClient.getQueryData<CodexGoalState | null>(
+						helmorQueryKeys.sessionCodexGoal(sessionId),
+					)
+				: null;
+
+		const stopPromise = stopAgentStream(sessionId, activeSession.provider);
+		if (goal && goal.status === "active") {
+			// Fire pause concurrently — both routes end up calling
+			// `turn/interrupt` server-side, which is idempotent under codex's
+			// thread state machine. mutateCodexGoal also flips the goal
+			// status, which is the bit we actually need.
+			void mutateCodexGoal(sessionId, "pause").catch(() => {
+				// Best-effort — surface stop errors via the existing pipeline.
+			});
+		}
+		void stopPromise;
+	}, [activeSessionByContext, composerContextKey, queryClient]);
 
 	const handlePermissionResponse = useCallback(
 		(

@@ -3,7 +3,7 @@
 //! through React Query — the channel only carries the invalidation cue.
 
 use rusqlite::params;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::AppHandle;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -35,6 +35,19 @@ pub(super) fn write_codex_goal_meta(
         Some(Value::Null) | None => None,
         _ => return Ok(CodexGoalWriteOutcome::Skipped),
     };
+
+    // Read previous meta to detect transitions worth narrating in the
+    // chat as a system message ("Goal paused", "Goal resumed", etc.).
+    let previous_meta: Option<String> = conn
+        .query_row(
+            "SELECT codex_goal_meta FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten();
+    let transition_label = goal_transition_label(previous_meta.as_deref(), value);
+
     let affected = conn.execute(
         "UPDATE sessions SET codex_goal_meta = ?1 WHERE id = ?2",
         params![value, session_id],
@@ -44,7 +57,93 @@ pub(super) fn write_codex_goal_meta(
             session_id.to_string(),
         ));
     }
+    if let Some(label) = transition_label {
+        // Best-effort: a failed system-message insert shouldn't fail the
+        // whole write — banner still reflects the new state via the
+        // codex_goal_meta column itself.
+        let _ = insert_goal_system_message(conn, session_id, &label);
+    }
     Ok(CodexGoalWriteOutcome::Wrote(session_id.to_string()))
+}
+
+/// Compare the old and new `codex_goal_meta` values and return a
+/// human-readable label when the transition is worth narrating in chat.
+/// `None` when no message should be inserted (e.g. unchanged status,
+/// background token-usage updates that don't move status).
+pub(super) fn goal_transition_label(
+    previous_meta: Option<&str>,
+    new_meta: Option<&str>,
+) -> Option<String> {
+    let prev = previous_meta.and_then(parse_goal_status);
+    let curr = new_meta.and_then(parse_goal_status);
+    let new_objective = new_meta.and_then(parse_goal_objective);
+
+    if prev == curr {
+        return None;
+    }
+    match (prev, curr) {
+        (None, None) => None,
+        // First time setting a goal: include the objective.
+        (None, Some(GoalStatus::Active)) => match new_objective {
+            Some(obj) if !obj.is_empty() => Some(format!("Goal set: {obj}")),
+            _ => Some("Goal started".to_string()),
+        },
+        // Brand-new goal in any other status — fallback.
+        (None, Some(_)) => Some("Goal updated".to_string()),
+        // Cleared.
+        (Some(_), None) => Some("Goal cleared".to_string()),
+        // Status flips while goal exists.
+        (Some(_), Some(GoalStatus::Paused)) => Some("Goal paused".to_string()),
+        (Some(_), Some(GoalStatus::Active)) => Some("Goal resumed".to_string()),
+        (Some(_), Some(GoalStatus::BudgetLimited)) => Some("Goal reached token budget".to_string()),
+        (Some(_), Some(GoalStatus::Complete)) => Some("Goal complete".to_string()),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GoalStatus {
+    Active,
+    Paused,
+    BudgetLimited,
+    Complete,
+}
+
+fn parse_goal_status(meta: &str) -> Option<GoalStatus> {
+    let v: Value = serde_json::from_str(meta).ok()?;
+    let s = v.get("status").and_then(Value::as_str)?;
+    match s {
+        "active" => Some(GoalStatus::Active),
+        "paused" => Some(GoalStatus::Paused),
+        "budgetLimited" => Some(GoalStatus::BudgetLimited),
+        "complete" => Some(GoalStatus::Complete),
+        _ => None,
+    }
+}
+
+fn parse_goal_objective(meta: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(meta).ok()?;
+    v.get("objective")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn insert_goal_system_message(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    label: &str,
+) -> std::result::Result<(), rusqlite::Error> {
+    let msg_id = uuid::Uuid::new_v4().to_string();
+    let content = json!({ "type": "goal_status", "text": label }).to_string();
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    conn.execute(
+        r#"
+            INSERT INTO session_messages (
+              id, session_id, role, content, created_at, sent_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+        "#,
+        params![msg_id, session_id, "system", content, now],
+    )?;
+    Ok(())
 }
 
 pub(super) fn persist_codex_goal_event(app: &AppHandle, raw: &Value) {
@@ -77,7 +176,15 @@ pub(super) fn persist_codex_goal_event(app: &AppHandle, raw: &Value) {
     };
     crate::ui_sync::publish(
         app,
-        crate::ui_sync::UiMutationEvent::CodexGoalChanged { session_id },
+        crate::ui_sync::UiMutationEvent::CodexGoalChanged {
+            session_id: session_id.clone(),
+        },
+    );
+    // Force the chat to refetch so any synthesised goal_status system
+    // message we just inserted shows up immediately.
+    crate::ui_sync::publish(
+        app,
+        crate::ui_sync::UiMutationEvent::SessionMessagesAppended { session_id },
     );
 }
 
@@ -162,5 +269,77 @@ mod tests {
         let raw = serde_json::json!({ "sessionId": "s1", "goal": 42 });
         let outcome = write_codex_goal_meta(&conn, &raw).unwrap();
         assert_eq!(outcome, CodexGoalWriteOutcome::Skipped);
+    }
+
+    fn meta(status: &str, objective: &str) -> String {
+        format!(
+            r#"{{"status":"{status}","objective":"{objective}","tokensUsed":0,"timeUsedSeconds":0,"createdAt":0,"updatedAt":0,"threadId":"t","tokenBudget":null}}"#
+        )
+    }
+
+    #[test]
+    fn transition_label_first_set_includes_objective() {
+        let label = goal_transition_label(None, Some(meta("active", "fix the bug").as_str()));
+        assert_eq!(label.as_deref(), Some("Goal set: fix the bug"));
+    }
+
+    #[test]
+    fn transition_label_pause() {
+        let label = goal_transition_label(
+            Some(meta("active", "x").as_str()),
+            Some(meta("paused", "x").as_str()),
+        );
+        assert_eq!(label.as_deref(), Some("Goal paused"));
+    }
+
+    #[test]
+    fn transition_label_resume() {
+        let label = goal_transition_label(
+            Some(meta("paused", "x").as_str()),
+            Some(meta("active", "x").as_str()),
+        );
+        assert_eq!(label.as_deref(), Some("Goal resumed"));
+    }
+
+    #[test]
+    fn transition_label_cleared() {
+        let label = goal_transition_label(Some(meta("active", "x").as_str()), None);
+        assert_eq!(label.as_deref(), Some("Goal cleared"));
+    }
+
+    #[test]
+    fn transition_label_no_change() {
+        let label = goal_transition_label(
+            Some(meta("active", "x").as_str()),
+            Some(meta("active", "x").as_str()),
+        );
+        assert_eq!(label, None);
+    }
+
+    #[test]
+    fn transition_label_token_only_update_no_message() {
+        // tokensUsed bumps every turn — must not spam system messages.
+        let prev = r#"{"status":"active","objective":"x","tokensUsed":100,"timeUsedSeconds":0,"createdAt":0,"updatedAt":0,"threadId":"t","tokenBudget":null}"#;
+        let next = r#"{"status":"active","objective":"x","tokensUsed":250,"timeUsedSeconds":0,"createdAt":0,"updatedAt":0,"threadId":"t","tokenBudget":null}"#;
+        let label = goal_transition_label(Some(prev), Some(next));
+        assert_eq!(label, None);
+    }
+
+    #[test]
+    fn transition_label_budget_limited() {
+        let label = goal_transition_label(
+            Some(meta("active", "x").as_str()),
+            Some(meta("budgetLimited", "x").as_str()),
+        );
+        assert_eq!(label.as_deref(), Some("Goal reached token budget"));
+    }
+
+    #[test]
+    fn transition_label_complete() {
+        let label = goal_transition_label(
+            Some(meta("active", "x").as_str()),
+            Some(meta("complete", "x").as_str()),
+        );
+        assert_eq!(label.as_deref(), Some("Goal complete"));
     }
 }

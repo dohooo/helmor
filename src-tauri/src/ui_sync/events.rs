@@ -20,6 +20,13 @@ pub enum UiMutationEvent {
     CodexGoalChanged {
         session_id: String,
     },
+    /// Fires when a `goal_status` system message has been synthesised into
+    /// the conversation history out-of-band — the streaming pipeline owns
+    /// real assistant messages, this exists for the lifecycle markers
+    /// (Goal paused / resumed / cleared) we insert ourselves.
+    SessionMessagesAppended {
+        session_id: String,
+    },
     WorkspaceFilesChanged {
         workspace_id: String,
     },
@@ -91,6 +98,9 @@ mod tests {
                 session_id: "s".into(),
             },
             UiMutationEvent::CodexGoalChanged {
+                session_id: "s".into(),
+            },
+            UiMutationEvent::SessionMessagesAppended {
                 session_id: "s".into(),
             },
             UiMutationEvent::WorkspaceFilesChanged {

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { open as openDirectoryDialog } from "@tauri-apps/plugin-dialog";
 import { CircleAlert, TimerReset } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ActionRow, ActionRowButton } from "@/components/action-row";
 import { ShimmerText } from "@/components/ui/shimmer-text";
@@ -32,6 +32,7 @@ import {
 	agentModelSectionsQueryOptions,
 	autoCloseActionKindsQueryOptions,
 	helmorQueryKeys,
+	sessionCodexGoalQueryOptions,
 	slashCommandsQueryOptions,
 	workspaceCandidateDirectoriesQueryOptions,
 	workspaceDetailQueryOptions,
@@ -52,6 +53,7 @@ import { CodexGoalBanner } from "../panel/codex-goal-banner";
 import type { DeferredToolResponseHandler } from "./deferred-tool";
 import type { AddDirPickerEntry } from "./editor/add-dir/typeahead-plugin";
 import type { ElicitationResponseHandler } from "./elicitation";
+import { GoalReplaceConfirm } from "./goal-replace-confirm";
 import { WorkspaceComposer } from "./index";
 import { SubmitQueueList } from "./submit-queue-list";
 
@@ -581,7 +583,23 @@ export const WorkspaceComposerContainer = memo(
 			void slashCommandsQuery.refetch();
 		}, [slashCommandsQuery]);
 
-		const handleComposerSubmit = useCallback(
+		// Pull the active codex goal so we can intercept `/goal X` submissions
+		// when one is already in flight and ask the user for confirmation
+		// before replacing it.
+		const codexGoalQuery = useQuery({
+			...sessionCodexGoalQueryOptions(displayedSessionId ?? "__none__"),
+			enabled: Boolean(displayedSessionId) && provider === "codex",
+		});
+		const activeGoal = codexGoalQuery.data ?? null;
+
+		type PendingGoalReplace = {
+			newObjective: string;
+			args: Parameters<typeof handleComposerSubmitInner>;
+		};
+		const [goalReplaceConfirm, setGoalReplaceConfirm] =
+			useState<PendingGoalReplace | null>(null);
+
+		const handleComposerSubmitInner = useCallback(
 			(
 				prompt: string,
 				imagePaths: string[],
@@ -628,6 +646,53 @@ export const WorkspaceComposerContainer = memo(
 				settings.followUpBehavior,
 			],
 		);
+
+		const handleComposerSubmit = useCallback(
+			(
+				prompt: string,
+				imagePaths: string[],
+				filePaths: string[],
+				customTags: ComposerCustomTag[],
+				options?: {
+					permissionModeOverride?: string;
+					oppositeFollowUp?: boolean;
+				},
+			) => {
+				// Intercept `/goal <objective>` for codex sessions that already
+				// have an active or paused goal — surface a confirm panel
+				// instead of silently replacing.
+				if (provider === "codex" && activeGoal) {
+					const match = prompt.trim().match(/^\/goal\s+([\s\S]+)$/);
+					const newObjective = match ? match[1]?.trim() : "";
+					if (newObjective && newObjective !== activeGoal.objective) {
+						setGoalReplaceConfirm({
+							newObjective,
+							args: [prompt, imagePaths, filePaths, customTags, options],
+						});
+						return;
+					}
+				}
+				handleComposerSubmitInner(
+					prompt,
+					imagePaths,
+					filePaths,
+					customTags,
+					options,
+				);
+			},
+			[provider, activeGoal, handleComposerSubmitInner],
+		);
+
+		const handleGoalReplaceConfirm = useCallback(() => {
+			if (!goalReplaceConfirm) return;
+			const args = goalReplaceConfirm.args;
+			setGoalReplaceConfirm(null);
+			handleComposerSubmitInner(...args);
+		}, [goalReplaceConfirm, handleComposerSubmitInner]);
+
+		const handleGoalReplaceCancel = useCallback(() => {
+			setGoalReplaceConfirm(null);
+		}, []);
 
 		// Track which queued prompt we've already dispatched so a re-render
 		// (e.g. due to query invalidation refreshing the session list) can't
@@ -793,6 +858,15 @@ export const WorkspaceComposerContainer = memo(
 
 				<div className="relative z-10">
 					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex flex-col items-center gap-1.5">
+						{goalReplaceConfirm && activeGoal ? (
+							<GoalReplaceConfirm
+								currentObjective={activeGoal.objective}
+								newObjective={goalReplaceConfirm.newObjective}
+								disabled={composerUnavailable}
+								onReplace={handleGoalReplaceConfirm}
+								onCancel={handleGoalReplaceCancel}
+							/>
+						) : null}
 						{displayedSessionId ? (
 							<CodexGoalBanner
 								sessionId={displayedSessionId}

@@ -261,10 +261,14 @@ describe("WorkspaceComposerContainer", () => {
 		);
 		expect(composerMockState.mounts).toBe(1);
 		expect(composerMockState.unmounts).toBe(0);
-		expect(composerMockState.renders).toEqual([
-			"session:session-1",
-			"session:session-2",
-		]);
+		// Allow extra synchronous renders from react-query observers
+		// (CodexGoal banner subscribes to a per-session query). The
+		// invariant we care about: no remount, and the session id seen
+		// in the rendered child stream eventually flips to session-2.
+		expect(composerMockState.renders[0]).toBe("session:session-1");
+		expect(
+			composerMockState.renders[composerMockState.renders.length - 1],
+		).toBe("session:session-2");
 	});
 
 	it("auto-submits queued CLI prompts with queued model and permission mode", async () => {

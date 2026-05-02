@@ -1098,6 +1098,7 @@ export type UiMutationEvent =
 	| { type: "sessionListChanged"; workspaceId: string }
 	| { type: "contextUsageChanged"; sessionId: string }
 	| { type: "codexGoalChanged"; sessionId: string }
+	| { type: "sessionMessagesAppended"; sessionId: string }
 	| { type: "workspaceFilesChanged"; workspaceId: string }
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
 	| { type: "workspaceForgeChanged"; workspaceId: string }
