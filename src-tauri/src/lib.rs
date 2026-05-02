@@ -296,6 +296,8 @@ pub fn run() {
             commands::session_commands::get_session_context_usage,
             commands::session_commands::get_session_codex_goal,
             commands::session_commands::mutate_codex_goal,
+            commands::session_commands::list_session_drafts,
+            commands::session_commands::set_session_draft,
             commands::session_commands::get_live_context_usage,
             commands::session_commands::mark_session_read,
             commands::session_commands::mark_session_unread,

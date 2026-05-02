@@ -2449,6 +2449,31 @@ export async function mutateCodexGoal(
 	await invoke("mutate_codex_goal", { sessionId, action });
 }
 
+/** One row of `listSessionDrafts`. `draftState` is opaque JSON (Lexical
+ *  SerializedEditorState) — frontend parses on read. */
+export type SessionDraftRow = {
+	sessionId: string;
+	draftState: string;
+};
+
+/** Bulk-load every persisted composer draft. Called once at app boot
+ *  to hydrate the in-memory draft cache that backs the synchronous
+ *  `loadPersistedDraft` API. */
+export async function listSessionDrafts(): Promise<SessionDraftRow[]> {
+	return await invoke<SessionDraftRow[]>("list_session_drafts");
+}
+
+/** Persist (or clear) a session's composer draft. Pass `null` to clear. */
+export async function setSessionDraft(
+	sessionId: string,
+	draftState: string | null,
+): Promise<void> {
+	await invoke<void>("set_session_draft", {
+		sessionId,
+		draftState,
+	});
+}
+
 /** Read the account-global Codex rate-limit snapshot. Null until Codex has
  *  emitted at least one `account/rateLimits/updated` notification. */
 export async function getCodexRateLimits(): Promise<string | null> {

@@ -168,6 +168,24 @@ pub async fn mutate_codex_goal(
     Ok(())
 }
 
+/// Bulk-load every persisted composer draft. Frontend calls this once
+/// at app boot and hydrates an in-memory map keyed by `session:<id>`,
+/// preserving the synchronous API the existing draft-storage exposes.
+#[tauri::command]
+pub async fn list_session_drafts() -> CmdResult<Vec<sessions::SessionDraftRow>> {
+    run_blocking(sessions::list_session_drafts).await
+}
+
+/// Persist (or clear) a session's composer draft. Pass `None` to clear.
+#[tauri::command]
+pub async fn set_session_draft(session_id: String, draft_state: Option<String>) -> CmdResult<()> {
+    run_blocking(move || {
+        sessions::set_session_draft(&session_id, draft_state.as_deref())?;
+        Ok(())
+    })
+    .await
+}
+
 /// Ad-hoc Claude-only context-usage fetch for the hover popover. Pure
 /// passthrough to the sidecar — no DB write, no mutex, no TTL. The
 /// frontend caches the result for 30 s via React Query.

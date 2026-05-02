@@ -42,6 +42,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-lifecycle";
+import { hydrateDraftCache } from "@/features/composer/draft-storage";
 import { WorkspaceConversationContainer } from "@/features/conversation";
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
@@ -111,7 +112,6 @@ import {
 	detectedEditorsQueryOptions,
 	helmorQueryKeys,
 	helmorQueryPersister,
-	isVolatileForgeQueryKey,
 	sessionThreadMessagesQueryOptions,
 	workspaceChangeRequestQueryOptions,
 	workspaceDetailQueryOptions,
@@ -267,14 +267,21 @@ function MainApp() {
 
 	useEffect(() => {
 		const minDelay = new Promise<void>((r) => setTimeout(r, 1000));
-		void Promise.all([loadSettings().then(setAppSettings), minDelay]).then(
-			() => {
-				// Start fade-out
-				setSplashVisible(false);
-				// Remove from DOM after transition
-				setTimeout(() => setSplashMounted(false), 400);
-			},
-		);
+		// Pull persisted composer drafts into the in-memory cache before
+		// the splash hides, so the chat composer's synchronous
+		// `loadPersistedDraft` call sees DB content on first mount
+		// instead of returning null and forcing a re-hydration flicker.
+		const draftHydration = hydrateDraftCache();
+		void Promise.all([
+			loadSettings().then(setAppSettings),
+			draftHydration,
+			minDelay,
+		]).then(() => {
+			// Start fade-out
+			setSplashVisible(false);
+			// Remove from DOM after transition
+			setTimeout(() => setSplashMounted(false), 400);
+		});
 	}, []);
 
 	useEffect(() => {
