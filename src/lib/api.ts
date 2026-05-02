@@ -1922,12 +1922,18 @@ export async function createWorkspaceFromRepo(
  * workspace + session UUIDs, inserts the `initializing` DB row + initial
  * session, and returns all metadata plus repo-level scripts. The
  * frontend paints with this response immediately — no placeholders.
+ *
+ * `sourceBranch` (optional): branch to fork the new workspace from. When
+ * omitted, the repo's default branch is used. The kanban "create" flow
+ * forwards the user's branch picker selection here.
  */
 export async function prepareWorkspaceFromRepo(
 	repoId: string,
+	sourceBranch?: string | null,
 ): Promise<PrepareWorkspaceResponse> {
 	return invoke<PrepareWorkspaceResponse>("prepare_workspace_from_repo", {
 		repoId,
+		sourceBranch: sourceBranch ?? null,
 	});
 }
 

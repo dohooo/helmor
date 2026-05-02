@@ -23,11 +23,40 @@ import { useSettings } from "@/lib/settings";
 import { EMPTY_QUEUE, useSubmitQueue } from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
 import { getComposerContextKey } from "@/lib/workspace-helpers";
-import { useConversationStreaming } from "./hooks/use-streaming";
+import {
+	type ComposerSubmitPayload,
+	useConversationStreaming,
+} from "./hooks/use-streaming";
 import {
 	adaptPermissionToDeferredTool,
 	permissionIdFromAdaptedToolUseId,
 } from "./permission-as-deferred-tool";
+
+export type { ComposerSubmitPayload } from "./hooks/use-streaming";
+
+/** Outcome the kanban-create flow returns to the composer container. When
+ *  `shouldStream` is true, the composer routes the submit through
+ *  `handleComposerSubmit` with the override pointing at the freshly-created
+ *  workspace + session, so the agent stream starts immediately. When false,
+ *  the workspace was created in a "no-stream" mode (e.g. backlog with the
+ *  draft persisted) and there is nothing more to do. */
+export type KanbanCreatePrepareOutcome =
+	| { shouldStream: false }
+	| {
+			shouldStream: true;
+			workspaceId: string;
+			sessionId: string;
+			contextKey: string;
+	  };
+
+export type KanbanCreateContext = {
+	/** Called by the composer's submit handler in kanban view. Implementations
+	 *  create the workspace (and optionally save a Backlog draft) and return
+	 *  whether the agent stream should fire next. */
+	prepare: (
+		payload: ComposerSubmitPayload,
+	) => Promise<KanbanCreatePrepareOutcome>;
+};
 
 type WorkspaceConversationContainerProps = {
 	selectedWorkspaceId: string | null;
@@ -80,6 +109,25 @@ type WorkspaceConversationContainerProps = {
 	onOpenFileReference?: (path: string, line?: number, column?: number) => void;
 	composerOnly?: boolean;
 	composerWrapperClassName?: string;
+	/** Override placeholder text for the composer's editor. Used by the
+	 *  kanban view to hint at the "compose multiple inbox sources" flow. */
+	composerPlaceholder?: string;
+	/** When true, force the composer to act as if a workspace were
+	 *  selected (skip the dim-out / disable applied when
+	 *  `displayedWorkspaceId === null`). Used in kanban mode where the
+	 *  composer creates a brand-new workspace on submit, so there is no
+	 *  pre-existing workspace ID to gate on. */
+	composerForceAvailable?: boolean;
+	/** Override the composer's context key. Without this the key falls
+	 *  back to `getComposerContextKey(displayedWorkspaceId, displayedSessionId)`
+	 *  — fine for the regular chat view. The kanban view uses this to
+	 *  scope its draft slot to the currently-selected repo (e.g.
+	 *  `kanban:repo:<id>`) so each repo keeps its own composer draft. */
+	composerContextKeyOverride?: string;
+	/** Kanban "create new workspace from composer" intercept. When set, the
+	 *  composer's submit calls `kanbanCreateContext.prepare` first and only
+	 *  fires the agent stream if the prepare step says so. */
+	kanbanCreateContext?: KanbanCreateContext | null;
 };
 
 export const WorkspaceConversationContainer = memo(
@@ -111,6 +159,10 @@ export const WorkspaceConversationContainer = memo(
 		onOpenFileReference,
 		composerOnly = false,
 		composerWrapperClassName,
+		composerPlaceholder,
+		composerForceAvailable = false,
+		composerContextKeyOverride,
+		kanbanCreateContext = null,
 	}: WorkspaceConversationContainerProps) {
 		const [composerModelSelections, setComposerModelSelections] = useState<
 			Record<string, string>
@@ -125,10 +177,9 @@ export const WorkspaceConversationContainer = memo(
 			Record<string, boolean>
 		>({});
 
-		const composerContextKey = getComposerContextKey(
-			displayedWorkspaceId,
-			displayedSessionId,
-		);
+		const composerContextKey =
+			composerContextKeyOverride ??
+			getComposerContextKey(displayedWorkspaceId, displayedSessionId);
 		const displayedSelectedModelId =
 			composerModelSelections[composerContextKey] ?? null;
 		const selectionPending =
@@ -266,16 +317,35 @@ export const WorkspaceConversationContainer = memo(
 
 		const handleComposerSubmitWrapper = useCallback(
 			(payload: Parameters<typeof handleComposerSubmit>[0]) => {
+				if (kanbanCreateContext) {
+					// Kanban "create new workspace from this prompt" flow.
+					// `prepare` creates the workspace + initial session and
+					// reports back whether the agent stream should fire (in
+					// progress) or whether we just persisted a Backlog draft.
+					void (async () => {
+						const outcome = await kanbanCreateContext.prepare(payload);
+						if (outcome.shouldStream) {
+							await handleComposerSubmit(payload, {
+								sessionId: outcome.sessionId,
+								workspaceId: outcome.workspaceId,
+								contextKey: outcome.contextKey,
+							});
+						}
+					})();
+					return;
+				}
 				void handleComposerSubmit(payload);
 			},
-			[handleComposerSubmit],
+			[handleComposerSubmit, kanbanCreateContext],
 		);
 		const relevantPendingInsertRequests = pendingInsertRequests.filter(
-			(request) =>
-				insertRequestMatchesComposer(request, {
+			(request) => {
+				return insertRequestMatchesComposer(request, {
+					contextKey: composerContextKey,
 					workspaceId: displayedWorkspaceId,
 					sessionId: displayedSessionId,
-				}),
+				});
+			},
 		);
 
 		// Permission requests are rendered through the same `GenericDeferredToolPanel`
@@ -351,6 +421,9 @@ export const WorkspaceConversationContainer = memo(
 						displayedWorkspaceId={displayedWorkspaceId}
 						displayedSessionId={displayedSessionId}
 						disabled={selectionPending}
+						forceAvailable={composerForceAvailable}
+						placeholder={composerPlaceholder}
+						contextKeyOverride={composerContextKeyOverride}
 						sending={isSending}
 						sendError={activeSendError}
 						restoreDraft={restoreDraft}

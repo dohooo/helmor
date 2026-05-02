@@ -35,6 +35,7 @@ import type {
 	WorkspaceRow,
 } from "@/lib/api";
 import { setWorkspaceStatus } from "@/lib/api";
+import type { ComposerInsertTarget } from "@/lib/composer-insert";
 import {
 	helmorQueryKeys,
 	workspaceGroupsQueryOptions,
@@ -50,7 +51,11 @@ import {
 } from "./board-state";
 import { KanbanCardPreview } from "./card";
 import { columnDropId, KanbanColumn } from "./column";
-import { KanbanMainContent, type KanbanMainTab } from "./main-content";
+import {
+	type KanbanCreateState,
+	KanbanMainContent,
+	type KanbanMainTab,
+} from "./main-content";
 import type { KanbanColumnId } from "./types";
 
 const DROP_SETTLE_MS = 190;
@@ -78,6 +83,22 @@ type KanbanPageProps = {
 	onInboxResizeKeyDown: KeyboardEventHandler<HTMLDivElement>;
 	onInboxResizeStart: MouseEventHandler<HTMLDivElement>;
 	resizeHitArea: number;
+	// All five view-state values below are controlled by App.tsx so they
+	// can be hydrated from persisted settings without racing the auto-pick
+	// effects inside KanbanMainContent / InboxSidebar.
+	repository: RepositoryCreateOption | null;
+	onRepositoryChange: (repository: RepositoryCreateOption | null) => void;
+	onSourceBranchChange?: (branch: string | null) => void;
+	createState: KanbanCreateState;
+	onCreateStateChange: (state: KanbanCreateState) => void;
+	inboxProviderTab: string;
+	onInboxProviderTabChange: (tab: string) => void;
+	inboxProviderSourceTab: string;
+	onInboxProviderSourceTabChange: (tab: string) => void;
+	openInboxCards: ContextCard[];
+	onOpenInboxCard: (card: ContextCard) => void;
+	onCloseInboxCard: (cardId: string) => void;
+	composerInsertTarget?: ComposerInsertTarget;
 };
 
 type SettlingDrop =
@@ -117,6 +138,19 @@ export function KanbanPage({
 	onInboxResizeKeyDown,
 	onInboxResizeStart,
 	resizeHitArea,
+	repository,
+	onRepositoryChange,
+	onSourceBranchChange,
+	createState,
+	onCreateStateChange,
+	inboxProviderTab,
+	onInboxProviderTabChange,
+	inboxProviderSourceTab,
+	onInboxProviderSourceTabChange,
+	openInboxCards,
+	onOpenInboxCard,
+	onCloseInboxCard,
+	composerInsertTarget,
 }: KanbanPageProps) {
 	const queryClient = useQueryClient();
 	const groupsQuery = useQuery(workspaceGroupsQueryOptions());
@@ -135,30 +169,22 @@ export function KanbanPage({
 		height: number;
 		width: number;
 	} | null>(null);
-	const [openedCards, setOpenedCards] = useState<ContextCard[]>([]);
 	const [activeMainTabId, setActiveMainTabId] = useState<string | null>(null);
-	// Mirrors the kanban header's repo picker so the InboxSidebar can
-	// scope its GitHub queries to the user's currently-selected repo.
-	// `KanbanMainContent` keeps the picker's source-of-truth state and
-	// fires `onRepositorySelect` (including on its auto-pick effect)
-	// to keep this in sync.
-	const [selectedRepository, setSelectedRepository] =
-		useState<RepositoryCreateOption | null>(null);
 	const inboxRepoFilter = useMemo(
-		() => parseGithubRepoFilter(selectedRepository),
-		[selectedRepository],
+		() => parseGithubRepoFilter(repository),
+		[repository],
 	);
 	const [settlingDrop, setSettlingDrop] = useState<SettlingDrop | null>(null);
 	const [topPlacements, setTopPlacements] = useState<KanbanTopPlacement[]>([]);
 	const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const mainTabs = useMemo<KanbanMainTab[]>(
 		() =>
-			openedCards.map((card) => ({
+			openInboxCards.map((card) => ({
 				card,
 				id: card.id,
 				kind: "card",
 			})),
-		[openedCards],
+		[openInboxCards],
 	);
 	const baseColumns = useMemo(
 		() => projectGroupsToKanbanColumns(groupsQuery.data ?? []),
@@ -190,29 +216,30 @@ export function KanbanPage({
 		);
 		onBoardExpandToggle(expandedWidth);
 	}, [boardMaxWidth, inboxWidth, minWidth, onBoardExpandToggle]);
-	const handleOpenInboxCard = useCallback((card: ContextCard) => {
-		setOpenedCards((current) =>
-			current.some((openedCard) => openedCard.id === card.id)
-				? current
-				: [...current, card],
-		);
-		setActiveMainTabId(card.id);
-	}, []);
-	const handleCloseMainTab = useCallback((tabId: string) => {
-		setOpenedCards((current) => {
-			const closingIndex = current.findIndex((card) => card.id === tabId);
-			if (closingIndex === -1) return current;
-
-			const nextCards = current.filter((card) => card.id !== tabId);
+	const handleOpenInboxCard = useCallback(
+		(card: ContextCard) => {
+			onOpenInboxCard(card);
+			setActiveMainTabId(card.id);
+		},
+		[onOpenInboxCard],
+	);
+	const handleCloseMainTab = useCallback(
+		(tabId: string) => {
+			const closingIndex = openInboxCards.findIndex(
+				(card) => card.id === tabId,
+			);
+			if (closingIndex === -1) return;
+			const nextCards = openInboxCards.filter((card) => card.id !== tabId);
 			setActiveMainTabId((activeTabId) => {
 				if (activeTabId !== tabId) return activeTabId;
 				return (
 					nextCards[closingIndex]?.id ?? nextCards[closingIndex - 1]?.id ?? null
 				);
 			});
-			return nextCards;
-		});
-	}, []);
+			onCloseInboxCard(tabId);
+		},
+		[onCloseInboxCard, openInboxCards],
+	);
 
 	useEffect(() => {
 		return () => {
@@ -379,6 +406,19 @@ export function KanbanPage({
 						onOpenCard={handleOpenInboxCard}
 						selectedCardId={activeMainTabId}
 						repoFilter={inboxRepoFilter}
+						providerTab={
+							inboxProviderTab as Parameters<
+								typeof InboxSidebar
+							>[0]["providerTab"]
+						}
+						onProviderTabChange={onInboxProviderTabChange}
+						providerSourceTab={
+							inboxProviderSourceTab as Parameters<
+								typeof InboxSidebar
+							>[0]["providerSourceTab"]
+						}
+						onProviderSourceTabChange={onInboxProviderSourceTabChange}
+						appendContextTarget={composerInsertTarget}
 					/>
 				</aside>
 				<KanbanResizeHandle
@@ -397,7 +437,11 @@ export function KanbanPage({
 					activeTabId={activeMainTabId}
 					onActiveTabChange={setActiveMainTabId}
 					onCloseTab={handleCloseMainTab}
-					onRepositorySelect={setSelectedRepository}
+					selectedRepository={repository}
+					onRepositorySelect={onRepositoryChange}
+					onSourceBranchChange={onSourceBranchChange}
+					createState={createState}
+					onCreateStateChange={onCreateStateChange}
 					tabs={mainTabs}
 				/>
 				<KanbanResizeHandle

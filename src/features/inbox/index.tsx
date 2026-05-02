@@ -17,6 +17,7 @@ import {
 	DropdownMenuRadioItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { ComposerInsertTarget } from "@/lib/composer-insert";
 import {
 	DEFAULT_INBOX_ACCOUNT_TOGGLES,
 	type InboxAccountSourceToggles,
@@ -136,19 +137,44 @@ export const InboxSidebar = memo(function InboxSidebar({
 	onOpenCard,
 	selectedCardId,
 	repoFilter,
+	providerTab,
+	providerSourceTab,
+	onProviderTabChange,
+	onProviderSourceTabChange,
+	appendContextTarget,
 }: {
 	className?: string;
 	onOpenCard?: (card: ContextCard) => void;
 	selectedCardId?: string | null;
+	appendContextTarget?: ComposerInsertTarget;
 	/** GitHub `owner/name` to scope the inbox queries to a single repo,
 	 *  driven by the kanban header's repo picker. `null` = unfiltered
 	 *  (the user's global "involves:@me" feed). */
 	repoFilter?: string | null;
+	/** Controlled top-level provider tab (e.g. "github"). When provided,
+	 *  the parent owns the selection so it can be persisted across
+	 *  restarts; otherwise the sidebar manages its own state. */
+	providerTab?: SourceFilter["id"];
+	onProviderTabChange?: (tab: SourceFilter["id"]) => void;
+	/** Controlled GitHub sub-tab id (issue/pr/discussion). Same
+	 *  controlled-vs-internal pattern as `providerTab`. */
+	providerSourceTab?: GitHubTypeFilter["id"];
+	onProviderSourceTabChange?: (tab: GitHubTypeFilter["id"]) => void;
 }) {
-	const [selectedSource, setSelectedSource] =
+	const [internalSelectedSource, setInternalSelectedSource] =
 		useState<SourceFilter["id"]>("github");
-	const [githubTypeFilter, setGithubTypeFilter] =
+	const [internalGithubTypeFilter, setInternalGithubTypeFilter] =
 		useState<GitHubTypeFilter["id"]>("github_issue");
+	const selectedSource = providerTab ?? internalSelectedSource;
+	const githubTypeFilter = providerSourceTab ?? internalGithubTypeFilter;
+	const setSelectedSource = (next: SourceFilter["id"]) => {
+		setInternalSelectedSource(next);
+		onProviderTabChange?.(next);
+	};
+	const setGithubTypeFilter = (next: GitHubTypeFilter["id"]) => {
+		setInternalGithubTypeFilter(next);
+		onProviderSourceTabChange?.(next);
+	};
 	const [searchQuery, setSearchQuery] = useState("");
 	const [stateFilter, setStateFilter] =
 		useState<GitHubStateFilter["id"]>("all");
@@ -450,6 +476,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 									card={card}
 									selected={card.id === selectedCardId}
 									onOpen={onOpenCard}
+									appendContextTarget={appendContextTarget}
 								/>
 							))}
 							{inbox.hasNextPage ? (

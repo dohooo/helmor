@@ -115,7 +115,10 @@ pub struct TargetBranchConflict {
 /// worktree on disk and flips the workspace row from `Initializing` to
 /// `Ready` / `SetupPending`. It can run in the background while the UI
 /// already shows the workspace.
-pub fn prepare_workspace_from_repo_impl(repo_id: &str) -> Result<PrepareWorkspaceResponse> {
+pub fn prepare_workspace_from_repo_impl(
+    repo_id: &str,
+    source_branch: Option<&str>,
+) -> Result<PrepareWorkspaceResponse> {
     let repository = repos::load_repository_by_id(repo_id)?
         .with_context(|| format!("Repository not found: {repo_id}"))?;
     let repo_root = PathBuf::from(repository.root_path.trim());
@@ -136,10 +139,22 @@ pub fn prepare_workspace_from_repo_impl(repo_id: &str) -> Result<PrepareWorkspac
     let directory_name = helpers::allocate_directory_name_for_repo(repo_id)?;
     let branch_settings = crate::repos::load_repo_branch_prefix_settings(repo_id)?;
     let branch = helpers::branch_name_for_directory(&directory_name, &branch_settings);
-    let default_branch = repository
-        .default_branch
-        .clone()
-        .filter(|value| !value.trim().is_empty())
+    // The workspace's `default_branch` column is what `finalize_workspace_*`
+    // uses as the start_point for the worktree. When the caller passes a
+    // `source_branch` (kanban create flow lets the user pick), use it
+    // verbatim — the merge target stays the same branch by default,
+    // matching the typical "branch from main, PR back to main" pattern.
+    // Falls back to the repo's default branch otherwise.
+    let default_branch = source_branch
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .or_else(|| {
+            repository
+                .default_branch
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+        })
         .unwrap_or_else(|| "main".to_string());
     let workspace_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -300,7 +315,7 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
 /// the old-shape response. Used by CLI, MCP, and `add_repository_from_local_path`
 /// — all non-UI callers that do not benefit from the prepare/finalize split.
 pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceResponse> {
-    let prepared = prepare_workspace_from_repo_impl(repo_id)?;
+    let prepared = prepare_workspace_from_repo_impl(repo_id, None)?;
     let finalized = finalize_workspace_from_repo_impl(&prepared.workspace_id)?;
 
     Ok(CreateWorkspaceResponse {

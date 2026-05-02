@@ -196,7 +196,7 @@ fn prepare_workspace_inserts_initializing_row_without_creating_worktree() {
         r#"{"scripts":{"setup":"bun install","run":"bun run dev"}}"#,
     )]);
 
-    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
 
     // DB row exists in `initializing` and matches the returned metadata.
     let connection = Connection::open(harness.db_path()).unwrap();
@@ -249,7 +249,7 @@ fn finalize_workspace_transitions_initializing_to_ready_and_creates_worktree() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
 
-    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
     let workspace_dir = harness.workspace_dir(&prepared.directory_name);
     assert!(!workspace_dir.exists());
 
@@ -284,7 +284,7 @@ fn finalize_workspace_reports_setup_pending_when_helmor_json_has_setup() {
     // → workspace defers to frontend inspector.
     harness.commit_repo_files(&[("helmor.json", r#"{"scripts":{"setup":"echo hi"}}"#)]);
 
-    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
     let finalized = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
 
     assert_eq!(finalized.final_state, WorkspaceState::SetupPending);
@@ -300,7 +300,7 @@ fn finalize_workspace_stays_ready_when_helmor_json_has_setup_but_auto_run_disabl
     harness.commit_repo_files(&[("helmor.json", r#"{"scripts":{"setup":"echo hi"}}"#)]);
     repos::update_repo_auto_run_setup(&harness.repo_id, false).unwrap();
 
-    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
     let finalized = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
 
     // User opted out → setup script is configured but the workspace lands
@@ -315,7 +315,7 @@ fn finalize_workspace_cleans_up_row_on_worktree_failure() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
 
-    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
 
     // Pre-create the target worktree dir so finalize's guard trips.
     let workspace_dir = harness.workspace_dir(&prepared.directory_name);
@@ -347,7 +347,7 @@ fn finalize_workspace_refuses_non_initializing_workspace() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
 
-    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
     workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
 
     // Second finalize on the same (now ready) workspace must reject —
@@ -372,7 +372,7 @@ fn cleanup_orphaned_initializing_workspaces_purges_old_rows_and_cascades_session
     let harness = CreateTestHarness::new();
 
     // Row 1: stale initializing — should be purged.
-    let stale = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let stale = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
     let connection = Connection::open(harness.db_path()).unwrap();
     connection
         .execute(
@@ -382,7 +382,7 @@ fn cleanup_orphaned_initializing_workspaces_purges_old_rows_and_cascades_session
         .unwrap();
 
     // Row 2: fresh initializing — should be kept.
-    let fresh = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let fresh = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
 
     let purged = workspaces::cleanup_orphaned_initializing_workspaces(300).unwrap();
     assert_eq!(purged, 1);
@@ -429,7 +429,7 @@ fn git_action_status_returns_fresh_defaults_for_initializing_workspace() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
 
-    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
 
     // Worktree does not exist yet — a naive git call would error. The
     // short-circuit must catch this before we ever touch the disk.
@@ -465,7 +465,7 @@ fn pr_lookups_short_circuit_for_initializing_workspace_without_network() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
 
-    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
 
     // `lookup_workspace_pr` and `lookup_workspace_pr_action_status` both
     // need to short-circuit to the canonical "no PR" answer — if they
@@ -511,7 +511,7 @@ fn load_repo_scripts_priority_1_worktree_helmor_json_wins() {
 
     // Finalize so the worktree exists, then rewrite the worktree's
     // helmor.json to a distinctly different value.
-    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
     workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
     let worktree_dir = harness.workspace_dir(&prepared.directory_name);
     fs::write(
@@ -549,7 +549,7 @@ fn load_repo_scripts_priority_2_repo_root_wins_when_worktree_missing() {
         )
         .unwrap();
 
-    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
     let worktree_dir = harness.workspace_dir(&prepared.directory_name);
     assert!(!worktree_dir.exists());
 
@@ -580,7 +580,7 @@ fn load_repo_scripts_priority_3_falls_through_to_db_when_no_helmor_json_anywhere
         )
         .unwrap();
 
-    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
     workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
 
     let scripts =
@@ -605,9 +605,9 @@ fn delete_workspace_and_session_rows_leaves_other_workspaces_intact() {
     let harness = CreateTestHarness::new();
 
     // Two sibling workspaces + sessions for the same repo.
-    let keep = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let keep = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
     workspaces::finalize_workspace_from_repo_impl(&keep.workspace_id).unwrap();
-    let drop = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let drop = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
     workspaces::finalize_workspace_from_repo_impl(&drop.workspace_id).unwrap();
 
     // Plant a session_message on each so the cascade is observable across
@@ -673,7 +673,7 @@ fn cleanup_orphaned_initializing_workspaces_skips_non_initializing_states() {
     let harness = CreateTestHarness::new();
 
     // Old but already finalized — must not be touched by the purge.
-    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
     workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
     let connection = Connection::open(harness.db_path()).unwrap();
     connection

@@ -315,6 +315,11 @@ describe("WorkspaceComposer", () => {
 					submitText: "Please implement the full requirements document.",
 				},
 			],
+			expect.objectContaining({
+				editorStateSnapshot: expect.objectContaining({
+					root: expect.any(Object),
+				}),
+			}),
 		);
 	});
 
@@ -464,6 +469,11 @@ describe("WorkspaceComposer", () => {
 					submitText: "Send this persisted draft.",
 				},
 			],
+			expect.objectContaining({
+				editorStateSnapshot: expect.objectContaining({
+					root: expect.any(Object),
+				}),
+			}),
 		);
 		expect(loadPersistedDraft(contextKey)).toBeNull();
 	});

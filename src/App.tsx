@@ -43,11 +43,17 @@ import {
 } from "@/components/ui/tooltip";
 import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-lifecycle";
 import { hydrateDraftCache } from "@/features/composer/draft-storage";
-import { WorkspaceConversationContainer } from "@/features/conversation";
+import {
+	type ComposerSubmitPayload,
+	type KanbanCreateContext,
+	type KanbanCreatePrepareOutcome,
+	WorkspaceConversationContainer,
+} from "@/features/conversation";
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
 import { WorkspaceInspectorSidebar } from "@/features/inspector";
 import { KanbanPage } from "@/features/kanban";
+import type { KanbanCreateState } from "@/features/kanban/main-content";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
 import { AppOnboarding } from "@/features/onboarding";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
@@ -86,11 +92,16 @@ import { clampZoom, useZoom, ZOOM_STEP } from "@/shell/use-zoom";
 import {
 	createSession,
 	drainPendingCliSends,
+	finalizeWorkspaceFromRepo,
 	markSessionRead,
 	markSessionUnread,
 	openWorkspaceInEditor,
 	openWorkspaceInFinder,
+	prepareWorkspaceFromRepo,
 	prewarmSlashCommandsForWorkspace,
+	type RepositoryCreateOption,
+	setSessionDraft,
+	setWorkspaceStatus,
 	syncWorkspaceWithTargetBranch,
 	triggerWorkspaceFetch,
 	unhideSession,
@@ -112,6 +123,7 @@ import {
 	detectedEditorsQueryOptions,
 	helmorQueryKeys,
 	helmorQueryPersister,
+	repositoriesQueryOptions,
 	sessionThreadMessagesQueryOptions,
 	workspaceChangeRequestQueryOptions,
 	workspaceDetailQueryOptions,
@@ -125,7 +137,9 @@ import { SendingSessionsProvider } from "./lib/sending-sessions-context";
 import {
 	type AppSettings,
 	type DarkTheme,
+	DEFAULT_KANBAN_VIEW_STATE,
 	DEFAULT_SETTINGS,
+	KANBAN_OPEN_INBOX_CARDS_MAX,
 	loadSettings,
 	resolveTheme,
 	SettingsContext,
@@ -136,8 +150,11 @@ import {
 	useSettings,
 } from "./lib/settings";
 import { flushSidebarListsIfIdle } from "./lib/sidebar-mutation-gate";
+import type { ContextCard } from "./lib/sources/types";
 import { useOsNotifications } from "./lib/use-os-notifications";
 import {
+	describeUnknownError,
+	getComposerContextKey,
 	recomputeWorkspaceDetailUnread,
 	recomputeWorkspaceUnreadInGroups,
 	summaryToArchivedRow,
@@ -505,6 +522,31 @@ function AppShell({
 	const kanbanBoardRestoreWidthRef = useRef(332);
 	const [kanbanResizeState, setKanbanResizeState] =
 		useState<KanbanResizeState | null>(null);
+	// Mirrors of the kanban header picker / toggle. Lifted from KanbanPage
+	// up here so the bottom kanban composer's submit handler can read the
+	// repo, source branch, and create-state the user clicked when they hit
+	// Enter to spin up a new workspace. Initial values are seeded
+	// optimistically from the synchronously-mounted DEFAULT_SETTINGS — the
+	// real persisted blob lands moments later when SettingsContext finishes
+	// loading and a mirror effect (below) overwrites these with the saved
+	// values. Resolving repoId from the saved blob also waits for the
+	// repositories query to resolve, see the dedicated repo-hydrate effect.
+	const [kanbanRepository, setKanbanRepository] =
+		useState<RepositoryCreateOption | null>(null);
+	const [kanbanSourceBranch, setKanbanSourceBranch] = useState<string | null>(
+		null,
+	);
+	const [kanbanCreateState, setKanbanCreateState] = useState<KanbanCreateState>(
+		DEFAULT_KANBAN_VIEW_STATE.createState,
+	);
+	const [kanbanInboxProviderTab, setKanbanInboxProviderTab] = useState<string>(
+		DEFAULT_KANBAN_VIEW_STATE.inboxProviderTab,
+	);
+	const [kanbanInboxProviderSourceTab, setKanbanInboxProviderSourceTab] =
+		useState<string>(DEFAULT_KANBAN_VIEW_STATE.inboxProviderSourceTab);
+	const [kanbanOpenInboxCards, setKanbanOpenInboxCards] = useState<
+		ContextCard[]
+	>(() => DEFAULT_KANBAN_VIEW_STATE.openInboxCards);
 	const [editorSession, setEditorSession] = useState<EditorSessionState | null>(
 		null,
 	);
@@ -2278,8 +2320,9 @@ function AppShell({
 				displayedWorkspaceId,
 				displayedSessionId,
 			});
+			const targetContextKey = resolvedTarget.contextKey ?? null;
 			const targetWorkspaceId = resolvedTarget.workspaceId;
-			if (!targetWorkspaceId) {
+			if (!targetContextKey && !targetWorkspaceId) {
 				pushWorkspaceToast(
 					"Open a workspace before inserting content into the composer.",
 					"Can't insert content",
@@ -2302,7 +2345,8 @@ function AppShell({
 				...current,
 				{
 					id: crypto.randomUUID(),
-					workspaceId: targetWorkspaceId,
+					contextKey: targetContextKey,
+					workspaceId: targetWorkspaceId ?? null,
 					sessionId: resolvedTarget.sessionId ?? null,
 					items,
 					behavior: request.behavior ?? "append",
@@ -2325,6 +2369,247 @@ function AppShell({
 			current.filter((r) => !consumed.has(r.id)),
 		);
 	}, []);
+
+	// Hydrate the kanban view's persisted UI state from settings.
+	//
+	// Two-phase, because the repo selection can only be resolved once the
+	// repositories list arrives:
+	//
+	//   Phase 1 — non-repo fields. Fires as soon as settings finish
+	//             loading. Ref-guarded so a later settings update doesn't
+	//             replay the same setters and revert in-flight edits.
+	//
+	//   Phase 2 — repoId. Waits for `repositoriesQuery.data` so the saved
+	//             string id can be mapped back to a full RepositoryCreateOption.
+	//
+	// `kanbanFullyHydrated` flips to true only when phase 2 has had its
+	// chance to run (or after we've decided no repo hydration is needed).
+	// The sync-back effect gates on that flag, which is the whole point —
+	// without the gate, sync-back fires immediately after phase 1 with
+	// `kanbanRepository?.id === null` and clobbers the persisted repoId
+	// before phase 2 can apply it.
+	const repositoriesQuery = useQuery(repositoriesQueryOptions());
+	const phase1HydratedRef = useRef(false);
+	const [kanbanFullyHydrated, setKanbanFullyHydrated] = useState(false);
+	useEffect(() => {
+		if (kanbanFullyHydrated) return;
+		if (!areSettingsLoaded) return;
+		const saved = appSettings.kanbanViewState;
+
+		if (!phase1HydratedRef.current) {
+			phase1HydratedRef.current = true;
+			setKanbanCreateState(saved.createState);
+			setKanbanInboxProviderTab(saved.inboxProviderTab);
+			setKanbanInboxProviderSourceTab(saved.inboxProviderSourceTab);
+			setKanbanOpenInboxCards(saved.openInboxCards);
+		}
+
+		if (!saved.repoId) {
+			// No saved selection — nothing more to wait for.
+			setKanbanFullyHydrated(true);
+			return;
+		}
+		const repos = repositoriesQuery.data;
+		if (!repos || repos.length === 0) {
+			// Wait for the next render where repos are populated. Stay
+			// un-hydrated so sync-back can't fire and clobber the saved
+			// repoId before we get a chance to apply it.
+			return;
+		}
+		const found = repos.find((r) => r.id === saved.repoId);
+		if (found) setKanbanRepository(found);
+		setKanbanFullyHydrated(true);
+	}, [
+		areSettingsLoaded,
+		appSettings.kanbanViewState,
+		kanbanFullyHydrated,
+		repositoriesQuery.data,
+	]);
+
+	// Push every kanban view-state change back to SQLite. Gated on
+	// `kanbanFullyHydrated` so the renders before phase 2 finishes don't
+	// overwrite the saved blob with the synchronous initial defaults.
+	// `updateSettings` is read through a ref (not a dep) to avoid the
+	// obvious feedback loop: this effect calls updateSettings →
+	// setAppSettings → updateSettings's identity changes → effect re-fires
+	// → infinite loop.
+	const updateSettingsRef = useRef(updateSettings);
+	useEffect(() => {
+		updateSettingsRef.current = updateSettings;
+	}, [updateSettings]);
+	useEffect(() => {
+		if (!kanbanFullyHydrated) return;
+		void updateSettingsRef.current({
+			kanbanViewState: {
+				createState: kanbanCreateState,
+				repoId: kanbanRepository?.id ?? null,
+				inboxProviderTab: kanbanInboxProviderTab,
+				inboxProviderSourceTab: kanbanInboxProviderSourceTab,
+				openInboxCards: kanbanOpenInboxCards,
+			},
+		});
+	}, [
+		kanbanCreateState,
+		kanbanRepository?.id,
+		kanbanInboxProviderTab,
+		kanbanInboxProviderSourceTab,
+		kanbanOpenInboxCards,
+		kanbanFullyHydrated,
+	]);
+
+	// Open an inbox card as a kanban main-content tab. Caps the open-tab
+	// list at KANBAN_OPEN_INBOX_CARDS_MAX — beyond that we toast and skip
+	// the addition rather than silently dropping the oldest tab, which
+	// would surprise the user (and risks losing context they were still
+	// reading). Reopening an already-open card is a no-op (no toast).
+	const handleKanbanOpenCard = useCallback(
+		(card: ContextCard) => {
+			setKanbanOpenInboxCards((current) => {
+				if (current.some((openedCard) => openedCard.id === card.id)) {
+					return current;
+				}
+				if (current.length >= KANBAN_OPEN_INBOX_CARDS_MAX) {
+					pushWorkspaceToast(
+						`Close one of the open ${KANBAN_OPEN_INBOX_CARDS_MAX} tabs before opening another card.`,
+						"Too many open cards",
+					);
+					return current;
+				}
+				return [...current, card];
+			});
+		},
+		[pushWorkspaceToast],
+	);
+
+	const handleKanbanCloseCard = useCallback((cardId: string) => {
+		setKanbanOpenInboxCards((current) =>
+			current.filter((card) => card.id !== cardId),
+		);
+	}, []);
+
+	// Kanban-mode composer submit: turn the user's prompt into a brand-new
+	// workspace. Phase 1 (`prepare`) returns the new workspace + initial
+	// session ids synchronously; Phase 2 (`finalize`) materialises the git
+	// worktree in the background. The "in progress" toggle dispatches the
+	// agent stream against the new session immediately by handing back the
+	// override to the conversation container; "backlog" persists the
+	// composer's full Lexical state to `sessions.draft_state` so the user
+	// finds their chips and prompt waiting when they later open the
+	// session, and skips the agent dispatch.
+	const handleKanbanComposerPrepare = useCallback(
+		async (
+			payload: ComposerSubmitPayload,
+		): Promise<KanbanCreatePrepareOutcome> => {
+			if (!kanbanRepository?.id) {
+				pushWorkspaceToast(
+					"Pick a repository before sending.",
+					"Can't create workspace",
+				);
+				return { shouldStream: false };
+			}
+
+			let prepared: Awaited<ReturnType<typeof prepareWorkspaceFromRepo>>;
+			try {
+				prepared = await prepareWorkspaceFromRepo(
+					kanbanRepository.id,
+					kanbanSourceBranch,
+				);
+			} catch (error) {
+				pushWorkspaceToast(
+					describeUnknownError(error, "Could not create workspace."),
+					"Can't create workspace",
+				);
+				return { shouldStream: false };
+			}
+
+			// Phase 2 — slow worktree creation runs in the background. The
+			// agent stream below blocks on the Rust side until finalize
+			// completes, so it's safe to fire-and-forget. We surface a toast
+			// only if Rust reports an outright failure (in which case it
+			// has already cleaned up the row + worktree).
+			void finalizeWorkspaceFromRepo(prepared.workspaceId).catch((error) => {
+				pushWorkspaceToast(
+					describeUnknownError(error, "Workspace setup failed."),
+					"Workspace setup failed",
+				);
+				void queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceGroups,
+				});
+			});
+
+			// Refresh the kanban board so the new card lands in its column
+			// immediately. Without this, the user has to wait for the next
+			// background poll to see the workspace they just created.
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceGroups,
+			});
+
+			if (kanbanCreateState === "backlog") {
+				try {
+					await setWorkspaceStatus(prepared.workspaceId, "backlog");
+				} catch (error) {
+					pushWorkspaceToast(
+						describeUnknownError(error, "Couldn't move card to Backlog."),
+					);
+				}
+				if (payload.editorStateSnapshot) {
+					try {
+						await setSessionDraft(
+							prepared.initialSessionId,
+							JSON.stringify(payload.editorStateSnapshot),
+						);
+					} catch (error) {
+						pushWorkspaceToast(
+							describeUnknownError(error, "Couldn't save draft."),
+						);
+					}
+				}
+				void queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceGroups,
+				});
+				return { shouldStream: false };
+			}
+
+			return {
+				shouldStream: true,
+				workspaceId: prepared.workspaceId,
+				sessionId: prepared.initialSessionId,
+				contextKey: getComposerContextKey(
+					prepared.workspaceId,
+					prepared.initialSessionId,
+				),
+			};
+		},
+		[
+			kanbanCreateState,
+			kanbanRepository?.id,
+			kanbanSourceBranch,
+			pushWorkspaceToast,
+			queryClient,
+		],
+	);
+
+	const kanbanCreateContext = useMemo<KanbanCreateContext | null>(
+		() =>
+			workspaceViewMode === "kanban"
+				? { prepare: handleKanbanComposerPrepare }
+				: null,
+		[workspaceViewMode, handleKanbanComposerPrepare],
+	);
+
+	// English placeholder that hints at the kanban view's "compose multiple
+	// inbox sources to create In-Progress or Backlog workspaces quickly"
+	// flow — distinct from the regular chat composer copy.
+	const kanbanComposerPlaceholder =
+		"Enter to launch a workspace or save as Backlog";
+
+	// Per-repo composer context key for the kanban bottom composer. Each
+	// repo gets its own draft slot so switching repos doesn't bleed a
+	// half-typed prompt across kanban contexts. Falls back to a single
+	// "no-repo" slot before the user picks a repository.
+	const kanbanComposerContextKey = kanbanRepository?.id
+		? `kanban:repo:${kanbanRepository.id}`
+		: "kanban:no-repo";
 
 	return (
 		<TooltipProvider delayDuration={0}>
@@ -2475,6 +2760,23 @@ function AppShell({
 													"inbox",
 												)}
 												onInboxResizeStart={handleKanbanResizeStart("inbox")}
+												repository={kanbanRepository}
+												onRepositoryChange={setKanbanRepository}
+												onSourceBranchChange={setKanbanSourceBranch}
+												createState={kanbanCreateState}
+												onCreateStateChange={setKanbanCreateState}
+												inboxProviderTab={kanbanInboxProviderTab}
+												onInboxProviderTabChange={setKanbanInboxProviderTab}
+												inboxProviderSourceTab={kanbanInboxProviderSourceTab}
+												onInboxProviderSourceTabChange={
+													setKanbanInboxProviderSourceTab
+												}
+												openInboxCards={kanbanOpenInboxCards}
+												onOpenInboxCard={handleKanbanOpenCard}
+												onCloseInboxCard={handleKanbanCloseCard}
+												composerInsertTarget={{
+													contextKey: kanbanComposerContextKey,
+												}}
 												resizeHitArea={SIDEBAR_RESIZE_HIT_AREA}
 											/>
 										)}
@@ -2506,12 +2808,38 @@ function AppShell({
 											}
 										>
 											<WorkspaceConversationContainer
-												selectedWorkspaceId={selectedWorkspaceId}
-												displayedWorkspaceId={displayedWorkspaceId}
-												selectedSessionId={selectedSessionId}
-												displayedSessionId={displayedSessionId}
+												// In kanban mode the bottom composer creates a brand-
+												// new workspace on submit, so it must NOT be tied to
+												// whichever workspace happens to be selected in the
+												// regular chat view. Pass null for all four selection
+												// props so the composer's context key falls back to
+												// the kanban-specific "global" slot — its own draft,
+												// no spillover into a previously-open session.
+												selectedWorkspaceId={
+													workspaceViewMode === "kanban"
+														? null
+														: selectedWorkspaceId
+												}
+												displayedWorkspaceId={
+													workspaceViewMode === "kanban"
+														? null
+														: displayedWorkspaceId
+												}
+												selectedSessionId={
+													workspaceViewMode === "kanban"
+														? null
+														: selectedSessionId
+												}
+												displayedSessionId={
+													workspaceViewMode === "kanban"
+														? null
+														: displayedSessionId
+												}
 												repoId={
-													selectedWorkspaceDetailQuery.data?.repoId ?? null
+													workspaceViewMode === "kanban"
+														? (kanbanRepository?.id ?? null)
+														: (selectedWorkspaceDetailQuery.data?.repoId ??
+															null)
 												}
 												sessionSelectionHistory={
 													selectedWorkspaceId
@@ -2553,6 +2881,18 @@ function AppShell({
 														? "pointer-events-auto mt-auto px-4 pb-4 pt-0"
 														: undefined
 												}
+												composerForceAvailable={workspaceViewMode === "kanban"}
+												composerContextKeyOverride={
+													workspaceViewMode === "kanban"
+														? kanbanComposerContextKey
+														: undefined
+												}
+												composerPlaceholder={
+													workspaceViewMode === "kanban"
+														? kanbanComposerPlaceholder
+														: undefined
+												}
+												kanbanCreateContext={kanbanCreateContext}
 												headerLeading={
 													sidebarCollapsed ? (
 														<>

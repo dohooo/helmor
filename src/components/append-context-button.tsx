@@ -118,7 +118,8 @@ export function AppendContextButton({
 		try {
 			const payload = await getPayload();
 			if (!payload) return;
-			insertIntoComposer(normalizeAppendContextPayload(payload));
+			const request = normalizeAppendContextPayload(payload);
+			insertIntoComposer(request);
 			onInserted?.();
 		} catch (error) {
 			pushToast(

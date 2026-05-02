@@ -25,10 +25,14 @@ fn notify_workspace_changed_in_background(app: AppHandle) {
 pub async fn prepare_workspace_from_repo(
     app: AppHandle,
     repo_id: String,
+    source_branch: Option<String>,
 ) -> CmdResult<workspaces::PrepareWorkspaceResponse> {
     let result = {
         let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
-        run_blocking(move || workspaces::prepare_workspace_from_repo_impl(&repo_id)).await?
+        run_blocking(move || {
+            workspaces::prepare_workspace_from_repo_impl(&repo_id, source_branch.as_deref())
+        })
+        .await?
     };
     notify_workspace_changed_in_background(app);
     Ok(result)

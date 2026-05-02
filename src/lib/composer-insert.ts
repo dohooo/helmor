@@ -63,6 +63,7 @@ export function buildComposerPreviewLabel(
 }
 
 export type ComposerInsertTarget = {
+	contextKey?: string | null;
 	workspaceId?: string | null;
 	sessionId?: string | null;
 };
@@ -75,7 +76,8 @@ export type ComposerInsertRequest = {
 
 export type ResolvedComposerInsertRequest = {
 	id: string;
-	workspaceId: string;
+	contextKey?: string | null;
+	workspaceId: string | null;
 	sessionId: string | null;
 	items: ComposerInsertItem[];
 	behavior: "append";
@@ -188,6 +190,7 @@ export function resolveComposerInsertTarget(
 	},
 ): ComposerInsertTarget {
 	return {
+		contextKey: requestTarget?.contextKey,
 		workspaceId:
 			requestTarget?.workspaceId ??
 			currentTarget.displayedWorkspaceId ??
@@ -201,8 +204,16 @@ export function resolveComposerInsertTarget(
 
 export function insertRequestMatchesComposer(
 	request: ResolvedComposerInsertRequest,
-	target: { workspaceId: string | null; sessionId: string | null },
+	target: {
+		contextKey?: string | null;
+		workspaceId: string | null;
+		sessionId: string | null;
+	},
 ): boolean {
+	if (request.contextKey) {
+		return request.contextKey === target.contextKey;
+	}
+
 	if (!target.workspaceId || request.workspaceId !== target.workspaceId) {
 		return false;
 	}

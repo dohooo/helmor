@@ -1,9 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Check, ChevronDown, GitBranch, X } from "lucide-react";
+import { Check, ChevronDown, GitBranch, X } from "lucide-react";
 import {
 	type PointerEvent as ReactPointerEvent,
 	useEffect,
-	useMemo,
 	useState,
 } from "react";
 import { BranchPickerPopover } from "@/components/branch-picker";
@@ -35,13 +34,27 @@ import { cn } from "@/lib/utils";
 import { SourceDetailView } from "./source-detail-views";
 
 export type KanbanMainTab = { card: ContextCard; id: string; kind: "card" };
-type KanbanCreateState = "in-progress" | "backlog";
+export type KanbanCreateState = "in-progress" | "backlog";
 
 type KanbanMainContentProps = {
 	activeTabId: string | null;
 	onActiveTabChange: (tabId: string) => void;
 	onCloseTab: (tabId: string) => void;
+	/** Currently-selected repository, controlled by the parent so its
+	 *  initial value can come from persisted settings without racing
+	 *  with this component's auto-pick fallback. */
+	selectedRepository: RepositoryCreateOption | null;
 	onRepositorySelect?: (repository: RepositoryCreateOption) => void;
+	/** Branch the new workspace should fork from. Lifted to the parent
+	 *  so the kanban composer's submit handler can read the same value
+	 *  the picker shows. Defaults to the repo's default branch via the
+	 *  initial-paint effect inside this component. */
+	onSourceBranchChange?: (branch: string | null) => void;
+	/** Whether new workspaces land in "in progress" (start agent
+	 *  immediately) or "backlog" (save draft, no agent). Controlled by
+	 *  the parent so the persisted value drives the initial render. */
+	createState: KanbanCreateState;
+	onCreateStateChange?: (state: KanbanCreateState) => void;
 	tabs: KanbanMainTab[];
 };
 
@@ -49,19 +62,17 @@ export function KanbanMainContent({
 	activeTabId,
 	onActiveTabChange,
 	onCloseTab,
+	selectedRepository,
 	onRepositorySelect,
+	onSourceBranchChange,
+	createState,
+	onCreateStateChange,
 	tabs,
 }: KanbanMainContentProps) {
 	const repositoriesQuery = useQuery(repositoriesQueryOptions());
 	const repositories = repositoriesQuery.data ?? [];
-	const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
+	const selectedRepoId = selectedRepository?.id ?? null;
 	const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
-	const [createState, setCreateState] =
-		useState<KanbanCreateState>("in-progress");
-	const selectedRepository = useMemo(
-		() => repositories.find((repo) => repo.id === selectedRepoId) ?? null,
-		[repositories, selectedRepoId],
-	);
 	const repoBranchesQuery = useQuery({
 		queryKey: ["kanban", "repoBranches", selectedRepoId],
 		queryFn: () => listRemoteBranches({ repoId: selectedRepoId ?? undefined }),
@@ -80,25 +91,21 @@ export function KanbanMainContent({
 		event.stopPropagation();
 	};
 
+	// Auto-pick the first repo when none is selected (or the persisted
+	// selection has gone away). Bubbles via `onRepositorySelect` so the
+	// parent's controlled state — and the inbox sidebar's repo filter —
+	// catch up on the same render.
 	useEffect(() => {
 		if (repositories.length === 0) {
-			setSelectedRepoId(null);
 			setSelectedBranch(null);
 			return;
 		}
-
 		if (
 			!selectedRepoId ||
 			!repositories.some((repo) => repo.id === selectedRepoId)
 		) {
 			const [firstRepository] = repositories;
-			setSelectedRepoId(firstRepository.id);
 			setSelectedBranch(firstRepository.defaultBranch ?? null);
-			// Notify the parent on auto-pick too — otherwise the inbox
-			// sidebar wouldn't see the selection until the user
-			// manually opens the picker. Effect already gates on
-			// "selection missing", so this fires once per repo list
-			// transition, not on every render.
 			onRepositorySelect?.(firstRepository);
 		}
 	}, [repositories, selectedRepoId, onRepositorySelect]);
@@ -115,6 +122,14 @@ export function KanbanMainContent({
 		setSelectedBranch(branchOptions[0]);
 	}, [branchOptions, selectedBranch, selectedRepository]);
 
+	// Bubble the resolved branch up to App.tsx so the kanban composer's
+	// submit handler reads the same value the picker shows. `createState`
+	// is already controlled (its setter on the toggle calls the parent
+	// directly), so it doesn't need a mirror effect here.
+	useEffect(() => {
+		onSourceBranchChange?.(currentBranch || null);
+	}, [currentBranch, onSourceBranchChange]);
+
 	return (
 		<div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
 			<header className="relative z-20 min-w-0 shrink-0">
@@ -127,14 +142,9 @@ export function KanbanMainContent({
 						repositories={repositories}
 						selectedRepository={selectedRepository}
 						onRepositorySelect={(repository) => {
-							setSelectedRepoId(repository.id);
 							setSelectedBranch(repository.defaultBranch ?? null);
 							onRepositorySelect?.(repository);
 						}}
-					/>
-					<ArrowRight
-						className="relative top-px size-3 shrink-0 text-muted-foreground"
-						strokeWidth={1.8}
 					/>
 					<BranchPickerPopover
 						currentBranch={currentBranch}
@@ -164,8 +174,8 @@ export function KanbanMainContent({
 					<KanbanCreateStateToggle
 						state={createState}
 						onToggle={() =>
-							setCreateState((current) =>
-								current === "in-progress" ? "backlog" : "in-progress",
+							onCreateStateChange?.(
+								createState === "in-progress" ? "backlog" : "in-progress",
 							)
 						}
 					/>

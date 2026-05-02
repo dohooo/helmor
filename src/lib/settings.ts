@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createContext, useContext } from "react";
+import type { ContextCard } from "./sources/types";
 
 export type ThemeMode = "system" | "light" | "dark";
 
@@ -40,6 +41,36 @@ export const DEFAULT_INBOX_ACCOUNT_TOGGLES: InboxAccountSourceToggles = {
 	discussions: true,
 };
 
+/** Cap on how many inbox cards the kanban view will keep open as
+ *  main-content tabs (and persist across restarts). Beyond this the
+ *  user gets a toast nudging them to close some — keeps the tab strip
+ *  legible and the persisted blob bounded. */
+export const KANBAN_OPEN_INBOX_CARDS_MAX = 10;
+
+/** Persisted UI state for the kanban view — the bits that should
+ *  survive an app restart so the user lands back in the same place
+ *  next time they open the kanban tab. Each field has a graceful
+ *  fallback so a corrupt or partial blob still produces sane UI. */
+export type KanbanViewState = {
+	/** Whether new kanban workspaces land in "in progress" (immediate
+	 *  agent dispatch) or "backlog" (draft saved, no agent). */
+	createState: "in-progress" | "backlog";
+	/** Repository id last selected in the kanban header picker.
+	 *  Resolved against the current repo list on hydrate — falls back
+	 *  to the first repo when the saved id is no longer present. */
+	repoId: string | null;
+	/** Inbox top-level provider tab id (e.g. "github", "linear"). Plain
+	 *  string here so settings.ts stays free of feature-module imports;
+	 *  consumers cast against their own narrower types. */
+	inboxProviderTab: string;
+	/** Inbox sub-tab id within the provider (e.g. "github_issue",
+	 *  "github_pr", "github_discussion"). */
+	inboxProviderSourceTab: string;
+	/** Inbox cards open as main-content tabs at last app exit. Capped
+	 *  at `KANBAN_OPEN_INBOX_CARDS_MAX`. */
+	openInboxCards: ContextCard[];
+};
+
 export type AppSettings = {
 	fontSize: number;
 	theme: ThemeMode;
@@ -71,6 +102,15 @@ export type AppSettings = {
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
 	inboxSourceConfig: InboxSourceConfig;
+	kanbanViewState: KanbanViewState;
+};
+
+export const DEFAULT_KANBAN_VIEW_STATE: KanbanViewState = {
+	createState: "in-progress",
+	repoId: null,
+	inboxProviderTab: "github",
+	inboxProviderSourceTab: "github_issue",
+	openInboxCards: [],
 };
 
 /**
@@ -106,6 +146,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		customModels: "",
 	},
 	inboxSourceConfig: { accounts: {} },
+	kanbanViewState: DEFAULT_KANBAN_VIEW_STATE,
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
@@ -142,6 +183,7 @@ const SETTINGS_KEY_MAP: Record<
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
 	inboxSourceConfig: "app.inbox_source_config",
+	kanbanViewState: "app.kanban_view_state",
 };
 
 function parseShortcutOverrides(raw: string | undefined): ShortcutOverrides {
@@ -189,6 +231,53 @@ function parseInboxSourceConfig(raw: string | undefined): InboxSourceConfig {
 		return { accounts };
 	} catch {
 		return DEFAULT_SETTINGS.inboxSourceConfig;
+	}
+}
+
+function parseKanbanViewState(raw: string | undefined): KanbanViewState {
+	if (!raw) return DEFAULT_KANBAN_VIEW_STATE;
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			return DEFAULT_KANBAN_VIEW_STATE;
+		}
+		const o = parsed as Partial<KanbanViewState>;
+		const createState =
+			o.createState === "backlog" || o.createState === "in-progress"
+				? o.createState
+				: DEFAULT_KANBAN_VIEW_STATE.createState;
+		const repoId = typeof o.repoId === "string" && o.repoId ? o.repoId : null;
+		const inboxProviderTab =
+			typeof o.inboxProviderTab === "string" && o.inboxProviderTab
+				? o.inboxProviderTab
+				: DEFAULT_KANBAN_VIEW_STATE.inboxProviderTab;
+		const inboxProviderSourceTab =
+			typeof o.inboxProviderSourceTab === "string" && o.inboxProviderSourceTab
+				? o.inboxProviderSourceTab
+				: DEFAULT_KANBAN_VIEW_STATE.inboxProviderSourceTab;
+		// Trust the persisted ContextCard array as long as it's an array
+		// of objects — the cards are written by the same code that reads
+		// them, and a deep schema check here would couple settings.ts to
+		// every field we add to ContextCard. Cap at the bound so an old
+		// blob from before the cap doesn't blow up the UI.
+		const openInboxCardsRaw = Array.isArray(o.openInboxCards)
+			? o.openInboxCards
+			: [];
+		const openInboxCards = openInboxCardsRaw
+			.filter(
+				(card): card is ContextCard =>
+					Boolean(card) && typeof card === "object" && !Array.isArray(card),
+			)
+			.slice(0, KANBAN_OPEN_INBOX_CARDS_MAX);
+		return {
+			createState,
+			repoId,
+			inboxProviderTab,
+			inboxProviderSourceTab,
+			openInboxCards,
+		};
+	} catch {
+		return DEFAULT_KANBAN_VIEW_STATE;
 	}
 }
 
@@ -300,6 +389,9 @@ export async function loadSettings(): Promise<AppSettings> {
 			inboxSourceConfig: parseInboxSourceConfig(
 				raw[SETTINGS_KEY_MAP.inboxSourceConfig],
 			),
+			kanbanViewState: parseKanbanViewState(
+				raw[SETTINGS_KEY_MAP.kanbanViewState],
+			),
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS };
@@ -336,7 +428,8 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 			settings[dbKey] =
 				key === "shortcuts" ||
 				key === "claudeCustomProviders" ||
-				key === "inboxSourceConfig"
+				key === "inboxSourceConfig" ||
+				key === "kanbanViewState"
 					? JSON.stringify(value)
 					: value === null
 						? ""

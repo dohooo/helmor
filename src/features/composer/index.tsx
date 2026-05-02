@@ -3,7 +3,7 @@ import { ContentEditable } from "@lexical/react/LexicalContentEditable";
 import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
 import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
-import type { LexicalEditor } from "lexical";
+import type { LexicalEditor, SerializedEditorState } from "lexical";
 import { $getRoot } from "lexical";
 import {
 	ArrowUp,
@@ -101,6 +101,12 @@ type WorkspaceComposerProps = {
 			/** Submit with the opposite follow-up behavior (queue ↔ steer)
 			 *  for this single message, leaving the persistent setting alone. */
 			oppositeFollowUp?: boolean;
+			/** Snapshot of the editor's full Lexical state at submit time.
+			 *  Captured synchronously before the editor clears so callers
+			 *  that need to round-trip chips/text/images (e.g. the kanban
+			 *  "backlog" submit handler that copies the draft into a freshly
+			 *  created session) can do so without a re-encode pass. */
+			editorStateSnapshot?: SerializedEditorState;
 		},
 	) => void;
 	disabled?: boolean;
@@ -170,6 +176,10 @@ type WorkspaceComposerProps = {
 	/** Hotkey that submits the current draft with the opposite follow-up
 	 *  behavior (queue ↔ steer) for one message. */
 	toggleFollowUpShortcut?: string | null;
+	/** Custom placeholder string. When omitted, falls back to the default
+	 *  "Ask to make changes…" copy. The kanban view supplies a hint that
+	 *  nudges the user toward composing inbox sources for new workspaces. */
+	placeholder?: string;
 };
 
 const EMPTY_SLASH_COMMANDS: readonly SlashCommandEntry[] = [];
@@ -222,6 +232,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	restoreNonce = 0,
 	pendingInsertRequests = [],
 	onPendingInsertRequestsConsumed,
+	placeholder,
 	slashCommands = EMPTY_SLASH_COMMANDS,
 	slashCommandsLoading = false,
 	slashCommandsError = false,
@@ -468,13 +479,19 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				customTags.length === 0
 			)
 				return;
-			if (options?.oppositeFollowUp) {
-				onSubmit(prompt, images, files, customTags, {
-					oppositeFollowUp: true,
-				});
-			} else {
-				onSubmit(prompt, images, files, customTags);
-			}
+			// Snapshot the editor's full Lexical state BEFORE the clear below
+			// wipes it. Synchronous capture is critical because callers that
+			// want to round-trip the draft (e.g. kanban "backlog" submit
+			// copying chips/text/images into a freshly-created session) read
+			// from this snapshot — by the time their async work runs, the
+			// editor is already empty.
+			const editorStateSnapshot = editor
+				.getEditorState()
+				.toJSON() as SerializedEditorState;
+			onSubmit(prompt, images, files, customTags, {
+				oppositeFollowUp: options?.oppositeFollowUp,
+				editorStateSnapshot,
+			});
 			editor.update(() => {
 				$getRoot().clear();
 			});
@@ -633,7 +650,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 									<div className="pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-muted-foreground/70">
 										{hasPlanReview && permissionMode === "plan"
 											? "Describe what to change, then click Request Changes"
-											: "Ask to make changes, @mention files, run /commands"}
+											: (placeholder ??
+												"Ask to make changes, @mention files, run /commands")}
 									</div>
 								}
 								ErrorBoundary={LexicalErrorBoundary}
