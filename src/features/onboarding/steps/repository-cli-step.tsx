@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/hover-card";
 import { Input } from "@/components/ui/input";
 import {
+	backfillForgeRepoBindings,
 	type ForgeAccount,
 	type ForgeProvider,
 	listForgeLogins,
@@ -290,9 +291,21 @@ export function RepositoryCliStep({
 		// another login. GitHub spawns a fresh terminal; GitLab
 		// opens the host input form.
 		resetFlowTo(pending.provider);
+		// Sync the just-added account against any pre-existing repos
+		// (e.g. from a prior session) so they pick up the binding
+		// without an app restart. Mirrors the Settings → Account flow.
+		void backfillForgeRepoBindings()
+			.then((bound) => {
+				if (bound > 0) {
+					void queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.repositories,
+					});
+				}
+			})
+			.catch(() => {});
 		const label = pending.provider === "gitlab" ? "GitLab" : "GitHub";
 		toast.success(`${label} connected as @${pending.login}`);
-	}, [addingAccount, accountsQuery.data, resetFlowTo]);
+	}, [addingAccount, accountsQuery.data, resetFlowTo, queryClient]);
 
 	// Fail-safe: if the profile fetch never lands (network error,
 	// stale cache, etc.) drop pending after 10s so the spinner can't
