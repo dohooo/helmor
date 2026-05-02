@@ -9,7 +9,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pause, Play, Target, X } from "lucide-react";
 import { toast } from "sonner";
-import { ActionRow, ActionRowButton } from "@/components/action-row";
+import { ActionRowButton } from "@/components/action-row";
 import { type CodexGoalState, mutateCodexGoal } from "@/lib/api";
 import {
 	helmorQueryKeys,
@@ -41,13 +41,9 @@ type Action = "pause" | "resume" | "clear";
 
 export function CodexGoalBanner({
 	sessionId,
-	hasQueueBelow,
 	disabled,
 }: {
 	sessionId: string;
-	/** When the submit-queue list renders directly below, the banner keeps
-	 *  its rounded top but should not double up on the bottom border. */
-	hasQueueBelow?: boolean;
 	disabled?: boolean;
 }) {
 	const queryClient = useQueryClient();
@@ -101,75 +97,60 @@ export function CodexGoalBanner({
 	return (
 		<div
 			data-testid="codex-goal-banner"
-			className={cn(
-				"pointer-events-auto relative z-0 mx-auto w-[90%] overflow-hidden rounded-t-2xl border border-b-0 border-secondary/80 bg-background",
-				// When queue is directly below, drop the bottom rounding so the
-				// next row meets us flush. SubmitQueueList already has no
-				// bottom border itself, so visually they stack as one block.
-				hasQueueBelow && "border-b-0",
-			)}
+			className="pointer-events-auto mx-auto flex w-fit max-w-[90%] items-center gap-2 rounded-md border border-secondary/80 bg-background px-3 py-1 text-xs shadow-sm"
 		>
-			<ActionRow
-				className="border-0 bg-transparent px-3 py-1 pb-0.5 pt-0.5"
-				leading={
-					<>
-						<Target
-							className="size-3.5 shrink-0 text-muted-foreground/70"
-							strokeWidth={1.8}
-							aria-hidden
-						/>
-						<span className="truncate text-[12px] font-medium tracking-[0.01em] text-foreground">
-							{goal.objective}
-						</span>
-						<span
-							className={cn(
-								"shrink-0 text-[11px] uppercase tracking-wider",
-								STATUS_TONE[goal.status],
-							)}
-						>
-							{STATUS_LABEL[goal.status]}
-						</span>
-						<span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/70">
-							{budget ? `${used} / ${budget}` : used}
-						</span>
-					</>
-				}
-				trailing={
-					<>
-						{goal.status === "active" && (
-							<ActionRowButton
-								type="button"
-								aria-label="Pause goal"
-								disabled={isPending}
-								onClick={() => mutation.mutate("pause")}
-							>
-								<Pause className="size-[13px] shrink-0" strokeWidth={1.8} />
-								<span>Pause</span>
-							</ActionRowButton>
-						)}
-						{goal.status === "paused" && (
-							<ActionRowButton
-								type="button"
-								aria-label="Resume goal"
-								disabled={isPending}
-								onClick={() => mutation.mutate("resume")}
-							>
-								<Play className="size-[13px] shrink-0" strokeWidth={1.8} />
-								<span>Resume</span>
-							</ActionRowButton>
-						)}
-						<ActionRowButton
-							type="button"
-							aria-label="Clear goal"
-							disabled={isPending}
-							onClick={() => mutation.mutate("clear")}
-						>
-							<X className="size-[13px] shrink-0" strokeWidth={1.8} />
-							<span>Clear</span>
-						</ActionRowButton>
-					</>
-				}
+			<Target
+				className="size-3.5 shrink-0 text-muted-foreground/70"
+				strokeWidth={1.8}
+				aria-hidden
 			/>
+			<span className="truncate text-[12px] font-medium tracking-[0.01em] text-foreground">
+				{goal.objective}
+			</span>
+			<span
+				className={cn(
+					"shrink-0 text-[11px] uppercase tracking-wider",
+					STATUS_TONE[goal.status],
+				)}
+			>
+				{STATUS_LABEL[goal.status]}
+			</span>
+			<span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/70">
+				{budget ? `${used} / ${budget}` : used}
+			</span>
+			<div className="ml-1 flex shrink-0 items-center gap-1">
+				{goal.status === "active" && (
+					<ActionRowButton
+						type="button"
+						aria-label="Pause goal"
+						disabled={isPending}
+						onClick={() => mutation.mutate("pause")}
+					>
+						<Pause className="size-[13px] shrink-0" strokeWidth={1.8} />
+						<span>Pause</span>
+					</ActionRowButton>
+				)}
+				{goal.status === "paused" && (
+					<ActionRowButton
+						type="button"
+						aria-label="Resume goal"
+						disabled={isPending}
+						onClick={() => mutation.mutate("resume")}
+					>
+						<Play className="size-[13px] shrink-0" strokeWidth={1.8} />
+						<span>Resume</span>
+					</ActionRowButton>
+				)}
+				<ActionRowButton
+					type="button"
+					aria-label="Clear goal"
+					disabled={isPending}
+					onClick={() => mutation.mutate("clear")}
+				>
+					<X className="size-[13px] shrink-0" strokeWidth={1.8} />
+					<span>Clear</span>
+				</ActionRowButton>
+			</div>
 		</div>
 	);
 }

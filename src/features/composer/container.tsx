@@ -792,11 +792,10 @@ export const WorkspaceComposerContainer = memo(
 				) : null}
 
 				<div className="relative z-10">
-					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex flex-col items-center">
+					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex flex-col items-center gap-1.5">
 						{displayedSessionId ? (
 							<CodexGoalBanner
 								sessionId={displayedSessionId}
-								hasQueueBelow={queueItems.length > 0}
 								disabled={composerUnavailable}
 							/>
 						) : null}
