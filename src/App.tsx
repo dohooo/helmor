@@ -2440,17 +2440,20 @@ function AppShell({
 	// Push every kanban view-state change back to SQLite. Gated on
 	// `kanbanFullyHydrated` so the renders before phase 2 finishes don't
 	// overwrite the saved blob with the synchronous initial defaults.
-	// `updateSettings` is read through a ref (not a dep) to avoid the
-	// obvious feedback loop: this effect calls updateSettings →
-	// setAppSettings → updateSettings's identity changes → effect re-fires
-	// → infinite loop.
-	const updateSettingsRef = useRef(updateSettings);
-	useEffect(() => {
-		updateSettingsRef.current = updateSettings;
-	}, [updateSettings]);
+	//
+	// IMPORTANT — uses `saveSettings` directly (write-only) instead of
+	// `updateSettings` (write + setAppSettings). Going through React state
+	// would force `settingsContextValue` to rebuild on every kanban
+	// interaction, which in turn re-renders every `useSettings()`
+	// consumer (panel / composer / conversation / inspector / inbox / …).
+	// `appSettings.kanbanViewState` is only read once during the
+	// hydration effect above — after hydration completes we never need
+	// React to know about kanban view-state changes again, so we bypass
+	// the context entirely and let SQLite be the source of truth across
+	// restarts.
 	useEffect(() => {
 		if (!kanbanFullyHydrated) return;
-		void updateSettingsRef.current({
+		void saveSettings({
 			kanbanViewState: {
 				createState: kanbanCreateState,
 				repoId: kanbanRepository?.id ?? null,
