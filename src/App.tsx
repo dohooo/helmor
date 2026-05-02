@@ -2641,6 +2641,15 @@ function AppShell({
 	const kanbanComposerContextKey = kanbanRepository?.id
 		? `kanban:repo:${kanbanRepository.id}`
 		: "kanban:no-repo";
+	// Stable identity for the composer-insert target passed to KanbanPage.
+	// Without `useMemo`, a fresh `{ contextKey }` object is created on every
+	// MainApp render, which defeats the `React.memo` wrapper around
+	// `InboxSidebar` and forces 20+ `SourceCard` children to re-render on
+	// every kanban interaction.
+	const kanbanComposerInsertTarget = useMemo(
+		() => ({ contextKey: kanbanComposerContextKey }),
+		[kanbanComposerContextKey],
+	);
 
 	return (
 		<TooltipProvider delayDuration={0}>
@@ -2812,9 +2821,7 @@ function AppShell({
 												openInboxCards={kanbanOpenInboxCards}
 												onOpenInboxCard={handleKanbanOpenCard}
 												onCloseInboxCard={handleKanbanCloseCard}
-												composerInsertTarget={{
-													contextKey: kanbanComposerContextKey,
-												}}
+												composerInsertTarget={kanbanComposerInsertTarget}
 												resizeHitArea={SIDEBAR_RESIZE_HIT_AREA}
 											/>
 										)}
