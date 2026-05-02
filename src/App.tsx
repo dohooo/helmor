@@ -1454,6 +1454,7 @@ function AppShell({
 		commitButtonMode,
 		commitButtonState,
 		handleInspectorCommitAction,
+		handleInspectorReviewPrAction,
 		handlePendingPromptConsumed,
 		pendingPromptForSession,
 		queuePendingPromptForSession,
@@ -2583,6 +2584,13 @@ function AppShell({
 												activeEditorPath={editorSession?.path ?? null}
 												onOpenEditorFile={handleOpenEditorFile}
 												onCommitAction={handleInspectorCommitAction}
+												onReviewPrAction={() =>
+													handleInspectorReviewPrAction({
+														modelId:
+															appSettings.reviewPrModelId ??
+															appSettings.defaultModelId,
+													})
+												}
 												currentSessionId={displayedSessionId}
 												onQueuePendingPromptForSession={
 													queuePendingPromptForSession

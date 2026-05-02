@@ -166,4 +166,43 @@ describe("repo preference prompts", () => {
 			"Fix the failing tests.",
 		);
 	});
+
+	it("returns the review-pr default prompt when no override is set", () => {
+		const prompt = resolveRepoPreferencePrompt({
+			key: "reviewPr",
+			repoPreferences: {},
+		});
+		expect(prompt).toContain("Review the open pull request");
+		expect(prompt).toContain("IN THIS CHAT ONLY");
+		expect(prompt).toContain("`gh pr diff`");
+		expect(prompt).not.toContain("### User Preferences");
+	});
+
+	it("appends review-pr overrides after the built-in prompt", () => {
+		const prompt = resolveRepoPreferencePrompt({
+			key: "reviewPr",
+			repoPreferences: { reviewPr: "Always check for missing tests." },
+		});
+		expect(prompt).toContain("Review the open pull request");
+		expect(prompt).toContain(
+			"### User Preferences\n\nAlways check for missing tests.",
+		);
+	});
+
+	it("uses the GitLab dialect in the review-pr prompt when forge is GitLab", () => {
+		const prompt = resolveRepoPreferencePrompt({
+			key: "reviewPr",
+			repoPreferences: {},
+			forge: GITLAB_FORGE,
+		});
+		expect(prompt).toContain("Review the open merge request");
+		expect(prompt).toContain("`glab mr diff`");
+		expect(prompt).not.toContain("`gh pr diff`");
+	});
+
+	it("uses generic prose in the review-pr preview", () => {
+		const preview = resolveRepoPreferencePreview("reviewPr", {});
+		expect(preview).toContain("Review the open pull request");
+		expect(preview).toContain("IN THIS CHAT ONLY");
+	});
 });

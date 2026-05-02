@@ -221,6 +221,26 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add action_kind column")?;
     }
 
+    // Migration: add custom_prompt_review_pr column for the Review PR action
+    // (mirrors custom_prompt_create_pr — repo-level prompt override).
+    let has_repos_table_for_review: bool = connection
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'repos'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+    if has_repos_table_for_review {
+        let has_review_col: bool = connection
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('repos') WHERE name = 'custom_prompt_review_pr'",
+            )
+            .and_then(|mut stmt| stmt.exists([]))
+            .unwrap_or(false);
+        if !has_review_col {
+            connection
+                .execute_batch("ALTER TABLE repos ADD COLUMN custom_prompt_review_pr TEXT")
+                .context("Failed to add custom_prompt_review_pr column")?;
+        }
+    }
+
     // Migration: wrap plain-text user prompts as JSON.
     //
     // Pre-migration, the `content` column held a union type: assistant/system/
@@ -496,6 +516,7 @@ CREATE TABLE IF NOT EXISTS repos (
     run_script TEXT,
     remote TEXT,
     custom_prompt_create_pr TEXT,
+    custom_prompt_review_pr TEXT,
     custom_prompt_rename_branch TEXT,
     custom_prompt_general TEXT,
     hidden INTEGER DEFAULT 0,

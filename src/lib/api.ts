@@ -49,6 +49,7 @@ export type PrSyncState = "none" | "open" | "closed" | "merged";
  */
 export type ActionKind =
 	| "create-pr"
+	| "review-pr"
 	| "commit-and-push"
 	| "push"
 	| "fix"
@@ -2405,6 +2406,7 @@ export type RepoScripts = {
 
 export type RepoPreferences = {
 	createPr?: string | null;
+	reviewPr?: string | null;
 	fixErrors?: string | null;
 	resolveConflicts?: string | null;
 	branchRename?: string | null;
