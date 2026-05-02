@@ -27,6 +27,23 @@ pub struct InboxToggles {
     pub discussions: bool,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxFilters {
+    pub query: Option<String>,
+    pub state: Option<InboxStateFilter>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InboxStateFilter {
+    Open,
+    Closed,
+    Merged,
+    Answered,
+    Unanswered,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InboxPage {
@@ -167,6 +184,46 @@ fn repo_qualifier(filter: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
+fn sanitize_search_query(query: &str) -> Option<String> {
+    let cleaned = query
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '"' | '\\' | ':') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect::<String>();
+    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        None
+    } else {
+        Some(collapsed)
+    }
+}
+
+fn search_qualifier(query: Option<&str>) -> String {
+    query
+        .and_then(sanitize_search_query)
+        .map(|safe| format!("{safe} in:title,body "))
+        .unwrap_or_default()
+}
+
+fn state_qualifier(source: InboxSource, state: Option<InboxStateFilter>) -> &'static str {
+    match (source, state) {
+        (InboxSource::GithubIssue, Some(InboxStateFilter::Open)) => "is:open ",
+        (InboxSource::GithubIssue, Some(InboxStateFilter::Closed)) => "is:closed ",
+        (InboxSource::GithubPr, Some(InboxStateFilter::Open)) => "is:open ",
+        (InboxSource::GithubPr, Some(InboxStateFilter::Closed)) => "is:closed is:unmerged ",
+        (InboxSource::GithubPr, Some(InboxStateFilter::Merged)) => "is:merged ",
+        (InboxSource::GithubDiscussion, Some(InboxStateFilter::Answered)) => "is:answered ",
+        (InboxSource::GithubDiscussion, Some(InboxStateFilter::Unanswered)) => "is:unanswered ",
+        _ => "",
+    }
+}
+
 /// Public entry point — driven by the `list_inbox_items` Tauri command.
 pub fn list_inbox_items(
     login: &str,
@@ -174,10 +231,17 @@ pub fn list_inbox_items(
     cursor: Option<&str>,
     limit: usize,
     repo_filter: Option<&str>,
+    filters: Option<InboxFilters>,
 ) -> Result<InboxPage> {
     let limit = limit.clamp(1, 100);
     let mut state = decode_cursor(cursor)?;
     let repo_qual = repo_qualifier(repo_filter);
+    let search_qual = search_qualifier(
+        filters
+            .as_ref()
+            .and_then(|filters| filters.query.as_deref()),
+    );
+    let state_filter = filters.as_ref().and_then(|filters| filters.state);
 
     tracing::debug!(
         target: "helmor::inbox",
@@ -186,6 +250,8 @@ pub fn list_inbox_items(
         ?state,
         limit,
         repo_filter,
+        query_filter = filters.as_ref().and_then(|filters| filters.query.as_deref()),
+        state_filter = ?state_filter,
         "list_inbox_items: starting page"
     );
 
@@ -204,7 +270,10 @@ pub fn list_inbox_items(
     let mut items: Vec<InboxItem> = Vec::new();
 
     if toggles.issues && !state.issues.done {
-        let q = format!("{repo_qual}is:issue {involvement_qual}archived:false");
+        let q = format!(
+            "{repo_qual}{search_qual}is:issue {}{involvement_qual}archived:false",
+            state_qualifier(InboxSource::GithubIssue, state_filter)
+        );
         match fetch_search(login, &q, &state.issues.cursor)? {
             FetchOutcome::Auth => {
                 tracing::warn!(target: "helmor::inbox", login, "issues search: auth required");
@@ -235,7 +304,10 @@ pub fn list_inbox_items(
     }
 
     if toggles.prs && !state.prs.done {
-        let q = format!("{repo_qual}is:pr {involvement_qual}archived:false");
+        let q = format!(
+            "{repo_qual}{search_qual}is:pr {}{involvement_qual}archived:false",
+            state_qualifier(InboxSource::GithubPr, state_filter)
+        );
         match fetch_search(login, &q, &state.prs.cursor)? {
             FetchOutcome::Auth => {
                 tracing::warn!(target: "helmor::inbox", login, "prs search: auth required");
@@ -270,6 +342,8 @@ pub fn list_inbox_items(
             login,
             &state.discussions.cursor,
             &repo_qual,
+            &search_qual,
+            state_qualifier(InboxSource::GithubDiscussion, state_filter),
             involvement_qual,
         )? {
             FetchOutcome::Auth => {
@@ -840,9 +914,11 @@ fn fetch_discussion_search(
     login: &str,
     cursor: &Option<String>,
     repo_qual: &str,
+    search_qual: &str,
+    state_qual: &str,
     involvement_qual: &str,
 ) -> Result<FetchOutcome<SearchPage<DiscussionNode>>> {
-    let q = format!("{repo_qual}{involvement_qual}sort:updated-desc");
+    let q = format!("{repo_qual}{search_qual}{state_qual}{involvement_qual}sort:updated-desc");
     let cursor_arg = cursor.clone().unwrap_or_default();
     let mut variables: Vec<(&str, &str)> = vec![("q", q.as_str())];
     if !cursor_arg.is_empty() {
@@ -1109,5 +1185,41 @@ mod tests {
         assert_eq!(repo_qualifier(Some("")), "");
         assert_eq!(repo_qualifier(Some("invalid")), "");
         assert_eq!(repo_qualifier(Some("dosu-ai/dosu")), "repo:dosu-ai/dosu ");
+    }
+
+    #[test]
+    fn search_qualifier_sanitizes_user_text() {
+        assert_eq!(search_qualifier(None), "");
+        assert_eq!(
+            search_qualifier(Some("  refresh token  ")),
+            "refresh token in:title,body "
+        );
+        assert_eq!(
+            search_qualifier(Some("is:open \"quoted\"")),
+            "is open quoted in:title,body ",
+        );
+    }
+
+    #[test]
+    fn state_qualifier_maps_source_specific_states() {
+        assert_eq!(
+            state_qualifier(InboxSource::GithubIssue, Some(InboxStateFilter::Open)),
+            "is:open ",
+        );
+        assert_eq!(
+            state_qualifier(InboxSource::GithubPr, Some(InboxStateFilter::Closed)),
+            "is:closed is:unmerged ",
+        );
+        assert_eq!(
+            state_qualifier(
+                InboxSource::GithubDiscussion,
+                Some(InboxStateFilter::Answered),
+            ),
+            "is:answered ",
+        );
+        assert_eq!(
+            state_qualifier(InboxSource::GithubIssue, Some(InboxStateFilter::Merged)),
+            "",
+        );
     }
 }

@@ -999,6 +999,18 @@ export type InboxToggles = {
 	discussions: boolean;
 };
 
+export type InboxStateFilter =
+	| "open"
+	| "closed"
+	| "merged"
+	| "answered"
+	| "unanswered";
+
+export type InboxFilters = {
+	query?: string | null;
+	state?: InboxStateFilter | null;
+};
+
 export async function listInboxItems(args: {
 	provider: ForgeProvider;
 	login: string;
@@ -1008,6 +1020,7 @@ export async function listInboxItems(args: {
 	/** GitHub `owner/name` filter — when present, all enabled kinds are
 	 *  scoped to that single repo via a `repo:owner/name` qualifier. */
 	repo?: string | null;
+	filters?: InboxFilters | null;
 }): Promise<InboxPage> {
 	try {
 		return await invoke<InboxPage>("list_inbox_items", {
@@ -1017,6 +1030,7 @@ export async function listInboxItems(args: {
 			cursor: args.cursor ?? null,
 			limit: args.limit ?? 20,
 			repo: args.repo ?? null,
+			filters: args.filters ?? null,
 		});
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to load inbox items."));

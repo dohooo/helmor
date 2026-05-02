@@ -1,7 +1,9 @@
 use crate::forge::{
     self,
     accounts::{self, ForgeAccount},
-    github::inbox::{self as github_inbox, InboxItemDetail, InboxPage, InboxSource, InboxToggles},
+    github::inbox::{
+        self as github_inbox, InboxFilters, InboxItemDetail, InboxPage, InboxSource, InboxToggles,
+    },
     ChangeRequestInfo, ForgeActionStatus, ForgeDetection, ForgeProvider, RemoteState,
 };
 // `accounts` re-exports the dispatchers; provider-specific work
@@ -54,6 +56,7 @@ pub async fn list_inbox_items(
     cursor: Option<String>,
     limit: Option<u32>,
     repo: Option<String>,
+    filters: Option<InboxFilters>,
 ) -> CmdResult<InboxPage> {
     let limit = limit.unwrap_or(20).clamp(1, 100) as usize;
     run_blocking(move || match provider {
@@ -63,6 +66,7 @@ pub async fn list_inbox_items(
             cursor.as_deref(),
             limit,
             repo.as_deref(),
+            filters,
         ),
         ForgeProvider::Gitlab | ForgeProvider::Unknown => Ok(InboxPage {
             items: Vec::new(),
