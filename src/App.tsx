@@ -42,7 +42,10 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-lifecycle";
-import { hydrateDraftCache } from "@/features/composer/draft-storage";
+import {
+	hydrateDraftCache,
+	persistSessionDraft,
+} from "@/features/composer/draft-storage";
 import {
 	type ComposerSubmitPayload,
 	type KanbanCreateContext,
@@ -100,7 +103,6 @@ import {
 	prepareWorkspaceFromRepo,
 	prewarmSlashCommandsForWorkspace,
 	type RepositoryCreateOption,
-	setSessionDraft,
 	setWorkspaceStatus,
 	syncWorkspaceWithTargetBranch,
 	triggerWorkspaceFetch,
@@ -544,6 +546,13 @@ function AppShell({
 	);
 	const [kanbanInboxProviderSourceTab, setKanbanInboxProviderSourceTab] =
 		useState<string>(DEFAULT_KANBAN_VIEW_STATE.inboxProviderSourceTab);
+	const [kanbanSourceBranchByRepoId, setKanbanSourceBranchByRepoId] = useState<
+		Record<string, string>
+	>(() => DEFAULT_KANBAN_VIEW_STATE.sourceBranchByRepoId);
+	const [kanbanInboxStateFilterBySource, setKanbanInboxStateFilterBySource] =
+		useState<Record<string, string>>(
+			() => DEFAULT_KANBAN_VIEW_STATE.inboxStateFilterBySource,
+		);
 	const [kanbanOpenInboxCards, setKanbanOpenInboxCards] = useState<
 		ContextCard[]
 	>(() => DEFAULT_KANBAN_VIEW_STATE.openInboxCards);
@@ -2401,6 +2410,8 @@ function AppShell({
 			setKanbanCreateState(saved.createState);
 			setKanbanInboxProviderTab(saved.inboxProviderTab);
 			setKanbanInboxProviderSourceTab(saved.inboxProviderSourceTab);
+			setKanbanSourceBranchByRepoId(saved.sourceBranchByRepoId);
+			setKanbanInboxStateFilterBySource(saved.inboxStateFilterBySource);
 			setKanbanOpenInboxCards(saved.openInboxCards);
 		}
 
@@ -2445,6 +2456,8 @@ function AppShell({
 				repoId: kanbanRepository?.id ?? null,
 				inboxProviderTab: kanbanInboxProviderTab,
 				inboxProviderSourceTab: kanbanInboxProviderSourceTab,
+				sourceBranchByRepoId: kanbanSourceBranchByRepoId,
+				inboxStateFilterBySource: kanbanInboxStateFilterBySource,
 				openInboxCards: kanbanOpenInboxCards,
 			},
 		});
@@ -2453,6 +2466,8 @@ function AppShell({
 		kanbanRepository?.id,
 		kanbanInboxProviderTab,
 		kanbanInboxProviderSourceTab,
+		kanbanSourceBranchByRepoId,
+		kanbanInboxStateFilterBySource,
 		kanbanOpenInboxCards,
 		kanbanFullyHydrated,
 	]);
@@ -2486,6 +2501,22 @@ function AppShell({
 			current.filter((card) => card.id !== cardId),
 		);
 	}, []);
+
+	const kanbanSelectedSourceBranch = kanbanRepository?.id
+		? (kanbanSourceBranchByRepoId[kanbanRepository.id] ?? null)
+		: null;
+
+	const handleKanbanSourceBranchChange = useCallback(
+		(branch: string | null) => {
+			setKanbanSourceBranch(branch);
+			const repoId = kanbanRepository?.id;
+			if (!repoId || !branch) return;
+			setKanbanSourceBranchByRepoId((current) =>
+				current[repoId] === branch ? current : { ...current, [repoId]: branch },
+			);
+		},
+		[kanbanRepository?.id],
+	);
 
 	// Kanban-mode composer submit: turn the user's prompt into a brand-new
 	// workspace. Phase 1 (`prepare`) returns the new workspace + initial
@@ -2537,26 +2568,12 @@ function AppShell({
 				});
 			});
 
-			// Refresh the kanban board so the new card lands in its column
-			// immediately. Without this, the user has to wait for the next
-			// background poll to see the workspace they just created.
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
-
 			if (kanbanCreateState === "backlog") {
-				try {
-					await setWorkspaceStatus(prepared.workspaceId, "backlog");
-				} catch (error) {
-					pushWorkspaceToast(
-						describeUnknownError(error, "Couldn't move card to Backlog."),
-					);
-				}
 				if (payload.editorStateSnapshot) {
 					try {
-						await setSessionDraft(
+						await persistSessionDraft(
 							prepared.initialSessionId,
-							JSON.stringify(payload.editorStateSnapshot),
+							payload.editorStateSnapshot,
 						);
 					} catch (error) {
 						pushWorkspaceToast(
@@ -2564,11 +2581,25 @@ function AppShell({
 						);
 					}
 				}
+				try {
+					await setWorkspaceStatus(prepared.workspaceId, "backlog");
+				} catch (error) {
+					pushWorkspaceToast(
+						describeUnknownError(error, "Couldn't move card to Backlog."),
+					);
+				}
 				void queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceGroups,
 				});
 				return { shouldStream: false };
 			}
+
+			// Refresh the kanban board so the new card lands in its column
+			// immediately. Without this, the user has to wait for the next
+			// background poll to see the workspace they just created.
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceGroups,
+			});
 
 			return {
 				shouldStream: true,
@@ -2762,7 +2793,8 @@ function AppShell({
 												onInboxResizeStart={handleKanbanResizeStart("inbox")}
 												repository={kanbanRepository}
 												onRepositoryChange={setKanbanRepository}
-												onSourceBranchChange={setKanbanSourceBranch}
+												sourceBranch={kanbanSelectedSourceBranch}
+												onSourceBranchChange={handleKanbanSourceBranchChange}
 												createState={kanbanCreateState}
 												onCreateStateChange={setKanbanCreateState}
 												inboxProviderTab={kanbanInboxProviderTab}
@@ -2770,6 +2802,12 @@ function AppShell({
 												inboxProviderSourceTab={kanbanInboxProviderSourceTab}
 												onInboxProviderSourceTabChange={
 													setKanbanInboxProviderSourceTab
+												}
+												inboxStateFilterBySource={
+													kanbanInboxStateFilterBySource
+												}
+												onInboxStateFilterBySourceChange={
+													setKanbanInboxStateFilterBySource
 												}
 												openInboxCards={kanbanOpenInboxCards}
 												onOpenInboxCard={handleKanbanOpenCard}

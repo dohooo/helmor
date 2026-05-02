@@ -141,6 +141,8 @@ export const InboxSidebar = memo(function InboxSidebar({
 	providerSourceTab,
 	onProviderTabChange,
 	onProviderSourceTabChange,
+	stateFilterBySource,
+	onStateFilterBySourceChange,
 	appendContextTarget,
 }: {
 	className?: string;
@@ -160,6 +162,8 @@ export const InboxSidebar = memo(function InboxSidebar({
 	 *  controlled-vs-internal pattern as `providerTab`. */
 	providerSourceTab?: GitHubTypeFilter["id"];
 	onProviderSourceTabChange?: (tab: GitHubTypeFilter["id"]) => void;
+	stateFilterBySource?: Record<string, string>;
+	onStateFilterBySourceChange?: (filters: Record<string, string>) => void;
 }) {
 	const [internalSelectedSource, setInternalSelectedSource] =
 		useState<SourceFilter["id"]>("github");
@@ -176,8 +180,6 @@ export const InboxSidebar = memo(function InboxSidebar({
 		onProviderSourceTabChange?.(next);
 	};
 	const [searchQuery, setSearchQuery] = useState("");
-	const [stateFilter, setStateFilter] =
-		useState<GitHubStateFilter["id"]>("all");
 	const debouncedSearchQuery = useDebouncedValue(searchQuery, 250);
 	const selectedFilter =
 		SOURCE_FILTERS.find((filter) => filter.id === selectedSource) ??
@@ -216,6 +218,13 @@ export const InboxSidebar = memo(function InboxSidebar({
 		enabledGitHubTypeFilters[0] ??
 		selectedGitHubTypeFilter;
 	const stateOptions = GITHUB_STATE_FILTERS[activeGitHubTypeFilter.id];
+	const stateFilter = stateFilterBySource?.[activeGitHubTypeFilter.id] ?? "all";
+	const setStateFilter = (next: GitHubStateFilter["id"]) => {
+		onStateFilterBySourceChange?.({
+			...(stateFilterBySource ?? {}),
+			[activeGitHubTypeFilter.id]: next,
+		});
+	};
 	const activeStateFilter =
 		stateOptions.find((filter) => filter.id === stateFilter) ?? stateOptions[0];
 	const effectiveStateFilter = activeStateFilter.id;

@@ -118,6 +118,15 @@ export function savePersistedDraft(
 	notifySubscribers();
 }
 
+export async function persistSessionDraft(
+	sessionId: string,
+	editorState: SerializedEditorState,
+): Promise<void> {
+	draftCache.set(`session:${sessionId}`, editorState);
+	notifySubscribers();
+	await setSessionDraft(sessionId, JSON.stringify(editorState));
+}
+
 export function clearPersistedDraft(contextKey: string): void {
 	if (!draftCache.has(contextKey) && !writeTimers.has(contextKey)) {
 		// Even if cache is empty, fire the clear IPC — covers the case

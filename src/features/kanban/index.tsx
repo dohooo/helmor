@@ -88,6 +88,7 @@ type KanbanPageProps = {
 	// effects inside KanbanMainContent / InboxSidebar.
 	repository: RepositoryCreateOption | null;
 	onRepositoryChange: (repository: RepositoryCreateOption | null) => void;
+	sourceBranch?: string | null;
 	onSourceBranchChange?: (branch: string | null) => void;
 	createState: KanbanCreateState;
 	onCreateStateChange: (state: KanbanCreateState) => void;
@@ -95,6 +96,8 @@ type KanbanPageProps = {
 	onInboxProviderTabChange: (tab: string) => void;
 	inboxProviderSourceTab: string;
 	onInboxProviderSourceTabChange: (tab: string) => void;
+	inboxStateFilterBySource: Record<string, string>;
+	onInboxStateFilterBySourceChange: (filters: Record<string, string>) => void;
 	openInboxCards: ContextCard[];
 	onOpenInboxCard: (card: ContextCard) => void;
 	onCloseInboxCard: (cardId: string) => void;
@@ -140,6 +143,7 @@ export function KanbanPage({
 	resizeHitArea,
 	repository,
 	onRepositoryChange,
+	sourceBranch,
 	onSourceBranchChange,
 	createState,
 	onCreateStateChange,
@@ -147,6 +151,8 @@ export function KanbanPage({
 	onInboxProviderTabChange,
 	inboxProviderSourceTab,
 	onInboxProviderSourceTabChange,
+	inboxStateFilterBySource,
+	onInboxStateFilterBySourceChange,
 	openInboxCards,
 	onOpenInboxCard,
 	onCloseInboxCard,
@@ -418,6 +424,8 @@ export function KanbanPage({
 							>[0]["providerSourceTab"]
 						}
 						onProviderSourceTabChange={onInboxProviderSourceTabChange}
+						stateFilterBySource={inboxStateFilterBySource}
+						onStateFilterBySourceChange={onInboxStateFilterBySourceChange}
 						appendContextTarget={composerInsertTarget}
 					/>
 				</aside>
@@ -439,6 +447,7 @@ export function KanbanPage({
 					onCloseTab={handleCloseMainTab}
 					selectedRepository={repository}
 					onRepositorySelect={onRepositoryChange}
+					sourceBranch={sourceBranch}
 					onSourceBranchChange={onSourceBranchChange}
 					createState={createState}
 					onCreateStateChange={onCreateStateChange}

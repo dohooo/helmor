@@ -1,3 +1,8 @@
+import type {
+	ContextCardSource,
+	ContextCardStateTone,
+} from "@/lib/sources/types";
+
 export type ComposerPreviewPayload =
 	| {
 			kind: "image";
@@ -24,6 +29,8 @@ export type ComposerCustomTag = {
 	label: string;
 	submitText: string;
 	preview?: ComposerPreviewPayload | null;
+	source?: ContextCardSource;
+	stateTone?: ContextCardStateTone;
 };
 
 export type ComposerInsertItem =
@@ -36,6 +43,8 @@ export type ComposerInsertItem =
 			submitText: string;
 			key?: string;
 			preview?: ComposerPreviewPayload | null;
+			source?: ContextCardSource;
+			stateTone?: ContextCardStateTone;
 	  };
 
 function truncateComposerPreviewLabel(label: string): string {

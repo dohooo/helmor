@@ -91,6 +91,7 @@ function buildCardContextPayload(
 	card: ContextCard,
 	target?: ComposerInsertTarget,
 ): AppendContextRequestPayload {
+	const label = buildCardContextLabel(card);
 	const lines = [
 		`Inbox context: ${card.title}`,
 		`Source: ${card.externalId}`,
@@ -105,18 +106,35 @@ function buildCardContextPayload(
 		items: [
 			{
 				kind: "custom-tag",
-				label: card.externalId,
+				label,
 				submitText,
 				key: `inbox:${card.id}`,
 				preview: {
 					kind: "text",
-					title: card.externalId,
+					title: label,
 					text: submitText,
 				},
+				source: card.source,
+				stateTone: card.state?.tone,
 			},
 		],
 		behavior: "append",
 	};
+}
+
+function buildCardContextLabel(card: ContextCard) {
+	const number =
+		card.meta.type === "github_issue" ||
+		card.meta.type === "github_pr" ||
+		card.meta.type === "github_discussion"
+			? card.meta.number
+			: null;
+
+	if (number) {
+		return `${card.title} #${number}`;
+	}
+
+	return `${card.title} ${card.externalId}`.trim();
 }
 
 function formatRelativeTime(timestamp: number) {

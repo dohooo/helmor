@@ -66,6 +66,10 @@ export type KanbanViewState = {
 	/** Inbox sub-tab id within the provider (e.g. "github_issue",
 	 *  "github_pr", "github_discussion"). */
 	inboxProviderSourceTab: string;
+	/** Branch selected in the kanban header, keyed by repository id. */
+	sourceBranchByRepoId: Record<string, string>;
+	/** GitHub inbox state filter keyed by source tab id. */
+	inboxStateFilterBySource: Record<string, string>;
 	/** Inbox cards open as main-content tabs at last app exit. Capped
 	 *  at `KANBAN_OPEN_INBOX_CARDS_MAX`. */
 	openInboxCards: ContextCard[];
@@ -110,6 +114,8 @@ export const DEFAULT_KANBAN_VIEW_STATE: KanbanViewState = {
 	repoId: null,
 	inboxProviderTab: "github",
 	inboxProviderSourceTab: "github_issue",
+	sourceBranchByRepoId: {},
+	inboxStateFilterBySource: {},
 	openInboxCards: [],
 };
 
@@ -234,6 +240,17 @@ function parseInboxSourceConfig(raw: string | undefined): InboxSourceConfig {
 	}
 }
 
+function parseStringRecord(value: unknown): Record<string, string> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return {};
+	}
+	return Object.fromEntries(
+		Object.entries(value).filter(
+			([key, entry]) => key.length > 0 && typeof entry === "string" && entry,
+		),
+	);
+}
+
 function parseKanbanViewState(raw: string | undefined): KanbanViewState {
 	if (!raw) return DEFAULT_KANBAN_VIEW_STATE;
 	try {
@@ -255,6 +272,10 @@ function parseKanbanViewState(raw: string | undefined): KanbanViewState {
 			typeof o.inboxProviderSourceTab === "string" && o.inboxProviderSourceTab
 				? o.inboxProviderSourceTab
 				: DEFAULT_KANBAN_VIEW_STATE.inboxProviderSourceTab;
+		const sourceBranchByRepoId = parseStringRecord(o.sourceBranchByRepoId);
+		const inboxStateFilterBySource = parseStringRecord(
+			o.inboxStateFilterBySource,
+		);
 		// Trust the persisted ContextCard array as long as it's an array
 		// of objects — the cards are written by the same code that reads
 		// them, and a deep schema check here would couple settings.ts to
@@ -274,6 +295,8 @@ function parseKanbanViewState(raw: string | undefined): KanbanViewState {
 			repoId,
 			inboxProviderTab,
 			inboxProviderSourceTab,
+			sourceBranchByRepoId,
+			inboxStateFilterBySource,
 			openInboxCards,
 		};
 	} catch {

@@ -49,6 +49,7 @@ type KanbanMainContentProps = {
 	 *  so the kanban composer's submit handler can read the same value
 	 *  the picker shows. Defaults to the repo's default branch via the
 	 *  initial-paint effect inside this component. */
+	sourceBranch?: string | null;
 	onSourceBranchChange?: (branch: string | null) => void;
 	/** Whether new workspaces land in "in progress" (start agent
 	 *  immediately) or "backlog" (save draft, no agent). Controlled by
@@ -64,6 +65,7 @@ export function KanbanMainContent({
 	onCloseTab,
 	selectedRepository,
 	onRepositorySelect,
+	sourceBranch,
 	onSourceBranchChange,
 	createState,
 	onCreateStateChange,
@@ -72,7 +74,6 @@ export function KanbanMainContent({
 	const repositoriesQuery = useQuery(repositoriesQueryOptions());
 	const repositories = repositoriesQuery.data ?? [];
 	const selectedRepoId = selectedRepository?.id ?? null;
-	const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
 	const repoBranchesQuery = useQuery({
 		queryKey: ["kanban", "repoBranches", selectedRepoId],
 		queryFn: () => listRemoteBranches({ repoId: selectedRepoId ?? undefined }),
@@ -80,11 +81,20 @@ export function KanbanMainContent({
 		staleTime: 5 * 60 * 1000,
 	});
 	const branchOptions = repoBranchesQuery.data ?? [];
+	const savedBranch = sourceBranch?.trim() || null;
+	const defaultBranch = selectedRepository?.defaultBranch?.trim() || null;
+	const branchOptionsResolved = branchOptions.length > 0;
 	const currentBranch =
-		selectedBranch ??
-		selectedRepository?.defaultBranch ??
-		branchOptions[0] ??
-		"";
+		savedBranch &&
+		(!branchOptionsResolved || branchOptions.includes(savedBranch))
+			? savedBranch
+			: defaultBranch &&
+					(!branchOptionsResolved || branchOptions.includes(defaultBranch))
+				? defaultBranch
+				: (branchOptions.find((branch) => branch === "main") ??
+					branchOptions[0] ??
+					defaultBranch ??
+					"");
 	const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
 	const stopTabActionPointerDown = (event: ReactPointerEvent) => {
 		event.preventDefault();
@@ -97,7 +107,7 @@ export function KanbanMainContent({
 	// catch up on the same render.
 	useEffect(() => {
 		if (repositories.length === 0) {
-			setSelectedBranch(null);
+			onSourceBranchChange?.(null);
 			return;
 		}
 		if (
@@ -105,22 +115,9 @@ export function KanbanMainContent({
 			!repositories.some((repo) => repo.id === selectedRepoId)
 		) {
 			const [firstRepository] = repositories;
-			setSelectedBranch(firstRepository.defaultBranch ?? null);
 			onRepositorySelect?.(firstRepository);
 		}
-	}, [repositories, selectedRepoId, onRepositorySelect]);
-
-	useEffect(() => {
-		setSelectedBranch(selectedRepository?.defaultBranch ?? null);
-	}, [selectedRepository?.id, selectedRepository?.defaultBranch]);
-
-	useEffect(() => {
-		if (!selectedRepository || selectedBranch || branchOptions.length === 0) {
-			return;
-		}
-
-		setSelectedBranch(branchOptions[0]);
-	}, [branchOptions, selectedBranch, selectedRepository]);
+	}, [repositories, selectedRepoId, onRepositorySelect, onSourceBranchChange]);
 
 	// Bubble the resolved branch up to App.tsx so the kanban composer's
 	// submit handler reads the same value the picker shows. `createState`
@@ -142,7 +139,6 @@ export function KanbanMainContent({
 						repositories={repositories}
 						selectedRepository={selectedRepository}
 						onRepositorySelect={(repository) => {
-							setSelectedBranch(repository.defaultBranch ?? null);
 							onRepositorySelect?.(repository);
 						}}
 					/>
@@ -155,7 +151,7 @@ export function KanbanMainContent({
 								void repoBranchesQuery.refetch();
 							}
 						}}
-						onSelect={setSelectedBranch}
+						onSelect={(branch) => onSourceBranchChange?.(branch)}
 					>
 						<button
 							type="button"
