@@ -28,7 +28,7 @@ export function GitHubDetailPage({
 	const reference = parseExternalReference(card.externalId);
 
 	return (
-		<article className="mx-auto flex h-full w-full max-w-5xl flex-col overflow-y-auto pr-1 [scrollbar-gutter:stable]">
+		<article className="mx-auto flex h-full w-full max-w-5xl flex-col overflow-y-auto pr-1 [contain:content] [scrollbar-gutter:stable]">
 			<header className="shrink-0 border-b border-border/70 pb-4">
 				<div className="flex min-w-0 items-start justify-between gap-4">
 					<div className="min-w-0 flex-1">
