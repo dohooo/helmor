@@ -1,8 +1,22 @@
-import { Loader2, Pickaxe, SlidersHorizontal } from "lucide-react";
+import {
+	ChevronDown,
+	Loader2,
+	Pickaxe,
+	Search,
+	SlidersHorizontal,
+	X,
+} from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { GithubBrandIcon } from "@/components/brand-icon";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Button } from "@/components/ui/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
 	DEFAULT_INBOX_ACCOUNT_TOGGLES,
 	type InboxAccountSourceToggles,
@@ -61,6 +75,11 @@ type GitHubTypeFilter = {
 	>[];
 };
 
+type GitHubStateFilter = {
+	id: "all" | "open" | "closed" | "merged" | "answered" | "unanswered";
+	label: string;
+};
+
 const SOURCE_FILTERS: SourceFilter[] = [
 	{
 		id: "github",
@@ -81,6 +100,37 @@ const GITHUB_TYPE_FILTERS: GitHubTypeFilter[] = [
 	},
 ];
 
+const GITHUB_STATE_FILTERS: Record<
+	GitHubTypeFilter["id"],
+	GitHubStateFilter[]
+> = {
+	github_issue: [
+		{ id: "all", label: "All" },
+		{ id: "open", label: "Open" },
+		{ id: "closed", label: "Closed" },
+	],
+	github_pr: [
+		{ id: "all", label: "All" },
+		{ id: "open", label: "Open" },
+		{ id: "closed", label: "Closed" },
+		{ id: "merged", label: "Merged" },
+	],
+	github_discussion: [
+		{ id: "all", label: "All" },
+		{ id: "answered", label: "Answered" },
+		{ id: "unanswered", label: "Unanswered" },
+	],
+};
+
+function useDebouncedValue<T>(value: T, delayMs: number) {
+	const [debouncedValue, setDebouncedValue] = useState(value);
+	useEffect(() => {
+		const timer = window.setTimeout(() => setDebouncedValue(value), delayMs);
+		return () => window.clearTimeout(timer);
+	}, [value, delayMs]);
+	return debouncedValue;
+}
+
 export const InboxSidebar = memo(function InboxSidebar({
 	className,
 	onOpenCard,
@@ -99,6 +149,10 @@ export const InboxSidebar = memo(function InboxSidebar({
 		useState<SourceFilter["id"]>("github");
 	const [githubTypeFilter, setGithubTypeFilter] =
 		useState<GitHubTypeFilter["id"]>("github_issue");
+	const [searchQuery, setSearchQuery] = useState("");
+	const [stateFilter, setStateFilter] =
+		useState<GitHubStateFilter["id"]>("all");
+	const debouncedSearchQuery = useDebouncedValue(searchQuery, 250);
 	const selectedFilter =
 		SOURCE_FILTERS.find((filter) => filter.id === selectedSource) ??
 		SOURCE_FILTERS[0];
@@ -135,6 +189,18 @@ export const InboxSidebar = memo(function InboxSidebar({
 		enabledGitHubTypeFilters.find((filter) => filter.id === githubTypeFilter) ??
 		enabledGitHubTypeFilters[0] ??
 		selectedGitHubTypeFilter;
+	const stateOptions = GITHUB_STATE_FILTERS[activeGitHubTypeFilter.id];
+	const activeStateFilter =
+		stateOptions.find((filter) => filter.id === stateFilter) ?? stateOptions[0];
+	const effectiveStateFilter = activeStateFilter.id;
+	const trimmedSearchQuery = debouncedSearchQuery.trim();
+	const inboxFilters = useMemo(
+		() => ({
+			query: trimmedSearchQuery || null,
+			state: effectiveStateFilter === "all" ? null : effectiveStateFilter,
+		}),
+		[effectiveStateFilter, trimmedSearchQuery],
+	);
 
 	useEffect(() => {
 		if (enabledGitHubTypeFilters.length === 0) return;
@@ -145,6 +211,11 @@ export const InboxSidebar = memo(function InboxSidebar({
 		}
 		setGithubTypeFilter(enabledGitHubTypeFilters[0].id);
 	}, [enabledGitHubTypeFilters, githubTypeFilter]);
+
+	useEffect(() => {
+		if (stateOptions.some((filter) => filter.id === stateFilter)) return;
+		setStateFilter("all");
+	}, [stateOptions, stateFilter]);
 
 	const showGitHubTypeTabs =
 		selectedFilter.id === "github" && enabledGitHubTypeFilters.length > 1;
@@ -161,7 +232,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 	// page when PRs dominate). Keying the hook on the active tab also
 	// means TanStack reuses each tab's previous pages on switch-back.
 	const inboxKind = TAB_TO_INBOX_KIND[activeGitHubTypeFilter.id];
-	const inbox = useInboxItems(inboxKind, repoFilter ?? null);
+	const inbox = useInboxItems(inboxKind, repoFilter ?? null, inboxFilters);
 	const filteredCards = useMemo<ContextCard[]>(
 		() => inbox.items.map(inboxItemToContextCard),
 		[inbox.items],
@@ -270,10 +341,72 @@ export const InboxSidebar = memo(function InboxSidebar({
 				</div>
 			) : null}
 
+			{selectedFilter.id === "github" ? (
+				<div className="mt-1.5 pr-4 pl-3">
+					<div className="flex h-7 min-w-0 items-center gap-1.5">
+						<div className="flex min-w-0 flex-1 items-center rounded-md border border-border/45 bg-background/35 px-1.5 text-muted-foreground transition-colors focus-within:border-border/80 focus-within:bg-background/55">
+							<Search className="size-3 shrink-0" strokeWidth={1.9} />
+							<input
+								type="text"
+								value={searchQuery}
+								onChange={(event) => setSearchQuery(event.target.value)}
+								placeholder="Search"
+								aria-label="Search GitHub inbox"
+								className="h-6 min-w-0 flex-1 bg-transparent px-1.5 text-[11px] text-foreground outline-none placeholder:text-muted-foreground/70"
+							/>
+							{searchQuery ? (
+								<button
+									type="button"
+									aria-label="Clear search"
+									onClick={() => setSearchQuery("")}
+									className="flex size-4 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+								>
+									<X className="size-3" strokeWidth={2} />
+								</button>
+							) : null}
+						</div>
+
+						<DropdownMenu>
+							<DropdownMenuTrigger asChild>
+								<button
+									type="button"
+									className="inline-flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border/45 bg-background/35 px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent/45 hover:text-foreground"
+								>
+									<span>{activeStateFilter.label}</span>
+									<ChevronDown className="size-3" strokeWidth={2} />
+								</button>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent align="end" className="w-28">
+								<DropdownMenuRadioGroup
+									value={activeStateFilter.id}
+									onValueChange={(value) =>
+										setStateFilter(value as GitHubStateFilter["id"])
+									}
+								>
+									{stateOptions.map((filter) => (
+										<DropdownMenuRadioItem
+											key={filter.id}
+											value={filter.id}
+											className="text-[11px]"
+										>
+											{filter.label}
+										</DropdownMenuRadioItem>
+									))}
+								</DropdownMenuRadioGroup>
+							</DropdownMenuContent>
+						</DropdownMenu>
+					</div>
+				</div>
+			) : null}
+
 			<div
 				className={cn(
 					"scrollbar-stable min-h-0 flex-1 overflow-x-hidden overflow-y-auto pr-4 pl-3 [scrollbar-width:thin]",
-					showGitHubTypeTabs ? "mt-1" : "mt-[7px]",
+					selectedFilter.id === "github"
+						? "mt-1"
+						: showGitHubTypeTabs
+							? "mt-1"
+							: "mt-[7px]",
 				)}
 			>
 				<div className="flex w-[calc(100%+12px)] flex-col gap-2 pb-3">
@@ -286,15 +419,30 @@ export const InboxSidebar = memo(function InboxSidebar({
 							<span className="text-[13px] font-medium">Coming Soon</span>
 						</div>
 					) : !hasGithubAccount ? (
-						<GithubInboxEmptyState
-							hasGithubAccount={false}
+						// State 1: no GitHub account at all → big Connect CTA.
+						<ConnectGithubState onConfigure={openInboxSettings} />
+					) : !inbox.kindEnabled ? (
+						// State 2: account exists but the user has turned this
+						// kind off in Settings → Inbox. Don't fetch; nudge them
+						// to flip it back on rather than show a misleading
+						// "no items" message.
+						<KindDisabledState
+							kind={inboxKind}
 							onConfigure={openInboxSettings}
 						/>
-					) : inbox.isLoading ? (
-						<InboxLoadingState />
 					) : inbox.error ? (
+						// State 4: query failed (toast already fired in the
+						// hook). Inline retry stays as the primary affordance.
 						<InboxErrorState error={inbox.error} onRetry={inbox.refetch} />
+					) : !inbox.hasResolved ? (
+						// State 3: first fetch hasn't resolved yet — show ONLY
+						// the spinner. Important: don't fall through to the
+						// empty state below until we actually have a response,
+						// otherwise "no items" flashes for a frame and the
+						// user thinks something's wrong.
+						<InboxLoadingState />
 					) : filteredCards.length > 0 ? (
+						// State 5: list.
 						<>
 							{filteredCards.map((card) => (
 								<SourceCard
@@ -321,10 +469,12 @@ export const InboxSidebar = memo(function InboxSidebar({
 							<ConfigureInboxLink onClick={openInboxSettings} />
 						</>
 					) : (
-						<GithubInboxEmptyState
-							hasGithubAccount={hasGithubAccount}
-							onConfigure={openInboxSettings}
-						/>
+						// State 6: query returned 0. Distinct copy depending
+						// on whether the user has scoped to a single repo or
+						// is looking at the global involves:@me feed —
+						// neither has a Configure CTA, the configuration is
+						// fine; there's just nothing to triage.
+						<NoItemsState kind={inboxKind} repoFilter={repoFilter ?? null} />
 					)}
 				</div>
 			</div>
@@ -455,27 +605,24 @@ function ConfigureInboxLink({ onClick }: { onClick: () => void }) {
 	);
 }
 
-function GithubInboxEmptyState({
-	hasGithubAccount,
-	onConfigure,
-}: {
-	hasGithubAccount: boolean;
-	onConfigure: () => void;
-}) {
-	const description = hasGithubAccount
-		? "Issues, PRs, and discussions you're involved in will surface here. Pick which ones in Configure."
-		: "Connect a GitHub account in Configure to surface your issues, PRs, and discussions here.";
+/** Singular + plural labels per inbox kind, used by the empty / disabled
+ *  states for terse, source-specific copy. */
+const KIND_LABEL: Record<InboxKind, { plural: string; singular: string }> = {
+	issues: { plural: "Issues", singular: "issue" },
+	prs: { plural: "Pull requests", singular: "pull request" },
+	discussions: { plural: "Discussions", singular: "discussion" },
+};
 
+/** State 1: no GitHub account on record. Big CTA — connecting an
+ *  account is the only useful action here. */
+function ConnectGithubState({ onConfigure }: { onConfigure: () => void }) {
 	return (
 		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-center">
 			<div className="flex size-8 items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground">
 				<GithubBrandIcon size={16} />
 			</div>
 			<div className="text-[13px] font-medium text-foreground">
-				{hasGithubAccount ? "No GitHub items yet" : "GitHub not configured"}
-			</div>
-			<div className="text-[12px] leading-5 text-muted-foreground">
-				{description}
+				Connect GitHub
 			</div>
 			<Button
 				type="button"
@@ -486,6 +633,62 @@ function GithubInboxEmptyState({
 				<SlidersHorizontal className="size-3.5" strokeWidth={2} />
 				Configure
 			</Button>
+		</div>
+	);
+}
+
+/** State 2: this kind is turned off in Settings → Inbox. Surface that
+ *  fact directly so an empty result isn't mistaken for "no items". */
+function KindDisabledState({
+	kind,
+	onConfigure,
+}: {
+	kind: InboxKind;
+	onConfigure: () => void;
+}) {
+	const lower = KIND_LABEL[kind].plural.toLowerCase();
+	return (
+		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-center">
+			<div className="flex size-8 items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground">
+				<SlidersHorizontal className="size-4" strokeWidth={2} />
+			</div>
+			<div className="text-[13px] font-medium text-foreground">
+				{KIND_LABEL[kind].plural} are off
+			</div>
+			<div className="text-[12px] leading-5 text-muted-foreground">
+				Turn {lower} back on in Inbox settings.
+			</div>
+			<Button
+				type="button"
+				variant="ghost"
+				size="sm"
+				onClick={onConfigure}
+				className="mt-1 cursor-pointer gap-1.5 text-[12px]"
+			>
+				<SlidersHorizontal className="size-3.5" strokeWidth={2} />
+				Configure
+			</Button>
+		</div>
+	);
+}
+
+/** State 6: query resolved with zero items. No CTA — config is fine,
+ *  there's just nothing to triage. Wording bends on whether the user
+ *  scoped to a single repo or is looking at their global feed. */
+function NoItemsState({
+	kind,
+	repoFilter,
+}: {
+	kind: InboxKind;
+	repoFilter: string | null;
+}) {
+	const lower = KIND_LABEL[kind].plural.toLowerCase();
+	const title = repoFilter ? `No ${lower} in ${repoFilter}` : `No ${lower} yet`;
+	return (
+		<div className="mt-8 flex flex-col items-center gap-1 px-6 text-center">
+			<div className="text-[12px] leading-5 text-muted-foreground/80">
+				{title}
+			</div>
 		</div>
 	);
 }

@@ -1,6 +1,7 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 import {
+	type InboxFilters,
 	type InboxItem,
 	type InboxItemDetailRef,
 	type InboxPage,
@@ -53,6 +54,16 @@ export type UseInboxItemsResult = {
 	isFetching: boolean;
 	isFetchingNextPage: boolean;
 	error: unknown;
+	/** True when the user has at least one GitHub account AND the
+	 *  Settings → Inbox toggle for this kind is on. False here is the
+	 *  consumer's signal to render the "kind disabled in settings"
+	 *  state instead of the empty / loading states. */
+	kindEnabled: boolean;
+	/** True once the underlying infinite query has produced at least
+	 *  one successful response. Use this to gate the "no items" empty
+	 *  state — without it, an in-flight first fetch flashes "empty"
+	 *  before the data lands. */
+	hasResolved: boolean;
 	fetchNextPage: () => void;
 	refetch: () => void;
 };
@@ -91,6 +102,7 @@ const KIND_TO_TOGGLES: Record<InboxKind, InboxToggles> = {
 export function useInboxItems(
 	kind: InboxKind,
 	repoFilter: string | null = null,
+	filters: InboxFilters | null = null,
 ): UseInboxItemsResult {
 	const accounts = useEnabledGithubAccounts();
 	const primary = accounts[0] ?? null;
@@ -112,6 +124,8 @@ export function useInboxItems(
 			primary?.login ?? "",
 			kind,
 			repoFilter ?? "",
+			filters?.query ?? "",
+			filters?.state ?? "",
 		],
 		enabled,
 		initialPageParam: null as string | null,
@@ -126,6 +140,7 @@ export function useInboxItems(
 				cursor: typeof pageParam === "string" ? pageParam : null,
 				limit: PAGE_SIZE,
 				repo: repoFilter,
+				filters,
 			});
 		},
 		getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
@@ -177,6 +192,8 @@ export function useInboxItems(
 		isFetching: query.isFetching,
 		isFetchingNextPage: query.isFetchingNextPage,
 		error: query.error,
+		kindEnabled: enabled,
+		hasResolved: query.data !== undefined,
 		fetchNextPage: () => {
 			void query.fetchNextPage();
 		},
