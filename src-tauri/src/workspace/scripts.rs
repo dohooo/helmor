@@ -99,6 +99,34 @@ impl ScriptProcessManager {
         }
     }
 
+    /// Signal every live script that matches `repo_id` and `script_type`
+    /// except the one whose workspace_id equals `keep_workspace_id`. Used
+    /// by the non-concurrent run mode to make a fresh run stop any other
+    /// run in the same repo before spawning. Returns the number of handles
+    /// that were signaled.
+    pub fn kill_others_in_repo(
+        &self,
+        repo_id: &str,
+        script_type: &str,
+        keep_workspace_id: Option<&str>,
+    ) -> usize {
+        let victims: Vec<ProcessHandle> = {
+            let map = self.processes.lock().expect("process map poisoned");
+            map.iter()
+                .filter(|(k, _)| {
+                    k.0 == repo_id && k.1 == script_type && k.2.as_deref() != keep_workspace_id
+                })
+                .map(|(_, h)| h.clone())
+                .collect()
+        };
+        let count = victims.len();
+        for h in victims {
+            h.killed.store(true, Ordering::Release);
+            escalating_kill(h.pid, h.pgid);
+        }
+        count
+    }
+
     /// Signal the process group (and leader as a fallback) with SIGTERM,
     /// escalating to SIGKILL after `PROCESS_TERM_TIMEOUT`. Returns true if
     /// there was a live handle to signal.
@@ -674,6 +702,57 @@ mod tests {
         // Cleanup.
         mgr.kill(&key);
         let _ = child2.wait();
+    }
+
+    // ── kill_others_in_repo (non-concurrent run mode) ──────────────────────
+
+    #[test]
+    fn kill_others_in_repo_signals_matching_run_scripts_only() {
+        let mgr = ScriptProcessManager::new();
+        // Three live "run" scripts in repo A, plus one "setup" in A and
+        // one "run" in repo B. Non-concurrent kill should hit only the
+        // two other "run" scripts in A.
+        let a_run_keep: ProcessKey = ("A".into(), "run".into(), Some("ws-keep".into()));
+        let a_run_other1: ProcessKey = ("A".into(), "run".into(), Some("ws-other-1".into()));
+        let a_run_other2: ProcessKey = ("A".into(), "run".into(), Some("ws-other-2".into()));
+        let a_setup: ProcessKey = ("A".into(), "setup".into(), Some("ws-keep".into()));
+        let b_run: ProcessKey = ("B".into(), "run".into(), Some("ws-keep".into()));
+
+        let (mut keep_child, _, _, keep_killed) = spawn_and_register(&mgr, a_run_keep.clone());
+        let (mut other1_child, _, _, other1_killed) =
+            spawn_and_register(&mgr, a_run_other1.clone());
+        let (mut other2_child, _, _, other2_killed) =
+            spawn_and_register(&mgr, a_run_other2.clone());
+        let (mut setup_child, _, _, setup_killed) = spawn_and_register(&mgr, a_setup.clone());
+        let (mut b_run_child, _, _, b_run_killed) = spawn_and_register(&mgr, b_run.clone());
+
+        let signaled = mgr.kill_others_in_repo("A", "run", Some("ws-keep"));
+        assert_eq!(signaled, 2);
+
+        // Reap the two victims to release pid resources.
+        let _ = other1_child.wait();
+        let _ = other2_child.wait();
+        assert!(other1_killed.load(Ordering::Acquire));
+        assert!(other2_killed.load(Ordering::Acquire));
+
+        // The kept run, the setup script, and the other repo's run are all
+        // still untouched.
+        assert!(!keep_killed.load(Ordering::Acquire));
+        assert!(!setup_killed.load(Ordering::Acquire));
+        assert!(!b_run_killed.load(Ordering::Acquire));
+
+        mgr.kill(&a_run_keep);
+        mgr.kill(&a_setup);
+        mgr.kill(&b_run);
+        let _ = keep_child.wait();
+        let _ = setup_child.wait();
+        let _ = b_run_child.wait();
+    }
+
+    #[test]
+    fn kill_others_in_repo_with_no_matches_is_noop() {
+        let mgr = ScriptProcessManager::new();
+        assert_eq!(mgr.kill_others_in_repo("nope", "run", None), 0);
     }
 
     // ── escalating_kill kills the process group ────────────────────────────

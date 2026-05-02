@@ -31,6 +31,7 @@ import {
 	backfillForgeRepoBindings,
 	type ForgeProvider,
 	listForgeLogins,
+	loadWorkspaceDetail,
 	resizeForgeCliAuthTerminal,
 	retryRepoForgeBinding,
 	type ScriptEvent,
@@ -65,22 +66,27 @@ export type ForgeConnectDialogProps = {
 	}) => void;
 };
 
-/// The post-close handler that diffs the live login set against the
-/// snapshot taken at open time. One-shot delta check on dialog
-/// close — cheaper than polling every 2s while the terminal is up.
-async function detectNewLoginAfterClose(
+type LoginProbeResult = {
+	login: string | null;
+};
+
+/// The post-close handler probes the live login set once after the
+/// terminal exits. Prefer a login that was not present at open time,
+/// but fall back to any current login so re-authorizing the same
+/// account still drives repo rebind + cache refresh.
+async function detectLoginAfterClose(
 	provider: ForgeProvider,
 	host: string,
 	baseline: Set<string>,
-): Promise<string | null> {
+): Promise<LoginProbeResult> {
 	try {
 		const current = await listForgeLogins(provider, host, {
 			forceRefresh: true,
 		});
 		const newLogin = current.find((login) => !baseline.has(login));
-		return newLogin ?? null;
+		return { login: newLogin ?? current[0] ?? null };
 	} catch {
-		return null;
+		return { login: null };
 	}
 }
 
@@ -170,7 +176,7 @@ export function ForgeConnectDialog({
 			}
 		}
 
-		const newLogin = await detectNewLoginAfterClose(
+		const probe = await detectLoginAfterClose(
 			provider,
 			host,
 			baselineRef.current,
@@ -182,7 +188,8 @@ export function ForgeConnectDialog({
 			queryKey: helmorQueryKeys.forgeLogins(provider, host),
 		});
 
-		if (newLogin) {
+		let connectedLogin = probe.login;
+		if (probe.login) {
 			// Resolve the repo to rebind: explicit prop wins, otherwise
 			// pull from the workspace detail cache.
 			let resolvedRepoId = repoId ?? null;
@@ -192,12 +199,22 @@ export function ForgeConnectDialog({
 				);
 				resolvedRepoId = detail?.repoId ?? null;
 			}
+			if (!resolvedRepoId && workspaceId) {
+				try {
+					const detail = await loadWorkspaceDetail(workspaceId);
+					resolvedRepoId = detail?.repoId ?? null;
+				} catch {
+					resolvedRepoId = null;
+				}
+			}
 			if (resolvedRepoId) {
 				try {
-					await retryRepoForgeBinding(resolvedRepoId);
+					connectedLogin = await retryRepoForgeBinding(resolvedRepoId);
 				} catch {
-					// Best-effort: invalidations below pick up whatever stuck.
+					connectedLogin = null;
 				}
+			} else if (repoId || workspaceId) {
+				connectedLogin = null;
 			}
 
 			void queryClient.invalidateQueries({
@@ -234,14 +251,16 @@ export function ForgeConnectDialog({
 					}
 				})
 				.catch(() => {});
-			toast.success(connectedToastMessage(provider, newLogin));
-			onConnected?.({ provider, host, login: newLogin });
+			if (connectedLogin) {
+				toast.success(connectedToastMessage(provider, connectedLogin));
+				onConnected?.({ provider, host, login: connectedLogin });
+			}
 		}
 		onCloseSettled?.({
 			provider,
 			host,
-			connected: newLogin !== null,
-			login: newLogin,
+			connected: connectedLogin !== null,
+			login: connectedLogin,
 		});
 	}, [
 		host,

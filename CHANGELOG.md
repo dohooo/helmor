@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.13.1
+
+### Patch Changes
+- [#316](https://github.com/dohooo/helmor/pull/316) [`1e1bc30`](https://github.com/dohooo/helmor/commit/1e1bc303fdc9628702378e2ebcdc30f9d84de6ab) Thanks [@davidparys](https://github.com/davidparys)! - Add a Color Theme picker in Settings with four accent palettes — Midnight, Forest, Ember, and Aurora — each tuned for both light and dark mode.
+
+- [#351](https://github.com/dohooo/helmor/pull/351) [`6812cb8`](https://github.com/dohooo/helmor/commit/6812cb889000081827938e129572596601f1b803) Thanks [@habibyuri](https://github.com/habibyuri)! - Fix a UI sync subscription leak where unmounted components left stale Tauri Channel subscribers on the backend, slowly accumulating during long sessions and dev hot-reloads.
+
+- [#352](https://github.com/dohooo/helmor/pull/352) [`8174a03`](https://github.com/dohooo/helmor/commit/8174a030ebdc958ada28dfda4f1d5a04ef588d4e) Thanks [@natllian](https://github.com/natllian)! - Small UI polish:
+  - Auto-bind existing repos when you connect a GitHub or GitLab account during onboarding.
+  - Show a spinner on the local-project onboarding card while a folder picker is open.
+  - Cleaner selected-state ring on the color theme picker so it stays visible across themes.
+  - Fix styling and behavior issues on the Terminal tab right-click menu.
+
 ## 0.13.0
 
 ### Minor Changes

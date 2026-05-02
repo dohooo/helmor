@@ -28,6 +28,9 @@ export type AppSettings = {
 	lastWorkspaceId: string | null;
 	lastSessionId: string | null;
 	defaultModelId: string | null;
+	/** Model used when the inspector "Review PR" button creates a session.
+	 *  When null, falls back to `defaultModelId`. */
+	reviewPrModelId: string | null;
 	defaultEffort: string | null;
 	defaultFastMode: boolean;
 	/** Webview zoom factor. 1.0 = 100%. Range 0.5–2.0. */
@@ -58,6 +61,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	lastWorkspaceId: null,
 	lastSessionId: null,
 	defaultModelId: null,
+	reviewPrModelId: null,
 	defaultEffort: "high",
 	defaultFastMode: false,
 	zoomLevel: 1.0,
@@ -95,6 +99,7 @@ const SETTINGS_KEY_MAP: Record<
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
 	defaultModelId: "app.default_model_id",
+	reviewPrModelId: "app.review_pr_model_id",
 	defaultEffort: "app.default_effort",
 	defaultFastMode: "app.default_fast_mode",
 	zoomLevel: "app.zoom_level",
@@ -157,6 +162,7 @@ export async function loadSettings(): Promise<AppSettings> {
 	try {
 		const raw = await invoke<Record<string, string>>("get_app_settings");
 		const rawDefaultModelId = raw[SETTINGS_KEY_MAP.defaultModelId];
+		const rawReviewPrModelId = raw[SETTINGS_KEY_MAP.reviewPrModelId];
 		return {
 			fontSize: raw[SETTINGS_KEY_MAP.fontSize]
 				? Number(raw[SETTINGS_KEY_MAP.fontSize])
@@ -180,6 +186,10 @@ export async function loadSettings(): Promise<AppSettings> {
 				rawDefaultModelId && rawDefaultModelId !== "default"
 					? rawDefaultModelId
 					: DEFAULT_SETTINGS.defaultModelId,
+			reviewPrModelId:
+				rawReviewPrModelId && rawReviewPrModelId !== "default"
+					? rawReviewPrModelId
+					: DEFAULT_SETTINGS.reviewPrModelId,
 			defaultEffort:
 				raw[SETTINGS_KEY_MAP.defaultEffort] || DEFAULT_SETTINGS.defaultEffort,
 			defaultFastMode:

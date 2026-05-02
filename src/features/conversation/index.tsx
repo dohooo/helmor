@@ -199,6 +199,26 @@ export const WorkspaceConversationContainer = memo(
 			prevPlanReviewRef.current = hasPlanReview;
 		}, [hasPlanReview, composerContextKey]);
 
+		// Preset composer model when a pending prompt carries an explicit
+		// modelId (e.g. Review PR uses settings.reviewPrModelId). Without this
+		// the chip below the chat keeps showing the inferred default while the
+		// submit silently uses the queued modelId — mismatch the user sees.
+		useEffect(() => {
+			if (!pendingPromptForSession?.modelId) return;
+			const targetKey = getComposerContextKey(
+				displayedWorkspaceId,
+				pendingPromptForSession.sessionId,
+			);
+			setComposerModelSelections((current) =>
+				current[targetKey] === pendingPromptForSession.modelId
+					? current
+					: {
+							...current,
+							[targetKey]: pendingPromptForSession.modelId as string,
+						},
+			);
+		}, [pendingPromptForSession, displayedWorkspaceId]);
+
 		const handleSelectModel = useCallback(
 			(contextKey: string, modelId: string) => {
 				setComposerModelSelections((current) => ({

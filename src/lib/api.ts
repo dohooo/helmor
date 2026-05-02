@@ -49,6 +49,7 @@ export type PrSyncState = "none" | "open" | "closed" | "merged";
  */
 export type ActionKind =
 	| "create-pr"
+	| "review-pr"
 	| "commit-and-push"
 	| "push"
 	| "fix"
@@ -2420,6 +2421,8 @@ export async function loadHiddenSessions(
 
 // ---- Repository scripts ----
 
+export type RunScriptMode = "concurrent" | "non-concurrent";
+
 export type RepoScripts = {
 	setupScript?: string | null;
 	runScript?: string | null;
@@ -2429,10 +2432,17 @@ export type RepoScripts = {
 	archiveFromProject: boolean;
 	/** Auto-run the setup script on workspace creation. Defaults to true. */
 	autoRunSetup: boolean;
+	/**
+	 * "non-concurrent" makes a new run stop any other run script in the
+	 * same repo first — useful when the script binds a fixed port.
+	 * Defaults to "concurrent".
+	 */
+	runScriptMode: RunScriptMode;
 };
 
 export type RepoPreferences = {
 	createPr?: string | null;
+	reviewPr?: string | null;
 	fixErrors?: string | null;
 	resolveConflicts?: string | null;
 	branchRename?: string | null;
@@ -2488,6 +2498,13 @@ export async function updateRepoAutoRunSetup(
 	enabled: boolean,
 ): Promise<void> {
 	await invoke("update_repo_auto_run_setup", { repoId, enabled });
+}
+
+export async function updateRepoRunScriptMode(
+	repoId: string,
+	mode: RunScriptMode,
+): Promise<void> {
+	await invoke("update_repo_run_script_mode", { repoId, mode });
 }
 
 export async function loadRepoPreferences(

@@ -699,6 +699,125 @@ describe("useWorkspaceCommitLifecycle", () => {
 		).toBe("review");
 	});
 
+	it("queues a review prompt with the configured modelId when handleInspectorReviewPrAction runs", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onSelectSession = vi.fn();
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					selectedWorkspaceIdRef: { current: "workspace-1" },
+					selectedRepoId: "repo-1",
+					selectedWorkspaceTargetBranch: "main",
+					changeRequest: {
+						number: 99,
+						title: "Add Review PR button",
+						url: "https://github.com/example/repo/pull/99",
+						state: "OPEN",
+						isMerged: false,
+					},
+					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					sendingSessionIds: new Set<string>(),
+					onSelectSession,
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorReviewPrAction({
+				modelId: "review-model",
+			});
+		});
+
+		expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1", {
+			actionKind: "review-pr",
+		});
+		expect(result.current.pendingPromptForSession).toMatchObject({
+			sessionId: "session-action",
+			modelId: "review-model",
+		});
+		expect(result.current.pendingPromptForSession?.prompt ?? "").toContain(
+			"Review the open",
+		);
+		expect(onSelectSession).toHaveBeenCalledWith("session-action");
+	});
+
+	it("forwards a null modelId untouched (composer falls back to the workspace default)", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					selectedWorkspaceIdRef: { current: "workspace-1" },
+					selectedRepoId: "repo-1",
+					selectedWorkspaceTargetBranch: "main",
+					changeRequest: null,
+					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					sendingSessionIds: new Set<string>(),
+					onSelectSession: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorReviewPrAction({ modelId: null });
+		});
+
+		expect(result.current.pendingPromptForSession).toMatchObject({
+			sessionId: "session-action",
+			modelId: null,
+		});
+	});
+
+	it("ignores handleInspectorReviewPrAction when no workspace is selected", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onSelectSession = vi.fn();
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: null,
+					selectedWorkspaceIdRef: { current: null },
+					selectedRepoId: null,
+					changeRequest: null,
+					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					sendingSessionIds: new Set<string>(),
+					onSelectSession,
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorReviewPrAction({
+				modelId: "review-model",
+			});
+		});
+
+		expect(apiMocks.createSession).not.toHaveBeenCalled();
+		expect(onSelectSession).not.toHaveBeenCalled();
+		expect(result.current.pendingPromptForSession).toBeNull();
+	});
+
 	it("shows a destructive workspace toast when merge fails", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: {

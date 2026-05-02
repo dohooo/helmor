@@ -197,6 +197,14 @@ export const SettingsDialog = memo(function SettingsDialog({
 		modelSectionsQuery.data ?? [],
 		settings.defaultModelId,
 	);
+	const selectedReviewPrModel = findModelOption(
+		modelSectionsQuery.data ?? [],
+		settings.reviewPrModelId,
+	);
+	const reviewPrModelLabel = settings.reviewPrModelId
+		? (selectedReviewPrModel?.label ??
+			(modelSectionsQuery.isPending ? "Loading…" : "Select model"))
+		: "Use default";
 	const defaultEffortLevels =
 		selectedDefaultModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS;
 	const defaultModelSupportsFastMode =
@@ -475,21 +483,23 @@ export const SettingsDialog = memo(function SettingsDialog({
 														const swatchAccent = isLight
 															? opt.lightAccent
 															: opt.accent;
+														const isSelected = settings.darkTheme === opt.id;
 														return (
 															<button
 																key={opt.id}
 																type="button"
 																title={opt.label}
 																aria-label={opt.label}
-																aria-pressed={settings.darkTheme === opt.id}
+																aria-pressed={isSelected}
 																className={cn(
-																	"h-7 w-7 cursor-pointer overflow-hidden rounded-full transition-all",
-																	settings.darkTheme === opt.id
-																		? "scale-110 ring-2 ring-foreground/70 ring-offset-2 ring-offset-background"
-																		: "hover:scale-105 hover:ring-1 hover:ring-border hover:ring-offset-1 hover:ring-offset-background",
+																	"h-7 w-7 cursor-pointer rounded-full transition-transform duration-150",
+																	isSelected ? "scale-105" : "hover:scale-105",
 																)}
 																style={{
 																	background: `linear-gradient(135deg, ${swatchBg}, ${swatchAccent})`,
+																	boxShadow: isSelected
+																		? `0 0 0 2px var(--background), 0 0 0 3.5px ${swatchBg}`
+																		: undefined,
 																}}
 																onClick={() =>
 																	updateSettings({ darkTheme: opt.id })
@@ -644,6 +654,60 @@ export const SettingsDialog = memo(function SettingsDialog({
 													aria-label="Default fast mode"
 												/>
 											</div>
+										</div>
+									</SettingsRow>
+									<SettingsRow
+										title="Review PR model"
+										description="Model used by the Review PR button. When unset, falls back to the default model above."
+									>
+										<div className="flex w-[360px] items-center gap-2">
+											<DropdownMenu>
+												<DropdownMenuTrigger
+													className={cn(
+														"flex h-8 cursor-pointer items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+														"min-w-0 flex-1 gap-1.5",
+													)}
+												>
+													<span className="flex min-w-0 items-center gap-1.5">
+														{selectedReviewPrModel ? (
+															<ModelIcon
+																model={selectedReviewPrModel}
+																className="size-[13px] shrink-0"
+															/>
+														) : null}
+														<span className="min-w-0 truncate whitespace-nowrap">
+															{reviewPrModelLabel}
+														</span>
+													</span>
+													<ChevronDown className="size-3 shrink-0 opacity-40" />
+												</DropdownMenuTrigger>
+												<DropdownMenuContent
+													align="end"
+													sideOffset={4}
+													className="min-w-[10rem]"
+												>
+													<DropdownMenuItem
+														onClick={() =>
+															updateSettings({ reviewPrModelId: null })
+														}
+														className="gap-2 text-muted-foreground"
+													>
+														Use default
+													</DropdownMenuItem>
+													{allModels.map((m) => (
+														<DropdownMenuItem
+															key={m.id}
+															onClick={() =>
+																updateSettings({ reviewPrModelId: m.id })
+															}
+															className="gap-2"
+														>
+															<ModelIcon model={m} className="size-4" />
+															{m.label}
+														</DropdownMenuItem>
+													))}
+												</DropdownMenuContent>
+											</DropdownMenu>
 										</div>
 									</SettingsRow>
 									<ClaudeCustomProvidersPanel />

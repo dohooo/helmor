@@ -625,12 +625,17 @@ pub struct RepoScripts {
     /// Auto-run setup on workspace creation. DB-only — not configurable
     /// from `helmor.json`. Defaults to true.
     pub auto_run_setup: bool,
+    /// "concurrent" (default) lets the run script run in many workspaces
+    /// at once. "non-concurrent" makes a new run stop any other live run
+    /// in the same repo first — useful when the script binds a fixed port.
+    pub run_script_mode: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoPreferences {
     pub create_pr: Option<String>,
+    pub review_pr: Option<String>,
     pub fix_errors: Option<String>,
     pub resolve_conflicts: Option<String>,
     pub branch_rename: Option<String>,
@@ -677,17 +682,19 @@ pub fn load_repo_scripts(repo_id: &str, workspace_id: Option<&str>) -> Result<Re
     let connection = db::read_conn()?;
     let mut statement = connection
         .prepare(
-            "SELECT setup_script, run_script, archive_script, auto_run_setup FROM repos WHERE id = ?1",
+            "SELECT setup_script, run_script, archive_script, auto_run_setup, run_script_mode FROM repos WHERE id = ?1",
         )
         .with_context(|| format!("Failed to prepare script lookup for {repo_id}"))?;
 
-    let (db_setup, db_run, db_archive, auto_run_setup) = statement
+    let (db_setup, db_run, db_archive, auto_run_setup, run_script_mode) = statement
         .query_row([repo_id], |row| {
             Ok((
                 row.get::<_, Option<String>>(0)?,
                 row.get::<_, Option<String>>(1)?,
                 row.get::<_, Option<String>>(2)?,
                 row.get::<_, Option<i64>>(3)?.unwrap_or(1) != 0,
+                row.get::<_, Option<String>>(4)?
+                    .unwrap_or_else(|| "concurrent".to_string()),
             ))
         })
         .with_context(|| format!("Repository not found: {repo_id}"))?;
@@ -709,6 +716,7 @@ pub fn load_repo_scripts(repo_id: &str, workspace_id: Option<&str>) -> Result<Re
         run_from_project,
         archive_from_project,
         auto_run_setup,
+        run_script_mode,
     })
 }
 
@@ -804,6 +812,28 @@ pub fn update_repo_auto_run_setup(repo_id: &str, enabled: bool) -> Result<()> {
     Ok(())
 }
 
+/// Persist the per-repo run-script mode. Accepts "concurrent" or
+/// "non-concurrent"; anything else is rejected so the column never holds
+/// an unrecognized value.
+pub fn update_repo_run_script_mode(repo_id: &str, mode: &str) -> Result<()> {
+    if mode != "concurrent" && mode != "non-concurrent" {
+        bail!("Invalid run_script_mode: {mode}");
+    }
+    let connection = db::write_conn()?;
+    let updated = connection
+        .execute(
+            "UPDATE repos SET run_script_mode = ?1, updated_at = datetime('now') WHERE id = ?2",
+            rusqlite::params![mode, repo_id],
+        )
+        .with_context(|| format!("Failed to update run_script_mode for {repo_id}"))?;
+
+    if updated != 1 {
+        bail!("Repository not found: {repo_id}");
+    }
+
+    Ok(())
+}
+
 pub fn load_repo_preferences(repo_id: &str) -> Result<RepoPreferences> {
     let connection = db::read_conn()?;
     let mut statement = connection
@@ -811,6 +841,7 @@ pub fn load_repo_preferences(repo_id: &str) -> Result<RepoPreferences> {
             r#"
             SELECT
               custom_prompt_create_pr,
+              custom_prompt_review_pr,
               custom_prompt_fix_errors,
               custom_prompt_resolve_merge_conflicts,
               custom_prompt_rename_branch,
@@ -825,10 +856,11 @@ pub fn load_repo_preferences(repo_id: &str) -> Result<RepoPreferences> {
         .query_row([repo_id], |row| {
             Ok(RepoPreferences {
                 create_pr: row.get(0)?,
-                fix_errors: row.get(1)?,
-                resolve_conflicts: row.get(2)?,
-                branch_rename: row.get(3)?,
-                general: row.get(4)?,
+                review_pr: row.get(1)?,
+                fix_errors: row.get(2)?,
+                resolve_conflicts: row.get(3)?,
+                branch_rename: row.get(4)?,
+                general: row.get(5)?,
             })
         })
         .with_context(|| format!("Repository not found: {repo_id}"))
@@ -842,15 +874,17 @@ pub fn update_repo_preferences(repo_id: &str, preferences: &RepoPreferences) -> 
             UPDATE repos
             SET
               custom_prompt_create_pr = ?1,
-              custom_prompt_fix_errors = ?2,
-              custom_prompt_resolve_merge_conflicts = ?3,
-              custom_prompt_rename_branch = ?4,
-              custom_prompt_general = ?5,
+              custom_prompt_review_pr = ?2,
+              custom_prompt_fix_errors = ?3,
+              custom_prompt_resolve_merge_conflicts = ?4,
+              custom_prompt_rename_branch = ?5,
+              custom_prompt_general = ?6,
               updated_at = datetime('now')
-            WHERE id = ?6
+            WHERE id = ?7
             "#,
             rusqlite::params![
                 normalize_repo_preference(preferences.create_pr.as_deref()),
+                normalize_repo_preference(preferences.review_pr.as_deref()),
                 normalize_repo_preference(preferences.fix_errors.as_deref()),
                 normalize_repo_preference(preferences.resolve_conflicts.as_deref()),
                 normalize_repo_preference(preferences.branch_rename.as_deref()),
@@ -1388,5 +1422,48 @@ mod tests {
         let cleared = load_repo_branch_prefix_settings(&repo_id).unwrap();
         assert_eq!(cleared.branch_prefix_type, None);
         assert_eq!(cleared.branch_prefix_custom, None);
+    }
+
+    #[test]
+    fn repo_preferences_round_trips_review_pr() {
+        let env = crate::testkit::TestEnv::new("repos-prefs-review-pr");
+        let repo = ResolvedRepositoryInput {
+            name: "review-pr-repo".to_string(),
+            normalized_root_path: env.root.join("review-repo").display().to_string(),
+            remote: None,
+            remote_url: None,
+            default_branch: "main".to_string(),
+            forge_provider: None,
+        };
+        let repo_id = insert_repository(&repo).unwrap();
+
+        // Default load returns None for the new field.
+        let initial = load_repo_preferences(&repo_id).unwrap();
+        assert_eq!(initial.review_pr, None);
+
+        // Round-trip a non-empty review prompt.
+        let prefs = RepoPreferences {
+            review_pr: Some("Focus on SQL injections and missing tests.".to_string()),
+            ..RepoPreferences::default()
+        };
+        update_repo_preferences(&repo_id, &prefs).unwrap();
+
+        let loaded = load_repo_preferences(&repo_id).unwrap();
+        assert_eq!(
+            loaded.review_pr.as_deref(),
+            Some("Focus on SQL injections and missing tests.")
+        );
+        // Other prompt slots remain untouched.
+        assert_eq!(loaded.create_pr, None);
+        assert_eq!(loaded.fix_errors, None);
+
+        // Whitespace-only override is normalized back to None.
+        let blanked = RepoPreferences {
+            review_pr: Some("   ".to_string()),
+            ..RepoPreferences::default()
+        };
+        update_repo_preferences(&repo_id, &blanked).unwrap();
+        let cleared = load_repo_preferences(&repo_id).unwrap();
+        assert_eq!(cleared.review_pr, None);
     }
 }
