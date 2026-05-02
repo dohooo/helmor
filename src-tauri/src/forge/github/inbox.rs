@@ -135,15 +135,49 @@ pub struct GithubDiscussionDetail {
     pub updated_at: Option<String>,
 }
 
+/// Validate `owner/name` shape so we can splice it directly into a
+/// search query string. Reject anything that could escape the qualifier
+/// (whitespace, quotes, search operators) — GitHub repository names are
+/// `[A-Za-z0-9._-]` and owner logins are `[A-Za-z0-9-]`.
+fn sanitize_repo_filter(filter: &str) -> Option<String> {
+    let trimmed = filter.trim();
+    // Reject anything beyond a single owner/name pair so whitespace +
+    // search-operator chars in the middle (e.g. `foo /bar`,
+    // `foo/bar OR is:pr`) can't leak through and broaden the query.
+    let (owner, name) = trimmed.split_once('/')?;
+    if owner.is_empty() || name.is_empty() || name.contains('/') {
+        return None;
+    }
+    let valid = |s: &str, extra: &[char]| -> bool {
+        s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
+    };
+    if !valid(owner, &['-', '_', '.']) || !valid(name, &['-', '_', '.']) {
+        return None;
+    }
+    Some(format!("{owner}/{name}"))
+}
+
+/// Build the qualifier prefix `repo:owner/name ` (trailing space) when
+/// the caller passed a repo filter; otherwise empty.
+fn repo_qualifier(filter: Option<&str>) -> String {
+    filter
+        .and_then(sanitize_repo_filter)
+        .map(|safe| format!("repo:{safe} "))
+        .unwrap_or_default()
+}
+
 /// Public entry point — driven by the `list_inbox_items` Tauri command.
 pub fn list_inbox_items(
     login: &str,
     toggles: InboxToggles,
     cursor: Option<&str>,
     limit: usize,
+    repo_filter: Option<&str>,
 ) -> Result<InboxPage> {
     let limit = limit.clamp(1, 100);
     let mut state = decode_cursor(cursor)?;
+    let repo_qual = repo_qualifier(repo_filter);
 
     tracing::debug!(
         target: "helmor::inbox",
@@ -151,17 +185,15 @@ pub fn list_inbox_items(
         ?toggles,
         ?state,
         limit,
+        repo_filter,
         "list_inbox_items: starting page"
     );
 
     let mut items: Vec<InboxItem> = Vec::new();
 
     if toggles.issues && !state.issues.done {
-        match fetch_search(
-            login,
-            "is:issue involves:@me archived:false",
-            &state.issues.cursor,
-        )? {
+        let q = format!("{repo_qual}is:issue involves:@me archived:false");
+        match fetch_search(login, &q, &state.issues.cursor)? {
             FetchOutcome::Auth => {
                 tracing::warn!(target: "helmor::inbox", login, "issues search: auth required");
                 return Ok(InboxPage {
@@ -191,11 +223,8 @@ pub fn list_inbox_items(
     }
 
     if toggles.prs && !state.prs.done {
-        match fetch_search(
-            login,
-            "is:pr involves:@me archived:false",
-            &state.prs.cursor,
-        )? {
+        let q = format!("{repo_qual}is:pr involves:@me archived:false");
+        match fetch_search(login, &q, &state.prs.cursor)? {
             FetchOutcome::Auth => {
                 tracing::warn!(target: "helmor::inbox", login, "prs search: auth required");
                 return Ok(InboxPage {
@@ -225,7 +254,7 @@ pub fn list_inbox_items(
     }
 
     if toggles.discussions && !state.discussions.done {
-        match fetch_discussion_search(login, &state.discussions.cursor)? {
+        match fetch_discussion_search(login, &state.discussions.cursor, &repo_qual)? {
             FetchOutcome::Auth => {
                 tracing::warn!(target: "helmor::inbox", login, "discussions search: auth required");
             }
@@ -793,10 +822,11 @@ fn fetch_search(
 fn fetch_discussion_search(
     login: &str,
     cursor: &Option<String>,
+    repo_qual: &str,
 ) -> Result<FetchOutcome<SearchPage<DiscussionNode>>> {
-    let q = "involves:@me sort:updated-desc";
+    let q = format!("{repo_qual}involves:@me sort:updated-desc");
     let cursor_arg = cursor.clone().unwrap_or_default();
-    let mut variables: Vec<(&str, &str)> = vec![("q", q)];
+    let mut variables: Vec<(&str, &str)> = vec![("q", q.as_str())];
     if !cursor_arg.is_empty() {
         variables.push(("cursor", cursor_arg.as_str()));
     }
@@ -1027,5 +1057,39 @@ mod tests {
         let state = issue_state("CLOSED", Some("NOT_PLANNED"));
         assert!(matches!(state.tone, InboxStateTone::Closed));
         assert_eq!(state.label, "Not planned");
+    }
+
+    #[test]
+    fn sanitize_repo_filter_accepts_simple_owner_name() {
+        assert_eq!(
+            sanitize_repo_filter("dosu-ai/dosu").as_deref(),
+            Some("dosu-ai/dosu"),
+        );
+        assert_eq!(
+            sanitize_repo_filter("dohooo/react-native-reanimated-carousel").as_deref(),
+            Some("dohooo/react-native-reanimated-carousel"),
+        );
+    }
+
+    #[test]
+    fn sanitize_repo_filter_rejects_garbage() {
+        assert!(sanitize_repo_filter("").is_none());
+        assert!(sanitize_repo_filter("noslash").is_none());
+        assert!(sanitize_repo_filter("/").is_none());
+        assert!(sanitize_repo_filter("a/").is_none());
+        assert!(sanitize_repo_filter("/a").is_none());
+        // No spaces / quotes / search-operator chars allowed.
+        assert!(sanitize_repo_filter("foo /bar").is_none());
+        assert!(sanitize_repo_filter("foo/bar baz").is_none());
+        assert!(sanitize_repo_filter("\"foo\"/bar").is_none());
+        assert!(sanitize_repo_filter("foo/bar OR is:pr").is_none());
+    }
+
+    #[test]
+    fn repo_qualifier_emits_trailing_space_when_present() {
+        assert_eq!(repo_qualifier(None), "");
+        assert_eq!(repo_qualifier(Some("")), "");
+        assert_eq!(repo_qualifier(Some("invalid")), "");
+        assert_eq!(repo_qualifier(Some("dosu-ai/dosu")), "repo:dosu-ai/dosu ");
     }
 }

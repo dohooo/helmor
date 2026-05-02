@@ -53,12 +53,17 @@ pub async fn list_inbox_items(
     toggles: InboxToggles,
     cursor: Option<String>,
     limit: Option<u32>,
+    repo: Option<String>,
 ) -> CmdResult<InboxPage> {
     let limit = limit.unwrap_or(20).clamp(1, 100) as usize;
     run_blocking(move || match provider {
-        ForgeProvider::Github => {
-            github_inbox::list_inbox_items(&login, toggles, cursor.as_deref(), limit)
-        }
+        ForgeProvider::Github => github_inbox::list_inbox_items(
+            &login,
+            toggles,
+            cursor.as_deref(),
+            limit,
+            repo.as_deref(),
+        ),
         ForgeProvider::Gitlab | ForgeProvider::Unknown => Ok(InboxPage {
             items: Vec::new(),
             next_cursor: None,

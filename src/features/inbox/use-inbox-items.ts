@@ -78,10 +78,19 @@ const KIND_TO_TOGGLES: Record<InboxKind, InboxToggles> = {
  * passes the current GitHub sub-type tab; switching tabs swaps to a
  * different cached query (TanStack reuses prior pages on switch-back).
  *
+ * `repoFilter` is the `owner/name` for the kanban's currently-selected
+ * repo. When provided, every kind is scoped to that single repo via a
+ * `repo:owner/name` GraphQL search qualifier on the backend. Each repo
+ * gets its own cache key so switching the repo picker doesn't trash
+ * the previous repo's cached pages.
+ *
  * Single-account today — picks the first GitHub login. The hook is
  * shaped for future multi-account fan-out (run one infinite query per
  * account-kind pair, merge in the consumer). */
-export function useInboxItems(kind: InboxKind): UseInboxItemsResult {
+export function useInboxItems(
+	kind: InboxKind,
+	repoFilter: string | null = null,
+): UseInboxItemsResult {
 	const accounts = useEnabledGithubAccounts();
 	const primary = accounts[0] ?? null;
 	// Honor the per-account settings toggle for THIS kind — flipping
@@ -96,7 +105,13 @@ export function useInboxItems(kind: InboxKind): UseInboxItemsResult {
 	const enabled = primary !== null && settingsAllowsKind;
 
 	const query = useInfiniteQuery<InboxPage, Error>({
-		queryKey: ["inbox-items", "github", primary?.login ?? "", kind],
+		queryKey: [
+			"inbox-items",
+			"github",
+			primary?.login ?? "",
+			kind,
+			repoFilter ?? "",
+		],
 		enabled,
 		initialPageParam: null as string | null,
 		queryFn: async ({ pageParam }) => {
@@ -109,6 +124,7 @@ export function useInboxItems(kind: InboxKind): UseInboxItemsResult {
 				toggles: KIND_TO_TOGGLES[kind],
 				cursor: typeof pageParam === "string" ? pageParam : null,
 				limit: PAGE_SIZE,
+				repo: repoFilter,
 			});
 		},
 		getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,

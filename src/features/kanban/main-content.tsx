@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronDown, GitBranch, X } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, GitBranch, X } from "lucide-react";
 import {
 	type PointerEvent as ReactPointerEvent,
 	useEffect,
@@ -19,15 +19,23 @@ import {
 	PopoverTrigger,
 } from "@/components/ui/popover";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { SourceIcon } from "@/features/inbox/source-icon";
 import { WorkspaceAvatar } from "@/features/navigation/avatar";
+import { GroupIcon } from "@/features/navigation/shared";
 import type { RepositoryCreateOption } from "@/lib/api";
 import { listRemoteBranches } from "@/lib/api";
 import { repositoriesQueryOptions } from "@/lib/query-client";
 import type { ContextCard } from "@/lib/sources/types";
+import { cn } from "@/lib/utils";
 import { SourceDetailView } from "./source-detail-views";
 
 export type KanbanMainTab = { card: ContextCard; id: string; kind: "card" };
+type KanbanCreateState = "in-progress" | "backlog";
 
 type KanbanMainContentProps = {
 	activeTabId: string | null;
@@ -48,6 +56,8 @@ export function KanbanMainContent({
 	const repositories = repositoriesQuery.data ?? [];
 	const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
 	const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
+	const [createState, setCreateState] =
+		useState<KanbanCreateState>("in-progress");
 	const selectedRepository = useMemo(
 		() => repositories.find((repo) => repo.id === selectedRepoId) ?? null,
 		[repositories, selectedRepoId],
@@ -84,8 +94,14 @@ export function KanbanMainContent({
 			const [firstRepository] = repositories;
 			setSelectedRepoId(firstRepository.id);
 			setSelectedBranch(firstRepository.defaultBranch ?? null);
+			// Notify the parent on auto-pick too — otherwise the inbox
+			// sidebar wouldn't see the selection until the user
+			// manually opens the picker. Effect already gates on
+			// "selection missing", so this fires once per repo list
+			// transition, not on every render.
+			onRepositorySelect?.(firstRepository);
 		}
-	}, [repositories, selectedRepoId]);
+	}, [repositories, selectedRepoId, onRepositorySelect]);
 
 	useEffect(() => {
 		setSelectedBranch(selectedRepository?.defaultBranch ?? null);
@@ -116,6 +132,10 @@ export function KanbanMainContent({
 							onRepositorySelect?.(repository);
 						}}
 					/>
+					<ArrowRight
+						className="relative top-px size-3 shrink-0 text-muted-foreground"
+						strokeWidth={1.8}
+					/>
 					<BranchPickerPopover
 						currentBranch={currentBranch}
 						branches={branchOptions}
@@ -141,6 +161,14 @@ export function KanbanMainContent({
 							<ChevronDown className="size-3 shrink-0" strokeWidth={2} />
 						</button>
 					</BranchPickerPopover>
+					<KanbanCreateStateToggle
+						state={createState}
+						onToggle={() =>
+							setCreateState((current) =>
+								current === "in-progress" ? "backlog" : "in-progress",
+							)
+						}
+					/>
 				</div>
 
 				<div className="flex min-w-0 items-center px-4 pb-1">
@@ -203,6 +231,40 @@ export function KanbanMainContent({
 
 function TabIcon({ tab }: { tab: KanbanMainTab }) {
 	return <SourceIcon source={tab.card.source} size={13} className="shrink-0" />;
+}
+
+function KanbanCreateStateToggle({
+	onToggle,
+	state,
+}: {
+	onToggle: () => void;
+	state: KanbanCreateState;
+}) {
+	const isProgress = state === "in-progress";
+	const label = isProgress ? "In progress" : "Backlog";
+	const nextLabel = isProgress ? "Backlog" : "In progress";
+
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<button
+					type="button"
+					aria-label={`Create as ${label}. Click to switch to ${nextLabel}.`}
+					onClick={onToggle}
+					className={cn(
+						"ml-auto inline-flex h-6 cursor-pointer items-center gap-1.5 rounded-md border border-border/45 bg-background/35 px-1.5 text-[12px] font-medium text-muted-foreground transition-[background-color,border-color,color,box-shadow]",
+						"hover:border-border hover:bg-accent/55 hover:text-foreground",
+					)}
+				>
+					<GroupIcon tone={isProgress ? "progress" : "backlog"} />
+					<span className="max-w-[88px] truncate">{label}</span>
+				</button>
+			</TooltipTrigger>
+			<TooltipContent side="bottom" align="end">
+				{`Create new kanban workspaces as ${label}. Click to switch to ${nextLabel}.`}
+			</TooltipContent>
+		</Tooltip>
+	);
 }
 
 function RepositoryPicker({

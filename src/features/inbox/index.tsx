@@ -85,10 +85,15 @@ export const InboxSidebar = memo(function InboxSidebar({
 	className,
 	onOpenCard,
 	selectedCardId,
+	repoFilter,
 }: {
 	className?: string;
 	onOpenCard?: (card: ContextCard) => void;
 	selectedCardId?: string | null;
+	/** GitHub `owner/name` to scope the inbox queries to a single repo,
+	 *  driven by the kanban header's repo picker. `null` = unfiltered
+	 *  (the user's global "involves:@me" feed). */
+	repoFilter?: string | null;
 }) {
 	const [selectedSource, setSelectedSource] =
 		useState<SourceFilter["id"]>("github");
@@ -156,7 +161,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 	// page when PRs dominate). Keying the hook on the active tab also
 	// means TanStack reuses each tab's previous pages on switch-back.
 	const inboxKind = TAB_TO_INBOX_KIND[activeGitHubTypeFilter.id];
-	const inbox = useInboxItems(inboxKind);
+	const inbox = useInboxItems(inboxKind, repoFilter ?? null);
 	const filteredCards = useMemo<ContextCard[]>(
 		() => inbox.items.map(inboxItemToContextCard),
 		[inbox.items],

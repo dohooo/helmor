@@ -1005,6 +1005,9 @@ export async function listInboxItems(args: {
 	toggles: InboxToggles;
 	cursor?: string | null;
 	limit?: number;
+	/** GitHub `owner/name` filter — when present, all enabled kinds are
+	 *  scoped to that single repo via a `repo:owner/name` qualifier. */
+	repo?: string | null;
 }): Promise<InboxPage> {
 	try {
 		return await invoke<InboxPage>("list_inbox_items", {
@@ -1013,6 +1016,7 @@ export async function listInboxItems(args: {
 			toggles: args.toggles,
 			cursor: args.cursor ?? null,
 			limit: args.limit ?? 20,
+			repo: args.repo ?? null,
 		});
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to load inbox items."));

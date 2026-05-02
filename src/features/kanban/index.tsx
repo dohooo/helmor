@@ -28,7 +28,12 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { InboxSidebar } from "@/features/inbox";
-import type { WorkspaceDetail, WorkspaceGroup, WorkspaceRow } from "@/lib/api";
+import type {
+	RepositoryCreateOption,
+	WorkspaceDetail,
+	WorkspaceGroup,
+	WorkspaceRow,
+} from "@/lib/api";
 import { setWorkspaceStatus } from "@/lib/api";
 import {
 	helmorQueryKeys,
@@ -132,6 +137,17 @@ export function KanbanPage({
 	} | null>(null);
 	const [openedCards, setOpenedCards] = useState<ContextCard[]>([]);
 	const [activeMainTabId, setActiveMainTabId] = useState<string | null>(null);
+	// Mirrors the kanban header's repo picker so the InboxSidebar can
+	// scope its GitHub queries to the user's currently-selected repo.
+	// `KanbanMainContent` keeps the picker's source-of-truth state and
+	// fires `onRepositorySelect` (including on its auto-pick effect)
+	// to keep this in sync.
+	const [selectedRepository, setSelectedRepository] =
+		useState<RepositoryCreateOption | null>(null);
+	const inboxRepoFilter = useMemo(
+		() => parseGithubRepoFilter(selectedRepository),
+		[selectedRepository],
+	);
 	const [settlingDrop, setSettlingDrop] = useState<SettlingDrop | null>(null);
 	const [topPlacements, setTopPlacements] = useState<KanbanTopPlacement[]>([]);
 	const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -362,6 +378,7 @@ export function KanbanPage({
 						className="flex flex-1"
 						onOpenCard={handleOpenInboxCard}
 						selectedCardId={activeMainTabId}
+						repoFilter={inboxRepoFilter}
 					/>
 				</aside>
 				<KanbanResizeHandle
@@ -380,6 +397,7 @@ export function KanbanPage({
 					activeTabId={activeMainTabId}
 					onActiveTabChange={setActiveMainTabId}
 					onCloseTab={handleCloseMainTab}
+					onRepositorySelect={setSelectedRepository}
 					tabs={mainTabs}
 				/>
 				<KanbanResizeHandle
@@ -627,6 +645,37 @@ function getColumnIdFromOver(
 
 function isKanbanColumnId(value: unknown): value is KanbanColumnId {
 	return KANBAN_COLUMNS.some((column) => column.id === value);
+}
+
+/** Pull `owner/name` out of a repo's GitHub remote URL. Returns null
+ * when the repo isn't on GitHub (or the remote isn't recognisable),
+ * which lets the inbox fall back to a global involvement query. */
+function parseGithubRepoFilter(
+	repository: RepositoryCreateOption | null,
+): string | null {
+	if (!repository) return null;
+	if (repository.forgeProvider && repository.forgeProvider !== "github") {
+		return null;
+	}
+	const remote = repository.remoteUrl ?? "";
+	const trimmed = remote.trim();
+	if (!trimmed) return null;
+	// Cover both SSH (`git@github.com:owner/repo(.git)`) and HTTPS
+	// (`https://github.com/owner/repo(.git)`) forms — the same two
+	// shapes the Rust forge layer parses in `parse_github_remote`.
+	const sshMatch = trimmed.match(
+		/^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?\/?$/i,
+	);
+	if (sshMatch) {
+		return `${sshMatch[1]}/${sshMatch[2]}`;
+	}
+	const httpsMatch = trimmed.match(
+		/^(?:https?|git|ssh:\/\/git@)?:?\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i,
+	);
+	if (httpsMatch) {
+		return `${httpsMatch[1]}/${httpsMatch[2]}`;
+	}
+	return null;
 }
 
 function updateWorkspaceStatusInGroups(
