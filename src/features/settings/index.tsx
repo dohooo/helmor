@@ -44,8 +44,8 @@ import {
 	helmorQueryKeys,
 	repositoriesQueryOptions,
 } from "@/lib/query-client";
-import type { ThemeMode } from "@/lib/settings";
-import { useSettings } from "@/lib/settings";
+import type { DarkTheme, ThemeMode } from "@/lib/settings";
+import { resolveTheme, useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { clampEffort, findModelOption } from "@/lib/workspace-helpers";
 import { SettingsGroup, SettingsRow } from "./components/settings-row";
@@ -60,6 +60,58 @@ import { RepositorySettingsPanel } from "./panels/repository-settings";
 const MIN_FONT_SIZE = 12;
 const MAX_FONT_SIZE = 20;
 const FALLBACK_EFFORT_LEVELS = ["low", "medium", "high"];
+
+const DARK_THEME_OPTIONS: Array<{
+	id: DarkTheme;
+	label: string;
+	/** Gradient stop colors for dark-mode swatch (vivid, hue-family) */
+	bg: string;
+	accent: string;
+	/** Gradient stop colors for light-mode swatch (vivid, hue-family) */
+	lightBg: string;
+	lightAccent: string;
+}> = [
+	{
+		id: "default",
+		label: "Default",
+		bg: "oklch(0.38 0 0)",
+		accent: "oklch(0.18 0 0)",
+		lightBg: "oklch(0.88 0 0)",
+		lightAccent: "oklch(0.52 0 0)",
+	},
+	{
+		id: "midnight",
+		label: "Midnight",
+		bg: "oklch(0.62 0.14 258)",
+		accent: "oklch(0.30 0.10 260)",
+		lightBg: "oklch(0.82 0.09 258)",
+		lightAccent: "oklch(0.46 0.20 255)",
+	},
+	{
+		id: "forest",
+		label: "Forest",
+		bg: "oklch(0.58 0.13 150)",
+		accent: "oklch(0.28 0.08 155)",
+		lightBg: "oklch(0.80 0.09 152)",
+		lightAccent: "oklch(0.44 0.17 148)",
+	},
+	{
+		id: "ember",
+		label: "Ember",
+		bg: "oklch(0.66 0.15 55)",
+		accent: "oklch(0.32 0.09 48)",
+		lightBg: "oklch(0.84 0.11 60)",
+		lightAccent: "oklch(0.52 0.19 50)",
+	},
+	{
+		id: "aurora",
+		label: "Aurora",
+		bg: "oklch(0.60 0.15 286)",
+		accent: "oklch(0.28 0.09 292)",
+		lightBg: "oklch(0.80 0.10 289)",
+		lightAccent: "oklch(0.46 0.20 284)",
+	},
+];
 
 export type SettingsSection =
 	| "general"
@@ -145,6 +197,14 @@ export const SettingsDialog = memo(function SettingsDialog({
 		modelSectionsQuery.data ?? [],
 		settings.defaultModelId,
 	);
+	const selectedReviewPrModel = findModelOption(
+		modelSectionsQuery.data ?? [],
+		settings.reviewPrModelId,
+	);
+	const reviewPrModelLabel = settings.reviewPrModelId
+		? (selectedReviewPrModel?.label ??
+			(modelSectionsQuery.isPending ? "Loading…" : "Select model"))
+		: "Use default";
 	const defaultEffortLevels =
 		selectedDefaultModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS;
 	const defaultModelSupportsFastMode =
@@ -411,6 +471,47 @@ export const SettingsDialog = memo(function SettingsDialog({
 										</ToggleGroup>
 									</SettingsRow>
 									<SettingsRow
+										title="Color Theme"
+										description="Choose an accent palette"
+									>
+										{(() => {
+											const isLight = resolveTheme(settings.theme) === "light";
+											return (
+												<div className="flex gap-2">
+													{DARK_THEME_OPTIONS.map((opt) => {
+														const swatchBg = isLight ? opt.lightBg : opt.bg;
+														const swatchAccent = isLight
+															? opt.lightAccent
+															: opt.accent;
+														const isSelected = settings.darkTheme === opt.id;
+														return (
+															<button
+																key={opt.id}
+																type="button"
+																title={opt.label}
+																aria-label={opt.label}
+																aria-pressed={isSelected}
+																className={cn(
+																	"h-7 w-7 cursor-pointer rounded-full transition-transform duration-150",
+																	isSelected ? "scale-105" : "hover:scale-105",
+																)}
+																style={{
+																	background: `linear-gradient(135deg, ${swatchBg}, ${swatchAccent})`,
+																	boxShadow: isSelected
+																		? `0 0 0 2px var(--background), 0 0 0 3.5px ${swatchBg}`
+																		: undefined,
+																}}
+																onClick={() =>
+																	updateSettings({ darkTheme: opt.id })
+																}
+															/>
+														);
+													})}
+												</div>
+											);
+										})()}
+									</SettingsRow>
+									<SettingsRow
 										title="Font Size"
 										description="Adjust the text size for chat messages"
 									>
@@ -553,6 +654,60 @@ export const SettingsDialog = memo(function SettingsDialog({
 													aria-label="Default fast mode"
 												/>
 											</div>
+										</div>
+									</SettingsRow>
+									<SettingsRow
+										title="Review PR model"
+										description="Model used by the Review PR button. When unset, falls back to the default model above."
+									>
+										<div className="flex w-[360px] items-center gap-2">
+											<DropdownMenu>
+												<DropdownMenuTrigger
+													className={cn(
+														"flex h-8 cursor-pointer items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+														"min-w-0 flex-1 gap-1.5",
+													)}
+												>
+													<span className="flex min-w-0 items-center gap-1.5">
+														{selectedReviewPrModel ? (
+															<ModelIcon
+																model={selectedReviewPrModel}
+																className="size-[13px] shrink-0"
+															/>
+														) : null}
+														<span className="min-w-0 truncate whitespace-nowrap">
+															{reviewPrModelLabel}
+														</span>
+													</span>
+													<ChevronDown className="size-3 shrink-0 opacity-40" />
+												</DropdownMenuTrigger>
+												<DropdownMenuContent
+													align="end"
+													sideOffset={4}
+													className="min-w-[10rem]"
+												>
+													<DropdownMenuItem
+														onClick={() =>
+															updateSettings({ reviewPrModelId: null })
+														}
+														className="gap-2 text-muted-foreground"
+													>
+														Use default
+													</DropdownMenuItem>
+													{allModels.map((m) => (
+														<DropdownMenuItem
+															key={m.id}
+															onClick={() =>
+																updateSettings({ reviewPrModelId: m.id })
+															}
+															className="gap-2"
+														>
+															<ModelIcon model={m} className="size-4" />
+															{m.label}
+														</DropdownMenuItem>
+													))}
+												</DropdownMenuContent>
+											</DropdownMenu>
 										</div>
 									</SettingsRow>
 									<ClaudeCustomProvidersPanel />

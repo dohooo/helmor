@@ -196,6 +196,7 @@ export function useUiSyncBridge({
 
 	useEffect(() => {
 		let disposed = false;
+		let unlisten: (() => void) | null = null;
 
 		void subscribeUiMutations((event) => {
 			if (disposed) {
@@ -206,10 +207,18 @@ export function useUiSyncBridge({
 				processPendingCliSends: () => processPendingCliSendsRef.current(),
 				reloadSettings: () => reloadSettingsRef.current(),
 			});
+		}).then((cleanup) => {
+			if (disposed) {
+				cleanup();
+				return;
+			}
+
+			unlisten = cleanup;
 		});
 
 		return () => {
 			disposed = true;
+			unlisten?.();
 		};
 	}, [queryClient]);
 }

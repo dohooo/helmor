@@ -421,6 +421,57 @@ export function useWorkspaceCommitLifecycle({
 		[],
 	);
 
+	const handleInspectorReviewPrAction = useCallback(
+		async ({ modelId }: { modelId: string | null }) => {
+			const workspaceId = selectedWorkspaceIdRef.current;
+			if (!workspaceId) {
+				console.warn("[reviewPr] action ignored: no selected workspace");
+				return;
+			}
+			console.log("[reviewPr] begin", { workspaceId, modelId });
+			try {
+				const { sessionId } = await createSession(workspaceId, {
+					actionKind: "review-pr",
+				});
+				const repoPreferences = selectedRepoId
+					? await loadRepoPreferences(selectedRepoId)
+					: null;
+				const forge = await queryClient
+					.ensureQueryData(workspaceForgeQueryOptions(workspaceId))
+					.catch(() => null);
+				const prompt = buildCommitButtonPrompt(
+					"review-pr",
+					repoPreferences,
+					selectedWorkspaceTargetBranch,
+					forge,
+					selectedWorkspaceRemote,
+				);
+				await queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+				});
+				setPendingPromptForSession({ sessionId, prompt, modelId });
+				onSelectSession(sessionId);
+			} catch (error) {
+				console.error("[reviewPr] failed to start session:", error);
+				pushToast?.(
+					getErrorMessage(error, "Unable to start review."),
+					`Review ${changeRequestName} failed`,
+					"destructive",
+				);
+			}
+		},
+		[
+			changeRequestName,
+			onSelectSession,
+			pushToast,
+			queryClient,
+			selectedRepoId,
+			selectedWorkspaceIdRef,
+			selectedWorkspaceTargetBranch,
+			selectedWorkspaceRemote,
+		],
+	);
+
 	const handlePendingPromptConsumed = useCallback(() => {
 		console.log("[commitButton] pending prompt consumed by composer");
 		setPendingPromptForSession(null);
@@ -667,6 +718,7 @@ export function useWorkspaceCommitLifecycle({
 		commitButtonMode,
 		commitButtonState,
 		handleInspectorCommitAction,
+		handleInspectorReviewPrAction,
 		handlePendingPromptConsumed,
 		pendingPromptForSession,
 		queuePendingPromptForSession,

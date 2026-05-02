@@ -98,6 +98,7 @@ import {
 	detectedEditorsQueryOptions,
 	helmorQueryKeys,
 	helmorQueryPersister,
+	isVolatileForgeQueryKey,
 	sessionThreadMessagesQueryOptions,
 	workspaceChangeRequestQueryOptions,
 	workspaceDetailQueryOptions,
@@ -110,6 +111,7 @@ import {
 import { SendingSessionsProvider } from "./lib/sending-sessions-context";
 import {
 	type AppSettings,
+	type DarkTheme,
 	DEFAULT_SETTINGS,
 	loadSettings,
 	resolveTheme,
@@ -289,6 +291,9 @@ function MainApp() {
 							) {
 								return false;
 							}
+							if (isVolatileForgeQueryKey(key)) {
+								return false;
+							}
 							return query.state.status === "success";
 						},
 					},
@@ -301,6 +306,9 @@ function MainApp() {
 					});
 					queryClient.removeQueries({
 						queryKey: helmorQueryKeys.archivedWorkspaces,
+					});
+					queryClient.removeQueries({
+						predicate: (query) => isVolatileForgeQueryKey(query.queryKey),
 					});
 				}}
 			>
@@ -932,6 +940,21 @@ function AppShell({
 		}
 	}, [appSettings.theme]);
 
+	useEffect(() => {
+		const DARK_THEME_CLASSES: DarkTheme[] = [
+			"midnight",
+			"forest",
+			"ember",
+			"aurora",
+		];
+		for (const t of DARK_THEME_CLASSES) {
+			document.documentElement.classList.remove(`theme-${t}`);
+		}
+		if (appSettings.darkTheme && appSettings.darkTheme !== "default") {
+			document.documentElement.classList.add(`theme-${appSettings.darkTheme}`);
+		}
+	}, [appSettings.darkTheme]);
+
 	const confirmDiscardEditorChanges = useCallback(
 		(action: string) => {
 			if (!editorSession?.dirty) {
@@ -1431,6 +1454,7 @@ function AppShell({
 		commitButtonMode,
 		commitButtonState,
 		handleInspectorCommitAction,
+		handleInspectorReviewPrAction,
 		handlePendingPromptConsumed,
 		pendingPromptForSession,
 		queuePendingPromptForSession,
@@ -2560,6 +2584,13 @@ function AppShell({
 												activeEditorPath={editorSession?.path ?? null}
 												onOpenEditorFile={handleOpenEditorFile}
 												onCommitAction={handleInspectorCommitAction}
+												onReviewPrAction={() =>
+													handleInspectorReviewPrAction({
+														modelId:
+															appSettings.reviewPrModelId ??
+															appSettings.defaultModelId,
+													})
+												}
 												currentSessionId={displayedSessionId}
 												onQueuePendingPromptForSession={
 													queuePendingPromptForSession

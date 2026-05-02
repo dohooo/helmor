@@ -8,6 +8,7 @@ const TARGET_REF_PLACEHOLDER = "$" + "{TARGET_REF}";
 
 export type RepoPreferenceKey =
 	| "createPr"
+	| "reviewPr"
 	| "fixErrors"
 	| "resolveConflicts"
 	| "branchRename"
@@ -67,6 +68,18 @@ Do the following, in order:
 
 Don't stop to ask for confirmation — execute each step automatically. If you hit an unrecoverable error (e.g. merge conflict, pre-push hook failure), report it clearly so I can intervene.`;
 
+const REVIEW_PR_PREVIEW = `Review the open pull request on this branch and report the review IN THIS CHAT ONLY.
+
+Do the following, in order:
+1. Inspect the pull request metadata (title, description, target branch, current state) using the relevant forge CLI.
+2. Read the full diff for the pull request — every changed file, not just a summary.
+3. Evaluate the change across five axes: correctness, readability, architecture, security, performance. Note any concrete risks (off-by-one, missing null checks, race conditions, injection vectors, N+1 queries, missing tests, unclear naming, leaked abstractions).
+4. Write the review as a single chat message in this conversation. Structure it as: a one-line verdict, a short summary, then a bulleted list of findings ordered by severity with exact file paths and line numbers.
+
+Do NOT post anything on the pull request itself — no review submissions, no comments, no approvals, no merge, no request-changes. The review lives in this chat only so the author can read it here and act.
+
+Don't stop to ask for confirmation — execute each step automatically. If the pull request can't be found or the diff is empty, say so directly in chat.`;
+
 const RESOLVE_CONFLICTS_PREVIEW = `This branch has merge conflicts with its target branch. Resolve them.
 
 Do the following, in order:
@@ -97,6 +110,19 @@ Do the following, in order:
 6. Report the ${dialect.changeRequestName} URL in your final message so I can click it.
 
 Don't stop to ask for confirmation — execute each step automatically. If you hit an unrecoverable error (e.g. merge conflict, pre-push hook failure), report it clearly so I can intervene.`;
+}
+
+function reviewPrPrompt(dialect: ForgePromptDialect): string {
+	return `Review the open ${dialect.changeRequestFullName} on this branch and report the review IN THIS CHAT ONLY.
+
+Do the following, in order:
+1. Use \`${dialect.viewCommand}\` (or equivalent) to read the ${dialect.changeRequestName} title, description, target branch, and state. Use \`${dialect.diffCommand}\` to read the full diff for every changed file.
+2. Evaluate the change across five axes: correctness, readability, architecture, security, performance. Look for concrete risks — off-by-one, missing null checks, race conditions, injection vectors, N+1 queries, missing tests, unclear naming, leaked abstractions.
+3. Write the review as a single chat message in this conversation. Structure it as: a one-line verdict, a short summary, then a bulleted list of findings ordered by severity with exact file paths and line numbers.
+
+Do NOT post anything on the ${dialect.changeRequestName} itself — no \`${dialect.reviewCommand}\`, no \`${dialect.commentCommand}\`, no approvals, no merge, no request-changes. The review lives in this chat only so the author can read it here and act.
+
+Don't stop to ask for confirmation — execute each step automatically. If the ${dialect.changeRequestName} can't be found or the diff is empty, say so directly in chat.`;
 }
 
 function fixErrorsPrompt(dialect: ForgePromptDialect): string {
@@ -146,6 +172,7 @@ export const DEFAULT_REPO_PREFERENCE_PROMPTS: Record<
 	string
 > = {
 	createPr: CREATE_PR_PREVIEW,
+	reviewPr: REVIEW_PR_PREVIEW,
 	fixErrors: fixErrorsPrompt(PREVIEW_DIALECT),
 	resolveConflicts: RESOLVE_CONFLICTS_PREVIEW,
 	branchRename: DEFAULT_BRANCH_RENAME_PROMPT,
@@ -154,6 +181,7 @@ export const DEFAULT_REPO_PREFERENCE_PROMPTS: Record<
 
 export const REPO_PREFERENCE_LABELS: Record<RepoPreferenceKey, string> = {
 	createPr: "Create PR preferences",
+	reviewPr: "Review PR preferences",
 	fixErrors: "Fix errors preferences",
 	resolveConflicts: "Resolve conflicts preferences",
 	branchRename: "Branch rename preferences",
@@ -163,6 +191,8 @@ export const REPO_PREFERENCE_LABELS: Record<RepoPreferenceKey, string> = {
 export const REPO_PREFERENCE_DESCRIPTIONS: Record<RepoPreferenceKey, string> = {
 	createPr:
 		"Add custom instructions sent to the agent when you click the Create PR button.",
+	reviewPr:
+		"Add custom instructions sent to the agent when you click the Review PR button.",
 	fixErrors:
 		"Add custom instructions sent to the agent when you click the Fix errors button.",
 	resolveConflicts:
@@ -248,6 +278,11 @@ export function resolveRepoPreferencePrompt({
 		case "createPr":
 			return appendUserPreferences(
 				createPrPrompt(forgePromptDialect(forge), targetBranch, remote),
+				resolvedOverride,
+			);
+		case "reviewPr":
+			return appendUserPreferences(
+				reviewPrPrompt(forgePromptDialect(forge)),
 				resolvedOverride,
 			);
 		case "fixErrors":

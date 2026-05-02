@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "kebab-case")]
 pub enum ActionKind {
     CreatePr,
+    ReviewPr,
     CommitAndPush,
     Push,
     Fix,
@@ -33,6 +34,7 @@ impl ActionKind {
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::CreatePr => "create-pr",
+            Self::ReviewPr => "review-pr",
             Self::CommitAndPush => "commit-and-push",
             Self::Push => "push",
             Self::Fix => "fix",
@@ -51,6 +53,7 @@ impl ActionKind {
     pub const fn default_title(&self) -> &'static str {
         match self {
             Self::CreatePr => "Create PR",
+            Self::ReviewPr => "Review PR",
             Self::CommitAndPush => "Commit and Push",
             Self::Push => "Push",
             Self::Fix => "Fix CI",
@@ -68,6 +71,7 @@ impl ActionKind {
     pub fn default_title_for_change_request(&self, change_request_name: &str) -> String {
         match self {
             Self::CreatePr => format!("Create {change_request_name}"),
+            Self::ReviewPr => format!("Review {change_request_name}"),
             Self::OpenPr => format!("Open {change_request_name}"),
             _ => self.default_title().to_string(),
         }
@@ -97,6 +101,7 @@ impl FromStr for ActionKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "create-pr" => Ok(Self::CreatePr),
+            "review-pr" => Ok(Self::ReviewPr),
             "commit-and-push" => Ok(Self::CommitAndPush),
             "push" => Ok(Self::Push),
             "fix" => Ok(Self::Fix),
@@ -133,6 +138,7 @@ mod tests {
 
     const ALL: &[ActionKind] = &[
         ActionKind::CreatePr,
+        ActionKind::ReviewPr,
         ActionKind::CommitAndPush,
         ActionKind::Push,
         ActionKind::Fix,
@@ -160,7 +166,7 @@ mod tests {
 
     #[test]
     fn unknown_values_fail_parse() {
-        assert!(ActionKind::from_str("review").is_err());
+        assert!(ActionKind::from_str("rebase").is_err());
         assert!(ActionKind::from_str("").is_err());
     }
 }

@@ -6,21 +6,27 @@ import {
 	resolveRepoPreferencePrompt,
 } from "@/lib/repo-preferences-prompts";
 
-type ActionSessionMode = Exclude<
+type ButtonActionMode = Exclude<
 	WorkspaceCommitButtonMode,
 	"push" | "merge" | "closed" | "merged"
 >;
+type ActionSessionMode = ButtonActionMode | "review-pr";
 
 // Modes that delegate to a `RepoPreferenceKey`. The other action modes
 // (`commit-and-push`, `open-pr`) have no user-facing preference slot — they're
 // rendered inline below.
-type PreferenceBackedMode = "create-pr" | "fix" | "resolve-conflicts";
+type PreferenceBackedMode =
+	| "create-pr"
+	| "review-pr"
+	| "fix"
+	| "resolve-conflicts";
 
 const ACTION_MODE_TO_PREFERENCE_KEY: Record<
 	PreferenceBackedMode,
 	RepoPreferenceKey
 > = {
 	"create-pr": "createPr",
+	"review-pr": "reviewPr",
 	fix: "fixErrors",
 	"resolve-conflicts": "resolveConflicts",
 };
@@ -56,6 +62,7 @@ Use \`${dialect.reopenCommand}\` + \`${dialect.commentCommand}\`. Report the ${d
 		}
 
 		case "create-pr":
+		case "review-pr":
 		case "fix":
 		case "resolve-conflicts":
 			return resolveRepoPreferencePrompt({
@@ -70,7 +77,7 @@ Use \`${dialect.reopenCommand}\` + \`${dialect.commentCommand}\`. Report the ${d
 
 export function isActionSessionMode(
 	mode: WorkspaceCommitButtonMode,
-): mode is ActionSessionMode {
+): mode is ButtonActionMode {
 	return (
 		mode === "create-pr" ||
 		mode === "commit-and-push" ||
@@ -84,6 +91,8 @@ export function describeActionKind(actionKind: string): string {
 	switch (actionKind) {
 		case "create-pr":
 			return "Create PR";
+		case "review-pr":
+			return "Review PR";
 		case "commit-and-push":
 			return "Commit and Push";
 		case "fix":

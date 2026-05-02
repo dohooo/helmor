@@ -49,6 +49,7 @@ export type PrSyncState = "none" | "open" | "closed" | "merged";
  */
 export type ActionKind =
 	| "create-pr"
+	| "review-pr"
 	| "commit-and-push"
 	| "push"
 	| "fix"
@@ -1130,11 +1131,16 @@ export async function listenGitRefsChanged(
 
 export async function subscribeUiMutations(
 	callback: (event: UiMutationEvent) => void,
-): Promise<void> {
+): Promise<UnlistenFn> {
 	const { Channel } = await import("@tauri-apps/api/core");
+	const subscriptionId = crypto.randomUUID();
 	const onEvent = new Channel<UiMutationEvent>();
 	onEvent.onmessage = callback;
-	await invoke("subscribe_ui_mutations", { onEvent });
+	await invoke("subscribe_ui_mutations", { subscriptionId, onEvent });
+	return () => {
+		onEvent.onmessage = () => {};
+		void invoke("unsubscribe_ui_mutations", { subscriptionId });
+	};
 }
 
 export type PrefetchRemoteRefsResponse = {
@@ -2408,6 +2414,7 @@ export type RepoScripts = {
 
 export type RepoPreferences = {
 	createPr?: string | null;
+	reviewPr?: string | null;
 	fixErrors?: string | null;
 	resolveConflicts?: string | null;
 	branchRename?: string | null;

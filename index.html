@@ -11,6 +11,8 @@
         var dark = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme:dark)').matches)
         if (dark) document.documentElement.classList.add('dark')
         document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+        var ct = localStorage.getItem('helmor-dark-theme') || 'default'
+        if (ct !== 'default') document.documentElement.classList.add(`theme-${ct}`)
       })()
     </script>
     <style>

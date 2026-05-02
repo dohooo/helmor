@@ -24,6 +24,7 @@ import { TerminalInstancePanel } from "./sections/terminal";
 import {
 	closeTerminal,
 	createTerminal,
+	setTerminalHoverZoomDisabled,
 	subscribeToWorkspaceList,
 	TERMINAL_INSTANCE_LIMIT,
 	type TerminalInstance,
@@ -42,6 +43,7 @@ type WorkspaceInspectorSidebarProps = {
 	onOpenEditorFile(path: string, options?: DiffOpenOptions): void;
 	onOpenMockReview?: (path: string) => void;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
+	onReviewPrAction?: () => Promise<void>;
 	currentSessionId?: string | null;
 	onQueuePendingPromptForSession?: (request: {
 		sessionId: string;
@@ -72,6 +74,7 @@ export function WorkspaceInspectorSidebar({
 	activeEditorPath,
 	onOpenEditorFile,
 	onCommitAction,
+	onReviewPrAction,
 	currentSessionId,
 	onQueuePendingPromptForSession,
 	commitButtonMode,
@@ -165,6 +168,14 @@ export function WorkspaceInspectorSidebar({
 		const next = createTerminal(repoId, workspaceId);
 		if (next) setActiveTab(next.id);
 	}, [repoId, workspaceId, setActiveTab]);
+
+	const handleToggleTerminalHoverZoom = useCallback(
+		(instanceId: string, disabled: boolean) => {
+			if (!workspaceId) return;
+			setTerminalHoverZoomDisabled(workspaceId, instanceId, disabled);
+		},
+		[workspaceId],
+	);
 
 	const handleCloseTerminal = useCallback(
 		(instanceId: string) => {
@@ -345,8 +356,11 @@ export function WorkspaceInspectorSidebar({
 	// that doesn't benefit from — and shouldn't trigger — the enlargement.
 	const scriptTabState =
 		activeTab === "setup" ? setupScriptState : runScriptState;
+	const activeTerminalInstance = isTerminalTabActive
+		? terminalInstances.find((t) => t.id === activeTab)
+		: undefined;
 	const canHoverExpand = isTerminalTabActive
-		? true
+		? !activeTerminalInstance?.hoverZoomDisabled
 		: scriptTabState === "running" ||
 			scriptTabState === "success" ||
 			scriptTabState === "failure";
@@ -372,6 +386,7 @@ export function WorkspaceInspectorSidebar({
 				onOpenEditorFile={onOpenEditorFile}
 				flashingPaths={flashingPaths}
 				onCommitAction={onCommitAction}
+				onReviewPrAction={onReviewPrAction}
 				commitButtonMode={commitButtonMode}
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
@@ -418,6 +433,7 @@ export function WorkspaceInspectorSidebar({
 				terminalInstances={terminalInstances}
 				onAddTerminal={handleAddTerminal}
 				onCloseTerminal={handleCloseTerminal}
+				onToggleTerminalHoverZoom={handleToggleTerminalHoverZoom}
 				canSpawnTerminal={canSpawnTerminal}
 				canHoverExpand={canHoverExpand}
 			>

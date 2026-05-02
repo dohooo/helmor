@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.13.1
+
+### Patch Changes
+- [#316](https://github.com/dohooo/helmor/pull/316) [`1e1bc30`](https://github.com/dohooo/helmor/commit/1e1bc303fdc9628702378e2ebcdc30f9d84de6ab) Thanks [@davidparys](https://github.com/davidparys)! - Add a Color Theme picker in Settings with four accent palettes — Midnight, Forest, Ember, and Aurora — each tuned for both light and dark mode.
+
+- [#351](https://github.com/dohooo/helmor/pull/351) [`6812cb8`](https://github.com/dohooo/helmor/commit/6812cb889000081827938e129572596601f1b803) Thanks [@habibyuri](https://github.com/habibyuri)! - Fix a UI sync subscription leak where unmounted components left stale Tauri Channel subscribers on the backend, slowly accumulating during long sessions and dev hot-reloads.
+
+- [#352](https://github.com/dohooo/helmor/pull/352) [`8174a03`](https://github.com/dohooo/helmor/commit/8174a030ebdc958ada28dfda4f1d5a04ef588d4e) Thanks [@natllian](https://github.com/natllian)! - Small UI polish:
+  - Auto-bind existing repos when you connect a GitHub or GitLab account during onboarding.
+  - Show a spinner on the local-project onboarding card while a folder picker is open.
+  - Cleaner selected-state ring on the color theme picker so it stays visible across themes.
+  - Fix styling and behavior issues on the Terminal tab right-click menu.
+
+## 0.13.0
+
+### Minor Changes
+
+- [#342](https://github.com/dohooo/helmor/pull/342) [`939eb0e`](https://github.com/dohooo/helmor/commit/939eb0e5079159f6de1cee82115163c79365911f) Thanks [@natllian](https://github.com/natllian)! - Replace the single GitHub OAuth identity with multi-account support across both forges:
+  - Sign in with multiple GitHub and/or GitLab accounts at once via the bundled `gh` / `glab` CLIs; each repository automatically binds to whichever account has access.
+  - Remove the GitHub OAuth device-flow sign-in entirely.
+  - Workspace branch chips display the bound account's avatar so it's clear which identity is acting on each workspace.
+  - Connecting an account from the inspector or repo settings now opens an in-app terminal dialog instead of launching the system Terminal app.
+  - Branch prefix moves out of the global Git settings and into each repository's Settings panel, so different repos can use different prefixes.
+
+### Patch Changes
+
+- [#291](https://github.com/dohooo/helmor/pull/291) [`a0015b6`](https://github.com/dohooo/helmor/commit/a0015b6daa7188c8dc73df29eacaeac2f39df2f3) Thanks [@habibyuri](https://github.com/habibyuri)! - Fix in-flight Codex turns being killed by transient upstream provider hiccups (e.g. Azure OpenAI mini-outages) — Helmor now surfaces a brief reconnecting notice and lets Codex's own retry loop recover instead of terminating the turn.
+
+- [#307](https://github.com/dohooo/helmor/pull/307) [`0f9fe7a`](https://github.com/dohooo/helmor/commit/0f9fe7a478aa3994e31707c73007e3665c94d017) Thanks [@baptisteArno](https://github.com/baptisteArno)! - Fix file and image attachments whose absolute paths contain whitespace (a common case for macOS Finder drops like `Application Support/...` or CleanShot screenshots) — they now round-trip end-to-end without being truncated, and steer turns keep their image badges after a reload.
+
+- [#348](https://github.com/dohooo/helmor/pull/348) [`eeeaa81`](https://github.com/dohooo/helmor/commit/eeeaa812eb71d30dc5a73eaaca4bbe7298390687) Thanks [@alantoa](https://github.com/alantoa)! - Fix the sidebar, inspector, and inspector section dividers starting a resize on right-click or middle-click — they now only respond to a primary (left) mouse button press.
+
+- [#323](https://github.com/dohooo/helmor/pull/323) [`f953cc8`](https://github.com/dohooo/helmor/commit/f953cc895f6b48988b64d8e39b661e2afb6eb3a3) Thanks [@lucasbastianik](https://github.com/lucasbastianik)! - Hide "Open in Finder" on archived workspaces and show the real error message instead of "[object Object]" when opening Finder fails.
+
+- [#306](https://github.com/dohooo/helmor/pull/306) [`c344573`](https://github.com/dohooo/helmor/commit/c344573be7459512e103608c30bb1aeb97c89f8a) Thanks [@baptisteArno](https://github.com/baptisteArno)! - Fix the Edit tool-call diff hover popover overflowing past the viewport when the badge sits near the bottom of the chat — it now flips above the trigger or shrinks to scroll within the available space.
+
+- [#346](https://github.com/dohooo/helmor/pull/346) [`4f6ca7c`](https://github.com/dohooo/helmor/commit/4f6ca7cd17850017cb08c9c2567f95b6223de321) Thanks [@natllian](https://github.com/natllian)! - Fix PR / MR merge failing because the merge call wasn't telling the server which method to use, and surface the actual server reason in the toast instead of a generic "merge failed."
+
+  - GitHub: query the repo's allowed merge methods and pass `mergeMethod` (MERGE → SQUASH → REBASE) instead of relying on GitHub's default — fixes "Merge commits are not allowed on this repository."
+  - GitLab: read the project's `squash_option` and pass `squash=true` when it's `always` or `default_on` — fixes "Squash commits is required for this project."
+  - Toast errors from any Tauri command now include the full anyhow chain (e.g. `mergePullRequest failed: gh api graphql failed: <real reason>`), not just the outermost `.context(...)` label.
+
+- [#341](https://github.com/dohooo/helmor/pull/341) [`12e895c`](https://github.com/dohooo/helmor/commit/12e895ccb8ed71a7eb69b2aebeefa72b1647ea06) Thanks [@natllian](https://github.com/natllian)! - Pull now mechanically stashes uncommitted work, fast-forwards from the target branch, and re-applies the stash — instead of asking the agent to commit and push for you. Only an actual merge conflict (or a stash-pop conflict) hands off to the agent, with a narrower prompt that no longer prescribes commit/push.
+
+- [#302](https://github.com/dohooo/helmor/pull/302) [`f97034c`](https://github.com/dohooo/helmor/commit/f97034c267a7fb2ff67d5a26aea9d09a1b3ebe9b) Thanks [@aidxun](https://github.com/aidxun)! - Fix Quit Helmor from the macOS app menu during onboarding so the app exits normally before the main workspace shell is loaded.
+
+- [#337](https://github.com/dohooo/helmor/pull/337) [`f632d2b`](https://github.com/dohooo/helmor/commit/f632d2b59d124af47f64c0ac716e5a8170762edc) Thanks [@alantoa](https://github.com/alantoa)! - Right-click a terminal tab in the inspector to disable the hover-to-zoom enlargement or close the tab, and middle-click a terminal tab to close it.
+
+- [#315](https://github.com/dohooo/helmor/pull/315) [`cdaaefa`](https://github.com/dohooo/helmor/commit/cdaaefa0c456e2ecd16edddb6f3127fa8536b02d) Thanks [@himanshhhhuv](https://github.com/himanshhhhuv)! - Fix terminal panel collapsing during text selection — the expanded terminal now stays open while selecting text, even when the cursor moves outside the container boundary.
+
 ## 0.12.2
 
 ### Patch Changes

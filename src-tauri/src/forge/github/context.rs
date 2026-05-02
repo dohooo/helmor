@@ -97,7 +97,7 @@ pub(super) fn load_github_context(
     let Some(login) = persisted_login else {
         return Ok(GithubResolution::Unauthenticated);
     };
-    if matches!(host_authenticated, HostAuthCheck::Probe) && !login_present_in_hosts(login) {
+    if matches!(host_authenticated, HostAuthCheck::Probe) && login_definitely_logged_out(login) {
         return Ok(GithubResolution::Unauthenticated);
     }
 
@@ -122,24 +122,18 @@ pub(super) enum HostAuthCheck {
     Probe,
 }
 
-fn login_present_in_hosts(login: &str) -> bool {
+/// Routes through `check_auth`; `Indeterminate` and `LoggedIn`
+/// preserve the binding.
+fn login_definitely_logged_out(login: &str) -> bool {
     let Some(backend) = crate::forge::accounts::backend_for(crate::forge::ForgeProvider::Github)
     else {
-        // Backend missing means we can't check — degrade to "trust the
-        // persisted binding" rather than spuriously logging the user out.
-        return true;
+        // Backend missing (Unknown provider): preserve binding,
+        // we can't probe.
+        return false;
     };
-    match backend.list_logins(super::api::GITHUB_HOST) {
-        Ok(logins) => logins.iter().any(|candidate| candidate == login),
-        Err(error) => {
-            tracing::warn!(
-                login = %login,
-                error = %format!("{error:#}"),
-                "Failed to probe gh logins; trusting persisted forge_login"
-            );
-            true
-        }
-    }
+    backend
+        .check_auth(super::api::GITHUB_HOST, login)
+        .is_definitely_logged_out()
 }
 
 /// `true` when the workspace's local branch has a remote-tracking ref.

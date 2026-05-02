@@ -11,7 +11,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use crate::forge::accounts::{ForgeAccount, ForgeAccountBackend};
+use crate::forge::accounts::{AuthCheck, ForgeAccount, ForgeAccountBackend};
 use crate::forge::command::{command_detail, run_command, run_command_with_env, CommandOutput};
 use crate::forge::types::ForgeProvider;
 
@@ -29,6 +29,10 @@ impl ForgeAccountBackend for GithubAccountBackend {
 
     fn list_logins(&self, host: &str) -> Result<Vec<String>> {
         list_github_logins(host)
+    }
+
+    fn check_auth(&self, host: &str, login: &str) -> AuthCheck {
+        check_github_auth(host, login)
     }
 
     fn repo_accessible(&self, host: &str, login: &str, owner: &str, name: &str) -> Result<bool> {
@@ -63,17 +67,11 @@ impl ForgeAccountBackend for GithubAccountBackend {
 /// because GHE accounts and github.com accounts live in separate
 /// `hosts.yml` buckets.
 pub(crate) fn token_for_user_on_host(host: &str, login: &str) -> Result<String> {
-    // Validate against `gh auth status --json hosts` BEFORE pulling the
-    // token. Reason: macOS keychain entries can outlive their hosts.yml
-    // registration (manual edit, stale credential store, etc.). In that ghost
-    // state `gh auth token --user X` happily returns a usable token,
-    // but commands that consult hosts.yml — most importantly the
-    // agent's `gh pr create` — fall back to a *different* user. We'd
-    // then have one path saying "auth ok" (this token works) and
-    // another saying "auth wrong" (PR create fails). Treat anything
-    // missing from hosts.yml as not-logged-in so the inspector
-    // surfaces the Connect CTA.
-    if !is_login_in_hosts(host, login)? {
+    // Validate against hosts.yml first: macOS keychain entries can
+    // outlive their hosts.yml registration, in which case `gh auth
+    // token --user X` returns a token but `gh pr create` falls back
+    // to a different user. Only bail on definite LoggedOut.
+    if check_github_auth(host, login).is_definitely_logged_out() {
         return Err(anyhow!(
             "gh user {login} is not logged in (not present in `gh auth status` for {host})"
         ));
@@ -91,11 +89,6 @@ pub(crate) fn token_for_user_on_host(host: &str, login: &str) -> Result<String> 
         return Err(anyhow!("`gh auth token --user {login}` returned empty"));
     }
     Ok(token)
-}
-
-fn is_login_in_hosts(host: &str, login: &str) -> Result<bool> {
-    let logins = list_github_logins(host)?;
-    Ok(logins.iter().any(|candidate| candidate == login))
 }
 
 /// Spawn `gh <args>` with `GH_TOKEN` set to `(host, login)`'s token. Caller
@@ -138,10 +131,12 @@ fn list_github_logins(host: &str) -> Result<Vec<String>> {
     Ok(logins)
 }
 
-/// Pull the (filtered) login list for `host` out of `gh auth status
-/// --json hosts` JSON output. Pure — split out so the filter rules
-/// (`state == "success"` and non-empty login) are unit-testable
-/// without spawning gh.
+/// All non-empty logins for `host`. State filtering is intentionally
+/// absent — that's what answers "is this login still in gh's store?"
+/// without conflating transient `state: "error"` with logout.
+/// Contrast with [`parse_account_slots`], which DOES filter by state
+/// because the Settings → Accounts roster only shows currently usable
+/// accounts.
 fn parse_logins_for_host(stdout: &str, host: &str) -> Result<Vec<String>> {
     let parsed: GhAuthStatusResponse = serde_json::from_str(stdout)
         .with_context(|| "Failed to decode `gh auth status --json hosts` output".to_string())?;
@@ -152,17 +147,37 @@ fn parse_logins_for_host(stdout: &str, host: &str) -> Result<Vec<String>> {
             entries
                 .iter()
                 .filter_map(|entry| {
-                    let state_ok = entry.state.as_deref() == Some("success");
                     let login = entry.login.as_deref().unwrap_or("").trim();
-                    if state_ok && !login.is_empty() {
-                        Some(login.to_string())
-                    } else {
+                    if login.is_empty() {
                         None
+                    } else {
+                        Some(login.to_string())
                     }
                 })
                 .collect()
         })
         .unwrap_or_default())
+}
+
+fn check_github_auth(host: &str, login: &str) -> AuthCheck {
+    match list_github_logins(host) {
+        Ok(logins) => {
+            if logins.iter().any(|candidate| candidate == login) {
+                AuthCheck::LoggedIn
+            } else {
+                AuthCheck::LoggedOut
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                host = %host,
+                login = %login,
+                error = %format!("{error:#}"),
+                "gh auth probe failed; treating as Indeterminate"
+            );
+            AuthCheck::Indeterminate
+        }
+    }
 }
 
 /// Per-process rate limiter for `gh auth status --hostname X`. The
@@ -495,7 +510,8 @@ struct GhAuthStatusResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 struct GhHostStatusEntry {
-    state: Option<String>,
+    // `state` is intentionally not deserialized — see comment on
+    // `parse_logins_for_host`. We only care about presence + login.
     login: Option<String>,
 }
 
@@ -561,22 +577,30 @@ mod tests {
     // ---------------- parse_logins_for_host ----------------
 
     #[test]
-    fn parse_logins_for_host_keeps_success_entries_only() {
-        // gh auth status --json hosts returns a host map; each host
-        // entry has its own `state` per login. Only `state=="success"`
-        // counts as "this login is currently usable".
+    fn parse_logins_for_host_keeps_all_entries_regardless_of_state() {
+        // gh marks an entry's `state` based on its most recent token
+        // validation: "success" when validation succeeded, "error"
+        // when it failed (could be transient — network blip, rate
+        // limit). We do NOT filter on state — entry presence alone
+        // answers "is this login still in gh's account store?".
+        // Filtering used to flicker the inspector's Connect CTA on
+        // every transient gh hiccup.
         let stdout = r#"{
             "hosts": {
                 "github.com": [
                     {"state":"success","login":"octocat"},
-                    {"state":"failure","login":"hubot"},
+                    {"state":"error","login":"hubot"},
                     {"state":"success","login":"alice"}
                 ]
             }
         }"#;
         assert_eq!(
             parse_logins_for_host(stdout, "github.com").unwrap(),
-            vec!["octocat".to_string(), "alice".to_string()],
+            vec![
+                "octocat".to_string(),
+                "hubot".to_string(),
+                "alice".to_string(),
+            ],
         );
     }
 
