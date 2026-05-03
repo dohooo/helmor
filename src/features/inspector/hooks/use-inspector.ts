@@ -7,39 +7,104 @@ import {
 	useRef,
 	useState,
 } from "react";
-import {
-	clampVerticalSplitSizes,
-	getInitialVerticalSplitSizes,
-	openVerticalSplitPanel,
-	resizeVerticalSplitPanel,
-	type VerticalSplitPanelConfig,
-	type VerticalSplitPanelId,
-	type VerticalSplitPanelSizeState,
-} from "@/components/ui/vertical-split-layout";
 import { loadRepoScripts, type RepoScripts } from "@/lib/api";
 import type { InspectorFileItem } from "@/lib/editor-session";
 import { workspaceChangesQueryOptions } from "@/lib/query-client";
 import { INSPECTOR_SECTION_HEADER_HEIGHT } from "../layout";
 import { getScriptState, startScript, stopScript } from "../script-store";
 
+// Inspector layout model
+// ----------------------
+// Three vertically-stacked sections (Changes, Actions, Tabs). Their bodies
+// always sum to `bodyBudget = container - 3 * sectionHeader`. There is no
+// CSS auto-fill — every body height is an explicit pixel value derived from:
+//   - actionsOpen / tabsOpen
+//   - containerHeight (observed)
+//   - storedChangesBody / storedTabsBody (user-resized values)
+//
+// The "auto-fill" panel is whichever panel absorbs the slack:
+//   - actions, when actions is open
+//   - changes, when actions is collapsed
+// We never store an explicit size for actions: it's always the slack absorber
+// (or zero when collapsed). That keeps the toggle round-trip lossless and
+// stops the section identities from competing for the same role.
+
+const RESIZE_TARGET_ACTIONS = "actions";
+const RESIZE_TARGET_TABS = "tabs";
+type ResizeTarget = typeof RESIZE_TARGET_ACTIONS | typeof RESIZE_TARGET_TABS;
+
+const MIN_CHANGES_BODY = 128;
+const MIN_ACTIONS_BODY = 160;
+const MIN_TABS_BODY = 160;
+const DEFAULT_CHANGES_BODY = 240;
+const DEFAULT_TABS_BODY = 160;
+
 type ResizeState = {
 	pointerY: number;
-	initialSizes: VerticalSplitPanelSizeState;
-	target: VerticalSplitPanelId;
+	target: ResizeTarget;
+	initialChangesBody: number;
+	initialTabsBody: number;
+	bodyBudget: number;
+	tabsBody: number;
+	actionsOpen: boolean;
 };
-
-const INSPECTOR_PRIMARY_PANEL_ID = "changes";
-const INSPECTOR_ACTIONS_PANEL_ID = "actions";
-const INSPECTOR_TERMINAL_PANEL_ID = "terminal";
-const MIN_INSPECTOR_PRIMARY_HEIGHT = 128;
-const MIN_INSPECTOR_ACTIONS_HEIGHT = 112;
-const MIN_INSPECTOR_TERMINAL_HEIGHT = 160;
 
 type UseWorkspaceInspectorSidebarArgs = {
 	workspaceRootPath?: string | null;
 	workspaceId: string | null;
 	repoId: string | null;
 };
+
+type DerivedSizes = {
+	changesBody: number;
+	actionsBody: number;
+	tabsBody: number;
+};
+
+function clamp(value: number, min: number, max: number): number {
+	if (max < min) return min;
+	if (value < min) return min;
+	if (value > max) return max;
+	return value;
+}
+
+/**
+ * Pure layout derivation. Heights always sum to `bodyBudget`, except in the
+ * pathological case where the container is smaller than the minimums — there
+ * we surface the negative as `actionsBody` going below its minimum, which the
+ * UI absorbs (the section just compresses).
+ */
+function deriveSizes({
+	bodyBudget,
+	actionsOpen,
+	tabsOpen,
+	storedChangesBody,
+	storedTabsBody,
+}: {
+	bodyBudget: number;
+	actionsOpen: boolean;
+	tabsOpen: boolean;
+	storedChangesBody: number;
+	storedTabsBody: number;
+}): DerivedSizes {
+	const tabsBody = tabsOpen
+		? clamp(storedTabsBody, MIN_TABS_BODY, Math.max(MIN_TABS_BODY, bodyBudget))
+		: 0;
+
+	if (actionsOpen) {
+		const remaining = Math.max(0, bodyBudget - tabsBody);
+		const changesBody = clamp(
+			storedChangesBody,
+			MIN_CHANGES_BODY,
+			Math.max(MIN_CHANGES_BODY, remaining - MIN_ACTIONS_BODY),
+		);
+		const actionsBody = Math.max(MIN_ACTIONS_BODY, remaining - changesBody);
+		return { changesBody, actionsBody, tabsBody };
+	}
+
+	const changesBody = Math.max(MIN_CHANGES_BODY, bodyBudget - tabsBody);
+	return { changesBody, actionsBody: 0, tabsBody };
+}
 
 export function useWorkspaceInspectorSidebar({
 	workspaceRootPath,
@@ -49,34 +114,11 @@ export function useWorkspaceInspectorSidebar({
 	const [actionsOpen, setActionsOpen] = useState(true);
 	const [tabsOpen, setTabsOpen] = useState(false);
 	const [activeTab, setActiveTab] = useState("setup");
-	const inspectorPanels = useMemo<VerticalSplitPanelConfig[]>(
-		() => [
-			{
-				id: INSPECTOR_PRIMARY_PANEL_ID,
-				open: true,
-				minSize: MIN_INSPECTOR_PRIMARY_HEIGHT,
-				defaultSize: 240,
-			},
-			{
-				id: INSPECTOR_ACTIONS_PANEL_ID,
-				open: actionsOpen,
-				minSize: MIN_INSPECTOR_ACTIONS_HEIGHT,
-				// First open uses minSize. Resizing then "remembers" the user's
-				// last height so subsequent toggles restore it.
-				defaultSize: MIN_INSPECTOR_ACTIONS_HEIGHT,
-			},
-			{
-				id: INSPECTOR_TERMINAL_PANEL_ID,
-				open: tabsOpen,
-				minSize: MIN_INSPECTOR_TERMINAL_HEIGHT,
-				defaultSize: MIN_INSPECTOR_TERMINAL_HEIGHT,
-			},
-		],
-		[actionsOpen, tabsOpen],
-	);
-	const [panelSizes, setPanelSizes] = useState<VerticalSplitPanelSizeState>(
-		() => getInitialVerticalSplitSizes(inspectorPanels),
-	);
+
+	const [containerHeight, setContainerHeight] = useState(0);
+	const [storedChangesBody, setStoredChangesBody] =
+		useState(DEFAULT_CHANGES_BODY);
+	const [storedTabsBody, setStoredTabsBody] = useState(DEFAULT_TABS_BODY);
 	const [resizeState, setResizeState] = useState<ResizeState | null>(null);
 
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -88,36 +130,39 @@ export function useWorkspaceInspectorSidebar({
 		if (!element) return;
 
 		let frameId: number | null = null;
-		const resizeObserver = new ResizeObserver((entries) => {
+		const observer = new ResizeObserver((entries) => {
 			const entry = entries[0];
 			if (!entry) return;
-			if (frameId !== null) {
-				cancelAnimationFrame(frameId);
-			}
+			if (frameId !== null) cancelAnimationFrame(frameId);
 			frameId = requestAnimationFrame(() => {
 				frameId = null;
-				const containerSize = entry.contentRect.height;
-				setPanelSizes((current) =>
-					clampVerticalSplitSizes({
-						containerSize,
-						headerSize: INSPECTOR_SECTION_HEADER_HEIGHT,
-						minPrimarySize: MIN_INSPECTOR_PRIMARY_HEIGHT,
-						primaryPanelId: INSPECTOR_PRIMARY_PANEL_ID,
-						panels: inspectorPanels,
-						sizes: current,
-					}),
-				);
+				setContainerHeight(entry.contentRect.height);
 			});
 		});
 
-		resizeObserver.observe(element);
+		observer.observe(element);
 		return () => {
-			if (frameId !== null) {
-				cancelAnimationFrame(frameId);
-			}
-			resizeObserver.disconnect();
+			if (frameId !== null) cancelAnimationFrame(frameId);
+			observer.disconnect();
 		};
-	}, [inspectorPanels]);
+	}, []);
+
+	const bodyBudget = Math.max(
+		0,
+		containerHeight - 3 * INSPECTOR_SECTION_HEADER_HEIGHT,
+	);
+
+	const { changesBody, actionsBody, tabsBody } = useMemo(
+		() =>
+			deriveSizes({
+				bodyBudget,
+				actionsOpen,
+				tabsOpen,
+				storedChangesBody,
+				storedTabsBody,
+			}),
+		[bodyBudget, actionsOpen, tabsOpen, storedChangesBody, storedTabsBody],
+	);
 
 	const repoScriptsQuery = useQuery({
 		queryKey: ["repoScripts", repoId, workspaceId],
@@ -128,10 +173,8 @@ export function useWorkspaceInspectorSidebar({
 	const repoScripts: RepoScripts | null = repoScriptsQuery.data ?? null;
 	const scriptsLoaded = repoScriptsQuery.isFetched;
 
-	// Listen for Cmd+R "run script" shortcut event. Toggles run/stop:
-	// idle/exited → start; running → stop. Tab visibility is unchanged —
-	// the user can open the Run tab later to see output; it's replayed
-	// from buffer.
+	// Cmd+R toggle: idle/exited → start; running → stop. Tab visibility
+	// unchanged — the user can open the Run tab later to replay output.
 	useEffect(() => {
 		const handler = () => {
 			if (!repoId || !workspaceId) return;
@@ -148,8 +191,8 @@ export function useWorkspaceInspectorSidebar({
 	}, [repoId, workspaceId, repoScripts]);
 
 	const isResizing = resizeState !== null;
-	const isActionsResizing = resizeState?.target === INSPECTOR_ACTIONS_PANEL_ID;
-	const isTabsResizing = resizeState?.target === INSPECTOR_TERMINAL_PANEL_ID;
+	const isActionsResizing = resizeState?.target === RESIZE_TARGET_ACTIONS;
+	const isTabsResizing = resizeState?.target === RESIZE_TARGET_TABS;
 
 	const changesQuery = useQuery({
 		...workspaceChangesQueryOptions(workspaceRootPath ?? ""),
@@ -206,76 +249,57 @@ export function useWorkspaceInspectorSidebar({
 		});
 	}, [changesQuery.data]);
 
-	// Closing only flips `open`; sizes stay in `panelSizes` so reopening
-	// restores the panel's last height. The primary panel auto-grows via
-	// `getPrimaryPanelSize`, which only sums open secondary panels.
 	const handleToggleTabs = useCallback(() => {
-		if (tabsOpen) {
-			setTabsOpen(false);
-			return;
-		}
-		setPanelSizes((current) =>
-			openVerticalSplitPanel({
-				containerSize: containerRef.current?.clientHeight ?? 0,
-				headerSize: INSPECTOR_SECTION_HEADER_HEIGHT,
-				minPrimarySize: MIN_INSPECTOR_PRIMARY_HEIGHT,
-				primaryPanelId: INSPECTOR_PRIMARY_PANEL_ID,
-				panels: inspectorPanels,
-				sizes: current,
-				panelId: INSPECTOR_TERMINAL_PANEL_ID,
-			}),
-		);
-		setTabsOpen(true);
-	}, [inspectorPanels, tabsOpen]);
+		setTabsOpen((open) => !open);
+	}, []);
 
 	const handleToggleActions = useCallback(() => {
-		if (actionsOpen) {
-			setActionsOpen(false);
-			return;
-		}
-		setPanelSizes((current) =>
-			openVerticalSplitPanel({
-				containerSize: containerRef.current?.clientHeight ?? 0,
-				headerSize: INSPECTOR_SECTION_HEADER_HEIGHT,
-				minPrimarySize: MIN_INSPECTOR_PRIMARY_HEIGHT,
-				primaryPanelId: INSPECTOR_PRIMARY_PANEL_ID,
-				panels: inspectorPanels,
-				sizes: current,
-				panelId: INSPECTOR_ACTIONS_PANEL_ID,
-			}),
-		);
-		setActionsOpen(true);
-	}, [actionsOpen, inspectorPanels]);
+		setActionsOpen((open) => !open);
+	}, []);
 
 	useEffect(() => {
 		if (!resizeState) {
 			return;
 		}
 
-		let pendingSizes: VerticalSplitPanelSizeState | null = null;
+		let pendingMove: globalThis.MouseEvent | null = null;
 		let animationFrameId: number | null = null;
 		const flush = () => {
 			animationFrameId = null;
-			if (pendingSizes !== null) {
-				const next = pendingSizes;
-				pendingSizes = null;
-				setPanelSizes(next);
+			const event = pendingMove;
+			pendingMove = null;
+			if (!event) return;
+			const deltaY = event.clientY - resizeState.pointerY;
+
+			if (resizeState.target === RESIZE_TARGET_ACTIONS) {
+				// Drag down → changes grows, actions auto-shrinks.
+				const max = Math.max(
+					MIN_CHANGES_BODY,
+					resizeState.bodyBudget - resizeState.tabsBody - MIN_ACTIONS_BODY,
+				);
+				const next = clamp(
+					resizeState.initialChangesBody + deltaY,
+					MIN_CHANGES_BODY,
+					max,
+				);
+				setStoredChangesBody(next);
+				return;
 			}
+
+			// Drag down → tabs shrinks, upper region (actions or changes) grows.
+			const upperMin =
+				MIN_CHANGES_BODY + (resizeState.actionsOpen ? MIN_ACTIONS_BODY : 0);
+			const max = Math.max(MIN_TABS_BODY, resizeState.bodyBudget - upperMin);
+			const next = clamp(
+				resizeState.initialTabsBody - deltaY,
+				MIN_TABS_BODY,
+				max,
+			);
+			setStoredTabsBody(next);
 		};
 
 		const handleMouseMove = (event: globalThis.MouseEvent) => {
-			const deltaY = event.clientY - resizeState.pointerY;
-			pendingSizes = resizeVerticalSplitPanel({
-				containerSize: containerRef.current?.clientHeight ?? 0,
-				headerSize: INSPECTOR_SECTION_HEADER_HEIGHT,
-				minPrimarySize: MIN_INSPECTOR_PRIMARY_HEIGHT,
-				primaryPanelId: INSPECTOR_PRIMARY_PANEL_ID,
-				panels: inspectorPanels,
-				sizes: resizeState.initialSizes,
-				panelId: resizeState.target,
-				deltaY,
-			});
-
+			pendingMove = event;
 			if (animationFrameId === null) {
 				animationFrameId = window.requestAnimationFrame(flush);
 			}
@@ -307,29 +331,32 @@ export function useWorkspaceInspectorSidebar({
 			window.removeEventListener("mousemove", handleMouseMove);
 			window.removeEventListener("mouseup", handleMouseUp);
 		};
-	}, [inspectorPanels, resizeState]);
+	}, [resizeState]);
 
 	const handleResizeStart = useCallback(
-		(target: VerticalSplitPanelId) =>
-			(event: ReactMouseEvent<HTMLDivElement>) => {
-				if (event.button !== 0) return;
-				event.preventDefault();
-				setResizeState({
-					pointerY: event.clientY,
-					initialSizes: panelSizes,
-					target,
-				});
-			},
-		[panelSizes],
+		(target: ResizeTarget) => (event: ReactMouseEvent<HTMLDivElement>) => {
+			if (event.button !== 0) return;
+			event.preventDefault();
+			setResizeState({
+				pointerY: event.clientY,
+				target,
+				initialChangesBody: storedChangesBody,
+				initialTabsBody: storedTabsBody,
+				bodyBudget,
+				tabsBody,
+				actionsOpen,
+			});
+		},
+		[storedChangesBody, storedTabsBody, bodyBudget, tabsBody, actionsOpen],
 	);
 
 	return {
-		actionsHeight:
-			panelSizes[INSPECTOR_ACTIONS_PANEL_ID] ?? MIN_INSPECTOR_ACTIONS_HEIGHT,
+		actionsHeight: actionsBody,
 		actionsOpen,
 		actionsRef,
 		activeTab,
 		changes,
+		changesHeight: changesBody,
 		containerRef,
 		flashingPaths,
 		handleResizeStart,
@@ -341,8 +368,7 @@ export function useWorkspaceInspectorSidebar({
 		repoScripts,
 		scriptsLoaded,
 		setActiveTab,
-		tabsBodyHeight:
-			panelSizes[INSPECTOR_TERMINAL_PANEL_ID] ?? MIN_INSPECTOR_TERMINAL_HEIGHT,
+		tabsBodyHeight: tabsBody,
 		tabsOpen,
 		tabsWrapperRef,
 	};

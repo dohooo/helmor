@@ -15,6 +15,7 @@ import {
 	PlusIcon,
 	Undo2Icon,
 } from "lucide-react";
+import { motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatedShinyText } from "@/components/ui/animated-shiny-text";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +44,11 @@ import {
 import { cn } from "@/lib/utils";
 import { showWorkspaceBrokenToast } from "@/lib/workspace-broken-toast";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
+import {
+	INSPECTOR_SECTION_HEADER_HEIGHT,
+	TABS_ANIMATION_MS,
+	TABS_EASING_CURVE,
+} from "../layout";
 import { GitSectionHeader } from "./git-section-header";
 
 const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
@@ -66,6 +72,10 @@ type ChangesSectionProps = {
 	changeRequest: ChangeRequestInfo | null;
 	/** Cold-fetch indicator owned by App; drives the git-header shimmer. */
 	forgeIsRefreshing?: boolean;
+	/** Height of the changes body (excluding the section header). */
+	bodyHeight: number;
+	/** Suppresses the height transition while the user is dragging a divider. */
+	isResizing?: boolean;
 };
 
 export function ChangesSection({
@@ -82,7 +92,14 @@ export function ChangesSection({
 	commitButtonState,
 	changeRequest,
 	forgeIsRefreshing = false,
+	bodyHeight,
+	isResizing,
 }: ChangesSectionProps) {
+	const shouldReduceMotion = useReducedMotion();
+	const panelTransition = {
+		duration: isResizing || shouldReduceMotion ? 0 : TABS_ANIMATION_MS / 1000,
+		ease: TABS_EASING_CURVE,
+	};
 	const queryClient = useQueryClient();
 	const [changesTreeView, setChangesTreeView] = useState(true);
 	const [branchDiffTreeView, setBranchDiffTreeView] = useState(true);
@@ -336,9 +353,13 @@ export function ChangesSection({
 	const isForgeRefreshing = workspaceId !== null && forgeIsRefreshing;
 
 	return (
-		<section
+		<motion.section
 			aria-label="Inspector section Git"
-			className="flex min-h-0 flex-1 flex-col overflow-hidden border-b border-border/60 bg-sidebar"
+			className="flex min-h-0 shrink-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar"
+			initial={false}
+			animate={{ height: INSPECTOR_SECTION_HEADER_HEIGHT + bodyHeight }}
+			transition={panelTransition}
+			style={{ willChange: isResizing ? undefined : "height" }}
 		>
 			<GitSectionHeader
 				commitButtonMode={commitButtonMode}
@@ -433,7 +454,7 @@ export function ChangesSection({
 					</div>
 				)}
 			</ScrollArea>
-		</section>
+		</motion.section>
 	);
 }
 
