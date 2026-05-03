@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.14.1
+
+### Patch Changes
+
+- [#356](https://github.com/dohooo/helmor/pull/356) [`f6062d8`](https://github.com/dohooo/helmor/commit/f6062d8f60da9c0eef737f0079d2b477ddedda6a) Thanks [@natllian](https://github.com/natllian)! - Bump bundled agent CLIs and add Codex `/goal` support:
+
+  - Bump Claude Code from 2.1.111 to 2.1.126 and switch to its new platform-native binary distribution.
+  - Bump Codex from 0.124.0 to 0.128.0.
+  - Add a Codex `/goal` slash command (set, pause, resume, clear, optional `--tokens` budget) that drives the new `thread/goal/*` JSON-RPC API, plus a thread-header banner showing the active goal's status and token usage.
+
+- [#360](https://github.com/dohooo/helmor/pull/360) [`83138a3`](https://github.com/dohooo/helmor/commit/83138a34fcd1dc26c5717c3dc4ac0422abd8723a) Thanks [@aidxun](https://github.com/aidxun)! - Fix the right inspector sidebar so Actions and Terminal resize, collapse, and expand cleanly without losing their headers or leaving visual gaps.
+
+- [#362](https://github.com/dohooo/helmor/pull/362) [`0355c77`](https://github.com/dohooo/helmor/commit/0355c77841092c287bccfa8a7e91fef487039000) Thanks [@natllian](https://github.com/natllian)! - Quiet down the inspector's commit button in non-actionable PR states — while mergeability is still being computed and after a PR is merged or closed — so they all share a muted ghost look instead of a faded-out solid CTA.
+
 ## 0.14.0
 
 ### Minor Changes
