@@ -7,29 +7,33 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { flushSync } from "react-dom";
+import {
+	clampVerticalSplitSizes,
+	getInitialVerticalSplitSizes,
+	openVerticalSplitPanel,
+	resizeVerticalSplitPanel,
+	type VerticalSplitPanelConfig,
+	type VerticalSplitPanelId,
+	type VerticalSplitPanelSizeState,
+} from "@/components/ui/vertical-split-layout";
 import { loadRepoScripts, type RepoScripts } from "@/lib/api";
 import type { InspectorFileItem } from "@/lib/editor-session";
 import { workspaceChangesQueryOptions } from "@/lib/query-client";
-import {
-	DEFAULT_TABS_BODY_HEIGHT,
-	MIN_SECTION_HEIGHT,
-	TABS_ANIMATION_MS,
-	TABS_EASING,
-} from "../layout";
+import { INSPECTOR_SECTION_HEADER_HEIGHT } from "../layout";
 import { getScriptState, startScript, stopScript } from "../script-store";
-
-const DEFAULT_CHANGES_RATIO = 0.6;
-const DEFAULT_ACTIONS_RATIO = 0.4;
-
-type ResizeTarget = "actions" | "tabs";
 
 type ResizeState = {
 	pointerY: number;
-	initialChangesHeight: number;
-	initialActionsHeight: number;
-	target: ResizeTarget;
+	initialSizes: VerticalSplitPanelSizeState;
+	target: VerticalSplitPanelId;
 };
+
+const INSPECTOR_PRIMARY_PANEL_ID = "changes";
+const INSPECTOR_ACTIONS_PANEL_ID = "actions";
+const INSPECTOR_TERMINAL_PANEL_ID = "terminal";
+const MIN_INSPECTOR_PRIMARY_HEIGHT = 128;
+const MIN_INSPECTOR_ACTIONS_HEIGHT = 112;
+const MIN_INSPECTOR_TERMINAL_HEIGHT = 160;
 
 type UseWorkspaceInspectorSidebarArgs = {
 	workspaceRootPath?: string | null;
@@ -42,10 +46,37 @@ export function useWorkspaceInspectorSidebar({
 	workspaceId,
 	repoId,
 }: UseWorkspaceInspectorSidebarArgs) {
+	const [actionsOpen, setActionsOpen] = useState(true);
 	const [tabsOpen, setTabsOpen] = useState(false);
 	const [activeTab, setActiveTab] = useState("setup");
-	const [changesHeight, setChangesHeight] = useState(0);
-	const [actionsHeight, setActionsHeight] = useState(0);
+	const inspectorPanels = useMemo<VerticalSplitPanelConfig[]>(
+		() => [
+			{
+				id: INSPECTOR_PRIMARY_PANEL_ID,
+				open: true,
+				minSize: MIN_INSPECTOR_PRIMARY_HEIGHT,
+				defaultSize: 240,
+			},
+			{
+				id: INSPECTOR_ACTIONS_PANEL_ID,
+				open: actionsOpen,
+				minSize: MIN_INSPECTOR_ACTIONS_HEIGHT,
+				// First open uses minSize. Resizing then "remembers" the user's
+				// last height so subsequent toggles restore it.
+				defaultSize: MIN_INSPECTOR_ACTIONS_HEIGHT,
+			},
+			{
+				id: INSPECTOR_TERMINAL_PANEL_ID,
+				open: tabsOpen,
+				minSize: MIN_INSPECTOR_TERMINAL_HEIGHT,
+				defaultSize: MIN_INSPECTOR_TERMINAL_HEIGHT,
+			},
+		],
+		[actionsOpen, tabsOpen],
+	);
+	const [panelSizes, setPanelSizes] = useState<VerticalSplitPanelSizeState>(
+		() => getInitialVerticalSplitSizes(inspectorPanels),
+	);
 	const [resizeState, setResizeState] = useState<ResizeState | null>(null);
 
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -54,19 +85,39 @@ export function useWorkspaceInspectorSidebar({
 
 	useEffect(() => {
 		const element = containerRef.current;
-		if (!element || changesHeight > 0) {
-			return;
-		}
+		if (!element) return;
 
-		const overhead = 36 * 3 + 8 * 2;
-		const available = Math.max(0, element.clientHeight - overhead);
-		const resizableAvailable = Math.max(
-			MIN_SECTION_HEIGHT * 2,
-			available - DEFAULT_TABS_BODY_HEIGHT,
-		);
-		setChangesHeight(Math.round(resizableAvailable * DEFAULT_CHANGES_RATIO));
-		setActionsHeight(Math.round(resizableAvailable * DEFAULT_ACTIONS_RATIO));
-	}, [changesHeight]);
+		let frameId: number | null = null;
+		const resizeObserver = new ResizeObserver((entries) => {
+			const entry = entries[0];
+			if (!entry) return;
+			if (frameId !== null) {
+				cancelAnimationFrame(frameId);
+			}
+			frameId = requestAnimationFrame(() => {
+				frameId = null;
+				const containerSize = entry.contentRect.height;
+				setPanelSizes((current) =>
+					clampVerticalSplitSizes({
+						containerSize,
+						headerSize: INSPECTOR_SECTION_HEADER_HEIGHT,
+						minPrimarySize: MIN_INSPECTOR_PRIMARY_HEIGHT,
+						primaryPanelId: INSPECTOR_PRIMARY_PANEL_ID,
+						panels: inspectorPanels,
+						sizes: current,
+					}),
+				);
+			});
+		});
+
+		resizeObserver.observe(element);
+		return () => {
+			if (frameId !== null) {
+				cancelAnimationFrame(frameId);
+			}
+			resizeObserver.disconnect();
+		};
+	}, [inspectorPanels]);
 
 	const repoScriptsQuery = useQuery({
 		queryKey: ["repoScripts", repoId, workspaceId],
@@ -97,8 +148,8 @@ export function useWorkspaceInspectorSidebar({
 	}, [repoId, workspaceId, repoScripts]);
 
 	const isResizing = resizeState !== null;
-	const isActionsResizing = resizeState?.target === "actions";
-	const isTabsResizing = resizeState?.target === "tabs";
+	const isActionsResizing = resizeState?.target === INSPECTOR_ACTIONS_PANEL_ID;
+	const isTabsResizing = resizeState?.target === INSPECTOR_TERMINAL_PANEL_ID;
 
 	const changesQuery = useQuery({
 		...workspaceChangesQueryOptions(workspaceRootPath ?? ""),
@@ -155,108 +206,75 @@ export function useWorkspaceInspectorSidebar({
 		});
 	}, [changesQuery.data]);
 
+	// Closing only flips `open`; sizes stay in `panelSizes` so reopening
+	// restores the panel's last height. The primary panel auto-grows via
+	// `getPrimaryPanelSize`, which only sums open secondary panels.
 	const handleToggleTabs = useCallback(() => {
-		const tabsElement = tabsWrapperRef.current;
-		const actionsElement = actionsRef.current;
-		if (!tabsElement) {
-			setTabsOpen((current) => !current);
+		if (tabsOpen) {
+			setTabsOpen(false);
 			return;
 		}
+		setPanelSizes((current) =>
+			openVerticalSplitPanel({
+				containerSize: containerRef.current?.clientHeight ?? 0,
+				headerSize: INSPECTOR_SECTION_HEADER_HEIGHT,
+				minPrimarySize: MIN_INSPECTOR_PRIMARY_HEIGHT,
+				primaryPanelId: INSPECTOR_PRIMARY_PANEL_ID,
+				panels: inspectorPanels,
+				sizes: current,
+				panelId: INSPECTOR_TERMINAL_PANEL_ID,
+			}),
+		);
+		setTabsOpen(true);
+	}, [inspectorPanels, tabsOpen]);
 
-		const tabsFrom = tabsElement.offsetHeight;
-		const actionsFrom = actionsElement?.offsetHeight ?? 0;
-
-		// Lock current sizes before flushSync so the className swap doesn't
-		// produce a one-frame layout jump (tabs gains flex-1, actions loses
-		// it). Same task = no paint between lock/unlock/measure.
-		tabsElement.style.height = `${tabsFrom}px`;
-		tabsElement.style.flex = "none";
-		if (actionsElement) {
-			actionsElement.style.height = `${actionsFrom}px`;
-			actionsElement.style.flex = "none";
-		}
-
-		flushSync(() => setTabsOpen((current) => !current));
-
-		// Unlock briefly to measure target sizes, then animateSection re-locks.
-		tabsElement.style.height = "";
-		tabsElement.style.flex = "";
-		if (actionsElement) {
-			actionsElement.style.height = "";
-			actionsElement.style.flex = "";
-		}
-		const tabsTo = tabsElement.offsetHeight;
-		const actionsTo = actionsElement?.offsetHeight ?? 0;
-		if (tabsFrom === tabsTo) {
+	const handleToggleActions = useCallback(() => {
+		if (actionsOpen) {
+			setActionsOpen(false);
 			return;
 		}
-
-		const options = { duration: TABS_ANIMATION_MS, easing: TABS_EASING };
-
-		const animateSection = (element: HTMLElement, from: number, to: number) => {
-			element.style.overflow = "hidden";
-			element.style.flex = "none";
-			element.style.height = `${from}px`;
-			const animation = element.animate(
-				[{ height: `${from}px` }, { height: `${to}px` }],
-				options,
-			);
-			animation.onfinish = animation.oncancel = () => {
-				element.style.overflow = "";
-				element.style.flex = "";
-				element.style.height = "";
-			};
-		};
-
-		animateSection(tabsElement, tabsFrom, tabsTo);
-		if (actionsElement && actionsFrom !== actionsTo) {
-			animateSection(actionsElement, actionsFrom, actionsTo);
-		}
-	}, []);
+		setPanelSizes((current) =>
+			openVerticalSplitPanel({
+				containerSize: containerRef.current?.clientHeight ?? 0,
+				headerSize: INSPECTOR_SECTION_HEADER_HEIGHT,
+				minPrimarySize: MIN_INSPECTOR_PRIMARY_HEIGHT,
+				primaryPanelId: INSPECTOR_PRIMARY_PANEL_ID,
+				panels: inspectorPanels,
+				sizes: current,
+				panelId: INSPECTOR_ACTIONS_PANEL_ID,
+			}),
+		);
+		setActionsOpen(true);
+	}, [actionsOpen, inspectorPanels]);
 
 	useEffect(() => {
 		if (!resizeState) {
 			return;
 		}
 
-		let pendingChanges: number | null = null;
-		let pendingActions: number | null = null;
+		let pendingSizes: VerticalSplitPanelSizeState | null = null;
 		let animationFrameId: number | null = null;
 		const flush = () => {
 			animationFrameId = null;
-			if (pendingChanges !== null) {
-				const next = pendingChanges;
-				pendingChanges = null;
-				setChangesHeight(next);
-			}
-			if (pendingActions !== null) {
-				const next = pendingActions;
-				pendingActions = null;
-				setActionsHeight(next);
+			if (pendingSizes !== null) {
+				const next = pendingSizes;
+				pendingSizes = null;
+				setPanelSizes(next);
 			}
 		};
 
 		const handleMouseMove = (event: globalThis.MouseEvent) => {
 			const deltaY = event.clientY - resizeState.pointerY;
-
-			if (resizeState.target === "actions") {
-				const nextChanges = Math.max(
-					MIN_SECTION_HEIGHT,
-					resizeState.initialChangesHeight + deltaY,
-				);
-				const actualDelta = nextChanges - resizeState.initialChangesHeight;
-				const nextActions = Math.max(
-					MIN_SECTION_HEIGHT,
-					resizeState.initialActionsHeight - actualDelta,
-				);
-				pendingChanges = nextChanges;
-				pendingActions = nextActions;
-			} else {
-				pendingActions = Math.max(
-					MIN_SECTION_HEIGHT,
-					resizeState.initialActionsHeight + deltaY,
-				);
-			}
+			pendingSizes = resizeVerticalSplitPanel({
+				containerSize: containerRef.current?.clientHeight ?? 0,
+				headerSize: INSPECTOR_SECTION_HEADER_HEIGHT,
+				minPrimarySize: MIN_INSPECTOR_PRIMARY_HEIGHT,
+				primaryPanelId: INSPECTOR_PRIMARY_PANEL_ID,
+				panels: inspectorPanels,
+				sizes: resizeState.initialSizes,
+				panelId: resizeState.target,
+				deltaY,
+			});
 
 			if (animationFrameId === null) {
 				animationFrameId = window.requestAnimationFrame(flush);
@@ -289,31 +307,33 @@ export function useWorkspaceInspectorSidebar({
 			window.removeEventListener("mousemove", handleMouseMove);
 			window.removeEventListener("mouseup", handleMouseUp);
 		};
-	}, [resizeState]);
+	}, [inspectorPanels, resizeState]);
 
 	const handleResizeStart = useCallback(
-		(target: ResizeTarget) => (event: ReactMouseEvent<HTMLDivElement>) => {
-			if (event.button !== 0) return;
-			event.preventDefault();
-			setResizeState({
-				pointerY: event.clientY,
-				initialChangesHeight: changesHeight,
-				initialActionsHeight: actionsHeight,
-				target,
-			});
-		},
-		[actionsHeight, changesHeight],
+		(target: VerticalSplitPanelId) =>
+			(event: ReactMouseEvent<HTMLDivElement>) => {
+				if (event.button !== 0) return;
+				event.preventDefault();
+				setResizeState({
+					pointerY: event.clientY,
+					initialSizes: panelSizes,
+					target,
+				});
+			},
+		[panelSizes],
 	);
 
 	return {
-		actionsHeight,
+		actionsHeight:
+			panelSizes[INSPECTOR_ACTIONS_PANEL_ID] ?? MIN_INSPECTOR_ACTIONS_HEIGHT,
+		actionsOpen,
 		actionsRef,
 		activeTab,
 		changes,
-		changesHeight,
 		containerRef,
 		flashingPaths,
 		handleResizeStart,
+		handleToggleActions,
 		handleToggleTabs,
 		isActionsResizing,
 		isResizing,
@@ -321,6 +341,8 @@ export function useWorkspaceInspectorSidebar({
 		repoScripts,
 		scriptsLoaded,
 		setActiveTab,
+		tabsBodyHeight:
+			panelSizes[INSPECTOR_TERMINAL_PANEL_ID] ?? MIN_INSPECTOR_TERMINAL_HEIGHT,
 		tabsOpen,
 		tabsWrapperRef,
 	};

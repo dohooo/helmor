@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { VerticalSplitPanelGroup } from "@/components/ui/vertical-split-panel-group";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
@@ -85,13 +86,14 @@ export function WorkspaceInspectorSidebar({
 }: WorkspaceInspectorSidebarProps) {
 	const {
 		actionsHeight,
+		actionsOpen,
 		actionsRef,
 		activeTab,
 		changes,
-		changesHeight,
 		containerRef,
 		flashingPaths,
 		handleResizeStart,
+		handleToggleActions,
 		handleToggleTabs,
 		isActionsResizing,
 		isResizing,
@@ -99,6 +101,7 @@ export function WorkspaceInspectorSidebar({
 		repoScripts,
 		scriptsLoaded,
 		setActiveTab,
+		tabsBodyHeight,
 		tabsOpen,
 		tabsWrapperRef,
 	} = useWorkspaceInspectorSidebar({
@@ -368,101 +371,114 @@ export function WorkspaceInspectorSidebar({
 	const handleOpenSettings = onOpenSettings ?? (() => {});
 
 	return (
-		<div
+		<VerticalSplitPanelGroup
 			ref={containerRef}
-			className={cn(
-				"flex h-full min-h-0 flex-col bg-sidebar",
-				isResizing && "select-none",
-			)}
-		>
-			<ChangesSection
-				bodyHeight={changesHeight}
-				workspaceId={workspaceId ?? null}
-				workspaceRootPath={workspaceRootPath ?? null}
-				workspaceTargetBranch={workspaceTargetBranch ?? null}
-				changes={changes}
-				editorMode={editorMode}
-				activeEditorPath={activeEditorPath}
-				onOpenEditorFile={onOpenEditorFile}
-				flashingPaths={flashingPaths}
-				onCommitAction={onCommitAction}
-				commitButtonMode={commitButtonMode}
-				commitButtonState={commitButtonState}
-				changeRequest={changeRequest ?? null}
-				forgeIsRefreshing={forgeIsRefreshing}
-			/>
-
-			<HorizontalResizeHandle
-				onMouseDown={handleResizeStart("actions")}
-				isActive={isActionsResizing}
-			/>
-
-			<ActionsSection
-				workspaceId={workspaceId ?? null}
-				workspaceState={workspaceState ?? null}
-				repoId={repoId ?? null}
-				workspaceRemote={workspaceRemote ?? null}
-				sectionRef={actionsRef}
-				bodyHeight={actionsHeight}
-				expanded={!tabsOpen}
-				onCommitAction={onCommitAction}
-				onReviewAction={onReviewAction}
-				currentSessionId={currentSessionId ?? null}
-				onQueuePendingPromptForSession={onQueuePendingPromptForSession}
-				commitButtonMode={commitButtonMode}
-				commitButtonState={commitButtonState}
-				changeRequest={changeRequest ?? null}
-			/>
-
-			{tabsOpen && (
+			className={cn("bg-sidebar", isResizing && "select-none")}
+			panels={[
+				{
+					id: "changes",
+					open: true,
+					node: (
+						<ChangesSection
+							workspaceId={workspaceId ?? null}
+							workspaceRootPath={workspaceRootPath ?? null}
+							workspaceTargetBranch={workspaceTargetBranch ?? null}
+							changes={changes}
+							editorMode={editorMode}
+							activeEditorPath={activeEditorPath}
+							onOpenEditorFile={onOpenEditorFile}
+							flashingPaths={flashingPaths}
+							onCommitAction={onCommitAction}
+							commitButtonMode={commitButtonMode}
+							commitButtonState={commitButtonState}
+							changeRequest={changeRequest ?? null}
+							forgeIsRefreshing={forgeIsRefreshing}
+						/>
+					),
+				},
+				{
+					id: "actions",
+					open: actionsOpen,
+					resizable: true,
+					node: (
+						<ActionsSection
+							workspaceId={workspaceId ?? null}
+							workspaceState={workspaceState ?? null}
+							repoId={repoId ?? null}
+							workspaceRemote={workspaceRemote ?? null}
+							sectionRef={actionsRef}
+							open={actionsOpen}
+							onToggle={handleToggleActions}
+							bodyHeight={actionsHeight}
+							isResizing={isResizing}
+							onCommitAction={onCommitAction}
+							onReviewAction={onReviewAction}
+							currentSessionId={currentSessionId ?? null}
+							onQueuePendingPromptForSession={onQueuePendingPromptForSession}
+							commitButtonMode={commitButtonMode}
+							commitButtonState={commitButtonState}
+							changeRequest={changeRequest ?? null}
+						/>
+					),
+				},
+				{
+					id: "terminal",
+					open: tabsOpen,
+					resizable: true,
+					node: (
+						<InspectorTabsSection
+							wrapperRef={tabsWrapperRef}
+							open={tabsOpen}
+							onToggle={handleToggleTabs}
+							activeTab={activeTab}
+							onTabChange={setActiveTab}
+							tabActions={runTabActions}
+							setupScriptState={setupScriptState}
+							runScriptState={runScriptState}
+							terminalInstances={terminalInstances}
+							onAddTerminal={handleAddTerminal}
+							onCloseTerminal={handleCloseTerminal}
+							onToggleTerminalHoverZoom={handleToggleTerminalHoverZoom}
+							canSpawnTerminal={canSpawnTerminal}
+							canHoverExpand={canHoverExpand}
+							bodyHeight={tabsBodyHeight}
+							isResizing={isResizing}
+						>
+							<SetupTab
+								repoId={repoId ?? null}
+								workspaceId={workspaceId ?? null}
+								setupScript={repoScripts?.setupScript ?? null}
+								isActive={activeTab === "setup"}
+								onOpenSettings={handleOpenSettings}
+							/>
+							<RunTab
+								repoId={repoId ?? null}
+								workspaceId={workspaceId ?? null}
+								runScript={repoScripts?.runScript ?? null}
+								isActive={activeTab === "run"}
+								onOpenSettings={handleOpenSettings}
+								onStatusChange={setRunStatus}
+								onUrlsChange={setRunUrls}
+							/>
+							{terminalInstances.map((instance) => (
+								<TerminalInstancePanel
+									key={instance.id}
+									repoId={repoId ?? null}
+									workspaceId={workspaceId ?? null}
+									instance={instance}
+									isActive={activeTab === instance.id}
+								/>
+							))}
+						</InspectorTabsSection>
+					),
+				},
+			]}
+			renderResizeHandle={(panelId) => (
 				<HorizontalResizeHandle
-					onMouseDown={handleResizeStart("tabs")}
-					isActive={isTabsResizing}
+					onMouseDown={handleResizeStart(panelId)}
+					isActive={panelId === "actions" ? isActionsResizing : isTabsResizing}
 				/>
 			)}
-
-			<InspectorTabsSection
-				wrapperRef={tabsWrapperRef}
-				open={tabsOpen}
-				onToggle={handleToggleTabs}
-				activeTab={activeTab}
-				onTabChange={setActiveTab}
-				tabActions={runTabActions}
-				setupScriptState={setupScriptState}
-				runScriptState={runScriptState}
-				terminalInstances={terminalInstances}
-				onAddTerminal={handleAddTerminal}
-				onCloseTerminal={handleCloseTerminal}
-				onToggleTerminalHoverZoom={handleToggleTerminalHoverZoom}
-				canSpawnTerminal={canSpawnTerminal}
-				canHoverExpand={canHoverExpand}
-			>
-				<SetupTab
-					repoId={repoId ?? null}
-					workspaceId={workspaceId ?? null}
-					setupScript={repoScripts?.setupScript ?? null}
-					isActive={activeTab === "setup"}
-					onOpenSettings={handleOpenSettings}
-				/>
-				<RunTab
-					repoId={repoId ?? null}
-					workspaceId={workspaceId ?? null}
-					runScript={repoScripts?.runScript ?? null}
-					isActive={activeTab === "run"}
-					onOpenSettings={handleOpenSettings}
-					onStatusChange={setRunStatus}
-					onUrlsChange={setRunUrls}
-				/>
-				{terminalInstances.map((instance) => (
-					<TerminalInstancePanel
-						key={instance.id}
-						repoId={repoId ?? null}
-						workspaceId={workspaceId ?? null}
-						instance={instance}
-						isActive={activeTab === instance.id}
-					/>
-				))}
-			</InspectorTabsSection>
-		</div>
+		/>
 	);
 }

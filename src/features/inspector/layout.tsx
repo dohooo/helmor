@@ -1,4 +1,5 @@
 import { ChevronDown, Plus, X, ZoomIn, ZoomOut } from "lucide-react";
+import { motion, useReducedMotion } from "motion/react";
 import {
 	createContext,
 	useCallback,
@@ -39,6 +40,7 @@ export const RESIZE_HIT_AREA = 10;
 export const TABS_ANIMATION_MS = 350;
 /** Apple-style easing — used consistently across panel toggle, chevron, and hover-zoom. */
 export const TABS_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
+export const TABS_EASING_CURVE = [0.32, 0.72, 0, 1] as const;
 
 /** 300ms is the industry-standard hover-intent threshold (VSCode/Material). */
 export const TABS_HOVER_ACTIVATION_MS = 300;
@@ -50,7 +52,8 @@ const TABS_BLUR_FADE_MS = 120;
 /** Hold blur slightly past the transition so xterm's late re-fit stays hidden. */
 export const TABS_BLUR_HOLD_UNTIL_MS = TABS_HOVER_TRANSITION_MS - 50;
 /** 32px header (h-8) + 1px section border-b. */
-const TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX = 33;
+export const INSPECTOR_SECTION_HEADER_HEIGHT = 33;
+const TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX = INSPECTOR_SECTION_HEADER_HEIGHT;
 
 export const INSPECTOR_SECTION_HEADER_CLASS =
 	"flex h-8 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-muted/25 px-3";
@@ -127,6 +130,8 @@ type InspectorTabsSectionProps = {
 	onToggleTerminalHoverZoom: (instanceId: string, disabled: boolean) => void;
 	/** False when there's no repo/workspace context — disables the "+" button. */
 	canSpawnTerminal: boolean;
+	bodyHeight: number;
+	isResizing?: boolean;
 	/**
 	 * Gate for the hover-to-zoom effect. When false, hovering the body does
 	 * nothing — used so we only zoom when there's actual terminal output worth
@@ -150,11 +155,18 @@ export function InspectorTabsSection({
 	onCloseTerminal,
 	onToggleTerminalHoverZoom,
 	canSpawnTerminal,
+	bodyHeight,
+	isResizing,
 	canHoverExpand,
 	children,
 }: InspectorTabsSectionProps) {
 	const { settings } = useSettings();
 	const newTerminalShortcut = getShortcut(settings.shortcuts, "terminal.new");
+	const shouldReduceMotion = useReducedMotion();
+	const panelTransition = {
+		duration: isResizing || shouldReduceMotion ? 0 : TABS_ANIMATION_MS / 1000,
+		ease: TABS_EASING_CURVE,
+	};
 	// `isHoverExpanded` drives the CSS transitions we CAN interpolate
 	// (width / height / box-shadow). Flipping it to `false` immediately starts
 	// the shrink animation.
@@ -459,20 +471,24 @@ export function InspectorTabsSection({
 	}, [open, onAddTerminal, onToggle]);
 
 	return (
-		<div
+		<motion.div
 			ref={wrapperRef}
 			className={cn(
 				"relative flex min-h-0 shrink-0 flex-col",
-				open && "flex-1",
+				!isZoomPresented && "overflow-hidden",
 			)}
+			initial={false}
+			animate={{
+				height: TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX + (open ? bodyHeight : 0),
+			}}
+			transition={panelTransition}
 			style={{
 				// The real content lives inside the absolutely-positioned child
 				// below, which contributes nothing to layout. Reserve header
 				// height when the panel is closed so the parent flex column
 				// keeps a stable footprint for us.
-				minHeight: open
-					? undefined
-					: `${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px`,
+				minHeight: `${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px`,
+				willChange: isResizing ? undefined : "height",
 			}}
 		>
 			<div
@@ -495,6 +511,7 @@ export function InspectorTabsSection({
 					isZoomPresented && "z-50",
 				)}
 				style={{
+					top: isHoverExpanded ? undefined : 0,
 					width: isHoverExpanded ? zoomedSize : "100%",
 					height: isHoverExpanded ? zoomedSize : "100%",
 					// Cap the zoomed box to a fraction of the viewport so a
@@ -568,6 +585,7 @@ export function InspectorTabsSection({
 							className={cn(
 								INSPECTOR_SECTION_HEADER_CLASS,
 								"relative z-10 items-stretch pt-0",
+								!open && "border-b-transparent",
 							)}
 						>
 							<div
@@ -815,7 +833,7 @@ export function InspectorTabsSection({
 					</div>
 				</section>
 			</div>
-		</div>
+		</motion.div>
 	);
 }
 

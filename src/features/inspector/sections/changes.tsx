@@ -52,7 +52,6 @@ const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
 };
 
 type ChangesSectionProps = {
-	bodyHeight: number;
 	workspaceId: string | null;
 	workspaceRootPath: string | null;
 	workspaceTargetBranch: string | null;
@@ -70,7 +69,6 @@ type ChangesSectionProps = {
 };
 
 export function ChangesSection({
-	bodyHeight,
 	workspaceId,
 	workspaceRootPath,
 	workspaceTargetBranch,
@@ -340,8 +338,7 @@ export function ChangesSection({
 	return (
 		<section
 			aria-label="Inspector section Git"
-			className="flex min-h-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar"
-			style={{ height: `${bodyHeight}px` }}
+			className="flex min-h-0 flex-1 flex-col overflow-hidden border-b border-border/60 bg-sidebar"
 		>
 			<GitSectionHeader
 				commitButtonMode={commitButtonMode}
