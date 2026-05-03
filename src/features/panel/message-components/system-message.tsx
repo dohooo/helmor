@@ -2,9 +2,9 @@ import { formatDistanceToNow } from "date-fns";
 import {
 	AlertCircle,
 	AlertTriangle,
+	Goal,
 	Info,
 	MessageSquareText,
-	Target,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -108,7 +108,7 @@ function SystemText({ text }: { text: string }) {
 	if (text.startsWith("Goal ")) {
 		return (
 			<span className="inline-flex items-center gap-1">
-				<Target className="size-3 shrink-0" strokeWidth={1.8} />
+				<Goal className="size-3 shrink-0" strokeWidth={1.8} />
 				{text}
 			</span>
 		);

@@ -6,7 +6,7 @@
  * option row / footer primitives as `AskUserQuestionPanel`.
  */
 
-import { Check, Target, X } from "lucide-react";
+import { Check, Goal, X } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { DeferredToolCard } from "./deferred-tool-panel/shared";
@@ -42,7 +42,7 @@ export function GoalReplaceConfirm({
 	return (
 		<DeferredToolCard>
 			<InteractionHeader
-				icon={Target}
+				icon={Goal}
 				title="Replace goal?"
 				description={
 					<>

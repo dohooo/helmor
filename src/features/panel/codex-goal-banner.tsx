@@ -17,7 +17,7 @@
  *     re-spawned by codex's continuation loop.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Play, Target, X } from "lucide-react";
+import { Goal, Play, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { type CodexGoalState, mutateCodexGoal } from "@/lib/api";
@@ -108,7 +108,7 @@ export function CodexGoalBanner({
 					: "mx-auto w-[90%] rounded-t-2xl border-b-0 py-1.5",
 			)}
 		>
-			<Target
+			<Goal
 				className="size-3.5 shrink-0 text-muted-foreground/70"
 				strokeWidth={1.8}
 				aria-hidden
