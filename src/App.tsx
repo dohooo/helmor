@@ -38,6 +38,7 @@ import {
 	type ComposerCreateContext,
 	type ComposerCreatePrepareOutcome,
 	type ComposerSubmitPayload,
+	type PendingCreatedWorkspaceSubmit,
 	WorkspaceConversationContainer,
 } from "@/features/conversation";
 import { useDockUnreadBadge } from "@/features/dock-badge";
@@ -457,6 +458,8 @@ function AppShell({
 	const [pendingComposerInserts, setPendingComposerInserts] = useState<
 		ResolvedComposerInsertRequest[]
 	>([]);
+	const [pendingCreatedWorkspaceSubmit, setPendingCreatedWorkspaceSubmit] =
+		useState<PendingCreatedWorkspaceSubmit | null>(null);
 	// Tracks sessions that have reached a terminal "done" event at least once
 	// in this app run. Used by the commit lifecycle to know when to prompt.
 	// Distinct from "unread" — `unreadCount` is the persisted, cross-restart
@@ -2122,6 +2125,14 @@ function AppShell({
 			current.filter((r) => !consumed.has(r.id)),
 		);
 	}, []);
+	const handlePendingCreatedWorkspaceSubmitConsumed = useCallback(
+		(id: string) => {
+			setPendingCreatedWorkspaceSubmit((current) =>
+				current?.id === id ? null : current,
+			);
+		},
+		[],
+	);
 
 	const repositoriesQuery = useQuery(repositoriesQueryOptions());
 	const repositories = repositoriesQuery.data ?? [];
@@ -2279,9 +2290,16 @@ function AppShell({
 				});
 
 				if (outcome.shouldStream) {
+					setPendingCreatedWorkspaceSubmit({
+						id: crypto.randomUUID(),
+						workspaceId: outcome.workspaceId,
+						sessionId: outcome.sessionId,
+						payload,
+					});
 					handleSelectWorkspace(outcome.workspaceId);
 					handleSelectSession(outcome.sessionId);
 					setWorkspaceViewMode("conversation");
+					return { shouldStream: false };
 				}
 
 				return outcome;
@@ -2561,6 +2579,12 @@ function AppShell({
 													workspaceChangeRequest={workspaceChangeRequest}
 													onSessionAborted={handleSessionAborted}
 													pendingPromptForSession={pendingPromptForSession}
+													pendingCreatedWorkspaceSubmit={
+														pendingCreatedWorkspaceSubmit
+													}
+													onPendingCreatedWorkspaceSubmitConsumed={
+														handlePendingCreatedWorkspaceSubmitConsumed
+													}
 													onPendingPromptConsumed={handlePendingPromptConsumed}
 													pendingInsertRequests={pendingComposerInserts}
 													onPendingInsertRequestsConsumed={

@@ -57,6 +57,13 @@ export type ComposerCreateContext = {
 	) => Promise<ComposerCreatePrepareOutcome>;
 };
 
+export type PendingCreatedWorkspaceSubmit = {
+	id: string;
+	workspaceId: string;
+	sessionId: string;
+	payload: ComposerSubmitPayload;
+};
+
 type WorkspaceConversationContainerProps = {
 	selectedWorkspaceId: string | null;
 	displayedWorkspaceId: string | null;
@@ -92,6 +99,8 @@ type WorkspaceConversationContainerProps = {
 		 *  regardless of the user's `followUpBehavior` setting. */
 		forceQueue?: boolean;
 	} | null;
+	pendingCreatedWorkspaceSubmit?: PendingCreatedWorkspaceSubmit | null;
+	onPendingCreatedWorkspaceSubmitConsumed?: (id: string) => void;
 	/** Called after the pending prompt has been handed off to the composer's
 	 * submit flow, so the caller can clear the queue. */
 	onPendingPromptConsumed?: () => void;
@@ -148,6 +157,8 @@ export const WorkspaceConversationContainer = memo(
 		headerActions,
 		headerLeading,
 		pendingPromptForSession = null,
+		pendingCreatedWorkspaceSubmit = null,
+		onPendingCreatedWorkspaceSubmitConsumed,
 		onPendingPromptConsumed,
 		pendingInsertRequests = [],
 		onPendingInsertRequestsConsumed,
@@ -335,6 +346,46 @@ export const WorkspaceConversationContainer = memo(
 			},
 			[handleComposerSubmit, composerCreateContext],
 		);
+		const dispatchedCreatedWorkspaceSubmitRef = useRef<string | null>(null);
+		useEffect(() => {
+			if (!pendingCreatedWorkspaceSubmit) {
+				dispatchedCreatedWorkspaceSubmitRef.current = null;
+				return;
+			}
+			if (
+				pendingCreatedWorkspaceSubmit.workspaceId !== displayedWorkspaceId ||
+				pendingCreatedWorkspaceSubmit.sessionId !== displayedSessionId
+			) {
+				return;
+			}
+			if (
+				dispatchedCreatedWorkspaceSubmitRef.current ===
+				pendingCreatedWorkspaceSubmit.id
+			) {
+				return;
+			}
+			dispatchedCreatedWorkspaceSubmitRef.current =
+				pendingCreatedWorkspaceSubmit.id;
+
+			void (async () => {
+				await handleComposerSubmit({
+					...pendingCreatedWorkspaceSubmit.payload,
+					workingDirectory:
+						workspaceRootPath ??
+						pendingCreatedWorkspaceSubmit.payload.workingDirectory,
+				});
+				onPendingCreatedWorkspaceSubmitConsumed?.(
+					pendingCreatedWorkspaceSubmit.id,
+				);
+			})();
+		}, [
+			displayedSessionId,
+			displayedWorkspaceId,
+			handleComposerSubmit,
+			onPendingCreatedWorkspaceSubmitConsumed,
+			pendingCreatedWorkspaceSubmit,
+			workspaceRootPath,
+		]);
 		const relevantPendingInsertRequests = pendingInsertRequests.filter(
 			(request) => {
 				return insertRequestMatchesComposer(request, {
