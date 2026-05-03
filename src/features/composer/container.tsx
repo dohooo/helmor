@@ -53,7 +53,6 @@ import { CodexGoalBanner } from "../panel/codex-goal-banner";
 import type { DeferredToolResponseHandler } from "./deferred-tool";
 import type { AddDirPickerEntry } from "./editor/add-dir/typeahead-plugin";
 import type { ElicitationResponseHandler } from "./elicitation";
-import { GoalReplaceConfirm } from "./goal-replace-confirm";
 import { WorkspaceComposer } from "./index";
 import { SubmitQueueList } from "./submit-queue-list";
 
@@ -862,15 +861,6 @@ export const WorkspaceComposerContainer = memo(
 
 				<div className="relative z-10">
 					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex flex-col items-center gap-1.5">
-						{goalReplaceConfirm && activeGoal ? (
-							<GoalReplaceConfirm
-								currentObjective={activeGoal.objective}
-								newObjective={goalReplaceConfirm.newObjective}
-								disabled={composerUnavailable}
-								onReplace={handleGoalReplaceConfirm}
-								onCancel={handleGoalReplaceCancel}
-							/>
-						) : null}
 						{displayedSessionId ? (
 							<CodexGoalBanner
 								sessionId={displayedSessionId}
@@ -928,6 +918,16 @@ export const WorkspaceComposerContainer = memo(
 						elicitationResponsePending={elicitationResponsePending}
 						pendingDeferredTool={pendingDeferredTool}
 						onDeferredToolResponse={onDeferredToolResponse}
+						goalReplace={
+							goalReplaceConfirm && activeGoal
+								? {
+										currentObjective: activeGoal.objective,
+										newObjective: goalReplaceConfirm.newObjective,
+										onReplace: handleGoalReplaceConfirm,
+										onCancel: handleGoalReplaceCancel,
+									}
+								: null
+						}
 						hasPlanReview={hasPlanReview}
 						pendingInsertRequests={pendingInsertRequests}
 						onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
