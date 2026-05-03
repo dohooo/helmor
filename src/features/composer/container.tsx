@@ -660,13 +660,17 @@ export const WorkspaceComposerContainer = memo(
 			) => {
 				// Intercept `/goal <objective>` for codex sessions that already
 				// have an active or paused goal — surface a confirm panel
-				// instead of silently replacing.
+				// instead of silently replacing. Reserved subcommands
+				// (resume / pause / clear) are NOT new objectives; they're
+				// lifecycle ops on the existing goal and should pass through.
 				if (provider === "codex" && activeGoal) {
 					const match = prompt.trim().match(/^\/goal\s+([\s\S]+)$/);
-					const newObjective = match ? match[1]?.trim() : "";
-					if (newObjective && newObjective !== activeGoal.objective) {
+					const arg = match ? (match[1]?.trim() ?? "") : "";
+					const isReservedSubcommand =
+						arg === "resume" || arg === "pause" || arg === "clear";
+					if (arg && !isReservedSubcommand && arg !== activeGoal.objective) {
 						setGoalReplaceConfirm({
-							newObjective,
+							newObjective: arg,
 							args: [prompt, imagePaths, filePaths, customTags, options],
 						});
 						return;

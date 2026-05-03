@@ -468,16 +468,11 @@ export function useConversationStreaming({
 		[],
 	);
 
-	const handleStopStream = useCallback(() => {
+	const handleStopStream = useCallback(async () => {
 		const activeSession = activeSessionByContext[composerContextKey];
 		if (!activeSession) {
 			return;
 		}
-
-		// For codex sessions with an active (non-paused) goal, flip the goal
-		// to paused first so codex doesn't auto-spawn a fresh continuation
-		// turn the moment we abort the current one. The user can resume from
-		// the banner whenever they're ready.
 		const sessionId = activeSession.stopSessionId;
 		const goal =
 			activeSession.provider === "codex"
@@ -486,17 +481,22 @@ export function useConversationStreaming({
 					)
 				: null;
 
-		const stopPromise = stopAgentStream(sessionId, activeSession.provider);
+		// For codex sessions with an active goal, flip the goal to paused
+		// FIRST so codex doesn't auto-spawn a fresh continuation turn the
+		// moment we abort the current one. Sequential: mutate -> stop, so
+		// the codex child is still alive when mutateCodexGoal needs it.
+		// (mutateCodexGoal is best-effort on the sidecar side too — if a
+		// race somehow kills the child first it just no-ops.) The user
+		// resumes by typing `/goal resume`.
 		if (goal && goal.status === "active") {
-			// Fire pause concurrently — both routes end up calling
-			// `turn/interrupt` server-side, which is idempotent under codex's
-			// thread state machine. mutateCodexGoal also flips the goal
-			// status, which is the bit we actually need.
-			void mutateCodexGoal(sessionId, "pause").catch(() => {
-				// Best-effort — surface stop errors via the existing pipeline.
-			});
+			try {
+				await mutateCodexGoal(sessionId, "pause");
+			} catch {
+				// Surfaced via toast inside mutateCodexGoal already; don't
+				// block the abort.
+			}
 		}
-		void stopPromise;
+		await stopAgentStream(sessionId, activeSession.provider);
 	}, [activeSessionByContext, composerContextKey, queryClient]);
 
 	const handlePermissionResponse = useCallback(

@@ -14,7 +14,7 @@ mod custom_providers;
 mod persistence;
 mod queries;
 mod slash_commands;
-mod streaming;
+pub(crate) mod streaming;
 mod support;
 
 pub use self::action_kind::ActionKind;
@@ -193,11 +193,11 @@ pub struct AgentSendRequest {
 use crate::pipeline::types::{AgentUsage, CollectedTurn, MessageRole};
 
 /// Context shared across incremental persistence calls within a single exchange.
-struct ExchangeContext {
-    helmor_session_id: String,
-    model_id: String,
-    model_provider: String,
-    user_message_id: String,
+pub(crate) struct ExchangeContext {
+    pub(crate) helmor_session_id: String,
+    pub(crate) model_id: String,
+    pub(crate) model_provider: String,
+    pub(crate) user_message_id: String,
 }
 
 #[tauri::command]

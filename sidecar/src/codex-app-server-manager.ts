@@ -106,18 +106,28 @@ function codexTargetTriple(): string | null {
 const CODEX_BIN_PATH = resolveCodexBinPath();
 
 /**
- * `/goal <objective>` parses to a goal-set request. Other flows
- * (pause / resume / clear / budget edits) go through `mutateCodexGoal`
- * out-of-band so they don't show up in the chat as user messages.
+ * Recognised `/goal` slash-command shapes. `set` carries the objective;
+ * `resume` exists so the user can recover an active goal after a pause
+ * by typing `/goal resume`. We deliberately route `resume` through the
+ * sendMessage path (rather than `mutateCodexGoal`) — the resulting
+ * stream subscription is what catches the goal-continuation turn that
+ * codex auto-spawns, otherwise those events fire into a dead handler.
+ *
+ * Pause / Clear are NOT here on purpose: they live on banner / Composer
+ * Stop and go through `mutateCodexGoal` so they don't show up as user
+ * messages in the chat.
  */
-export type GoalCommand = { kind: "set"; objective: string };
+export type GoalCommand =
+	| { kind: "set"; objective: string }
+	| { kind: "resume" };
 
 export function parseGoalCommand(prompt: string): GoalCommand | null {
 	const m = prompt.trim().match(/^\/goal(?:\s+([\s\S]+))?$/);
 	if (!m) return null;
-	const objective = (m[1] ?? "").trim();
-	if (objective === "") return null;
-	return { kind: "set", objective };
+	const arg = (m[1] ?? "").trim();
+	if (arg === "") return null;
+	if (arg === "resume") return { kind: "resume" };
+	return { kind: "set", objective: arg };
 }
 
 function dispatchGoalCommand(
@@ -125,6 +135,16 @@ function dispatchGoalCommand(
 	threadId: string,
 	cmd: GoalCommand,
 ): { method: string; promise: Promise<unknown> } {
+	if (cmd.kind === "resume") {
+		return {
+			method: "thread/goal/set",
+			promise: server.sendRequest(
+				"thread/goal/set",
+				{ threadId, status: "active" },
+				20_000,
+			),
+		};
+	}
 	return {
 		method: "thread/goal/set",
 		promise: server.sendRequest(
@@ -826,15 +846,20 @@ export class CodexAppServerManager implements SessionManager {
 			activeTurnId: ctx?.activeTurnId ?? "(none)",
 			knownSessions: [...this.sessions.keys()],
 		});
-		if (!ctx) {
-			throw new Error(
-				"This Codex session has no active process — send a message first to wake it up, then try again.",
-			);
+		if (!ctx?.providerThreadId) {
+			// No live codex process or no thread yet — silent skip rather
+			// than throw. The Composer Stop path fires this concurrently
+			// with `stopAgentStream`, and a race where Stop kills the
+			// process first must NOT surface as a user-facing error. The
+			// Rust caller still applies the mutation to the local DB so
+			// the banner reflects the new state.
+			logger.debug("mutateGoal: no active codex context, skipping RPC", {
+				sessionId,
+				action,
+			});
+			return;
 		}
 		const threadId = ctx.providerThreadId;
-		if (!threadId) {
-			throw new Error("Codex thread has not started yet");
-		}
 
 		// Codex's pause/clear semantics only stop the continuation loop —
 		// any in-flight turn keeps streaming until natural end. To match
@@ -858,16 +883,24 @@ export class CodexAppServerManager implements SessionManager {
 			}
 		}
 
-		if (action === "clear") {
-			await ctx.server.sendRequest("thread/goal/clear", { threadId }, 20_000);
-			return;
+		try {
+			if (action === "clear") {
+				await ctx.server.sendRequest("thread/goal/clear", { threadId }, 20_000);
+				return;
+			}
+			const status = action === "pause" ? "paused" : "active";
+			await ctx.server.sendRequest(
+				"thread/goal/set",
+				{ threadId, status },
+				20_000,
+			);
+		} catch (err) {
+			// The codex child may have been killed (Composer Stop's parallel
+			// stopSession path) — same idempotency rule as the no-ctx case.
+			logger.debug("mutateGoal RPC failed (best-effort)", {
+				...errorDetails(err),
+			});
 		}
-		const status = action === "pause" ? "paused" : "active";
-		await ctx.server.sendRequest(
-			"thread/goal/set",
-			{ threadId, status },
-			20_000,
-		);
 	}
 
 	// ── stopSession / shutdown ───────────────────────────────────────────

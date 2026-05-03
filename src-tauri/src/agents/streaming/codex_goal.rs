@@ -146,6 +146,67 @@ fn insert_goal_system_message(
     Ok(())
 }
 
+/// Apply a banner-button-driven goal mutation directly to the local DB
+/// without waiting for codex's `thread/goal/updated` notification to
+/// round-trip back through the stale per-stream notification handler.
+///
+/// Idempotent with whatever codex eventually pushes — both writes go
+/// through `write_codex_goal_meta`, so the second one (whichever it is)
+/// just observes "no transition" and skips the system message.
+pub fn apply_local_mutation(app: &AppHandle, session_id: &str, action: &str) {
+    let new_meta = match compute_local_mutation(session_id, action) {
+        Ok(meta) => meta,
+        Err(err) => {
+            tracing::warn!(session_id = %session_id, action = %action, error = %err, "apply_local_mutation: skipped");
+            return;
+        }
+    };
+    let raw = serde_json::json!({
+        "sessionId": session_id,
+        "goal": new_meta,
+    });
+    persist_codex_goal_event(app, &raw);
+}
+
+/// Read current `codex_goal_meta`, project the button action onto it,
+/// return the new meta as a stringified ThreadGoal (or `None` for
+/// `clear`). Returns `Err` when there's no current goal to mutate
+/// (clicking Pause when nothing is set is a no-op the caller swallows).
+fn compute_local_mutation(
+    session_id: &str,
+    action: &str,
+) -> std::result::Result<Option<String>, String> {
+    let conn = crate::models::db::read_conn().map_err(|e| e.to_string())?;
+    let prev_meta: Option<String> = conn
+        .query_row(
+            "SELECT codex_goal_meta FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    drop(conn);
+
+    if action == "clear" {
+        return Ok(None);
+    }
+
+    let prev = prev_meta
+        .as_deref()
+        .ok_or_else(|| "no goal to mutate".to_string())?;
+    let mut value: Value = serde_json::from_str(prev).map_err(|e| e.to_string())?;
+    let new_status = match action {
+        "pause" => "paused",
+        "resume" => "active",
+        other => return Err(format!("invalid action {other}")),
+    };
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("status".to_string(), Value::String(new_status.to_string()));
+    } else {
+        return Err("codex_goal_meta is not an object".to_string());
+    }
+    Ok(Some(value.to_string()))
+}
+
 pub(super) fn persist_codex_goal_event(app: &AppHandle, raw: &Value) {
     let outcome = match crate::models::db::write_conn() {
         Ok(conn) => match write_codex_goal_meta(&conn, raw) {
@@ -341,5 +402,71 @@ mod tests {
             Some(meta("complete", "x").as_str()),
         );
         assert_eq!(label.as_deref(), Some("Goal complete"));
+    }
+
+    // The compute_local_mutation tests need to drive the real DB pool
+    // because they read codex_goal_meta via the shared connection. We
+    // do that through the same TEST_ENV_LOCK setup other DB-touching
+    // tests use.
+    fn with_db_session<F: FnOnce(&str)>(prev_meta: Option<&str>, f: F) {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+        crate::data_dir::ensure_directory_structure().unwrap();
+
+        let session_id = "s-mutate";
+        {
+            let conn = crate::models::db::write_conn().unwrap();
+            crate::schema::ensure_schema(&conn).unwrap();
+            conn.execute(
+                "INSERT OR REPLACE INTO sessions (id, workspace_id, status, codex_goal_meta) VALUES (?1, 'w', 'idle', ?2)",
+                rusqlite::params![session_id, prev_meta],
+            )
+            .unwrap();
+        }
+        f(session_id);
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn compute_local_mutation_pause_flips_status_to_paused() {
+        with_db_session(Some(&meta("active", "obj")), |sid| {
+            let new_meta = compute_local_mutation(sid, "pause").unwrap().unwrap();
+            assert!(new_meta.contains("\"status\":\"paused\""));
+            assert!(new_meta.contains("\"objective\":\"obj\""));
+        });
+    }
+
+    #[test]
+    fn compute_local_mutation_resume_flips_to_active() {
+        with_db_session(Some(&meta("paused", "obj")), |sid| {
+            let new_meta = compute_local_mutation(sid, "resume").unwrap().unwrap();
+            assert!(new_meta.contains("\"status\":\"active\""));
+        });
+    }
+
+    #[test]
+    fn compute_local_mutation_clear_returns_none() {
+        with_db_session(Some(&meta("active", "obj")), |sid| {
+            let new_meta = compute_local_mutation(sid, "clear").unwrap();
+            assert_eq!(new_meta, None);
+        });
+    }
+
+    #[test]
+    fn compute_local_mutation_pause_without_existing_goal_errors() {
+        with_db_session(None, |sid| {
+            assert!(compute_local_mutation(sid, "pause").is_err());
+        });
+    }
+
+    #[test]
+    fn compute_local_mutation_clear_without_existing_goal_is_idempotent() {
+        with_db_session(None, |sid| {
+            // Clear should be tolerant — clearing nothing is a no-op.
+            assert_eq!(compute_local_mutation(sid, "clear").unwrap(), None);
+        });
     }
 }

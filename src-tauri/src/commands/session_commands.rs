@@ -80,6 +80,7 @@ pub async fn get_session_codex_goal(session_id: String) -> CmdResult<Option<Stri
 /// method, which then dispatches to the right `thread/goal/*` RPC.
 #[tauri::command]
 pub async fn mutate_codex_goal(
+    app: tauri::AppHandle,
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
     session_id: String,
     action: String,
@@ -142,6 +143,23 @@ pub async fn mutate_codex_goal(
 
     sidecar.unsubscribe(&rid);
     outcome?;
+
+    // Mirror the goal mutation locally so the banner reflects the new
+    // state on the next React Query refetch. Codex eventually pushes
+    // `thread/goal/updated` too, but the notification flows through a
+    // stale per-stream handler when no fresh sendMessage is in flight,
+    // so we can't rely on it. `apply_local_mutation` is idempotent.
+    let session_for_local = session_id.clone();
+    let action_for_local = action.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        crate::agents::streaming::codex_goal::apply_local_mutation(
+            &app,
+            &session_for_local,
+            &action_for_local,
+        );
+    })
+    .await;
+
     Ok(())
 }
 

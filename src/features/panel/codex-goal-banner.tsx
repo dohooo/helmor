@@ -3,13 +3,23 @@
  * floating overlay as `<SubmitQueueList />` so the two visually stack —
  * one banner + N queued submits + the composer below.
  *
- * Pause / Resume / Clear go straight to `mutateCodexGoal` so the
- * lifecycle ops never appear as user messages in the chat.
+ * Two button paths:
+ *   - Clear: out-of-band JSON-RPC via `mutateCodexGoal` so it doesn't
+ *     leave a user message in the chat.
+ *   - Resume: NOT a button. The banner shows a `/goal resume` hint and
+ *     the user types it as a normal slash command. Routing it through
+ *     the sendMessage path piggybacks on the resulting stream
+ *     subscription, which is what catches the goal-continuation turn
+ *     codex auto-spawns when the status flips back to active.
+ *
+ * Pause is also out-of-band but isn't a banner button — it's the
+ * Composer Stop button that triggers it, so an abort during an active
+ * goal doesn't immediately get re-spawned by codex's continuation loop.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pause, Play, Target, X } from "lucide-react";
+import { Target, X } from "lucide-react";
 import { toast } from "sonner";
-import { ActionRowButton } from "@/components/action-row";
+import { Button } from "@/components/ui/button";
 import { type CodexGoalState, mutateCodexGoal } from "@/lib/api";
 import {
 	helmorQueryKeys,
@@ -37,8 +47,6 @@ function formatTokens(n: number): string {
 	return n.toString();
 }
 
-type Action = "pause" | "resume" | "clear";
-
 export function CodexGoalBanner({
 	sessionId,
 	hasQueueBelow,
@@ -56,37 +64,21 @@ export function CodexGoalBanner({
 	const queryKey = helmorQueryKeys.sessionCodexGoal(sessionId);
 	const { data: goal } = useQuery(sessionCodexGoalQueryOptions(sessionId));
 
-	const mutation = useMutation({
-		mutationFn: (action: Action) => mutateCodexGoal(sessionId, action),
-		onMutate: async (action) => {
-			// Optimistic flip so the banner reacts immediately even if the
-			// codex `thread/goal/updated` notification takes a moment to
-			// round-trip back through the pipeline.
+	const clearMutation = useMutation({
+		mutationFn: () => mutateCodexGoal(sessionId, "clear"),
+		onMutate: async () => {
 			await queryClient.cancelQueries({ queryKey });
 			const previous = queryClient.getQueryData<CodexGoalState | null>(
 				queryKey,
 			);
-			if (action === "clear") {
-				queryClient.setQueryData<CodexGoalState | null>(queryKey, null);
-			} else if (previous) {
-				queryClient.setQueryData<CodexGoalState | null>(queryKey, {
-					...previous,
-					status: action === "pause" ? "paused" : "active",
-				});
-			}
+			queryClient.setQueryData<CodexGoalState | null>(queryKey, null);
 			return { previous };
 		},
-		onSuccess: (_, action) => {
-			if (action === "pause") toast.success("Goal paused");
-			else if (action === "resume") toast.success("Goal resumed");
-			else if (action === "clear") toast.success("Goal cleared");
-		},
-		onError: (err: unknown, _action, context) => {
-			// Roll back the optimistic update.
+		onError: (err: unknown, _vars, context) => {
 			if (context?.previous !== undefined) {
 				queryClient.setQueryData(queryKey, context.previous);
 			}
-			toast.error(err instanceof Error ? err.message : "Failed to update goal");
+			toast.error(err instanceof Error ? err.message : "Failed to clear goal");
 		},
 		onSettled: () => {
 			void queryClient.invalidateQueries({ queryKey });
@@ -98,7 +90,8 @@ export function CodexGoalBanner({
 	const used = formatTokens(goal.tokensUsed);
 	const budget =
 		goal.tokenBudget != null ? formatTokens(goal.tokenBudget) : null;
-	const isPending = mutation.isPending || disabled;
+	const isPaused = goal.status === "paused";
+	const isPending = clearMutation.isPending || disabled;
 
 	return (
 		<div
@@ -106,13 +99,8 @@ export function CodexGoalBanner({
 			className={cn(
 				"pointer-events-auto flex items-center gap-2 border border-secondary/80 bg-background px-3 py-1 text-xs",
 				hasQueueBelow
-					? // Standalone pill — fully rounded, content-width, drop shadow
-						// to lift it visually off the queue row directly below.
-						"mx-auto w-fit max-w-[90%] rounded-md shadow-sm"
-					: // Glue to the composer top — same shape as SubmitQueueList's
-						// solo styling so a goal with no queue feels like a single
-						// continuous block above the input.
-						"mx-auto w-[90%] rounded-t-2xl border-b-0 py-1.5",
+					? "mx-auto w-fit max-w-[90%] rounded-md shadow-sm"
+					: "mx-auto w-[90%] rounded-t-2xl border-b-0 py-1.5",
 			)}
 		>
 			<Target
@@ -132,40 +120,30 @@ export function CodexGoalBanner({
 				{STATUS_LABEL[goal.status]}
 			</span>
 			<span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/70">
-				{budget ? `${used} / ${budget}` : used}
+				Used: {budget ? `${used} / ${budget}` : used}
 			</span>
-			<div className="ml-1 flex shrink-0 items-center gap-1">
-				{goal.status === "active" && (
-					<ActionRowButton
-						type="button"
-						aria-label="Pause goal"
-						disabled={isPending}
-						onClick={() => mutation.mutate("pause")}
-					>
-						<Pause className="size-[13px] shrink-0" strokeWidth={1.8} />
-						<span>Pause</span>
-					</ActionRowButton>
-				)}
-				{goal.status === "paused" && (
-					<ActionRowButton
-						type="button"
-						aria-label="Resume goal"
-						disabled={isPending}
-						onClick={() => mutation.mutate("resume")}
-					>
-						<Play className="size-[13px] shrink-0" strokeWidth={1.8} />
-						<span>Resume</span>
-					</ActionRowButton>
-				)}
-				<ActionRowButton
+			{isPaused ? (
+				<span className="shrink-0 text-[11px] text-muted-foreground/80">
+					Type{" "}
+					<code className="rounded bg-muted px-1 py-0.5 text-[10px] font-medium text-foreground">
+						/goal resume
+					</code>{" "}
+					to continue
+				</span>
+			) : null}
+			<div className="ml-auto flex shrink-0 items-center gap-1">
+				<Button
 					type="button"
+					variant="ghost"
+					size="sm"
 					aria-label="Clear goal"
 					disabled={isPending}
-					onClick={() => mutation.mutate("clear")}
+					onClick={() => clearMutation.mutate()}
+					className="h-7 gap-1 rounded-md px-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
 				>
 					<X className="size-[13px] shrink-0" strokeWidth={1.8} />
 					<span>Clear</span>
-				</ActionRowButton>
+				</Button>
 			</div>
 		</div>
 	);
