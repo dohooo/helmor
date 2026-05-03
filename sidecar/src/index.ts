@@ -298,11 +298,7 @@ async function handleMutateCodexGoal(
 	try {
 		const sessionId = requireString(params, "sessionId");
 		const actionRaw = requireString(params, "action");
-		if (
-			actionRaw !== "pause" &&
-			actionRaw !== "resume" &&
-			actionRaw !== "clear"
-		) {
+		if (actionRaw !== "pause" && actionRaw !== "clear") {
 			throw new Error(`Invalid mutateCodexGoal action: ${actionRaw}`);
 		}
 		logger.debug(`[${id}] mutateCodexGoal`, { sessionId, action: actionRaw });

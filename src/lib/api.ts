@@ -2365,11 +2365,15 @@ export async function getSessionCodexGoal(
 	}
 }
 
-/** Out-of-band Codex `/goal` lifecycle control — what the banner buttons
- *  call. `pause` / `resume` flip the goal status; `clear` removes it. */
+/** Out-of-band Codex `/goal` lifecycle control. `pause` is fired by the
+ *  Composer Stop button (so abort doesn't get re-spawned by codex's
+ *  continuation loop); `clear` is the banner's Clear button. Resume is
+ *  intentionally NOT here — it goes through `/goal resume` on the
+ *  sendMessage path so the resulting stream subscription catches the
+ *  goal-continuation turn codex auto-spawns. */
 export async function mutateCodexGoal(
 	sessionId: string,
-	action: "pause" | "resume" | "clear",
+	action: "pause" | "clear",
 ): Promise<void> {
 	await invoke("mutate_codex_goal", { sessionId, action });
 }

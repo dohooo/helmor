@@ -835,7 +835,7 @@ export class CodexAppServerManager implements SessionManager {
 	 */
 	async mutateGoal(
 		sessionId: string,
-		action: "pause" | "resume" | "clear",
+		action: "pause" | "clear",
 	): Promise<void> {
 		const ctx = this.sessions.get(sessionId);
 		logger.info("mutateGoal request", {
@@ -892,10 +892,10 @@ export class CodexAppServerManager implements SessionManager {
 				await ctx.server.sendRequest("thread/goal/clear", { threadId }, 20_000);
 				return;
 			}
-			const status = action === "pause" ? "paused" : "active";
+			// action === "pause"
 			await ctx.server.sendRequest(
 				"thread/goal/set",
-				{ threadId, status },
+				{ threadId, status: "paused" },
 				20_000,
 			);
 		} catch (err) {

@@ -10,9 +10,16 @@ use tauri::AppHandle;
 pub(super) enum CodexGoalWriteOutcome {
     /// Malformed event (missing/empty sessionId).
     Skipped,
-    /// Event valid, DB row updated. `Some(json)` = active goal,
-    /// `None` = goal cleared.
-    Wrote(String),
+    /// Event valid, DB row updated. `inserted_message` flips on only
+    /// when the transition actually produced a new chat-history system
+    /// message — used by the broadcaster to skip a wasteful
+    /// `SessionMessagesAppended` invalidation on idempotent writes
+    /// (e.g. the codex push that arrives right after a local mutation
+    /// already wrote the same payload).
+    Wrote {
+        session_id: String,
+        inserted_message: bool,
+    },
     /// Session row not found — likely a stale/post-delete event.
     UnknownSession(String),
 }
@@ -57,13 +64,18 @@ pub(super) fn write_codex_goal_meta(
             session_id.to_string(),
         ));
     }
-    if let Some(label) = transition_label {
+    let inserted_message = if let Some(label) = transition_label {
         // Best-effort: a failed system-message insert shouldn't fail the
         // whole write — banner still reflects the new state via the
         // codex_goal_meta column itself.
-        let _ = insert_goal_system_message(conn, session_id, &label);
-    }
-    Ok(CodexGoalWriteOutcome::Wrote(session_id.to_string()))
+        insert_goal_system_message(conn, session_id, &label).is_ok()
+    } else {
+        false
+    };
+    Ok(CodexGoalWriteOutcome::Wrote {
+        session_id: session_id.to_string(),
+        inserted_message,
+    })
 }
 
 /// Compare the old and new `codex_goal_meta` values and return a
@@ -190,17 +202,15 @@ fn compute_local_mutation(
         return Ok(None);
     }
 
+    if action != "pause" {
+        return Err(format!("invalid action {action}"));
+    }
     let prev = prev_meta
         .as_deref()
         .ok_or_else(|| "no goal to mutate".to_string())?;
     let mut value: Value = serde_json::from_str(prev).map_err(|e| e.to_string())?;
-    let new_status = match action {
-        "pause" => "paused",
-        "resume" => "active",
-        other => return Err(format!("invalid action {other}")),
-    };
     if let Some(obj) = value.as_object_mut() {
-        obj.insert("status".to_string(), Value::String(new_status.to_string()));
+        obj.insert("status".to_string(), Value::String("paused".to_string()));
     } else {
         return Err("codex_goal_meta is not an object".to_string());
     }
@@ -221,7 +231,7 @@ pub(super) fn persist_codex_goal_event(app: &AppHandle, raw: &Value) {
             return;
         }
     };
-    let session_id = match outcome {
+    let (session_id, inserted_message) = match outcome {
         CodexGoalWriteOutcome::Skipped => {
             tracing::warn!("codexGoalUpdated event malformed (missing sessionId)");
             return;
@@ -233,7 +243,10 @@ pub(super) fn persist_codex_goal_event(app: &AppHandle, raw: &Value) {
             );
             return;
         }
-        CodexGoalWriteOutcome::Wrote(id) => id,
+        CodexGoalWriteOutcome::Wrote {
+            session_id,
+            inserted_message,
+        } => (session_id, inserted_message),
     };
     crate::ui_sync::publish(
         app,
@@ -241,12 +254,18 @@ pub(super) fn persist_codex_goal_event(app: &AppHandle, raw: &Value) {
             session_id: session_id.clone(),
         },
     );
-    // Force the chat to refetch so any synthesised goal_status system
-    // message we just inserted shows up immediately.
-    crate::ui_sync::publish(
-        app,
-        crate::ui_sync::UiMutationEvent::SessionMessagesAppended { session_id },
-    );
+    // Only broadcast SessionMessagesAppended when we actually inserted a
+    // chat-history message. A re-write that flips no fields (e.g. the
+    // codex notification arriving after a local mutation already wrote
+    // the same payload) must not invalidate the chat — that triggers a
+    // refetch which fights with in-flight streaming and shows up as a
+    // visible flicker / "interrupted output".
+    if inserted_message {
+        crate::ui_sync::publish(
+            app,
+            crate::ui_sync::UiMutationEvent::SessionMessagesAppended { session_id },
+        );
+    }
 }
 
 #[cfg(test)]
@@ -281,7 +300,14 @@ mod tests {
             "goal": r#"{"objective":"refactor","status":"active","tokensUsed":100}"#,
         });
         let outcome = write_codex_goal_meta(&conn, &raw).unwrap();
-        assert_eq!(outcome, CodexGoalWriteOutcome::Wrote("s1".to_string()));
+        // First write of an active goal counts as a transition → message inserted.
+        assert_eq!(
+            outcome,
+            CodexGoalWriteOutcome::Wrote {
+                session_id: "s1".to_string(),
+                inserted_message: true,
+            }
+        );
         assert!(read_meta(&conn, "s1").unwrap().contains("\"objective\""));
     }
 
@@ -295,8 +321,38 @@ mod tests {
         .unwrap();
         let raw = serde_json::json!({ "sessionId": "s1", "goal": null });
         let outcome = write_codex_goal_meta(&conn, &raw).unwrap();
-        assert_eq!(outcome, CodexGoalWriteOutcome::Wrote("s1".to_string()));
+        // {} -> null isn't a goal-status transition we narrate.
+        assert_eq!(
+            outcome,
+            CodexGoalWriteOutcome::Wrote {
+                session_id: "s1".to_string(),
+                inserted_message: false,
+            }
+        );
         assert_eq!(read_meta(&conn, "s1"), None);
+    }
+
+    #[test]
+    fn idempotent_rewrite_does_not_insert_message() {
+        // Simulates the codex notification arriving after a local mutation
+        // already wrote the same payload — must NOT fire a second
+        // SessionMessagesAppended invalidation.
+        let conn = open_test_db_with_session("s1");
+        let active_meta = r#"{"objective":"x","status":"active","tokensUsed":0,"timeUsedSeconds":0,"createdAt":0,"updatedAt":0,"threadId":"t","tokenBudget":null}"#;
+        conn.execute(
+            "UPDATE sessions SET codex_goal_meta = ?1 WHERE id = 's1'",
+            [active_meta],
+        )
+        .unwrap();
+        let raw = serde_json::json!({ "sessionId": "s1", "goal": active_meta });
+        let outcome = write_codex_goal_meta(&conn, &raw).unwrap();
+        assert_eq!(
+            outcome,
+            CodexGoalWriteOutcome::Wrote {
+                session_id: "s1".to_string(),
+                inserted_message: false,
+            }
+        );
     }
 
     #[test]
@@ -436,14 +492,6 @@ mod tests {
             let new_meta = compute_local_mutation(sid, "pause").unwrap().unwrap();
             assert!(new_meta.contains("\"status\":\"paused\""));
             assert!(new_meta.contains("\"objective\":\"obj\""));
-        });
-    }
-
-    #[test]
-    fn compute_local_mutation_resume_flips_to_active() {
-        with_db_session(Some(&meta("paused", "obj")), |sid| {
-            let new_meta = compute_local_mutation(sid, "resume").unwrap().unwrap();
-            assert!(new_meta.contains("\"status\":\"active\""));
         });
     }
 

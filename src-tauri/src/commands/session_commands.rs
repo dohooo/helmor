@@ -85,7 +85,7 @@ pub async fn mutate_codex_goal(
     session_id: String,
     action: String,
 ) -> CmdResult<()> {
-    if !matches!(action.as_str(), "pause" | "resume" | "clear") {
+    if !matches!(action.as_str(), "pause" | "clear") {
         return Err(anyhow::anyhow!("Invalid mutateCodexGoal action: {action}").into());
     }
     tracing::info!(session_id = %session_id, action = %action, "mutate_codex_goal");
