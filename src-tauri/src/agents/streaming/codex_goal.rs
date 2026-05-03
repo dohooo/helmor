@@ -68,7 +68,7 @@ pub(super) fn write_codex_goal_meta(
         // Best-effort: a failed system-message insert shouldn't fail the
         // whole write — banner still reflects the new state via the
         // codex_goal_meta column itself.
-        insert_goal_system_message(conn, session_id, &label).is_ok()
+        insert_goal_system_message(conn, session_id, label).is_ok()
     } else {
         false
     };
@@ -82,33 +82,31 @@ pub(super) fn write_codex_goal_meta(
 /// human-readable label when the transition is worth narrating in chat.
 /// `None` when no message should be inserted (e.g. unchanged status,
 /// background token-usage updates that don't move status).
+///
+/// Labels intentionally don't include the objective — the user's
+/// `/goal X` prompt already produced a chat bubble carrying that text,
+/// and repeating it on the system row would just be visual noise.
 pub(super) fn goal_transition_label(
     previous_meta: Option<&str>,
     new_meta: Option<&str>,
-) -> Option<String> {
+) -> Option<&'static str> {
     let prev = previous_meta.and_then(parse_goal_status);
     let curr = new_meta.and_then(parse_goal_status);
-    let new_objective = new_meta.and_then(parse_goal_objective);
 
     if prev == curr {
         return None;
     }
     match (prev, curr) {
         (None, None) => None,
-        // First time setting a goal: include the objective.
-        (None, Some(GoalStatus::Active)) => match new_objective {
-            Some(obj) if !obj.is_empty() => Some(format!("Goal set: {obj}")),
-            _ => Some("Goal started".to_string()),
-        },
-        // Brand-new goal in any other status — fallback.
-        (None, Some(_)) => Some("Goal updated".to_string()),
+        // Brand-new goal — `Goal set` regardless of starting status.
+        (None, Some(_)) => Some("Goal set"),
         // Cleared.
-        (Some(_), None) => Some("Goal cleared".to_string()),
+        (Some(_), None) => Some("Goal cleared"),
         // Status flips while goal exists.
-        (Some(_), Some(GoalStatus::Paused)) => Some("Goal paused".to_string()),
-        (Some(_), Some(GoalStatus::Active)) => Some("Goal resumed".to_string()),
-        (Some(_), Some(GoalStatus::BudgetLimited)) => Some("Goal reached token budget".to_string()),
-        (Some(_), Some(GoalStatus::Complete)) => Some("Goal complete".to_string()),
+        (Some(_), Some(GoalStatus::Paused)) => Some("Goal paused"),
+        (Some(_), Some(GoalStatus::Active)) => Some("Goal resumed"),
+        (Some(_), Some(GoalStatus::BudgetLimited)) => Some("Goal reached token budget"),
+        (Some(_), Some(GoalStatus::Complete)) => Some("Goal complete"),
     }
 }
 
@@ -130,13 +128,6 @@ fn parse_goal_status(meta: &str) -> Option<GoalStatus> {
         "complete" => Some(GoalStatus::Complete),
         _ => None,
     }
-}
-
-fn parse_goal_objective(meta: &str) -> Option<String> {
-    let v: Value = serde_json::from_str(meta).ok()?;
-    v.get("objective")
-        .and_then(Value::as_str)
-        .map(str::to_string)
 }
 
 fn insert_goal_system_message(
@@ -395,9 +386,12 @@ mod tests {
     }
 
     #[test]
-    fn transition_label_first_set_includes_objective() {
+    fn transition_label_first_set_does_not_include_objective() {
+        // The user's `/goal X` prompt already produces a chat bubble with
+        // the objective text — repeating it on the system row would just
+        // be noise. So the label is the same regardless of objective.
         let label = goal_transition_label(None, Some(meta("active", "fix the bug").as_str()));
-        assert_eq!(label.as_deref(), Some("Goal set: fix the bug"));
+        assert_eq!(label, Some("Goal set"));
     }
 
     #[test]
@@ -406,7 +400,7 @@ mod tests {
             Some(meta("active", "x").as_str()),
             Some(meta("paused", "x").as_str()),
         );
-        assert_eq!(label.as_deref(), Some("Goal paused"));
+        assert_eq!(label, Some("Goal paused"));
     }
 
     #[test]
@@ -415,13 +409,13 @@ mod tests {
             Some(meta("paused", "x").as_str()),
             Some(meta("active", "x").as_str()),
         );
-        assert_eq!(label.as_deref(), Some("Goal resumed"));
+        assert_eq!(label, Some("Goal resumed"));
     }
 
     #[test]
     fn transition_label_cleared() {
         let label = goal_transition_label(Some(meta("active", "x").as_str()), None);
-        assert_eq!(label.as_deref(), Some("Goal cleared"));
+        assert_eq!(label, Some("Goal cleared"));
     }
 
     #[test]
@@ -448,7 +442,7 @@ mod tests {
             Some(meta("active", "x").as_str()),
             Some(meta("budgetLimited", "x").as_str()),
         );
-        assert_eq!(label.as_deref(), Some("Goal reached token budget"));
+        assert_eq!(label, Some("Goal reached token budget"));
     }
 
     #[test]
@@ -457,7 +451,7 @@ mod tests {
             Some(meta("active", "x").as_str()),
             Some(meta("complete", "x").as_str()),
         );
-        assert_eq!(label.as_deref(), Some("Goal complete"));
+        assert_eq!(label, Some("Goal complete"));
     }
 
     // The compute_local_mutation tests need to drive the real DB pool
