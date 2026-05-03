@@ -181,31 +181,59 @@ type ActionButtonVariant = "default" | "secondary" | "outline" | "destructive";
 
 function getButtonVariant(
 	mode: WorkspaceCommitButtonMode,
+	state: CommitButtonState | undefined,
 ): ActionButtonVariant {
+	// Non-actionable states all share the "muted ghost" look (outline +
+	// transparent bg + muted accent), regardless of mode:
+	//   • merged / closed — settled ghost (PR finalized).
+	//   • merge + disabled — mergeability is still computing.
+	// Filled CTA is reserved for actively-actionable modes only.
+	if (mode === "merged" || mode === "closed") return "outline";
+	if (mode === "merge" && state === "disabled") return "outline";
 	switch (mode) {
 		case "fix":
-		case "closed":
 		case "resolve-conflicts":
 		case "merge":
-		case "merged":
 			return "default";
 		default:
 			return "outline";
 	}
 }
 
-/** Mode-specific button color overrides (layered on top of the variant). */
-function getModeClassName(mode: WorkspaceCommitButtonMode): string | undefined {
+/** Mode-specific button color overrides (layered on top of the variant).
+ *
+ * Two visual families:
+ *  - **Filled CTA** for actionable modes (fix / resolve-conflicts / merge).
+ *  - **Muted ghost** for non-actionable modes — transparent bg, muted
+ *    accent border + text. Used for both settled ghost states (merged /
+ *    closed) and the transient merge-disabled state (mergeability still
+ *    computing). Keeping these in one shape so wrapper-level opacity
+ *    tricks aren't needed.
+ */
+function getModeClassName(
+	mode: WorkspaceCommitButtonMode,
+	state: CommitButtonState | undefined,
+): string | undefined {
+	// Computing mergeability: render the merge button as a green ghost so
+	// it visually pairs with merged/closed (and the open-accent PR badge
+	// next to it) instead of a faded-out solid CTA.
+	if (mode === "merge" && state === "disabled") {
+		return "border-[var(--workspace-pr-open-accent)] bg-transparent text-[var(--workspace-pr-open-accent)] transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-transparent hover:text-[var(--workspace-pr-open-accent)]";
+	}
 	switch (mode) {
 		case "fix":
-		case "closed":
 			return "bg-clip-border bg-[var(--workspace-pr-closed-accent)] text-white transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-[var(--workspace-pr-closed-accent)]";
 		case "resolve-conflicts":
 			return "bg-clip-border bg-[var(--workspace-pr-conflicts-accent)] text-white transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-[var(--workspace-pr-conflicts-accent)]";
 		case "merge":
 			return "bg-clip-border bg-[var(--workspace-pr-open-accent)] text-white transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-[var(--workspace-pr-open-accent)]";
+		// Ghost: outline + transparent + the same pure accent the PR badge
+		// and Continue button use, so all three pieces in the bar share
+		// one color.
 		case "merged":
-			return "bg-clip-border bg-[var(--workspace-pr-merged-accent)] text-white transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-[var(--workspace-pr-merged-accent)]";
+			return "border-[var(--workspace-pr-merged-accent)] bg-transparent text-[var(--workspace-pr-merged-accent)] transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-transparent hover:text-[var(--workspace-pr-merged-accent)]";
+		case "closed":
+			return "border-[var(--workspace-pr-closed-accent)] bg-transparent text-[var(--workspace-pr-closed-accent)] transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-transparent hover:text-[var(--workspace-pr-closed-accent)]";
 		default:
 			return undefined;
 	}
@@ -262,8 +290,8 @@ export function WorkspaceCommitButton({
 	const currentState = isControlled ? state : internalState;
 	const isBusy = currentState === "busy";
 	const isGhostMode = mode === "merged" || mode === "closed";
-	const buttonVariant = getButtonVariant(mode);
-	const modeClassName = getModeClassName(mode);
+	const buttonVariant = getButtonVariant(mode, currentState);
+	const modeClassName = getModeClassName(mode, currentState);
 
 	const setState = (nextState: CommitButtonState) => {
 		onStateChange?.(nextState);

@@ -465,6 +465,26 @@ fn read_session_context_usage(conn: &Connection, session_id: &str) -> Result<Opt
     Ok(meta.filter(|s| !s.is_empty()))
 }
 
+/// Read the opaque `codex_goal_meta` JSON for the panel-header goal banner.
+/// `None` means no active goal (cleared, never set, or unknown session).
+pub fn get_session_codex_goal(session_id: &str) -> Result<Option<String>> {
+    let conn = db::read_conn()?;
+    let meta: Option<String> = match conn.query_row(
+        "SELECT codex_goal_meta FROM sessions WHERE id = ?1",
+        [session_id],
+        |row| row.get(0),
+    ) {
+        Ok(value) => value,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("Failed to read codex_goal_meta for session {session_id}")
+            });
+        }
+    };
+    Ok(meta.filter(|s| !s.is_empty()))
+}
+
 pub fn rename_session(session_id: &str, title: &str) -> Result<()> {
     let connection = db::write_conn()?;
 

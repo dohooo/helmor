@@ -1,5 +1,5 @@
 import { ChevronsRight, ExternalLink } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
 import {
@@ -133,17 +133,27 @@ export function GitSectionHeader({
 	//   - Background polling on stable data (would be noisy).
 	//   - Active lifecycle phases (creating/streaming/verifying) — the button
 	//     itself shows a busy spinner, additional shimmer is redundant.
-	const isComputing = isRefreshing || commitButtonState === "disabled";
+	const [forgeConnecting, setForgeConnecting] = useState(false);
+	const isComputing =
+		isRefreshing || commitButtonState === "disabled" || forgeConnecting;
 	const showShimmer = useMinDisplayDuration(
 		isComputing,
 		SHIMMER_MIN_DISPLAY_MS,
 	);
 
-	const cliStatus = forgeDetection?.cli ?? null;
-	const cliNeedsAttention =
-		cliStatus?.status === "unauthenticated" ||
-		forgeRemoteState === "unauthenticated";
-	const showForgeOnboarding = cliNeedsAttention && forgeDetection !== null;
+	// Per-repo auth state is the source of truth in the multi-account
+	// architecture: `forgeRemoteState` already covers both "no accounts
+	// at all" (per-repo lookup fails because there's nothing to bind)
+	// and "this repo's bound account is broken". The legacy
+	// `cliStatus.status === "unauthenticated"` clause was redundant
+	// global-state plumbing.
+	const showForgeOnboarding =
+		forgeRemoteState === "unauthenticated" && forgeDetection !== null;
+	useEffect(() => {
+		if (!showForgeOnboarding) {
+			setForgeConnecting(false);
+		}
+	}, [showForgeOnboarding]);
 	const showButton =
 		hasChanges ||
 		commitButtonState === "busy" ||
@@ -333,7 +343,8 @@ export function GitSectionHeader({
 					<ForgeCliTrigger
 						detection={forgeDetection}
 						workspaceId={workspaceId}
-						authRequired={forgeRemoteState === "unauthenticated"}
+						connecting={forgeConnecting}
+						onConnectingChange={setForgeConnecting}
 					/>
 				) : (
 					<div className="flex min-w-0 flex-1 items-center justify-end gap-1.5">

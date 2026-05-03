@@ -46,6 +46,10 @@ pub struct WorkspaceRecord {
     pub message_count: i64,
     pub remote: Option<String>,
     pub forge_provider: Option<String>,
+    /// gh/glab account login bound to the parent repo. NULL means
+    /// auto-detect found no logged-in account with access (or the row
+    /// predates the binding feature).
+    pub forge_login: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     /// Most recent `last_user_message_at` across all sessions in the
@@ -151,6 +155,7 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       COALESCE(wss.message_count, 0) AS message_count,
       r.remote,
       r.forge_provider,
+      r.forge_login,
       w.created_at,
       w.updated_at,
       wss.last_user_message_at
@@ -534,8 +539,9 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         message_count: row.get(29)?,
         remote: row.get(30)?,
         forge_provider: row.get(31)?,
-        created_at: row.get(32)?,
-        updated_at: row.get(33)?,
-        last_user_message_at: row.get(34)?,
+        forge_login: row.get(32)?,
+        created_at: row.get(33)?,
+        updated_at: row.get(34)?,
+        last_user_message_at: row.get(35)?,
     })
 }

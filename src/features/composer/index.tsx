@@ -84,6 +84,7 @@ import { $appendComposerInsertItems } from "./editor-ops";
 import type { ElicitationResponseHandler } from "./elicitation";
 import { ElicitationPanel } from "./elicitation-panel";
 import { FastModeLottieIcon } from "./fast-mode-lottie-icon";
+import { GoalReplaceConfirm } from "./goal-replace-confirm";
 import { UsageStatsIndicator } from "./usage-stats-indicator";
 
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
@@ -143,6 +144,15 @@ type WorkspaceComposerProps = {
 	elicitationResponsePending?: boolean;
 	pendingDeferredTool?: PendingDeferredTool | null;
 	onDeferredToolResponse?: DeferredToolResponseHandler;
+	/** When set, the composer body is replaced with a GoalReplaceConfirm
+	 *  panel asking the user whether to overwrite the active codex goal.
+	 *  Same in-place takeover pattern as `pendingDeferredTool`. */
+	goalReplace?: {
+		currentObjective: string;
+		newObjective: string;
+		onReplace: () => void;
+		onCancel: () => void;
+	} | null;
 	hasPlanReview?: boolean;
 	/** When true, the ring is always rendered next to the send button.
 	 *  When false (the default), the ring auto-reveals only after usage
@@ -227,6 +237,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	elicitationResponsePending = false,
 	pendingDeferredTool = null,
 	onDeferredToolResponse = noopDeferredToolResponse,
+	goalReplace = null,
 	hasPlanReview = false,
 	alwaysShowContextUsage = false,
 	sessionId = null,
@@ -312,7 +323,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	]);
 	const hasPendingElicitation = pendingElicitation !== null;
 	const hasPendingDeferredTool = pendingDeferredTool !== null;
-	const hasPendingInteraction = hasPendingElicitation || hasPendingDeferredTool;
+	const hasGoalReplace = goalReplace !== null;
+	const hasPendingInteraction =
+		hasPendingElicitation || hasPendingDeferredTool || hasGoalReplace;
 	const inputDisabled = disabled || hasPendingInteraction;
 	const toolbarDisabled = disabled || hasPendingInteraction;
 	useEffect(() => {
@@ -548,6 +561,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 					deferred={pendingDeferredTool!}
 					disabled={disabled}
 					onResponse={onDeferredToolResponse}
+				/>
+			) : hasGoalReplace ? (
+				<GoalReplaceConfirm
+					currentObjective={goalReplace.currentObjective}
+					newObjective={goalReplace.newObjective}
+					onReplace={goalReplace.onReplace}
+					onCancel={goalReplace.onCancel}
+					disabled={disabled}
 				/>
 			) : (
 				<>

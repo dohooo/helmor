@@ -8,6 +8,9 @@
  */
 
 import crypto from "node:crypto";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import {
 	CodexAppServer,
 	type JsonRpcNotification,
@@ -34,7 +37,123 @@ import {
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "./title.js";
 
-const CODEX_BIN_PATH = process.env.HELMOR_CODEX_BIN_PATH || "codex";
+/**
+ * Resolve the path to the Codex native binary, used as the spawn target for
+ * every `codex app-server` child process.
+ *
+ * Resolution order:
+ *   1. `HELMOR_CODEX_BIN_PATH` — set by the Tauri host in release builds,
+ *      pointing at `Helmor.app/Contents/Resources/vendor/codex/codex`.
+ *   2. `createRequire` lookup of the platform sub-package's binary inside
+ *      `node_modules`. Used in dev (`bun run src/index.ts`) and `bun test`.
+ *   3. Fall back to `"codex"` so the OS resolves it from PATH — last-resort
+ *      for unusual setups; surfaces as ENOENT if not installed.
+ */
+function resolveCodexBinPath(): string {
+	const override = process.env.HELMOR_CODEX_BIN_PATH;
+	if (override) {
+		return override;
+	}
+	const triple = codexTargetTriple();
+	if (triple) {
+		const platformPkg = `@openai/codex-${platformShort()}`;
+		try {
+			const require = createRequire(import.meta.url);
+			const pkgJson = require.resolve(`${platformPkg}/package.json`);
+			const candidate = join(
+				dirname(pkgJson),
+				"vendor",
+				triple,
+				"codex",
+				process.platform === "win32" ? "codex.exe" : "codex",
+			);
+			if (existsSync(candidate)) {
+				return candidate;
+			}
+		} catch {
+			// Platform sub-package missing (e.g. --omit=optional) — fall through.
+		}
+	}
+	return "codex";
+}
+
+function platformShort(): string {
+	const arch = process.arch === "x64" ? "x64" : "arm64";
+	if (process.platform === "darwin") return `darwin-${arch}`;
+	if (process.platform === "linux") return `linux-${arch}`;
+	if (process.platform === "win32") return `win32-${arch}`;
+	return "";
+}
+
+function codexTargetTriple(): string | null {
+	const arch = process.arch;
+	if (process.platform === "darwin") {
+		return arch === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin";
+	}
+	if (process.platform === "linux") {
+		return arch === "arm64"
+			? "aarch64-unknown-linux-musl"
+			: "x86_64-unknown-linux-musl";
+	}
+	if (process.platform === "win32") {
+		return arch === "arm64"
+			? "aarch64-pc-windows-msvc"
+			: "x86_64-pc-windows-msvc";
+	}
+	return null;
+}
+
+const CODEX_BIN_PATH = resolveCodexBinPath();
+
+/**
+ * Recognised `/goal` slash-command shapes. `set` carries the objective;
+ * `resume` exists so the user can recover an active goal after a pause
+ * by typing `/goal resume`. We deliberately route `resume` through the
+ * sendMessage path (rather than `mutateCodexGoal`) — the resulting
+ * stream subscription is what catches the goal-continuation turn that
+ * codex auto-spawns, otherwise those events fire into a dead handler.
+ *
+ * Pause / Clear are NOT here on purpose: they live on banner / Composer
+ * Stop and go through `mutateCodexGoal` so they don't show up as user
+ * messages in the chat.
+ */
+export type GoalCommand =
+	| { kind: "set"; objective: string }
+	| { kind: "resume" };
+
+export function parseGoalCommand(prompt: string): GoalCommand | null {
+	const m = prompt.trim().match(/^\/goal(?:\s+([\s\S]+))?$/);
+	if (!m) return null;
+	const arg = (m[1] ?? "").trim();
+	if (arg === "") return null;
+	if (arg === "resume") return { kind: "resume" };
+	return { kind: "set", objective: arg };
+}
+
+function dispatchGoalCommand(
+	server: CodexAppServer,
+	threadId: string,
+	cmd: GoalCommand,
+): { method: string; promise: Promise<unknown> } {
+	if (cmd.kind === "resume") {
+		return {
+			method: "thread/goal/set",
+			promise: server.sendRequest(
+				"thread/goal/set",
+				{ threadId, status: "active" },
+				20_000,
+			),
+		};
+	}
+	return {
+		method: "thread/goal/set",
+		promise: server.sendRequest(
+			"thread/goal/set",
+			{ threadId, objective: cmd.objective },
+			20_000,
+		),
+	};
+}
 
 /** How long after a "Reconnecting…" stderr line we keep emitting
  *  synthetic heartbeats while Codex owns its retry loop. */
@@ -247,6 +366,7 @@ export class CodexAppServerManager implements SessionManager {
 			permissionMode,
 			fastMode,
 			additionalDirectories,
+			images,
 		} = params;
 		const workDir = cwd ?? process.cwd();
 		const effectiveFastMode =
@@ -287,8 +407,9 @@ export class CodexAppServerManager implements SessionManager {
 			prompt,
 			resolvedAdditionalDirectories,
 		);
-		const isCompactCommand = prompt.trim() === "/compact";
-		const input = buildTurnInput(promptWithContext);
+		const goalCommand = parseGoalCommand(prompt);
+		const isCompactCommand = !goalCommand && prompt.trim() === "/compact";
+		const input = buildTurnInput(promptWithContext, images);
 		const turnStartParams: Record<string, unknown> = {
 			threadId: ctx.providerThreadId,
 			input,
@@ -402,6 +523,24 @@ export class CodexAppServerManager implements SessionManager {
 					}
 				}
 
+				// Forward Codex goal state changes so the panel header banner
+				// can render the active goal. `thread/goal/updated` carries
+				// the full ThreadGoal payload; `thread/goal/cleared` flips it
+				// off (we send a null goal in the same event type).
+				if (n.method === "thread/goal/updated") {
+					const goal = deepGet(n.params, "goal");
+					if (goal && typeof goal === "object") {
+						emitter.codexGoalUpdated(
+							requestId,
+							sessionId,
+							JSON.stringify(goal),
+						);
+					}
+				}
+				if (n.method === "thread/goal/cleared") {
+					emitter.codexGoalUpdated(requestId, sessionId, null);
+				}
+
 				// Forward Codex token usage to the context-usage ring.
 				if (n.method === "thread/tokenUsage/updated") {
 					const tokenUsage = deepGet(n.params, "tokenUsage");
@@ -507,18 +646,43 @@ export class CodexAppServerManager implements SessionManager {
 			ctx.server.setHandlers(handleNotification, handleRequest);
 			ctx.server.setActiveRequestId(requestId);
 
-			if (isCompactCommand && !ctx.providerThreadId) {
-				reject(new Error("Cannot compact before a Codex thread has started"));
+			if ((isCompactCommand || goalCommand) && !ctx.providerThreadId) {
+				reject(
+					new Error(
+						`Cannot run /${isCompactCommand ? "compact" : "goal"} before a Codex thread has started`,
+					),
+				);
 				return;
 			}
 
-			const requestPromise = isCompactCommand
-				? ctx.server.sendRequest(
-						"thread/compact/start",
-						{ threadId: ctx.providerThreadId },
-						20_000,
-					)
-				: ctx.server.sendRequest("turn/start", turnStartParams);
+			const dispatchPrompt = (): {
+				method: string;
+				promise: Promise<unknown>;
+			} => {
+				if (isCompactCommand) {
+					return {
+						method: "thread/compact/start",
+						promise: ctx.server.sendRequest(
+							"thread/compact/start",
+							{ threadId: ctx.providerThreadId },
+							20_000,
+						),
+					};
+				}
+				if (goalCommand) {
+					return dispatchGoalCommand(
+						ctx.server,
+						ctx.providerThreadId as string,
+						goalCommand,
+					);
+				}
+				return {
+					method: "turn/start",
+					promise: ctx.server.sendRequest("turn/start", turnStartParams),
+				};
+			};
+
+			const { method, promise: requestPromise } = dispatchPrompt();
 
 			requestPromise
 				.then((response) => {
@@ -528,10 +692,7 @@ export class CodexAppServerManager implements SessionManager {
 					}
 				})
 				.catch((err) => {
-					logger.error(
-						`${isCompactCommand ? "thread/compact/start" : "turn/start"} failed`,
-						errorDetails(err),
-					);
+					logger.error(`${method} failed`, errorDetails(err));
 					reject(err);
 				});
 		}).finally(() => {
@@ -539,6 +700,11 @@ export class CodexAppServerManager implements SessionManager {
 				emitter.aborted(requestId, "user_requested");
 			} else {
 				emitter.end(requestId);
+			}
+			if (ctx.activeRequestId === requestId) {
+				ctx.activeRequestId = null;
+				ctx.activeEmitter = null;
+				ctx.lastRetryNotice = null;
 			}
 		});
 	}
@@ -659,6 +825,99 @@ export class CodexAppServerManager implements SessionManager {
 		return listProviderModels("codex");
 	}
 
+	// ── mutateGoal ───────────────────────────────────────────────────────
+
+	/**
+	 * Out-of-band Codex `/goal` lifecycle control. Called when the user
+	 * clicks Pause / Resume / Clear on the goal banner — these operations
+	 * shouldn't appear in chat history, so they bypass the prompt-parsing
+	 * path entirely and go straight to the right `thread/goal/*` RPC.
+	 */
+	async mutateGoal(
+		sessionId: string,
+		action: "pause" | "clear",
+	): Promise<void> {
+		const ctx = this.sessions.get(sessionId);
+		logger.info("mutateGoal request", {
+			sessionId,
+			action,
+			hasContext: !!ctx,
+			threadId: ctx?.providerThreadId ?? "(none)",
+			activeTurnId: ctx?.activeTurnId ?? "(none)",
+			knownSessions: [...this.sessions.keys()],
+		});
+		if (!ctx?.providerThreadId) {
+			// No live codex process or no thread yet — silent skip rather
+			// than throw. The Composer Stop path fires this concurrently
+			// with `stopAgentStream`, and a race where Stop kills the
+			// process first must NOT surface as a user-facing error. The
+			// Rust caller still applies the mutation to the local DB so
+			// the banner reflects the new state.
+			logger.debug("mutateGoal: no active codex context, skipping RPC", {
+				sessionId,
+				action,
+			});
+			return;
+		}
+		const threadId = ctx.providerThreadId;
+
+		// Pause-only: codex's `thread/goal/set { paused }` stops the
+		// continuation loop but doesn't abort the in-flight turn, leaving
+		// helmor's loading spinner stuck. Issue `turn/interrupt` ourselves
+		// to match the user intent ("pause = stop now"). The interrupt
+		// produces a normal turn/completed downstream, which lets the
+		// streaming pipeline transition out of the loading state.
+		//
+		// Clear deliberately does NOT interrupt — codex keeps streaming
+		// the current turn naturally; clearing just removes the goal so
+		// no further continuations spawn after the turn finishes.
+		//
+		// Contract on `ctx.activeTurnId`: it's only updated by
+		// `setHandlers` from inside an active sendMessage stream, so a
+		// goal-continuation turn that codex auto-spawns when no fresh
+		// sendMessage is in flight will NOT be tracked here. In practice
+		// `mutateGoal("pause")` is currently only fired by the Composer
+		// Stop button, which runs `stopAgentStream` immediately after —
+		// `stopSession` kills the codex child unconditionally, so any
+		// untracked turn dies with the process. If a future caller fires
+		// pause without that backup, this branch may silently no-op on
+		// the untracked turn.
+		if (action === "pause" && ctx.activeTurnId) {
+			try {
+				await ctx.server.sendRequest(
+					"turn/interrupt",
+					{ threadId, turnId: ctx.activeTurnId },
+					5_000,
+				);
+			} catch (err) {
+				// Best-effort — don't let an interrupt failure block the
+				// goal state change. Codex may have just finished naturally.
+				logger.debug("mutateGoal interrupt failed (best-effort)", {
+					...errorDetails(err),
+				});
+			}
+		}
+
+		try {
+			if (action === "clear") {
+				await ctx.server.sendRequest("thread/goal/clear", { threadId }, 20_000);
+				return;
+			}
+			// action === "pause"
+			await ctx.server.sendRequest(
+				"thread/goal/set",
+				{ threadId, status: "paused" },
+				20_000,
+			);
+		} catch (err) {
+			// The codex child may have been killed (Composer Stop's parallel
+			// stopSession path) — same idempotency rule as the no-ctx case.
+			logger.debug("mutateGoal RPC failed (best-effort)", {
+				...errorDetails(err),
+			});
+		}
+	}
+
 	// ── stopSession / shutdown ───────────────────────────────────────────
 
 	async stopSession(sessionId: string): Promise<void> {
@@ -729,16 +988,37 @@ export class CodexAppServerManager implements SessionManager {
 		sessionId: string,
 		prompt: string,
 		files: readonly string[],
+		// Codex's `turn/steer` RPC forwards text only; the SDK has no
+		// hook to attach images mid-turn. We still carry `images` on the
+		// synthetic `user_prompt` event below so the persisted shape
+		// matches the optimistic render — the badges remain visible on
+		// reload — but the model itself never sees the bytes. The
+		// frontend should warn the user before they steer with images
+		// attached on a Codex session.
+		images: readonly string[],
 	): Promise<boolean> {
 		const ctx = this.sessions.get(sessionId);
 		if (!ctx?.providerThreadId || !ctx.activeTurnId) {
 			return false;
+		}
+		if (images.length > 0) {
+			// `info` rather than a richer log level — the sidecar's
+			// `Logger` only exposes debug/info/error. Surface the
+			// limitation prominently so the user can correlate "Codex
+			// didn't see my image" with this line in the JSONL log.
+			logger.info(
+				`steer ${sessionId}: ${images.length} image(s) dropped (codex turn/steer is text-only)`,
+				{
+					note: "images are persisted to the DB so the bubble keeps its badge after reload, but the model itself does not see them",
+				},
+			);
 		}
 		logger.info(`steer ${sessionId}`, {
 			threadId: ctx.providerThreadId,
 			turnId: ctx.activeTurnId,
 			preview: prompt.slice(0, 60),
 			fileCount: files.length,
+			imageCount: images.length,
 		});
 
 		let releaseGate: () => void = () => {};
@@ -761,14 +1041,19 @@ export class CodexAppServerManager implements SessionManager {
 
 			// Provider accepted. Emit the synthetic event BEFORE releasing
 			// the gate so queued notifications land after it in FIFO.
+			// `images` rides on the event purely for persistence/reload
+			// fidelity (see the steer() doc above) — Codex's turn/steer
+			// already returned without seeing them.
 			if (ctx.activeEmitter && ctx.activeRequestId) {
 				const event: {
 					type: "user_prompt";
 					text: string;
 					steer: true;
 					files?: string[];
+					images?: string[];
 				} = { type: "user_prompt", text: prompt, steer: true };
 				if (files.length > 0) event.files = [...files];
+				if (images.length > 0) event.images = [...images];
 				ctx.activeEmitter.passthrough(ctx.activeRequestId, event);
 			}
 			return true;
@@ -801,6 +1086,45 @@ export class CodexAppServerManager implements SessionManager {
 
 	// ── Private ──────────────────────────────────────────────────────────
 
+	private settleUnexpectedExit(
+		sessionId: string,
+		ctx: AppServerContext,
+		code: number | null,
+		signal: string | null,
+	): void {
+		const hasActiveTurn =
+			ctx.turnResolve !== null ||
+			ctx.turnReject !== null ||
+			ctx.activeTurnId !== null;
+		if (!hasActiveTurn) return;
+
+		for (const [id, p] of this.pendingApprovals) {
+			if (p.sessionId === sessionId) this.pendingApprovals.delete(id);
+		}
+		for (const [id, p] of this.pendingUserInputs) {
+			if (p.sessionId === sessionId) this.pendingUserInputs.delete(id);
+		}
+
+		const requestId = ctx.activeRequestId;
+		const emitter = ctx.activeEmitter;
+		logger.error("codex app-server exited during active turn", {
+			sessionId,
+			requestId: requestId ?? "(none)",
+			turnId: ctx.activeTurnId ?? "(none)",
+			code,
+			signal,
+		});
+		ctx.activeTurnId = null;
+		const resolve = ctx.turnResolve;
+		ctx.turnResolve = null;
+		ctx.turnReject = null;
+
+		if (requestId && emitter) {
+			emitter.error(requestId, "Codex app-server exited unexpectedly");
+		}
+		resolve?.();
+	}
+
 	/**
 	 * Get an existing session context or create a new one. When `resume`
 	 * is set (provider thread ID from a previous session), attempts
@@ -829,7 +1153,11 @@ export class CodexAppServerManager implements SessionManager {
 			cwd,
 			onNotification: () => {},
 			onRequest: () => {},
-			onExit: () => {
+			onExit: (code, signal) => {
+				const ctx = ctxRef.current;
+				if (ctx) {
+					this.settleUnexpectedExit(sessionId, ctx, code, signal);
+				}
 				this.sessions.delete(sessionId);
 			},
 			onError: (err) => {
@@ -976,8 +1304,11 @@ function flattenNotification(
 	};
 }
 
-function buildTurnInput(prompt: string): Array<Record<string, unknown>> {
-	const { text, imagePaths } = parseImageRefs(prompt);
+function buildTurnInput(
+	prompt: string,
+	images: readonly string[],
+): Array<Record<string, unknown>> {
+	const { text, imagePaths } = parseImageRefs(prompt, images);
 	const parts: Array<Record<string, unknown>> = [];
 	if (text) {
 		parts.push({ type: "text", text, text_elements: [] });

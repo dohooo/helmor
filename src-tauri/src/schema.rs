@@ -46,8 +46,10 @@ const DEAD_COLUMNS: &[(&str, &str)] = &[
     ("repos", "conductor_config"),
     ("repos", "custom_prompt_code_review"),
     ("repos", "icon"),
-    ("repos", "branch_prefix_type"),
-    ("repos", "run_script_mode"),
+    // `branch_prefix_type` and `run_script_mode` were once stubs here.
+    // Both have since been revived as real per-repo columns (multi-account
+    // refactor and non-concurrent run mode respectively) — keep them OUT
+    // of this list so they survive startup.
     ("repos", "storage_version"),
     // workspaces: legacy fields with no read path in production.
     ("workspaces", "big_terminal_mode"),
@@ -219,6 +221,47 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add action_kind column")?;
     }
 
+    // Migration: ensure repos.custom_prompt_review exists.
+    //
+    // The column was originally introduced as `custom_prompt_review_pr`
+    // alongside the (removed) "Review PR" header button. The button is now
+    // a generic "Review changes" helper, so the column was renamed to
+    // `custom_prompt_review`. Three start states must converge cleanly:
+    //   1. Brand-new DB — CREATE TABLE already adds `custom_prompt_review`.
+    //   2. Old DB that picked up the previous migration — has the legacy
+    //      `custom_prompt_review_pr`. RENAME preserves any user-saved prompt.
+    //   3. Old DB that pre-dates either migration — neither column exists,
+    //      so we ADD the new one.
+    let has_repos_table: bool = connection
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'repos'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+    if has_repos_table {
+        let has_new_col: bool = connection
+            .prepare("SELECT 1 FROM pragma_table_info('repos') WHERE name = 'custom_prompt_review'")
+            .and_then(|mut stmt| stmt.exists([]))
+            .unwrap_or(false);
+        let has_legacy_col: bool = connection
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('repos') WHERE name = 'custom_prompt_review_pr'",
+            )
+            .and_then(|mut stmt| stmt.exists([]))
+            .unwrap_or(false);
+        if !has_new_col {
+            if has_legacy_col {
+                connection
+                    .execute_batch(
+                        "ALTER TABLE repos RENAME COLUMN custom_prompt_review_pr TO custom_prompt_review",
+                    )
+                    .context("Failed to rename custom_prompt_review_pr -> custom_prompt_review")?;
+            } else {
+                connection
+                    .execute_batch("ALTER TABLE repos ADD COLUMN custom_prompt_review TEXT")
+                    .context("Failed to add custom_prompt_review column")?;
+            }
+        }
+    }
+
     // Migration: wrap plain-text user prompts as JSON.
     //
     // Pre-migration, the `content` column held a union type: assistant/system/
@@ -355,6 +398,14 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add context_usage_meta column")?;
     }
 
+    // Migration: opaque JSON snapshot of the active Codex `/goal` state, used
+    // by the panel-header banner. NULL means no active goal.
+    if !has_column(connection, "sessions", "codex_goal_meta") {
+        connection
+            .execute_batch("ALTER TABLE sessions ADD COLUMN codex_goal_meta TEXT")
+            .context("Failed to add codex_goal_meta column")?;
+    }
+
     // Migration: toggle for auto-running the setup script on workspace
     // creation. Default 1 (on) — preserves the pre-feature behavior for
     // existing repos and is the most common case. Users opt out per-repo
@@ -377,10 +428,42 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add forge_provider column")?;
     }
 
+    // Migration: forge_login — the gh/glab account login bound to this
+    // repo. Auto-detected on add-repo by probing each logged-in account
+    // for access; NULL means no account had access (or detection hasn't
+    // run yet). Used to set GH_TOKEN per-spawn so multi-account users
+    // don't have to manually `gh auth switch` between repos.
+    if has_table(connection, "repos") && !has_column(connection, "repos", "forge_login") {
+        connection
+            .execute_batch("ALTER TABLE repos ADD COLUMN forge_login TEXT")
+            .context("Failed to add forge_login column")?;
+    }
+
     if has_table(connection, "repos") && !has_column(connection, "repos", "branch_prefix_custom") {
         connection
             .execute_batch("ALTER TABLE repos ADD COLUMN branch_prefix_custom TEXT")
             .context("Failed to add branch_prefix_custom column")?;
+    }
+
+    // Re-add the per-repo `branch_prefix_type` column. Earlier shipped
+    // releases dropped it via DEAD_COLUMNS; the multi-account refactor
+    // brings it back as the canonical place for the override. No data
+    // back-fill — no prior release wrote a value worth preserving.
+    if has_table(connection, "repos") && !has_column(connection, "repos", "branch_prefix_type") {
+        connection
+            .execute_batch("ALTER TABLE repos ADD COLUMN branch_prefix_type TEXT")
+            .context("Failed to add branch_prefix_type column")?;
+    }
+
+    // Migration: per-repo run-script mode. 'concurrent' (default) preserves
+    // the historical behavior of allowing multiple workspaces in the same
+    // repo to run their scripts at once. 'non-concurrent' makes a new run
+    // stop any other run script in the same repo first — convenient when
+    // the script binds a fixed port.
+    if has_table(connection, "repos") && !has_column(connection, "repos", "run_script_mode") {
+        connection
+            .execute_batch("ALTER TABLE repos ADD COLUMN run_script_mode TEXT DEFAULT 'concurrent'")
+            .context("Failed to add run_script_mode column")?;
     }
 
     if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "pr_sync_state")
@@ -458,6 +541,15 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         .execute_batch("UPDATE sessions SET model = 'default' WHERE model = 'opus-1m'")
         .ok();
 
+    // Migration: drop the old OAuth identity rows. The device-flow login
+    // is gone — auth is now per-repo via the bundled `gh` CLI's own
+    // credential store. Idempotent: DELETE on absent rows is a no-op.
+    connection
+        .execute_batch(
+            "DELETE FROM settings WHERE key IN ('github_identity_meta', 'github_identity_secret');",
+        )
+        .ok();
+
     Ok(())
 }
 
@@ -474,6 +566,7 @@ CREATE TABLE IF NOT EXISTS repos (
     run_script TEXT,
     remote TEXT,
     custom_prompt_create_pr TEXT,
+    custom_prompt_review TEXT,
     custom_prompt_rename_branch TEXT,
     custom_prompt_general TEXT,
     hidden INTEGER DEFAULT 0,
@@ -481,7 +574,10 @@ CREATE TABLE IF NOT EXISTS repos (
     custom_prompt_resolve_merge_conflicts TEXT,
     auto_run_setup INTEGER DEFAULT 1,
     forge_provider TEXT,
+    forge_login TEXT,
+    branch_prefix_type TEXT,
     branch_prefix_custom TEXT,
+    run_script_mode TEXT DEFAULT 'concurrent',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -541,6 +637,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     fast_mode INTEGER DEFAULT 0,
     action_kind TEXT,
     context_usage_meta TEXT,
+    codex_goal_meta TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -1123,6 +1220,59 @@ mod tests {
         let (connection, _dir) = open_test_db();
         ensure_schema(&connection).unwrap();
         assert!(column_exists(&connection, "repos", "forge_provider"));
+    }
+
+    #[test]
+    fn forge_login_added_to_legacy_and_idempotent() {
+        let (connection, _dir) = open_test_db();
+        create_legacy_schema(&connection);
+        assert!(!column_exists(&connection, "repos", "forge_login"));
+
+        run_migrations(&connection).unwrap();
+        assert!(column_exists(&connection, "repos", "forge_login"));
+
+        run_migrations(&connection).unwrap();
+        assert!(column_exists(&connection, "repos", "forge_login"));
+    }
+
+    #[test]
+    fn forge_login_present_on_fresh_install() {
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+        assert!(column_exists(&connection, "repos", "forge_login"));
+    }
+
+    #[test]
+    fn run_script_mode_present_on_fresh_install() {
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+        assert!(column_exists(&connection, "repos", "run_script_mode"));
+    }
+
+    #[test]
+    fn run_script_mode_retained_from_legacy_schema() {
+        // Conductor DBs already carry this column. Migration must keep it
+        // (and any persisted value) rather than dropping it.
+        let (connection, _dir) = open_test_db();
+        create_legacy_schema(&connection);
+        connection
+            .execute(
+                "INSERT INTO repos (id, name, run_script_mode) VALUES ('r1', 'x', 'non-concurrent')",
+                [],
+            )
+            .unwrap();
+
+        run_migrations(&connection).unwrap();
+        assert!(column_exists(&connection, "repos", "run_script_mode"));
+
+        let mode: String = connection
+            .query_row(
+                "SELECT run_script_mode FROM repos WHERE id = 'r1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(mode, "non-concurrent");
     }
 
     #[test]

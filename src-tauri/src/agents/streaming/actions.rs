@@ -93,6 +93,10 @@ pub(super) enum Action {
     /// `ContextUsageChanged` UI mutation.
     PersistContextUsage { raw: Value },
 
+    /// Persist the parsed `codexGoalUpdated` payload + broadcast a
+    /// `CodexGoalChanged` UI mutation.
+    PersistCodexGoal { raw: Value },
+
     /// Finalize the session row to the given status (`idle` for normal
     /// exits, `aborted` for user-requested stops). Emitted on terminal
     /// transitions that don't go through `PersistResult` (e.g., aborts
@@ -129,6 +133,9 @@ pub(super) fn apply_action(action: Action, ctx: &ApplyContext) {
         }
         Action::PersistContextUsage { raw } => {
             super::context_usage::persist_context_usage_event(ctx.app, &raw);
+        }
+        Action::PersistCodexGoal { raw } => {
+            super::codex_goal::persist_codex_goal_event(ctx.app, &raw);
         }
         other => {
             tracing::error!(

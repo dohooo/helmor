@@ -5,9 +5,12 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
-    sync::mpsc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use crate::error::{AnyhowCodedExt, ErrorCode};
@@ -22,6 +25,14 @@ pub struct WorkspaceGitActionStatus {
     pub behind_target_count: u32,
     pub remote_tracking_ref: Option<String>,
     pub ahead_of_remote_count: u32,
+    /// How many commits this branch is ahead of its **target** branch's
+    /// remote-tracking ref (e.g. `origin/main`). Unlike `ahead_of_remote_count`
+    /// — which reads as 0 for unpublished branches because there is no upstream
+    /// — this measures user-introduced commits regardless of push state, so
+    /// frontends can tell "fresh empty branch" from "has unpushed work" even
+    /// before the first `git push`. 0 when the target branch ref can't be
+    /// resolved.
+    pub ahead_of_target_count: u32,
     pub push_status: WorkspacePushStatus,
 }
 
@@ -422,14 +433,32 @@ pub fn remove_worktree(repo_root: &Path, workspace_dir: &Path) -> Result<()> {
 }
 
 /// Rename `dir` to a `.trash-*` sibling so the caller can treat it as gone.
+///
+/// The suffix combines PID + nanos + a per-process counter so we never collide
+/// with a leftover trash dir from an earlier archive in the same process (e.g.
+/// archive → restore → archive of the same workspace before the background
+/// cleanup finishes).
 fn renamed_to_trash(dir: &Path) -> Result<PathBuf> {
+    static TRASH_SEQ: AtomicU64 = AtomicU64::new(0);
+
     let parent = dir
         .parent()
         .with_context(|| format!("No parent for {}", dir.display()))?;
     let name = dir
         .file_name()
         .with_context(|| format!("No filename for {}", dir.display()))?;
-    let trash_name = format!(".trash-{}-{}", name.to_string_lossy(), std::process::id());
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let seq = TRASH_SEQ.fetch_add(1, Ordering::Relaxed);
+    let trash_name = format!(
+        ".trash-{}-{}-{}-{}",
+        name.to_string_lossy(),
+        std::process::id(),
+        nanos,
+        seq,
+    );
     let trash_dir = parent.join(&trash_name);
     fs::rename(dir, &trash_dir).with_context(|| {
         format!(
@@ -718,6 +747,8 @@ pub fn workspace_action_status(
         .map(ToOwned::to_owned);
     let (sync_status, behind_target_count) =
         workspace_sync_status(workspace_dir, remote, sync_target_branch.as_deref());
+    let ahead_of_target_count =
+        commits_ahead_of_target(workspace_dir, remote, sync_target_branch.as_deref());
     let remote_tracking_ref = resolve_remote_tracking_ref(workspace_dir, remote);
     let ahead_of_remote_count = remote_tracking_ref
         .as_deref()
@@ -733,8 +764,35 @@ pub fn workspace_action_status(
         behind_target_count,
         remote_tracking_ref,
         ahead_of_remote_count,
+        ahead_of_target_count,
         push_status,
     })
+}
+
+/// Count commits this workspace's HEAD has on top of the *target* branch's
+/// remote-tracking ref. Unlike `ahead_of_remote_count` (which compares to
+/// `current_upstream_ref` and is 0 for unpublished branches), this works even
+/// before the first push — useful for "does the user have anything to review"
+/// signals.
+fn commits_ahead_of_target(
+    workspace_dir: &Path,
+    remote: Option<&str>,
+    target_branch: Option<&str>,
+) -> u32 {
+    let Some(remote) = remote.map(str::trim).filter(|value| !value.is_empty()) else {
+        return 0;
+    };
+    let Some(target_branch) = target_branch
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return 0;
+    };
+    if !verify_remote_ref_exists(workspace_dir, remote, target_branch).unwrap_or(false) {
+        return 0;
+    }
+    let target_ref = format!("refs/remotes/{remote}/{target_branch}");
+    commits_ahead_of(workspace_dir, &target_ref).unwrap_or(0)
 }
 
 fn workspace_sync_status(
@@ -1029,6 +1087,57 @@ pub fn abort_merge(workspace_dir: &Path) -> Result<()> {
         .with_context(|| format!("Failed to abort merge in {workspace_dir}"))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StashPopOutcome {
+    Clean,
+    Conflict,
+}
+
+/// Push a stash entry that captures both tracked changes and untracked files.
+/// Returns `true` when a new stash entry was created, `false` if there was
+/// nothing to save.
+pub fn stash_push_include_untracked(workspace_dir: &Path, message: &str) -> Result<bool> {
+    let workspace_dir_arg = workspace_dir.display().to_string();
+    let output = run_git(
+        [
+            "-C",
+            workspace_dir_arg.as_str(),
+            "stash",
+            "push",
+            "--include-untracked",
+            "-m",
+            message,
+        ],
+        None,
+    )
+    .with_context(|| format!("Failed to git stash push in {}", workspace_dir.display()))?;
+    Ok(!output.contains("No local changes to save"))
+}
+
+/// Pop the most recent stash entry. Conflicts during pop leave the stash
+/// entry intact (git's default), so the caller / agent can retry.
+pub fn stash_pop(workspace_dir: &Path) -> Result<StashPopOutcome> {
+    let workspace_dir_arg = workspace_dir.display().to_string();
+    let output = Command::new("git")
+        .args(["-C", workspace_dir_arg.as_str(), "stash", "pop"])
+        .output()
+        .with_context(|| format!("Failed to git stash pop in {}", workspace_dir.display()))?;
+    if output.status.success() {
+        return Ok(StashPopOutcome::Clean);
+    }
+    let unmerged =
+        run_git(["-C", workspace_dir_arg.as_str(), "ls-files", "-u"], None).unwrap_or_default();
+    if unmerged.trim().is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "git stash pop failed in {}: {}",
+            workspace_dir.display(),
+            stderr.trim()
+        );
+    }
+    Ok(StashPopOutcome::Conflict)
+}
+
 pub fn preflight_merge_ref(workspace_dir: &Path, target_ref: &str) -> Result<MergePreflightResult> {
     let head_sha = current_workspace_head_commit(workspace_dir)?;
     let preflight_dir =
@@ -1227,7 +1336,41 @@ mod tests {
 
         assert_eq!(status.remote_tracking_ref, None);
         assert_eq!(status.ahead_of_remote_count, 0);
+        // Fresh branch identical to origin/main — nothing to review yet.
+        assert_eq!(status.ahead_of_target_count, 0);
         assert_eq!(status.push_status, WorkspacePushStatus::Unpublished);
+    }
+
+    #[test]
+    fn workspace_action_status_reports_ahead_of_target_for_unpublished_branch_with_commits() {
+        // Branch is unpublished (no upstream) but has local commits past
+        // origin/main. `ahead_of_remote_count` is 0 here (no upstream),
+        // but `ahead_of_target_count` must surface the unpushed work.
+        let (_origin, clone) = init_repo_with_remote();
+        run(clone.path(), &["checkout", "-b", "feature/local-only"]);
+        std::fs::write(clone.path().join("local.txt"), "local\n").unwrap();
+        run(clone.path(), &["add", "local.txt"]);
+        run(clone.path(), &["commit", "-m", "local-only commit"]);
+
+        let status = workspace_action_status(clone.path(), Some("origin"), Some("main")).unwrap();
+
+        assert_eq!(status.push_status, WorkspacePushStatus::Unpublished);
+        assert_eq!(status.ahead_of_remote_count, 0);
+        assert_eq!(status.ahead_of_target_count, 1);
+    }
+
+    #[test]
+    fn workspace_action_status_reports_ahead_of_target_for_published_branch() {
+        // Sanity: `ahead_of_target_count` works when the branch HAS an
+        // upstream too (shouldn't depend on `pushStatus`).
+        let (_origin, clone) = init_repo_with_remote();
+        std::fs::write(clone.path().join("pushed.txt"), "pushed\n").unwrap();
+        run(clone.path(), &["add", "pushed.txt"]);
+        run(clone.path(), &["commit", "-m", "pushed commit"]);
+
+        let status = workspace_action_status(clone.path(), Some("origin"), Some("main")).unwrap();
+
+        assert_eq!(status.ahead_of_target_count, 1);
     }
 
     #[test]

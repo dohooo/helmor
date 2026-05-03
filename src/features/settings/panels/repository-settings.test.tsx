@@ -6,9 +6,9 @@ import { renderWithProviders } from "@/test/render-with-providers";
 import { RepositorySettingsPanel } from "./repository-settings";
 
 const apiMocks = vi.hoisted(() => ({
-	getForgeCliStatus: vi.fn(),
 	listRemoteBranches: vi.fn(),
 	listRepoRemotes: vi.fn(),
+	listForgeAccounts: vi.fn(),
 	loadRepoPreferences: vi.fn(),
 	loadRepoScripts: vi.fn(),
 	prefetchRemoteRefs: vi.fn(),
@@ -19,9 +19,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@/lib/api")>();
 	return {
 		...actual,
-		getForgeCliStatus: apiMocks.getForgeCliStatus,
 		listRemoteBranches: apiMocks.listRemoteBranches,
 		listRepoRemotes: apiMocks.listRepoRemotes,
+		listForgeAccounts: apiMocks.listForgeAccounts,
 		loadRepoPreferences: apiMocks.loadRepoPreferences,
 		loadRepoScripts: apiMocks.loadRepoScripts,
 		prefetchRemoteRefs: apiMocks.prefetchRemoteRefs,
@@ -39,30 +39,24 @@ function repo(
 		remoteUrl: "git@github.com:acme/repo-a.git",
 		defaultBranch: "main",
 		forgeProvider: "github",
+		forgeLogin: "octocat",
+		branchPrefixType: "custom",
 		repoInitials: "RA",
 		...overrides,
 	};
 }
 
-function renderPanel(
-	repository: RepositoryCreateOption,
-	options?: { branchPrefixType?: "github" | "custom" | "none" },
-) {
+function renderPanel(repository: RepositoryCreateOption) {
 	return renderWithProviders(
 		<SettingsContext.Provider
 			value={{
-				settings: {
-					...DEFAULT_SETTINGS,
-					branchPrefixType: options?.branchPrefixType ?? "custom",
-					branchPrefixCustom: "team/",
-				},
+				settings: { ...DEFAULT_SETTINGS },
 				isLoaded: true,
 				updateSettings: vi.fn(),
 			}}
 		>
 			<RepositorySettingsPanel
 				repo={repository}
-				githubLogin="octo"
 				workspaceId={null}
 				onRepoSettingsChanged={vi.fn()}
 				onRepoDeleted={vi.fn()}
@@ -74,12 +68,9 @@ function renderPanel(
 describe("RepositorySettingsPanel branch prefix", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
-		apiMocks.getForgeCliStatus.mockResolvedValue({
-			status: "ready",
-			login: "gitlab-user",
-		});
 		apiMocks.listRemoteBranches.mockResolvedValue([]);
 		apiMocks.listRepoRemotes.mockResolvedValue([]);
+		apiMocks.listForgeAccounts.mockResolvedValue([]);
 		apiMocks.loadRepoPreferences.mockResolvedValue({
 			createPr: null,
 			fixErrors: null,
@@ -105,10 +96,11 @@ describe("RepositorySettingsPanel branch prefix", () => {
 		vi.clearAllMocks();
 	});
 
-	it("cancels a pending prefix save when switching repositories", () => {
+	it("cancels a pending custom-prefix save when switching repositories", () => {
 		const { rerender } = renderPanel(
 			repo({
 				id: "repo-a",
+				branchPrefixType: "custom",
 				branchPrefixCustom: "a/",
 			}),
 		);
@@ -120,11 +112,7 @@ describe("RepositorySettingsPanel branch prefix", () => {
 		rerender(
 			<SettingsContext.Provider
 				value={{
-					settings: {
-						...DEFAULT_SETTINGS,
-						branchPrefixType: "custom",
-						branchPrefixCustom: "team/",
-					},
+					settings: { ...DEFAULT_SETTINGS },
 					isLoaded: true,
 					updateSettings: vi.fn(),
 				}}
@@ -133,9 +121,9 @@ describe("RepositorySettingsPanel branch prefix", () => {
 					repo={repo({
 						id: "repo-b",
 						name: "Repo B",
+						branchPrefixType: "custom",
 						branchPrefixCustom: "b/",
 					})}
-					githubLogin="octo"
 					workspaceId={null}
 					onRepoSettingsChanged={vi.fn()}
 					onRepoDeleted={vi.fn()}
@@ -152,6 +140,7 @@ describe("RepositorySettingsPanel branch prefix", () => {
 		const { rerender } = renderPanel(
 			repo({
 				id: "repo-a",
+				branchPrefixType: "custom",
 				branchPrefixCustom: "repo/",
 			}),
 		);
@@ -163,11 +152,7 @@ describe("RepositorySettingsPanel branch prefix", () => {
 		rerender(
 			<SettingsContext.Provider
 				value={{
-					settings: {
-						...DEFAULT_SETTINGS,
-						branchPrefixType: "custom",
-						branchPrefixCustom: "team/",
-					},
+					settings: { ...DEFAULT_SETTINGS },
 					isLoaded: true,
 					updateSettings: vi.fn(),
 				}}
@@ -175,9 +160,9 @@ describe("RepositorySettingsPanel branch prefix", () => {
 				<RepositorySettingsPanel
 					repo={repo({
 						id: "repo-a",
+						branchPrefixType: "custom",
 						branchPrefixCustom: "repo/f",
 					})}
-					githubLogin="octo"
 					workspaceId={null}
 					onRepoSettingsChanged={vi.fn()}
 					onRepoDeleted={vi.fn()}
@@ -188,15 +173,26 @@ describe("RepositorySettingsPanel branch prefix", () => {
 		expect(screen.getByDisplayValue("repo/feature/")).toBeInTheDocument();
 	});
 
-	it("does not render a global prefix helper line when global prefix is none", () => {
+	it("renders the bound forge account login in the panel header", () => {
 		renderPanel(
 			repo({
-				branchPrefixCustom: null,
+				forgeLogin: "octocat",
 			}),
-			{ branchPrefixType: "none" },
 		);
 
-		expect(screen.getByPlaceholderText("No prefix")).toBeInTheDocument();
-		expect(screen.queryByText(/Using global:/)).not.toBeInTheDocument();
+		expect(screen.getByText("@octocat")).toBeInTheDocument();
+	});
+
+	it("renders an unconnected header with a Connect CTA when forgeLogin is null", () => {
+		renderPanel(
+			repo({
+				forgeLogin: null,
+			}),
+		);
+
+		expect(screen.getByText("GitHub not connected")).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: /^Connect$/i }),
+		).toBeInTheDocument();
 	});
 });

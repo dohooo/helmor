@@ -8,6 +8,7 @@ import type {
 import {
 	clampEffort,
 	clampEffortToModel,
+	createLiveThreadMessage,
 	findModelOption,
 	getWorkspaceBranchTone,
 	inferDefaultModelId,
@@ -404,6 +405,59 @@ describe("splitTextWithFiles", () => {
 		);
 		expect(result).toEqual([
 			{ type: "file-mention", id: "m1:mention:0", path: "src/lib/api.ts" },
+		]);
+	});
+
+	it("matches a file path containing spaces", () => {
+		const path = "/Users/me/Library/Application Support/notes.txt";
+		const result = splitTextWithFiles(`see @${path} please`, [path], "m1");
+		expect(result).toEqual([
+			{ type: "text", id: "m1:txt:0", text: "see " },
+			{ type: "file-mention", id: "m1:mention:0", path },
+			{ type: "text", id: "m1:txt:1", text: " please" },
+		]);
+	});
+
+	it("matches an image path containing spaces via the images param", () => {
+		const path =
+			"/Users/me/Library/Application Support/CleanShot/CleanShot 2026-04-29 at 08.24.35@2x.jpg";
+		const result = splitTextWithFiles(`look at @${path} now`, [], "m1", [path]);
+		expect(result).toEqual([
+			{ type: "text", id: "m1:txt:0", text: "look at " },
+			{ type: "file-mention", id: "m1:mention:0", path },
+			{ type: "text", id: "m1:txt:1", text: " now" },
+		]);
+	});
+
+	it("matches files and images mixed in a single prompt", () => {
+		const file = "/abs path/notes.md";
+		const image = "/abs path/shot.png";
+		const text = `compare @${file} with @${image}`;
+		const result = splitTextWithFiles(text, [file], "m1", [image]);
+		expect(result).toEqual([
+			{ type: "text", id: "m1:txt:0", text: "compare " },
+			{ type: "file-mention", id: "m1:mention:0", path: file },
+			{ type: "text", id: "m1:txt:1", text: " with " },
+			{ type: "file-mention", id: "m1:mention:1", path: image },
+		]);
+	});
+});
+
+describe("createLiveThreadMessage with image paths", () => {
+	it("threads images through the splitter", () => {
+		const image =
+			"/Users/me/Library/Application Support/CleanShot/CleanShot @2x.jpg";
+		const message = createLiveThreadMessage({
+			id: "msg-1",
+			role: "user",
+			text: `screenshot: @${image}`,
+			createdAt: "2026-04-29T00:00:00.000Z",
+			files: [],
+			images: [image],
+		});
+		expect(message.content).toEqual([
+			{ type: "text", id: "msg-1:txt:0", text: "screenshot: " },
+			{ type: "file-mention", id: "msg-1:mention:0", path: image },
 		]);
 	});
 });

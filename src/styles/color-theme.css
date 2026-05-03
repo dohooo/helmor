@@ -214,3 +214,275 @@
 	--terminal-bright-cyan: oklch(0.84 0.07 192);
 	--terminal-bright-white: oklch(0.985 0 0);
 }
+
+/* ── Midnight (light) ─────────────────────────────────────────────────────────
+   Blue-tinted white surfaces with cool blue accents.
+   ──────────────────────────────────────────────────────────────────────────── */
+.theme-midnight:not(.dark) {
+	color-scheme: light;
+	--background: oklch(0.97 0.01 260);
+	--foreground: oklch(0.145 0 0);
+	--conversation-body-foreground: rgb(44, 40, 38);
+	--card: oklch(0.99 0.004 260);
+	--card-foreground: oklch(0.145 0 0);
+	--popover: oklch(0.99 0.004 260);
+	--popover-foreground: oklch(0.145 0 0);
+	--primary: oklch(0.22 0.02 260);
+	--primary-foreground: oklch(0.985 0 0);
+	--secondary: oklch(0.935 0.014 260);
+	--secondary-foreground: oklch(0.205 0 0);
+	--muted: oklch(0.935 0.014 260);
+	--muted-foreground: oklch(0.5 0.025 258);
+	--accent: oklch(0.935 0.014 260);
+	--accent-foreground: oklch(0.205 0 0);
+	--destructive: oklch(0.577 0.245 27.325);
+	--border: oklch(0.875 0.016 258);
+	--input: oklch(0.875 0.016 258);
+	--ring: oklch(0.5 0.14 255);
+	--sidebar: oklch(0.95 0.013 260);
+	--sidebar-foreground: oklch(0.145 0 0);
+	--sidebar-primary: oklch(0.45 0.18 255);
+	--sidebar-primary-foreground: oklch(0.985 0 0);
+	--sidebar-accent: oklch(0.915 0.018 260);
+	--sidebar-accent-foreground: oklch(0.205 0 0);
+	--sidebar-border: oklch(0.875 0.016 258);
+	--sidebar-ring: oklch(0.5 0.14 255);
+}
+
+/* ── Midnight (dark) ──────────────────────────────────────────────────────────
+   Deep blue-black surfaces with cool blue accents.
+   ──────────────────────────────────────────────────────────────────────────── */
+.dark.theme-midnight {
+	color-scheme: dark;
+	--background: oklch(0.135 0.022 260);
+	--foreground: oklch(0.985 0 0);
+	--conversation-body-foreground: rgb(234, 232, 230);
+	--card: oklch(0.175 0.025 260);
+	--card-foreground: oklch(0.985 0 0);
+	--popover: oklch(0.175 0.025 260);
+	--popover-foreground: oklch(0.985 0 0);
+	--primary: oklch(0.78 0.09 250);
+	--primary-foreground: oklch(0.135 0.022 260);
+	--secondary: oklch(0.245 0.022 260);
+	--secondary-foreground: oklch(0.985 0 0);
+	--muted: oklch(0.245 0.022 260);
+	--muted-foreground: oklch(0.66 0.04 255);
+	--accent: oklch(0.245 0.022 260);
+	--accent-foreground: oklch(0.985 0 0);
+	--destructive: oklch(0.704 0.191 22.216);
+	--border: oklch(1 0 0 / 9%);
+	--input: oklch(1 0 0 / 13%);
+	--ring: oklch(0.55 0.08 252);
+	--sidebar: oklch(0.17 0.024 260);
+	--sidebar-foreground: oklch(0.985 0 0);
+	--sidebar-primary: oklch(0.58 0.16 255);
+	--sidebar-primary-foreground: oklch(0.985 0 0);
+	--sidebar-accent: oklch(0.245 0.022 260);
+	--sidebar-accent-foreground: oklch(0.985 0 0);
+	--sidebar-border: oklch(1 0 0 / 9%);
+	--sidebar-ring: oklch(0.55 0.08 252);
+}
+
+/* ── Forest (light) ───────────────────────────────────────────────────────────
+   Green-tinted white surfaces with emerald accents.
+   ──────────────────────────────────────────────────────────────────────────── */
+.theme-forest:not(.dark) {
+	color-scheme: light;
+	--background: oklch(0.97 0.008 158);
+	--foreground: oklch(0.145 0 0);
+	--conversation-body-foreground: rgb(44, 40, 38);
+	--card: oklch(0.99 0.004 158);
+	--card-foreground: oklch(0.145 0 0);
+	--popover: oklch(0.99 0.004 158);
+	--popover-foreground: oklch(0.145 0 0);
+	--primary: oklch(0.22 0.018 158);
+	--primary-foreground: oklch(0.985 0 0);
+	--secondary: oklch(0.935 0.012 158);
+	--secondary-foreground: oklch(0.205 0 0);
+	--muted: oklch(0.935 0.012 158);
+	--muted-foreground: oklch(0.5 0.022 155);
+	--accent: oklch(0.935 0.012 158);
+	--accent-foreground: oklch(0.205 0 0);
+	--destructive: oklch(0.577 0.245 27.325);
+	--border: oklch(0.875 0.014 155);
+	--input: oklch(0.875 0.014 155);
+	--ring: oklch(0.48 0.13 148);
+	--sidebar: oklch(0.95 0.011 158);
+	--sidebar-foreground: oklch(0.145 0 0);
+	--sidebar-primary: oklch(0.42 0.16 148);
+	--sidebar-primary-foreground: oklch(0.985 0 0);
+	--sidebar-accent: oklch(0.915 0.015 158);
+	--sidebar-accent-foreground: oklch(0.205 0 0);
+	--sidebar-border: oklch(0.875 0.014 155);
+	--sidebar-ring: oklch(0.48 0.13 148);
+}
+
+/* ── Forest (dark) ────────────────────────────────────────────────────────────
+   Dark surfaces with deep green undertones and emerald accents.
+   ──────────────────────────────────────────────────────────────────────────── */
+.dark.theme-forest {
+	color-scheme: dark;
+	--background: oklch(0.145 0.016 158);
+	--foreground: oklch(0.985 0 0);
+	--conversation-body-foreground: rgb(234, 232, 230);
+	--card: oklch(0.185 0.018 158);
+	--card-foreground: oklch(0.985 0 0);
+	--popover: oklch(0.185 0.018 158);
+	--popover-foreground: oklch(0.985 0 0);
+	--primary: oklch(0.82 0.09 148);
+	--primary-foreground: oklch(0.145 0.016 158);
+	--secondary: oklch(0.25 0.016 158);
+	--secondary-foreground: oklch(0.985 0 0);
+	--muted: oklch(0.25 0.016 158);
+	--muted-foreground: oklch(0.67 0.04 155);
+	--accent: oklch(0.25 0.016 158);
+	--accent-foreground: oklch(0.985 0 0);
+	--destructive: oklch(0.704 0.191 22.216);
+	--border: oklch(1 0 0 / 9%);
+	--input: oklch(1 0 0 / 13%);
+	--ring: oklch(0.54 0.08 150);
+	--sidebar: oklch(0.178 0.018 158);
+	--sidebar-foreground: oklch(0.985 0 0);
+	--sidebar-primary: oklch(0.58 0.14 148);
+	--sidebar-primary-foreground: oklch(0.985 0 0);
+	--sidebar-accent: oklch(0.25 0.016 158);
+	--sidebar-accent-foreground: oklch(0.985 0 0);
+	--sidebar-border: oklch(1 0 0 / 9%);
+	--sidebar-ring: oklch(0.54 0.08 150);
+}
+
+/* ── Ember (light) ────────────────────────────────────────────────────────────
+   Warm amber-tinted white surfaces with orange/gold accents.
+   ──────────────────────────────────────────────────────────────────────────── */
+.theme-ember:not(.dark) {
+	color-scheme: light;
+	--background: oklch(0.97 0.008 65);
+	--foreground: oklch(0.145 0 0);
+	--conversation-body-foreground: rgb(44, 40, 38);
+	--card: oklch(0.99 0.005 65);
+	--card-foreground: oklch(0.145 0 0);
+	--popover: oklch(0.99 0.005 65);
+	--popover-foreground: oklch(0.145 0 0);
+	--primary: oklch(0.22 0.015 55);
+	--primary-foreground: oklch(0.985 0 0);
+	--secondary: oklch(0.94 0.013 65);
+	--secondary-foreground: oklch(0.205 0 0);
+	--muted: oklch(0.94 0.013 65);
+	--muted-foreground: oklch(0.5 0.022 60);
+	--accent: oklch(0.94 0.013 65);
+	--accent-foreground: oklch(0.205 0 0);
+	--destructive: oklch(0.577 0.245 27.325);
+	--border: oklch(0.875 0.015 60);
+	--input: oklch(0.875 0.015 60);
+	--ring: oklch(0.52 0.14 53);
+	--sidebar: oklch(0.95 0.012 65);
+	--sidebar-foreground: oklch(0.145 0 0);
+	--sidebar-primary: oklch(0.48 0.16 48);
+	--sidebar-primary-foreground: oklch(0.985 0 0);
+	--sidebar-accent: oklch(0.92 0.016 65);
+	--sidebar-accent-foreground: oklch(0.205 0 0);
+	--sidebar-border: oklch(0.875 0.015 60);
+	--sidebar-ring: oklch(0.52 0.14 53);
+}
+
+/* ── Ember (dark) ─────────────────────────────────────────────────────────────
+   Warm amber-tinted surfaces with orange/gold accents.
+   ──────────────────────────────────────────────────────────────────────────── */
+.dark.theme-ember {
+	color-scheme: dark;
+	--background: oklch(0.15 0.012 48);
+	--foreground: oklch(0.985 0 0);
+	--conversation-body-foreground: rgb(234, 232, 230);
+	--card: oklch(0.192 0.016 48);
+	--card-foreground: oklch(0.985 0 0);
+	--popover: oklch(0.192 0.016 48);
+	--popover-foreground: oklch(0.985 0 0);
+	--primary: oklch(0.84 0.1 65);
+	--primary-foreground: oklch(0.15 0.012 48);
+	--secondary: oklch(0.252 0.014 48);
+	--secondary-foreground: oklch(0.985 0 0);
+	--muted: oklch(0.252 0.014 48);
+	--muted-foreground: oklch(0.67 0.04 60);
+	--accent: oklch(0.252 0.014 48);
+	--accent-foreground: oklch(0.985 0 0);
+	--destructive: oklch(0.704 0.191 22.216);
+	--border: oklch(1 0 0 / 9%);
+	--input: oklch(1 0 0 / 13%);
+	--ring: oklch(0.55 0.1 58);
+	--sidebar: oklch(0.184 0.015 48);
+	--sidebar-foreground: oklch(0.985 0 0);
+	--sidebar-primary: oklch(0.64 0.16 53);
+	--sidebar-primary-foreground: oklch(0.985 0 0);
+	--sidebar-accent: oklch(0.252 0.014 48);
+	--sidebar-accent-foreground: oklch(0.985 0 0);
+	--sidebar-border: oklch(1 0 0 / 9%);
+	--sidebar-ring: oklch(0.55 0.1 58);
+}
+
+/* ── Aurora (light) ───────────────────────────────────────────────────────────
+   Violet-tinted white surfaces with purple accents.
+   ──────────────────────────────────────────────────────────────────────────── */
+.theme-aurora:not(.dark) {
+	color-scheme: light;
+	--background: oklch(0.97 0.01 292);
+	--foreground: oklch(0.145 0 0);
+	--conversation-body-foreground: rgb(44, 40, 38);
+	--card: oklch(0.99 0.005 292);
+	--card-foreground: oklch(0.145 0 0);
+	--popover: oklch(0.99 0.005 292);
+	--popover-foreground: oklch(0.145 0 0);
+	--primary: oklch(0.22 0.022 292);
+	--primary-foreground: oklch(0.985 0 0);
+	--secondary: oklch(0.935 0.016 292);
+	--secondary-foreground: oklch(0.205 0 0);
+	--muted: oklch(0.935 0.016 292);
+	--muted-foreground: oklch(0.5 0.026 288);
+	--accent: oklch(0.935 0.016 292);
+	--accent-foreground: oklch(0.205 0 0);
+	--destructive: oklch(0.577 0.245 27.325);
+	--border: oklch(0.875 0.018 288);
+	--input: oklch(0.875 0.018 288);
+	--ring: oklch(0.5 0.15 284);
+	--sidebar: oklch(0.95 0.014 292);
+	--sidebar-foreground: oklch(0.145 0 0);
+	--sidebar-primary: oklch(0.46 0.18 284);
+	--sidebar-primary-foreground: oklch(0.985 0 0);
+	--sidebar-accent: oklch(0.915 0.018 292);
+	--sidebar-accent-foreground: oklch(0.205 0 0);
+	--sidebar-border: oklch(0.875 0.018 288);
+	--sidebar-ring: oklch(0.5 0.15 284);
+}
+
+/* ── Aurora (dark) ────────────────────────────────────────────────────────────
+   Mauve/violet-tinted surfaces with purple accents.
+   ──────────────────────────────────────────────────────────────────────────── */
+.dark.theme-aurora {
+	color-scheme: dark;
+	--background: oklch(0.14 0.018 292);
+	--foreground: oklch(0.985 0 0);
+	--conversation-body-foreground: rgb(234, 232, 230);
+	--card: oklch(0.18 0.022 292);
+	--card-foreground: oklch(0.985 0 0);
+	--popover: oklch(0.18 0.022 292);
+	--popover-foreground: oklch(0.985 0 0);
+	--primary: oklch(0.82 0.09 292);
+	--primary-foreground: oklch(0.14 0.018 292);
+	--secondary: oklch(0.248 0.02 292);
+	--secondary-foreground: oklch(0.985 0 0);
+	--muted: oklch(0.248 0.02 292);
+	--muted-foreground: oklch(0.67 0.04 288);
+	--accent: oklch(0.248 0.02 292);
+	--accent-foreground: oklch(0.985 0 0);
+	--destructive: oklch(0.704 0.191 22.216);
+	--border: oklch(1 0 0 / 9%);
+	--input: oklch(1 0 0 / 13%);
+	--ring: oklch(0.54 0.09 288);
+	--sidebar: oklch(0.172 0.022 292);
+	--sidebar-foreground: oklch(0.985 0 0);
+	--sidebar-primary: oklch(0.6 0.17 284);
+	--sidebar-primary-foreground: oklch(0.985 0 0);
+	--sidebar-accent: oklch(0.248 0.02 292);
+	--sidebar-accent-foreground: oklch(0.985 0 0);
+	--sidebar-border: oklch(1 0 0 / 9%);
+	--sidebar-ring: oklch(0.54 0.09 288);
+}

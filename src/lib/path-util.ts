@@ -18,3 +18,19 @@ export function basename(path: string): string {
 	const segments = normalized.split("/");
 	return segments[segments.length - 1] || path;
 }
+
+/** Whether the path's extension marks it as an image. */
+const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|svg|bmp|ico)$/i;
+
+export function isImageExtensionPath(path: string): boolean {
+	return IMAGE_EXT_RE.test(path);
+}
+
+/**
+ * Whether `text` looks like an absolute filesystem path to an image
+ * file. Used by the composer's paste handler to recognize `cmd-c` of
+ * an image file in Finder (which yields the path on the clipboard).
+ */
+export function isImagePath(text: string): boolean {
+	return text.startsWith("/") && isImageExtensionPath(text.trim());
+}
