@@ -5,13 +5,17 @@
 
 use anyhow::{bail, Result};
 
+use crate::forge::branch::forge_head_branch_for;
 use crate::forge::remote::{parse_remote, ParsedRemote};
-use crate::models::workspaces::{self as workspace_models, WorkspaceRecord};
-use crate::{git_ops, workspace_state::WorkspaceState};
+use crate::models::workspaces as workspace_models;
+use crate::workspace_state::WorkspaceState;
 
 pub(super) struct GitlabContext {
     pub(super) remote: ParsedRemote,
     pub(super) full_path: String,
+    /// Branch name to pass as GitLab's `source_branch`. If the local
+    /// branch tracks a differently named remote branch, this is the
+    /// upstream branch name rather than the local branch name.
     pub(super) branch: String,
     pub(super) published: bool,
     /// Bound glab account. Always non-empty — `Unauthenticated`
@@ -64,7 +68,7 @@ pub(super) fn load_gitlab_context(workspace_id: &str) -> Result<GitlabResolution
         return Ok(GitlabResolution::Unauthenticated);
     };
 
-    let published = workspace_branch_has_remote_tracking(&record);
+    let (branch, published) = forge_head_branch_for(&record, &branch);
     let full_path = format!("{}/{}", remote.namespace, remote.repo);
 
     Ok(GitlabResolution::Ready(GitlabContext {
@@ -76,21 +80,10 @@ pub(super) fn load_gitlab_context(workspace_id: &str) -> Result<GitlabResolution
     }))
 }
 
-fn workspace_branch_has_remote_tracking(record: &WorkspaceRecord) -> bool {
-    let Ok(workspace_dir) =
-        crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
-    else {
-        return false;
-    };
-    if !workspace_dir.exists() {
-        return false;
-    }
-    git_ops::resolve_remote_tracking_ref(&workspace_dir, record.remote.as_deref()).is_some()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git_ops;
     use rusqlite::Connection;
 
     fn insert_repo(
@@ -283,5 +276,66 @@ mod tests {
     fn errors_when_workspace_does_not_exist() {
         let _env = crate::testkit::TestEnv::new("gitlab-ctx-missing");
         assert!(load_gitlab_context("does-not-exist").is_err());
+    }
+
+    #[test]
+    fn uses_upstream_branch_name_when_local_branch_was_renamed() {
+        let env = crate::testkit::TestEnv::new("gitlab-ctx-renamed-local-branch");
+        let origin = crate::testkit::GitTestRepo::init();
+        let workspace_dir = crate::data_dir::workspace_dir("Repo", "workspace-dir").unwrap();
+        std::fs::create_dir_all(workspace_dir.parent().unwrap()).unwrap();
+        git_ops::run_git(
+            [
+                "clone",
+                &origin.path().display().to_string(),
+                &workspace_dir.display().to_string(),
+            ],
+            None,
+        )
+        .unwrap();
+        git_ops::run_git(
+            ["config", "user.email", "helmor@example.com"],
+            Some(&workspace_dir),
+        )
+        .unwrap();
+        git_ops::run_git(["config", "user.name", "Helmor Test"], Some(&workspace_dir)).unwrap();
+        git_ops::run_git(
+            ["checkout", "-b", "feature/local-name"],
+            Some(&workspace_dir),
+        )
+        .unwrap();
+        git_ops::run_git(
+            [
+                "push",
+                "--set-upstream",
+                "origin",
+                "HEAD:refs/heads/feature/remote-name",
+            ],
+            Some(&workspace_dir),
+        )
+        .unwrap();
+
+        let conn = env.db_connection();
+        insert_repo(
+            &conn,
+            "r-renamed",
+            "Repo",
+            Some("git@gitlab.com:acme/repo.git"),
+            Some("alice"),
+        );
+        insert_workspace(
+            &conn,
+            "w-renamed",
+            "r-renamed",
+            "ready",
+            Some("feature/local-name"),
+        );
+        drop(conn);
+
+        let GitlabResolution::Ready(ctx) = load_gitlab_context("w-renamed").unwrap() else {
+            panic!("expected Ready");
+        };
+        assert_eq!(ctx.branch, "feature/remote-name");
+        assert!(ctx.published);
     }
 }
