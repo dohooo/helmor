@@ -1,5 +1,6 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
@@ -796,9 +797,13 @@ describe("WorkspaceComposerContainer", () => {
 			return { queryClient };
 		}
 
+		type ContainerOnSubmit = ComponentProps<
+			typeof WorkspaceComposerContainer
+		>["onSubmit"];
+
 		function renderCodexComposer(
 			queryClient: ReturnType<typeof createHelmorQueryClient>,
-			onSubmit: ReturnType<typeof vi.fn>,
+			onSubmit: ContainerOnSubmit,
 		) {
 			render(
 				<QueryClientProvider client={queryClient}>
@@ -807,8 +812,7 @@ describe("WorkspaceComposerContainer", () => {
 							value={{
 								settings: DEFAULT_SETTINGS,
 								updateSettings: vi.fn(),
-								loaded: true,
-								reload: vi.fn(),
+								isLoaded: true,
 							}}
 						>
 							<WorkspaceComposerContainer
@@ -839,7 +843,7 @@ describe("WorkspaceComposerContainer", () => {
 
 		it("routes /goal pause to mutateCodexGoal and does NOT call onSubmit", async () => {
 			const { queryClient } = setupCodexSessionWithGoal();
-			const onSubmit = vi.fn();
+			const onSubmit = vi.fn<ContainerOnSubmit>();
 			renderCodexComposer(queryClient, onSubmit);
 
 			await waitFor(() =>
@@ -858,7 +862,7 @@ describe("WorkspaceComposerContainer", () => {
 
 		it("routes /goal clear to mutateCodexGoal and does NOT call onSubmit", async () => {
 			const { queryClient } = setupCodexSessionWithGoal();
-			const onSubmit = vi.fn();
+			const onSubmit = vi.fn<ContainerOnSubmit>();
 			renderCodexComposer(queryClient, onSubmit);
 
 			await waitFor(() =>
@@ -877,7 +881,7 @@ describe("WorkspaceComposerContainer", () => {
 
 		it("lets /goal resume fall through to onSubmit (sendMessage path)", async () => {
 			const { queryClient } = setupCodexSessionWithGoal();
-			const onSubmit = vi.fn();
+			const onSubmit = vi.fn<ContainerOnSubmit>();
 			renderCodexComposer(queryClient, onSubmit);
 
 			await waitFor(() =>
