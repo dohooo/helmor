@@ -861,13 +861,17 @@ export class CodexAppServerManager implements SessionManager {
 		}
 		const threadId = ctx.providerThreadId;
 
-		// Codex's pause/clear semantics only stop the continuation loop —
-		// any in-flight turn keeps streaming until natural end. To match
-		// user intent ("pause = stop now"), we abort the active turn
-		// ourselves before flipping the goal state. The interrupt produces
-		// a normal turn/completed downstream, which lets the streaming
-		// pipeline transition out of the loading state.
-		if ((action === "pause" || action === "clear") && ctx.activeTurnId) {
+		// Pause-only: codex's `thread/goal/set { paused }` stops the
+		// continuation loop but doesn't abort the in-flight turn, leaving
+		// helmor's loading spinner stuck. Issue `turn/interrupt` ourselves
+		// to match the user intent ("pause = stop now"). The interrupt
+		// produces a normal turn/completed downstream, which lets the
+		// streaming pipeline transition out of the loading state.
+		//
+		// Clear deliberately does NOT interrupt — codex keeps streaming
+		// the current turn naturally; clearing just removes the goal so
+		// no further continuations spawn after the turn finishes.
+		if (action === "pause" && ctx.activeTurnId) {
 			try {
 				await ctx.server.sendRequest(
 					"turn/interrupt",
