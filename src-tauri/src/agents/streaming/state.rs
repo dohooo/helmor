@@ -1262,6 +1262,44 @@ mod tests {
     }
 
     #[test]
+    fn handle_codex_goal_updated_returns_persist_action_when_active() {
+        let mut session = TurnSession::new(test_ctx());
+        let raw = json!({
+            "sessionId": "session-1",
+            "goal": "{\"status\":\"active\"}"
+        });
+
+        let actions = session.handle_codex_goal_updated(&raw).unwrap();
+
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::PersistCodexGoal { .. }));
+    }
+
+    // Regression: codex pushes `thread/goal/updated` exactly at the turn
+    // boundary carrying the final tokens / `complete` status. The handler
+    // must NOT bail with `AlreadyTerminated` — that would drop the final
+    // payload and leave the banner stale forever. The action is just a DB
+    // write + UI invalidation; it has no state-machine invariants to
+    // protect post-termination.
+    #[test]
+    fn handle_codex_goal_updated_still_persists_after_termination() {
+        let mut session = TurnSession::new(test_ctx());
+        session.state = TurnState::Terminated(TerminalReason::Done);
+
+        let raw = json!({
+            "sessionId": "session-1",
+            "goal": "{\"status\":\"complete\",\"tokensUsed\":12345}"
+        });
+
+        let actions = session.handle_codex_goal_updated(&raw).expect(
+            "goal-updated must remain accepted post-termination so the banner sees \
+             the final tokens / complete status codex emits at the turn boundary",
+        );
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::PersistCodexGoal { .. }));
+    }
+
+    #[test]
     fn handle_permission_mode_changed_clears_when_field_missing() {
         let mut session = TurnSession::new(test_ctx());
         session.ctx.permission_mode = Some("acceptEdits".into());
