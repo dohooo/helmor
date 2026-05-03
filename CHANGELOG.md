@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.14.2
+
+### Patch Changes
+
+- [#365](https://github.com/dohooo/helmor/pull/365) [`4af2902`](https://github.com/dohooo/helmor/commit/4af29024ec1d8801e43de2fe6bd72c6dd7a6bb16) Thanks [@natllian](https://github.com/natllian)! - Show a green checkmark next to the currently selected model in the Settings default-model and review-model pickers, so the active choice is obvious even when the model name is truncated.
+
+- [#370](https://github.com/dohooo/helmor/pull/370) [`768174e`](https://github.com/dohooo/helmor/commit/768174ea636d1c350533cdded20851433bc3bfde) Thanks [@natllian](https://github.com/natllian)! - Tighten up the workspace archive flow:
+
+  - Fix archive failing with "Directory not empty" when archiving a workspace that was just restored in the same session, by giving each trash directory a unique name instead of reusing the process-id suffix.
+  - Offer "Permanently Delete" as a recovery action whenever archive fails, matching the restore-failure behavior, so a stuck cleanup never leaves the workspace unremovable until app restart.
+
+- [#363](https://github.com/dohooo/helmor/pull/363) [`119fc35`](https://github.com/dohooo/helmor/commit/119fc358718a0a227d098bff34f578158c351245) Thanks [@aidxun](https://github.com/aidxun)! - Keep existing GitHub pull requests and GitLab merge requests linked after a local branch rename by resolving the change-request status from the branch's upstream ref.
+
+- [#369](https://github.com/dohooo/helmor/pull/369) [`681212d`](https://github.com/dohooo/helmor/commit/681212d232bd9c256203e97e5fe701603985af3b) Thanks [@natllian](https://github.com/natllian)! - Rebalance the right inspector sidebar so the Changes/diff section sits at a sensible default height and toggling Actions or the scripts panel animates smoothly without the bottom strip briefly jumping out of place.
+
 ## 0.14.1
 
 ### Patch Changes
