@@ -871,6 +871,17 @@ export class CodexAppServerManager implements SessionManager {
 		// Clear deliberately does NOT interrupt — codex keeps streaming
 		// the current turn naturally; clearing just removes the goal so
 		// no further continuations spawn after the turn finishes.
+		//
+		// Contract on `ctx.activeTurnId`: it's only updated by
+		// `setHandlers` from inside an active sendMessage stream, so a
+		// goal-continuation turn that codex auto-spawns when no fresh
+		// sendMessage is in flight will NOT be tracked here. In practice
+		// `mutateGoal("pause")` is currently only fired by the Composer
+		// Stop button, which runs `stopAgentStream` immediately after —
+		// `stopSession` kills the codex child unconditionally, so any
+		// untracked turn dies with the process. If a future caller fires
+		// pause without that backup, this branch may silently no-op on
+		// the untracked turn.
 		if (action === "pause" && ctx.activeTurnId) {
 			try {
 				await ctx.server.sendRequest(

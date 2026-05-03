@@ -593,15 +593,16 @@ impl TurnSession {
     /// Handle a `codexGoalUpdated` sidecar event (Codex `/goal` lifecycle).
     /// Persists the goal payload to the session row and broadcasts a
     /// `CodexGoalChanged` invalidation so the panel-header banner refetches.
+    ///
+    /// Intentionally does NOT bail when the turn is already terminated:
+    /// codex pushes `thread/goal/updated` exactly at the turn boundary
+    /// with the final tokens / `complete` status, and we want the banner
+    /// to reflect that. The action is a pure DB write + UI invalidation
+    /// — no state-machine invariants to protect.
     pub(super) fn handle_codex_goal_updated(
         &mut self,
         raw: &Value,
     ) -> Result<Vec<Action>, TransitionError> {
-        if self.state.is_terminated() {
-            return Err(TransitionError::AlreadyTerminated {
-                event_kind: "codexGoalUpdated".into(),
-            });
-        }
         Ok(vec![Action::PersistCodexGoal { raw: raw.clone() }])
     }
 

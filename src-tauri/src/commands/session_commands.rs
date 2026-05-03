@@ -107,7 +107,7 @@ pub async fn mutate_codex_goal(
     }
 
     let rid = request_id.clone();
-    let outcome = tauri::async_runtime::spawn_blocking(move || {
+    let join_result = tauri::async_runtime::spawn_blocking(move || {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
@@ -138,10 +138,15 @@ pub async fn mutate_codex_goal(
             }
         }
     })
-    .await
-    .map_err(|e| anyhow::anyhow!("mutate_codex_goal worker join failed: {e}"))?;
+    .await;
 
+    // Always unsubscribe — even when the worker panicked / produced a
+    // join error — to avoid leaking the listener slot in the sidecar's
+    // map. Both the join error and the worker's own outcome propagate
+    // after the cleanup.
     sidecar.unsubscribe(&rid);
+    let outcome =
+        join_result.map_err(|e| anyhow::anyhow!("mutate_codex_goal worker join failed: {e}"))?;
     outcome?;
 
     // Mirror the goal mutation locally so the banner reflects the new

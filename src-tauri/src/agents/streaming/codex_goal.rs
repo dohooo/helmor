@@ -153,11 +153,36 @@ fn insert_goal_system_message(
 /// without waiting for codex's `thread/goal/updated` notification to
 /// round-trip back through the stale per-stream notification handler.
 ///
+/// Holds the writer connection for the whole read-modify-write window,
+/// so a concurrent codex push can't interleave between us reading the
+/// previous payload and writing the mutated one — which used to drop
+/// fields like `tokensUsed` that codex had updated in between.
+///
 /// Idempotent with whatever codex eventually pushes — both writes go
 /// through `write_codex_goal_meta`, so the second one (whichever it is)
 /// just observes "no transition" and skips the system message.
 pub fn apply_local_mutation(app: &AppHandle, session_id: &str, action: &str) {
-    let new_meta = match compute_local_mutation(session_id, action) {
+    let conn = match crate::models::db::write_conn() {
+        Ok(conn) => conn,
+        Err(err) => {
+            tracing::warn!(session_id = %session_id, action = %action, error = %err, "apply_local_mutation: write_conn failed");
+            return;
+        }
+    };
+    let prev_meta: Option<String> = match conn.query_row(
+        "SELECT codex_goal_meta FROM sessions WHERE id = ?1",
+        [session_id],
+        |row| row.get(0),
+    ) {
+        Ok(value) => value,
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(err) => {
+            tracing::warn!(session_id = %session_id, action = %action, error = %err, "apply_local_mutation: read prev failed");
+            return;
+        }
+    };
+
+    let new_meta = match project_action_on_prev(prev_meta.as_deref(), action) {
         Ok(meta) => meta,
         Err(err) => {
             tracing::warn!(session_id = %session_id, action = %action, error = %err, "apply_local_mutation: skipped");
@@ -168,37 +193,34 @@ pub fn apply_local_mutation(app: &AppHandle, session_id: &str, action: &str) {
         "sessionId": session_id,
         "goal": new_meta,
     });
-    persist_codex_goal_event(app, &raw);
+    let outcome = match write_codex_goal_meta(&conn, &raw) {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            tracing::warn!("Failed to persist codex_goal_meta: {err}");
+            return;
+        }
+    };
+    // Release the writer before fanning out invalidations — broadcasting
+    // doesn't need the lock and any followers waiting on it shouldn't be
+    // blocked behind a UI mutation publish.
+    drop(conn);
+    broadcast_codex_goal_outcome(app, outcome);
 }
 
-/// Read current `codex_goal_meta`, project the button action onto it,
-/// return the new meta as a stringified ThreadGoal (or `None` for
-/// `clear`). Returns `Err` when there's no current goal to mutate
-/// (clicking Pause when nothing is set is a no-op the caller swallows).
-fn compute_local_mutation(
-    session_id: &str,
+/// Project a banner-button action onto the previously-stored meta and
+/// return the new payload (or `None` for `clear`). Returns `Err` when
+/// the action can't be applied (e.g. pause without an existing goal).
+fn project_action_on_prev(
+    prev_meta: Option<&str>,
     action: &str,
 ) -> std::result::Result<Option<String>, String> {
-    let conn = crate::models::db::read_conn().map_err(|e| e.to_string())?;
-    let prev_meta: Option<String> = conn
-        .query_row(
-            "SELECT codex_goal_meta FROM sessions WHERE id = ?1",
-            [session_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    drop(conn);
-
     if action == "clear" {
         return Ok(None);
     }
-
     if action != "pause" {
         return Err(format!("invalid action {action}"));
     }
-    let prev = prev_meta
-        .as_deref()
-        .ok_or_else(|| "no goal to mutate".to_string())?;
+    let prev = prev_meta.ok_or_else(|| "no goal to mutate".to_string())?;
     let mut value: Value = serde_json::from_str(prev).map_err(|e| e.to_string())?;
     if let Some(obj) = value.as_object_mut() {
         obj.insert("status".to_string(), Value::String("paused".to_string()));
@@ -222,6 +244,10 @@ pub(super) fn persist_codex_goal_event(app: &AppHandle, raw: &Value) {
             return;
         }
     };
+    broadcast_codex_goal_outcome(app, outcome);
+}
+
+fn broadcast_codex_goal_outcome(app: &AppHandle, outcome: CodexGoalWriteOutcome) {
     let (session_id, inserted_message) = match outcome {
         CodexGoalWriteOutcome::Skipped => {
             tracing::warn!("codexGoalUpdated event malformed (missing sessionId)");
@@ -454,61 +480,40 @@ mod tests {
         assert_eq!(label, Some("Goal complete"));
     }
 
-    // The compute_local_mutation tests need to drive the real DB pool
-    // because they read codex_goal_meta via the shared connection. We
-    // do that through the same TEST_ENV_LOCK setup other DB-touching
-    // tests use.
-    fn with_db_session<F: FnOnce(&str)>(prev_meta: Option<&str>, f: F) {
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = crate::data_dir::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        std::env::set_var("HELMOR_DATA_DIR", dir.path());
-        crate::data_dir::ensure_directory_structure().unwrap();
-
-        let session_id = "s-mutate";
-        {
-            let conn = crate::models::db::write_conn().unwrap();
-            crate::schema::ensure_schema(&conn).unwrap();
-            conn.execute(
-                "INSERT OR REPLACE INTO sessions (id, workspace_id, status, codex_goal_meta) VALUES (?1, 'w', 'idle', ?2)",
-                rusqlite::params![session_id, prev_meta],
-            )
+    // `project_action_on_prev` is a pure function — no DB. Tests drive
+    // it directly without a session row.
+    #[test]
+    fn project_action_pause_flips_status_to_paused() {
+        let prev = meta("active", "obj");
+        let new_meta = project_action_on_prev(Some(prev.as_str()), "pause")
+            .unwrap()
             .unwrap();
-        }
-        f(session_id);
-        std::env::remove_var("HELMOR_DATA_DIR");
+        assert!(new_meta.contains("\"status\":\"paused\""));
+        assert!(new_meta.contains("\"objective\":\"obj\""));
     }
 
     #[test]
-    fn compute_local_mutation_pause_flips_status_to_paused() {
-        with_db_session(Some(&meta("active", "obj")), |sid| {
-            let new_meta = compute_local_mutation(sid, "pause").unwrap().unwrap();
-            assert!(new_meta.contains("\"status\":\"paused\""));
-            assert!(new_meta.contains("\"objective\":\"obj\""));
-        });
+    fn project_action_clear_returns_none() {
+        let prev = meta("active", "obj");
+        let new_meta = project_action_on_prev(Some(prev.as_str()), "clear").unwrap();
+        assert_eq!(new_meta, None);
     }
 
     #[test]
-    fn compute_local_mutation_clear_returns_none() {
-        with_db_session(Some(&meta("active", "obj")), |sid| {
-            let new_meta = compute_local_mutation(sid, "clear").unwrap();
-            assert_eq!(new_meta, None);
-        });
+    fn project_action_pause_without_existing_goal_errors() {
+        assert!(project_action_on_prev(None, "pause").is_err());
     }
 
     #[test]
-    fn compute_local_mutation_pause_without_existing_goal_errors() {
-        with_db_session(None, |sid| {
-            assert!(compute_local_mutation(sid, "pause").is_err());
-        });
+    fn project_action_clear_without_existing_goal_is_idempotent() {
+        // Clear is tolerant — clearing nothing is a no-op (returns None).
+        assert_eq!(project_action_on_prev(None, "clear").unwrap(), None);
     }
 
     #[test]
-    fn compute_local_mutation_clear_without_existing_goal_is_idempotent() {
-        with_db_session(None, |sid| {
-            // Clear should be tolerant — clearing nothing is a no-op.
-            assert_eq!(compute_local_mutation(sid, "clear").unwrap(), None);
-        });
+    fn project_action_invalid_returns_err() {
+        let prev = meta("active", "obj");
+        assert!(project_action_on_prev(Some(prev.as_str()), "resume").is_err());
+        assert!(project_action_on_prev(Some(prev.as_str()), "garbage").is_err());
     }
 }

@@ -21,6 +21,7 @@ import type {
 } from "@/lib/api";
 import {
 	createSession,
+	mutateCodexGoal,
 	saveAutoCloseActionKinds,
 	setWorkspaceLinkedDirectories,
 } from "@/lib/api";
@@ -687,17 +688,33 @@ export const WorkspaceComposerContainer = memo(
 					oppositeFollowUp?: boolean;
 				},
 			) => {
-				// Intercept `/goal <objective>` for codex sessions that already
-				// have an active or paused goal — surface a confirm panel
-				// instead of silently replacing. Reserved subcommands
-				// (resume / pause / clear) are NOT new objectives; they're
-				// lifecycle ops on the existing goal and should pass through.
-				if (provider === "codex" && activeGoal) {
+				// `/goal …` interception for codex sessions. Three flavors:
+				//   - `/goal pause` / `/goal clear`  → out-of-band mutate IPC,
+				//     no chat bubble (matches the banner-button behaviour).
+				//   - `/goal resume`                 → falls through to send-
+				//     Message so the resulting stream subscription catches
+				//     the goal-continuation turn codex auto-spawns.
+				//   - `/goal <new objective>` while a goal already exists
+				//                                    → confirm-replace panel.
+				if (provider === "codex" && displayedSessionId) {
 					const match = prompt.trim().match(/^\/goal\s+([\s\S]+)$/);
 					const arg = match ? (match[1]?.trim() ?? "") : "";
-					const isReservedSubcommand =
-						arg === "resume" || arg === "pause" || arg === "clear";
-					if (arg && !isReservedSubcommand && arg !== activeGoal.objective) {
+					if (arg === "pause" || arg === "clear") {
+						if (activeGoal) {
+							void mutateCodexGoal(displayedSessionId, arg).catch((err) => {
+								toast.error(
+									err instanceof Error ? err.message : `Failed to ${arg} goal`,
+								);
+							});
+						}
+						return;
+					}
+					if (
+						arg &&
+						arg !== "resume" &&
+						activeGoal &&
+						arg !== activeGoal.objective
+					) {
 						setGoalReplaceConfirm({
 							newObjective: arg,
 							args: [prompt, imagePaths, filePaths, customTags, options],
@@ -713,7 +730,7 @@ export const WorkspaceComposerContainer = memo(
 					options,
 				);
 			},
-			[provider, activeGoal, handleComposerSubmitInner],
+			[provider, displayedSessionId, activeGoal, handleComposerSubmitInner],
 		);
 
 		const handleGoalReplaceConfirm = useCallback(() => {
