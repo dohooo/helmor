@@ -5,9 +5,12 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
-    sync::mpsc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use crate::error::{AnyhowCodedExt, ErrorCode};
@@ -430,14 +433,32 @@ pub fn remove_worktree(repo_root: &Path, workspace_dir: &Path) -> Result<()> {
 }
 
 /// Rename `dir` to a `.trash-*` sibling so the caller can treat it as gone.
+///
+/// The suffix combines PID + nanos + a per-process counter so we never collide
+/// with a leftover trash dir from an earlier archive in the same process (e.g.
+/// archive → restore → archive of the same workspace before the background
+/// cleanup finishes).
 fn renamed_to_trash(dir: &Path) -> Result<PathBuf> {
+    static TRASH_SEQ: AtomicU64 = AtomicU64::new(0);
+
     let parent = dir
         .parent()
         .with_context(|| format!("No parent for {}", dir.display()))?;
     let name = dir
         .file_name()
         .with_context(|| format!("No filename for {}", dir.display()))?;
-    let trash_name = format!(".trash-{}-{}", name.to_string_lossy(), std::process::id());
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let seq = TRASH_SEQ.fetch_add(1, Ordering::Relaxed);
+    let trash_name = format!(
+        ".trash-{}-{}-{}-{}",
+        name.to_string_lossy(),
+        std::process::id(),
+        nanos,
+        seq,
+    );
     let trash_dir = parent.join(&trash_name);
     fs::rename(dir, &trash_dir).with_context(|| {
         format!(
