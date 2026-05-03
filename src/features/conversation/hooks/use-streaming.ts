@@ -120,6 +120,7 @@ type SubmitPayload = {
 	 *  "send with opposite follow-up" shortcut. Ignored when `forceQueue`
 	 *  is set. */
 	followUpBehaviorOverride?: FollowUpBehavior;
+	startSubmitMode?: "startNow" | "saveForLater";
 	/** Snapshot of the editor's full Lexical state at submit time. Captured
 	 *  synchronously inside the composer so callers that need to round-trip
 	 *  chips/text/images (e.g. the kanban "backlog" handler that copies the

@@ -53,6 +53,7 @@ export type ComposerCreateContext = {
 	 *  workspace before routing the prompt into the freshly-created session. */
 	prepare: (
 		payload: ComposerSubmitPayload,
+		options?: { startSubmitMode?: "startNow" | "saveForLater" },
 	) => Promise<ComposerCreatePrepareOutcome>;
 };
 
@@ -124,6 +125,7 @@ type WorkspaceConversationContainerProps = {
 	 *  `composerCreateContext.prepare` first and only fires the agent stream
 	 *  if the prepare step says so. */
 	composerCreateContext?: ComposerCreateContext | null;
+	composerStartSubmitMenu?: boolean;
 };
 
 export const WorkspaceConversationContainer = memo(
@@ -159,6 +161,7 @@ export const WorkspaceConversationContainer = memo(
 		composerForceAvailable = false,
 		composerContextKeyOverride,
 		composerCreateContext = null,
+		composerStartSubmitMenu = false,
 	}: WorkspaceConversationContainerProps) {
 		const [composerModelSelections, setComposerModelSelections] = useState<
 			Record<string, string>
@@ -315,7 +318,9 @@ export const WorkspaceConversationContainer = memo(
 			(payload: Parameters<typeof handleComposerSubmit>[0]) => {
 				if (composerCreateContext) {
 					void (async () => {
-						const outcome = await composerCreateContext.prepare(payload);
+						const outcome = await composerCreateContext.prepare(payload, {
+							startSubmitMode: payload.startSubmitMode,
+						});
 						if (outcome.shouldStream) {
 							await handleComposerSubmit(payload, {
 								sessionId: outcome.sessionId,
@@ -448,6 +453,7 @@ export const WorkspaceConversationContainer = memo(
 						queueItems={queueItems}
 						onSteerQueued={handleSteerQueued}
 						onRemoveQueued={handleRemoveQueued}
+						startSubmitMenu={composerStartSubmitMenu}
 					/>
 				</div>
 			</FileLinkProvider>

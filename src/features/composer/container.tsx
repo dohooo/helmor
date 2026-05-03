@@ -64,6 +64,7 @@ const EMPTY_SLASH_COMMANDS: SlashCommandEntry[] = [];
 const EMPTY_LINKED_DIRECTORIES: readonly string[] = [];
 const EMPTY_CANDIDATE_DIRECTORIES: readonly CandidateDirectory[] = [];
 const EMPTY_QUEUE_ITEMS: readonly QueuedSubmit[] = [];
+type StartSubmitMode = "startNow" | "saveForLater";
 
 /**
  * Host-app slash commands. Prepended to the agent-supplied list so they
@@ -153,6 +154,7 @@ type WorkspaceComposerContainerProps = {
 		 *  one submit (queue ↔ steer). Used by the "send with opposite
 		 *  follow-up" composer shortcut. Ignored when `forceQueue` is true. */
 		followUpBehaviorOverride?: "queue" | "steer";
+		startSubmitMode?: "startNow" | "saveForLater";
 		/** Snapshot of the editor's full Lexical state at submit time, so
 		 *  callers that need to round-trip chips/text/images (e.g. the kanban
 		 *  "backlog" handler that copies the draft into a freshly-created
@@ -185,6 +187,7 @@ type WorkspaceComposerContainerProps = {
 	queueItems?: readonly QueuedSubmit[];
 	onSteerQueued?: (itemId: string) => void;
 	onRemoveQueued?: (itemId: string) => void;
+	startSubmitMenu?: boolean;
 };
 
 const noopDeferredToolResponse: DeferredToolResponseHandler = () => {};
@@ -230,9 +233,25 @@ export const WorkspaceComposerContainer = memo(
 		queueItems = EMPTY_QUEUE_ITEMS,
 		onSteerQueued,
 		onRemoveQueued,
+		startSubmitMenu = false,
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
-		const { settings } = useSettings();
+		const { settings, updateSettings } = useSettings();
+		const startSubmitMode: StartSubmitMode =
+			settings.kanbanViewState.createState === "backlog"
+				? "saveForLater"
+				: "startNow";
+		const handleStartSubmitModeChange = useCallback(
+			(mode: StartSubmitMode) => {
+				void updateSettings({
+					kanbanViewState: {
+						...settings.kanbanViewState,
+						createState: mode === "saveForLater" ? "backlog" : "in-progress",
+					},
+				});
+			},
+			[settings.kanbanViewState, updateSettings],
+		);
 		const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
 		const workspaceDetailQuery = useQuery({
 			...workspaceDetailQueryOptions(displayedWorkspaceId ?? "__none__"),
@@ -660,6 +679,7 @@ export const WorkspaceComposerContainer = memo(
 				options?: {
 					permissionModeOverride?: string;
 					oppositeFollowUp?: boolean;
+					startSubmitMode?: "startNow" | "saveForLater";
 					editorStateSnapshot?: SerializedEditorState;
 				},
 			) => {
@@ -686,6 +706,7 @@ export const WorkspaceComposerContainer = memo(
 						options?.permissionModeOverride ?? effectivePermissionMode,
 					fastMode: supportsFastMode ? fastMode : false,
 					followUpBehaviorOverride,
+					startSubmitMode: options?.startSubmitMode,
 					editorStateSnapshot: options?.editorStateSnapshot,
 				});
 			},
@@ -1024,6 +1045,9 @@ export const WorkspaceComposerContainer = memo(
 						linkedDirectoriesDisabled={linkedDirectoriesMutation.isPending}
 						addDirCandidates={candidateDirectories}
 						onPickAddDir={handlePickAddDir}
+						startSubmitMenu={startSubmitMenu}
+						startSubmitMode={startSubmitMode}
+						onStartSubmitModeChange={handleStartSubmitModeChange}
 					/>
 				</div>
 			</div>

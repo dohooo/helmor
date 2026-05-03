@@ -63,6 +63,7 @@ import { AppUpdateButton } from "@/features/updater/app-update-button";
 import { useAppUpdater } from "@/features/updater/use-app-updater";
 import { WorkspaceStartPage } from "@/features/workspace-start";
 import { WorkspaceStartContextSidebar } from "@/features/workspace-start/context-sidebar";
+import { createWorkspaceFromStartComposer } from "@/features/workspace-start/create-workspace";
 import { EditorIcon } from "@/shell/editor-icon";
 import { useEnsureDefaultModel } from "@/shell/hooks/use-ensure-default-model";
 import { useShellPanels } from "@/shell/hooks/use-panels";
@@ -80,14 +81,13 @@ import { clampZoom, useZoom, ZOOM_STEP } from "@/shell/use-zoom";
 import {
 	createSession,
 	drainPendingCliSends,
-	finalizeWorkspaceFromRepo,
 	listRemoteBranches,
 	markSessionRead,
 	markSessionUnread,
 	openWorkspaceInEditor,
 	openWorkspaceInFinder,
-	prepareWorkspaceFromRepo,
 	prewarmSlashCommandsForWorkspace,
+	type RepositoryCreateOption,
 	syncWorkspaceWithTargetBranch,
 	triggerWorkspaceFetch,
 	unhideSession,
@@ -138,7 +138,6 @@ import type { ContextCard } from "./lib/sources/types";
 import { useOsNotifications } from "./lib/use-os-notifications";
 import {
 	describeUnknownError,
-	getComposerContextKey,
 	recomputeWorkspaceDetailUnread,
 	recomputeWorkspaceUnreadInGroups,
 	summaryToArchivedRow,
@@ -2126,6 +2125,28 @@ function AppShell({
 
 	const repositoriesQuery = useQuery(repositoriesQueryOptions());
 	const repositories = repositoriesQuery.data ?? [];
+	useEffect(() => {
+		if (!areSettingsLoaded || repositories.length === 0) {
+			return;
+		}
+		if (
+			startRepositoryId &&
+			repositories.some((repository) => repository.id === startRepositoryId)
+		) {
+			return;
+		}
+
+		const savedRepository =
+			repositories.find(
+				(repository) => repository.id === appSettings.kanbanViewState.repoId,
+			) ?? null;
+		setStartRepositoryId((savedRepository ?? repositories[0]).id);
+	}, [
+		appSettings.kanbanViewState.repoId,
+		areSettingsLoaded,
+		repositories,
+		startRepositoryId,
+	]);
 	const startRepository =
 		repositories.find((repository) => repository.id === startRepositoryId) ??
 		repositories[0] ??
@@ -2143,10 +2164,6 @@ function AppShell({
 	});
 	const handleOpenWorkspaceStart = useCallback(
 		(options?: { persist?: boolean }) => {
-			if (!startRepositoryId && repositories[0]) {
-				setStartRepositoryId(repositories[0].id);
-			}
-
 			workspaceSelectionRequestRef.current += 1;
 			sessionSelectionRequestRef.current += 1;
 			selectedWorkspaceIdRef.current = null;
@@ -2161,7 +2178,7 @@ function AppShell({
 				void updateSettings({ lastSurface: "workspace-start" });
 			}
 		},
-		[repositories, startRepositoryId, updateSettings],
+		[updateSettings],
 	);
 	useEffect(() => {
 		if (!areSettingsLoaded || appSettings.lastSurface !== "workspace-start") {
@@ -2201,6 +2218,18 @@ function AppShell({
 		},
 		[appSettings.kanbanViewState, startRepository, updateSettings],
 	);
+	const handleStartRepositorySelect = useCallback(
+		(repository: RepositoryCreateOption) => {
+			setStartRepositoryId(repository.id);
+			void updateSettings({
+				kanbanViewState: {
+					...appSettings.kanbanViewState,
+					repoId: repository.id,
+				},
+			});
+		},
+		[appSettings.kanbanViewState, updateSettings],
+	);
 	useEffect(() => {
 		setStartPreviewCard(null);
 	}, [startRepository?.id]);
@@ -2213,7 +2242,8 @@ function AppShell({
 
 	const handleStartComposerPrepare = useCallback(
 		async (
-			_payload: ComposerSubmitPayload,
+			payload: ComposerSubmitPayload,
+			options?: { startSubmitMode?: "startNow" | "saveForLater" },
 		): Promise<ComposerCreatePrepareOutcome> => {
 			if (!startRepository?.id) {
 				pushWorkspaceToast(
@@ -2223,12 +2253,38 @@ function AppShell({
 				return { shouldStream: false };
 			}
 
-			let prepared: Awaited<ReturnType<typeof prepareWorkspaceFromRepo>>;
 			try {
-				prepared = await prepareWorkspaceFromRepo(
-					startRepository.id,
-					startSourceBranch,
-				);
+				const { finalizePromise, outcome } =
+					await createWorkspaceFromStartComposer({
+						repoId: startRepository.id,
+						sourceBranch: startSourceBranch,
+						submitMode: options?.startSubmitMode ?? "startNow",
+						editorStateSnapshot: payload.editorStateSnapshot,
+					});
+
+				if (finalizePromise) {
+					void finalizePromise.catch((error) => {
+						pushWorkspaceToast(
+							describeUnknownError(error, "Workspace setup failed."),
+							"Workspace setup failed",
+						);
+						void queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceGroups,
+						});
+					});
+				}
+
+				void queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceGroups,
+				});
+
+				if (outcome.shouldStream) {
+					handleSelectWorkspace(outcome.workspaceId);
+					handleSelectSession(outcome.sessionId);
+					setWorkspaceViewMode("conversation");
+				}
+
+				return outcome;
 			} catch (error) {
 				pushWorkspaceToast(
 					describeUnknownError(error, "Could not create workspace."),
@@ -2236,34 +2292,6 @@ function AppShell({
 				);
 				return { shouldStream: false };
 			}
-
-			void finalizeWorkspaceFromRepo(prepared.workspaceId).catch((error) => {
-				pushWorkspaceToast(
-					describeUnknownError(error, "Workspace setup failed."),
-					"Workspace setup failed",
-				);
-				void queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGroups,
-				});
-			});
-
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
-
-			handleSelectWorkspace(prepared.workspaceId);
-			handleSelectSession(prepared.initialSessionId);
-			setWorkspaceViewMode("conversation");
-
-			return {
-				shouldStream: true,
-				workspaceId: prepared.workspaceId,
-				sessionId: prepared.initialSessionId,
-				contextKey: getComposerContextKey(
-					prepared.workspaceId,
-					prepared.initialSessionId,
-				),
-			};
 		},
 		[
 			handleSelectSession,
@@ -2445,9 +2473,7 @@ function AppShell({
 												<WorkspaceStartPage
 													repositories={repositories}
 													selectedRepository={startRepository}
-													onSelectRepository={(repository) =>
-														setStartRepositoryId(repository.id)
-													}
+													onSelectRepository={handleStartRepositorySelect}
 													selectedBranch={startSourceBranch}
 													branches={startBranchesQuery.data ?? []}
 													branchesLoading={startBranchesQuery.isFetching}
@@ -2500,6 +2526,7 @@ function AppShell({
 														composerContextKeyOverride={startComposerContextKey}
 														composerPlaceholder="Describe what you want to build"
 														composerCreateContext={startCreateContext}
+														composerStartSubmitMenu
 													/>
 												</WorkspaceStartPage>
 											) : (

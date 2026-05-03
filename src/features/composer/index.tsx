@@ -10,6 +10,7 @@ import {
 	Check,
 	ChevronDown,
 	ClipboardList,
+	Clock3,
 	MessageSquareMore,
 	Plus,
 	Square,
@@ -18,6 +19,10 @@ import {
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ModelIcon } from "@/components/model-icon";
 import { Button } from "@/components/ui/button";
+import {
+	ButtonGroup,
+	ButtonGroupSeparator,
+} from "@/components/ui/button-group";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -101,6 +106,7 @@ type WorkspaceComposerProps = {
 			/** Submit with the opposite follow-up behavior (queue ↔ steer)
 			 *  for this single message, leaving the persistent setting alone. */
 			oppositeFollowUp?: boolean;
+			startSubmitMode?: StartSubmitMode;
 			/** Snapshot of the editor's full Lexical state at submit time.
 			 *  Captured synchronously before the editor clears so callers
 			 *  that need to round-trip chips/text/images (e.g. the kanban
@@ -180,6 +186,9 @@ type WorkspaceComposerProps = {
 	 *  "Ask to make changes…" copy. The kanban view supplies a hint that
 	 *  nudges the user toward composing inbox sources for new workspaces. */
 	placeholder?: string;
+	startSubmitMenu?: boolean;
+	startSubmitMode?: StartSubmitMode;
+	onStartSubmitModeChange?: (mode: StartSubmitMode) => void;
 };
 
 const EMPTY_SLASH_COMMANDS: readonly SlashCommandEntry[] = [];
@@ -192,6 +201,7 @@ const noopDeferredToolResponse = (
 	_options?: DeferredToolResponseOptions,
 ) => {};
 const noopElicitationResponse: ElicitationResponseHandler = () => {};
+type StartSubmitMode = "startNow" | "saveForLater";
 // ---------------------------------------------------------------------------
 // Lexical editor config (stable reference — defined outside component)
 // ---------------------------------------------------------------------------
@@ -257,6 +267,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	focusShortcut = null,
 	togglePlanShortcut = null,
 	toggleFollowUpShortcut = null,
+	startSubmitMenu = false,
+	startSubmitMode = "startNow",
+	onStartSubmitModeChange,
 }: WorkspaceComposerProps) {
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
@@ -458,7 +471,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	}, [hasPlanReview, onSubmit, contextKey]);
 
 	const submitDraft = useCallback(
-		(options?: { oppositeFollowUp?: boolean }) => {
+		(options?: {
+			oppositeFollowUp?: boolean;
+			startSubmitMode?: StartSubmitMode;
+		}) => {
 			const editor = editorRef.current;
 			if (!editor) return;
 			let prompt = "";
@@ -490,6 +506,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				.toJSON() as SerializedEditorState;
 			onSubmit(prompt, images, files, customTags, {
 				oppositeFollowUp: options?.oppositeFollowUp,
+				startSubmitMode: options?.startSubmitMode,
 				editorStateSnapshot,
 			});
 			editor.update(() => {
@@ -502,12 +519,35 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	);
 
 	const handleSubmit = useCallback(() => {
-		submitDraft();
-	}, [submitDraft]);
+		submitDraft(startSubmitMenu ? { startSubmitMode } : undefined);
+	}, [startSubmitMenu, startSubmitMode, submitDraft]);
 
 	const handleSubmitOpposite = useCallback(() => {
 		submitDraft({ oppositeFollowUp: true });
 	}, [submitDraft]);
+
+	const handleStartSubmitMode = useCallback(
+		(mode: StartSubmitMode) => {
+			submitDraft({ startSubmitMode: mode });
+		},
+		[submitDraft],
+	);
+
+	const handleSelectStartSubmitMode = useCallback(
+		(mode: StartSubmitMode) => {
+			onStartSubmitModeChange?.(mode);
+			handleStartSubmitMode(mode);
+		},
+		[handleStartSubmitMode, onStartSubmitModeChange],
+	);
+	const alternateStartSubmitMode: StartSubmitMode =
+		startSubmitMode === "saveForLater" ? "startNow" : "saveForLater";
+	const preferredStartSubmitLabel =
+		startSubmitMode === "saveForLater" ? "Save for later" : "Start now";
+	const alternateStartSubmitLabel =
+		alternateStartSubmitMode === "saveForLater"
+			? "Save for later"
+			: "Start now";
 
 	const handleComposerKeyDownCapture = useCallback(
 		(event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -992,16 +1032,78 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 									) : null}
 								</div>
 							) : (
-								<Button
-									variant="outline"
-									size="icon"
-									aria-label="Send"
-									onClick={handleSubmit}
-									disabled={sendDisabled}
-									className="ml-1.5 rounded-[9px]"
-								>
-									<ArrowUp className="size-[15px]" strokeWidth={2.2} />
-								</Button>
+								<div className="ml-1.5 flex items-center">
+									{startSubmitMenu ? (
+										<DropdownMenu>
+											<ButtonGroup className="rounded-[9px]">
+												<Button
+													variant="outline"
+													size="sm"
+													aria-label={preferredStartSubmitLabel}
+													onClick={() => handleStartSubmitMode(startSubmitMode)}
+													disabled={sendDisabled}
+													className="gap-1.5 px-2.5"
+												>
+													{startSubmitMode === "saveForLater" ? (
+														<Clock3 className="size-3.5" strokeWidth={1.8} />
+													) : (
+														<ArrowUp className="size-3.5" strokeWidth={2.2} />
+													)}
+													<span>{preferredStartSubmitLabel}</span>
+												</Button>
+												<ButtonGroupSeparator className="bg-border/80" />
+												<DropdownMenuTrigger asChild>
+													<Button
+														variant="outline"
+														size="sm"
+														aria-label="Start options"
+														disabled={sendDisabled}
+														className="px-2.5"
+													>
+														<ChevronDown
+															className="size-3 text-muted-foreground"
+															strokeWidth={2}
+														/>
+													</Button>
+												</DropdownMenuTrigger>
+											</ButtonGroup>
+											<DropdownMenuContent
+												side="bottom"
+												align="end"
+												sideOffset={6}
+												className="min-w-[133px] -translate-x-px"
+											>
+												<DropdownMenuItem
+													onClick={() =>
+														handleSelectStartSubmitMode(
+															alternateStartSubmitMode,
+														)
+													}
+													disabled={sendDisabled}
+													className="gap-2"
+												>
+													{alternateStartSubmitMode === "saveForLater" ? (
+														<Clock3 className="size-3.5" strokeWidth={1.8} />
+													) : (
+														<ArrowUp className="size-3.5" strokeWidth={2} />
+													)}
+													<span>{alternateStartSubmitLabel}</span>
+												</DropdownMenuItem>
+											</DropdownMenuContent>
+										</DropdownMenu>
+									) : (
+										<Button
+											variant="outline"
+											size="icon"
+											aria-label="Send"
+											onClick={handleSubmit}
+											disabled={sendDisabled}
+											className="rounded-[9px]"
+										>
+											<ArrowUp className="size-[15px]" strokeWidth={2.2} />
+										</Button>
+									)}
+								</div>
 							)}
 						</div>
 					</div>

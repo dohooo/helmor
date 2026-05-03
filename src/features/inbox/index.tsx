@@ -292,6 +292,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 		if (!el) return;
 		const root = scrollContainerRef.current;
 		if (!root) return;
+		if (root.scrollHeight <= root.clientHeight + 1) return;
 		const observer = new IntersectionObserver(
 			(entries) => {
 				for (const entry of entries) {
