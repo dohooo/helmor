@@ -697,6 +697,16 @@ export const WorkspaceComposerContainer = memo(
 			setGoalReplaceConfirm(null);
 		}, []);
 
+		// Resume button on the goal banner — synthesises a `/goal resume`
+		// submit so it travels through the normal sendMessage path. The
+		// resulting stream subscription is what catches the
+		// goal-continuation turn codex auto-spawns server-side; routing
+		// resume through `mutateCodexGoal` would skip that subscription
+		// and the chat would go silent even though the agent is working.
+		const handleResumeGoal = useCallback(() => {
+			handleComposerSubmitInner("/goal resume", [], [], []);
+		}, [handleComposerSubmitInner]);
+
 		// Track which queued prompt we've already dispatched so a re-render
 		// (e.g. due to query invalidation refreshing the session list) can't
 		// resubmit the same prompt twice before the parent clears the queue.
@@ -866,6 +876,7 @@ export const WorkspaceComposerContainer = memo(
 								sessionId={displayedSessionId}
 								hasQueueBelow={queueItems.length > 0}
 								disabled={composerUnavailable}
+								onResume={handleResumeGoal}
 							/>
 						) : null}
 						<SubmitQueueList

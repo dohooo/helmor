@@ -3,21 +3,21 @@
  * floating overlay as `<SubmitQueueList />` so the two visually stack —
  * one banner + N queued submits + the composer below.
  *
- * Two button paths:
+ * Three button paths:
  *   - Clear: out-of-band JSON-RPC via `mutateCodexGoal` so it doesn't
  *     leave a user message in the chat.
- *   - Resume: NOT a button. The banner shows a `/goal resume` hint and
- *     the user types it as a normal slash command. Routing it through
- *     the sendMessage path piggybacks on the resulting stream
- *     subscription, which is what catches the goal-continuation turn
- *     codex auto-spawns when the status flips back to active.
- *
- * Pause is also out-of-band but isn't a banner button — it's the
- * Composer Stop button that triggers it, so an abort during an active
- * goal doesn't immediately get re-spawned by codex's continuation loop.
+ *   - Resume: synthesises a `/goal resume` prompt and submits it through
+ *     the host-supplied callback, which routes through the sendMessage
+ *     path. The resulting stream subscription is what catches the
+ *     goal-continuation turn codex auto-spawns when status flips back
+ *     to active. Users can also type `/goal resume` themselves —
+ *     parsed identically.
+ *   - Pause is NOT a banner button; it's the Composer Stop button that
+ *     triggers it, so an abort during an active goal doesn't get
+ *     re-spawned by codex's continuation loop.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Target, X } from "lucide-react";
+import { Play, Target, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { type CodexGoalState, mutateCodexGoal } from "@/lib/api";
@@ -51,6 +51,7 @@ export function CodexGoalBanner({
 	sessionId,
 	hasQueueBelow,
 	disabled,
+	onResume,
 }: {
 	sessionId: string;
 	/** When the submit-queue list renders directly below us, the banner
@@ -59,6 +60,10 @@ export function CodexGoalBanner({
 	 *  the composer just like SubmitQueueList does on its own. */
 	hasQueueBelow?: boolean;
 	disabled?: boolean;
+	/** Resume button handler. The host injects `/goal resume` through
+	 *  the normal composer submit flow — see `container.tsx`. When
+	 *  omitted, the Resume button hides entirely. */
+	onResume?: () => void;
 }) {
 	const queryClient = useQueryClient();
 	const queryKey = helmorQueryKeys.sessionCodexGoal(sessionId);
@@ -122,16 +127,21 @@ export function CodexGoalBanner({
 			<span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/70">
 				Used: {budget ? `${used} / ${budget}` : used}
 			</span>
-			{isPaused ? (
-				<span className="shrink-0 text-[11px] text-muted-foreground/80">
-					Type{" "}
-					<code className="rounded bg-muted px-1 py-0.5 text-[10px] font-medium text-foreground">
-						/goal resume
-					</code>{" "}
-					to continue
-				</span>
-			) : null}
 			<div className="ml-auto flex shrink-0 items-center gap-1">
+				{isPaused && onResume ? (
+					<Button
+						type="button"
+						variant="ghost"
+						size="sm"
+						aria-label="Resume goal"
+						disabled={isPending}
+						onClick={onResume}
+						className="h-7 gap-1 rounded-md px-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
+					>
+						<Play className="size-[13px] shrink-0" strokeWidth={1.8} />
+						<span>Resume</span>
+					</Button>
+				) : null}
 				<Button
 					type="button"
 					variant="ghost"
