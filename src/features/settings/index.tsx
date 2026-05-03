@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	CheckCircle2,
 	ChevronDown,
 	Minus,
 	Monitor,
@@ -605,10 +606,19 @@ export const SettingsDialog = memo(function SettingsDialog({
 															onClick={() =>
 																updateSettings({ defaultModelId: m.id })
 															}
-															className="gap-2"
+															className="justify-between gap-2"
 														>
-															<ModelIcon model={m} className="size-4" />
-															{m.label}
+															<span className="flex min-w-0 items-center gap-2">
+																<ModelIcon model={m} className="size-4" />
+																{m.label}
+															</span>
+															<CheckCircle2
+																className={cn(
+																	"size-3.5 shrink-0 text-emerald-500",
+																	m.id !== settings.defaultModelId &&
+																		"invisible",
+																)}
+															/>
 														</DropdownMenuItem>
 													))}
 												</DropdownMenuContent>
@@ -713,10 +723,19 @@ export const SettingsDialog = memo(function SettingsDialog({
 																			: m.id,
 																})
 															}
-															className="gap-2"
+															className="justify-between gap-2"
 														>
-															<ModelIcon model={m} className="size-4" />
-															{m.label}
+															<span className="flex min-w-0 items-center gap-2">
+																<ModelIcon model={m} className="size-4" />
+																{m.label}
+															</span>
+															<CheckCircle2
+																className={cn(
+																	"size-3.5 shrink-0 text-emerald-500",
+																	m.id !== effectiveReviewModelId &&
+																		"invisible",
+																)}
+															/>
 														</DropdownMenuItem>
 													))}
 												</DropdownMenuContent>
