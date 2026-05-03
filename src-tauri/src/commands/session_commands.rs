@@ -69,6 +69,105 @@ pub async fn get_session_context_usage(session_id: String) -> CmdResult<Option<S
     run_blocking(move || sessions::get_session_context_usage(&session_id)).await
 }
 
+#[tauri::command]
+pub async fn get_session_codex_goal(session_id: String) -> CmdResult<Option<String>> {
+    run_blocking(move || sessions::get_session_codex_goal(&session_id)).await
+}
+
+/// Out-of-band Codex `/goal` lifecycle control. The banner buttons
+/// (Pause / Resume / Clear) call this directly so the operations don't
+/// appear in chat history. Routes to the sidecar's `mutateCodexGoal`
+/// method, which then dispatches to the right `thread/goal/*` RPC.
+#[tauri::command]
+pub async fn mutate_codex_goal(
+    app: tauri::AppHandle,
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    session_id: String,
+    action: String,
+) -> CmdResult<()> {
+    if !matches!(action.as_str(), "pause" | "clear") {
+        return Err(anyhow::anyhow!("Invalid mutateCodexGoal action: {action}").into());
+    }
+    tracing::info!(session_id = %session_id, action = %action, "mutate_codex_goal");
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let req = crate::sidecar::SidecarRequest {
+        id: request_id.clone(),
+        method: "mutateCodexGoal".to_string(),
+        params: serde_json::json!({
+            "sessionId": session_id,
+            "action": action,
+        }),
+    };
+
+    let rx = sidecar.subscribe(&request_id);
+    if let Err(error) = sidecar.send(&req) {
+        sidecar.unsubscribe(&request_id);
+        return Err(anyhow::anyhow!("Sidecar send failed: {error}").into());
+    }
+
+    let rid = request_id.clone();
+    let join_result = tauri::async_runtime::spawn_blocking(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(anyhow::anyhow!("mutateCodexGoal timed out"));
+            }
+            match rx.recv_timeout(remaining) {
+                Ok(event) => {
+                    if event.event_type() == "pong" {
+                        return Ok(());
+                    }
+                    if event.event_type() == "error" {
+                        let msg = event
+                            .raw
+                            .get("message")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("sidecar error")
+                            .to_string();
+                        return Err(anyhow::anyhow!(msg));
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    return Err(anyhow::anyhow!("mutateCodexGoal timed out"));
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(anyhow::anyhow!("Sidecar disconnected before responding"));
+                }
+            }
+        }
+    })
+    .await;
+
+    // Always unsubscribe — even when the worker panicked / produced a
+    // join error — to avoid leaking the listener slot in the sidecar's
+    // map. Both the join error and the worker's own outcome propagate
+    // after the cleanup.
+    sidecar.unsubscribe(&rid);
+    let outcome =
+        join_result.map_err(|e| anyhow::anyhow!("mutate_codex_goal worker join failed: {e}"))?;
+    outcome?;
+
+    // Mirror the goal mutation locally so the banner reflects the new
+    // state on the next React Query refetch. Codex eventually pushes
+    // `thread/goal/updated` too, but the notification flows through a
+    // stale per-stream handler when no fresh sendMessage is in flight,
+    // so we can't rely on it. `apply_local_mutation` is idempotent.
+    let session_for_local = session_id.clone();
+    let action_for_local = action.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        crate::agents::streaming::codex_goal::apply_local_mutation(
+            &app,
+            &session_for_local,
+            &action_for_local,
+        );
+    })
+    .await;
+
+    Ok(())
+}
+
 /// Ad-hoc Claude-only context-usage fetch for the hover popover. Pure
 /// passthrough to the sidecar — no DB write, no mutex, no TTL. The
 /// frontend caches the result for 30 s via React Query.

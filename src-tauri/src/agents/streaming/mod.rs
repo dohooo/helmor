@@ -14,6 +14,7 @@ mod actions;
 mod active_streams;
 mod bridges;
 mod cleanup;
+pub(crate) mod codex_goal;
 mod context_usage;
 mod params;
 mod session_id;
@@ -885,6 +886,20 @@ pub(super) fn stream_via_sidecar(
                         }
                     }
                 }
+                "codexGoalUpdated" => match turn_session.handle_codex_goal_updated(&event.raw) {
+                    Ok(actions) => {
+                        for action in actions {
+                            actions::apply_action(action, &apply_ctx);
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            rid = %rid,
+                            error = ?err,
+                            "codexGoalUpdated transition rejected",
+                        );
+                    }
+                },
                 "elicitationRequest" => {
                     let resolved_model = pipeline
                         .as_ref()

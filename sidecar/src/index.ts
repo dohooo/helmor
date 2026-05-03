@@ -291,6 +291,26 @@ async function handleGetContextUsage(
 	}
 }
 
+async function handleMutateCodexGoal(
+	id: string,
+	params: Record<string, unknown>,
+): Promise<void> {
+	try {
+		const sessionId = requireString(params, "sessionId");
+		const actionRaw = requireString(params, "action");
+		if (actionRaw !== "pause" && actionRaw !== "clear") {
+			throw new Error(`Invalid mutateCodexGoal action: ${actionRaw}`);
+		}
+		logger.debug(`[${id}] mutateCodexGoal`, { sessionId, action: actionRaw });
+		await codexManager.mutateGoal(sessionId, actionRaw);
+		emitter.pong(id);
+	} catch (err) {
+		const msg = errorMessage(err);
+		logger.error(`[${id}] mutateCodexGoal FAILED: ${msg}`, errorDetails(err));
+		emitter.error(id, msg);
+	}
+}
+
 async function handleSteerSession(
 	id: string,
 	params: Record<string, unknown>,
@@ -433,6 +453,9 @@ for await (const line of rl) {
 				break;
 			case "steerSession":
 				await handleSteerSession(id, params);
+				break;
+			case "mutateCodexGoal":
+				await handleMutateCodexGoal(id, params);
 				break;
 			case "shutdown":
 				await handleShutdown(id);

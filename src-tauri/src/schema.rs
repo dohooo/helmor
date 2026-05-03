@@ -398,6 +398,14 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add context_usage_meta column")?;
     }
 
+    // Migration: opaque JSON snapshot of the active Codex `/goal` state, used
+    // by the panel-header banner. NULL means no active goal.
+    if !has_column(connection, "sessions", "codex_goal_meta") {
+        connection
+            .execute_batch("ALTER TABLE sessions ADD COLUMN codex_goal_meta TEXT")
+            .context("Failed to add codex_goal_meta column")?;
+    }
+
     // Migration: toggle for auto-running the setup script on workspace
     // creation. Default 1 (on) — preserves the pre-feature behavior for
     // existing repos and is the most common case. Users opt out per-repo
@@ -618,6 +626,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     fast_mode INTEGER DEFAULT 0,
     action_kind TEXT,
     context_usage_meta TEXT,
+    codex_goal_meta TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

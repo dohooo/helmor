@@ -601,3 +601,61 @@ describe("CodexAppServerManager", () => {
 		expect(events.find((e) => e.type === "aborted")).toBeUndefined();
 	});
 });
+
+describe("parseGoalCommand", () => {
+	test("returns null for non-/goal prompts", async () => {
+		const { parseGoalCommand } = await import(
+			"../src/codex-app-server-manager.js"
+		);
+		expect(parseGoalCommand("hello world")).toBeNull();
+		expect(parseGoalCommand("/compact")).toBeNull();
+		expect(parseGoalCommand("/goalish trick")).toBeNull();
+	});
+
+	test("returns null for bare /goal so the agent handles it", async () => {
+		const { parseGoalCommand } = await import(
+			"../src/codex-app-server-manager.js"
+		);
+		expect(parseGoalCommand("/goal")).toBeNull();
+		expect(parseGoalCommand("  /goal  ")).toBeNull();
+	});
+
+	test("treats free-form text as the objective", async () => {
+		const { parseGoalCommand } = await import(
+			"../src/codex-app-server-manager.js"
+		);
+		expect(parseGoalCommand("/goal improve benchmark coverage")).toEqual({
+			kind: "set",
+			objective: "improve benchmark coverage",
+		});
+	});
+
+	test("recognises /goal resume as the resume kind", async () => {
+		const { parseGoalCommand } = await import(
+			"../src/codex-app-server-manager.js"
+		);
+		expect(parseGoalCommand("/goal resume")).toEqual({ kind: "resume" });
+	});
+
+	// Contract: pause/clear are NOT recognised by the sidecar parser. The
+	// container-level intercept catches them BEFORE the prompt ever reaches
+	// the sidecar — they're routed through `mutateCodexGoal` so they don't
+	// pollute chat history. If this changes (e.g. parser starts returning
+	// pause/clear variants), the container intercept must lose its short-
+	// circuit too, or `/goal pause` will be both lifecycle-mutated AND
+	// echoed as a chat user prompt.
+	test("does NOT recognise /goal pause or /goal clear (handled by container intercept)", async () => {
+		const { parseGoalCommand } = await import(
+			"../src/codex-app-server-manager.js"
+		);
+		// Sidecar treats them as plain objectives if they ever arrive here.
+		expect(parseGoalCommand("/goal pause")).toEqual({
+			kind: "set",
+			objective: "pause",
+		});
+		expect(parseGoalCommand("/goal clear")).toEqual({
+			kind: "set",
+			objective: "clear",
+		});
+	});
+});

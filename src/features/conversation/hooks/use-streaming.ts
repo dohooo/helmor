@@ -17,10 +17,15 @@ import {
 	type PendingElicitation,
 } from "@/features/conversation/pending-elicitation";
 import { stabilizeStreamingMessages } from "@/features/conversation/streaming-tail-collapse";
-import type { AgentModelOption, ThreadMessageLike } from "@/lib/api";
+import type {
+	AgentModelOption,
+	CodexGoalState,
+	ThreadMessageLike,
+} from "@/lib/api";
 import {
 	generateSessionTitle,
 	loadRepoPreferences,
+	mutateCodexGoal,
 	renameSession,
 	respondToDeferredTool,
 	respondToElicitationRequest,
@@ -463,14 +468,36 @@ export function useConversationStreaming({
 		[],
 	);
 
-	const handleStopStream = useCallback(() => {
+	const handleStopStream = useCallback(async () => {
 		const activeSession = activeSessionByContext[composerContextKey];
 		if (!activeSession) {
 			return;
 		}
+		const sessionId = activeSession.stopSessionId;
+		const goal =
+			activeSession.provider === "codex"
+				? queryClient.getQueryData<CodexGoalState | null>(
+						helmorQueryKeys.sessionCodexGoal(sessionId),
+					)
+				: null;
 
-		void stopAgentStream(activeSession.stopSessionId, activeSession.provider);
-	}, [activeSessionByContext, composerContextKey]);
+		// For codex sessions with an active goal, flip the goal to paused
+		// FIRST so codex doesn't auto-spawn a fresh continuation turn the
+		// moment we abort the current one. Sequential: mutate -> stop, so
+		// the codex child is still alive when mutateCodexGoal needs it.
+		// (mutateCodexGoal is best-effort on the sidecar side too — if a
+		// race somehow kills the child first it just no-ops.) The user
+		// resumes by typing `/goal resume`.
+		if (goal && goal.status === "active") {
+			try {
+				await mutateCodexGoal(sessionId, "pause");
+			} catch {
+				// Surfaced via toast inside mutateCodexGoal already; don't
+				// block the abort.
+			}
+		}
+		await stopAgentStream(sessionId, activeSession.provider);
+	}, [activeSessionByContext, composerContextKey, queryClient]);
 
 	const handlePermissionResponse = useCallback(
 		(

@@ -13,6 +13,7 @@ import {
 	getClaudeRateLimits,
 	getCodexRateLimits,
 	getLiveContextUsage,
+	getSessionCodexGoal,
 	getSessionContextUsage,
 	getWorkspaceAccountProfile,
 	getWorkspaceForge,
@@ -57,6 +58,8 @@ export const helmorQueryKeys = {
 		["workspaceSessions", workspaceId] as const,
 	sessionContextUsage: (sessionId: string) =>
 		["sessionContextUsage", sessionId] as const,
+	sessionCodexGoal: (sessionId: string) =>
+		["sessionCodexGoal", sessionId] as const,
 	codexRateLimits: ["codexRateLimits"] as const,
 	claudeRateLimits: ["claudeRateLimits"] as const,
 	claudeRichContextUsage: (
@@ -339,6 +342,15 @@ export function sessionContextUsageQueryOptions(sessionId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.sessionContextUsage(sessionId),
 		queryFn: () => getSessionContextUsage(sessionId),
+		staleTime: 0,
+	});
+}
+
+/** Active Codex `/goal` payload. Event-driven via `CodexGoalChanged`. */
+export function sessionCodexGoalQueryOptions(sessionId: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.sessionCodexGoal(sessionId),
+		queryFn: () => getSessionCodexGoal(sessionId),
 		staleTime: 0,
 	});
 }
