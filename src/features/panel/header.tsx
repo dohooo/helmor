@@ -59,6 +59,7 @@ import {
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
+import { extractError } from "@/lib/errors";
 import { initialsFor } from "@/lib/initials";
 import {
 	helmorQueryKeys,
@@ -71,6 +72,7 @@ import {
 	type WorkspaceBranchTone,
 } from "@/lib/workspace-helpers";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
+import { normalizeBranchRenameInput } from "./branch-rename";
 import { seedNewSessionInCache } from "./session-cache";
 import { closeWorkspaceSession } from "./session-close";
 import type { SessionCloseRequest } from "./use-confirm-session-close";
@@ -188,8 +190,8 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		if (editingBranch === null || !workspace) {
 			return;
 		}
-		const trimmed = editingBranch.trim();
-		if (trimmed && trimmed !== workspace.branch) {
+		const normalized = normalizeBranchRenameInput(editingBranch);
+		if (normalized && normalized !== workspace.branch) {
 			const detailKey = helmorQueryKeys.workspaceDetail(workspace.id);
 			const previous = queryClient.getQueryData<WorkspaceDetail | null>(
 				detailKey,
@@ -197,21 +199,18 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 			if (previous) {
 				queryClient.setQueryData<WorkspaceDetail | null>(detailKey, {
 					...previous,
-					branch: trimmed,
+					branch: normalized,
 				});
 			}
 			try {
-				await renameWorkspaceBranch(workspace.id, trimmed);
+				await renameWorkspaceBranch(workspace.id, normalized);
 				onWorkspaceChanged?.();
 			} catch (error: unknown) {
 				if (previous) {
 					queryClient.setQueryData<WorkspaceDetail | null>(detailKey, previous);
 				}
-				pushToast(
-					error instanceof Error ? error.message : String(error),
-					"Branch rename failed",
-					"destructive",
-				);
+				const { message } = extractError(error, "Unable to rename branch.");
+				pushToast(message, "Branch rename failed", "destructive");
 			}
 		}
 		setEditingBranch(null);
