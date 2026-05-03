@@ -133,6 +133,12 @@ export type PendingPromptForSession = {
 	sessionId: string;
 	prompt: string;
 	modelId?: string | null;
+	/** Effort level override applied alongside `modelId` (e.g. Review helper
+	 *  uses settings.reviewEffort). Falls through if null. */
+	effort?: string | null;
+	/** Fast-mode override applied alongside `modelId` (Review helper uses
+	 *  settings.reviewFastMode). Falls through if null/undefined. */
+	fastMode?: boolean | null;
 	permissionMode?: string | null;
 	/** When true, submit must queue if a turn is already streaming —
 	 *  regardless of the user's `followUpBehavior` setting. Used for
@@ -421,17 +427,30 @@ export function useWorkspaceCommitLifecycle({
 		[],
 	);
 
-	const handleInspectorReviewPrAction = useCallback(
-		async ({ modelId }: { modelId: string | null }) => {
+	const handleInspectorReviewAction = useCallback(
+		async ({
+			modelId,
+			effort,
+			fastMode,
+		}: {
+			modelId: string | null;
+			effort?: string | null;
+			fastMode?: boolean | null;
+		}) => {
 			const workspaceId = selectedWorkspaceIdRef.current;
 			if (!workspaceId) {
-				console.warn("[reviewPr] action ignored: no selected workspace");
+				console.warn("[review] action ignored: no selected workspace");
 				return;
 			}
-			console.log("[reviewPr] begin", { workspaceId, modelId });
+			console.log("[review] begin", { workspaceId, modelId, effort, fastMode });
 			try {
+				// Review is auto-created (so it gets a fixed "Review" title
+				// instead of an LLM-generated one), but it's NOT auto-hideable
+				// — the review output is *for the user to read*, so the
+				// session must stay around. The auto-hide gate is enforced
+				// independently in `isAutoHideableActionKind`.
 				const { sessionId } = await createSession(workspaceId, {
-					actionKind: "review-pr",
+					actionKind: "review",
 				});
 				const repoPreferences = selectedRepoId
 					? await loadRepoPreferences(selectedRepoId)
@@ -440,7 +459,7 @@ export function useWorkspaceCommitLifecycle({
 					.ensureQueryData(workspaceForgeQueryOptions(workspaceId))
 					.catch(() => null);
 				const prompt = buildCommitButtonPrompt(
-					"review-pr",
+					"review",
 					repoPreferences,
 					selectedWorkspaceTargetBranch,
 					forge,
@@ -449,19 +468,24 @@ export function useWorkspaceCommitLifecycle({
 				await queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
 				});
-				setPendingPromptForSession({ sessionId, prompt, modelId });
+				setPendingPromptForSession({
+					sessionId,
+					prompt,
+					modelId,
+					effort: effort ?? null,
+					fastMode: fastMode ?? null,
+				});
 				onSelectSession(sessionId);
 			} catch (error) {
-				console.error("[reviewPr] failed to start session:", error);
+				console.error("[review] failed to start session:", error);
 				pushToast?.(
 					getErrorMessage(error, "Unable to start review."),
-					`Review ${changeRequestName} failed`,
+					"Review failed",
 					"destructive",
 				);
 			}
 		},
 		[
-			changeRequestName,
 			onSelectSession,
 			pushToast,
 			queryClient,
@@ -718,7 +742,7 @@ export function useWorkspaceCommitLifecycle({
 		commitButtonMode,
 		commitButtonState,
 		handleInspectorCommitAction,
-		handleInspectorReviewPrAction,
+		handleInspectorReviewAction,
 		handlePendingPromptConsumed,
 		pendingPromptForSession,
 		queuePendingPromptForSession,

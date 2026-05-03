@@ -167,42 +167,70 @@ describe("repo preference prompts", () => {
 		);
 	});
 
-	it("returns the review-pr default prompt when no override is set", () => {
+	it("returns the review default prompt diffing against the target ref when no override is set", () => {
 		const prompt = resolveRepoPreferencePrompt({
-			key: "reviewPr",
+			key: "review",
 			repoPreferences: {},
+			targetBranch: "main",
+			remote: "origin",
 		});
-		expect(prompt).toContain("Review the open pull request");
+		expect(prompt).toContain("relative to `origin/main`");
 		expect(prompt).toContain("IN THIS CHAT ONLY");
-		expect(prompt).toContain("`gh pr diff`");
+		expect(prompt).toContain("git diff origin/main...HEAD");
+		// Forge-agnostic — no PR / MR machinery.
+		expect(prompt).not.toContain("pull request");
+		expect(prompt).not.toContain("merge request");
+		expect(prompt).not.toContain("gh pr");
+		expect(prompt).not.toContain("glab mr");
+		// Side-effect ban must be explicit.
+		expect(prompt).toContain("Do NOT modify files");
 		expect(prompt).not.toContain("### User Preferences");
 	});
 
-	it("appends review-pr overrides after the built-in prompt", () => {
+	it("appends review overrides after the built-in prompt", () => {
 		const prompt = resolveRepoPreferencePrompt({
-			key: "reviewPr",
-			repoPreferences: { reviewPr: "Always check for missing tests." },
+			key: "review",
+			repoPreferences: { review: "Always check for missing tests." },
+			targetBranch: "main",
+			remote: "origin",
 		});
-		expect(prompt).toContain("Review the open pull request");
+		expect(prompt).toContain("git diff origin/main...HEAD");
 		expect(prompt).toContain(
 			"### User Preferences\n\nAlways check for missing tests.",
 		);
 	});
 
-	it("uses the GitLab dialect in the review-pr prompt when forge is GitLab", () => {
-		const prompt = resolveRepoPreferencePrompt({
-			key: "reviewPr",
+	it("is forge-agnostic — same prompt regardless of GitLab vs GitHub", () => {
+		const githubPrompt = resolveRepoPreferencePrompt({
+			key: "review",
 			repoPreferences: {},
+			targetBranch: "main",
+			remote: "origin",
+		});
+		const gitlabPrompt = resolveRepoPreferencePrompt({
+			key: "review",
+			repoPreferences: {},
+			targetBranch: "main",
+			remote: "origin",
 			forge: GITLAB_FORGE,
 		});
-		expect(prompt).toContain("Review the open merge request");
-		expect(prompt).toContain("`glab mr diff`");
-		expect(prompt).not.toContain("`gh pr diff`");
+		expect(gitlabPrompt).toBe(githubPrompt);
 	});
 
-	it("uses generic prose in the review-pr preview", () => {
-		const preview = resolveRepoPreferencePreview("reviewPr", {});
-		expect(preview).toContain("Review the open pull request");
+	it("throws when the review prompt is built without a target branch", () => {
+		expect(() =>
+			resolveRepoPreferencePrompt({
+				key: "review",
+				repoPreferences: {},
+				remote: "origin",
+			}),
+		).toThrow(/target branch/i);
+	});
+
+	it("uses generic prose in the review preview (no live workspace ref)", () => {
+		const preview = resolveRepoPreferencePreview("review", {});
+		expect(preview).toContain("relative to the target branch");
 		expect(preview).toContain("IN THIS CHAT ONLY");
+		expect(preview).not.toContain("origin/");
 	});
 });

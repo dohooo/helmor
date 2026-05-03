@@ -8,7 +8,7 @@ const TARGET_REF_PLACEHOLDER = "$" + "{TARGET_REF}";
 
 export type RepoPreferenceKey =
 	| "createPr"
-	| "reviewPr"
+	| "review"
 	| "fixErrors"
 	| "resolveConflicts"
 	| "branchRename"
@@ -68,17 +68,30 @@ Do the following, in order:
 
 Don't stop to ask for confirmation — execute each step automatically. If you hit an unrecoverable error (e.g. merge conflict, pre-push hook failure), report it clearly so I can intervene.`;
 
-const REVIEW_PR_PREVIEW = `Review the open pull request on this branch and report the review IN THIS CHAT ONLY.
+const REVIEW_PREVIEW = `Review the changes on this branch relative to the target branch and report the review IN THIS CHAT ONLY.
 
-Do the following, in order:
-1. Inspect the pull request metadata (title, description, target branch, current state) using the relevant forge CLI.
-2. Read the full diff for the pull request — every changed file, not just a summary.
-3. Evaluate the change across five axes: correctness, readability, architecture, security, performance. Note any concrete risks (off-by-one, missing null checks, race conditions, injection vectors, N+1 queries, missing tests, unclear naming, leaked abstractions).
-4. Write the review as a single chat message in this conversation. Structure it as: a one-line verdict, a short summary, then a bulleted list of findings ordered by severity with exact file paths and line numbers.
+Scope — review BOTH together:
+1. Committed work past the target: \`git diff <target>...HEAD\`.
+2. Uncommitted work in the worktree: \`git status\`, \`git diff\`, and \`git diff --staged\`.
+Do not review code outside this diff. Read enough surrounding context to judge a change, but don't audit unrelated files.
 
-Do NOT post anything on the pull request itself — no review submissions, no comments, no approvals, no merge, no request-changes. The review lives in this chat only so the author can read it here and act.
+Look for, in priority order:
+- Correctness: logic errors, off-by-one, null/undefined access, wrong control flow, missing error handling, broken invariants.
+- Security: injection, secret leakage, missing authz, unsafe deserialization, path traversal.
+- Edge cases: empty / large input, concurrency, retry & idempotency, resource cleanup.
+- Maintainability: unclear naming, dead code, leaky abstractions, missing tests for non-trivial branches.
+- Performance: only when something is materially wrong (N+1, blocking I/O on a hot path) — not micro-optimizations.
 
-Don't stop to ask for confirmation — execute each step automatically. If the pull request can't be found or the diff is empty, say so directly in chat.`;
+Only flag what a thoughtful human reviewer would actually fix. Skip nits, taste, and speculation.
+
+Output one chat message:
+- One-line verdict (e.g. "Looks good", "One blocking issue", "Two security concerns — needs changes").
+- One short paragraph summarising what the change does.
+- Findings as a bulleted list, ordered blocking → major → minor. Each: severity tag, exact \`path/to/file.ext:LINE\`, what's wrong, one-sentence fix.
+
+Do NOT modify files, stage, commit, push, or call any forge review API. The review lives in this chat — the user will read it and act.
+
+If the diff is empty, say so in one line and stop.`;
 
 const RESOLVE_CONFLICTS_PREVIEW = `This branch has merge conflicts with its target branch. Resolve them.
 
@@ -112,17 +125,37 @@ Do the following, in order:
 Don't stop to ask for confirmation — execute each step automatically. If you hit an unrecoverable error (e.g. merge conflict, pre-push hook failure), report it clearly so I can intervene.`;
 }
 
-function reviewPrPrompt(dialect: ForgePromptDialect): string {
-	return `Review the open ${dialect.changeRequestFullName} on this branch and report the review IN THIS CHAT ONLY.
+function reviewPrompt(
+	targetBranch?: string | null,
+	remote?: string | null,
+): string {
+	const branch = requireTargetBranch("review", targetBranch);
+	const remoteName = normalizeRemote(remote);
+	const targetRef = `${remoteName}/${branch}`;
+	return `Review the changes on this branch relative to \`${targetRef}\` and report the review IN THIS CHAT ONLY.
 
-Do the following, in order:
-1. Use \`${dialect.viewCommand}\` (or equivalent) to read the ${dialect.changeRequestName} title, description, target branch, and state. Use \`${dialect.diffCommand}\` to read the full diff for every changed file.
-2. Evaluate the change across five axes: correctness, readability, architecture, security, performance. Look for concrete risks — off-by-one, missing null checks, race conditions, injection vectors, N+1 queries, missing tests, unclear naming, leaked abstractions.
-3. Write the review as a single chat message in this conversation. Structure it as: a one-line verdict, a short summary, then a bulleted list of findings ordered by severity with exact file paths and line numbers.
+Scope — review BOTH together:
+1. Committed work past the target: \`git diff ${targetRef}...HEAD\`.
+2. Uncommitted work in the worktree: \`git status\`, \`git diff\`, and \`git diff --staged\`.
+Do not review code outside this diff. Read enough surrounding context to judge a change, but don't audit unrelated files.
 
-Do NOT post anything on the ${dialect.changeRequestName} itself — no \`${dialect.reviewCommand}\`, no \`${dialect.commentCommand}\`, no approvals, no merge, no request-changes. The review lives in this chat only so the author can read it here and act.
+Look for, in priority order:
+- Correctness: logic errors, off-by-one, null/undefined access, wrong control flow, missing error handling, broken invariants.
+- Security: injection, secret leakage, missing authz, unsafe deserialization, path traversal.
+- Edge cases: empty / large input, concurrency, retry & idempotency, resource cleanup.
+- Maintainability: unclear naming, dead code, leaky abstractions, missing tests for non-trivial branches.
+- Performance: only when something is materially wrong (N+1, blocking I/O on a hot path) — not micro-optimizations.
 
-Don't stop to ask for confirmation — execute each step automatically. If the ${dialect.changeRequestName} can't be found or the diff is empty, say so directly in chat.`;
+Only flag what a thoughtful human reviewer would actually fix. Skip nits, taste, and speculation.
+
+Output one chat message:
+- One-line verdict (e.g. "Looks good", "One blocking issue", "Two security concerns — needs changes").
+- One short paragraph summarising what the change does.
+- Findings as a bulleted list, ordered blocking → major → minor. Each: severity tag, exact \`path/to/file.ext:LINE\`, what's wrong, one-sentence fix.
+
+Do NOT modify files, stage, commit, push, or call any forge review API. The review lives in this chat — the user will read it and act.
+
+If the diff is empty, say so in one line and stop.`;
 }
 
 function fixErrorsPrompt(dialect: ForgePromptDialect): string {
@@ -172,7 +205,7 @@ export const DEFAULT_REPO_PREFERENCE_PROMPTS: Record<
 	string
 > = {
 	createPr: CREATE_PR_PREVIEW,
-	reviewPr: REVIEW_PR_PREVIEW,
+	review: REVIEW_PREVIEW,
 	fixErrors: fixErrorsPrompt(PREVIEW_DIALECT),
 	resolveConflicts: RESOLVE_CONFLICTS_PREVIEW,
 	branchRename: DEFAULT_BRANCH_RENAME_PROMPT,
@@ -181,7 +214,7 @@ export const DEFAULT_REPO_PREFERENCE_PROMPTS: Record<
 
 export const REPO_PREFERENCE_LABELS: Record<RepoPreferenceKey, string> = {
 	createPr: "Create PR preferences",
-	reviewPr: "Review PR preferences",
+	review: "Review preferences",
 	fixErrors: "Fix errors preferences",
 	resolveConflicts: "Resolve conflicts preferences",
 	branchRename: "Branch rename preferences",
@@ -191,8 +224,8 @@ export const REPO_PREFERENCE_LABELS: Record<RepoPreferenceKey, string> = {
 export const REPO_PREFERENCE_DESCRIPTIONS: Record<RepoPreferenceKey, string> = {
 	createPr:
 		"Add custom instructions sent to the agent when you click the Create PR button.",
-	reviewPr:
-		"Add custom instructions sent to the agent when you click the Review PR button.",
+	review:
+		"Add custom instructions sent to the agent when you click Review in the inspector.",
 	fixErrors:
 		"Add custom instructions sent to the agent when you click the Fix errors button.",
 	resolveConflicts:
@@ -228,7 +261,7 @@ function appendUserPreferences(
 }
 
 function requireTargetBranch(
-	key: "createPr" | "resolveConflicts",
+	key: "createPr" | "review" | "resolveConflicts",
 	targetBranch?: string | null,
 ): string {
 	const branch = targetBranch?.trim();
@@ -280,9 +313,9 @@ export function resolveRepoPreferencePrompt({
 				createPrPrompt(forgePromptDialect(forge), targetBranch, remote),
 				resolvedOverride,
 			);
-		case "reviewPr":
+		case "review":
 			return appendUserPreferences(
-				reviewPrPrompt(forgePromptDialect(forge)),
+				reviewPrompt(targetBranch, remote),
 				resolvedOverride,
 			);
 		case "fixErrors":

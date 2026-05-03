@@ -43,7 +43,7 @@ type WorkspaceInspectorSidebarProps = {
 	onOpenEditorFile(path: string, options?: DiffOpenOptions): void;
 	onOpenMockReview?: (path: string) => void;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
-	onReviewPrAction?: () => Promise<void>;
+	onReviewAction?: () => Promise<void>;
 	currentSessionId?: string | null;
 	onQueuePendingPromptForSession?: (request: {
 		sessionId: string;
@@ -74,7 +74,7 @@ export function WorkspaceInspectorSidebar({
 	activeEditorPath,
 	onOpenEditorFile,
 	onCommitAction,
-	onReviewPrAction,
+	onReviewAction,
 	currentSessionId,
 	onQueuePendingPromptForSession,
 	commitButtonMode,
@@ -386,7 +386,6 @@ export function WorkspaceInspectorSidebar({
 				onOpenEditorFile={onOpenEditorFile}
 				flashingPaths={flashingPaths}
 				onCommitAction={onCommitAction}
-				onReviewPrAction={onReviewPrAction}
 				commitButtonMode={commitButtonMode}
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
@@ -407,6 +406,7 @@ export function WorkspaceInspectorSidebar({
 				bodyHeight={actionsHeight}
 				expanded={!tabsOpen}
 				onCommitAction={onCommitAction}
+				onReviewAction={onReviewAction}
 				currentSessionId={currentSessionId ?? null}
 				onQueuePendingPromptForSession={onQueuePendingPromptForSession}
 				commitButtonMode={commitButtonMode}

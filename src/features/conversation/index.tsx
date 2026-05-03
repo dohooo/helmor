@@ -200,7 +200,7 @@ export const WorkspaceConversationContainer = memo(
 		}, [hasPlanReview, composerContextKey]);
 
 		// Preset composer model when a pending prompt carries an explicit
-		// modelId (e.g. Review PR uses settings.reviewPrModelId). Without this
+		// modelId (e.g. Review uses settings.reviewModelId). Without this
 		// the chip below the chat keeps showing the inferred default while the
 		// submit silently uses the queued modelId — mismatch the user sees.
 		useEffect(() => {

@@ -200,35 +200,52 @@ describe("buildCommitButtonPrompt", () => {
 		expect(prompt).not.toContain("<remote>");
 	});
 
-	it("returns the review-pr built-in prompt for the GitHub default", () => {
-		const prompt = buildCommitButtonPrompt("review-pr", null);
-		expect(prompt).toContain("Review the open pull request");
-		expect(prompt).toContain("IN THIS CHAT ONLY");
-		// Reads PR via gh, never posts back on the PR.
-		expect(prompt).toContain("`gh pr view");
-		expect(prompt).toContain("`gh pr diff`");
-		expect(prompt).toContain("Do NOT post anything on the PR itself");
-	});
-
-	it("uses GitLab review commands when the forge is GitLab", () => {
+	it("diffs against the target ref and stays chat-only by default", () => {
 		const prompt = buildCommitButtonPrompt(
-			"review-pr",
+			"review",
 			null,
+			"main",
 			null,
-			GITLAB_FORGE,
+			"origin",
 		);
-		expect(prompt).toContain("Review the open merge request");
-		expect(prompt).toContain("`glab mr view`");
-		expect(prompt).toContain("`glab mr diff`");
-		expect(prompt).not.toContain("`gh pr view");
-		expect(prompt).not.toContain("`gh pr diff`");
+		expect(prompt).toContain("relative to `origin/main`");
+		expect(prompt).toContain("git diff origin/main...HEAD");
+		expect(prompt).toContain("IN THIS CHAT ONLY");
+		expect(prompt).toContain("Do NOT modify files");
+		// Forge-agnostic — never touches gh/glab.
+		expect(prompt).not.toContain("pull request");
+		expect(prompt).not.toContain("merge request");
+		expect(prompt).not.toContain("gh pr");
+		expect(prompt).not.toContain("glab mr");
 	});
 
-	it("appends review-pr preferences after the built-in prompt", () => {
+	it("produces the same review prompt regardless of forge (GitLab vs GitHub)", () => {
+		const githubPrompt = buildCommitButtonPrompt(
+			"review",
+			null,
+			"main",
+			null,
+			"origin",
+		);
+		const gitlabPrompt = buildCommitButtonPrompt(
+			"review",
+			null,
+			"main",
+			GITLAB_FORGE,
+			"origin",
+		);
+		expect(gitlabPrompt).toBe(githubPrompt);
+	});
+
+	it("appends review preferences after the built-in prompt", () => {
 		expect(
-			buildCommitButtonPrompt("review-pr", {
-				reviewPr: "Focus on security regressions.",
-			}),
+			buildCommitButtonPrompt(
+				"review",
+				{ review: "Focus on security regressions." },
+				"main",
+				null,
+				"origin",
+			),
 		).toContain("### User Preferences\n\nFocus on security regressions.");
 	});
 });

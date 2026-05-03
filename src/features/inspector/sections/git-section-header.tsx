@@ -89,7 +89,6 @@ export type GitSectionHeaderProps = {
 	workspaceId?: string | null;
 	onChangeRequestClick?: () => void;
 	onCommit?: () => void | Promise<void>;
-	onReviewPr?: () => void | Promise<void>;
 	onContinueWorkspace?: () => void | Promise<void>;
 	isContinuingWorkspace?: boolean;
 	className?: string;
@@ -107,7 +106,6 @@ export function GitSectionHeader({
 	workspaceId = null,
 	onChangeRequestClick,
 	onCommit,
-	onReviewPr,
 	onContinueWorkspace,
 	isContinuingWorkspace = false,
 	className,
@@ -377,29 +375,6 @@ export function GitSectionHeader({
 									{CONTINUE_LABEL}
 								</span>
 							</Button>
-						)}
-						{changeRequest?.state === "OPEN" && onReviewPr && (
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<Button
-										type="button"
-										variant="outline"
-										size="xs"
-										className="shrink-0 self-center font-normal"
-										onClick={onReviewPr}
-									>
-										Review {changeRequestName}
-									</Button>
-								</TooltipTrigger>
-								<TooltipContent
-									side="bottom"
-									className="flex max-w-[320px] items-center gap-2 rounded-md px-2 py-1 text-[12px] leading-tight"
-								>
-									<span className="truncate">
-										Start a new chat that reviews this {changeRequestName}.
-									</span>
-								</TooltipContent>
-							</Tooltip>
 						)}
 						<div ref={commitButtonRef} className="flex shrink-0 items-center">
 							<Tooltip>
