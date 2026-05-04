@@ -2572,6 +2572,9 @@ function AppShell({
 												workspaceRemote={
 													selectedWorkspaceDetailQuery.data?.remote ?? null
 												}
+												workspaceRemoteUrl={
+													selectedWorkspaceDetailQuery.data?.remoteUrl ?? null
+												}
 												workspaceTargetBranch={(() => {
 													const d = selectedWorkspaceDetailQuery.data;
 													const target =
