@@ -448,6 +448,9 @@ function AppShell({
 	const [startPreviewCard, setStartPreviewCard] = useState<ContextCard | null>(
 		null,
 	);
+	const [workspacePreviewCard, setWorkspacePreviewCard] =
+		useState<ContextCard | null>(null);
+	const [workspacePreviewActive, setWorkspacePreviewActive] = useState(false);
 	const [editorSession, setEditorSession] = useState<EditorSessionState | null>(
 		null,
 	);
@@ -1315,6 +1318,8 @@ function AppShell({
 				return;
 			}
 
+			setWorkspacePreviewCard(null);
+			setWorkspacePreviewActive(false);
 			const requestId = workspaceSelectionRequestRef.current + 1;
 			workspaceSelectionRequestRef.current = requestId;
 			sessionSelectionRequestRef.current += 1;
@@ -1417,6 +1422,7 @@ function AppShell({
 
 	const handleSelectSession = useCallback(
 		(sessionId: string | null) => {
+			setWorkspacePreviewActive(false);
 			if (sessionId === selectedSessionIdRef.current) {
 				return;
 			}
@@ -2223,6 +2229,8 @@ function AppShell({
 			setDisplayedWorkspaceId(null);
 			setDisplayedSessionId(null);
 			setWorkspaceViewMode("start");
+			setWorkspacePreviewCard(null);
+			setWorkspacePreviewActive(false);
 			setRightSidebarMode(
 				appSettings.startContextPanelOpen ? "context" : "inspector",
 			);
@@ -2294,6 +2302,17 @@ function AppShell({
 	}, []);
 	const handleStartContextPreviewClose = useCallback(() => {
 		setStartPreviewCard(null);
+	}, []);
+	const handleWorkspaceContextCardOpen = useCallback((card: ContextCard) => {
+		setWorkspacePreviewCard(card);
+		setWorkspacePreviewActive(true);
+	}, []);
+	const handleWorkspaceContextPreviewSelect = useCallback(() => {
+		setWorkspacePreviewActive(true);
+	}, []);
+	const handleWorkspaceContextPreviewClose = useCallback(() => {
+		setWorkspacePreviewCard(null);
+		setWorkspacePreviewActive(false);
 	}, []);
 
 	const handleStartComposerPrepare = useCallback(
@@ -2667,6 +2686,14 @@ function AppShell({
 													onOpenFileReference={handleOpenFileReference}
 													contextPanelOpen={contextPanelOpen}
 													onToggleContextPanel={handleToggleContextPanel}
+													contextPreviewCard={workspacePreviewCard}
+													contextPreviewActive={workspacePreviewActive}
+													onSelectContextPreview={
+														handleWorkspaceContextPreviewSelect
+													}
+													onCloseContextPreview={
+														handleWorkspaceContextPreviewClose
+													}
 													headerLeading={
 														sidebarCollapsed ? (
 															<>
@@ -2938,12 +2965,12 @@ function AppShell({
 														selectedCardId={
 															workspaceViewMode === "start"
 																? (startPreviewCard?.id ?? null)
-																: null
+																: (workspacePreviewCard?.id ?? null)
 														}
 														onOpenCard={
 															workspaceViewMode === "start"
 																? handleStartContextCardOpen
-																: undefined
+																: handleWorkspaceContextCardOpen
 														}
 													/>
 												) : (

@@ -8,6 +8,7 @@ import {
 	Copy,
 	GitBranch,
 	History,
+	Layers,
 	Pencil,
 	Plus,
 	RotateCcw,
@@ -66,6 +67,7 @@ import {
 	workspaceAccountProfileQueryOptions,
 	workspaceForgeActionStatusQueryOptions,
 } from "@/lib/query-client";
+import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
 import {
 	getWorkspaceBranchTone,
@@ -87,9 +89,13 @@ type WorkspacePanelHeaderProps = {
 	sendingSessionIds?: Set<string>;
 	interactionRequiredSessionIds?: Set<string>;
 	loadingWorkspace: boolean;
+	contextPreviewCard?: ContextCard | null;
+	contextPreviewActive?: boolean;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
 	onSelectSession?: (sessionId: string) => void;
+	onSelectContextPreview?: () => void;
+	onCloseContextPreview?: () => void;
 	onPrefetchSession?: (sessionId: string) => void;
 	onSessionsChanged?: () => void;
 	onSessionRenamed?: (sessionId: string, title: string) => void;
@@ -108,9 +114,13 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	sendingSessionIds,
 	interactionRequiredSessionIds,
 	loadingWorkspace,
+	contextPreviewCard = null,
+	contextPreviewActive = false,
 	headerActions,
 	headerLeading,
 	onSelectSession,
+	onSelectContextPreview,
+	onCloseContextPreview,
 	onPrefetchSession,
 	onSessionsChanged,
 	onSessionRenamed,
@@ -123,6 +133,10 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		status: workspace?.status,
 		changeRequest,
 	});
+	const contextTabValue = "__context_preview__";
+	const tabsValue = contextPreviewActive
+		? contextTabValue
+		: (selectedSessionId ?? sessions[0]?.id);
 	const [showHistory, setShowHistory] = useState(false);
 	const [hiddenSessions, setHiddenSessions] = useState<
 		WorkspaceSessionSummary[]
@@ -617,10 +631,14 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 								<Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
 								Loading
 							</div>
-						) : sessions.length > 0 ? (
+						) : sessions.length > 0 || contextPreviewCard ? (
 							<Tabs
-								value={selectedSessionId ?? sessions[0]?.id}
+								value={tabsValue}
 								onValueChange={(value) => {
+									if (value === contextTabValue) {
+										onSelectContextPreview?.();
+										return;
+									}
 									onSelectSession?.(value);
 								}}
 								className="min-w-max gap-0"
@@ -629,6 +647,46 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 									aria-label="Sessions"
 									className="inline-flex min-w-full w-max justify-start self-start"
 								>
+									{contextPreviewCard ? (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<TabsTrigger
+													value={contextTabValue}
+													aria-label="Context preview"
+													className="group/tab relative h-full w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
+												>
+													<span className="tab-content-fade flex min-w-0 flex-1 items-center gap-1.5">
+														<Layers className="size-3.5" strokeWidth={1.8} />
+														<span className="truncate font-medium">
+															{contextPreviewCard.title}
+														</span>
+													</span>
+													<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible">
+														<span
+															role="button"
+															aria-label="Close context preview"
+															onPointerDown={stopTabActionPointerDown}
+															onClick={(event) => {
+																event.preventDefault();
+																event.stopPropagation();
+																onCloseContextPreview?.();
+															}}
+															className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+														>
+															<X className="size-3" strokeWidth={2} />
+														</span>
+													</span>
+												</TabsTrigger>
+											</TooltipTrigger>
+											<TooltipContent
+												side="bottom"
+												sideOffset={4}
+												className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+											>
+												<span>{contextPreviewCard.title}</span>
+											</TooltipContent>
+										</Tooltip>
+									) : null}
 									{sessions.map((session) => {
 										const selected = session.id === selectedSessionId;
 										const isActivelySending = sendingSessionIds

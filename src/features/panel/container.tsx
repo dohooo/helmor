@@ -18,6 +18,7 @@ import {
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
+import type { ContextCard } from "@/lib/sources/types";
 import { resolveSessionDisplayProvider } from "@/lib/workspace-helpers";
 import {
 	WORKSPACE_SCRIPT_PROMPTS,
@@ -48,6 +49,10 @@ type WorkspacePanelContainerProps = {
 		permissionMode?: string | null;
 	}) => void;
 	onRequestCloseSession?: (request: SessionCloseRequest) => void;
+	contextPreviewCard?: ContextCard | null;
+	contextPreviewActive?: boolean;
+	onSelectContextPreview?: () => void;
+	onCloseContextPreview?: () => void;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
 };
@@ -67,6 +72,10 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	onResolveDisplayedSession,
 	onQueuePendingPromptForSession,
 	onRequestCloseSession,
+	contextPreviewCard = null,
+	contextPreviewActive = false,
+	onSelectContextPreview,
+	onCloseContextPreview,
 	headerActions,
 	headerLeading,
 }: WorkspacePanelContainerProps) {
@@ -528,7 +537,11 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			sending={sending}
 			sendingSessionIds={sendingSessionIds}
 			interactionRequiredSessionIds={interactionRequiredSessionIds}
+			contextPreviewCard={contextPreviewCard}
+			contextPreviewActive={contextPreviewActive}
 			onSelectSession={handleSelectSession}
+			onSelectContextPreview={onSelectContextPreview}
+			onCloseContextPreview={onCloseContextPreview}
 			onPrefetchSession={handlePrefetchSession}
 			onSessionsChanged={handleSessionsChanged}
 			onSessionRenamed={handleSessionRenamed}

@@ -20,6 +20,7 @@ import { insertRequestMatchesComposer } from "@/lib/composer-insert";
 import { hasUnresolvedPlanReview } from "@/lib/plan-review";
 import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
+import type { ContextCard } from "@/lib/sources/types";
 import { EMPTY_QUEUE, useSubmitQueue } from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
 import { getComposerContextKey } from "@/lib/workspace-helpers";
@@ -88,6 +89,10 @@ type WorkspaceConversationContainerProps = {
 	onSessionAborted?: (sessionId: string, workspaceId: string) => void;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
+	contextPreviewCard?: ContextCard | null;
+	contextPreviewActive?: boolean;
+	onSelectContextPreview?: () => void;
+	onCloseContextPreview?: () => void;
 	/** Prompt queued by an external caller (e.g. the inspector Git commit
 	 * button) to be auto-submitted once the displayed session matches. */
 	pendingPromptForSession?: {
@@ -158,6 +163,10 @@ export const WorkspaceConversationContainer = memo(
 		onSessionAborted,
 		headerActions,
 		headerLeading,
+		contextPreviewCard = null,
+		contextPreviewActive = false,
+		onSelectContextPreview,
+		onCloseContextPreview,
 		pendingPromptForSession = null,
 		pendingCreatedWorkspaceSubmit = null,
 		onPendingCreatedWorkspaceSubmitConsumed,
@@ -458,6 +467,10 @@ export const WorkspaceConversationContainer = memo(
 						onResolveDisplayedSession={onResolveDisplayedSession}
 						onQueuePendingPromptForSession={onQueuePendingPromptForSession}
 						onRequestCloseSession={onRequestCloseSession}
+						contextPreviewCard={contextPreviewCard}
+						contextPreviewActive={contextPreviewActive}
+						onSelectContextPreview={onSelectContextPreview}
+						onCloseContextPreview={onCloseContextPreview}
 						headerActions={headerActions}
 						headerLeading={headerLeading}
 					/>

@@ -1,4 +1,5 @@
 import { memo, type ReactNode, useEffect } from "react";
+import { SourceDetailView } from "@/features/source-detail";
 import type {
 	AgentProvider,
 	ChangeRequestInfo,
@@ -6,6 +7,7 @@ import type {
 	WorkspaceSessionSummary,
 } from "@/lib/api";
 import { HelmorProfiler } from "@/lib/dev-react-profiler";
+import type { ContextCard } from "@/lib/sources/types";
 import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
 import { WorkspacePanelHeader } from "./header";
 import { EmptyState, preloadStreamdown } from "./message-components";
@@ -36,7 +38,11 @@ type WorkspacePanelProps = {
 	sending?: boolean;
 	sendingSessionIds?: Set<string>;
 	interactionRequiredSessionIds?: Set<string>;
+	contextPreviewCard?: ContextCard | null;
+	contextPreviewActive?: boolean;
 	onSelectSession?: (sessionId: string) => void;
+	onSelectContextPreview?: () => void;
+	onCloseContextPreview?: () => void;
 	onPrefetchSession?: (sessionId: string) => void;
 	onSessionsChanged?: () => void;
 	onSessionRenamed?: (sessionId: string, title: string) => void;
@@ -63,7 +69,11 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	sending = false,
 	sendingSessionIds,
 	interactionRequiredSessionIds,
+	contextPreviewCard = null,
+	contextPreviewActive = false,
 	onSelectSession,
+	onSelectContextPreview,
+	onCloseContextPreview,
 	onPrefetchSession,
 	onSessionsChanged,
 	onSessionRenamed,
@@ -121,9 +131,13 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 					sendingSessionIds={sendingSessionIds}
 					interactionRequiredSessionIds={interactionRequiredSessionIds}
 					loadingWorkspace={loadingWorkspace}
+					contextPreviewCard={contextPreviewCard}
+					contextPreviewActive={contextPreviewActive}
 					headerActions={headerActions}
 					headerLeading={headerLeading}
 					onSelectSession={onSelectSession}
+					onSelectContextPreview={onSelectContextPreview}
+					onCloseContextPreview={onCloseContextPreview}
 					onPrefetchSession={onPrefetchSession}
 					onSessionsChanged={onSessionsChanged}
 					onSessionRenamed={onSessionRenamed}
@@ -133,7 +147,11 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 				/>
 
 				<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-					{activePane?.hasLoaded ? (
+					{contextPreviewActive && contextPreviewCard ? (
+						<div className="min-h-0 flex-1 overflow-hidden px-0 pt-4 pb-3">
+							<SourceDetailView card={contextPreviewCard} />
+						</div>
+					) : activePane?.hasLoaded ? (
 						<ActiveThreadViewport
 							hasSession={!!selectedSession}
 							pane={activePane}
