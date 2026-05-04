@@ -968,6 +968,9 @@ pub fn resolve_repository_from_local_path(folder_path: &str) -> Result<ResolvedR
         })?;
 
     let remote = resolve_repository_remote(normalized_root)?;
+    if remote.is_none() {
+        bail!("Local-only repositories are not supported.");
+    }
     let remote_url = match remote.as_deref() {
         Some(remote_name) => Some(resolve_repository_remote_url(normalized_root, remote_name)?),
         None => None,
