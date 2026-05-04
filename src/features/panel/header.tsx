@@ -653,6 +653,17 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 												<TabsTrigger
 													value={contextTabValue}
 													aria-label="Context preview"
+													onKeyDownCapture={(event) => {
+														if (
+															event.key.toLowerCase() !== "w" ||
+															(!event.metaKey && !event.ctrlKey)
+														) {
+															return;
+														}
+														event.preventDefault();
+														event.stopPropagation();
+														onCloseContextPreview?.();
+													}}
 													className="group/tab relative h-full w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
 												>
 													<span className="tab-content-fade flex min-w-0 flex-1 items-center gap-1.5">

@@ -1866,10 +1866,18 @@ function AppShell({
 			{
 				id: "session.close" as const,
 				callback: () => {
+					if (workspacePreviewActive && workspacePreviewCard) {
+						setWorkspacePreviewCard(null);
+						setWorkspacePreviewActive(false);
+						return;
+					}
 					if (!getCloseableCurrentSession()) return;
 					void handleCloseSelectedSession();
 				},
-				enabled: workspaceViewMode === "conversation",
+				enabled:
+					workspaceViewMode === "conversation" &&
+					(Boolean(workspacePreviewCard) ||
+						Boolean(getCloseableCurrentSession())),
 			},
 			{
 				id: "session.new" as const,
@@ -1980,6 +1988,8 @@ function AppShell({
 			setSidebarCollapsed,
 			updateSettings,
 			workspaceRootPath,
+			workspacePreviewActive,
+			workspacePreviewCard,
 			workspaceViewMode,
 		],
 	);
