@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.3
+
+### Patch Changes
+
+- [#372](https://github.com/dohooo/helmor/pull/372) [`2e345c5`](https://github.com/dohooo/helmor/commit/2e345c514cc8191aa976e7d9441de2d744a642f7) Thanks [@habibyuri](https://github.com/habibyuri)! - Fix workspace header branch renames so spaces are converted to hyphens and invalid branch names show the underlying Git error.
+
+- [#375](https://github.com/dohooo/helmor/pull/375) [`be4dc73`](https://github.com/dohooo/helmor/commit/be4dc735bd5ec26810d8087ba3a4fb1320007c02) Thanks [@natllian](https://github.com/natllian)! - Show a clear "Local-only repositories are not supported." message when adding a Git repository that has no remote configured.
+
+- [#374](https://github.com/dohooo/helmor/pull/374) [`2733f60`](https://github.com/dohooo/helmor/commit/2733f6034fb04da811a54dd9b2ca967469c887c4) Thanks [@natllian](https://github.com/natllian)! - Fix a dev-mode EACCES crash on first sidecar spawn when the upstream Claude Code wrapper's postinstall stub wasn't replaced (Nix sandbox, multi-worktree setups, `--ignore-scripts` installs); release builds were unaffected.
+
 ## 0.14.2
 
 ### Patch Changes
