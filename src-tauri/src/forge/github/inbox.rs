@@ -366,7 +366,7 @@ pub fn list_inbox_items(
         }
     }
 
-    items.sort_by(|a, b| b.last_activity_at.cmp(&a.last_activity_at));
+    items.sort_by_key(|item| std::cmp::Reverse(item.last_activity_at));
     items.truncate(limit);
 
     let everything_done = state.issues.done && state.prs.done && state.discussions.done;
