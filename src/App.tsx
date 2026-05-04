@@ -133,6 +133,7 @@ import {
 	THEME_STORAGE_KEY,
 	type ThemeMode,
 	useSettings,
+	type WorkspaceRightSidebarMode,
 } from "./lib/settings";
 import { flushSidebarListsIfIdle } from "./lib/sidebar-mutation-gate";
 import type { ContextCard } from "./lib/sources/types";
@@ -334,6 +335,7 @@ function AppShell({
 	const queryClient = useQueryClient();
 	const workspaceSelectionRequestRef = useRef(0);
 	const sessionSelectionRequestRef = useRef(0);
+	const rightSidebarSettingsHydratedRef = useRef(false);
 	const startupPrefetchedWorkspaceRef = useRef<string | null>(null);
 	const warmedWorkspaceIdsRef = useRef<Set<string>>(new Set());
 	const selectedWorkspaceIdRef = useRef<string | null>(null);
@@ -418,6 +420,8 @@ function AppShell({
 		setSidebarCollapsed,
 	} = useShellPanels();
 	const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+	const [rightSidebarMode, setRightSidebarMode] =
+		useState<WorkspaceRightSidebarMode>("inspector");
 	const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
 		null,
 	);
@@ -662,6 +666,32 @@ function AppShell({
 		shortcuts: appSettings.shortcuts,
 		updateShortcuts: handleUpdateGlobalHotkeyShortcuts,
 	});
+	useEffect(() => {
+		if (!areSettingsLoaded || rightSidebarSettingsHydratedRef.current) {
+			return;
+		}
+		rightSidebarSettingsHydratedRef.current = true;
+
+		if (appSettings.lastSurface === "workspace-start") {
+			setRightSidebarMode(
+				appSettings.startContextPanelOpen ? "context" : "inspector",
+			);
+			if (appSettings.startContextPanelOpen) {
+				setInspectorCollapsed(false);
+			}
+			return;
+		}
+
+		setRightSidebarMode(appSettings.workspaceRightSidebarMode);
+		if (appSettings.workspaceRightSidebarMode === "context") {
+			setInspectorCollapsed(false);
+		}
+	}, [
+		appSettings.lastSurface,
+		appSettings.startContextPanelOpen,
+		appSettings.workspaceRightSidebarMode,
+		areSettingsLoaded,
+	]);
 	const handleOpenPreferredEditor = useCallback(() => {
 		if (!selectedWorkspaceId || !preferredEditor) return;
 		void openWorkspaceInEditor(selectedWorkspaceId, preferredEditor.id).catch(
@@ -1269,6 +1299,10 @@ function AppShell({
 			if (workspaceViewModeRef.current === "start") {
 				setWorkspaceViewMode("conversation");
 			}
+			setRightSidebarMode(appSettings.workspaceRightSidebarMode);
+			if (appSettings.workspaceRightSidebarMode === "context") {
+				setInspectorCollapsed(false);
+			}
 
 			if (workspaceId === selectedWorkspaceIdRef.current) {
 				// Re-clicking the currently selected workspace: force the
@@ -1377,6 +1411,7 @@ function AppShell({
 			rememberSessionSelection,
 			resolveCachedWorkspaceDisplay,
 			resolvePreferredSessionId,
+			appSettings.workspaceRightSidebarMode,
 		],
 	);
 
@@ -2162,6 +2197,10 @@ function AppShell({
 		repositories.find((repository) => repository.id === startRepositoryId) ??
 		repositories[0] ??
 		null;
+	const selectedWorkspaceRepository =
+		repositories.find(
+			(repository) => repository.id === selectedWorkspaceDetail?.repoId,
+		) ?? null;
 	const startSourceBranch =
 		(startRepository
 			? appSettings.kanbanViewState.sourceBranchByRepoId[startRepository.id]
@@ -2184,12 +2223,18 @@ function AppShell({
 			setDisplayedWorkspaceId(null);
 			setDisplayedSessionId(null);
 			setWorkspaceViewMode("start");
+			setRightSidebarMode(
+				appSettings.startContextPanelOpen ? "context" : "inspector",
+			);
+			if (appSettings.startContextPanelOpen) {
+				setInspectorCollapsed(false);
+			}
 
 			if (options?.persist !== false) {
 				void updateSettings({ lastSurface: "workspace-start" });
 			}
 		},
-		[updateSettings],
+		[appSettings.startContextPanelOpen, updateSettings],
 	);
 	useEffect(() => {
 		if (!areSettingsLoaded || appSettings.lastSurface !== "workspace-start") {
@@ -2336,6 +2381,28 @@ function AppShell({
 		() => ({ contextKey: startComposerContextKey }),
 		[startComposerContextKey],
 	);
+	const contextPanelOpen =
+		rightSidebarMode === "context" && !inspectorCollapsed;
+	const handleToggleContextPanel = useCallback(() => {
+		if (rightSidebarMode === "context" && !inspectorCollapsed) {
+			if (workspaceViewModeRef.current === "start") {
+				setInspectorCollapsed(true);
+				void updateSettings({ startContextPanelOpen: false });
+			} else {
+				setRightSidebarMode("inspector");
+				void updateSettings({ workspaceRightSidebarMode: "inspector" });
+			}
+			return;
+		}
+
+		setRightSidebarMode("context");
+		setInspectorCollapsed(false);
+		if (workspaceViewModeRef.current === "start") {
+			void updateSettings({ startContextPanelOpen: true });
+		} else {
+			void updateSettings({ workspaceRightSidebarMode: "context" });
+		}
+	}, [inspectorCollapsed, rightSidebarMode, updateSettings]);
 	const restoreStartSurface =
 		areSettingsLoaded && appSettings.lastSurface === "workspace-start";
 	const workspaceSidebarAutoSelectEnabled =
@@ -2544,6 +2611,8 @@ function AppShell({
 														composerContextKeyOverride={startComposerContextKey}
 														composerPlaceholder="Describe what you want to build"
 														composerCreateContext={startCreateContext}
+														contextPanelOpen={contextPanelOpen}
+														onToggleContextPanel={handleToggleContextPanel}
 														composerStartSubmitMenu
 													/>
 												</WorkspaceStartPage>
@@ -2596,6 +2665,8 @@ function AppShell({
 													onRequestCloseSession={requestCloseSession}
 													workspaceRootPath={workspaceRootPath}
 													onOpenFileReference={handleOpenFileReference}
+													contextPanelOpen={contextPanelOpen}
+													onToggleContextPanel={handleToggleContextPanel}
 													headerLeading={
 														sidebarCollapsed ? (
 															<>
@@ -2805,116 +2876,134 @@ function AppShell({
 									</div>
 								</section>
 
-								{!inspectorCollapsed && (
-									<>
-										<div
-											role="separator"
-											tabIndex={0}
-											aria-label="Resize inspector sidebar"
-											aria-orientation="vertical"
-											aria-valuemin={MIN_SIDEBAR_WIDTH}
-											aria-valuemax={MAX_SIDEBAR_WIDTH}
-											aria-valuenow={inspectorWidth}
-											onMouseDown={handleResizeStart("inspector")}
-											onKeyDown={handleResizeKeyDown("inspector")}
-											className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
-											style={{
-												right: `${Math.max(0, inspectorWidth - SIDEBAR_RESIZE_HIT_AREA)}px`,
-												width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
-											}}
-										>
-											<span
-												aria-hidden="true"
-												className={`pointer-events-none absolute inset-y-0 left-0 transition-[width,background-color,box-shadow] ${
-													isInspectorResizing
-														? "w-[2px] bg-transparent shadow-none"
-														: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
-												}`}
-											/>
-										</div>
+								{!inspectorCollapsed &&
+									(workspaceViewMode !== "start" ||
+										rightSidebarMode === "context") && (
+										<>
+											<div
+												role="separator"
+												tabIndex={0}
+												aria-label="Resize inspector sidebar"
+												aria-orientation="vertical"
+												aria-valuemin={MIN_SIDEBAR_WIDTH}
+												aria-valuemax={MAX_SIDEBAR_WIDTH}
+												aria-valuenow={inspectorWidth}
+												onMouseDown={handleResizeStart("inspector")}
+												onKeyDown={handleResizeKeyDown("inspector")}
+												className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
+												style={{
+													right: `${Math.max(0, inspectorWidth - SIDEBAR_RESIZE_HIT_AREA)}px`,
+													width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
+												}}
+											>
+												<span
+													aria-hidden="true"
+													className={`pointer-events-none absolute inset-y-0 left-0 transition-[width,background-color,box-shadow] ${
+														isInspectorResizing
+															? "w-[2px] bg-transparent shadow-none"
+															: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
+													}`}
+												/>
+											</div>
 
-										<aside
-											aria-label="Inspector sidebar"
-											className="relative h-full shrink-0 overflow-hidden bg-sidebar has-[[data-tabs-zoomed=true]]:overflow-visible"
-											style={{ width: `${inspectorWidth}px` }}
-										>
-											{workspaceViewMode === "start" ? (
-												<WorkspaceStartContextSidebar
-													repository={startRepository}
-													inboxProviderTab={startInboxProviderTab}
-													onInboxProviderTabChange={setStartInboxProviderTab}
-													inboxProviderSourceTab={startInboxProviderSourceTab}
-													onInboxProviderSourceTabChange={
-														setStartInboxProviderSourceTab
-													}
-													inboxStateFilterBySource={
-														startInboxStateFilterBySource
-													}
-													onInboxStateFilterBySourceChange={
-														setStartInboxStateFilterBySource
-													}
-													composerInsertTarget={startComposerInsertTarget}
-													selectedCardId={startPreviewCard?.id ?? null}
-													onOpenCard={handleStartContextCardOpen}
-												/>
-											) : (
-												<WorkspaceInspectorSidebar
-													workspaceId={selectedWorkspaceId}
-													workspaceRootPath={workspaceRootPath}
-													workspaceState={
-														selectedWorkspaceDetailQuery.data?.state ?? null
-													}
-													repoId={
-														selectedWorkspaceDetailQuery.data?.repoId ?? null
-													}
-													workspaceBranch={
-														selectedWorkspaceDetailQuery.data?.branch ?? null
-													}
-													workspaceRemote={
-														selectedWorkspaceDetailQuery.data?.remote ?? null
-													}
-													workspaceRemoteUrl={
-														selectedWorkspaceDetailQuery.data?.remoteUrl ?? null
-													}
-													workspaceTargetBranch={(() => {
-														const d = selectedWorkspaceDetailQuery.data;
-														const target =
-															d?.intendedTargetBranch ?? d?.defaultBranch;
-														if (!target) return null;
-														const remote = d?.remote ?? "origin";
-														return `${remote}/${target}`;
-													})()}
-													editorMode={workspaceViewMode === "editor"}
-													activeEditorPath={editorSession?.path ?? null}
-													onOpenEditorFile={handleOpenEditorFile}
-													onCommitAction={handleInspectorCommitAction}
-													onReviewAction={() =>
-														handleInspectorReviewAction({
-															modelId:
-																appSettings.reviewModelId ??
-																appSettings.defaultModelId,
-															effort:
-																appSettings.reviewEffort ??
-																appSettings.defaultEffort,
-															fastMode:
-																appSettings.reviewFastMode ??
-																appSettings.defaultFastMode,
-														})
-													}
-													currentSessionId={displayedSessionId}
-													onQueuePendingPromptForSession={
-														queuePendingPromptForSession
-													}
-													commitButtonMode={commitButtonMode}
-													commitButtonState={commitButtonState}
-													changeRequest={workspaceChangeRequest}
-													forgeIsRefreshing={workspaceForgeIsRefreshing}
-													onOpenSettings={handleOpenSettings}
-												/>
-											)}
-										</aside>
-									</>
-								)}
+											<aside
+												aria-label="Inspector sidebar"
+												className="relative h-full shrink-0 overflow-hidden bg-sidebar has-[[data-tabs-zoomed=true]]:overflow-visible"
+												style={{ width: `${inspectorWidth}px` }}
+											>
+												{rightSidebarMode === "context" ? (
+													<WorkspaceStartContextSidebar
+														repository={
+															workspaceViewMode === "start"
+																? startRepository
+																: selectedWorkspaceRepository
+														}
+														inboxProviderTab={startInboxProviderTab}
+														onInboxProviderTabChange={setStartInboxProviderTab}
+														inboxProviderSourceTab={startInboxProviderSourceTab}
+														onInboxProviderSourceTabChange={
+															setStartInboxProviderSourceTab
+														}
+														inboxStateFilterBySource={
+															startInboxStateFilterBySource
+														}
+														onInboxStateFilterBySourceChange={
+															setStartInboxStateFilterBySource
+														}
+														composerInsertTarget={
+															workspaceViewMode === "start"
+																? startComposerInsertTarget
+																: undefined
+														}
+														selectedCardId={
+															workspaceViewMode === "start"
+																? (startPreviewCard?.id ?? null)
+																: null
+														}
+														onOpenCard={
+															workspaceViewMode === "start"
+																? handleStartContextCardOpen
+																: undefined
+														}
+													/>
+												) : (
+													<WorkspaceInspectorSidebar
+														workspaceId={selectedWorkspaceId}
+														workspaceRootPath={workspaceRootPath}
+														workspaceState={
+															selectedWorkspaceDetailQuery.data?.state ?? null
+														}
+														repoId={
+															selectedWorkspaceDetailQuery.data?.repoId ?? null
+														}
+														workspaceBranch={
+															selectedWorkspaceDetailQuery.data?.branch ?? null
+														}
+														workspaceRemote={
+															selectedWorkspaceDetailQuery.data?.remote ?? null
+														}
+														workspaceRemoteUrl={
+															selectedWorkspaceDetailQuery.data?.remoteUrl ?? null
+														}
+														workspaceTargetBranch={(() => {
+															const d = selectedWorkspaceDetailQuery.data;
+															const target =
+																d?.intendedTargetBranch ?? d?.defaultBranch;
+															if (!target) return null;
+															const remote = d?.remote ?? "origin";
+															return `${remote}/${target}`;
+														})()}
+														editorMode={workspaceViewMode === "editor"}
+														activeEditorPath={editorSession?.path ?? null}
+														onOpenEditorFile={handleOpenEditorFile}
+														onCommitAction={handleInspectorCommitAction}
+														onReviewAction={() =>
+															handleInspectorReviewAction({
+																modelId:
+																	appSettings.reviewModelId ??
+																	appSettings.defaultModelId,
+																effort:
+																	appSettings.reviewEffort ??
+																	appSettings.defaultEffort,
+																fastMode:
+																	appSettings.reviewFastMode ??
+																	appSettings.defaultFastMode,
+															})
+														}
+														currentSessionId={displayedSessionId}
+														onQueuePendingPromptForSession={
+															queuePendingPromptForSession
+														}
+														commitButtonMode={commitButtonMode}
+														commitButtonState={commitButtonState}
+														changeRequest={workspaceChangeRequest}
+														forgeIsRefreshing={workspaceForgeIsRefreshing}
+														onOpenSettings={handleOpenSettings}
+													/>
+												)}
+											</aside>
+										</>
+									)}
 							</div>
 						</main>
 						<Toaster

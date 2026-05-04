@@ -1,4 +1,3 @@
-import { useVirtualizer } from "@tanstack/react-virtual";
 import {
 	ChevronDown,
 	Loader2,
@@ -123,8 +122,6 @@ const GITHUB_STATE_FILTERS: Record<
 		{ id: "unanswered", label: "Unanswered" },
 	],
 };
-const SOURCE_CARD_ESTIMATED_HEIGHT = 88;
-
 function useDebouncedValue<T>(value: T, delayMs: number) {
 	const [debouncedValue, setDebouncedValue] = useState(value);
 	useEffect(() => {
@@ -274,13 +271,6 @@ export const InboxSidebar = memo(function InboxSidebar({
 		[inbox.items],
 	);
 	const scrollContainerRef = useRef<HTMLDivElement | null>(null);
-	const listVirtualizer = useVirtualizer({
-		count: filteredCards.length,
-		getScrollElement: () => scrollContainerRef.current,
-		estimateSize: () => SOURCE_CARD_ESTIMATED_HEIGHT,
-		getItemKey: (index) => filteredCards[index]?.id ?? index,
-		overscan: 0,
-	});
 
 	// IntersectionObserver-driven infinite scroll. Sentinel at the
 	// bottom of the list — entering the visible area pages forward.
@@ -519,32 +509,17 @@ export const InboxSidebar = memo(function InboxSidebar({
 					) : filteredCards.length > 0 ? (
 						// State 5: list.
 						<>
-							<div
-								className="relative w-full"
-								style={{ height: `${listVirtualizer.getTotalSize()}px` }}
-							>
-								{listVirtualizer.getVirtualItems().map((virtualItem) => {
-									const card = filteredCards[virtualItem.index];
-									if (!card) return null;
-									return (
-										<div
-											key={virtualItem.key}
-											data-index={virtualItem.index}
-											ref={listVirtualizer.measureElement}
-											className="absolute top-0 left-0 w-full pb-2"
-											style={{
-												transform: `translateY(${virtualItem.start}px)`,
-											}}
-										>
-											<SourceCard
-												card={card}
-												selected={card.id === selectedCardId}
-												onOpen={onOpenCard}
-												appendContextTarget={appendContextTarget}
-											/>
-										</div>
-									);
-								})}
+							<div className="flex w-full flex-col gap-2">
+								{filteredCards.map((card, index) => (
+									<div key={card.id} data-index={index}>
+										<SourceCard
+											card={card}
+											selected={card.id === selectedCardId}
+											onOpen={onOpenCard}
+											appendContextTarget={appendContextTarget}
+										/>
+									</div>
+								))}
 							</div>
 							{inbox.hasNextPage ? (
 								<div

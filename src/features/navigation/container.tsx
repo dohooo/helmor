@@ -62,6 +62,7 @@ export const WorkspacesSidebarContainer = memo(
 			selectedWorkspaceId,
 			autoSelectEnabled,
 			onSelectWorkspace,
+			onOpenNewWorkspace,
 			pushWorkspaceToast,
 		});
 

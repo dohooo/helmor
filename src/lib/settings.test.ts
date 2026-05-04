@@ -94,20 +94,30 @@ describe("settings", () => {
 	it("hydrates and saves the last app surface", async () => {
 		invokeMock.mockResolvedValue({
 			"app.last_surface": "workspace-start",
+			"app.start_context_panel_open": "true",
+			"app.workspace_right_sidebar_mode": "context",
 		});
 
 		const settings = await loadSettings();
 
 		expect(settings.lastSurface).toBe("workspace-start");
+		expect(settings.startContextPanelOpen).toBe(true);
+		expect(settings.workspaceRightSidebarMode).toBe("context");
 
 		invokeMock.mockResolvedValue(undefined);
-		await saveSettings({ lastSurface: "workspace" });
+		await saveSettings({
+			lastSurface: "workspace",
+			startContextPanelOpen: false,
+			workspaceRightSidebarMode: "inspector",
+		});
 
 		expect(invokeMock).toHaveBeenLastCalledWith(
 			"update_app_settings",
 			expect.objectContaining({
 				settingsMap: expect.objectContaining({
 					"app.last_surface": "workspace",
+					"app.start_context_panel_open": "false",
+					"app.workspace_right_sidebar_mode": "inspector",
 				}),
 			}),
 		);

@@ -80,6 +80,7 @@ type UseWorkspacesSidebarControllerArgs = {
 	selectedWorkspaceId: string | null;
 	autoSelectEnabled?: boolean;
 	onSelectWorkspace: (workspaceId: string | null) => void;
+	onOpenNewWorkspace?: () => void;
 	pushWorkspaceToast: WorkspaceToastFn;
 };
 
@@ -89,6 +90,7 @@ export function useWorkspacesSidebarController({
 	selectedWorkspaceId,
 	autoSelectEnabled = true,
 	onSelectWorkspace,
+	onOpenNewWorkspace,
 	pushWorkspaceToast,
 }: UseWorkspacesSidebarControllerArgs) {
 	const queryClient = useQueryClient();
@@ -1316,17 +1318,21 @@ export function useWorkspacesSidebarController({
 				const shouldNavigate =
 					!selectedWorkspaceId || selectedWorkspaceId === workspaceId;
 				if (shouldNavigate) {
-					const nextWorkspaceId = findReplacementWorkspaceIdAfterRemoval({
-						currentGroups: groups,
-						currentArchivedRows: archivedRows,
-						nextGroups: optimisticGroups,
-						nextArchivedRows: optimisticArchived.archivedRows,
-						removedWorkspaceId: workspaceId,
-					});
-					if (nextWorkspaceId) {
-						prefetchWorkspace(nextWorkspaceId);
+					if (onOpenNewWorkspace) {
+						onOpenNewWorkspace();
+					} else {
+						const nextWorkspaceId = findReplacementWorkspaceIdAfterRemoval({
+							currentGroups: groups,
+							currentArchivedRows: archivedRows,
+							nextGroups: optimisticGroups,
+							nextArchivedRows: optimisticArchived.archivedRows,
+							removedWorkspaceId: workspaceId,
+						});
+						if (nextWorkspaceId) {
+							prefetchWorkspace(nextWorkspaceId);
+						}
+						onSelectWorkspace(nextWorkspaceId);
 					}
-					onSelectWorkspace(nextWorkspaceId);
 				}
 
 				void startArchiveWorkspace(workspaceId)
@@ -1347,6 +1353,7 @@ export function useWorkspacesSidebarController({
 			baseArchivedSummaries,
 			groups,
 			onSelectWorkspace,
+			onOpenNewWorkspace,
 			pendingArchives,
 			prefetchWorkspace,
 			pushWorkspaceErrorToast,

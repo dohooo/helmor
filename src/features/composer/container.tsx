@@ -187,6 +187,8 @@ type WorkspaceComposerContainerProps = {
 	queueItems?: readonly QueuedSubmit[];
 	onSteerQueued?: (itemId: string) => void;
 	onRemoveQueued?: (itemId: string) => void;
+	contextPanelOpen?: boolean;
+	onToggleContextPanel?: () => void;
 	startSubmitMenu?: boolean;
 };
 
@@ -233,6 +235,8 @@ export const WorkspaceComposerContainer = memo(
 		queueItems = EMPTY_QUEUE_ITEMS,
 		onSteerQueued,
 		onRemoveQueued,
+		contextPanelOpen = false,
+		onToggleContextPanel,
 		startSubmitMenu = false,
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
@@ -1045,6 +1049,8 @@ export const WorkspaceComposerContainer = memo(
 						linkedDirectoriesDisabled={linkedDirectoriesMutation.isPending}
 						addDirCandidates={candidateDirectories}
 						onPickAddDir={handlePickAddDir}
+						contextPanelOpen={contextPanelOpen}
+						onToggleContextPanel={onToggleContextPanel}
 						startSubmitMenu={startSubmitMenu}
 						startSubmitMode={startSubmitMode}
 						onStartSubmitModeChange={handleStartSubmitModeChange}

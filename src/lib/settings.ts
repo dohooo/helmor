@@ -12,6 +12,7 @@ export type DarkTheme = "default" | "midnight" | "forest" | "ember" | "aurora";
  */
 export type FollowUpBehavior = "steer" | "queue";
 export type AppSurface = "workspace" | "workspace-start";
+export type WorkspaceRightSidebarMode = "inspector" | "context";
 
 export type ShortcutOverrides = Record<string, string | null>;
 
@@ -84,6 +85,8 @@ export type AppSettings = {
 	lastWorkspaceId: string | null;
 	lastSessionId: string | null;
 	lastSurface: AppSurface;
+	startContextPanelOpen: boolean;
+	workspaceRightSidebarMode: WorkspaceRightSidebarMode;
 	defaultModelId: string | null;
 	/** Model used when the inspector "Review changes" helper creates a session.
 	 *  When null, falls back to `defaultModelId`. */
@@ -136,6 +139,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	lastWorkspaceId: null,
 	lastSessionId: null,
 	lastSurface: "workspace",
+	startContextPanelOpen: false,
+	workspaceRightSidebarMode: "inspector",
 	defaultModelId: null,
 	reviewModelId: null,
 	reviewEffort: null,
@@ -179,6 +184,8 @@ const SETTINGS_KEY_MAP: Record<
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
 	lastSurface: "app.last_surface",
+	startContextPanelOpen: "app.start_context_panel_open",
+	workspaceRightSidebarMode: "app.workspace_right_sidebar_mode",
 	defaultModelId: "app.default_model_id",
 	reviewModelId: "app.review_model_id",
 	reviewEffort: "app.review_effort",
@@ -368,6 +375,14 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.lastSurface] === "workspace-start"
 					? "workspace-start"
 					: DEFAULT_SETTINGS.lastSurface,
+			startContextPanelOpen:
+				raw[SETTINGS_KEY_MAP.startContextPanelOpen] !== undefined
+					? raw[SETTINGS_KEY_MAP.startContextPanelOpen] === "true"
+					: DEFAULT_SETTINGS.startContextPanelOpen,
+			workspaceRightSidebarMode:
+				raw[SETTINGS_KEY_MAP.workspaceRightSidebarMode] === "context"
+					? "context"
+					: DEFAULT_SETTINGS.workspaceRightSidebarMode,
 			defaultModelId:
 				rawDefaultModelId && rawDefaultModelId !== "default"
 					? rawDefaultModelId

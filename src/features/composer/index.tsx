@@ -11,6 +11,7 @@ import {
 	ChevronDown,
 	ClipboardList,
 	Clock3,
+	Layers,
 	MessageSquareMore,
 	Plus,
 	Square,
@@ -182,6 +183,8 @@ type WorkspaceComposerProps = {
 	/** Hotkey that submits the current draft with the opposite follow-up
 	 *  behavior (queue ↔ steer) for one message. */
 	toggleFollowUpShortcut?: string | null;
+	contextPanelOpen?: boolean;
+	onToggleContextPanel?: () => void;
 	/** Custom placeholder string. When omitted, falls back to the default
 	 *  "Ask to make changes…" copy. The kanban view supplies a hint that
 	 *  nudges the user toward composing inbox sources for new workspaces. */
@@ -267,6 +270,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	focusShortcut = null,
 	togglePlanShortcut = null,
 	toggleFollowUpShortcut = null,
+	contextPanelOpen = false,
+	onToggleContextPanel,
 	startSubmitMenu = false,
 	startSubmitMode = "startNow",
 	onStartSubmitModeChange,
@@ -960,6 +965,32 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										<ClipboardList className="size-[13px]" strokeWidth={1.8} />
 										<span>Plan</span>
 									</ComposerButton>
+									{onToggleContextPanel ? (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<ComposerButton
+													aria-label="Add context"
+													aria-pressed={contextPanelOpen}
+													disabled={toolbarDisabled}
+													className={cn(
+														composerToolbarTriggerClassName,
+														contextPanelOpen
+															? "text-foreground"
+															: "text-muted-foreground/70 hover:text-muted-foreground/70",
+														toolbarDisabled
+															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
+															: null,
+													)}
+													onClick={onToggleContextPanel}
+												>
+													<Layers className="size-[13px]" strokeWidth={1.8} />
+												</ComposerButton>
+											</TooltipTrigger>
+											<TooltipContent side="top" sideOffset={4}>
+												<span>Add context</span>
+											</TooltipContent>
+										</Tooltip>
+									) : null}
 								</>
 							)}
 						</div>

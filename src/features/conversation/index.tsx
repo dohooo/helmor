@@ -134,6 +134,8 @@ type WorkspaceConversationContainerProps = {
 	 *  `composerCreateContext.prepare` first and only fires the agent stream
 	 *  if the prepare step says so. */
 	composerCreateContext?: ComposerCreateContext | null;
+	contextPanelOpen?: boolean;
+	onToggleContextPanel?: () => void;
 	composerStartSubmitMenu?: boolean;
 };
 
@@ -172,6 +174,8 @@ export const WorkspaceConversationContainer = memo(
 		composerForceAvailable = false,
 		composerContextKeyOverride,
 		composerCreateContext = null,
+		contextPanelOpen = false,
+		onToggleContextPanel,
 		composerStartSubmitMenu = false,
 	}: WorkspaceConversationContainerProps) {
 		const [composerModelSelections, setComposerModelSelections] = useState<
@@ -504,6 +508,8 @@ export const WorkspaceConversationContainer = memo(
 						queueItems={queueItems}
 						onSteerQueued={handleSteerQueued}
 						onRemoveQueued={handleRemoveQueued}
+						contextPanelOpen={contextPanelOpen}
+						onToggleContextPanel={onToggleContextPanel}
 						startSubmitMenu={composerStartSubmitMenu}
 					/>
 				</div>
