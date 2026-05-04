@@ -59,19 +59,10 @@ const SLASH_COMMANDS_TIMEOUT_MS = 20_000;
 const CONTEXT_USAGE_TIMEOUT_MS = 30_000;
 
 /**
- * Resolve the path to the Claude Code native binary, passed as
- * `pathToClaudeCodeExecutable` on every SDK `query()` call.
- *
- * Resolution order:
- *   1. `HELMOR_CLAUDE_CODE_BIN_PATH` — set by the Tauri host in release
- *      builds, pointing at the bundled copy inside
- *      `Helmor.app/Contents/Resources/vendor/claude-code/claude`.
- *   2. `createRequire` lookup of the wrapper package's `bin/claude.exe`,
- *      which `@anthropic-ai/claude-code/install.cjs` populates from the
- *      platform sub-package on `bun install`. Used in dev
- *      (`bun run src/index.ts`) and `bun test`. The `.exe` suffix is
- *      Anthropic's chosen filename across all platforms — it's not a
- *      Windows-only thing.
+ * Resolve the Claude Code native binary for `pathToClaudeCodeExecutable`.
+ * Prefers `HELMOR_CLAUDE_CODE_BIN_PATH` (release), then the platform
+ * sub-package (dev/test); falls back to the wrapper bin for `--omit=optional`.
+ * Mirrors the codex resolver in `codex-app-server-manager.ts`.
  */
 function resolveClaudeBinPath(): string {
 	const override = process.env.HELMOR_CLAUDE_CODE_BIN_PATH;
@@ -79,8 +70,33 @@ function resolveClaudeBinPath(): string {
 		return override;
 	}
 	const require = createRequire(import.meta.url);
-	const pkgJson = require.resolve("@anthropic-ai/claude-code/package.json");
-	return join(dirname(pkgJson), "bin", "claude.exe");
+	const binName = process.platform === "win32" ? "claude.exe" : "claude";
+	const platformPkg = `@anthropic-ai/claude-code-${claudePlatformShort()}`;
+	try {
+		const pkgJson = require.resolve(`${platformPkg}/package.json`);
+		return join(dirname(pkgJson), binName);
+	} catch {
+		const pkgJson = require.resolve("@anthropic-ai/claude-code/package.json");
+		return join(dirname(pkgJson), "bin", "claude.exe");
+	}
+}
+
+function claudePlatformShort(): string {
+	const arch = process.arch === "x64" ? "x64" : "arm64";
+	if (process.platform === "darwin") return `darwin-${arch}`;
+	if (process.platform === "win32") return `win32-${arch}`;
+	if (process.platform === "linux") {
+		// claude-code ships separate -musl variants; glibcVersionRuntime is absent on musl.
+		const report =
+			typeof process.report?.getReport === "function"
+				? (process.report.getReport() as {
+						header?: { glibcVersionRuntime?: string };
+					})
+				: null;
+		const musl = !!report && report.header?.glibcVersionRuntime === undefined;
+		return `linux-${arch}${musl ? "-musl" : ""}`;
+	}
+	return `${process.platform}-${arch}`;
 }
 
 const CLAUDE_BIN_PATH = resolveClaudeBinPath();
