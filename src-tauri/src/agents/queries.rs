@@ -119,6 +119,20 @@ pub async fn generate_session_title(
                     )
                 })
             });
+    tracing::debug!(
+        session_id = %request.session_id,
+        workspace_info_found = workspace_info.is_some(),
+        current_branch = workspace_info
+            .as_ref()
+            .and_then(|(_, _, _, _, b)| b.as_deref())
+            .unwrap_or(""),
+        directory_name = workspace_info
+            .as_ref()
+            .map(|(_, _, _, d, _)| d.as_str())
+            .unwrap_or(""),
+        should_generate_branch,
+        "generate_session_title branch gating resolved"
+    );
 
     let branch_rename_prompt = workspace_info
         .as_ref()
@@ -139,9 +153,13 @@ pub async fn generate_session_title(
     }
 
     let request_id = Uuid::new_v4().to_string();
+    // Skip the branch slug instruction in the prompt when we already know we
+    // won't apply it (local mode, already-renamed worktree, etc.). Saves a
+    // line of LLM output and the branch-rename instruction block of input.
     let mut params = serde_json::json!({
         "userMessage": request.user_message,
         "branchRenamePrompt": branch_rename_prompt,
+        "generateBranch": should_generate_branch,
     });
     if let Some(model) = super::custom_providers::configured_models()
         .into_iter()

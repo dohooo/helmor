@@ -2,7 +2,9 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Row;
 
 use crate::{
-    repos, workspace_pr_sync::PrSyncState, workspace_state::WorkspaceState,
+    repos,
+    workspace_pr_sync::PrSyncState,
+    workspace_state::{WorkspaceMode, WorkspaceState},
     workspace_status::WorkspaceStatus,
 };
 
@@ -25,6 +27,7 @@ pub struct WorkspaceRecord {
     pub branch: Option<String>,
     pub initialization_parent_branch: Option<String>,
     pub intended_target_branch: Option<String>,
+    pub mode: WorkspaceMode,
     pub pinned_at: Option<String>,
     pub active_session_id: Option<String>,
     pub active_session_title: Option<String>,
@@ -137,6 +140,7 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       w.branch,
       w.initialization_parent_branch,
       w.intended_target_branch,
+      COALESCE(w.mode, 'worktree') AS mode,
       w.pinned_at,
       w.active_session_id,
       s.title AS active_session_title,
@@ -216,6 +220,29 @@ pub(crate) fn insert_initializing_workspace_and_session(
     default_branch: &str,
     timestamp: &str,
 ) -> Result<()> {
+    insert_initializing_workspace_and_session_with_mode(
+        repository,
+        workspace_id,
+        session_id,
+        directory_name,
+        branch,
+        default_branch,
+        WorkspaceMode::Worktree,
+        timestamp,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn insert_initializing_workspace_and_session_with_mode(
+    repository: &repos::RepositoryRecord,
+    workspace_id: &str,
+    session_id: &str,
+    directory_name: &str,
+    branch: &str,
+    default_branch: &str,
+    mode: WorkspaceMode,
+    timestamp: &str,
+) -> Result<()> {
     let mut connection = db::write_conn()?;
     let transaction = connection
         .transaction()
@@ -233,11 +260,12 @@ pub(crate) fn insert_initializing_workspace_and_session(
               state,
               initialization_parent_branch,
               intended_target_branch,
+              mode,
               status,
               unread,
               created_at,
               updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'in-progress', 0, ?9, ?9)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'in-progress', 0, ?10, ?10)
             "#,
             (
                 workspace_id,
@@ -248,6 +276,7 @@ pub(crate) fn insert_initializing_workspace_and_session(
                 WorkspaceState::Initializing,
                 default_branch,
                 default_branch,
+                mode,
                 timestamp,
             ),
         )
@@ -276,6 +305,50 @@ pub(crate) fn insert_initializing_workspace_and_session(
     transaction
         .commit()
         .context("Failed to commit create-workspace transaction")
+}
+
+/// Atomically convert a local-mode workspace into a worktree-mode one.
+/// Used by the move-local-to-worktree flow once the new worktree
+/// directory + branch have been created on disk.
+pub(crate) fn convert_to_worktree(
+    workspace_id: &str,
+    directory_name: &str,
+    branch: &str,
+    intended_target_branch: &str,
+    initialization_parent_branch: &str,
+    timestamp: &str,
+) -> Result<()> {
+    let connection = db::write_conn()?;
+    let updated = connection
+        .execute(
+            r#"
+            UPDATE workspaces
+            SET mode = 'worktree',
+                directory_name = ?2,
+                branch = ?3,
+                intended_target_branch = ?4,
+                initialization_parent_branch = ?5,
+                updated_at = ?6
+            WHERE id = ?1 AND COALESCE(mode, 'worktree') = 'local'
+            "#,
+            (
+                workspace_id,
+                directory_name,
+                branch,
+                intended_target_branch,
+                initialization_parent_branch,
+                timestamp,
+            ),
+        )
+        .with_context(|| {
+            format!("Failed to convert workspace {workspace_id} from local to worktree")
+        })?;
+    if updated != 1 {
+        bail!(
+            "Workspace {workspace_id} could not be converted to worktree (already worktree or missing)"
+        );
+    }
+    Ok(())
 }
 
 pub(crate) fn update_workspace_state(
@@ -451,25 +524,26 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         branch: row.get(12)?,
         initialization_parent_branch: row.get(13)?,
         intended_target_branch: row.get(14)?,
-        pinned_at: row.get(15)?,
-        active_session_id: row.get(16)?,
-        active_session_title: row.get(17)?,
-        active_session_agent_type: row.get(18)?,
-        active_session_status: row.get(19)?,
-        primary_session_id: row.get(20)?,
-        primary_session_title: row.get(21)?,
-        primary_session_agent_type: row.get(22)?,
-        pr_title: row.get(23)?,
-        pr_sync_state: row.get(24)?,
-        pr_url: row.get(25)?,
-        archive_commit: row.get(26)?,
-        session_count: row.get(27)?,
-        message_count: row.get(28)?,
-        remote: row.get(29)?,
-        forge_provider: row.get(30)?,
-        forge_login: row.get(31)?,
-        created_at: row.get(32)?,
-        updated_at: row.get(33)?,
-        last_user_message_at: row.get(34)?,
+        mode: row.get(15)?,
+        pinned_at: row.get(16)?,
+        active_session_id: row.get(17)?,
+        active_session_title: row.get(18)?,
+        active_session_agent_type: row.get(19)?,
+        active_session_status: row.get(20)?,
+        primary_session_id: row.get(21)?,
+        primary_session_title: row.get(22)?,
+        primary_session_agent_type: row.get(23)?,
+        pr_title: row.get(24)?,
+        pr_sync_state: row.get(25)?,
+        pr_url: row.get(26)?,
+        archive_commit: row.get(27)?,
+        session_count: row.get(28)?,
+        message_count: row.get(29)?,
+        remote: row.get(30)?,
+        forge_provider: row.get(31)?,
+        forge_login: row.get(32)?,
+        created_at: row.get(33)?,
+        updated_at: row.get(34)?,
+        last_user_message_at: row.get(35)?,
     })
 }

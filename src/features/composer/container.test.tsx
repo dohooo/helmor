@@ -26,13 +26,18 @@ vi.mock("@/lib/api", async () => {
 
 type PickHandler = (entry: unknown) => void;
 type RemoveHandler = (path: string) => void;
+type StartSubmitMode = "startNow" | "saveForLater";
 
 type ComposerSubmitHandler = (
 	prompt: string,
 	imagePaths: string[],
 	filePaths: string[],
 	customTags: unknown[],
-	options?: { permissionModeOverride?: string; oppositeFollowUp?: boolean },
+	options?: {
+		permissionModeOverride?: string;
+		oppositeFollowUp?: boolean;
+		startSubmitMode?: StartSubmitMode;
+	},
 ) => void;
 
 const composerMockState = vi.hoisted(() => ({
@@ -50,6 +55,8 @@ const composerMockState = vi.hoisted(() => ({
 	lastAddDirCandidates: [] as readonly unknown[],
 	lastOnPickAddDir: null as PickHandler | null,
 	lastOnSubmit: null as ComposerSubmitHandler | null,
+	lastStartSubmitMode: null as StartSubmitMode | null,
+	lastOnStartSubmitModeChange: null as ((mode: StartSubmitMode) => void) | null,
 }));
 
 vi.mock("./index", async () => {
@@ -73,6 +80,8 @@ vi.mock("./index", async () => {
 			addDirCandidates?: readonly unknown[];
 			onPickAddDir?: PickHandler;
 			onSubmit?: ComposerSubmitHandler;
+			startSubmitMode?: StartSubmitMode;
+			onStartSubmitModeChange?: (mode: StartSubmitMode) => void;
 		}) => {
 			composerMockState.renders.push(props.contextKey);
 			composerMockState.lastSlashCommands = [...(props.slashCommands ?? [])];
@@ -84,6 +93,9 @@ vi.mock("./index", async () => {
 			];
 			composerMockState.lastOnPickAddDir = props.onPickAddDir ?? null;
 			composerMockState.lastOnSubmit = props.onSubmit ?? null;
+			composerMockState.lastStartSubmitMode = props.startSubmitMode ?? null;
+			composerMockState.lastOnStartSubmitModeChange =
+				props.onStartSubmitModeChange ?? null;
 			React.useEffect(() => {
 				composerMockState.mounts += 1;
 				return () => {
@@ -286,6 +298,128 @@ describe("WorkspaceComposerContainer", () => {
 		expect(
 			composerMockState.renders[composerMockState.renders.length - 1],
 		).toBe("session:session-2");
+	});
+
+	it("forwards the start submit mode into the composer payload", () => {
+		const queryClient = createHelmorQueryClient();
+		const handleSubmit = vi.fn();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			WORKSPACE_SESSIONS,
+		);
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId="workspace-1"
+					displayedSessionId="session-1"
+					disabled={false}
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{}}
+					effortLevels={{}}
+					permissionModes={{}}
+					fastModes={{}}
+					onSelectModel={vi.fn()}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
+					onSubmit={handleSubmit}
+					startSubmitMenu
+				/>
+			</QueryClientProvider>,
+		);
+
+		composerMockState.lastOnSubmit?.("Save this for later.", [], [], [], {
+			startSubmitMode: "saveForLater",
+		});
+
+		expect(handleSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				prompt: "Save this for later.",
+				startSubmitMode: "saveForLater",
+			}),
+		);
+	});
+
+	it("persists the selected start submit mode in settings", () => {
+		const queryClient = createHelmorQueryClient();
+		const updateSettings = vi.fn();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			WORKSPACE_DETAIL,
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			WORKSPACE_SESSIONS,
+		);
+
+		render(
+			<SettingsContext.Provider
+				value={{
+					settings: {
+						...DEFAULT_SETTINGS,
+						kanbanViewState: {
+							...DEFAULT_SETTINGS.kanbanViewState,
+							createState: "backlog",
+						},
+					},
+					isLoaded: true,
+					updateSettings,
+				}}
+			>
+				<QueryClientProvider client={queryClient}>
+					<WorkspaceComposerContainer
+						displayedWorkspaceId="workspace-1"
+						displayedSessionId="session-1"
+						disabled={false}
+						sending={false}
+						sendError={null}
+						restoreDraft={null}
+						restoreImages={[]}
+						restoreFiles={[]}
+						restoreNonce={0}
+						modelSelections={{}}
+						effortLevels={{}}
+						permissionModes={{}}
+						fastModes={{}}
+						onSelectModel={vi.fn()}
+						onSelectEffort={vi.fn()}
+						onChangePermissionMode={vi.fn()}
+						onChangeFastMode={vi.fn()}
+						onSubmit={vi.fn()}
+						startSubmitMenu
+					/>
+				</QueryClientProvider>
+			</SettingsContext.Provider>,
+		);
+
+		expect(composerMockState.lastStartSubmitMode).toBe("saveForLater");
+
+		composerMockState.lastOnStartSubmitModeChange?.("startNow");
+
+		expect(updateSettings).toHaveBeenCalledWith({
+			kanbanViewState: {
+				...DEFAULT_SETTINGS.kanbanViewState,
+				createState: "in-progress",
+			},
+		});
 	});
 
 	it("auto-submits queued CLI prompts with queued model and permission mode", async () => {

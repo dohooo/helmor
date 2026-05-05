@@ -731,8 +731,9 @@ export class ClaudeSessionManager implements SessionManager {
 				? options.claudeEnvironment
 				: undefined;
 
+		const generateBranch = options?.generateBranch ?? true;
 		const q = query({
-			prompt: buildTitlePrompt(userMessage, branchRenamePrompt),
+			prompt: buildTitlePrompt(userMessage, branchRenamePrompt, generateBranch),
 			options: {
 				abortController,
 				pathToClaudeCodeExecutable: CLAUDE_BIN_PATH,

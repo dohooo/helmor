@@ -18,6 +18,7 @@ import {
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
+import type { ContextCard } from "@/lib/sources/types";
 import { resolveSessionDisplayProvider } from "@/lib/workspace-helpers";
 import {
 	WORKSPACE_SCRIPT_PROMPTS,
@@ -27,6 +28,18 @@ import { WorkspacePanel } from "./index";
 import type { SessionCloseRequest } from "./use-confirm-session-close";
 
 const EMPTY_MESSAGES: ThreadMessageLike[] = [];
+
+/** Minimal shape the panel needs to render an optimistic user bubble for a
+ *  freshly-created workspace whose first send is still queued behind
+ *  `await finalizePromise`. Decoupled from the full
+ *  `PendingCreatedWorkspaceSubmit` type so the panel doesn't pull in the
+ *  composer payload's transitive deps. */
+export type OptimisticPendingSubmit = {
+	id: string;
+	workspaceId: string;
+	sessionId: string;
+	prompt: string;
+};
 
 type WorkspacePanelContainerProps = {
 	selectedWorkspaceId: string | null;
@@ -48,8 +61,16 @@ type WorkspacePanelContainerProps = {
 		permissionMode?: string | null;
 	}) => void;
 	onRequestCloseSession?: (request: SessionCloseRequest) => void;
+	contextPreviewCard?: ContextCard | null;
+	contextPreviewActive?: boolean;
+	onSelectContextPreview?: () => void;
+	onCloseContextPreview?: () => void;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
+	/** Optimistic user bubble for a workspace that's mid-finalize — rendered
+	 *  before the real send actually fires, swapped out as soon as the real
+	 *  user message lands in DB. */
+	optimisticPendingSubmit?: OptimisticPendingSubmit | null;
 };
 
 export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
@@ -67,8 +88,13 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	onResolveDisplayedSession,
 	onQueuePendingPromptForSession,
 	onRequestCloseSession,
+	contextPreviewCard = null,
+	contextPreviewActive = false,
+	onSelectContextPreview,
+	onCloseContextPreview,
 	headerActions,
 	headerLeading,
+	optimisticPendingSubmit = null,
 }: WorkspacePanelContainerProps) {
 	const queryClient = useQueryClient();
 	const { settings } = useSettings();
@@ -329,18 +355,51 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		if (messagesQuery.data === undefined) {
 			return [];
 		}
+
+		// Inject an optimistic user bubble while a freshly-created workspace
+		// is still finalising. The real user message will replace it the
+		// moment the sidecar persists the send. Guard with `!hasUserMessage`
+		// so we never double-render once the real one lands.
+		let renderedMessages = messages;
+		if (
+			optimisticPendingSubmit &&
+			optimisticPendingSubmit.sessionId === preferredPaneSessionId &&
+			optimisticPendingSubmit.workspaceId === displayedWorkspaceId &&
+			!messages.some((m) => m.role === "user") &&
+			optimisticPendingSubmit.prompt.trim().length > 0
+		) {
+			const optimisticId = `optimistic:${optimisticPendingSubmit.id}`;
+			renderedMessages = [
+				{
+					role: "user",
+					id: optimisticId,
+					createdAt: new Date(0).toISOString(),
+					content: [
+						{
+							type: "text",
+							id: `${optimisticId}:text`,
+							text: optimisticPendingSubmit.prompt,
+						},
+					],
+				},
+				...messages,
+			];
+		}
+
 		return [
 			{
 				sessionId: preferredPaneSessionId,
-				messages,
+				messages: renderedMessages,
 				sending,
 				hasLoaded: true,
 				presentationState: "presented" as const,
 			},
 		];
 	}, [
+		displayedWorkspaceId,
 		messages,
 		messagesQuery.data,
+		optimisticPendingSubmit,
 		preferredPaneSessionId,
 		sending,
 		threadSessionId,
@@ -528,7 +587,11 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			sending={sending}
 			sendingSessionIds={sendingSessionIds}
 			interactionRequiredSessionIds={interactionRequiredSessionIds}
+			contextPreviewCard={contextPreviewCard}
+			contextPreviewActive={contextPreviewActive}
 			onSelectSession={handleSelectSession}
+			onSelectContextPreview={onSelectContextPreview}
+			onCloseContextPreview={onCloseContextPreview}
 			onPrefetchSession={handlePrefetchSession}
 			onSessionsChanged={handleSessionsChanged}
 			onSessionRenamed={handleSessionRenamed}

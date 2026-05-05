@@ -294,6 +294,111 @@ pub fn has_remote(repo_root: &Path, remote: &str) -> Result<bool> {
     Ok(output.lines().any(|line| line.trim() == remote))
 }
 
+/// List local branches under `refs/heads/`, sorted alphabetically.
+pub fn list_local_branches(repo_root: &Path) -> Result<Vec<String>> {
+    let repo_root = repo_root.display().to_string();
+    let output = run_git(
+        [
+            "-C",
+            repo_root.as_str(),
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads/",
+        ],
+        None,
+    )
+    .context("Failed to list local branches")?;
+
+    let mut branches: Vec<String> = output
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    branches.sort();
+    Ok(branches)
+}
+
+/// Switch the repo's HEAD to `branch`. Used by the local-mode create
+/// flow when the user picks a branch different from the current HEAD.
+/// Caller is expected to verify the working tree is clean first.
+///
+/// `git checkout <name>` uses git's DWIM: if no local branch exists but
+/// a single remote-tracking ref matches, git creates a local tracking
+/// branch automatically. That's enough to cover the local picker
+/// selecting a remote-only branch — no extra branch around it.
+pub fn checkout_branch(repo_root: &Path, branch: &str) -> Result<()> {
+    let repo_root = repo_root.display().to_string();
+    run_git(["-C", repo_root.as_str(), "checkout", branch], None)
+        .map(|_| ())
+        .with_context(|| format!("Failed to checkout `{branch}` in {repo_root}"))
+}
+
+/// Create a new branch at HEAD and switch to it (`git checkout -b`).
+/// Used by the "Create and checkout new branch" picker action.
+pub fn create_and_checkout_branch(repo_root: &Path, branch: &str) -> Result<()> {
+    let repo_root = repo_root.display().to_string();
+    run_git(["-C", repo_root.as_str(), "checkout", "-b", branch], None)
+        .map(|_| ())
+        .with_context(|| format!("Failed to create branch `{branch}` in {repo_root}"))
+}
+
+/// Snapshot the working tree + index changes (relative to HEAD) into a
+/// stash commit object **without** modifying the working tree or
+/// pushing the entry into the stash list. Returns `Some(sha)` when
+/// there were tracked changes to capture, `None` when the tree was
+/// clean. Untracked files are NOT included — caller is expected to
+/// enumerate + copy them separately.
+pub fn stash_create(repo_root: &Path) -> Result<Option<String>> {
+    let repo_root = repo_root.display().to_string();
+    let output = run_git(["-C", repo_root.as_str(), "stash", "create"], None)
+        .with_context(|| format!("Failed to `git stash create` in {repo_root}"))?;
+    let sha = output.trim();
+    if sha.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(sha.to_string()))
+    }
+}
+
+/// Apply a previously-captured stash commit (from `stash_create`) to
+/// the target worktree's working tree. Useful for transferring
+/// uncommitted changes into a fresh worktree without touching the
+/// source.
+pub fn stash_apply_sha(workspace_dir: &Path, stash_sha: &str) -> Result<()> {
+    let workspace_dir = workspace_dir.display().to_string();
+    run_git(
+        ["-C", workspace_dir.as_str(), "stash", "apply", stash_sha],
+        None,
+    )
+    .map(|_| ())
+    .with_context(|| format!("Failed to apply stash {stash_sha} into {workspace_dir}"))
+}
+
+/// List untracked files in the repo (respecting `.gitignore`),
+/// returning paths relative to repo root. Used by the move-local-to-
+/// worktree flow to carry untracked files over.
+pub fn list_untracked_files(repo_root: &Path) -> Result<Vec<String>> {
+    let repo_root = repo_root.display().to_string();
+    let output = run_git(
+        [
+            "-C",
+            repo_root.as_str(),
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+        ],
+        None,
+    )
+    .context("Failed to list untracked files")?;
+    Ok(output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
+}
+
 /// List remote-tracking branches for the given remote.
 pub fn list_remote_branches(repo_root: &Path, remote: &str) -> Result<Vec<String>> {
     let repo_root = repo_root.display().to_string();
@@ -410,7 +515,15 @@ pub fn create_worktree_from_start_point(
     Ok(output)
 }
 
+/// Remove worktree dir + prune. Refuses if `workspace_dir == repo_root`
+/// (local-mode mis-routed here would `.trash-` and delete the user's repo).
 pub fn remove_worktree(repo_root: &Path, workspace_dir: &Path) -> Result<()> {
+    if paths_resolve_equal(repo_root, workspace_dir) {
+        bail!(
+            "Refusing to remove worktree at {} — path equals repo_root (likely a local-mode workspace mis-routed into the worktree teardown path)",
+            workspace_dir.display()
+        );
+    }
     let repo_root_str = repo_root.display().to_string();
     if workspace_dir.exists() {
         // Rename to a sibling temp dir (instant O(1) on the same filesystem),
@@ -430,6 +543,14 @@ pub fn remove_worktree(repo_root: &Path, workspace_dir: &Path) -> Result<()> {
     run_git(["-C", repo_root_str.as_str(), "worktree", "prune"], None)
         .map(|_| ())
         .with_context(|| format!("Failed to prune worktree for {}", workspace_dir.display()))
+}
+
+/// Same on-disk location? Falls back to lexical equality if canonicalize fails.
+pub(crate) fn paths_resolve_equal(a: &Path, b: &Path) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => a == b,
+    }
 }
 
 /// Rename `dir` to a `.trash-*` sibling so the caller can treat it as gone.
@@ -714,6 +835,30 @@ pub fn working_tree_clean(workspace_dir: &Path) -> Result<bool> {
         None,
     )
     .with_context(|| format!("Failed to read working tree status for {}", workspace_dir))?;
+
+    Ok(output.trim().is_empty())
+}
+
+/// True when no staged/unstaged tracked changes (untracked ignored).
+/// Right pre-check for `git checkout`, which only refuses on conflict.
+pub fn tracked_changes_clean(workspace_dir: &Path) -> Result<bool> {
+    let workspace_dir = workspace_dir.display().to_string();
+    let output = run_git(
+        [
+            "-C",
+            workspace_dir.as_str(),
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+        ],
+        None,
+    )
+    .with_context(|| {
+        format!(
+            "Failed to read tracked working tree status for {}",
+            workspace_dir
+        )
+    })?;
 
     Ok(output.trim().is_empty())
 }

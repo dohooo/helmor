@@ -1,6 +1,10 @@
 use crate::forge::{
     self,
     accounts::{self, ForgeAccount},
+    github::inbox::{
+        self as github_inbox, GithubLabelOption, InboxFilters, InboxItemDetail, InboxPage,
+        InboxSource, InboxToggles,
+    },
     ChangeRequestInfo, ForgeActionStatus, ForgeDetection, ForgeProvider, RemoteState,
 };
 // `accounts` re-exports the dispatchers; provider-specific work
@@ -35,6 +39,66 @@ pub async fn get_workspace_forge(workspace_id: String) -> CmdResult<ForgeDetecti
 #[tauri::command]
 pub async fn list_forge_accounts(gitlab_hosts: Vec<String>) -> CmdResult<Vec<ForgeAccount>> {
     run_blocking(move || Ok(accounts::list_forge_accounts(&gitlab_hosts))).await
+}
+
+/// List inbox items for one GitHub account.
+///
+/// Toggles are mirrored 1:1 from `settings.inboxSourceConfig.accounts[<provider>:<login>]`.
+/// `cursor` is opaque on the JS side — pass back the previous response's
+/// `nextCursor` to fetch the next page. `limit` clamps to [1, 100].
+///
+/// Currently GitHub-only; future Linear / Slack go through their own
+/// adapters and a dispatcher here.
+#[tauri::command]
+pub async fn list_inbox_items(
+    provider: ForgeProvider,
+    login: String,
+    toggles: InboxToggles,
+    cursor: Option<String>,
+    limit: Option<u32>,
+    repo: Option<String>,
+    filters: Option<InboxFilters>,
+) -> CmdResult<InboxPage> {
+    let limit = limit.unwrap_or(20).clamp(1, 100) as usize;
+    run_blocking(move || match provider {
+        ForgeProvider::Github => github_inbox::list_inbox_items(
+            &login,
+            toggles,
+            cursor.as_deref(),
+            limit,
+            repo.as_deref(),
+            filters,
+        ),
+        ForgeProvider::Gitlab | ForgeProvider::Unknown => Ok(InboxPage {
+            items: Vec::new(),
+            next_cursor: None,
+        }),
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_github_labels(
+    login: String,
+    repos: Vec<String>,
+) -> CmdResult<Vec<GithubLabelOption>> {
+    run_blocking(move || github_inbox::list_github_labels(&login, &repos)).await
+}
+
+/// Fetch native detail data for one inbox item. The command is a shared
+/// entry point, but each provider/source owns its own response shape.
+#[tauri::command]
+pub async fn get_inbox_item_detail(
+    provider: ForgeProvider,
+    login: String,
+    source: InboxSource,
+    external_id: String,
+) -> CmdResult<Option<InboxItemDetail>> {
+    run_blocking(move || match provider {
+        ForgeProvider::Github => github_inbox::get_inbox_item_detail(&login, source, &external_id),
+        ForgeProvider::Gitlab | ForgeProvider::Unknown => Ok(None),
+    })
+    .await
 }
 
 /// Resolve the gh/glab account bound to a workspace's parent repo and

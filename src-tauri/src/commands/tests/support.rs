@@ -318,6 +318,40 @@ impl CreateTestHarness {
             .unwrap();
     }
 
+    /// Create a sibling branch off main with one committed file, then
+    /// switch back to main. Used to seed a non-default branch for
+    /// "create from this branch" tests.
+    pub(crate) fn create_remote_branch_with_file(
+        &self,
+        branch: &str,
+        relative_path: &str,
+        contents: &str,
+    ) {
+        let root = self.source_repo_root.to_str().unwrap();
+        git_ops::run_git(["-C", root, "checkout", "-b", branch], None).unwrap();
+        fs::write(self.source_repo_root.join(relative_path), contents).unwrap();
+        git_ops::run_git(["-C", root, "add", relative_path], None).unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                root,
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Helmor",
+                "-c",
+                "user.email=helmor@example.com",
+                "commit",
+                "-m",
+                &format!("add {relative_path}"),
+            ],
+            None,
+        )
+        .unwrap();
+        git_ops::run_git(["-C", root, "checkout", "main"], None).unwrap();
+        git_ops::run_git(["-C", root, "fetch", "origin"], None).unwrap();
+    }
+
     pub(crate) fn commit_repo_files(&self, files: &[(&str, &str)]) {
         for (relative_path, contents) in files {
             let path = self.source_repo_root.join(relative_path);

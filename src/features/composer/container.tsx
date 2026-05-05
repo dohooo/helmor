@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { open as openDirectoryDialog } from "@tauri-apps/plugin-dialog";
+import type { SerializedEditorState } from "lexical";
 import { CircleAlert, TimerReset } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -63,6 +64,7 @@ const EMPTY_SLASH_COMMANDS: SlashCommandEntry[] = [];
 const EMPTY_LINKED_DIRECTORIES: readonly string[] = [];
 const EMPTY_CANDIDATE_DIRECTORIES: readonly CandidateDirectory[] = [];
 const EMPTY_QUEUE_ITEMS: readonly QueuedSubmit[] = [];
+type StartSubmitMode = "startNow" | "saveForLater";
 
 /**
  * Host-app slash commands. Prepended to the agent-supplied list so they
@@ -100,6 +102,18 @@ type WorkspaceComposerContainerProps = {
 	displayedWorkspaceId: string | null;
 	displayedSessionId: string | null;
 	disabled: boolean;
+	/** When true, treat the composer as available even if no workspace is
+	 *  selected — the bottom composer in kanban mode uses this so it can
+	 *  collect a prompt before any workspace exists. */
+	forceAvailable?: boolean;
+	/** Custom placeholder text. When omitted, the composer falls back to
+	 *  the default "Ask to make changes…" copy. */
+	placeholder?: string;
+	/** Override the composer's context key. Without this the key falls
+	 *  back to `getComposerContextKey(displayedWorkspaceId, displayedSessionId)`.
+	 *  The kanban view supplies a per-repo key so each repo keeps its
+	 *  own draft. */
+	contextKeyOverride?: string;
 	onStop?: () => void;
 	sending: boolean;
 	sendError: string | null;
@@ -140,6 +154,13 @@ type WorkspaceComposerContainerProps = {
 		 *  one submit (queue ↔ steer). Used by the "send with opposite
 		 *  follow-up" composer shortcut. Ignored when `forceQueue` is true. */
 		followUpBehaviorOverride?: "queue" | "steer";
+		startSubmitMode?: "startNow" | "saveForLater";
+		/** Snapshot of the editor's full Lexical state at submit time, so
+		 *  callers that need to round-trip chips/text/images (e.g. the kanban
+		 *  "backlog" handler that copies the draft into a freshly-created
+		 *  session's `sessions.draft_state`) can do so without re-encoding
+		 *  the badge nodes. */
+		editorStateSnapshot?: SerializedEditorState;
 	}) => void;
 	/** Prompt queued by an external caller to auto-submit once the displayed
 	 * session matches `sessionId`. */
@@ -166,6 +187,9 @@ type WorkspaceComposerContainerProps = {
 	queueItems?: readonly QueuedSubmit[];
 	onSteerQueued?: (itemId: string) => void;
 	onRemoveQueued?: (itemId: string) => void;
+	contextPanelOpen?: boolean;
+	onToggleContextPanel?: () => void;
+	startSubmitMenu?: boolean;
 };
 
 const noopDeferredToolResponse: DeferredToolResponseHandler = () => {};
@@ -176,6 +200,9 @@ export const WorkspaceComposerContainer = memo(
 		displayedWorkspaceId,
 		displayedSessionId,
 		disabled,
+		forceAvailable = false,
+		placeholder,
+		contextKeyOverride,
 		onStop,
 		sending,
 		sendError,
@@ -208,9 +235,27 @@ export const WorkspaceComposerContainer = memo(
 		queueItems = EMPTY_QUEUE_ITEMS,
 		onSteerQueued,
 		onRemoveQueued,
+		contextPanelOpen = false,
+		onToggleContextPanel,
+		startSubmitMenu = false,
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
-		const { settings } = useSettings();
+		const { settings, updateSettings } = useSettings();
+		const startSubmitMode: StartSubmitMode =
+			settings.kanbanViewState.createState === "backlog"
+				? "saveForLater"
+				: "startNow";
+		const handleStartSubmitModeChange = useCallback(
+			(mode: StartSubmitMode) => {
+				void updateSettings({
+					kanbanViewState: {
+						...settings.kanbanViewState,
+						createState: mode === "saveForLater" ? "backlog" : "in-progress",
+					},
+				});
+			},
+			[settings.kanbanViewState, updateSettings],
+		);
 		const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
 		const workspaceDetailQuery = useQuery({
 			...workspaceDetailQueryOptions(displayedWorkspaceId ?? "__none__"),
@@ -334,10 +379,9 @@ export const WorkspaceComposerContainer = memo(
 			(sessionsQuery.data ?? []).find(
 				(session) => session.id === displayedSessionId,
 			) ?? null;
-		const composerContextKey = getComposerContextKey(
-			displayedWorkspaceId,
-			displayedSessionId,
-		);
+		const composerContextKey =
+			contextKeyOverride ??
+			getComposerContextKey(displayedWorkspaceId, displayedSessionId);
 		const selectedModelId = resolveSessionSelectedModelId({
 			session: currentSession,
 			modelSelections,
@@ -365,6 +409,11 @@ export const WorkspaceComposerContainer = memo(
 		]
 			? null
 			: getShortcut(settings.shortcuts, "composer.toggleFollowUpBehavior");
+		const toggleContextPanelShortcut = shortcutConflicts.conflictById[
+			"composer.toggleContextPanel"
+		]
+			? null
+			: getShortcut(settings.shortcuts, "composer.toggleContextPanel");
 		const pendingOverrideActive =
 			pendingPromptForSession?.sessionId === displayedSessionId;
 		const pendingModel = useMemo(
@@ -455,8 +504,9 @@ export const WorkspaceComposerContainer = memo(
 		//     finalize. The typical ~200-500ms window ends long before the
 		//     user finishes typing, so there is no visible transition.
 		const composerUnavailable =
-			displayedWorkspaceId === null ||
-			workspaceDetailQuery.data?.state === "archived";
+			!forceAvailable &&
+			(displayedWorkspaceId === null ||
+				workspaceDetailQuery.data?.state === "archived");
 		const composerAwaitingFinalize =
 			workspaceDetailQuery.data?.state === "initializing";
 
@@ -638,6 +688,8 @@ export const WorkspaceComposerContainer = memo(
 				options?: {
 					permissionModeOverride?: string;
 					oppositeFollowUp?: boolean;
+					startSubmitMode?: "startNow" | "saveForLater";
+					editorStateSnapshot?: SerializedEditorState;
 				},
 			) => {
 				if (!effectiveModel) {
@@ -663,6 +715,8 @@ export const WorkspaceComposerContainer = memo(
 						options?.permissionModeOverride ?? effectivePermissionMode,
 					fastMode: supportsFastMode ? fastMode : false,
 					followUpBehaviorOverride,
+					startSubmitMode: options?.startSubmitMode,
+					editorStateSnapshot: options?.editorStateSnapshot,
 				});
 			},
 			[
@@ -936,6 +990,7 @@ export const WorkspaceComposerContainer = memo(
 					<WorkspaceComposer
 						contextKey={composerContextKey}
 						sessionId={displayedSessionId}
+						placeholder={placeholder}
 						providerSessionId={currentSession?.providerSessionId ?? null}
 						agentType={
 							effectiveModel?.provider === "codex" ? "codex" : "claude"
@@ -943,6 +998,7 @@ export const WorkspaceComposerContainer = memo(
 						focusShortcut={focusShortcut}
 						togglePlanShortcut={togglePlanShortcut}
 						toggleFollowUpShortcut={toggleFollowUpShortcut}
+						toggleContextPanelShortcut={toggleContextPanelShortcut}
 						alwaysShowContextUsage={settings.alwaysShowContextUsage}
 						onSubmit={handleComposerSubmit}
 						disabled={composerUnavailable}
@@ -999,6 +1055,11 @@ export const WorkspaceComposerContainer = memo(
 						linkedDirectoriesDisabled={linkedDirectoriesMutation.isPending}
 						addDirCandidates={candidateDirectories}
 						onPickAddDir={handlePickAddDir}
+						contextPanelOpen={contextPanelOpen}
+						onToggleContextPanel={onToggleContextPanel}
+						startSubmitMenu={startSubmitMenu}
+						startSubmitMode={startSubmitMode}
+						onStartSubmitModeChange={handleStartSubmitModeChange}
 					/>
 				</div>
 			</div>

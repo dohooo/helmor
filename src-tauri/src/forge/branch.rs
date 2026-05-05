@@ -31,9 +31,7 @@ fn remote_tracking_branch_name(remote_tracking_ref: &str) -> Option<&str> {
 }
 
 fn workspace_remote_tracking_ref(record: &WorkspaceRecord) -> Option<String> {
-    let Ok(workspace_dir) =
-        crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
-    else {
+    let Ok(workspace_dir) = crate::workspace::helpers::workspace_path(record) else {
         return None;
     };
     if !workspace_dir.exists() {

@@ -7,13 +7,15 @@
 //! Lifecycle:
 //!   - On open: snapshot the current login set, spawn the auth PTY.
 //!   - User authenticates inside the dialog (or doesn't).
-//!   - On close (X / Esc / backdrop): kill the PTY, fire one
-//!     `listForgeLogins` probe, diff against the snapshot. A new
-//!     login means we invalidate the forge caches + emit a toast;
-//!     no delta means a silent close.
+//!   - On close (X / Esc / backdrop): kill the PTY, then poll
+//!     `listForgeLogins` for a few seconds and diff against the
+//!     snapshot. A new login means we invalidate the forge caches +
+//!     emit a toast; no delta means a silent close.
 //!
-//! No polling — the close event is the authoritative "user is done"
-//! signal.
+//! The close event is the "user is done" signal, but the post-close
+//! probe polls (rather than firing once) because gh's hosts.yml +
+//! macOS keychain writes can lag the PTY exit by a moment — a single
+//! immediate read used to flake against that latency (#350).
 
 import { useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
@@ -70,24 +72,49 @@ type LoginProbeResult = {
 	login: string | null;
 };
 
-/// The post-close handler probes the live login set once after the
-/// terminal exits. Prefer a login that was not present at open time,
-/// but fall back to any current login so re-authorizing the same
-/// account still drives repo rebind + cache refresh.
+// Polling window for the post-close login probe. `gh auth login`'s
+// hosts.yml + macOS keychain writes can lag the PTY exit by a moment,
+// and a single immediate read used to flake against that latency
+// (#350). Mirror onboarding's `pollUntilReady` shape — fire fast,
+// then retry every second up to the timeout — so the auth-then-poll
+// path is resilient without making the happy case feel slow.
+const NEW_LOGIN_POLL_TIMEOUT_MS = 8000;
+const NEW_LOGIN_POLL_INTERVAL_MS = 1000;
+
+const sleep = (ms: number) =>
+	new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/// The post-close handler probes the live login set after the terminal
+/// exits. Polls for a login that was not present at open time so a
+/// brief flush delay between gh writing hosts.yml and our read doesn't
+/// flip the UI back to "not connected". Falls back to any current
+/// login on timeout so re-authorizing the same account still drives
+/// repo rebind + cache refresh.
 async function detectLoginAfterClose(
 	provider: ForgeProvider,
 	host: string,
 	baseline: Set<string>,
 ): Promise<LoginProbeResult> {
-	try {
-		const current = await listForgeLogins(provider, host, {
-			forceRefresh: true,
-		});
-		const newLogin = current.find((login) => !baseline.has(login));
-		return { login: newLogin ?? current[0] ?? null };
-	} catch {
-		return { login: null };
+	const startedAt = Date.now();
+	let lastSeen: string[] = [];
+	while (Date.now() - startedAt < NEW_LOGIN_POLL_TIMEOUT_MS) {
+		try {
+			const next = await listForgeLogins(provider, host, {
+				forceRefresh: true,
+			});
+			lastSeen = next ?? [];
+			const newLogin = lastSeen.find((login) => !baseline.has(login));
+			if (newLogin) return { login: newLogin };
+		} catch {
+			// Auth may still be in progress / gh hosts.yml may be
+			// mid-flush. Fall through to retry below.
+		}
+		if (Date.now() - startedAt >= NEW_LOGIN_POLL_TIMEOUT_MS) break;
+		await sleep(NEW_LOGIN_POLL_INTERVAL_MS);
 	}
+	// Timeout: fall back to any current login so re-authorizing the
+	// same account still triggers downstream refresh / repo rebind.
+	return { login: lastSeen[0] ?? null };
 }
 
 function providerLabel(provider: ForgeProvider): string {
@@ -160,10 +187,10 @@ export function ForgeConnectDialog({
 	// `gh|glab auth login` bytes.
 	const onOpenChangeRef = useRef(onOpenChange);
 
-	// On close: stop the PTY, run the delta probe once, propagate
-	// upwards. Wrapped in a ref-guarded block so multi-fire close
-	// events (X click + Esc + backdrop in a single render cycle) only
-	// run cleanup once.
+	// On close: stop the PTY, poll for the new login until it lands
+	// (or we time out), propagate upwards. Wrapped in a ref-guarded
+	// block so multi-fire close events (X click + Esc + backdrop in a
+	// single render cycle) only run cleanup once.
 	const handleClose = useCallback(async () => {
 		if (cleanedUpRef.current) return;
 		cleanedUpRef.current = true;
