@@ -4,10 +4,11 @@ import {
 	Pickaxe,
 	Search,
 	SlidersHorizontal,
+	Smartphone,
 	X,
 } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { GithubBrandIcon } from "@/components/brand-icon";
+import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Button } from "@/components/ui/button";
 import {
@@ -62,7 +63,7 @@ function openInboxSettings() {
 }
 
 type SourceFilter = {
-	id: "linear" | "github" | "slack";
+	id: "github" | "gitlab" | "linear" | "slack" | "mobile";
 	label: string;
 	sources: ContextCardSource[];
 };
@@ -87,9 +88,37 @@ const SOURCE_FILTERS: SourceFilter[] = [
 		label: "GitHub",
 		sources: ["github_issue", "github_pr", "github_discussion"],
 	},
+	{ id: "gitlab", label: "GitLab", sources: [] },
 	{ id: "linear", label: "Linear", sources: ["linear"] },
 	{ id: "slack", label: "Slack", sources: ["slack_thread"] },
+	{ id: "mobile", label: "Mobile", sources: [] },
 ];
+
+const COMING_SOON_COPY: Record<
+	Exclude<SourceFilter["id"], "github">,
+	string[]
+> = {
+	gitlab: [
+		"Link merge requests, issues, and pipeline failures as context.",
+		"Turn review threads into targeted fix prompts.",
+		"Bring CI logs and branch state into the workspace flow.",
+	],
+	linear: [
+		"Pull in issues, specs, labels, and priorities.",
+		"Start workspaces directly from planned tasks.",
+		"Keep implementation context tied to product intent.",
+	],
+	slack: [
+		"Capture threads, decisions, and follow-up requests.",
+		"Convert discussions into actionable workspace prompts.",
+		"Preserve source context without copying long chat history.",
+	],
+	mobile: [
+		"Send tasks, links, and screenshots from your phone.",
+		"Keep lightweight review and triage flows in sync.",
+		"Hand off mobile-captured context to desktop agents.",
+	],
+};
 
 const GITHUB_TYPE_FILTERS: GitHubTypeFilter[] = [
 	{ id: "github_issue", label: "Issues", sources: ["github_issue"] },
@@ -335,7 +364,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 			>
 				<div
 					className={cn(
-						"grid w-full grid-cols-3 border border-border/60 bg-background/40",
+						"grid w-full grid-cols-5 border border-border/60 bg-background/40",
 						providerTabsCompact
 							? "gap-0.5 rounded-md p-0.5"
 							: "gap-1 rounded-lg p-1",
@@ -360,10 +389,17 @@ export const InboxSidebar = memo(function InboxSidebar({
 							<span className="relative inline-flex">
 								{filter.id === "github" ? (
 									<GithubBrandIcon size={providerTabsCompact ? 13 : 14} />
+								) : filter.id === "gitlab" ? (
+									<GitlabBrandIcon size={providerTabsCompact ? 13 : 14} />
 								) : filter.id === "slack" ? (
 									<SourceIcon
 										source="slack_thread"
 										size={providerTabsCompact ? 13 : 14}
+									/>
+								) : filter.id === "mobile" ? (
+									<Smartphone
+										size={providerTabsCompact ? 13 : 14}
+										strokeWidth={2}
 									/>
 								) : (
 									<SourceIcon
@@ -487,12 +523,28 @@ export const InboxSidebar = memo(function InboxSidebar({
 			>
 				<div className="flex w-[calc(100%+12px)] flex-col gap-2 pb-3">
 					{isComingSoonSource ? (
-						<div className="mt-8 flex w-full items-center justify-center gap-2 px-3 text-muted-foreground/65">
-							<Pickaxe
-								className="inbox-coming-soon-pickaxe size-3.5 shrink-0"
-								strokeWidth={2}
-							/>
-							<span className="text-[13px] font-medium">Coming Soon</span>
+						<div className="flex min-h-[calc(100vh-150px)] w-full items-center justify-center px-3">
+							<div className="flex w-full max-w-[250px] flex-col items-stretch text-muted-foreground/65">
+								<div className="flex items-center justify-center gap-2">
+									<Pickaxe
+										className="inbox-coming-soon-pickaxe size-3.5 shrink-0"
+										strokeWidth={2}
+									/>
+									<span className="text-[13px] font-medium">Coming Soon</span>
+								</div>
+								<div className="my-7 flex items-center gap-2 px-2 text-muted-foreground/20">
+									<div className="h-px flex-1 bg-current opacity-60" />
+									<div className="size-0.5 rounded-full bg-current opacity-80" />
+									<div className="h-px flex-1 bg-current opacity-60" />
+								</div>
+								<ul className="list-disc space-y-3 pl-4 text-left text-pretty text-[11px] leading-4 marker:text-muted-foreground/35">
+									{COMING_SOON_COPY[
+										selectedFilter.id as Exclude<SourceFilter["id"], "github">
+									].map((line) => (
+										<li key={line}>{line}</li>
+									))}
+								</ul>
+							</div>
 						</div>
 					) : !hasGithubAccount ? (
 						// State 1: no GitHub account at all → big Connect CTA.
