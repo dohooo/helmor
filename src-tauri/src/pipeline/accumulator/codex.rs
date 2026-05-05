@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use super::StreamAccumulator;
+use crate::pipeline::codex_collab::{build_collab_result_text, collab_synthetic_tool_name};
 use crate::pipeline::types::{CollectedTurn, MessageRole};
 
 // ---------------------------------------------------------------------------
@@ -296,6 +297,9 @@ fn dispatch_item(acc: &mut StreamAccumulator, raw_line: &str, value: &Value, per
         }
         Some("error") => {
             handle_error_item(acc, raw_line, item, persist);
+        }
+        Some("collab_agent_tool_call") => {
+            handle_collab_agent_tool_call(acc, raw_line, item, item_id.as_deref(), persist);
         }
         _ => {
             let label = format!("codex/item:{}", item_type.unwrap_or("<missing-item-type>"));
@@ -965,6 +969,101 @@ pub(super) fn handle_turn_plan_updated(
     );
 }
 
+/// Synthesize a tool_use block for a `collabAgentToolCall`. The five
+/// `tool` variants (spawnAgent / sendInput / resumeAgent / wait /
+/// closeAgent) each become a distinct synthetic tool name so the
+/// frontend can dispatch on `toolName` like it does for other Codex
+/// tools (Bash, apply_patch, etc.).
+///
+/// `wait` carries the most signal: when status=completed,
+/// `agentsStates[threadId].message` is the sub-agent's final answer
+/// text. We emit it as a `tool_result` so the existing tool-result
+/// rendering path can surface it without any new MessagePart shape.
+fn handle_collab_agent_tool_call(
+    acc: &mut StreamAccumulator,
+    raw_line: &str,
+    item: &Value,
+    item_id: Option<&str>,
+    persist: bool,
+) {
+    let tool = item.get("tool").and_then(Value::as_str).unwrap_or("");
+    let status = item.get("status").and_then(Value::as_str);
+    let synthetic_tool_name = collab_synthetic_tool_name(tool);
+
+    let synthetic_id = item_id
+        .map(|id| format!("codex-collab-{id}"))
+        .unwrap_or_else(|| format!("codex-collab-{}", acc.line_count));
+
+    // Pass through every collab field — the frontend's spawn-agent renderer
+    // reads `prompt`, `senderThreadId`, `receiverThreadIds`, `agentsStates`,
+    // `model`, `reasoningEffort` directly. Cheaper to forward the whole item
+    // than to enumerate fields here (the adapter does the same).
+    let mut input = item.clone();
+    if let Some(obj) = input.as_object_mut() {
+        // Drop redundant identifiers — frontend uses the synthetic id.
+        obj.remove("type");
+        obj.remove("id");
+    }
+
+    let mut tool_use = serde_json::json!({
+        "type": "tool_use",
+        "id": synthetic_id,
+        "name": synthetic_tool_name,
+        "input": input,
+    });
+    if status == Some("in_progress") {
+        tool_use["__streaming_status"] = Value::String("running".to_string());
+    }
+
+    let synthetic_assistant = serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "type": "message",
+            "role": "assistant",
+            "content": [tool_use],
+        }
+    });
+    let sa_str = serde_json::to_string(&synthetic_assistant).unwrap_or_default();
+    let asst_id = item_id
+        .map(|id| format!("codex-collab-asst:{id}"))
+        .unwrap_or_else(|| format!("codex-collab-asst:{}", acc.line_count));
+    acc.collect_or_replace(
+        &sa_str,
+        &synthetic_assistant,
+        MessageRole::Assistant,
+        Some(asst_id.clone()),
+    );
+
+    // For terminal statuses synthesize a tool_result. `wait` carries the
+    // sub-agents' final answers in `agentsStates[*].message`; spawn / send /
+    // resume / close don't produce useful textual output beyond the request
+    // itself, so their result is just the status word.
+    if matches!(status, Some("completed") | Some("failed")) {
+        let result_text = build_collab_result_text(tool, status.unwrap_or(""), item);
+        let synthetic_result = serde_json::json!({
+            "type": "user",
+            "message": {
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": synthetic_id,
+                    "content": result_text,
+                }]
+            }
+        });
+        let sr_str = serde_json::to_string(&synthetic_result).unwrap_or_default();
+        let user_id = item_id.map(|id| format!("codex-collab-user:{id}"));
+        acc.collect_or_replace(&sr_str, &synthetic_result, MessageRole::User, user_id);
+    }
+
+    if persist {
+        acc.turns.push(CollectedTurn {
+            id: asst_id,
+            role: MessageRole::Assistant,
+            content_json: raw_line.to_string(),
+        });
+    }
+}
+
 fn handle_error_item(acc: &mut StreamAccumulator, raw_line: &str, item: &Value, persist: bool) {
     let message = item
         .get("message")
@@ -1061,6 +1160,7 @@ fn normalize_item_type(t: &str) -> &str {
         "plan" => "plan",
         "contextCompaction" | "context_compaction" => "context_compaction",
         "imageGeneration" | "image_generation" => "image_generation",
+        "collabAgentToolCall" | "collab_agent_tool_call" => "collab_agent_tool_call",
         "error" => "error",
         other => other,
     }
@@ -1076,6 +1176,10 @@ fn normalize_field_name(name: &str) -> String {
         "commandActions" => "command_actions".to_string(),
         "memoryCitation" => "memory_citation".to_string(),
         "savedPath" => "saved_path".to_string(),
+        // collabAgentToolCall fields — keep camelCase intact for the
+        // adapter (it inspects raw fields like `senderThreadId`,
+        // `receiverThreadIds`, `agentsStates`); rename only those that
+        // collide with snake_case rendering elsewhere.
         _ => name.to_string(),
     }
 }
