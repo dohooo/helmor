@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.0
+
+### Minor Changes
+
+- [#381](https://github.com/dohooo/helmor/pull/381) [`db3ea68`](https://github.com/dohooo/helmor/commit/db3ea68909e649be50433cb2b1b2587485abd699) Thanks [@alantoa](https://github.com/alantoa)! - Right-click a file in the inspector's Changes section to reveal it in Finder, copy its absolute path, copy its relative path, or copy its remote file URL on GitHub/GitLab/Bitbucket.
+
+### Patch Changes
+
+- [#384](https://github.com/dohooo/helmor/pull/384) [`1b99be2`](https://github.com/dohooo/helmor/commit/1b99be2d3521866393687c14256a420a7af5fff4) Thanks [@natllian](https://github.com/natllian)! - Fix `/goal` silently failing when Codex's experimental goals feature is disabled.
+
 ## 0.14.3
 
 ### Patch Changes
