@@ -1,5 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Plus, X } from "lucide-react";
+import {
+	ChevronDown,
+	CircleDot,
+	GitPullRequest,
+	MessagesSquare,
+	Pickaxe,
+	Plus,
+	Smartphone,
+	X,
+} from "lucide-react";
 import {
 	type ReactNode,
 	useCallback,
@@ -7,7 +16,12 @@ import {
 	useMemo,
 	useState,
 } from "react";
-import { GithubBrandIcon } from "@/components/brand-icon";
+import {
+	GithubBrandIcon,
+	GitlabBrandIcon,
+	LinearBrandIcon,
+	SlackBrandIcon,
+} from "@/components/brand-icon";
 import { CachedAvatar } from "@/components/cached-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,7 +37,6 @@ import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
-	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -74,22 +87,66 @@ type Option<T extends string> = {
 	label: string;
 };
 
+type ContextProviderTab = "github" | "gitlab" | "linear" | "slack" | "mobile";
+
+const PROVIDER_TABS: {
+	id: ContextProviderTab;
+	label: string;
+	icon: ReactNode;
+}[] = [
+	{ id: "github", label: "GitHub", icon: <GithubBrandIcon size={13} /> },
+	{ id: "gitlab", label: "GitLab", icon: <GitlabBrandIcon size={13} /> },
+	{ id: "linear", label: "Linear", icon: <LinearBrandIcon size={13} /> },
+	{ id: "slack", label: "Slack", icon: <SlackBrandIcon size={13} /> },
+	{
+		id: "mobile",
+		label: "Mobile",
+		icon: <Smartphone className="size-3.5" strokeWidth={2} />,
+	},
+];
+
+const COMING_SOON_COPY: Record<
+	Exclude<ContextProviderTab, "github">,
+	string[]
+> = {
+	gitlab: [
+		"Link merge requests, issues, and pipeline failures as context.",
+		"Turn review threads into targeted fix prompts.",
+		"Bring CI logs and branch state into the workspace flow.",
+	],
+	linear: [
+		"Pull in issues, specs, labels, and priorities.",
+		"Start workspaces directly from planned tasks.",
+		"Keep implementation context tied to product intent.",
+	],
+	slack: [
+		"Capture threads, decisions, and follow-up requests.",
+		"Convert discussions into actionable workspace prompts.",
+		"Preserve source context without copying long chat history.",
+	],
+	mobile: [
+		"Send tasks, links, and screenshots from your phone.",
+		"Keep lightweight review and triage flows in sync.",
+		"Hand off mobile-captured context to desktop agents.",
+	],
+};
+
 const ISSUE_SCOPE_OPTIONS: Option<InboxIssueScope>[] = [
+	{ value: "all", label: "All" },
 	{ value: "involves", label: "Involves me" },
 	{ value: "assigned", label: "Assigned to me" },
 	{ value: "mentioned", label: "Mentioned me" },
 	{ value: "created", label: "Created by me" },
-	{ value: "all", label: "Everything" },
 ];
 
 const PR_SCOPE_OPTIONS: Option<InboxPullRequestScope>[] = [
+	{ value: "all", label: "All" },
 	{ value: "involves", label: "Involves me" },
 	{ value: "reviewRequested", label: "Review requested" },
 	{ value: "author", label: "Created by me" },
 	{ value: "assignee", label: "Assigned to me" },
 	{ value: "mentions", label: "Mentioned me" },
 	{ value: "reviewedBy", label: "Reviewed by me" },
-	{ value: "all", label: "Everything" },
 ];
 
 const SORT_OPTIONS: Option<InboxSort>[] = [
@@ -155,6 +212,8 @@ export function InboxSettingsPanel({
 }) {
 	const accountsQuery = useForgeAccountsAll();
 	const { settings, updateSettings } = useSettings();
+	const [activeProvider, setActiveProvider] =
+		useState<ContextProviderTab>("github");
 
 	// Currently we only ship the GitHub connector. GitLab accounts exist
 	// in the forge layer but Contexts can't pull anything for them yet.
@@ -163,10 +222,6 @@ export function InboxSettingsPanel({
 		[accountsQuery.data],
 	);
 
-	const [selectedLogin, setSelectedLogin] = useState<string | null>(null);
-	const effectiveLogin = selectedLogin ?? githubAccounts[0]?.login ?? null;
-	const selectedAccount =
-		githubAccounts.find((a) => a.login === effectiveLogin) ?? null;
 	const githubRepositories = useMemo(
 		() =>
 			repositories
@@ -183,12 +238,9 @@ export function InboxSettingsPanel({
 					} =>
 						Boolean(entry.repoFilter) &&
 						(!entry.repository.forgeProvider ||
-							entry.repository.forgeProvider === "github") &&
-						(!selectedAccount ||
-							!entry.repository.forgeLogin ||
-							entry.repository.forgeLogin === selectedAccount.login),
+							entry.repository.forgeProvider === "github"),
 				),
-		[repositories, selectedAccount],
+		[repositories],
 	);
 	const [selectedRepoFilter, setSelectedRepoFilter] = useState<string | null>(
 		null,
@@ -201,6 +253,13 @@ export function InboxSettingsPanel({
 	const selectedRepository =
 		githubRepositories.find((entry) => entry.repoFilter === effectiveRepoFilter)
 			?.repository ?? null;
+	const selectedAccount =
+		githubAccounts.find(
+			(account) => account.login === selectedRepository?.forgeLogin,
+		) ??
+		githubAccounts[0] ??
+		null;
+	const effectiveLogin = selectedAccount?.login ?? null;
 	useEffect(() => {
 		if (effectiveRepoFilter && effectiveRepoFilter !== selectedRepoFilter) {
 			setSelectedRepoFilter(effectiveRepoFilter);
@@ -226,10 +285,9 @@ export function InboxSettingsPanel({
 	const currentToggles: InboxAccountSourceToggles =
 		(accountKey ? inboxConfig.accounts[accountKey] : undefined) ??
 		DEFAULT_INBOX_ACCOUNT_TOGGLES;
-	const currentRepoConfig: InboxRepoSourceConfig =
-		(effectiveRepoFilter
-			? currentToggles.repos?.[effectiveRepoFilter]
-			: undefined) ?? DEFAULT_INBOX_REPO_CONFIG;
+	const currentRepoConfig: InboxRepoSourceConfig = (effectiveRepoFilter
+		? currentToggles.repos?.[effectiveRepoFilter]
+		: undefined) ?? { ...DEFAULT_INBOX_REPO_CONFIG, enabled: true };
 
 	const setRepoConfig = useCallback(
 		(nextRepoConfig: InboxRepoSourceConfig) => {
@@ -243,7 +301,10 @@ export function InboxSettingsPanel({
 							...currentToggles,
 							repos: {
 								...(currentToggles.repos ?? {}),
-								[effectiveRepoFilter]: nextRepoConfig,
+								[effectiveRepoFilter]: {
+									...nextRepoConfig,
+									enabled: true,
+								},
 							},
 						},
 					},
@@ -273,225 +334,243 @@ export function InboxSettingsPanel({
 		},
 		[currentRepoConfig, setRepoConfig],
 	);
-	const setRepoEnabled = useCallback(
-		(enabled: boolean) => {
-			setRepoConfig({ ...currentRepoConfig, enabled });
-		},
-		[currentRepoConfig, setRepoConfig],
-	);
-
-	if (githubAccounts.length === 0) {
-		return (
-			<div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border/60 px-6 py-10 text-center">
-				<div className="flex size-9 items-center justify-center rounded-lg border border-border/50 text-muted-foreground">
-					<GithubBrandIcon size={18} />
-				</div>
-				<div className="text-[13px] font-medium text-foreground">
-					Connect a GitHub account
-				</div>
-				<div className="max-w-[360px] text-[12px] leading-5 text-muted-foreground">
-					You need at least one GitHub account before Contexts can pull issues,
-					pull requests, or discussions.
-				</div>
-				<Button
-					type="button"
-					size="sm"
-					onClick={openAccountSettings}
-					className="mt-1 cursor-pointer gap-1.5"
-				>
-					<Plus className="size-3.5" strokeWidth={2} />
-					Add account
-				</Button>
-			</div>
-		);
-	}
 
 	return (
-		<SettingsGroup>
-			<SettingsRow
-				title="GitHub account"
-				description="Choose which connected account contributes items to Contexts."
-			>
-				<AccountPicker
-					accounts={githubAccounts}
-					selected={selectedAccount}
-					onSelect={(login) => {
-						setSelectedLogin(login);
-						setSelectedRepoFilter(null);
-					}}
-				/>
-			</SettingsRow>
-			<SettingsRow
-				title="Repository"
-				description="Choose the repo these Contexts settings apply to."
-			>
-				<RepoPicker
-					repositories={githubRepositories}
-					selected={selectedRepository}
-					onSelect={setSelectedRepoFilter}
-				/>
-			</SettingsRow>
-			{effectiveRepoFilter ? (
-				<RepositoryConfigSection
-					title="Repository contexts"
-					description="Allow this repo to contribute items to Contexts."
-					enabled={currentRepoConfig.enabled}
-					onEnabledChange={setRepoEnabled}
-				>
-					<ContextKindSection
-						title="Issues"
-						description="Surface issues you're assigned to or have opened."
-						enabled={currentRepoConfig.issues}
-						onEnabledChange={(next) => setToggle("issues", next)}
+		<div className="space-y-3 pt-2">
+			<ProviderTabs
+				value={activeProvider}
+				onChange={(provider) => setActiveProvider(provider)}
+			/>
+
+			{activeProvider !== "github" ? (
+				<ProviderComingSoon provider={activeProvider} />
+			) : githubAccounts.length === 0 ? (
+				<div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border/60 px-6 py-10 text-center">
+					<div className="flex size-9 items-center justify-center rounded-lg border border-border/50 text-muted-foreground">
+						<GithubBrandIcon size={18} />
+					</div>
+					<div className="text-[13px] font-medium text-foreground">
+						Connect a GitHub account
+					</div>
+					<div className="max-w-[360px] text-[12px] leading-5 text-muted-foreground">
+						You need at least one GitHub account before Contexts can pull
+						issues, pull requests, or discussions.
+					</div>
+					<Button
+						type="button"
+						size="sm"
+						onClick={openAccountSettings}
+						className="mt-1 cursor-pointer gap-1.5"
 					>
-						<ContextConfigRow
-							title="Scope"
-							description="Which issue relationship GitHub should use by default."
-						>
-							<ScopeMultiSelect
-								value={currentRepoConfig.issueScopes}
-								options={ISSUE_SCOPE_OPTIONS}
-								onChange={(value) => setConfig("issueScopes", value)}
-							/>
-						</ContextConfigRow>
-						<ContextConfigRow
-							title="Sort"
-							description="Default ordering before any sidebar filters are applied."
-						>
-							<SettingsSelect
-								value={currentRepoConfig.issueSort}
-								options={SORT_OPTIONS}
-								onChange={(value) => setConfig("issueSort", value)}
-							/>
-						</ContextConfigRow>
-						<ContextConfigRow
-							title="Labels"
-							description="Only include issues with selected repository labels."
-						>
-							<LabelMultiSelect
-								value={splitLabels(currentRepoConfig.issueLabels)}
-								options={labelOptions}
-								loading={labelsQuery.isLoading || labelsQuery.isFetching}
-								onChange={(value) =>
-									setConfig("issueLabels", joinLabels(value))
-								}
-							/>
-						</ContextConfigRow>
-					</ContextKindSection>
-					<ContextKindSection
-						title="Pull requests"
-						description="Surface PRs you opened, are review-requested on, or have outstanding reviews."
-						enabled={currentRepoConfig.prs}
-						onEnabledChange={(next) => setToggle("prs", next)}
-					>
-						<ContextConfigRow
-							title="Scope"
-							description="Which pull request relationship GitHub should use by default."
-						>
-							<ScopeMultiSelect
-								value={currentRepoConfig.prScopes}
-								options={PR_SCOPE_OPTIONS}
-								onChange={(value) => setConfig("prScopes", value)}
-							/>
-						</ContextConfigRow>
-						<ContextConfigRow
-							title="Drafts"
-							description="Whether draft pull requests appear in the PR feed."
-						>
-							<SettingsSelect
-								value={currentRepoConfig.draftPrs}
-								options={DRAFT_OPTIONS}
-								onChange={(value) => setConfig("draftPrs", value)}
-							/>
-						</ContextConfigRow>
-						<ContextConfigRow
-							title="Sort"
-							description="Default ordering before any sidebar filters are applied."
-						>
-							<SettingsSelect
-								value={currentRepoConfig.prSort}
-								options={SORT_OPTIONS}
-								onChange={(value) => setConfig("prSort", value)}
-							/>
-						</ContextConfigRow>
-						<ContextConfigRow
-							title="Labels"
-							description="Only include PRs with selected repository labels."
-						>
-							<LabelMultiSelect
-								value={splitLabels(currentRepoConfig.prLabels)}
-								options={labelOptions}
-								loading={labelsQuery.isLoading || labelsQuery.isFetching}
-								onChange={(value) => setConfig("prLabels", joinLabels(value))}
-							/>
-						</ContextConfigRow>
-					</ContextKindSection>
-					<ContextKindSection
-						title="Discussions"
-						description="Surface discussions in repos you have access to."
-						enabled={currentRepoConfig.discussions}
-						onEnabledChange={(next) => setToggle("discussions", next)}
-					>
-						<ContextConfigRow
-							title="Sort"
-							description="Default ordering before any sidebar filters are applied."
-						>
-							<SettingsSelect
-								value={currentRepoConfig.discussionSort}
-								options={SORT_OPTIONS}
-								onChange={(value) => setConfig("discussionSort", value)}
-							/>
-						</ContextConfigRow>
-					</ContextKindSection>
-				</RepositoryConfigSection>
-			) : (
-				<div className="py-8 text-center text-[12px] text-muted-foreground">
-					Add or connect a GitHub repository before configuring Contexts.
+						<Plus className="size-3.5" strokeWidth={2} />
+						Add account
+					</Button>
 				</div>
+			) : (
+				<SettingsGroup>
+					<SettingsRow
+						title="Repository"
+						description="Choose the repo these Contexts settings apply to."
+					>
+						<RepoPicker
+							repositories={githubRepositories}
+							selected={selectedRepository}
+							onSelect={setSelectedRepoFilter}
+						/>
+					</SettingsRow>
+					{effectiveRepoFilter ? (
+						<div className="py-1">
+							<ContextKindSection
+								title="Issues"
+								icon={<CircleDot className="size-3" strokeWidth={2} />}
+								description="Surface issues you're assigned to or have opened."
+								enabled={currentRepoConfig.issues}
+								onEnabledChange={(next) => setToggle("issues", next)}
+							>
+								<ContextConfigRow
+									title="Scope"
+									description="Which issue relationship GitHub should use by default."
+								>
+									<ScopeMultiSelect
+										value={currentRepoConfig.issueScopes}
+										options={ISSUE_SCOPE_OPTIONS}
+										onChange={(value) => setConfig("issueScopes", value)}
+									/>
+								</ContextConfigRow>
+								<ContextConfigRow
+									title="Sort"
+									description="Default ordering before any sidebar filters are applied."
+								>
+									<SettingsSelect
+										value={currentRepoConfig.issueSort}
+										options={SORT_OPTIONS}
+										onChange={(value) => setConfig("issueSort", value)}
+									/>
+								</ContextConfigRow>
+								<ContextConfigRow
+									title="Labels"
+									description="Only include issues with selected repository labels."
+								>
+									<LabelMultiSelect
+										value={splitLabels(currentRepoConfig.issueLabels)}
+										options={labelOptions}
+										loading={labelsQuery.isLoading || labelsQuery.isFetching}
+										onChange={(value) =>
+											setConfig("issueLabels", joinLabels(value))
+										}
+									/>
+								</ContextConfigRow>
+							</ContextKindSection>
+							<ContextKindSection
+								title="Pull requests"
+								icon={<GitPullRequest className="size-3" strokeWidth={2} />}
+								description="Surface PRs you opened, are review-requested on, or have outstanding reviews."
+								enabled={currentRepoConfig.prs}
+								onEnabledChange={(next) => setToggle("prs", next)}
+							>
+								<ContextConfigRow
+									title="Scope"
+									description="Which pull request relationship GitHub should use by default."
+								>
+									<ScopeMultiSelect
+										value={currentRepoConfig.prScopes}
+										options={PR_SCOPE_OPTIONS}
+										onChange={(value) => setConfig("prScopes", value)}
+									/>
+								</ContextConfigRow>
+								<ContextConfigRow
+									title="Drafts"
+									description="Whether draft pull requests appear in the PR feed."
+								>
+									<SettingsSelect
+										value={currentRepoConfig.draftPrs}
+										options={DRAFT_OPTIONS}
+										onChange={(value) => setConfig("draftPrs", value)}
+									/>
+								</ContextConfigRow>
+								<ContextConfigRow
+									title="Sort"
+									description="Default ordering before any sidebar filters are applied."
+								>
+									<SettingsSelect
+										value={currentRepoConfig.prSort}
+										options={SORT_OPTIONS}
+										onChange={(value) => setConfig("prSort", value)}
+									/>
+								</ContextConfigRow>
+								<ContextConfigRow
+									title="Labels"
+									description="Only include PRs with selected repository labels."
+								>
+									<LabelMultiSelect
+										value={splitLabels(currentRepoConfig.prLabels)}
+										options={labelOptions}
+										loading={labelsQuery.isLoading || labelsQuery.isFetching}
+										onChange={(value) =>
+											setConfig("prLabels", joinLabels(value))
+										}
+									/>
+								</ContextConfigRow>
+							</ContextKindSection>
+							<ContextKindSection
+								title="Discussions"
+								icon={<MessagesSquare className="size-3" strokeWidth={2} />}
+								description="Surface discussions in repos you have access to."
+								enabled={currentRepoConfig.discussions}
+								onEnabledChange={(next) => setToggle("discussions", next)}
+							>
+								<ContextConfigRow
+									title="Sort"
+									description="Default ordering before any sidebar filters are applied."
+								>
+									<SettingsSelect
+										value={currentRepoConfig.discussionSort}
+										options={SORT_OPTIONS}
+										onChange={(value) => setConfig("discussionSort", value)}
+									/>
+								</ContextConfigRow>
+							</ContextKindSection>
+						</div>
+					) : (
+						<div className="py-8 text-center text-[12px] text-muted-foreground">
+							Add or connect a GitHub repository before configuring Contexts.
+						</div>
+					)}
+				</SettingsGroup>
 			)}
-		</SettingsGroup>
+		</div>
 	);
 }
 
-function RepositoryConfigSection({
-	title,
-	description,
-	enabled,
-	onEnabledChange,
-	children,
+function ProviderTabs({
+	value,
+	onChange,
 }: {
-	title: string;
-	description: string;
-	enabled: boolean;
-	onEnabledChange: (enabled: boolean) => void;
-	children: ReactNode;
+	value: ContextProviderTab;
+	onChange: (value: ContextProviderTab) => void;
 }) {
 	return (
-		<div className="py-5">
-			<div className="flex items-center justify-between gap-4">
-				<div className="min-w-0 flex-1">
-					<div className="text-[13px] font-medium leading-snug text-foreground">
-						{title}
-					</div>
-					<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
-						{description}
-					</div>
+		<div className="grid grid-cols-5 gap-1 rounded-lg border border-border/60 bg-background/40 p-1">
+			{PROVIDER_TABS.map((tab) => (
+				<button
+					key={tab.id}
+					type="button"
+					aria-pressed={value === tab.id}
+					onClick={() => onChange(tab.id)}
+					className={cn(
+						"flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-md px-2 text-[12px] font-medium text-muted-foreground transition-[background-color,color,box-shadow]",
+						"hover:bg-accent/60 hover:text-foreground",
+						value === tab.id && "bg-accent text-foreground shadow-xs",
+					)}
+				>
+					{tab.icon}
+					<span className="truncate">{tab.label}</span>
+				</button>
+			))}
+		</div>
+	);
+}
+
+function ProviderComingSoon({
+	provider,
+}: {
+	provider: Exclude<ContextProviderTab, "github">;
+}) {
+	return (
+		<div className="flex min-h-[360px] w-full items-center justify-center px-3 py-8">
+			<div className="flex w-full max-w-[380px] flex-col items-stretch text-muted-foreground/65">
+				<div className="flex items-center justify-center gap-2">
+					<Pickaxe
+						className="inbox-coming-soon-pickaxe size-3.5 shrink-0"
+						strokeWidth={2}
+					/>
+					<span className="text-[13px] font-medium">Coming Soon</span>
 				</div>
-				<Switch checked={enabled} onCheckedChange={onEnabledChange} />
+				<div className="my-7 flex items-center gap-2 px-2 text-muted-foreground/20">
+					<div className="h-px flex-1 bg-current opacity-60" />
+					<div className="size-0.5 rounded-full bg-current opacity-80" />
+					<div className="h-px flex-1 bg-current opacity-60" />
+				</div>
+				<ul className="mx-auto list-disc space-y-3 pl-4 text-left text-pretty text-[11px] leading-4 marker:text-muted-foreground/35">
+					{COMING_SOON_COPY[provider].map((line) => (
+						<li key={line}>{line}</li>
+					))}
+				</ul>
 			</div>
-			{enabled ? <div className="mt-2">{children}</div> : null}
 		</div>
 	);
 }
 
 function ContextKindSection({
 	title,
+	icon,
 	description,
 	enabled,
 	onEnabledChange,
 	children,
 }: {
 	title: string;
+	icon: ReactNode;
 	description: string;
 	enabled: boolean;
 	onEnabledChange: (enabled: boolean) => void;
@@ -501,7 +580,10 @@ function ContextKindSection({
 		<div className="py-5">
 			<div className="flex items-center justify-between gap-4">
 				<div className="min-w-0 flex-1">
-					<div className="text-[13px] font-medium leading-snug text-foreground">
+					<div className="flex items-center gap-1.5 text-[13px] font-medium leading-snug text-foreground">
+						<span className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
+							{icon}
+						</span>
 						{title}
 					</div>
 					<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
@@ -588,7 +670,7 @@ function ScopeMultiSelect<T extends string>({
 					role="button"
 					tabIndex={0}
 					className={cn(
-						"flex min-h-9 w-[320px] cursor-pointer items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors",
+						"flex min-h-9 w-[280px] cursor-pointer items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors",
 						"hover:bg-muted/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
 					)}
 				>
@@ -622,7 +704,7 @@ function ScopeMultiSelect<T extends string>({
 					/>
 				</div>
 			</PopoverTrigger>
-			<PopoverContent align="end" className="w-[320px] p-1.5">
+			<PopoverContent align="end" className="w-[280px] p-1.5">
 				<Command>
 					<CommandInput placeholder="Search scopes" />
 					<CommandList>
@@ -684,7 +766,7 @@ function LabelMultiSelect({
 					role="button"
 					tabIndex={0}
 					className={cn(
-						"flex min-h-9 w-[320px] cursor-pointer items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors",
+						"flex min-h-9 w-[280px] cursor-pointer items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors",
 						"hover:bg-muted/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
 					)}
 				>
@@ -725,7 +807,7 @@ function LabelMultiSelect({
 					/>
 				</div>
 			</PopoverTrigger>
-			<PopoverContent align="end" className="w-[320px] p-1.5">
+			<PopoverContent align="end" className="w-[280px] p-1.5">
 				<Command>
 					<CommandInput placeholder="Search labels" />
 					<CommandList>
@@ -782,7 +864,7 @@ function SettingsSelect<T extends string>({
 				<Button
 					type="button"
 					variant="outline"
-					className="h-9 min-w-36 cursor-pointer justify-between gap-2 px-3 text-[13px]"
+					className="h-9 w-[180px] cursor-pointer justify-between gap-2 px-3 text-[13px]"
 				>
 					<span className="truncate">{selected.label}</span>
 					<ChevronDown
@@ -791,7 +873,10 @@ function SettingsSelect<T extends string>({
 					/>
 				</Button>
 			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end" className="min-w-40">
+			<DropdownMenuContent
+				align="end"
+				className="w-[var(--radix-dropdown-menu-trigger-width)]"
+			>
 				{options.map((option) => (
 					<DropdownMenuItem
 						key={option.value}
@@ -827,7 +912,7 @@ function RepoPicker({
 					type="button"
 					variant="outline"
 					disabled={repositories.length === 0}
-					className="h-10 w-60 cursor-pointer justify-between gap-2 px-3 text-[13px]"
+					className="h-10 w-[280px] cursor-pointer justify-between gap-2 px-3 text-[13px]"
 				>
 					<span className="flex min-w-0 items-center gap-2">
 						{selected ? (
@@ -877,96 +962,6 @@ function RepoAvatar({ repo }: { repo: RepositoryCreateOption }) {
 			fallback={repo.repoInitials ?? initialsFor(repo.name)}
 			className="size-5 shrink-0 rounded-md"
 			fallbackClassName="rounded-md text-[10px]"
-		/>
-	);
-}
-
-function AccountPicker({
-	accounts,
-	selected,
-	onSelect,
-}: {
-	accounts: ReadonlyArray<{
-		login: string;
-		host: string;
-		avatarUrl?: string | null;
-		name?: string | null;
-	}>;
-	selected: { login: string; host: string } | null;
-	onSelect: (login: string) => void;
-}) {
-	return (
-		<DropdownMenu>
-			<DropdownMenuTrigger asChild>
-				<Button
-					type="button"
-					variant="outline"
-					className={cn(
-						"h-10 w-60 cursor-pointer justify-between gap-2 px-3 text-[13px]",
-					)}
-				>
-					<span className="flex min-w-0 items-center gap-2">
-						{selected ? (
-							<AccountAvatar account={selected} />
-						) : (
-							<GithubBrandIcon size={16} />
-						)}
-						<span className="min-w-0 truncate font-medium">
-							{selected ? selected.login : "Select account"}
-						</span>
-						{selected ? (
-							<span className="shrink-0 text-[11px] text-muted-foreground">
-								{selected.host}
-							</span>
-						) : null}
-					</span>
-					<ChevronDown
-						className="size-4 shrink-0 text-muted-foreground"
-						strokeWidth={1.8}
-					/>
-				</Button>
-			</DropdownMenuTrigger>
-			<DropdownMenuContent
-				align="start"
-				className="w-[var(--radix-dropdown-menu-trigger-width)]"
-			>
-				{accounts.map((account) => (
-					<DropdownMenuItem
-						key={`${account.host}:${account.login}`}
-						onSelect={() => onSelect(account.login)}
-						className="cursor-pointer gap-2 text-[13px]"
-					>
-						<AccountAvatar account={account} />
-						<span className="min-w-0 flex-1 truncate">{account.login}</span>
-						<span className="shrink-0 text-[11px] text-muted-foreground">
-							{account.host}
-						</span>
-					</DropdownMenuItem>
-				))}
-				<DropdownMenuSeparator />
-				<DropdownMenuItem
-					onSelect={openAccountSettings}
-					className="cursor-pointer gap-2 text-[13px] text-muted-foreground"
-				>
-					<Plus className="size-4" strokeWidth={2} />
-					Add account…
-				</DropdownMenuItem>
-			</DropdownMenuContent>
-		</DropdownMenu>
-	);
-}
-
-function AccountAvatar({
-	account,
-}: {
-	account: { login: string; avatarUrl?: string | null; name?: string | null };
-}) {
-	return (
-		<CachedAvatar
-			src={account.avatarUrl ?? undefined}
-			alt={account.login}
-			fallback={initialsFor(account.name ?? account.login)}
-			className="size-5 shrink-0 rounded-full"
 		/>
 	);
 }

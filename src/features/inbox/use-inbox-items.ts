@@ -10,6 +10,7 @@ import {
 } from "@/lib/api";
 import {
 	DEFAULT_INBOX_ACCOUNT_TOGGLES,
+	DEFAULT_INBOX_REPO_CONFIG,
 	type InboxAccountSourceToggles,
 	type InboxDiscussionState,
 	type InboxIssueState,
@@ -126,15 +127,19 @@ export function useInboxItems(
 	filters: InboxFilters | null = null,
 ): UseInboxItemsResult {
 	const accounts = useEnabledGithubAccounts();
-	const primary = accounts[0] ?? null;
+	const primary =
+		(repoFilter
+			? accounts.find((account) => account.toggles.repos?.[repoFilter])
+			: undefined) ??
+		accounts[0] ??
+		null;
 	const repoToggles =
 		primary && repoFilter
 			? (primary.toggles.repos?.[repoFilter] ?? null)
 			: null;
 	const activeToggles: ActiveInboxToggles | null = repoFilter
-		? repoToggles
+		? (repoToggles ?? { ...DEFAULT_INBOX_REPO_CONFIG, enabled: true })
 		: (primary?.toggles ?? null);
-	const repoEnabled = repoFilter ? Boolean(repoToggles?.enabled) : true;
 	// Honor the per-account settings toggle for THIS kind — flipping
 	// `Issues` off in Settings → Context disables this tab's fetch.
 	const settingsAllowsKind = activeToggles
@@ -144,7 +149,7 @@ export function useInboxItems(
 				? activeToggles.prs
 				: activeToggles.discussions
 		: false;
-	const enabled = primary !== null && repoEnabled && settingsAllowsKind;
+	const enabled = primary !== null && settingsAllowsKind;
 	const defaultFilters = activeToggles
 		? {
 				state: defaultStateForKind(kind, activeToggles),

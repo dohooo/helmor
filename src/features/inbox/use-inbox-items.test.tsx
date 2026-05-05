@@ -3,6 +3,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	type AppSettings,
 	DEFAULT_INBOX_ACCOUNT_TOGGLES,
 	DEFAULT_INBOX_REPO_CONFIG,
 	DEFAULT_SETTINGS,
@@ -25,28 +26,31 @@ vi.mock("@/lib/use-forge-accounts", () => ({
 	}),
 }));
 
-function wrapperFor(queryClient: QueryClient) {
+function wrapperFor(
+	queryClient: QueryClient,
+	settings: AppSettings = {
+		...DEFAULT_SETTINGS,
+		inboxSourceConfig: {
+			accounts: {
+				"github:dohooo": {
+					...DEFAULT_INBOX_ACCOUNT_TOGGLES,
+					repos: {
+						"dohooo/helmor": {
+							...DEFAULT_INBOX_REPO_CONFIG,
+							enabled: true,
+						},
+					},
+				},
+			},
+		},
+	},
+) {
 	return function Wrapper({ children }: { children: ReactNode }) {
 		return (
 			<QueryClientProvider client={queryClient}>
 				<SettingsContext.Provider
 					value={{
-						settings: {
-							...DEFAULT_SETTINGS,
-							inboxSourceConfig: {
-								accounts: {
-									"github:dohooo": {
-										...DEFAULT_INBOX_ACCOUNT_TOGGLES,
-										repos: {
-											"dohooo/helmor": {
-												...DEFAULT_INBOX_REPO_CONFIG,
-												enabled: true,
-											},
-										},
-									},
-								},
-							},
-						},
+						settings,
 						isLoaded: true,
 						updateSettings: vi.fn(),
 					}}
@@ -107,5 +111,43 @@ describe("useInboxItems", () => {
 				filters: expect.objectContaining({ state: null }),
 			}),
 		);
+	});
+
+	it("ignores legacy repository enabled=false once the repository master switch is removed", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		listInboxItemsMock.mockResolvedValueOnce({
+			items: [],
+			nextCursor: null,
+		});
+
+		const { result } = renderHook(
+			() => useInboxItems("issues", "dohooo/helmor", null),
+			{
+				wrapper: wrapperFor(queryClient, {
+					...DEFAULT_SETTINGS,
+					inboxSourceConfig: {
+						accounts: {
+							"github:dohooo": {
+								...DEFAULT_INBOX_ACCOUNT_TOGGLES,
+								repos: {
+									"dohooo/helmor": {
+										...DEFAULT_INBOX_REPO_CONFIG,
+										enabled: false,
+										issues: true,
+									},
+								},
+							},
+						},
+					},
+				}),
+			},
+		);
+
+		await waitFor(() => expect(result.current.hasResolved).toBe(true));
+
+		expect(result.current.kindEnabled).toBe(true);
+		expect(listInboxItemsMock).toHaveBeenCalledTimes(1);
 	});
 });
