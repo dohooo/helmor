@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.17.0
+
+### Minor Changes
+
+- [#367](https://github.com/dohooo/helmor/pull/367) [`359d678`](https://github.com/dohooo/helmor/commit/359d678e57d8d2914b26628154fdaf7ba3f08ebf) Thanks [@dohooo](https://github.com/dohooo)! - Ship the GitHub inbox, redesigned workspace start page, and Local workspaces:
+  - Add a GitHub inbox that lists real issues, pull requests, and discussions per linked account, with sub-tab toggles, search and label filters, per-repo scoping, and detail previews you can drop straight into the composer.
+  - Redesign the workspace start page around a context sidebar that exposes the inbox and source-detail previews next to a mode picker, branch picker, and Create-and-checkout-new-branch dialog whose checkout is deferred until you submit.
+  - Add Local workspace mode — the agent operates directly on your source repo without a worktree — plus a right-click "Move into a new worktree" flow that relocates a Local workspace into its own worktree without touching the source repo.
+  - Fix a sidecar zombie-process bug where a closed parent pipe blocked auto title generation and branch rename after the first message.
+
+### Patch Changes
+
+- [#367](https://github.com/dohooo/helmor/pull/367) [`359d678`](https://github.com/dohooo/helmor/commit/359d678e57d8d2914b26628154fdaf7ba3f08ebf) Thanks [@dohooo](https://github.com/dohooo)! - Poll for the new login after the GitHub/GitLab connect dialog closes so a brief flush delay between `gh auth login` finishing and writing its config no longer leaves the Connect button stuck in the unconnected state.
+
 ## 0.16.0
 
 ### Minor Changes
