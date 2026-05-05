@@ -1,10 +1,5 @@
 import { memo, useEffect, useState } from "react";
-import {
-	Avatar,
-	AvatarBadge,
-	AvatarFallback,
-	AvatarImage,
-} from "@/components/ui/avatar";
+import { Avatar, AvatarBadge, AvatarImage } from "@/components/ui/avatar";
 import { ShineBorder } from "@/components/ui/shine-border";
 import { cn } from "@/lib/utils";
 
@@ -71,6 +66,7 @@ export const WorkspaceAvatar = memo(function WorkspaceAvatar({
 
 	return (
 		<Avatar
+			key={src ?? "fallback"}
 			aria-hidden="true"
 			data-slot="workspace-avatar"
 			data-fallback={fallback}
@@ -91,16 +87,16 @@ export const WorkspaceAvatar = memo(function WorkspaceAvatar({
 					}}
 				/>
 			) : null}
-			{!hasImage ? (
-				<AvatarFallback
-					delayMs={0}
+			{!src || !hasImage ? (
+				<span
+					data-slot="avatar-fallback"
 					className={cn(
-						"bg-muted text-[7px] font-semibold uppercase tracking-[0.02em] text-muted-foreground",
+						"flex size-full items-center justify-center rounded-[inherit] bg-muted text-[7px] font-semibold uppercase tracking-[0.02em] text-muted-foreground",
 						fallbackClassName,
 					)}
 				>
 					{fallback}
-				</AvatarFallback>
+				</span>
 			) : null}
 			{isRunning ? (
 				<ShineBorder
