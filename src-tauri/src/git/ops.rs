@@ -546,7 +546,7 @@ pub fn remove_worktree(repo_root: &Path, workspace_dir: &Path) -> Result<()> {
 }
 
 /// Same on-disk location? Falls back to lexical equality if canonicalize fails.
-fn paths_resolve_equal(a: &Path, b: &Path) -> bool {
+pub(crate) fn paths_resolve_equal(a: &Path, b: &Path) -> bool {
     match (fs::canonicalize(a), fs::canonicalize(b)) {
         (Ok(ca), Ok(cb)) => ca == cb,
         _ => a == b,

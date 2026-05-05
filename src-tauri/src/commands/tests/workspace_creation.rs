@@ -293,6 +293,50 @@ fn finalize_workspace_from_repo_no_ops_for_local_workspace() {
 }
 
 #[test]
+fn finalize_workspace_short_circuits_for_orphaned_initializing_local_row() {
+    // If `prepare_local_workspace_impl` ever fails between the
+    // `Initializing` insert and the `Ready` flip, the row sits as a
+    // local-mode `Initializing`. A subsequent `finalize_workspace_from_repo`
+    // must NOT route that row into the worktree-creation path — that would
+    // resolve `workspace_dir = repo_root` and the failure cleanup
+    // (`cleanup_failed_created_workspace`) could touch the user's repo.
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    fs::write(harness.source_repo_root.join("user-file.txt"), "important").unwrap();
+
+    let prepared = workspaces::prepare_local_workspace_impl(&harness.repo_id, None).unwrap();
+    // Force the row back into Initializing to mimic the orphaned state.
+    {
+        let conn = Connection::open(harness.db_path()).unwrap();
+        conn.execute(
+            "UPDATE workspaces SET state = 'initializing' WHERE id = ?1",
+            [&prepared.workspace_id],
+        )
+        .unwrap();
+    }
+
+    let finalized = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
+    // Short-circuit returns whatever state the row is in; what matters is
+    // that no worktree creation / cleanup ran.
+    assert_eq!(finalized.final_state, WorkspaceState::Initializing);
+
+    // User repo untouched: file still there, branch still `main`, no
+    // `.trash-*` dirs scattered around.
+    assert!(harness.source_repo_root.join("user-file.txt").is_file());
+    let head = crate::git_ops::current_branch_name(&harness.source_repo_root).unwrap();
+    assert_eq!(head, "main");
+    let parent = harness.source_repo_root.parent().unwrap();
+    let trash_count = fs::read_dir(parent)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with(".trash-"))
+        .count();
+    assert_eq!(trash_count, 0, "no .trash-* dir should exist");
+}
+
+#[test]
 fn create_workspace_from_repo_defers_setup_when_script_configured_by_default() {
     let _guard = TEST_LOCK
         .lock()

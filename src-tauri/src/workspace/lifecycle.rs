@@ -319,9 +319,18 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
         .ok_or_else(|| coded(ErrorCode::WorkspaceNotFound))
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
 
-    // Local workspaces are created in one shot by `prepare_local_workspace_impl`
-    // and arrive here already past Initializing. Treat that as a no-op rather
-    // than an error so the frontend's prepare+finalize sequence remains uniform.
+    // Local workspaces never need worktree materialisation. Short-circuit
+    // unconditionally — even an orphaned `Initializing` local row (left by
+    // a partially-failed prepare) must not enter the worktree-creation
+    // path below, where a failure would route into
+    // `cleanup_failed_created_workspace(repo_root, root_path, ...)`.
+    if record.mode == WorkspaceMode::Local {
+        return Ok(FinalizeWorkspaceResponse {
+            workspace_id: workspace_id.to_string(),
+            final_state: record.state,
+        });
+    }
+
     match record.state {
         WorkspaceState::Initializing => {}
         WorkspaceState::Ready | WorkspaceState::SetupPending => {
@@ -1082,6 +1091,13 @@ pub fn restore_workspace_impl(
         .unwrap_or(stored_target_branch.as_str());
 
     if workspace_dir.exists() {
+        // Belt + suspenders against local-mode mis-routing.
+        if git_ops::paths_resolve_equal(&repo_root, &workspace_dir) {
+            bail!(
+                "Refusing to wipe restore target {} — equals repo_root",
+                workspace_dir.display()
+            );
+        }
         std::fs::remove_dir_all(&workspace_dir).with_context(|| {
             format!(
                 "Failed to remove existing workspace directory: {}",
@@ -1211,7 +1227,12 @@ fn cleanup_failed_created_workspace(
     branch: &str,
     created_worktree: bool,
 ) {
-    if created_worktree && workspace_dir.exists() {
+    // Refuse to touch the source repo even if a caller mis-routed a
+    // local-mode record into this worktree-creation cleanup path.
+    if created_worktree
+        && workspace_dir.exists()
+        && !git_ops::paths_resolve_equal(repo_root, workspace_dir)
+    {
         let _ = git_ops::remove_worktree(repo_root, workspace_dir);
         let _ = fs::remove_dir_all(workspace_dir);
     }
@@ -1223,8 +1244,10 @@ fn cleanup_failed_created_workspace(
 }
 
 fn cleanup_failed_restore(repo_root: &Path, workspace_dir: &Path, branch: &str) {
-    let _ = git_ops::remove_worktree(repo_root, workspace_dir);
-    let _ = fs::remove_dir_all(workspace_dir);
+    if !git_ops::paths_resolve_equal(repo_root, workspace_dir) {
+        let _ = git_ops::remove_worktree(repo_root, workspace_dir);
+        let _ = fs::remove_dir_all(workspace_dir);
+    }
     let _ = git_ops::remove_branch(repo_root, branch);
 }
 
