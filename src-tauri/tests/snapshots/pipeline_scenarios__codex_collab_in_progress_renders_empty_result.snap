@@ -1,0 +1,27 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: tool-call
+      tool_name: subagent_spawn
+      tool_call_id: codex-collab-spawn3
+      args_keys:
+        - agentsStates
+        - prompt
+        - receiverThreadIds
+        - senderThreadId
+        - status
+        - tool
+      args_text_length: 147
+      has_result: true
+      result_kind: string
+      result_preview: ""
+      streaming_status: ~
+  status:
+    type: complete
+    reason: stop
+  streaming: ~

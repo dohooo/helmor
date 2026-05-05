@@ -1,0 +1,248 @@
+---
+source: tests/pipeline_streams.rs
+expression: snapshot
+input_file: tests/fixtures/streams/codex/spawn-agents.jsonl
+---
+line_count: 68
+checkpoint_count: 19
+checkpoints:
+  - line_index: 4
+    event_type: item/completed
+    roles: []
+    last_part_types: []
+  - line_index: 6
+    event_type: item/completed
+    roles: []
+    last_part_types: []
+  - line_index: 11
+    event_type: item/completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+  - line_index: 14
+    event_type: item/completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - tool-call
+  - line_index: 19
+    event_type: item/completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - tool-call
+      - tool-call
+  - line_index: 23
+    event_type: item/completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - tool-call
+      - tool-call
+  - line_index: 32
+    event_type: item/completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - tool-call
+      - tool-call
+      - text
+      - text
+  - line_index: 33
+    event_type: item/completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - tool-call
+      - tool-call
+      - text
+      - text
+  - line_index: 36
+    event_type: item/completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - tool-call
+      - tool-call
+      - text
+      - text
+      - tool-call
+      - tool-call
+  - line_index: 38
+    event_type: item/completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - tool-call
+      - tool-call
+      - text
+      - text
+      - tool-call
+      - tool-call
+  - line_index: 43
+    event_type: item/completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - tool-call
+      - tool-call
+      - text
+      - text
+      - tool-call
+      - tool-call
+      - text
+  - line_index: 49
+    event_type: item/completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - tool-call
+      - tool-call
+      - text
+      - text
+      - tool-call
+      - tool-call
+      - text
+      - text
+      - tool-call
+  - line_index: 50
+    event_type: item/completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - tool-call
+      - tool-call
+      - text
+      - text
+      - tool-call
+      - tool-call
+      - text
+      - text
+      - tool-call
+  - line_index: 52
+    event_type: item/completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - tool-call
+      - tool-call
+      - text
+      - text
+      - tool-call
+      - tool-call
+      - text
+      - text
+      - tool-call
+      - tool-call
+  - line_index: 61
+    event_type: item/completed
+    roles:
+      - assistant
+    last_part_types:
+      - text
+      - tool-call
+      - tool-call
+      - text
+      - text
+      - tool-call
+      - tool-call
+      - text
+      - text
+      - tool-call
+      - tool-call
+      - text
+      - text
+  - line_index: 63
+    event_type: turn/completed
+    roles:
+      - assistant
+      - system
+    last_part_types:
+      - text
+  - line_index: 64
+    event_type: item/completed
+    roles:
+      - assistant
+      - system
+    last_part_types:
+      - text
+  - line_index: 65
+    event_type: item/completed
+    roles:
+      - assistant
+      - system
+    last_part_types:
+      - text
+  - line_index: 67
+    event_type: turn/completed
+    roles:
+      - assistant
+      - system
+    last_part_types:
+      - text
+final_state:
+  message_count: 2
+  roles:
+    - assistant
+    - system
+  total_parts: 14
+persisted_turns:
+  turn_count: 13
+  total_blocks: 0
+  turns:
+    - role: assistant
+      block_types: []
+    - role: assistant
+      block_types: []
+    - role: assistant
+      block_types: []
+    - role: assistant
+      block_types: []
+    - role: assistant
+      block_types: []
+    - role: assistant
+      block_types: []
+    - role: assistant
+      block_types: []
+    - role: assistant
+      block_types: []
+    - role: assistant
+      block_types: []
+    - role: assistant
+      block_types: []
+    - role: assistant
+      block_types: []
+    - role: assistant
+      block_types: []
+    - role: assistant
+      block_types: []
+historical_render:
+  message_count: 1
+  messages:
+    - role: assistant
+      part_types:
+        - text
+        - tool-call
+        - tool-call
+        - text
+        - text
+        - tool-call
+        - text
+        - tool-call
+        - text
+        - tool-call
+        - text
+        - tool-call
+        - text
