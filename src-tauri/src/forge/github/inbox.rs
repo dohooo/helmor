@@ -11,6 +11,7 @@
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashSet};
 
 use super::{
     accounts as gh_accounts,
@@ -32,6 +33,10 @@ pub struct InboxToggles {
 pub struct InboxFilters {
     pub query: Option<String>,
     pub state: Option<InboxStateFilter>,
+    pub scope: Option<Vec<InboxScopeFilter>>,
+    pub sort: Option<InboxSortFilter>,
+    pub draft: Option<InboxDraftFilter>,
+    pub labels: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -40,8 +45,55 @@ pub enum InboxStateFilter {
     Open,
     Closed,
     Merged,
+    All,
     Answered,
     Unanswered,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum InboxScopeFilter {
+    Involves,
+    Assigned,
+    Mentioned,
+    Created,
+    Author,
+    Assignee,
+    Mentions,
+    ReviewRequested,
+    ReviewedBy,
+    All,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InboxSortFilter {
+    Updated,
+    Created,
+    Comments,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InboxDraftFilter {
+    Exclude,
+    Include,
+    Only,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubLabelOption {
+    pub name: String,
+    pub color: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubLabelRestResponse {
+    name: String,
+    color: Option<String>,
+    description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -211,6 +263,30 @@ fn search_qualifier(query: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
+fn labels_qualifier(labels: Option<&str>) -> String {
+    let Some(labels) = labels else {
+        return String::new();
+    };
+    labels
+        .split(',')
+        .filter_map(|label| {
+            let cleaned = label
+                .trim()
+                .chars()
+                .map(|c| {
+                    if c.is_control() || matches!(c, '"' | '\\') {
+                        ' '
+                    } else {
+                        c
+                    }
+                })
+                .collect::<String>();
+            let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+            (!collapsed.is_empty()).then(|| format!("label:\"{collapsed}\" "))
+        })
+        .collect::<String>()
+}
+
 fn state_qualifier(source: InboxSource, state: Option<InboxStateFilter>) -> &'static str {
     match (source, state) {
         (InboxSource::GithubIssue, Some(InboxStateFilter::Open)) => "is:open ",
@@ -221,6 +297,88 @@ fn state_qualifier(source: InboxSource, state: Option<InboxStateFilter>) -> &'st
         (InboxSource::GithubDiscussion, Some(InboxStateFilter::Answered)) => "is:answered ",
         (InboxSource::GithubDiscussion, Some(InboxStateFilter::Unanswered)) => "is:unanswered ",
         _ => "",
+    }
+}
+
+fn scope_qualifier(source: InboxSource, scope: Option<InboxScopeFilter>) -> &'static str {
+    match (source, scope) {
+        (_, None | Some(InboxScopeFilter::All)) => "",
+        (_, Some(InboxScopeFilter::Involves)) => "involves:@me ",
+        (InboxSource::GithubIssue, Some(InboxScopeFilter::Assigned)) => "assignee:@me ",
+        (InboxSource::GithubIssue, Some(InboxScopeFilter::Mentioned)) => "mentions:@me ",
+        (InboxSource::GithubIssue, Some(InboxScopeFilter::Created)) => "author:@me ",
+        (InboxSource::GithubPr, Some(InboxScopeFilter::Author)) => "author:@me ",
+        (InboxSource::GithubPr, Some(InboxScopeFilter::Assignee)) => "assignee:@me ",
+        (InboxSource::GithubPr, Some(InboxScopeFilter::Mentions)) => "mentions:@me ",
+        (InboxSource::GithubPr, Some(InboxScopeFilter::ReviewRequested)) => "review-requested:@me ",
+        (InboxSource::GithubPr, Some(InboxScopeFilter::ReviewedBy)) => "reviewed-by:@me ",
+        _ => "",
+    }
+}
+
+fn scope_key(scope: Option<InboxScopeFilter>) -> String {
+    match scope {
+        Some(scope) => format!("{scope:?}"),
+        None => "default".to_string(),
+    }
+}
+
+fn source_scopes(
+    source: InboxSource,
+    scopes: Option<&[InboxScopeFilter]>,
+) -> Vec<Option<InboxScopeFilter>> {
+    let Some(scopes) = scopes else {
+        return vec![None];
+    };
+    let mut out: Vec<Option<InboxScopeFilter>> = scopes
+        .iter()
+        .copied()
+        .filter(|scope| {
+            matches!(
+                (source, scope),
+                (_, InboxScopeFilter::All)
+                    | (_, InboxScopeFilter::Involves)
+                    | (InboxSource::GithubIssue, InboxScopeFilter::Assigned)
+                    | (InboxSource::GithubIssue, InboxScopeFilter::Mentioned)
+                    | (InboxSource::GithubIssue, InboxScopeFilter::Created)
+                    | (InboxSource::GithubPr, InboxScopeFilter::Author)
+                    | (InboxSource::GithubPr, InboxScopeFilter::Assignee)
+                    | (InboxSource::GithubPr, InboxScopeFilter::Mentions)
+                    | (InboxSource::GithubPr, InboxScopeFilter::ReviewRequested)
+                    | (InboxSource::GithubPr, InboxScopeFilter::ReviewedBy)
+            )
+        })
+        .map(Some)
+        .collect();
+    out.sort();
+    out.dedup();
+    if out.is_empty() {
+        vec![None]
+    } else {
+        out
+    }
+}
+
+fn draft_qualifier(draft: Option<InboxDraftFilter>) -> &'static str {
+    match draft {
+        Some(InboxDraftFilter::Exclude) => "-is:draft ",
+        Some(InboxDraftFilter::Only) => "is:draft ",
+        Some(InboxDraftFilter::Include) | None => "",
+    }
+}
+
+fn sort_qualifier(sort: Option<InboxSortFilter>) -> &'static str {
+    match sort {
+        Some(InboxSortFilter::Created) => "sort:created-desc",
+        Some(InboxSortFilter::Comments) => "sort:comments-desc",
+        Some(InboxSortFilter::Updated) | None => "sort:updated-desc",
+    }
+}
+
+fn discussion_sort_qualifier(sort: Option<InboxSortFilter>) -> &'static str {
+    match sort {
+        Some(InboxSortFilter::Created) => "sort:created-desc",
+        Some(InboxSortFilter::Updated | InboxSortFilter::Comments) | None => "sort:updated-desc",
     }
 }
 
@@ -241,7 +399,19 @@ pub fn list_inbox_items(
             .as_ref()
             .and_then(|filters| filters.query.as_deref()),
     );
+    let labels_qual = labels_qualifier(
+        filters
+            .as_ref()
+            .and_then(|filters| filters.labels.as_deref()),
+    );
     let state_filter = filters.as_ref().and_then(|filters| filters.state);
+    let scope_filters = filters
+        .as_ref()
+        .and_then(|filters| filters.scope.as_deref());
+    let sort_qual = sort_qualifier(filters.as_ref().and_then(|filters| filters.sort));
+    let discussion_sort_qual =
+        discussion_sort_qualifier(filters.as_ref().and_then(|filters| filters.sort));
+    let draft_filter = filters.as_ref().and_then(|filters| filters.draft);
 
     tracing::debug!(
         target: "helmor::inbox",
@@ -255,86 +425,116 @@ pub fn list_inbox_items(
         "list_inbox_items: starting page"
     );
 
-    // When the user has scoped to a single repo, the kanban inbox shows
-    // "everything in this repo" rather than "everything I'm personally
-    // involved in" — otherwise repos where the user has access but
-    // hasn't authored / commented on issues come back empty even though
-    // 17 issues exist (real-world helmor case). Without a repo filter
-    // the query stays narrow so the global feed isn't a firehose.
-    let involvement_qual = if repo_qual.is_empty() {
+    let mut items: Vec<InboxItem> = Vec::new();
+    let discussion_scope_qual = if repo_qual.is_empty() {
         "involves:@me "
     } else {
         ""
     };
 
-    let mut items: Vec<InboxItem> = Vec::new();
-
     if toggles.issues && !state.issues.done {
-        let q = format!(
-            "{repo_qual}{search_qual}is:issue {}{involvement_qual}archived:false",
-            state_qualifier(InboxSource::GithubIssue, state_filter)
-        );
-        match fetch_search(login, &q, &state.issues.cursor)? {
-            FetchOutcome::Auth => {
-                tracing::warn!(target: "helmor::inbox", login, "issues search: auth required");
-                return Ok(InboxPage {
-                    items: Vec::new(),
-                    next_cursor: None,
-                });
+        let scopes = source_scopes(InboxSource::GithubIssue, scope_filters);
+        let mut all_done = true;
+        for scope in scopes {
+            let scope_key = scope_key(scope);
+            let cursor_entry = state
+                .issue_scopes
+                .entry(scope_key.clone())
+                .or_insert_with(MultiCursorEntry::default);
+            if cursor_entry.done {
+                continue;
             }
-            FetchOutcome::Ok(page) => {
-                tracing::debug!(
-                    target: "helmor::inbox",
-                    login,
-                    fetched = page.nodes.len(),
-                    has_next = page.has_next_page,
-                    "issues search results"
-                );
-                items.extend(
-                    page.nodes
-                        .into_iter()
-                        .filter_map(|n| issue_or_pr_to_item(n, false)),
-                );
-                state.issues = MultiCursorEntry {
-                    cursor: page.end_cursor,
-                    done: !page.has_next_page,
-                };
+            let q = format!(
+                "{repo_qual}{search_qual}{labels_qual}is:issue {}{}archived:false",
+                state_qualifier(InboxSource::GithubIssue, state_filter),
+                scope_qualifier(InboxSource::GithubIssue, scope)
+            );
+            match fetch_search(login, &q, &cursor_entry.cursor, sort_qual)? {
+                FetchOutcome::Auth => {
+                    tracing::warn!(target: "helmor::inbox", login, "issues search: auth required");
+                    return Ok(InboxPage {
+                        items: Vec::new(),
+                        next_cursor: None,
+                    });
+                }
+                FetchOutcome::Ok(page) => {
+                    tracing::debug!(
+                        target: "helmor::inbox",
+                        login,
+                        fetched = page.nodes.len(),
+                        has_next = page.has_next_page,
+                        scope = scope_key,
+                        "issues search results"
+                    );
+                    items.extend(
+                        page.nodes
+                            .into_iter()
+                            .filter_map(|n| issue_or_pr_to_item(n, false)),
+                    );
+                    *cursor_entry = MultiCursorEntry {
+                        cursor: page.end_cursor,
+                        done: !page.has_next_page,
+                    };
+                    if !cursor_entry.done {
+                        all_done = false;
+                    }
+                }
             }
         }
+        state.issues.done = all_done;
     }
 
     if toggles.prs && !state.prs.done {
-        let q = format!(
-            "{repo_qual}{search_qual}is:pr {}{involvement_qual}archived:false",
-            state_qualifier(InboxSource::GithubPr, state_filter)
-        );
-        match fetch_search(login, &q, &state.prs.cursor)? {
-            FetchOutcome::Auth => {
-                tracing::warn!(target: "helmor::inbox", login, "prs search: auth required");
-                return Ok(InboxPage {
-                    items: Vec::new(),
-                    next_cursor: None,
-                });
+        let scopes = source_scopes(InboxSource::GithubPr, scope_filters);
+        let mut all_done = true;
+        for scope in scopes {
+            let scope_key = scope_key(scope);
+            let cursor_entry = state
+                .pr_scopes
+                .entry(scope_key.clone())
+                .or_insert_with(MultiCursorEntry::default);
+            if cursor_entry.done {
+                continue;
             }
-            FetchOutcome::Ok(page) => {
-                tracing::debug!(
-                    target: "helmor::inbox",
-                    login,
-                    fetched = page.nodes.len(),
-                    has_next = page.has_next_page,
-                    "prs search results"
-                );
-                items.extend(
-                    page.nodes
-                        .into_iter()
-                        .filter_map(|n| issue_or_pr_to_item(n, true)),
-                );
-                state.prs = MultiCursorEntry {
-                    cursor: page.end_cursor,
-                    done: !page.has_next_page,
-                };
+            let q = format!(
+                "{repo_qual}{search_qual}{labels_qual}is:pr {}{}{}archived:false",
+                state_qualifier(InboxSource::GithubPr, state_filter),
+                scope_qualifier(InboxSource::GithubPr, scope),
+                draft_qualifier(draft_filter)
+            );
+            match fetch_search(login, &q, &cursor_entry.cursor, sort_qual)? {
+                FetchOutcome::Auth => {
+                    tracing::warn!(target: "helmor::inbox", login, "prs search: auth required");
+                    return Ok(InboxPage {
+                        items: Vec::new(),
+                        next_cursor: None,
+                    });
+                }
+                FetchOutcome::Ok(page) => {
+                    tracing::debug!(
+                        target: "helmor::inbox",
+                        login,
+                        fetched = page.nodes.len(),
+                        has_next = page.has_next_page,
+                        scope = scope_key,
+                        "prs search results"
+                    );
+                    items.extend(
+                        page.nodes
+                            .into_iter()
+                            .filter_map(|n| issue_or_pr_to_item(n, true)),
+                    );
+                    *cursor_entry = MultiCursorEntry {
+                        cursor: page.end_cursor,
+                        done: !page.has_next_page,
+                    };
+                    if !cursor_entry.done {
+                        all_done = false;
+                    }
+                }
             }
         }
+        state.prs.done = all_done;
     }
 
     if toggles.discussions && !state.discussions.done {
@@ -344,7 +544,8 @@ pub fn list_inbox_items(
             &repo_qual,
             &search_qual,
             state_qualifier(InboxSource::GithubDiscussion, state_filter),
-            involvement_qual,
+            discussion_scope_qual,
+            discussion_sort_qual,
         )? {
             FetchOutcome::Auth => {
                 tracing::warn!(target: "helmor::inbox", login, "discussions search: auth required");
@@ -366,6 +567,8 @@ pub fn list_inbox_items(
         }
     }
 
+    let mut seen = HashSet::new();
+    items.retain(|item| seen.insert(item.id.clone()));
     items.sort_by_key(|item| std::cmp::Reverse(item.last_activity_at));
     items.truncate(limit);
 
@@ -403,6 +606,50 @@ pub fn get_inbox_item_detail(
         InboxSource::GithubPr => fetch_pull_request_detail(login, external_id),
         InboxSource::GithubDiscussion => fetch_discussion_detail(login, external_id),
     }
+}
+
+pub fn list_github_labels(login: &str, repos: &[String]) -> Result<Vec<GithubLabelOption>> {
+    let mut labels_by_name = BTreeMap::<String, GithubLabelOption>::new();
+    for repo in repos.iter().filter_map(|repo| sanitize_repo_filter(repo)) {
+        let path = format!("/repos/{repo}/labels?per_page=100");
+        let raw = match run_github_api(login, &path, "repository labels") {
+            Ok(Some(raw)) => raw,
+            Ok(None) => continue,
+            Err(error) => {
+                tracing::warn!(
+                    target: "helmor::inbox",
+                    login,
+                    repo,
+                    error = %error,
+                    "failed to load GitHub labels for repo"
+                );
+                continue;
+            }
+        };
+        let labels = match serde_json::from_str::<Vec<GithubLabelRestResponse>>(&raw) {
+            Ok(labels) => labels,
+            Err(error) => {
+                tracing::warn!(
+                    target: "helmor::inbox",
+                    login,
+                    repo,
+                    error = %error,
+                    "failed to parse GitHub labels for repo"
+                );
+                continue;
+            }
+        };
+        for label in labels {
+            labels_by_name
+                .entry(label.name.clone())
+                .or_insert(GithubLabelOption {
+                    name: label.name,
+                    color: label.color,
+                    description: label.description,
+                });
+        }
+    }
+    Ok(labels_by_name.into_values().collect())
 }
 
 fn fetch_pull_request_detail(login: &str, external_id: &str) -> Result<Option<InboxItemDetail>> {
@@ -677,6 +924,10 @@ struct MultiCursor {
     prs: MultiCursorEntry,
     #[serde(default)]
     discussions: MultiCursorEntry,
+    #[serde(default)]
+    issue_scopes: BTreeMap<String, MultiCursorEntry>,
+    #[serde(default)]
+    pr_scopes: BTreeMap<String, MultiCursorEntry>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -870,8 +1121,9 @@ fn fetch_search(
     login: &str,
     base_query: &str,
     cursor: &Option<String>,
+    sort_qualifier: &str,
 ) -> Result<FetchOutcome<SearchPage<IssueOrPrNode>>> {
-    let q = format!("{base_query} sort:updated-desc");
+    let q = format!("{base_query} {sort_qualifier}");
     let cursor_arg = cursor.clone().unwrap_or_default();
     let mut variables: Vec<(&str, &str)> = vec![("q", q.as_str())];
     if !cursor_arg.is_empty() {
@@ -916,9 +1168,10 @@ fn fetch_discussion_search(
     repo_qual: &str,
     search_qual: &str,
     state_qual: &str,
-    involvement_qual: &str,
+    scope_qual: &str,
+    sort_qualifier: &str,
 ) -> Result<FetchOutcome<SearchPage<DiscussionNode>>> {
-    let q = format!("{repo_qual}{search_qual}{state_qual}{involvement_qual}sort:updated-desc");
+    let q = format!("{repo_qual}{search_qual}{state_qual}{scope_qual}{sort_qualifier}");
     let cursor_arg = cursor.clone().unwrap_or_default();
     let mut variables: Vec<(&str, &str)> = vec![("q", q.as_str())];
     if !cursor_arg.is_empty() {
@@ -1124,6 +1377,8 @@ mod tests {
                 done: true,
             },
             discussions: MultiCursorEntry::default(),
+            issue_scopes: BTreeMap::new(),
+            pr_scopes: BTreeMap::new(),
         };
         let encoded = encode_cursor(&original).unwrap();
         let decoded = decode_cursor(Some(&encoded)).unwrap();
@@ -1201,6 +1456,15 @@ mod tests {
     }
 
     #[test]
+    fn labels_qualifier_sanitizes_and_quotes_labels() {
+        assert_eq!(labels_qualifier(None), "");
+        assert_eq!(
+            labels_qualifier(Some("bug, good first issue, area:ui")),
+            "label:\"bug\" label:\"good first issue\" label:\"area:ui\" ",
+        );
+    }
+
+    #[test]
     fn state_qualifier_maps_source_specific_states() {
         assert_eq!(
             state_qualifier(InboxSource::GithubIssue, Some(InboxStateFilter::Open)),
@@ -1220,6 +1484,43 @@ mod tests {
         assert_eq!(
             state_qualifier(InboxSource::GithubIssue, Some(InboxStateFilter::Merged)),
             "",
+        );
+    }
+
+    #[test]
+    fn scope_qualifier_maps_source_specific_scopes() {
+        assert_eq!(
+            scope_qualifier(InboxSource::GithubIssue, Some(InboxScopeFilter::Mentioned),),
+            "mentions:@me ",
+        );
+        assert_eq!(
+            scope_qualifier(
+                InboxSource::GithubPr,
+                Some(InboxScopeFilter::ReviewRequested),
+            ),
+            "review-requested:@me ",
+        );
+        assert_eq!(
+            scope_qualifier(InboxSource::GithubDiscussion, Some(InboxScopeFilter::All)),
+            "",
+        );
+    }
+
+    #[test]
+    fn draft_and_sort_qualifiers_map_settings() {
+        assert_eq!(
+            draft_qualifier(Some(InboxDraftFilter::Exclude)),
+            "-is:draft "
+        );
+        assert_eq!(draft_qualifier(Some(InboxDraftFilter::Only)), "is:draft ");
+        assert_eq!(draft_qualifier(Some(InboxDraftFilter::Include)), "");
+        assert_eq!(
+            sort_qualifier(Some(InboxSortFilter::Comments)),
+            "sort:comments-desc",
+        );
+        assert_eq!(
+            discussion_sort_qualifier(Some(InboxSortFilter::Comments)),
+            "sort:updated-desc",
         );
     }
 }

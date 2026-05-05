@@ -1,4 +1,10 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,6 +23,10 @@ const apiMocks = vi.hoisted(() => ({
 	listSessionDrafts: vi.fn(),
 }));
 
+const streamingMocks = vi.hoisted(() => ({
+	handleComposerSubmit: vi.fn(),
+}));
+
 const createRuntime = vi.hoisted(() => ({
 	created: false,
 	workspaceId: null as string | null,
@@ -26,6 +36,31 @@ const createRuntime = vi.hoisted(() => ({
 vi.mock("./App.css", () => ({}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
 	open: vi.fn(),
+}));
+
+vi.mock("@/features/conversation/hooks/use-streaming", () => ({
+	useConversationStreaming: () => ({
+		activeSendError: null,
+		handleComposerSubmit: streamingMocks.handleComposerSubmit,
+		handleDeferredToolResponse: vi.fn(),
+		handleElicitationResponse: vi.fn(),
+		handlePermissionResponse: vi.fn(),
+		handleStopStream: vi.fn(),
+		handleSteerQueued: vi.fn(),
+		handleRemoveQueued: vi.fn(),
+		elicitationResponsePending: false,
+		isSending: false,
+		pendingElicitation: null,
+		pendingDeferredTool: null,
+		pendingPermissions: [],
+		restoreCustomTags: [],
+		restoreDraft: null,
+		restoreFiles: [],
+		restoreImages: [],
+		restoreNonce: 0,
+		activeFastPreludes: {},
+		sendingSessionIds: new Set(),
+	}),
 }));
 
 vi.mock("./lib/api", async (importOriginal) => {
@@ -51,11 +86,34 @@ vi.mock("./lib/api", async (importOriginal) => {
 
 import App from "./App";
 
+function commitComposerText(editor: HTMLElement, text: string) {
+	const paragraph = editor.querySelector("p");
+	if (!paragraph) {
+		throw new Error("Composer paragraph element not found.");
+	}
+	fireEvent.compositionStart(editor, { data: "" });
+	paragraph.textContent = text;
+	const textNode = paragraph.firstChild;
+	if (textNode) {
+		const selection = editor.ownerDocument.defaultView?.getSelection();
+		if (selection) {
+			const range = editor.ownerDocument.createRange();
+			range.setStart(textNode, text.length);
+			range.setEnd(textNode, text.length);
+			selection.removeAllRanges();
+			selection.addRange(range);
+		}
+	}
+	fireEvent.compositionUpdate(editor, { data: text });
+	fireEvent.compositionEnd(editor, { data: text });
+}
+
 describe("App create workspace flow", () => {
 	beforeEach(() => {
 		createRuntime.created = false;
 		createRuntime.workspaceId = null;
 		createRuntime.sessionId = null;
+		streamingMocks.handleComposerSubmit.mockReset();
 
 		apiMocks.loadWorkspaceGroups.mockReset();
 		apiMocks.loadArchivedWorkspaces.mockReset();
@@ -287,5 +345,71 @@ describe("App create workspace flow", () => {
 		expect(await screen.findByLabelText("Workspace input")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Start now" })).toBeDisabled();
 		expect(apiMocks.prepareWorkspaceFromRepo).not.toHaveBeenCalled();
+	});
+
+	it("creates from the start composer and stays on the created workspace", async () => {
+		const user = userEvent.setup({ pointerEventsCheck: 0 });
+		apiMocks.loadAgentModelSections.mockResolvedValue([
+			{
+				id: "claude",
+				label: "Claude",
+				options: [
+					{
+						id: "opus-1m",
+						provider: "claude",
+						label: "Opus 4.7 1M",
+						cliModel: "opus-1m",
+						effortLevels: ["low", "medium", "high"],
+					},
+				],
+			},
+		]);
+
+		render(<App />);
+		await screen.findByRole("main", { name: "Application shell" });
+
+		await user.click(screen.getByRole("button", { name: "New workspace" }));
+		expect(await screen.findByLabelText("Workspace input")).toBeInTheDocument();
+		expect(
+			screen.queryByLabelText("Workspace panel drag region"),
+		).not.toBeInTheDocument();
+
+		commitComposerText(
+			screen.getByLabelText("Workspace input"),
+			"Build a dashboard",
+		);
+		await waitFor(() => {
+			expect(screen.getByRole("button", { name: "Start now" })).toBeEnabled();
+		});
+		await user.click(screen.getByRole("button", { name: "Start now" }));
+
+		await waitFor(() => {
+			expect(apiMocks.prepareWorkspaceFromRepo).toHaveBeenCalledWith(
+				"repo-1",
+				"main",
+			);
+		});
+		await waitFor(() => {
+			expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
+				createRuntime.workspaceId,
+			);
+		});
+		await waitFor(() => {
+			expect(apiMocks.loadWorkspaceDetail).toHaveBeenCalledWith(
+				createRuntime.workspaceId,
+			);
+			expect(apiMocks.loadWorkspaceSessions).toHaveBeenCalledWith(
+				createRuntime.workspaceId,
+			);
+		});
+		await waitFor(() => {
+			expect(
+				screen.getByLabelText("Workspace panel drag region"),
+			).toBeInTheDocument();
+			expect(
+				screen.queryByRole("button", { name: "Start now" }),
+			).not.toBeInTheDocument();
+		});
+		expect(streamingMocks.handleComposerSubmit).toHaveBeenCalled();
 	});
 });

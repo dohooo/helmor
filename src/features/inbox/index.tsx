@@ -122,6 +122,15 @@ const GITHUB_STATE_FILTERS: Record<
 		{ id: "unanswered", label: "Unanswered" },
 	],
 };
+
+function defaultStateForGitHubType(
+	filterId: GitHubTypeFilter["id"],
+	toggles: InboxAccountSourceToggles,
+): GitHubStateFilter["id"] {
+	if (filterId === "github_issue") return toggles.issueState;
+	if (filterId === "github_pr") return toggles.prState;
+	return toggles.discussionState;
+}
 function useDebouncedValue<T>(value: T, delayMs: number) {
 	const [debouncedValue, setDebouncedValue] = useState(value);
 	useEffect(() => {
@@ -219,7 +228,9 @@ export const InboxSidebar = memo(function InboxSidebar({
 		enabledGitHubTypeFilters[0] ??
 		selectedGitHubTypeFilter;
 	const stateOptions = GITHUB_STATE_FILTERS[activeGitHubTypeFilter.id];
-	const stateFilter = stateFilterBySource?.[activeGitHubTypeFilter.id] ?? "all";
+	const stateFilter =
+		stateFilterBySource?.[activeGitHubTypeFilter.id] ??
+		defaultStateForGitHubType(activeGitHubTypeFilter.id, currentInboxToggles);
 	const setStateFilter = (next: GitHubStateFilter["id"]) => {
 		onStateFilterBySourceChange?.({
 			...(stateFilterBySource ?? {}),
@@ -376,7 +387,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 								value={searchQuery}
 								onChange={(event) => setSearchQuery(event.target.value)}
 								placeholder="Search"
-								aria-label="Search GitHub inbox"
+								aria-label="Search GitHub contexts"
 								className="h-6 min-w-0 flex-1 bg-transparent px-1.5 text-[11px] text-foreground outline-none placeholder:text-muted-foreground/70"
 							/>
 							{searchQuery ? (
@@ -488,7 +499,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 						<ConnectGithubState onConfigure={openInboxSettings} />
 					) : !inbox.kindEnabled ? (
 						// State 2: account exists but the user has turned this
-						// kind off in Settings → Inbox. Don't fetch; nudge them
+						// kind off in Settings → Context. Don't fetch; nudge them
 						// to flip it back on rather than show a misleading
 						// "no items" message.
 						<KindDisabledState
@@ -568,7 +579,7 @@ function InboxErrorState({
 	onRetry: () => void;
 }) {
 	const message =
-		error instanceof Error ? error.message : "Couldn't load inbox items.";
+		error instanceof Error ? error.message : "Couldn't load context items.";
 	return (
 		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-center">
 			<div className="text-[13px] font-medium text-foreground">
@@ -706,7 +717,7 @@ function ConnectGithubState({ onConfigure }: { onConfigure: () => void }) {
 	);
 }
 
-/** State 2: this kind is turned off in Settings → Inbox. Surface that
+/** State 2: this kind is turned off in Settings → Context. Surface that
  *  fact directly so an empty result isn't mistaken for "no items". */
 function KindDisabledState({
 	kind,
@@ -725,7 +736,7 @@ function KindDisabledState({
 				{KIND_LABEL[kind].plural} are off
 			</div>
 			<div className="text-[12px] leading-5 text-muted-foreground">
-				Turn {lower} back on in Inbox settings.
+				Turn {lower} back on in Contexts settings.
 			</div>
 			<Button
 				type="button"

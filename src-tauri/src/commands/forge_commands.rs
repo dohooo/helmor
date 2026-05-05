@@ -2,7 +2,8 @@ use crate::forge::{
     self,
     accounts::{self, ForgeAccount},
     github::inbox::{
-        self as github_inbox, InboxFilters, InboxItemDetail, InboxPage, InboxSource, InboxToggles,
+        self as github_inbox, GithubLabelOption, InboxFilters, InboxItemDetail, InboxPage,
+        InboxSource, InboxToggles,
     },
     ChangeRequestInfo, ForgeActionStatus, ForgeDetection, ForgeProvider, RemoteState,
 };
@@ -74,6 +75,14 @@ pub async fn list_inbox_items(
         }),
     })
     .await
+}
+
+#[tauri::command]
+pub async fn list_github_labels(
+    login: String,
+    repos: Vec<String>,
+) -> CmdResult<Vec<GithubLabelOption>> {
+    run_blocking(move || github_inbox::list_github_labels(&login, &repos)).await
 }
 
 /// Fetch native detail data for one inbox item. The command is a shared

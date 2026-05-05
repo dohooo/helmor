@@ -78,7 +78,7 @@ export const SourceCard = memo(function SourceCard({
 			<AppendContextButton
 				subjectLabel={card.title}
 				getPayload={() => buildCardContextPayload(card, appendContextTarget)}
-				errorTitle="Couldn't insert inbox card"
+				errorTitle="Couldn't insert context card"
 				className={cn(
 					"absolute right-1 bottom-0.5 z-10 flex size-7.5 cursor-pointer items-center justify-center rounded-md",
 					"border-0 bg-transparent text-muted-foreground opacity-0 shadow-none",
@@ -99,7 +99,7 @@ function buildCardContextPayload(
 ): AppendContextRequestPayload {
 	const label = buildCardContextLabel(card);
 	const lines = [
-		`Inbox context: ${card.title}`,
+		`Context: ${card.title}`,
 		`Source: ${card.externalId}`,
 		card.subtitle ? `Area: ${card.subtitle}` : null,
 		card.state ? `State: ${card.state.label}` : null,

@@ -78,6 +78,8 @@ describe("createWorkspaceFromStartComposer", () => {
 			sessionId: "session-1",
 			contextKey: "session:session-1",
 		});
+		expect(result.workspaceId).toBe("workspace-1");
+		expect(result.sessionId).toBe("session-1");
 		expect(result.finalizePromise).toBeInstanceOf(Promise);
 	});
 
@@ -106,6 +108,10 @@ describe("createWorkspaceFromStartComposer", () => {
 			"workspace-1",
 			"backlog",
 		);
-		expect(result).toEqual({ outcome: { shouldStream: false } });
+		expect(result).toEqual({
+			outcome: { shouldStream: false },
+			workspaceId: "workspace-1",
+			sessionId: "session-1",
+		});
 	});
 });

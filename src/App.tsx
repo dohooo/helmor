@@ -887,16 +887,8 @@ function AppShell({
 		workspaceViewModeRef.current = workspaceViewMode;
 	}, [workspaceViewMode]);
 
-	// Persist last workspace/session for restore-on-launch
-	useEffect(() => {
-		if (selectedWorkspaceId) {
-			void updateSettings({
-				lastSurface: "workspace",
-				lastWorkspaceId: selectedWorkspaceId,
-			});
-		}
-	}, [selectedWorkspaceId, updateSettings]);
-
+	// Persist last session for restore-on-launch. Last workspace is written
+	// synchronously in handleSelectWorkspace so surface restore cannot race it.
 	useEffect(() => {
 		if (selectedSessionId) {
 			void saveSettings({ lastSessionId: selectedSessionId });
@@ -1299,6 +1291,12 @@ function AppShell({
 
 	const handleSelectWorkspace = useCallback(
 		(workspaceId: string | null) => {
+			if (workspaceId) {
+				void updateSettings({
+					lastSurface: "workspace",
+					lastWorkspaceId: workspaceId,
+				});
+			}
 			if (workspaceViewModeRef.current === "start") {
 				setWorkspaceViewMode("conversation");
 			}
@@ -1417,6 +1415,7 @@ function AppShell({
 			resolveCachedWorkspaceDisplay,
 			resolvePreferredSessionId,
 			appSettings.workspaceRightSidebarMode,
+			updateSettings,
 		],
 	);
 
@@ -1938,7 +1937,8 @@ function AppShell({
 				id: "composer.focus" as const,
 				callback: () =>
 					window.dispatchEvent(new Event("helmor:focus-composer")),
-				enabled: workspaceViewMode === "conversation",
+				enabled:
+					workspaceViewMode === "conversation" || workspaceViewMode === "start",
 			},
 			{
 				id: "composer.openModelPicker" as const,
@@ -2339,7 +2339,7 @@ function AppShell({
 			}
 
 			try {
-				const { finalizePromise, outcome } =
+				const { finalizePromise, outcome, workspaceId, sessionId } =
 					await createWorkspaceFromStartComposer({
 						repoId: startRepository.id,
 						sourceBranch: startSourceBranch,
@@ -2376,6 +2376,9 @@ function AppShell({
 					return { shouldStream: false };
 				}
 
+				handleSelectWorkspace(workspaceId);
+				handleSelectSession(sessionId);
+				setWorkspaceViewMode("conversation");
 				return outcome;
 			} catch (error) {
 				pushWorkspaceToast(

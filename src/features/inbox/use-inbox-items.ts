@@ -11,6 +11,10 @@ import {
 import {
 	DEFAULT_INBOX_ACCOUNT_TOGGLES,
 	type InboxAccountSourceToggles,
+	type InboxDiscussionState,
+	type InboxIssueState,
+	type InboxPullRequestState,
+	type InboxRepoSourceConfig,
 	useSettings,
 } from "@/lib/settings";
 import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
@@ -26,6 +30,8 @@ type GithubAccountInboxArgs = {
 	login: string;
 	toggles: InboxAccountSourceToggles;
 };
+
+type ActiveInboxToggles = InboxAccountSourceToggles | InboxRepoSourceConfig;
 
 /** Resolves the GitHub accounts the inbox should fan out across, with
  * their per-account toggles merged from settings. Single-account today
@@ -55,7 +61,7 @@ export type UseInboxItemsResult = {
 	isFetchingNextPage: boolean;
 	error: unknown;
 	/** True when the user has at least one GitHub account AND the
-	 *  Settings → Inbox toggle for this kind is on. False here is the
+	 *  Settings → Context toggle for this kind is on. False here is the
 	 *  consumer's signal to render the "kind disabled in settings"
 	 *  state instead of the empty / loading states. */
 	kindEnabled: boolean;
@@ -86,6 +92,21 @@ const KIND_TO_TOGGLES: Record<InboxKind, InboxToggles> = {
 	discussions: { issues: false, prs: false, discussions: true },
 };
 
+function defaultStateForKind(
+	kind: InboxKind,
+	toggles: ActiveInboxToggles,
+): InboxIssueState | InboxPullRequestState | InboxDiscussionState {
+	if (kind === "issues") return toggles.issueState;
+	if (kind === "prs") return toggles.prState;
+	return toggles.discussionState;
+}
+
+function scopeForKind(kind: InboxKind, toggles: ActiveInboxToggles) {
+	if (kind === "issues") return toggles.issueScopes;
+	if (kind === "prs") return toggles.prScopes;
+	return null;
+}
+
 /** Drives the kanban-inbox list for ONE sub-tab at a time. The caller
  * passes the current GitHub sub-type tab; switching tabs swaps to a
  * different cached query (TanStack reuses prior pages on switch-back).
@@ -106,16 +127,51 @@ export function useInboxItems(
 ): UseInboxItemsResult {
 	const accounts = useEnabledGithubAccounts();
 	const primary = accounts[0] ?? null;
+	const repoToggles =
+		primary && repoFilter
+			? (primary.toggles.repos?.[repoFilter] ?? null)
+			: null;
+	const activeToggles: ActiveInboxToggles | null = repoFilter
+		? repoToggles
+		: (primary?.toggles ?? null);
+	const repoEnabled = repoFilter ? Boolean(repoToggles?.enabled) : true;
 	// Honor the per-account settings toggle for THIS kind — flipping
-	// `Issues` off in Settings → Inbox disables this tab's fetch.
-	const settingsAllowsKind = primary
+	// `Issues` off in Settings → Context disables this tab's fetch.
+	const settingsAllowsKind = activeToggles
 		? kind === "issues"
-			? primary.toggles.issues
+			? activeToggles.issues
 			: kind === "prs"
-				? primary.toggles.prs
-				: primary.toggles.discussions
+				? activeToggles.prs
+				: activeToggles.discussions
 		: false;
-	const enabled = primary !== null && settingsAllowsKind;
+	const enabled = primary !== null && repoEnabled && settingsAllowsKind;
+	const defaultFilters = activeToggles
+		? {
+				state: defaultStateForKind(kind, activeToggles),
+				scope: scopeForKind(kind, activeToggles),
+				sort:
+					kind === "issues"
+						? activeToggles.issueSort
+						: kind === "prs"
+							? activeToggles.prSort
+							: activeToggles.discussionSort,
+				draft: kind === "prs" ? activeToggles.draftPrs : null,
+				labels:
+					kind === "issues"
+						? activeToggles.issueLabels.trim() || null
+						: kind === "prs"
+							? activeToggles.prLabels.trim() || null
+							: null,
+			}
+		: null;
+	const resolvedFilters: InboxFilters | null = {
+		query: filters?.query ?? null,
+		state: filters?.state ?? defaultFilters?.state ?? null,
+		scope: defaultFilters?.scope ?? null,
+		sort: defaultFilters?.sort ?? null,
+		draft: defaultFilters?.draft ?? null,
+		labels: defaultFilters?.labels ?? null,
+	};
 
 	const query = useInfiniteQuery<InboxPage, Error>({
 		queryKey: [
@@ -124,8 +180,12 @@ export function useInboxItems(
 			primary?.login ?? "",
 			kind,
 			repoFilter ?? "",
-			filters?.query ?? "",
-			filters?.state ?? "",
+			resolvedFilters.query ?? "",
+			resolvedFilters.state ?? "",
+			(resolvedFilters.scope ?? []).join(","),
+			resolvedFilters.sort ?? "",
+			resolvedFilters.draft ?? "",
+			resolvedFilters.labels ?? "",
 		],
 		enabled,
 		initialPageParam: null as string | null,
@@ -140,7 +200,7 @@ export function useInboxItems(
 				cursor: typeof pageParam === "string" ? pageParam : null,
 				limit: PAGE_SIZE,
 				repo: repoFilter,
-				filters,
+				filters: resolvedFilters,
 			});
 		},
 		getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
@@ -165,8 +225,8 @@ export function useInboxItems(
 		const message =
 			query.error instanceof Error
 				? query.error.message
-				: "Couldn't load inbox items.";
-		pushToast(message, "Inbox fetch failed", "destructive");
+				: "Couldn't load context items.";
+		pushToast(message, "Context fetch failed", "destructive");
 	}, [query.error, pushToast]);
 
 	const items = useMemo<InboxItemWithDetailRef[]>(

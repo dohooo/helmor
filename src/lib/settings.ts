@@ -16,6 +16,40 @@ export type WorkspaceRightSidebarMode = "inspector" | "context";
 
 export type ShortcutOverrides = Record<string, string | null>;
 
+export type InboxIssueScope =
+	| "involves"
+	| "assigned"
+	| "mentioned"
+	| "created"
+	| "all";
+export type InboxPullRequestScope =
+	| "involves"
+	| "author"
+	| "assignee"
+	| "mentions"
+	| "reviewRequested"
+	| "reviewedBy"
+	| "all";
+export type InboxSort = "updated" | "created" | "comments";
+export type InboxDraftFilter = "exclude" | "include" | "only";
+export type InboxIssueState = "open" | "closed" | "all";
+export type InboxPullRequestState = "open" | "closed" | "merged" | "all";
+export type InboxDiscussionState = "unanswered" | "answered" | "all";
+
+export type InboxKindDefaults = {
+	issueScopes: InboxIssueScope[];
+	prScopes: InboxPullRequestScope[];
+	issueState: InboxIssueState;
+	prState: InboxPullRequestState;
+	discussionState: InboxDiscussionState;
+	issueSort: InboxSort;
+	prSort: InboxSort;
+	discussionSort: InboxSort;
+	draftPrs: InboxDraftFilter;
+	issueLabels: string;
+	prLabels: string;
+};
+
 export type ClaudeCustomProviderSettings = {
 	builtinProviderApiKeys: Record<string, string>;
 	customBaseUrl: string;
@@ -27,7 +61,15 @@ export type ClaudeCustomProviderSettings = {
  * a given forge login. Keyed externally by `<provider>:<login>` (e.g.
  * `github:octocat`). Missing keys default to all `true` — newly added
  * accounts opt into everything until the user changes their mind. */
-export type InboxAccountSourceToggles = {
+export type InboxAccountSourceToggles = InboxKindDefaults & {
+	issues: boolean;
+	prs: boolean;
+	discussions: boolean;
+	repos?: Record<string, InboxRepoSourceConfig>;
+};
+
+export type InboxRepoSourceConfig = InboxKindDefaults & {
+	enabled: boolean;
 	issues: boolean;
 	prs: boolean;
 	discussions: boolean;
@@ -41,6 +83,35 @@ export const DEFAULT_INBOX_ACCOUNT_TOGGLES: InboxAccountSourceToggles = {
 	issues: true,
 	prs: true,
 	discussions: true,
+	issueScopes: ["involves"],
+	prScopes: ["involves"],
+	issueState: "open",
+	prState: "open",
+	discussionState: "unanswered",
+	issueSort: "updated",
+	prSort: "updated",
+	discussionSort: "updated",
+	draftPrs: "exclude",
+	issueLabels: "",
+	prLabels: "",
+};
+
+export const DEFAULT_INBOX_REPO_CONFIG: InboxRepoSourceConfig = {
+	enabled: false,
+	issues: true,
+	prs: true,
+	discussions: true,
+	issueScopes: ["all"],
+	prScopes: ["all"],
+	issueState: "open",
+	prState: "open",
+	discussionState: "unanswered",
+	issueSort: "updated",
+	prSort: "updated",
+	discussionSort: "updated",
+	draftPrs: "exclude",
+	issueLabels: "",
+	prLabels: "",
 };
 
 /** Cap on how many inbox cards the kanban view will keep open as
@@ -220,6 +291,56 @@ function parseShortcutOverrides(raw: string | undefined): ShortcutOverrides {
 	}
 }
 
+function parseInboxToggles(
+	value: unknown,
+	defaults: InboxKindDefaults & {
+		issues: boolean;
+		prs: boolean;
+		discussions: boolean;
+	},
+): InboxKindDefaults & { issues: boolean; prs: boolean; discussions: boolean } {
+	const v = (value ?? {}) as Partial<InboxAccountSourceToggles> & {
+		labels?: unknown;
+		sort?: unknown;
+		issueScope?: unknown;
+		prScope?: unknown;
+	};
+	const legacySort = isInboxSort(v.sort) ? v.sort : defaults.issueSort;
+	const legacyLabels = typeof v.labels === "string" ? v.labels : "";
+	return {
+		issues: typeof v.issues === "boolean" ? v.issues : defaults.issues,
+		prs: typeof v.prs === "boolean" ? v.prs : defaults.prs,
+		discussions:
+			typeof v.discussions === "boolean" ? v.discussions : defaults.discussions,
+		issueScopes: parseInboxIssueScopes(
+			v.issueScopes,
+			v.issueScope,
+			defaults.issueScopes,
+		),
+		prScopes: parseInboxPullRequestScopes(
+			v.prScopes,
+			v.prScope,
+			defaults.prScopes,
+		),
+		issueState: isInboxIssueState(v.issueState)
+			? v.issueState
+			: defaults.issueState,
+		prState: isInboxPullRequestState(v.prState) ? v.prState : defaults.prState,
+		discussionState: isInboxDiscussionState(v.discussionState)
+			? v.discussionState
+			: defaults.discussionState,
+		issueSort: isInboxSort(v.issueSort) ? v.issueSort : legacySort,
+		prSort: isInboxSort(v.prSort) ? v.prSort : legacySort,
+		discussionSort: isInboxSort(v.discussionSort)
+			? v.discussionSort
+			: legacySort,
+		draftPrs: isInboxDraftFilter(v.draftPrs) ? v.draftPrs : defaults.draftPrs,
+		issueLabels:
+			typeof v.issueLabels === "string" ? v.issueLabels : legacyLabels,
+		prLabels: typeof v.prLabels === "string" ? v.prLabels : legacyLabels,
+	};
+}
+
 function parseInboxSourceConfig(raw: string | undefined): InboxSourceConfig {
 	if (!raw) return DEFAULT_SETTINGS.inboxSourceConfig;
 	try {
@@ -239,16 +360,119 @@ function parseInboxSourceConfig(raw: string | undefined): InboxSourceConfig {
 		for (const [key, value] of Object.entries(accountsRaw)) {
 			if (!value || typeof value !== "object" || Array.isArray(value)) continue;
 			const v = value as Partial<InboxAccountSourceToggles>;
+			const reposRaw = v.repos;
+			const repos: Record<string, InboxRepoSourceConfig> = {};
+			if (
+				reposRaw &&
+				typeof reposRaw === "object" &&
+				!Array.isArray(reposRaw)
+			) {
+				for (const [repo, repoValue] of Object.entries(reposRaw)) {
+					if (
+						!repoValue ||
+						typeof repoValue !== "object" ||
+						Array.isArray(repoValue)
+					) {
+						continue;
+					}
+					const repoConfig = repoValue as Partial<InboxRepoSourceConfig>;
+					repos[repo] = {
+						...parseInboxToggles(repoValue, DEFAULT_INBOX_REPO_CONFIG),
+						enabled:
+							typeof repoConfig.enabled === "boolean"
+								? repoConfig.enabled
+								: DEFAULT_INBOX_REPO_CONFIG.enabled,
+					};
+				}
+			}
 			accounts[key] = {
-				issues: typeof v.issues === "boolean" ? v.issues : true,
-				prs: typeof v.prs === "boolean" ? v.prs : true,
-				discussions: typeof v.discussions === "boolean" ? v.discussions : true,
+				...parseInboxToggles(value, DEFAULT_INBOX_ACCOUNT_TOGGLES),
+				repos,
 			};
 		}
 		return { accounts };
 	} catch {
 		return DEFAULT_SETTINGS.inboxSourceConfig;
 	}
+}
+
+function oneOf<T extends string>(
+	value: unknown,
+	values: readonly T[],
+): value is T {
+	return typeof value === "string" && values.includes(value as T);
+}
+
+function isInboxIssueScope(value: unknown): value is InboxIssueScope {
+	return oneOf(value, [
+		"involves",
+		"assigned",
+		"mentioned",
+		"created",
+		"all",
+	] as const);
+}
+
+function parseInboxIssueScopes(
+	value: unknown,
+	legacyValue: unknown,
+	fallback = DEFAULT_INBOX_ACCOUNT_TOGGLES.issueScopes,
+): InboxIssueScope[] {
+	if (Array.isArray(value)) {
+		const scopes = value.filter(isInboxIssueScope);
+		if (scopes.length > 0) return scopes;
+	}
+	if (isInboxIssueScope(legacyValue)) return [legacyValue];
+	return fallback;
+}
+
+function isInboxPullRequestScope(
+	value: unknown,
+): value is InboxPullRequestScope {
+	return oneOf(value, [
+		"involves",
+		"author",
+		"assignee",
+		"mentions",
+		"reviewRequested",
+		"reviewedBy",
+		"all",
+	] as const);
+}
+
+function parseInboxPullRequestScopes(
+	value: unknown,
+	legacyValue: unknown,
+	fallback = DEFAULT_INBOX_ACCOUNT_TOGGLES.prScopes,
+): InboxPullRequestScope[] {
+	if (Array.isArray(value)) {
+		const scopes = value.filter(isInboxPullRequestScope);
+		if (scopes.length > 0) return scopes;
+	}
+	if (isInboxPullRequestScope(legacyValue)) return [legacyValue];
+	return fallback;
+}
+
+function isInboxIssueState(value: unknown): value is InboxIssueState {
+	return oneOf(value, ["open", "closed", "all"] as const);
+}
+
+function isInboxPullRequestState(
+	value: unknown,
+): value is InboxPullRequestState {
+	return oneOf(value, ["open", "closed", "merged", "all"] as const);
+}
+
+function isInboxDiscussionState(value: unknown): value is InboxDiscussionState {
+	return oneOf(value, ["unanswered", "answered", "all"] as const);
+}
+
+function isInboxSort(value: unknown): value is InboxSort {
+	return oneOf(value, ["updated", "created", "comments"] as const);
+}
+
+function isInboxDraftFilter(value: unknown): value is InboxDraftFilter {
+	return oneOf(value, ["exclude", "include", "only"] as const);
 }
 
 function parseStringRecord(value: unknown): Record<string, string> {

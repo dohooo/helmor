@@ -19,6 +19,7 @@ import {
 	getWorkspaceAccountProfile,
 	getWorkspaceForge,
 	listForgeAccounts,
+	listGithubLabels,
 	listRepositories,
 	listSlashCommands,
 	listWorkspaceCandidateDirectories,
@@ -101,6 +102,8 @@ export const helmorQueryKeys = {
 		source: string,
 		externalId: string,
 	) => ["inboxItemDetail", provider, login, source, externalId] as const,
+	githubLabels: (login: string, repos: string[]) =>
+		["githubLabels", login, ...repos] as const,
 	workspaceGitActionStatus: (workspaceId: string) =>
 		["workspaceGitActionStatus", workspaceId] as const,
 	workspaceForgeActionStatus: (workspaceId: string) =>
@@ -300,6 +303,18 @@ export function repositoriesQueryOptions() {
 		initialData: [],
 		initialDataUpdatedAt: 0,
 		staleTime: 0,
+	});
+}
+
+export function githubLabelsQueryOptions(login: string, repos: string[]) {
+	const sortedRepos = [...repos].sort();
+	return queryOptions({
+		queryKey: helmorQueryKeys.githubLabels(login, sortedRepos),
+		queryFn: () => listGithubLabels({ login, repos: sortedRepos }),
+		initialData: [],
+		initialDataUpdatedAt: 0,
+		staleTime: 10 * 60_000,
+		gcTime: 24 * 60 * 60_000,
 	});
 }
 

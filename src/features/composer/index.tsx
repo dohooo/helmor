@@ -20,10 +20,7 @@ import {
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ModelIcon } from "@/components/model-icon";
 import { Button } from "@/components/ui/button";
-import {
-	ButtonGroup,
-	ButtonGroupSeparator,
-} from "@/components/ui/button-group";
+import { ButtonGroup } from "@/components/ui/button-group";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -1082,7 +1079,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													)}
 													<span>{preferredStartSubmitLabel}</span>
 												</Button>
-												<ButtonGroupSeparator className="bg-border/80" />
 												<DropdownMenuTrigger asChild>
 													<Button
 														variant="outline"

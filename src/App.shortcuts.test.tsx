@@ -670,6 +670,26 @@ describe("App global navigation shortcuts", () => {
 		expect(screen.getByRole("button", { name: "Start now" })).toBeDisabled();
 	});
 
+	it("focuses the start composer on Command+L", async () => {
+		const user = userEvent.setup({ pointerEventsCheck: 0 });
+		await renderAppReady();
+
+		await user.click(screen.getByRole("button", { name: "New workspace" }));
+		const input = await screen.findByLabelText("Workspace input");
+		input.blur();
+		expect(input).not.toHaveFocus();
+
+		fireEvent.keyDown(window, {
+			key: "l",
+			code: "KeyL",
+			metaKey: true,
+		});
+
+		await waitFor(() => {
+			expect(input).toHaveFocus();
+		});
+	});
+
 	it("opens the add repository menu on Command+Shift+N", async () => {
 		await renderAppReady();
 

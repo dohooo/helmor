@@ -13,6 +13,8 @@ export type WorkspaceStartSubmitMode = "startNow" | "saveForLater";
 
 export type WorkspaceStartCreateResult = {
 	outcome: ComposerCreatePrepareOutcome;
+	workspaceId: string;
+	sessionId: string;
 	finalizePromise?: Promise<FinalizeWorkspaceResponse>;
 };
 
@@ -37,11 +39,17 @@ export async function createWorkspaceFromStartComposer({
 				: Promise.resolve(),
 		]);
 		await setWorkspaceStatus(prepared.workspaceId, "backlog");
-		return { outcome: { shouldStream: false } };
+		return {
+			outcome: { shouldStream: false },
+			workspaceId: prepared.workspaceId,
+			sessionId: prepared.initialSessionId,
+		};
 	}
 
 	return {
 		finalizePromise: finalizeWorkspaceFromRepo(prepared.workspaceId),
+		workspaceId: prepared.workspaceId,
+		sessionId: prepared.initialSessionId,
 		outcome: {
 			shouldStream: true,
 			workspaceId: prepared.workspaceId,

@@ -132,7 +132,7 @@ export type SettingsSection =
 /// don't pluralise nicely under that rule — keep the overrides explicit.
 const SECTION_LABEL_OVERRIDES: Partial<Record<SettingsSection, string>> = {
 	account: "Accounts",
-	inbox: "Inbox",
+	inbox: "Contexts",
 };
 
 /// Optional muted-caption next to the title in the dialog header.
@@ -140,8 +140,7 @@ const SECTION_LABEL_OVERRIDES: Partial<Record<SettingsSection, string>> = {
 /// row (which otherwise duplicates the section name).
 const SECTION_TITLE_CAPTIONS: Partial<Record<SettingsSection, string>> = {
 	account: "Synced with your local gh / glab CLI.",
-	inbox:
-		"Pick which items each connected account contributes to the context inbox.",
+	inbox: "Pick which items each connected account contributes to Contexts.",
 };
 
 function sidebarSectionLabel(
@@ -828,7 +827,9 @@ export const SettingsDialog = memo(function SettingsDialog({
 								<AccountPanel repositories={repositories} />
 							)}
 
-							{activeSection === "inbox" && <InboxSettingsPanel />}
+							{activeSection === "inbox" && (
+								<InboxSettingsPanel repositories={repositories} />
+							)}
 
 							{activeRepo && (
 								<RepositorySettingsPanel

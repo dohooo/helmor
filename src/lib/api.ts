@@ -1003,13 +1003,55 @@ export type InboxStateFilter =
 	| "open"
 	| "closed"
 	| "merged"
+	| "all"
 	| "answered"
 	| "unanswered";
+
+export type InboxScopeFilter =
+	| "involves"
+	| "assigned"
+	| "mentioned"
+	| "created"
+	| "author"
+	| "assignee"
+	| "mentions"
+	| "reviewRequested"
+	| "reviewedBy"
+	| "all";
+
+export type InboxSortFilter = "updated" | "created" | "comments";
+export type InboxDraftFilter = "exclude" | "include" | "only";
 
 export type InboxFilters = {
 	query?: string | null;
 	state?: InboxStateFilter | null;
+	scope?: InboxScopeFilter[] | null;
+	sort?: InboxSortFilter | null;
+	draft?: InboxDraftFilter | null;
+	labels?: string | null;
 };
+
+export type GithubLabelOption = {
+	name: string;
+	color?: string | null;
+	description?: string | null;
+};
+
+export async function listGithubLabels(args: {
+	login: string;
+	repos: string[];
+}): Promise<GithubLabelOption[]> {
+	try {
+		return await invoke<GithubLabelOption[]>("list_github_labels", {
+			login: args.login,
+			repos: args.repos,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load GitHub labels."),
+		);
+	}
+}
 
 export async function listInboxItems(args: {
 	provider: ForgeProvider;
