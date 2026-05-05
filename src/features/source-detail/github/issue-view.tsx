@@ -3,7 +3,10 @@ import { getInboxItemDetail } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { GitHubDetailPage, type SourceDetailProps } from "../common";
 
-export function GitHubIssueView({ card }: SourceDetailProps) {
+export function GitHubIssueView({
+	card,
+	appendContextTarget,
+}: SourceDetailProps) {
 	const detailRef =
 		card.detailRef?.source === "github_issue" ? card.detailRef : null;
 	const detailQuery = useQuery({
@@ -25,6 +28,7 @@ export function GitHubIssueView({ card }: SourceDetailProps) {
 	return (
 		<GitHubDetailPage
 			card={card}
+			appendContextTarget={appendContextTarget}
 			description={detail?.body ?? undefined}
 			error={detailQuery.error}
 			isLoading={detailQuery.isLoading}

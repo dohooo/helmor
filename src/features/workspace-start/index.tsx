@@ -20,6 +20,7 @@ import {
 } from "@/features/shortcuts/shortcut-display";
 import { SourceDetailView } from "@/features/source-detail";
 import type { RepositoryCreateOption } from "@/lib/api";
+import type { ComposerInsertTarget } from "@/lib/composer-insert";
 import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
 
@@ -35,6 +36,7 @@ type WorkspaceStartPageProps = {
 	onOpenBranchPicker: () => void;
 	onSelectBranch: (branch: string) => void;
 	previewCard?: ContextCard | null;
+	previewAppendContextTarget?: ComposerInsertTarget;
 	onClosePreview?: () => void;
 	children: React.ReactNode;
 };
@@ -49,6 +51,7 @@ export function WorkspaceStartPage({
 	onOpenBranchPicker,
 	onSelectBranch,
 	previewCard = null,
+	previewAppendContextTarget,
 	onClosePreview,
 	children,
 }: WorkspaceStartPageProps) {
@@ -133,7 +136,12 @@ export function WorkspaceStartPage({
 								</Button>
 							</div>
 							<div className="min-h-0 flex-1 px-0 pt-4 pb-3">
-								{previewCard ? <SourceDetailView card={previewCard} /> : null}
+								{previewCard ? (
+									<SourceDetailView
+										card={previewCard}
+										appendContextTarget={previewAppendContextTarget}
+									/>
+								) : null}
 							</div>
 							<div
 								aria-hidden="true"

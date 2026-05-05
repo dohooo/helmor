@@ -1,66 +1,81 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ArrowUpRight, Clock3 } from "lucide-react";
-import { Suspense } from "react";
+import { Check, Clock3, Copy, ExternalLink } from "lucide-react";
+import { Suspense, useCallback, useState } from "react";
+import { AppendContextButton } from "@/components/append-context-button";
 import { HelmorLogoAnimated } from "@/components/helmor-logo-animated";
 import { LazyStreamdown } from "@/components/streamdown-loader";
 import { Button } from "@/components/ui/button";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { buildCardContextPayload } from "@/features/inbox/source-card";
+import { SourceIcon } from "@/features/inbox/source-icon";
 import { STATE_TONE_CLASS } from "@/features/inbox/state-tone";
+import type { ComposerInsertTarget } from "@/lib/composer-insert";
 import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
 
 export type SourceDetailProps = {
 	card: ContextCard;
+	appendContextTarget?: ComposerInsertTarget;
 };
 
 export function GitHubDetailPage({
 	card,
+	appendContextTarget,
 	description,
 	isLoading,
 	error,
 	kindLabel,
 }: {
 	card: ContextCard;
+	appendContextTarget?: ComposerInsertTarget;
 	description?: string;
 	isLoading?: boolean;
 	error?: Error | null;
 	kindLabel: string;
 }) {
 	const reference = parseExternalReference(card.externalId);
+	const markdownBody = description?.trim() || "No description provided.";
 
 	return (
 		<article className="mx-auto flex h-full w-full max-w-5xl flex-col overflow-y-auto px-4 [contain:content] [scrollbar-gutter:stable]">
 			<header className="shrink-0 border-b border-border/70 pb-4">
-				<div className="flex min-w-0 items-start justify-between gap-4">
-					<div className="min-w-0 flex-1">
-						<h2 className="min-w-0 text-balance text-[24px] font-semibold leading-8 text-foreground">
-							{card.title}
-							<span className="ml-2 font-normal text-muted-foreground">
-								#{reference.number}
-							</span>
-						</h2>
-						<div className="mt-2 flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+				<div className="min-w-0">
+					<h2 className="min-w-0 text-balance text-[24px] font-semibold leading-8 text-foreground">
+						{card.title}
+						<span className="ml-2 font-normal text-muted-foreground">
+							#{reference.number}
+						</span>
+					</h2>
+					<div className="mt-2 flex min-w-0 items-center justify-between gap-4">
+						<div className="flex min-w-0 flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
 							{card.state ? <StatePill state={card.state} /> : null}
 							<span className="font-medium text-foreground/80">
 								{reference.repo}
 							</span>
-							<span className="text-muted-foreground/70">{kindLabel}</span>
-							<span className="inline-flex items-center gap-1 text-muted-foreground/80">
-								<Clock3 className="size-3.5" strokeWidth={1.8} />
+							<span className="inline-flex items-center gap-1 font-normal text-muted-foreground/70">
+								<SourceIcon
+									source={card.source}
+									size={13}
+									className="shrink-0"
+								/>
+								{kindLabel}
+							</span>
+							<span className="inline-flex items-center gap-1 font-normal text-muted-foreground/70">
+								<Clock3 className="size-[13px]" strokeWidth={1.8} />
 								Updated {formatRelativeTime(card.lastActivityAt)}
 							</span>
 						</div>
+						<SourceDetailActions
+							card={card}
+							appendContextTarget={appendContextTarget}
+							markdownBody={markdownBody}
+							copyDisabled={isLoading || Boolean(error)}
+						/>
 					</div>
-
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						onClick={() => void openUrl(card.externalUrl)}
-						className="h-7 shrink-0 cursor-pointer gap-1 px-2 text-[12px]"
-					>
-						<ArrowUpRight className="size-3" strokeWidth={1.8} />
-						Open
-					</Button>
 				</div>
 			</header>
 
@@ -75,12 +90,89 @@ export function GitHubDetailPage({
 				) : error ? (
 					<DetailErrorState error={error} />
 				) : (
-					<MarkdownBody
-						body={description?.trim() || "No description provided."}
-					/>
+					<MarkdownBody body={markdownBody} />
 				)}
 			</div>
 		</article>
+	);
+}
+
+function SourceDetailActions({
+	card,
+	appendContextTarget,
+	markdownBody,
+	copyDisabled,
+}: {
+	card: ContextCard;
+	appendContextTarget?: ComposerInsertTarget;
+	markdownBody: string;
+	copyDisabled?: boolean;
+}) {
+	const [copied, setCopied] = useState(false);
+	const handleCopy = useCallback(() => {
+		if (copyDisabled || !navigator.clipboard?.writeText) return;
+		void navigator.clipboard.writeText(markdownBody).then(() => {
+			setCopied(true);
+			window.setTimeout(() => setCopied(false), 1500);
+		});
+	}, [copyDisabled, markdownBody]);
+
+	return (
+		<div className="flex shrink-0 items-center gap-1">
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Button
+						type="button"
+						variant="ghost"
+						size="icon-xs"
+						aria-label="Open externally"
+						onClick={() => void openUrl(card.externalUrl)}
+						className="size-7 cursor-pointer rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+					>
+						<ExternalLink className="size-[13px]" strokeWidth={1.8} />
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent side="top">Open externally</TooltipContent>
+			</Tooltip>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<span className="inline-flex" aria-label="Add to context">
+						<AppendContextButton
+							subjectLabel={card.title}
+							ariaLabel="Add to context"
+							getPayload={() =>
+								buildCardContextPayload(card, appendContextTarget)
+							}
+							errorTitle="Couldn't insert context card"
+							className="size-7 cursor-pointer rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground [&_svg]:size-[13px]"
+						/>
+					</span>
+				</TooltipTrigger>
+				<TooltipContent side="top">Add to context</TooltipContent>
+			</Tooltip>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Button
+						type="button"
+						variant="ghost"
+						size="icon-xs"
+						aria-label="Copy markdown"
+						disabled={copyDisabled}
+						onClick={handleCopy}
+						className="size-7 cursor-pointer rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+					>
+						{copied ? (
+							<Check className="size-[13px]" strokeWidth={1.8} />
+						) : (
+							<Copy className="size-[13px]" strokeWidth={1.8} />
+						)}
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent side="top">
+					{copied ? "Copied" : "Copy markdown"}
+				</TooltipContent>
+			</Tooltip>
+		</div>
 	);
 }
 

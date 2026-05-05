@@ -93,7 +93,7 @@ export const SourceCard = memo(function SourceCard({
 	);
 });
 
-function buildCardContextPayload(
+export function buildCardContextPayload(
 	card: ContextCard,
 	target?: ComposerInsertTarget,
 ): AppendContextRequestPayload {

@@ -2592,6 +2592,7 @@ function AppShell({
 													}}
 													onSelectBranch={handleStartSourceBranchSelect}
 													previewCard={startPreviewCard}
+													previewAppendContextTarget={startComposerInsertTarget}
 													onClosePreview={handleStartContextPreviewClose}
 												>
 													<WorkspaceConversationContainer

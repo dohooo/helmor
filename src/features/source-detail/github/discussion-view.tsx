@@ -3,7 +3,10 @@ import { getInboxItemDetail } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { GitHubDetailPage, type SourceDetailProps } from "../common";
 
-export function GitHubDiscussionView({ card }: SourceDetailProps) {
+export function GitHubDiscussionView({
+	card,
+	appendContextTarget,
+}: SourceDetailProps) {
 	const detailRef =
 		card.detailRef?.source === "github_discussion" ? card.detailRef : null;
 	const detailQuery = useQuery({
@@ -27,6 +30,7 @@ export function GitHubDiscussionView({ card }: SourceDetailProps) {
 	return (
 		<GitHubDetailPage
 			card={card}
+			appendContextTarget={appendContextTarget}
 			description={detail?.body ?? undefined}
 			error={detailQuery.error}
 			isLoading={detailQuery.isLoading}

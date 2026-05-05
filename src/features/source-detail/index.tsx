@@ -1,4 +1,5 @@
 import { memo } from "react";
+import type { ComposerInsertTarget } from "@/lib/composer-insert";
 import type { ContextCard } from "@/lib/sources/types";
 import { GitHubDiscussionView } from "./github/discussion-view";
 import { GitHubIssueView } from "./github/issue-view";
@@ -11,16 +12,33 @@ import { UnsupportedSourceView } from "./unsupported-view";
 // `card` reference itself changes.
 export const SourceDetailView = memo(function SourceDetailView({
 	card,
+	appendContextTarget,
 }: {
 	card: ContextCard;
+	appendContextTarget?: ComposerInsertTarget;
 }) {
 	switch (card.source) {
 		case "github_issue":
-			return <GitHubIssueView card={card} />;
+			return (
+				<GitHubIssueView
+					card={card}
+					appendContextTarget={appendContextTarget}
+				/>
+			);
 		case "github_pr":
-			return <GitHubPullRequestView card={card} />;
+			return (
+				<GitHubPullRequestView
+					card={card}
+					appendContextTarget={appendContextTarget}
+				/>
+			);
 		case "github_discussion":
-			return <GitHubDiscussionView card={card} />;
+			return (
+				<GitHubDiscussionView
+					card={card}
+					appendContextTarget={appendContextTarget}
+				/>
+			);
 		case "linear":
 		case "slack_thread":
 			return <UnsupportedSourceView card={card} />;
