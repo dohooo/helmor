@@ -2,6 +2,7 @@ import { formatDistanceToNow } from "date-fns";
 import {
 	AlertCircle,
 	AlertTriangle,
+	Goal,
 	Info,
 	MessageSquareText,
 } from "lucide-react";
@@ -97,6 +98,18 @@ function SystemText({ text }: { text: string }) {
 			<span className="inline-flex items-center gap-1 text-destructive">
 				<AlertCircle className="size-3 shrink-0" strokeWidth={1.8} />
 				{text.slice(7)}
+			</span>
+		);
+	}
+	// Codex `/goal` lifecycle markers — narrated by
+	// `agents::streaming::codex_goal::goal_transition_label` on the
+	// backend ("Goal set" / "Goal paused" / etc.). Prefix-detect them
+	// here so they share an icon, same shape as the Error case above.
+	if (text.startsWith("Goal ")) {
+		return (
+			<span className="inline-flex items-center gap-1">
+				<Goal className="size-3 shrink-0" strokeWidth={1.8} />
+				{text}
 			</span>
 		);
 	}

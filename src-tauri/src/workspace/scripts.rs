@@ -99,6 +99,34 @@ impl ScriptProcessManager {
         }
     }
 
+    /// Signal every live script that matches `repo_id` and `script_type`
+    /// except the one whose workspace_id equals `keep_workspace_id`. Used
+    /// by the non-concurrent run mode to make a fresh run stop any other
+    /// run in the same repo before spawning. Returns the number of handles
+    /// that were signaled.
+    pub fn kill_others_in_repo(
+        &self,
+        repo_id: &str,
+        script_type: &str,
+        keep_workspace_id: Option<&str>,
+    ) -> usize {
+        let victims: Vec<ProcessHandle> = {
+            let map = self.processes.lock().expect("process map poisoned");
+            map.iter()
+                .filter(|(k, _)| {
+                    k.0 == repo_id && k.1 == script_type && k.2.as_deref() != keep_workspace_id
+                })
+                .map(|(_, h)| h.clone())
+                .collect()
+        };
+        let count = victims.len();
+        for h in victims {
+            h.killed.store(true, Ordering::Release);
+            escalating_kill(h.pid, h.pgid);
+        }
+        count
+    }
+
     /// Signal the process group (and leader as a fallback) with SIGTERM,
     /// escalating to SIGKILL after `PROCESS_TERM_TIMEOUT`. Returns true if
     /// there was a live handle to signal.
@@ -310,6 +338,7 @@ pub fn run_script(
         channel,
         &shell,
         &["-i", "-l"],
+        None,
     )
 }
 
@@ -333,6 +362,7 @@ pub fn run_terminal_session(
     working_dir: &str,
     context: &ScriptContext,
     channel: Channel<ScriptEvent>,
+    boot_input: Option<&str>,
 ) -> Result<Option<i32>> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     run_script_with_shell(
@@ -346,6 +376,7 @@ pub fn run_terminal_session(
         channel,
         &shell,
         &["-i", "-l"],
+        boot_input,
     )
 }
 
@@ -357,7 +388,12 @@ pub fn run_terminal_session(
 /// once the command completes. When `script` is `None`, the shell starts
 /// blank — used by the Terminal tab (user types commands directly) and by
 /// the onboarding embedded auth terminals (caller drives input via
-/// `write_stdin`).
+/// `write_stdin` or via `boot_input`).
+///
+/// `boot_input` is written to the PTY master right after the shell is
+/// spawned and registered. Use it to seed an interactive shell with an
+/// initial command (e.g. `gh auth login\n`) without racing against
+/// `write_stdin`'s "process not yet registered" polling.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_script_with_shell(
     manager: &ScriptProcessManager,
@@ -370,6 +406,7 @@ pub(crate) fn run_script_with_shell(
     channel: Channel<ScriptEvent>,
     shell_path: &str,
     shell_args: &[&str],
+    boot_input: Option<&str>,
 ) -> Result<Option<i32>> {
     if let Some(s) = script {
         if s.trim().is_empty() {
@@ -512,7 +549,7 @@ pub(crate) fn run_script_with_shell(
     //
     // Skipped when `script == None` (Terminal tab / onboarding auth terminals):
     // the shell stays at its prompt and waits for input — the user typing
-    // directly in the Terminal tab, or the caller driving via `write_stdin`.
+    // directly in the Terminal tab, or `boot_input` seeding it below.
     if let Some(script) = script {
         let wrapped = format!(
             "eval {}; __helmor_ec=$?; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
@@ -521,6 +558,17 @@ pub(crate) fn run_script_with_shell(
         let mut file = stdin.lock().expect("stdin mutex poisoned");
         if let Err(e) = file.write_all(wrapped.as_bytes()) {
             tracing::warn!(error = %e, "initial PTY write failed");
+        }
+    } else if let Some(input) = boot_input {
+        // Bytes go into the PTY master here — synchronously, while we
+        // still own the only handle. The shell will read them once its
+        // init completes. Doing this inline (instead of via a spawned
+        // polling thread that calls `write_stdin`) means a
+        // re-render-driven cleanup → respawn cycle on the frontend can't
+        // race ahead and drop the bytes.
+        let mut file = stdin.lock().expect("stdin mutex poisoned");
+        if let Err(e) = file.write_all(input.as_bytes()) {
+            tracing::warn!(error = %e, "boot_input PTY write failed");
         }
     }
 
@@ -656,6 +704,57 @@ mod tests {
         let _ = child2.wait();
     }
 
+    // ── kill_others_in_repo (non-concurrent run mode) ──────────────────────
+
+    #[test]
+    fn kill_others_in_repo_signals_matching_run_scripts_only() {
+        let mgr = ScriptProcessManager::new();
+        // Three live "run" scripts in repo A, plus one "setup" in A and
+        // one "run" in repo B. Non-concurrent kill should hit only the
+        // two other "run" scripts in A.
+        let a_run_keep: ProcessKey = ("A".into(), "run".into(), Some("ws-keep".into()));
+        let a_run_other1: ProcessKey = ("A".into(), "run".into(), Some("ws-other-1".into()));
+        let a_run_other2: ProcessKey = ("A".into(), "run".into(), Some("ws-other-2".into()));
+        let a_setup: ProcessKey = ("A".into(), "setup".into(), Some("ws-keep".into()));
+        let b_run: ProcessKey = ("B".into(), "run".into(), Some("ws-keep".into()));
+
+        let (mut keep_child, _, _, keep_killed) = spawn_and_register(&mgr, a_run_keep.clone());
+        let (mut other1_child, _, _, other1_killed) =
+            spawn_and_register(&mgr, a_run_other1.clone());
+        let (mut other2_child, _, _, other2_killed) =
+            spawn_and_register(&mgr, a_run_other2.clone());
+        let (mut setup_child, _, _, setup_killed) = spawn_and_register(&mgr, a_setup.clone());
+        let (mut b_run_child, _, _, b_run_killed) = spawn_and_register(&mgr, b_run.clone());
+
+        let signaled = mgr.kill_others_in_repo("A", "run", Some("ws-keep"));
+        assert_eq!(signaled, 2);
+
+        // Reap the two victims to release pid resources.
+        let _ = other1_child.wait();
+        let _ = other2_child.wait();
+        assert!(other1_killed.load(Ordering::Acquire));
+        assert!(other2_killed.load(Ordering::Acquire));
+
+        // The kept run, the setup script, and the other repo's run are all
+        // still untouched.
+        assert!(!keep_killed.load(Ordering::Acquire));
+        assert!(!setup_killed.load(Ordering::Acquire));
+        assert!(!b_run_killed.load(Ordering::Acquire));
+
+        mgr.kill(&a_run_keep);
+        mgr.kill(&a_setup);
+        mgr.kill(&b_run);
+        let _ = keep_child.wait();
+        let _ = setup_child.wait();
+        let _ = b_run_child.wait();
+    }
+
+    #[test]
+    fn kill_others_in_repo_with_no_matches_is_noop() {
+        let mgr = ScriptProcessManager::new();
+        assert_eq!(mgr.kill_others_in_repo("nope", "run", None), 0);
+    }
+
     // ── escalating_kill kills the process group ────────────────────────────
 
     #[test]
@@ -743,6 +842,7 @@ mod tests {
                 make_channel(),
                 "/bin/sh",
                 &[],
+                None,
             )
         });
 
@@ -822,6 +922,7 @@ mod tests {
                 ch,
                 "/bin/sh",
                 &[],
+                None,
             )
         });
 
@@ -909,6 +1010,7 @@ mod tests {
                 ch,
                 "/bin/sh",
                 &[],
+                None,
             )
         });
 
@@ -973,6 +1075,7 @@ mod tests {
             // makes tests flaky under `cargo test` parallelism.
             "/bin/sh",
             &[],
+            None,
         )
         .unwrap()
     }

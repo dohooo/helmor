@@ -8,12 +8,14 @@ use crate::sessions::mark_session_read_in_transaction;
 use super::ExchangeContext;
 
 /// Persist the user's prompt as the first message of the exchange.
-/// Wraps as `{"type":"user_prompt","text":"...","files":[...]}`.
+/// Wraps as `{"type":"user_prompt","text":"...","files":[...],"images":[...]}`.
+/// Empty arrays are omitted from the JSON.
 pub(super) fn persist_user_message(
     conn: &Connection,
     ctx: &ExchangeContext,
     prompt: &str,
     files: &[String],
+    images: &[String],
 ) -> Result<()> {
     let now = current_timestamp_string()?;
     let user_message_id = ctx.user_message_id.clone();
@@ -24,6 +26,14 @@ pub(super) fn persist_user_message(
     if !files.is_empty() {
         payload["files"] = serde_json::Value::Array(
             files
+                .iter()
+                .map(|path| serde_json::Value::String(path.clone()))
+                .collect(),
+        );
+    }
+    if !images.is_empty() {
+        payload["images"] = serde_json::Value::Array(
+            images
                 .iter()
                 .map(|path| serde_json::Value::String(path.clone()))
                 .collect(),
@@ -366,7 +376,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         make_messages_table(&conn);
         let ctx = test_exchange_context();
-        persist_user_message(&conn, &ctx, "fix bug X", &[]).unwrap();
+        persist_user_message(&conn, &ctx, "fix bug X", &[], &[]).unwrap();
 
         let (role, content, id): (String, String, String) = conn
             .query_row(
@@ -391,7 +401,7 @@ mod tests {
         make_messages_table(&conn);
         let ctx = test_exchange_context();
         let files = vec!["a.rs".to_string(), "b.rs".to_string()];
-        persist_user_message(&conn, &ctx, "refactor", &files).unwrap();
+        persist_user_message(&conn, &ctx, "refactor", &files, &[]).unwrap();
 
         let content: String = conn
             .query_row(
@@ -405,6 +415,29 @@ mod tests {
             parsed["files"],
             json!(["a.rs".to_string(), "b.rs".to_string()])
         );
+        assert!(parsed.get("images").is_none());
+    }
+
+    #[test]
+    fn persist_user_message_includes_images_with_whitespace_in_paths() {
+        let conn = Connection::open_in_memory().unwrap();
+        make_messages_table(&conn);
+        let ctx = test_exchange_context();
+        let images = vec![
+            "/Users/me/Library/Application Support/CleanShot/CleanShot 2026-04-29 at 08.24.35@2x.jpg".to_string(),
+        ];
+        persist_user_message(&conn, &ctx, "look at this", &[], &images).unwrap();
+
+        let content: String = conn
+            .query_row(
+                "SELECT content FROM session_messages WHERE id = ?1",
+                ["user-1"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed["images"], json!(images));
+        assert!(parsed.get("files").is_none());
     }
 
     #[test]

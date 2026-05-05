@@ -104,6 +104,7 @@ pub async fn generate_session_title(
             branch_prefix_custom: None,
             forge_provider: None,
             remote_url: None,
+            forge_login: None,
         });
 
     let should_generate_branch =

@@ -1,5 +1,6 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
@@ -9,6 +10,7 @@ const apiMockState = vi.hoisted(() => ({
 	listSlashCommands: vi.fn(),
 	listWorkspaceLinkedDirectories: vi.fn(),
 	setWorkspaceLinkedDirectories: vi.fn(),
+	mutateCodexGoal: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async () => {
@@ -18,11 +20,20 @@ vi.mock("@/lib/api", async () => {
 		listSlashCommands: apiMockState.listSlashCommands,
 		listWorkspaceLinkedDirectories: apiMockState.listWorkspaceLinkedDirectories,
 		setWorkspaceLinkedDirectories: apiMockState.setWorkspaceLinkedDirectories,
+		mutateCodexGoal: apiMockState.mutateCodexGoal,
 	};
 });
 
 type PickHandler = (entry: unknown) => void;
 type RemoveHandler = (path: string) => void;
+
+type ComposerSubmitHandler = (
+	prompt: string,
+	imagePaths: string[],
+	filePaths: string[],
+	customTags: unknown[],
+	options?: { permissionModeOverride?: string; oppositeFollowUp?: boolean },
+) => void;
 
 const composerMockState = vi.hoisted(() => ({
 	renders: [] as string[],
@@ -38,6 +49,7 @@ const composerMockState = vi.hoisted(() => ({
 	lastOnRemoveLinkedDirectory: null as RemoveHandler | null,
 	lastAddDirCandidates: [] as readonly unknown[],
 	lastOnPickAddDir: null as PickHandler | null,
+	lastOnSubmit: null as ComposerSubmitHandler | null,
 }));
 
 vi.mock("./index", async () => {
@@ -60,6 +72,7 @@ vi.mock("./index", async () => {
 			onRemoveLinkedDirectory?: RemoveHandler;
 			addDirCandidates?: readonly unknown[];
 			onPickAddDir?: PickHandler;
+			onSubmit?: ComposerSubmitHandler;
 		}) => {
 			composerMockState.renders.push(props.contextKey);
 			composerMockState.lastSlashCommands = [...(props.slashCommands ?? [])];
@@ -70,6 +83,7 @@ vi.mock("./index", async () => {
 				...(props.addDirCandidates ?? []),
 			];
 			composerMockState.lastOnPickAddDir = props.onPickAddDir ?? null;
+			composerMockState.lastOnSubmit = props.onSubmit ?? null;
 			React.useEffect(() => {
 				composerMockState.mounts += 1;
 				return () => {
@@ -193,10 +207,13 @@ describe("WorkspaceComposerContainer", () => {
 		composerMockState.renders = [];
 		composerMockState.mounts = 0;
 		composerMockState.unmounts = 0;
+		composerMockState.lastOnSubmit = null;
 		apiMockState.listSlashCommands.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockResolvedValue([]);
 		apiMockState.setWorkspaceLinkedDirectories.mockReset();
+		apiMockState.mutateCodexGoal.mockReset();
+		apiMockState.mutateCodexGoal.mockResolvedValue(undefined);
 		apiMockState.listSlashCommands.mockResolvedValue({
 			commands: [],
 		});
@@ -261,10 +278,14 @@ describe("WorkspaceComposerContainer", () => {
 		);
 		expect(composerMockState.mounts).toBe(1);
 		expect(composerMockState.unmounts).toBe(0);
-		expect(composerMockState.renders).toEqual([
-			"session:session-1",
-			"session:session-2",
-		]);
+		// Allow extra synchronous renders from react-query observers
+		// (CodexGoal banner subscribes to a per-session query). The
+		// invariant we care about: no remount, and the session id seen
+		// in the rendered child stream eventually flips to session-2.
+		expect(composerMockState.renders[0]).toBe("session:session-1");
+		expect(
+			composerMockState.renders[composerMockState.renders.length - 1],
+		).toBe("session:session-2");
 	});
 
 	it("auto-submits queued CLI prompts with queued model and permission mode", async () => {
@@ -689,7 +710,7 @@ describe("WorkspaceComposerContainer", () => {
 			});
 		});
 
-		it("adds a built-in /compact command for Codex sessions", async () => {
+		it("adds built-in /compact and /goal commands for Codex sessions", async () => {
 			apiMockState.listSlashCommands.mockResolvedValue({
 				commands: [],
 				isComplete: true,
@@ -701,11 +722,20 @@ describe("WorkspaceComposerContainer", () => {
 				expect(composerMockState.lastSlashCommands.map((c) => c.name)).toEqual([
 					"add-dir",
 					"compact",
+					"goal",
 				]);
 			});
 			expect(composerMockState.lastSlashCommands[1]).toEqual({
 				name: "compact",
 				description: "Compact this Codex thread's context",
+				source: "builtin",
+				providers: ["codex"],
+			});
+			expect(composerMockState.lastSlashCommands[2]).toEqual({
+				name: "goal",
+				description:
+					"Set a persistent goal Codex pursues turn-after-turn until done or paused",
+				argumentHint: "<objective>",
 				source: "builtin",
 				providers: ["codex"],
 			});
@@ -723,6 +753,148 @@ describe("WorkspaceComposerContainer", () => {
 			// AddDirTypeaheadPlugin dispatches through it when the user
 			// picks a candidate from the inline popup.
 			expect(composerMockState.lastOnPickAddDir).not.toBeNull();
+		});
+	});
+
+	// Regression coverage for the review-flagged bug where typing
+	// `/goal pause` (or `/goal clear`) was interpreted by the sidecar
+	// parser as `{kind: "set", objective: "pause"}` and would silently
+	// overwrite the existing goal. The container intercept must short-
+	// circuit these out-of-band so they go through `mutateCodexGoal`
+	// instead of leaking to the agent stream.
+	describe("/goal pause/clear interception", () => {
+		const ACTIVE_GOAL = {
+			threadId: "t1",
+			objective: "improve test coverage",
+			status: "active" as const,
+			tokenBudget: null,
+			tokensUsed: 100,
+			timeUsedSeconds: 30,
+			createdAt: 0,
+			updatedAt: 0,
+		};
+
+		function setupCodexSessionWithGoal(): {
+			queryClient: ReturnType<typeof createHelmorQueryClient>;
+		} {
+			const queryClient = createHelmorQueryClient();
+			queryClient.setQueryData(
+				helmorQueryKeys.agentModelSections,
+				MODEL_SECTIONS,
+			);
+			queryClient.setQueryData(
+				helmorQueryKeys.workspaceDetail("workspace-1"),
+				WORKSPACE_DETAIL,
+			);
+			queryClient.setQueryData(
+				helmorQueryKeys.workspaceSessions("workspace-1"),
+				WORKSPACE_SESSIONS,
+			);
+			queryClient.setQueryData(
+				helmorQueryKeys.sessionCodexGoal("session-2"),
+				ACTIVE_GOAL,
+			);
+			return { queryClient };
+		}
+
+		type ContainerOnSubmit = ComponentProps<
+			typeof WorkspaceComposerContainer
+		>["onSubmit"];
+
+		function renderCodexComposer(
+			queryClient: ReturnType<typeof createHelmorQueryClient>,
+			onSubmit: ContainerOnSubmit,
+		) {
+			render(
+				<QueryClientProvider client={queryClient}>
+					<TooltipProvider>
+						<SettingsContext.Provider
+							value={{
+								settings: DEFAULT_SETTINGS,
+								updateSettings: vi.fn(),
+								isLoaded: true,
+							}}
+						>
+							<WorkspaceComposerContainer
+								displayedWorkspaceId="workspace-1"
+								displayedSessionId="session-2"
+								disabled={false}
+								sending={false}
+								sendError={null}
+								restoreDraft={null}
+								restoreImages={[]}
+								restoreFiles={[]}
+								restoreNonce={0}
+								modelSelections={{ "session:session-2": "gpt-5.4" }}
+								effortLevels={{}}
+								permissionModes={{}}
+								fastModes={{}}
+								onSelectModel={vi.fn()}
+								onSelectEffort={vi.fn()}
+								onChangePermissionMode={vi.fn()}
+								onChangeFastMode={vi.fn()}
+								onSubmit={onSubmit}
+							/>
+						</SettingsContext.Provider>
+					</TooltipProvider>
+				</QueryClientProvider>,
+			);
+		}
+
+		it("routes /goal pause to mutateCodexGoal and does NOT call onSubmit", async () => {
+			const { queryClient } = setupCodexSessionWithGoal();
+			const onSubmit = vi.fn<ContainerOnSubmit>();
+			renderCodexComposer(queryClient, onSubmit);
+
+			await waitFor(() =>
+				expect(composerMockState.lastOnSubmit).not.toBeNull(),
+			);
+
+			composerMockState.lastOnSubmit?.("/goal pause", [], [], []);
+
+			expect(apiMockState.mutateCodexGoal).toHaveBeenCalledTimes(1);
+			expect(apiMockState.mutateCodexGoal).toHaveBeenCalledWith(
+				"session-2",
+				"pause",
+			);
+			expect(onSubmit).not.toHaveBeenCalled();
+		});
+
+		it("routes /goal clear to mutateCodexGoal and does NOT call onSubmit", async () => {
+			const { queryClient } = setupCodexSessionWithGoal();
+			const onSubmit = vi.fn<ContainerOnSubmit>();
+			renderCodexComposer(queryClient, onSubmit);
+
+			await waitFor(() =>
+				expect(composerMockState.lastOnSubmit).not.toBeNull(),
+			);
+
+			composerMockState.lastOnSubmit?.("/goal clear", [], [], []);
+
+			expect(apiMockState.mutateCodexGoal).toHaveBeenCalledTimes(1);
+			expect(apiMockState.mutateCodexGoal).toHaveBeenCalledWith(
+				"session-2",
+				"clear",
+			);
+			expect(onSubmit).not.toHaveBeenCalled();
+		});
+
+		it("lets /goal resume fall through to onSubmit (sendMessage path)", async () => {
+			const { queryClient } = setupCodexSessionWithGoal();
+			const onSubmit = vi.fn<ContainerOnSubmit>();
+			renderCodexComposer(queryClient, onSubmit);
+
+			await waitFor(() =>
+				expect(composerMockState.lastOnSubmit).not.toBeNull(),
+			);
+
+			composerMockState.lastOnSubmit?.("/goal resume", [], [], []);
+
+			expect(apiMockState.mutateCodexGoal).not.toHaveBeenCalled();
+			expect(onSubmit).toHaveBeenCalledTimes(1);
+			expect(onSubmit).toHaveBeenCalledWith(
+				expect.objectContaining({ prompt: "/goal resume" }),
+			);
 		});
 	});
 });

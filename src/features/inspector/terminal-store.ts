@@ -23,6 +23,9 @@ export type TerminalInstance = {
 	truncated: boolean;
 	status: TerminalStatus;
 	exitCode: number | null;
+	/** When true, the inspector tabs section skips its hover-zoom for this
+	 * terminal so the user can keep typing without the panel resizing. */
+	hoverZoomDisabled: boolean;
 };
 
 /** Positional label: 1 instance → "Terminal", 2+ → "Terminal N". */
@@ -123,6 +126,7 @@ export function createTerminal(
 		truncated: false,
 		status: "running",
 		exitCode: null,
+		hoverZoomDisabled: false,
 	};
 	list.push(instance);
 	instancesByWorkspace.set(workspaceId, list);
@@ -208,6 +212,22 @@ export function closeTerminal(
 	if (removed && removed.status === "running") {
 		void stopTerminal(repoId, workspaceId, instanceId);
 	}
+}
+
+/** Disable / enable the inspector's hover-to-zoom enlargement for a single
+ * terminal so the user can keep working at the resting size without the panel
+ * resizing under them. */
+export function setTerminalHoverZoomDisabled(
+	workspaceId: string,
+	instanceId: string,
+	disabled: boolean,
+) {
+	const list = instancesByWorkspace.get(workspaceId);
+	if (!list) return;
+	const entry = list.find((t) => t.id === instanceId);
+	if (!entry || entry.hoverZoomDisabled === disabled) return;
+	entry.hoverZoomDisabled = disabled;
+	emitListChange(workspaceId);
 }
 
 /** Tear down all terminals in a workspace (fires on workspace delete). */

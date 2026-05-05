@@ -215,6 +215,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -262,6 +263,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -338,6 +340,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -445,6 +448,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -482,6 +486,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: true,
+				images: [],
 			},
 			emitter,
 		);
@@ -512,6 +517,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: level,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -534,6 +540,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: "ultra",
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -557,6 +564,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -584,6 +592,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -625,6 +634,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -657,6 +667,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 					permissionMode: undefined,
 					effortLevel: undefined,
 					fastMode: undefined,
+					images: [],
 				},
 				emitter,
 			),
@@ -685,6 +696,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: "bypassPermissions",
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 				// Include a duplicate to confirm Claude now forwards the
 				// caller-provided list directly without extra normalization.
 				additionalDirectories: [userDirA, userDirA, userDirB],
@@ -719,6 +731,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: "bypassPermissions",
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 				additionalDirectories: [linkedDirA, linkedDirB],
 			},
 			emitter,
@@ -816,6 +829,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -895,6 +909,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -978,6 +993,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -1079,6 +1095,7 @@ describe("ClaudeSessionManager.stopSession", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -1177,6 +1194,7 @@ describe("ClaudeSessionManager.stopSession", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -1403,6 +1421,7 @@ describe("Claude full-fixture round-trip", () => {
 					permissionMode: undefined,
 					effortLevel: undefined,
 					fastMode: undefined,
+					images: [],
 				},
 				emitter,
 			);

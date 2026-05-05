@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { open as openDirectoryDialog } from "@tauri-apps/plugin-dialog";
 import { CircleAlert, TimerReset } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ActionRow, ActionRowButton } from "@/components/action-row";
 import { ShimmerText } from "@/components/ui/shimmer-text";
@@ -21,9 +21,11 @@ import type {
 } from "@/lib/api";
 import {
 	createSession,
+	mutateCodexGoal,
 	saveAutoCloseActionKinds,
 	setWorkspaceLinkedDirectories,
 } from "@/lib/api";
+import { isAutoHideableActionKind } from "@/lib/commit-button-prompts";
 import type {
 	ComposerCustomTag,
 	ResolvedComposerInsertRequest,
@@ -32,6 +34,7 @@ import {
 	agentModelSectionsQueryOptions,
 	autoCloseActionKindsQueryOptions,
 	helmorQueryKeys,
+	sessionCodexGoalQueryOptions,
 	slashCommandsQueryOptions,
 	workspaceCandidateDirectoriesQueryOptions,
 	workspaceDetailQueryOptions,
@@ -48,6 +51,7 @@ import {
 	isNewSession,
 	resolveSessionSelectedModelId,
 } from "@/lib/workspace-helpers";
+import { CodexGoalBanner } from "../panel/codex-goal-banner";
 import type { DeferredToolResponseHandler } from "./deferred-tool";
 import type { AddDirPickerEntry } from "./editor/add-dir/typeahead-plugin";
 import type { ElicitationResponseHandler } from "./elicitation";
@@ -77,9 +81,19 @@ const CODEX_COMPACT_COMMAND: SlashCommandEntry = {
 	providers: ["codex"],
 };
 
+const CODEX_GOAL_COMMAND: SlashCommandEntry = {
+	name: "goal",
+	description:
+		"Set a persistent goal Codex pursues turn-after-turn until done or paused",
+	argumentHint: "<objective>",
+	source: "builtin",
+	providers: ["codex"],
+};
+
 const BUILTIN_CLIENT_COMMANDS: readonly SlashCommandEntry[] = [
 	ADD_DIR_COMMAND,
 	CODEX_COMPACT_COMMAND,
+	CODEX_GOAL_COMMAND,
 ];
 
 type WorkspaceComposerContainerProps = {
@@ -133,6 +147,12 @@ type WorkspaceComposerContainerProps = {
 		sessionId: string;
 		prompt: string;
 		modelId?: string | null;
+		/** Effort level forced for this pending submit. Takes precedence over
+		 *  cached/session/default effort. */
+		effort?: string | null;
+		/** Fast-mode forced for this pending submit. Takes precedence over
+		 *  cached/session/default fast-mode. */
+		fastMode?: boolean | null;
 		permissionMode?: string | null;
 		/** Force queue (bypass `followUpBehavior`) if a turn is streaming. */
 		forceQueue?: boolean;
@@ -369,8 +389,16 @@ export const WorkspaceComposerContainer = memo(
 		// For new sessions, use user setting; for existing sessions with history, use session's effort
 		const sessionEffort =
 			(!isNewSession(currentSession) && currentSession?.effortLevel) || null;
+		const pendingEffort =
+			pendingOverrideActive && pendingPromptForSession?.effort
+				? pendingPromptForSession.effort
+				: null;
 		const rawEffort =
-			cachedEffort ?? sessionEffort ?? settings.defaultEffort ?? "high";
+			pendingEffort ??
+			cachedEffort ??
+			sessionEffort ??
+			settings.defaultEffort ??
+			"high";
 		const effortLevel = clampEffortToModel(
 			rawEffort,
 			effectiveSelectedModelId,
@@ -396,8 +424,18 @@ export const WorkspaceComposerContainer = memo(
 		const sessionFastMode = !isNewSession(currentSession)
 			? currentSession?.fastMode
 			: undefined;
+		const pendingFastMode =
+			pendingOverrideActive &&
+			pendingPromptForSession?.fastMode !== undefined &&
+			pendingPromptForSession?.fastMode !== null
+				? pendingPromptForSession.fastMode
+				: undefined;
 		const fastMode = supportsFastMode
-			? (cachedFastMode ?? sessionFastMode ?? settings.defaultFastMode ?? false)
+			? (pendingFastMode ??
+				cachedFastMode ??
+				sessionFastMode ??
+				settings.defaultFastMode ??
+				false)
 			: false;
 		const showFastModePrelude = activeFastPreludes[composerContextKey] === true;
 		const loadingConversationContext =
@@ -431,7 +469,12 @@ export const WorkspaceComposerContainer = memo(
 			[autoCloseQuery.data],
 		);
 		const sessionActionKind = currentSession?.actionKind ?? null;
-		const isActionSession = Boolean(sessionActionKind);
+		// "Action session" here drives the Auto-Close composer affordance.
+		// Some kinds (e.g. "review") are auto-created but explicitly NOT
+		// auto-hideable — they exist for the user to read — so we hide the
+		// toggle UI for them.
+		const isActionSession =
+			sessionActionKind !== null && isAutoHideableActionKind(sessionActionKind);
 		const autoCloseEnabled = sessionActionKind
 			? autoCloseActionKinds.has(sessionActionKind)
 			: false;
@@ -570,7 +613,23 @@ export const WorkspaceComposerContainer = memo(
 			void slashCommandsQuery.refetch();
 		}, [slashCommandsQuery]);
 
-		const handleComposerSubmit = useCallback(
+		// Pull the active codex goal so we can intercept `/goal X` submissions
+		// when one is already in flight and ask the user for confirmation
+		// before replacing it.
+		const codexGoalQuery = useQuery({
+			...sessionCodexGoalQueryOptions(displayedSessionId ?? "__none__"),
+			enabled: Boolean(displayedSessionId) && provider === "codex",
+		});
+		const activeGoal = codexGoalQuery.data ?? null;
+
+		type PendingGoalReplace = {
+			newObjective: string;
+			args: Parameters<typeof handleComposerSubmitInner>;
+		};
+		const [goalReplaceConfirm, setGoalReplaceConfirm] =
+			useState<PendingGoalReplace | null>(null);
+
+		const handleComposerSubmitInner = useCallback(
 			(
 				prompt: string,
 				imagePaths: string[],
@@ -617,6 +676,83 @@ export const WorkspaceComposerContainer = memo(
 				settings.followUpBehavior,
 			],
 		);
+
+		const handleComposerSubmit = useCallback(
+			(
+				prompt: string,
+				imagePaths: string[],
+				filePaths: string[],
+				customTags: ComposerCustomTag[],
+				options?: {
+					permissionModeOverride?: string;
+					oppositeFollowUp?: boolean;
+				},
+			) => {
+				// `/goal …` interception for codex sessions. Three flavors:
+				//   - `/goal pause` / `/goal clear`  → out-of-band mutate IPC,
+				//     no chat bubble (matches the banner-button behaviour).
+				//   - `/goal resume`                 → falls through to send-
+				//     Message so the resulting stream subscription catches
+				//     the goal-continuation turn codex auto-spawns.
+				//   - `/goal <new objective>` while a goal already exists
+				//                                    → confirm-replace panel.
+				if (provider === "codex" && displayedSessionId) {
+					const match = prompt.trim().match(/^\/goal\s+([\s\S]+)$/);
+					const arg = match ? (match[1]?.trim() ?? "") : "";
+					if (arg === "pause" || arg === "clear") {
+						if (activeGoal) {
+							void mutateCodexGoal(displayedSessionId, arg).catch((err) => {
+								toast.error(
+									err instanceof Error ? err.message : `Failed to ${arg} goal`,
+								);
+							});
+						}
+						return;
+					}
+					if (
+						arg &&
+						arg !== "resume" &&
+						activeGoal &&
+						arg !== activeGoal.objective
+					) {
+						setGoalReplaceConfirm({
+							newObjective: arg,
+							args: [prompt, imagePaths, filePaths, customTags, options],
+						});
+						return;
+					}
+				}
+				handleComposerSubmitInner(
+					prompt,
+					imagePaths,
+					filePaths,
+					customTags,
+					options,
+				);
+			},
+			[provider, displayedSessionId, activeGoal, handleComposerSubmitInner],
+		);
+
+		const handleGoalReplaceConfirm = useCallback(() => {
+			if (!goalReplaceConfirm) return;
+			const args = goalReplaceConfirm.args;
+			setGoalReplaceConfirm(null);
+			handleComposerSubmitInner(...args);
+		}, [goalReplaceConfirm, handleComposerSubmitInner]);
+
+		const handleGoalReplaceCancel = useCallback(() => {
+			setGoalReplaceConfirm(null);
+		}, []);
+
+		// Resume button on the goal banner — synthesises a `/goal resume`
+		// submit so it travels through the normal sendMessage path. The
+		// resulting stream subscription is what catches the
+		// goal-continuation turn codex auto-spawns server-side; routing
+		// resume through `mutateCodexGoal` would skip that subscription
+		// and the chat would go silent even though the agent is working.
+		const handleResumeGoal = useCallback(() => {
+			handleComposerSubmitInner("/goal resume", [], [], []);
+		}, [handleComposerSubmitInner]);
 
 		// Track which queued prompt we've already dispatched so a re-render
 		// (e.g. due to query invalidation refreshing the session list) can't
@@ -781,7 +917,15 @@ export const WorkspaceComposerContainer = memo(
 				) : null}
 
 				<div className="relative z-10">
-					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex justify-center">
+					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex flex-col items-center gap-1.5">
+						{displayedSessionId ? (
+							<CodexGoalBanner
+								sessionId={displayedSessionId}
+								hasQueueBelow={queueItems.length > 0}
+								disabled={composerUnavailable}
+								onResume={handleResumeGoal}
+							/>
+						) : null}
 						<SubmitQueueList
 							items={queueItems}
 							onSteer={(id) => onSteerQueued?.(id)}
@@ -832,6 +976,16 @@ export const WorkspaceComposerContainer = memo(
 						elicitationResponsePending={elicitationResponsePending}
 						pendingDeferredTool={pendingDeferredTool}
 						onDeferredToolResponse={onDeferredToolResponse}
+						goalReplace={
+							goalReplaceConfirm && activeGoal
+								? {
+										currentObjective: activeGoal.objective,
+										newObjective: goalReplaceConfirm.newObjective,
+										onReplace: handleGoalReplaceConfirm,
+										onCancel: handleGoalReplaceCancel,
+									}
+								: null
+						}
 						hasPlanReview={hasPlanReview}
 						pendingInsertRequests={pendingInsertRequests}
 						onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}

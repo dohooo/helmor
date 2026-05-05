@@ -256,7 +256,7 @@ describe("MemoConversationMessage plan review", () => {
 		expect(writeTextMock).toHaveBeenCalledWith("Ship the action slot.");
 	});
 
-	it("keeps a completed reasoning block open and shows elapsed time", () => {
+	it("auto-collapses a completed reasoning block and shows elapsed time", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date("2026-04-20T12:00:00.000Z"));
 
@@ -319,9 +319,10 @@ describe("MemoConversationMessage plan review", () => {
 		);
 
 		expect(screen.getByText("Thought for 2s")).toBeInTheDocument();
+		// Content is hidden because reasoning auto-collapses on completion.
 		expect(
-			screen.getByText("Inspecting the streamed reasoning block."),
-		).toBeInTheDocument();
+			screen.queryByText("Inspecting the streamed reasoning block."),
+		).not.toBeInTheDocument();
 		expect(screen.getByText("Done.")).toBeInTheDocument();
 	});
 
@@ -401,5 +402,61 @@ describe("MemoConversationMessage plan review", () => {
 		expect(screen.getByText("Thinking")).toBeInTheDocument();
 		// Historical blocks default closed, so the body is not rendered.
 		expect(screen.queryByText("Old thinking content.")).toBeNull();
+	});
+});
+
+describe("ChatUserMessage with spaces in attachment paths", () => {
+	it("renders a raw `@<path with spaces>` text segment verbatim", () => {
+		const message: ThreadMessageLike = {
+			id: "user-raw-1",
+			role: "user",
+			createdAt: "2026-04-29T08:24:35.000Z",
+			content: [
+				{
+					type: "text",
+					id: "user-raw-1:txt:0",
+					text: "Clicking on pull @/Users/me/Library/Application Support/foo.jpg queues",
+				},
+			],
+		};
+
+		render(
+			<MemoConversationMessage
+				message={message}
+				sessionId="session-1"
+				itemIndex={0}
+			/>,
+		);
+
+		// A whitespace-truncating regex would chip-render "Application".
+		expect(screen.queryByText("Application")).toBeNull();
+		expect(screen.getByText(/Clicking on pull/)).toBeInTheDocument();
+	});
+
+	it("renders an image badge with its full filename for an image-extension mention", () => {
+		const path =
+			"/Users/me/Library/Application Support/CleanShot/CleanShot 2026-04-29 at 08.24.35@2x.jpg";
+		const message: ThreadMessageLike = {
+			id: "user-image-1",
+			role: "user",
+			createdAt: "2026-04-29T08:24:35.000Z",
+			content: [
+				{ type: "text", id: "user-image-1:txt:0", text: "look " },
+				{ type: "file-mention", id: "user-image-1:mention:0", path },
+			],
+		};
+
+		render(
+			<MemoConversationMessage
+				message={message}
+				sessionId="session-1"
+				itemIndex={0}
+			/>,
+		);
+
+		expect(
+			screen.getAllByText(/CleanShot 2026-04-29 at 08\.24\.35@2x\.jpg/),
+		).toHaveLength(1);
+		expect(screen.queryByText(/Support\/CleanShot\/CleanShot/)).toBeNull();
 	});
 });

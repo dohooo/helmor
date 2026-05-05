@@ -100,6 +100,7 @@ pub async fn get_workspace_git_action_status(
             behind_target_count: 0,
             remote_tracking_ref: None,
             ahead_of_remote_count: 0,
+            ahead_of_target_count: 0,
             push_status: git_ops::WorkspacePushStatus::Unpublished,
         };
         // Non-operational workspaces (Initializing / Archived) have no live

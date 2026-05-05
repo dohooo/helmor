@@ -192,6 +192,7 @@ describe("parseSendMessageParams", () => {
 			permissionMode: "plan",
 			effortLevel: "high",
 			fastMode: undefined,
+			images: [],
 			additionalDirectories: undefined,
 		});
 	});

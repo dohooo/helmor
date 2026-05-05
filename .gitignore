@@ -60,3 +60,6 @@ test-results/
 !.claude/settings.json
 !.claude/hooks
 !.claude/hooks/*
+
+# Nix/direnv
+.direnv/

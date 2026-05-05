@@ -1,0 +1,26 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: tool-call
+      tool_name: subagent_wait
+      tool_call_id: codex-collab-wait1
+      args_keys:
+        - agentsStates
+        - receiverThreadIds
+        - senderThreadId
+        - status
+        - tool
+      args_text_length: 410
+      has_result: true
+      result_kind: string
+      result_preview: "Hubble (explorer) — completed\nTotal: 6409 lines ac... completed\nTotal: 13420 lines across 53 .rs files.[len:138]"
+      streaming_status: ~
+  status:
+    type: complete
+    reason: stop
+  streaming: ~

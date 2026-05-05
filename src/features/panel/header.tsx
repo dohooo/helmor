@@ -15,7 +15,12 @@ import {
 	X,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import {
+	AccountHoverCardContent,
+	accountInfoFromForgeAccount,
+} from "@/components/account-hover-card-content";
 import { BranchPickerPopover } from "@/components/branch-picker";
+import { CachedAvatar } from "@/components/cached-avatar";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
 import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -24,6 +29,11 @@ import {
 	DropdownMenuContent,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+	HoverCard,
+	HoverCardContent,
+	HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { HyperText } from "@/components/ui/hyper-text";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -49,13 +59,20 @@ import {
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
-import { helmorQueryKeys } from "@/lib/query-client";
+import { extractError } from "@/lib/errors";
+import { initialsFor } from "@/lib/initials";
+import {
+	helmorQueryKeys,
+	workspaceAccountProfileQueryOptions,
+	workspaceForgeActionStatusQueryOptions,
+} from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import {
 	getWorkspaceBranchTone,
 	type WorkspaceBranchTone,
 } from "@/lib/workspace-helpers";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
+import { normalizeBranchRenameInput } from "./branch-rename";
 import { seedNewSessionInCache } from "./session-cache";
 import { closeWorkspaceSession } from "./session-close";
 import type { SessionCloseRequest } from "./use-confirm-session-close";
@@ -121,6 +138,25 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	});
 	const remoteBranches = branchesQuery.data ?? [];
 	const loadingBranches = branchesQuery.isFetching;
+	const accountProfileQuery = useQuery(
+		workspaceAccountProfileQueryOptions(
+			workspace?.forgeLogin ? (workspace?.id ?? null) : null,
+		),
+	);
+	const accountProfile = accountProfileQuery.data ?? null;
+	const accountLogin = accountProfile?.login ?? workspace?.forgeLogin ?? null;
+	const accountDisplayName = accountProfile?.name?.trim() || accountLogin || "";
+	// Mirror the inspector's Connect-CTA condition: when the workspace is
+	// in `unauthenticated` state, the bound `forgeLogin` no longer has
+	// access (token revoked / removed account / etc.). Suppress the
+	// avatar in that case so it doesn't masquerade as another account
+	// while the right-side panel is asking the user to reconnect.
+	const forgeStatusQuery = useQuery({
+		...workspaceForgeActionStatusQueryOptions(workspace?.id ?? ""),
+		enabled: !!workspace?.id,
+	});
+	const forgeNeedsConnect =
+		forgeStatusQuery.data?.remoteState === "unauthenticated";
 	const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
 	const [editingTitle, setEditingTitle] = useState("");
 	const [editingBranch, setEditingBranch] = useState<string | null>(null);
@@ -154,8 +190,8 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		if (editingBranch === null || !workspace) {
 			return;
 		}
-		const trimmed = editingBranch.trim();
-		if (trimmed && trimmed !== workspace.branch) {
+		const normalized = normalizeBranchRenameInput(editingBranch);
+		if (normalized && normalized !== workspace.branch) {
 			const detailKey = helmorQueryKeys.workspaceDetail(workspace.id);
 			const previous = queryClient.getQueryData<WorkspaceDetail | null>(
 				detailKey,
@@ -163,21 +199,18 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 			if (previous) {
 				queryClient.setQueryData<WorkspaceDetail | null>(detailKey, {
 					...previous,
-					branch: trimmed,
+					branch: normalized,
 				});
 			}
 			try {
-				await renameWorkspaceBranch(workspace.id, trimmed);
+				await renameWorkspaceBranch(workspace.id, normalized);
 				onWorkspaceChanged?.();
 			} catch (error: unknown) {
 				if (previous) {
 					queryClient.setQueryData<WorkspaceDetail | null>(detailKey, previous);
 				}
-				pushToast(
-					error instanceof Error ? error.message : String(error),
-					"Branch rename failed",
-					"destructive",
-				);
+				const { message } = extractError(error, "Unable to rename branch.");
+				pushToast(message, "Branch rename failed", "destructive");
 			}
 		}
 		setEditingBranch(null);
@@ -348,14 +381,51 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 			>
 				<div className="relative z-0 flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-[12.5px]">
 					{headerLeading}
-					<span className="group/branch relative inline-flex items-center gap-1 overflow-hidden px-1 py-0.5 font-medium text-foreground">
-						<GitBranch
-							className={cn(
-								"size-3.5 shrink-0",
-								getBranchToneClassName(branchTone),
-							)}
-							strokeWidth={1.9}
-						/>
+					<span className="group/branch relative inline-flex items-center gap-1.5 overflow-hidden px-1 py-0.5 font-medium text-foreground">
+						{(() => {
+							// Avatar only when we have a URL AND the workspace's bound
+							// account is still valid (mirrors the right-side Connect
+							// CTA). Otherwise drop to the GitBranch icon fallback.
+							const showAvatar =
+								accountProfile?.avatarUrl && !forgeNeedsConnect;
+							const hoverInfo = showAvatar
+								? accountInfoFromForgeAccount(accountProfile)
+								: null;
+							if (!showAvatar || !hoverInfo) {
+								return (
+									<GitBranch
+										className={cn(
+											"size-3.5 shrink-0",
+											getBranchToneClassName(branchTone),
+										)}
+										strokeWidth={1.9}
+									/>
+								);
+							}
+							return (
+								<HoverCard openDelay={120} closeDelay={80}>
+									<HoverCardTrigger asChild>
+										<span className="inline-flex">
+											<CachedAvatar
+												className="size-4 shrink-0 cursor-default"
+												src={accountProfile?.avatarUrl}
+												alt={accountLogin ?? ""}
+												fallback={initialsFor(accountDisplayName)}
+												fallbackClassName="bg-muted text-[8px] font-semibold uppercase text-muted-foreground"
+											/>
+										</span>
+									</HoverCardTrigger>
+									<HoverCardContent
+										side="bottom"
+										align="start"
+										sideOffset={8}
+										className="w-auto max-w-[260px] p-3"
+									>
+										<AccountHoverCardContent account={hoverInfo} />
+									</HoverCardContent>
+								</HoverCard>
+							);
+						})()}
 						{editingBranch !== null ? (
 							<Input
 								autoFocus

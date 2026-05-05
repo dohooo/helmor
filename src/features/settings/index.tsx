@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	CheckCircle2,
 	ChevronDown,
 	Minus,
 	Monitor,
@@ -18,9 +19,6 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Field, FieldContent, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
 	SidebarGroup,
 	SidebarGroupContent,
@@ -41,18 +39,14 @@ import {
 import { getShortcut } from "@/features/shortcuts/registry";
 import { ShortcutsSettingsPanel } from "@/features/shortcuts/settings-panel";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
-import {
-	isConductorAvailable,
-	loadGithubIdentitySession,
-	type RepositoryCreateOption,
-} from "@/lib/api";
+import { isConductorAvailable, type RepositoryCreateOption } from "@/lib/api";
 import {
 	agentModelSectionsQueryOptions,
 	helmorQueryKeys,
 	repositoriesQueryOptions,
 } from "@/lib/query-client";
-import type { ThemeMode } from "@/lib/settings";
-import { useSettings } from "@/lib/settings";
+import type { DarkTheme, ThemeMode } from "@/lib/settings";
+import { resolveTheme, useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { clampEffort, findModelOption } from "@/lib/workspace-helpers";
 import { SettingsGroup, SettingsRow } from "./components/settings-row";
@@ -68,17 +62,82 @@ const MIN_FONT_SIZE = 12;
 const MAX_FONT_SIZE = 20;
 const FALLBACK_EFFORT_LEVELS = ["low", "medium", "high"];
 
+const DARK_THEME_OPTIONS: Array<{
+	id: DarkTheme;
+	label: string;
+	/** Gradient stop colors for dark-mode swatch (vivid, hue-family) */
+	bg: string;
+	accent: string;
+	/** Gradient stop colors for light-mode swatch (vivid, hue-family) */
+	lightBg: string;
+	lightAccent: string;
+}> = [
+	{
+		id: "default",
+		label: "Default",
+		bg: "oklch(0.38 0 0)",
+		accent: "oklch(0.18 0 0)",
+		lightBg: "oklch(0.88 0 0)",
+		lightAccent: "oklch(0.52 0 0)",
+	},
+	{
+		id: "midnight",
+		label: "Midnight",
+		bg: "oklch(0.62 0.14 258)",
+		accent: "oklch(0.30 0.10 260)",
+		lightBg: "oklch(0.82 0.09 258)",
+		lightAccent: "oklch(0.46 0.20 255)",
+	},
+	{
+		id: "forest",
+		label: "Forest",
+		bg: "oklch(0.58 0.13 150)",
+		accent: "oklch(0.28 0.08 155)",
+		lightBg: "oklch(0.80 0.09 152)",
+		lightAccent: "oklch(0.44 0.17 148)",
+	},
+	{
+		id: "ember",
+		label: "Ember",
+		bg: "oklch(0.66 0.15 55)",
+		accent: "oklch(0.32 0.09 48)",
+		lightBg: "oklch(0.84 0.11 60)",
+		lightAccent: "oklch(0.52 0.19 50)",
+	},
+	{
+		id: "aurora",
+		label: "Aurora",
+		bg: "oklch(0.60 0.15 286)",
+		accent: "oklch(0.28 0.09 292)",
+		lightBg: "oklch(0.80 0.10 289)",
+		lightAccent: "oklch(0.46 0.20 284)",
+	},
+];
+
 export type SettingsSection =
 	| "general"
 	| "shortcuts"
 	| "appearance"
 	| "model"
-	| "git"
 	| "experimental"
 	| "import"
 	| "developer"
 	| "account"
 	| `repo:${string}`;
+
+/// Display labels for settings sections in the sidebar / dialog title.
+/// Most match the section key with a leading capital, but a few names
+/// don't pluralise nicely under that rule — keep the overrides explicit.
+const SECTION_LABEL_OVERRIDES: Partial<Record<SettingsSection, string>> = {
+	account: "Accounts",
+};
+
+/// Optional muted-caption next to the title in the dialog header.
+/// Lets a panel surface a one-liner without rendering its own header
+/// row (which otherwise duplicates the section name).
+const SECTION_TITLE_CAPTIONS: Partial<Record<SettingsSection, string>> = {
+	account: "Synced with your local gh / glab CLI.",
+};
 
 function sidebarSectionLabel(
 	section: SettingsSection,
@@ -88,6 +147,8 @@ function sidebarSectionLabel(
 		const repoId = section.slice(5);
 		return repos.find((r) => r.id === repoId)?.name ?? "Repository";
 	}
+	const override = SECTION_LABEL_OVERRIDES[section];
+	if (override) return override;
 	return section.charAt(0).toUpperCase() + section.slice(1);
 }
 
@@ -115,7 +176,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 	const queryClient = useQueryClient();
 	const [activeSection, setActiveSection] =
 		useState<SettingsSection>("general");
-	const [githubLogin, setGithubLogin] = useState<string | null>(null);
 	const [conductorEnabled, setConductorEnabled] = useState(false);
 
 	useEffect(() => {
@@ -145,6 +205,29 @@ export const SettingsDialog = memo(function SettingsDialog({
 	const defaultModelLabel =
 		selectedDefaultModel?.label ??
 		(modelSectionsQuery.isPending ? "Loading…" : "Select model");
+	// Review row mirrors the Default row's three-control combo *exactly*.
+	// `null` on a Review setting means "follow the default" — we resolve it
+	// here so the Review controls read identically to the Default ones,
+	// without a "Use default" affordance. Selecting the same value as the
+	// default snaps Review back to `null` (still following) so the user
+	// can return to follow-mode just by re-picking the default value.
+	const effectiveReviewModelId =
+		settings.reviewModelId ?? settings.defaultModelId;
+	const effectiveReviewModel = findModelOption(
+		modelSectionsQuery.data ?? [],
+		effectiveReviewModelId,
+	);
+	const reviewModelLabel =
+		effectiveReviewModel?.label ??
+		(modelSectionsQuery.isPending ? "Loading…" : "Select model");
+	const reviewEffortLevels =
+		effectiveReviewModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS;
+	const reviewModelSupportsFastMode =
+		effectiveReviewModel?.supportsFastMode === true;
+	const effectiveReviewEffort =
+		settings.reviewEffort ?? settings.defaultEffort ?? "high";
+	const effectiveReviewFastMode =
+		settings.reviewFastMode ?? settings.defaultFastMode;
 	// Auto-clamp effort when model changes — but only after model metadata
 	// has actually loaded, otherwise the fallback levels silently kill max/xhigh.
 	useEffect(() => {
@@ -167,11 +250,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 
 	useEffect(() => {
 		if (open) {
-			void loadGithubIdentitySession().then((snapshot) => {
-				if (snapshot.status === "connected") {
-					setGithubLogin(snapshot.session.login);
-				}
-			});
 			void isConductorAvailable().then(setConductorEnabled);
 		}
 	}, [open]);
@@ -183,11 +261,10 @@ export const SettingsDialog = memo(function SettingsDialog({
 		"appearance",
 		"model",
 		"shortcuts",
-		"git",
-		"experimental",
 		...(conductorEnabled ? (["import"] as const) : []),
 		...(isDev ? (["developer"] as const) : []),
 		"account",
+		"experimental",
 	];
 
 	const activeRepoId = activeSection.startsWith("repo:")
@@ -261,12 +338,17 @@ export const SettingsDialog = memo(function SettingsDialog({
 					{/* Main content */}
 					<div className="flex min-w-0 flex-1 flex-col overflow-hidden">
 						{/* Header */}
-						<div className="flex items-center border-b border-border/40 px-8 py-4">
+						<div className="flex items-baseline gap-3 border-b border-border/40 px-8 py-4">
 							<DialogTitle className="text-[15px] font-semibold text-foreground">
 								{activeRepo
 									? activeRepo.name
 									: titleSectionLabel(activeSection, repositories)}
 							</DialogTitle>
+							{!activeRepo && SECTION_TITLE_CAPTIONS[activeSection] ? (
+								<span className="truncate text-[12px] text-muted-foreground/70">
+									{SECTION_TITLE_CAPTIONS[activeSection]}
+								</span>
+							) : null}
 						</div>
 
 						{/* Content area */}
@@ -405,6 +487,47 @@ export const SettingsDialog = memo(function SettingsDialog({
 										</ToggleGroup>
 									</SettingsRow>
 									<SettingsRow
+										title="Color Theme"
+										description="Choose an accent palette"
+									>
+										{(() => {
+											const isLight = resolveTheme(settings.theme) === "light";
+											return (
+												<div className="flex gap-2">
+													{DARK_THEME_OPTIONS.map((opt) => {
+														const swatchBg = isLight ? opt.lightBg : opt.bg;
+														const swatchAccent = isLight
+															? opt.lightAccent
+															: opt.accent;
+														const isSelected = settings.darkTheme === opt.id;
+														return (
+															<button
+																key={opt.id}
+																type="button"
+																title={opt.label}
+																aria-label={opt.label}
+																aria-pressed={isSelected}
+																className={cn(
+																	"h-7 w-7 cursor-pointer rounded-full transition-transform duration-150",
+																	isSelected ? "scale-105" : "hover:scale-105",
+																)}
+																style={{
+																	background: `linear-gradient(135deg, ${swatchBg}, ${swatchAccent})`,
+																	boxShadow: isSelected
+																		? `0 0 0 2px var(--background), 0 0 0 3.5px ${swatchBg}`
+																		: undefined,
+																}}
+																onClick={() =>
+																	updateSettings({ darkTheme: opt.id })
+																}
+															/>
+														);
+													})}
+												</div>
+											);
+										})()}
+									</SettingsRow>
+									<SettingsRow
 										title="Font Size"
 										description="Adjust the text size for chat messages"
 									>
@@ -483,10 +606,19 @@ export const SettingsDialog = memo(function SettingsDialog({
 															onClick={() =>
 																updateSettings({ defaultModelId: m.id })
 															}
-															className="gap-2"
+															className="justify-between gap-2"
 														>
-															<ModelIcon model={m} className="size-4" />
-															{m.label}
+															<span className="flex min-w-0 items-center gap-2">
+																<ModelIcon model={m} className="size-4" />
+																{m.label}
+															</span>
+															<CheckCircle2
+																className={cn(
+																	"size-3.5 shrink-0 text-emerald-500",
+																	m.id !== settings.defaultModelId &&
+																		"invisible",
+																)}
+															/>
 														</DropdownMenuItem>
 													))}
 												</DropdownMenuContent>
@@ -549,59 +681,130 @@ export const SettingsDialog = memo(function SettingsDialog({
 											</div>
 										</div>
 									</SettingsRow>
-									<ClaudeCustomProvidersPanel />
-								</SettingsGroup>
-							)}
-
-							{activeSection === "git" && (
-								<SettingsGroup>
-									<div className="py-5">
-										<div className="text-[13px] font-medium leading-snug text-foreground">
-											Branch Prefix
-										</div>
-										<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
-											Prefix added to branch names when creating new workspaces
-										</div>
-										<RadioGroup
-											value={settings.branchPrefixType}
-											onValueChange={(value: string) =>
-												updateSettings({
-													branchPrefixType: value as
-														| "github"
-														| "custom"
-														| "none",
-												})
-											}
-											className="mt-4 gap-1"
-										>
-											<RadioOption
-												value="github"
-												label={`GitHub username${githubLogin ? ` (${githubLogin})` : ""}`}
-											/>
-											<RadioOption value="custom" label="Custom" />
-											{settings.branchPrefixType === "custom" && (
-												<div className="ml-7">
-													<Input
-														type="text"
-														value={settings.branchPrefixCustom}
-														onChange={(e) =>
-															updateSettings({
-																branchPrefixCustom: e.target.value,
-															})
-														}
-														placeholder="e.g. feat/"
-														className="w-full bg-muted/30 text-[13px] text-foreground placeholder:text-muted-foreground/50"
-													/>
-													{settings.branchPrefixCustom && (
-														<div className="mt-1.5 text-[12px] text-muted-foreground">
-															Preview: {settings.branchPrefixCustom}tokyo
-														</div>
+									<SettingsRow
+										title="Review model"
+										description="Model for code review"
+									>
+										<div className="flex w-[360px] items-center gap-2">
+											<DropdownMenu>
+												<DropdownMenuTrigger
+													className={cn(
+														"flex h-8 cursor-pointer items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+														"min-w-0 flex-1 gap-1.5",
 													)}
-												</div>
-											)}
-											<RadioOption value="none" label="None" />
-										</RadioGroup>
-									</div>
+												>
+													<span className="flex min-w-0 items-center gap-1.5">
+														<ModelIcon
+															model={effectiveReviewModel}
+															className="size-[13px] shrink-0"
+														/>
+														<span className="min-w-0 truncate whitespace-nowrap">
+															{reviewModelLabel}
+														</span>
+													</span>
+													<ChevronDown className="size-3 shrink-0 opacity-40" />
+												</DropdownMenuTrigger>
+												<DropdownMenuContent
+													align="end"
+													sideOffset={4}
+													className="min-w-[10rem]"
+												>
+													{allModels.map((m) => (
+														<DropdownMenuItem
+															key={m.id}
+															onClick={() =>
+																updateSettings({
+																	// Picking the same value as the
+																	// default snaps Review back to `null`
+																	// (still following the default).
+																	reviewModelId:
+																		m.id === settings.defaultModelId
+																			? null
+																			: m.id,
+																})
+															}
+															className="justify-between gap-2"
+														>
+															<span className="flex min-w-0 items-center gap-2">
+																<ModelIcon model={m} className="size-4" />
+																{m.label}
+															</span>
+															<CheckCircle2
+																className={cn(
+																	"size-3.5 shrink-0 text-emerald-500",
+																	m.id !== effectiveReviewModelId &&
+																		"invisible",
+																)}
+															/>
+														</DropdownMenuItem>
+													))}
+												</DropdownMenuContent>
+											</DropdownMenu>
+											<DropdownMenu>
+												<DropdownMenuTrigger
+													className={cn(
+														"flex h-8 cursor-pointer items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+														"shrink-0 gap-1.5",
+													)}
+												>
+													<span>{effortLabel(effectiveReviewEffort)}</span>
+													<ChevronDown className="size-3 opacity-40" />
+												</DropdownMenuTrigger>
+												<DropdownMenuContent
+													align="end"
+													sideOffset={4}
+													className="min-w-[8rem]"
+												>
+													{reviewEffortLevels.map((l) => (
+														<DropdownMenuItem
+															key={l}
+															onClick={() =>
+																updateSettings({
+																	reviewEffort:
+																		l === settings.defaultEffort ? null : l,
+																})
+															}
+														>
+															{effortLabel(l)}
+														</DropdownMenuItem>
+													))}
+												</DropdownMenuContent>
+											</DropdownMenu>
+											<div
+												className={cn(
+													"flex h-8 cursor-pointer items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+													"shrink-0 gap-2",
+												)}
+											>
+												<span
+													className={
+														reviewModelSupportsFastMode
+															? "text-[13px] text-foreground"
+															: "text-[13px] text-muted-foreground"
+													}
+												>
+													Fast mode
+												</span>
+												<Switch
+													checked={
+														reviewModelSupportsFastMode &&
+														effectiveReviewFastMode
+													}
+													disabled={!reviewModelSupportsFastMode}
+													onCheckedChange={(checked) =>
+														updateSettings({
+															reviewFastMode:
+																checked === settings.defaultFastMode
+																	? null
+																	: checked,
+														})
+													}
+													aria-label="Review fast mode"
+												/>
+											</div>
+										</div>
+									</SettingsRow>
+									<ClaudeCustomProvidersPanel />
 								</SettingsGroup>
 							)}
 
@@ -616,16 +819,12 @@ export const SettingsDialog = memo(function SettingsDialog({
 							{activeSection === "developer" && <DevToolsPanel />}
 
 							{activeSection === "account" && (
-								<AccountPanel
-									repositories={repositories}
-									onSignedOut={onClose}
-								/>
+								<AccountPanel repositories={repositories} />
 							)}
 
 							{activeRepo && (
 								<RepositorySettingsPanel
 									repo={activeRepo}
-									githubLogin={githubLogin}
 									workspaceId={
 										activeRepo.id === workspaceRepoId ? workspaceId : null
 									}
@@ -664,30 +863,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 // ---------------------------------------------------------------------------
 // Shared sub-components
 // ---------------------------------------------------------------------------
-
-function RadioOption({
-	value,
-	label,
-}: {
-	value: "github" | "custom" | "none";
-	label: string;
-}) {
-	const id = `settings-branch-prefix-${value}`;
-
-	return (
-		<Field
-			orientation="horizontal"
-			className="items-center gap-3 rounded-lg px-1 py-1.5"
-		>
-			<RadioGroupItem value={value} id={id} />
-			<FieldContent>
-				<FieldLabel htmlFor={id} className="text-foreground">
-					{label}
-				</FieldLabel>
-			</FieldContent>
-		</Field>
-	);
-}
 
 function effortLabel(level: string): string {
 	if (level === "xhigh") return "Extra High";

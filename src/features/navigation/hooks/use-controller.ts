@@ -223,6 +223,18 @@ export function useWorkspacesSidebarController({
 		[pushWorkspaceToast],
 	);
 
+	// Forward-ref so the rollback can call into the recovery toast helper that
+	// is defined below (they form a cycle: the helper depends on
+	// `handleDeleteWorkspace`, which is defined later still).
+	const pushPermanentDeleteRecoveryToastRef = useRef<
+		(
+			workspaceId: string,
+			title: string,
+			error: unknown,
+			fallbackMessage: string,
+		) => void
+	>(() => {});
+
 	const rollbackArchivedWorkspace = useCallback(
 		(workspaceId: string, error: unknown, fallbackMessage: string) => {
 			updateArchivingWorkspaceId(workspaceId, false);
@@ -242,14 +254,18 @@ export function useWorkspacesSidebarController({
 				flushSidebarLists();
 			}
 
-			pushWorkspaceErrorToast(
+			// Always offer the permanent-delete escape hatch on archive failure —
+			// matches the restore-failure path. The user already chose to drop
+			// this workspace; if cleanup hits a snag (e.g. trash-dir collision,
+			// stale worktree) they need a way out without restarting the app.
+			pushPermanentDeleteRecoveryToastRef.current(
 				workspaceId,
 				"Archive failed",
 				error,
 				fallbackMessage,
 			);
 		},
-		[flushSidebarLists, pushWorkspaceErrorToast, updateArchivingWorkspaceId],
+		[flushSidebarLists, updateArchivingWorkspaceId],
 	);
 
 	useEffect(() => {
@@ -1169,6 +1185,12 @@ export function useWorkspacesSidebarController({
 	useEffect(() => {
 		handleDeleteWorkspaceRef.current = handleDeleteWorkspace;
 	}, [handleDeleteWorkspace]);
+
+	// Keep the forward-ref used by `rollbackArchivedWorkspace` in sync.
+	useEffect(() => {
+		pushPermanentDeleteRecoveryToastRef.current =
+			pushPermanentDeleteRecoveryToast;
+	}, [pushPermanentDeleteRecoveryToast]);
 
 	const notifyBranchRename = useCallback(
 		(rename: { original: string; actual: string }) => {
