@@ -20,9 +20,17 @@ const serverState = {
 	 *  `turn/started` and `turn/completed` (e.g. `thread/tokenUsage/updated`). */
 	beforeTurnCompleted: null as null | (() => void),
 	exitAfterTurnStarted: false,
+	instances: [] as MockCodexAppServer[],
 };
 const gitAccessState = {
 	directories: [] as string[],
+};
+const codexConfigState = {
+	result: {
+		kind: "alreadyEnabled" as "alreadyEnabled" | "modified",
+		path: "/fake/.codex/config.toml",
+	},
+	calls: 0,
 };
 
 class MockCodexAppServer {
@@ -32,6 +40,7 @@ class MockCodexAppServer {
 		onExit: (code: number | null, signal: string | null) => void;
 	}) {
 		serverState.onExit = opts.onExit;
+		serverState.instances.push(this);
 	}
 
 	async sendRequest(method: string, params: unknown): Promise<unknown> {
@@ -40,6 +49,25 @@ class MockCodexAppServer {
 		if (method === "initialize") return {};
 		if (method === "thread/start") {
 			return { thread: { id: "thread-1" } };
+		}
+		if (method === "thread/resume") {
+			const threadId =
+				(params as { threadId?: string } | undefined)?.threadId ??
+				"thread-resumed";
+			return { thread: { id: threadId } };
+		}
+		if (method === "thread/goal/set") {
+			queueMicrotask(() => {
+				serverState.onNotification?.({
+					method: "turn/started",
+					params: { turn: { id: "turn-goal-1" } },
+				});
+				serverState.onNotification?.({
+					method: "turn/completed",
+					params: { turn: { id: "turn-goal-1" } },
+				});
+			});
+			return {};
 		}
 		if (method === "turn/start") {
 			queueMicrotask(() => {
@@ -89,6 +117,14 @@ mock.module("../src/git-access.js", () => ({
 	resolveGitAccessDirectories: async () => [...gitAccessState.directories],
 }));
 
+mock.module("../src/codex-config.js", () => ({
+	ensureCodexGoalsFeatureEnabled: async () => {
+		codexConfigState.calls += 1;
+		return { ...codexConfigState.result };
+	},
+	codexConfigPath: () => codexConfigState.result.path,
+}));
+
 const { CodexAppServerManager } = await import(
 	"../src/codex-app-server-manager.js"
 );
@@ -102,7 +138,13 @@ describe("CodexAppServerManager", () => {
 		serverState.onExit = null;
 		serverState.beforeTurnCompleted = null;
 		serverState.exitAfterTurnStarted = false;
+		serverState.instances = [];
 		gitAccessState.directories = [];
+		codexConfigState.result = {
+			kind: "alreadyEnabled",
+			path: "/fake/.codex/config.toml",
+		};
+		codexConfigState.calls = 0;
 		emitter = createSidecarEmitter(() => {});
 	});
 
@@ -657,5 +699,202 @@ describe("parseGoalCommand", () => {
 			kind: "set",
 			objective: "clear",
 		});
+	});
+});
+
+describe("CodexAppServerManager goal pre-flight", () => {
+	let emitter: SidecarEmitter;
+
+	beforeEach(() => {
+		serverState.requests = [];
+		serverState.onNotification = null;
+		serverState.onExit = null;
+		serverState.beforeTurnCompleted = null;
+		serverState.exitAfterTurnStarted = false;
+		serverState.instances = [];
+		gitAccessState.directories = [];
+		codexConfigState.result = {
+			kind: "alreadyEnabled",
+			path: "/fake/.codex/config.toml",
+		};
+		codexConfigState.calls = 0;
+		emitter = createSidecarEmitter(() => {});
+	});
+
+	test("/goal pre-flight: no-op when codex config already enables goals", async () => {
+		const manager = new CodexAppServerManager();
+		codexConfigState.result = {
+			kind: "alreadyEnabled",
+			path: "/fake/.codex/config.toml",
+		};
+
+		await manager.sendMessage(
+			"REQ-goal-noop",
+			{
+				sessionId: "s-goal-noop",
+				prompt: "/goal review the diff",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		expect(codexConfigState.calls).toBe(1);
+		expect(serverState.instances).toHaveLength(1);
+		expect(serverState.instances[0]?.killed).toBe(false);
+		const goalSet = serverState.requests.find(
+			(r) => r.method === "thread/goal/set",
+		);
+		expect(goalSet?.params).toMatchObject({
+			threadId: "thread-1",
+			objective: "review the diff",
+		});
+	});
+
+	test("/goal pre-flight: recycles stale codex and resumes its thread when toml had to be modified", async () => {
+		const manager = new CodexAppServerManager();
+
+		// Seed a session so a stale ctx exists for the recycle.
+		codexConfigState.result = {
+			kind: "alreadyEnabled",
+			path: "/fake/.codex/config.toml",
+		};
+		await manager.sendMessage(
+			"REQ-seed",
+			{
+				sessionId: "s-goal-recycle",
+				prompt: "warm-up",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+		expect(serverState.instances).toHaveLength(1);
+		const stale = serverState.instances[0];
+
+		// Pretend the helper had to flip the flag.
+		codexConfigState.result = {
+			kind: "modified",
+			path: "/fake/.codex/config.toml",
+		};
+		serverState.requests = [];
+
+		await manager.sendMessage(
+			"REQ-goal-recycle",
+			{
+				sessionId: "s-goal-recycle",
+				prompt: "/goal say hi",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				// No caller resume → pre-flight reuses the stale thread.
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		expect(stale?.killed).toBe(true);
+		expect(serverState.instances).toHaveLength(2);
+		expect(serverState.instances[1]?.killed).toBe(false);
+
+		const resume = serverState.requests.find(
+			(r) => r.method === "thread/resume",
+		);
+		expect(resume?.params).toMatchObject({ threadId: "thread-1" });
+
+		const goalSet = serverState.requests.find(
+			(r) => r.method === "thread/goal/set",
+		);
+		expect(goalSet?.params).toMatchObject({
+			threadId: "thread-1",
+			objective: "say hi",
+		});
+	});
+
+	test("/goal pre-flight: caller-provided resume wins over stale providerThreadId", async () => {
+		const manager = new CodexAppServerManager();
+
+		codexConfigState.result = {
+			kind: "alreadyEnabled",
+			path: "/fake/.codex/config.toml",
+		};
+		await manager.sendMessage(
+			"REQ-seed-2",
+			{
+				sessionId: "s-goal-explicit",
+				prompt: "warm-up",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		codexConfigState.result = {
+			kind: "modified",
+			path: "/fake/.codex/config.toml",
+		};
+		serverState.requests = [];
+
+		// Caller's resume wins over the in-memory stale id.
+		await manager.sendMessage(
+			"REQ-goal-explicit",
+			{
+				sessionId: "s-goal-explicit",
+				prompt: "/goal something",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: "thread-from-rust",
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		const resume = serverState.requests.find(
+			(r) => r.method === "thread/resume",
+		);
+		expect(resume?.params).toMatchObject({ threadId: "thread-from-rust" });
+	});
+
+	test("/goal pre-flight: skipped for non-/goal prompts", async () => {
+		const manager = new CodexAppServerManager();
+
+		await manager.sendMessage(
+			"REQ-plain",
+			{
+				sessionId: "s-plain",
+				prompt: "just a regular question",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		expect(codexConfigState.calls).toBe(0);
 	});
 });
