@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.16.0
+
+### Minor Changes
+
+- [#387](https://github.com/dohooo/helmor/pull/387) [`9ea7823`](https://github.com/dohooo/helmor/commit/9ea7823a3b896a75d7ef96454e5540c5403d9953) Thanks [@natllian](https://github.com/natllian)! - Render Codex multi-agent (sub-agent spawn / wait) messages with a "Spawned N agents" group header, per-agent color-coded identities, and click-to-expand instructions — previously these events were silently dropped.
+
+### Patch Changes
+
+- [#385](https://github.com/dohooo/helmor/pull/385) [`d18414f`](https://github.com/dohooo/helmor/commit/d18414f06c60766f81f6dd490890795acc941875) Thanks [@natllian](https://github.com/natllian)! - Render image and file attachments in queued follow-up messages as hover-preview chips, matching how they appear in the composer and sent chat bubbles instead of showing the raw `@/path/...` text.
+
 ## 0.15.0
 
 ### Minor Changes

@@ -26,6 +26,16 @@
 	--chart-3: oklch(0.398 0.07 227.392);
 	--chart-4: oklch(0.828 0.189 84.429);
 	--chart-5: oklch(0.769 0.188 70.08);
+	/* Sub-agent identity palette — soft, distinguishable hues for the
+	   "Created <Agent>" labels. Sized at L≈58% / C≈0.10 to read well on
+	   light surfaces without clashing with destructive red. Mirrored in
+	   `.dark` at L≈75% for dark surfaces. */
+	--subagent-1: oklch(0.55 0.1 220);
+	--subagent-2: oklch(0.55 0.1 165);
+	--subagent-3: oklch(0.58 0.11 80);
+	--subagent-4: oklch(0.55 0.1 320);
+	--subagent-5: oklch(0.55 0.1 280);
+	--subagent-6: oklch(0.55 0.09 195);
 	--sidebar: oklch(0.985 0 0);
 	--sidebar-foreground: oklch(0.145 0 0);
 	--sidebar-primary: oklch(0.205 0 0);
@@ -137,6 +147,15 @@
 	--chart-3: oklch(0.769 0.188 70.08);
 	--chart-4: oklch(0.627 0.265 303.9);
 	--chart-5: oklch(0.645 0.246 16.439);
+	/* Sub-agent identity palette — see `:root` for design notes. Lifted to
+	   L≈75% so colors stay visible against the dark background while still
+	   reading as soft, not neon. */
+	--subagent-1: oklch(0.74 0.1 220);
+	--subagent-2: oklch(0.74 0.1 165);
+	--subagent-3: oklch(0.78 0.1 80);
+	--subagent-4: oklch(0.74 0.1 320);
+	--subagent-5: oklch(0.74 0.1 280);
+	--subagent-6: oklch(0.76 0.09 195);
 	--sidebar: oklch(0.205 0 0);
 	--sidebar-foreground: oklch(0.985 0 0);
 	--sidebar-primary: oklch(0.488 0.243 264.376);

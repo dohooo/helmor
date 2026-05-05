@@ -17,6 +17,7 @@ import {
 	type JsonRpcRequest,
 } from "./codex-app-server.js";
 import { ensureCodexGoalsFeatureEnabled } from "./codex-config.js";
+import { SubAgentTracker } from "./codex-subagent-tracker.js";
 import { buildCodexStoredMeta } from "./context-usage.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { resolveGitAccessDirectories } from "./git-access.js";
@@ -258,6 +259,9 @@ interface AppServerContext {
 	/** Last reconnect notice forwarded to the pipeline. Dedupe stderr +
 	 *  JSON-RPC echoes so the user sees liveness without duplicate rows. */
 	lastRetryNotice: { key: string; at: number } | null;
+	/** Tracks sub-agent thread metadata (nickname, role) so we can enrich
+	 *  `collabAgentToolCall(spawnAgent)` items before forwarding them. */
+	subAgentTracker: SubAgentTracker;
 }
 
 // ---------------------------------------------------------------------------
@@ -518,20 +522,54 @@ export class CodexAppServerManager implements SessionManager {
 					return;
 				}
 
+				// Route by threadId. Codex multiplexes parent + sub-agent on
+				// the same stdio stream; without this filter the sub-agent's
+				// turn/started would clobber `activeTurnId` and its items
+				// would pollute the parent turn's accumulator.
+				const eventThreadId = extractEventThreadId(n);
+				const isSubAgentEvent =
+					eventThreadId !== null &&
+					ctx.providerThreadId !== null &&
+					eventThreadId !== ctx.providerThreadId;
+
+				if (isSubAgentEvent) {
+					// Tracker is idempotent + caches in-flight; safe to fire
+					// for every sub-agent event so we register no matter
+					// which method (thread/started, status/changed, …) is
+					// the sub-agent's first signal.
+					void ctx.subAgentTracker.noteSpawned(eventThreadId);
+					return;
+				}
+
+				// Block briefly (≤2s) on a spawn-completed item so the
+				// nickname/role enrichment lands before the pipeline sees it.
+				if (n.method === "item/completed" && isSpawnAgentCompleted(n.params)) {
+					await enrichSpawnAgentItem(ctx.subAgentTracker, n);
+				}
+
 				const flat = flattenNotification(n, ctx.providerThreadId);
 				emit(flat);
 
 				if (n.method === "thread/started") {
-					const threadId = deepGet(n.params, "thread", "id");
-					if (typeof threadId === "string") {
-						ctx.providerThreadId = threadId;
+					// Only the first thread/started locks providerThreadId.
+					if (!ctx.providerThreadId) {
+						const threadId = deepGet(n.params, "thread", "id");
+						if (typeof threadId === "string") {
+							ctx.providerThreadId = threadId;
+						}
 					}
 				}
 
 				if (n.method === "turn/started") {
-					const turnId = deepGet(n.params, "turn", "id");
-					if (typeof turnId === "string") {
-						ctx.activeTurnId = turnId;
+					// Defensive: older Codex builds may omit threadId.
+					if (
+						eventThreadId === null ||
+						eventThreadId === ctx.providerThreadId
+					) {
+						const turnId = deepGet(n.params, "turn", "id");
+						if (typeof turnId === "string") {
+							ctx.activeTurnId = turnId;
+						}
 					}
 				}
 
@@ -1296,6 +1334,7 @@ export class CodexAppServerManager implements SessionManager {
 			lastSentModel: model ?? "",
 			lastRetryAt: null,
 			lastRetryNotice: null,
+			subAgentTracker: new SubAgentTracker(server),
 		};
 
 		this.sessions.set(sessionId, ctx);
@@ -1359,6 +1398,74 @@ function flattenNotification(
 		...params,
 		...(sessionId ? { session_id: sessionId } : {}),
 	};
+}
+
+/** params.threadId, or thread.id for thread/started. */
+function extractEventThreadId(n: JsonRpcNotification): string | null {
+	const params = n.params as Record<string, unknown> | undefined;
+	if (!params) return null;
+	const direct = params.threadId;
+	if (typeof direct === "string") return direct;
+	const fromThread = (params.thread as Record<string, unknown> | undefined)?.id;
+	return typeof fromThread === "string" ? fromThread : null;
+}
+
+/** True for `collabAgentToolCall(spawnAgent, completed)`. */
+function isSpawnAgentCompleted(params: unknown): boolean {
+	if (!params || typeof params !== "object") return false;
+	const item = (params as Record<string, unknown>).item as
+		| Record<string, unknown>
+		| undefined;
+	return (
+		!!item &&
+		item.type === "collabAgentToolCall" &&
+		item.tool === "spawnAgent" &&
+		item.status === "completed"
+	);
+}
+
+/** Resolve nickname/role for each receiverThreadId via `thread/read` and
+ *  merge into `agentsStates`. Existing values win. */
+async function enrichSpawnAgentItem(
+	tracker: SubAgentTracker,
+	n: JsonRpcNotification,
+): Promise<void> {
+	const params = n.params as Record<string, unknown> | undefined;
+	const item = params?.item as Record<string, unknown> | undefined;
+	if (!item) return;
+	const receivers = item.receiverThreadIds;
+	if (!Array.isArray(receivers) || receivers.length === 0) return;
+
+	// Resolve all receivers in parallel — usually it's exactly one per call.
+	const metas = await Promise.all(
+		receivers.map((tid) =>
+			typeof tid === "string"
+				? tracker.noteSpawned(tid)
+				: Promise.resolve(null),
+		),
+	);
+
+	const states = (item.agentsStates ?? {}) as Record<
+		string,
+		Record<string, unknown>
+	>;
+	for (let i = 0; i < receivers.length; i++) {
+		const tid = receivers[i];
+		const meta = metas[i];
+		if (typeof tid !== "string" || !meta) continue;
+		const state = (states[tid] as Record<string, unknown> | undefined) ?? {};
+		// Existing values win — only fill in what's missing. Guards against
+		// `noteSpawned` returning a fallback placeholder (thread/read timed
+		// out / failed) blowing away whatever the upstream item already had.
+		if (meta.agentNickname && state.agentNickname == null) {
+			state.agentNickname = meta.agentNickname;
+		}
+		if (meta.agentRole && state.agentRole == null) {
+			state.agentRole = meta.agentRole;
+		}
+		states[tid] = state;
+	}
+	item.agentsStates = states;
 }
 
 function buildTurnInput(
