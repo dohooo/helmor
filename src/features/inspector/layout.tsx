@@ -55,6 +55,92 @@ export const TABS_BLUR_HOLD_UNTIL_MS = TABS_HOVER_TRANSITION_MS - 50;
 export const INSPECTOR_SECTION_HEADER_HEIGHT = 33;
 const TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX = INSPECTOR_SECTION_HEADER_HEIGHT;
 
+// Inspector layout persistence
+export const INSPECTOR_ACTIONS_OPEN_STORAGE_KEY =
+	"helmor.workspaceInspectorActionsOpen";
+export const INSPECTOR_TABS_OPEN_STORAGE_KEY =
+	"helmor.workspaceInspectorTabsOpen";
+export const INSPECTOR_ACTIVE_TAB_STORAGE_KEY =
+	"helmor.workspaceInspectorActiveTab";
+export const INSPECTOR_CHANGES_HEIGHT_STORAGE_KEY =
+	"helmor.workspaceInspectorChangesHeight";
+export const INSPECTOR_TABS_HEIGHT_STORAGE_KEY =
+	"helmor.workspaceInspectorTabsHeight";
+
+export function getInitialActionsOpen(): boolean {
+	if (typeof window === "undefined") {
+		return true; // default: Actions open
+	}
+	try {
+		const stored = window.localStorage.getItem(
+			INSPECTOR_ACTIONS_OPEN_STORAGE_KEY,
+		);
+		if (!stored) return true;
+		return stored === "true";
+	} catch {
+		return true;
+	}
+}
+
+export function getInitialTabsOpen(): boolean {
+	if (typeof window === "undefined") {
+		return false; // default: Tabs collapsed
+	}
+	try {
+		const stored = window.localStorage.getItem(INSPECTOR_TABS_OPEN_STORAGE_KEY);
+		if (!stored) return false;
+		return stored === "true";
+	} catch {
+		return false;
+	}
+}
+
+export function getInitialActiveTab(): string {
+	if (typeof window === "undefined") {
+		return "setup";
+	}
+	try {
+		const stored = window.localStorage.getItem(
+			INSPECTOR_ACTIVE_TAB_STORAGE_KEY,
+		);
+		return stored || "setup";
+	} catch {
+		return "setup";
+	}
+}
+
+export function getInitialChangesHeight(defaultHeight: number): number {
+	if (typeof window === "undefined") {
+		return defaultHeight;
+	}
+	try {
+		const stored = window.localStorage.getItem(
+			INSPECTOR_CHANGES_HEIGHT_STORAGE_KEY,
+		);
+		if (!stored) return defaultHeight;
+		const parsed = Number.parseInt(stored, 10);
+		return Number.isFinite(parsed) ? parsed : defaultHeight;
+	} catch {
+		return defaultHeight;
+	}
+}
+
+export function getInitialTabsHeight(defaultHeight: number): number {
+	if (typeof window === "undefined") {
+		return defaultHeight;
+	}
+	try {
+		const stored = window.localStorage.getItem(
+			INSPECTOR_TABS_HEIGHT_STORAGE_KEY,
+		);
+		if (!stored) return defaultHeight;
+		const parsed = Number.parseInt(stored, 10);
+		return Number.isFinite(parsed) ? parsed : defaultHeight;
+	} catch {
+		return defaultHeight;
+	}
+}
+
 export const INSPECTOR_SECTION_HEADER_CLASS =
 	"flex h-8 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-muted/25 px-3";
 export const INSPECTOR_SECTION_TITLE_CLASS =

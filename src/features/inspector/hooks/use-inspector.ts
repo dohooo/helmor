@@ -10,7 +10,19 @@ import {
 import { loadRepoScripts, type RepoScripts } from "@/lib/api";
 import type { InspectorFileItem } from "@/lib/editor-session";
 import { workspaceChangesQueryOptions } from "@/lib/query-client";
-import { INSPECTOR_SECTION_HEADER_HEIGHT } from "../layout";
+import {
+	getInitialActionsOpen,
+	getInitialActiveTab,
+	getInitialChangesHeight,
+	getInitialTabsHeight,
+	getInitialTabsOpen,
+	INSPECTOR_ACTIONS_OPEN_STORAGE_KEY,
+	INSPECTOR_ACTIVE_TAB_STORAGE_KEY,
+	INSPECTOR_CHANGES_HEIGHT_STORAGE_KEY,
+	INSPECTOR_SECTION_HEADER_HEIGHT,
+	INSPECTOR_TABS_HEIGHT_STORAGE_KEY,
+	INSPECTOR_TABS_OPEN_STORAGE_KEY,
+} from "../layout";
 import { getScriptState, startScript, stopScript } from "../script-store";
 
 // Inspector layout model
@@ -111,14 +123,17 @@ export function useWorkspaceInspectorSidebar({
 	workspaceId,
 	repoId,
 }: UseWorkspaceInspectorSidebarArgs) {
-	const [actionsOpen, setActionsOpen] = useState(true);
-	const [tabsOpen, setTabsOpen] = useState(false);
-	const [activeTab, setActiveTab] = useState("setup");
+	const [actionsOpen, setActionsOpen] = useState(getInitialActionsOpen);
+	const [tabsOpen, setTabsOpen] = useState(getInitialTabsOpen);
+	const [activeTab, setActiveTab] = useState(getInitialActiveTab);
 
 	const [containerHeight, setContainerHeight] = useState(0);
-	const [storedChangesBody, setStoredChangesBody] =
-		useState(DEFAULT_CHANGES_BODY);
-	const [storedTabsBody, setStoredTabsBody] = useState(DEFAULT_TABS_BODY);
+	const [storedChangesBody, setStoredChangesBody] = useState(() =>
+		getInitialChangesHeight(DEFAULT_CHANGES_BODY),
+	);
+	const [storedTabsBody, setStoredTabsBody] = useState(() =>
+		getInitialTabsHeight(DEFAULT_TABS_BODY),
+	);
 	const [resizeState, setResizeState] = useState<ResizeState | null>(null);
 
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -163,6 +178,73 @@ export function useWorkspaceInspectorSidebar({
 			}),
 		[bodyBudget, actionsOpen, tabsOpen, storedChangesBody, storedTabsBody],
 	);
+
+	useEffect(() => {
+		try {
+			window.localStorage.setItem(
+				INSPECTOR_ACTIONS_OPEN_STORAGE_KEY,
+				String(actionsOpen),
+			);
+		} catch (error) {
+			console.error(
+				`[helmor] actions open save failed for "${INSPECTOR_ACTIONS_OPEN_STORAGE_KEY}"`,
+				error,
+			);
+		}
+	}, [actionsOpen]);
+
+	useEffect(() => {
+		try {
+			window.localStorage.setItem(
+				INSPECTOR_TABS_OPEN_STORAGE_KEY,
+				String(tabsOpen),
+			);
+		} catch (error) {
+			console.error(
+				`[helmor] tabs open save failed for "${INSPECTOR_TABS_OPEN_STORAGE_KEY}"`,
+				error,
+			);
+		}
+	}, [tabsOpen]);
+
+	useEffect(() => {
+		try {
+			window.localStorage.setItem(INSPECTOR_ACTIVE_TAB_STORAGE_KEY, activeTab);
+		} catch (error) {
+			console.error(
+				`[helmor] active tab save failed for "${INSPECTOR_ACTIVE_TAB_STORAGE_KEY}"`,
+				error,
+			);
+		}
+	}, [activeTab]);
+
+	useEffect(() => {
+		try {
+			window.localStorage.setItem(
+				INSPECTOR_CHANGES_HEIGHT_STORAGE_KEY,
+				String(storedChangesBody),
+			);
+		} catch (error) {
+			console.error(
+				`[helmor] changes height save failed for "${INSPECTOR_CHANGES_HEIGHT_STORAGE_KEY}"`,
+				error,
+			);
+		}
+	}, [storedChangesBody]);
+
+	useEffect(() => {
+		try {
+			window.localStorage.setItem(
+				INSPECTOR_TABS_HEIGHT_STORAGE_KEY,
+				String(storedTabsBody),
+			);
+		} catch (error) {
+			console.error(
+				`[helmor] tabs height save failed for "${INSPECTOR_TABS_HEIGHT_STORAGE_KEY}"`,
+				error,
+			);
+		}
+	}, [storedTabsBody]);
 
 	const repoScriptsQuery = useQuery({
 		queryKey: ["repoScripts", repoId, workspaceId],
