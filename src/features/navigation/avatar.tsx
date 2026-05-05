@@ -63,6 +63,7 @@ export const WorkspaceAvatar = memo(function WorkspaceAvatar({
 	useEffect(() => {
 		setHasImage(Boolean(src));
 	}, [src]);
+	const showFallback = !src || !hasImage;
 
 	return (
 		<Avatar
@@ -73,6 +74,7 @@ export const WorkspaceAvatar = memo(function WorkspaceAvatar({
 			className={cn(
 				"size-[16px] shrink-0 rounded-[5px] border-0 bg-transparent outline-none",
 				className,
+				showFallback && "rounded-full",
 			)}
 		>
 			{src ? (
@@ -87,15 +89,16 @@ export const WorkspaceAvatar = memo(function WorkspaceAvatar({
 					}}
 				/>
 			) : null}
-			{!src || !hasImage ? (
+			{showFallback ? (
 				<span
 					data-slot="avatar-fallback"
 					className={cn(
-						"flex size-full items-center justify-center rounded-[inherit] bg-muted text-[7px] font-semibold uppercase tracking-[0.02em] text-muted-foreground",
+						"grid size-full place-items-center bg-muted text-center text-[7px] font-semibold leading-none uppercase tracking-[0.02em] text-muted-foreground",
 						fallbackClassName,
+						"rounded-full",
 					)}
 				>
-					{fallback}
+					<span className="translate-y-px">{fallback}</span>
 				</span>
 			) : null}
 			{isRunning ? (

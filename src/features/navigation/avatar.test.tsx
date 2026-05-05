@@ -30,4 +30,23 @@ describe("WorkspaceAvatar", () => {
 		expect(fallback).toBeInTheDocument();
 		expect(fallback).toHaveTextContent("TT");
 	});
+
+	it("keeps fallback initials circular even when the avatar container is rounded-md", () => {
+		const { container } = render(
+			<WorkspaceAvatar
+				repoIconSrc={null}
+				repoInitials="TT"
+				repoName="ts-to-zod"
+				title="ts-to-zod"
+				className="size-4 rounded-md"
+			/>,
+		);
+
+		expect(
+			container.querySelector('[data-slot="workspace-avatar"]'),
+		).toHaveClass("rounded-full");
+		expect(
+			container.querySelector('[data-slot="avatar-fallback"]'),
+		).toHaveClass("rounded-full");
+	});
 });
