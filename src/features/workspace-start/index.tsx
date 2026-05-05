@@ -122,7 +122,19 @@ export function WorkspaceStartPage({
 				>
 					<div className="min-h-0 overflow-hidden">
 						<div className="relative flex h-full min-h-[320px] flex-col overflow-hidden bg-background">
-							<div className="flex h-8 shrink-0 items-center justify-end border-border/60 border-b px-3">
+							<div className="flex h-8 shrink-0 items-center justify-between gap-3 border-border/60 border-b px-3">
+								{previewCard ? (
+									<h2 className="flex h-full min-w-0 flex-1 translate-y-[2px] items-center text-[13px] font-medium leading-5 text-foreground">
+										<span className="min-w-0 truncate">
+											{previewCard.title}
+										</span>
+										<span className="ml-2 shrink-0 font-normal text-muted-foreground">
+											#{sourceCardNumber(previewCard)}
+										</span>
+									</h2>
+								) : (
+									<div className="min-w-0 flex-1" />
+								)}
 								<Button
 									type="button"
 									variant="ghost"
@@ -135,7 +147,7 @@ export function WorkspaceStartPage({
 									<X className="size-3.5" strokeWidth={1.8} />
 								</Button>
 							</div>
-							<div className="min-h-0 flex-1 px-0 pt-4 pb-3">
+							<div className="min-h-0 flex-1 px-0 pb-3">
 								{previewCard ? (
 									<SourceDetailView
 										card={previewCard}
@@ -389,4 +401,17 @@ export function WorkspaceStartPage({
 			</div>
 		</div>
 	);
+}
+
+function sourceCardNumber(card: ContextCard): string {
+	if (
+		card.meta.type === "github_issue" ||
+		card.meta.type === "github_pr" ||
+		card.meta.type === "github_discussion"
+	) {
+		return String(card.meta.number);
+	}
+
+	const idx = card.externalId.lastIndexOf("#");
+	return idx === -1 ? "" : card.externalId.slice(idx + 1);
 }

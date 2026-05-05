@@ -42,47 +42,35 @@ export function GitHubDetailPage({
 
 	return (
 		<article className="mx-auto flex h-full w-full max-w-5xl flex-col overflow-y-auto px-4 [contain:content] [scrollbar-gutter:stable]">
-			<header className="shrink-0 border-b border-border/70 pb-4">
-				<div className="min-w-0">
-					<h2 className="min-w-0 text-balance text-[24px] font-semibold leading-8 text-foreground">
-						{card.title}
-						<span className="ml-2 font-normal text-muted-foreground">
-							#{reference.number}
+			<header className="shrink-0 py-1.5">
+				<div className="flex min-w-0 items-center justify-between gap-4">
+					<div className="flex min-w-0 flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+						{card.state ? <StatePill state={card.state} /> : null}
+						<span className="font-medium text-foreground/80">
+							{reference.repo}
 						</span>
-					</h2>
-					<div className="mt-2 flex min-w-0 items-center justify-between gap-4">
-						<div className="flex min-w-0 flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
-							{card.state ? <StatePill state={card.state} /> : null}
-							<span className="font-medium text-foreground/80">
-								{reference.repo}
-							</span>
-							<span className="inline-flex items-center gap-1 font-normal text-muted-foreground/70">
-								<SourceIcon
-									source={card.source}
-									size={13}
-									className="shrink-0"
-								/>
-								{kindLabel}
-							</span>
-							<span className="inline-flex items-center gap-1 font-normal text-muted-foreground/70">
-								<Clock3 className="size-[13px]" strokeWidth={1.8} />
-								Updated {formatRelativeTime(card.lastActivityAt)}
-							</span>
-						</div>
-						<SourceDetailActions
-							card={card}
-							appendContextTarget={appendContextTarget}
-							markdownBody={markdownBody}
-							copyDisabled={isLoading || Boolean(error)}
-						/>
+						<span className="inline-flex items-center gap-1 font-normal text-muted-foreground/70">
+							<SourceIcon source={card.source} size={13} className="shrink-0" />
+							{kindLabel}
+						</span>
+						<span className="inline-flex items-center gap-1 font-normal text-muted-foreground/70">
+							<Clock3 className="size-[13px]" strokeWidth={1.8} />
+							Updated {formatRelativeTime(card.lastActivityAt)}
+						</span>
 					</div>
+					<SourceDetailActions
+						card={card}
+						appendContextTarget={appendContextTarget}
+						markdownBody={markdownBody}
+						copyDisabled={isLoading || Boolean(error)}
+					/>
 				</div>
 			</header>
 
 			<div
 				className={cn(
 					"min-h-0 flex-1",
-					isLoading || error ? "flex items-center justify-center" : "py-5",
+					isLoading || error ? "flex items-center justify-center" : "py-4",
 				)}
 			>
 				{isLoading ? (
