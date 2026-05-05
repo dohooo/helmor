@@ -16,6 +16,7 @@ import {
 	type JsonRpcNotification,
 	type JsonRpcRequest,
 } from "./codex-app-server.js";
+import { ensureCodexGoalsFeatureEnabled } from "./codex-config.js";
 import { buildCodexStoredMeta } from "./context-usage.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { resolveGitAccessDirectories } from "./git-access.js";
@@ -384,10 +385,22 @@ export class CodexAppServerManager implements SessionManager {
 			promptLen: prompt.length,
 		});
 
+		// `/goal` needs `[features] goals = true` in `~/.codex/config.toml`.
+		// Codex reads its config once at startup, so the pre-flight runs
+		// before `ensureContext` and recycles any stale process.
+		const goalCommand = parseGoalCommand(prompt);
+		let effectiveResume = resume;
+		if (goalCommand) {
+			effectiveResume = await this.ensureCodexGoalsReady(
+				sessionId,
+				effectiveResume,
+			);
+		}
+
 		const ctx = await this.ensureContext(
 			sessionId,
 			workDir,
-			resume,
+			effectiveResume,
 			model,
 			permissionMode,
 			effectiveFastMode,
@@ -407,7 +420,6 @@ export class CodexAppServerManager implements SessionManager {
 			prompt,
 			resolvedAdditionalDirectories,
 		);
-		const goalCommand = parseGoalCommand(prompt);
 		const isCompactCommand = !goalCommand && prompt.trim() === "/compact";
 		const input = buildTurnInput(promptWithContext, images);
 		const turnStartParams: Record<string, unknown> = {
@@ -916,6 +928,51 @@ export class CodexAppServerManager implements SessionManager {
 				...errorDetails(err),
 			});
 		}
+	}
+
+	// ── ensureCodexGoalsReady ────────────────────────────────────────────
+
+	// Writes `[features] goals = true` if missing, then recycles any stale
+	// codex process so the new config takes effect. Returns a resume thread
+	// id (caller's wins; otherwise the stale ctx's). Best-effort — IO
+	// failures are logged and the caller falls through to codex's own error.
+	private async ensureCodexGoalsReady(
+		sessionId: string,
+		callerResume: string | undefined,
+	): Promise<string | undefined> {
+		let result: Awaited<ReturnType<typeof ensureCodexGoalsFeatureEnabled>>;
+		try {
+			result = await ensureCodexGoalsFeatureEnabled();
+		} catch (err) {
+			logger.error("ensureCodexGoalsFeatureEnabled failed", errorDetails(err));
+			return callerResume;
+		}
+		if (result.kind !== "modified") return callerResume;
+
+		const stale = this.sessions.get(sessionId);
+		if (!stale) {
+			logger.info("Enabled codex goals feature", {
+				sessionId,
+				path: result.path,
+			});
+			return callerResume;
+		}
+
+		logger.info("Enabled codex goals feature; recycling stale session", {
+			sessionId,
+			path: result.path,
+			providerThreadId: stale.providerThreadId ?? "(none)",
+		});
+		const reuseThread = stale.providerThreadId ?? undefined;
+		stale.server.kill();
+		this.sessions.delete(sessionId);
+		for (const [id, p] of this.pendingApprovals) {
+			if (p.sessionId === sessionId) this.pendingApprovals.delete(id);
+		}
+		for (const [id, p] of this.pendingUserInputs) {
+			if (p.sessionId === sessionId) this.pendingUserInputs.delete(id);
+		}
+		return callerResume ?? reuseThread;
 	}
 
 	// ── stopSession / shutdown ───────────────────────────────────────────
