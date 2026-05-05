@@ -138,6 +138,7 @@ import {
 import { flushSidebarListsIfIdle } from "./lib/sidebar-mutation-gate";
 import type { ContextCard } from "./lib/sources/types";
 import { useOsNotifications } from "./lib/use-os-notifications";
+import { cn } from "./lib/utils";
 import {
 	describeUnknownError,
 	recomputeWorkspaceDetailUnread,
@@ -1946,6 +1947,13 @@ function AppShell({
 				enabled: workspaceViewMode === "conversation",
 			},
 			{
+				id: "composer.toggleContextPanel" as const,
+				callback: () =>
+					window.dispatchEvent(new Event("helmor:toggle-context-panel")),
+				enabled:
+					workspaceViewMode === "conversation" || workspaceViewMode === "start",
+			},
+			{
 				id: "zoom.in" as const,
 				callback: () =>
 					updateSettings({
@@ -2406,8 +2414,12 @@ function AppShell({
 		() => ({ contextKey: startComposerContextKey }),
 		[startComposerContextKey],
 	);
+	const rightSidebarAvailable =
+		workspaceViewMode !== "start" || rightSidebarMode === "context";
 	const contextPanelOpen =
-		rightSidebarMode === "context" && !inspectorCollapsed;
+		rightSidebarAvailable &&
+		rightSidebarMode === "context" &&
+		!inspectorCollapsed;
 	const handleToggleContextPanel = useCallback(() => {
 		if (rightSidebarMode === "context" && !inspectorCollapsed) {
 			if (workspaceViewModeRef.current === "start") {
@@ -2428,6 +2440,17 @@ function AppShell({
 			void updateSettings({ workspaceRightSidebarMode: "context" });
 		}
 	}, [inspectorCollapsed, rightSidebarMode, updateSettings]);
+	useEffect(() => {
+		window.addEventListener(
+			"helmor:toggle-context-panel",
+			handleToggleContextPanel,
+		);
+		return () =>
+			window.removeEventListener(
+				"helmor:toggle-context-panel",
+				handleToggleContextPanel,
+			);
+	}, [handleToggleContextPanel]);
 	const restoreStartSurface =
 		areSettingsLoaded && appSettings.lastSurface === "workspace-start";
 	const workspaceSidebarAutoSelectEnabled =
@@ -2445,11 +2468,28 @@ function AppShell({
 							<div className="relative flex h-full min-h-0 bg-background">
 								{workspaceViewMode !== "editor" && (
 									<>
-										{!sidebarCollapsed && (
-											<aside
-												aria-label="Workspace sidebar"
-												data-helmor-sidebar-root
-												className="relative flex h-full shrink-0 flex-col overflow-hidden bg-sidebar"
+										<aside
+											aria-hidden={sidebarCollapsed}
+											aria-label="Workspace sidebar"
+											data-helmor-sidebar-root
+											className={cn(
+												"relative flex h-full shrink-0 flex-col overflow-hidden bg-sidebar",
+												isSidebarResizing
+													? "transition-none"
+													: "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+												sidebarCollapsed ? "pointer-events-none" : "",
+											)}
+											style={{
+												width: sidebarCollapsed ? 0 : `${sidebarWidth}px`,
+											}}
+										>
+											<div
+												className={cn(
+													"relative flex h-full shrink-0 flex-col transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+													sidebarCollapsed
+														? "-translate-x-full opacity-0"
+														: "translate-x-0 opacity-100",
+												)}
 												style={{ width: `${sidebarWidth}px` }}
 											>
 												<div className="min-h-0 flex-1">
@@ -2513,36 +2553,45 @@ function AppShell({
 														)}
 													/>
 												</div>
-											</aside>
-										)}
-
-										{!sidebarCollapsed && (
-											<div
-												role="separator"
-												tabIndex={0}
-												aria-label="Resize sidebar"
-												aria-orientation="vertical"
-												aria-valuemin={MIN_SIDEBAR_WIDTH}
-												aria-valuemax={MAX_SIDEBAR_WIDTH}
-												aria-valuenow={sidebarWidth}
-												onMouseDown={handleResizeStart("sidebar")}
-												onKeyDown={handleResizeKeyDown("sidebar")}
-												className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
-												style={{
-													left: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
-													width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
-												}}
-											>
-												<span
-													aria-hidden="true"
-													className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
-														isSidebarResizing
-															? "w-[2px] bg-foreground/80 shadow-[0_0_12px_rgba(0,0,0,0.12)] dark:shadow-[0_0_12px_rgba(255,255,255,0.16)]"
-															: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
-													}`}
-												/>
 											</div>
-										)}
+										</aside>
+
+										<div
+											role="separator"
+											tabIndex={sidebarCollapsed ? -1 : 0}
+											aria-hidden={sidebarCollapsed}
+											aria-label="Resize sidebar"
+											aria-orientation="vertical"
+											aria-valuemin={MIN_SIDEBAR_WIDTH}
+											aria-valuemax={MAX_SIDEBAR_WIDTH}
+											aria-valuenow={sidebarWidth}
+											onMouseDown={handleResizeStart("sidebar")}
+											onKeyDown={handleResizeKeyDown("sidebar")}
+											className={cn(
+												"group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none",
+												isSidebarResizing
+													? "transition-none"
+													: "transition-[left,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+												sidebarCollapsed
+													? "pointer-events-none opacity-0"
+													: "opacity-100",
+											)}
+											style={{
+												left: sidebarCollapsed
+													? `${-SIDEBAR_RESIZE_HIT_AREA / 2}px`
+													: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
+												width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
+											}}
+										>
+											<span
+												aria-hidden="true"
+												className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
+													isSidebarResizing
+														? "w-[2px] bg-foreground/80 shadow-[0_0_12px_rgba(0,0,0,0.12)] dark:shadow-[0_0_12px_rgba(255,255,255,0.16)]"
+														: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
+												}`}
+											/>
+										</div>
 									</>
 								)}
 
@@ -2910,39 +2959,66 @@ function AppShell({
 									</div>
 								</section>
 
-								{!inspectorCollapsed &&
-									(workspaceViewMode !== "start" ||
-										rightSidebarMode === "context") && (
-										<>
-											<div
-												role="separator"
-												tabIndex={0}
-												aria-label="Resize inspector sidebar"
-												aria-orientation="vertical"
-												aria-valuemin={MIN_SIDEBAR_WIDTH}
-												aria-valuemax={MAX_SIDEBAR_WIDTH}
-												aria-valuenow={inspectorWidth}
-												onMouseDown={handleResizeStart("inspector")}
-												onKeyDown={handleResizeKeyDown("inspector")}
-												className="group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none"
-												style={{
-													right: `${Math.max(0, inspectorWidth - SIDEBAR_RESIZE_HIT_AREA)}px`,
-													width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
-												}}
-											>
-												<span
-													aria-hidden="true"
-													className={`pointer-events-none absolute inset-y-0 left-0 transition-[width,background-color,box-shadow] ${
-														isInspectorResizing
-															? "w-[2px] bg-transparent shadow-none"
-															: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
-													}`}
-												/>
-											</div>
+								{rightSidebarAvailable && (
+									<>
+										<div
+											role="separator"
+											tabIndex={inspectorCollapsed ? -1 : 0}
+											aria-hidden={inspectorCollapsed}
+											aria-label="Resize inspector sidebar"
+											aria-orientation="vertical"
+											aria-valuemin={MIN_SIDEBAR_WIDTH}
+											aria-valuemax={MAX_SIDEBAR_WIDTH}
+											aria-valuenow={inspectorWidth}
+											onMouseDown={handleResizeStart("inspector")}
+											onKeyDown={handleResizeKeyDown("inspector")}
+											className={cn(
+												"group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none",
+												isInspectorResizing
+													? "transition-none"
+													: "transition-[right,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+												inspectorCollapsed
+													? "pointer-events-none opacity-0"
+													: "opacity-100",
+											)}
+											style={{
+												right: inspectorCollapsed
+													? `${-SIDEBAR_RESIZE_HIT_AREA}px`
+													: `${Math.max(0, inspectorWidth - SIDEBAR_RESIZE_HIT_AREA)}px`,
+												width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
+											}}
+										>
+											<span
+												aria-hidden="true"
+												className={`pointer-events-none absolute inset-y-0 left-0 transition-[width,background-color,box-shadow] ${
+													isInspectorResizing
+														? "w-[2px] bg-foreground/80 shadow-[0_0_12px_rgba(0,0,0,0.12)] dark:shadow-[0_0_12px_rgba(255,255,255,0.16)]"
+														: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
+												}`}
+											/>
+										</div>
 
-											<aside
-												aria-label="Inspector sidebar"
-												className="relative h-full shrink-0 overflow-hidden bg-sidebar has-[[data-tabs-zoomed=true]]:overflow-visible"
+										<aside
+											aria-hidden={inspectorCollapsed}
+											aria-label="Inspector sidebar"
+											className={cn(
+												"relative h-full shrink-0 overflow-hidden bg-sidebar has-[[data-tabs-zoomed=true]]:overflow-visible",
+												isInspectorResizing
+													? "transition-none"
+													: "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+												inspectorCollapsed ? "pointer-events-none" : "",
+											)}
+											style={{
+												width: inspectorCollapsed ? 0 : `${inspectorWidth}px`,
+											}}
+										>
+											<div
+												className={cn(
+													"h-full shrink-0 transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+													inspectorCollapsed
+														? "translate-x-full opacity-0"
+														: "translate-x-0 opacity-100",
+												)}
 												style={{ width: `${inspectorWidth}px` }}
 											>
 												{rightSidebarMode === "context" ? (
@@ -3036,9 +3112,10 @@ function AppShell({
 														onOpenSettings={handleOpenSettings}
 													/>
 												)}
-											</aside>
-										</>
-									)}
+											</div>
+										</aside>
+									</>
+								)}
 							</div>
 						</main>
 						<Toaster

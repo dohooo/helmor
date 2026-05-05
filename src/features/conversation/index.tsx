@@ -381,12 +381,22 @@ export const WorkspaceConversationContainer = memo(
 				pendingCreatedWorkspaceSubmit.id;
 
 			void (async () => {
-				await handleComposerSubmit({
-					...pendingCreatedWorkspaceSubmit.payload,
-					workingDirectory:
-						workspaceRootPath ??
-						pendingCreatedWorkspaceSubmit.payload.workingDirectory,
-				});
+				await handleComposerSubmit(
+					{
+						...pendingCreatedWorkspaceSubmit.payload,
+						workingDirectory:
+							workspaceRootPath ??
+							pendingCreatedWorkspaceSubmit.payload.workingDirectory,
+					},
+					{
+						sessionId: pendingCreatedWorkspaceSubmit.sessionId,
+						workspaceId: pendingCreatedWorkspaceSubmit.workspaceId,
+						contextKey: getComposerContextKey(
+							pendingCreatedWorkspaceSubmit.workspaceId,
+							pendingCreatedWorkspaceSubmit.sessionId,
+						),
+					},
+				);
 				onPendingCreatedWorkspaceSubmitConsumed?.(
 					pendingCreatedWorkspaceSubmit.id,
 				);

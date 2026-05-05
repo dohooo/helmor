@@ -103,10 +103,17 @@ describe("WorkspaceConversationContainer", () => {
 		renderContainer(pendingPayload, onConsumed);
 
 		await waitFor(() => {
-			expect(streamingMocks.handleComposerSubmit).toHaveBeenCalledWith({
-				...pendingPayload,
-				workingDirectory: "/tmp/new-workspace",
-			});
+			expect(streamingMocks.handleComposerSubmit).toHaveBeenCalledWith(
+				{
+					...pendingPayload,
+					workingDirectory: "/tmp/new-workspace",
+				},
+				{
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					contextKey: "session:session-1",
+				},
+			);
 		});
 		expect(onConsumed).toHaveBeenCalledWith("pending-1");
 	});

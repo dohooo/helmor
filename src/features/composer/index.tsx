@@ -180,6 +180,7 @@ type WorkspaceComposerProps = {
 	/** Hotkey that submits the current draft with the opposite follow-up
 	 *  behavior (queue ↔ steer) for one message. */
 	toggleFollowUpShortcut?: string | null;
+	toggleContextPanelShortcut?: string | null;
 	contextPanelOpen?: boolean;
 	onToggleContextPanel?: () => void;
 	/** Custom placeholder string. When omitted, falls back to the default
@@ -267,6 +268,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	focusShortcut = null,
 	togglePlanShortcut = null,
 	toggleFollowUpShortcut = null,
+	toggleContextPanelShortcut = null,
 	contextPanelOpen = false,
 	onToggleContextPanel,
 	startSubmitMenu = false,
@@ -983,8 +985,18 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													<Layers className="size-[13px]" strokeWidth={1.8} />
 												</ComposerButton>
 											</TooltipTrigger>
-											<TooltipContent side="top" sideOffset={4}>
+											<TooltipContent
+												side="top"
+												sideOffset={4}
+												className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+											>
 												<span>Add context</span>
+												{toggleContextPanelShortcut ? (
+													<InlineShortcutDisplay
+														hotkey={toggleContextPanelShortcut}
+														className="text-background/60"
+													/>
+												) : null}
 											</TooltipContent>
 										</Tooltip>
 									) : null}

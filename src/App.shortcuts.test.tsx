@@ -703,6 +703,19 @@ describe("App global navigation shortcuts", () => {
 		await screen.findByRole("menuitem", { name: /Open project/i });
 	});
 
+	it("toggles the context panel on Option+Command+C", async () => {
+		await renderAppReady();
+
+		fireEvent.keyDown(window, {
+			key: "c",
+			code: "KeyC",
+			metaKey: true,
+			altKey: true,
+		});
+
+		await screen.findByRole("heading", { name: "Contexts" });
+	});
+
 	it("does not wrap session navigation on Option+Command+Left from the first session", async () => {
 		await renderAppReady();
 
