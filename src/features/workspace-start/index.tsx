@@ -1,5 +1,5 @@
-import { ChevronDown, GitBranch, X } from "lucide-react";
-import { useCallback, useEffect } from "react";
+import { ChevronDown, GitBranch, Laptop, Plus, Split, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { BranchPickerPopover } from "@/components/branch-picker";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,12 +19,27 @@ import {
 	ShortcutDisplay,
 } from "@/features/shortcuts/shortcut-display";
 import { SourceDetailView } from "@/features/source-detail";
-import type { RepositoryCreateOption } from "@/lib/api";
+import type { RepositoryCreateOption, WorkspaceMode } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
 import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
+import { CreateBranchDialog } from "./create-branch-dialog";
 
 const SWITCH_REPOSITORY_SHORTCUT = "Shift+Tab";
+
+function defaultBranchPrefix(repo: RepositoryCreateOption | null): string {
+	if (!repo) return "";
+	switch (repo.branchPrefixType ?? null) {
+		case "username":
+			return repo.forgeLogin ? `${repo.forgeLogin}/` : "";
+		case "custom":
+			return repo.branchPrefixCustom ? `${repo.branchPrefixCustom}/` : "";
+		case "none":
+			return "";
+		default:
+			return repo.forgeLogin ? `${repo.forgeLogin}/` : "";
+	}
+}
 
 type WorkspaceStartPageProps = {
 	repositories: RepositoryCreateOption[];
@@ -35,6 +50,11 @@ type WorkspaceStartPageProps = {
 	branchesLoading: boolean;
 	onOpenBranchPicker: () => void;
 	onSelectBranch: (branch: string) => void;
+	mode: WorkspaceMode;
+	onModeChange: (mode: WorkspaceMode) => void;
+	/** Called when the user creates a new branch via the picker footer.
+	 * Caller is responsible for the underlying `git checkout -b`. */
+	onCreateAndCheckoutBranch?: (branch: string) => Promise<void>;
 	previewCard?: ContextCard | null;
 	previewAppendContextTarget?: ComposerInsertTarget;
 	onClosePreview?: () => void;
@@ -50,11 +70,15 @@ export function WorkspaceStartPage({
 	branchesLoading,
 	onOpenBranchPicker,
 	onSelectBranch,
+	mode,
+	onModeChange,
+	onCreateAndCheckoutBranch,
 	previewCard = null,
 	previewAppendContextTarget,
 	onClosePreview,
 	children,
 }: WorkspaceStartPageProps) {
+	const [createBranchOpen, setCreateBranchOpen] = useState(false);
 	const selectNextRepository = useCallback(() => {
 		if (repositories.length === 0) {
 			return;
@@ -360,6 +384,63 @@ export function WorkspaceStartPage({
 								</DropdownMenuContent>
 							</DropdownMenu>
 						) : null}
+						<DropdownMenu>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<DropdownMenuTrigger asChild>
+										<button
+											type="button"
+											disabled={!selectedRepository}
+											className="inline-flex h-7 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+										>
+											{mode === "local" ? (
+												<Laptop
+													className="size-3.5 shrink-0"
+													strokeWidth={1.8}
+												/>
+											) : (
+												<Split
+													className="size-3.5 shrink-0 rotate-90"
+													strokeWidth={1.8}
+												/>
+											)}
+											<span>
+												{mode === "local" ? "Work locally" : "New worktree"}
+											</span>
+											<ChevronDown
+												className="size-3 shrink-0 text-muted-foreground"
+												strokeWidth={2}
+											/>
+										</button>
+									</DropdownMenuTrigger>
+								</TooltipTrigger>
+								<TooltipContent
+									side="top"
+									sideOffset={4}
+									className="rounded-md px-2 text-[12px] leading-none"
+								>
+									Select where to run the task
+								</TooltipContent>
+							</Tooltip>
+							<DropdownMenuContent align="start" className="w-fit min-w-36">
+								<DropdownMenuItem
+									onClick={() => onModeChange("local")}
+									className="gap-2 pr-3"
+									data-checked={mode === "local" ? "true" : undefined}
+								>
+									<Laptop className="size-3.5" strokeWidth={1.8} />
+									<span>Work locally</span>
+								</DropdownMenuItem>
+								<DropdownMenuItem
+									onClick={() => onModeChange("worktree")}
+									className="gap-2 pr-3"
+									data-checked={mode === "worktree" ? "true" : undefined}
+								>
+									<Split className="size-3.5 rotate-90" strokeWidth={1.8} />
+									<span>New worktree</span>
+								</DropdownMenuItem>
+							</DropdownMenuContent>
+						</DropdownMenu>
 						<Tooltip>
 							<BranchPickerPopover
 								currentBranch={selectedBranch}
@@ -367,6 +448,23 @@ export function WorkspaceStartPage({
 								loading={branchesLoading}
 								onOpen={onOpenBranchPicker}
 								onSelect={onSelectBranch}
+								renderFooter={
+									mode === "local" && onCreateAndCheckoutBranch
+										? ({ close }) => (
+												<button
+													type="button"
+													className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+													onClick={() => {
+														close();
+														setCreateBranchOpen(true);
+													}}
+												>
+													<Plus className="size-3.5" strokeWidth={2} />
+													<span>Create and checkout new branch…</span>
+												</button>
+											)
+										: undefined
+								}
 							>
 								<TooltipTrigger asChild>
 									<button
@@ -379,7 +477,9 @@ export function WorkspaceStartPage({
 											strokeWidth={1.8}
 										/>
 										<span className="min-w-0 truncate">
-											{selectedRepository?.remote ?? "origin"}/{selectedBranch}
+											{mode === "local"
+												? selectedBranch
+												: `${selectedRepository?.remote ?? "origin"}/${selectedBranch}`}
 										</span>
 										<ChevronDown
 											className="size-3 shrink-0 text-muted-foreground"
@@ -393,9 +493,21 @@ export function WorkspaceStartPage({
 								sideOffset={4}
 								className="rounded-md px-2 text-[12px] leading-none"
 							>
-								What branch should this task start from?
+								{mode === "local"
+									? "Switch branch"
+									: "What branch should this task start from?"}
 							</TooltipContent>
 						</Tooltip>
+						<CreateBranchDialog
+							open={createBranchOpen}
+							onOpenChange={setCreateBranchOpen}
+							defaultPrefix={defaultBranchPrefix(selectedRepository)}
+							existingBranches={branches}
+							onSubmit={async (branch) => {
+								if (!onCreateAndCheckoutBranch) return;
+								await onCreateAndCheckoutBranch(branch);
+							}}
+						/>
 					</div>
 				</div>
 			</div>

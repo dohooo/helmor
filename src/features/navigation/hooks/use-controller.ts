@@ -411,6 +411,19 @@ export function useWorkspacesSidebarController({
 			return;
 		}
 
+		// A freshly-created workspace lands here BEFORE `groupsQuery`
+		// refetches it from the backend, so `hasWorkspaceId` returns false
+		// and the fallback below would otherwise jump us to whatever sits
+		// in `archivedSummaries[0]` — clobbering the user's brand-new
+		// workspace selection. Hold off until the refetch settles.
+		if (
+			selectedWorkspaceId &&
+			!hasWorkspaceId(selectedWorkspaceId, groups, archivedSummaries) &&
+			groupsQuery.isFetching
+		) {
+			return;
+		}
+
 		// Only restore archived workspaces if they were the live selection
 		// (runtime state). Never auto-restore archived from persisted
 		// `lastWorkspaceId` — the directory may be gone, which would spam

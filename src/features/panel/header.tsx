@@ -8,6 +8,7 @@ import {
 	Copy,
 	GitBranch,
 	History,
+	Laptop,
 	Layers,
 	Pencil,
 	Plus,
@@ -397,9 +398,13 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					{headerLeading}
 					<span className="group/branch relative inline-flex items-center gap-1.5 overflow-hidden px-1 py-0.5 font-medium text-foreground">
 						{(() => {
-							// Avatar only when we have a URL AND the workspace's bound
-							// account is still valid (mirrors the right-side Connect
-							// CTA). Otherwise drop to the GitBranch icon fallback.
+							// Avatar always wins when we have a URL AND the
+							// workspace's bound account is still valid (mirrors the
+							// right-side Connect CTA). Otherwise fall back to a
+							// mode-appropriate glyph: Laptop for local, GitBranch
+							// for worktree.
+							const FallbackIcon =
+								workspace?.mode === "local" ? Laptop : GitBranch;
 							const showAvatar =
 								accountProfile?.avatarUrl && !forgeNeedsConnect;
 							const hoverInfo = showAvatar
@@ -407,7 +412,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 								: null;
 							if (!showAvatar || !hoverInfo) {
 								return (
-									<GitBranch
+									<FallbackIcon
 										className={cn(
 											"size-3.5 shrink-0",
 											getBranchToneClassName(branchTone),

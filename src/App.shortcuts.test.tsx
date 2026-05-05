@@ -261,6 +261,7 @@ function createWorkspaceDetail(
 		branch: archived ? "archive/main" : "main",
 		initializationParentBranch: "main",
 		intendedTargetBranch: "main",
+		mode: "worktree",
 		pinnedAt: null,
 		prTitle: null,
 		archiveCommit: null,

@@ -6,6 +6,7 @@ import {
 	finalizeWorkspaceFromRepo,
 	prepareWorkspaceFromRepo,
 	setWorkspaceStatus,
+	type WorkspaceMode,
 } from "@/lib/api";
 import { getComposerContextKey } from "@/lib/workspace-helpers";
 
@@ -21,15 +22,17 @@ export type WorkspaceStartCreateResult = {
 export async function createWorkspaceFromStartComposer({
 	repoId,
 	sourceBranch,
+	mode,
 	submitMode,
 	editorStateSnapshot,
 }: {
 	repoId: string;
 	sourceBranch: string;
+	mode: WorkspaceMode;
 	submitMode: WorkspaceStartSubmitMode;
 	editorStateSnapshot?: SerializedEditorState;
 }): Promise<WorkspaceStartCreateResult> {
-	const prepared = await prepareWorkspaceFromRepo(repoId, sourceBranch);
+	const prepared = await prepareWorkspaceFromRepo(repoId, sourceBranch, mode);
 
 	if (submitMode === "saveForLater") {
 		await Promise.all([

@@ -63,6 +63,12 @@ export type PendingCreatedWorkspaceSubmit = {
 	workspaceId: string;
 	sessionId: string;
 	payload: ComposerSubmitPayload;
+	/** False until `await finalizePromise` resolves. The optimistic user
+	 *  bubble is rendered as soon as the pending submit is queued, but the
+	 *  actual `handleComposerSubmit` is held back until this flips true so
+	 *  the backend's title-gen + sendMessage runs against an operational
+	 *  workspace row (not one still in `initializing`). */
+	finalized: boolean;
 };
 
 type WorkspaceConversationContainerProps = {
@@ -266,6 +272,18 @@ export const WorkspaceConversationContainer = memo(
 			[threadQuery.data],
 		);
 
+		// True while the freshly-created workspace's first send is queued
+		// (we've shown the optimistic user bubble, but
+		// `handleComposerSubmit` hasn't fired yet because finalize is still
+		// in flight). Treated as "sending" by the panel header / status badge
+		// so the loading state appears at click time, not at finalize time.
+		const hasPendingOptimisticSubmit = Boolean(
+			pendingCreatedWorkspaceSubmit &&
+				pendingCreatedWorkspaceSubmit.workspaceId === displayedWorkspaceId &&
+				pendingCreatedWorkspaceSubmit.sessionId === displayedSessionId,
+		);
+		const sendingForPanel = isSending || hasPendingOptimisticSubmit;
+
 		// Auto-activate plan button when AI enters plan mode on its own.
 		const prevPlanReviewRef = useRef(false);
 		useEffect(() => {
@@ -371,6 +389,13 @@ export const WorkspaceConversationContainer = memo(
 			) {
 				return;
 			}
+			// Hold off until the App-level handler has awaited finalize. The
+			// backend has already written `state=ready` / `setup_pending` by
+			// the time `finalized` flips true — no React Query round-trip
+			// needed before firing the submit.
+			if (!pendingCreatedWorkspaceSubmit.finalized) {
+				return;
+			}
 			if (
 				dispatchedCreatedWorkspaceSubmitRef.current ===
 				pendingCreatedWorkspaceSubmit.id
@@ -468,7 +493,7 @@ export const WorkspaceConversationContainer = memo(
 						selectedSessionId={selectedSessionId}
 						displayedSessionId={displayedSessionId}
 						sessionSelectionHistory={sessionSelectionHistory}
-						sending={isSending}
+						sending={sendingForPanel}
 						sendingSessionIds={sendingSessionIds}
 						interactionRequiredSessionIds={interactionRequiredSessionIds}
 						modelSelections={composerModelSelections}
@@ -483,6 +508,16 @@ export const WorkspaceConversationContainer = memo(
 						onCloseContextPreview={onCloseContextPreview}
 						headerActions={headerActions}
 						headerLeading={headerLeading}
+						optimisticPendingSubmit={
+							pendingCreatedWorkspaceSubmit
+								? {
+										id: pendingCreatedWorkspaceSubmit.id,
+										workspaceId: pendingCreatedWorkspaceSubmit.workspaceId,
+										sessionId: pendingCreatedWorkspaceSubmit.sessionId,
+										prompt: pendingCreatedWorkspaceSubmit.payload.prompt,
+									}
+								: null
+						}
 					/>
 				)}
 
@@ -499,7 +534,7 @@ export const WorkspaceConversationContainer = memo(
 						forceAvailable={composerForceAvailable}
 						placeholder={composerPlaceholder}
 						contextKeyOverride={composerContextKeyOverride}
-						sending={isSending}
+						sending={sendingForPanel}
 						sendError={activeSendError}
 						restoreDraft={restoreDraft}
 						restoreImages={restoreImages}

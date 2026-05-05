@@ -68,6 +68,7 @@ export type WorkspaceRow = {
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
 	state?: WorkspaceState;
+	mode?: WorkspaceMode;
 	hasUnread?: boolean;
 	workspaceUnread?: number;
 	unreadSessionCount?: number;
@@ -170,6 +171,7 @@ export type WorkspaceSummary = {
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
 	state: WorkspaceState;
+	mode?: WorkspaceMode;
 	hasUnread: boolean;
 	workspaceUnread: number;
 	unreadSessionCount: number;
@@ -295,6 +297,7 @@ export type WorkspaceDetail = {
 	branch?: string | null;
 	initializationParentBranch?: string | null;
 	intendedTargetBranch?: string | null;
+	mode: WorkspaceMode;
 	pinnedAt?: string | null;
 	prTitle?: string | null;
 	prSyncState?: PrSyncState;
@@ -1174,10 +1177,85 @@ export async function listRemoteBranches(opts: {
 }): Promise<string[]> {
 	try {
 		return await invoke<string[]>("list_remote_branches", opts);
-	} catch {
+	} catch (error) {
+		console.warn("[helmor] listRemoteBranches failed:", error);
 		return [];
 	}
 }
+
+/**
+ * Current HEAD branch of the repo's local working directory. Used by
+ * the start page in local mode to default the picker to the branch
+ * the user is currently on. `null` when the repo path is missing or
+ * HEAD is detached.
+ */
+export async function getRepoCurrentBranch(
+	repoId: string,
+): Promise<string | null> {
+	try {
+		return await invoke<string | null>("get_repo_current_branch", {
+			repoId,
+		});
+	} catch (error) {
+		console.warn("[helmor] getRepoCurrentBranch failed:", error);
+		return null;
+	}
+}
+
+/**
+ * Merged local + remote branches for the local-mode start picker.
+ * Deduped by name, alphabetical. Worktree mode still uses
+ * `listRemoteBranches` (remote-only).
+ */
+export async function listBranchesForLocalPicker(
+	repoId: string,
+): Promise<string[]> {
+	try {
+		return await invoke<string[]>("list_branches_for_local_picker", {
+			repoId,
+		});
+	} catch (error) {
+		console.warn("[helmor] listBranchesForLocalPicker failed:", error);
+		return [];
+	}
+}
+
+/**
+ * `git checkout -b <branch>` against the repo's source path. Caller is
+ * responsible for refreshing whatever query feeds the branch picker.
+ */
+export async function createAndCheckoutBranch(
+	repoId: string,
+	branch: string,
+): Promise<void> {
+	await invoke("create_and_checkout_branch", { repoId, branch });
+}
+
+export type MoveLocalToWorktreeResponse = {
+	workspaceId: string;
+	directoryName: string;
+	branch: string;
+	state: WorkspaceState;
+};
+
+/**
+ * Move a local-mode workspace into a fresh worktree (relocation, not a
+ * clone — the workspace's mode flips Local → Worktree, same id). The
+ * new worktree gets an auto-named branch with the local repo's
+ * current state (tracked + untracked) carried over. The local repo
+ * itself is not modified.
+ */
+export async function moveLocalWorkspaceToWorktree(
+	workspaceId: string,
+): Promise<MoveLocalToWorktreeResponse> {
+	return invoke<MoveLocalToWorktreeResponse>(
+		"move_local_workspace_to_worktree",
+		{ workspaceId },
+	);
+}
+
+/** How a workspace's filesystem is provisioned. */
+export type WorkspaceMode = "worktree" | "local";
 
 export type UpdateIntendedTargetBranchResponse = {
 	/** True if the workspace's local branch was hard-reset to origin/<target>. */
@@ -1965,17 +2043,19 @@ export async function createWorkspaceFromRepo(
  * session, and returns all metadata plus repo-level scripts. The
  * frontend paints with this response immediately — no placeholders.
  *
- * `sourceBranch` (optional): branch to fork the new workspace from. When
+ * `sourceBranch` (optional): branch to branch the new workspace from. When
  * omitted, the repo's default branch is used. The kanban "create" flow
  * forwards the user's branch picker selection here.
  */
 export async function prepareWorkspaceFromRepo(
 	repoId: string,
 	sourceBranch?: string | null,
+	mode?: WorkspaceMode | null,
 ): Promise<PrepareWorkspaceResponse> {
 	return invoke<PrepareWorkspaceResponse>("prepare_workspace_from_repo", {
 		repoId,
 		sourceBranch: sourceBranch ?? null,
+		mode: mode ?? null,
 	});
 }
 

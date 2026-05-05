@@ -30,7 +30,19 @@ function buildBranchRenameInstructions(
 export function buildTitlePrompt(
 	userMessage: string,
 	branchRenamePrompt?: string | null,
+	generateBranch = true,
 ): string {
+	if (!generateBranch) {
+		return [
+			"Based on the following user message, generate a concise session title (use the same language as the user message, max 8 words).",
+			"",
+			"Output EXACTLY in this format (one line, nothing else):",
+			"title: <the title>",
+			"",
+			"User message:",
+			userMessage,
+		].join("\n");
+	}
 	return [
 		"Based on the following user message, generate TWO things:",
 		"1. A concise session title (use the same language as the user message, max 8 words)",

@@ -15,6 +15,7 @@ type WorkspacesSidebarContainerProps = {
 	addRepositoryShortcut?: string | null;
 	onSelectWorkspace: (workspaceId: string | null) => void;
 	onOpenNewWorkspace?: () => void;
+	onMoveLocalToWorktree?: (workspaceId: string) => void;
 	pushWorkspaceToast: (
 		description: string,
 		title?: string,
@@ -36,6 +37,7 @@ export const WorkspacesSidebarContainer = memo(
 		addRepositoryShortcut,
 		onSelectWorkspace,
 		onOpenNewWorkspace,
+		onMoveLocalToWorktree,
 		pushWorkspaceToast,
 	}: WorkspacesSidebarContainerProps) {
 		const {
@@ -90,6 +92,7 @@ export const WorkspacesSidebarContainer = memo(
 				onPrefetchWorkspace={prefetchWorkspace}
 				onOpenNewWorkspace={onOpenNewWorkspace}
 				onArchiveWorkspace={handleArchiveWorkspace}
+				onMoveLocalToWorktree={onMoveLocalToWorktree}
 				onMarkWorkspaceUnread={handleMarkWorkspaceUnread}
 				onRestoreWorkspace={handleRestoreWorkspace}
 				onDeleteWorkspace={handleDeleteWorkspace}

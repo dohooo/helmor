@@ -1,5 +1,5 @@
 use super::support::*;
-use crate::workspace_state::WorkspaceState;
+use crate::workspace_state::{WorkspaceMode, WorkspaceState};
 
 #[test]
 fn create_workspace_from_repo_creates_ready_workspace_and_initial_session() {
@@ -81,6 +81,215 @@ fn create_workspace_from_repo_creates_ready_workspace_and_initial_session() {
         "new session should have no agent_type"
     );
     assert_eq!(session_permission_mode, "default");
+}
+
+#[test]
+fn prepare_local_workspace_keeps_current_branch_when_source_is_none() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    let response = workspaces::prepare_local_workspace_impl(&harness.repo_id, None).unwrap();
+
+    assert_eq!(response.state, WorkspaceState::Ready);
+    assert_eq!(response.branch, "main");
+    assert_eq!(response.directory_name, "");
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let (mode_str, state_str, branch, init_parent, target_branch): (
+        String,
+        String,
+        String,
+        String,
+        String,
+    ) = connection
+        .query_row(
+            r#"
+            SELECT COALESCE(mode, 'worktree'), state, branch,
+                   initialization_parent_branch, intended_target_branch
+            FROM workspaces WHERE id = ?1
+            "#,
+            [&response.workspace_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .unwrap();
+
+    assert_eq!(mode_str, "local");
+    assert_eq!(state_str, "ready");
+    assert_eq!(branch, "main");
+    assert_eq!(init_parent, "main");
+    assert_eq!(target_branch, "main");
+}
+
+#[test]
+fn prepare_local_workspace_switches_branch_when_source_differs() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.create_remote_branch_with_file("develop", "develop.txt", "from develop");
+
+    // Repo head is currently on `main` after the harness fixture.
+    let response =
+        workspaces::prepare_local_workspace_impl(&harness.repo_id, Some("develop")).unwrap();
+
+    assert_eq!(response.state, WorkspaceState::Ready);
+    assert_eq!(response.branch, "develop");
+
+    // Verify the source repo's HEAD actually moved.
+    let head = crate::git_ops::current_branch_name(&harness.source_repo_root).unwrap();
+    assert_eq!(head, "develop");
+}
+
+#[test]
+fn prepare_local_workspace_checks_out_remote_only_branch_via_dwim() {
+    // Local picker shares its data source with the worktree picker
+    // (`listRemoteBranches`), so the user can select a branch that
+    // exists only as `refs/remotes/origin/<name>`. `git checkout` DWIM
+    // is expected to auto-create a local tracking branch.
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.create_remote_branch_with_file("remote-only", "ro.txt", "remote-only");
+    // Drop the local ref so only `refs/remotes/origin/remote-only` remains.
+    let root = harness.source_repo_root.to_str().unwrap();
+    crate::git_ops::run_git(["-C", root, "branch", "-D", "remote-only"], None).unwrap();
+
+    let response =
+        workspaces::prepare_local_workspace_impl(&harness.repo_id, Some("remote-only")).unwrap();
+
+    assert_eq!(response.branch, "remote-only");
+    let head = crate::git_ops::current_branch_name(&harness.source_repo_root).unwrap();
+    assert_eq!(head, "remote-only");
+    // DWIM should have created a local tracking branch.
+    let locals = crate::git_ops::list_local_branches(&harness.source_repo_root).unwrap();
+    assert!(
+        locals.iter().any(|b| b == "remote-only"),
+        "expected `remote-only` local branch after DWIM checkout, got: {locals:?}"
+    );
+}
+
+#[test]
+fn list_branches_for_local_picker_merges_local_and_remote_deduped() {
+    // Local picker should see both:
+    //   - branches the user already has on disk (`refs/heads/`)
+    //   - branches published on `origin` (`refs/remotes/origin/`)
+    // … with names that exist on both sides shown only once.
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    // `develop` ends up both as a local branch AND `origin/develop`.
+    harness.create_remote_branch_with_file("develop", "develop.txt", "from develop");
+    // `remote-only` simulates a branch published on origin but not
+    // checked out locally.
+    harness.create_remote_branch_with_file("remote-only", "ro.txt", "remote only");
+    let root = harness.source_repo_root.to_str().unwrap();
+    crate::git_ops::run_git(["-C", root, "branch", "-D", "remote-only"], None).unwrap();
+    // `local-only` only exists locally (not pushed to origin).
+    crate::git_ops::run_git(["-C", root, "branch", "local-only", "main"], None).unwrap();
+
+    let merged = tauri::async_runtime::block_on(
+        crate::commands::workspace_commands::list_branches_for_local_picker(
+            harness.repo_id.clone(),
+        ),
+    )
+    .unwrap();
+
+    assert!(merged.contains(&"main".to_string()));
+    assert!(merged.contains(&"develop".to_string()));
+    assert!(merged.contains(&"local-only".to_string()));
+    assert!(merged.contains(&"remote-only".to_string()));
+    // `develop` exists on both sides — it must appear only once.
+    assert_eq!(merged.iter().filter(|b| *b == "develop").count(), 1);
+}
+
+#[test]
+fn prepare_local_workspace_rejects_dirty_tracked_changes() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.create_remote_branch_with_file("develop", "develop.txt", "from develop");
+
+    // Modify a tracked file → must reject.
+    fs::write(harness.source_repo_root.join("tracked.txt"), "modified").unwrap();
+
+    let err =
+        workspaces::prepare_local_workspace_impl(&harness.repo_id, Some("develop")).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("uncommitted tracked changes"),
+        "expected tracked-changes error, got: {msg}"
+    );
+    let head = crate::git_ops::current_branch_name(&harness.source_repo_root).unwrap();
+    assert_eq!(head, "main");
+}
+
+#[test]
+fn prepare_local_workspace_allows_untracked_files_when_switching_branch() {
+    // Untracked files don't block — `git checkout` carries them over.
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.create_remote_branch_with_file("develop", "develop.txt", "from develop");
+    fs::write(harness.source_repo_root.join("scratch.txt"), "wip").unwrap();
+
+    let response =
+        workspaces::prepare_local_workspace_impl(&harness.repo_id, Some("develop")).unwrap();
+    assert_eq!(response.branch, "develop");
+    let head = crate::git_ops::current_branch_name(&harness.source_repo_root).unwrap();
+    assert_eq!(head, "develop");
+    assert!(harness.source_repo_root.join("scratch.txt").is_file());
+}
+
+#[test]
+fn prepare_local_workspace_rolls_back_db_when_checkout_fails() {
+    // Checkout failure must roll back the DB row.
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let nonexistent = "branch-that-does-not-exist-anywhere";
+
+    let err =
+        workspaces::prepare_local_workspace_impl(&harness.repo_id, Some(nonexistent)).unwrap_err();
+    assert!(format!("{err:#}").to_lowercase().contains("checkout"));
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let workspace_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM workspaces", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(workspace_count, 0);
+    let head = crate::git_ops::current_branch_name(&harness.source_repo_root).unwrap();
+    assert_eq!(head, "main");
+}
+
+#[test]
+fn finalize_workspace_from_repo_no_ops_for_local_workspace() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    let prepared = workspaces::prepare_local_workspace_impl(&harness.repo_id, None).unwrap();
+
+    // Already-ready workspace: finalize is a benign no-op.
+    let finalized = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
+
+    assert_eq!(finalized.final_state, WorkspaceState::Ready);
+    let _ = WorkspaceMode::Worktree; // sanity: enum is in scope
 }
 
 #[test]
@@ -341,23 +550,316 @@ fn finalize_workspace_cleans_up_row_on_worktree_failure() {
 }
 
 #[test]
-fn finalize_workspace_refuses_non_initializing_workspace() {
+fn execute_archive_plan_short_circuits_for_local_workspace() {
+    // CRITICAL regression test: `execute_archive_plan` is the path used
+    // by the queue / kanban-style archive flow. For local mode it MUST
+    // skip the worktree removal — `remove_worktree` would rename + delete
+    // the user's actual repo (since workspace_dir == repo_root).
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let prepared = workspaces::prepare_local_workspace_impl(&harness.repo_id, None).unwrap();
+    fs::write(harness.source_repo_root.join("user.txt"), "important").unwrap();
+
+    // The plan looks like a normal archive plan: workspace_dir == repo_root for local.
+    let plan = workspaces::prepare_archive_plan(&prepared.workspace_id).unwrap();
+    let _response = workspaces::execute_archive_plan(&plan).unwrap();
+
+    // Source repo must be intact (NOT renamed to .trash-...).
+    assert!(
+        harness.source_repo_root.is_dir(),
+        "source repo must survive"
+    );
+    assert!(harness.source_repo_root.join("user.txt").is_file());
+
+    // No `.trash-*` sibling created.
+    let parent = harness.source_repo_root.parent().unwrap();
+    let trash_count = fs::read_dir(parent)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().starts_with(".trash-"))
+        .count();
+    assert_eq!(trash_count, 0, "no trash dir should have been created");
+}
+
+#[test]
+fn archive_local_workspace_only_updates_db() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    // Set up a local workspace + plant some user files. Archiving must
+    // NOT touch the source repo's branch or working tree.
+    let prepared = workspaces::prepare_local_workspace_impl(&harness.repo_id, None).unwrap();
+    fs::write(harness.source_repo_root.join("user.txt"), "important").unwrap();
+
+    let response = workspaces::archive_workspace_impl(&prepared.workspace_id).unwrap();
+    assert_eq!(response.archived_state, WorkspaceState::Archived);
+
+    // Source repo intact: file present, branch unchanged.
+    assert!(harness.source_repo_root.join("user.txt").is_file());
+    assert_eq!(
+        crate::git_ops::current_branch_name(&harness.source_repo_root).unwrap(),
+        "main"
+    );
+
+    // DB row archived.
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let state: String = connection
+        .query_row(
+            "SELECT state FROM workspaces WHERE id = ?1",
+            [&prepared.workspace_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "archived");
+}
+
+#[test]
+fn restore_local_workspace_only_flips_state() {
+    // Local restore must skip every git operation the worktree path
+    // performs. The user's source repo branch + working tree must
+    // remain exactly as they were before the restore call.
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    let prepared = workspaces::prepare_local_workspace_impl(&harness.repo_id, None).unwrap();
+    workspaces::archive_workspace_impl(&prepared.workspace_id).unwrap();
+
+    // After archive, simulate the user moving on with the repo: switch
+    // to a new local branch + plant uncommitted work. Restore must NOT
+    // touch any of this.
+    crate::git_ops::run_git(
+        [
+            "-C",
+            harness.source_repo_root.to_str().unwrap(),
+            "checkout",
+            "-b",
+            "user-work",
+        ],
+        None,
+    )
+    .unwrap();
+    fs::write(harness.source_repo_root.join("scratch.txt"), "WIP").unwrap();
+
+    let response = workspaces::restore_workspace_impl(&prepared.workspace_id, None).unwrap();
+    assert_eq!(response.restored_state, WorkspaceState::Ready);
+    assert!(
+        response.branch_rename.is_none(),
+        "local restore must not rename branches"
+    );
+    assert!(
+        response.restored_from_target_branch.is_none(),
+        "local restore never targets a remote branch"
+    );
+
+    // Source repo untouched: still on `user-work` with the scratch
+    // file present.
+    assert_eq!(
+        crate::git_ops::current_branch_name(&harness.source_repo_root).unwrap(),
+        "user-work"
+    );
+    assert!(harness.source_repo_root.join("scratch.txt").is_file());
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let state: String = connection
+        .query_row(
+            "SELECT state FROM workspaces WHERE id = ?1",
+            [&prepared.workspace_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "ready");
+}
+
+#[test]
+fn validate_restore_local_workspace_short_circuits_to_no_conflict() {
+    // The pre-restore validate query also runs on archived rows. For
+    // local mode it must skip the git remote checks entirely (same
+    // reason as the restore path) and report no conflict.
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    let prepared = workspaces::prepare_local_workspace_impl(&harness.repo_id, None).unwrap();
+    workspaces::archive_workspace_impl(&prepared.workspace_id).unwrap();
+
+    let validation = workspaces::validate_restore_workspace(&prepared.workspace_id).unwrap();
+    assert!(validation.target_branch_conflict.is_none());
+}
+
+#[test]
+fn move_local_workspace_to_worktree_carries_uncommitted_changes() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    // Create the local workspace on main.
+    let prepared = workspaces::prepare_local_workspace_impl(&harness.repo_id, None).unwrap();
+
+    // Dirty the local repo: modify a tracked-friendly file + add an untracked.
+    fs::write(
+        harness.source_repo_root.join("README.md"),
+        "modified by user\n",
+    )
+    .unwrap();
+    fs::write(
+        harness.source_repo_root.join("scratch.txt"),
+        "untracked thoughts\n",
+    )
+    .unwrap();
+
+    let response =
+        workspaces::move_local_workspace_to_worktree_impl(&prepared.workspace_id).unwrap();
+
+    // Worktree should have both: tracked change reapplied, untracked copied.
+    let worktree_dir = harness.workspace_dir(&response.directory_name);
+    assert!(worktree_dir.is_dir(), "worktree dir was not created");
+    assert_eq!(
+        fs::read_to_string(worktree_dir.join("README.md")).unwrap(),
+        "modified by user\n",
+    );
+    assert_eq!(
+        fs::read_to_string(worktree_dir.join("scratch.txt")).unwrap(),
+        "untracked thoughts\n",
+    );
+
+    // Local stays untouched: same branch, dirty files still there.
+    let local_head = crate::git_ops::current_branch_name(&harness.source_repo_root).unwrap();
+    assert_eq!(local_head, "main");
+    assert_eq!(
+        fs::read_to_string(harness.source_repo_root.join("README.md")).unwrap(),
+        "modified by user\n",
+    );
+    assert!(harness.source_repo_root.join("scratch.txt").is_file());
+
+    // DB row flipped to worktree mode.
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let (mode_str, branch, init_parent, target_branch, dir_name): (
+        String,
+        String,
+        String,
+        String,
+        String,
+    ) = connection
+        .query_row(
+            r#"
+            SELECT COALESCE(mode, 'worktree'), branch, initialization_parent_branch,
+                   intended_target_branch, directory_name
+            FROM workspaces WHERE id = ?1
+            "#,
+            [&prepared.workspace_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(mode_str, "worktree");
+    assert_eq!(branch, response.branch);
+    assert_eq!(init_parent, "main");
+    assert_eq!(target_branch, "main");
+    assert_eq!(dir_name, response.directory_name);
+}
+
+#[test]
+fn move_local_workspace_to_worktree_works_on_clean_local() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    let prepared = workspaces::prepare_local_workspace_impl(&harness.repo_id, None).unwrap();
+
+    // No dirty state.
+    let response =
+        workspaces::move_local_workspace_to_worktree_impl(&prepared.workspace_id).unwrap();
+
+    let worktree_dir = harness.workspace_dir(&response.directory_name);
+    assert!(worktree_dir.join(".git").exists());
+    // Local branch stayed put.
+    let local_head = crate::git_ops::current_branch_name(&harness.source_repo_root).unwrap();
+    assert_eq!(local_head, "main");
+}
+
+#[test]
+fn move_local_workspace_to_worktree_rejects_worktree_mode_workspace() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
+    workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
+
+    let err =
+        workspaces::move_local_workspace_to_worktree_impl(&prepared.workspace_id).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("not a local workspace"),
+        "unexpected error: {msg}"
+    );
+}
+
+#[test]
+fn create_and_checkout_branch_creates_new_local_ref_and_switches_head() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    crate::git_ops::create_and_checkout_branch(&harness.source_repo_root, "experiment/foo")
+        .unwrap();
+
+    let head = crate::git_ops::current_branch_name(&harness.source_repo_root).unwrap();
+    assert_eq!(head, "experiment/foo");
+
+    let locals = crate::git_ops::list_local_branches(&harness.source_repo_root).unwrap();
+    assert!(locals.iter().any(|b| b == "experiment/foo"));
+}
+
+#[test]
+fn create_and_checkout_branch_rejects_existing_branch() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.create_remote_branch_with_file("dup", "dup.txt", "dup");
+
+    let err =
+        crate::git_ops::create_and_checkout_branch(&harness.source_repo_root, "dup").unwrap_err();
+    assert!(
+        format!("{err:#}").contains("dup"),
+        "expected 'dup' in error, got: {err}"
+    );
+}
+
+#[test]
+fn finalize_workspace_is_idempotent_for_ready_workspace() {
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
 
     let prepared = workspaces::prepare_workspace_from_repo_impl(&harness.repo_id, None).unwrap();
-    workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
+    let first = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
+    assert_eq!(first.final_state, WorkspaceState::Ready);
 
-    // Second finalize on the same (now ready) workspace must reject —
-    // the state guard protects against accidental double-finalize that
-    // would try to recreate an existing worktree.
-    let error = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap_err();
-    assert!(
-        error.to_string().contains("initializing"),
-        "Expected guard error, got: {error}"
-    );
+    // Second finalize on a ready workspace is a benign no-op (also
+    // covers the local-mode flow that arrives here already past
+    // initializing). Worktree itself is not touched.
+    let again = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
+    assert_eq!(again.final_state, WorkspaceState::Ready);
 }
 
 // ---------------------------------------------------------------------------

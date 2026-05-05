@@ -59,6 +59,7 @@ describe("createWorkspaceFromStartComposer", () => {
 		const result = await createWorkspaceFromStartComposer({
 			repoId: "repo-1",
 			sourceBranch: "origin/main",
+			mode: "worktree",
 			submitMode: "startNow",
 			editorStateSnapshot,
 		});
@@ -66,6 +67,7 @@ describe("createWorkspaceFromStartComposer", () => {
 		expect(apiMocks.prepareWorkspaceFromRepo).toHaveBeenCalledWith(
 			"repo-1",
 			"origin/main",
+			"worktree",
 		);
 		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
 			"workspace-1",
@@ -89,6 +91,7 @@ describe("createWorkspaceFromStartComposer", () => {
 		const result = await createWorkspaceFromStartComposer({
 			repoId: "repo-1",
 			sourceBranch: "origin/dev",
+			mode: "worktree",
 			submitMode: "saveForLater",
 			editorStateSnapshot,
 		});
@@ -96,6 +99,7 @@ describe("createWorkspaceFromStartComposer", () => {
 		expect(apiMocks.prepareWorkspaceFromRepo).toHaveBeenCalledWith(
 			"repo-1",
 			"origin/dev",
+			"worktree",
 		);
 		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
 			"workspace-1",

@@ -200,6 +200,7 @@ function makeWorkspaceDetail(id: string): WorkspaceDetail {
 		branch: `feature/${id}`,
 		initializationParentBranch: "main",
 		intendedTargetBranch: "main",
+		mode: "worktree",
 		pinnedAt: null,
 		prTitle: null,
 		archiveCommit: null,

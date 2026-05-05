@@ -552,6 +552,17 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         )
         .ok();
 
+    // Workspace `mode`: 'worktree' (existing — own dir, own branch) or
+    // 'local' (operates on the source repo's root, no separate worktree).
+    // Nullable + COALESCE'd at read sites so the conductor import flow
+    // (which copies columns directly without applying NOT NULL defaults)
+    // keeps working — NULL is treated as 'worktree' on read.
+    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "mode") {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN mode TEXT DEFAULT 'worktree'")
+            .context("Failed to add workspaces.mode column")?;
+    }
+
     Ok(())
 }
 
@@ -618,6 +629,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     pr_url TEXT,
     archive_commit TEXT,
     linked_directory_paths TEXT,
+    mode TEXT DEFAULT 'worktree',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

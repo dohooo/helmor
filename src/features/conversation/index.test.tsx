@@ -76,6 +76,7 @@ function renderContainer(
 					workspaceId: "workspace-1",
 					sessionId: "session-1",
 					payload: pendingPayload,
+					finalized: true,
 				}}
 				onPendingCreatedWorkspaceSubmitConsumed={onConsumed}
 				workspaceRootPath="/tmp/new-workspace"

@@ -387,6 +387,7 @@ describe("App create workspace flow", () => {
 			expect(apiMocks.prepareWorkspaceFromRepo).toHaveBeenCalledWith(
 				"repo-1",
 				"main",
+				"worktree",
 			);
 		});
 		await waitFor(() => {

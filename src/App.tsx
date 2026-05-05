@@ -80,11 +80,15 @@ import {
 } from "@/shell/layout";
 import { clampZoom, useZoom, ZOOM_STEP } from "@/shell/use-zoom";
 import {
+	createAndCheckoutBranch,
 	createSession,
 	drainPendingCliSends,
+	getRepoCurrentBranch,
+	listBranchesForLocalPicker,
 	listRemoteBranches,
 	markSessionRead,
 	markSessionUnread,
+	moveLocalWorkspaceToWorktree,
 	openWorkspaceInEditor,
 	openWorkspaceInFinder,
 	prewarmSlashCommandsForWorkspace,
@@ -94,6 +98,7 @@ import {
 	unhideSession,
 	type WorkspaceDetail,
 	type WorkspaceGroup,
+	type WorkspaceMode,
 	type WorkspaceSessionSummary,
 } from "./lib/api";
 import {
@@ -468,6 +473,30 @@ function AppShell({
 	>([]);
 	const [pendingCreatedWorkspaceSubmit, setPendingCreatedWorkspaceSubmit] =
 		useState<PendingCreatedWorkspaceSubmit | null>(null);
+	// While a freshly-created workspace's first send is queued behind
+	// `await finalizePromise`, the actual `handleComposerSubmit` hasn't fired
+	// yet — so neither the streaming hook nor any indicator knows the session
+	// "is sending". Fold the pending session/workspace into the sending sets
+	// so the sidebar spinner, panel header, and commit lifecycle all treat
+	// the pending submit as in-flight from the moment the user clicks send.
+	const effectiveSendingSessionIds = useMemo(() => {
+		if (!pendingCreatedWorkspaceSubmit) return sendingSessionIds;
+		if (sendingSessionIds.has(pendingCreatedWorkspaceSubmit.sessionId)) {
+			return sendingSessionIds;
+		}
+		const next = new Set(sendingSessionIds);
+		next.add(pendingCreatedWorkspaceSubmit.sessionId);
+		return next;
+	}, [sendingSessionIds, pendingCreatedWorkspaceSubmit]);
+	const effectiveSendingWorkspaceIds = useMemo(() => {
+		if (!pendingCreatedWorkspaceSubmit) return sendingWorkspaceIds;
+		if (sendingWorkspaceIds.has(pendingCreatedWorkspaceSubmit.workspaceId)) {
+			return sendingWorkspaceIds;
+		}
+		const next = new Set(sendingWorkspaceIds);
+		next.add(pendingCreatedWorkspaceSubmit.workspaceId);
+		return next;
+	}, [sendingWorkspaceIds, pendingCreatedWorkspaceSubmit]);
 	// Tracks sessions that have reached a terminal "done" event at least once
 	// in this app run. Used by the commit lifecycle to know when to prompt.
 	// Distinct from "unread" — `unreadCount` is the persisted, cross-restart
@@ -1501,7 +1530,7 @@ function AppShell({
 		completedSessionIds: settledSessionIds,
 		abortedSessionIds,
 		interactionRequiredSessionIds,
-		sendingSessionIds,
+		sendingSessionIds: effectiveSendingSessionIds,
 		onSelectSession: handleSelectSession,
 		pushToast: pushWorkspaceToast,
 	});
@@ -1648,7 +1677,7 @@ function AppShell({
 
 	const { requestClose: requestCloseSession, dialogNode: closeConfirmDialog } =
 		useConfirmSessionClose({
-			sendingSessionIds,
+			sendingSessionIds: effectiveSendingSessionIds,
 			onSelectSession: handleSelectSession,
 			onSessionHidden: handleSessionHidden,
 			pushToast: pushWorkspaceToast,
@@ -2229,14 +2258,47 @@ function AppShell({
 	const [startSourceBranchOverride, setStartSourceBranchOverride] = useState<
 		string | null
 	>(null);
+	// When the user picks "Create and checkout new branch..." in the
+	// picker, we DON'T touch git yet — just remember the name. The
+	// actual `git checkout -b` runs when the user submits the composer
+	// (lazy execution). Cleared whenever they pick an existing branch
+	// or switch repo / re-enter start.
+	const [startPendingNewBranch, setStartPendingNewBranch] = useState<
+		string | null
+	>(null);
+	const [startMode, setStartMode] = useState<WorkspaceMode>("worktree");
 	useEffect(() => {
 		setStartSourceBranchOverride(null);
+		setStartPendingNewBranch(null);
+		setStartMode("worktree");
 	}, [startRepositoryId]);
+	// In local mode the picker should default to whatever branch the
+	// repo's HEAD currently points at — that's the branch the user
+	// will actually be working on. Worktree mode keeps the stored
+	// default branch (= intended target).
+	const startLocalCurrentBranchQuery = useQuery({
+		queryKey: ["repoCurrentBranch", startRepository?.id],
+		queryFn: () => getRepoCurrentBranch(startRepository!.id),
+		enabled: Boolean(startRepository?.id) && startMode === "local",
+	});
 	const startSourceBranch =
-		startSourceBranchOverride ?? startRepository?.defaultBranch ?? "main";
+		startSourceBranchOverride ??
+		(startMode === "local"
+			? (startLocalCurrentBranchQuery.data ??
+				startRepository?.defaultBranch ??
+				"main")
+			: (startRepository?.defaultBranch ?? "main"));
+	// Local mode shows local + remote branches (deduped). Worktree mode
+	// only cares about remote refs (workspace branches off `origin/<x>`).
 	const startBranchesQuery = useQuery({
-		queryKey: ["remoteBranches", "start", startRepository?.id],
-		queryFn: () => listRemoteBranches({ repoId: startRepository!.id }),
+		queryKey:
+			startMode === "local"
+				? ["localPickerBranches", startRepository?.id]
+				: ["remoteBranches", "start", startRepository?.id],
+		queryFn: () =>
+			startMode === "local"
+				? listBranchesForLocalPicker(startRepository!.id)
+				: listRemoteBranches({ repoId: startRepository!.id }),
 		enabled: Boolean(startRepository?.id),
 	});
 	const handleOpenWorkspaceStart = useCallback(
@@ -2253,6 +2315,7 @@ function AppShell({
 			setWorkspacePreviewCard(null);
 			setWorkspacePreviewActive(false);
 			setStartSourceBranchOverride(null);
+			setStartPendingNewBranch(null);
 			setRightSidebarMode(
 				appSettings.startContextPanelOpen ? "context" : "inspector",
 			);
@@ -2290,9 +2353,37 @@ function AppShell({
 		(branch: string) => {
 			if (!startRepository) return;
 			setStartSourceBranchOverride(branch);
+			// Picking an existing branch from the dropdown clears any
+			// pending "create new branch" selection so we don't try to
+			// create-and-checkout on submit.
+			setStartPendingNewBranch(null);
 		},
 		[startRepository],
 	);
+	const handleMoveLocalToWorktree = useCallback(
+		(workspaceId: string) => {
+			void moveLocalWorkspaceToWorktree(workspaceId)
+				.then(() => {
+					void queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceGroups,
+					});
+					void queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+					});
+				})
+				.catch((error) => {
+					pushWorkspaceToast(
+						describeUnknownError(
+							error,
+							"Could not move workspace into a new worktree.",
+						),
+						"Move to worktree failed",
+					);
+				});
+		},
+		[pushWorkspaceToast, queryClient],
+	);
+
 	const handleStartRepositorySelect = useCallback(
 		(repository: RepositoryCreateOption) => {
 			setStartRepositoryId(repository.id);
@@ -2340,40 +2431,83 @@ function AppShell({
 			}
 
 			try {
+				// Lazy execution of "Create and checkout new branch":
+				// the dialog only stashes the name. We `git checkout -b`
+				// here, right before the workspace create, so the local
+				// repo isn't mutated until the user actually commits to
+				// running the task.
+				if (startPendingNewBranch) {
+					await createAndCheckoutBranch(
+						startRepository.id,
+						startPendingNewBranch,
+					);
+					setStartPendingNewBranch(null);
+				}
 				const { finalizePromise, outcome, workspaceId, sessionId } =
 					await createWorkspaceFromStartComposer({
 						repoId: startRepository.id,
 						sourceBranch: startSourceBranch,
+						mode: startMode,
 						submitMode: options?.startSubmitMode ?? "startNow",
 						editorStateSnapshot: payload.editorStateSnapshot,
 					});
-
-				if (finalizePromise) {
-					void finalizePromise.catch((error) => {
-						pushWorkspaceToast(
-							describeUnknownError(error, "Workspace setup failed."),
-							"Workspace setup failed",
-						);
-						void queryClient.invalidateQueries({
-							queryKey: helmorQueryKeys.workspaceGroups,
-						});
-					});
-				}
 
 				void queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceGroups,
 				});
 
 				if (outcome.shouldStream) {
-					setPendingCreatedWorkspaceSubmit({
-						id: crypto.randomUUID(),
-						workspaceId: outcome.workspaceId,
-						sessionId: outcome.sessionId,
-						payload,
-					});
+					// Navigate immediately so the panel mounts on the new
+					// session, then queue the optimistic user bubble before
+					// awaiting finalize. The conversation effect waits for
+					// the workspace state to flip operational before actually
+					// firing `handleComposerSubmit`, so the bubble shows up
+					// instantly while the worktree materialises in the
+					// background.
 					handleSelectWorkspace(outcome.workspaceId);
 					handleSelectSession(outcome.sessionId);
 					setWorkspaceViewMode("conversation");
+
+					const pendingId = crypto.randomUUID();
+					setPendingCreatedWorkspaceSubmit({
+						id: pendingId,
+						workspaceId: outcome.workspaceId,
+						sessionId: outcome.sessionId,
+						payload,
+						finalized: false,
+					});
+
+					if (finalizePromise) {
+						try {
+							await finalizePromise;
+						} catch (error) {
+							// Clear the optimistic bubble so the user doesn't
+							// see a message that never actually got sent.
+							setPendingCreatedWorkspaceSubmit((current) =>
+								current?.id === pendingId ? null : current,
+							);
+							pushWorkspaceToast(
+								describeUnknownError(error, "Workspace setup failed."),
+								"Workspace setup failed",
+							);
+							void queryClient.invalidateQueries({
+								queryKey: helmorQueryKeys.workspaceGroups,
+							});
+							return { shouldStream: false };
+						}
+					}
+					// Flip the gate: the worktree is materialised + DB row is
+					// now in `ready` / `setup_pending`. The conversation
+					// effect picks this up immediately — no need to wait for
+					// the workspaceDetail React Query refetch round-trip.
+					setPendingCreatedWorkspaceSubmit((current) =>
+						current?.id === pendingId
+							? { ...current, finalized: true }
+							: current,
+					);
+					void queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceGroups,
+					});
 					return { shouldStream: false };
 				}
 
@@ -2396,6 +2530,8 @@ function AppShell({
 			queryClient,
 			startRepository?.id,
 			startSourceBranch,
+			startMode,
+			startPendingNewBranch,
 		],
 	);
 
@@ -2459,7 +2595,7 @@ function AppShell({
 	return (
 		<TooltipProvider delayDuration={0}>
 			<WorkspaceToastProvider value={pushWorkspaceToast}>
-				<SendingSessionsProvider value={sendingSessionIds}>
+				<SendingSessionsProvider value={effectiveSendingSessionIds}>
 					<ComposerInsertProvider value={handleInsertIntoComposer}>
 						<main
 							aria-label="Application shell"
@@ -2502,7 +2638,7 @@ function AppShell({
 														autoSelectEnabled={
 															workspaceSidebarAutoSelectEnabled
 														}
-														sendingWorkspaceIds={sendingWorkspaceIds}
+														sendingWorkspaceIds={effectiveSendingWorkspaceIds}
 														interactionRequiredWorkspaceIds={
 															interactionRequiredWorkspaceIds
 														}
@@ -2510,6 +2646,7 @@ function AppShell({
 														addRepositoryShortcut={addRepositoryShortcut}
 														onSelectWorkspace={handleSelectWorkspace}
 														onOpenNewWorkspace={handleOpenWorkspaceStart}
+														onMoveLocalToWorktree={handleMoveLocalToWorktree}
 														pushWorkspaceToast={pushWorkspaceToast}
 													/>
 												</div>
@@ -2640,6 +2777,20 @@ function AppShell({
 														void startBranchesQuery.refetch();
 													}}
 													onSelectBranch={handleStartSourceBranchSelect}
+													mode={startMode}
+													onModeChange={(next) => {
+														setStartMode(next);
+														setStartSourceBranchOverride(null);
+														setStartPendingNewBranch(null);
+													}}
+													onCreateAndCheckoutBranch={async (branch) => {
+														if (!startRepository) return;
+														// Lazy: just remember the desired name. Actual
+														// `git checkout -b` runs at submit time inside
+														// `handleStartComposerPrepare`.
+														setStartSourceBranchOverride(branch);
+														setStartPendingNewBranch(branch);
+													}}
 													previewCard={startPreviewCard}
 													previewAppendContextTarget={startComposerInsertTarget}
 													onClosePreview={handleStartContextPreviewClose}
@@ -3127,7 +3278,7 @@ function AppShell({
 					</ComposerInsertProvider>
 				</SendingSessionsProvider>
 			</WorkspaceToastProvider>
-			<QuitConfirmDialog sendingSessionIds={sendingSessionIds} />
+			<QuitConfirmDialog sendingSessionIds={effectiveSendingSessionIds} />
 		</TooltipProvider>
 	);
 }
