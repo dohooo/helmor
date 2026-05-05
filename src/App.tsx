@@ -2217,12 +2217,15 @@ function AppShell({
 		repositories.find(
 			(repository) => repository.id === selectedWorkspaceDetail?.repoId,
 		) ?? null;
+	// Session-only override; resets on repo switch and on re-entering start.
+	const [startSourceBranchOverride, setStartSourceBranchOverride] = useState<
+		string | null
+	>(null);
+	useEffect(() => {
+		setStartSourceBranchOverride(null);
+	}, [startRepositoryId]);
 	const startSourceBranch =
-		(startRepository
-			? appSettings.kanbanViewState.sourceBranchByRepoId[startRepository.id]
-			: null) ??
-		startRepository?.defaultBranch ??
-		"main";
+		startSourceBranchOverride ?? startRepository?.defaultBranch ?? "main";
 	const startBranchesQuery = useQuery({
 		queryKey: ["remoteBranches", "start", startRepository?.id],
 		queryFn: () => listRemoteBranches({ repoId: startRepository!.id }),
@@ -2241,6 +2244,7 @@ function AppShell({
 			setWorkspaceViewMode("start");
 			setWorkspacePreviewCard(null);
 			setWorkspacePreviewActive(false);
+			setStartSourceBranchOverride(null);
 			setRightSidebarMode(
 				appSettings.startContextPanelOpen ? "context" : "inspector",
 			);
@@ -2276,21 +2280,10 @@ function AppShell({
 	]);
 	const handleStartSourceBranchSelect = useCallback(
 		(branch: string) => {
-			if (!startRepository) {
-				return;
-			}
-
-			updateSettings({
-				kanbanViewState: {
-					...appSettings.kanbanViewState,
-					sourceBranchByRepoId: {
-						...appSettings.kanbanViewState.sourceBranchByRepoId,
-						[startRepository.id]: branch,
-					},
-				},
-			});
+			if (!startRepository) return;
+			setStartSourceBranchOverride(branch);
 		},
-		[appSettings.kanbanViewState, startRepository, updateSettings],
+		[startRepository],
 	);
 	const handleStartRepositorySelect = useCallback(
 		(repository: RepositoryCreateOption) => {

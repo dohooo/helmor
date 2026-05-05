@@ -139,13 +139,10 @@ pub fn prepare_workspace_from_repo_impl(
     let directory_name = helpers::allocate_directory_name_for_repo(repo_id)?;
     let branch_settings = crate::repos::load_repo_branch_prefix_settings(repo_id)?;
     let branch = helpers::branch_name_for_directory(&directory_name, &branch_settings);
-    // The workspace's `default_branch` column is what `finalize_workspace_*`
-    // uses as the start_point for the worktree. When the caller passes a
-    // `source_branch` (kanban create flow lets the user pick), use it
-    // verbatim — the merge target stays the same branch by default,
-    // matching the typical "branch from main, PR back to main" pattern.
-    // Falls back to the repo's default branch otherwise.
-    let default_branch = source_branch
+    // Picker selection (or repo default). Stored as both
+    // `initialization_parent_branch` and `intended_target_branch`
+    // (fork from X → merge back to X). Phase 2 uses init_parent as start_ref.
+    let base_branch = source_branch
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string())
@@ -166,7 +163,7 @@ pub fn prepare_workspace_from_repo_impl(
         &session_id,
         &directory_name,
         &branch,
-        &default_branch,
+        &base_branch,
         &timestamp,
     )?;
 
@@ -199,7 +196,8 @@ pub fn prepare_workspace_from_repo_impl(
         repo_name: repository.name,
         directory_name,
         branch,
-        default_branch,
+        // Field name is legacy; value is the effective base branch.
+        default_branch: base_branch,
         state: WorkspaceState::Initializing,
         repo_scripts,
     })
@@ -230,10 +228,16 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
         .remote
         .clone()
         .unwrap_or_else(|| "origin".to_string());
-    let default_branch = record
-        .default_branch
-        .clone()
-        .filter(|value| !value.trim().is_empty())
+    // start_ref source: init_parent (Phase 1's stored pick), with
+    // repo default as fallback for legacy rows.
+    let base_branch = helpers::non_empty(&record.initialization_parent_branch)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            record
+                .default_branch
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+        })
         .unwrap_or_else(|| "main".to_string());
     let branch = helpers::non_empty(&record.branch)
         .map(ToOwned::to_owned)
@@ -251,11 +255,11 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
         }
 
         git_ops::ensure_git_repository(&repo_root)?;
-        let start_ref = git_ops::default_branch_ref(&remote, &default_branch);
+        let start_ref = git_ops::default_branch_ref(&remote, &base_branch);
         git_ops::verify_commitish_exists(
             &repo_root,
             &start_ref,
-            &format!("Default branch is missing in source repo: {default_branch}"),
+            &format!("Base branch is missing in source repo: {base_branch}"),
         )?;
         match git_ops::create_worktree_from_start_point(
             &repo_root,

@@ -340,28 +340,42 @@ export function WorkspaceStartPage({
 								</DropdownMenuContent>
 							</DropdownMenu>
 						) : null}
-						<BranchPickerPopover
-							currentBranch={selectedBranch}
-							branches={branches}
-							loading={branchesLoading}
-							onOpen={onOpenBranchPicker}
-							onSelect={onSelectBranch}
-						>
-							<button
-								type="button"
-								disabled={!selectedRepository}
-								className="inline-flex h-7 max-w-[13rem] cursor-pointer items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+						<Tooltip>
+							<BranchPickerPopover
+								currentBranch={selectedBranch}
+								branches={branches}
+								loading={branchesLoading}
+								onOpen={onOpenBranchPicker}
+								onSelect={onSelectBranch}
 							>
-								<GitBranch className="size-3.5 shrink-0" strokeWidth={1.8} />
-								<span className="min-w-0 truncate">
-									{selectedRepository?.remote ?? "origin"}/{selectedBranch}
-								</span>
-								<ChevronDown
-									className="size-3 shrink-0 text-muted-foreground"
-									strokeWidth={2}
-								/>
-							</button>
-						</BranchPickerPopover>
+								<TooltipTrigger asChild>
+									<button
+										type="button"
+										disabled={!selectedRepository}
+										className="inline-flex h-7 max-w-[13rem] cursor-pointer items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+									>
+										<GitBranch
+											className="size-3.5 shrink-0"
+											strokeWidth={1.8}
+										/>
+										<span className="min-w-0 truncate">
+											{selectedRepository?.remote ?? "origin"}/{selectedBranch}
+										</span>
+										<ChevronDown
+											className="size-3 shrink-0 text-muted-foreground"
+											strokeWidth={2}
+										/>
+									</button>
+								</TooltipTrigger>
+							</BranchPickerPopover>
+							<TooltipContent
+								side="top"
+								sideOffset={4}
+								className="rounded-md px-2 text-[12px] leading-none"
+							>
+								What branch should this task start from?
+							</TooltipContent>
+						</Tooltip>
 					</div>
 				</div>
 			</div>
