@@ -17,6 +17,7 @@ pub mod schema;
 pub mod service;
 mod shell_env;
 pub mod sidecar;
+mod system_limits;
 pub mod ui_sync;
 pub mod updater;
 pub mod workspace;
@@ -49,6 +50,8 @@ pub fn schema_init(conn: &rusqlite::Connection) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    system_limits::raise_nofile_soft_limit();
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())

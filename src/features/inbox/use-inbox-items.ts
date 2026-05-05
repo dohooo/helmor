@@ -166,7 +166,10 @@ export function useInboxItems(
 		: null;
 	const resolvedFilters: InboxFilters | null = {
 		query: filters?.query ?? null,
-		state: filters?.state ?? defaultFilters?.state ?? null,
+		state:
+			filters && "state" in filters
+				? (filters.state ?? null)
+				: (defaultFilters?.state ?? null),
 		scope: defaultFilters?.scope ?? null,
 		sort: defaultFilters?.sort ?? null,
 		draft: defaultFilters?.draft ?? null,
@@ -203,7 +206,10 @@ export function useInboxItems(
 				filters: resolvedFilters,
 			});
 		},
-		getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+		getNextPageParam: (lastPage) =>
+			lastPage.items.length > 0
+				? (lastPage.nextCursor ?? undefined)
+				: undefined,
 		staleTime: STALE_MS,
 	});
 

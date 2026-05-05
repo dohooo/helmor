@@ -393,6 +393,15 @@ pub fn list_inbox_items(
 ) -> Result<InboxPage> {
     let limit = limit.clamp(1, 100);
     let mut state = decode_cursor(cursor)?;
+    if !toggles.issues {
+        state.issues.done = true;
+    }
+    if !toggles.prs {
+        state.prs.done = true;
+    }
+    if !toggles.discussions {
+        state.discussions.done = true;
+    }
     let repo_qual = repo_qualifier(repo_filter);
     let search_qual = search_qualifier(
         filters
@@ -582,7 +591,7 @@ pub fn list_inbox_items(
         Some(encode_cursor(&state)?)
     };
 
-    tracing::info!(
+    tracing::debug!(
         target: "helmor::inbox",
         login,
         returned = items.len(),
@@ -1392,6 +1401,47 @@ mod tests {
         let decoded = decode_cursor(None).unwrap();
         assert!(!decoded.issues.done);
         assert!(decoded.issues.cursor.is_none());
+    }
+
+    #[test]
+    fn single_kind_finished_cursor_stops_when_other_kinds_are_disabled() {
+        let cursor = encode_cursor(&MultiCursor {
+            issues: MultiCursorEntry {
+                cursor: None,
+                done: true,
+            },
+            prs: MultiCursorEntry::default(),
+            discussions: MultiCursorEntry::default(),
+            issue_scopes: BTreeMap::from([(
+                "All".to_string(),
+                MultiCursorEntry {
+                    cursor: Some("Y3Vyc29yOjk=".to_string()),
+                    done: true,
+                },
+            )]),
+            pr_scopes: BTreeMap::new(),
+        })
+        .unwrap();
+
+        let page = list_inbox_items(
+            "dohooo",
+            InboxToggles {
+                issues: true,
+                prs: false,
+                discussions: false,
+            },
+            Some(&cursor),
+            20,
+            Some("dohooo/helmor"),
+            None,
+        )
+        .unwrap();
+
+        assert!(page.items.is_empty());
+        assert!(
+            page.next_cursor.is_none(),
+            "disabled inbox kinds must not keep pagination alive"
+        );
     }
 
     #[test]
