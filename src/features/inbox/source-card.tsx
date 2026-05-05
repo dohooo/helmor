@@ -3,6 +3,11 @@ import {
 	AppendContextButton,
 	type AppendContextRequestPayload,
 } from "@/components/append-context-button";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
 import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
@@ -75,20 +80,30 @@ export const SourceCard = memo(function SourceCard({
 					"group-hover:opacity-100",
 				)}
 			/>
-			<AppendContextButton
-				subjectLabel={card.title}
-				getPayload={() => buildCardContextPayload(card, appendContextTarget)}
-				errorTitle="Couldn't insert context card"
-				className={cn(
-					"absolute right-1 bottom-0.5 z-10 flex size-7.5 cursor-pointer items-center justify-center rounded-md",
-					"border-0 bg-transparent text-muted-foreground opacity-0 shadow-none",
-					"transition-[background-color,color,opacity,transform] duration-150",
-					"group-hover:opacity-100",
-					"hover:bg-foreground/10 hover:text-foreground",
-					"focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/70",
-					"active:scale-95 [&_svg]:size-3.5",
-				)}
-			/>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<span className="absolute right-1 bottom-0.5 z-10 inline-flex">
+						<AppendContextButton
+							subjectLabel={card.title}
+							ariaLabel="Add to context"
+							getPayload={() =>
+								buildCardContextPayload(card, appendContextTarget)
+							}
+							errorTitle="Couldn't insert context card"
+							className={cn(
+								"flex size-7.5 cursor-pointer items-center justify-center rounded-md",
+								"border-0 bg-transparent text-muted-foreground opacity-0 shadow-none",
+								"transition-[background-color,color,opacity,transform] duration-150",
+								"group-hover:opacity-100",
+								"hover:bg-foreground/10 hover:text-foreground",
+								"focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/70",
+								"active:scale-95 [&_svg]:size-3.5",
+							)}
+						/>
+					</span>
+				</TooltipTrigger>
+				<TooltipContent side="top">Add to context</TooltipContent>
+			</Tooltip>
 		</article>
 	);
 });
