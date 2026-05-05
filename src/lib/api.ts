@@ -2088,6 +2088,10 @@ export async function showImageInFinder(path: string): Promise<void> {
 	await invoke("show_image_in_finder", { path });
 }
 
+export async function revealPathInFinder(path: string): Promise<void> {
+	await invoke("reveal_path_in_finder", { path });
+}
+
 export async function copyImageToClipboard(path: string): Promise<void> {
 	await invoke("copy_image_to_clipboard", { path });
 }

@@ -883,6 +883,25 @@ pub async fn show_image_in_finder(path: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
+pub async fn reveal_path_in_finder(path: String) -> CmdResult<()> {
+    run_blocking(move || {
+        let source = std::path::PathBuf::from(&path);
+        if source.exists() {
+            return reveal_file_in_finder(&source).context("Failed to reveal in Finder");
+        }
+        // File may have been deleted (e.g. a `D` change). Fall back to the
+        // closest existing ancestor so the user still gets a useful Finder
+        // window pointed at the right area of the workspace.
+        if let Some(parent) = source.ancestors().skip(1).find(|p| p.exists()) {
+            return open_directory_in_finder(parent)
+                .context("Failed to open parent directory in Finder");
+        }
+        Err(anyhow::anyhow!("Path not found: {}", source.display()))
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn copy_image_to_clipboard(path: String) -> CmdResult<()> {
     run_blocking(move || {
         let source = std::path::PathBuf::from(path);
@@ -910,6 +929,20 @@ fn reveal_file_in_finder(path: &std::path::Path) -> anyhow::Result<()> {
 #[cfg(not(target_os = "macos"))]
 fn reveal_file_in_finder(_path: &std::path::Path) -> anyhow::Result<()> {
     anyhow::bail!("Showing images in Finder is only supported on macOS")
+}
+
+#[cfg(target_os = "macos")]
+fn open_directory_in_finder(path: &std::path::Path) -> anyhow::Result<()> {
+    std::process::Command::new("open")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .context("open command failed")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_directory_in_finder(_path: &std::path::Path) -> anyhow::Result<()> {
+    anyhow::bail!("Opening Finder is only supported on macOS")
 }
 
 #[cfg(target_os = "macos")]

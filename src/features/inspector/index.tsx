@@ -37,6 +37,7 @@ type WorkspaceInspectorSidebarProps = {
 	workspaceBranch?: string | null;
 	workspaceTargetBranch?: string | null;
 	workspaceRemote?: string | null;
+	workspaceRemoteUrl?: string | null;
 	workspaceState?: string | null;
 	editorMode: boolean;
 	activeEditorPath?: string | null;
@@ -66,8 +67,10 @@ type WorkspaceInspectorSidebarProps = {
 export function WorkspaceInspectorSidebar({
 	workspaceId,
 	workspaceRootPath,
+	workspaceBranch,
 	workspaceTargetBranch,
 	workspaceRemote,
+	workspaceRemoteUrl,
 	workspaceState,
 	repoId,
 	editorMode,
@@ -381,6 +384,8 @@ export function WorkspaceInspectorSidebar({
 			<ChangesSection
 				workspaceId={workspaceId ?? null}
 				workspaceRootPath={workspaceRootPath ?? null}
+				workspaceBranch={workspaceBranch ?? null}
+				workspaceRemoteUrl={workspaceRemoteUrl ?? null}
 				workspaceTargetBranch={workspaceTargetBranch ?? null}
 				changes={changes}
 				editorMode={editorMode}
