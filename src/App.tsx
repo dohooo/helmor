@@ -3003,7 +3003,8 @@ function AppShell({
 															selectedWorkspaceDetailQuery.data?.remote ?? null
 														}
 														workspaceRemoteUrl={
-															selectedWorkspaceDetailQuery.data?.remoteUrl ?? null
+															selectedWorkspaceDetailQuery.data?.remoteUrl ??
+															null
 														}
 														workspaceTargetBranch={(() => {
 															const d = selectedWorkspaceDetailQuery.data;
