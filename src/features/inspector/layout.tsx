@@ -66,6 +66,8 @@ export const INSPECTOR_CHANGES_HEIGHT_STORAGE_KEY =
 	"helmor.workspaceInspectorChangesHeight";
 export const INSPECTOR_TABS_HEIGHT_STORAGE_KEY =
 	"helmor.workspaceInspectorTabsHeight";
+export const INSPECTOR_GIT_ACTIVE_TAB_STORAGE_KEY =
+	"helmor.workspaceInspectorGitActiveTab";
 
 export function getInitialActionsOpen(): boolean {
 	if (typeof window === "undefined") {
@@ -138,6 +140,20 @@ export function getInitialTabsHeight(defaultHeight: number): number {
 		return Number.isFinite(parsed) ? parsed : defaultHeight;
 	} catch {
 		return defaultHeight;
+	}
+}
+
+export function getInitialGitActiveTab(): "changes" | "files" {
+	if (typeof window === "undefined") {
+		return "changes";
+	}
+	try {
+		const stored = window.localStorage.getItem(
+			INSPECTOR_GIT_ACTIVE_TAB_STORAGE_KEY,
+		);
+		return stored === "files" ? "files" : "changes";
+	} catch {
+		return "changes";
 	}
 }
 

@@ -9,16 +9,21 @@ import {
 } from "react";
 import { loadRepoScripts, type RepoScripts } from "@/lib/api";
 import type { InspectorFileItem } from "@/lib/editor-session";
-import { workspaceChangesQueryOptions } from "@/lib/query-client";
+import {
+	workspaceChangesQueryOptions,
+	workspaceFilesQueryOptions,
+} from "@/lib/query-client";
 import {
 	getInitialActionsOpen,
 	getInitialActiveTab,
 	getInitialChangesHeight,
+	getInitialGitActiveTab,
 	getInitialTabsHeight,
 	getInitialTabsOpen,
 	INSPECTOR_ACTIONS_OPEN_STORAGE_KEY,
 	INSPECTOR_ACTIVE_TAB_STORAGE_KEY,
 	INSPECTOR_CHANGES_HEIGHT_STORAGE_KEY,
+	INSPECTOR_GIT_ACTIVE_TAB_STORAGE_KEY,
 	INSPECTOR_SECTION_HEADER_HEIGHT,
 	INSPECTOR_TABS_HEIGHT_STORAGE_KEY,
 	INSPECTOR_TABS_OPEN_STORAGE_KEY,
@@ -126,6 +131,7 @@ export function useWorkspaceInspectorSidebar({
 	const [actionsOpen, setActionsOpen] = useState(getInitialActionsOpen);
 	const [tabsOpen, setTabsOpen] = useState(getInitialTabsOpen);
 	const [activeTab, setActiveTab] = useState(getInitialActiveTab);
+	const [gitActiveTab, setGitActiveTab] = useState(getInitialGitActiveTab);
 
 	const [containerHeight, setContainerHeight] = useState(0);
 	const [storedChangesBody, setStoredChangesBody] = useState(() =>
@@ -221,6 +227,20 @@ export function useWorkspaceInspectorSidebar({
 	useEffect(() => {
 		try {
 			window.localStorage.setItem(
+				INSPECTOR_GIT_ACTIVE_TAB_STORAGE_KEY,
+				gitActiveTab,
+			);
+		} catch (error) {
+			console.error(
+				`[helmor] git active tab save failed for "${INSPECTOR_GIT_ACTIVE_TAB_STORAGE_KEY}"`,
+				error,
+			);
+		}
+	}, [gitActiveTab]);
+
+	useEffect(() => {
+		try {
+			window.localStorage.setItem(
 				INSPECTOR_CHANGES_HEIGHT_STORAGE_KEY,
 				String(storedChangesBody),
 			);
@@ -281,6 +301,12 @@ export function useWorkspaceInspectorSidebar({
 		enabled: !!workspaceRootPath,
 	});
 	const changes: InspectorFileItem[] = changesQuery.data?.items ?? [];
+
+	const filesQuery = useQuery({
+		...workspaceFilesQueryOptions(workspaceRootPath ?? ""),
+		enabled: !!workspaceRootPath && gitActiveTab === "files",
+	});
+	const allFiles: InspectorFileItem[] = filesQuery.data ?? [];
 
 	const prevChangesRef = useRef<Map<string, string> | null>(null);
 	const prevRootPathRef = useRef(workspaceRootPath);
@@ -437,10 +463,12 @@ export function useWorkspaceInspectorSidebar({
 		actionsOpen,
 		actionsRef,
 		activeTab,
+		allFiles,
 		changes,
 		changesHeight: changesBody,
 		containerRef,
 		flashingPaths,
+		gitActiveTab,
 		handleResizeStart,
 		handleToggleActions,
 		handleToggleTabs,
@@ -450,6 +478,7 @@ export function useWorkspaceInspectorSidebar({
 		repoScripts,
 		scriptsLoaded,
 		setActiveTab,
+		setGitActiveTab,
 		tabsBodyHeight: tabsBody,
 		tabsOpen,
 		tabsWrapperRef,
