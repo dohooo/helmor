@@ -162,12 +162,9 @@ pub(super) fn stream_via_sidecar(
         params,
     };
 
-    // Per-helmor-session lock — reject overlapping sends synchronously
-    // before we touch the sidecar. Without this, rapid-fire submits can
-    // stack concurrent Claude `query()` calls against the same `resume:`
-    // id and corrupt the underlying conversation jsonl, which then
-    // returns an immediate empty result on every subsequent send and
-    // permanently bricks the thread (see issue #398).
+    // Per-helmor-session lock — block overlapping sends so concurrent
+    // `query()` calls can't stack against the same `resume:` id and
+    // corrupt the conversation jsonl (issue #398).
     let registered = active_streams.try_register_for_session(ActiveStreamHandle {
         request_id: request_id.clone(),
         sidecar_session_id: sidecar_session_id.clone(),
@@ -525,16 +522,17 @@ pub(super) fn stream_via_sidecar(
                     let mut persisted = false;
                     let mut resolved_model = model_copy.cli_model.to_string();
                     let mut final_messages: Vec<ThreadMessageLike> = Vec::new();
-                    // Set when an `end` arrives with no real assistant content
-                    // on a stream that was attempting `resume:` against a
-                    // stored provider_session_id. Indicates the resume target
-                    // is stale/corrupt — we clear the stored id and surface
-                    // an Error to the user instead of silently emitting Done
-                    // and bricking the thread (issue #398).
+                    // Set on an empty `end` for a `resume:` stream — surface
+                    // an Error instead of silently committing a blank Done
+                    // (issue #398). We do NOT clear provider_session_id
+                    // here: a single empty response can be a transient API
+                    // blip, and dropping the resume id would lose the whole
+                    // conversation on retry (issue #402). The hard-evidence
+                    // clear lives in `cleanup_abnormal_stream_exit`.
                     let mut bad_resume_failure = false;
                     const BAD_RESUME_USER_MESSAGE: &str =
-                        "The previous conversation could not be resumed (the provider returned \
-                         an empty response). Cleared the stale session — please retry your message.";
+                        "The provider returned an empty response. Please try again. \
+                         If this keeps happening on this thread, start a new conversation.";
 
                     if let Some(mut pipeline_state) = pipeline.take() {
                         if is_aborted {
@@ -587,17 +585,10 @@ pub(super) fn stream_via_sidecar(
                             resolved_model = output.resolved_model.clone();
                         }
 
-                        // Empty-resume detection. When the SDK's `result`
-                        // arrives within milliseconds of `system.init` with
-                        // zero turns and no assistant text, the resume
-                        // target on disk is almost certainly stale or
-                        // corrupted (e.g. the sidecar was killed mid-write
-                        // on a prior turn). Treat as failure, NOT as a
-                        // successful empty completion. Skip resume_only
-                        // streams (deferred-tool answer submission can
-                        // legitimately produce no new text). Skip when no
-                        // resume id was sent (a brand new conversation
-                        // returning empty is a different kind of bug).
+                        // Empty result on a `resume:` stream → surface as
+                        // Error. Skip `resume_only` (deferred-tool answers
+                        // can legitimately be empty) and the no-resume
+                        // case.
                         let is_empty_resume = !is_aborted
                             && !resume_only
                             && resume_session_id.is_some()
@@ -607,18 +598,6 @@ pub(super) fn stream_via_sidecar(
                         if let (Some(ctx), Some(conn)) = (exchange_ctx.as_ref(), writer.as_ref()) {
                             if is_empty_resume {
                                 bad_resume_failure = true;
-                                // Clear the stale provider_session_id so the
-                                // next send starts a fresh Claude conversation
-                                // instead of replaying the same broken resume.
-                                if let Err(error) = conn.execute(
-                                    "UPDATE sessions SET provider_session_id = NULL WHERE id = ?1",
-                                    rusqlite::params![ctx.helmor_session_id],
-                                ) {
-                                    tracing::error!(
-                                        rid = %rid,
-                                        "Failed to clear stale provider_session_id: {error}"
-                                    );
-                                }
                                 match persist_error_message(
                                     conn,
                                     ctx,
@@ -644,7 +623,7 @@ pub(super) fn stream_via_sidecar(
                                     Err(error) => {
                                         tracing::error!(
                                             rid = %rid,
-                                            "Failed to finalize after bad resume: {error}"
+                                            "Failed to finalize after empty resume: {error}"
                                         );
                                     }
                                 }
@@ -707,10 +686,8 @@ pub(super) fn stream_via_sidecar(
                     );
 
                     if bad_resume_failure {
-                        // Route through `handle_error` so the state machine
-                        // ends in `Error` rather than `Done`, and the
-                        // frontend's error path runs (clears sending state,
-                        // does NOT mark the turn complete).
+                        // End in `Error` (not `Done`) so the frontend's
+                        // error path runs.
                         let raw = json!({
                             "type": "error",
                             "message": BAD_RESUME_USER_MESSAGE,

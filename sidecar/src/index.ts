@@ -42,13 +42,24 @@ const managers: Record<Provider, SessionManager> = {
 	codex: codexManager,
 };
 
-// EPIPE = parent closed the pipe → exit cleanly. Without this, writes to
-// a dead pipe escalate to uncaughtException → the handler writes again →
-// zombie process that silently kills every in-flight RPC.
+// `parentGone` flips to true only when stdin EOFs — that's the
+// authoritative "Rust exited" signal. EPIPE on stdout, by contrast, can
+// fire transiently from any pipe in the process (Anthropic SDK child
+// processes, internal Bun async paths, etc.); using EPIPE alone as the
+// exit trigger silently kills every in-flight query whenever any of
+// those pipes blip (issues #398/#402). Set the flag here so the EPIPE
+// handlers below can distinguish the two.
+let parentGone = false;
+
 function handleStdioError(stream: "stdout" | "stderr") {
 	return (err: NodeJS.ErrnoException) => {
 		if (err.code === "EPIPE") {
-			process.exit(0);
+			if (parentGone) {
+				process.exit(0);
+			}
+			// Transient EPIPE while parent is still alive — drop this
+			// write. Don't escalate.
+			return;
 		}
 		// Report through the OTHER stream to avoid recursion.
 		if (stream === "stdout") {
@@ -99,10 +110,11 @@ setInterval(() => {
 // in-flight request gets notified, and keep the process alive.
 // ---------------------------------------------------------------------------
 
+// Don't `process.exit(0)` on EPIPE-coded errors here: any pipe in the
+// process (SDK child processes, internal Bun async work) can surface a
+// stray EPIPE, and exiting takes down every in-flight query with it
+// (issues #398/#402). The parent-died path is handled via stdin EOF.
 process.on("uncaughtException", (err) => {
-	if ((err as NodeJS.ErrnoException).code === "EPIPE") {
-		process.exit(0);
-	}
 	logger.error("uncaughtException", errorDetails(err));
 	try {
 		emitter.error(null, "Internal sidecar error", true);
@@ -110,9 +122,6 @@ process.on("uncaughtException", (err) => {
 });
 
 process.on("unhandledRejection", (reason) => {
-	if ((reason as NodeJS.ErrnoException | undefined)?.code === "EPIPE") {
-		process.exit(0);
-	}
 	logger.error("unhandledRejection", errorDetails(reason));
 	try {
 		emitter.error(null, "Internal sidecar error", true);
@@ -432,6 +441,12 @@ function trackHandler(p: Promise<void>): void {
 // ---------------------------------------------------------------------------
 
 const rl = createInterface({ input: process.stdin });
+// Authoritative "Rust exited" signal — flip the flag so any subsequent
+// EPIPE on stdout/stderr is treated as "drain to /dev/null then exit"
+// rather than "transient blip, ignore".
+rl.on("close", () => {
+	parentGone = true;
+});
 let requestCount = 0;
 
 for await (const line of rl) {

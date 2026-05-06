@@ -52,11 +52,9 @@ pub(crate) fn cleanup_abnormal_stream_exit(
         }
     };
 
-    // Clear the stored provider_session_id — the sidecar/SDK was killed
-    // mid-write, so the provider's conversation jsonl is likely corrupt
-    // (or at least undefined). Reusing the same id on the next send
-    // makes Claude return an immediate empty result that we'd misread
-    // as success, permanently bricking the thread (issue #398).
+    // SDK was killed mid-write; the provider's conversation jsonl may
+    // be corrupt. Drop the resume id so the next send starts fresh
+    // instead of replaying a broken target (issue #398).
     if let Err(error) = conn.execute(
         "UPDATE sessions SET provider_session_id = NULL WHERE id = ?1",
         rusqlite::params![ctx.helmor_session_id],
