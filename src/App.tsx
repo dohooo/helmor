@@ -3153,7 +3153,7 @@ function AppShell({
 											aria-hidden={inspectorCollapsed}
 											aria-label="Inspector sidebar"
 											className={cn(
-												"relative h-full shrink-0 overflow-hidden bg-sidebar has-[[data-tabs-zoomed=true]]:overflow-visible",
+												"relative h-full shrink-0 overflow-hidden bg-sidebar has-[[data-tabs-zoomed=true]]:z-50 has-[[data-tabs-zoomed=true]]:overflow-visible",
 												isInspectorResizing
 													? "transition-none"
 													: "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
