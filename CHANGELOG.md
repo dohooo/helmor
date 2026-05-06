@@ -15,6 +15,8 @@
 
 ### Patch Changes
 
+- [#394](https://github.com/dohooo/helmor/pull/394) [`b84b070`](https://github.com/dohooo/helmor/commit/b84b0705e842eb91668510e8fadc959e7725c0bb) Thanks [@daniel-mf28](https://github.com/daniel-mf28)! - Fix dragging the empty area of the workspace panel header.
+
 - [#404](https://github.com/dohooo/helmor/pull/404) [`4df8fcd`](https://github.com/dohooo/helmor/commit/4df8fcd77d8a20263c4ba33a2ba10481cb9e7fce) Thanks [@aidxun](https://github.com/aidxun)! - Fix the right inspector sidebar so its panels no longer animate from an initial zero-height state when Helmor first renders or switches back from the Context panel.
 
 - [#407](https://github.com/dohooo/helmor/pull/407) [`a8c7d46`](https://github.com/dohooo/helmor/commit/a8c7d467c873cbae98a09fa985da6ee5e6f2e863) Thanks [@natllian](https://github.com/natllian)! - Fix Claude threads occasionally returning an empty response mid-conversation and losing context on retry.
