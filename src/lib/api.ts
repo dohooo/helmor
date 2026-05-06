@@ -268,9 +268,13 @@ export type ForgeDetection = {
 export type AddRepositoryResponse = {
 	repositoryId: string;
 	createdRepository: boolean;
-	selectedWorkspaceId: string;
-	createdWorkspaceId?: string | null;
-	createdWorkspaceState: WorkspaceState;
+	/**
+	 * `string` only when the repo was already in the DB and has a visible
+	 * workspace — UI focuses it. `null` for newly-added repos and re-adds
+	 * with only archived workspaces — UI lands on the start page with this
+	 * repo selected.
+	 */
+	selectedWorkspaceId: string | null;
 };
 
 export type WorkspaceDetail = {
