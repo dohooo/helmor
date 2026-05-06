@@ -395,7 +395,10 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				className="flex h-9 items-center justify-between gap-3 px-[18px]"
 				data-tauri-drag-region
 			>
-				<div className="relative z-0 flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-[12.5px]">
+				<div
+					data-tauri-drag-region
+					className="relative z-0 flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-[12.5px]"
+				>
 					{headerLeading}
 					<span className="group/branch relative inline-flex items-center gap-1.5 overflow-hidden px-1 py-0.5 font-medium text-foreground">
 						{(() => {
