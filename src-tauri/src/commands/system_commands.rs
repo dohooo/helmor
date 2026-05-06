@@ -949,6 +949,40 @@ pub async fn save_pasted_image(data: String, media_type: String) -> CmdResult<St
     .await
 }
 
+/// Write a UTF-8 string to an absolute path the user picked from the
+/// `plugin-dialog` Save dialog.
+///
+/// We don't ship `tauri-plugin-fs`, and Tauri's webview also doesn't honour
+/// the browser-style `<a download>` click that streamdown uses internally —
+/// so the chat view's "Download as CSV / Markdown" buttons are dead unless
+/// we route the write through the host process. The dialog already gates
+/// the path on user intent, so we just make the parent dir if needed and
+/// write.
+#[tauri::command]
+pub async fn save_text_file_as(path: String, contents: String) -> CmdResult<()> {
+    run_blocking(move || {
+        use std::fs;
+
+        let target = std::path::PathBuf::from(&path);
+        if !target.is_absolute() {
+            anyhow::bail!(
+                "Refusing to save to non-absolute path: {}",
+                target.display()
+            );
+        }
+        if let Some(parent) = target.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+            }
+        }
+        fs::write(&target, contents.as_bytes())
+            .with_context(|| format!("Failed to write file {}", target.display()))?;
+        Ok(())
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn show_image_in_finder(path: String) -> CmdResult<()> {
     run_blocking(move || {

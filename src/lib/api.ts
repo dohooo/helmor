@@ -2363,6 +2363,19 @@ export async function savePastedImage(
 	return invoke<string>("save_pasted_image", { data, mediaType });
 }
 
+/**
+ * Write a UTF-8 string to an absolute path the user just picked from the
+ * `plugin-dialog` Save dialog. Used by the chat-view table-download menu
+ * (streamdown's built-in download relies on a synthetic `<a download>` click
+ * that Tauri's webview ignores).
+ */
+export async function saveTextFileAs(
+	path: string,
+	contents: string,
+): Promise<void> {
+	await invoke("save_text_file_as", { path, contents });
+}
+
 export async function showImageInFinder(path: string): Promise<void> {
 	await invoke("show_image_in_finder", { path });
 }
