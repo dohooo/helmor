@@ -89,6 +89,8 @@ type ChangesSectionProps = {
 	forgeIsRefreshing?: boolean;
 	/** Height of the changes body (excluding the section header). */
 	bodyHeight: number;
+	/** Enables the height transition only for explicit panel toggles. */
+	animatePanelToggle?: boolean;
 	/** Suppresses the height transition while the user is dragging a divider. */
 	isResizing?: boolean;
 };
@@ -110,11 +112,15 @@ export function ChangesSection({
 	changeRequest,
 	forgeIsRefreshing = false,
 	bodyHeight,
+	animatePanelToggle = false,
 	isResizing,
 }: ChangesSectionProps) {
 	const shouldReduceMotion = useReducedMotion();
 	const panelTransition = {
-		duration: isResizing || shouldReduceMotion ? 0 : TABS_ANIMATION_MS / 1000,
+		duration:
+			animatePanelToggle && !isResizing && !shouldReduceMotion
+				? TABS_ANIMATION_MS / 1000
+				: 0,
 		ease: TABS_EASING_CURVE,
 	};
 	const queryClient = useQueryClient();

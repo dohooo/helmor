@@ -3,6 +3,7 @@ import {
 	type MouseEvent as ReactMouseEvent,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -22,6 +23,7 @@ import {
 	INSPECTOR_SECTION_HEADER_HEIGHT,
 	INSPECTOR_TABS_HEIGHT_STORAGE_KEY,
 	INSPECTOR_TABS_OPEN_STORAGE_KEY,
+	TABS_ANIMATION_MS,
 } from "../layout";
 import { getScriptState, startScript, stopScript } from "../script-store";
 
@@ -135,10 +137,37 @@ export function useWorkspaceInspectorSidebar({
 		getInitialTabsHeight(DEFAULT_TABS_BODY),
 	);
 	const [resizeState, setResizeState] = useState<ResizeState | null>(null);
+	const [isPanelToggleAnimating, setIsPanelToggleAnimating] = useState(false);
 
 	const containerRef = useRef<HTMLDivElement>(null);
 	const tabsWrapperRef = useRef<HTMLDivElement>(null);
 	const actionsRef = useRef<HTMLElement>(null);
+	const panelToggleTimerRef = useRef<number | null>(null);
+
+	const beginPanelToggleAnimation = useCallback(() => {
+		if (panelToggleTimerRef.current !== null) {
+			window.clearTimeout(panelToggleTimerRef.current);
+		}
+		setIsPanelToggleAnimating(true);
+		panelToggleTimerRef.current = window.setTimeout(() => {
+			panelToggleTimerRef.current = null;
+			setIsPanelToggleAnimating(false);
+		}, TABS_ANIMATION_MS + 50);
+	}, []);
+
+	useEffect(() => {
+		return () => {
+			if (panelToggleTimerRef.current !== null) {
+				window.clearTimeout(panelToggleTimerRef.current);
+			}
+		};
+	}, []);
+
+	useLayoutEffect(() => {
+		const element = containerRef.current;
+		if (!element) return;
+		setContainerHeight(element.getBoundingClientRect().height);
+	}, []);
 
 	useEffect(() => {
 		const element = containerRef.current;
@@ -332,12 +361,14 @@ export function useWorkspaceInspectorSidebar({
 	}, [changesQuery.data]);
 
 	const handleToggleTabs = useCallback(() => {
+		beginPanelToggleAnimation();
 		setTabsOpen((open) => !open);
-	}, []);
+	}, [beginPanelToggleAnimation]);
 
 	const handleToggleActions = useCallback(() => {
+		beginPanelToggleAnimation();
 		setActionsOpen((open) => !open);
-	}, []);
+	}, [beginPanelToggleAnimation]);
 
 	useEffect(() => {
 		if (!resizeState) {
@@ -445,6 +476,7 @@ export function useWorkspaceInspectorSidebar({
 		handleToggleActions,
 		handleToggleTabs,
 		isActionsResizing,
+		isPanelToggleAnimating,
 		isResizing,
 		isTabsResizing,
 		repoScripts,

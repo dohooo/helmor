@@ -217,6 +217,8 @@ type InspectorTabsSectionProps = {
 	/** False when there's no repo/workspace context — disables the "+" button. */
 	canSpawnTerminal: boolean;
 	bodyHeight: number;
+	/** Enables the height transition only for explicit panel toggles. */
+	animatePanelToggle?: boolean;
 	isResizing?: boolean;
 	/**
 	 * Gate for the hover-to-zoom effect. When false, hovering the body does
@@ -242,6 +244,7 @@ export function InspectorTabsSection({
 	onToggleTerminalHoverZoom,
 	canSpawnTerminal,
 	bodyHeight,
+	animatePanelToggle = false,
 	isResizing,
 	canHoverExpand,
 	children,
@@ -250,9 +253,14 @@ export function InspectorTabsSection({
 	const newTerminalShortcut = getShortcut(settings.shortcuts, "terminal.new");
 	const shouldReduceMotion = useReducedMotion();
 	const panelTransition = {
-		duration: isResizing || shouldReduceMotion ? 0 : TABS_ANIMATION_MS / 1000,
+		duration:
+			animatePanelToggle && !isResizing && !shouldReduceMotion
+				? TABS_ANIMATION_MS / 1000
+				: 0,
 		ease: TABS_EASING_CURVE,
 	};
+	const chevronTransitionMs =
+		animatePanelToggle && !shouldReduceMotion ? TABS_ANIMATION_MS : 0;
 	// `isHoverExpanded` drives the CSS transitions we CAN interpolate
 	// (width / height / box-shadow). Flipping it to `false` immediately starts
 	// the shrink animation.
@@ -895,7 +903,7 @@ export function InspectorTabsSection({
 										strokeWidth={1.9}
 										style={{
 											transform: open ? "rotate(0deg)" : "rotate(-90deg)",
-											transition: `transform ${TABS_ANIMATION_MS}ms ${TABS_EASING}`,
+											transition: `transform ${chevronTransitionMs}ms ${TABS_EASING}`,
 										}}
 									/>
 								</Button>
