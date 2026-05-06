@@ -15,6 +15,7 @@ type WorkspacesSidebarContainerProps = {
 	addRepositoryShortcut?: string | null;
 	onSelectWorkspace: (workspaceId: string | null) => void;
 	onOpenNewWorkspace?: () => void;
+	onAddRepositoryNeedsStart?: (repositoryId: string) => void;
 	onMoveLocalToWorktree?: (workspaceId: string) => void;
 	pushWorkspaceToast: (
 		description: string,
@@ -37,6 +38,7 @@ export const WorkspacesSidebarContainer = memo(
 		addRepositoryShortcut,
 		onSelectWorkspace,
 		onOpenNewWorkspace,
+		onAddRepositoryNeedsStart,
 		onMoveLocalToWorktree,
 		pushWorkspaceToast,
 	}: WorkspacesSidebarContainerProps) {
@@ -65,6 +67,7 @@ export const WorkspacesSidebarContainer = memo(
 			autoSelectEnabled,
 			onSelectWorkspace,
 			onOpenNewWorkspace,
+			onAddRepositoryNeedsStart,
 			pushWorkspaceToast,
 		});
 

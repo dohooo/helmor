@@ -2421,6 +2421,22 @@ function AppShell({
 		},
 		[appSettings.kanbanViewState, updateSettings],
 	);
+	// Add-repo no longer auto-creates a workspace — when the backend
+	// hands back `selectedWorkspaceId: null`, drop into the start page
+	// with the freshly added repo selected.
+	const handleAddRepositoryNeedsStart = useCallback(
+		(repositoryId: string) => {
+			setStartRepositoryId(repositoryId);
+			void updateSettings({
+				kanbanViewState: {
+					...appSettings.kanbanViewState,
+					repoId: repositoryId,
+				},
+			});
+			handleOpenWorkspaceStart();
+		},
+		[appSettings.kanbanViewState, handleOpenWorkspaceStart, updateSettings],
+	);
 	useEffect(() => {
 		setStartPreviewCard(null);
 	}, [startRepository?.id]);
@@ -2671,6 +2687,9 @@ function AppShell({
 														addRepositoryShortcut={addRepositoryShortcut}
 														onSelectWorkspace={handleSelectWorkspace}
 														onOpenNewWorkspace={handleOpenWorkspaceStart}
+														onAddRepositoryNeedsStart={
+															handleAddRepositoryNeedsStart
+														}
 														onMoveLocalToWorktree={handleMoveLocalToWorktree}
 														pushWorkspaceToast={pushWorkspaceToast}
 													/>

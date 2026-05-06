@@ -7,10 +7,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{
-    git_ops, helpers,
-    workspace_state::{self, WorkspaceState},
-};
+use crate::{git_ops, helpers, workspace_state};
 
 use super::db;
 
@@ -42,14 +39,23 @@ pub struct AddRepositoryDefaults {
     pub last_clone_directory: Option<String>,
 }
 
+/// Response from `add_repository_from_local_path` / `clone_repository_from_url`.
+///
+/// `selected_workspace_id`:
+/// - `Some(id)` only when the repo was already in the DB AND has a visible
+///   (non-archived) workspace — the UI focuses that workspace.
+/// - `None` for newly-added repos and for re-adds where every workspace is
+///   archived. The UI lands on the start page with the new repo selected
+///   so the user can pick the source branch + workspace mode themselves.
+///
+/// We deliberately no longer auto-create a workspace at add-repo time —
+/// the start page replaced that flow.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddRepositoryResponse {
     pub repository_id: String,
     pub created_repository: bool,
-    pub selected_workspace_id: String,
-    pub created_workspace_id: Option<String>,
-    pub created_workspace_state: WorkspaceState,
+    pub selected_workspace_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -908,19 +914,6 @@ fn normalize_repo_preference(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-pub(crate) fn delete_repository(repo_id: &str) -> Result<()> {
-    let connection = db::write_conn()?;
-    let deleted_rows = connection
-        .execute("DELETE FROM repos WHERE id = ?1", [repo_id])
-        .with_context(|| format!("Failed to delete repository {repo_id}"))?;
-
-    if deleted_rows != 1 {
-        bail!("Repository delete affected {deleted_rows} rows for {repo_id}");
-    }
-
-    Ok(())
-}
-
 /// Delete a repository and all related data (workspaces, sessions, messages, etc.)
 pub fn delete_repository_cascade(repo_id: &str) -> Result<()> {
     let mut connection = db::write_conn()?;
@@ -1075,31 +1068,17 @@ pub fn add_repository_from_local_path(folder_path: &str) -> Result<AddRepository
             .map_err(|e| anyhow::anyhow!(e))?;
     }
 
+    // Re-add path: focus an existing visible workspace if one exists,
+    // otherwise fall through to the start-page hand-off (None).
     if let Some(repository) = load_repository_by_root_path(&normalized_root_path)? {
-        if let Some((selected_workspace_id, selected_workspace_state)) =
+        let selected_workspace_id =
             crate::workspaces::select_visible_workspace_for_repo(&repository.id)
                 .map_err(|e| anyhow::anyhow!(e))?
-        {
-            return Ok(AddRepositoryResponse {
-                repository_id: repository.id,
-                created_repository: false,
-                selected_workspace_id,
-                created_workspace_id: None,
-                created_workspace_state: selected_workspace_state,
-            });
-        }
-
-        let create_response = crate::workspaces::create_workspace_from_repo_impl(&repository.id)
-            .map_err(|error| {
-                anyhow::anyhow!("Repository already exists, but workspace create failed: {error}")
-            })?;
-
+                .map(|(workspace_id, _)| workspace_id);
         return Ok(AddRepositoryResponse {
             repository_id: repository.id,
             created_repository: false,
-            selected_workspace_id: create_response.selected_workspace_id.clone(),
-            created_workspace_id: Some(create_response.created_workspace_id),
-            created_workspace_state: create_response.created_state,
+            selected_workspace_id,
         });
     }
 
@@ -1137,21 +1116,11 @@ pub fn add_repository_from_local_path(folder_path: &str) -> Result<AddRepository
         }
     }
 
-    let create_result = crate::workspaces::create_workspace_from_repo_impl(&repository_id);
-
-    match create_result {
-        Ok(create_response) => Ok(AddRepositoryResponse {
-            repository_id,
-            created_repository: true,
-            selected_workspace_id: create_response.selected_workspace_id.clone(),
-            created_workspace_id: Some(create_response.created_workspace_id),
-            created_workspace_state: create_response.created_state,
-        }),
-        Err(error) => {
-            let _ = delete_repository(&repository_id);
-            bail!("First workspace create failed: {error}");
-        }
-    }
+    Ok(AddRepositoryResponse {
+        repository_id,
+        created_repository: true,
+        selected_workspace_id: None,
+    })
 }
 
 /// Lightweight git root resolution — no network calls, just local git commands.

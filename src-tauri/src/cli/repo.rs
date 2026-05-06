@@ -101,12 +101,9 @@ fn show(repo_ref: &str, cli: &Cli) -> Result<()> {
 fn add(path: &str, cli: &Cli) -> Result<()> {
     let response = service::add_repository_from_local_path(path)?;
     let mut events = vec![UiMutationEvent::RepositoryListChanged];
-    if response.created_workspace_id.is_some() {
-        events.push(UiMutationEvent::WorkspaceListChanged);
+    if let Some(workspace_id) = response.selected_workspace_id.clone() {
+        events.push(UiMutationEvent::WorkspaceChanged { workspace_id });
     }
-    events.push(UiMutationEvent::WorkspaceChanged {
-        workspace_id: response.selected_workspace_id.clone(),
-    });
     notify_ui_events(events);
     output::print(cli, &response, |r| {
         let mut lines = Vec::new();
@@ -115,10 +112,12 @@ fn add(path: &str, cli: &Cli) -> Result<()> {
         } else {
             lines.push(format!("Repository already exists: {}", r.repository_id));
         }
-        if let Some(ref ws_id) = r.created_workspace_id {
-            lines.push(format!("Created workspace  {ws_id}"));
+        match r.selected_workspace_id.as_deref() {
+            Some(ws_id) => lines.push(format!("Selected workspace {ws_id}")),
+            None => lines.push(
+                "No workspace selected — use `helmor workspace create` to start one.".to_string(),
+            ),
         }
-        lines.push(format!("Selected workspace {}", r.selected_workspace_id));
         lines.join("\n")
     })
 }
