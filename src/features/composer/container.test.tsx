@@ -58,6 +58,9 @@ const composerMockState = vi.hoisted(() => ({
 	lastStartSubmitMode: null as StartSubmitMode | null,
 	lastOnStartSubmitModeChange: null as ((mode: StartSubmitMode) => void) | null,
 	lastOnSelectModel: null as ((modelId: string) => void) | null,
+	lastOnSelectEffort: null as ((level: string) => void) | null,
+	lastOnChangePermissionMode: null as ((mode: string) => void) | null,
+	lastOnChangeFastMode: null as ((enabled: boolean) => void) | null,
 }));
 
 vi.mock("./index", async () => {
@@ -84,6 +87,11 @@ vi.mock("./index", async () => {
 			startSubmitMode?: StartSubmitMode;
 			onStartSubmitModeChange?: (mode: StartSubmitMode) => void;
 			onSelectModel?: (modelId: string) => void;
+			effortLevel?: string;
+			onSelectEffort?: (level: string) => void;
+			permissionMode?: string;
+			onChangePermissionMode?: (mode: string) => void;
+			onChangeFastMode?: (enabled: boolean) => void;
 		}) => {
 			composerMockState.renders.push(props.contextKey);
 			composerMockState.lastSlashCommands = [...(props.slashCommands ?? [])];
@@ -99,6 +107,10 @@ vi.mock("./index", async () => {
 			composerMockState.lastOnStartSubmitModeChange =
 				props.onStartSubmitModeChange ?? null;
 			composerMockState.lastOnSelectModel = props.onSelectModel ?? null;
+			composerMockState.lastOnSelectEffort = props.onSelectEffort ?? null;
+			composerMockState.lastOnChangePermissionMode =
+				props.onChangePermissionMode ?? null;
+			composerMockState.lastOnChangeFastMode = props.onChangeFastMode ?? null;
 			React.useEffect(() => {
 				composerMockState.mounts += 1;
 				return () => {
@@ -110,6 +122,8 @@ vi.mock("./index", async () => {
 				<div
 					data-testid="workspace-composer-mock"
 					data-fast-mode={props.fastMode ? "on" : "off"}
+					data-effort-level={props.effortLevel ?? ""}
+					data-permission-mode={props.permissionMode ?? ""}
 					data-disabled={props.disabled ? "true" : "false"}
 					data-submit-disabled={props.submitDisabled ? "true" : "false"}
 				>
@@ -224,6 +238,9 @@ describe("WorkspaceComposerContainer", () => {
 		composerMockState.unmounts = 0;
 		composerMockState.lastOnSubmit = null;
 		composerMockState.lastOnSelectModel = null;
+		composerMockState.lastOnSelectEffort = null;
+		composerMockState.lastOnChangePermissionMode = null;
+		composerMockState.lastOnChangeFastMode = null;
 		apiMockState.listSlashCommands.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockResolvedValue([]);
@@ -348,6 +365,66 @@ describe("WorkspaceComposerContainer", () => {
 		expect(handleSelectModel).toHaveBeenCalledWith(
 			"start:repo:repo-1",
 			"opus-1m",
+		);
+	});
+
+	it("uses context-key effort/plan/fast selections before a workspace exists", () => {
+		const queryClient = createHelmorQueryClient();
+		const handleSelectEffort = vi.fn();
+		const handleChangePermissionMode = vi.fn();
+		const handleChangeFastMode = vi.fn();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId={null}
+					displayedSessionId={null}
+					disabled={false}
+					forceAvailable
+					contextKeyOverride="start:repo:repo-1"
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{ "start:repo:repo-1": "gpt-5.4" }}
+					effortLevels={{ "start:repo:repo-1": "low" }}
+					permissionModes={{ "start:repo:repo-1": "plan" }}
+					fastModes={{ "start:repo:repo-1": true }}
+					onSelectModel={vi.fn()}
+					onSelectEffort={handleSelectEffort}
+					onChangePermissionMode={handleChangePermissionMode}
+					onChangeFastMode={handleChangeFastMode}
+					onSubmit={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		const mock = screen.getByTestId("workspace-composer-mock");
+		expect(mock).toHaveAttribute("data-effort-level", "low");
+		expect(mock).toHaveAttribute("data-permission-mode", "plan");
+		expect(mock).toHaveAttribute("data-fast-mode", "on");
+
+		composerMockState.lastOnSelectEffort?.("medium");
+		composerMockState.lastOnChangePermissionMode?.("bypassPermissions");
+		composerMockState.lastOnChangeFastMode?.(false);
+
+		expect(handleSelectEffort).toHaveBeenCalledWith(
+			"start:repo:repo-1",
+			"medium",
+		);
+		expect(handleChangePermissionMode).toHaveBeenCalledWith(
+			"start:repo:repo-1",
+			"bypassPermissions",
+		);
+		expect(handleChangeFastMode).toHaveBeenCalledWith(
+			"start:repo:repo-1",
+			false,
 		);
 	});
 

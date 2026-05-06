@@ -433,9 +433,7 @@ export const WorkspaceComposerContainer = memo(
 		const effectiveSelectedModelId = effectiveModel?.id ?? selectedModelId;
 		const provider =
 			effectiveModel?.provider ?? currentSession?.agentType ?? "claude";
-		const cachedEffort = composerContextKey.startsWith("session:")
-			? effortLevels[composerContextKey]
-			: undefined;
+		const cachedEffort = effortLevels[composerContextKey];
 		// For new sessions, use user setting; for existing sessions with history, use session's effort
 		const sessionEffort =
 			(!isNewSession(currentSession) && currentSession?.effortLevel) || null;
@@ -454,9 +452,7 @@ export const WorkspaceComposerContainer = memo(
 			effectiveSelectedModelId,
 			modelSections,
 		);
-		const cachedPermissionMode = composerContextKey.startsWith("session:")
-			? permissionModes[composerContextKey]
-			: undefined;
+		const cachedPermissionMode = permissionModes[composerContextKey];
 		const sessionPermissionMode = !isNewSession(currentSession)
 			? currentSession?.permissionMode
 			: null;
@@ -468,9 +464,7 @@ export const WorkspaceComposerContainer = memo(
 				? pendingPromptForSession.permissionMode
 				: permissionMode;
 		const supportsFastMode = effectiveModel?.supportsFastMode === true;
-		const cachedFastMode = composerContextKey.startsWith("session:")
-			? fastModes[composerContextKey]
-			: undefined;
+		const cachedFastMode = fastModes[composerContextKey];
 		const sessionFastMode = !isNewSession(currentSession)
 			? currentSession?.fastMode
 			: undefined;
