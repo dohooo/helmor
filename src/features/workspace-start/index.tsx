@@ -1,6 +1,7 @@
 import { ChevronDown, GitBranch, Laptop, Plus, Split, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { BranchPickerPopover } from "@/components/branch-picker";
+import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -25,6 +26,7 @@ import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
 import { CreateBranchDialog } from "./create-branch-dialog";
 
+const PREVIEW_TRAFFIC_LIGHT_SPACER_WIDTH = 52;
 const SWITCH_REPOSITORY_SHORTCUT = "Shift+Tab";
 
 function defaultBranchPrefix(repo: RepositoryCreateOption | null): string {
@@ -57,6 +59,7 @@ type WorkspaceStartPageProps = {
 	onCreateAndCheckoutBranch?: (branch: string) => Promise<void>;
 	previewCard?: ContextCard | null;
 	previewAppendContextTarget?: ComposerInsertTarget;
+	showWindowSafeTop?: boolean;
 	onClosePreview?: () => void;
 	children: React.ReactNode;
 };
@@ -75,6 +78,7 @@ export function WorkspaceStartPage({
 	onCreateAndCheckoutBranch,
 	previewCard = null,
 	previewAppendContextTarget,
+	showWindowSafeTop = false,
 	onClosePreview,
 	children,
 }: WorkspaceStartPageProps) {
@@ -147,6 +151,12 @@ export function WorkspaceStartPage({
 					<div className="min-h-0 overflow-hidden">
 						<div className="relative flex h-full min-h-[320px] flex-col overflow-hidden bg-background">
 							<div className="flex h-8 shrink-0 items-center justify-between gap-3 border-border/60 border-b px-3">
+								{showWindowSafeTop ? (
+									<TrafficLightSpacer
+										side="left"
+										width={PREVIEW_TRAFFIC_LIGHT_SPACER_WIDTH}
+									/>
+								) : null}
 								{previewCard ? (
 									<h2 className="flex h-full min-w-0 flex-1 translate-y-[2px] items-center text-[13px] font-medium leading-5 text-foreground">
 										<span className="min-w-0 truncate">

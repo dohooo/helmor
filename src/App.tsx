@@ -2793,6 +2793,7 @@ function AppShell({
 													}}
 													previewCard={startPreviewCard}
 													previewAppendContextTarget={startComposerInsertTarget}
+													showWindowSafeTop={sidebarCollapsed}
 													onClosePreview={handleStartContextPreviewClose}
 												>
 													<WorkspaceConversationContainer
