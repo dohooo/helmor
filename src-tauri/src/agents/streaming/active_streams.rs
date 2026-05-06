@@ -17,6 +17,13 @@ pub(crate) struct ActiveStreamHandle {
     pub request_id: String,
     pub sidecar_session_id: String,
     pub provider: String,
+    /// Helmor session this stream belongs to. Used by
+    /// `try_register_for_session` to reject overlapping sends targeting
+    /// the same helmor session — without this guard, rapid retries can
+    /// stack concurrent `query()` calls against the same Claude resume
+    /// id and corrupt the conversation jsonl. `None` for streams that
+    /// don't carry a helmor session (e.g. one-off title generation).
+    pub helmor_session_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -29,10 +36,26 @@ impl ActiveStreams {
         Self::default()
     }
 
-    pub(super) fn register(&self, handle: ActiveStreamHandle) {
-        if let Ok(mut map) = self.inner.lock() {
-            map.insert(handle.request_id.clone(), handle);
+    /// Atomic check-and-insert: register `handle` only if no existing
+    /// entry already targets the same `helmor_session_id`. Returns
+    /// `true` on success, `false` if a stream is already in flight for
+    /// that session. When `helmor_session_id` is `None` this degrades to
+    /// an unconditional insert (call sites with no session can never
+    /// collide on session id).
+    pub(super) fn try_register_for_session(&self, handle: ActiveStreamHandle) -> bool {
+        let Ok(mut map) = self.inner.lock() else {
+            return false;
+        };
+        if let Some(hsid) = handle.helmor_session_id.as_deref() {
+            let already_active = map
+                .values()
+                .any(|h| h.helmor_session_id.as_deref() == Some(hsid));
+            if already_active {
+                return false;
+            }
         }
+        map.insert(handle.request_id.clone(), handle);
+        true
     }
 
     pub(super) fn unregister(&self, request_id: &str) {

@@ -101,6 +101,10 @@ const BUILTIN_CLIENT_COMMANDS: readonly SlashCommandEntry[] = [
 type WorkspaceComposerContainerProps = {
 	displayedWorkspaceId: string | null;
 	displayedSessionId: string | null;
+	/** Repo ID hint used when there's no workspace yet (start page). Lets the
+	 *  slash-command query hit the backend's repo-level cache fallback so the
+	 *  popup is populated before the user has created a workspace. */
+	repoId?: string | null;
 	disabled: boolean;
 	/** When true, treat the composer as available even if no workspace is
 	 *  selected — the bottom composer in kanban mode uses this so it can
@@ -199,6 +203,7 @@ export const WorkspaceComposerContainer = memo(
 	function WorkspaceComposerContainer({
 		displayedWorkspaceId,
 		displayedSessionId,
+		repoId: propRepoId = null,
 		disabled,
 		forceAvailable = false,
 		placeholder,
@@ -617,17 +622,21 @@ export const WorkspaceComposerContainer = memo(
 		// query — anything else degrades to claude so we never miss the popup.
 		const slashProvider: AgentProvider =
 			provider === "codex" ? "codex" : "claude";
-		// Slash command list — keyed by (provider, workingDirectory). The
-		// composer popup is hidden until this resolves; on error we fall back
-		// to an empty list and the popup never opens (no UI breakage).
+		// Prefer the repoId from a real workspace; on the start page there's no
+		// workspace yet, so fall back to the caller-supplied repoId hint.
+		const effectiveRepoId =
+			workspaceDetailQuery.data?.repoId ?? propRepoId ?? null;
+		// Slash command list — keyed by (provider, workingDirectory). On the
+		// start page workingDirectory is null, but the backend has a repo-level
+		// cache fallback, so we still fire the query when we know the repoId.
 		const slashCommandsQuery = useQuery({
 			...slashCommandsQueryOptions(
 				slashProvider,
 				workingDirectory,
-				workspaceDetailQuery.data?.repoId ?? null,
+				effectiveRepoId,
 				displayedWorkspaceId,
 			),
-			enabled: Boolean(workingDirectory),
+			enabled: Boolean(workingDirectory) || Boolean(effectiveRepoId),
 		});
 		const slashCommandsResponse = slashCommandsQuery.data;
 		const agentSlashCommands =
@@ -648,12 +657,13 @@ export const WorkspaceComposerContainer = memo(
 		// Pending only (`isPending`) covers the very first fetch with no data
 		// yet; once we have data, `isFetching` covers background refetches but
 		// users don't need a spinner for those — the cached list is fine.
+		const slashQueryActive =
+			Boolean(workingDirectory) || Boolean(effectiveRepoId);
 		const slashCommandsLoading =
-			Boolean(workingDirectory) &&
+			slashQueryActive &&
 			slashCommandsQuery.isPending &&
 			!slashCommandsQuery.isError;
-		const slashCommandsError =
-			Boolean(workingDirectory) && slashCommandsQuery.isError;
+		const slashCommandsError = slashQueryActive && slashCommandsQuery.isError;
 		const refetchSlashCommands = useCallback(() => {
 			void slashCommandsQuery.refetch();
 		}, [slashCommandsQuery]);

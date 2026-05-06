@@ -52,6 +52,22 @@ pub(crate) fn cleanup_abnormal_stream_exit(
         }
     };
 
+    // Clear the stored provider_session_id — the sidecar/SDK was killed
+    // mid-write, so the provider's conversation jsonl is likely corrupt
+    // (or at least undefined). Reusing the same id on the next send
+    // makes Claude return an immediate empty result that we'd misread
+    // as success, permanently bricking the thread (issue #398).
+    if let Err(error) = conn.execute(
+        "UPDATE sessions SET provider_session_id = NULL WHERE id = ?1",
+        rusqlite::params![ctx.helmor_session_id],
+    ) {
+        tracing::error!(
+            rid = %rid,
+            session_id = %ctx.helmor_session_id,
+            "cleanup_abnormal_stream_exit: failed to clear provider_session_id: {error}"
+        );
+    }
+
     match finalize_session_metadata(&conn, ctx, "idle", effort_level, permission_mode) {
         Ok(_) => {
             tracing::debug!(
@@ -78,6 +94,14 @@ mod tests {
     use super::*;
 
     fn with_session<F: FnOnce()>(session_status: &str, f: F) {
+        with_session_and_provider_id(session_status, None, f);
+    }
+
+    fn with_session_and_provider_id<F: FnOnce()>(
+        session_status: &str,
+        provider_session_id: Option<&str>,
+        f: F,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let _guard = crate::data_dir::TEST_ENV_LOCK
             .lock()
@@ -100,8 +124,9 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO sessions (id, workspace_id, status, title) VALUES (?1, 'w-1', ?2, 't')",
-            rusqlite::params!["s-1", session_status],
+            "INSERT INTO sessions (id, workspace_id, status, title, provider_session_id)
+             VALUES (?1, 'w-1', ?2, 't', ?3)",
+            rusqlite::params!["s-1", session_status, provider_session_id],
         )
         .unwrap();
         drop(conn);
@@ -109,6 +134,17 @@ mod tests {
         f();
 
         std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    fn provider_session_id() -> Option<String> {
+        crate::models::db::read_conn()
+            .unwrap()
+            .query_row(
+                "SELECT provider_session_id FROM sessions WHERE id = 's-1'",
+                [],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .unwrap()
     }
 
     fn ctx() -> ExchangeContext {
@@ -183,6 +219,32 @@ mod tests {
                 None,
             );
             assert!(!persisted);
+        });
+    }
+
+    #[test]
+    fn clears_provider_session_id_so_next_send_starts_fresh() {
+        with_session_and_provider_id("streaming", Some("provider-sid-stale"), || {
+            assert_eq!(
+                provider_session_id().as_deref(),
+                Some("provider-sid-stale"),
+                "precondition: row starts with a provider session id",
+            );
+            let persisted = cleanup_abnormal_stream_exit(
+                "rid-clear",
+                Some(&ctx()),
+                "opus",
+                "sidecar dead, retry",
+                None,
+                None,
+            );
+            assert!(persisted);
+            assert_eq!(
+                provider_session_id(),
+                None,
+                "abnormal exit must clear provider_session_id so the next send doesn't \
+                 replay a corrupt resume target (issue #398)",
+            );
         });
     }
 }

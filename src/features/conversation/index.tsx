@@ -541,6 +541,7 @@ export const WorkspaceConversationContainer = memo(
 					<WorkspaceComposerContainer
 						displayedWorkspaceId={displayedWorkspaceId}
 						displayedSessionId={displayedSessionId}
+						repoId={repoId}
 						disabled={selectionPending}
 						forceAvailable={composerForceAvailable}
 						placeholder={composerPlaceholder}
