@@ -46,6 +46,7 @@ import { WorkspaceEditorSurface } from "@/features/editor";
 import { WorkspaceInspectorSidebar } from "@/features/inspector";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
 import { AppOnboarding } from "@/features/onboarding";
+import { ExportSessionImageButton } from "@/features/panel/export-session-image";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import { useConfirmSessionClose } from "@/features/panel/use-confirm-session-close";
 import {
@@ -2996,7 +2997,7 @@ function AppShell({
 															<div className="flex items-center gap-1">
 																{installedEditors.length > 0 &&
 																preferredEditor ? (
-																	<div className="flex items-center">
+																	<div className="flex -translate-x-1 items-center gap-0">
 																		<Tooltip>
 																			<TooltipTrigger asChild>
 																				<Button
@@ -3004,7 +3005,7 @@ function AppShell({
 																					size="xs"
 																					aria-label={`Open in ${preferredEditor.name}`}
 																					onClick={handleOpenPreferredEditor}
-																					className="text-muted-foreground hover:text-foreground"
+																					className="px-0.5 text-muted-foreground hover:text-foreground"
 																				>
 																					<EditorIcon
 																						editorId={preferredEditor.id}
@@ -3031,8 +3032,8 @@ function AppShell({
 																			<DropdownMenuTrigger asChild>
 																				<Button
 																					variant="ghost"
-																					size="icon-xs"
-																					className="w-4 text-muted-foreground hover:text-foreground"
+																					size="xs"
+																					className="h-6 px-0.5 text-muted-foreground hover:text-foreground"
 																				>
 																					<ChevronDown
 																						className="size-2.5"
@@ -3103,53 +3104,58 @@ function AppShell({
 																		</DropdownMenu>
 																	</div>
 																) : null}
-																<Tooltip>
-																	<TooltipTrigger asChild>
-																		<Button
-																			aria-label={
-																				inspectorCollapsed
-																					? "Expand right sidebar"
-																					: "Collapse right sidebar"
-																			}
-																			onClick={() =>
-																				setInspectorCollapsed(
-																					(collapsed) => !collapsed,
-																				)
-																			}
-																			variant="ghost"
-																			size="icon-xs"
-																			className="text-muted-foreground hover:text-foreground"
+																<div className="flex -translate-x-px items-center gap-1">
+																	<ExportSessionImageButton
+																		sessionId={selectedSessionId}
+																	/>
+																	<Tooltip>
+																		<TooltipTrigger asChild>
+																			<Button
+																				aria-label={
+																					inspectorCollapsed
+																						? "Expand right sidebar"
+																						: "Collapse right sidebar"
+																				}
+																				onClick={() =>
+																					setInspectorCollapsed(
+																						(collapsed) => !collapsed,
+																					)
+																				}
+																				variant="ghost"
+																				size="icon-xs"
+																				className="text-muted-foreground hover:text-foreground"
+																			>
+																				{inspectorCollapsed ? (
+																					<PanelRightOpen
+																						className="size-4"
+																						strokeWidth={1.8}
+																					/>
+																				) : (
+																					<PanelRightClose
+																						className="size-4"
+																						strokeWidth={1.8}
+																					/>
+																				)}
+																			</Button>
+																		</TooltipTrigger>
+																		<TooltipContent
+																			side="bottom"
+																			className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
 																		>
-																			{inspectorCollapsed ? (
-																				<PanelRightOpen
-																					className="size-4"
-																					strokeWidth={1.8}
+																			<span>
+																				{inspectorCollapsed
+																					? "Expand right sidebar"
+																					: "Collapse right sidebar"}
+																			</span>
+																			{rightSidebarToggleShortcut ? (
+																				<InlineShortcutDisplay
+																					hotkey={rightSidebarToggleShortcut}
+																					className="text-background/60"
 																				/>
-																			) : (
-																				<PanelRightClose
-																					className="size-4"
-																					strokeWidth={1.8}
-																				/>
-																			)}
-																		</Button>
-																	</TooltipTrigger>
-																	<TooltipContent
-																		side="bottom"
-																		className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-																	>
-																		<span>
-																			{inspectorCollapsed
-																				? "Expand right sidebar"
-																				: "Collapse right sidebar"}
-																		</span>
-																		{rightSidebarToggleShortcut ? (
-																			<InlineShortcutDisplay
-																				hotkey={rightSidebarToggleShortcut}
-																				className="text-background/60"
-																			/>
-																		) : null}
-																	</TooltipContent>
-																</Tooltip>
+																			) : null}
+																		</TooltipContent>
+																	</Tooltip>
+																</div>
 															</div>
 														) : undefined
 													}
