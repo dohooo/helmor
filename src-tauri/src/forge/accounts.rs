@@ -49,6 +49,29 @@ impl AuthCheck {
     }
 }
 
+/// Three-tier repo-access verdict. Auto-bind prefers `Push`; falls back
+/// to `Probable` only when *no* candidate has `Push`. `None` means the
+/// API definitively says we can't reach this repo with this login.
+///
+/// `Probable` covers the (surprisingly common) case where the API
+/// returns 200 but doesn't expose membership-based push permission:
+/// admin-via-instance on self-hosted GitLab, SAML-SSO tokens that
+/// haven't been authorized for an org on GitHub, fine-grained PATs
+/// without `repository.metadata` scope, shared-with groups not
+/// reflected in `permissions`, etc. We'd rather bind one of these and
+/// surface a real `git push` error than show "Connect" forever when
+/// the user clearly has access (issue #350).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RepoAccess {
+    /// API explicitly confirmed push permission.
+    Push,
+    /// 200 but `permissions` field is missing / has no concrete data.
+    /// Bind only when no `Push` candidate exists.
+    Probable,
+    /// 404 / auth rejected / explicit no-push verdict.
+    None,
+}
+
 /// Provider-agnostic account operations. Each method may interpret
 /// `host` / `login` slightly differently — GitLab ignores `login` since
 /// it has at most one account per host, while GitHub uses `(host,
@@ -68,9 +91,10 @@ pub(crate) trait ForgeAccountBackend: Sync {
     /// failures as `Indeterminate`, never `LoggedOut`.
     fn check_auth(&self, host: &str, login: &str) -> AuthCheck;
 
-    /// 200 → `Ok(true)`, 404 / auth-rejected → `Ok(false)`, anything
-    /// else → `Err`.
-    fn repo_accessible(&self, host: &str, login: &str, owner: &str, name: &str) -> Result<bool>;
+    /// 200 with explicit push → `RepoAccess::Push`. 200 without
+    /// membership data → `RepoAccess::Probable` (auto-bind fallback).
+    /// 404 / auth-rejected → `RepoAccess::None`. Anything else → `Err`.
+    fn repo_access(&self, host: &str, login: &str, owner: &str, name: &str) -> Result<RepoAccess>;
 
     /// Display profile for a single `(host, login)`. Hits the same
     /// per-process cache as [`list_accounts`] so spot-fetches (e.g. the
@@ -161,7 +185,7 @@ pub fn workspace_account_profile(workspace_id: &str) -> Result<Option<ForgeAccou
 // ---------------- Auto-bind ----------------
 
 /// Resolved forge identity for a repo: provider, host, owner, name. The
-/// caller probes `repo_accessible` against candidate logins (auto-bind)
+/// caller probes `repo_access` against candidate logins (auto-bind)
 /// or runs CLI commands once a login is bound.
 #[derive(Debug, Clone)]
 pub(crate) struct RepoForgeTarget {
@@ -227,16 +251,19 @@ pub(crate) fn auto_bind_repo_account(repo_id: &str) -> Result<Option<String>> {
         return Ok(None);
     }
 
-    // Probe every candidate so we can both pick a winner *and*
-    // surface a warning when more than one account claims access —
-    // first-match-wins is fine in practice but the user should know
-    // they have an ambiguous binding so they can override it from
-    // Settings → Repository if the auto-pick is wrong.
-    let mut accessible: Vec<String> = Vec::new();
+    // Tier the candidates: explicit push permission wins; "200 but
+    // permissions field missing/null" is a fallback used only when no
+    // push-confirmed candidate exists. This prevents the
+    // "permissions-missing relaxation" from silently binding a
+    // read-only account when a push-capable account is also logged in
+    // on the same host (multi-account GitHub case).
+    let mut confirmed: Vec<String> = Vec::new();
+    let mut probable: Vec<String> = Vec::new();
     for login in &candidates {
-        match backend.repo_accessible(&target.host, login, &target.owner, &target.name) {
-            Ok(true) => accessible.push(login.clone()),
-            Ok(false) => continue,
+        match backend.repo_access(&target.host, login, &target.owner, &target.name) {
+            Ok(RepoAccess::Push) => confirmed.push(login.clone()),
+            Ok(RepoAccess::Probable) => probable.push(login.clone()),
+            Ok(RepoAccess::None) => continue,
             Err(error) => {
                 tracing::warn!(
                     repo_id,
@@ -247,17 +274,22 @@ pub(crate) fn auto_bind_repo_account(repo_id: &str) -> Result<Option<String>> {
             }
         }
     }
-    let Some(chosen) = accessible.first().cloned() else {
-        return Ok(None);
+    let (chosen, tier) = match confirmed.first().cloned() {
+        Some(login) => (login, "push"),
+        None => match probable.first().cloned() {
+            Some(login) => (login, "probable"),
+            None => return Ok(None),
+        },
     };
-    if accessible.len() > 1 {
+    if confirmed.len() + probable.len() > 1 {
         tracing::warn!(
             repo_id,
             provider = target.provider.as_storage_str(),
             host = %target.host,
             chosen = %chosen,
-            candidates = ?accessible,
-            "Multiple logged-in accounts can access this repo — picked the first; user can override from Settings → Repository"
+            confirmed = ?confirmed,
+            probable = ?probable,
+            "Multiple logged-in accounts can access this repo — picked one; user can override from Settings → Repository"
         );
     }
     repos::update_repository_forge_login(repo_id, Some(&chosen))?;
@@ -266,6 +298,7 @@ pub(crate) fn auto_bind_repo_account(repo_id: &str) -> Result<Option<String>> {
         provider = target.provider.as_storage_str(),
         host = %target.host,
         login = %chosen,
+        tier,
         "Auto-bound repo to forge account"
     );
     Ok(Some(chosen))

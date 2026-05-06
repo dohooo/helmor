@@ -496,6 +496,20 @@ describe("resolveSessionSelectedModelId", () => {
 		).toBe("gpt-4o");
 	});
 
+	it("prefers the composer-selected model for a custom context key", () => {
+		expect(
+			resolveSessionSelectedModelId({
+				session: null,
+				modelSelections: {
+					"start:repo:repo-1": "gpt-4o",
+				},
+				modelSections: MODEL_SECTIONS,
+				settingsDefaultModelId: "default",
+				contextKey: "start:repo:repo-1",
+			}),
+		).toBe("gpt-4o");
+	});
+
 	it("falls back to the persisted session model", () => {
 		expect(
 			resolveSessionSelectedModelId({

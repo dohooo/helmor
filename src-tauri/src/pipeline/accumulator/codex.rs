@@ -85,6 +85,14 @@ pub(super) fn handle_item_started(acc: &mut StreamAccumulator, _raw_line: &str, 
         );
     }
 
+    // Skip mid-flight render for collab tool calls — `item/started` has
+    // empty agentsStates / receiverThreadIds, so all the frontend can show
+    // is a "Sub-agent" placeholder that flickers off when completed lands.
+    // The entry stays in `codex_items` so abort/flush still works.
+    if item_type == "collab_agent_tool_call" {
+        return;
+    }
+
     let synthetic = serde_json::json!({"item": item});
     let synthetic_str = serde_json::to_string(&synthetic).unwrap_or_default();
     dispatch_item(acc, &synthetic_str, &synthetic, false);

@@ -161,7 +161,7 @@ export function useWorkspaceCommitLifecycle({
 	completedSessionIds,
 	abortedSessionIds,
 	interactionRequiredSessionIds,
-	sendingSessionIds,
+	busySessionIds,
 	onSelectSession,
 	pushToast,
 }: {
@@ -181,7 +181,7 @@ export function useWorkspaceCommitLifecycle({
 	completedSessionIds: Set<string>;
 	abortedSessionIds?: Set<string>;
 	interactionRequiredSessionIds: Set<string>;
-	sendingSessionIds: Set<string>;
+	busySessionIds: Set<string>;
 	onSelectSession: (sessionId: string | null) => void;
 	pushToast?: PushWorkspaceToast;
 }) {
@@ -514,7 +514,7 @@ export function useWorkspaceCommitLifecycle({
 	useEffect(() => {
 		const current = commitLifecycleRef.current;
 		console.log("[commitButton] action-session settlement check", {
-			sendingIds: Array.from(sendingSessionIds),
+			sendingIds: Array.from(busySessionIds),
 			completedIds: Array.from(completedSessionIds),
 			abortedIds: abortedSessionIds ? Array.from(abortedSessionIds) : [],
 			interactionRequiredIds: Array.from(interactionRequiredSessionIds),
@@ -541,7 +541,7 @@ export function useWorkspaceCommitLifecycle({
 			return;
 		}
 
-		const isSending = sendingSessionIds.has(trackedSessionId);
+		const isSending = busySessionIds.has(trackedSessionId);
 		if (isSending) {
 			console.log("[commitButton] tracked session is streaming");
 			hasObservedSendingRef.current = true;
@@ -646,7 +646,7 @@ export function useWorkspaceCommitLifecycle({
 		pushToast,
 		queryClient,
 		refreshWorkspaceRemoteStatus,
-		sendingSessionIds,
+		busySessionIds,
 	]);
 
 	useEffect(() => {

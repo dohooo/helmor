@@ -41,7 +41,7 @@ describe("WorkspacesSidebar", () => {
 					groups={workspaceGroups}
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
-					sendingWorkspaceIds={new Set()}
+					busyWorkspaceIds={new Set()}
 				/>
 			</TooltipProvider>,
 		);
@@ -57,7 +57,7 @@ describe("WorkspacesSidebar", () => {
 					groups={workspaceGroups}
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
-					sendingWorkspaceIds={new Set(["workspace-1"])}
+					busyWorkspaceIds={new Set(["workspace-1"])}
 				/>
 			</TooltipProvider>,
 		);

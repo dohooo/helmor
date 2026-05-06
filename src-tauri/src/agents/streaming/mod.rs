@@ -162,18 +162,34 @@ pub(super) fn stream_via_sidecar(
         params,
     };
 
+    // Per-helmor-session lock — block overlapping sends so concurrent
+    // `query()` calls can't stack against the same `resume:` id and
+    // corrupt the conversation jsonl (issue #398).
+    let registered = active_streams.try_register_for_session(ActiveStreamHandle {
+        request_id: request_id.clone(),
+        sidecar_session_id: sidecar_session_id.clone(),
+        provider: model.provider.to_string(),
+        helmor_session_id: request.helmor_session_id.clone(),
+    });
+    if !registered {
+        tracing::warn!(
+            rid = %request_id,
+            helmor_session_id = ?request.helmor_session_id,
+            "Rejecting send: another stream is already active for this session"
+        );
+        return Err(anyhow::anyhow!(
+            "A previous send is still running for this session. Wait for it to finish or stop it first."
+        )
+        .into());
+    }
+
     let rx = sidecar.subscribe(&request_id);
 
     if let Err(error) = sidecar.send(&sidecar_req) {
         sidecar.unsubscribe(&request_id);
+        active_streams.unregister(&request_id);
         return Err(anyhow::anyhow!("Sidecar send failed: {error}").into());
     }
-
-    active_streams.register(ActiveStreamHandle {
-        request_id: request_id.clone(),
-        sidecar_session_id: sidecar_session_id.clone(),
-        provider: model.provider.to_string(),
-    });
 
     let model_id = model.id.clone();
     let provider = model.provider.clone();
@@ -506,6 +522,17 @@ pub(super) fn stream_via_sidecar(
                     let mut persisted = false;
                     let mut resolved_model = model_copy.cli_model.to_string();
                     let mut final_messages: Vec<ThreadMessageLike> = Vec::new();
+                    // Set on an empty `end` for a `resume:` stream — surface
+                    // an Error instead of silently committing a blank Done
+                    // (issue #398). We do NOT clear provider_session_id
+                    // here: a single empty response can be a transient API
+                    // blip, and dropping the resume id would lose the whole
+                    // conversation on retry (issue #402). The hard-evidence
+                    // clear lives in `cleanup_abnormal_stream_exit`.
+                    let mut bad_resume_failure = false;
+                    const BAD_RESUME_USER_MESSAGE: &str =
+                        "The provider returned an empty response. Please try again. \
+                         If this keeps happening on this thread, start a new conversation.";
 
                     if let Some(mut pipeline_state) = pipeline.take() {
                         if is_aborted {
@@ -557,8 +584,50 @@ pub(super) fn stream_via_sidecar(
                         if !output.assistant_text.is_empty() {
                             resolved_model = output.resolved_model.clone();
                         }
+
+                        // Empty result on a `resume:` stream → surface as
+                        // Error. Skip `resume_only` (deferred-tool answers
+                        // can legitimately be empty) and the no-resume
+                        // case.
+                        let is_empty_resume = !is_aborted
+                            && !resume_only
+                            && resume_session_id.is_some()
+                            && persisted_turn_count == 0
+                            && output.assistant_text.trim().is_empty();
+
                         if let (Some(ctx), Some(conn)) = (exchange_ctx.as_ref(), writer.as_ref()) {
-                            if is_aborted {
+                            if is_empty_resume {
+                                bad_resume_failure = true;
+                                match persist_error_message(
+                                    conn,
+                                    ctx,
+                                    &resolved_model,
+                                    BAD_RESUME_USER_MESSAGE,
+                                ) {
+                                    Ok(_) => {}
+                                    Err(error) => {
+                                        tracing::error!(
+                                            rid = %rid,
+                                            "Failed to persist bad-resume error: {error}"
+                                        );
+                                    }
+                                }
+                                match finalize_session_metadata(
+                                    conn,
+                                    ctx,
+                                    "idle",
+                                    effort_copy.as_deref(),
+                                    turn_session.ctx.permission_mode.as_deref(),
+                                ) {
+                                    Ok(_) => persisted = true,
+                                    Err(error) => {
+                                        tracing::error!(
+                                            rid = %rid,
+                                            "Failed to finalize after empty resume: {error}"
+                                        );
+                                    }
+                                }
+                            } else if is_aborted {
                                 match finalize_session_metadata(
                                     conn,
                                     ctx,
@@ -612,8 +681,34 @@ pub(super) fn stream_via_sidecar(
                         persisted_turn_count,
                         elapsed_ms = stream_started_at.elapsed().as_millis(),
                         persisted,
+                        bad_resume_failure,
                         "stream: terminal event received"
                     );
+
+                    if bad_resume_failure {
+                        // End in `Error` (not `Done`) so the frontend's
+                        // error path runs.
+                        let raw = json!({
+                            "type": "error",
+                            "message": BAD_RESUME_USER_MESSAGE,
+                            "internal": false,
+                        });
+                        match turn_session.handle_error(&raw, persisted) {
+                            Ok(actions) => {
+                                for action in actions {
+                                    actions::apply_action(action, &apply_ctx);
+                                }
+                            }
+                            Err(err) => {
+                                tracing::error!(
+                                    rid = %rid,
+                                    error = ?err,
+                                    "bad-resume error transition rejected",
+                                );
+                            }
+                        }
+                        break;
+                    }
 
                     match turn_session.handle_end_or_aborted(
                         is_aborted,

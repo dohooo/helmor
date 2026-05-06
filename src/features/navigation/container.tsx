@@ -9,12 +9,13 @@ type WorkspaceToastVariant = "default" | "destructive";
 type WorkspacesSidebarContainerProps = {
 	selectedWorkspaceId: string | null;
 	autoSelectEnabled?: boolean;
-	sendingWorkspaceIds?: Set<string>;
+	busyWorkspaceIds?: Set<string>;
 	interactionRequiredWorkspaceIds?: Set<string>;
 	newWorkspaceShortcut?: string | null;
 	addRepositoryShortcut?: string | null;
 	onSelectWorkspace: (workspaceId: string | null) => void;
 	onOpenNewWorkspace?: () => void;
+	onAddRepositoryNeedsStart?: (repositoryId: string) => void;
 	onMoveLocalToWorktree?: (workspaceId: string) => void;
 	pushWorkspaceToast: (
 		description: string,
@@ -31,12 +32,13 @@ export const WorkspacesSidebarContainer = memo(
 	function WorkspacesSidebarContainer({
 		selectedWorkspaceId,
 		autoSelectEnabled = true,
-		sendingWorkspaceIds,
+		busyWorkspaceIds,
 		interactionRequiredWorkspaceIds,
 		newWorkspaceShortcut,
 		addRepositoryShortcut,
 		onSelectWorkspace,
 		onOpenNewWorkspace,
+		onAddRepositoryNeedsStart,
 		onMoveLocalToWorktree,
 		pushWorkspaceToast,
 	}: WorkspacesSidebarContainerProps) {
@@ -65,6 +67,7 @@ export const WorkspacesSidebarContainer = memo(
 			autoSelectEnabled,
 			onSelectWorkspace,
 			onOpenNewWorkspace,
+			onAddRepositoryNeedsStart,
 			pushWorkspaceToast,
 		});
 
@@ -75,7 +78,7 @@ export const WorkspacesSidebarContainer = memo(
 				addingRepository={addingRepository}
 				archivingWorkspaceIds={archivingWorkspaceIds}
 				selectedWorkspaceId={selectedWorkspaceId}
-				sendingWorkspaceIds={sendingWorkspaceIds}
+				busyWorkspaceIds={busyWorkspaceIds}
 				interactionRequiredWorkspaceIds={interactionRequiredWorkspaceIds}
 				newWorkspaceShortcut={newWorkspaceShortcut}
 				addRepositoryShortcut={addRepositoryShortcut}
