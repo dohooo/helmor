@@ -387,6 +387,7 @@ export const WorkspaceComposerContainer = memo(
 			modelSelections,
 			modelSections,
 			settingsDefaultModelId: settings.defaultModelId,
+			contextKey: composerContextKey,
 		});
 		const selectedModel = useMemo(
 			() => findModelOption(modelSections, selectedModelId),

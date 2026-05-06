@@ -57,6 +57,7 @@ const composerMockState = vi.hoisted(() => ({
 	lastOnSubmit: null as ComposerSubmitHandler | null,
 	lastStartSubmitMode: null as StartSubmitMode | null,
 	lastOnStartSubmitModeChange: null as ((mode: StartSubmitMode) => void) | null,
+	lastOnSelectModel: null as ((modelId: string) => void) | null,
 }));
 
 vi.mock("./index", async () => {
@@ -82,6 +83,7 @@ vi.mock("./index", async () => {
 			onSubmit?: ComposerSubmitHandler;
 			startSubmitMode?: StartSubmitMode;
 			onStartSubmitModeChange?: (mode: StartSubmitMode) => void;
+			onSelectModel?: (modelId: string) => void;
 		}) => {
 			composerMockState.renders.push(props.contextKey);
 			composerMockState.lastSlashCommands = [...(props.slashCommands ?? [])];
@@ -96,6 +98,7 @@ vi.mock("./index", async () => {
 			composerMockState.lastStartSubmitMode = props.startSubmitMode ?? null;
 			composerMockState.lastOnStartSubmitModeChange =
 				props.onStartSubmitModeChange ?? null;
+			composerMockState.lastOnSelectModel = props.onSelectModel ?? null;
 			React.useEffect(() => {
 				composerMockState.mounts += 1;
 				return () => {
@@ -220,6 +223,7 @@ describe("WorkspaceComposerContainer", () => {
 		composerMockState.mounts = 0;
 		composerMockState.unmounts = 0;
 		composerMockState.lastOnSubmit = null;
+		composerMockState.lastOnSelectModel = null;
 		apiMockState.listSlashCommands.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockResolvedValue([]);
@@ -298,6 +302,53 @@ describe("WorkspaceComposerContainer", () => {
 		expect(
 			composerMockState.renders[composerMockState.renders.length - 1],
 		).toBe("session:session-2");
+	});
+
+	it("uses the context-key model selection before a workspace exists", () => {
+		const queryClient = createHelmorQueryClient();
+		const handleSelectModel = vi.fn();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposerContainer
+					displayedWorkspaceId={null}
+					displayedSessionId={null}
+					disabled={false}
+					forceAvailable
+					contextKeyOverride="start:repo:repo-1"
+					sending={false}
+					sendError={null}
+					restoreDraft={null}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreNonce={0}
+					modelSelections={{ "start:repo:repo-1": "gpt-5.4" }}
+					effortLevels={{}}
+					permissionModes={{}}
+					fastModes={{}}
+					onSelectModel={handleSelectModel}
+					onSelectEffort={vi.fn()}
+					onChangePermissionMode={vi.fn()}
+					onChangeFastMode={vi.fn()}
+					onSubmit={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		expect(screen.getByTestId("workspace-composer-mock")).toHaveTextContent(
+			"start:repo:repo-1:gpt-5.4",
+		);
+
+		composerMockState.lastOnSelectModel?.("opus-1m");
+
+		expect(handleSelectModel).toHaveBeenCalledWith(
+			"start:repo:repo-1",
+			"opus-1m",
+		);
 	});
 
 	it("forwards the start submit mode into the composer payload", () => {

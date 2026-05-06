@@ -390,6 +390,7 @@ export function resolveSessionSelectedModelId({
 	modelSelections,
 	modelSections,
 	settingsDefaultModelId,
+	contextKey,
 }: {
 	session: Pick<
 		WorkspaceSessionSummary,
@@ -398,10 +399,13 @@ export function resolveSessionSelectedModelId({
 	modelSelections: Record<string, string>;
 	modelSections: AgentModelSection[];
 	settingsDefaultModelId?: string | null;
+	contextKey?: string | null;
 }): string | null {
-	const selectedModelId = session
-		? (modelSelections[getComposerContextKey(null, session.id)] ?? null)
-		: null;
+	const selectedModelId =
+		(contextKey ? (modelSelections[contextKey] ?? null) : null) ??
+		(session
+			? (modelSelections[getComposerContextKey(null, session.id)] ?? null)
+			: null);
 	return (
 		selectedModelId ??
 		inferDefaultModelId(session, modelSections, settingsDefaultModelId)
