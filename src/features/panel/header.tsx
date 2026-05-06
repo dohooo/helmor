@@ -514,7 +514,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 								strokeWidth={1.8}
 							/>
 							{workspace.state === "archived" ? (
-								<span className="px-1 py-0.5 font-medium text-muted-foreground">
+								<span className="min-w-0 truncate px-1 py-0.5 font-medium text-muted-foreground">
 									{workspace.remote ?? "origin"}/
 									{workspace.intendedTargetBranch}
 								</span>
@@ -1008,7 +1008,7 @@ function BranchPicker({
 				size="xs"
 				className="h-6 min-w-0 max-w-[180px] gap-1 rounded-md px-1.5 text-[13px] font-medium text-muted-foreground hover:text-foreground"
 			>
-				<span className="truncate">
+				<span className="block min-w-0 truncate">
 					{displayRemote}/{currentBranch}
 				</span>
 				<ChevronDown data-icon="inline-end" strokeWidth={2} />
