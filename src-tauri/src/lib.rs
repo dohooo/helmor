@@ -351,6 +351,7 @@ pub fn run() {
             commands::conductor_commands::list_conductor_workspaces,
             commands::conductor_commands::import_conductor_workspaces,
             commands::system_commands::save_pasted_image,
+            commands::system_commands::save_text_file_as,
             commands::system_commands::show_image_in_finder,
             commands::system_commands::reveal_path_in_finder,
             commands::system_commands::copy_image_to_clipboard,

@@ -143,6 +143,11 @@ pub fn sidebar_sort_rank(record: &WorkspaceRecord) -> usize {
 // ---- Repo icon helpers ----
 
 const REPO_ICON_CANDIDATES: &[&str] = &[
+    // Explicit Helmor override — always wins. Drop a file here in monorepos
+    // (or any repo where automatic detection picks the wrong icon).
+    ".helmor/icon.svg",
+    ".helmor/icon.png",
+    // Single-package conventions.
     "public/apple-touch-icon.png",
     "apple-touch-icon.png",
     "public/favicon.svg",
@@ -164,7 +169,21 @@ const REPO_ICON_CANDIDATES: &[&str] = &[
     "src/assets/icon.png",
 ];
 
-static REPO_ICON_SRC_CACHE: LazyLock<Mutex<HashMap<String, Option<String>>>> =
+/// Cache value: the resolved `data:` URI plus the mtime of the source file at
+/// the time we read it. The mtime lets us cheaply invalidate when the user
+/// edits / commits a new icon without restarting the app.
+#[derive(Clone)]
+struct CachedIcon {
+    /// Path we read the icon from (so a later override file taking precedence
+    /// also invalidates this entry).
+    source_path: String,
+    /// `mtime` of `source_path` when we last read it. `None` if `metadata()`
+    /// failed — in that case we treat the entry as always-stale.
+    mtime: Option<std::time::SystemTime>,
+    data_uri: Option<String>,
+}
+
+static REPO_ICON_SRC_CACHE: LazyLock<Mutex<HashMap<String, CachedIcon>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn repo_icon_path_for_root_path(root_path: Option<&str>) -> Option<String> {
@@ -193,17 +212,40 @@ pub fn repo_icon_src_for_root_path(root_path: Option<&str>) -> Option<String> {
         return None;
     }
 
+    let icon_path = repo_icon_path_for_root_path(Some(root_path));
+    let current_mtime = icon_path
+        .as_deref()
+        .and_then(|path| fs::metadata(path).ok())
+        .and_then(|metadata| metadata.modified().ok());
+
+    // Reuse the cached entry only if (a) the resolved icon path is unchanged
+    // (e.g. a user didn't add a higher-priority candidate like
+    // `.helmor/icon.svg`) and (b) the file's mtime hasn't moved. We bail out
+    // of the cache on any uncertainty (missing metadata) so editing an icon
+    // never strands a stale `data:` URI in the UI.
     if let Ok(cache) = REPO_ICON_SRC_CACHE.lock() {
         if let Some(cached) = cache.get(root_path) {
-            return cached.clone();
+            let path_matches = icon_path.as_deref() == Some(cached.source_path.as_str());
+            let mtime_matches = match (cached.mtime, current_mtime) {
+                (Some(cached_mtime), Some(current)) => cached_mtime == current,
+                _ => false,
+            };
+
+            if path_matches && mtime_matches {
+                return cached.data_uri.clone();
+            }
+
+            // Negative cache: both sides agree there's no icon. Cheap to
+            // keep; saves a directory walk per workspace summary refresh.
+            if icon_path.is_none() && cached.source_path.is_empty() {
+                return cached.data_uri.clone();
+            }
         }
     }
 
-    let icon_path = repo_icon_path_for_root_path(Some(root_path));
-    let icon_src = icon_path.and_then(|icon_path| {
-        let mime_type = repo_icon_mime_type(Path::new(&icon_path));
-        let bytes = fs::read(icon_path).ok()?;
-
+    let data_uri = icon_path.as_deref().and_then(|path| {
+        let mime_type = repo_icon_mime_type(Path::new(path));
+        let bytes = fs::read(path).ok()?;
         Some(format!(
             "data:{mime_type};base64,{}",
             BASE64_STANDARD.encode(bytes)
@@ -211,10 +253,17 @@ pub fn repo_icon_src_for_root_path(root_path: Option<&str>) -> Option<String> {
     });
 
     if let Ok(mut cache) = REPO_ICON_SRC_CACHE.lock() {
-        cache.insert(root_path.to_string(), icon_src.clone());
+        cache.insert(
+            root_path.to_string(),
+            CachedIcon {
+                source_path: icon_path.clone().unwrap_or_default(),
+                mtime: current_mtime,
+                data_uri: data_uri.clone(),
+            },
+        );
     }
 
-    icon_src
+    data_uri
 }
 
 pub fn repo_icon_mime_type(path: &Path) -> &'static str {
@@ -993,6 +1042,120 @@ mod tests {
         assert!(repo_icon_path_for_root_path(None).is_none());
         assert!(repo_icon_path_for_root_path(Some("")).is_none());
         assert!(repo_icon_path_for_root_path(Some("   ")).is_none());
+    }
+
+    #[test]
+    fn repo_icon_path_prefers_helmor_override_over_favicon() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Existing single-package favicon.
+        fs::create_dir_all(root.join("public")).unwrap();
+        fs::write(root.join("public/favicon.svg"), b"<svg/>").unwrap();
+
+        // Higher-priority Helmor override.
+        fs::create_dir_all(root.join(".helmor")).unwrap();
+        fs::write(root.join(".helmor/icon.svg"), b"<svg id=\"override\"/>").unwrap();
+
+        let resolved = repo_icon_path_for_root_path(Some(root.to_str().unwrap()))
+            .expect("expected an icon to resolve");
+        assert!(
+            resolved.ends_with(".helmor/icon.svg"),
+            "expected `.helmor/icon.svg` to win, got {resolved}"
+        );
+    }
+
+    #[test]
+    fn repo_icon_path_returns_none_for_unknown_subdir_layouts() {
+        // No automatic monorepo detection — repos with apps under
+        // `apps/<name>/public/...` or `applications/<name>/public/...` get
+        // initials-only avatars unless the user drops a `.helmor/icon.*`.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        fs::create_dir_all(root.join("apps/web/public")).unwrap();
+        fs::write(root.join("apps/web/public/favicon.svg"), b"<svg/>").unwrap();
+        fs::create_dir_all(root.join("applications/next-app/public")).unwrap();
+        fs::write(
+            root.join("applications/next-app/public/favicon.ico"),
+            b"\0\0",
+        )
+        .unwrap();
+
+        assert!(repo_icon_path_for_root_path(Some(root.to_str().unwrap())).is_none());
+    }
+
+    #[test]
+    fn repo_icon_src_picks_up_higher_priority_override_without_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let root_str = dir.path().to_str().unwrap().to_string();
+
+        // First pass: only the low-priority favicon exists.
+        fs::create_dir_all(dir.path().join("public")).unwrap();
+        fs::write(
+            dir.path().join("public/favicon.svg"),
+            b"<svg id=\"first\"/>",
+        )
+        .unwrap();
+
+        let initial =
+            repo_icon_src_for_root_path(Some(&root_str)).expect("expected initial icon to resolve");
+        assert!(initial.starts_with("data:image/svg+xml;base64,"));
+
+        // Now drop in a `.helmor/icon.svg` override. The cache must notice
+        // that the resolved path changed and serve the new contents — this
+        // is the failure mode that motivated mtime-aware invalidation.
+        fs::create_dir_all(dir.path().join(".helmor")).unwrap();
+        fs::write(
+            dir.path().join(".helmor/icon.svg"),
+            b"<svg id=\"override\"/>",
+        )
+        .unwrap();
+
+        let after_override = repo_icon_src_for_root_path(Some(&root_str))
+            .expect("expected override icon to resolve");
+        assert_ne!(
+            initial, after_override,
+            "cache must re-read when a higher-priority candidate appears"
+        );
+    }
+
+    #[test]
+    fn repo_icon_src_picks_up_in_place_edits_via_mtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let root_str = dir.path().to_str().unwrap().to_string();
+
+        fs::create_dir_all(dir.path().join(".helmor")).unwrap();
+        let icon_path = dir.path().join(".helmor/icon.svg");
+        fs::write(&icon_path, b"<svg id=\"v1\"/>").unwrap();
+
+        let v1 =
+            repo_icon_src_for_root_path(Some(&root_str)).expect("expected initial icon to resolve");
+
+        // Overwrite in place and bump mtime explicitly, so the test doesn't
+        // depend on filesystem mtime resolution.
+        fs::write(&icon_path, b"<svg id=\"v2\"/>").unwrap();
+        let bumped = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&icon_path)
+            .unwrap()
+            .set_modified(bumped)
+            .unwrap();
+
+        let v2 =
+            repo_icon_src_for_root_path(Some(&root_str)).expect("expected updated icon to resolve");
+        assert_ne!(v1, v2, "cache must re-read when icon mtime changes");
+    }
+
+    #[test]
+    fn repo_icon_src_returns_none_when_no_candidate_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let root_str = dir.path().to_str().unwrap().to_string();
+
+        assert!(repo_icon_src_for_root_path(Some(&root_str)).is_none());
+        // Second call exercises the negative-cache path.
+        assert!(repo_icon_src_for_root_path(Some(&root_str)).is_none());
     }
 
     // ---- Workspace naming tests ----
