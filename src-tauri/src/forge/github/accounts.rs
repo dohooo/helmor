@@ -11,7 +11,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use crate::forge::accounts::{AuthCheck, ForgeAccount, ForgeAccountBackend};
+use crate::forge::accounts::{AuthCheck, ForgeAccount, ForgeAccountBackend, RepoAccess};
 use crate::forge::command::{command_detail, run_command, run_command_with_env, CommandOutput};
 use crate::forge::types::ForgeProvider;
 
@@ -35,8 +35,8 @@ impl ForgeAccountBackend for GithubAccountBackend {
         check_github_auth(host, login)
     }
 
-    fn repo_accessible(&self, host: &str, login: &str, owner: &str, name: &str) -> Result<bool> {
-        github_repo_accessible(host, login, owner, name)
+    fn repo_access(&self, host: &str, login: &str, owner: &str, name: &str) -> Result<RepoAccess> {
+        github_repo_access(host, login, owner, name)
     }
 
     fn fetch_profile(&self, host: &str, login: &str) -> Result<ForgeAccount> {
@@ -449,15 +449,12 @@ mod profile_cache {
     }
 }
 
-/// "Can this account *push* to this repo?" — read access alone isn't
-/// enough for auto-bind because Helmor commits and pushes via the
-/// bound account; we'd be misleading the user by binding to a login
-/// they can only browse with. GitHub's authenticated
-/// `GET /repos/{owner}/{repo}` returns a `permissions` object whose
-/// `push` flag we honour. (Anonymous responses don't carry that
-/// field, but we always go through `run_cli_with_login` so the
-/// request is authenticated.)
-fn github_repo_accessible(host: &str, login: &str, owner: &str, name: &str) -> Result<bool> {
+/// Probe push access for `(host, login, owner, name)` via authenticated
+/// `GET /repos/{owner}/{repo}`. `permissions.push == true` → `Push`.
+/// `permissions` missing entirely → `Probable` (SAML SSO not authorized,
+/// fine-grained PAT without `repository.metadata`, etc. — issue #350).
+/// 404 / auth rejected → `None`.
+fn github_repo_access(host: &str, login: &str, owner: &str, name: &str) -> Result<RepoAccess> {
     let path = format!("/repos/{owner}/{name}");
     let args = [
         "api",
@@ -472,7 +469,7 @@ fn github_repo_accessible(host: &str, login: &str, owner: &str, name: &str) -> R
     if !output.success {
         let detail = command_detail(&output);
         if looks_like_not_found(&detail) || looks_like_unauthenticated(&detail) {
-            return Ok(false);
+            return Ok(RepoAccess::None);
         }
         return Err(anyhow!("`gh api {path}` failed for {login}: {detail}"));
     }
@@ -480,15 +477,22 @@ fn github_repo_accessible(host: &str, login: &str, owner: &str, name: &str) -> R
         .with_context(|| format!("Failed to decode `gh api {path}` for {login}"))
 }
 
-/// `Ok(true)` when GitHub's `GET /repos/{owner}/{repo}` response
-/// carries `permissions.push == true`. Anonymous responses lack the
-/// `permissions` object entirely → `Ok(false)`. Pure JSON shape —
-/// split out so the threshold ("push, not just pull") has explicit
-/// test coverage.
-fn parse_repo_push_permission(stdout: &str) -> Result<bool> {
+/// Decode `permissions` from a successful `GET /repos/{owner}/{repo}`
+/// response into a [`RepoAccess`] verdict. Pure JSON shape — split out
+/// so the threshold ("push, not just pull") has explicit test coverage.
+fn parse_repo_push_permission(stdout: &str) -> Result<RepoAccess> {
     let parsed: GithubRepoPermissionsResponse = serde_json::from_str(stdout)
         .with_context(|| "Failed to decode `gh api /repos/...` payload".to_string())?;
-    Ok(parsed.permissions.is_some_and(|p| p.push))
+    Ok(match parsed.permissions {
+        Some(p) if p.push => RepoAccess::Push,
+        Some(_) => RepoAccess::None,
+        // Authenticated request, 200, but no `permissions` object —
+        // GitHub Enterprise quirks, SSO-blocked tokens, fine-grained
+        // PATs without metadata scope. Auto-bind treats this as a
+        // fallback candidate so users like #350 don't get stuck on
+        // the Connect CTA.
+        None => RepoAccess::Probable,
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -722,37 +726,48 @@ mod tests {
     // ---------------- parse_repo_push_permission ----------------
 
     #[test]
-    fn parse_repo_push_permission_true_when_push_set() {
+    fn parse_repo_push_permission_push_when_push_set() {
         // Authenticated `GET /repos/{owner}/{repo}` returns
         // `permissions: { push: true }` for collaborators with write
-        // access. Auto-bind needs *push* not just pull.
+        // access.
         let stdout = r#"{
             "id": 1,
             "name": "hello-world",
             "permissions": { "admin": false, "push": true, "pull": true }
         }"#;
-        assert!(parse_repo_push_permission(stdout).unwrap());
+        assert_eq!(
+            parse_repo_push_permission(stdout).unwrap(),
+            RepoAccess::Push
+        );
     }
 
     #[test]
-    fn parse_repo_push_permission_false_when_only_pull() {
-        // Read-only collaborators / public-repo browsers — must not
-        // be auto-bound, since Helmor pushes via the bound account.
+    fn parse_repo_push_permission_none_when_only_pull() {
+        // Read-only collaborators / public-repo browsers — explicit no.
         let stdout = r#"{
             "id": 1,
             "name": "hello-world",
             "permissions": { "admin": false, "push": false, "pull": true }
         }"#;
-        assert!(!parse_repo_push_permission(stdout).unwrap());
+        assert_eq!(
+            parse_repo_push_permission(stdout).unwrap(),
+            RepoAccess::None
+        );
     }
 
     #[test]
-    fn parse_repo_push_permission_false_when_permissions_missing() {
-        // Anonymous responses (or scopes that don't expose the
-        // `permissions` object) — treat as "not writeable" rather
-        // than failing the probe.
+    fn parse_repo_push_permission_probable_when_permissions_missing() {
+        // SAML-SSO tokens that haven't been org-authorized, fine-grained
+        // PATs without `repository.metadata`, GHES quirks — the request
+        // is authenticated and 200 but the `permissions` object is
+        // missing. Surface as `Probable` so auto-bind picks us up when
+        // no push-confirmed candidate exists. Was previously
+        // (incorrectly) `false`, which is the root cause of issue #350.
         let stdout = r#"{ "id": 1, "name": "hello-world" }"#;
-        assert!(!parse_repo_push_permission(stdout).unwrap());
+        assert_eq!(
+            parse_repo_push_permission(stdout).unwrap(),
+            RepoAccess::Probable
+        );
     }
 
     #[test]

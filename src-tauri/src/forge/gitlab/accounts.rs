@@ -10,7 +10,7 @@
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
-use crate::forge::accounts::{AuthCheck, ForgeAccount, ForgeAccountBackend};
+use crate::forge::accounts::{AuthCheck, ForgeAccount, ForgeAccountBackend, RepoAccess};
 use crate::forge::command::{command_detail, run_command, CommandOutput};
 use crate::forge::types::ForgeProvider;
 
@@ -79,8 +79,8 @@ impl ForgeAccountBackend for GitlabAccountBackend {
         check_gitlab_auth(host, login)
     }
 
-    fn repo_accessible(&self, host: &str, _login: &str, owner: &str, name: &str) -> Result<bool> {
-        gitlab_repo_accessible(host, owner, name)
+    fn repo_access(&self, host: &str, _login: &str, owner: &str, name: &str) -> Result<RepoAccess> {
+        gitlab_repo_access(host, owner, name)
     }
 
     fn fetch_profile(&self, host: &str, login: &str) -> Result<ForgeAccount> {
@@ -445,18 +445,15 @@ fn fetch_gitlab_profile(host: &str) -> Result<GitlabUserResponse> {
     Ok(parsed)
 }
 
-/// "Can this account *push* to this project?" — read access alone
-/// isn't enough; auto-bind would surface a login that can only
-/// browse, which would silently fail the moment Helmor tries to
-/// commit. `GET /projects/:id` returns a `permissions` object with
-/// a direct `project_access` and an inherited `group_access`,
-/// either of which is enough — we take the higher of the two and
-/// require Developer (30+), the lowest tier that can push to
-/// unprotected branches. Maintainers (40) and Owners (50)
-/// naturally satisfy this. Reporters (20) and Guests (10) don't.
+/// `GET /projects/:id` returns a `permissions` object with a direct
+/// `project_access` and an inherited `group_access`. We take the
+/// higher of the two and require Developer (30+) for `Push`.
+/// Reporters (20) / Guests (10) → `None`. The `Probable` tier
+/// handles the "permissions present but no concrete data" case
+/// (admin, shared groups, scope-limited tokens) — see [`RepoAccess`].
 const GITLAB_DEVELOPER_ACCESS_LEVEL: i32 = 30;
 
-fn gitlab_repo_accessible(host: &str, owner: &str, name: &str) -> Result<bool> {
+fn gitlab_repo_access(host: &str, owner: &str, name: &str) -> Result<RepoAccess> {
     let path = format!(
         "projects/{}",
         encode_path_component(&format!("{owner}/{name}"))
@@ -466,7 +463,7 @@ fn gitlab_repo_accessible(host: &str, owner: &str, name: &str) -> Result<bool> {
     if !output.success {
         let detail = command_detail(&output);
         if looks_like_missing_error(&detail) || looks_like_auth_error(&detail) {
-            return Ok(false);
+            return Ok(RepoAccess::None);
         }
         return Err(anyhow!("`glab api {path}` failed: {detail}"));
     }
@@ -474,31 +471,41 @@ fn gitlab_repo_accessible(host: &str, owner: &str, name: &str) -> Result<bool> {
         .with_context(|| format!("Failed to decode `glab api {path}`"))
 }
 
-/// `Ok(true)` when the higher of `project_access` / `group_access`
-/// is at least Developer (30). Pure JSON shape — split out so the
-/// access-level threshold ("Developer can push to unprotected
-/// branches") has explicit test coverage independent of the CLI.
-fn parse_project_push_permission(stdout: &str) -> Result<bool> {
+/// Decode `permissions` from a successful `GET /projects/:id` response
+/// into a [`RepoAccess`] verdict. Split out so the threshold logic has
+/// explicit test coverage independent of the CLI.
+fn parse_project_push_permission(stdout: &str) -> Result<RepoAccess> {
     let parsed: GitlabProjectPermissionsResponse = serde_json::from_str(stdout)
         .with_context(|| "Failed to decode `glab api projects/...` payload".to_string())?;
-    let highest = parsed
+    let project_level = parsed
         .permissions
         .as_ref()
-        .map(|p| {
-            let project = p
-                .project_access
-                .as_ref()
-                .and_then(|a| a.access_level)
-                .unwrap_or(0);
-            let group = p
-                .group_access
-                .as_ref()
-                .and_then(|a| a.access_level)
-                .unwrap_or(0);
-            project.max(group)
-        })
-        .unwrap_or(0);
-    Ok(highest >= GITLAB_DEVELOPER_ACCESS_LEVEL)
+        .and_then(|p| p.project_access.as_ref())
+        .and_then(|a| a.access_level);
+    let group_level = parsed
+        .permissions
+        .as_ref()
+        .and_then(|p| p.group_access.as_ref())
+        .and_then(|a| a.access_level);
+    tracing::debug!(
+        permissions_present = parsed.permissions.is_some(),
+        project_access_level = ?project_level,
+        group_access_level = ?group_level,
+        threshold = GITLAB_DEVELOPER_ACCESS_LEVEL,
+        "parse_project_push_permission: parsed access levels"
+    );
+    // No permissions object, or both access fields absent → can't tell
+    // membership from the API. Fall back to `Probable` so auto-bind
+    // can still bind us when no push-confirmed candidate exists.
+    if project_level.is_none() && group_level.is_none() {
+        return Ok(RepoAccess::Probable);
+    }
+    let highest = project_level.unwrap_or(0).max(group_level.unwrap_or(0));
+    Ok(if highest >= GITLAB_DEVELOPER_ACCESS_LEVEL {
+        RepoAccess::Push
+    } else {
+        RepoAccess::None
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -655,10 +662,12 @@ mod tests {
     //
     // GitLab access levels (constants are GitLab's, not ours):
     //   10 Guest, 20 Reporter, 30 Developer, 40 Maintainer, 50 Owner.
-    // Auto-bind needs *push*, so the threshold is Developer (30).
+    // Push threshold is Developer (30). Below that → `None`. Above →
+    // `Push`. Permissions present but with no concrete access data
+    // (admin / shared groups / scope-limited tokens) → `Probable`.
 
     #[test]
-    fn parse_project_push_permission_true_for_developer_via_project_access() {
+    fn parse_project_push_permission_push_for_developer_via_project_access() {
         let stdout = r#"{
             "id": 1,
             "permissions": {
@@ -666,42 +675,53 @@ mod tests {
                 "group_access": null
             }
         }"#;
-        assert!(parse_project_push_permission(stdout).unwrap());
+        assert_eq!(
+            parse_project_push_permission(stdout).unwrap(),
+            RepoAccess::Push
+        );
     }
 
     #[test]
-    fn parse_project_push_permission_true_for_maintainer() {
+    fn parse_project_push_permission_push_for_maintainer() {
         let stdout = r#"{
             "permissions": {
                 "project_access": {"access_level": 40, "notification_level": 3},
                 "group_access": null
             }
         }"#;
-        assert!(parse_project_push_permission(stdout).unwrap());
+        assert_eq!(
+            parse_project_push_permission(stdout).unwrap(),
+            RepoAccess::Push
+        );
     }
 
     #[test]
-    fn parse_project_push_permission_false_for_reporter() {
-        // Reporter (20) — read-only on most workflows. Must NOT be
-        // auto-bound or push will silently fail.
+    fn parse_project_push_permission_none_for_reporter() {
+        // Reporter (20) — read-only on most workflows. Explicit no.
         let stdout = r#"{
             "permissions": {
                 "project_access": {"access_level": 20, "notification_level": 3},
                 "group_access": null
             }
         }"#;
-        assert!(!parse_project_push_permission(stdout).unwrap());
+        assert_eq!(
+            parse_project_push_permission(stdout).unwrap(),
+            RepoAccess::None
+        );
     }
 
     #[test]
-    fn parse_project_push_permission_false_for_guest() {
+    fn parse_project_push_permission_none_for_guest() {
         let stdout = r#"{
             "permissions": {
                 "project_access": {"access_level": 10, "notification_level": 0},
                 "group_access": null
             }
         }"#;
-        assert!(!parse_project_push_permission(stdout).unwrap());
+        assert_eq!(
+            parse_project_push_permission(stdout).unwrap(),
+            RepoAccess::None
+        );
     }
 
     #[test]
@@ -716,28 +736,42 @@ mod tests {
                 "group_access": {"access_level": 40}
             }
         }"#;
-        assert!(parse_project_push_permission(stdout).unwrap());
+        assert_eq!(
+            parse_project_push_permission(stdout).unwrap(),
+            RepoAccess::Push
+        );
     }
 
     #[test]
-    fn parse_project_push_permission_handles_null_access_levels() {
-        // Both blocks present but with `access_level: null` — treat
-        // as 0 (no permission), don't blow up.
+    fn parse_project_push_permission_probable_when_access_levels_null() {
+        // The case from the wild: instance admin / shared-with group /
+        // scope-limited PAT — `permissions` is present but both blocks
+        // carry `access_level: null`. Surface as `Probable` so the
+        // auto-bind tier picks us up when no push-confirmed candidate
+        // exists. Was previously (incorrectly) `false`, leaving the
+        // user stuck with the Connect CTA forever.
         let stdout = r#"{
             "permissions": {
                 "project_access": {"access_level": null},
                 "group_access": {"access_level": null}
             }
         }"#;
-        assert!(!parse_project_push_permission(stdout).unwrap());
+        assert_eq!(
+            parse_project_push_permission(stdout).unwrap(),
+            RepoAccess::Probable
+        );
     }
 
     #[test]
-    fn parse_project_push_permission_false_when_permissions_missing() {
-        // Anonymous response or scope without `permissions` — treat
-        // as not pushable. Mirrors the GitHub side.
+    fn parse_project_push_permission_probable_when_permissions_missing() {
+        // Same rationale as the null-blocks case above — the API
+        // returned 200 (so the user can at least read), it just
+        // didn't tell us about membership.
         let stdout = r#"{ "id": 1, "name": "x" }"#;
-        assert!(!parse_project_push_permission(stdout).unwrap());
+        assert_eq!(
+            parse_project_push_permission(stdout).unwrap(),
+            RepoAccess::Probable
+        );
     }
 
     #[test]

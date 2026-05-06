@@ -81,6 +81,13 @@ type UseWorkspacesSidebarControllerArgs = {
 	autoSelectEnabled?: boolean;
 	onSelectWorkspace: (workspaceId: string | null) => void;
 	onOpenNewWorkspace?: () => void;
+	/**
+	 * Called after a successful add-repo when the backend hands us a
+	 * `selectedWorkspaceId: null` — newly added repo, or re-add with only
+	 * archived workspaces. UI lands on the start page with this repo
+	 * preselected.
+	 */
+	onAddRepositoryNeedsStart?: (repositoryId: string) => void;
 	pushWorkspaceToast: WorkspaceToastFn;
 };
 
@@ -91,6 +98,7 @@ export function useWorkspacesSidebarController({
 	autoSelectEnabled = true,
 	onSelectWorkspace,
 	onOpenNewWorkspace,
+	onAddRepositoryNeedsStart,
 	pushWorkspaceToast,
 }: UseWorkspacesSidebarControllerArgs) {
 	const queryClient = useQueryClient();
@@ -1000,18 +1008,33 @@ export function useWorkspacesSidebarController({
 	const applyAddRepositoryResponse = useCallback(
 		async (response: AddRepositoryResponse) => {
 			await refetchNavigation();
-			prefetchWorkspace(response.selectedWorkspaceId);
-			onSelectWorkspace(response.selectedWorkspaceId);
-
+			if (response.selectedWorkspaceId) {
+				// Re-add of an existing repo with a visible workspace —
+				// jump straight to it, same as before.
+				prefetchWorkspace(response.selectedWorkspaceId);
+				onSelectWorkspace(response.selectedWorkspaceId);
+				if (!response.createdRepository) {
+					pushWorkspaceToast(
+						"Switched to the existing workspace.",
+						"Repository already added",
+						"default",
+					);
+				}
+				return;
+			}
+			// No visible workspace to focus → land on the start page with
+			// the new repo selected so the user picks branch + mode.
+			onAddRepositoryNeedsStart?.(response.repositoryId);
 			if (!response.createdRepository) {
 				pushWorkspaceToast(
-					"Switched to the existing workspace.",
+					"Repository already added — opened the start page so you can spin up a workspace.",
 					"Repository already added",
 					"default",
 				);
 			}
 		},
 		[
+			onAddRepositoryNeedsStart,
 			onSelectWorkspace,
 			prefetchWorkspace,
 			pushWorkspaceToast,
