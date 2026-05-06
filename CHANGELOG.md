@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.17.1
+
+### Patch Changes
+
+- [#388](https://github.com/dohooo/helmor/pull/388) [`3fa1e6e`](https://github.com/dohooo/helmor/commit/3fa1e6e5d217d559f3499bf84e81273e3e6902d6) Thanks [@alantoa](https://github.com/alantoa)! - Fix the chat-view table "Download as CSV / Markdown" buttons doing nothing — the download now goes through a native Save dialog and writes the file via the Tauri host, since the webview was silently swallowing streamdown's built-in `<a download>` click.
+
+- [#400](https://github.com/dohooo/helmor/pull/400) [`212fe13`](https://github.com/dohooo/helmor/commit/212fe13f691a329bc84e10a145b9881acfbd9f5e) Thanks [@dohooo](https://github.com/dohooo)! - Fix model switching on the new workspace welcome page so the selected model stays applied before the workspace and session are created.
+
+- [#400](https://github.com/dohooo/helmor/pull/400) [`212fe13`](https://github.com/dohooo/helmor/commit/212fe13f691a329bc84e10a145b9881acfbd9f5e) Thanks [@dohooo](https://github.com/dohooo)! - Keep context previews clear of the macOS window controls when the left workspace sidebar is collapsed.
+
+- [#399](https://github.com/dohooo/helmor/pull/399) [`7db9114`](https://github.com/dohooo/helmor/commit/7db911406dd9c6c5fa725dd651f9c64d66294b73) Thanks [@natllian](https://github.com/natllian)! - Fix a few rough edges:
+
+  - Custom workspace branch prefixes no longer auto-append a trailing `/`; the prefix you set is the prefix used.
+  - Codex sub-agents now render with their real nickname throughout (spawn, wait, etc.) instead of switching names partway through, and no longer flash a no-name "Sub-agent" placeholder while spawning.
+
+- [#389](https://github.com/dohooo/helmor/pull/389) [`c3d0e7f`](https://github.com/dohooo/helmor/commit/c3d0e7fe1bf4bef8651197d5853536c3a893e3ee) Thanks [@alantoa](https://github.com/alantoa)! - Let workspaces opt out of icon auto-detection by committing a `.helmor/icon.svg` (or `.png`) — useful for monorepos where the existing heuristics pick the wrong sub-app's favicon, or none at all. Edits to the icon file are now also picked up without restarting the app, since the in-process icon cache is keyed on the file's mtime instead of being permanent.
+
+- [#400](https://github.com/dohooo/helmor/pull/400) [`212fe13`](https://github.com/dohooo/helmor/commit/212fe13f691a329bc84e10a145b9881acfbd9f5e) Thanks [@dohooo](https://github.com/dohooo)! - Load project slash commands on the start page once a repository is picked, so the `/` popup is populated before the first workspace exists.
+
+- [#400](https://github.com/dohooo/helmor/pull/400) [`212fe13`](https://github.com/dohooo/helmor/commit/212fe13f691a329bc84e10a145b9881acfbd9f5e) Thanks [@dohooo](https://github.com/dohooo)! - Keep workspace and session loading indicators, stop controls, and quit warnings in sync while agent tasks are running or waiting for workspace setup to finish.
+
+- [#400](https://github.com/dohooo/helmor/pull/400) [`212fe13`](https://github.com/dohooo/helmor/commit/212fe13f691a329bc84e10a145b9881acfbd9f5e) Thanks [@dohooo](https://github.com/dohooo)! - Keep the inspector terminal hover preview above the rest of the workspace UI so the expanded terminal is no longer covered by the composer or side panels.
+
+- [#400](https://github.com/dohooo/helmor/pull/400) [`212fe13`](https://github.com/dohooo/helmor/commit/212fe13f691a329bc84e10a145b9881acfbd9f5e) Thanks [@dohooo](https://github.com/dohooo)! - Fix Claude threads getting permanently stuck in the sending state after a sidecar crash or rapid-fire retries.
+
 ## 0.17.0
 
 ### Minor Changes
