@@ -85,7 +85,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	archivedRows,
 	addingRepository,
 	selectedWorkspaceId,
-	sendingWorkspaceIds,
+	busyWorkspaceIds,
 	interactionRequiredWorkspaceIds,
 	newWorkspaceShortcut,
 	addRepositoryShortcut,
@@ -115,7 +115,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	archivedRows: WorkspaceRow[];
 	addingRepository?: boolean;
 	selectedWorkspaceId?: string | null;
-	sendingWorkspaceIds?: Set<string>;
+	busyWorkspaceIds?: Set<string>;
 	interactionRequiredWorkspaceIds?: Set<string>;
 	newWorkspaceShortcut?: string | null;
 	addRepositoryShortcut?: string | null;
@@ -448,7 +448,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					<WorkspaceRowItem
 						row={item.row}
 						selected={selectedWorkspaceId === item.row.id}
-						isSending={sendingWorkspaceIds?.has(item.row.id)}
+						isSending={busyWorkspaceIds?.has(item.row.id)}
 						isInteractionRequired={interactionRequiredWorkspaceIds?.has(
 							item.row.id,
 						)}
@@ -480,7 +480,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			sectionOpenState,
 			toggleSection,
 			selectedWorkspaceId,
-			sendingWorkspaceIds,
+			busyWorkspaceIds,
 			interactionRequiredWorkspaceIds,
 			onSelectWorkspace,
 			onPrefetchWorkspace,

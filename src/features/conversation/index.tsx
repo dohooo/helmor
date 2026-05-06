@@ -80,15 +80,17 @@ type WorkspaceConversationContainerProps = {
 	sessionSelectionHistory?: string[];
 	onSelectSession: (sessionId: string | null) => void;
 	onResolveDisplayedSession: (sessionId: string | null) => void;
-	onSendingWorkspacesChange?: (workspaceIds: Set<string>) => void;
-	/** Reports the set of session IDs currently streaming, so App can observe
-	 * session-level lifecycle events (e.g. the commit button driver needs to
-	 * know when its target session's stream has ended). */
-	onSendingSessionsChange?: (sessionIds: Set<string>) => void;
+	onSessionRunStateChange?: (
+		sessionId: string,
+		workspaceId: string | null,
+		sending: boolean,
+	) => void;
 	onInteractionSessionsChange?: (
 		sessionWorkspaceMap: Map<string, string>,
 		interactionCounts: Map<string, number>,
 	) => void;
+	busySessionIds?: Set<string>;
+	stoppableSessionIds?: Set<string>;
 	interactionRequiredSessionIds?: Set<string>;
 	onSessionCompleted?: (sessionId: string, workspaceId: string) => void;
 	workspaceChangeRequest?: ChangeRequestInfo | null;
@@ -160,9 +162,10 @@ export const WorkspaceConversationContainer = memo(
 		sessionSelectionHistory = [],
 		onSelectSession,
 		onResolveDisplayedSession,
-		onSendingWorkspacesChange,
-		onSendingSessionsChange,
+		onSessionRunStateChange,
 		onInteractionSessionsChange,
+		busySessionIds,
+		stoppableSessionIds,
 		interactionRequiredSessionIds,
 		onSessionCompleted,
 		workspaceChangeRequest = null,
@@ -241,7 +244,7 @@ export const WorkspaceConversationContainer = memo(
 			restoreImages,
 			restoreNonce,
 			activeFastPreludes,
-			sendingSessionIds,
+			busySessionIds: localBusySessionIds,
 		} = useConversationStreaming({
 			composerContextKey,
 			displayedSelectedModelId,
@@ -251,8 +254,7 @@ export const WorkspaceConversationContainer = memo(
 			selectionPending,
 			followUpBehavior: settings.followUpBehavior,
 			submitQueue: submitQueueApi,
-			onSendingSessionsChange,
-			onSendingWorkspacesChange,
+			onSessionRunStateChange,
 			onInteractionSessionsChange,
 			onSessionCompleted,
 			onSessionAborted,
@@ -282,7 +284,16 @@ export const WorkspaceConversationContainer = memo(
 				pendingCreatedWorkspaceSubmit.workspaceId === displayedWorkspaceId &&
 				pendingCreatedWorkspaceSubmit.sessionId === displayedSessionId,
 		);
-		const sendingForPanel = isSending || hasPendingOptimisticSubmit;
+		const displayedSessionBusy = displayedSessionId
+			? (busySessionIds?.has(displayedSessionId) ?? false)
+			: false;
+		const displayedSessionStoppable = displayedSessionId
+			? (stoppableSessionIds?.has(displayedSessionId) ?? false)
+			: false;
+		const sendingForPanel =
+			isSending || displayedSessionBusy || hasPendingOptimisticSubmit;
+		const sendingForComposer = isSending || displayedSessionStoppable;
+		const panelBusySessionIds = busySessionIds ?? localBusySessionIds;
 
 		// Auto-activate plan button when AI enters plan mode on its own.
 		const prevPlanReviewRef = useRef(false);
@@ -494,7 +505,7 @@ export const WorkspaceConversationContainer = memo(
 						displayedSessionId={displayedSessionId}
 						sessionSelectionHistory={sessionSelectionHistory}
 						sending={sendingForPanel}
-						sendingSessionIds={sendingSessionIds}
+						busySessionIds={panelBusySessionIds}
 						interactionRequiredSessionIds={interactionRequiredSessionIds}
 						modelSelections={composerModelSelections}
 						workspaceChangeRequest={workspaceChangeRequest}
@@ -530,11 +541,12 @@ export const WorkspaceConversationContainer = memo(
 					<WorkspaceComposerContainer
 						displayedWorkspaceId={displayedWorkspaceId}
 						displayedSessionId={displayedSessionId}
+						repoId={repoId}
 						disabled={selectionPending}
 						forceAvailable={composerForceAvailable}
 						placeholder={composerPlaceholder}
 						contextKeyOverride={composerContextKeyOverride}
-						sending={sendingForPanel}
+						sending={sendingForComposer}
 						sendError={activeSendError}
 						restoreDraft={restoreDraft}
 						restoreImages={restoreImages}

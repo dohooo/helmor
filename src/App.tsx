@@ -125,7 +125,15 @@ import {
 	workspaceGroupsQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "./lib/query-client";
-import { SendingSessionsProvider } from "./lib/sending-sessions-context";
+import {
+	deriveBusySessionIds,
+	deriveBusyWorkspaceIds,
+	deriveStoppableSessionIds,
+	nextSessionRunStates,
+	type SessionRunState,
+	withPendingFinalizeRunState,
+} from "./lib/session-run-state";
+import { SessionRunStatesProvider } from "./lib/session-run-state-context";
 import {
 	type AppSettings,
 	type DarkTheme,
@@ -159,7 +167,7 @@ import { StreamingFooterOverlapScenario } from "./test/e2e-scenarios/streaming-f
 const SETTINGS_RELOAD_EVENT = "helmor:reload-settings";
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
 type WorkspaceViewMode = "conversation" | "editor" | "start";
-const EMPTY_SENDING_SESSION_IDS = new Set<string>();
+const EMPTY_SESSION_RUN_STATES = new Map<string, SessionRunState>();
 
 function App() {
 	const e2eScenario =
@@ -289,7 +297,7 @@ function MainApp() {
 				{appSettings === null ? null : !appSettings.onboardingCompleted ? (
 					<>
 						<AppOnboarding onComplete={completeOnboarding} />
-						<QuitConfirmDialog sendingSessionIds={EMPTY_SENDING_SESSION_IDS} />
+						<QuitConfirmDialog sessionRunStates={EMPTY_SESSION_RUN_STATES} />
 					</>
 				) : (
 					<>
@@ -460,43 +468,46 @@ function AppShell({
 	const [editorSession, setEditorSession] = useState<EditorSessionState | null>(
 		null,
 	);
-	const [sendingWorkspaceIds, setSendingWorkspaceIds] = useState<Set<string>>(
-		() => new Set(),
-	);
-	// Session IDs currently streaming — reported by WorkspaceConversationContainer
-	// and consumed by the commit button driver to detect stream completion.
-	const [sendingSessionIds, setSendingSessionIds] = useState<Set<string>>(
-		() => new Set(),
+	const [sessionRunStates, setSessionRunStates] = useState<
+		Map<string, SessionRunState>
+	>(() => new Map());
+	const handleSessionRunStateChange = useCallback(
+		(sessionId: string, workspaceId: string | null, sending: boolean) => {
+			setSessionRunStates((current) =>
+				nextSessionRunStates(current, {
+					sessionId,
+					workspaceId,
+					running: sending,
+				}),
+			);
+		},
+		[],
 	);
 	const [pendingComposerInserts, setPendingComposerInserts] = useState<
 		ResolvedComposerInsertRequest[]
 	>([]);
 	const [pendingCreatedWorkspaceSubmit, setPendingCreatedWorkspaceSubmit] =
 		useState<PendingCreatedWorkspaceSubmit | null>(null);
-	// While a freshly-created workspace's first send is queued behind
-	// `await finalizePromise`, the actual `handleComposerSubmit` hasn't fired
-	// yet — so neither the streaming hook nor any indicator knows the session
-	// "is sending". Fold the pending session/workspace into the sending sets
-	// so the sidebar spinner, panel header, and commit lifecycle all treat
-	// the pending submit as in-flight from the moment the user clicks send.
-	const effectiveSendingSessionIds = useMemo(() => {
-		if (!pendingCreatedWorkspaceSubmit) return sendingSessionIds;
-		if (sendingSessionIds.has(pendingCreatedWorkspaceSubmit.sessionId)) {
-			return sendingSessionIds;
-		}
-		const next = new Set(sendingSessionIds);
-		next.add(pendingCreatedWorkspaceSubmit.sessionId);
-		return next;
-	}, [sendingSessionIds, pendingCreatedWorkspaceSubmit]);
-	const effectiveSendingWorkspaceIds = useMemo(() => {
-		if (!pendingCreatedWorkspaceSubmit) return sendingWorkspaceIds;
-		if (sendingWorkspaceIds.has(pendingCreatedWorkspaceSubmit.workspaceId)) {
-			return sendingWorkspaceIds;
-		}
-		const next = new Set(sendingWorkspaceIds);
-		next.add(pendingCreatedWorkspaceSubmit.workspaceId);
-		return next;
-	}, [sendingWorkspaceIds, pendingCreatedWorkspaceSubmit]);
+	const effectiveSessionRunStates = useMemo(
+		() =>
+			withPendingFinalizeRunState(
+				sessionRunStates,
+				pendingCreatedWorkspaceSubmit,
+			),
+		[sessionRunStates, pendingCreatedWorkspaceSubmit],
+	);
+	const effectiveBusySessionIds = useMemo(
+		() => deriveBusySessionIds(effectiveSessionRunStates),
+		[effectiveSessionRunStates],
+	);
+	const effectiveStoppableSessionIds = useMemo(
+		() => deriveStoppableSessionIds(effectiveSessionRunStates),
+		[effectiveSessionRunStates],
+	);
+	const effectiveBusyWorkspaceIds = useMemo(
+		() => deriveBusyWorkspaceIds(effectiveSessionRunStates),
+		[effectiveSessionRunStates],
+	);
 	// Tracks sessions that have reached a terminal "done" event at least once
 	// in this app run. Used by the commit lifecycle to know when to prompt.
 	// Distinct from "unread" — `unreadCount` is the persisted, cross-restart
@@ -1530,7 +1541,7 @@ function AppShell({
 		completedSessionIds: settledSessionIds,
 		abortedSessionIds,
 		interactionRequiredSessionIds,
-		sendingSessionIds: effectiveSendingSessionIds,
+		busySessionIds: effectiveBusySessionIds,
 		onSelectSession: handleSelectSession,
 		pushToast: pushWorkspaceToast,
 	});
@@ -1677,7 +1688,7 @@ function AppShell({
 
 	const { requestClose: requestCloseSession, dialogNode: closeConfirmDialog } =
 		useConfirmSessionClose({
-			sendingSessionIds: effectiveSendingSessionIds,
+			busySessionIds: effectiveBusySessionIds,
 			onSelectSession: handleSelectSession,
 			onSessionHidden: handleSessionHidden,
 			pushToast: pushWorkspaceToast,
@@ -2595,7 +2606,7 @@ function AppShell({
 	return (
 		<TooltipProvider delayDuration={0}>
 			<WorkspaceToastProvider value={pushWorkspaceToast}>
-				<SendingSessionsProvider value={effectiveSendingSessionIds}>
+				<SessionRunStatesProvider value={effectiveSessionRunStates}>
 					<ComposerInsertProvider value={handleInsertIntoComposer}>
 						<main
 							aria-label="Application shell"
@@ -2638,7 +2649,7 @@ function AppShell({
 														autoSelectEnabled={
 															workspaceSidebarAutoSelectEnabled
 														}
-														sendingWorkspaceIds={effectiveSendingWorkspaceIds}
+														busyWorkspaceIds={effectiveBusyWorkspaceIds}
 														interactionRequiredWorkspaceIds={
 															interactionRequiredWorkspaceIds
 														}
@@ -2793,6 +2804,7 @@ function AppShell({
 													}}
 													previewCard={startPreviewCard}
 													previewAppendContextTarget={startComposerInsertTarget}
+													showWindowSafeTop={sidebarCollapsed}
 													onClosePreview={handleStartContextPreviewClose}
 												>
 													<WorkspaceConversationContainer
@@ -2806,11 +2818,14 @@ function AppShell({
 														onResolveDisplayedSession={
 															handleResolveDisplayedSession
 														}
-														onSendingWorkspacesChange={setSendingWorkspaceIds}
-														onSendingSessionsChange={setSendingSessionIds}
+														onSessionRunStateChange={
+															handleSessionRunStateChange
+														}
 														onInteractionSessionsChange={
 															handleInteractionSessionsChange
 														}
+														busySessionIds={effectiveBusySessionIds}
+														stoppableSessionIds={effectiveStoppableSessionIds}
 														interactionRequiredSessionIds={
 															interactionRequiredSessionIds
 														}
@@ -2862,11 +2877,12 @@ function AppShell({
 													onResolveDisplayedSession={
 														handleResolveDisplayedSession
 													}
-													onSendingWorkspacesChange={setSendingWorkspaceIds}
-													onSendingSessionsChange={setSendingSessionIds}
+													onSessionRunStateChange={handleSessionRunStateChange}
 													onInteractionSessionsChange={
 														handleInteractionSessionsChange
 													}
+													busySessionIds={effectiveBusySessionIds}
+													stoppableSessionIds={effectiveStoppableSessionIds}
 													interactionRequiredSessionIds={
 														interactionRequiredSessionIds
 													}
@@ -3153,7 +3169,7 @@ function AppShell({
 											aria-hidden={inspectorCollapsed}
 											aria-label="Inspector sidebar"
 											className={cn(
-												"relative h-full shrink-0 overflow-hidden bg-sidebar has-[[data-tabs-zoomed=true]]:overflow-visible",
+												"relative h-full shrink-0 overflow-hidden bg-sidebar has-[[data-tabs-zoomed=true]]:z-50 has-[[data-tabs-zoomed=true]]:overflow-visible",
 												isInspectorResizing
 													? "transition-none"
 													: "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
@@ -3276,9 +3292,9 @@ function AppShell({
 						/>
 						{closeConfirmDialog}
 					</ComposerInsertProvider>
-				</SendingSessionsProvider>
+				</SessionRunStatesProvider>
 			</WorkspaceToastProvider>
-			<QuitConfirmDialog sendingSessionIds={effectiveSendingSessionIds} />
+			<QuitConfirmDialog sessionRunStates={effectiveSessionRunStates} />
 		</TooltipProvider>
 	);
 }

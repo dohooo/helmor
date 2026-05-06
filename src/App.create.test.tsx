@@ -59,7 +59,7 @@ vi.mock("@/features/conversation/hooks/use-streaming", () => ({
 		restoreImages: [],
 		restoreNonce: 0,
 		activeFastPreludes: {},
-		sendingSessionIds: new Set(),
+		busySessionIds: new Set(),
 	}),
 }));
 

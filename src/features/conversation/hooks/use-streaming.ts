@@ -146,8 +146,11 @@ type UseConversationStreamingArgs = {
 	/** App-level queue handle (read + mutate). Shared across session /
 	 *  workspace switches so the queue survives navigation. */
 	submitQueue: SubmitQueueApi;
-	onSendingWorkspacesChange?: (workspaceIds: Set<string>) => void;
-	onSendingSessionsChange?: (sessionIds: Set<string>) => void;
+	onSessionRunStateChange?: (
+		sessionId: string,
+		workspaceId: string | null,
+		sending: boolean,
+	) => void;
 	onInteractionSessionsChange?: (
 		sessionWorkspaceMap: Map<string, string>,
 		interactionCounts: Map<string, number>,
@@ -165,8 +168,7 @@ export function useConversationStreaming({
 	selectionPending,
 	followUpBehavior,
 	submitQueue,
-	onSendingWorkspacesChange,
-	onSendingSessionsChange,
+	onSessionRunStateChange,
 	onInteractionSessionsChange,
 	onSessionCompleted,
 	onSessionAborted,
@@ -187,6 +189,7 @@ export function useConversationStreaming({
 	const [sendingContextKeys, setSendingContextKeys] = useState<Set<string>>(
 		() => new Set(),
 	);
+	const sendingContextKeysRef = useRef<Set<string>>(new Set());
 	const [pendingPermissionsByContext, setPendingPermissionsByContext] =
 		useState<Record<string, PendingPermission[]>>({});
 	const [pendingDeferredByContext, setPendingDeferredByContext] = useState<
@@ -271,7 +274,7 @@ export function useConversationStreaming({
 		);
 	}, [displayedSelectedModelId, modelSectionsQuery.data]);
 
-	const sendingSessionIds = useMemo(() => {
+	const busySessionIds = useMemo(() => {
 		const ids = new Set<string>();
 		for (const key of sendingContextKeys) {
 			if (key.startsWith("session:")) {
@@ -281,24 +284,14 @@ export function useConversationStreaming({
 		return ids;
 	}, [sendingContextKeys]);
 
-	const onSendingWorkspacesChangeRef = useRef(onSendingWorkspacesChange);
-	onSendingWorkspacesChangeRef.current = onSendingWorkspacesChange;
-	const onSendingSessionsChangeRef = useRef(onSendingSessionsChange);
-	onSendingSessionsChangeRef.current = onSendingSessionsChange;
+	const onSessionRunStateChangeRef = useRef(onSessionRunStateChange);
+	onSessionRunStateChangeRef.current = onSessionRunStateChange;
 	const onInteractionSessionsChangeRef = useRef(onInteractionSessionsChange);
 	onInteractionSessionsChangeRef.current = onInteractionSessionsChange;
 	const onSessionCompletedRef = useRef(onSessionCompleted);
 	onSessionCompletedRef.current = onSessionCompleted;
 	const onSessionAbortedRef = useRef(onSessionAborted);
 	onSessionAbortedRef.current = onSessionAborted;
-	useLayoutEffect(() => {
-		const workspaceIds = new Set<string>();
-		for (const [, workspaceId] of sendingWorkspaceMapRef.current) {
-			workspaceIds.add(workspaceId);
-		}
-		onSendingWorkspacesChangeRef.current?.(workspaceIds);
-		onSendingSessionsChangeRef.current?.(sendingSessionIds);
-	}, [sendingContextKeys, sendingSessionIds]);
 	useLayoutEffect(() => {
 		const interactionSessions = new Map<string, string>();
 		const interactionCounts = new Map<string, number>();
@@ -540,18 +533,64 @@ export function useConversationStreaming({
 		[composerContextKey],
 	);
 
-	const pauseSendingState = useCallback((contextKey: string) => {
-		sendingWorkspaceMapRef.current.delete(contextKey);
-		setSendingContextKeys((current) => {
-			if (!current.has(contextKey)) {
-				return current;
+	const publishSendingState = useCallback(
+		(
+			contextKey: string,
+			workspaceId: string | null | undefined,
+			sending: boolean,
+		) => {
+			if (!contextKey.startsWith("session:")) {
+				return;
+			}
+			onSessionRunStateChangeRef.current?.(
+				contextKey.slice(8),
+				workspaceId ?? null,
+				sending,
+			);
+		},
+		[],
+	);
+
+	const markSendingState = useCallback(
+		(contextKey: string, workspaceId: string | null | undefined) => {
+			const previousWorkspaceId =
+				sendingWorkspaceMapRef.current.get(contextKey) ?? null;
+			if (workspaceId) {
+				sendingWorkspaceMapRef.current.set(contextKey, workspaceId);
+			}
+			const nextWorkspaceId =
+				sendingWorkspaceMapRef.current.get(contextKey) ?? workspaceId ?? null;
+			if (sendingContextKeysRef.current.has(contextKey)) {
+				if (nextWorkspaceId !== previousWorkspaceId) {
+					publishSendingState(contextKey, nextWorkspaceId, true);
+				}
+				return;
 			}
 
-			const next = new Set(current);
-			next.delete(contextKey);
-			return next;
-		});
-	}, []);
+			sendingContextKeysRef.current = new Set(sendingContextKeysRef.current);
+			sendingContextKeysRef.current.add(contextKey);
+			publishSendingState(contextKey, nextWorkspaceId, true);
+			setSendingContextKeys(sendingContextKeysRef.current);
+		},
+		[publishSendingState],
+	);
+
+	const pauseSendingState = useCallback(
+		(contextKey: string) => {
+			const workspaceId =
+				sendingWorkspaceMapRef.current.get(contextKey) ?? null;
+			sendingWorkspaceMapRef.current.delete(contextKey);
+			if (!sendingContextKeysRef.current.has(contextKey)) {
+				return;
+			}
+
+			sendingContextKeysRef.current = new Set(sendingContextKeysRef.current);
+			sendingContextKeysRef.current.delete(contextKey);
+			publishSendingState(contextKey, workspaceId, false);
+			setSendingContextKeys(sendingContextKeysRef.current);
+		},
+		[publishSendingState],
+	);
 
 	const clearSendingState = useCallback(
 		(contextKey: string) => {
@@ -685,14 +724,7 @@ export function useConversationStreaming({
 				);
 				clearPendingElicitation(contextKey);
 				rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
-				if (displayedWorkspaceId) {
-					sendingWorkspaceMapRef.current.set(contextKey, displayedWorkspaceId);
-				}
-				setSendingContextKeys((current) => {
-					const next = new Set(current);
-					next.add(contextKey);
-					return next;
-				});
+				markSendingState(contextKey, displayedWorkspaceId);
 			} catch (error) {
 				console.error("[conversation] elicitation response:", error);
 				const errorMsg = error instanceof Error ? error.message : String(error);
@@ -711,6 +743,7 @@ export function useConversationStreaming({
 			clearPendingElicitation,
 			composerContextKey,
 			displayedWorkspaceId,
+			markSendingState,
 			pushToast,
 			rememberInteractionWorkspace,
 		],
@@ -758,14 +791,7 @@ export function useConversationStreaming({
 				[contextKey]: null,
 			}));
 			rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
-			if (displayedWorkspaceId) {
-				sendingWorkspaceMapRef.current.set(contextKey, displayedWorkspaceId);
-			}
-			setSendingContextKeys((current) => {
-				const next = new Set(current);
-				next.add(contextKey);
-				return next;
-			});
+			markSendingState(contextKey, displayedWorkspaceId);
 
 			try {
 				await respondToDeferredTool(deferred.toolUseId, behavior, {
@@ -1025,6 +1051,7 @@ export function useConversationStreaming({
 			displayedSessionId,
 			displayedWorkspaceId,
 			invalidateConversationQueries,
+			markSendingState,
 			pushToast,
 			queryClient,
 			rememberInteractionWorkspace,
@@ -1276,14 +1303,7 @@ export function useConversationStreaming({
 			}));
 			clearPendingElicitation(contextKey);
 			rememberInteractionWorkspace(contextKey, targetWorkspaceId);
-			if (targetWorkspaceId) {
-				sendingWorkspaceMapRef.current.set(contextKey, targetWorkspaceId);
-			}
-			setSendingContextKeys((current) => {
-				const next = new Set(current);
-				next.add(contextKey);
-				return next;
-			});
+			markSendingState(contextKey, targetWorkspaceId);
 			if (fastMode) {
 				setFastPreludeActive(contextKey);
 			} else {
@@ -1590,6 +1610,7 @@ export function useConversationStreaming({
 			displayedWorkspaceId,
 			invalidateConversationQueries,
 			liveSessionsByContext,
+			markSendingState,
 			pushToast,
 			queryClient,
 			repoId,
@@ -1724,6 +1745,6 @@ export function useConversationStreaming({
 		restoreImages: restoreActive ? composerRestoreState.images : EMPTY_IMAGES,
 		restoreNonce: restoreActive ? composerRestoreState.nonce : 0,
 		selectedProvider,
-		sendingSessionIds,
+		busySessionIds,
 	};
 }

@@ -1,5 +1,11 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+	cleanup,
+	render,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -21,6 +27,16 @@ vi.mock("@/components/icons", () => ({
 		<span data-testid="codex-icon" {...props}>
 			codex-icon
 		</span>
+	),
+}));
+
+vi.mock("@/components/helmor-thinking-indicator", () => ({
+	HelmorThinkingIndicator: () => (
+		<span
+			aria-hidden="true"
+			data-slot="helmor-thinking-indicator"
+			data-testid="thinking-indicator"
+		/>
 	),
 }));
 
@@ -94,7 +110,58 @@ describe("WorkspacePanel", () => {
 	});
 
 	afterEach(() => {
+		cleanup();
 		vi.clearAllMocks();
+	});
+
+	it("shows a session tab loading indicator from persisted streaming status when live sending ids are empty", () => {
+		render(
+			<TooltipProvider delayDuration={0}>
+				<QueryClientProvider client={createHelmorQueryClient()}>
+					<WorkspacePanel
+						workspace={{
+							...WORKSPACE,
+							activeSessionStatus: "streaming",
+						}}
+						sessions={[
+							{
+								...SESSIONS[0],
+								status: "streaming",
+							},
+						]}
+						selectedSessionId="session-1"
+						sessionPanes={[]}
+						sending={false}
+						busySessionIds={new Set()}
+						onSelectSession={vi.fn()}
+						onSessionsChanged={vi.fn()}
+					/>
+				</QueryClientProvider>
+			</TooltipProvider>,
+		);
+
+		expect(screen.getByTestId("thinking-indicator")).toBeInTheDocument();
+	});
+
+	it("keeps the selected session tab loading when panel sending is true and live sending ids are empty", () => {
+		render(
+			<TooltipProvider delayDuration={0}>
+				<QueryClientProvider client={createHelmorQueryClient()}>
+					<WorkspacePanel
+						workspace={WORKSPACE}
+						sessions={SESSIONS}
+						selectedSessionId="session-1"
+						sessionPanes={[]}
+						sending
+						busySessionIds={new Set()}
+						onSelectSession={vi.fn()}
+						onSessionsChanged={vi.fn()}
+					/>
+				</QueryClientProvider>
+			</TooltipProvider>,
+		);
+
+		expect(screen.getByTestId("thinking-indicator")).toBeInTheDocument();
 	});
 
 	it("optimistically seeds the new session before switching selection", async () => {
