@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.18.0
+
+### Minor Changes
+
+- [#401](https://github.com/dohooo/helmor/pull/401) [`a3d91f0`](https://github.com/dohooo/helmor/commit/a3d91f0bed7f47dc2c4bf6b5546d00ce6852e942) Thanks [@natllian](https://github.com/natllian)! - Render Markdown files in the in-app editor with a Source/Preview toggle, so AI-generated specs and other `.md` files can be reviewed as formatted documents instead of raw source.
+
+- [#406](https://github.com/dohooo/helmor/pull/406) [`1cfef47`](https://github.com/dohooo/helmor/commit/1cfef47f1f22bda6b4a465f37564e0e8d6839a6b) Thanks [@natllian](https://github.com/natllian)! - Smooth out the add-repo and forge connect flows:
+
+  - Adding a repository now lands on the start page with the new repo selected, instead of auto-creating a workspace.
+  - Fix the GitHub / GitLab "Connect" button staying stuck after sign-in for accounts whose token can read the repo but doesn't expose membership in the API response.
+
+- [#405](https://github.com/dohooo/helmor/pull/405) [`7324592`](https://github.com/dohooo/helmor/commit/73245921a48ffada4c9490a3776810be3ee5224b) Thanks [@dohooo](https://github.com/dohooo)! - Add an export-as-image button to the chat panel header that opens a snapshot of the full session with a one-click copy-to-clipboard.
+
+### Patch Changes
+
+- [#394](https://github.com/dohooo/helmor/pull/394) [`b84b070`](https://github.com/dohooo/helmor/commit/b84b0705e842eb91668510e8fadc959e7725c0bb) Thanks [@daniel-mf28](https://github.com/daniel-mf28)! - Fix dragging the empty area of the workspace panel header.
+
+- [#404](https://github.com/dohooo/helmor/pull/404) [`4df8fcd`](https://github.com/dohooo/helmor/commit/4df8fcd77d8a20263c4ba33a2ba10481cb9e7fce) Thanks [@aidxun](https://github.com/aidxun)! - Fix the right inspector sidebar so its panels no longer animate from an initial zero-height state when Helmor first renders or switches back from the Context panel.
+
+- [#407](https://github.com/dohooo/helmor/pull/407) [`a8c7d46`](https://github.com/dohooo/helmor/commit/a8c7d467c873cbae98a09fa985da6ee5e6f2e863) Thanks [@natllian](https://github.com/natllian)! - Fix Claude threads occasionally returning an empty response mid-conversation and losing context on retry.
+
 ## 0.17.1
 
 ### Patch Changes
