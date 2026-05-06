@@ -24,6 +24,7 @@
 import { describe, expect, test } from "bun:test";
 import type { OnNotification, OnRequest } from "./codex-app-server.js";
 import { CodexAppServerManager } from "./codex-app-server-manager.js";
+import { SubAgentTracker } from "./codex-subagent-tracker.js";
 import { createSidecarEmitter } from "./emitter.js";
 
 interface PendingRpc {
@@ -125,8 +126,10 @@ async function driveToSendMessage(sessionId: string) {
 		activeEmitter: null,
 		notificationGate: null,
 		lastSentModel: "",
+		agentProxyKey: "none",
 		lastRetryAt: null,
 		lastRetryNotice: null,
+		subAgentTracker: new SubAgentTracker(fake.server as never),
 	});
 
 	const sendMessagePromise = manager.sendMessage(
