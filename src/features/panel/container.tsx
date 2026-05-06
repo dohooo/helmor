@@ -48,7 +48,7 @@ type WorkspacePanelContainerProps = {
 	displayedSessionId: string | null;
 	sessionSelectionHistory?: string[];
 	sending: boolean;
-	sendingSessionIds?: Set<string>;
+	busySessionIds?: Set<string>;
 	interactionRequiredSessionIds?: Set<string>;
 	modelSelections?: Record<string, string>;
 	workspaceChangeRequest?: ChangeRequestInfo | null;
@@ -80,7 +80,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	displayedSessionId,
 	sessionSelectionHistory = [],
 	sending,
-	sendingSessionIds,
+	busySessionIds,
 	interactionRequiredSessionIds,
 	modelSelections = {},
 	workspaceChangeRequest = null,
@@ -585,7 +585,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			refreshingWorkspace={refreshingWorkspace}
 			refreshingSession={refreshingSession}
 			sending={sending}
-			sendingSessionIds={sendingSessionIds}
+			busySessionIds={busySessionIds}
 			interactionRequiredSessionIds={interactionRequiredSessionIds}
 			contextPreviewCard={contextPreviewCard}
 			contextPreviewActive={contextPreviewActive}

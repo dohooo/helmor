@@ -25,7 +25,7 @@ export type SessionCloseRequest = {
 };
 
 type UseConfirmSessionCloseOptions = {
-	sendingSessionIds?: Set<string>;
+	busySessionIds?: Set<string>;
 	onSelectSession?: (sessionId: string) => void;
 	onSessionHidden?: (sessionId: string, workspaceId: string) => void;
 	pushToast: PushWorkspaceToast;
@@ -42,7 +42,7 @@ type UseConfirmSessionCloseReturn = {
 // (tab × button, Cmd+W, etc.) calls `requestClose` with the target
 // session's full context.
 export function useConfirmSessionClose({
-	sendingSessionIds,
+	busySessionIds,
 	onSelectSession,
 	onSessionHidden,
 	pushToast,
@@ -70,15 +70,13 @@ export function useConfirmSessionClose({
 
 	const requestClose = useCallback(
 		async (request: SessionCloseRequest) => {
-			if (
-				shouldConfirmRunningSessionClose(request.session, sendingSessionIds)
-			) {
+			if (shouldConfirmRunningSessionClose(request.session, busySessionIds)) {
 				setPending(request);
 				return;
 			}
 			await performClose(request);
 		},
-		[performClose, sendingSessionIds],
+		[busySessionIds, performClose],
 	);
 
 	const handleConfirm = useCallback(async () => {

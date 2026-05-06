@@ -201,7 +201,7 @@ describe("chooseLiveSessionId", () => {
 		const qc = new QueryClient();
 		const result = chooseLiveSessionId({
 			workspaceSessions: [makeSession({ id: "s1" })],
-			sendingSessionIds: new Set(),
+			busySessionIds: new Set(),
 			primarySessionId: "primary",
 			queryClient: qc,
 		});
@@ -212,7 +212,7 @@ describe("chooseLiveSessionId", () => {
 		const qc = new QueryClient();
 		const result = chooseLiveSessionId({
 			workspaceSessions: [makeSession({ id: "s1" }), makeSession({ id: "s2" })],
-			sendingSessionIds: new Set(["s2"]),
+			busySessionIds: new Set(["s2"]),
 			primarySessionId: "primary",
 			queryClient: qc,
 		});
@@ -226,7 +226,7 @@ describe("chooseLiveSessionId", () => {
 				makeSession({ id: "s1", isHidden: true }),
 				makeSession({ id: "s2" }),
 			],
-			sendingSessionIds: new Set(["s1", "s2"]),
+			busySessionIds: new Set(["s1", "s2"]),
 			primarySessionId: "primary",
 			queryClient: qc,
 		});
@@ -240,7 +240,7 @@ describe("chooseLiveSessionId", () => {
 				makeSession({ id: "action", actionKind: "create-pr" }),
 				makeSession({ id: "convo" }),
 			],
-			sendingSessionIds: new Set(["action", "convo"]),
+			busySessionIds: new Set(["action", "convo"]),
 			primarySessionId: "primary",
 			queryClient: qc,
 		});
@@ -254,7 +254,7 @@ describe("chooseLiveSessionId", () => {
 				makeSession({ id: "h", isHidden: true }),
 				makeSession({ id: "a", actionKind: "commit-and-push" }),
 			],
-			sendingSessionIds: new Set(["h", "a"]),
+			busySessionIds: new Set(["h", "a"]),
 			primarySessionId: "primary",
 			queryClient: qc,
 		});
@@ -272,7 +272,7 @@ describe("chooseLiveSessionId", () => {
 				makeSession({ id: "big" }),
 				makeSession({ id: "medium" }),
 			],
-			sendingSessionIds: new Set(["small", "big", "medium"]),
+			busySessionIds: new Set(["small", "big", "medium"]),
 			primarySessionId: "primary",
 			queryClient: qc,
 		});
@@ -293,7 +293,7 @@ describe("chooseLiveSessionId", () => {
 				makeSession({ id: "big" }),
 				makeSession({ id: "small" }),
 			],
-			sendingSessionIds: new Set(["small", "big", "medium"]),
+			busySessionIds: new Set(["small", "big", "medium"]),
 			primarySessionId: "primary",
 			queryClient: qc,
 		});
@@ -306,7 +306,7 @@ describe("chooseLiveSessionId", () => {
 		seedThread(qc, "b", 5);
 		const result = chooseLiveSessionId({
 			workspaceSessions: [makeSession({ id: "a" }), makeSession({ id: "b" })],
-			sendingSessionIds: new Set(["a", "b"]),
+			busySessionIds: new Set(["a", "b"]),
 			primarySessionId: null,
 			queryClient: qc,
 		});
@@ -317,7 +317,7 @@ describe("chooseLiveSessionId", () => {
 		const qc = new QueryClient();
 		const result = chooseLiveSessionId({
 			workspaceSessions: [],
-			sendingSessionIds: new Set(),
+			busySessionIds: new Set(),
 			primarySessionId: null,
 			queryClient: qc,
 		});

@@ -29,7 +29,7 @@ import {
 	workspaceGitActionStatusQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
-import { useSendingSessionIds } from "@/lib/sending-sessions-context";
+import { useBusySessionIds } from "@/lib/session-run-state-context";
 import {
 	readSessionThread,
 	sessionThreadCacheKey,
@@ -156,17 +156,17 @@ function GitStats({ workspaceId }: { workspaceId: string }) {
 
 /**
  * Pick the streaming session for the live preview: prefer non-hidden,
- * non-action sessions in `sendingSessionIds`; tiebreak on thread length;
+ * non-action sessions in `busySessionIds`; tiebreak on thread length;
  * fall back to `primarySessionId` if none are streaming.
  */
 export function chooseLiveSessionId({
 	workspaceSessions,
-	sendingSessionIds,
+	busySessionIds,
 	primarySessionId,
 	queryClient,
 }: {
 	workspaceSessions: WorkspaceSessionSummary[] | undefined;
-	sendingSessionIds: ReadonlySet<string>;
+	busySessionIds: ReadonlySet<string>;
 	primarySessionId: string | null | undefined;
 	queryClient: ReturnType<typeof useQueryClient>;
 }): string | null {
@@ -174,7 +174,7 @@ export function chooseLiveSessionId({
 		(session) =>
 			!session.isHidden &&
 			!session.actionKind &&
-			sendingSessionIds.has(session.id),
+			busySessionIds.has(session.id),
 	);
 
 	if (candidates.length === 0) {
@@ -293,14 +293,14 @@ function StreamingElapsed({
 	primarySessionId: string | null | undefined;
 }) {
 	const queryClient = useQueryClient();
-	const sendingSessionIds = useSendingSessionIds();
+	const busySessionIds = useBusySessionIds();
 	const { data: workspaceSessions } = useQuery(
 		workspaceSessionsQueryOptions(workspaceId, { staleTime: 5_000 }),
 	);
 
 	const sessionId = chooseLiveSessionId({
 		workspaceSessions,
-		sendingSessionIds,
+		busySessionIds,
 		primarySessionId,
 		queryClient,
 	});
@@ -385,7 +385,7 @@ function LiveSessionPreview({
 	primarySessionId: string | null | undefined;
 }) {
 	const queryClient = useQueryClient();
-	const sendingSessionIds = useSendingSessionIds();
+	const busySessionIds = useBusySessionIds();
 
 	// Pre-warm streamdown so Suspense rarely fires once the card opens.
 	useEffect(() => {
@@ -400,7 +400,7 @@ function LiveSessionPreview({
 	const sessionId =
 		chooseLiveSessionId({
 			workspaceSessions,
-			sendingSessionIds,
+			busySessionIds,
 			primarySessionId,
 			queryClient,
 		}) ?? null;

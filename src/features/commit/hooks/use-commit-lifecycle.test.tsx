@@ -151,11 +151,11 @@ describe("useWorkspaceCommitLifecycle", () => {
 			({
 				completedSessionIds,
 				interactionRequiredSessionIds,
-				sendingSessionIds,
+				busySessionIds,
 			}: {
 				completedSessionIds: Set<string>;
 				interactionRequiredSessionIds: Set<string>;
-				sendingSessionIds: Set<string>;
+				busySessionIds: Set<string>;
 			}) =>
 				useWorkspaceCommitLifecycle({
 					queryClient,
@@ -168,14 +168,14 @@ describe("useWorkspaceCommitLifecycle", () => {
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds,
 					interactionRequiredSessionIds,
-					sendingSessionIds,
+					busySessionIds,
 					onSelectSession,
 				}),
 			{
 				initialProps: {
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 				},
 				wrapper: createWrapper(queryClient),
 			},
@@ -200,13 +200,13 @@ describe("useWorkspaceCommitLifecycle", () => {
 		rerender({
 			completedSessionIds: new Set<string>(),
 			interactionRequiredSessionIds: new Set<string>(),
-			sendingSessionIds: new Set(["session-action"]),
+			busySessionIds: new Set(["session-action"]),
 		});
 
 		rerender({
 			completedSessionIds: new Set(["session-action"]),
 			interactionRequiredSessionIds: new Set<string>(),
-			sendingSessionIds: new Set<string>(),
+			busySessionIds: new Set<string>(),
 		});
 
 		await waitFor(() => {
@@ -273,11 +273,11 @@ describe("useWorkspaceCommitLifecycle", () => {
 			({
 				completedSessionIds,
 				abortedSessionIds,
-				sendingSessionIds,
+				busySessionIds,
 			}: {
 				completedSessionIds: Set<string>;
 				abortedSessionIds: Set<string>;
-				sendingSessionIds: Set<string>;
+				busySessionIds: Set<string>;
 			}) =>
 				useWorkspaceCommitLifecycle({
 					queryClient,
@@ -291,14 +291,14 @@ describe("useWorkspaceCommitLifecycle", () => {
 					completedSessionIds,
 					abortedSessionIds,
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds,
+					busySessionIds,
 					onSelectSession,
 				}),
 			{
 				initialProps: {
 					completedSessionIds: new Set<string>(),
 					abortedSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 				},
 				wrapper: createWrapper(queryClient),
 			},
@@ -318,15 +318,15 @@ describe("useWorkspaceCommitLifecycle", () => {
 		rerender({
 			completedSessionIds: new Set<string>(),
 			abortedSessionIds: new Set<string>(),
-			sendingSessionIds: new Set(["session-action"]),
+			busySessionIds: new Set(["session-action"]),
 		});
 
-		// User aborts: session leaves sendingSessionIds and enters
+		// User aborts: session leaves busySessionIds and enters
 		// abortedSessionIds without ever reaching completedSessionIds.
 		rerender({
 			completedSessionIds: new Set<string>(),
 			abortedSessionIds: new Set(["session-action"]),
-			sendingSessionIds: new Set<string>(),
+			busySessionIds: new Set<string>(),
 		});
 
 		await waitFor(() => {
@@ -362,7 +362,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					},
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession,
 					pushToast,
 				}),
@@ -435,7 +435,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					},
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession: vi.fn(),
 					pushToast,
 				}),
@@ -480,7 +480,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession: vi.fn(),
 					pushToast,
 				}),
@@ -572,7 +572,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession: vi.fn(),
 				}),
 			{ wrapper: createWrapper(queryClient) },
@@ -671,7 +671,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession: vi.fn(),
 					pushToast: vi.fn(),
 				}),
@@ -725,7 +725,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession,
 				}),
 			{ wrapper: createWrapper(queryClient) },
@@ -771,7 +771,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession: vi.fn(),
 				}),
 			{ wrapper: createWrapper(queryClient) },
@@ -805,7 +805,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession,
 				}),
 			{ wrapper: createWrapper(queryClient) },
@@ -856,7 +856,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession: vi.fn(),
 					pushToast,
 				}),

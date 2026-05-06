@@ -396,16 +396,15 @@ export function resolveSessionSelectedModelId({
 		WorkspaceSessionSummary,
 		"id" | "agentType" | "model" | "lastUserMessageAt"
 	> | null;
-	modelSelections: Record<string, string>;
+	modelSelections: Partial<Record<string, string>>;
 	modelSections: AgentModelSection[];
 	settingsDefaultModelId?: string | null;
 	contextKey?: string | null;
 }): string | null {
-	const selectedModelId =
-		(contextKey ? (modelSelections[contextKey] ?? null) : null) ??
-		(session
-			? (modelSelections[getComposerContextKey(null, session.id)] ?? null)
-			: null);
+	let selectedModelId = contextKey ? modelSelections[contextKey] : undefined;
+	if (!selectedModelId && session) {
+		selectedModelId = modelSelections[getComposerContextKey(null, session.id)];
+	}
 	return (
 		selectedModelId ??
 		inferDefaultModelId(session, modelSections, settingsDefaultModelId)
@@ -422,7 +421,7 @@ export function resolveSessionDisplayProvider({
 		WorkspaceSessionSummary,
 		"id" | "agentType" | "model" | "lastUserMessageAt"
 	>;
-	modelSelections: Record<string, string>;
+	modelSelections: Partial<Record<string, string>>;
 	modelSections: AgentModelSection[];
 	settingsDefaultModelId?: string | null;
 }): AgentProvider | null {

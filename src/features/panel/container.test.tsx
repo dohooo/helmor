@@ -711,7 +711,7 @@ describe("WorkspacePanelContainer loading semantics", () => {
 				selectedSessionId="idle"
 				displayedSessionId="idle"
 				sending={false}
-				sendingSessionIds={new Set(["running"])}
+				busySessionIds={new Set(["running"])}
 				onSelectSession={vi.fn()}
 				onResolveDisplayedSession={vi.fn()}
 			/>,

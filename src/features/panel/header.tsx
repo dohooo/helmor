@@ -78,6 +78,7 @@ import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { normalizeBranchRenameInput } from "./branch-rename";
 import { seedNewSessionInCache } from "./session-cache";
 import { closeWorkspaceSession } from "./session-close";
+import { isSessionRunningStatus } from "./session-running";
 import type { SessionCloseRequest } from "./use-confirm-session-close";
 
 type WorkspacePanelHeaderProps = {
@@ -87,7 +88,7 @@ type WorkspacePanelHeaderProps = {
 	selectedSessionId: string | null;
 	sessionDisplayProviders?: Record<string, AgentProvider>;
 	sending: boolean;
-	sendingSessionIds?: Set<string>;
+	busySessionIds?: Set<string>;
 	interactionRequiredSessionIds?: Set<string>;
 	loadingWorkspace: boolean;
 	contextPreviewCard?: ContextCard | null;
@@ -112,7 +113,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	selectedSessionId,
 	sessionDisplayProviders,
 	sending,
-	sendingSessionIds,
+	busySessionIds,
 	interactionRequiredSessionIds,
 	loadingWorkspace,
 	contextPreviewCard = null,
@@ -705,9 +706,10 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 									) : null}
 									{sessions.map((session) => {
 										const selected = session.id === selectedSessionId;
-										const isActivelySending = sendingSessionIds
-											? sendingSessionIds.has(session.id)
-											: selected && sending;
+										const isActivelySending =
+											busySessionIds?.has(session.id) === true ||
+											isSessionRunningStatus(session.status) ||
+											(selected && sending);
 										const hasUnread = session.unreadCount > 0;
 										const isInteractionRequired =
 											interactionRequiredSessionIds?.has(session.id) ?? false;
