@@ -84,7 +84,7 @@ describe("App", () => {
 			screen.getByLabelText("Inspector section Actions"),
 		).toBeInTheDocument();
 		expect(screen.getByLabelText("Inspector section Tabs")).toBeInTheDocument();
-		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
+		expect(screen.getByLabelText("Git panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
 		// Inspector tabs section starts collapsed; body only mounts when opened.
 		expect(
@@ -125,7 +125,7 @@ describe("App", () => {
 		await screen.findByRole("main", { name: "Application shell" });
 
 		// Default: tabs section collapsed; changes + actions bodies present.
-		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
+		expect(screen.getByLabelText("Git panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
 		expect(
 			screen.queryByLabelText("Inspector tabs body"),
@@ -134,14 +134,14 @@ describe("App", () => {
 		// Clicking the toggle expands the tabs body.
 		await user.click(screen.getByLabelText("Toggle inspector tabs section"));
 
-		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
+		expect(screen.getByLabelText("Git panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Inspector tabs body")).toBeInTheDocument();
 
 		// Clicking again collapses it back.
 		await user.click(screen.getByLabelText("Toggle inspector tabs section"));
 
-		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
+		expect(screen.getByLabelText("Git panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
 		expect(
 			screen.queryByLabelText("Inspector tabs body"),
