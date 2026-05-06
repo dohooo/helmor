@@ -108,7 +108,7 @@ import {
 } from "./lib/composer-insert";
 import { ComposerInsertProvider } from "./lib/composer-insert-context";
 import type { DiffOpenOptions, EditorSessionState } from "./lib/editor-session";
-import { isPathWithinRoot } from "./lib/editor-session";
+import { isMarkdownPath, isPathWithinRoot } from "./lib/editor-session";
 import {
 	archivedWorkspacesQueryOptions,
 	createHelmorQueryClient,
@@ -1060,6 +1060,8 @@ function AppShell({
 				fileStatus: status,
 				originalRef: options?.originalRef,
 				modifiedRef: options?.modifiedRef,
+				// Diff click is "see what changed" — default to source even for .md.
+				viewMode: isMarkdownPath(path) ? "source" : undefined,
 			});
 		},
 		[
@@ -1101,16 +1103,28 @@ function AppShell({
 			}
 
 			setWorkspaceViewMode("editor");
-			setEditorSession((current) => ({
-				kind: "file",
-				path,
-				line,
-				column,
-				dirty: current?.path === path ? current.dirty : false,
-				originalText: current?.path === path ? current.originalText : undefined,
-				modifiedText: current?.path === path ? current.modifiedText : undefined,
-				mtimeMs: current?.path === path ? current.mtimeMs : undefined,
-			}));
+			setEditorSession((current) => {
+				const samePath = current?.path === path;
+				// Chat-link open of a markdown file: default to preview (reading the
+				// rendered output). Preserve user's explicit toggle if reopening the
+				// same file. Non-markdown paths leave viewMode unset.
+				const viewMode = isMarkdownPath(path)
+					? samePath && current?.viewMode
+						? current.viewMode
+						: "preview"
+					: undefined;
+				return {
+					kind: "file",
+					path,
+					line,
+					column,
+					dirty: samePath ? current.dirty : false,
+					originalText: samePath ? current.originalText : undefined,
+					modifiedText: samePath ? current.modifiedText : undefined,
+					mtimeMs: samePath ? current.mtimeMs : undefined,
+					viewMode,
+				};
+			});
 		},
 		[
 			confirmDiscardEditorChanges,

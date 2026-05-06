@@ -1,16 +1,38 @@
-import { X } from "lucide-react";
+import { Eye, FileCode, X } from "lucide-react";
 import {
 	type MutableRefObject,
+	Suspense,
 	useEffect,
 	useLayoutEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
+import { LazyStreamdown } from "@/components/streamdown-loader";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ShortcutDisplay } from "@/features/shortcuts/shortcut-display";
-import type { EditorSessionState } from "@/lib/editor-session";
+import {
+	type EditorSessionState,
+	type EditorViewMode,
+	isMarkdownPath,
+} from "@/lib/editor-session";
 import { describeUnknownError } from "@/lib/workspace-helpers";
+
+// Refined segmented-tab look: no tray, soft glassy pill on the active state.
+// Hover only changes text color (no bg) — otherwise hover-on-inactive sits next
+// to active-bg and the boundary blurs. Active is the ONLY trigger with a bg.
+const SEGMENT_CLASS = [
+	"h-5 gap-1 rounded-[5px] px-1.5 py-0 text-[10.5px] font-normal tracking-tight",
+	"border-transparent bg-transparent text-muted-foreground/70 shadow-none",
+	"hover:bg-transparent hover:text-foreground",
+	"data-active:bg-foreground/[0.10] data-active:text-foreground data-active:border-transparent data-active:shadow-none",
+	"aria-selected:bg-foreground/[0.10] aria-selected:text-foreground aria-selected:border-transparent aria-selected:shadow-none",
+	"dark:data-active:bg-foreground/[0.10] dark:data-active:border-transparent",
+	"dark:aria-selected:bg-foreground/[0.10] dark:aria-selected:border-transparent",
+	"[&_svg:not([class*='size-'])]:size-2.5",
+].join(" ");
 
 type WorkspaceEditorSurfaceProps = {
 	editorSession: EditorSessionState;
@@ -66,6 +88,15 @@ export function WorkspaceEditorSurface({
 		editorSession.modifiedText !== undefined;
 	const closeLabel =
 		editorSession.kind === "diff" ? "Close diff view" : "Close editor view";
+	const isMarkdown = isMarkdownPath(editorSession.path);
+	const viewMode: EditorViewMode = isMarkdown
+		? (editorSession.viewMode ?? "source")
+		: "source";
+	const showPreview = isMarkdown && viewMode === "preview";
+	const previewContent = useMemo(() => {
+		if (!showPreview) return "";
+		return editorSession.modifiedText ?? editorSession.originalText ?? "";
+	}, [showPreview, editorSession.modifiedText, editorSession.originalText]);
 
 	useEffect(() => {
 		if (
@@ -161,6 +192,27 @@ export function WorkspaceEditorSurface({
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
 	}, [onExit]);
+
+	// ⌘⇧V toggles markdown preview, mirroring VS Code's "Markdown: Toggle Preview".
+	useEffect(() => {
+		if (!isMarkdown) return;
+		const handleKeyDown = (event: KeyboardEvent) => {
+			const isToggle =
+				(event.metaKey || event.ctrlKey) &&
+				event.shiftKey &&
+				event.key.toLowerCase() === "v";
+			if (!isToggle) return;
+			event.preventDefault();
+			const next: EditorViewMode =
+				viewMode === "preview" ? "source" : "preview";
+			onChangeSessionRef.current({
+				...latestSessionRef.current,
+				viewMode: next,
+			});
+		};
+		window.addEventListener("keydown", handleKeyDown);
+		return () => window.removeEventListener("keydown", handleKeyDown);
+	}, [isMarkdown, viewMode]);
 
 	// useLayoutEffect: run model swap BEFORE browser paint to avoid flicker.
 	// The fast path returns NO cleanup — we keep the editor instance alive across
@@ -378,6 +430,15 @@ export function WorkspaceEditorSurface({
 		editorSession.originalText,
 	]);
 
+	const handleViewModeChange = (next: string) => {
+		if (next !== "source" && next !== "preview") return;
+		if (next === viewMode) return;
+		onChangeSession({
+			...editorSession,
+			viewMode: next,
+		});
+	};
+
 	return (
 		<section
 			aria-label="Workspace editor surface"
@@ -393,7 +454,26 @@ export function WorkspaceEditorSurface({
 
 				<div className="min-w-0 flex-1" data-tauri-drag-region />
 
-				<div className="flex shrink-0 items-center pr-2">
+				<div className="flex shrink-0 items-center gap-2 pr-2">
+					{isMarkdown && (
+						<Tabs
+							value={viewMode}
+							onValueChange={handleViewModeChange}
+							aria-label="Markdown view mode"
+						>
+							{/* No tray: bg-transparent + p-0. Pill highlight only on the active trigger. */}
+							<TabsList className="h-5 gap-0 bg-transparent p-0">
+								<TabsTrigger value="source" className={SEGMENT_CLASS}>
+									<FileCode strokeWidth={1.8} />
+									Source
+								</TabsTrigger>
+								<TabsTrigger value="preview" className={SEGMENT_CLASS}>
+									<Eye strokeWidth={1.8} />
+									Preview
+								</TabsTrigger>
+							</TabsList>
+						</Tabs>
+					)}
 					<Button
 						type="button"
 						variant="ghost"
@@ -409,11 +489,38 @@ export function WorkspaceEditorSurface({
 			</div>
 
 			<div className="relative flex min-h-0 flex-1 bg-background">
+				{/* Monaco host stays mounted in preview mode so model + dirty state survive toggling. */}
 				<div
 					ref={editorHostRef}
 					aria-label="Editor canvas"
 					className="h-full min-h-0 flex-1"
+					aria-hidden={showPreview}
+					style={showPreview ? { visibility: "hidden" } : undefined}
 				/>
+
+				{showPreview && (
+					<div
+						aria-label="Markdown preview"
+						className="absolute inset-0 overflow-y-auto bg-background"
+					>
+						<div className="conversation-markdown mx-auto max-w-3xl break-words px-8 py-6 text-[13px] leading-6 text-foreground">
+							<Suspense
+								fallback={
+									<pre className="whitespace-pre-wrap break-words font-mono text-muted-foreground">
+										{previewContent}
+									</pre>
+								}
+							>
+								<LazyStreamdown
+									className="conversation-streamdown"
+									mode="static"
+								>
+									{previewContent}
+								</LazyStreamdown>
+							</Suspense>
+						</div>
+					</div>
+				)}
 
 				{surfaceStatus.kind === "error" && (
 					<div className="absolute inset-0 flex items-center justify-center bg-background">
