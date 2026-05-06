@@ -473,6 +473,18 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add pr_sync_state column")?;
     }
 
+    // Migration: composer drafts move from per-browser localStorage into
+    // SQLite as a JSON-serialised Lexical editor state. Nullable — most
+    // sessions don't have a draft most of the time, and clearing the
+    // draft writes NULL rather than an empty JSON blob. Frontend
+    // performs a one-time copy of leftover localStorage drafts into
+    // this column on first launch (see `draft-storage.ts`).
+    if has_table(connection, "sessions") && !has_column(connection, "sessions", "draft_state") {
+        connection
+            .execute_batch("ALTER TABLE sessions ADD COLUMN draft_state TEXT")
+            .context("Failed to add sessions.draft_state column")?;
+    }
+
     // Migration: cache the live PR/MR url on the workspace row so the
     // inspector can render the PR badge optimistically (before the live
     // forge query returns). The PR number is parsed from the URL on the
@@ -540,6 +552,17 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         )
         .ok();
 
+    // Workspace `mode`: 'worktree' (existing — own dir, own branch) or
+    // 'local' (operates on the source repo's root, no separate worktree).
+    // Nullable + COALESCE'd at read sites so the conductor import flow
+    // (which copies columns directly without applying NOT NULL defaults)
+    // keeps working — NULL is treated as 'worktree' on read.
+    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "mode") {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN mode TEXT DEFAULT 'worktree'")
+            .context("Failed to add workspaces.mode column")?;
+    }
+
     Ok(())
 }
 
@@ -606,6 +629,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     pr_url TEXT,
     archive_commit TEXT,
     linked_directory_paths TEXT,
+    mode TEXT DEFAULT 'worktree',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -627,6 +651,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     action_kind TEXT,
     context_usage_meta TEXT,
     codex_goal_meta TEXT,
+    draft_state TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

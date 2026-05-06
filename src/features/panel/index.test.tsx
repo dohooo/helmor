@@ -54,6 +54,7 @@ const WORKSPACE: WorkspaceDetail = {
 	branch: "main",
 	initializationParentBranch: "main",
 	intendedTargetBranch: "main",
+	mode: "worktree",
 	pinnedAt: null,
 	prTitle: null,
 	archiveCommit: null,

@@ -25,6 +25,7 @@ pub mod accounts;
 mod actions;
 mod api;
 mod context;
+pub mod inbox;
 mod pull_request;
 mod types;
 

@@ -485,8 +485,7 @@ pub async fn open_workspace_in_editor(workspace_id: String, editor: String) -> C
         let record = workspace_models::load_workspace_record_by_id(&workspace_id)?
             .with_context(|| format!("Workspace not found: {workspace_id}"))?;
 
-        let workspace_dir =
-            crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+        let workspace_dir = crate::workspace::helpers::workspace_path(&record)?;
         if !workspace_dir.is_dir() {
             return Err(anyhow::anyhow!(
                 "Workspace directory not found: {}",
@@ -509,8 +508,7 @@ pub async fn open_workspace_in_finder(workspace_id: String) -> CmdResult<()> {
         let record = workspace_models::load_workspace_record_by_id(&workspace_id)?
             .with_context(|| format!("Workspace not found: {workspace_id}"))?;
 
-        let workspace_dir =
-            crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+        let workspace_dir = crate::workspace::helpers::workspace_path(&record)?;
         if !workspace_dir.is_dir() {
             return Err(anyhow::anyhow!(
                 "Workspace directory not found: {}",

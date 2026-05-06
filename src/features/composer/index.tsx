@@ -3,13 +3,15 @@ import { ContentEditable } from "@lexical/react/LexicalContentEditable";
 import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
 import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
-import type { LexicalEditor } from "lexical";
+import type { LexicalEditor, SerializedEditorState } from "lexical";
 import { $getRoot } from "lexical";
 import {
 	ArrowUp,
 	Check,
 	ChevronDown,
 	ClipboardList,
+	Clock3,
+	Layers,
 	MessageSquareMore,
 	Plus,
 	Square,
@@ -18,6 +20,7 @@ import {
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ModelIcon } from "@/components/model-icon";
 import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -101,6 +104,13 @@ type WorkspaceComposerProps = {
 			/** Submit with the opposite follow-up behavior (queue ↔ steer)
 			 *  for this single message, leaving the persistent setting alone. */
 			oppositeFollowUp?: boolean;
+			startSubmitMode?: StartSubmitMode;
+			/** Snapshot of the editor's full Lexical state at submit time.
+			 *  Captured synchronously before the editor clears so callers
+			 *  that need to round-trip chips/text/images (e.g. the kanban
+			 *  "backlog" submit handler that copies the draft into a freshly
+			 *  created session) can do so without a re-encode pass. */
+			editorStateSnapshot?: SerializedEditorState;
 		},
 	) => void;
 	disabled?: boolean;
@@ -170,6 +180,16 @@ type WorkspaceComposerProps = {
 	/** Hotkey that submits the current draft with the opposite follow-up
 	 *  behavior (queue ↔ steer) for one message. */
 	toggleFollowUpShortcut?: string | null;
+	toggleContextPanelShortcut?: string | null;
+	contextPanelOpen?: boolean;
+	onToggleContextPanel?: () => void;
+	/** Custom placeholder string. When omitted, falls back to the default
+	 *  "Ask to make changes…" copy. The kanban view supplies a hint that
+	 *  nudges the user toward composing inbox sources for new workspaces. */
+	placeholder?: string;
+	startSubmitMenu?: boolean;
+	startSubmitMode?: StartSubmitMode;
+	onStartSubmitModeChange?: (mode: StartSubmitMode) => void;
 };
 
 const EMPTY_SLASH_COMMANDS: readonly SlashCommandEntry[] = [];
@@ -182,6 +202,7 @@ const noopDeferredToolResponse = (
 	_options?: DeferredToolResponseOptions,
 ) => {};
 const noopElicitationResponse: ElicitationResponseHandler = () => {};
+type StartSubmitMode = "startNow" | "saveForLater";
 // ---------------------------------------------------------------------------
 // Lexical editor config (stable reference — defined outside component)
 // ---------------------------------------------------------------------------
@@ -222,6 +243,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	restoreNonce = 0,
 	pendingInsertRequests = [],
 	onPendingInsertRequestsConsumed,
+	placeholder,
 	slashCommands = EMPTY_SLASH_COMMANDS,
 	slashCommandsLoading = false,
 	slashCommandsError = false,
@@ -246,6 +268,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	focusShortcut = null,
 	togglePlanShortcut = null,
 	toggleFollowUpShortcut = null,
+	toggleContextPanelShortcut = null,
+	contextPanelOpen = false,
+	onToggleContextPanel,
+	startSubmitMenu = false,
+	startSubmitMode = "startNow",
+	onStartSubmitModeChange,
 }: WorkspaceComposerProps) {
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
@@ -447,7 +475,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	}, [hasPlanReview, onSubmit, contextKey]);
 
 	const submitDraft = useCallback(
-		(options?: { oppositeFollowUp?: boolean }) => {
+		(options?: {
+			oppositeFollowUp?: boolean;
+			startSubmitMode?: StartSubmitMode;
+		}) => {
 			const editor = editorRef.current;
 			if (!editor) return;
 			let prompt = "";
@@ -468,13 +499,20 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				customTags.length === 0
 			)
 				return;
-			if (options?.oppositeFollowUp) {
-				onSubmit(prompt, images, files, customTags, {
-					oppositeFollowUp: true,
-				});
-			} else {
-				onSubmit(prompt, images, files, customTags);
-			}
+			// Snapshot the editor's full Lexical state BEFORE the clear below
+			// wipes it. Synchronous capture is critical because callers that
+			// want to round-trip the draft (e.g. kanban "backlog" submit
+			// copying chips/text/images into a freshly-created session) read
+			// from this snapshot — by the time their async work runs, the
+			// editor is already empty.
+			const editorStateSnapshot = editor
+				.getEditorState()
+				.toJSON() as SerializedEditorState;
+			onSubmit(prompt, images, files, customTags, {
+				oppositeFollowUp: options?.oppositeFollowUp,
+				startSubmitMode: options?.startSubmitMode,
+				editorStateSnapshot,
+			});
 			editor.update(() => {
 				$getRoot().clear();
 			});
@@ -485,12 +523,35 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	);
 
 	const handleSubmit = useCallback(() => {
-		submitDraft();
-	}, [submitDraft]);
+		submitDraft(startSubmitMenu ? { startSubmitMode } : undefined);
+	}, [startSubmitMenu, startSubmitMode, submitDraft]);
 
 	const handleSubmitOpposite = useCallback(() => {
 		submitDraft({ oppositeFollowUp: true });
 	}, [submitDraft]);
+
+	const handleStartSubmitMode = useCallback(
+		(mode: StartSubmitMode) => {
+			submitDraft({ startSubmitMode: mode });
+		},
+		[submitDraft],
+	);
+
+	const handleSelectStartSubmitMode = useCallback(
+		(mode: StartSubmitMode) => {
+			onStartSubmitModeChange?.(mode);
+			handleStartSubmitMode(mode);
+		},
+		[handleStartSubmitMode, onStartSubmitModeChange],
+	);
+	const alternateStartSubmitMode: StartSubmitMode =
+		startSubmitMode === "saveForLater" ? "startNow" : "saveForLater";
+	const preferredStartSubmitLabel =
+		startSubmitMode === "saveForLater" ? "Save for later" : "Start now";
+	const alternateStartSubmitLabel =
+		alternateStartSubmitMode === "saveForLater"
+			? "Save for later"
+			: "Start now";
 
 	const handleComposerKeyDownCapture = useCallback(
 		(event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -633,7 +694,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 									<div className="pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-muted-foreground/70">
 										{hasPlanReview && permissionMode === "plan"
 											? "Describe what to change, then click Request Changes"
-											: "Ask to make changes, @mention files, run /commands"}
+											: (placeholder ??
+												"Ask to make changes, @mention files, run /commands")}
 									</div>
 								}
 								ErrorBoundary={LexicalErrorBoundary}
@@ -902,6 +964,42 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										<ClipboardList className="size-[13px]" strokeWidth={1.8} />
 										<span>Plan</span>
 									</ComposerButton>
+									{onToggleContextPanel ? (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<ComposerButton
+													aria-label="Add context"
+													aria-pressed={contextPanelOpen}
+													disabled={toolbarDisabled}
+													className={cn(
+														composerToolbarTriggerClassName,
+														contextPanelOpen
+															? "text-foreground"
+															: "text-muted-foreground/70 hover:text-muted-foreground/70",
+														toolbarDisabled
+															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
+															: null,
+													)}
+													onClick={onToggleContextPanel}
+												>
+													<Layers className="size-[13px]" strokeWidth={1.8} />
+												</ComposerButton>
+											</TooltipTrigger>
+											<TooltipContent
+												side="top"
+												sideOffset={4}
+												className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+											>
+												<span>Add context</span>
+												{toggleContextPanelShortcut ? (
+													<InlineShortcutDisplay
+														hotkey={toggleContextPanelShortcut}
+														className="text-background/60"
+													/>
+												) : null}
+											</TooltipContent>
+										</Tooltip>
+									) : null}
 								</>
 							)}
 						</div>
@@ -974,16 +1072,77 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 									) : null}
 								</div>
 							) : (
-								<Button
-									variant="outline"
-									size="icon"
-									aria-label="Send"
-									onClick={handleSubmit}
-									disabled={sendDisabled}
-									className="ml-1.5 rounded-[9px]"
-								>
-									<ArrowUp className="size-[15px]" strokeWidth={2.2} />
-								</Button>
+								<div className="ml-1.5 flex items-center">
+									{startSubmitMenu ? (
+										<DropdownMenu>
+											<ButtonGroup className="rounded-[9px]">
+												<Button
+													variant="outline"
+													size="sm"
+													aria-label={preferredStartSubmitLabel}
+													onClick={() => handleStartSubmitMode(startSubmitMode)}
+													disabled={sendDisabled}
+													className="gap-1.5 px-2.5"
+												>
+													{startSubmitMode === "saveForLater" ? (
+														<Clock3 className="size-3.5" strokeWidth={1.8} />
+													) : (
+														<ArrowUp className="size-3.5" strokeWidth={2.2} />
+													)}
+													<span>{preferredStartSubmitLabel}</span>
+												</Button>
+												<DropdownMenuTrigger asChild>
+													<Button
+														variant="outline"
+														size="sm"
+														aria-label="Start options"
+														disabled={sendDisabled}
+														className="px-2.5"
+													>
+														<ChevronDown
+															className="size-3 text-muted-foreground"
+															strokeWidth={2}
+														/>
+													</Button>
+												</DropdownMenuTrigger>
+											</ButtonGroup>
+											<DropdownMenuContent
+												side="bottom"
+												align="end"
+												sideOffset={6}
+												className="min-w-[133px] -translate-x-px"
+											>
+												<DropdownMenuItem
+													onClick={() =>
+														handleSelectStartSubmitMode(
+															alternateStartSubmitMode,
+														)
+													}
+													disabled={sendDisabled}
+													className="gap-2"
+												>
+													{alternateStartSubmitMode === "saveForLater" ? (
+														<Clock3 className="size-3.5" strokeWidth={1.8} />
+													) : (
+														<ArrowUp className="size-3.5" strokeWidth={2} />
+													)}
+													<span>{alternateStartSubmitLabel}</span>
+												</DropdownMenuItem>
+											</DropdownMenuContent>
+										</DropdownMenu>
+									) : (
+										<Button
+											variant="outline"
+											size="icon"
+											aria-label="Send"
+											onClick={handleSubmit}
+											disabled={sendDisabled}
+											className="rounded-[9px]"
+										>
+											<ArrowUp className="size-[15px]" strokeWidth={2.2} />
+										</Button>
+									)}
+								</div>
 							)}
 						</div>
 					</div>

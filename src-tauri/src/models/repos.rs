@@ -663,7 +663,7 @@ pub fn load_repo_scripts(repo_id: &str, workspace_id: Option<&str>) -> Result<Re
         crate::models::workspaces::load_workspace_record_by_id(ws_id)
             .ok()
             .flatten()
-            .and_then(|ws| crate::data_dir::workspace_dir(&ws.repo_name, &ws.directory_name).ok())
+            .and_then(|ws| crate::workspace::helpers::workspace_path(&ws).ok())
             .filter(|dir| dir.is_dir())
             .and_then(|dir| load_helmor_json_scripts(&dir))
     });

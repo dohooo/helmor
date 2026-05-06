@@ -59,6 +59,10 @@ export interface GetContextUsageParams {
 export interface GenerateTitleOptions {
 	readonly model?: string;
 	readonly claudeEnvironment?: Readonly<Record<string, string>>;
+	/** When false, only the title is requested — branch generation is omitted
+	 * from the prompt entirely (saves tokens for local-mode workspaces and
+	 * any other case where the caller has no intent to rename a branch). */
+	readonly generateBranch?: boolean;
 }
 
 /**

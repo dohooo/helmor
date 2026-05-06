@@ -34,6 +34,7 @@ export const defaultInvokeHandlers: Record<string, InvokeHandler> = {
 	list_workspace_files: () => [],
 	list_workspace_changes_with_content: () => ({ items: [], prefetched: [] }),
 	list_slash_commands: () => [],
+	list_github_labels: () => [],
 	refresh_workspace_change_request: () => null,
 	get_workspace_forge: () => ({
 		provider: "unknown",

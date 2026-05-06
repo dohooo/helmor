@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { SerializedEditorState } from "lexical";
 import {
 	useCallback,
 	useEffect,
@@ -119,7 +120,16 @@ type SubmitPayload = {
 	 *  "send with opposite follow-up" shortcut. Ignored when `forceQueue`
 	 *  is set. */
 	followUpBehaviorOverride?: FollowUpBehavior;
+	startSubmitMode?: "startNow" | "saveForLater";
+	/** Snapshot of the editor's full Lexical state at submit time. Captured
+	 *  synchronously inside the composer so callers that need to round-trip
+	 *  chips/text/images (e.g. the kanban "backlog" handler that copies the
+	 *  draft to a freshly-created session) can do so without losing the
+	 *  badge nodes that a plain prompt-string would discard. */
+	editorStateSnapshot?: SerializedEditorState;
 };
+
+export type ComposerSubmitPayload = SubmitPayload;
 
 type UseConversationStreamingArgs = {
 	composerContextKey: string;

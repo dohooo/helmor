@@ -45,7 +45,7 @@ fn resolve_workspace(workspace_ref: &str) -> Result<(String, PathBuf)> {
     let id = service::resolve_workspace_ref(workspace_ref)?;
     let record = workspace_models::load_workspace_record_by_id(&id)?
         .with_context(|| format!("Workspace not found: {id}"))?;
-    let root = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+    let root = crate::workspace::helpers::workspace_path(&record)?;
     Ok((id, root))
 }
 

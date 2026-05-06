@@ -68,6 +68,7 @@ export type WorkspaceRow = {
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
 	state?: WorkspaceState;
+	mode?: WorkspaceMode;
 	hasUnread?: boolean;
 	workspaceUnread?: number;
 	unreadSessionCount?: number;
@@ -170,6 +171,7 @@ export type WorkspaceSummary = {
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
 	state: WorkspaceState;
+	mode?: WorkspaceMode;
 	hasUnread: boolean;
 	workspaceUnread: number;
 	unreadSessionCount: number;
@@ -295,6 +297,7 @@ export type WorkspaceDetail = {
 	branch?: string | null;
 	initializationParentBranch?: string | null;
 	intendedTargetBranch?: string | null;
+	mode: WorkspaceMode;
 	pinnedAt?: string | null;
 	prTitle?: string | null;
 	prSyncState?: PrSyncState;
@@ -903,6 +906,199 @@ export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Inbox (kanban-mode left sidebar)
+// ---------------------------------------------------------------------------
+
+export type InboxItemSource =
+	| "github_issue"
+	| "github_pr"
+	| "github_discussion";
+
+export type InboxItemStateTone =
+	| "open"
+	| "closed"
+	| "merged"
+	| "draft"
+	| "answered"
+	| "unanswered"
+	| "urgent"
+	| "neutral";
+
+export type InboxItem = {
+	id: string;
+	source: InboxItemSource;
+	externalId: string;
+	externalUrl: string;
+	title: string;
+	subtitle?: string | null;
+	state?: { label: string; tone: InboxItemStateTone } | null;
+	lastActivityAt: number;
+};
+
+export type InboxItemDetailRef = {
+	provider: Extract<ForgeProvider, "github">;
+	login: string;
+	source: InboxItemSource;
+	externalId: string;
+};
+
+export type GitHubIssueDetail = {
+	externalId: string;
+	title: string;
+	body?: string | null;
+	url: string;
+	state: string;
+	stateReason?: string | null;
+	authorLogin?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
+	closedAt?: string | null;
+};
+
+export type GitHubPullRequestDetail = {
+	externalId: string;
+	title: string;
+	body?: string | null;
+	url: string;
+	state: string;
+	merged: boolean;
+	draft: boolean;
+	authorLogin?: string | null;
+	baseRefName?: string | null;
+	headRefName?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
+};
+
+export type GitHubDiscussionDetail = {
+	externalId: string;
+	title: string;
+	body?: string | null;
+	url: string;
+	answered?: boolean | null;
+	authorLogin?: string | null;
+	categoryName?: string | null;
+	categoryEmoji?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
+};
+
+export type InboxItemDetail =
+	| { type: "github_issue"; data: GitHubIssueDetail }
+	| { type: "github_pr"; data: GitHubPullRequestDetail }
+	| { type: "github_discussion"; data: GitHubDiscussionDetail };
+
+export type InboxPage = {
+	items: InboxItem[];
+	/** Opaque cursor — pass back verbatim to fetch the next page. `null`
+	 * when there are no more pages from any enabled source. */
+	nextCursor: string | null;
+};
+
+export type InboxToggles = {
+	issues: boolean;
+	prs: boolean;
+	discussions: boolean;
+};
+
+export type InboxStateFilter =
+	| "open"
+	| "closed"
+	| "merged"
+	| "all"
+	| "answered"
+	| "unanswered";
+
+export type InboxScopeFilter =
+	| "involves"
+	| "assigned"
+	| "mentioned"
+	| "created"
+	| "author"
+	| "assignee"
+	| "mentions"
+	| "reviewRequested"
+	| "reviewedBy"
+	| "all";
+
+export type InboxSortFilter = "updated" | "created" | "comments";
+export type InboxDraftFilter = "exclude" | "include" | "only";
+
+export type InboxFilters = {
+	query?: string | null;
+	state?: InboxStateFilter | null;
+	scope?: InboxScopeFilter[] | null;
+	sort?: InboxSortFilter | null;
+	draft?: InboxDraftFilter | null;
+	labels?: string | null;
+};
+
+export type GithubLabelOption = {
+	name: string;
+	color?: string | null;
+	description?: string | null;
+};
+
+export async function listGithubLabels(args: {
+	login: string;
+	repos: string[];
+}): Promise<GithubLabelOption[]> {
+	try {
+		return await invoke<GithubLabelOption[]>("list_github_labels", {
+			login: args.login,
+			repos: args.repos,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load GitHub labels."),
+		);
+	}
+}
+
+export async function listInboxItems(args: {
+	provider: ForgeProvider;
+	login: string;
+	toggles: InboxToggles;
+	cursor?: string | null;
+	limit?: number;
+	/** GitHub `owner/name` filter — when present, all enabled kinds are
+	 *  scoped to that single repo via a `repo:owner/name` qualifier. */
+	repo?: string | null;
+	filters?: InboxFilters | null;
+}): Promise<InboxPage> {
+	try {
+		return await invoke<InboxPage>("list_inbox_items", {
+			provider: args.provider,
+			login: args.login,
+			toggles: args.toggles,
+			cursor: args.cursor ?? null,
+			limit: args.limit ?? 20,
+			repo: args.repo ?? null,
+			filters: args.filters ?? null,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to load inbox items."));
+	}
+}
+
+export async function getInboxItemDetail(
+	ref: InboxItemDetailRef,
+): Promise<InboxItemDetail | null> {
+	try {
+		return await invoke<InboxItemDetail | null>("get_inbox_item_detail", {
+			provider: ref.provider,
+			login: ref.login,
+			source: ref.source,
+			externalId: ref.externalId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load inbox item details."),
+		);
+	}
+}
+
 export type SlashCommandEntry = {
 	name: string;
 	description: string;
@@ -981,10 +1177,85 @@ export async function listRemoteBranches(opts: {
 }): Promise<string[]> {
 	try {
 		return await invoke<string[]>("list_remote_branches", opts);
-	} catch {
+	} catch (error) {
+		console.warn("[helmor] listRemoteBranches failed:", error);
 		return [];
 	}
 }
+
+/**
+ * Current HEAD branch of the repo's local working directory. Used by
+ * the start page in local mode to default the picker to the branch
+ * the user is currently on. `null` when the repo path is missing or
+ * HEAD is detached.
+ */
+export async function getRepoCurrentBranch(
+	repoId: string,
+): Promise<string | null> {
+	try {
+		return await invoke<string | null>("get_repo_current_branch", {
+			repoId,
+		});
+	} catch (error) {
+		console.warn("[helmor] getRepoCurrentBranch failed:", error);
+		return null;
+	}
+}
+
+/**
+ * Merged local + remote branches for the local-mode start picker.
+ * Deduped by name, alphabetical. Worktree mode still uses
+ * `listRemoteBranches` (remote-only).
+ */
+export async function listBranchesForLocalPicker(
+	repoId: string,
+): Promise<string[]> {
+	try {
+		return await invoke<string[]>("list_branches_for_local_picker", {
+			repoId,
+		});
+	} catch (error) {
+		console.warn("[helmor] listBranchesForLocalPicker failed:", error);
+		return [];
+	}
+}
+
+/**
+ * `git checkout -b <branch>` against the repo's source path. Caller is
+ * responsible for refreshing whatever query feeds the branch picker.
+ */
+export async function createAndCheckoutBranch(
+	repoId: string,
+	branch: string,
+): Promise<void> {
+	await invoke("create_and_checkout_branch", { repoId, branch });
+}
+
+export type MoveLocalToWorktreeResponse = {
+	workspaceId: string;
+	directoryName: string;
+	branch: string;
+	state: WorkspaceState;
+};
+
+/**
+ * Move a local-mode workspace into a fresh worktree (relocation, not a
+ * clone — the workspace's mode flips Local → Worktree, same id). The
+ * new worktree gets an auto-named branch with the local repo's
+ * current state (tracked + untracked) carried over. The local repo
+ * itself is not modified.
+ */
+export async function moveLocalWorkspaceToWorktree(
+	workspaceId: string,
+): Promise<MoveLocalToWorktreeResponse> {
+	return invoke<MoveLocalToWorktreeResponse>(
+		"move_local_workspace_to_worktree",
+		{ workspaceId },
+	);
+}
+
+/** How a workspace's filesystem is provisioned. */
+export type WorkspaceMode = "worktree" | "local";
 
 export type UpdateIntendedTargetBranchResponse = {
 	/** True if the workspace's local branch was hard-reset to origin/<target>. */
@@ -1771,12 +2042,20 @@ export async function createWorkspaceFromRepo(
  * workspace + session UUIDs, inserts the `initializing` DB row + initial
  * session, and returns all metadata plus repo-level scripts. The
  * frontend paints with this response immediately — no placeholders.
+ *
+ * `sourceBranch` (optional): branch to branch the new workspace from. When
+ * omitted, the repo's default branch is used. The kanban "create" flow
+ * forwards the user's branch picker selection here.
  */
 export async function prepareWorkspaceFromRepo(
 	repoId: string,
+	sourceBranch?: string | null,
+	mode?: WorkspaceMode | null,
 ): Promise<PrepareWorkspaceResponse> {
 	return invoke<PrepareWorkspaceResponse>("prepare_workspace_from_repo", {
 		repoId,
+		sourceBranch: sourceBranch ?? null,
+		mode: mode ?? null,
 	});
 }
 
@@ -2384,6 +2663,31 @@ export async function mutateCodexGoal(
 	action: "pause" | "clear",
 ): Promise<void> {
 	await invoke("mutate_codex_goal", { sessionId, action });
+}
+
+/** One row of `listSessionDrafts`. `draftState` is opaque JSON (Lexical
+ *  SerializedEditorState) — frontend parses on read. */
+export type SessionDraftRow = {
+	sessionId: string;
+	draftState: string;
+};
+
+/** Bulk-load every persisted composer draft. Called once at app boot
+ *  to hydrate the in-memory draft cache that backs the synchronous
+ *  `loadPersistedDraft` API. */
+export async function listSessionDrafts(): Promise<SessionDraftRow[]> {
+	return await invoke<SessionDraftRow[]>("list_session_drafts");
+}
+
+/** Persist (or clear) a session's composer draft. Pass `null` to clear. */
+export async function setSessionDraft(
+	sessionId: string,
+	draftState: string | null,
+): Promise<void> {
+	await invoke<void>("set_session_draft", {
+		sessionId,
+		draftState,
+	});
 }
 
 /** Read the account-global Codex rate-limit snapshot. Null until Codex has

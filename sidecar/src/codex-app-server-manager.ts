@@ -767,8 +767,9 @@ export class CodexAppServerManager implements SessionManager {
 		branchRenamePrompt: string | null,
 		emitter: SidecarEmitter,
 		timeoutMs = TITLE_GENERATION_TIMEOUT_MS,
-		_options?: GenerateTitleOptions,
+		options?: GenerateTitleOptions,
 	): Promise<void> {
+		const generateBranch = options?.generateBranch ?? true;
 		const cwd = process.cwd();
 		const server = new CodexAppServer({
 			binaryPath: CODEX_BIN_PATH,
@@ -821,7 +822,11 @@ export class CodexAppServerManager implements SessionManager {
 				input: [
 					{
 						type: "text",
-						text: buildTitlePrompt(userMessage, branchRenamePrompt),
+						text: buildTitlePrompt(
+							userMessage,
+							branchRenamePrompt,
+							generateBranch,
+						),
 						text_elements: [],
 					},
 				],

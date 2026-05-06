@@ -11,7 +11,7 @@ use tauri::{
 };
 
 use crate::workspace::scripts::{ScriptContext, ScriptEvent, ScriptProcessManager};
-use crate::{agents, git_watcher, models::db, service, sidecar};
+use crate::{agents, data_dir, git_watcher, models::db, service, sidecar};
 
 use super::common::{run_blocking, CmdResult};
 
@@ -418,6 +418,88 @@ pub fn get_cli_status() -> CmdResult<CliStatus> {
     let source = std::env::current_exe().context("Cannot determine app executable path")?;
     let cli_binary = bundled_cli_binary(&source)?;
     Ok(cli_status_for_paths(&install_path, &cli_binary))
+}
+
+/// File-backed React Query persister storage. The cache lives in the
+/// data dir (next to `helmor.db`) instead of localStorage, so it isn't
+/// bound by the webview's ~5–10 MB localStorage quota. The frontend
+/// addresses each cache key as a distinct file under
+/// `<data_dir>/query-cache/<key>` — only one key is in use today
+/// (`helmor-query-cache`), but the namespacing keeps the door open for
+/// the persister's optional `entries()` extension.
+fn query_cache_dir() -> anyhow::Result<PathBuf> {
+    let dir = data_dir::data_dir()?.join("query-cache");
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("Failed to create query cache dir at {dir:?}"))?;
+    Ok(dir)
+}
+
+/// Reject anything that could escape the cache dir (`..`, `/`, etc.) —
+/// the key comes from JS and must round-trip cleanly to a flat
+/// filename. Allowed chars cover the keys TanStack Query persister uses
+/// in practice (alphanumeric, `-`, `_`, `:`, `.`).
+fn sanitize_cache_key(key: &str) -> anyhow::Result<String> {
+    if key.is_empty() {
+        anyhow::bail!("Empty query cache key");
+    }
+    if !key
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ':' || c == '.')
+    {
+        anyhow::bail!("Invalid query cache key: {key:?}");
+    }
+    Ok(key.to_string())
+}
+
+fn query_cache_path(key: &str) -> anyhow::Result<PathBuf> {
+    let safe = sanitize_cache_key(key)?;
+    Ok(query_cache_dir()?.join(format!("{safe}.json")))
+}
+
+#[tauri::command]
+pub async fn read_query_cache(key: String) -> CmdResult<Option<String>> {
+    run_blocking(move || {
+        let path = query_cache_path(&key)?;
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => Ok(Some(contents)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => {
+                Err(anyhow::Error::from(err)
+                    .context(format!("Failed to read query cache at {path:?}")))
+            }
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn write_query_cache(key: String, value: String) -> CmdResult<()> {
+    run_blocking(move || {
+        let path = query_cache_path(&key)?;
+        // Atomic write: stage to a sibling tmp file then rename. Avoids
+        // a half-written cache surviving a crash mid-flush.
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, &value)
+            .with_context(|| format!("Failed to stage query cache at {tmp:?}"))?;
+        std::fs::rename(&tmp, &path)
+            .with_context(|| format!("Failed to commit query cache to {path:?}"))?;
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_query_cache(key: String) -> CmdResult<()> {
+    run_blocking(move || {
+        let path = query_cache_path(&key)?;
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(anyhow::Error::from(err)
+                .context(format!("Failed to delete query cache at {path:?}"))),
+        }
+    })
+    .await
 }
 
 #[tauri::command]

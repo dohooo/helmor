@@ -53,7 +53,7 @@ pub async fn spawn_terminal(
     // we couldn't resolve the workspace directory.
     let workspace_root = workspace
         .as_ref()
-        .and_then(|ws| crate::data_dir::workspace_dir(&ws.repo_name, &ws.directory_name).ok());
+        .and_then(|ws| crate::workspace::helpers::workspace_path(ws).ok());
     let working_dir = workspace_root
         .as_ref()
         .map(|p| p.display().to_string())

@@ -1,5 +1,6 @@
 import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
 import { focusManager, QueryClient, queryOptions } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 import {
 	type ActionKind,
 	type AgentProvider,
@@ -18,6 +19,7 @@ import {
 	getWorkspaceAccountProfile,
 	getWorkspaceForge,
 	listForgeAccounts,
+	listGithubLabels,
 	listRepositories,
 	listSlashCommands,
 	listWorkspaceCandidateDirectories,
@@ -94,6 +96,14 @@ export const helmorQueryKeys = {
 	/// invalidates the heavyweight `forgeAccounts` cache.
 	forgeLogins: (provider: string, host: string) =>
 		["forgeLogins", provider, host] as const,
+	inboxItemDetail: (
+		provider: string,
+		login: string,
+		source: string,
+		externalId: string,
+	) => ["inboxItemDetail", provider, login, source, externalId] as const,
+	githubLabels: (login: string, repos: string[]) =>
+		["githubLabels", login, ...repos] as const,
 	workspaceGitActionStatus: (workspaceId: string) =>
 		["workspaceGitActionStatus", workspaceId] as const,
 	workspaceForgeActionStatus: (workspaceId: string) =>
@@ -172,33 +182,98 @@ export function createHelmorQueryClient() {
 	});
 }
 
-// Surface persister write failures (quota exceeded, security errors) instead
-// of letting them silently disable persistence.
-const loggingLocalStorage: Storage = {
-	get length() {
-		return window.localStorage.length;
-	},
-	clear: () => window.localStorage.clear(),
-	getItem: (k) => window.localStorage.getItem(k),
-	key: (i) => window.localStorage.key(i),
-	removeItem: (k) => window.localStorage.removeItem(k),
-	setItem: (k, v) => {
+/** AsyncStorage adapter backed by Tauri-managed files in the helmor data
+ * dir. Replaces the prior `window.localStorage` backend so the React
+ * Query persister isn't bound by the webview's ~5–10 MB quota. The
+ * three helper IPC commands (`read_query_cache` / `write_query_cache` /
+ * `delete_query_cache`) sit on top of `<data_dir>/query-cache/<key>.json`
+ * with atomic-rename writes.
+ *
+ * The TanStack Query `AsyncStorage` interface only needs `getItem`,
+ * `setItem`, `removeItem` — no `length` / `key()` / `clear()` like
+ * `Storage`. Returning `null` for missing keys matches the localStorage
+ * convention the persister was written against.
+ *
+ * Boot-time migration: if `localStorage` still has the legacy
+ * `helmor-query-cache` blob from older versions, copy it into the new
+ * file-backed location once and clear it from localStorage. Idempotent
+ * — runs every boot, no-ops once the localStorage key is gone.
+ */
+const QUERY_CACHE_KEY = "helmor-query-cache";
+let migrationPromise: Promise<void> | null = null;
+
+async function migrateLegacyLocalStorageQueryCache(): Promise<void> {
+	if (typeof window === "undefined") return;
+	let legacy: string | null = null;
+	try {
+		legacy = window.localStorage.getItem(QUERY_CACHE_KEY);
+	} catch {
+		return;
+	}
+	if (!legacy) return;
+	try {
+		await invoke<void>("write_query_cache", {
+			key: QUERY_CACHE_KEY,
+			value: legacy,
+		});
 		try {
-			window.localStorage.setItem(k, v);
+			window.localStorage.removeItem(QUERY_CACHE_KEY);
+		} catch {
+			/* keep going — DB has it */
+		}
+		console.info(
+			`[helmor] migrated localStorage query cache (${(legacy.length / 1024).toFixed(1)} KB) into data dir`,
+		);
+	} catch (error) {
+		console.error(
+			"[helmor] failed to migrate legacy localStorage query cache",
+			error,
+		);
+	}
+}
+
+function ensureQueryCacheMigration(): Promise<void> {
+	if (!migrationPromise) {
+		migrationPromise = migrateLegacyLocalStorageQueryCache();
+	}
+	return migrationPromise;
+}
+
+const tauriFsQueryCacheStorage = {
+	getItem: async (key: string): Promise<string | null> => {
+		await ensureQueryCacheMigration();
+		try {
+			const value = await invoke<string | null>("read_query_cache", { key });
+			return value ?? null;
 		} catch (error) {
-			const sizeKb = (v.length / 1024).toFixed(1);
+			console.error(`[helmor] read_query_cache failed for "${key}"`, error);
+			return null;
+		}
+	},
+	setItem: async (key: string, value: string): Promise<void> => {
+		try {
+			await invoke<void>("write_query_cache", { key, value });
+		} catch (error) {
+			const sizeKb = (value.length / 1024).toFixed(1);
 			console.error(
-				`[helmor] localStorage.setItem failed for "${k}" (${sizeKb} KB)`,
+				`[helmor] write_query_cache failed for "${key}" (${sizeKb} KB)`,
 				error,
 			);
 			throw error;
 		}
 	},
+	removeItem: async (key: string): Promise<void> => {
+		try {
+			await invoke<void>("delete_query_cache", { key });
+		} catch (error) {
+			console.error(`[helmor] delete_query_cache failed for "${key}"`, error);
+		}
+	},
 };
 
 export const helmorQueryPersister = createAsyncStoragePersister({
-	storage: loggingLocalStorage,
-	key: "helmor-query-cache",
+	storage: tauriFsQueryCacheStorage,
+	key: QUERY_CACHE_KEY,
 });
 
 export function workspaceGroupsQueryOptions() {
@@ -228,6 +303,18 @@ export function repositoriesQueryOptions() {
 		initialData: [],
 		initialDataUpdatedAt: 0,
 		staleTime: 0,
+	});
+}
+
+export function githubLabelsQueryOptions(login: string, repos: string[]) {
+	const sortedRepos = [...repos].sort();
+	return queryOptions({
+		queryKey: helmorQueryKeys.githubLabels(login, sortedRepos),
+		queryFn: () => listGithubLabels({ login, repos: sortedRepos }),
+		initialData: [],
+		initialDataUpdatedAt: 0,
+		staleTime: 10 * 60_000,
+		gcTime: 24 * 60 * 60_000,
 	});
 }
 

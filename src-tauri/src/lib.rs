@@ -17,6 +17,7 @@ pub mod schema;
 pub mod service;
 mod shell_env;
 pub mod sidecar;
+mod system_limits;
 pub mod ui_sync;
 pub mod updater;
 pub mod workspace;
@@ -49,6 +50,8 @@ pub fn schema_init(conn: &rusqlite::Connection) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    system_limits::raise_nofile_soft_limit();
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
@@ -234,6 +237,9 @@ pub fn run() {
             commands::system_commands::get_agent_login_status,
             commands::system_commands::get_helmor_skills_status,
             commands::system_commands::install_cli,
+            commands::system_commands::read_query_cache,
+            commands::system_commands::write_query_cache,
+            commands::system_commands::delete_query_cache,
             commands::system_commands::install_helmor_skills,
             commands::system_commands::enter_onboarding_window_mode,
             commands::system_commands::exit_onboarding_window_mode,
@@ -244,6 +250,9 @@ pub fn run() {
             commands::system_commands::resize_agent_login_terminal,
             commands::forge_commands::get_workspace_forge,
             commands::forge_commands::list_forge_accounts,
+            commands::forge_commands::list_inbox_items,
+            commands::forge_commands::list_github_labels,
+            commands::forge_commands::get_inbox_item_detail,
             commands::forge_commands::get_workspace_account_profile,
             commands::forge_commands::cache_forge_avatar,
             commands::forge_commands::list_forge_logins,
@@ -295,10 +304,16 @@ pub fn run() {
             commands::session_commands::get_session_context_usage,
             commands::session_commands::get_session_codex_goal,
             commands::session_commands::mutate_codex_goal,
+            commands::session_commands::list_session_drafts,
+            commands::session_commands::set_session_draft,
             commands::session_commands::get_live_context_usage,
             commands::session_commands::mark_session_read,
             commands::session_commands::mark_session_unread,
             commands::workspace_commands::list_remote_branches,
+            commands::workspace_commands::list_branches_for_local_picker,
+            commands::workspace_commands::get_repo_current_branch,
+            commands::workspace_commands::create_and_checkout_branch,
+            commands::workspace_commands::move_local_workspace_to_worktree,
             commands::workspace_commands::rename_workspace_branch,
             commands::workspace_commands::update_intended_target_branch,
             commands::workspace_commands::prefetch_remote_refs,
