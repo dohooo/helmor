@@ -141,6 +141,11 @@ When a snapshot drifts: look at the diff first. Only accept after confirming the
   2. Pull the new SHA256 from `…/checksums.txt` (URLs in the file's header comment) and update `GH_SHA256` / `GLAB_SHA256`.
   3. Wipe `sidecar/.bundle-cache/` and re-run `bun run build` in `sidecar/` to force re-download + verify.
   Bump cadence: every release cycle if upstream has shipped a notable fix; immediately on security advisories. Pin so the auth-status JSON shape Helmor parses doesn't drift unexpectedly.
+- **Bundled agent CLIs (`claude-code`, `codex`)**: Pulled in via `sidecar/package.json` and staged into `sidecar/dist/vendor/{claude-code,codex}/` as platform-native binaries. Both upstreams ship per-platform npm sub-packages (`@anthropic-ai/claude-code-darwin-{arm64,x64}`, `@openai/codex-darwin-{arm64,x64}`). Cross-arch CI staging downloads the tarball straight from the npm registry and verifies against `CLAUDE_CODE_SHA256` / `CODEX_SHA256` in `stage-vendor.ts`. To upgrade:
+  1. Bump the version in `sidecar/package.json`, `cd sidecar && bun install`.
+  2. Compute the SHA256 of both arch tarballs (`shasum -a 256` on the cached `.tgz`) and update the table in `stage-vendor.ts` (key it under the new version string).
+  3. Wipe `sidecar/.bundle-cache/` and run `bun run build` in `sidecar/` to verify.
+  Both binaries are `bun build --compile` output (~200 MB each on macOS), so `maybeSignMacBinary(_, true)` is required — JSC needs `allow-jit` / `allow-unsigned-executable-memory` under hardened runtime. Run pipeline snapshot tests after every claude-code bump (`cd src-tauri && cargo test --tests`); the SDK event shape is the contract Helmor's accumulator depends on.
 
 ## 🚨 Code organization rules
 

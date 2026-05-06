@@ -124,6 +124,9 @@ async function driveToSendMessage(sessionId: string) {
 		activeRequestId: null,
 		activeEmitter: null,
 		notificationGate: null,
+		lastSentModel: "",
+		lastRetryAt: null,
+		lastRetryNotice: null,
 	});
 
 	const sendMessagePromise = manager.sendMessage(
@@ -137,6 +140,7 @@ async function driveToSendMessage(sessionId: string) {
 			effortLevel: undefined,
 			permissionMode: undefined,
 			fastMode: undefined,
+			images: [],
 		},
 		emitter,
 	);
@@ -181,7 +185,7 @@ describe("CodexAppServerManager.steer gate — real manager wiring", () => {
 		const { manager, fake, events, sendMessagePromise } =
 			await driveToSendMessage("s1");
 
-		const steerPromise = manager.steer("s1", "focus on failing tests", []);
+		const steerPromise = manager.steer("s1", "focus on failing tests", [], []);
 		// Let steer() install the gate and park on sendRequest.
 		await new Promise((r) => setTimeout(r, 0));
 
@@ -220,7 +224,7 @@ describe("CodexAppServerManager.steer gate — real manager wiring", () => {
 		const { manager, fake, events, sendMessagePromise } =
 			await driveToSendMessage("s1");
 
-		const steerPromise = manager.steer("s1", "switch direction", []);
+		const steerPromise = manager.steer("s1", "switch direction", [], []);
 		await new Promise((r) => setTimeout(r, 0));
 
 		// Tool approval request mid-steer. Without handleRequest's
@@ -255,7 +259,7 @@ describe("CodexAppServerManager.steer gate — real manager wiring", () => {
 		const { manager, fake, events, sendMessagePromise } =
 			await driveToSendMessage("s1");
 
-		const steerPromise = manager.steer("s1", "bad steer", []);
+		const steerPromise = manager.steer("s1", "bad steer", [], []);
 		await new Promise((r) => setTimeout(r, 0));
 
 		fake.fireNotification("item/delta-1", {
@@ -277,6 +281,95 @@ describe("CodexAppServerManager.steer gate — real manager wiring", () => {
 		expect(idxSynthetic).toBe(-1);
 
 		await finish(fake, sendMessagePromise);
+	});
+
+	test("legacy retry window only suppresses reconnect notices", async () => {
+		const { manager, fake, events, sendMessagePromise, sessionId } =
+			await driveToSendMessage("s1");
+
+		// Simulate an older Codex app-server build: stderr already emitted a
+		// reconnect line, but the JSON-RPC error lacks structured willRetry.
+		// Only explicit reconnect progress should be suppressed; terminal
+		// provider errors inside that window must still surface immediately.
+		// biome-ignore lint/suspicious/noExplicitAny: inspect private sessions in regression test
+		(manager as any).sessions.get(sessionId).lastRetryAt = Date.now();
+
+		await fake.fireNotification("error", {
+			error: { message: "Reconnecting... 1/5" },
+		});
+		await new Promise((r) => setTimeout(r, 0));
+
+		const reconnectError = events.find(
+			(e) => (e as { type?: string }).type === "error",
+		);
+		expect(reconnectError).toBeUndefined();
+		expect(events).toContainEqual({
+			id: "stream-rid-1",
+			type: "system",
+			subtype: "codex_reconnecting",
+			attempt: 1,
+			max_retries: 5,
+			retry_delay_ms: 0,
+			error: "Reconnecting... 1/5",
+		});
+
+		await finish(fake, sendMessagePromise);
+	});
+
+	test("structured retry notices are delivered once with heartbeat", async () => {
+		const { fake, events, sendMessagePromise } = await driveToSendMessage("s1");
+
+		await fake.fireNotification("error", {
+			willRetry: true,
+			error: { message: "Reconnecting... 2/5" },
+		});
+		await fake.fireNotification("error", {
+			willRetry: true,
+			error: { message: "Reconnecting... 2/5" },
+		});
+		await new Promise((r) => setTimeout(r, 0));
+
+		expect(
+			events.filter((e) => (e as { type?: string }).type === "heartbeat"),
+		).toHaveLength(2);
+		expect(
+			events.filter(
+				(e) =>
+					(e as { type?: string; subtype?: string }).type === "system" &&
+					(e as { subtype?: string }).subtype === "codex_reconnecting",
+			),
+		).toEqual([
+			{
+				id: "stream-rid-1",
+				type: "system",
+				subtype: "codex_reconnecting",
+				attempt: 2,
+				max_retries: 5,
+				retry_delay_ms: 0,
+				error: "Reconnecting... 2/5",
+			},
+		]);
+
+		await finish(fake, sendMessagePromise);
+	});
+
+	test("terminal errors emit inside a legacy retry window", async () => {
+		const { manager, fake, events, sendMessagePromise, sessionId } =
+			await driveToSendMessage("s1");
+
+		// biome-ignore lint/suspicious/noExplicitAny: inspect private sessions in regression test
+		(manager as any).sessions.get(sessionId).lastRetryAt = Date.now();
+
+		await fake.fireNotification("error", {
+			error: { message: "Reconnecting... exhausted retries" },
+		});
+		await sendMessagePromise;
+
+		expect(events).toContainEqual({
+			id: "stream-rid-1",
+			type: "error",
+			message: "Reconnecting... exhausted retries",
+		});
 	});
 
 	test("steady-state: notifications flow through when no steer is pending", async () => {

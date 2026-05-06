@@ -7,6 +7,8 @@
  */
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import readline from "node:readline";
 import { logger } from "./logger.js";
 
@@ -54,6 +56,13 @@ export interface CodexAppServerOptions {
 	onRequest: OnRequest;
 	onExit: OnExit;
 	onError: OnError;
+	/** Fired when Codex's own SSE retry loop emits a "Reconnecting…"
+	 *  line on stderr. The manager uses this to (a) pulse a synthetic
+	 *  heartbeat keeping Rust's 45s watchdog satisfied, (b) forward a
+	 *  non-terminal retry notice to the UI, and (c) record a recency
+	 *  timestamp so a transient {method:"error"} notification arriving
+	 *  inside the retry window can be suppressed. */
+	onRetry?: (message: string) => void;
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
@@ -70,6 +79,28 @@ const CODEX_APP_SERVER_ARGS = [
 
 export function buildCodexAppServerArgs(): string[] {
 	return [...CODEX_APP_SERVER_ARGS];
+}
+
+/**
+ * Codex ships ripgrep next to its binary and spawns it by name on PATH for
+ * in-thread search. Two layouts to support:
+ *   - dev (node_modules):  <pkg>/vendor/<triple>/codex/codex
+ *                          <pkg>/vendor/<triple>/path/rg          ← parent's sibling
+ *   - staged (release):    dist/vendor/codex/codex
+ *                          dist/vendor/codex/path/rg              ← own sibling
+ */
+function buildCodexEnv(binaryPath: string): NodeJS.ProcessEnv {
+	const env = { ...process.env };
+	const candidates = [
+		join(dirname(binaryPath), "..", "path"),
+		join(dirname(binaryPath), "path"),
+	];
+	const pathDir = candidates.find((p) => existsSync(p));
+	if (pathDir) {
+		const sep = process.platform === "win32" ? ";" : ":";
+		env.PATH = `${pathDir}${sep}${env.PATH ?? ""}`;
+	}
+	return env;
 }
 
 export class CodexAppServer {
@@ -91,15 +122,23 @@ export class CodexAppServer {
 		this.child = spawn(opts.binaryPath, buildCodexAppServerArgs(), {
 			cwd: opts.cwd,
 			stdio: ["pipe", "pipe", "pipe"],
+			env: buildCodexEnv(opts.binaryPath),
 		});
 
 		this.output = readline.createInterface({ input: this.child.stdout });
 		this.output.on("line", (line) => this.handleLine(line));
 
 		this.child.stderr.on("data", (chunk: Buffer) => {
-			logger.debug("codex app-server stderr", {
-				data: chunk.toString().trim(),
-			});
+			const text = chunk.toString();
+			logger.debug("codex app-server stderr", { data: text.trim() });
+			const retryMessage = extractReconnectNotice(text);
+			if (retryMessage) {
+				try {
+					opts.onRetry?.(retryMessage);
+				} catch (err) {
+					logger.error("onRetry handler threw", { err: String(err) });
+				}
+			}
 		});
 
 		this.child.on("error", (err) => {
@@ -234,6 +273,14 @@ export class CodexAppServer {
 		}
 		this.pending.clear();
 	}
+}
+
+function extractReconnectNotice(text: string): string | null {
+	for (const line of text.split(/\r?\n/)) {
+		const trimmed = line.trim();
+		if (/Reconnecting/i.test(trimmed)) return trimmed;
+	}
+	return null;
 }
 
 // ---------------------------------------------------------------------------

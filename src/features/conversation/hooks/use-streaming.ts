@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { SerializedEditorState } from "lexical";
 import {
 	useCallback,
 	useEffect,
@@ -17,10 +18,15 @@ import {
 	type PendingElicitation,
 } from "@/features/conversation/pending-elicitation";
 import { stabilizeStreamingMessages } from "@/features/conversation/streaming-tail-collapse";
-import type { AgentModelOption, ThreadMessageLike } from "@/lib/api";
+import type {
+	AgentModelOption,
+	CodexGoalState,
+	ThreadMessageLike,
+} from "@/lib/api";
 import {
 	generateSessionTitle,
 	loadRepoPreferences,
+	mutateCodexGoal,
 	renameSession,
 	respondToDeferredTool,
 	respondToElicitationRequest,
@@ -114,7 +120,16 @@ type SubmitPayload = {
 	 *  "send with opposite follow-up" shortcut. Ignored when `forceQueue`
 	 *  is set. */
 	followUpBehaviorOverride?: FollowUpBehavior;
+	startSubmitMode?: "startNow" | "saveForLater";
+	/** Snapshot of the editor's full Lexical state at submit time. Captured
+	 *  synchronously inside the composer so callers that need to round-trip
+	 *  chips/text/images (e.g. the kanban "backlog" handler that copies the
+	 *  draft to a freshly-created session) can do so without losing the
+	 *  badge nodes that a plain prompt-string would discard. */
+	editorStateSnapshot?: SerializedEditorState;
 };
+
+export type ComposerSubmitPayload = SubmitPayload;
 
 type UseConversationStreamingArgs = {
 	composerContextKey: string;
@@ -463,14 +478,36 @@ export function useConversationStreaming({
 		[],
 	);
 
-	const handleStopStream = useCallback(() => {
+	const handleStopStream = useCallback(async () => {
 		const activeSession = activeSessionByContext[composerContextKey];
 		if (!activeSession) {
 			return;
 		}
+		const sessionId = activeSession.stopSessionId;
+		const goal =
+			activeSession.provider === "codex"
+				? queryClient.getQueryData<CodexGoalState | null>(
+						helmorQueryKeys.sessionCodexGoal(sessionId),
+					)
+				: null;
 
-		void stopAgentStream(activeSession.stopSessionId, activeSession.provider);
-	}, [activeSessionByContext, composerContextKey]);
+		// For codex sessions with an active goal, flip the goal to paused
+		// FIRST so codex doesn't auto-spawn a fresh continuation turn the
+		// moment we abort the current one. Sequential: mutate -> stop, so
+		// the codex child is still alive when mutateCodexGoal needs it.
+		// (mutateCodexGoal is best-effort on the sidecar side too — if a
+		// race somehow kills the child first it just no-ops.) The user
+		// resumes by typing `/goal resume`.
+		if (goal && goal.status === "active") {
+			try {
+				await mutateCodexGoal(sessionId, "pause");
+			} catch {
+				// Surfaced via toast inside mutateCodexGoal already; don't
+				// block the abort.
+			}
+		}
+		await stopAgentStream(sessionId, activeSession.provider);
+	}, [activeSessionByContext, composerContextKey, queryClient]);
 
 	const handlePermissionResponse = useCallback(
 		(
@@ -1104,6 +1141,7 @@ export function useConversationStreaming({
 					text: trimmedPrompt,
 					createdAt: new Date().toISOString(),
 					files: filePaths,
+					images: imagePaths,
 				});
 				const rollback = appendUserMessage(
 					queryClient,
@@ -1138,6 +1176,7 @@ export function useConversationStreaming({
 						provider: liveStream.provider,
 						prompt: trimmedPrompt,
 						files: filePaths,
+						images: imagePaths,
 					});
 					if (!response.accepted) {
 						// Turn already completed / provider rejected —
@@ -1207,6 +1246,7 @@ export function useConversationStreaming({
 				text: trimmedPrompt,
 				createdAt: now,
 				files: filePaths,
+				images: imagePaths,
 			});
 			let titleSeed: string | null = null;
 			if (isFirstUserMessage && !isCompactCommand) {
@@ -1341,6 +1381,7 @@ export function useConversationStreaming({
 						fastMode,
 						userMessageId,
 						files: filePaths,
+						images: imagePaths,
 					},
 					(event) => {
 						if (event.kind === "update") {
@@ -1625,6 +1666,7 @@ export function useConversationStreaming({
 					provider: liveStream.provider,
 					prompt: item.payload.prompt,
 					files: item.payload.filePaths,
+					images: item.payload.imagePaths,
 				});
 				if (!response.accepted) {
 					submitQueue.enqueue(ctx, item.payload);

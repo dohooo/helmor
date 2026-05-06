@@ -43,6 +43,7 @@ export function createOptimisticCreatingWorkspaceDetail(
 		branch: row.branch ?? null,
 		initializationParentBranch: null,
 		intendedTargetBranch: null,
+		mode: row.mode ?? "worktree",
 		pinnedAt: row.pinnedAt ?? null,
 		prTitle: null,
 		archiveCommit: null,
@@ -361,6 +362,7 @@ export function summaryToArchivedRow(summary: WorkspaceSummary): WorkspaceRow {
 		repoIconSrc: summary.repoIconSrc ?? null,
 		repoInitials: summary.repoInitials ?? null,
 		state: summary.state,
+		mode: summary.mode ?? "worktree",
 		hasUnread: summary.hasUnread,
 		workspaceUnread: summary.workspaceUnread,
 		unreadSessionCount: summary.unreadSessionCount,
@@ -461,6 +463,7 @@ export function rowToWorkspaceSummary(
 		repoIconSrc: row.repoIconSrc ?? null,
 		repoInitials: row.repoInitials ?? null,
 		state: row.state ?? "archived",
+		mode: row.mode ?? "worktree",
 		hasUnread: row.hasUnread ?? false,
 		workspaceUnread: row.workspaceUnread ?? 0,
 		unreadSessionCount: row.unreadSessionCount ?? 0,
@@ -570,18 +573,24 @@ export function findModelOption(
  * `msgId` namespaces the per-part ids to match the Rust side's
  * `{msgId}:txt:N` / `{msgId}:mention:N` scheme so optimistic ids survive
  * the round-trip through the adapter without remounting.
+ *
+ * `files` and `images` are merged into a single needle pool. Both must
+ * be passed in — paths with whitespace can only round-trip when matched
+ * against a structured needle, never via regex.
  */
 export function splitTextWithFiles(
 	text: string,
 	files: readonly string[],
 	msgId: string,
+	images: readonly string[] = [],
 ): MessagePart[] {
 	const textId = (idx: number): string => `${msgId}:txt:${idx}`;
 	const mentionId = (idx: number): string => `${msgId}:mention:${idx}`;
-	if (files.length === 0 || text.length === 0) {
+	const needles = [...files, ...images];
+	if (needles.length === 0 || text.length === 0) {
 		return [{ type: "text", id: textId(0), text }];
 	}
-	const sorted = [...files].sort((a, b) => b.length - a.length);
+	const sorted = [...needles].sort((a, b) => b.length - a.length);
 	const matches: { start: number; end: number; path: string }[] = [];
 	for (const file of sorted) {
 		if (!file) continue;
@@ -630,18 +639,20 @@ export function createLiveThreadMessage({
 	text,
 	createdAt,
 	files = [],
+	images = [],
 }: {
 	id: string;
 	role: "user" | "assistant" | "system";
 	text: string;
 	createdAt: string;
 	files?: readonly string[];
+	images?: readonly string[];
 }): ThreadMessageLike {
 	return {
 		role,
 		id,
 		createdAt,
-		content: splitTextWithFiles(text, files, id),
+		content: splitTextWithFiles(text, files, id, images),
 	};
 }
 

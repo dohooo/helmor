@@ -25,6 +25,7 @@ import {
 
 const PREFERENCE_KEYS: RepoPreferenceKey[] = [
 	"createPr",
+	"review",
 	"fixErrors",
 	"resolveConflicts",
 	"branchRename",

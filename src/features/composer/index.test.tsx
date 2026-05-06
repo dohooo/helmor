@@ -7,20 +7,81 @@ import {
 	waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { SerializedEditorState } from "lexical";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
 import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
 import { createHelmorQueryClient } from "@/lib/query-client";
-import { getComposerDraftStorageKey } from "./draft-storage";
+import {
+	__resetDraftCacheForTests,
+	loadPersistedDraft,
+	savePersistedDraft,
+} from "./draft-storage";
 
 vi.mock("@tauri-apps/api/core", () => ({
-	invoke: vi.fn(),
+	invoke: vi.fn(async (cmd: string) => {
+		// Drafts are now DB-backed; the in-memory cache is the
+		// source-of-truth in tests (no real Rust IPC). Returning sane
+		// defaults for the two draft commands keeps the cache plumbing
+		// happy without touching the assertions.
+		if (cmd === "list_session_drafts") return [];
+		if (cmd === "set_session_draft") return undefined;
+		return undefined;
+	}),
 	convertFileSrc: vi.fn((path: string) => `asset://localhost${path}`),
 	Channel: class {
 		onmessage: ((event: unknown) => void) | null = null;
 	},
 }));
+
+/** Match the legacy `localStorage` `.toContain()` assertion shape so
+ *  callers can keep reading "the persisted blob contains text X" without
+ *  reaching into Lexical's editor-state JSON manually. */
+function persistedDraftText(contextKey: string): string {
+	const state = loadPersistedDraft(contextKey);
+	return state ? JSON.stringify(state) : "";
+}
+
+/** Build a minimal Lexical `SerializedEditorState` from one paragraph
+ *  of plain text — keeps the test fixture short. The cast through
+ *  `unknown` is unavoidable: Lexical's `SerializedEditorState` includes
+ *  union types that require `format` to be a specific bit-flag literal,
+ *  but the editor's deserializer only checks structural shape — and we
+ *  want every test to keep using the same plain string for clarity. */
+function paragraphDraft(text: string): SerializedEditorState {
+	return {
+		root: {
+			type: "root",
+			version: 1,
+			format: "",
+			indent: 0,
+			direction: null,
+			children: [
+				{
+					type: "paragraph",
+					version: 1,
+					format: "",
+					indent: 0,
+					direction: null,
+					textFormat: 0,
+					textStyle: "",
+					children: [
+						{
+							type: "text",
+							version: 1,
+							text,
+							format: 0,
+							mode: "normal",
+							style: "",
+							detail: 0,
+						},
+					],
+				},
+			],
+		},
+	} as unknown as SerializedEditorState;
+}
 
 const openerMocks = vi.hoisted(() => ({
 	openUrl: vi.fn(),
@@ -51,6 +112,7 @@ import { WorkspaceComposer } from "./index";
 afterEach(() => {
 	cleanup();
 	window.localStorage.clear();
+	__resetDraftCacheForTests();
 	vi.useRealTimers();
 });
 
@@ -253,13 +315,18 @@ describe("WorkspaceComposer", () => {
 					submitText: "Please implement the full requirements document.",
 				},
 			],
+			expect.objectContaining({
+				editorStateSnapshot: expect.objectContaining({
+					root: expect.any(Object),
+				}),
+			}),
 		);
 	});
 
-	it("persists drafts to localStorage and restores them after remount", async () => {
+	it("persists drafts to the in-memory cache and restores them after remount", async () => {
 		const queryClient = createHelmorQueryClient();
 		const handleSubmit = vi.fn();
-		const storageKey = getComposerDraftStorageKey("session:session-restore");
+		const contextKey = "session:session-restore";
 		const { unmount } = render(
 			<QueryClientProvider client={queryClient}>
 				<WorkspaceComposer
@@ -301,7 +368,7 @@ describe("WorkspaceComposer", () => {
 		);
 
 		await waitFor(() => {
-			expect(window.localStorage.getItem(storageKey)).toContain(
+			expect(persistedDraftText(contextKey)).toContain(
 				"Restore this draft after restart.",
 			);
 		});
@@ -332,7 +399,7 @@ describe("WorkspaceComposer", () => {
 		);
 
 		await screen.findByText("Requirements");
-		expect(window.localStorage.getItem(storageKey)).toContain(
+		expect(persistedDraftText(contextKey)).toContain(
 			"Restore this draft after restart.",
 		);
 		expect(handleSubmit).not.toHaveBeenCalled();
@@ -342,7 +409,6 @@ describe("WorkspaceComposer", () => {
 		const queryClient = createHelmorQueryClient();
 		const handleSubmit = vi.fn();
 		const contextKey = "session:session-send";
-		const storageKey = getComposerDraftStorageKey(contextKey);
 
 		render(
 			<QueryClientProvider client={queryClient}>
@@ -385,7 +451,7 @@ describe("WorkspaceComposer", () => {
 		);
 
 		await waitFor(() => {
-			expect(window.localStorage.getItem(storageKey)).toContain(
+			expect(persistedDraftText(contextKey)).toContain(
 				"Send this persisted draft.",
 			);
 		});
@@ -403,51 +469,26 @@ describe("WorkspaceComposer", () => {
 					submitText: "Send this persisted draft.",
 				},
 			],
+			expect.objectContaining({
+				editorStateSnapshot: expect.objectContaining({
+					root: expect.any(Object),
+				}),
+			}),
 		);
-		expect(window.localStorage.getItem(storageKey)).toBeNull();
+		expect(loadPersistedDraft(contextKey)).toBeNull();
 	});
 
 	it("does not rehydrate the active draft when restore props change in-place", async () => {
 		const queryClient = createHelmorQueryClient();
-		const storageKey = getComposerDraftStorageKey("session:session-stable");
-		window.localStorage.setItem(
-			storageKey,
-			JSON.stringify({
-				root: {
-					type: "root",
-					version: 1,
-					format: "",
-					indent: 0,
-					direction: null,
-					children: [
-						{
-							type: "paragraph",
-							version: 1,
-							format: "",
-							indent: 0,
-							direction: null,
-							textFormat: 0,
-							textStyle: "",
-							children: [
-								{
-									type: "text",
-									version: 1,
-									text: "Keep the persisted draft.",
-									format: 0,
-									mode: "normal",
-									style: "",
-									detail: 0,
-								},
-							],
-						},
-					],
-				},
-			}),
+		const stableContextKey = "session:session-stable";
+		savePersistedDraft(
+			stableContextKey,
+			paragraphDraft("Keep the persisted draft."),
 		);
 		const { rerender } = render(
 			<QueryClientProvider client={queryClient}>
 				<WorkspaceComposer
-					contextKey="session:session-stable"
+					contextKey={stableContextKey}
 					onSubmit={vi.fn()}
 					disabled={false}
 					submitDisabled={false}
@@ -469,7 +510,7 @@ describe("WorkspaceComposer", () => {
 		);
 
 		await waitFor(() => {
-			expect(window.localStorage.getItem(storageKey)).toContain(
+			expect(persistedDraftText(stableContextKey)).toContain(
 				"Keep the persisted draft.",
 			);
 		});
@@ -477,7 +518,7 @@ describe("WorkspaceComposer", () => {
 		rerender(
 			<QueryClientProvider client={queryClient}>
 				<WorkspaceComposer
-					contextKey="session:session-stable"
+					contextKey={stableContextKey}
 					onSubmit={vi.fn()}
 					disabled={false}
 					submitDisabled={false}
@@ -498,10 +539,10 @@ describe("WorkspaceComposer", () => {
 			</QueryClientProvider>,
 		);
 
-		expect(window.localStorage.getItem(storageKey)).not.toContain(
+		expect(persistedDraftText(stableContextKey)).not.toContain(
 			"stale restore payload",
 		);
-		expect(window.localStorage.getItem(storageKey)).toContain(
+		expect(persistedDraftText(stableContextKey)).toContain(
 			"Keep the persisted draft.",
 		);
 	});
@@ -509,41 +550,7 @@ describe("WorkspaceComposer", () => {
 	it("does not rehydrate stale local drafts on same-context rerenders", async () => {
 		const queryClient = createHelmorQueryClient();
 		const contextKey = "session:session-rerender";
-		const storageKey = getComposerDraftStorageKey(contextKey);
-		window.localStorage.setItem(
-			storageKey,
-			JSON.stringify({
-				root: {
-					type: "root",
-					version: 1,
-					format: "",
-					indent: 0,
-					direction: null,
-					children: [
-						{
-							type: "paragraph",
-							version: 1,
-							format: "",
-							indent: 0,
-							direction: null,
-							textFormat: 0,
-							textStyle: "",
-							children: [
-								{
-									type: "text",
-									version: 1,
-									text: "stale draft",
-									format: 0,
-									mode: "normal",
-									style: "",
-									detail: 0,
-								},
-							],
-						},
-					],
-				},
-			}),
-		);
+		savePersistedDraft(contextKey, paragraphDraft("stale draft"));
 
 		const renderComposer = (
 			pendingInsertRequests = [] as Array<{
@@ -603,7 +610,7 @@ describe("WorkspaceComposer", () => {
 		rerender(renderComposer());
 
 		expect(screen.getByText("New context")).toBeInTheDocument();
-		expect(window.localStorage.getItem(storageKey)).toContain("stale draft");
+		expect(persistedDraftText(contextKey)).toContain("stale draft");
 	});
 
 	it("only renders fast mode controls for supported models", () => {

@@ -266,11 +266,12 @@ fn status(workspace_ref: &str, cli: &Cli) -> Result<()> {
             behind_target_count: 0,
             remote_tracking_ref: None,
             ahead_of_remote_count: 0,
+            ahead_of_target_count: 0,
             push_status: git_ops::WorkspacePushStatus::Unpublished,
         };
         return output::print(cli, &status, format_status);
     }
-    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+    let workspace_dir = crate::workspace::helpers::workspace_path(&record)?;
     let status = git_ops::workspace_action_status(
         &workspace_dir,
         record.remote.as_deref(),

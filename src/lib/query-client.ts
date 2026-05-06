@@ -1,5 +1,6 @@
 import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
 import { focusManager, QueryClient, queryOptions } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 import {
 	type ActionKind,
 	type AgentProvider,
@@ -7,16 +8,18 @@ import {
 	DEFAULT_WORKSPACE_GROUPS,
 	type DetectedEditor,
 	detectInstalledEditors,
+	type ForgeAccount,
 	type ForgeActionStatus,
-	type ForgeCliStatus,
 	type ForgeDetection,
-	type ForgeProvider,
 	getClaudeRateLimits,
 	getCodexRateLimits,
-	getForgeCliStatus,
 	getLiveContextUsage,
+	getSessionCodexGoal,
 	getSessionContextUsage,
+	getWorkspaceAccountProfile,
 	getWorkspaceForge,
+	listForgeAccounts,
+	listGithubLabels,
 	listRepositories,
 	listSlashCommands,
 	listWorkspaceCandidateDirectories,
@@ -57,6 +60,8 @@ export const helmorQueryKeys = {
 		["workspaceSessions", workspaceId] as const,
 	sessionContextUsage: (sessionId: string) =>
 		["sessionContextUsage", sessionId] as const,
+	sessionCodexGoal: (sessionId: string) =>
+		["sessionCodexGoal", sessionId] as const,
 	codexRateLimits: ["codexRateLimits"] as const,
 	claudeRateLimits: ["claudeRateLimits"] as const,
 	claudeRichContextUsage: (
@@ -80,11 +85,25 @@ export const helmorQueryKeys = {
 		["workspaceChangeRequest", workspaceId] as const,
 	workspaceForge: (workspaceId: string) =>
 		["workspaceForge", workspaceId] as const,
-	forgeCliStatus: (provider: ForgeProvider, host: string) =>
-		["forgeCliStatus", provider, host] as const,
-	// Prefix for matching every `forgeCliStatus` cache entry — pass to
-	// `invalidateQueries` when an auth signal arrives from elsewhere.
-	forgeCliStatusAll: ["forgeCliStatus"] as const,
+	forgeAccounts: (gitlabHosts: string[]) =>
+		["forgeAccounts", ...gitlabHosts] as const,
+	forgeAccountsAll: ["forgeAccounts"] as const,
+	workspaceAccountProfile: (workspaceId: string) =>
+		["workspaceAccountProfile", workspaceId] as const,
+	/// Lightweight per-host login set probe (no profile fetch). Used as
+	/// the focus-driven auth liveness check: account / repo settings
+	/// surfaces refetch this on window focus, and a delta in the set
+	/// invalidates the heavyweight `forgeAccounts` cache.
+	forgeLogins: (provider: string, host: string) =>
+		["forgeLogins", provider, host] as const,
+	inboxItemDetail: (
+		provider: string,
+		login: string,
+		source: string,
+		externalId: string,
+	) => ["inboxItemDetail", provider, login, source, externalId] as const,
+	githubLabels: (login: string, repos: string[]) =>
+		["githubLabels", login, ...repos] as const,
 	workspaceGitActionStatus: (workspaceId: string) =>
 		["workspaceGitActionStatus", workspaceId] as const,
 	workspaceForgeActionStatus: (workspaceId: string) =>
@@ -111,6 +130,17 @@ export const helmorQueryKeys = {
 	workspaceCandidateDirectories: (excludeWorkspaceId: string | null) =>
 		["workspaceCandidateDirectories", excludeWorkspaceId ?? ""] as const,
 };
+
+export function isVolatileForgeQueryKey(queryKey: readonly unknown[]): boolean {
+	const root = queryKey[0];
+	return (
+		root === "workspaceForge" ||
+		root === "workspaceForgeActionStatus" ||
+		root === "workspaceAccountProfile" ||
+		root === "forgeLogins" ||
+		root === "forgeAccounts"
+	);
+}
 
 export function createHelmorQueryClient() {
 	// Replace React Query's default focus listener (browser visibilitychange)
@@ -152,33 +182,98 @@ export function createHelmorQueryClient() {
 	});
 }
 
-// Surface persister write failures (quota exceeded, security errors) instead
-// of letting them silently disable persistence.
-const loggingLocalStorage: Storage = {
-	get length() {
-		return window.localStorage.length;
-	},
-	clear: () => window.localStorage.clear(),
-	getItem: (k) => window.localStorage.getItem(k),
-	key: (i) => window.localStorage.key(i),
-	removeItem: (k) => window.localStorage.removeItem(k),
-	setItem: (k, v) => {
+/** AsyncStorage adapter backed by Tauri-managed files in the helmor data
+ * dir. Replaces the prior `window.localStorage` backend so the React
+ * Query persister isn't bound by the webview's ~5–10 MB quota. The
+ * three helper IPC commands (`read_query_cache` / `write_query_cache` /
+ * `delete_query_cache`) sit on top of `<data_dir>/query-cache/<key>.json`
+ * with atomic-rename writes.
+ *
+ * The TanStack Query `AsyncStorage` interface only needs `getItem`,
+ * `setItem`, `removeItem` — no `length` / `key()` / `clear()` like
+ * `Storage`. Returning `null` for missing keys matches the localStorage
+ * convention the persister was written against.
+ *
+ * Boot-time migration: if `localStorage` still has the legacy
+ * `helmor-query-cache` blob from older versions, copy it into the new
+ * file-backed location once and clear it from localStorage. Idempotent
+ * — runs every boot, no-ops once the localStorage key is gone.
+ */
+const QUERY_CACHE_KEY = "helmor-query-cache";
+let migrationPromise: Promise<void> | null = null;
+
+async function migrateLegacyLocalStorageQueryCache(): Promise<void> {
+	if (typeof window === "undefined") return;
+	let legacy: string | null = null;
+	try {
+		legacy = window.localStorage.getItem(QUERY_CACHE_KEY);
+	} catch {
+		return;
+	}
+	if (!legacy) return;
+	try {
+		await invoke<void>("write_query_cache", {
+			key: QUERY_CACHE_KEY,
+			value: legacy,
+		});
 		try {
-			window.localStorage.setItem(k, v);
+			window.localStorage.removeItem(QUERY_CACHE_KEY);
+		} catch {
+			/* keep going — DB has it */
+		}
+		console.info(
+			`[helmor] migrated localStorage query cache (${(legacy.length / 1024).toFixed(1)} KB) into data dir`,
+		);
+	} catch (error) {
+		console.error(
+			"[helmor] failed to migrate legacy localStorage query cache",
+			error,
+		);
+	}
+}
+
+function ensureQueryCacheMigration(): Promise<void> {
+	if (!migrationPromise) {
+		migrationPromise = migrateLegacyLocalStorageQueryCache();
+	}
+	return migrationPromise;
+}
+
+const tauriFsQueryCacheStorage = {
+	getItem: async (key: string): Promise<string | null> => {
+		await ensureQueryCacheMigration();
+		try {
+			const value = await invoke<string | null>("read_query_cache", { key });
+			return value ?? null;
 		} catch (error) {
-			const sizeKb = (v.length / 1024).toFixed(1);
+			console.error(`[helmor] read_query_cache failed for "${key}"`, error);
+			return null;
+		}
+	},
+	setItem: async (key: string, value: string): Promise<void> => {
+		try {
+			await invoke<void>("write_query_cache", { key, value });
+		} catch (error) {
+			const sizeKb = (value.length / 1024).toFixed(1);
 			console.error(
-				`[helmor] localStorage.setItem failed for "${k}" (${sizeKb} KB)`,
+				`[helmor] write_query_cache failed for "${key}" (${sizeKb} KB)`,
 				error,
 			);
 			throw error;
 		}
 	},
+	removeItem: async (key: string): Promise<void> => {
+		try {
+			await invoke<void>("delete_query_cache", { key });
+		} catch (error) {
+			console.error(`[helmor] delete_query_cache failed for "${key}"`, error);
+		}
+	},
 };
 
 export const helmorQueryPersister = createAsyncStoragePersister({
-	storage: loggingLocalStorage,
-	key: "helmor-query-cache",
+	storage: tauriFsQueryCacheStorage,
+	key: QUERY_CACHE_KEY,
 });
 
 export function workspaceGroupsQueryOptions() {
@@ -211,6 +306,18 @@ export function repositoriesQueryOptions() {
 	});
 }
 
+export function githubLabelsQueryOptions(login: string, repos: string[]) {
+	const sortedRepos = [...repos].sort();
+	return queryOptions({
+		queryKey: helmorQueryKeys.githubLabels(login, sortedRepos),
+		queryFn: () => listGithubLabels({ login, repos: sortedRepos }),
+		initialData: [],
+		initialDataUpdatedAt: 0,
+		staleTime: 10 * 60_000,
+		gcTime: 24 * 60 * 60_000,
+	});
+}
+
 export function agentModelSectionsQueryOptions() {
 	return queryOptions({
 		queryKey: helmorQueryKeys.agentModelSections,
@@ -233,22 +340,69 @@ export function workspaceForgeQueryOptions(workspaceId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceForge(workspaceId),
 		queryFn: () => getWorkspaceForge(workspaceId),
-		staleTime: 30_000,
+		// Same identity-info contract: cache forever, refetch on focus.
+		// `refetchInterval` keeps the active workspace's chip in sync
+		// with backend-side polling (e.g. CI status changes).
+		staleTime: Number.POSITIVE_INFINITY,
 		refetchOnWindowFocus: "always",
 		refetchInterval: (query) => workspaceForgeRefetchInterval(query.state.data),
 	});
 }
 
-export function forgeCliStatusQueryOptions(
-	provider: ForgeProvider,
-	host: string,
+/** Profile (login / name / email / avatarUrl / active) for the
+ *  account bound to a workspace.
+ *
+ *  Cache strategy across **every identity-information query** in
+ *  this file (this one + `forgeAccountsQueryOptions` +
+ *  `workspaceForgeQueryOptions` + `workspaceForgeActionStatusQueryOptions`):
+ *
+ *    - `staleTime: Infinity` — once a value is in cache, never
+ *      mark it stale on its own. We don't want a flicker every
+ *      time some other component happens to mount.
+ *    - `refetchOnWindowFocus: "always"` — but *do* re-check on
+ *      window focus, every time. If the refetch fails (token
+ *      revoked / account logged out elsewhere), React Query keeps
+ *      the previous data + sets `error`; the consuming UI flips
+ *      to "Connect" by reading the new state from the next
+ *      successful response (the action-status backend returns
+ *      `remoteState: "unauthenticated"` for invalid tokens).
+ *
+ *  Backend has matching throttles on the underlying CLI calls
+ *  (`gh / glab auth status` and `gh / glab api user`) so a burst
+ *  of refocuses doesn't fan out N CLI invocations.
+ *
+ *  Avatar *image bytes* are a separate concern and cached on disk
+ *  by URL hash (`forge/avatar_cache.rs`); identity changes never
+ *  imply a new image, and an unchanged URL reuses the cached file
+ *  regardless of what this query returns. */
+export function workspaceAccountProfileQueryOptions(
+	workspaceId: string | null,
 ) {
-	return queryOptions<ForgeCliStatus>({
-		queryKey: helmorQueryKeys.forgeCliStatus(provider, host),
-		queryFn: () => getForgeCliStatus(provider, host),
-		staleTime: 30_000,
+	return queryOptions<ForgeAccount | null>({
+		queryKey: workspaceId
+			? helmorQueryKeys.workspaceAccountProfile(workspaceId)
+			: ["workspaceAccountProfile", "__none__"],
+		queryFn: () =>
+			workspaceId
+				? getWorkspaceAccountProfile(workspaceId)
+				: Promise.resolve(null),
+		enabled: workspaceId !== null,
+		staleTime: Number.POSITIVE_INFINITY,
 		refetchOnWindowFocus: "always",
-		refetchInterval: 60_000,
+		refetchOnReconnect: true,
+		retry: 0,
+	});
+}
+
+export function forgeAccountsQueryOptions(gitlabHosts: string[]) {
+	return queryOptions<ForgeAccount[]>({
+		queryKey: helmorQueryKeys.forgeAccounts(gitlabHosts),
+		queryFn: () => listForgeAccounts(gitlabHosts),
+		// Same cache contract as `workspaceAccountProfileQueryOptions`:
+		// cache forever, refetch on every window focus. Backend
+		// throttles the underlying CLI calls.
+		staleTime: Number.POSITIVE_INFINITY,
+		refetchOnWindowFocus: "always",
 	});
 }
 
@@ -275,6 +429,15 @@ export function sessionContextUsageQueryOptions(sessionId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.sessionContextUsage(sessionId),
 		queryFn: () => getSessionContextUsage(sessionId),
+		staleTime: 0,
+	});
+}
+
+/** Active Codex `/goal` payload. Event-driven via `CodexGoalChanged`. */
+export function sessionCodexGoalQueryOptions(sessionId: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.sessionCodexGoal(sessionId),
+		queryFn: () => getSessionCodexGoal(sessionId),
 		staleTime: 0,
 	});
 }
@@ -533,8 +696,26 @@ export function workspaceForgeActionStatusQueryOptions(workspaceId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
 		queryFn: () => loadWorkspaceForgeActionStatus(workspaceId),
-		staleTime: 30_000,
+		// Same `staleTime: Infinity` + `refetchOnWindowFocus: "always"`
+		// baseline as the other three identity-info queries.
+		//
+		// Unique to this query: `refetchOnMount: "always"`. Inspector's
+		// `Connect` CTA reads `remoteState` from here, so the moment the
+		// user switches workspaces we MUST re-probe the new workspace's
+		// remote — otherwise the previously-visited workspace's stale
+		// cache (with the same `staleTime: Infinity` rule) would render
+		// the wrong CTA state until the next focus event. The cached
+		// value still shows immediately (no loading flicker), only
+		// `isFetching` flips while the background refetch lands.
+		//
+		// The other three queries intentionally don't get this: their
+		// data either rarely changes (chip avatar, GitHub-vs-GitLab
+		// label) or isn't workspace-scoped (Settings roster), so the
+		// extra mount-time IPC isn't worth the cost.
+		staleTime: Number.POSITIVE_INFINITY,
 		gcTime: DEFAULT_GC_TIME,
+		refetchOnWindowFocus: "always",
+		refetchOnMount: "always",
 		refetchInterval: (query) =>
 			forgeActionStatusRefetchInterval(query.state.data),
 		retry: 0,

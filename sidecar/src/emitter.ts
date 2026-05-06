@@ -161,6 +161,17 @@ export type ContextUsageResultEvent = {
 	readonly meta: string;
 };
 
+// Codex `/goal` state change. `goal` is the stringified `ThreadGoal`
+// payload from `thread/goal/updated`; `null` means the goal was cleared.
+// Rust persists this to an in-memory map so the banner can render the
+// active goal in the panel header.
+export type CodexGoalUpdatedEvent = {
+	readonly id: string;
+	readonly type: "codexGoalUpdated";
+	readonly sessionId: string;
+	readonly goal: string | null;
+};
+
 export type SidecarControlEvent =
 	| ReadyEvent
 	| EndEvent
@@ -180,7 +191,8 @@ export type SidecarControlEvent =
 	| ModelsListedEvent
 	| UserInputRequestEvent
 	| ContextUsageUpdatedEvent
-	| ContextUsageResultEvent;
+	| ContextUsageResultEvent
+	| CodexGoalUpdatedEvent;
 
 /**
  * Typed emitter for the sidecar's stdout protocol.
@@ -258,6 +270,11 @@ export interface SidecarEmitter {
 		meta: string | null,
 	): void;
 	contextUsageResult(requestId: string, meta: string): void;
+	codexGoalUpdated(
+		requestId: string,
+		sessionId: string,
+		goal: string | null,
+	): void;
 	/**
 	 * Forward a raw provider SDK message. `id` is appended LAST so an SDK
 	 * field named `id` can never override our request id.
@@ -371,6 +388,13 @@ export function createSidecarEmitter(
 			}),
 		contextUsageResult: (requestId, meta) =>
 			write({ id: requestId, type: "contextUsageResult", meta }),
+		codexGoalUpdated: (requestId, sessionId, goal) =>
+			write({
+				id: requestId,
+				type: "codexGoalUpdated",
+				sessionId,
+				goal,
+			}),
 		passthrough: (requestId, message) =>
 			write({ ...(message as Record<string, unknown>), id: requestId }),
 	};

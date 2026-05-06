@@ -27,6 +27,15 @@ export interface SendMessageParams {
 	 * arrays everywhere.
 	 */
 	readonly additionalDirectories?: readonly string[];
+	/**
+	 * Structured image attachment paths from the composer. The single
+	 * source of truth for which `@<path>` substrings inside `prompt`
+	 * should be lifted out as image attachments. Paths may contain
+	 * whitespace (macOS Finder drops); never re-derive this list from
+	 * the prompt text. Always present — empty array means "no
+	 * attachments".
+	 */
+	readonly images: readonly string[];
 }
 
 export interface ListSlashCommandsParams {
@@ -50,6 +59,10 @@ export interface GetContextUsageParams {
 export interface GenerateTitleOptions {
 	readonly model?: string;
 	readonly claudeEnvironment?: Readonly<Record<string, string>>;
+	/** When false, only the title is requested — branch generation is omitted
+	 * from the prompt entirely (saves tokens for local-mode workspaces and
+	 * any other case where the caller has no intent to rename a branch). */
+	readonly generateBranch?: boolean;
 }
 
 /**
@@ -129,6 +142,7 @@ export interface SessionManager {
 		sessionId: string,
 		prompt: string,
 		files: readonly string[],
+		images: readonly string[],
 	): Promise<boolean>;
 
 	/**

@@ -12,6 +12,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 use helmor_lib::agents::{build_send_message_params, BuildSendMessageParamsInput};
 use helmor_lib::data_dir;
+use helmor_lib::db;
 use insta::assert_yaml_snapshot;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -39,6 +40,10 @@ impl TestEnv {
         data_dir::ensure_directory_structure().unwrap();
         let conn = rusqlite::Connection::open(data_dir::db_path().unwrap()).unwrap();
         helmor_lib::schema::ensure_schema(&conn).unwrap();
+        // Rebuild the connection pool so `read_conn()` sees the fresh
+        // data dir. The lib's prod fast path caches the pool path, and
+        // integration tests link against the lib in non-test mode.
+        db::init_pools().unwrap();
         conn.execute(
             "INSERT INTO repos (id, name, default_branch) VALUES ('r-1', 'Repo One', 'main')",
             [],
@@ -100,6 +105,7 @@ fn base_input<'a>(session_id: Option<&'a str>) -> BuildSendMessageParamsInput<'a
         helmor_session_id: session_id,
         claude_base_url: None,
         claude_auth_token: None,
+        images: &[],
     }
 }
 

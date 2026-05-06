@@ -25,10 +25,21 @@ fn notify_workspace_changed_in_background(app: AppHandle) {
 pub async fn prepare_workspace_from_repo(
     app: AppHandle,
     repo_id: String,
+    source_branch: Option<String>,
+    mode: Option<crate::workspace_state::WorkspaceMode>,
 ) -> CmdResult<workspaces::PrepareWorkspaceResponse> {
+    let mode = mode.unwrap_or_default();
     let result = {
         let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
-        run_blocking(move || workspaces::prepare_workspace_from_repo_impl(&repo_id)).await?
+        run_blocking(move || match mode {
+            crate::workspace_state::WorkspaceMode::Worktree => {
+                workspaces::prepare_workspace_from_repo_impl(&repo_id, source_branch.as_deref())
+            }
+            crate::workspace_state::WorkspaceMode::Local => {
+                workspaces::prepare_local_workspace_impl(&repo_id, source_branch.as_deref())
+            }
+        })
+        .await?
     };
     notify_workspace_changed_in_background(app);
     Ok(result)
@@ -52,6 +63,87 @@ pub async fn finalize_workspace_from_repo(
     };
     notify_workspace_changed_in_background(app);
     Ok(result)
+}
+
+/// Move a local-mode workspace into a fresh worktree (relocation, not a
+/// clone — the workspace's mode flips Local → Worktree). Snapshots the
+/// local repo's current state (HEAD commit + tracked + untracked
+/// changes) into the new worktree dir on a fresh auto-named branch.
+/// The local repo itself is not modified.
+#[tauri::command]
+pub async fn move_local_workspace_to_worktree(
+    app: AppHandle,
+    workspace_id: String,
+) -> CmdResult<workspaces::MoveLocalToWorktreeResponse> {
+    let result = {
+        let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
+        run_blocking(move || workspaces::move_local_workspace_to_worktree_impl(&workspace_id))
+            .await?
+    };
+    notify_workspace_changed_in_background(app);
+    Ok(result)
+}
+
+/// Create a new local branch at the repo's current HEAD and switch to
+/// it. Used by the start page's "Create and checkout new branch..."
+/// picker action. `git checkout -b` doesn't require a clean working
+/// tree — files carry over to the new branch unchanged.
+#[tauri::command]
+pub async fn create_and_checkout_branch(repo_id: String, branch: String) -> CmdResult<()> {
+    run_blocking(move || -> anyhow::Result<()> {
+        use anyhow::Context;
+        let repo = crate::repos::load_repository_by_id(&repo_id)?
+            .with_context(|| format!("Repository not found: {repo_id}"))?;
+        let repo_root = std::path::PathBuf::from(repo.root_path.trim());
+        crate::git_ops::ensure_git_repository(&repo_root)?;
+        crate::git_ops::create_and_checkout_branch(&repo_root, &branch)
+    })
+    .await
+}
+
+/// Current local repo HEAD branch name. Used by the start page as
+/// the local-mode picker's default selection (worktree mode uses the
+/// repo's stored default branch instead). Returns `None` if the repo
+/// is missing on disk or HEAD is detached — frontend then falls back
+/// to the stored default.
+#[tauri::command]
+pub async fn get_repo_current_branch(repo_id: String) -> CmdResult<Option<String>> {
+    run_blocking(move || -> anyhow::Result<Option<String>> {
+        let Some(repo) = crate::repos::load_repository_by_id(&repo_id)? else {
+            return Ok(None);
+        };
+        let repo_root = std::path::PathBuf::from(repo.root_path.trim());
+        if !repo_root.is_dir() {
+            return Ok(None);
+        }
+        Ok(crate::git_ops::current_branch_name(&repo_root).ok())
+    })
+    .await
+}
+
+/// Merged local + remote branches, deduped (by name), sorted. Used by
+/// the local-mode start picker so users can pick from anything they
+/// already have on disk OR any branch published on `origin`. Returns
+/// an empty list if the repo path is missing — keeps the picker usable
+/// even after the repo was moved.
+#[tauri::command]
+pub async fn list_branches_for_local_picker(repo_id: String) -> CmdResult<Vec<String>> {
+    run_blocking(move || -> anyhow::Result<Vec<String>> {
+        let Some(repo) = crate::repos::load_repository_by_id(&repo_id)? else {
+            return Ok(Vec::new());
+        };
+        let repo_root = std::path::PathBuf::from(repo.root_path.trim());
+        if !repo_root.is_dir() {
+            return Ok(Vec::new());
+        }
+        let remote = repo.remote.unwrap_or_else(|| "origin".to_string());
+
+        let mut seen = std::collections::BTreeSet::new();
+        seen.extend(crate::git_ops::list_local_branches(&repo_root).unwrap_or_default());
+        seen.extend(crate::git_ops::list_remote_branches(&repo_root, &remote).unwrap_or_default());
+        Ok(seen.into_iter().collect())
+    })
+    .await
 }
 
 /// Legacy combined flow (prepare + finalize in a single call). Retained

@@ -52,6 +52,15 @@ export function AgentLoginStep({
 		setWaitingProvider(null);
 	}, []);
 
+	/// Bail out of the in-progress login. `setActiveLoginProvider(null)`
+	/// triggers `LoginTerminalPreview`'s effect cleanup, which kills
+	/// the spawned PTY via `stopAgentLoginTerminal`.
+	const handleAbortLogin = useCallback(() => {
+		setActiveLoginProvider(null);
+		setLoginInstanceId(null);
+		setWaitingProvider(null);
+	}, []);
+
 	return (
 		<section
 			aria-label="Agent login"
@@ -139,6 +148,7 @@ export function AgentLoginStep({
 					active={terminalActive}
 					onExit={handleTerminalExit}
 					onError={handleTerminalError}
+					onClose={handleAbortLogin}
 				/>
 			</div>
 		</section>

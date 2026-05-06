@@ -3,23 +3,56 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use std::{
     collections::HashMap,
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::{LazyLock, Mutex},
 };
 
 use crate::{
-    forge::{self, remote::parse_remote, ForgeCliStatus, ForgeProvider},
+    forge::{self, remote::parse_remote, ForgeProvider},
     git_ops,
     models::workspaces::WorkspaceRecord,
+    workspace_state::WorkspaceMode,
     workspace_status::WorkspaceStatus,
 };
+
+/// Resolve the on-disk path a workspace operates against. Worktree
+/// workspaces live under the helmor data dir; Local workspaces operate
+/// directly on the source repo's root path.
+pub fn workspace_path(record: &WorkspaceRecord) -> Result<PathBuf> {
+    match record.mode {
+        WorkspaceMode::Worktree => {
+            crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
+        }
+        WorkspaceMode::Local => non_empty(&record.root_path)
+            .map(PathBuf::from)
+            .with_context(|| format!("Workspace {} (local) is missing repo root_path", record.id)),
+    }
+}
 
 // ---- Display / naming helpers ----
 
 pub fn display_title(record: &WorkspaceRecord) -> String {
     if let Some(pr_title) = non_empty(&record.pr_title) {
         return pr_title.to_string();
+    }
+
+    // Local workspaces don't own a `directory_name` (they share the
+    // user's repo root with potentially other local workspaces). Use
+    // the first conversation's title to differentiate them in the
+    // sidebar; primary_session_title is the most-message-count
+    // non-hidden session, which lines up with "the conversation" in
+    // practice. Fall back to "Untitled" / repo name when nothing is
+    // populated yet.
+    if record.mode == WorkspaceMode::Local {
+        if let Some(title) = non_empty(&record.primary_session_title)
+            .or_else(|| non_empty(&record.active_session_title))
+        {
+            if title != "Untitled" {
+                return title.to_string();
+            }
+        }
+        return record.repo_name.clone();
     }
 
     if let Some(session_title) = non_empty(&record.active_session_title) {
@@ -29,6 +62,27 @@ pub fn display_title(record: &WorkspaceRecord) -> String {
     }
 
     humanize_directory_name(&record.directory_name)
+}
+
+/// Operational local: live HEAD. Worktree or archived local: stored
+/// snapshot (worktree is pinned; archived must freeze at archive time).
+/// Errors fall back to stored so the UI never blanks.
+// TODO(perf): one `git branch --show-current` subprocess per row;
+// cache by repo path with watcher invalidation if it shows up in profiles.
+pub fn live_branch_label(record: &WorkspaceRecord) -> Option<String> {
+    if record.mode != WorkspaceMode::Local || !record.state.is_operational() {
+        return record.branch.clone();
+    }
+    let Ok(workspace_dir) = workspace_path(record) else {
+        return record.branch.clone();
+    };
+    if !workspace_dir.is_dir() {
+        return record.branch.clone();
+    }
+    git_ops::current_branch_name(&workspace_dir)
+        .ok()
+        .filter(|b| !b.trim().is_empty())
+        .or_else(|| record.branch.clone())
 }
 
 pub fn humanize_directory_name(directory_name: &str) -> String {
@@ -501,22 +555,25 @@ pub fn branch_name_for_directory(
     directory_name: &str,
     settings: &crate::settings::EffectiveBranchPrefixSettings,
 ) -> String {
+    use crate::settings::BranchPrefixType;
+
+    // NULL / unrecognised values default to Username — keeps legacy
+    // rows that predate the per-repo column behaving the same as the
+    // explicit default.
     let prefix_type = settings
         .branch_prefix_type
-        .as_deref()
-        .map(|value| value.trim().to_ascii_lowercase());
+        .unwrap_or(BranchPrefixType::Username);
 
-    let prefix = match prefix_type.as_deref() {
-        Some("custom") => settings
+    let prefix = match prefix_type {
+        BranchPrefixType::Custom => settings
             .branch_prefix_custom
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or("")
             .to_string(),
-        Some("none") => String::new(),
-        // Default: use the matching forge account login as prefix.
-        _ => {
+        BranchPrefixType::None => String::new(),
+        BranchPrefixType::Username => {
             if let Ok(Some(login)) = resolve_forge_login(settings) {
                 format!("{login}/")
             } else {
@@ -555,6 +612,19 @@ pub fn is_auto_generated_branch_name(
 fn resolve_forge_login(
     settings: &crate::settings::EffectiveBranchPrefixSettings,
 ) -> Result<Option<String>> {
+    // Prefer the per-repo binding (set at repo creation by
+    // `forge::accounts::auto_bind_repo_account` and updatable via the
+    // Connect flow). Fall back to the bundled `glab auth status` for
+    // GitLab when the repo predates the binding feature.
+    if let Some(login) = settings
+        .forge_login
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(Some(login.to_string()));
+    }
+
     let provider = settings
         .forge_provider
         .as_deref()
@@ -566,7 +636,7 @@ fn resolve_forge_login(
         ForgeProvider::Unknown if remote_url_looks_like_gitlab(settings) => {
             resolve_gitlab_login(settings)
         }
-        ForgeProvider::Github | ForgeProvider::Unknown => resolve_github_login(),
+        ForgeProvider::Github | ForgeProvider::Unknown => Ok(None),
     }
 }
 
@@ -578,17 +648,11 @@ fn remote_url_looks_like_gitlab(settings: &crate::settings::EffectiveBranchPrefi
         .is_some_and(|remote| remote.host.contains("gitlab"))
 }
 
-/// Read the GitHub login from the stored identity metadata.
-fn resolve_github_login() -> Result<Option<String>> {
-    let raw = crate::settings::load_setting_value("github_identity_meta")?;
-    let raw = match raw {
-        Some(v) => v,
-        None => return Ok(None),
-    };
-    let meta: serde_json::Value = serde_json::from_str(&raw)?;
-    Ok(meta.get("login").and_then(|v| v.as_str()).map(String::from))
-}
-
+/// Legacy fallback for repo rows that predate `forge_login`: probe
+/// glab directly. Transient `list_logins` failures collapse to
+/// `Ok(None)` so the branch-prefix path degrades to "no prefix"
+/// rather than bubbling — caller already treats `Err` and `Ok(None)`
+/// the same way (`if let Ok(Some(...))`).
 fn resolve_gitlab_login(
     settings: &crate::settings::EffectiveBranchPrefixSettings,
 ) -> Result<Option<String>> {
@@ -599,12 +663,13 @@ fn resolve_gitlab_login(
         .map(|remote| remote.host)
         .unwrap_or_else(|| "gitlab.com".to_string());
 
-    Ok(
-        match forge::get_forge_cli_status(ForgeProvider::Gitlab, Some(&host))? {
-            ForgeCliStatus::Ready { login, .. } => Some(login),
-            _ => None,
-        },
-    )
+    let Some(backend) = forge::accounts::backend_for(ForgeProvider::Gitlab) else {
+        return Ok(None);
+    };
+    Ok(backend
+        .list_logins(&host)
+        .ok()
+        .and_then(|logins| logins.into_iter().next()))
 }
 
 pub fn allocate_directory_name_for_repo(repo_id: &str) -> Result<String> {
@@ -664,6 +729,83 @@ pub fn allocate_directory_name_with_conn(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace_pr_sync::PrSyncState;
+    use crate::workspace_status::WorkspaceStatus;
+
+    fn fixture_record(mode: WorkspaceMode, root_path: Option<String>) -> WorkspaceRecord {
+        WorkspaceRecord {
+            id: "ws-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            repo_name: "demo".to_string(),
+            remote_url: None,
+            default_branch: Some("main".to_string()),
+            root_path,
+            directory_name: "cebu".to_string(),
+            state: crate::workspace_state::WorkspaceState::Ready,
+            has_unread: false,
+            workspace_unread: 0,
+            unread_session_count: 0,
+            status: WorkspaceStatus::InProgress,
+            branch: Some("nathan/cebu".to_string()),
+            initialization_parent_branch: Some("main".to_string()),
+            intended_target_branch: Some("main".to_string()),
+            mode,
+            pinned_at: None,
+            active_session_id: None,
+            active_session_title: None,
+            active_session_agent_type: None,
+            active_session_status: None,
+            primary_session_id: None,
+            primary_session_title: None,
+            primary_session_agent_type: None,
+            pr_title: None,
+            pr_sync_state: PrSyncState::None,
+            pr_url: None,
+            archive_commit: None,
+            session_count: 0,
+            message_count: 0,
+            remote: Some("origin".to_string()),
+            forge_provider: None,
+            forge_login: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+            last_user_message_at: None,
+        }
+    }
+
+    #[test]
+    fn workspace_path_for_worktree_uses_data_dir() {
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock();
+        let temp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", temp.path());
+        let record = fixture_record(WorkspaceMode::Worktree, None);
+        let path = workspace_path(&record).unwrap();
+        assert_eq!(
+            path,
+            temp.path().join("workspaces").join("demo").join("cebu")
+        );
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn workspace_path_for_local_uses_repo_root() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().join("my-repo");
+        let record = fixture_record(WorkspaceMode::Local, Some(root.display().to_string()));
+        let path = workspace_path(&record).unwrap();
+        assert_eq!(path, root);
+    }
+
+    #[test]
+    fn workspace_path_for_local_errors_without_root_path() {
+        let record = fixture_record(WorkspaceMode::Local, None);
+        let err = workspace_path(&record).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("local") && msg.contains("root_path"),
+            "unexpected error: {msg}"
+        );
+    }
 
     #[test]
     fn humanize_directory_name_capitalizes_segments() {
@@ -677,6 +819,96 @@ mod tests {
         assert_eq!(humanize_directory_name("a--b"), "A B");
         assert_eq!(humanize_directory_name(""), "");
         assert_eq!(humanize_directory_name("v2-release"), "V2 Release");
+    }
+
+    #[test]
+    fn live_branch_label_returns_stored_value_for_worktree_mode() {
+        let record = fixture_record(WorkspaceMode::Worktree, None);
+        // Worktree mode never re-reads HEAD — stored snapshot wins.
+        assert_eq!(live_branch_label(&record), Some("nathan/cebu".to_string()));
+    }
+
+    #[test]
+    fn live_branch_label_falls_back_to_stored_for_local_when_path_missing() {
+        let record = fixture_record(WorkspaceMode::Local, None);
+        assert_eq!(live_branch_label(&record), Some("nathan/cebu".to_string()));
+    }
+
+    #[test]
+    fn live_branch_label_returns_actual_head_for_local_mode() {
+        // A local workspace's stored `branch` is just a snapshot. Once
+        // the user (or another local create) checks out a different
+        // branch in the same repo, the snapshot goes stale —
+        // `live_branch_label` must return the current HEAD instead.
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
+        let root_str = root.to_str().unwrap();
+        git_ops::run_git(["init", "-b", "main", root_str], None).unwrap();
+        std::fs::write(root.join("f.txt"), "x").unwrap();
+        git_ops::run_git(["-C", root_str, "add", "f.txt"], None).unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                root_str,
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Helmor",
+                "-c",
+                "user.email=h@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+            None,
+        )
+        .unwrap();
+        // Snapshot says `main` (matches HEAD initially).
+        let mut record = fixture_record(WorkspaceMode::Local, Some(root.display().to_string()));
+        record.branch = Some("main".to_string());
+        assert_eq!(live_branch_label(&record), Some("main".to_string()));
+
+        // Now check out a different branch — stored snapshot is stale.
+        git_ops::run_git(["-C", root_str, "checkout", "-b", "other"], None).unwrap();
+        // Stored value still says `main`, but live HEAD wins.
+        assert_eq!(live_branch_label(&record), Some("other".to_string()));
+    }
+
+    #[test]
+    fn live_branch_label_freezes_for_archived_local_workspace() {
+        // Archived → snapshot, not live HEAD.
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
+        let root_str = root.to_str().unwrap();
+        git_ops::run_git(["init", "-b", "main", root_str], None).unwrap();
+        std::fs::write(root.join("f.txt"), "x").unwrap();
+        git_ops::run_git(["-C", root_str, "add", "f.txt"], None).unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                root_str,
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Helmor",
+                "-c",
+                "user.email=h@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+            None,
+        )
+        .unwrap();
+
+        let mut record = fixture_record(WorkspaceMode::Local, Some(root.display().to_string()));
+        record.branch = Some("feature/foo".to_string());
+        record.state = crate::workspace_state::WorkspaceState::Archived;
+
+        // User has since switched the local repo to `main`.
+        git_ops::run_git(["-C", root_str, "checkout", "-b", "main-2"], None).unwrap();
+        // Archived label must STILL be the snapshot value.
+        assert_eq!(live_branch_label(&record), Some("feature/foo".to_string()));
     }
 
     #[test]
@@ -702,10 +934,11 @@ mod tests {
     #[test]
     fn auto_generated_branch_name_accepts_version_suffixes() {
         let settings = crate::settings::EffectiveBranchPrefixSettings {
-            branch_prefix_type: Some("custom".to_string()),
+            branch_prefix_type: Some(crate::settings::BranchPrefixType::Custom),
             branch_prefix_custom: Some("user/".to_string()),
             forge_provider: Some("github".to_string()),
             remote_url: None,
+            forge_login: None,
         };
 
         assert!(is_auto_generated_branch_name(

@@ -18,10 +18,10 @@
 use std::path::Path;
 use std::time::Duration;
 
-use super::cli_status::{github_status, gitlab_status, labels_for};
+use super::cli_status::labels_for;
 use super::command::{command_detail, run_command_with_timeout};
 use super::remote::{parse_remote, ParsedRemote};
-use super::types::{DetectionSignal, ForgeCliStatus, ForgeDetection, ForgeProvider};
+use super::types::{DetectionSignal, ForgeDetection, ForgeProvider};
 
 const CLI_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -195,37 +195,6 @@ pub(crate) fn build_detection_for_remote(
         _ => detect_provider_for_repo(remote_url, repo_root),
     };
 
-    let cli = match provider {
-        ForgeProvider::Github => Some(github_status().unwrap_or_else(|e| {
-            ForgeCliStatus::Error {
-                provider: ForgeProvider::Github,
-                host: parsed
-                    .as_ref()
-                    .map(|r| r.host.clone())
-                    .unwrap_or_else(|| "github.com".to_string()),
-                cli_name: "gh".to_string(),
-                version: None,
-                message: format!("GitHub CLI status unavailable: {e}"),
-            }
-        })),
-        ForgeProvider::Gitlab => {
-            let host = parsed
-                .as_ref()
-                .map(|r| r.host.as_str())
-                .unwrap_or("gitlab.com");
-            Some(
-                gitlab_status(host).unwrap_or_else(|e| ForgeCliStatus::Error {
-                    provider: ForgeProvider::Gitlab,
-                    host: host.to_string(),
-                    cli_name: "glab".to_string(),
-                    version: None,
-                    message: format!("GitLab CLI status unavailable: {e}"),
-                }),
-            )
-        }
-        ForgeProvider::Unknown => None,
-    };
-
     ForgeDetection {
         provider,
         host: parsed.as_ref().map(|r| r.host.clone()),
@@ -233,7 +202,6 @@ pub(crate) fn build_detection_for_remote(
         repo: parsed.as_ref().map(|r| r.repo.clone()),
         remote_url: remote_url.map(str::to_string),
         labels: labels_for(provider),
-        cli,
         detection_signals: signals,
     }
 }

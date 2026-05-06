@@ -301,6 +301,19 @@ fn dispatch_one(
             }
             session.handle_deferred_tool_use(raw, &resolved_model, final_messages)
         }
+        "error"
+            if session.ctx.provider == "codex"
+                && super::bridges::is_retryable_sidecar_error(raw) =>
+        {
+            if let Some(pipeline_state) = pipeline.as_mut() {
+                let notice = super::bridges::retry_notice_event_from_error(raw);
+                let raw_str = serde_json::to_string(&notice).unwrap_or_default();
+                let emit = pipeline_state.push_event(&notice, &raw_str);
+                session.handle_stream_event(emit)
+            } else {
+                Ok(vec![])
+            }
+        }
         "error" => {
             // Persistence success is fixed at `true` so the test focuses
             // on the dispatch + state transition rather than the DB
@@ -519,6 +532,77 @@ fn error_event_terminates_session_with_internal_flag() {
                 "type": "error",
                 "message": "Sidecar lost connection",
                 "internal": true
+            }),
+        ],
+    );
+    assert_yaml_snapshot!(entries);
+}
+
+#[test]
+fn structured_retryable_sidecar_error_does_not_terminate_session() {
+    let entries = dispatch_events(
+        "codex",
+        vec![
+            json!({"type": "turn/started", "session_id": "s1"}),
+            json!({
+                "type": "error",
+                "message": "Reconnecting... 1/100",
+                "willRetry": true
+            }),
+            json!({"type": "item/agentMessage/delta", "session_id": "s1", "delta": "Recovered"}),
+            json!({"type": "turn/completed", "session_id": "s1"}),
+            json!({"type": "end"}),
+        ],
+    );
+    assert_yaml_snapshot!(entries);
+}
+
+#[test]
+fn codex_message_only_reconnect_error_then_end_preserves_error() {
+    let entries = dispatch_events(
+        "codex",
+        vec![
+            json!({"type": "turn/started", "session_id": "s1"}),
+            json!({
+                "type": "error",
+                "message": "Reconnecting... 1/5"
+            }),
+            json!({"type": "end"}),
+        ],
+    );
+    assert_yaml_snapshot!(entries);
+}
+
+#[test]
+fn codex_reconnecting_terminal_error_without_progress_terminates_session() {
+    let entries = dispatch_events(
+        "codex",
+        vec![
+            json!({"type": "turn/started", "session_id": "s1"}),
+            json!({
+                "type": "error",
+                "message": "Reconnecting... exhausted retries"
+            }),
+        ],
+    );
+    assert_yaml_snapshot!(entries);
+}
+
+#[test]
+fn claude_reconnecting_error_terminates_session() {
+    let entries = dispatch_events(
+        "claude",
+        vec![
+            json!({
+                "type": "system",
+                "subtype": "init",
+                "session_id": "provider-1",
+                "uuid": "sys-1"
+            }),
+            json!({
+                "type": "error",
+                "message": "Reconnecting... provider failed",
+                "willRetry": true
             }),
         ],
     );

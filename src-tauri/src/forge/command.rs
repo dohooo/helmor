@@ -41,6 +41,39 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    run_command_full::<_, _, &str, &str>(program, args, timeout, &[])
+}
+
+/// `run_command` with caller-supplied environment overrides. Each `(name,
+/// value)` pair is applied on top of the inherited environment AFTER the
+/// default `NO_COLOR=1` etc., so callers can set per-spawn `GH_TOKEN`
+/// without leaking it back into the parent process.
+pub(crate) fn run_command_with_env<I, S, K, V>(
+    program: &str,
+    args: I,
+    env: &[(K, V)],
+) -> std::io::Result<CommandOutput>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
+    run_command_full(program, args, DEFAULT_COMMAND_TIMEOUT, env)
+}
+
+fn run_command_full<I, S, K, V>(
+    program: &str,
+    args: I,
+    timeout: Duration,
+    env: &[(K, V)],
+) -> std::io::Result<CommandOutput>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
     let args: Vec<OsString> = args
         .into_iter()
         .map(|arg| arg.as_ref().to_os_string())
@@ -58,6 +91,9 @@ where
         .env("NO_COLOR", "1")
         .env_remove("CLICOLOR_FORCE")
         .env_remove("FORCE_COLOR");
+    for (name, value) in env {
+        command.env(name, value);
+    }
 
     #[cfg(unix)]
     {
