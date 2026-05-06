@@ -70,13 +70,16 @@ const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
 	D: "text-red-500",
 };
 
-type ChangesSectionProps = {
+type GitSectionProps = {
 	workspaceId: string | null;
 	workspaceRootPath: string | null;
 	workspaceBranch: string | null;
 	workspaceRemoteUrl: string | null;
 	workspaceTargetBranch: string | null;
 	changes: InspectorFileItem[];
+	allFiles: InspectorFileItem[];
+	gitActiveTab: "changes" | "files";
+	onGitTabChange: (tab: "changes" | "files") => void;
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
@@ -93,13 +96,16 @@ type ChangesSectionProps = {
 	isResizing?: boolean;
 };
 
-export function ChangesSection({
+export function GitSection({
 	workspaceId,
 	workspaceRootPath,
 	workspaceBranch,
 	workspaceRemoteUrl,
 	workspaceTargetBranch,
 	changes,
+	allFiles,
+	gitActiveTab,
+	onGitTabChange,
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
@@ -111,7 +117,7 @@ export function ChangesSection({
 	forgeIsRefreshing = false,
 	bodyHeight,
 	isResizing,
-}: ChangesSectionProps) {
+}: GitSectionProps) {
 	const shouldReduceMotion = useReducedMotion();
 	const panelTransition = {
 		duration: isResizing || shouldReduceMotion ? 0 : TABS_ANIMATION_MS / 1000,
@@ -389,6 +395,8 @@ export function ChangesSection({
 				hasChanges={hasChanges}
 				isRefreshing={isForgeRefreshing}
 				isContinuingWorkspace={isContinuingWorkspace}
+				activeTab={gitActiveTab}
+				onTabChange={onGitTabChange}
 				onChangeRequestClick={
 					changeRequest ? () => void openUrl(changeRequest.url) : undefined
 				}
@@ -397,23 +405,73 @@ export function ChangesSection({
 			/>
 
 			<ScrollArea
-				aria-label="Changes panel body"
+				aria-label="Git panel body"
 				className="min-h-0 flex-1 bg-muted/20 font-mono text-[11.5px]"
 			>
-				{hasUncommittedChanges && (
+				{gitActiveTab === "changes" ? (
 					<>
-						{stagedChanges.length > 0 && (
-							<ChangesGroup
-								label="Staged Changes"
-								count={stagedChanges.length}
-								open={stagedOpen}
-								onToggle={() => setStagedOpen((current) => !current)}
-								changes={stagedChanges}
-								treeView={changesTreeView}
-								onToggleTreeView={() => setChangesTreeView((v) => !v)}
-								action="unstage"
-								onStageAction={unstageFile}
-								onBatchAction={unstageAll}
+						{hasUncommittedChanges && (
+							<>
+								{stagedChanges.length > 0 && (
+									<ChangesGroup
+										label="Staged Changes"
+										count={stagedChanges.length}
+										open={stagedOpen}
+										onToggle={() => setStagedOpen((current) => !current)}
+										changes={stagedChanges}
+										treeView={changesTreeView}
+										onToggleTreeView={() => setChangesTreeView((v) => !v)}
+										action="unstage"
+										onStageAction={unstageFile}
+										onBatchAction={unstageAll}
+										editorMode={editorMode}
+										activeEditorPath={activeEditorPath}
+										onOpenEditorFile={onOpenEditorFile}
+										flashingPaths={flashingPaths}
+										workspaceBranch={workspaceBranch}
+										workspaceRemoteUrl={workspaceRemoteUrl}
+									/>
+								)}
+								{unstagedChanges.length > 0 && (
+									<ChangesGroup
+										label="Changes"
+										icon={
+											<LaptopIcon
+												className="size-3 shrink-0 text-muted-foreground"
+												strokeWidth={2}
+											/>
+										}
+										count={unstagedChanges.length}
+										open={changesOpen}
+										onToggle={() => setChangesOpen((current) => !current)}
+										changes={unstagedChanges}
+										treeView={changesTreeView}
+										onToggleTreeView={() => setChangesTreeView((v) => !v)}
+										action="stage"
+										onStageAction={stageFile}
+										onBatchAction={stageAll}
+										onDiscard={discardFile}
+										editorMode={editorMode}
+										activeEditorPath={activeEditorPath}
+										onOpenEditorFile={onOpenEditorFile}
+										flashingPaths={flashingPaths}
+										workspaceBranch={workspaceBranch}
+										workspaceRemoteUrl={workspaceRemoteUrl}
+									/>
+								)}
+							</>
+						)}
+
+						{(committedChanges.length > 0 || branchSwitching) && (
+							<BranchDiffSection
+								targetBranch={workspaceTargetBranch}
+								count={committedChanges.length}
+								loading={branchSwitching}
+								open={branchDiffOpen}
+								onToggle={() => setBranchDiffOpen((current) => !current)}
+								changes={committedChanges}
+								treeView={branchDiffTreeView}
+								onToggleTreeView={() => setBranchDiffTreeView((v) => !v)}
 								editorMode={editorMode}
 								activeEditorPath={activeEditorPath}
 								onOpenEditorFile={onOpenEditorFile}
@@ -422,59 +480,46 @@ export function ChangesSection({
 								workspaceRemoteUrl={workspaceRemoteUrl}
 							/>
 						)}
-						{unstagedChanges.length > 0 && (
-							<ChangesGroup
-								label="Changes"
-								icon={
-									<LaptopIcon
-										className="size-3 shrink-0 text-muted-foreground"
-										strokeWidth={2}
-									/>
-								}
-								count={unstagedChanges.length}
-								open={changesOpen}
-								onToggle={() => setChangesOpen((current) => !current)}
-								changes={unstagedChanges}
-								treeView={changesTreeView}
-								onToggleTreeView={() => setChangesTreeView((v) => !v)}
-								action="stage"
-								onStageAction={stageFile}
-								onBatchAction={stageAll}
-								onDiscard={discardFile}
-								editorMode={editorMode}
-								activeEditorPath={activeEditorPath}
-								onOpenEditorFile={onOpenEditorFile}
-								flashingPaths={flashingPaths}
-								workspaceBranch={workspaceBranch}
-								workspaceRemoteUrl={workspaceRemoteUrl}
-							/>
+
+						{!hasChanges && (
+							<div className="px-3 py-3 text-[11px] leading-5 text-muted-foreground">
+								No changes on this branch yet.
+							</div>
 						)}
 					</>
-				)}
-
-				{(committedChanges.length > 0 || branchSwitching) && (
-					<BranchDiffSection
-						targetBranch={workspaceTargetBranch}
-						count={committedChanges.length}
-						loading={branchSwitching}
-						open={branchDiffOpen}
-						onToggle={() => setBranchDiffOpen((current) => !current)}
-						changes={committedChanges}
-						treeView={branchDiffTreeView}
-						onToggleTreeView={() => setBranchDiffTreeView((v) => !v)}
-						editorMode={editorMode}
-						activeEditorPath={activeEditorPath}
-						onOpenEditorFile={onOpenEditorFile}
-						flashingPaths={flashingPaths}
-						workspaceBranch={workspaceBranch}
-						workspaceRemoteUrl={workspaceRemoteUrl}
-					/>
-				)}
-
-				{!hasChanges && (
-					<div className="px-3 py-3 text-[11px] leading-5 text-muted-foreground">
-						No changes on this branch yet.
-					</div>
+				) : (
+					<>
+						{/* Files Tab Content */}
+						{allFiles.length === 0 ? (
+							<div className="px-3 py-3 text-[11px] leading-5 text-muted-foreground">
+								No files in workspace.
+							</div>
+						) : (
+							<div className="py-0.5">
+								{changesTreeView ? (
+									<ChangesTreeView
+										changes={allFiles}
+										editorMode={editorMode}
+										activeEditorPath={activeEditorPath}
+										onOpenEditorFile={onOpenEditorFile}
+										flashingPaths={new Set()}
+										workspaceBranch={workspaceBranch}
+										workspaceRemoteUrl={workspaceRemoteUrl}
+									/>
+								) : (
+									<ChangesFlatView
+										changes={allFiles}
+										editorMode={editorMode}
+										activeEditorPath={activeEditorPath}
+										onOpenEditorFile={onOpenEditorFile}
+										flashingPaths={new Set()}
+										workspaceBranch={workspaceBranch}
+										workspaceRemoteUrl={workspaceRemoteUrl}
+									/>
+								)}
+							</div>
+						)}
+					</>
 				)}
 			</ScrollArea>
 		</motion.section>

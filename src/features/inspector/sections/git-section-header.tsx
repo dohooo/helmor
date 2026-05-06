@@ -87,6 +87,8 @@ export type GitSectionHeaderProps = {
 	 */
 	forgeDetection?: ForgeDetection | null;
 	workspaceId?: string | null;
+	activeTab?: "changes" | "files";
+	onTabChange?: (tab: "changes" | "files") => void;
 	onChangeRequestClick?: () => void;
 	onCommit?: () => void | Promise<void>;
 	onContinueWorkspace?: () => void | Promise<void>;
@@ -104,6 +106,8 @@ export function GitSectionHeader({
 	forgeRemoteState = null,
 	forgeDetection = null,
 	workspaceId = null,
+	activeTab = "changes",
+	onTabChange,
 	onChangeRequestClick,
 	onCommit,
 	onContinueWorkspace,
@@ -251,7 +255,7 @@ export function GitSectionHeader({
 			ref={headerRef}
 			className={cn(
 				INSPECTOR_SECTION_HEADER_CLASS,
-				"relative gap-1.5 overflow-hidden border-b-0 shadow-[inset_0_-1px_0_color-mix(in_oklch,var(--border)_60%,transparent)]",
+				"relative flex-col gap-2 overflow-hidden border-b-0 shadow-[inset_0_-1px_0_color-mix(in_oklch,var(--border)_60%,transparent)]",
 				"transition-[background-color,border-color,color,box-shadow] duration-300 ease-out",
 				showForgeOnboarding ? null : gitHeaderHighlightClass,
 				className,
@@ -269,148 +273,191 @@ export function GitSectionHeader({
 					}}
 				/>
 			)}
-			<div
-				ref={changeRequestRef}
-				className="flex shrink-0 items-center gap-1.5"
-			>
-				{!showChangeRequest ? (
-					<span className={cn(INSPECTOR_SECTION_TITLE_CLASS, "translate-y-px")}>
-						Git
-					</span>
-				) : (
-					(() => {
-						const button = (
-							<Button
-								type="button"
-								variant="outline"
-								size="xs"
-								className={cn(
-									"self-center bg-transparent font-normal tracking-[0.01em] transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-transparent hover:opacity-80",
-									(commitButtonMode === "fix" ||
-										commitButtonMode === "closed") &&
-										"border-[var(--workspace-pr-closed-accent)] text-[var(--workspace-pr-closed-accent)] hover:text-[var(--workspace-pr-closed-accent)]",
-									commitButtonMode === "resolve-conflicts" &&
-										"border-[var(--workspace-pr-conflicts-accent)] text-[var(--workspace-pr-conflicts-accent)] hover:text-[var(--workspace-pr-conflicts-accent)]",
-									commitButtonMode === "merge" &&
-										"border-[var(--workspace-pr-open-accent)] text-[var(--workspace-pr-open-accent)] hover:text-[var(--workspace-pr-open-accent)]",
-									commitButtonMode === "merged" &&
-										"border-[var(--workspace-pr-merged-accent)] text-[var(--workspace-pr-merged-accent)] hover:text-[var(--workspace-pr-merged-accent)]",
-								)}
-								onClick={onChangeRequestClick}
-							>
-								<span className="inline-flex h-4 min-w-0 items-center gap-1.5 leading-4">
-									<span className="inline-flex size-4 shrink-0 items-center justify-center overflow-visible">
-										{isMergeRequest ? (
-											<GitlabBrandIcon size={12} />
-										) : (
-											<GithubBrandIcon size={12} />
-										)}
-									</span>
-									<span className="inline-flex h-4 min-w-0 items-center truncate leading-4 tabular-nums text-[13px] font-light">
-										{isMergeRequest ? "!" : "#"}
-										{changeRequest.number}
-									</span>
-									<ExternalLink
-										size={12}
-										strokeWidth={2}
-										className="shrink-0 self-center"
-									/>
-								</span>
-							</Button>
-						);
-						const openLabel = isMergeRequest
-							? "Open merge request"
-							: "Open pull request";
-						return (
-							<Tooltip>
-								<TooltipTrigger asChild>{button}</TooltipTrigger>
-								<TooltipContent
-									side="bottom"
-									className="flex max-w-[320px] items-center gap-2 rounded-md px-2 py-1 text-[12px] leading-tight"
+			{/* Top row: PR button + commit buttons */}
+			<div className="flex w-full items-center gap-1.5">
+				<div
+					ref={changeRequestRef}
+					className="flex shrink-0 items-center gap-1.5"
+				>
+					{!showChangeRequest ? (
+						<span
+							className={cn(INSPECTOR_SECTION_TITLE_CLASS, "translate-y-px")}
+						>
+							Git
+						</span>
+					) : (
+						(() => {
+							const button = (
+								<Button
+									type="button"
+									variant="outline"
+									size="xs"
+									className={cn(
+										"self-center bg-transparent font-normal tracking-[0.01em] transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-transparent hover:opacity-80",
+										(commitButtonMode === "fix" ||
+											commitButtonMode === "closed") &&
+											"border-[var(--workspace-pr-closed-accent)] text-[var(--workspace-pr-closed-accent)] hover:text-[var(--workspace-pr-closed-accent)]",
+										commitButtonMode === "resolve-conflicts" &&
+											"border-[var(--workspace-pr-conflicts-accent)] text-[var(--workspace-pr-conflicts-accent)] hover:text-[var(--workspace-pr-conflicts-accent)]",
+										commitButtonMode === "merge" &&
+											"border-[var(--workspace-pr-open-accent)] text-[var(--workspace-pr-open-accent)] hover:text-[var(--workspace-pr-open-accent)]",
+										commitButtonMode === "merged" &&
+											"border-[var(--workspace-pr-merged-accent)] text-[var(--workspace-pr-merged-accent)] hover:text-[var(--workspace-pr-merged-accent)]",
+									)}
+									onClick={onChangeRequestClick}
 								>
-									<span className="truncate">{openLabel}</span>
-									{openChangeRequestShortcut ? (
-										<InlineShortcutDisplay hotkey={openChangeRequestShortcut} />
-									) : null}
-								</TooltipContent>
-							</Tooltip>
-						);
-					})()
-				)}
-			</div>
-			{showButton &&
-				(showForgeOnboarding ? (
-					<ForgeCliTrigger
-						detection={forgeDetection}
-						workspaceId={workspaceId}
-						connecting={forgeConnecting}
-						onConnectingChange={setForgeConnecting}
-					/>
-				) : (
-					<div className="flex min-w-0 flex-1 items-center justify-end gap-1.5">
-						{showContinue && (
-							<Button
-								type="button"
-								variant="outline"
-								size="xs"
-								aria-label="Continue workspace"
-								className={cn(
-									"shrink-0 justify-start overflow-hidden self-center border-dashed border-[var(--workspace-pr-merged-accent)] bg-transparent px-0 font-normal text-[var(--workspace-pr-merged-accent)] transition-[background-color,border-color,color,box-shadow,opacity] duration-200 ease-out hover:bg-transparent hover:text-[var(--workspace-pr-merged-accent)] hover:opacity-80",
-								)}
-								style={{ width: continueWidth }}
-								disabled={isContinuingWorkspace}
-								onClick={onContinueWorkspace}
-							>
-								<ChevronsRight
-									size={13}
-									strokeWidth={2}
-									className="shrink-0 transition-[margin-left] duration-200 ease-out"
-									style={{ marginLeft: iconMarginLeft }}
-								/>
-								<span
-									ref={continueLabelRef}
-									className="block min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-left leading-none"
-									style={{ maxWidth: labelMaxWidth }}
-								>
-									{CONTINUE_LABEL}
-								</span>
-							</Button>
-						)}
-						<div ref={commitButtonRef} className="flex shrink-0 items-center">
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<span className="inline-flex">
-										<WorkspaceCommitButton
-											mode={commitButtonMode}
-											state={commitButtonState}
-											changeRequestName={changeRequestName}
-											className="self-center"
-											onCommit={onCommit}
-										/>
-									</span>
-								</TooltipTrigger>
-								{commitShortcut ? (
-									<TooltipContent
-										side="bottom"
-										className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-									>
-										<span>
-											{getCommitButtonLabel(
-												commitButtonMode,
-												"idle",
-												changeRequestName,
+									<span className="inline-flex h-4 min-w-0 items-center gap-1.5 leading-4">
+										<span className="inline-flex size-4 shrink-0 items-center justify-center overflow-visible">
+											{isMergeRequest ? (
+												<GitlabBrandIcon size={12} />
+											) : (
+												<GithubBrandIcon size={12} />
 											)}
 										</span>
-										<InlineShortcutDisplay
-											hotkey={commitShortcut}
-											className="text-background/60"
+										<span className="inline-flex h-4 min-w-0 items-center truncate leading-4 tabular-nums text-[13px] font-light">
+											{isMergeRequest ? "!" : "#"}
+											{changeRequest.number}
+										</span>
+										<ExternalLink
+											size={12}
+											strokeWidth={2}
+											className="shrink-0 self-center"
 										/>
+									</span>
+								</Button>
+							);
+							const openLabel = isMergeRequest
+								? "Open merge request"
+								: "Open pull request";
+							return (
+								<Tooltip>
+									<TooltipTrigger asChild>{button}</TooltipTrigger>
+									<TooltipContent
+										side="bottom"
+										className="flex max-w-[320px] items-center gap-2 rounded-md px-2 py-1 text-[12px] leading-tight"
+									>
+										<span className="truncate">{openLabel}</span>
+										{openChangeRequestShortcut ? (
+											<InlineShortcutDisplay
+												hotkey={openChangeRequestShortcut}
+											/>
+										) : null}
 									</TooltipContent>
-								) : null}
-							</Tooltip>
+								</Tooltip>
+							);
+						})()
+					)}
+				</div>
+				{showButton &&
+					(showForgeOnboarding ? (
+						<ForgeCliTrigger
+							detection={forgeDetection}
+							workspaceId={workspaceId}
+							connecting={forgeConnecting}
+							onConnectingChange={setForgeConnecting}
+						/>
+					) : (
+						<div className="flex min-w-0 flex-1 items-center justify-end gap-1.5">
+							{showContinue && (
+								<Button
+									type="button"
+									variant="outline"
+									size="xs"
+									aria-label="Continue workspace"
+									className={cn(
+										"shrink-0 justify-start overflow-hidden self-center border-dashed border-[var(--workspace-pr-merged-accent)] bg-transparent px-0 font-normal text-[var(--workspace-pr-merged-accent)] transition-[background-color,border-color,color,box-shadow,opacity] duration-200 ease-out hover:bg-transparent hover:text-[var(--workspace-pr-merged-accent)] hover:opacity-80",
+									)}
+									style={{ width: continueWidth }}
+									disabled={isContinuingWorkspace}
+									onClick={onContinueWorkspace}
+								>
+									<ChevronsRight
+										size={13}
+										strokeWidth={2}
+										className="shrink-0 transition-[margin-left] duration-200 ease-out"
+										style={{ marginLeft: iconMarginLeft }}
+									/>
+									<span
+										ref={continueLabelRef}
+										className="block min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-left leading-none"
+										style={{ maxWidth: labelMaxWidth }}
+									>
+										{CONTINUE_LABEL}
+									</span>
+								</Button>
+							)}
+							<div ref={commitButtonRef} className="flex shrink-0 items-center">
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<span className="inline-flex">
+											<WorkspaceCommitButton
+												mode={commitButtonMode}
+												state={commitButtonState}
+												changeRequestName={changeRequestName}
+												className="self-center"
+												onCommit={onCommit}
+											/>
+										</span>
+									</TooltipTrigger>
+									{commitShortcut ? (
+										<TooltipContent
+											side="bottom"
+											className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+										>
+											<span>
+												{getCommitButtonLabel(
+													commitButtonMode,
+													"idle",
+													changeRequestName,
+												)}
+											</span>
+											<InlineShortcutDisplay
+												hotkey={commitShortcut}
+												className="text-background/60"
+											/>
+										</TooltipContent>
+									) : null}
+								</Tooltip>
+							</div>
 						</div>
-					</div>
-				))}
+					))}
+			</div>
+
+			{/* Tab row */}
+			{onTabChange && (
+				<div className="flex w-full items-center gap-0 border-t border-border/30 pt-1.5 -mb-[1px]">
+					<button
+						type="button"
+						onClick={() => onTabChange("changes")}
+						className={cn(
+							"relative px-3 py-1 text-[12px] font-medium transition-colors cursor-pointer",
+							activeTab === "changes"
+								? "text-foreground"
+								: "text-muted-foreground hover:text-foreground",
+						)}
+					>
+						Changes
+						{activeTab === "changes" && (
+							<span className="absolute inset-x-0 bottom-0 h-0.5 bg-foreground" />
+						)}
+					</button>
+					<button
+						type="button"
+						onClick={() => onTabChange("files")}
+						className={cn(
+							"relative px-3 py-1 text-[12px] font-medium transition-colors cursor-pointer",
+							activeTab === "files"
+								? "text-foreground"
+								: "text-muted-foreground hover:text-foreground",
+						)}
+					>
+						Files
+						{activeTab === "files" && (
+							<span className="absolute inset-x-0 bottom-0 h-0.5 bg-foreground" />
+						)}
+					</button>
+				</div>
+			)}
 		</div>
 	);
 }

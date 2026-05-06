@@ -17,7 +17,7 @@ import { useSetupAutoRun } from "./hooks/use-setup-auto-run";
 import { HorizontalResizeHandle, InspectorTabsSection } from "./layout";
 import type { ScriptStatus } from "./script-store";
 import { ActionsSection } from "./sections/actions";
-import { ChangesSection } from "./sections/changes";
+import { GitSection } from "./sections/git-section";
 import { OpenDevServerButton, RunTab } from "./sections/run";
 import { SetupTab } from "./sections/setup";
 import { TerminalInstancePanel } from "./sections/terminal";
@@ -91,10 +91,12 @@ export function WorkspaceInspectorSidebar({
 		actionsOpen,
 		actionsRef,
 		activeTab,
+		allFiles,
 		changes,
 		changesHeight,
 		containerRef,
 		flashingPaths,
+		gitActiveTab,
 		handleResizeStart,
 		handleToggleActions,
 		handleToggleTabs,
@@ -104,6 +106,7 @@ export function WorkspaceInspectorSidebar({
 		repoScripts,
 		scriptsLoaded,
 		setActiveTab,
+		setGitActiveTab,
 		tabsBodyHeight,
 		tabsOpen,
 		tabsWrapperRef,
@@ -381,13 +384,16 @@ export function WorkspaceInspectorSidebar({
 				isResizing && "select-none",
 			)}
 		>
-			<ChangesSection
+			<GitSection
 				workspaceId={workspaceId ?? null}
 				workspaceRootPath={workspaceRootPath ?? null}
 				workspaceBranch={workspaceBranch ?? null}
 				workspaceRemoteUrl={workspaceRemoteUrl ?? null}
 				workspaceTargetBranch={workspaceTargetBranch ?? null}
 				changes={changes}
+				allFiles={allFiles}
+				gitActiveTab={gitActiveTab}
+				onGitTabChange={setGitActiveTab}
 				editorMode={editorMode}
 				activeEditorPath={activeEditorPath}
 				onOpenEditorFile={onOpenEditorFile}
