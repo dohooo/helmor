@@ -43,6 +43,7 @@ export function createOptimisticCreatingWorkspaceDetail(
 		branch: row.branch ?? null,
 		initializationParentBranch: null,
 		intendedTargetBranch: null,
+		mode: row.mode ?? "worktree",
 		pinnedAt: row.pinnedAt ?? null,
 		prTitle: null,
 		archiveCommit: null,
@@ -361,6 +362,7 @@ export function summaryToArchivedRow(summary: WorkspaceSummary): WorkspaceRow {
 		repoIconSrc: summary.repoIconSrc ?? null,
 		repoInitials: summary.repoInitials ?? null,
 		state: summary.state,
+		mode: summary.mode ?? "worktree",
 		hasUnread: summary.hasUnread,
 		workspaceUnread: summary.workspaceUnread,
 		unreadSessionCount: summary.unreadSessionCount,
@@ -388,18 +390,21 @@ export function resolveSessionSelectedModelId({
 	modelSelections,
 	modelSections,
 	settingsDefaultModelId,
+	contextKey,
 }: {
 	session: Pick<
 		WorkspaceSessionSummary,
 		"id" | "agentType" | "model" | "lastUserMessageAt"
 	> | null;
-	modelSelections: Record<string, string>;
+	modelSelections: Partial<Record<string, string>>;
 	modelSections: AgentModelSection[];
 	settingsDefaultModelId?: string | null;
+	contextKey?: string | null;
 }): string | null {
-	const selectedModelId = session
-		? (modelSelections[getComposerContextKey(null, session.id)] ?? null)
-		: null;
+	let selectedModelId = contextKey ? modelSelections[contextKey] : undefined;
+	if (!selectedModelId && session) {
+		selectedModelId = modelSelections[getComposerContextKey(null, session.id)];
+	}
 	return (
 		selectedModelId ??
 		inferDefaultModelId(session, modelSections, settingsDefaultModelId)
@@ -416,7 +421,7 @@ export function resolveSessionDisplayProvider({
 		WorkspaceSessionSummary,
 		"id" | "agentType" | "model" | "lastUserMessageAt"
 	>;
-	modelSelections: Record<string, string>;
+	modelSelections: Partial<Record<string, string>>;
 	modelSections: AgentModelSection[];
 	settingsDefaultModelId?: string | null;
 }): AgentProvider | null {
@@ -461,6 +466,7 @@ export function rowToWorkspaceSummary(
 		repoIconSrc: row.repoIconSrc ?? null,
 		repoInitials: row.repoInitials ?? null,
 		state: row.state ?? "archived",
+		mode: row.mode ?? "worktree",
 		hasUnread: row.hasUnread ?? false,
 		workspaceUnread: row.workspaceUnread ?? 0,
 		unreadSessionCount: row.unreadSessionCount ?? 0,

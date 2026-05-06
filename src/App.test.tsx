@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { WorkspacesSidebar } from "./features/navigation";
 import { WorkspacePanel } from "./features/panel";
-import type { RepositoryCreateOption, WorkspaceGroup } from "./lib/api";
+import type { WorkspaceGroup } from "./lib/api";
 import { renderWithProviders } from "./test/render-with-providers";
 
 vi.mock("./App.css", () => ({}));
@@ -369,30 +369,15 @@ describe("App", () => {
 		expect(onArchiveWorkspace).toHaveBeenCalledWith("ready-workspace");
 	});
 
-	it("opens the repo picker and creates a workspace from a selected repository", async () => {
+	it("opens the workspace start page from the new workspace button", async () => {
 		const user = userEvent.setup();
-		const onCreateWorkspace = vi.fn();
-		const repositories: RepositoryCreateOption[] = [
-			{
-				id: "repo-1",
-				name: "dosu-cli",
-				defaultBranch: "main",
-				repoInitials: "DC",
-			},
-			{
-				id: "repo-2",
-				name: "helmor",
-				defaultBranch: "main",
-				repoInitials: "H",
-			},
-		];
+		const onOpenNewWorkspace = vi.fn();
 
 		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[]}
 				archivedRows={[]}
-				availableRepositories={repositories}
-				onCreateWorkspace={onCreateWorkspace}
+				onOpenNewWorkspace={onOpenNewWorkspace}
 			/>,
 		);
 
@@ -400,13 +385,7 @@ describe("App", () => {
 
 		expect(screen.queryByPlaceholderText("Search repositories")).toBeNull();
 		expect(screen.queryByText("Repositories")).toBeNull();
-		expect(
-			screen.getByRole("option", { name: /dosu-cli/i }),
-		).toBeInTheDocument();
-
-		await user.click(screen.getByText("dosu-cli"));
-
-		expect(onCreateWorkspace).toHaveBeenCalledWith("repo-1");
+		expect(onOpenNewWorkspace).toHaveBeenCalledTimes(1);
 	});
 
 	it("opens a workspace context menu and calls mark as unread", async () => {

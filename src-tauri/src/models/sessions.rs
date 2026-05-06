@@ -485,6 +485,64 @@ pub fn get_session_codex_goal(session_id: &str) -> Result<Option<String>> {
     Ok(meta.filter(|s| !s.is_empty()))
 }
 
+/// One row in `list_session_drafts`. The `state` payload is whatever
+/// JSON the frontend stored — opaque to Rust (Lexical SerializedEditorState
+/// for chat composer drafts). Empty / NULL rows are filtered out before
+/// returning so the caller never has to distinguish "no draft" from
+/// "empty-string draft".
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionDraftRow {
+    pub session_id: String,
+    pub draft_state: String,
+}
+
+/// Bulk-load every session that currently has a non-empty draft. Called
+/// once at app boot to hydrate the in-memory draft map; subsequent
+/// reads / writes go through the per-session `set_session_draft` path.
+pub fn list_session_drafts() -> Result<Vec<SessionDraftRow>> {
+    let conn = db::read_conn()?;
+    let mut statement = conn
+        .prepare(
+            "SELECT id, draft_state FROM sessions \
+             WHERE draft_state IS NOT NULL AND draft_state <> ''",
+        )
+        .context("Failed to prepare list_session_drafts query")?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(SessionDraftRow {
+                session_id: row.get(0)?,
+                draft_state: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            })
+        })
+        .context("Failed to query session drafts")?;
+    let mut out = Vec::new();
+    for row in rows {
+        let row = row.context("Failed to read draft row")?;
+        if !row.draft_state.is_empty() {
+            out.push(row);
+        }
+    }
+    Ok(out)
+}
+
+/// Persist (or clear) a single session's draft. Pass `None` to clear.
+/// Returns `Ok(false)` if the session row doesn't exist — caller can
+/// silently drop the write rather than surface an error.
+pub fn set_session_draft(session_id: &str, draft_state: Option<&str>) -> Result<bool> {
+    let conn = db::write_conn()?;
+    // Treat "" as "clear" — frontend can't always send None cleanly
+    // through the IPC layer, and the loader filter already drops empties.
+    let normalized = draft_state.map(str::trim).filter(|s| !s.is_empty());
+    let updated = conn
+        .execute(
+            "UPDATE sessions SET draft_state = ?1 WHERE id = ?2",
+            (normalized, session_id),
+        )
+        .with_context(|| format!("Failed to update draft for session {session_id}"))?;
+    Ok(updated > 0)
+}
+
 pub fn rename_session(session_id: &str, title: &str) -> Result<()> {
     let connection = db::write_conn()?;
 

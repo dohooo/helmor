@@ -78,7 +78,9 @@ type WorkspaceToastFn = (
 
 type UseWorkspacesSidebarControllerArgs = {
 	selectedWorkspaceId: string | null;
+	autoSelectEnabled?: boolean;
 	onSelectWorkspace: (workspaceId: string | null) => void;
+	onOpenNewWorkspace?: () => void;
 	pushWorkspaceToast: WorkspaceToastFn;
 };
 
@@ -86,7 +88,9 @@ const WORKSPACE_GROUPS_INITIAL_DATA = workspaceGroupsQueryOptions().initialData;
 
 export function useWorkspacesSidebarController({
 	selectedWorkspaceId,
+	autoSelectEnabled = true,
 	onSelectWorkspace,
+	onOpenNewWorkspace,
 	pushWorkspaceToast,
 }: UseWorkspacesSidebarControllerArgs) {
 	const queryClient = useQueryClient();
@@ -387,6 +391,10 @@ export function useWorkspacesSidebarController({
 	}, [baseGroups, pendingCreations]);
 
 	useEffect(() => {
+		if (!autoSelectEnabled) {
+			return;
+		}
+
 		if (
 			selectedWorkspaceId === null &&
 			groupsQuery.data === undefined &&
@@ -399,6 +407,19 @@ export function useWorkspacesSidebarController({
 			selectedWorkspaceId === null &&
 			groupsQuery.isFetching &&
 			groupsQuery.data === WORKSPACE_GROUPS_INITIAL_DATA
+		) {
+			return;
+		}
+
+		// A freshly-created workspace lands here BEFORE `groupsQuery`
+		// refetches it from the backend, so `hasWorkspaceId` returns false
+		// and the fallback below would otherwise jump us to whatever sits
+		// in `archivedSummaries[0]` — clobbering the user's brand-new
+		// workspace selection. Hold off until the refetch settles.
+		if (
+			selectedWorkspaceId &&
+			!hasWorkspaceId(selectedWorkspaceId, groups, archivedSummaries) &&
+			groupsQuery.isFetching
 		) {
 			return;
 		}
@@ -430,6 +451,7 @@ export function useWorkspacesSidebarController({
 			onSelectWorkspace(nextWorkspaceId);
 		}
 	}, [
+		autoSelectEnabled,
 		archivedQuery.data,
 		archivedSummaries,
 		groups,
@@ -1309,17 +1331,21 @@ export function useWorkspacesSidebarController({
 				const shouldNavigate =
 					!selectedWorkspaceId || selectedWorkspaceId === workspaceId;
 				if (shouldNavigate) {
-					const nextWorkspaceId = findReplacementWorkspaceIdAfterRemoval({
-						currentGroups: groups,
-						currentArchivedRows: archivedRows,
-						nextGroups: optimisticGroups,
-						nextArchivedRows: optimisticArchived.archivedRows,
-						removedWorkspaceId: workspaceId,
-					});
-					if (nextWorkspaceId) {
-						prefetchWorkspace(nextWorkspaceId);
+					if (onOpenNewWorkspace) {
+						onOpenNewWorkspace();
+					} else {
+						const nextWorkspaceId = findReplacementWorkspaceIdAfterRemoval({
+							currentGroups: groups,
+							currentArchivedRows: archivedRows,
+							nextGroups: optimisticGroups,
+							nextArchivedRows: optimisticArchived.archivedRows,
+							removedWorkspaceId: workspaceId,
+						});
+						if (nextWorkspaceId) {
+							prefetchWorkspace(nextWorkspaceId);
+						}
+						onSelectWorkspace(nextWorkspaceId);
 					}
-					onSelectWorkspace(nextWorkspaceId);
 				}
 
 				void startArchiveWorkspace(workspaceId)
@@ -1340,6 +1366,7 @@ export function useWorkspacesSidebarController({
 			baseArchivedSummaries,
 			groups,
 			onSelectWorkspace,
+			onOpenNewWorkspace,
 			pendingArchives,
 			prefetchWorkspace,
 			pushWorkspaceErrorToast,

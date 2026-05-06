@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createContext, useContext } from "react";
+import type { ContextCard } from "./sources/types";
 
 export type ThemeMode = "system" | "light" | "dark";
 
@@ -10,14 +11,141 @@ export type DarkTheme = "default" | "midnight" | "forest" | "ember" | "aurora";
  *  - `queue`: stash locally; auto-fire as a new turn once the agent finishes.
  */
 export type FollowUpBehavior = "steer" | "queue";
+export type AppSurface = "workspace" | "workspace-start";
+export type WorkspaceRightSidebarMode = "inspector" | "context";
 
 export type ShortcutOverrides = Record<string, string | null>;
+
+export type InboxIssueScope =
+	| "involves"
+	| "assigned"
+	| "mentioned"
+	| "created"
+	| "all";
+export type InboxPullRequestScope =
+	| "involves"
+	| "author"
+	| "assignee"
+	| "mentions"
+	| "reviewRequested"
+	| "reviewedBy"
+	| "all";
+export type InboxSort = "updated" | "created" | "comments";
+export type InboxDraftFilter = "exclude" | "include" | "only";
+export type InboxIssueState = "open" | "closed" | "all";
+export type InboxPullRequestState = "open" | "closed" | "merged" | "all";
+export type InboxDiscussionState = "unanswered" | "answered" | "all";
+
+export type InboxKindDefaults = {
+	issueScopes: InboxIssueScope[];
+	prScopes: InboxPullRequestScope[];
+	issueState: InboxIssueState;
+	prState: InboxPullRequestState;
+	discussionState: InboxDiscussionState;
+	issueSort: InboxSort;
+	prSort: InboxSort;
+	discussionSort: InboxSort;
+	draftPrs: InboxDraftFilter;
+	issueLabels: string;
+	prLabels: string;
+};
 
 export type ClaudeCustomProviderSettings = {
 	builtinProviderApiKeys: Record<string, string>;
 	customBaseUrl: string;
 	customApiKey: string;
 	customModels: string;
+};
+
+/** Per-account toggles for which item kinds the inbox should pull from
+ * a given forge login. Keyed externally by `<provider>:<login>` (e.g.
+ * `github:octocat`). Missing keys default to all `true` — newly added
+ * accounts opt into everything until the user changes their mind. */
+export type InboxAccountSourceToggles = InboxKindDefaults & {
+	issues: boolean;
+	prs: boolean;
+	discussions: boolean;
+	repos?: Record<string, InboxRepoSourceConfig>;
+};
+
+export type InboxRepoSourceConfig = InboxKindDefaults & {
+	enabled: boolean;
+	issues: boolean;
+	prs: boolean;
+	discussions: boolean;
+};
+
+export type InboxSourceConfig = {
+	accounts: Record<string, InboxAccountSourceToggles>;
+};
+
+export const DEFAULT_INBOX_ACCOUNT_TOGGLES: InboxAccountSourceToggles = {
+	issues: true,
+	prs: true,
+	discussions: true,
+	issueScopes: ["involves"],
+	prScopes: ["involves"],
+	issueState: "open",
+	prState: "open",
+	discussionState: "unanswered",
+	issueSort: "updated",
+	prSort: "updated",
+	discussionSort: "updated",
+	draftPrs: "exclude",
+	issueLabels: "",
+	prLabels: "",
+};
+
+export const DEFAULT_INBOX_REPO_CONFIG: InboxRepoSourceConfig = {
+	enabled: false,
+	issues: true,
+	prs: true,
+	discussions: true,
+	issueScopes: ["all"],
+	prScopes: ["all"],
+	issueState: "open",
+	prState: "open",
+	discussionState: "unanswered",
+	issueSort: "updated",
+	prSort: "updated",
+	discussionSort: "updated",
+	draftPrs: "exclude",
+	issueLabels: "",
+	prLabels: "",
+};
+
+/** Cap on how many inbox cards the kanban view will keep open as
+ *  main-content tabs (and persist across restarts). Beyond this the
+ *  user gets a toast nudging them to close some — keeps the tab strip
+ *  legible and the persisted blob bounded. */
+export const KANBAN_OPEN_INBOX_CARDS_MAX = 10;
+
+/** Persisted UI state for the kanban view — the bits that should
+ *  survive an app restart so the user lands back in the same place
+ *  next time they open the kanban tab. Each field has a graceful
+ *  fallback so a corrupt or partial blob still produces sane UI. */
+export type KanbanViewState = {
+	/** Whether new kanban workspaces land in "in progress" (immediate
+	 *  agent dispatch) or "backlog" (draft saved, no agent). */
+	createState: "in-progress" | "backlog";
+	/** Repository id last selected in the kanban header picker.
+	 *  Resolved against the current repo list on hydrate — falls back
+	 *  to the first repo when the saved id is no longer present. */
+	repoId: string | null;
+	/** Inbox top-level provider tab id (e.g. "github", "linear"). Plain
+	 *  string here so settings.ts stays free of feature-module imports;
+	 *  consumers cast against their own narrower types. */
+	inboxProviderTab: string;
+	/** Inbox sub-tab id within the provider (e.g. "github_issue",
+	 *  "github_pr", "github_discussion"). */
+	inboxProviderSourceTab: string;
+	/** Branch selected in the kanban header, keyed by repository id. */
+	sourceBranchByRepoId: Record<string, string>;
+	/** GitHub inbox state filter keyed by source tab id. */
+	inboxStateFilterBySource: Record<string, string>;
+	/** Inbox cards open as main-content tabs at last app exit. Capped
+	 *  at `KANBAN_OPEN_INBOX_CARDS_MAX`. */
+	openInboxCards: ContextCard[];
 };
 
 export type AppSettings = {
@@ -27,6 +155,9 @@ export type AppSettings = {
 	notifications: boolean;
 	lastWorkspaceId: string | null;
 	lastSessionId: string | null;
+	lastSurface: AppSurface;
+	startContextPanelOpen: boolean;
+	workspaceRightSidebarMode: WorkspaceRightSidebarMode;
 	defaultModelId: string | null;
 	/** Model used when the inspector "Review changes" helper creates a session.
 	 *  When null, falls back to `defaultModelId`. */
@@ -50,6 +181,18 @@ export type AppSettings = {
 	onboardingCompleted: boolean;
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
+	inboxSourceConfig: InboxSourceConfig;
+	kanbanViewState: KanbanViewState;
+};
+
+export const DEFAULT_KANBAN_VIEW_STATE: KanbanViewState = {
+	createState: "in-progress",
+	repoId: null,
+	inboxProviderTab: "github",
+	inboxProviderSourceTab: "github_issue",
+	sourceBranchByRepoId: {},
+	inboxStateFilterBySource: {},
+	openInboxCards: [],
 };
 
 /**
@@ -66,6 +209,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	notifications: true,
 	lastWorkspaceId: null,
 	lastSessionId: null,
+	lastSurface: "workspace",
+	startContextPanelOpen: false,
+	workspaceRightSidebarMode: "inspector",
 	defaultModelId: null,
 	reviewModelId: null,
 	reviewEffort: null,
@@ -84,6 +230,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		customApiKey: "",
 		customModels: "",
 	},
+	inboxSourceConfig: { accounts: {} },
+	kanbanViewState: DEFAULT_KANBAN_VIEW_STATE,
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
@@ -106,6 +254,9 @@ const SETTINGS_KEY_MAP: Record<
 	notifications: "app.notifications",
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
+	lastSurface: "app.last_surface",
+	startContextPanelOpen: "app.start_context_panel_open",
+	workspaceRightSidebarMode: "app.workspace_right_sidebar_mode",
 	defaultModelId: "app.default_model_id",
 	reviewModelId: "app.review_model_id",
 	reviewEffort: "app.review_effort",
@@ -119,6 +270,8 @@ const SETTINGS_KEY_MAP: Record<
 	onboardingCompleted: "app.onboarding_completed",
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
+	inboxSourceConfig: "app.inbox_source_config",
+	kanbanViewState: "app.kanban_view_state",
 };
 
 function parseShortcutOverrides(raw: string | undefined): ShortcutOverrides {
@@ -135,6 +288,254 @@ function parseShortcutOverrides(raw: string | undefined): ShortcutOverrides {
 		) as ShortcutOverrides;
 	} catch {
 		return DEFAULT_SETTINGS.shortcuts;
+	}
+}
+
+function parseInboxToggles(
+	value: unknown,
+	defaults: InboxKindDefaults & {
+		issues: boolean;
+		prs: boolean;
+		discussions: boolean;
+	},
+): InboxKindDefaults & { issues: boolean; prs: boolean; discussions: boolean } {
+	const v = (value ?? {}) as Partial<InboxAccountSourceToggles> & {
+		labels?: unknown;
+		sort?: unknown;
+		issueScope?: unknown;
+		prScope?: unknown;
+	};
+	const legacySort = isInboxSort(v.sort) ? v.sort : defaults.issueSort;
+	const legacyLabels = typeof v.labels === "string" ? v.labels : "";
+	return {
+		issues: typeof v.issues === "boolean" ? v.issues : defaults.issues,
+		prs: typeof v.prs === "boolean" ? v.prs : defaults.prs,
+		discussions:
+			typeof v.discussions === "boolean" ? v.discussions : defaults.discussions,
+		issueScopes: parseInboxIssueScopes(
+			v.issueScopes,
+			v.issueScope,
+			defaults.issueScopes,
+		),
+		prScopes: parseInboxPullRequestScopes(
+			v.prScopes,
+			v.prScope,
+			defaults.prScopes,
+		),
+		issueState: isInboxIssueState(v.issueState)
+			? v.issueState
+			: defaults.issueState,
+		prState: isInboxPullRequestState(v.prState) ? v.prState : defaults.prState,
+		discussionState: isInboxDiscussionState(v.discussionState)
+			? v.discussionState
+			: defaults.discussionState,
+		issueSort: isInboxSort(v.issueSort) ? v.issueSort : legacySort,
+		prSort: isInboxSort(v.prSort) ? v.prSort : legacySort,
+		discussionSort: isInboxSort(v.discussionSort)
+			? v.discussionSort
+			: legacySort,
+		draftPrs: isInboxDraftFilter(v.draftPrs) ? v.draftPrs : defaults.draftPrs,
+		issueLabels:
+			typeof v.issueLabels === "string" ? v.issueLabels : legacyLabels,
+		prLabels: typeof v.prLabels === "string" ? v.prLabels : legacyLabels,
+	};
+}
+
+function parseInboxSourceConfig(raw: string | undefined): InboxSourceConfig {
+	if (!raw) return DEFAULT_SETTINGS.inboxSourceConfig;
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			return DEFAULT_SETTINGS.inboxSourceConfig;
+		}
+		const accountsRaw = (parsed as { accounts?: unknown }).accounts;
+		if (
+			!accountsRaw ||
+			typeof accountsRaw !== "object" ||
+			Array.isArray(accountsRaw)
+		) {
+			return { accounts: {} };
+		}
+		const accounts: Record<string, InboxAccountSourceToggles> = {};
+		for (const [key, value] of Object.entries(accountsRaw)) {
+			if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+			const v = value as Partial<InboxAccountSourceToggles>;
+			const reposRaw = v.repos;
+			const repos: Record<string, InboxRepoSourceConfig> = {};
+			if (
+				reposRaw &&
+				typeof reposRaw === "object" &&
+				!Array.isArray(reposRaw)
+			) {
+				for (const [repo, repoValue] of Object.entries(reposRaw)) {
+					if (
+						!repoValue ||
+						typeof repoValue !== "object" ||
+						Array.isArray(repoValue)
+					) {
+						continue;
+					}
+					const repoConfig = repoValue as Partial<InboxRepoSourceConfig>;
+					repos[repo] = {
+						...parseInboxToggles(repoValue, DEFAULT_INBOX_REPO_CONFIG),
+						enabled:
+							typeof repoConfig.enabled === "boolean"
+								? repoConfig.enabled
+								: DEFAULT_INBOX_REPO_CONFIG.enabled,
+					};
+				}
+			}
+			accounts[key] = {
+				...parseInboxToggles(value, DEFAULT_INBOX_ACCOUNT_TOGGLES),
+				repos,
+			};
+		}
+		return { accounts };
+	} catch {
+		return DEFAULT_SETTINGS.inboxSourceConfig;
+	}
+}
+
+function oneOf<T extends string>(
+	value: unknown,
+	values: readonly T[],
+): value is T {
+	return typeof value === "string" && values.includes(value as T);
+}
+
+function isInboxIssueScope(value: unknown): value is InboxIssueScope {
+	return oneOf(value, [
+		"involves",
+		"assigned",
+		"mentioned",
+		"created",
+		"all",
+	] as const);
+}
+
+function parseInboxIssueScopes(
+	value: unknown,
+	legacyValue: unknown,
+	fallback = DEFAULT_INBOX_ACCOUNT_TOGGLES.issueScopes,
+): InboxIssueScope[] {
+	if (Array.isArray(value)) {
+		const scopes = value.filter(isInboxIssueScope);
+		if (scopes.length > 0) return scopes;
+	}
+	if (isInboxIssueScope(legacyValue)) return [legacyValue];
+	return fallback;
+}
+
+function isInboxPullRequestScope(
+	value: unknown,
+): value is InboxPullRequestScope {
+	return oneOf(value, [
+		"involves",
+		"author",
+		"assignee",
+		"mentions",
+		"reviewRequested",
+		"reviewedBy",
+		"all",
+	] as const);
+}
+
+function parseInboxPullRequestScopes(
+	value: unknown,
+	legacyValue: unknown,
+	fallback = DEFAULT_INBOX_ACCOUNT_TOGGLES.prScopes,
+): InboxPullRequestScope[] {
+	if (Array.isArray(value)) {
+		const scopes = value.filter(isInboxPullRequestScope);
+		if (scopes.length > 0) return scopes;
+	}
+	if (isInboxPullRequestScope(legacyValue)) return [legacyValue];
+	return fallback;
+}
+
+function isInboxIssueState(value: unknown): value is InboxIssueState {
+	return oneOf(value, ["open", "closed", "all"] as const);
+}
+
+function isInboxPullRequestState(
+	value: unknown,
+): value is InboxPullRequestState {
+	return oneOf(value, ["open", "closed", "merged", "all"] as const);
+}
+
+function isInboxDiscussionState(value: unknown): value is InboxDiscussionState {
+	return oneOf(value, ["unanswered", "answered", "all"] as const);
+}
+
+function isInboxSort(value: unknown): value is InboxSort {
+	return oneOf(value, ["updated", "created", "comments"] as const);
+}
+
+function isInboxDraftFilter(value: unknown): value is InboxDraftFilter {
+	return oneOf(value, ["exclude", "include", "only"] as const);
+}
+
+function parseStringRecord(value: unknown): Record<string, string> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return {};
+	}
+	return Object.fromEntries(
+		Object.entries(value).filter(
+			([key, entry]) => key.length > 0 && typeof entry === "string" && entry,
+		),
+	);
+}
+
+function parseKanbanViewState(raw: string | undefined): KanbanViewState {
+	if (!raw) return DEFAULT_KANBAN_VIEW_STATE;
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			return DEFAULT_KANBAN_VIEW_STATE;
+		}
+		const o = parsed as Partial<KanbanViewState>;
+		const createState =
+			o.createState === "backlog" || o.createState === "in-progress"
+				? o.createState
+				: DEFAULT_KANBAN_VIEW_STATE.createState;
+		const repoId = typeof o.repoId === "string" && o.repoId ? o.repoId : null;
+		const inboxProviderTab =
+			typeof o.inboxProviderTab === "string" && o.inboxProviderTab
+				? o.inboxProviderTab
+				: DEFAULT_KANBAN_VIEW_STATE.inboxProviderTab;
+		const inboxProviderSourceTab =
+			typeof o.inboxProviderSourceTab === "string" && o.inboxProviderSourceTab
+				? o.inboxProviderSourceTab
+				: DEFAULT_KANBAN_VIEW_STATE.inboxProviderSourceTab;
+		const sourceBranchByRepoId = parseStringRecord(o.sourceBranchByRepoId);
+		const inboxStateFilterBySource = parseStringRecord(
+			o.inboxStateFilterBySource,
+		);
+		// Trust the persisted ContextCard array as long as it's an array
+		// of objects — the cards are written by the same code that reads
+		// them, and a deep schema check here would couple settings.ts to
+		// every field we add to ContextCard. Cap at the bound so an old
+		// blob from before the cap doesn't blow up the UI.
+		const openInboxCardsRaw = Array.isArray(o.openInboxCards)
+			? o.openInboxCards
+			: [];
+		const openInboxCards = openInboxCardsRaw
+			.filter(
+				(card): card is ContextCard =>
+					Boolean(card) && typeof card === "object" && !Array.isArray(card),
+			)
+			.slice(0, KANBAN_OPEN_INBOX_CARDS_MAX);
+		return {
+			createState,
+			repoId,
+			inboxProviderTab,
+			inboxProviderSourceTab,
+			sourceBranchByRepoId,
+			inboxStateFilterBySource,
+			openInboxCards,
+		};
+	} catch {
+		return DEFAULT_KANBAN_VIEW_STATE;
 	}
 }
 
@@ -194,6 +595,18 @@ export async function loadSettings(): Promise<AppSettings> {
 					: DEFAULT_SETTINGS.notifications,
 			lastWorkspaceId: raw[SETTINGS_KEY_MAP.lastWorkspaceId] || null,
 			lastSessionId: raw[SETTINGS_KEY_MAP.lastSessionId] || null,
+			lastSurface:
+				raw[SETTINGS_KEY_MAP.lastSurface] === "workspace-start"
+					? "workspace-start"
+					: DEFAULT_SETTINGS.lastSurface,
+			startContextPanelOpen:
+				raw[SETTINGS_KEY_MAP.startContextPanelOpen] !== undefined
+					? raw[SETTINGS_KEY_MAP.startContextPanelOpen] === "true"
+					: DEFAULT_SETTINGS.startContextPanelOpen,
+			workspaceRightSidebarMode:
+				raw[SETTINGS_KEY_MAP.workspaceRightSidebarMode] === "context"
+					? "context"
+					: DEFAULT_SETTINGS.workspaceRightSidebarMode,
 			defaultModelId:
 				rawDefaultModelId && rawDefaultModelId !== "default"
 					? rawDefaultModelId
@@ -243,6 +656,12 @@ export async function loadSettings(): Promise<AppSettings> {
 			claudeCustomProviders: parseClaudeCustomProviderSettings(
 				raw[SETTINGS_KEY_MAP.claudeCustomProviders],
 			),
+			inboxSourceConfig: parseInboxSourceConfig(
+				raw[SETTINGS_KEY_MAP.inboxSourceConfig],
+			),
+			kanbanViewState: parseKanbanViewState(
+				raw[SETTINGS_KEY_MAP.kanbanViewState],
+			),
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS };
@@ -277,7 +696,10 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 		const value = patch[key as keyof Omit<AppSettings, "theme" | "darkTheme">];
 		if (value !== undefined) {
 			settings[dbKey] =
-				key === "shortcuts" || key === "claudeCustomProviders"
+				key === "shortcuts" ||
+				key === "claudeCustomProviders" ||
+				key === "inboxSourceConfig" ||
+				key === "kanbanViewState"
 					? JSON.stringify(value)
 					: value === null
 						? ""

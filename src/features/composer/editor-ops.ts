@@ -117,6 +117,8 @@ export function $appendComposerInsertItems(items: ComposerInsertItem[]) {
 					label: item.label,
 					submitText: item.submitText,
 					preview: item.preview ?? null,
+					source: item.source,
+					stateTone: item.stateTone,
 				}),
 			);
 		}

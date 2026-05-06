@@ -20,13 +20,56 @@ import { insertRequestMatchesComposer } from "@/lib/composer-insert";
 import { hasUnresolvedPlanReview } from "@/lib/plan-review";
 import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
+import type { ContextCard } from "@/lib/sources/types";
 import { EMPTY_QUEUE, useSubmitQueue } from "@/lib/use-submit-queue";
+import { cn } from "@/lib/utils";
 import { getComposerContextKey } from "@/lib/workspace-helpers";
-import { useConversationStreaming } from "./hooks/use-streaming";
+import {
+	type ComposerSubmitPayload,
+	useConversationStreaming,
+} from "./hooks/use-streaming";
 import {
 	adaptPermissionToDeferredTool,
 	permissionIdFromAdaptedToolUseId,
 } from "./permission-as-deferred-tool";
+
+export type { ComposerSubmitPayload } from "./hooks/use-streaming";
+
+/** Outcome the create-workspace flow returns to the composer container. When
+ *  `shouldStream` is true, the composer routes the submit through
+ *  `handleComposerSubmit` with the override pointing at the freshly-created
+ *  workspace + session, so the agent stream starts immediately. When false,
+ *  the workspace was created without an immediate agent turn. */
+export type ComposerCreatePrepareOutcome =
+	| { shouldStream: false }
+	| {
+			shouldStream: true;
+			workspaceId: string;
+			sessionId: string;
+			contextKey: string;
+	  };
+
+export type ComposerCreateContext = {
+	/** Called by the composer's submit handler when this composer creates a
+	 *  workspace before routing the prompt into the freshly-created session. */
+	prepare: (
+		payload: ComposerSubmitPayload,
+		options?: { startSubmitMode?: "startNow" | "saveForLater" },
+	) => Promise<ComposerCreatePrepareOutcome>;
+};
+
+export type PendingCreatedWorkspaceSubmit = {
+	id: string;
+	workspaceId: string;
+	sessionId: string;
+	payload: ComposerSubmitPayload;
+	/** False until `await finalizePromise` resolves. The optimistic user
+	 *  bubble is rendered as soon as the pending submit is queued, but the
+	 *  actual `handleComposerSubmit` is held back until this flips true so
+	 *  the backend's title-gen + sendMessage runs against an operational
+	 *  workspace row (not one still in `initializing`). */
+	finalized: boolean;
+};
 
 type WorkspaceConversationContainerProps = {
 	selectedWorkspaceId: string | null;
@@ -37,21 +80,27 @@ type WorkspaceConversationContainerProps = {
 	sessionSelectionHistory?: string[];
 	onSelectSession: (sessionId: string | null) => void;
 	onResolveDisplayedSession: (sessionId: string | null) => void;
-	onSendingWorkspacesChange?: (workspaceIds: Set<string>) => void;
-	/** Reports the set of session IDs currently streaming, so App can observe
-	 * session-level lifecycle events (e.g. the commit button driver needs to
-	 * know when its target session's stream has ended). */
-	onSendingSessionsChange?: (sessionIds: Set<string>) => void;
+	onSessionRunStateChange?: (
+		sessionId: string,
+		workspaceId: string | null,
+		sending: boolean,
+	) => void;
 	onInteractionSessionsChange?: (
 		sessionWorkspaceMap: Map<string, string>,
 		interactionCounts: Map<string, number>,
 	) => void;
+	busySessionIds?: Set<string>;
+	stoppableSessionIds?: Set<string>;
 	interactionRequiredSessionIds?: Set<string>;
 	onSessionCompleted?: (sessionId: string, workspaceId: string) => void;
 	workspaceChangeRequest?: ChangeRequestInfo | null;
 	onSessionAborted?: (sessionId: string, workspaceId: string) => void;
 	headerActions?: React.ReactNode;
 	headerLeading?: React.ReactNode;
+	contextPreviewCard?: ContextCard | null;
+	contextPreviewActive?: boolean;
+	onSelectContextPreview?: () => void;
+	onCloseContextPreview?: () => void;
 	/** Prompt queued by an external caller (e.g. the inspector Git commit
 	 * button) to be auto-submitted once the displayed session matches. */
 	pendingPromptForSession?: {
@@ -63,6 +112,8 @@ type WorkspaceConversationContainerProps = {
 		 *  regardless of the user's `followUpBehavior` setting. */
 		forceQueue?: boolean;
 	} | null;
+	pendingCreatedWorkspaceSubmit?: PendingCreatedWorkspaceSubmit | null;
+	onPendingCreatedWorkspaceSubmitConsumed?: (id: string) => void;
 	/** Called after the pending prompt has been handed off to the composer's
 	 * submit flow, so the caller can clear the queue. */
 	onPendingPromptConsumed?: () => void;
@@ -77,6 +128,28 @@ type WorkspaceConversationContainerProps = {
 	onRequestCloseSession?: (request: SessionCloseRequest) => void;
 	workspaceRootPath?: string | null;
 	onOpenFileReference?: (path: string, line?: number, column?: number) => void;
+	composerOnly?: boolean;
+	composerWrapperClassName?: string;
+	/** Override placeholder text for the composer's editor. */
+	composerPlaceholder?: string;
+	/** When true, force the composer to act as if a workspace were
+	 *  selected (skip the dim-out / disable applied when
+	 *  `displayedWorkspaceId === null`). Used when the composer creates a
+	 *  brand-new workspace on submit, so there is no pre-existing workspace ID
+	 *  to gate on. */
+	composerForceAvailable?: boolean;
+	/** Override the composer's context key. Without this the key falls
+	 *  back to `getComposerContextKey(displayedWorkspaceId, displayedSessionId)`
+	 *  — fine for the regular chat view. Create-workspace surfaces use this
+	 *  to scope drafts to the currently-selected repo. */
+	composerContextKeyOverride?: string;
+	/** Create-workspace intercept. When set, the composer's submit calls
+	 *  `composerCreateContext.prepare` first and only fires the agent stream
+	 *  if the prepare step says so. */
+	composerCreateContext?: ComposerCreateContext | null;
+	contextPanelOpen?: boolean;
+	onToggleContextPanel?: () => void;
+	composerStartSubmitMenu?: boolean;
 };
 
 export const WorkspaceConversationContainer = memo(
@@ -89,16 +162,23 @@ export const WorkspaceConversationContainer = memo(
 		sessionSelectionHistory = [],
 		onSelectSession,
 		onResolveDisplayedSession,
-		onSendingWorkspacesChange,
-		onSendingSessionsChange,
+		onSessionRunStateChange,
 		onInteractionSessionsChange,
+		busySessionIds,
+		stoppableSessionIds,
 		interactionRequiredSessionIds,
 		onSessionCompleted,
 		workspaceChangeRequest = null,
 		onSessionAborted,
 		headerActions,
 		headerLeading,
+		contextPreviewCard = null,
+		contextPreviewActive = false,
+		onSelectContextPreview,
+		onCloseContextPreview,
 		pendingPromptForSession = null,
+		pendingCreatedWorkspaceSubmit = null,
+		onPendingCreatedWorkspaceSubmitConsumed,
 		onPendingPromptConsumed,
 		pendingInsertRequests = [],
 		onPendingInsertRequestsConsumed,
@@ -106,6 +186,15 @@ export const WorkspaceConversationContainer = memo(
 		onRequestCloseSession,
 		workspaceRootPath,
 		onOpenFileReference,
+		composerOnly = false,
+		composerWrapperClassName,
+		composerPlaceholder,
+		composerForceAvailable = false,
+		composerContextKeyOverride,
+		composerCreateContext = null,
+		contextPanelOpen = false,
+		onToggleContextPanel,
+		composerStartSubmitMenu = false,
 	}: WorkspaceConversationContainerProps) {
 		const [composerModelSelections, setComposerModelSelections] = useState<
 			Record<string, string>
@@ -120,10 +209,9 @@ export const WorkspaceConversationContainer = memo(
 			Record<string, boolean>
 		>({});
 
-		const composerContextKey = getComposerContextKey(
-			displayedWorkspaceId,
-			displayedSessionId,
-		);
+		const composerContextKey =
+			composerContextKeyOverride ??
+			getComposerContextKey(displayedWorkspaceId, displayedSessionId);
 		const displayedSelectedModelId =
 			composerModelSelections[composerContextKey] ?? null;
 		const selectionPending =
@@ -156,7 +244,7 @@ export const WorkspaceConversationContainer = memo(
 			restoreImages,
 			restoreNonce,
 			activeFastPreludes,
-			sendingSessionIds,
+			busySessionIds: localBusySessionIds,
 		} = useConversationStreaming({
 			composerContextKey,
 			displayedSelectedModelId,
@@ -166,8 +254,7 @@ export const WorkspaceConversationContainer = memo(
 			selectionPending,
 			followUpBehavior: settings.followUpBehavior,
 			submitQueue: submitQueueApi,
-			onSendingSessionsChange,
-			onSendingWorkspacesChange,
+			onSessionRunStateChange,
 			onInteractionSessionsChange,
 			onSessionCompleted,
 			onSessionAborted,
@@ -186,6 +273,27 @@ export const WorkspaceConversationContainer = memo(
 			() => hasUnresolvedPlanReview(threadQuery.data ?? []),
 			[threadQuery.data],
 		);
+
+		// True while the freshly-created workspace's first send is queued
+		// (we've shown the optimistic user bubble, but
+		// `handleComposerSubmit` hasn't fired yet because finalize is still
+		// in flight). Treated as "sending" by the panel header / status badge
+		// so the loading state appears at click time, not at finalize time.
+		const hasPendingOptimisticSubmit = Boolean(
+			pendingCreatedWorkspaceSubmit &&
+				pendingCreatedWorkspaceSubmit.workspaceId === displayedWorkspaceId &&
+				pendingCreatedWorkspaceSubmit.sessionId === displayedSessionId,
+		);
+		const displayedSessionBusy = displayedSessionId
+			? (busySessionIds?.has(displayedSessionId) ?? false)
+			: false;
+		const displayedSessionStoppable = displayedSessionId
+			? (stoppableSessionIds?.has(displayedSessionId) ?? false)
+			: false;
+		const sendingForPanel =
+			isSending || displayedSessionBusy || hasPendingOptimisticSubmit;
+		const sendingForComposer = isSending || displayedSessionStoppable;
+		const panelBusySessionIds = busySessionIds ?? localBusySessionIds;
 
 		// Auto-activate plan button when AI enters plan mode on its own.
 		const prevPlanReviewRef = useRef(false);
@@ -261,16 +369,90 @@ export const WorkspaceConversationContainer = memo(
 
 		const handleComposerSubmitWrapper = useCallback(
 			(payload: Parameters<typeof handleComposerSubmit>[0]) => {
+				if (composerCreateContext) {
+					void (async () => {
+						const outcome = await composerCreateContext.prepare(payload, {
+							startSubmitMode: payload.startSubmitMode,
+						});
+						if (outcome.shouldStream) {
+							await handleComposerSubmit(payload, {
+								sessionId: outcome.sessionId,
+								workspaceId: outcome.workspaceId,
+								contextKey: outcome.contextKey,
+							});
+						}
+					})();
+					return;
+				}
 				void handleComposerSubmit(payload);
 			},
-			[handleComposerSubmit],
+			[handleComposerSubmit, composerCreateContext],
 		);
+		const dispatchedCreatedWorkspaceSubmitRef = useRef<string | null>(null);
+		useEffect(() => {
+			if (!pendingCreatedWorkspaceSubmit) {
+				dispatchedCreatedWorkspaceSubmitRef.current = null;
+				return;
+			}
+			if (
+				pendingCreatedWorkspaceSubmit.workspaceId !== displayedWorkspaceId ||
+				pendingCreatedWorkspaceSubmit.sessionId !== displayedSessionId
+			) {
+				return;
+			}
+			// Hold off until the App-level handler has awaited finalize. The
+			// backend has already written `state=ready` / `setup_pending` by
+			// the time `finalized` flips true — no React Query round-trip
+			// needed before firing the submit.
+			if (!pendingCreatedWorkspaceSubmit.finalized) {
+				return;
+			}
+			if (
+				dispatchedCreatedWorkspaceSubmitRef.current ===
+				pendingCreatedWorkspaceSubmit.id
+			) {
+				return;
+			}
+			dispatchedCreatedWorkspaceSubmitRef.current =
+				pendingCreatedWorkspaceSubmit.id;
+
+			void (async () => {
+				await handleComposerSubmit(
+					{
+						...pendingCreatedWorkspaceSubmit.payload,
+						workingDirectory:
+							workspaceRootPath ??
+							pendingCreatedWorkspaceSubmit.payload.workingDirectory,
+					},
+					{
+						sessionId: pendingCreatedWorkspaceSubmit.sessionId,
+						workspaceId: pendingCreatedWorkspaceSubmit.workspaceId,
+						contextKey: getComposerContextKey(
+							pendingCreatedWorkspaceSubmit.workspaceId,
+							pendingCreatedWorkspaceSubmit.sessionId,
+						),
+					},
+				);
+				onPendingCreatedWorkspaceSubmitConsumed?.(
+					pendingCreatedWorkspaceSubmit.id,
+				);
+			})();
+		}, [
+			displayedSessionId,
+			displayedWorkspaceId,
+			handleComposerSubmit,
+			onPendingCreatedWorkspaceSubmitConsumed,
+			pendingCreatedWorkspaceSubmit,
+			workspaceRootPath,
+		]);
 		const relevantPendingInsertRequests = pendingInsertRequests.filter(
-			(request) =>
-				insertRequestMatchesComposer(request, {
+			(request) => {
+				return insertRequestMatchesComposer(request, {
+					contextKey: composerContextKey,
 					workspaceId: displayedWorkspaceId,
 					sessionId: displayedSessionId,
-				}),
+				});
+			},
 		);
 
 		// Permission requests are rendered through the same `GenericDeferredToolPanel`
@@ -315,65 +497,91 @@ export const WorkspaceConversationContainer = memo(
 					workspaceRootPath,
 				}}
 			>
-				<WorkspacePanelContainer
-					selectedWorkspaceId={selectedWorkspaceId}
-					displayedWorkspaceId={displayedWorkspaceId}
-					selectedSessionId={selectedSessionId}
-					displayedSessionId={displayedSessionId}
-					sessionSelectionHistory={sessionSelectionHistory}
-					sending={isSending}
-					sendingSessionIds={sendingSessionIds}
-					interactionRequiredSessionIds={interactionRequiredSessionIds}
-					modelSelections={composerModelSelections}
-					workspaceChangeRequest={workspaceChangeRequest}
-					onSelectSession={onSelectSession}
-					onResolveDisplayedSession={onResolveDisplayedSession}
-					onQueuePendingPromptForSession={onQueuePendingPromptForSession}
-					onRequestCloseSession={onRequestCloseSession}
-					headerActions={headerActions}
-					headerLeading={headerLeading}
-				/>
+				{composerOnly ? null : (
+					<WorkspacePanelContainer
+						selectedWorkspaceId={selectedWorkspaceId}
+						displayedWorkspaceId={displayedWorkspaceId}
+						selectedSessionId={selectedSessionId}
+						displayedSessionId={displayedSessionId}
+						sessionSelectionHistory={sessionSelectionHistory}
+						sending={sendingForPanel}
+						busySessionIds={panelBusySessionIds}
+						interactionRequiredSessionIds={interactionRequiredSessionIds}
+						modelSelections={composerModelSelections}
+						workspaceChangeRequest={workspaceChangeRequest}
+						onSelectSession={onSelectSession}
+						onResolveDisplayedSession={onResolveDisplayedSession}
+						onQueuePendingPromptForSession={onQueuePendingPromptForSession}
+						onRequestCloseSession={onRequestCloseSession}
+						contextPreviewCard={contextPreviewCard}
+						contextPreviewActive={contextPreviewActive}
+						onSelectContextPreview={onSelectContextPreview}
+						onCloseContextPreview={onCloseContextPreview}
+						headerActions={headerActions}
+						headerLeading={headerLeading}
+						optimisticPendingSubmit={
+							pendingCreatedWorkspaceSubmit
+								? {
+										id: pendingCreatedWorkspaceSubmit.id,
+										workspaceId: pendingCreatedWorkspaceSubmit.workspaceId,
+										sessionId: pendingCreatedWorkspaceSubmit.sessionId,
+										prompt: pendingCreatedWorkspaceSubmit.payload.prompt,
+									}
+								: null
+						}
+					/>
+				)}
 
-				<div className="mt-auto px-4 pb-4 pt-0">
-					<div>
-						<WorkspaceComposerContainer
-							displayedWorkspaceId={displayedWorkspaceId}
-							displayedSessionId={displayedSessionId}
-							disabled={selectionPending}
-							sending={isSending}
-							sendError={activeSendError}
-							restoreDraft={restoreDraft}
-							restoreImages={restoreImages}
-							restoreFiles={restoreFiles}
-							restoreCustomTags={restoreCustomTags}
-							restoreNonce={restoreNonce}
-							pendingElicitation={pendingElicitation}
-							onElicitationResponse={handleElicitationResponse}
-							elicitationResponsePending={elicitationResponsePending}
-							pendingDeferredTool={effectivePendingDeferredTool}
-							onDeferredToolResponse={effectiveDeferredToolResponse}
-							hasPlanReview={hasPlanReview}
-							modelSelections={composerModelSelections}
-							effortLevels={composerEffortLevels}
-							permissionModes={composerPermissionModes}
-							fastModes={composerFastModes}
-							activeFastPreludes={activeFastPreludes}
-							onSelectModel={handleSelectModel}
-							onSelectEffort={handleSelectEffort}
-							onChangePermissionMode={handleChangePermissionMode}
-							onChangeFastMode={handleChangeFastMode}
-							onSwitchSession={onSelectSession}
-							onSubmit={handleComposerSubmitWrapper}
-							onStop={handleStopStream}
-							pendingPromptForSession={pendingPromptForSession}
-							onPendingPromptConsumed={onPendingPromptConsumed}
-							pendingInsertRequests={relevantPendingInsertRequests}
-							onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
-							queueItems={queueItems}
-							onSteerQueued={handleSteerQueued}
-							onRemoveQueued={handleRemoveQueued}
-						/>
-					</div>
+				<div
+					className={cn(
+						composerOnly ? "w-full" : "mt-auto px-4 pb-4 pt-0",
+						composerWrapperClassName,
+					)}
+				>
+					<WorkspaceComposerContainer
+						displayedWorkspaceId={displayedWorkspaceId}
+						displayedSessionId={displayedSessionId}
+						repoId={repoId}
+						disabled={selectionPending}
+						forceAvailable={composerForceAvailable}
+						placeholder={composerPlaceholder}
+						contextKeyOverride={composerContextKeyOverride}
+						sending={sendingForComposer}
+						sendError={activeSendError}
+						restoreDraft={restoreDraft}
+						restoreImages={restoreImages}
+						restoreFiles={restoreFiles}
+						restoreCustomTags={restoreCustomTags}
+						restoreNonce={restoreNonce}
+						pendingElicitation={pendingElicitation}
+						onElicitationResponse={handleElicitationResponse}
+						elicitationResponsePending={elicitationResponsePending}
+						pendingDeferredTool={effectivePendingDeferredTool}
+						onDeferredToolResponse={effectiveDeferredToolResponse}
+						hasPlanReview={hasPlanReview}
+						modelSelections={composerModelSelections}
+						effortLevels={composerEffortLevels}
+						permissionModes={composerPermissionModes}
+						fastModes={composerFastModes}
+						activeFastPreludes={activeFastPreludes}
+						onSelectModel={handleSelectModel}
+						onSelectEffort={handleSelectEffort}
+						onChangePermissionMode={handleChangePermissionMode}
+						onChangeFastMode={handleChangeFastMode}
+						onSwitchSession={onSelectSession}
+						onSubmit={handleComposerSubmitWrapper}
+						onStop={handleStopStream}
+						pendingPromptForSession={pendingPromptForSession}
+						onPendingPromptConsumed={onPendingPromptConsumed}
+						pendingInsertRequests={relevantPendingInsertRequests}
+						onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
+						queueItems={queueItems}
+						onSteerQueued={handleSteerQueued}
+						onRemoveQueued={handleRemoveQueued}
+						contextPanelOpen={contextPanelOpen}
+						onToggleContextPanel={onToggleContextPanel}
+						startSubmitMenu={composerStartSubmitMenu}
+					/>
 				</div>
 			</FileLinkProvider>
 		);

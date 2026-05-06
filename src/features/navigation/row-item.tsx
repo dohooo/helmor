@@ -4,10 +4,12 @@ import {
 	Circle,
 	FolderOpen,
 	GitBranch,
+	Laptop,
 	LoaderCircle,
 	Pin,
 	PinOff,
 	RotateCcw,
+	Split,
 	Trash2,
 } from "lucide-react";
 import { memo, useEffect, useState } from "react";
@@ -38,6 +40,7 @@ import { recordSidebarRowRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
 import { getWorkspaceBranchTone } from "@/lib/workspace-helpers";
 import { WorkspaceAvatar } from "./avatar";
+import { MoveToWorktreeDialog } from "./move-to-worktree-dialog";
 import {
 	branchToneClasses,
 	GroupIcon,
@@ -70,6 +73,7 @@ export type WorkspaceRowItemProps = {
 	onSelect?: (workspaceId: string) => void;
 	onPrefetch?: (workspaceId: string) => void;
 	onArchiveWorkspace?: (workspaceId: string) => void;
+	onMoveLocalToWorktree?: (workspaceId: string) => void;
 	onMarkWorkspaceUnread?: (workspaceId: string) => void;
 	onOpenInFinder?: (workspaceId: string) => void;
 	onRestoreWorkspace?: (workspaceId: string) => void;
@@ -112,6 +116,7 @@ export const WorkspaceRowItem = memo(
 		onSelect,
 		onPrefetch,
 		onArchiveWorkspace,
+		onMoveLocalToWorktree,
 		onMarkWorkspaceUnread: _onMarkWorkspaceUnread,
 		onOpenInFinder,
 		onRestoreWorkspace,
@@ -127,6 +132,7 @@ export const WorkspaceRowItem = memo(
 			recordSidebarRowRender(row.id);
 		});
 		const isRunScriptRunning = useIsRunScriptRunning(row.id);
+		const [moveDialogOpen, setMoveDialogOpen] = useState(false);
 		const actionLabel =
 			row.state === "archived" ? "Restore workspace" : "Archive workspace";
 		const isArchiving = archivingWorkspaceIds?.has(row.id) ?? false;
@@ -172,7 +178,15 @@ export const WorkspaceRowItem = memo(
 			? "bg-yellow-500"
 			: "bg-chart-2";
 		const showStatusDot = statusDotLabel !== null;
-		const displayTitle = row.branch ? humanizeBranch(row.branch) : row.title;
+		// Local workspaces don't carry a meaningful per-row branch label
+		// (multiple locals share the repo + a single HEAD), so always
+		// fall back to the auto-titled session title (`row.title`).
+		const displayTitle =
+			row.mode === "local"
+				? row.title
+				: row.branch
+					? humanizeBranch(row.branch)
+					: row.title;
 
 		const rowBody = (
 			<div
@@ -219,6 +233,14 @@ export const WorkspaceRowItem = memo(
 					<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
 						{isSending && !isInteractionRequired ? (
 							<HelmorThinkingIndicator size={13} />
+						) : row.mode === "local" ? (
+							<Laptop
+								className={cn(
+									"size-[13px] shrink-0",
+									branchToneClasses[branchTone],
+								)}
+								strokeWidth={1.9}
+							/>
 						) : (
 							<GitBranch
 								className={cn(
@@ -327,84 +349,109 @@ export const WorkspaceRowItem = memo(
 		);
 
 		return (
-			<ContextMenu>
-				<WorkspaceHoverCard row={row} isSending={isSending}>
-					<ContextMenuTrigger className="block">{rowBody}</ContextMenuTrigger>
-				</WorkspaceHoverCard>
-				<ContextMenuContent className="min-w-48">
-					<ContextMenuItem onClick={() => onTogglePin?.(row.id, isPinned)}>
-						{isPinned ? (
-							<PinOff className="size-4 shrink-0" strokeWidth={1.6} />
+			<>
+				<ContextMenu>
+					<WorkspaceHoverCard row={row} isSending={isSending}>
+						<ContextMenuTrigger className="block">{rowBody}</ContextMenuTrigger>
+					</WorkspaceHoverCard>
+					<ContextMenuContent className="min-w-48">
+						<ContextMenuItem onClick={() => onTogglePin?.(row.id, isPinned)}>
+							{isPinned ? (
+								<PinOff className="size-4 shrink-0" strokeWidth={1.6} />
+							) : (
+								<Pin className="size-4 shrink-0" strokeWidth={1.6} />
+							)}
+							<span>{isPinned ? "Unpin" : "Pin"}</span>
+						</ContextMenuItem>
+
+						<ContextMenuSub>
+							<ContextMenuSubTrigger>
+								<Circle className="size-4 shrink-0" strokeWidth={1.6} />
+								<span>Set status</span>
+							</ContextMenuSubTrigger>
+							<ContextMenuSubContent>
+								{STATUS_OPTIONS.map((opt) => (
+									<ContextMenuItem
+										key={opt.value}
+										onClick={() => onSetWorkspaceStatus?.(row.id, opt.value)}
+									>
+										<GroupIcon tone={opt.tone} />
+										<span className="flex-1">{opt.label}</span>
+										{effectiveStatus === opt.value ? (
+											<span className="ml-auto text-foreground">✓</span>
+										) : null}
+									</ContextMenuItem>
+								))}
+							</ContextMenuSubContent>
+						</ContextMenuSub>
+
+						{_onMarkWorkspaceUnread ? (
+							<ContextMenuItem
+								disabled={
+									row.hasUnread || isBusy || Boolean(workspaceActionsDisabled)
+								}
+								onClick={() => _onMarkWorkspaceUnread(row.id)}
+							>
+								<Circle className="size-4 shrink-0" strokeWidth={1.6} />
+								<span>Mark as unread</span>
+							</ContextMenuItem>
+						) : null}
+
+						{onOpenInFinder && !isRestoreAction ? (
+							<ContextMenuItem
+								disabled={isBusy || Boolean(workspaceActionsDisabled)}
+								onClick={() => onOpenInFinder(row.id)}
+							>
+								<FolderOpen className="size-4 shrink-0" strokeWidth={1.6} />
+								<span>Open in Finder</span>
+							</ContextMenuItem>
+						) : null}
+
+						{row.mode === "local" &&
+						onMoveLocalToWorktree &&
+						!isRestoreAction ? (
+							<ContextMenuItem
+								disabled={isBusy || Boolean(workspaceActionsDisabled)}
+								onClick={() => setMoveDialogOpen(true)}
+							>
+								<Split
+									className="size-4 shrink-0 rotate-90"
+									strokeWidth={1.6}
+								/>
+								<span>Move into a new worktree</span>
+							</ContextMenuItem>
+						) : null}
+
+						<ContextMenuSeparator />
+
+						{isRestoreAction ? (
+							<ContextMenuItem
+								disabled={isBusy || workspaceActionsDisabled}
+								onClick={() => onRestoreWorkspace?.(row.id)}
+							>
+								<RotateCcw className="size-4 shrink-0" strokeWidth={1.6} />
+								<span>Restore</span>
+							</ContextMenuItem>
 						) : (
-							<Pin className="size-4 shrink-0" strokeWidth={1.6} />
+							<ContextMenuItem
+								disabled={isBusy || workspaceActionsDisabled}
+								onClick={() => onArchiveWorkspace?.(row.id)}
+							>
+								<Archive className="size-4 shrink-0" strokeWidth={1.6} />
+								<span>Archive</span>
+							</ContextMenuItem>
 						)}
-						<span>{isPinned ? "Unpin" : "Pin"}</span>
-					</ContextMenuItem>
-
-					<ContextMenuSub>
-						<ContextMenuSubTrigger>
-							<Circle className="size-4 shrink-0" strokeWidth={1.6} />
-							<span>Set status</span>
-						</ContextMenuSubTrigger>
-						<ContextMenuSubContent>
-							{STATUS_OPTIONS.map((opt) => (
-								<ContextMenuItem
-									key={opt.value}
-									onClick={() => onSetWorkspaceStatus?.(row.id, opt.value)}
-								>
-									<GroupIcon tone={opt.tone} />
-									<span className="flex-1">{opt.label}</span>
-									{effectiveStatus === opt.value ? (
-										<span className="ml-auto text-foreground">✓</span>
-									) : null}
-								</ContextMenuItem>
-							))}
-						</ContextMenuSubContent>
-					</ContextMenuSub>
-
-					{_onMarkWorkspaceUnread ? (
-						<ContextMenuItem
-							disabled={
-								row.hasUnread || isBusy || Boolean(workspaceActionsDisabled)
-							}
-							onClick={() => _onMarkWorkspaceUnread(row.id)}
-						>
-							<Circle className="size-4 shrink-0" strokeWidth={1.6} />
-							<span>Mark as unread</span>
-						</ContextMenuItem>
-					) : null}
-
-					{onOpenInFinder && !isRestoreAction ? (
-						<ContextMenuItem
-							disabled={isBusy || Boolean(workspaceActionsDisabled)}
-							onClick={() => onOpenInFinder(row.id)}
-						>
-							<FolderOpen className="size-4 shrink-0" strokeWidth={1.6} />
-							<span>Open in Finder</span>
-						</ContextMenuItem>
-					) : null}
-
-					<ContextMenuSeparator />
-
-					{isRestoreAction ? (
-						<ContextMenuItem
-							disabled={isBusy || workspaceActionsDisabled}
-							onClick={() => onRestoreWorkspace?.(row.id)}
-						>
-							<RotateCcw className="size-4 shrink-0" strokeWidth={1.6} />
-							<span>Restore</span>
-						</ContextMenuItem>
-					) : (
-						<ContextMenuItem
-							disabled={isBusy || workspaceActionsDisabled}
-							onClick={() => onArchiveWorkspace?.(row.id)}
-						>
-							<Archive className="size-4 shrink-0" strokeWidth={1.6} />
-							<span>Archive</span>
-						</ContextMenuItem>
-					)}
-				</ContextMenuContent>
-			</ContextMenu>
+					</ContextMenuContent>
+				</ContextMenu>
+				{onMoveLocalToWorktree ? (
+					<MoveToWorktreeDialog
+						open={moveDialogOpen}
+						onOpenChange={setMoveDialogOpen}
+						workspaceTitle={displayTitle}
+						onConfirm={() => onMoveLocalToWorktree(row.id)}
+					/>
+				) : null}
+			</>
 		);
 	},
 	function areWorkspaceRowItemPropsEqual(

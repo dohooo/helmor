@@ -55,6 +55,7 @@ import { AppUpdatesPanel } from "./panels/app-updates";
 import { CliInstallPanel } from "./panels/cli-install";
 import { ConductorImportPanel } from "./panels/conductor-import";
 import { DevToolsPanel } from "./panels/dev-tools";
+import { InboxSettingsPanel } from "./panels/inbox";
 import { ClaudeCustomProvidersPanel } from "./panels/model-providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 
@@ -123,6 +124,7 @@ export type SettingsSection =
 	| "import"
 	| "developer"
 	| "account"
+	| "inbox"
 	| `repo:${string}`;
 
 /// Display labels for settings sections in the sidebar / dialog title.
@@ -130,6 +132,7 @@ export type SettingsSection =
 /// don't pluralise nicely under that rule — keep the overrides explicit.
 const SECTION_LABEL_OVERRIDES: Partial<Record<SettingsSection, string>> = {
 	account: "Accounts",
+	inbox: "Contexts",
 };
 
 /// Optional muted-caption next to the title in the dialog header.
@@ -137,6 +140,7 @@ const SECTION_LABEL_OVERRIDES: Partial<Record<SettingsSection, string>> = {
 /// row (which otherwise duplicates the section name).
 const SECTION_TITLE_CAPTIONS: Partial<Record<SettingsSection, string>> = {
 	account: "Synced with your local gh / glab CLI.",
+	inbox: "Pick which items each connected account contributes to Contexts.",
 };
 
 function sidebarSectionLabel(
@@ -264,6 +268,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 		...(conductorEnabled ? (["import"] as const) : []),
 		...(isDev ? (["developer"] as const) : []),
 		"account",
+		"inbox",
 		"experimental",
 	];
 
@@ -820,6 +825,10 @@ export const SettingsDialog = memo(function SettingsDialog({
 
 							{activeSection === "account" && (
 								<AccountPanel repositories={repositories} />
+							)}
+
+							{activeSection === "inbox" && (
+								<InboxSettingsPanel repositories={repositories} />
 							)}
 
 							{activeRepo && (

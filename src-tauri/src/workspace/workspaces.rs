@@ -9,7 +9,7 @@ use crate::{
     models::workspaces::{self as workspace_models, WorkspaceRecord},
     sessions,
     workspace_pr_sync::PrSyncState,
-    workspace_state::WorkspaceState,
+    workspace_state::{WorkspaceMode, WorkspaceState},
     workspace_status::WorkspaceStatus,
 };
 
@@ -27,11 +27,13 @@ pub use super::branching::{
 };
 pub use super::lifecycle::{
     archive_workspace_impl, cleanup_orphaned_initializing_workspaces,
-    create_workspace_from_repo_impl, finalize_workspace_from_repo_impl, prepare_archive_plan,
+    create_workspace_from_repo_impl, execute_archive_plan, finalize_workspace_from_repo_impl,
+    move_local_workspace_to_worktree_impl, prepare_archive_plan, prepare_local_workspace_impl,
     prepare_workspace_from_repo_impl, restore_workspace_impl, validate_archive_workspace,
     validate_restore_workspace, ArchivePreparedPlan, ArchiveWorkspaceResponse, BranchRename,
-    CreateWorkspaceResponse, FinalizeWorkspaceResponse, PrepareWorkspaceResponse,
-    RestoreWorkspaceResponse, TargetBranchConflict, ValidateRestoreResponse,
+    CreateWorkspaceResponse, FinalizeWorkspaceResponse, MoveLocalToWorktreeResponse,
+    PrepareWorkspaceResponse, RestoreWorkspaceResponse, TargetBranchConflict,
+    ValidateRestoreResponse,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -45,6 +47,7 @@ pub struct WorkspaceSidebarRow {
     pub repo_icon_src: Option<String>,
     pub repo_initials: String,
     pub state: WorkspaceState,
+    pub mode: WorkspaceMode,
     pub has_unread: bool,
     pub workspace_unread: i64,
     pub unread_session_count: i64,
@@ -87,6 +90,7 @@ pub struct WorkspaceSummary {
     pub repo_icon_src: Option<String>,
     pub repo_initials: String,
     pub state: WorkspaceState,
+    pub mode: WorkspaceMode,
     pub has_unread: bool,
     pub workspace_unread: i64,
     pub unread_session_count: i64,
@@ -136,6 +140,7 @@ pub struct WorkspaceDetail {
     pub branch: Option<String>,
     pub initialization_parent_branch: Option<String>,
     pub intended_target_branch: Option<String>,
+    pub mode: WorkspaceMode,
     pub pinned_at: Option<String>,
     pub pr_title: Option<String>,
     pub pr_sync_state: PrSyncState,
@@ -473,8 +478,7 @@ pub fn list_candidate_directories(
         }
         // `workspace_dir` needs the data dir to be set. A single
         // unresolvable row shouldn't hide the rest, so skip silently.
-        let Ok(path) = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
-        else {
+        let Ok(path) = helpers::workspace_path(&record) else {
             continue;
         };
         let title = helpers::display_title(&record);
@@ -725,6 +729,7 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         repo_icon_src: helpers::repo_icon_src_for_root_path(record.root_path.as_deref()),
         repo_initials,
         state: record.state,
+        mode: record.mode,
         has_unread: record.has_unread,
         workspace_unread: record.workspace_unread,
         unread_session_count: record.unread_session_count,
@@ -751,6 +756,9 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
 
 pub fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
     let repo_initials = helpers::repo_initials_for_name(&record.repo_name);
+    // Local workspaces: replace the stored snapshot with the live HEAD
+    // so the sidebar/hover-card never shows a stale branch label.
+    let branch = helpers::live_branch_label(&record);
 
     WorkspaceSummary {
         title: helpers::display_title(&record),
@@ -760,11 +768,12 @@ pub fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
         repo_icon_src: helpers::repo_icon_src_for_root_path(record.root_path.as_deref()),
         repo_initials,
         state: record.state,
+        mode: record.mode,
         has_unread: record.has_unread,
         workspace_unread: record.workspace_unread,
         unread_session_count: record.unread_session_count,
         status: record.status,
-        branch: record.branch,
+        branch,
         active_session_id: record.active_session_id,
         active_session_title: record.active_session_title,
         active_session_agent_type: record.active_session_agent_type,
@@ -787,19 +796,22 @@ pub fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
 pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
     let repo_initials = helpers::repo_initials_for_name(&record.repo_name);
 
-    // Use the worktree path as root_path so Claude Code/Codex operate in the
-    // correct workspace directory, not the source repository.
-    // Archived workspaces have no worktree — return None so the frontend
-    // knows agent messaging is unavailable.
-    let worktree_path = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
-        .ok()
-        .and_then(|p| {
-            if p.is_dir() {
-                p.to_str().map(|s| s.to_string())
-            } else {
-                None
-            }
-        });
+    // Use the workspace path as root_path so Claude Code/Codex operate in the
+    // correct directory. For worktree workspaces this is the helmor data
+    // dir; for local it's the source repo's root. Archived workspaces have
+    // no on-disk path — return None so the frontend knows agent messaging
+    // is unavailable.
+    let worktree_path = helpers::workspace_path(&record).ok().and_then(|p| {
+        if p.is_dir() {
+            p.to_str().map(|s| s.to_string())
+        } else {
+            None
+        }
+    });
+    // Local workspaces: substitute the stored branch snapshot with the
+    // live HEAD so the header reflects whatever the user (or another
+    // local create) just checked out.
+    let branch = helpers::live_branch_label(&record);
 
     WorkspaceDetail {
         title: helpers::display_title(&record),
@@ -822,7 +834,8 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         active_session_title: record.active_session_title,
         active_session_agent_type: record.active_session_agent_type,
         active_session_status: record.active_session_status,
-        branch: record.branch,
+        branch,
+        mode: record.mode,
         initialization_parent_branch: record.initialization_parent_branch,
         intended_target_branch: record.intended_target_branch,
         pinned_at: record.pinned_at,
@@ -853,11 +866,15 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
 /// Returns the number of workspaces that were degraded.
 pub fn purge_orphaned_workspaces() -> Result<usize> {
     let connection = db::read_conn()?;
+    // Local workspaces' "directory" IS the user's repo root — we never
+    // consider those orphaned, even if `r.root_path` is currently
+    // missing (the user might be on a removable drive). Filter them out
+    // server-side via `w.mode = 'worktree'`.
     let mut stmt = connection.prepare(&format!(
         "SELECT w.id, r.name, w.directory_name, w.state
          FROM workspaces w
          JOIN repos r ON r.id = w.repository_id
-         WHERE w.state {}",
+         WHERE w.state {} AND COALESCE(w.mode, 'worktree') = 'worktree'",
         crate::workspace_state::OPERATIONAL_FILTER
     ))?;
     let orphans: Vec<(String, String, String, WorkspaceState)> = stmt
@@ -942,12 +959,19 @@ pub fn degrade_workspace_to_archived(workspace_id: &str) -> Result<bool> {
 pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
     let mut connection = db::write_conn()?;
 
-    // Load workspace info for filesystem cleanup
-    let record: Option<(String, String, WorkspaceState)> = connection
+    // Load workspace info for filesystem cleanup. Skips the dir delete
+    // step for local-mode rows (whose "dir" is the user's repo root).
+    let record: Option<(
+        String,
+        String,
+        WorkspaceState,
+        crate::workspace_state::WorkspaceMode,
+    )> = connection
         .query_row(
-            "SELECT r.name, w.directory_name, w.state FROM workspaces w JOIN repos r ON r.id = w.repository_id WHERE w.id = ?1",
+            "SELECT r.name, w.directory_name, w.state, COALESCE(w.mode, 'worktree')
+                 FROM workspaces w JOIN repos r ON r.id = w.repository_id WHERE w.id = ?1",
             [workspace_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .ok();
 
@@ -984,12 +1008,14 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
     super::branching::clear_prefetch_rate_limit(workspace_id);
     db::remove_workspace_lock(workspace_id);
 
-    // Filesystem cleanup (best-effort)
-    if let Some((repo_name, directory_name, _state)) = record {
-        // Remove worktree directory
-        if let Ok(ws_dir) = crate::data_dir::workspace_dir(&repo_name, &directory_name) {
-            if ws_dir.is_dir() {
-                std::fs::remove_dir_all(&ws_dir).ok();
+    // Filesystem cleanup (best-effort). Local workspaces never own
+    // their directory — that's the user's repo, never delete it.
+    if let Some((repo_name, directory_name, _state, mode)) = record {
+        if mode == crate::workspace_state::WorkspaceMode::Worktree {
+            if let Ok(ws_dir) = crate::data_dir::workspace_dir(&repo_name, &directory_name) {
+                if ws_dir.is_dir() {
+                    std::fs::remove_dir_all(&ws_dir).ok();
+                }
             }
         }
     }

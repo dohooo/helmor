@@ -90,6 +90,39 @@ body {
 	animation: conversation-scrollbar-fade-in 300ms ease-out 400ms both;
 }
 
+.inbox-coming-soon-pickaxe {
+	transform-origin: 70% 76%;
+	animation: inbox-coming-soon-pickaxe 1.55s cubic-bezier(0.4, 0, 0.2, 1)
+		infinite;
+}
+
+@keyframes inbox-coming-soon-pickaxe {
+	0%,
+	68%,
+	100% {
+		transform: translateY(0) rotate(0deg);
+	}
+
+	76% {
+		transform: translateY(0) rotate(-10deg);
+	}
+
+	84% {
+		transform: translateY(0) rotate(6deg);
+	}
+
+	92% {
+		transform: translateY(0) rotate(-2deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.inbox-coming-soon-pickaxe {
+		animation: none;
+		transform: translateY(0);
+	}
+}
+
 @keyframes conversation-scrollbar-fade-in {
 	from {
 		opacity: 0;

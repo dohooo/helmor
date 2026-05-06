@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { open as openDirectoryDialog } from "@tauri-apps/plugin-dialog";
+import type { SerializedEditorState } from "lexical";
 import { CircleAlert, TimerReset } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -63,6 +64,7 @@ const EMPTY_SLASH_COMMANDS: SlashCommandEntry[] = [];
 const EMPTY_LINKED_DIRECTORIES: readonly string[] = [];
 const EMPTY_CANDIDATE_DIRECTORIES: readonly CandidateDirectory[] = [];
 const EMPTY_QUEUE_ITEMS: readonly QueuedSubmit[] = [];
+type StartSubmitMode = "startNow" | "saveForLater";
 
 /**
  * Host-app slash commands. Prepended to the agent-supplied list so they
@@ -99,7 +101,23 @@ const BUILTIN_CLIENT_COMMANDS: readonly SlashCommandEntry[] = [
 type WorkspaceComposerContainerProps = {
 	displayedWorkspaceId: string | null;
 	displayedSessionId: string | null;
+	/** Repo ID hint used when there's no workspace yet (start page). Lets the
+	 *  slash-command query hit the backend's repo-level cache fallback so the
+	 *  popup is populated before the user has created a workspace. */
+	repoId?: string | null;
 	disabled: boolean;
+	/** When true, treat the composer as available even if no workspace is
+	 *  selected — the bottom composer in kanban mode uses this so it can
+	 *  collect a prompt before any workspace exists. */
+	forceAvailable?: boolean;
+	/** Custom placeholder text. When omitted, the composer falls back to
+	 *  the default "Ask to make changes…" copy. */
+	placeholder?: string;
+	/** Override the composer's context key. Without this the key falls
+	 *  back to `getComposerContextKey(displayedWorkspaceId, displayedSessionId)`.
+	 *  The kanban view supplies a per-repo key so each repo keeps its
+	 *  own draft. */
+	contextKeyOverride?: string;
 	onStop?: () => void;
 	sending: boolean;
 	sendError: string | null;
@@ -140,6 +158,13 @@ type WorkspaceComposerContainerProps = {
 		 *  one submit (queue ↔ steer). Used by the "send with opposite
 		 *  follow-up" composer shortcut. Ignored when `forceQueue` is true. */
 		followUpBehaviorOverride?: "queue" | "steer";
+		startSubmitMode?: "startNow" | "saveForLater";
+		/** Snapshot of the editor's full Lexical state at submit time, so
+		 *  callers that need to round-trip chips/text/images (e.g. the kanban
+		 *  "backlog" handler that copies the draft into a freshly-created
+		 *  session's `sessions.draft_state`) can do so without re-encoding
+		 *  the badge nodes. */
+		editorStateSnapshot?: SerializedEditorState;
 	}) => void;
 	/** Prompt queued by an external caller to auto-submit once the displayed
 	 * session matches `sessionId`. */
@@ -166,6 +191,9 @@ type WorkspaceComposerContainerProps = {
 	queueItems?: readonly QueuedSubmit[];
 	onSteerQueued?: (itemId: string) => void;
 	onRemoveQueued?: (itemId: string) => void;
+	contextPanelOpen?: boolean;
+	onToggleContextPanel?: () => void;
+	startSubmitMenu?: boolean;
 };
 
 const noopDeferredToolResponse: DeferredToolResponseHandler = () => {};
@@ -175,7 +203,11 @@ export const WorkspaceComposerContainer = memo(
 	function WorkspaceComposerContainer({
 		displayedWorkspaceId,
 		displayedSessionId,
+		repoId: propRepoId = null,
 		disabled,
+		forceAvailable = false,
+		placeholder,
+		contextKeyOverride,
 		onStop,
 		sending,
 		sendError,
@@ -208,9 +240,27 @@ export const WorkspaceComposerContainer = memo(
 		queueItems = EMPTY_QUEUE_ITEMS,
 		onSteerQueued,
 		onRemoveQueued,
+		contextPanelOpen = false,
+		onToggleContextPanel,
+		startSubmitMenu = false,
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
-		const { settings } = useSettings();
+		const { settings, updateSettings } = useSettings();
+		const startSubmitMode: StartSubmitMode =
+			settings.kanbanViewState.createState === "backlog"
+				? "saveForLater"
+				: "startNow";
+		const handleStartSubmitModeChange = useCallback(
+			(mode: StartSubmitMode) => {
+				void updateSettings({
+					kanbanViewState: {
+						...settings.kanbanViewState,
+						createState: mode === "saveForLater" ? "backlog" : "in-progress",
+					},
+				});
+			},
+			[settings.kanbanViewState, updateSettings],
+		);
 		const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
 		const workspaceDetailQuery = useQuery({
 			...workspaceDetailQueryOptions(displayedWorkspaceId ?? "__none__"),
@@ -334,15 +384,15 @@ export const WorkspaceComposerContainer = memo(
 			(sessionsQuery.data ?? []).find(
 				(session) => session.id === displayedSessionId,
 			) ?? null;
-		const composerContextKey = getComposerContextKey(
-			displayedWorkspaceId,
-			displayedSessionId,
-		);
+		const composerContextKey =
+			contextKeyOverride ??
+			getComposerContextKey(displayedWorkspaceId, displayedSessionId);
 		const selectedModelId = resolveSessionSelectedModelId({
 			session: currentSession,
 			modelSelections,
 			modelSections,
 			settingsDefaultModelId: settings.defaultModelId,
+			contextKey: composerContextKey,
 		});
 		const selectedModel = useMemo(
 			() => findModelOption(modelSections, selectedModelId),
@@ -365,6 +415,11 @@ export const WorkspaceComposerContainer = memo(
 		]
 			? null
 			: getShortcut(settings.shortcuts, "composer.toggleFollowUpBehavior");
+		const toggleContextPanelShortcut = shortcutConflicts.conflictById[
+			"composer.toggleContextPanel"
+		]
+			? null
+			: getShortcut(settings.shortcuts, "composer.toggleContextPanel");
 		const pendingOverrideActive =
 			pendingPromptForSession?.sessionId === displayedSessionId;
 		const pendingModel = useMemo(
@@ -383,9 +438,7 @@ export const WorkspaceComposerContainer = memo(
 		const effectiveSelectedModelId = effectiveModel?.id ?? selectedModelId;
 		const provider =
 			effectiveModel?.provider ?? currentSession?.agentType ?? "claude";
-		const cachedEffort = composerContextKey.startsWith("session:")
-			? effortLevels[composerContextKey]
-			: undefined;
+		const cachedEffort = effortLevels[composerContextKey];
 		// For new sessions, use user setting; for existing sessions with history, use session's effort
 		const sessionEffort =
 			(!isNewSession(currentSession) && currentSession?.effortLevel) || null;
@@ -404,9 +457,7 @@ export const WorkspaceComposerContainer = memo(
 			effectiveSelectedModelId,
 			modelSections,
 		);
-		const cachedPermissionMode = composerContextKey.startsWith("session:")
-			? permissionModes[composerContextKey]
-			: undefined;
+		const cachedPermissionMode = permissionModes[composerContextKey];
 		const sessionPermissionMode = !isNewSession(currentSession)
 			? currentSession?.permissionMode
 			: null;
@@ -418,9 +469,7 @@ export const WorkspaceComposerContainer = memo(
 				? pendingPromptForSession.permissionMode
 				: permissionMode;
 		const supportsFastMode = effectiveModel?.supportsFastMode === true;
-		const cachedFastMode = composerContextKey.startsWith("session:")
-			? fastModes[composerContextKey]
-			: undefined;
+		const cachedFastMode = fastModes[composerContextKey];
 		const sessionFastMode = !isNewSession(currentSession)
 			? currentSession?.fastMode
 			: undefined;
@@ -455,8 +504,9 @@ export const WorkspaceComposerContainer = memo(
 		//     finalize. The typical ~200-500ms window ends long before the
 		//     user finishes typing, so there is no visible transition.
 		const composerUnavailable =
-			displayedWorkspaceId === null ||
-			workspaceDetailQuery.data?.state === "archived";
+			!forceAvailable &&
+			(displayedWorkspaceId === null ||
+				workspaceDetailQuery.data?.state === "archived");
 		const composerAwaitingFinalize =
 			workspaceDetailQuery.data?.state === "initializing";
 
@@ -572,17 +622,21 @@ export const WorkspaceComposerContainer = memo(
 		// query — anything else degrades to claude so we never miss the popup.
 		const slashProvider: AgentProvider =
 			provider === "codex" ? "codex" : "claude";
-		// Slash command list — keyed by (provider, workingDirectory). The
-		// composer popup is hidden until this resolves; on error we fall back
-		// to an empty list and the popup never opens (no UI breakage).
+		// Prefer the repoId from a real workspace; on the start page there's no
+		// workspace yet, so fall back to the caller-supplied repoId hint.
+		const effectiveRepoId =
+			workspaceDetailQuery.data?.repoId ?? propRepoId ?? null;
+		// Slash command list — keyed by (provider, workingDirectory). On the
+		// start page workingDirectory is null, but the backend has a repo-level
+		// cache fallback, so we still fire the query when we know the repoId.
 		const slashCommandsQuery = useQuery({
 			...slashCommandsQueryOptions(
 				slashProvider,
 				workingDirectory,
-				workspaceDetailQuery.data?.repoId ?? null,
+				effectiveRepoId,
 				displayedWorkspaceId,
 			),
-			enabled: Boolean(workingDirectory),
+			enabled: Boolean(workingDirectory) || Boolean(effectiveRepoId),
 		});
 		const slashCommandsResponse = slashCommandsQuery.data;
 		const agentSlashCommands =
@@ -603,12 +657,13 @@ export const WorkspaceComposerContainer = memo(
 		// Pending only (`isPending`) covers the very first fetch with no data
 		// yet; once we have data, `isFetching` covers background refetches but
 		// users don't need a spinner for those — the cached list is fine.
+		const slashQueryActive =
+			Boolean(workingDirectory) || Boolean(effectiveRepoId);
 		const slashCommandsLoading =
-			Boolean(workingDirectory) &&
+			slashQueryActive &&
 			slashCommandsQuery.isPending &&
 			!slashCommandsQuery.isError;
-		const slashCommandsError =
-			Boolean(workingDirectory) && slashCommandsQuery.isError;
+		const slashCommandsError = slashQueryActive && slashCommandsQuery.isError;
 		const refetchSlashCommands = useCallback(() => {
 			void slashCommandsQuery.refetch();
 		}, [slashCommandsQuery]);
@@ -638,6 +693,8 @@ export const WorkspaceComposerContainer = memo(
 				options?: {
 					permissionModeOverride?: string;
 					oppositeFollowUp?: boolean;
+					startSubmitMode?: "startNow" | "saveForLater";
+					editorStateSnapshot?: SerializedEditorState;
 				},
 			) => {
 				if (!effectiveModel) {
@@ -663,6 +720,8 @@ export const WorkspaceComposerContainer = memo(
 						options?.permissionModeOverride ?? effectivePermissionMode,
 					fastMode: supportsFastMode ? fastMode : false,
 					followUpBehaviorOverride,
+					startSubmitMode: options?.startSubmitMode,
+					editorStateSnapshot: options?.editorStateSnapshot,
 				});
 			},
 			[
@@ -936,6 +995,7 @@ export const WorkspaceComposerContainer = memo(
 					<WorkspaceComposer
 						contextKey={composerContextKey}
 						sessionId={displayedSessionId}
+						placeholder={placeholder}
 						providerSessionId={currentSession?.providerSessionId ?? null}
 						agentType={
 							effectiveModel?.provider === "codex" ? "codex" : "claude"
@@ -943,6 +1003,7 @@ export const WorkspaceComposerContainer = memo(
 						focusShortcut={focusShortcut}
 						togglePlanShortcut={togglePlanShortcut}
 						toggleFollowUpShortcut={toggleFollowUpShortcut}
+						toggleContextPanelShortcut={toggleContextPanelShortcut}
 						alwaysShowContextUsage={settings.alwaysShowContextUsage}
 						onSubmit={handleComposerSubmit}
 						disabled={composerUnavailable}
@@ -999,6 +1060,11 @@ export const WorkspaceComposerContainer = memo(
 						linkedDirectoriesDisabled={linkedDirectoriesMutation.isPending}
 						addDirCandidates={candidateDirectories}
 						onPickAddDir={handlePickAddDir}
+						contextPanelOpen={contextPanelOpen}
+						onToggleContextPanel={onToggleContextPanel}
+						startSubmitMenu={startSubmitMenu}
+						startSubmitMode={startSubmitMode}
+						onStartSubmitModeChange={handleStartSubmitModeChange}
 					/>
 				</div>
 			</div>

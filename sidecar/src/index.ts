@@ -42,6 +42,25 @@ const managers: Record<Provider, SessionManager> = {
 	codex: codexManager,
 };
 
+// EPIPE = parent closed the pipe → exit cleanly. Without this, writes to
+// a dead pipe escalate to uncaughtException → the handler writes again →
+// zombie process that silently kills every in-flight RPC.
+function handleStdioError(stream: "stdout" | "stderr") {
+	return (err: NodeJS.ErrnoException) => {
+		if (err.code === "EPIPE") {
+			process.exit(0);
+		}
+		// Report through the OTHER stream to avoid recursion.
+		if (stream === "stdout") {
+			try {
+				process.stderr.write(`[helmor-sidecar] stdout error: ${err.message}\n`);
+			} catch {}
+		}
+	};
+}
+process.stdout.on("error", handleStdioError("stdout"));
+process.stderr.on("error", handleStdioError("stderr"));
+
 const emitter = createSidecarEmitter((event) => {
 	process.stdout.write(`${JSON.stringify(event)}\n`);
 });
@@ -81,21 +100,23 @@ setInterval(() => {
 // ---------------------------------------------------------------------------
 
 process.on("uncaughtException", (err) => {
+	if ((err as NodeJS.ErrnoException).code === "EPIPE") {
+		process.exit(0);
+	}
 	logger.error("uncaughtException", errorDetails(err));
 	try {
 		emitter.error(null, "Internal sidecar error", true);
-	} catch {
-		// stdout may be broken — nothing more we can do
-	}
+	} catch {}
 });
 
 process.on("unhandledRejection", (reason) => {
+	if ((reason as NodeJS.ErrnoException | undefined)?.code === "EPIPE") {
+		process.exit(0);
+	}
 	logger.error("unhandledRejection", errorDetails(reason));
 	try {
 		emitter.error(null, "Internal sidecar error", true);
-	} catch {
-		// stdout may be broken
-	}
+	} catch {}
 });
 
 logger.info("Sidecar starting", { pid: process.pid });
@@ -156,10 +177,15 @@ async function handleGenerateTitle(
 			params,
 			"claudeEnvironment",
 		);
+		// Default true so older clients without the field keep getting both
+		// title and branch. Pass `false` to skip the branch slug entirely.
+		const generateBranch =
+			typeof params.generateBranch === "boolean" ? params.generateBranch : true;
 		logger.debug(`[${id}] generateTitle`, {
 			userMessage: userMessage.slice(0, 100),
 			claudeModel: claudeModel ?? "haiku",
 			customClaudeEnvironment: Boolean(claudeEnvironment),
+			generateBranch,
 		});
 
 		// Try the configured Claude-compatible model first when available;
@@ -171,7 +197,7 @@ async function handleGenerateTitle(
 				branchRenamePrompt,
 				emitter,
 				TITLE_GENERATION_TIMEOUT_MS,
-				{ model: claudeModel, claudeEnvironment },
+				{ model: claudeModel, claudeEnvironment, generateBranch },
 			);
 			logger.debug(`[${id}] generateTitle completed (claude)`);
 		} catch (claudeErr) {
@@ -186,6 +212,7 @@ async function handleGenerateTitle(
 						branchRenamePrompt,
 						emitter,
 						TITLE_GENERATION_TIMEOUT_MS,
+						{ generateBranch },
 					);
 					logger.debug(`[${id}] generateTitle completed (official claude)`);
 					return;
@@ -205,6 +232,7 @@ async function handleGenerateTitle(
 				branchRenamePrompt,
 				emitter,
 				TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
+				{ generateBranch },
 			);
 			logger.debug(`[${id}] generateTitle completed (codex fallback)`);
 		}

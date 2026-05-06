@@ -512,6 +512,93 @@ describe("useConversationStreaming", () => {
 		expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
 	});
 
+	it("reports sending as incremental session lifecycle events so sibling containers cannot clear it", async () => {
+		const streamCallbacks: Array<(event: unknown) => void> = [];
+		apiMocks.startAgentMessageStream.mockImplementation(
+			async (_payload: unknown, onEvent: (event: unknown) => void) => {
+				streamCallbacks.push(onEvent);
+			},
+		);
+
+		const activeSessions = new Set<string>();
+		const sessionWorkspaceMap = new Map<string, string>();
+		const onSessionRunStateChange = vi.fn(
+			(sessionId: string, workspaceId: string | null, sending: boolean) => {
+				if (sending) {
+					activeSessions.add(sessionId);
+					if (workspaceId) {
+						sessionWorkspaceMap.set(sessionId, workspaceId);
+					}
+					return;
+				}
+				activeSessions.delete(sessionId);
+				sessionWorkspaceMap.delete(sessionId);
+			},
+		);
+
+		const { Wrapper } = createWrapper();
+		const { result } = renderHook(
+			() => ({
+				running: useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+					followUpBehavior: "steer",
+					submitQueue: noopSubmitQueue,
+					onSessionRunStateChange,
+				}),
+				emptySibling: useConversationStreaming({
+					composerContextKey: "start:repo:repo-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: null,
+					displayedWorkspaceId: null,
+					selectionPending: false,
+					followUpBehavior: "steer",
+					submitQueue: noopSubmitQueue,
+					onSessionRunStateChange,
+				}),
+			}),
+			{ wrapper: Wrapper },
+		);
+
+		await act(async () => {
+			await result.current.running.handleComposerSubmit({
+				prompt: "kick things off",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: false,
+			});
+		});
+
+		expect(activeSessions).toEqual(new Set(["session-1"]));
+		expect(new Set(sessionWorkspaceMap.values())).toEqual(
+			new Set(["workspace-1"]),
+		);
+		expect(result.current.emptySibling.isSending).toBe(false);
+
+		act(() => {
+			streamCallbacks[0]({
+				kind: "done",
+				provider: MODEL.provider,
+				modelId: MODEL.id,
+				resolvedModel: MODEL.cliModel,
+				sessionId: "provider-session-1",
+				workingDirectory: "/tmp/helmor",
+				persisted: true,
+			});
+		});
+
+		expect(activeSessions).toEqual(new Set());
+		expect(sessionWorkspaceMap.size).toBe(0);
+	});
+
 	it("sends the repo general preference via promptPrefix on the first prompt only", async () => {
 		apiMocks.loadRepoPreferences.mockResolvedValue({
 			general: "Always summarize the repo conventions first.",
