@@ -33,7 +33,7 @@ function defaultBranchPrefix(repo: RepositoryCreateOption | null): string {
 		case "username":
 			return repo.forgeLogin ? `${repo.forgeLogin}/` : "";
 		case "custom":
-			return repo.branchPrefixCustom ? `${repo.branchPrefixCustom}/` : "";
+			return repo.branchPrefixCustom ?? "";
 		case "none":
 			return "";
 		default:

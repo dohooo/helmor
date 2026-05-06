@@ -74,7 +74,6 @@ checkpoints:
       - text
       - text
       - tool-call
-      - tool-call
   - line_index: 38
     event_type: item/completed
     roles:
@@ -85,7 +84,6 @@ checkpoints:
       - tool-call
       - text
       - text
-      - tool-call
       - tool-call
   - line_index: 43
     event_type: item/completed
@@ -98,7 +96,6 @@ checkpoints:
       - text
       - text
       - tool-call
-      - tool-call
       - text
   - line_index: 49
     event_type: item/completed
@@ -110,7 +107,6 @@ checkpoints:
       - tool-call
       - text
       - text
-      - tool-call
       - tool-call
       - text
       - text
@@ -126,7 +122,6 @@ checkpoints:
       - text
       - text
       - tool-call
-      - tool-call
       - text
       - text
       - tool-call
@@ -140,7 +135,6 @@ checkpoints:
       - tool-call
       - text
       - text
-      - tool-call
       - tool-call
       - text
       - text
@@ -156,7 +150,6 @@ checkpoints:
       - tool-call
       - text
       - text
-      - tool-call
       - tool-call
       - text
       - text
@@ -176,27 +169,31 @@ checkpoints:
     roles:
       - assistant
       - system
+      - assistant
     last_part_types:
-      - text
+      - tool-call
   - line_index: 65
     event_type: item/completed
     roles:
       - assistant
       - system
+      - assistant
     last_part_types:
-      - text
+      - tool-call
   - line_index: 67
     event_type: turn/completed
     roles:
       - assistant
       - system
+      - assistant
     last_part_types:
-      - text
+      - tool-call
 final_state:
-  message_count: 2
+  message_count: 3
   roles:
     - assistant
     - system
+    - assistant
   total_parts: 14
 persisted_turns:
   turn_count: 13

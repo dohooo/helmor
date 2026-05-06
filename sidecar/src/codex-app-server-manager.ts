@@ -541,10 +541,15 @@ export class CodexAppServerManager implements SessionManager {
 					return;
 				}
 
-				// Block briefly (≤2s) on a spawn-completed item so the
-				// nickname/role enrichment lands before the pipeline sees it.
-				if (n.method === "item/completed" && isSpawnAgentCompleted(n.params)) {
-					await enrichSpawnAgentItem(ctx.subAgentTracker, n);
+				// Block briefly (≤2s) on any collab item with known receivers
+				// so nickname/role enrichment lands before the pipeline sees
+				// it. Without this, wait/sendInput/etc. render with pool
+				// fallback nicknames that don't match what spawn showed.
+				if (
+					(n.method === "item/started" || n.method === "item/completed") &&
+					shouldEnrichCollabItem(n.params)
+				) {
+					await enrichCollabItem(ctx.subAgentTracker, n);
 				}
 
 				const flat = flattenNotification(n, ctx.providerThreadId);
@@ -1415,23 +1420,24 @@ function extractEventThreadId(n: JsonRpcNotification): string | null {
 	return typeof fromThread === "string" ? fromThread : null;
 }
 
-/** True for `collabAgentToolCall(spawnAgent, completed)`. */
-function isSpawnAgentCompleted(params: unknown): boolean {
+/** True for any `collabAgentToolCall` whose `receiverThreadIds` are
+ *  populated. spawnAgent's `item/started` has empty receivers (new thread
+ *  not created yet) so falls through; spawnAgent completed plus
+ *  wait/sendInput/resumeAgent/closeAgent at started AND completed match. */
+function shouldEnrichCollabItem(params: unknown): boolean {
 	if (!params || typeof params !== "object") return false;
 	const item = (params as Record<string, unknown>).item as
 		| Record<string, unknown>
 		| undefined;
-	return (
-		!!item &&
-		item.type === "collabAgentToolCall" &&
-		item.tool === "spawnAgent" &&
-		item.status === "completed"
-	);
+	if (!item || item.type !== "collabAgentToolCall") return false;
+	const receivers = item.receiverThreadIds;
+	return Array.isArray(receivers) && receivers.length > 0;
 }
 
 /** Resolve nickname/role for each receiverThreadId via `thread/read` and
- *  merge into `agentsStates`. Existing values win. */
-async function enrichSpawnAgentItem(
+ *  merge into `agentsStates`. Existing values win. Used for any collab
+ *  tool call (spawnAgent / sendInput / resumeAgent / wait / closeAgent). */
+async function enrichCollabItem(
 	tracker: SubAgentTracker,
 	n: JsonRpcNotification,
 ): Promise<void> {
