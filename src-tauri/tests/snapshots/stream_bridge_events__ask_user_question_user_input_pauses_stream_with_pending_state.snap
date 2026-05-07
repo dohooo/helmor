@@ -4,19 +4,20 @@ expression: snapshot
 ---
 line_count: 3
 control_events:
-  - kind: deferredToolUse
+  - kind: userInputRequest
+    message: Claude is asking for your input.
     model_id: model-id
+    payload:
+      kind: ask-user-question
+      questions:
+        - options: []
+          question: Pick one
     permission_mode: default
     provider: claude
     resolved_model: test-model
     session_id: provider-session-1
-    toolInput:
-      options:
-        - a
-        - b
-      question: Pick one
-    toolName: AskUserQuestion
-    toolUseId: tool-1
+    source: Claude
+    userInputId: tool-1
     working_directory: /tmp/helmor
 final_messages:
   - role: assistant

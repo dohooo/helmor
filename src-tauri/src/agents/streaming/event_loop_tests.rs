@@ -62,15 +62,11 @@ enum EmittedEvent {
         permission_id: String,
         tool_name: String,
     },
-    Elicitation {
-        server_name: String,
-        elicitation_id: Option<String>,
-        mode: Option<String>,
-    },
-    DeferredToolUse {
-        tool_use_id: String,
-        tool_name: String,
+    UserInputRequest {
+        user_input_id: String,
+        source: String,
         permission_mode: Option<String>,
+        payload_kind: String,
     },
     PlanCaptured,
     Done {
@@ -141,25 +137,21 @@ fn convert_action(action: Action) -> Result<EmittedEvent, String> {
                 permission_id,
                 tool_name,
             },
-            AgentStreamEvent::ElicitationRequest {
-                server_name,
-                elicitation_id,
-                mode,
-                ..
-            } => EmittedEvent::Elicitation {
-                server_name,
-                elicitation_id,
-                mode,
-            },
-            AgentStreamEvent::DeferredToolUse {
-                tool_use_id,
-                tool_name,
+            AgentStreamEvent::UserInputRequest {
+                user_input_id,
+                source,
                 permission_mode,
+                payload,
                 ..
-            } => EmittedEvent::DeferredToolUse {
-                tool_use_id,
-                tool_name,
+            } => EmittedEvent::UserInputRequest {
+                user_input_id,
+                source,
                 permission_mode,
+                payload_kind: payload
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
             },
             AgentStreamEvent::PlanCaptured {} => EmittedEvent::PlanCaptured,
             AgentStreamEvent::Done { persisted, .. } => EmittedEvent::Done { persisted },
@@ -249,19 +241,17 @@ fn dispatch_one(
     let result = match event_type {
         "permissionRequest" => session.handle_permission_request(raw),
         "permissionModeChanged" => session.handle_permission_mode_changed(raw),
-        "elicitationRequest" => {
-            let resolved_model = pipeline
-                .as_ref()
-                .map(|p| p.accumulator.resolved_model().to_string())
-                .unwrap_or_else(|| session.ctx.resolved_model.clone());
-            session.handle_elicitation_request(raw, &resolved_model)
-        }
         "userInputRequest" => {
-            let resolved_model = pipeline
-                .as_ref()
-                .map(|p| p.accumulator.resolved_model().to_string())
-                .unwrap_or_else(|| session.ctx.resolved_model.clone());
-            session.handle_user_input_request(raw, &resolved_model)
+            // Mirror mod.rs: keep the pipeline alive (`as_mut`, not `take`)
+            // so post-pause events still accumulate into the same instance.
+            let mut resolved_model = session.ctx.resolved_model.clone();
+            let mut final_messages = Vec::new();
+            if let Some(pipeline_state) = pipeline.as_mut() {
+                pipeline_state.accumulator.flush_pending();
+                resolved_model = pipeline_state.accumulator.resolved_model().to_string();
+                final_messages = pipeline_state.finish();
+            }
+            session.handle_user_input_request(raw, &resolved_model, final_messages)
         }
         "contextUsageUpdated" => session.handle_context_usage_updated(raw),
         "planCaptured" => {
@@ -290,16 +280,6 @@ fn dispatch_one(
             } else {
                 Ok(vec![])
             }
-        }
-        "deferredToolUse" => {
-            let mut resolved_model = session.ctx.resolved_model.clone();
-            let mut final_messages = Vec::new();
-            if let Some(mut pipeline_state) = pipeline.take() {
-                pipeline_state.accumulator.flush_pending();
-                resolved_model = pipeline_state.accumulator.resolved_model().to_string();
-                final_messages = pipeline_state.finish();
-            }
-            session.handle_deferred_tool_use(raw, &resolved_model, final_messages)
         }
         "error"
             if session.ctx.provider == "codex"
@@ -610,7 +590,11 @@ fn claude_reconnecting_error_terminates_session() {
 }
 
 #[test]
-fn deferred_tool_use_terminates_with_pause() {
+fn user_input_request_emits_panel_marker_without_terminating() {
+    // Unified user-input pause (Claude AUQ flavor here): the sidecar's
+    // live SDK callback is parked, the pipeline keeps accumulating, and
+    // Rust just emits a snapshot Update + the UserInputRequest marker.
+    // Subsequent stream events flow normally once the user submits.
     let entries = dispatch_events(
         "claude",
         vec![
@@ -627,10 +611,14 @@ fn deferred_tool_use_terminates_with_pause() {
                 "message": {"content": [{"type": "text", "text": "Let me ask you something."}]}
             }),
             json!({
-                "type": "deferredToolUse",
-                "toolUseId": "tool-1",
-                "toolName": "AskUserQuestion",
-                "toolInput": {"question": "Pick one"}
+                "type": "userInputRequest",
+                "userInputId": "tool-1",
+                "source": "Claude",
+                "message": "Claude is asking for your input.",
+                "payload": {
+                    "kind": "ask-user-question",
+                    "questions": [{"question": "Pick one", "options": []}]
+                }
             }),
         ],
     );
@@ -638,9 +626,9 @@ fn deferred_tool_use_terminates_with_pause() {
 }
 
 #[test]
-fn permission_mode_changed_propagates_to_later_deferred_tool() {
-    // permissionModeChanged updates ctx.permission_mode; the deferred-
-    // tool emit later in the turn must reflect the new mode.
+fn permission_mode_changed_propagates_to_later_user_input_request() {
+    // permissionModeChanged updates ctx.permission_mode; the
+    // UserInputRequest emit later in the turn must reflect the new mode.
     let entries = dispatch_events(
         "claude",
         vec![
@@ -652,10 +640,14 @@ fn permission_mode_changed_propagates_to_later_deferred_tool() {
             }),
             json!({"type": "permissionModeChanged", "permissionMode": "plan"}),
             json!({
-                "type": "deferredToolUse",
-                "toolUseId": "tool-1",
-                "toolName": "AskUserQuestion",
-                "toolInput": {"question": "Pick"}
+                "type": "userInputRequest",
+                "userInputId": "tool-1",
+                "source": "Claude",
+                "message": "Claude is asking for your input.",
+                "payload": {
+                    "kind": "ask-user-question",
+                    "questions": [{"question": "Pick", "options": []}]
+                }
             }),
         ],
     );
@@ -687,7 +679,10 @@ fn late_event_after_terminal_is_rejected_without_emit() {
 }
 
 #[test]
-fn elicitation_request_passes_through_with_resolved_model() {
+fn user_input_request_form_mode_passes_payload_through() {
+    // Form-mode user input (MCP elicitation form, or Codex's
+    // synthesized form schema). The sidecar shapes `payload.schema`;
+    // Rust forwards the marker without inspecting the schema.
     let entries = dispatch_events(
         "claude",
         vec![
@@ -698,30 +693,15 @@ fn elicitation_request_passes_through_with_resolved_model() {
                 "uuid": "sys-1"
             }),
             json!({
-                "type": "elicitationRequest",
-                "elicitationId": "elic-1",
-                "serverName": "design-server",
-                "message": "Need input",
-                "mode": "form"
-            }),
-            json!({"type": "end"}),
-        ],
-    );
-    assert_yaml_snapshot!(entries);
-}
-
-#[test]
-fn user_input_request_synthesizes_codex_form_elicitation() {
-    let entries = dispatch_events(
-        "codex",
-        vec![
-            json!({"type": "turn/started", "session_id": "s1"}),
-            json!({
                 "type": "userInputRequest",
-                "userInputId": "ui-1",
-                "questions": [{"question": "Approve?"}]
+                "userInputId": "elic-1",
+                "source": "design-server",
+                "message": "Need input",
+                "payload": {
+                    "kind": "form",
+                    "schema": { "type": "object", "properties": {} }
+                }
             }),
-            json!({"type": "turn/completed", "session_id": "s1"}),
             json!({"type": "end"}),
         ],
     );

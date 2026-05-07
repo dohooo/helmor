@@ -40,6 +40,18 @@ type MockHookFn = (
 	hookSpecificOutput?: Record<string, unknown>;
 }>;
 
+type MockCanUseToolFn = (
+	toolName: string,
+	input: Record<string, unknown>,
+	options: {
+		signal: AbortSignal;
+		toolUseID: string;
+		suggestions?: unknown[];
+		title?: string;
+		description?: string;
+	},
+) => Promise<unknown>;
+
 type MockQueryImpl = (options: {
 	prompt?: unknown;
 	options?: {
@@ -58,6 +70,7 @@ type MockQueryImpl = (options: {
 		hooks?: {
 			PreToolUse?: Array<{ hooks: MockHookFn[] }>;
 		};
+		canUseTool?: MockCanUseToolFn;
 	};
 }) => MockQueryResult;
 
@@ -824,45 +837,69 @@ describe("ClaudeSessionManager.sendMessage", () => {
 		});
 	});
 
-	test("suppresses deferred tool_use passthrough while keeping the deferred control event", async () => {
-		mockQueryImpl = async function* withDeferredTool() {
-			yield {
-				type: "assistant",
-				session_id: "sdk-session-1",
-				uuid: "assistant-1",
-				message: {
-					content: [
-						{ type: "text", text: "Need a quick decision." },
+	// AskUserQuestion goes through `canUseTool`: the sidecar emits a
+	// `deferredToolUse` event, parks the callback on a promise, and the
+	// frontend's `respondToDeferredTool` RPC resolves it with the user's
+	// answer. The same live `query()` continues — no `--resume`, no new
+	// process. The assistant message that contained the AUQ tool_use
+	// block must be stripped on the passthrough so the UI's deferred
+	// panel handles rendering instead of a duplicate tool-use bubble.
+	test("AskUserQuestion: canUseTool emits deferredToolUse, parks, returns answer via updatedInput", async () => {
+		let canUseToolResult: unknown = null;
+
+		mockQueryImpl = (queryArgs) => {
+			const callback = queryArgs.options?.canUseTool;
+			if (callback) {
+				const abortController = new AbortController();
+				void (async () => {
+					canUseToolResult = await callback(
+						"AskUserQuestion",
 						{
-							type: "tool_use",
-							id: "tool-ask-1",
-							name: "AskUserQuestion",
-							input: {
-								questions: [
-									{ question: "Which path should we take?", options: [] },
-								],
-							},
+							questions: [
+								{ question: "Which path should we take?", options: [] },
+							],
 						},
-					],
-				},
-			};
-			yield {
-				type: "result",
-				session_id: "sdk-session-1",
-				result: "",
-				deferred_tool_use: {
-					id: "tool-ask-1",
-					name: "AskUserQuestion",
-					input: {
-						questions: [
-							{ question: "Which path should we take?", options: [] },
-						],
+						{
+							signal: abortController.signal,
+							toolUseID: "tool-ask-1",
+							suggestions: [],
+							title: "AskUserQuestion",
+							description: "",
+						},
+					);
+				})();
+			}
+
+			return makeMockQuery({
+				stream: [
+					{
+						type: "assistant",
+						session_id: "sdk-session-1",
+						uuid: "assistant-1",
+						message: {
+							content: [
+								{ type: "text", text: "Need a quick decision." },
+								{
+									type: "tool_use",
+									id: "tool-ask-1",
+									name: "AskUserQuestion",
+									input: {
+										questions: [
+											{ question: "Which path should we take?", options: [] },
+										],
+									},
+								},
+							],
+						},
 					},
-				},
-			};
+				],
+			});
 		};
 
-		await manager.sendMessage(
+		// Drive sendMessage to completion in the background — it will block on
+		// the for-await once it's emitted the assistant passthrough; we resolve
+		// the parked canUseTool promise below to let it finish.
+		const sending = manager.sendMessage(
 			"REQ-DEFER",
 			{
 				sessionId: "helmor-sess-defer",
@@ -878,102 +915,64 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			emitter,
 		);
 
-		expect(captured).toHaveLength(3);
-		expect(captured[0]?.type).toBe("assistant");
-		expect(
-			(
-				captured[0]?.message as {
-					content?: Array<{ type?: string; name?: string; text?: string }>;
-				}
-			).content ?? [],
-		).toEqual([{ type: "text", text: "Need a quick decision." }]);
-		expect(captured[1]).toEqual({
+		// Wait until the userInputRequest event has been emitted (canUseTool
+		// fired and parked).
+		await waitForCondition(
+			() =>
+				captured.some(
+					(event) => (event as { type?: string }).type === "userInputRequest",
+				),
+			"userInputRequest emit",
+		);
+
+		// User submits answers — resolves the parked canUseTool promise.
+		// The frontend AUQ renderer produces the full `updatedInput` shape
+		// directly (questions + answers), and the sidecar passes that
+		// through to the SDK without further conversion.
+		manager.resolveUserInput("tool-ask-1", {
+			action: "submit",
+			content: {
+				questions: [{ question: "Which path should we take?", options: [] }],
+				answers: { "Which path should we take?": "Option A" },
+			},
+		});
+
+		await sending;
+
+		// Assistant passthrough: the AUQ tool_use block must be stripped so
+		// the UI doesn't double-render it alongside the user-input panel.
+		const assistantEvent = captured.find(
+			(event) => (event as { type?: string }).type === "assistant",
+		) as { message?: { content?: Array<{ type?: string; text?: string }> } };
+		expect(assistantEvent?.message?.content).toEqual([
+			{ type: "text", text: "Need a quick decision." },
+		]);
+
+		// userInputRequest event surfaces the question to the frontend with
+		// the AUQ-flavored payload (questions array kept raw — preview /
+		// notes / header / multiSelect all flow through unchanged).
+		const userInputEvent = captured.find(
+			(event) => (event as { type?: string }).type === "userInputRequest",
+		);
+		expect(userInputEvent).toEqual({
 			id: "REQ-DEFER",
-			type: "deferredToolUse",
-			toolUseId: "tool-ask-1",
-			toolName: "AskUserQuestion",
-			toolInput: {
+			type: "userInputRequest",
+			userInputId: "tool-ask-1",
+			source: "Claude",
+			message: "Claude is asking for your input.",
+			payload: {
+				kind: "ask-user-question",
 				questions: [{ question: "Which path should we take?", options: [] }],
 			},
 		});
-		expect(captured[2]).toEqual({ id: "REQ-DEFER", type: "end" });
-	});
 
-	// Regression for AskUserQuestion answer delivery: the Steer commit
-	// (1e0d07b) forced every sendMessage through streaming-input mode, which
-	// made resume-only streams push a synthetic `{ role: "user", content: "" }`
-	// into the SDK. Claude treated that as a new empty user turn and skipped
-	// re-invoking the PreToolUse hook, so the user's answer (stored in
-	// `deferredToolResponses`) never reached Claude. This test pins the fix:
-	// empty prompt => pass `""` (string) to `query()` so the hook re-fires.
-	test("empty prompt: query() gets string prompt and PreToolUse hook surfaces the stored resolution", async () => {
-		manager.resolveDeferredTool("tool-ask-1", "allow", undefined, {
-			questions: [{ question: "Which path should we take?", options: [] }],
-			answers: { "Which path should we take?": "Option A" },
-		});
-
-		let hookOutput: unknown = null;
-		mockQueryImpl = (queryArgs) => {
-			const hook = queryArgs.options?.hooks?.PreToolUse?.[0]?.hooks?.[0];
-			// Simulate the SDK re-invoking PreToolUse for the pending tool_use
-			// on resume. The real SDK does this inside its replay loop before
-			// executing the deferred tool.
-			if (hook) {
-				void (async () => {
-					hookOutput = await hook(
-						{
-							hook_event_name: "PreToolUse",
-							tool_name: "AskUserQuestion",
-						},
-						"tool-ask-1",
-					);
-				})();
-			}
-			return makeMockQuery({
-				stream: [
-					{
-						type: "result",
-						session_id: "sdk-session-resume",
-						subtype: "success",
-						is_error: false,
-						result: "done",
-					},
-				],
-			});
-		};
-
-		await manager.sendMessage(
-			"REQ-RESUME",
-			{
-				sessionId: "helmor-sess-defer",
-				prompt: "",
-				model: undefined,
-				cwd: undefined,
-				resume: "sdk-session-resume",
-				permissionMode: undefined,
-				effortLevel: undefined,
-				fastMode: undefined,
-				images: [],
-			},
-			emitter,
-		);
-
-		// Pre-Steer shape: plain empty string. If this ever becomes an object
-		// (pushable / iterable), AskUserQuestion answers stop reaching Claude.
-		expect(typeof (lastQueryArgs as { prompt?: unknown } | null)?.prompt).toBe(
-			"string",
-		);
-		expect((lastQueryArgs as { prompt: string }).prompt).toBe("");
-
-		await waitForCondition(() => hookOutput !== null, "hook invocation");
-		expect(hookOutput).toEqual({
-			hookSpecificOutput: {
-				hookEventName: "PreToolUse",
-				permissionDecision: "allow",
-				updatedInput: {
-					questions: [{ question: "Which path should we take?", options: [] }],
-					answers: { "Which path should we take?": "Option A" },
-				},
+		// canUseTool returned the answer through `updatedInput` — the SDK
+		// would then execute the tool with this input and continue the turn.
+		expect(canUseToolResult).toEqual({
+			behavior: "allow",
+			updatedInput: {
+				questions: [{ question: "Which path should we take?", options: [] }],
+				answers: { "Which path should we take?": "Option A" },
 			},
 		});
 	});
@@ -1145,29 +1144,30 @@ describe("ClaudeSessionManager.stopSession", () => {
 		);
 
 		await waitForCondition(
-			() => captured.some((event) => event.type === "elicitationRequest"),
-			"elicitation request event",
+			() => captured.some((event) => event.type === "userInputRequest"),
+			"userInputRequest event",
 		);
 
 		expect(captured[0]).toEqual({
 			id: "REQ-ELICIT",
-			type: "elicitationRequest",
-			serverName: "design-server",
+			type: "userInputRequest",
+			userInputId: "elicitation-1",
+			source: "design-server",
 			message: "Need more structured input",
-			mode: "form",
-			url: undefined,
-			elicitationId: "elicitation-1",
-			requestedSchema: {
-				type: "object",
-				properties: {
-					name: { type: "string" },
+			payload: {
+				kind: "form",
+				schema: {
+					type: "object",
+					properties: {
+						name: { type: "string" },
+					},
+					required: ["name"],
 				},
-				required: ["name"],
 			},
 		});
 
-		manager.resolveElicitation("elicitation-1", {
-			action: "accept",
+		manager.resolveUserInput("elicitation-1", {
+			action: "submit",
 			content: { name: "Helmor" },
 		});
 
@@ -1244,8 +1244,8 @@ describe("ClaudeSessionManager.stopSession", () => {
 		);
 
 		await waitForCondition(
-			() => captured.some((event) => event.type === "elicitationRequest"),
-			"stop-session elicitation request event",
+			() => captured.some((event) => event.type === "userInputRequest"),
+			"stop-session userInputRequest event",
 		);
 
 		await manager.stopSession("elicitation-stop-session");

@@ -10,8 +10,8 @@ import userEvent from "@testing-library/user-event";
 import type { SerializedEditorState } from "lexical";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
-import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
+import type { PendingPermission } from "@/features/conversation/hooks/use-streaming";
+import type { PendingUserInput } from "@/features/conversation/pending-user-input";
 import { createHelmorQueryClient } from "@/lib/query-client";
 import {
 	__resetDraftCacheForTests,
@@ -133,7 +133,7 @@ const MODEL_SECTIONS = [
 	},
 ] satisfies import("@/lib/api").AgentModelSection[];
 
-function createAskUserQuestionDeferredTool(): PendingDeferredTool {
+function createAskUserQuestionUserInput(): PendingUserInput {
 	return {
 		provider: "claude",
 		modelId: "opus-1m",
@@ -141,9 +141,11 @@ function createAskUserQuestionDeferredTool(): PendingDeferredTool {
 		providerSessionId: "provider-session-1",
 		workingDirectory: "/tmp/helmor",
 		permissionMode: "default",
-		toolUseId: "tool-ask-1",
-		toolName: "AskUserQuestion",
-		toolInput: {
+		userInputId: "tool-ask-1",
+		source: "Claude",
+		message: "Claude is asking for your input.",
+		payload: {
+			kind: "ask-user-question",
 			questions: [
 				{
 					header: "UI",
@@ -183,64 +185,62 @@ function createAskUserQuestionDeferredTool(): PendingDeferredTool {
 	};
 }
 
-function createGenericDeferredTool(): PendingDeferredTool {
+function createGenericPermission(): PendingPermission {
 	return {
-		provider: "claude",
-		modelId: "opus-1m",
-		resolvedModel: "opus-1m",
-		providerSessionId: "provider-session-1",
-		workingDirectory: "/tmp/helmor",
-		permissionMode: "default",
-		toolUseId: "tool-generic-1",
+		permissionId: "permission-generic-1",
 		toolName: "Bash",
 		toolInput: {
 			command: "git status --short",
 		},
+		title: null,
+		description: null,
 	};
 }
 
-function createFormElicitation(): PendingElicitation {
+function createFormUserInput(): PendingUserInput {
 	return {
 		provider: "claude",
 		modelId: "opus-1m",
 		resolvedModel: "opus-1m",
 		providerSessionId: "provider-session-1",
 		workingDirectory: "/tmp/helmor",
-		elicitationId: "elicitation-form-1",
-		serverName: "design-server",
+		permissionMode: null,
+		userInputId: "elicitation-form-1",
+		source: "design-server",
 		message: "Tell the MCP server what to do next.",
-		mode: "form",
-		requestedSchema: {
-			type: "object",
-			properties: {
-				name: {
-					type: "string",
-					title: "Project name",
-					description: "Used for the next step.",
+		payload: {
+			kind: "form",
+			schema: {
+				type: "object",
+				properties: {
+					name: {
+						type: "string",
+						title: "Project name",
+						description: "Used for the next step.",
+					},
+					approved: {
+						type: "boolean",
+						title: "Approved",
+					},
 				},
-				approved: {
-					type: "boolean",
-					title: "Approved",
-				},
+				required: ["name", "approved"],
 			},
-			required: ["name", "approved"],
 		},
 	};
 }
 
-function createUrlElicitation(): PendingElicitation {
+function createUrlUserInput(): PendingUserInput {
 	return {
 		provider: "claude",
 		modelId: "opus-1m",
 		resolvedModel: "opus-1m",
 		providerSessionId: "provider-session-1",
 		workingDirectory: "/tmp/helmor",
-		elicitationId: "elicitation-url-1",
-		serverName: "auth-server",
+		permissionMode: null,
+		userInputId: "elicitation-url-1",
+		source: "auth-server",
 		message: "Finish sign-in in the browser.",
-		mode: "url",
-		url: "https://example.com/authorize",
-		requestedSchema: null,
+		payload: { kind: "url", url: "https://example.com/authorize" },
 	};
 }
 
@@ -936,7 +936,7 @@ describe("WorkspaceComposer", () => {
 	it("collects AskUserQuestion answers into updatedInput and resumes via allow", async () => {
 		const user = userEvent.setup();
 		const queryClient = createHelmorQueryClient();
-		const handleDeferredToolResponse = vi.fn();
+		const handleUserInputResponse = vi.fn();
 
 		render(
 			<QueryClientProvider client={queryClient}>
@@ -957,8 +957,8 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingDeferredTool={createAskUserQuestionDeferredTool()}
-					onDeferredToolResponse={handleDeferredToolResponse}
+					pendingUserInput={createAskUserQuestionUserInput()}
+					onUserInputResponse={handleUserInputResponse}
 				/>
 			</QueryClientProvider>,
 		);
@@ -990,11 +990,11 @@ describe("WorkspaceComposer", () => {
 		await user.click(screen.getByRole("button", { name: /Typecheck/i }));
 		await user.click(screen.getByRole("button", { name: "Send Answers" }));
 
-		expect(handleDeferredToolResponse).toHaveBeenCalledWith(
-			expect.objectContaining({ toolUseId: "tool-ask-1" }),
-			"allow",
+		expect(handleUserInputResponse).toHaveBeenCalledWith(
+			expect.objectContaining({ userInputId: "tool-ask-1" }),
+			"submit",
 			expect.objectContaining({
-				updatedInput: expect.objectContaining({
+				content: expect.objectContaining({
 					answers: {
 						"Which UI path should we take?": "Build new",
 						"Which checks should run before merge?": "Vitest, Typecheck",
@@ -1010,10 +1010,10 @@ describe("WorkspaceComposer", () => {
 		);
 	});
 
-	it("keeps deferred tool approval buttons enabled while the stream is paused for approval", async () => {
+	it("keeps permission approval buttons enabled while the stream is paused for approval", async () => {
 		const user = userEvent.setup();
 		const queryClient = createHelmorQueryClient();
-		const handleDeferredToolResponse = vi.fn();
+		const handlePermissionResponse = vi.fn();
 
 		render(
 			<QueryClientProvider client={queryClient}>
@@ -1034,8 +1034,8 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingDeferredTool={createGenericDeferredTool()}
-					onDeferredToolResponse={handleDeferredToolResponse}
+					pendingPermission={createGenericPermission()}
+					onPermissionResponse={handlePermissionResponse}
 				/>
 			</QueryClientProvider>,
 		);
@@ -1048,14 +1048,9 @@ describe("WorkspaceComposer", () => {
 
 		await user.click(allowButton);
 
-		expect(handleDeferredToolResponse).toHaveBeenCalledWith(
-			expect.objectContaining({ toolUseId: "tool-generic-1" }),
+		expect(handlePermissionResponse).toHaveBeenCalledWith(
+			"permission-generic-1",
 			"allow",
-			expect.objectContaining({
-				updatedInput: {
-					command: "git status --short",
-				},
-			}),
 		);
 	});
 
@@ -1082,8 +1077,8 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingDeferredTool={createAskUserQuestionDeferredTool()}
-					onDeferredToolResponse={vi.fn()}
+					pendingUserInput={createAskUserQuestionUserInput()}
+					onUserInputResponse={vi.fn()}
 				/>
 			</QueryClientProvider>,
 		);
@@ -1108,7 +1103,7 @@ describe("WorkspaceComposer", () => {
 	it("renders a form elicitation panel and submits structured content", async () => {
 		const user = userEvent.setup();
 		const queryClient = createHelmorQueryClient();
-		const onElicitationResponse = vi.fn();
+		const onUserInputResponse = vi.fn();
 
 		render(
 			<QueryClientProvider client={queryClient}>
@@ -1129,8 +1124,8 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingElicitation={createFormElicitation()}
-					onElicitationResponse={onElicitationResponse}
+					pendingUserInput={createFormUserInput()}
+					onUserInputResponse={onUserInputResponse}
 				/>
 			</QueryClientProvider>,
 		);
@@ -1160,17 +1155,17 @@ describe("WorkspaceComposer", () => {
 		).not.toBeDisabled();
 		await user.click(screen.getByRole("button", { name: "Send Response" }));
 
-		expect(onElicitationResponse).toHaveBeenCalledWith(
-			expect.objectContaining({ elicitationId: "elicitation-form-1" }),
-			"accept",
-			{ approved: true, name: "Helmor Elicitation" },
+		expect(onUserInputResponse).toHaveBeenCalledWith(
+			expect.objectContaining({ userInputId: "elicitation-form-1" }),
+			"submit",
+			{ content: { approved: true, name: "Helmor Elicitation" } },
 		);
 	});
 
 	it("opens and copies URL elicitation links through the shared panel shell", async () => {
 		const user = userEvent.setup();
 		const queryClient = createHelmorQueryClient();
-		const onElicitationResponse = vi.fn();
+		const onUserInputResponse = vi.fn();
 		const writeText = vi.fn().mockResolvedValue(undefined);
 		Object.defineProperty(navigator, "clipboard", {
 			configurable: true,
@@ -1197,8 +1192,8 @@ describe("WorkspaceComposer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreCustomTags={[]}
-					pendingElicitation={createUrlElicitation()}
-					onElicitationResponse={onElicitationResponse}
+					pendingUserInput={createUrlUserInput()}
+					onUserInputResponse={onUserInputResponse}
 				/>
 			</QueryClientProvider>,
 		);
@@ -1216,9 +1211,9 @@ describe("WorkspaceComposer", () => {
 			"https://example.com/authorize",
 		);
 		await waitFor(() => {
-			expect(onElicitationResponse).toHaveBeenCalledWith(
-				expect.objectContaining({ elicitationId: "elicitation-url-1" }),
-				"accept",
+			expect(onUserInputResponse).toHaveBeenCalledWith(
+				expect.objectContaining({ userInputId: "elicitation-url-1" }),
+				"submit",
 			);
 		});
 	});

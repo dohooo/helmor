@@ -12,10 +12,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import type {
-	AskUserQuestionViewModel,
-	DeferredQuestion,
-} from "../deferred-tool";
 import {
 	InteractionFooter,
 	InteractionHeader,
@@ -23,7 +19,11 @@ import {
 	InteractionOptionRow,
 	InteractionStepTabs,
 } from "../interaction";
-import { DeferredToolCard, type DeferredToolPanelProps } from "./shared";
+import type {
+	AskUserQuestionItem,
+	AskUserQuestionViewModel,
+} from "../user-input";
+import { UserInputCard, type UserInputPanelProps } from "./shared";
 
 type AskQuestionResponseState = {
 	selectedOptionLabels: string[];
@@ -69,7 +69,7 @@ function buildInitialAskResponses(
 }
 
 function buildAnswerString(
-	question: DeferredQuestion,
+	question: AskUserQuestionItem,
 	response: AskQuestionResponseState,
 ): string {
 	const selectedLabels = question.multiSelect
@@ -88,7 +88,7 @@ function buildAnswerString(
 }
 
 function isQuestionAnswered(
-	question: DeferredQuestion,
+	question: AskUserQuestionItem,
 	response: AskQuestionResponseState,
 ): boolean {
 	return buildAnswerString(question, response).trim().length > 0;
@@ -124,18 +124,18 @@ function buildAskUserQuestionInput(
 	}
 
 	return {
-		...viewModel.toolInput,
+		...viewModel.rawInput,
 		answers,
 		...(Object.keys(annotations).length > 0 ? { annotations } : {}),
 	};
 }
 
-export function AskUserQuestionPanel({
-	deferred,
+export function AskUserQuestionRenderer({
+	userInput,
 	disabled,
 	onResponse,
 	viewModel,
-}: DeferredToolPanelProps & { viewModel: AskUserQuestionViewModel }) {
+}: UserInputPanelProps & { viewModel: AskUserQuestionViewModel }) {
 	const initialResponses = useMemo(
 		() => buildInitialAskResponses(viewModel),
 		[viewModel],
@@ -147,7 +147,7 @@ export function AskUserQuestionPanel({
 	useEffect(() => {
 		setQuestionIndex(0);
 		setResponses(initialResponses);
-	}, [initialResponses, viewModel.toolUseId]);
+	}, [initialResponses, viewModel.userInputId]);
 
 	const questions = viewModel.questions;
 	const currentQuestion = questions[questionIndex] ?? questions[0];
@@ -229,13 +229,15 @@ export function AskUserQuestionPanel({
 			return;
 		}
 
-		onResponse(deferred, "allow", {
-			updatedInput: buildAskUserQuestionInput(viewModel, responses),
+		// AUQ produces the full `updatedInput` shape directly — sidecar's
+		// canUseTool resolver passes it through to the SDK unchanged.
+		onResponse(userInput, "submit", {
+			content: buildAskUserQuestionInput(viewModel, responses),
 		});
-	}, [canSubmit, deferred, onResponse, responses, viewModel]);
+	}, [canSubmit, userInput, onResponse, responses, viewModel]);
 
 	return (
-		<DeferredToolCard>
+		<UserInputCard>
 			<InteractionHeader
 				icon={MessageSquareMore}
 				title={currentQuestion.question}
@@ -427,7 +429,7 @@ export function AskUserQuestionPanel({
 					variant="outline"
 					size="sm"
 					disabled={disabled}
-					onClick={() => onResponse(deferred, "deny")}
+					onClick={() => onResponse(userInput, "decline")}
 				>
 					<X className="size-3.5" strokeWidth={2} />
 					<span>Decline</span>
@@ -442,6 +444,6 @@ export function AskUserQuestionPanel({
 					<span>Send Answers</span>
 				</Button>
 			</InteractionFooter>
-		</DeferredToolCard>
+		</UserInputCard>
 	);
 }

@@ -3,7 +3,22 @@ import { useMemo } from "react";
 import { CodeBlock } from "@/components/ai/code-block";
 import { Button } from "@/components/ui/button";
 import { InteractionFooter, InteractionHeader } from "../interaction";
-import { DeferredToolCard, type DeferredToolPanelProps } from "./shared";
+import { UserInputCard } from "./shared";
+
+/**
+ * Generic tool-approval card: renders a tool name + input preview +
+ * Allow / Deny buttons. Currently consumed by `PermissionPanel` (see
+ * `features/composer/permission-panel.tsx`) — permission requests
+ * surface here verbatim. Kept independent of `PendingUserInput` so it
+ * can be reused for any tool-approval-shaped flow without adapter
+ * objects.
+ */
+export type ToolApprovalCardProps = {
+	toolName: string;
+	toolInput: Record<string, unknown>;
+	disabled?: boolean;
+	onResponse: (behavior: "allow" | "deny") => void;
+};
 
 function looksLikeCommand(
 	toolName: string,
@@ -17,36 +32,40 @@ function looksLikeCommand(
 	);
 }
 
-function getCodePreview(deferred: DeferredToolPanelProps["deferred"]): {
-	code: string;
-	language: string;
-} {
-	const command = deferred.toolInput?.command;
+function getCodePreview(
+	toolName: string,
+	toolInput: Record<string, unknown>,
+): { code: string; language: string } {
+	const command = toolInput?.command;
 	if (
 		typeof command === "string" &&
 		command.length > 0 &&
-		looksLikeCommand(deferred.toolName, deferred.toolInput)
+		looksLikeCommand(toolName, toolInput)
 	) {
 		return { code: command, language: "bash" };
 	}
 	return {
-		code: JSON.stringify(deferred.toolInput, null, 2),
+		code: JSON.stringify(toolInput, null, 2),
 		language: "json",
 	};
 }
 
-export function GenericDeferredToolPanel({
-	deferred,
+export function ToolApprovalCard({
+	toolName,
+	toolInput,
 	disabled,
 	onResponse,
-}: DeferredToolPanelProps) {
-	const preview = useMemo(() => getCodePreview(deferred), [deferred]);
+}: ToolApprovalCardProps) {
+	const preview = useMemo(
+		() => getCodePreview(toolName, toolInput),
+		[toolName, toolInput],
+	);
 
 	return (
-		<DeferredToolCard>
+		<UserInputCard>
 			<InteractionHeader
 				icon={Settings2}
-				title={deferred.toolName}
+				title={toolName}
 				description="This tool needs your approval before it can run."
 				truncateTitle
 			/>
@@ -64,7 +83,7 @@ export function GenericDeferredToolPanel({
 					variant="outline"
 					size="sm"
 					disabled={disabled}
-					onClick={() => onResponse(deferred, "deny")}
+					onClick={() => onResponse("deny")}
 				>
 					<X className="size-3.5" strokeWidth={2} />
 					<span>Deny</span>
@@ -73,16 +92,12 @@ export function GenericDeferredToolPanel({
 					variant="default"
 					size="sm"
 					disabled={disabled}
-					onClick={() =>
-						onResponse(deferred, "allow", {
-							updatedInput: deferred.toolInput,
-						})
-					}
+					onClick={() => onResponse("allow")}
 				>
 					<Check className="size-3.5" strokeWidth={2} />
 					<span>Allow</span>
 				</Button>
 			</InteractionFooter>
-		</DeferredToolCard>
+		</UserInputCard>
 	);
 }

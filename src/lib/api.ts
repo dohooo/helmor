@@ -146,7 +146,6 @@ export type AgentSendRequest = {
 	 *  content keeps `prompt` only — the prefix never enters the DB or
 	 *  the chat bubble. */
 	promptPrefix?: string | null;
-	resumeOnly?: boolean | null;
 	sessionId?: string | null;
 	helmorSessionId?: string | null;
 	workingDirectory?: string | null;
@@ -2331,30 +2330,22 @@ export type AgentStreamEvent =
 			description?: string | null;
 	  }
 	| {
-			kind: "deferredToolUse";
+			kind: "userInputRequest";
 			provider: AgentProvider;
 			modelId: string;
 			resolvedModel: string;
 			sessionId?: string | null;
 			workingDirectory: string;
 			permissionMode?: string | null;
-			toolUseId: string;
-			toolName: string;
-			toolInput: Record<string, unknown>;
-	  }
-	| {
-			kind: "elicitationRequest";
-			provider: AgentProvider;
-			modelId: string;
-			resolvedModel: string;
-			sessionId?: string | null;
-			workingDirectory: string;
-			elicitationId?: string | null;
-			serverName: string;
+			userInputId: string;
+			source: string;
 			message: string;
-			mode?: string | null;
-			url?: string | null;
-			requestedSchema?: Record<string, unknown> | null;
+			/** Discriminated by `payload.kind`:
+			 *  - `ask-user-question` → Claude AskUserQuestion (raw multi-question / option / preview shape)
+			 *  - `form` → JSON-Schema form (MCP form elicitation or Codex's synthesized form)
+			 *  - `url` → URL launcher (MCP url-mode elicitation)
+			 *  See `pending-user-input.ts` for the typed payload union. */
+			payload: Record<string, unknown>;
 	  }
 	| { kind: "planCaptured" }
 	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
@@ -2474,32 +2465,28 @@ export async function respondToPermissionRequest(
 	});
 }
 
-export async function respondToDeferredTool(
-	toolUseId: string,
-	behavior: "allow" | "deny",
-	options?: {
-		reason?: string | null;
-		updatedInput?: Record<string, unknown> | null;
-	},
-): Promise<void> {
-	await invoke("respond_to_deferred_tool", {
-		request: {
-			toolUseId,
-			behavior,
-			reason: options?.reason ?? null,
-			updatedInput: options?.updatedInput ?? null,
-		},
-	});
-}
-
-export async function respondToElicitationRequest(
-	elicitationId: string,
-	action: "accept" | "decline" | "cancel",
+/**
+ * Resolve a parked unified `userInputRequest`. The sidecar's pending
+ * resolver closure (`canUseTool` for AskUserQuestion, `onElicitation`
+ * for MCP, Codex's `requestUserInput` JSON-RPC handler) translates
+ * this generic resolution into the matching SDK-specific shape.
+ *
+ * - `submit` → frontend produced a content payload (matched to whatever
+ *   the matching renderer asks for: AUQ updatedInput, schema content
+ *   map, or `{}` for url-mode).
+ * - `decline` → user explicitly rejected; sidecar surfaces this as the
+ *   provider's matching "deny" signal.
+ * - `cancel` → user dismissed without answering; treated as cancel by
+ *   each provider.
+ */
+export async function respondToUserInput(
+	userInputId: string,
+	action: "submit" | "decline" | "cancel",
 	content?: Record<string, unknown> | null,
 ): Promise<void> {
-	await invoke("respond_to_elicitation_request", {
+	await invoke("respond_to_user_input", {
 		request: {
-			elicitationId,
+			userInputId,
 			action,
 			content: content ?? null,
 		},

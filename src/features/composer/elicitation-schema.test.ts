@@ -1,28 +1,28 @@
 import { describe, expect, it } from "vitest";
-import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
-import { normalizeElicitation } from "./elicitation";
+import type { PendingUserInput } from "@/features/conversation/pending-user-input";
+import { normalizeElicitation } from "./elicitation-schema";
 
-function createFormElicitation(
-	requestedSchema: Record<string, unknown>,
-): PendingElicitation {
+function createFormUserInput(
+	schema: Record<string, unknown>,
+): PendingUserInput {
 	return {
 		provider: "claude",
 		modelId: "opus-1m",
 		resolvedModel: "opus-1m",
 		providerSessionId: "provider-session-1",
 		workingDirectory: "/tmp/helmor",
-		elicitationId: "elicitation-form-1",
-		serverName: "design-server",
+		permissionMode: null,
+		userInputId: "elicitation-form-1",
+		source: "design-server",
 		message: "Need structured input",
-		mode: "form",
-		requestedSchema,
+		payload: { kind: "form", schema },
 	};
 }
 
 describe("normalizeElicitation", () => {
 	it("normalizes supported form fields into a form view model", () => {
 		const result = normalizeElicitation(
-			createFormElicitation({
+			createFormUserInput({
 				type: "object",
 				properties: {
 					name: {
@@ -91,7 +91,7 @@ describe("normalizeElicitation", () => {
 
 	it("falls back to unsupported when a required field has an unsupported schema", () => {
 		const result = normalizeElicitation(
-			createFormElicitation({
+			createFormUserInput({
 				type: "object",
 				properties: {
 					name: { type: "string" },
@@ -122,12 +122,11 @@ describe("normalizeElicitation", () => {
 			resolvedModel: "opus-1m",
 			providerSessionId: "provider-session-1",
 			workingDirectory: "/tmp/helmor",
-			elicitationId: "elicitation-url-1",
-			serverName: "auth-server",
+			permissionMode: null,
+			userInputId: "elicitation-url-1",
+			source: "auth-server",
 			message: "Finish sign-in in the browser.",
-			mode: "url",
-			url: "https://example.com/authorize",
-			requestedSchema: null,
+			payload: { kind: "url", url: "https://example.com/authorize" },
 		});
 
 		expect(result).toEqual({
@@ -142,7 +141,7 @@ describe("normalizeElicitation", () => {
 
 	it("normalizes number fields with min/max constraints", () => {
 		const result = normalizeElicitation(
-			createFormElicitation({
+			createFormUserInput({
 				type: "object",
 				properties: {
 					count: {
@@ -174,7 +173,7 @@ describe("normalizeElicitation", () => {
 
 	it("normalizes single-select (oneOf) fields", () => {
 		const result = normalizeElicitation(
-			createFormElicitation({
+			createFormUserInput({
 				type: "object",
 				properties: {
 					color: {
@@ -208,7 +207,7 @@ describe("normalizeElicitation", () => {
 
 	it("uses property key as label when title is missing", () => {
 		const result = normalizeElicitation(
-			createFormElicitation({
+			createFormUserInput({
 				type: "object",
 				properties: {
 					myField: { type: "string" },
@@ -225,7 +224,7 @@ describe("normalizeElicitation", () => {
 
 	it("marks non-required fields correctly", () => {
 		const result = normalizeElicitation(
-			createFormElicitation({
+			createFormUserInput({
 				type: "object",
 				properties: {
 					optional_field: { type: "string", title: "Notes" },
