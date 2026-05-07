@@ -7,8 +7,8 @@ import { toast } from "sonner";
 import { ActionRow, ActionRowButton } from "@/components/action-row";
 import { ShimmerText } from "@/components/ui/shimmer-text";
 import { ShineBorder } from "@/components/ui/shine-border";
-import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
-import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
+import type { PendingPermission } from "@/features/conversation/hooks/use-streaming";
+import type { PendingUserInput } from "@/features/conversation/pending-user-input";
 import {
 	getShortcut,
 	getShortcutConflicts,
@@ -53,11 +53,11 @@ import {
 	resolveSessionSelectedModelId,
 } from "@/lib/workspace-helpers";
 import { CodexGoalBanner } from "../panel/codex-goal-banner";
-import type { DeferredToolResponseHandler } from "./deferred-tool";
 import type { AddDirPickerEntry } from "./editor/add-dir/typeahead-plugin";
-import type { ElicitationResponseHandler } from "./elicitation";
 import { WorkspaceComposer } from "./index";
+import type { PermissionPanelProps } from "./permission-panel";
 import { SubmitQueueList } from "./submit-queue-list";
+import type { UserInputResponseHandler } from "./user-input";
 
 const EMPTY_MODEL_SECTIONS: AgentModelSection[] = [];
 const EMPTY_SLASH_COMMANDS: SlashCommandEntry[] = [];
@@ -126,11 +126,11 @@ type WorkspaceComposerContainerProps = {
 	restoreFiles: string[];
 	restoreCustomTags?: ComposerCustomTag[];
 	restoreNonce: number;
-	pendingElicitation?: PendingElicitation | null;
-	onElicitationResponse?: ElicitationResponseHandler;
-	elicitationResponsePending?: boolean;
-	pendingDeferredTool?: PendingDeferredTool | null;
-	onDeferredToolResponse?: DeferredToolResponseHandler;
+	pendingUserInput?: PendingUserInput | null;
+	onUserInputResponse?: UserInputResponseHandler;
+	userInputResponsePending?: boolean;
+	pendingPermission?: PendingPermission | null;
+	onPermissionResponse?: PermissionPanelProps["onResponse"];
 	hasPlanReview?: boolean;
 	modelSelections: Record<string, string>;
 	effortLevels: Record<string, string>;
@@ -205,8 +205,10 @@ type WorkspaceComposerContainerProps = {
 	} | null;
 };
 
-const noopDeferredToolResponse: DeferredToolResponseHandler = () => {};
-const noopElicitationResponse: ElicitationResponseHandler = () => {};
+const noopUserInputResponse: UserInputResponseHandler = () => {};
+const noopPermissionResponse: NonNullable<
+	WorkspaceComposerContainerProps["onPermissionResponse"]
+> = () => {};
 
 export const WorkspaceComposerContainer = memo(
 	function WorkspaceComposerContainer({
@@ -225,11 +227,11 @@ export const WorkspaceComposerContainer = memo(
 		restoreFiles,
 		restoreCustomTags = [],
 		restoreNonce,
-		pendingElicitation = null,
-		onElicitationResponse = noopElicitationResponse,
-		elicitationResponsePending = false,
-		pendingDeferredTool = null,
-		onDeferredToolResponse = noopDeferredToolResponse,
+		pendingUserInput = null,
+		onUserInputResponse = noopUserInputResponse,
+		userInputResponsePending = false,
+		pendingPermission = null,
+		onPermissionResponse = noopPermissionResponse,
 		hasPlanReview = false,
 		modelSelections,
 		effortLevels = {},
@@ -1077,11 +1079,11 @@ export const WorkspaceComposerContainer = memo(
 						restoreFiles={restoreFiles}
 						restoreCustomTags={restoreCustomTags}
 						restoreNonce={restoreNonce}
-						pendingElicitation={pendingElicitation}
-						onElicitationResponse={onElicitationResponse}
-						elicitationResponsePending={elicitationResponsePending}
-						pendingDeferredTool={pendingDeferredTool}
-						onDeferredToolResponse={onDeferredToolResponse}
+						pendingUserInput={pendingUserInput}
+						onUserInputResponse={onUserInputResponse}
+						userInputResponsePending={userInputResponsePending}
+						pendingPermission={pendingPermission}
+						onPermissionResponse={onPermissionResponse}
 						goalReplace={
 							goalReplaceConfirm && activeGoal
 								? {

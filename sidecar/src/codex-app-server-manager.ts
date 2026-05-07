@@ -32,6 +32,7 @@ import type {
 	SendMessageParams,
 	SessionManager,
 	SlashCommandInfo,
+	UserInputResolution,
 } from "./session-manager.js";
 import {
 	buildTitlePrompt,
@@ -226,6 +227,116 @@ interface PendingApproval {
 	sessionId: string;
 }
 
+/**
+ * A parked Codex server-initiated user-input request. Two flavors map
+ * onto the same unified `userInputRequest` wire event but require
+ * different response shapes when we send the user's answer back to
+ * Codex's app-server:
+ *
+ * - `codex-form` (`item/tool/requestUserInput`): Codex's own
+ *   user-input mechanism. Response shape is `{ answers: { id: { answers:
+ *   [value] } } }`. Built from `questions[]` we kept around.
+ * - `mcp-elicitation` (`mcpServer/elicitation/request`): Codex
+ *   forwarding an MCP server's elicitation request. Response shape is
+ *   `{ action, content, _meta }` matching the MCP elicitation spec.
+ */
+type PendingUserInput =
+	| {
+			kind: "codex-form";
+			jsonRpcId: string | number;
+			sessionId: string;
+			/** Original Codex question array — needed to reverse-map the
+			 *  unified form-content response back into Codex's
+			 *  `{ id: { answers: [value] } }` shape. */
+			questions: CodexQuestion[];
+	  }
+	| {
+			kind: "mcp-elicitation";
+			jsonRpcId: string | number;
+			sessionId: string;
+	  };
+
+interface CodexQuestion {
+	id?: string;
+	header?: string;
+	question?: string;
+	isOther?: boolean;
+	options?: Array<{ label?: string; description?: string }>;
+}
+
+/**
+ * Build a JSON Schema from Codex's `requestUserInput` questions so the
+ * unified `UserInputPanel` can render them as form fields. Mirrors the
+ * shape the existing Rust bridge used to produce — moved into the
+ * sidecar so Rust can stay generic about user-input semantics.
+ */
+function buildCodexUserInputSchema(
+	questions: CodexQuestion[],
+): Record<string, unknown> {
+	const properties: Record<string, unknown> = {};
+	const required: string[] = [];
+
+	questions.forEach((q, i) => {
+		const key = q.id ?? `q${i}`;
+		required.push(key);
+		const header = q.header ?? "";
+		const questionText = q.question ?? "Question";
+		const title = header || questionText;
+		const description = header ? questionText : "";
+		const options = Array.isArray(q.options) ? q.options : [];
+		const hasOptions = options.length > 0;
+
+		const oneOf = hasOptions
+			? options.map((opt) => ({
+					const: opt.label ?? "",
+					title: opt.label ?? "",
+					description: opt.description ?? "",
+				}))
+			: [
+					{ const: "yes", title: "Yes" },
+					{ const: "no", title: "No" },
+				];
+
+		const prop: Record<string, unknown> = hasOptions
+			? {
+					type: "string",
+					title,
+					description,
+					oneOf,
+				}
+			: q.isOther
+				? { type: "string", title, description }
+				: { type: "string", title, description, oneOf };
+		if (q.isOther) {
+			prop["x-allow-other"] = true;
+		}
+		properties[key] = prop;
+	});
+
+	return { type: "object", properties, required };
+}
+
+/**
+ * Reverse `buildCodexUserInputSchema`: take the unified form content
+ * (`{ q0: "Option A", ... }`) and produce Codex's expected answer
+ * shape (`{ q0: { answers: ["Option A"] }, ... }`).
+ */
+function buildCodexAnswers(
+	content: Record<string, unknown>,
+): Record<string, { answers: string[] }> {
+	const answers: Record<string, { answers: string[] }> = {};
+	for (const [key, value] of Object.entries(content)) {
+		if (typeof value === "string") {
+			answers[key] = { answers: [value] };
+		} else if (Array.isArray(value)) {
+			answers[key] = {
+				answers: value.filter((v): v is string => typeof v === "string"),
+			};
+		}
+	}
+	return answers;
+}
+
 interface AppServerContext {
 	server: CodexAppServer;
 	providerThreadId: string | null;
@@ -325,7 +436,7 @@ function approvalToolInput(
 export class CodexAppServerManager implements SessionManager {
 	private sessions = new Map<string, AppServerContext>();
 	private pendingApprovals = new Map<string, PendingApproval>();
-	private pendingUserInputs = new Map<string, PendingApproval>();
+	private pendingUserInputs = new Map<string, PendingUserInput>();
 
 	/** Called by index.ts when frontend responds to a permission prompt. */
 	resolvePermission(permissionId: string, behavior: "allow" | "deny"): void {
@@ -341,17 +452,56 @@ export class CodexAppServerManager implements SessionManager {
 		logger.debug(`Codex approval resolved`, { permissionId, decision });
 	}
 
-	/** Called by index.ts when Rust responds to a user-input request. */
-	resolveUserInput(userInputId: string, answers: unknown): void {
+	/**
+	 * Called by index.ts when the frontend responds to a unified
+	 * `userInputRequest`. The response shape Codex expects depends on
+	 * which server-initiated request the entry was parked for:
+	 *
+	 * - `codex-form` (`item/tool/requestUserInput`): wrap the content
+	 *   into `{ answers: { id: { answers: [value] } } }`. Cancel /
+	 *   decline flush an empty answer set so Codex unwedges its turn.
+	 * - `mcp-elicitation` (`mcpServer/elicitation/request`): reply with
+	 *   `{ action, content, _meta }` per the MCP elicitation spec.
+	 *   `submit` → `accept`; otherwise pass `decline` / `cancel` and
+	 *   `null` content so the MCP server stops waiting.
+	 */
+	resolveUserInput(
+		userInputId: string,
+		resolution: UserInputResolution,
+	): boolean {
 		const pending = this.pendingUserInputs.get(userInputId);
-		if (!pending) return;
+		if (!pending) return false;
 		this.pendingUserInputs.delete(userInputId);
 
 		const ctx = this.sessions.get(pending.sessionId);
-		if (!ctx) return;
+		if (!ctx) return false;
 
-		ctx.server.sendResponse(pending.jsonRpcId, { answers });
-		logger.debug(`Codex user-input resolved`, { userInputId });
+		if (pending.kind === "mcp-elicitation") {
+			const action =
+				resolution.action === "submit"
+					? "accept"
+					: resolution.action === "decline"
+						? "decline"
+						: "cancel";
+			ctx.server.sendResponse(pending.jsonRpcId, {
+				action,
+				content:
+					resolution.action === "submit" ? (resolution.content ?? null) : null,
+				_meta: null,
+			});
+		} else {
+			const answers =
+				resolution.action === "submit"
+					? buildCodexAnswers(resolution.content)
+					: {};
+			ctx.server.sendResponse(pending.jsonRpcId, { answers });
+		}
+		logger.debug(`Codex user-input resolved`, {
+			userInputId,
+			kind: pending.kind,
+			action: resolution.action,
+		});
+		return true;
 	}
 
 	// ── sendMessage ──────────────────────────────────────────────────────
@@ -683,15 +833,113 @@ export class CodexAppServerManager implements SessionManager {
 				if (req.method === "item/tool/requestUserInput") {
 					const p = (req.params ?? {}) as Record<string, unknown>;
 					const userInputId = `codex-input-${crypto.randomUUID()}`;
-					const questions = Array.isArray(p.questions) ? p.questions : [];
+					const questions = Array.isArray(p.questions)
+						? (p.questions as CodexQuestion[])
+						: [];
+
+					// Park the entry alongside the question array so we can
+					// reverse-map the unified-form response back into Codex's
+					// `{ id: { answers: [value] } }` shape.
+					this.pendingUserInputs.set(userInputId, {
+						kind: "codex-form",
+						jsonRpcId: req.id,
+						sessionId,
+						questions,
+					});
+
+					emitter.userInputRequest(
+						requestId,
+						userInputId,
+						"Codex",
+						"Codex needs your input.",
+						{ kind: "form", schema: buildCodexUserInputSchema(questions) },
+					);
+					logger.debug(`Codex user-input request`, { userInputId });
+					return;
+				}
+				if (req.method === "mcpServer/elicitation/request") {
+					// MCP elicitation forwarded by Codex. `mode: "form" | "url"`,
+					// schema/URL passed through to the unified `userInputRequest`.
+					const p = (req.params ?? {}) as Record<string, unknown>;
+
+					// Empty-schema form == Codex's MCP tool-call approval
+					// (`_meta.codex_approval_kind: "mcp_tool_call"`). `Never`
+					// policy auto-accepts it; `Granular` doesn't, so we mirror
+					// that here for bypass mode. Real forms still surface.
+					const requestedSchema =
+						typeof p.requestedSchema === "object" &&
+						p.requestedSchema !== null &&
+						!Array.isArray(p.requestedSchema)
+							? (p.requestedSchema as Record<string, unknown>)
+							: null;
+					const properties =
+						requestedSchema &&
+						typeof requestedSchema.properties === "object" &&
+						requestedSchema.properties !== null &&
+						!Array.isArray(requestedSchema.properties)
+							? (requestedSchema.properties as Record<string, unknown>)
+							: {};
+					const isEmptyApprovalForm =
+						p.mode === "form" && Object.keys(properties).length === 0;
+					if (isEmptyApprovalForm && permissionMode === "bypassPermissions") {
+						ctx.server.sendResponse(req.id, {
+							action: "accept",
+							content: {},
+							_meta: null,
+						});
+						logger.debug(
+							"Codex MCP elicitation auto-accepted (empty schema in bypass mode)",
+							{
+								serverName:
+									typeof p.serverName === "string" ? p.serverName : "(?)",
+							},
+						);
+						return;
+					}
+
+					const userInputId = `codex-mcp-elicit-${crypto.randomUUID()}`;
+					const serverName =
+						typeof p.serverName === "string" ? p.serverName : "MCP server";
+					const message =
+						typeof p.message === "string"
+							? p.message
+							: "Server requested input.";
 
 					this.pendingUserInputs.set(userInputId, {
+						kind: "mcp-elicitation",
 						jsonRpcId: req.id,
 						sessionId,
 					});
 
-					emitter.userInputRequest(requestId, userInputId, questions);
-					logger.debug(`Codex user-input request`, { userInputId });
+					if (p.mode === "url") {
+						emitter.userInputRequest(
+							requestId,
+							userInputId,
+							serverName,
+							message,
+							{
+								kind: "url",
+								url: typeof p.url === "string" ? p.url : "",
+							},
+						);
+					} else {
+						const schema = requestedSchema ?? {
+							type: "object",
+							properties: {},
+						};
+						emitter.userInputRequest(
+							requestId,
+							userInputId,
+							serverName,
+							message,
+							{ kind: "form", schema },
+						);
+					}
+					logger.debug(`Codex MCP elicitation request`, {
+						userInputId,
+						serverName,
+						mode: p.mode,
+					});
 					return;
 				}
 				// Unknown server request — auto-reject
@@ -1318,7 +1566,8 @@ export class CodexAppServerManager implements SessionManager {
 			});
 			const threadStartParams: Record<string, unknown> = {
 				cwd,
-				approvalPolicy: toCodexApprovalPolicy(permissionMode) ?? "never",
+				approvalPolicy:
+					toCodexApprovalPolicy(permissionMode) ?? BYPASS_GRANULAR_POLICY,
 				sandbox:
 					permissionMode === "plan" ? "workspace-write" : "danger-full-access",
 			};
@@ -1582,17 +1831,36 @@ function toCodexCollaborationMode(
 	return undefined;
 }
 
-/**
- * Map Helmor's permissionMode to Codex's approvalPolicy.
- * "never" = full auto (no approval popups).
- * Only override on non-plan modes — plan mode is read-only by design.
- */
+// `bypassPermissions` uses `Granular` (not `"never"`) because Codex's
+// `Never` policy also auto-declines MCP elicitations.
+type CodexApprovalPolicy =
+	| string
+	| {
+			granular: {
+				sandbox_approval: boolean;
+				rules: boolean;
+				skill_approval: boolean;
+				request_permissions: boolean;
+				mcp_elicitations: boolean;
+			};
+	  };
+
+const BYPASS_GRANULAR_POLICY: CodexApprovalPolicy = {
+	granular: {
+		sandbox_approval: false,
+		rules: false,
+		skill_approval: false,
+		request_permissions: false,
+		mcp_elicitations: true,
+	},
+};
+
 function toCodexApprovalPolicy(
 	permissionMode: string | undefined,
-): string | undefined {
-	if (permissionMode === "bypassPermissions") return "never";
+): CodexApprovalPolicy | undefined {
+	if (permissionMode === "bypassPermissions") return BYPASS_GRANULAR_POLICY;
 	if (permissionMode === "acceptEdits") return "untrusted";
-	// plan mode: don't override — Codex plan mode is inherently read-only
+	// plan mode is read-only by design — leave to Codex default
 	return undefined;
 }
 

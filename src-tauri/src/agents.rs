@@ -26,11 +26,9 @@ pub use self::queries::{
 };
 pub use self::slash_commands::SlashCommandCache;
 pub use self::streaming::{
-    abort_all_active_streams_blocking, bridge_aborted_event, bridge_deferred_tool_use_event,
-    bridge_done_event, bridge_elicitation_request_event, bridge_error_event,
+    abort_all_active_streams_blocking, bridge_aborted_event, bridge_done_event, bridge_error_event,
     bridge_permission_request_event, bridge_user_input_request_event, build_send_message_params,
-    convert_elicitation_content_to_codex_answers, lookup_workspace_linked_directories,
-    ActiveStreams, BuildSendMessageParamsInput,
+    lookup_workspace_linked_directories, ActiveStreams, BuildSendMessageParamsInput,
 };
 
 use self::persistence::{
@@ -38,7 +36,7 @@ use self::persistence::{
     persist_result_and_finalize, persist_turn_message, persist_user_message,
 };
 use self::streaming::stream_via_sidecar;
-use self::support::{resolve_resume_working_directory, resolve_working_directory};
+use self::support::resolve_working_directory;
 
 #[cfg(test)]
 use self::support::{non_empty, parse_claude_output, parse_codex_output};
@@ -109,35 +107,29 @@ pub enum AgentStreamEvent {
         title: Option<String>,
         description: Option<String>,
     },
-    DeferredToolUse {
+    /// Unified "agent needs user input" event. Sources:
+    /// - Claude AskUserQuestion (sidecar `canUseTool`)
+    /// - Claude MCP elicitation (sidecar `onElicitation`)
+    /// - Codex `requestUserInput`
+    ///
+    /// `payload.kind` discriminates how the frontend should render:
+    /// `ask-user-question` keeps AUQ's native question/option/preview/
+    /// notes UI; `form` is a JSON-Schema-driven form (used for both MCP
+    /// form elicitations and Codex's synthesized form); `url` is a
+    /// URL-launcher card. The Rust side just forwards the payload — all
+    /// schema normalization happens in the sidecar.
+    UserInputRequest {
         provider: String,
         model_id: String,
         resolved_model: String,
         session_id: Option<String>,
         working_directory: String,
         permission_mode: Option<String>,
-        #[serde(rename = "toolUseId")]
-        tool_use_id: String,
-        #[serde(rename = "toolName")]
-        tool_name: String,
-        #[serde(rename = "toolInput")]
-        tool_input: Value,
-    },
-    ElicitationRequest {
-        provider: String,
-        model_id: String,
-        resolved_model: String,
-        session_id: Option<String>,
-        working_directory: String,
-        #[serde(rename = "elicitationId")]
-        elicitation_id: Option<String>,
-        #[serde(rename = "serverName")]
-        server_name: String,
+        #[serde(rename = "userInputId")]
+        user_input_id: String,
+        source: String,
         message: String,
-        mode: Option<String>,
-        url: Option<String>,
-        #[serde(rename = "requestedSchema")]
-        requested_schema: Option<Value>,
+        payload: Value,
     },
     /// A plan was captured from ExitPlanMode. The plan content is already
     /// in the thread messages as a PlanReview card; this event just tells
@@ -170,8 +162,6 @@ pub struct AgentSendRequest {
     /// the chat bubble. Empty/absent ⇒ no prefix.
     #[serde(default)]
     pub prompt_prefix: Option<String>,
-    #[serde(default)]
-    pub resume_only: bool,
     pub session_id: Option<String>,
     pub helmor_session_id: Option<String>,
     pub working_directory: Option<String>,
@@ -213,7 +203,7 @@ pub async fn send_agent_message_stream(
     on_event: Channel<AgentStreamEvent>,
 ) -> CmdResult<()> {
     let prompt = request.prompt.trim().to_string();
-    if prompt.is_empty() && !request.resume_only {
+    if prompt.is_empty() {
         return Err(anyhow::anyhow!("Prompt cannot be empty.").into());
     }
 
@@ -248,27 +238,6 @@ pub async fn send_agent_message_stream(
 fn resolve_stream_working_directory(
     request: &AgentSendRequest,
 ) -> anyhow::Result<std::path::PathBuf> {
-    if request.resume_only {
-        if let Some(session_id) = request.helmor_session_id.as_deref() {
-            if let Some(workspace_dir) = resolve_resume_working_directory(session_id)? {
-                if !workspace_dir.is_dir() {
-                    // Tag as `WorkspaceBroken` so the frontend toast can
-                    // offer "Permanently Delete" + default-keep-history,
-                    // matching the non-resume path in resolve_working_directory.
-                    return Err(
-                        crate::error::coded(crate::error::ErrorCode::WorkspaceBroken).context(
-                            format!(
-                                "Workspace directory is missing for resumed session: {}",
-                                workspace_dir.display()
-                            ),
-                        ),
-                    );
-                }
-                return Ok(workspace_dir);
-            }
-        }
-    }
-
     resolve_working_directory(request.working_directory.as_deref())
 }
 
@@ -462,94 +431,38 @@ pub async fn respond_to_permission_request(
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DeferredToolResponseRequest {
-    pub tool_use_id: String,
-    pub behavior: String,
-    pub reason: Option<String>,
-    pub updated_input: Option<Value>,
-}
-
-#[tauri::command]
-pub async fn respond_to_deferred_tool(
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
-    request: DeferredToolResponseRequest,
-) -> CmdResult<()> {
-    tracing::info!(
-        tool_use_id = %request.tool_use_id,
-        behavior = %request.behavior,
-        "Deferred tool response"
-    );
-    let req = crate::sidecar::SidecarRequest {
-        id: Uuid::new_v4().to_string(),
-        method: "deferredToolResponse".to_string(),
-        params: serde_json::json!({
-            "toolUseId": request.tool_use_id,
-            "behavior": request.behavior,
-            "reason": request.reason,
-            "updatedInput": request.updated_input,
-        }),
-    };
-    sidecar
-        .send(&req)
-        .map_err(|e| anyhow::anyhow!("Failed to send deferred tool response: {e}"))?;
-    Ok(())
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ElicitationResponseRequest {
-    pub elicitation_id: String,
+pub struct UserInputResponseRequest {
+    pub user_input_id: String,
+    /// One of `"submit"`, `"decline"`, `"cancel"` — keeps the wire
+    /// shape provider-neutral; each sidecar manager translates it
+    /// into the SDK-specific resolution (AUQ allow/deny, MCP
+    /// elicitation accept/decline/cancel, Codex answer payload).
     pub action: String,
     pub content: Option<Value>,
 }
 
-fn build_elicitation_response_sidecar_request(
-    request: &ElicitationResponseRequest,
-) -> crate::sidecar::SidecarRequest {
-    crate::sidecar::SidecarRequest {
+#[tauri::command]
+pub async fn respond_to_user_input(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    request: UserInputResponseRequest,
+) -> CmdResult<()> {
+    tracing::info!(
+        user_input_id = %request.user_input_id,
+        action = %request.action,
+        "User-input response"
+    );
+    let req = crate::sidecar::SidecarRequest {
         id: Uuid::new_v4().to_string(),
-        method: "elicitationResponse".to_string(),
+        method: "userInputResponse".to_string(),
         params: serde_json::json!({
-            "elicitationId": request.elicitation_id,
+            "userInputId": request.user_input_id,
             "action": request.action,
             "content": request.content,
         }),
-    }
-}
-
-#[tauri::command]
-pub async fn respond_to_elicitation_request(
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
-    request: ElicitationResponseRequest,
-) -> CmdResult<()> {
-    if request.elicitation_id.starts_with("codex-input-") {
-        // Codex user-input: convert form content → answers, send via separate channel.
-        let answers = if request.action == "accept" {
-            request
-                .content
-                .as_ref()
-                .map(convert_elicitation_content_to_codex_answers)
-                .unwrap_or(Value::Null)
-        } else {
-            Value::Null
-        };
-        let req = crate::sidecar::SidecarRequest {
-            id: Uuid::new_v4().to_string(),
-            method: "userInputResponse".to_string(),
-            params: serde_json::json!({
-                "userInputId": request.elicitation_id,
-                "answers": answers,
-            }),
-        };
-        sidecar
-            .send(&req)
-            .map_err(|e| anyhow::anyhow!("Failed to send user-input response: {e}"))?;
-    } else {
-        let req = build_elicitation_response_sidecar_request(&request);
-        sidecar
-            .send(&req)
-            .map_err(|e| anyhow::anyhow!("Failed to send elicitation response: {e}"))?;
-    }
+    };
+    sidecar
+        .send(&req)
+        .map_err(|e| anyhow::anyhow!("Failed to send user-input response: {e}"))?;
     Ok(())
 }
 
@@ -575,7 +488,6 @@ pub async fn list_slash_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use insta::assert_yaml_snapshot;
 
     // -----------------------------------------------------------------------
     // parse_claude_output
@@ -842,92 +754,6 @@ mod tests {
     }
 
     #[test]
-    fn resume_stream_uses_session_workspace_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
-        std::env::set_var("HELMOR_DATA_DIR", dir.path());
-
-        let db_path = setup_test_db(dir.path());
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('s1', 'w1', 'idle', 'Test')",
-            [],
-        )
-        .unwrap();
-
-        let workspace_dir = crate::data_dir::workspace_dir("test-repo", "test").unwrap();
-        std::fs::create_dir_all(&workspace_dir).unwrap();
-
-        let provided_dir = dir.path().join("somewhere-else");
-        std::fs::create_dir_all(&provided_dir).unwrap();
-
-        let request = AgentSendRequest {
-            provider: "claude".to_string(),
-            model_id: "opus-1m".to_string(),
-            prompt: String::new(),
-            prompt_prefix: None,
-            resume_only: true,
-            session_id: Some("provider-session-1".to_string()),
-            helmor_session_id: Some("s1".to_string()),
-            working_directory: Some(provided_dir.display().to_string()),
-            effort_level: None,
-            permission_mode: Some("plan".to_string()),
-            fast_mode: None,
-            user_message_id: None,
-            files: None,
-            images: None,
-        };
-
-        let resolved = resolve_stream_working_directory(&request).unwrap();
-        assert_eq!(resolved, workspace_dir);
-
-        std::env::remove_var("HELMOR_DATA_DIR");
-    }
-
-    #[test]
-    fn resume_stream_errors_when_session_workspace_is_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
-        std::env::set_var("HELMOR_DATA_DIR", dir.path());
-
-        let db_path = setup_test_db(dir.path());
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('s1', 'w1', 'idle', 'Test')",
-            [],
-        )
-        .unwrap();
-
-        let request = AgentSendRequest {
-            provider: "claude".to_string(),
-            model_id: "opus-1m".to_string(),
-            prompt: String::new(),
-            prompt_prefix: None,
-            resume_only: true,
-            session_id: Some("provider-session-1".to_string()),
-            helmor_session_id: Some("s1".to_string()),
-            working_directory: None,
-            effort_level: None,
-            permission_mode: Some("plan".to_string()),
-            fast_mode: None,
-            user_message_id: None,
-            files: None,
-            images: None,
-        };
-
-        let error = resolve_stream_working_directory(&request).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("Workspace directory is missing for resumed session"),);
-        assert_eq!(
-            crate::error::extract_code(&error),
-            crate::error::ErrorCode::WorkspaceBroken,
-        );
-
-        std::env::remove_var("HELMOR_DATA_DIR");
-    }
-
-    #[test]
     fn incremental_persist_preserves_existing_values_when_null() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
@@ -1156,35 +982,5 @@ mod tests {
         assert_eq!(messages[3].role, PipelineRole::Assistant);
 
         std::env::remove_var("HELMOR_DATA_DIR");
-    }
-
-    #[test]
-    fn build_elicitation_response_sidecar_request_serializes_expected_payload() {
-        let request = ElicitationResponseRequest {
-            elicitation_id: "elicitation-1".to_string(),
-            action: "accept".to_string(),
-            content: Some(serde_json::json!({
-                "name": "Helmor",
-                "approved": true,
-            })),
-        };
-
-        let sidecar_request = build_elicitation_response_sidecar_request(&request);
-        assert_eq!(sidecar_request.method, "elicitationResponse");
-        let mut serialized = serde_json::to_value(&sidecar_request).unwrap();
-        serialized["id"] = serde_json::json!("<uuid>");
-        assert_yaml_snapshot!(
-            serialized,
-            @r#"
-id: "<uuid>"
-method: elicitationResponse
-params:
-  action: accept
-  content:
-    approved: true
-    name: Helmor
-  elicitationId: elicitation-1
-        "#
-        );
     }
 }

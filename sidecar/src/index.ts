@@ -17,8 +17,8 @@ import { createSidecarEmitter } from "./emitter.js";
 import { errorDetails, logger } from "./logger.js";
 import {
 	errorMessage,
+	optionalObject,
 	optionalString,
-	parseElicitationResultContent,
 	parseGetContextUsageParams,
 	parseListSlashCommandsParams,
 	parseOptionalStringRecord,
@@ -29,7 +29,11 @@ import {
 	type RawRequest,
 	requireString,
 } from "./request-parser.js";
-import type { Provider, SessionManager } from "./session-manager.js";
+import type {
+	Provider,
+	SessionManager,
+	UserInputResolution,
+} from "./session-manager.js";
 import {
 	TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
 	TITLE_GENERATION_TIMEOUT_MS,
@@ -384,20 +388,6 @@ async function handleSteerSession(
 	}
 }
 
-function optionalObject(
-	params: Record<string, unknown>,
-	key: string,
-): Record<string, unknown> | undefined {
-	const value = params[key];
-	if (value === undefined || value === null) {
-		return undefined;
-	}
-	if (typeof value === "object") {
-		return value as Record<string, unknown>;
-	}
-	throw new Error(`params.${key} must be an object`);
-}
-
 /**
  * Cooperative shutdown — closes every live session across all providers and
  * exits the process. The Rust side calls this before escalating to SIGTERM /
@@ -525,42 +515,39 @@ for await (const line of rl) {
 				}
 				break;
 			}
-			case "elicitationResponse": {
-				const elicitationId = requireString(params, "elicitationId");
+			case "userInputResponse": {
+				// Unified resolver — covers Claude AskUserQuestion (canUseTool),
+				// Claude MCP elicitation (onElicitation), and Codex
+				// `requestUserInput`. Each provider's manager silently no-ops
+				// when the userInputId isn't in its pending map, so we just
+				// fan the call out to every provider.
+				const userInputId = requireString(params, "userInputId");
 				const action = requireString(params, "action") as
-					| "accept"
+					| "submit"
 					| "decline"
 					| "cancel";
-				const content = parseElicitationResultContent(params, "content");
-				logger.debug(`[${id}] elicitationResponse`, { elicitationId, action });
-				claudeManager.resolveElicitation(elicitationId, {
-					action,
-					...(content ? { content } : {}),
-				});
-				break;
-			}
-			case "userInputResponse": {
-				const userInputId = requireString(params, "userInputId");
-				const answers = params.answers ?? null;
-				logger.debug(`[${id}] userInputResponse`, { userInputId });
-				codexManager.resolveUserInput(userInputId, answers);
-				break;
-			}
-			case "deferredToolResponse": {
-				const toolUseId = requireString(params, "toolUseId");
-				const behavior = requireString(params, "behavior") as "allow" | "deny";
-				const reason = optionalString(params, "reason");
-				const updatedInput = optionalObject(params, "updatedInput");
-				logger.debug(`[${id}] deferredToolResponse`, {
-					toolUseId,
-					behavior,
-				});
-				claudeManager.resolveDeferredTool(
-					toolUseId,
-					behavior,
-					reason,
-					updatedInput,
-				);
+				const content = optionalObject(params, "content");
+				logger.debug(`[${id}] userInputResponse`, { userInputId, action });
+				const resolution: UserInputResolution =
+					action === "submit"
+						? { action, content: content ?? {} }
+						: action === "decline"
+							? { action, ...(content ? { content } : {}) }
+							: { action: "cancel" };
+				const claimed =
+					claudeManager.resolveUserInput(userInputId, resolution) ||
+					codexManager.resolveUserInput(userInputId, resolution);
+				if (!claimed) {
+					// No live waiter — the parked promise was lost (sidecar
+					// restart, session ended, or duplicate submit). Surface
+					// it instead of silently swallowing so the UI can
+					// inform the user that the answer didn't reach the agent.
+					logger.error(`[${id}] userInputResponse dropped`, {
+						userInputId,
+						action,
+					});
+					emitter.error(id, `No active waiter for userInputId=${userInputId}`);
+				}
 				break;
 			}
 			case "ping":

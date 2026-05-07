@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use rusqlite::OptionalExtension;
 #[cfg(test)]
 use serde_json::Value;
 
@@ -69,40 +68,6 @@ pub(super) fn resolve_working_directory(provided: Option<&str>) -> Result<PathBu
     }
 
     std::env::current_dir().context("Failed to resolve working directory")
-}
-
-pub(super) fn resolve_resume_working_directory(session_id: &str) -> Result<Option<PathBuf>> {
-    let connection = crate::models::db::read_conn()
-        .context("Failed to open DB while resolving resume workspace")?;
-    let workspace_info: Option<(
-        String,
-        String,
-        crate::workspace_state::WorkspaceMode,
-        Option<String>,
-    )> = connection
-        .query_row(
-            r#"SELECT r.name, w.directory_name,
-                          COALESCE(w.mode, 'worktree'), r.root_path
-                   FROM sessions s
-                   JOIN workspaces w ON w.id = s.workspace_id
-                   JOIN repos r ON r.id = w.repository_id
-                   WHERE s.id = ?1"#,
-            [session_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
-        .optional()
-        .context("Failed to load resume workspace info")?;
-
-    workspace_info
-        .map(|(repo_name, directory_name, mode, root_path)| match mode {
-            crate::workspace_state::WorkspaceMode::Worktree => {
-                crate::data_dir::workspace_dir(&repo_name, &directory_name)
-            }
-            crate::workspace_state::WorkspaceMode::Local => root_path
-                .map(PathBuf::from)
-                .context("Local workspace is missing repo root_path"),
-        })
-        .transpose()
 }
 
 #[cfg(test)]

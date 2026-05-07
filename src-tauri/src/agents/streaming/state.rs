@@ -27,12 +27,10 @@
 //! |-------|---------|
 //! | `permissionRequest` | [`TurnSession::handle_permission_request`] |
 //! | `permissionModeChanged` | [`TurnSession::handle_permission_mode_changed`] |
-//! | `elicitationRequest` | [`TurnSession::handle_elicitation_request`] |
 //! | `userInputRequest` | [`TurnSession::handle_user_input_request`] |
 //! | `contextUsageUpdated` | [`TurnSession::handle_context_usage_updated`] |
 //! | `planCaptured` | [`TurnSession::handle_plan_captured`] |
 //! | `error` | [`TurnSession::handle_error`] |
-//! | `deferredToolUse` | [`TurnSession::handle_deferred_tool_use`] |
 //! | `end` / `aborted` | [`TurnSession::handle_end_or_aborted`] |
 //! | default (`stream_event`, `assistant`, `result`, etc.) | [`TurnSession::handle_stream_event`] |
 //! | heartbeat timeout / sidecar disconnect (synthesized) | [`TurnSession::handle_abnormal_exit`] |
@@ -58,8 +56,7 @@ use crate::pipeline::PipelineEmit;
 
 use super::actions::Action;
 use super::bridges::{
-    bridge_aborted_event, bridge_deferred_tool_use_event, bridge_done_event,
-    bridge_elicitation_request_event, bridge_error_event, bridge_permission_request_event,
+    bridge_aborted_event, bridge_done_event, bridge_error_event, bridge_permission_request_event,
     bridge_user_input_request_event,
 };
 
@@ -85,8 +82,7 @@ pub(super) enum TurnState {
     /// A terminal event was received and processed. The event loop must
     /// break out of its receive loop on this transition. `TerminalReason`
     /// records why so the surface emit at the call site (Done / Aborted /
-    /// Error / DeferredToolUse) can be derived without re-inspecting the
-    /// raw event.
+    /// Error) can be derived without re-inspecting the raw event.
     Terminated(TerminalReason),
 }
 
@@ -99,9 +95,6 @@ pub(super) enum TerminalReason {
     Done,
     /// Sidecar emitted `aborted` — user pressed stop or app shutdown.
     Aborted { reason: String },
-    /// Sidecar emitted `deferredToolUse` — turn paused, frontend will
-    /// resume via `respondToDeferredTool`.
-    DeferredToolPause,
     /// Sidecar emitted `error`.
     Error {
         message: String,
@@ -272,59 +265,45 @@ impl TurnSession {
         )])
     }
 
-    /// Handle an `elicitationRequest` sidecar event (MCP elicitation flow).
+    /// Handle a unified `userInputRequest` sidecar event. **Non-terminal pause.**
     ///
-    /// The bridge needs the live `resolved_model` because the pipeline
-    /// accumulator may upgrade it from `system.init` mid-stream; the
-    /// caller passes it in rather than the state machine reading the
-    /// pipeline directly. Keeps the state machine pure / testable.
-    pub(super) fn handle_elicitation_request(
-        &mut self,
-        raw: &Value,
-        resolved_model: &str,
-    ) -> Result<Vec<Action>, TransitionError> {
-        if self.state.is_terminated() {
-            return Err(TransitionError::AlreadyTerminated {
-                event_kind: "elicitationRequest".into(),
-            });
-        }
-        Ok(vec![Action::EmitToFrontend(
-            bridge_elicitation_request_event(
-                &self.ctx.provider,
-                &self.ctx.model_id,
-                resolved_model,
-                self.ctx.resolved_session_id.clone(),
-                &self.ctx.working_directory,
-                raw,
-            ),
-        )])
-    }
-
-    /// Handle a `userInputRequest` sidecar event (Codex form prompt).
+    /// Sources include Claude AskUserQuestion (canUseTool), Claude MCP
+    /// elicitation (onElicitation), and Codex `requestUserInput`. All
+    /// of them park the relevant SDK callback in the sidecar and ride
+    /// through the same wire event — Rust just emits a snapshot Update
+    /// (so the frontend cache mirrors the pre-pause assistant text)
+    /// followed by the `UserInputRequest` marker, then stays in
+    /// `Streaming`. Subsequent stream events flow through this state
+    /// machine normally once the user submits via `respondToUserInput`.
     ///
-    /// Same shape as [`Self::handle_elicitation_request`] — the bridge
-    /// synthesizes a JSON Schema and emits an `ElicitationRequest` so
-    /// the frontend renders both flows through the same panel.
+    /// `pipeline_final_messages` is a non-destructive snapshot taken
+    /// from `pipeline.finish()` at the call site; the pipeline itself
+    /// is still alive and continues accumulating.
     pub(super) fn handle_user_input_request(
         &mut self,
         raw: &Value,
         resolved_model: &str,
+        pipeline_final_messages: Vec<ThreadMessageLike>,
     ) -> Result<Vec<Action>, TransitionError> {
         if self.state.is_terminated() {
             return Err(TransitionError::AlreadyTerminated {
                 event_kind: "userInputRequest".into(),
             });
         }
-        Ok(vec![Action::EmitToFrontend(
-            bridge_user_input_request_event(
+        Ok(vec![
+            Action::EmitToFrontend(AgentStreamEvent::Update {
+                messages: pipeline_final_messages,
+            }),
+            Action::EmitToFrontend(bridge_user_input_request_event(
                 &self.ctx.provider,
                 &self.ctx.model_id,
                 resolved_model,
                 self.ctx.resolved_session_id.clone(),
                 &self.ctx.working_directory,
+                self.ctx.permission_mode.clone(),
                 raw,
-            ),
-        )])
+            )),
+        ])
     }
 
     /// Handle a generic stream event (the catch-all match arm). The
@@ -433,44 +412,6 @@ impl TurnSession {
         }
 
         Ok(actions)
-    }
-
-    /// Handle a `deferredToolUse` sidecar event. **Terminal pause.**
-    ///
-    /// The turn pauses here from the frontend's perspective; the user
-    /// resumes via `respondToDeferredTool`, which spawns a fresh
-    /// `startAgentMessageStream` with `resumeOnly: true`.
-    ///
-    /// `pipeline_final_messages` is the result of `pipeline.finish()`
-    /// at the call site; the state machine emits it as `Update` so the
-    /// frontend's cache reflects the pre-pause assistant text before
-    /// the deferred-tool overlay appears.
-    pub(super) fn handle_deferred_tool_use(
-        &mut self,
-        raw: &Value,
-        resolved_model: &str,
-        pipeline_final_messages: Vec<ThreadMessageLike>,
-    ) -> Result<Vec<Action>, TransitionError> {
-        if self.state.is_terminated() {
-            return Err(TransitionError::AlreadyTerminated {
-                event_kind: "deferredToolUse".into(),
-            });
-        }
-        self.state = TurnState::Terminated(TerminalReason::DeferredToolPause);
-        Ok(vec![
-            Action::EmitToFrontend(AgentStreamEvent::Update {
-                messages: pipeline_final_messages,
-            }),
-            Action::EmitToFrontend(bridge_deferred_tool_use_event(
-                &self.ctx.provider,
-                &self.ctx.model_id,
-                resolved_model,
-                self.ctx.resolved_session_id.clone(),
-                &self.ctx.working_directory,
-                self.ctx.permission_mode.clone(),
-                raw,
-            )),
-        ])
     }
 
     /// Handle an abnormal receiver-loop exit (heartbeat timeout or
@@ -713,62 +654,52 @@ mod tests {
     }
 
     #[test]
-    fn handle_elicitation_request_emits_with_live_resolved_model() {
+    fn handle_user_input_request_emits_update_then_marker_with_live_resolved_model() {
         // The pipeline owns the truth about `resolved_model` (it can be
         // upgraded mid-stream by `system.init`). The state machine takes
         // it as an argument rather than reading the snapshot in ctx.
         let mut session = TurnSession::new(test_ctx());
+        session.state = TurnState::Streaming;
         let raw = json!({
-            "elicitationId": "elic-1",
-            "serverName": "design-server",
+            "userInputId": "ui-1",
+            "source": "design-server",
             "message": "Need input",
-            "mode": "form"
+            "payload": {
+                "kind": "form",
+                "schema": { "type": "object", "properties": {} }
+            }
         });
+        let final_messages = vec![empty_thread_message("asst-1")];
 
         let actions = session
-            .handle_elicitation_request(&raw, "claude-opus-4.6-LIVE")
+            .handle_user_input_request(&raw, "claude-opus-4.6-LIVE", final_messages)
             .unwrap();
 
-        assert_eq!(actions.len(), 1);
+        // Update first (snapshot of pre-pause state) then the
+        // UserInputRequest marker. State must STAY in Streaming —
+        // user-input pause is non-terminal.
+        assert_eq!(actions.len(), 2);
         match &actions[0] {
-            Action::EmitToFrontend(AgentStreamEvent::ElicitationRequest {
+            Action::EmitToFrontend(AgentStreamEvent::Update { messages }) => {
+                assert_eq!(messages.len(), 1);
+                assert_eq!(messages[0].id.as_deref(), Some("asst-1"));
+            }
+            other => panic!("expected EmitToFrontend(Update), got {other:?}"),
+        }
+        match &actions[1] {
+            Action::EmitToFrontend(AgentStreamEvent::UserInputRequest {
                 resolved_model,
-                elicitation_id,
+                user_input_id,
+                source,
                 ..
             }) => {
                 assert_eq!(resolved_model, "claude-opus-4.6-LIVE");
-                assert_eq!(elicitation_id.as_deref(), Some("elic-1"));
+                assert_eq!(user_input_id, "ui-1");
+                assert_eq!(source, "design-server");
             }
-            other => panic!("expected EmitToFrontend(ElicitationRequest), got {other:?}"),
+            other => panic!("expected EmitToFrontend(UserInputRequest), got {other:?}"),
         }
-    }
-
-    #[test]
-    fn handle_user_input_request_synthesizes_codex_elicitation() {
-        let mut session = TurnSession::new(test_ctx());
-        let raw = json!({
-            "userInputId": "ui-1",
-            "questions": [{ "question": "Approve?" }]
-        });
-
-        let actions = session
-            .handle_user_input_request(&raw, "gpt-5.4-LIVE")
-            .unwrap();
-
-        assert_eq!(actions.len(), 1);
-        match &actions[0] {
-            Action::EmitToFrontend(AgentStreamEvent::ElicitationRequest {
-                server_name,
-                elicitation_id,
-                requested_schema,
-                ..
-            }) => {
-                assert_eq!(server_name, "Codex");
-                assert_eq!(elicitation_id.as_deref(), Some("ui-1"));
-                assert!(requested_schema.is_some());
-            }
-            other => panic!("expected EmitToFrontend(ElicitationRequest), got {other:?}"),
-        }
+        assert_eq!(session.state, TurnState::Streaming);
     }
 
     #[test]
@@ -957,23 +888,28 @@ mod tests {
     }
 
     #[test]
-    fn handle_deferred_tool_use_emits_update_then_deferred_and_terminates() {
+    fn handle_user_input_request_for_ask_user_question_passes_payload_through() {
+        // AskUserQuestion ships through unified userInputRequest with
+        // its native `payload.kind = ask-user-question` and the raw
+        // questions[] from the SDK — Rust just plumbs it through.
         let mut session = TurnSession::new(test_ctx());
+        session.state = TurnState::Streaming;
         session.ctx.permission_mode = Some("default".into());
         let raw = json!({
-            "toolUseId": "tool-1",
-            "toolName": "AskUserQuestion",
-            "toolInput": { "question": "Pick one" }
+            "userInputId": "tool-1",
+            "source": "Claude",
+            "message": "Claude is asking for your input.",
+            "payload": {
+                "kind": "ask-user-question",
+                "questions": [{ "question": "Pick one", "options": [] }]
+            }
         });
         let final_messages = vec![empty_thread_message("asst-1")];
 
         let actions = session
-            .handle_deferred_tool_use(&raw, "claude-opus-4-LIVE", final_messages)
+            .handle_user_input_request(&raw, "claude-opus-4-LIVE", final_messages)
             .unwrap();
 
-        // Order matters: Update first so the cache reflects the
-        // pre-pause assistant text, THEN DeferredToolUse so the panel
-        // overlays on top of an already-rendered thread.
         assert_eq!(actions.len(), 2);
         match &actions[0] {
             Action::EmitToFrontend(AgentStreamEvent::Update { messages }) => {
@@ -982,25 +918,24 @@ mod tests {
             other => panic!("expected EmitToFrontend(Update), got {other:?}"),
         }
         match &actions[1] {
-            Action::EmitToFrontend(AgentStreamEvent::DeferredToolUse {
-                tool_use_id,
-                tool_name,
+            Action::EmitToFrontend(AgentStreamEvent::UserInputRequest {
+                user_input_id,
+                source,
                 resolved_model,
                 permission_mode,
+                payload,
                 ..
             }) => {
-                assert_eq!(tool_use_id, "tool-1");
-                assert_eq!(tool_name, "AskUserQuestion");
+                assert_eq!(user_input_id, "tool-1");
+                assert_eq!(source, "Claude");
                 assert_eq!(resolved_model, "claude-opus-4-LIVE");
                 assert_eq!(permission_mode.as_deref(), Some("default"));
+                assert_eq!(payload["kind"], "ask-user-question");
+                assert!(payload["questions"].is_array());
             }
-            other => panic!("expected EmitToFrontend(DeferredToolUse), got {other:?}"),
+            other => panic!("expected EmitToFrontend(UserInputRequest), got {other:?}"),
         }
-
-        assert_eq!(
-            session.state,
-            TurnState::Terminated(TerminalReason::DeferredToolPause),
-        );
+        assert_eq!(session.state, TurnState::Streaming);
     }
 
     #[test]
@@ -1145,60 +1080,17 @@ mod tests {
     }
 
     #[test]
-    fn handle_deferred_tool_use_transitions_to_pause_and_emits_two_actions() {
-        let mut session = TurnSession::new(test_ctx());
-        let raw = json!({
-            "toolUseId": "tool-1",
-            "toolName": "AskUserQuestion",
-            "toolInput": { "question": "Pick one" }
-        });
-        let final_messages = vec![empty_thread_message("asst-1")];
-
-        let actions = session
-            .handle_deferred_tool_use(&raw, "claude-opus-4-LIVE", final_messages)
-            .unwrap();
-
-        // Update first so the cache has the pre-pause text, then the
-        // DeferredToolUse marker that drives the frontend overlay.
-        assert_eq!(actions.len(), 2);
-        match &actions[0] {
-            Action::EmitToFrontend(AgentStreamEvent::Update { messages }) => {
-                assert_eq!(messages.len(), 1);
-                assert_eq!(messages[0].id.as_deref(), Some("asst-1"));
-            }
-            other => panic!("expected EmitToFrontend(Update), got {other:?}"),
-        }
-        match &actions[1] {
-            Action::EmitToFrontend(AgentStreamEvent::DeferredToolUse {
-                tool_use_id,
-                tool_name,
-                resolved_model,
-                ..
-            }) => {
-                assert_eq!(tool_use_id, "tool-1");
-                assert_eq!(tool_name, "AskUserQuestion");
-                assert_eq!(resolved_model, "claude-opus-4-LIVE");
-            }
-            other => panic!("expected EmitToFrontend(DeferredToolUse), got {other:?}"),
-        }
-        assert_eq!(
-            session.state,
-            TurnState::Terminated(TerminalReason::DeferredToolPause)
-        );
-    }
-
-    #[test]
-    fn handle_deferred_tool_use_after_terminal_returns_already_terminated() {
+    fn handle_user_input_request_after_terminal_returns_already_terminated() {
         let mut session = TurnSession::new(test_ctx());
         session.state = TurnState::Terminated(TerminalReason::Done);
 
         let err = session
-            .handle_deferred_tool_use(&json!({}), "model", vec![])
+            .handle_user_input_request(&json!({}), "model", vec![])
             .unwrap_err();
 
         match err {
             TransitionError::AlreadyTerminated { event_kind } => {
-                assert_eq!(event_kind, "deferredToolUse");
+                assert_eq!(event_kind, "userInputRequest");
             }
             other => panic!("expected AlreadyTerminated, got {other:?}"),
         }
@@ -1329,7 +1221,6 @@ mod tests {
             reason: "user_requested".into(),
         })
         .is_terminated());
-        assert!(TurnState::Terminated(TerminalReason::DeferredToolPause).is_terminated());
         assert!(TurnState::Terminated(TerminalReason::Error {
             message: "boom".into(),
             internal: true,

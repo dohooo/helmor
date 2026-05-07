@@ -7,10 +7,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WorkspaceComposerContainer } from "@/features/composer/container";
-import type {
-	DeferredToolResponseHandler,
-	DeferredToolResponseOptions,
-} from "@/features/composer/deferred-tool";
+import type { UserInputResponseHandler } from "@/features/composer/user-input";
 import { WorkspacePanelContainer } from "@/features/panel/container";
 import { FileLinkProvider } from "@/features/panel/message-components/file-link-context";
 import type { SessionCloseRequest } from "@/features/panel/use-confirm-session-close";
@@ -28,10 +25,6 @@ import {
 	type ComposerSubmitPayload,
 	useConversationStreaming,
 } from "./hooks/use-streaming";
-import {
-	adaptPermissionToDeferredTool,
-	permissionIdFromAdaptedToolUseId,
-} from "./permission-as-deferred-tool";
 
 export type { ComposerSubmitPayload } from "./hooks/use-streaming";
 
@@ -236,16 +229,14 @@ export const WorkspaceConversationContainer = memo(
 		const {
 			activeSendError,
 			handleComposerSubmit,
-			handleDeferredToolResponse,
-			handleElicitationResponse,
+			handleUserInputResponse,
 			handlePermissionResponse,
 			handleStopStream,
 			handleSteerQueued,
 			handleRemoveQueued,
-			elicitationResponsePending,
+			userInputResponsePending,
 			isSending,
-			pendingElicitation,
-			pendingDeferredTool,
+			pendingUserInput,
 			pendingPermissions,
 			restoreCustomTags,
 			restoreDraft,
@@ -497,40 +488,21 @@ export const WorkspaceConversationContainer = memo(
 			},
 		);
 
-		// Permission requests are rendered through the same `GenericDeferredToolPanel`
-		// as deferred-tool requests so both flows share one UI. Pick the head of the
-		// queue (one-at-a-time, same as `pendingDeferredTool`) and adapt it. The
-		// wrapped response handler routes callbacks back to the correct API.
+		// Permission requests have their own dedicated `permissionRequest`
+		// wire event + RPC and render through `PermissionPanel`; user-input
+		// requests (AskUserQuestion / MCP elicitation / Codex
+		// `requestUserInput`) ride the unified `userInputRequest` event +
+		// `respondToUserInput` RPC and render through `UserInputPanel`. Both
+		// surface as composer takeovers; the composer picks one panel at a
+		// time (user-input takes priority since it's the agent's explicit
+		// ask). We pick the head of the permission queue (one-at-a-time
+		// same as user-input), and pass both panels' state down to the
+		// composer container.
 		const headPendingPermission = pendingPermissions[0] ?? null;
-		const permissionAsDeferredTool = useMemo(
-			() =>
-				headPendingPermission
-					? adaptPermissionToDeferredTool(headPendingPermission)
-					: null,
-			[headPendingPermission],
-		);
 
-		const effectivePendingDeferredTool =
-			pendingDeferredTool ?? permissionAsDeferredTool;
-
-		const effectiveDeferredToolResponse =
-			useCallback<DeferredToolResponseHandler>(
-				(deferred, behavior, options?: DeferredToolResponseOptions) => {
-					const permissionId = permissionIdFromAdaptedToolUseId(
-						deferred.toolUseId,
-					);
-					if (permissionId !== null) {
-						handlePermissionResponse(
-							permissionId,
-							behavior,
-							options?.reason ? { message: options.reason } : undefined,
-						);
-						return;
-					}
-					handleDeferredToolResponse(deferred, behavior, options);
-				},
-				[handlePermissionResponse, handleDeferredToolResponse],
-			);
+		// Type alias for clarity at the prop boundary — the composer takes
+		// the same handler shape regardless of which panel is rendered.
+		const userInputResponse: UserInputResponseHandler = handleUserInputResponse;
 
 		return (
 			<FileLinkProvider
@@ -595,11 +567,11 @@ export const WorkspaceConversationContainer = memo(
 						restoreFiles={restoreFiles}
 						restoreCustomTags={restoreCustomTags}
 						restoreNonce={restoreNonce}
-						pendingElicitation={pendingElicitation}
-						onElicitationResponse={handleElicitationResponse}
-						elicitationResponsePending={elicitationResponsePending}
-						pendingDeferredTool={effectivePendingDeferredTool}
-						onDeferredToolResponse={effectiveDeferredToolResponse}
+						pendingUserInput={pendingUserInput}
+						onUserInputResponse={userInputResponse}
+						userInputResponsePending={userInputResponsePending}
+						pendingPermission={headPendingPermission}
+						onPermissionResponse={handlePermissionResponse}
 						hasPlanReview={hasPlanReview}
 						modelSelections={composerModelSelections}
 						effortLevels={composerEffortLevels}

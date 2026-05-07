@@ -1,24 +1,26 @@
 import type { ReactNode } from "react";
-import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
+import type { PendingUserInput } from "@/features/conversation/pending-user-input";
 import { cn } from "@/lib/utils";
-import type { DeferredToolResponseHandler } from "../deferred-tool";
+import type { UserInputResponseHandler } from "../user-input";
 
-export type DeferredToolPanelProps = {
-	deferred: PendingDeferredTool;
+export type UserInputPanelProps = {
+	userInput: PendingUserInput;
 	disabled?: boolean;
-	onResponse: DeferredToolResponseHandler;
+	onResponse: UserInputResponseHandler;
 };
 
-export function DeferredToolCard({
+/**
+ * Shared card wrapper for composer-takeover panels (UserInputPanel,
+ * PermissionPanel, GoalReplaceConfirm). Provides internal padding;
+ * border / background / rounded corners come from the composer shell.
+ */
+export function UserInputCard({
 	children,
 	className,
 }: {
 	children: ReactNode;
 	className?: string;
 }) {
-	// The composer outer shell already supplies the border / background /
-	// rounded corners — this wrapper just provides the internal breathing
-	// room and lets the panel's content fill the shell edge-to-edge.
 	return <div className={cn("px-4 py-3", className)}>{children}</div>;
 }
 

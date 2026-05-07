@@ -79,38 +79,63 @@ fn wire_format_permission_request() {
 }
 
 #[test]
-fn wire_format_deferred_tool_use() {
-    assert_yaml_snapshot!(to_value(AgentStreamEvent::DeferredToolUse {
+fn wire_format_user_input_request_ask_user_question() {
+    assert_yaml_snapshot!(to_value(AgentStreamEvent::UserInputRequest {
         provider: "claude".into(),
         model_id: "opus-1m".into(),
         resolved_model: "claude-opus-4-20250514".into(),
         session_id: Some("provider-session-1".into()),
         working_directory: "/tmp/helmor".into(),
         permission_mode: Some("default".into()),
-        tool_use_id: "tool-1".into(),
-        tool_name: "AskUserQuestion".into(),
-        tool_input: json!({ "question": "Pick one" }),
+        user_input_id: "tool-1".into(),
+        source: "Claude".into(),
+        message: "Claude is asking for your input.".into(),
+        payload: json!({
+            "kind": "ask-user-question",
+            "questions": [{ "question": "Pick one", "options": [] }],
+        }),
     }));
 }
 
 #[test]
-fn wire_format_elicitation_request() {
-    assert_yaml_snapshot!(to_value(AgentStreamEvent::ElicitationRequest {
+fn wire_format_user_input_request_form() {
+    assert_yaml_snapshot!(to_value(AgentStreamEvent::UserInputRequest {
         provider: "claude".into(),
         model_id: "opus-1m".into(),
         resolved_model: "claude-opus-4-20250514".into(),
         session_id: Some("provider-session-1".into()),
         working_directory: "/tmp/helmor".into(),
-        elicitation_id: Some("elicitation-1".into()),
-        server_name: "design-server".into(),
+        permission_mode: None,
+        user_input_id: "elicitation-1".into(),
+        source: "design-server".into(),
         message: "Need structured input".into(),
-        mode: Some("form".into()),
-        url: None,
-        requested_schema: Some(json!({
-            "type": "object",
-            "properties": { "name": { "type": "string" } },
-            "required": ["name"]
-        })),
+        payload: json!({
+            "kind": "form",
+            "schema": {
+                "type": "object",
+                "properties": { "name": { "type": "string" } },
+                "required": ["name"]
+            },
+        }),
+    }));
+}
+
+#[test]
+fn wire_format_user_input_request_url() {
+    assert_yaml_snapshot!(to_value(AgentStreamEvent::UserInputRequest {
+        provider: "claude".into(),
+        model_id: "opus-1m".into(),
+        resolved_model: "claude-opus-4-20250514".into(),
+        session_id: Some("provider-session-1".into()),
+        working_directory: "/tmp/helmor".into(),
+        permission_mode: None,
+        user_input_id: "elicitation-2".into(),
+        source: "auth-server".into(),
+        message: "Finish auth".into(),
+        payload: json!({
+            "kind": "url",
+            "url": "https://example.com/authorize",
+        }),
     }));
 }
 

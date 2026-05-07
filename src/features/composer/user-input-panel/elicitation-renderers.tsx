@@ -15,28 +15,28 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
+import type { PendingUserInput } from "@/features/conversation/pending-user-input";
 import { cn } from "@/lib/utils";
-import { DeferredToolCard } from "../deferred-tool-panel/shared";
 import type {
 	ElicitationFormField,
 	ElicitationFormViewModel,
-	ElicitationResponseHandler,
 	ElicitationUrlViewModel,
 	UnsupportedElicitationViewModel,
-} from "../elicitation";
-import { normalizeElicitation } from "../elicitation";
+} from "../elicitation-schema";
+import { normalizeElicitation } from "../elicitation-schema";
 import {
 	InteractionFooter,
 	InteractionHeader,
 	InteractionOptionRow,
 	InteractionStepTabs,
 } from "../interaction";
+import type { UserInputResponseHandler } from "../user-input";
+import { UserInputCard } from "./shared";
 
 type ElicitationPanelProps = {
-	elicitation: PendingElicitation;
+	userInput: PendingUserInput;
 	disabled?: boolean;
-	onResponse: ElicitationResponseHandler;
+	onResponse: UserInputResponseHandler;
 };
 
 type FormResponseState = {
@@ -266,15 +266,15 @@ function buildResponseContent(
 }
 
 function FormElicitationPanel({
-	elicitation,
+	userInput,
 	viewModel,
 	disabled,
 	onResponse,
 }: {
-	elicitation: PendingElicitation;
+	userInput: PendingUserInput;
 	viewModel: ElicitationFormViewModel;
 	disabled: boolean;
-	onResponse: ElicitationResponseHandler;
+	onResponse: UserInputResponseHandler;
 }) {
 	const [fieldIndex, setFieldIndex] = useState(0);
 	const [responses, setResponses] = useState<FormResponseState>(() =>
@@ -373,15 +373,15 @@ function FormElicitationPanel({
 		if (!content) {
 			return;
 		}
-		onResponse(elicitation, "accept", content);
-	}, [elicitation, onResponse, responses, viewModel]);
+		onResponse(userInput, "submit", { content });
+	}, [userInput, onResponse, responses, viewModel]);
 
 	if (!currentField) {
 		return null;
 	}
 
 	return (
-		<DeferredToolCard>
+		<UserInputCard>
 			<InteractionHeader
 				icon={ShieldQuestion}
 				title={currentField.label}
@@ -600,7 +600,7 @@ function FormElicitationPanel({
 					variant="outline"
 					size="sm"
 					disabled={disabled}
-					onClick={() => onResponse(elicitation, "cancel")}
+					onClick={() => onResponse(userInput, "cancel")}
 				>
 					<X className="size-3.5" strokeWidth={2} />
 					<span>Cancel</span>
@@ -609,7 +609,7 @@ function FormElicitationPanel({
 					variant="outline"
 					size="sm"
 					disabled={disabled}
-					onClick={() => onResponse(elicitation, "decline")}
+					onClick={() => onResponse(userInput, "decline")}
 				>
 					<Info className="size-3.5" strokeWidth={2} />
 					<span>Decline</span>
@@ -624,20 +624,20 @@ function FormElicitationPanel({
 					<span>Send Response</span>
 				</Button>
 			</InteractionFooter>
-		</DeferredToolCard>
+		</UserInputCard>
 	);
 }
 
 function UrlElicitationPanel({
-	elicitation,
+	userInput,
 	viewModel,
 	disabled,
 	onResponse,
 }: {
-	elicitation: PendingElicitation;
+	userInput: PendingUserInput;
 	viewModel: ElicitationUrlViewModel;
 	disabled: boolean;
-	onResponse: ElicitationResponseHandler;
+	onResponse: UserInputResponseHandler;
 }) {
 	const [copied, setCopied] = useState(false);
 
@@ -654,11 +654,11 @@ function UrlElicitationPanel({
 
 	const handleOpen = useCallback(async () => {
 		await openUrl(viewModel.url);
-		onResponse(elicitation, "accept");
-	}, [elicitation, onResponse, viewModel.url]);
+		onResponse(userInput, "submit");
+	}, [userInput, onResponse, viewModel.url]);
 
 	return (
-		<DeferredToolCard>
+		<UserInputCard>
 			<InteractionHeader
 				icon={Globe}
 				title={viewModel.message}
@@ -694,7 +694,7 @@ function UrlElicitationPanel({
 					variant="outline"
 					size="sm"
 					disabled={disabled}
-					onClick={() => onResponse(elicitation, "cancel")}
+					onClick={() => onResponse(userInput, "cancel")}
 				>
 					<X className="size-3.5" strokeWidth={2} />
 					<span>Cancel</span>
@@ -703,7 +703,7 @@ function UrlElicitationPanel({
 					variant="outline"
 					size="sm"
 					disabled={disabled}
-					onClick={() => onResponse(elicitation, "decline")}
+					onClick={() => onResponse(userInput, "decline")}
 				>
 					<Info className="size-3.5" strokeWidth={2} />
 					<span>Decline</span>
@@ -731,23 +731,23 @@ function UrlElicitationPanel({
 					<span>Open Link</span>
 				</Button>
 			</InteractionFooter>
-		</DeferredToolCard>
+		</UserInputCard>
 	);
 }
 
 function UnsupportedElicitationPanel({
-	elicitation,
+	userInput,
 	viewModel,
 	disabled,
 	onResponse,
 }: {
-	elicitation: PendingElicitation;
+	userInput: PendingUserInput;
 	viewModel: UnsupportedElicitationViewModel;
 	disabled: boolean;
-	onResponse: ElicitationResponseHandler;
+	onResponse: UserInputResponseHandler;
 }) {
 	return (
-		<DeferredToolCard>
+		<UserInputCard>
 			<InteractionHeader
 				icon={Info}
 				title={viewModel.message}
@@ -758,7 +758,7 @@ function UnsupportedElicitationPanel({
 					variant="outline"
 					size="sm"
 					disabled={disabled}
-					onClick={() => onResponse(elicitation, "cancel")}
+					onClick={() => onResponse(userInput, "cancel")}
 				>
 					<X className="size-3.5" strokeWidth={2} />
 					<span>Cancel</span>
@@ -767,30 +767,33 @@ function UnsupportedElicitationPanel({
 					variant="outline"
 					size="sm"
 					disabled={disabled}
-					onClick={() => onResponse(elicitation, "decline")}
+					onClick={() => onResponse(userInput, "decline")}
 				>
 					<Info className="size-3.5" strokeWidth={2} />
 					<span>Decline</span>
 				</Button>
 			</InteractionFooter>
-		</DeferredToolCard>
+		</UserInputCard>
 	);
 }
 
-export function ElicitationPanel({
-	elicitation,
+/**
+ * Render either the form, URL, or unsupported view from a unified
+ * `PendingUserInput` whose payload is `form` or `url`. The top-level
+ * UserInputPanel dispatcher routes here for those two payload kinds;
+ * AskUserQuestion has its own renderer.
+ */
+export function ElicitationRenderer({
+	userInput,
 	disabled = false,
 	onResponse,
 }: ElicitationPanelProps) {
-	const viewModel = useMemo(
-		() => normalizeElicitation(elicitation),
-		[elicitation],
-	);
+	const viewModel = useMemo(() => normalizeElicitation(userInput), [userInput]);
 
 	if (viewModel.kind === "url") {
 		return (
 			<UrlElicitationPanel
-				elicitation={elicitation}
+				userInput={userInput}
 				viewModel={viewModel}
 				disabled={disabled}
 				onResponse={onResponse}
@@ -801,7 +804,7 @@ export function ElicitationPanel({
 	if (viewModel.kind === "unsupported") {
 		return (
 			<UnsupportedElicitationPanel
-				elicitation={elicitation}
+				userInput={userInput}
 				viewModel={viewModel}
 				disabled={disabled}
 				onResponse={onResponse}
@@ -811,7 +814,7 @@ export function ElicitationPanel({
 
 	return (
 		<FormElicitationPanel
-			elicitation={elicitation}
+			userInput={userInput}
 			viewModel={viewModel}
 			disabled={disabled}
 			onResponse={onResponse}

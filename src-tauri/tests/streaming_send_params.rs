@@ -164,3 +164,18 @@ fn malformed_linked_column_falls_back_to_no_directories() {
     let params = build(base_input(Some("s-4")));
     assert_yaml_snapshot!("params_malformed_linked_column", &params);
 }
+
+#[test]
+fn includes_source_repo_path_when_repo_has_root_path() {
+    let env = TestEnv::new();
+    let conn = env.connection();
+    conn.execute(
+        "UPDATE repos SET root_path = '/Users/me/repos/my-repo' WHERE id = 'r-1'",
+        [],
+    )
+    .unwrap();
+    seed_workspace_session(&conn, "w-5", "s-5", None);
+
+    let params = build(base_input(Some("s-5")));
+    assert_yaml_snapshot!("params_with_source_repo_path", &params);
+}

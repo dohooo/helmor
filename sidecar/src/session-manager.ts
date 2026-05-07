@@ -28,6 +28,14 @@ export interface SendMessageParams {
 	 */
 	readonly additionalDirectories?: readonly string[];
 	/**
+	 * Source repo `root_path` for the workspace this session belongs to.
+	 * Claude uses it to load project-scope MCP servers from
+	 * `~/.claude.json` — `cwd` is the worktree (never matches the user's
+	 * registered project key), so without this hint only user-scope MCPs
+	 * surface to the agent.
+	 */
+	readonly sourceRepoPath?: string;
+	/**
 	 * Structured image attachment paths from the composer. The single
 	 * source of truth for which `@<path>` substrings inside `prompt`
 	 * should be lifted out as image attachments. Paths may contain
@@ -77,6 +85,18 @@ export interface SlashCommandInfo {
 	readonly source: "builtin" | "skill";
 }
 
+/**
+ * Generic resolution for a unified `userInputRequest` round-trip. Every
+ * source (Claude AskUserQuestion, Claude MCP elicitation, Codex
+ * `requestUserInput`) emits the same wire event and accepts the same
+ * response shape; per-provider conversion to the SDK-specific form
+ * happens inside each manager's resolver closure.
+ */
+export type UserInputResolution =
+	| { action: "submit"; content: Record<string, unknown> }
+	| { action: "decline"; content?: Record<string, unknown> }
+	| { action: "cancel" };
+
 /** A model entry returned by listModels. Provider is implicit. */
 export interface ProviderModelInfo {
 	readonly id: string;
@@ -87,6 +107,22 @@ export interface ProviderModelInfo {
 }
 
 export interface SessionManager {
+	/**
+	 * Resolve a parked unified `userInputRequest`. Each manager translates
+	 * the generic `UserInputResolution` into the SDK-specific shape that
+	 * its own pending-resolver closure expects (e.g. AskUserQuestion's
+	 * `updatedInput`, MCP `ElicitationResult`, or Codex `answers`).
+	 *
+	 * Returns `true` when the manager owned this id and resolved its
+	 * waiter, `false` when not in its pending map. `index.ts` fans the
+	 * call out to every provider and at least one is expected to claim
+	 * it; if none does, the dispatcher reports an error to the caller.
+	 */
+	resolveUserInput(
+		userInputId: string,
+		resolution: UserInputResolution,
+	): boolean;
+
 	/**
 	 * Stream a single user turn to the underlying provider SDK and forward
 	 * every event back through `emitter`. Resolves when the stream
