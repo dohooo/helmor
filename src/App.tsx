@@ -13,14 +13,7 @@ import {
 	PanelRightClose,
 	PanelRightOpen,
 } from "lucide-react";
-import {
-	startTransition,
-	useCallback,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ForgeAccountsHealthSentinel } from "@/components/forge-accounts-health-sentinel";
 import { QuitConfirmDialog } from "@/components/quit-confirm-dialog";
@@ -2552,25 +2545,25 @@ function AppShell({
 				});
 
 				if (outcome.shouldStream) {
-					// Wrap the view-switch state burst in startTransition so
-					// React schedules the heavy mount as a non-blocking
-					// transition. Without this, the synchronous commit pumps
-					// the WKWebView's paint/composite pipeline so hard that
-					// RAF stalls for 5–8 seconds, freezing every CSS / Lottie
+					// Defer the view-switch state burst to the next animation
+					// frame so the browser can paint the current frame
+					// (start page) before reconciling the heavy conversation
+					// tree. Without this, the synchronous commit pumps the
+					// WKWebView's paint/composite pipeline so hard that RAF
+					// stalls for 5–8 seconds, freezing every CSS / Lottie
 					// animation on screen even though JS itself isn't blocked.
 					const pendingId = crypto.randomUUID();
-					startTransition(() => {
+					setPendingCreatedWorkspaceSubmit({
+						id: pendingId,
+						workspaceId: outcome.workspaceId,
+						sessionId: outcome.sessionId,
+						payload,
+						finalized: false,
+					});
+					requestAnimationFrame(() => {
 						handleSelectWorkspace(outcome.workspaceId);
 						handleSelectSession(outcome.sessionId);
 						setWorkspaceViewMode("conversation");
-
-						setPendingCreatedWorkspaceSubmit({
-							id: pendingId,
-							workspaceId: outcome.workspaceId,
-							sessionId: outcome.sessionId,
-							payload,
-							finalized: false,
-						});
 					});
 
 					if (finalizePromise) {
