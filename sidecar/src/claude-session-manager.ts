@@ -795,8 +795,12 @@ export class ClaudeSessionManager implements SessionManager {
 				pathToClaudeCodeExecutable: CLAUDE_BIN_PATH,
 				...(claudeEnv ? { env: claudeEnv } : {}),
 				model,
-				permissionMode: "plan",
+				permissionMode: "bypassPermissions",
 				allowDangerouslySkipPermissions: true,
+				thinking: { type: "disabled" },
+				settingSources: [],
+				tools: [],
+				maxTurns: 1,
 			},
 		});
 
