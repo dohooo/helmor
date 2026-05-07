@@ -367,9 +367,14 @@ describe("MemoConversationMessage plan review", () => {
 		);
 
 		expect(screen.getByText("Thought for 4s")).toBeInTheDocument();
-		// The block should be open (not auto-collapsed) because the
-		// pipeline signaled a just-completed live reasoning run.
-		expect(screen.getByText("Figured it out quickly.")).toBeInTheDocument();
+		// `just-finished` blocks default closed now — matches what historical
+		// reloads do, so a session that finishes thinking while the user is
+		// switched to another workspace doesn't come back full of expanded
+		// reasoning walls. The text is still in the DOM (CollapsibleContent
+		// hides via attributes, not unmount), so query through the trigger's
+		// state instead of looking for the body text.
+		const trigger = screen.getByText("Thought for 4s").closest("button");
+		expect(trigger?.getAttribute("data-state")).toBe("closed");
 	});
 
 	it("keeps a historical reasoning block collapsed without a duration", () => {
