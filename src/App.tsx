@@ -165,6 +165,7 @@ import {
 	WorkspaceToastProvider,
 } from "./lib/workspace-toast-context";
 import { StreamingFooterOverlapScenario } from "./test/e2e-scenarios/streaming-footer-overlap";
+import { StreamingReasoningGapScenario } from "./test/e2e-scenarios/streaming-reasoning-gap";
 
 const SETTINGS_RELOAD_EVENT = "helmor:reload-settings";
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
@@ -180,6 +181,10 @@ function App() {
 
 	if (e2eScenario === "streaming-footer-overlap") {
 		return <StreamingFooterOverlapScenario />;
+	}
+
+	if (e2eScenario === "streaming-reasoning-gap") {
+		return <StreamingReasoningGapScenario />;
 	}
 
 	return <MainApp />;

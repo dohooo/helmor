@@ -62,10 +62,15 @@ export const Reasoning = memo(
 		children,
 		...props
 	}: ReasoningProps) => {
-		// Live blocks (streaming OR just-finished) default open; historical
-		// reloads default collapsed so a returning user isn't buried in
-		// past reasoning text.
-		const resolvedDefaultOpen = defaultOpen ?? lifecycle !== "historical";
+		// Only the actively-streaming block defaults open. `just-finished`
+		// and `historical` both default closed so the row's DOM state is
+		// the same regardless of whether the user was watching when the
+		// stream ended — previously a transition-only `setIsOpen(false)`
+		// effect collapsed live observers but left switched-away viewers
+		// with an expanded block, which both surprises users (per their
+		// "thinking 输出完之后自动收起" expectation) and inflates
+		// `totalRowsHeight` against the layout estimator.
+		const resolvedDefaultOpen = defaultOpen ?? lifecycle === "streaming";
 
 		const [isOpen, setIsOpen] = useControllableState({
 			prop: open,
@@ -89,8 +94,10 @@ export const Reasoning = memo(
 			}
 		}, [isStreaming, startTime, setDuration]);
 
-		// Auto-collapse when the reasoning block finishes streaming
-		// (streaming → just-finished or historical).
+		// Auto-collapse on the live `streaming → !streaming` transition so
+		// the user watching it finish sees the block tuck away. Fresh
+		// mounts as `just-finished` already start collapsed via the
+		// defaultOpen above, so the two paths converge.
 		const prevLifecycleRef = useRef(lifecycle);
 		useEffect(() => {
 			const prev = prevLifecycleRef.current;
