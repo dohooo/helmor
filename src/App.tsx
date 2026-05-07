@@ -13,7 +13,14 @@ import {
 	PanelRightClose,
 	PanelRightOpen,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	startTransition,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { ForgeAccountsHealthSentinel } from "@/components/forge-accounts-health-sentinel";
 import { QuitConfirmDialog } from "@/components/quit-confirm-dialog";
@@ -2545,24 +2552,25 @@ function AppShell({
 				});
 
 				if (outcome.shouldStream) {
-					// Navigate immediately so the panel mounts on the new
-					// session, then queue the optimistic user bubble before
-					// awaiting finalize. The conversation effect waits for
-					// the workspace state to flip operational before actually
-					// firing `handleComposerSubmit`, so the bubble shows up
-					// instantly while the worktree materialises in the
-					// background.
-					handleSelectWorkspace(outcome.workspaceId);
-					handleSelectSession(outcome.sessionId);
-					setWorkspaceViewMode("conversation");
-
+					// Wrap the view-switch state burst in startTransition so
+					// React schedules the heavy mount as a non-blocking
+					// transition. Without this, the synchronous commit pumps
+					// the WKWebView's paint/composite pipeline so hard that
+					// RAF stalls for 5–8 seconds, freezing every CSS / Lottie
+					// animation on screen even though JS itself isn't blocked.
 					const pendingId = crypto.randomUUID();
-					setPendingCreatedWorkspaceSubmit({
-						id: pendingId,
-						workspaceId: outcome.workspaceId,
-						sessionId: outcome.sessionId,
-						payload,
-						finalized: false,
+					startTransition(() => {
+						handleSelectWorkspace(outcome.workspaceId);
+						handleSelectSession(outcome.sessionId);
+						setWorkspaceViewMode("conversation");
+
+						setPendingCreatedWorkspaceSubmit({
+							id: pendingId,
+							workspaceId: outcome.workspaceId,
+							sessionId: outcome.sessionId,
+							payload,
+							finalized: false,
+						});
 					});
 
 					if (finalizePromise) {
