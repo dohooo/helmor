@@ -150,6 +150,14 @@ type WorkspaceConversationContainerProps = {
 	contextPanelOpen?: boolean;
 	onToggleContextPanel?: () => void;
 	composerStartSubmitMenu?: boolean;
+	/** Pre-workspace linked-directories controller. Forwarded to the
+	 *  composer; see `WorkspaceComposerContainerProps.linkedDirectoriesController`.
+	 *  Used by the start-page composer to collect /add-dir picks before any
+	 *  workspace exists. */
+	composerLinkedDirectoriesController?: {
+		directories: readonly string[];
+		onChange: (next: readonly string[]) => void;
+	} | null;
 };
 
 export const WorkspaceConversationContainer = memo(
@@ -195,6 +203,7 @@ export const WorkspaceConversationContainer = memo(
 		contextPanelOpen = false,
 		onToggleContextPanel,
 		composerStartSubmitMenu = false,
+		composerLinkedDirectoriesController = null,
 	}: WorkspaceConversationContainerProps) {
 		const [composerModelSelections, setComposerModelSelections] = useState<
 			Record<string, string>
@@ -614,6 +623,7 @@ export const WorkspaceConversationContainer = memo(
 						contextPanelOpen={contextPanelOpen}
 						onToggleContextPanel={onToggleContextPanel}
 						startSubmitMenu={composerStartSubmitMenu}
+						linkedDirectoriesController={composerLinkedDirectoriesController}
 					/>
 				</div>
 			</FileLinkProvider>

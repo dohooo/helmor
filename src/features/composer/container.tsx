@@ -194,6 +194,15 @@ type WorkspaceComposerContainerProps = {
 	contextPanelOpen?: boolean;
 	onToggleContextPanel?: () => void;
 	startSubmitMenu?: boolean;
+	/** External owner of the linked-directories list. When provided, the
+	 *  composer reads from `directories` and writes via `onChange` instead of
+	 *  the workspace-scoped query/mutation. Used by the start-page composer
+	 *  where no workspace exists yet — picks accumulate in a parent-owned
+	 *  pending list and get applied at workspace creation time. */
+	linkedDirectoriesController?: {
+		directories: readonly string[];
+		onChange: (next: readonly string[]) => void;
+	} | null;
 };
 
 const noopDeferredToolResponse: DeferredToolResponseHandler = () => {};
@@ -243,6 +252,7 @@ export const WorkspaceComposerContainer = memo(
 		contextPanelOpen = false,
 		onToggleContextPanel,
 		startSubmitMenu = false,
+		linkedDirectoriesController = null,
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
 		const { settings, updateSettings } = useSettings();
@@ -274,19 +284,25 @@ export const WorkspaceComposerContainer = memo(
 			...workspaceLinkedDirectoriesQueryOptions(
 				displayedWorkspaceId ?? "__none__",
 			),
-			enabled: Boolean(displayedWorkspaceId),
+			// Skip the query when an external controller is supplying the list
+			// (start page) — the controller is the source of truth there.
+			enabled: Boolean(displayedWorkspaceId) && !linkedDirectoriesController,
 		});
-		const linkedDirectories =
-			linkedDirectoriesQuery.data ?? EMPTY_LINKED_DIRECTORIES;
+		const linkedDirectories: readonly string[] = linkedDirectoriesController
+			? linkedDirectoriesController.directories
+			: (linkedDirectoriesQuery.data ?? EMPTY_LINKED_DIRECTORIES);
 
 		// Candidate workspaces the /add-dir popup offers as quick picks.
 		// Excludes the currently-active workspace (you're already in it —
-		// linking self to self is a no-op).
+		// linking self to self is a no-op). On the start page no workspace
+		// is selected yet but a controller is in play; pass null exclude so
+		// the backend returns every workspace.
 		const candidateDirectoriesQuery = useQuery({
 			...workspaceCandidateDirectoriesQueryOptions(
 				displayedWorkspaceId ?? null,
 			),
-			enabled: Boolean(displayedWorkspaceId),
+			enabled:
+				Boolean(displayedWorkspaceId) || Boolean(linkedDirectoriesController),
 		});
 		const candidateDirectories =
 			candidateDirectoriesQuery.data ?? EMPTY_CANDIDATE_DIRECTORIES;
@@ -324,16 +340,32 @@ export const WorkspaceComposerContainer = memo(
 			},
 		});
 
+		// One-stop commit: routes to the parent controller when present,
+		// otherwise to the workspace-scoped mutation. Returns false when
+		// neither path is available (no workspace and no controller — should
+		// not happen in practice, but keeps the call sites honest).
+		const commitLinkedDirectories = useCallback(
+			(next: readonly string[]): boolean => {
+				if (linkedDirectoriesController) {
+					linkedDirectoriesController.onChange(next);
+					return true;
+				}
+				if (!displayedWorkspaceId) return false;
+				linkedDirectoriesMutation.mutate([...next]);
+				return true;
+			},
+			[
+				linkedDirectoriesController,
+				displayedWorkspaceId,
+				linkedDirectoriesMutation,
+			],
+		);
+
 		const handleRemoveLinkedDirectory = useCallback(
 			(path: string) => {
-				if (!displayedWorkspaceId) return;
-				// `mutate` (not `mutateAsync`) sends errors through the
-				// `onError` callback configured above — no need to catch.
-				linkedDirectoriesMutation.mutate(
-					linkedDirectories.filter((d) => d !== path),
-				);
+				commitLinkedDirectories(linkedDirectories.filter((d) => d !== path));
 			},
-			[displayedWorkspaceId, linkedDirectories, linkedDirectoriesMutation],
+			[commitLinkedDirectories, linkedDirectories],
 		);
 
 		// Handle a pick from the AddDirTypeaheadPlugin popup. For
@@ -342,7 +374,9 @@ export const WorkspaceComposerContainer = memo(
 		// the popup). For "browse" we open the native directory picker.
 		const handlePickAddDir = useCallback(
 			async (entry: AddDirPickerEntry) => {
-				if (!displayedWorkspaceId) return;
+				// Either a real workspace or a parent-supplied controller is
+				// required — without one of them there's nowhere to commit.
+				if (!displayedWorkspaceId && !linkedDirectoriesController) return;
 				if (entry.kind === "browse") {
 					let picked: string | null = null;
 					try {
@@ -361,19 +395,22 @@ export const WorkspaceComposerContainer = memo(
 					}
 					if (!picked) return;
 					if (linkedDirectories.includes(picked)) return;
-					linkedDirectoriesMutation.mutate([...linkedDirectories, picked]);
+					commitLinkedDirectories([...linkedDirectories, picked]);
 					return;
 				}
 				const path = entry.candidate.absolutePath;
 				if (entry.alreadyLinked) {
-					linkedDirectoriesMutation.mutate(
-						linkedDirectories.filter((d) => d !== path),
-					);
+					commitLinkedDirectories(linkedDirectories.filter((d) => d !== path));
 				} else {
-					linkedDirectoriesMutation.mutate([...linkedDirectories, path]);
+					commitLinkedDirectories([...linkedDirectories, path]);
 				}
 			},
-			[displayedWorkspaceId, linkedDirectories, linkedDirectoriesMutation],
+			[
+				displayedWorkspaceId,
+				linkedDirectoriesController,
+				linkedDirectories,
+				commitLinkedDirectories,
+			],
 		);
 
 		const modelSections = modelSectionsQuery.data ?? EMPTY_MODEL_SECTIONS;
@@ -1065,7 +1102,11 @@ export const WorkspaceComposerContainer = memo(
 						workspaceRootPath={workingDirectory}
 						linkedDirectories={linkedDirectories}
 						onRemoveLinkedDirectory={handleRemoveLinkedDirectory}
-						linkedDirectoriesDisabled={linkedDirectoriesMutation.isPending}
+						linkedDirectoriesDisabled={
+							linkedDirectoriesController
+								? false
+								: linkedDirectoriesMutation.isPending
+						}
 						addDirCandidates={candidateDirectories}
 						onPickAddDir={handlePickAddDir}
 						contextPanelOpen={contextPanelOpen}

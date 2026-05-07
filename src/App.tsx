@@ -32,6 +32,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-lifecycle";
 import { hydrateDraftCache } from "@/features/composer/draft-storage";
 import {
@@ -169,6 +170,7 @@ const SETTINGS_RELOAD_EVENT = "helmor:reload-settings";
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
 type WorkspaceViewMode = "conversation" | "editor" | "start";
 const EMPTY_SESSION_RUN_STATES = new Map<string, SessionRunState>();
+const EMPTY_STRING_LIST: readonly string[] = [];
 
 function App() {
 	const e2eScenario =
@@ -1561,6 +1563,31 @@ function AppShell({
 		pushToast: pushWorkspaceToast,
 	});
 
+	// Wrapper that injects the configured PR/MR model overrides for the
+	// "create-pr" mode so the action runs on the user's preferred PR model
+	// (with effort + fast-mode falling back to defaults when null).
+	const handleCommitAction = useCallback(
+		(mode: WorkspaceCommitButtonMode) => {
+			if (mode === "create-pr") {
+				return handleInspectorCommitAction(mode, {
+					modelId: appSettings.prModelId ?? appSettings.defaultModelId,
+					effort: appSettings.prEffort ?? appSettings.defaultEffort,
+					fastMode: appSettings.prFastMode ?? appSettings.defaultFastMode,
+				});
+			}
+			return handleInspectorCommitAction(mode);
+		},
+		[
+			handleInspectorCommitAction,
+			appSettings.prModelId,
+			appSettings.prEffort,
+			appSettings.prFastMode,
+			appSettings.defaultModelId,
+			appSettings.defaultEffort,
+			appSettings.defaultFastMode,
+		],
+	);
+
 	const handleSessionCompleted = useCallback(
 		(sessionId: string, workspaceId: string) => {
 			setSettledSessionIds((prev) => {
@@ -1965,7 +1992,7 @@ function AppShell({
 			},
 			{
 				id: "action.createPr" as const,
-				callback: () => void handleInspectorCommitAction("create-pr"),
+				callback: () => void handleCommitAction("create-pr"),
 			},
 			{
 				id: "action.commitAndPush" as const,
@@ -2033,6 +2060,7 @@ function AppShell({
 			handleCloseSelectedSession,
 			handleCopyWorkspacePath,
 			handleCreateSession,
+			handleCommitAction,
 			handleInspectorCommitAction,
 			handleNavigateSessions,
 			handleNavigateWorkspaces,
@@ -2292,10 +2320,17 @@ function AppShell({
 	const [startPendingNewBranch, setStartPendingNewBranch] = useState<
 		string | null
 	>(null);
+	// Directories the user picked via /add-dir on the start page before any
+	// workspace exists. Applied via `setWorkspaceLinkedDirectories` once the
+	// workspace is created (see `handleStartComposerPrepare`). Cleared on
+	// repo switch — the picks were intent-bound to a specific repo.
+	const [startPendingLinkedDirectories, setStartPendingLinkedDirectories] =
+		useState<readonly string[]>(EMPTY_STRING_LIST);
 	const [startMode, setStartMode] = useState<WorkspaceMode>("worktree");
 	useEffect(() => {
 		setStartSourceBranchOverride(null);
 		setStartPendingNewBranch(null);
+		setStartPendingLinkedDirectories(EMPTY_STRING_LIST);
 		setStartMode("worktree");
 	}, [startRepositoryId]);
 	// In local mode the picker should default to whatever branch the
@@ -2498,7 +2533,11 @@ function AppShell({
 							permissionMode: payload.permissionMode,
 							fastMode: payload.fastMode,
 						},
+						linkedDirectories: startPendingLinkedDirectories,
 					});
+				// Picks belonged to the in-flight create; clear regardless of
+				// outcome so the next start-page session begins clean.
+				setStartPendingLinkedDirectories(EMPTY_STRING_LIST);
 
 				void queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceGroups,
@@ -2580,6 +2619,7 @@ function AppShell({
 			startSourceBranch,
 			startMode,
 			startPendingNewBranch,
+			startPendingLinkedDirectories,
 		],
 	);
 
@@ -2597,6 +2637,15 @@ function AppShell({
 	const startComposerInsertTarget = useMemo(
 		() => ({ contextKey: startComposerContextKey }),
 		[startComposerContextKey],
+	);
+	const startLinkedDirectoriesController = useMemo(
+		() => ({
+			directories: startPendingLinkedDirectories,
+			onChange: (next: readonly string[]) => {
+				setStartPendingLinkedDirectories(next);
+			},
+		}),
+		[startPendingLinkedDirectories],
 	);
 	const rightSidebarAvailable =
 		workspaceViewMode !== "start" || rightSidebarMode === "context";
@@ -2895,6 +2944,9 @@ function AppShell({
 														contextPanelOpen={contextPanelOpen}
 														onToggleContextPanel={handleToggleContextPanel}
 														composerStartSubmitMenu
+														composerLinkedDirectoriesController={
+															startLinkedDirectoriesController
+														}
 													/>
 												</WorkspaceStartPage>
 											) : (
@@ -3299,7 +3351,7 @@ function AppShell({
 														editorMode={workspaceViewMode === "editor"}
 														activeEditorPath={editorSession?.path ?? null}
 														onOpenEditorFile={handleOpenEditorFile}
-														onCommitAction={handleInspectorCommitAction}
+														onCommitAction={handleCommitAction}
 														onReviewAction={() =>
 															handleInspectorReviewAction({
 																modelId:

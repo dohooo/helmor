@@ -5,6 +5,7 @@ import {
 	type FinalizeWorkspaceResponse,
 	finalizeWorkspaceFromRepo,
 	prepareWorkspaceFromRepo,
+	setWorkspaceLinkedDirectories,
 	setWorkspaceStatus,
 	updateSessionSettings,
 	type WorkspaceMode,
@@ -27,6 +28,7 @@ export async function createWorkspaceFromStartComposer({
 	submitMode,
 	editorStateSnapshot,
 	composerConfig,
+	linkedDirectories,
 }: {
 	repoId: string;
 	sourceBranch: string;
@@ -41,8 +43,21 @@ export async function createWorkspaceFromStartComposer({
 		permissionMode?: string;
 		fastMode?: boolean;
 	};
+	/** Pre-workspace `/add-dir` picks. Written onto the freshly-prepared
+	 *  workspace row immediately so the conversation-mode composer (which
+	 *  reads the workspace-scoped query) sees them on first mount. */
+	linkedDirectories?: readonly string[];
 }): Promise<WorkspaceStartCreateResult> {
 	const prepared = await prepareWorkspaceFromRepo(repoId, sourceBranch, mode);
+
+	// Persist pending /add-dir picks before kicking off finalize. The DB
+	// write is fast and the column is just a property of the existing
+	// workspace row — no need to wait for materialise.
+	if (linkedDirectories && linkedDirectories.length > 0) {
+		await setWorkspaceLinkedDirectories(prepared.workspaceId, [
+			...linkedDirectories,
+		]);
+	}
 
 	if (submitMode === "saveForLater") {
 		await Promise.all([

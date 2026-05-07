@@ -168,6 +168,16 @@ export type AppSettings = {
 	/** Fast-mode flag for the Review helper. When null, falls back to
 	 *  `defaultFastMode`. */
 	reviewFastMode: boolean | null;
+	/** Model used when the inspector "Create PR/MR" action starts a session.
+	 *  Applies to both GitHub PRs and GitLab MRs. When null, falls back to
+	 *  `defaultModelId`. */
+	prModelId: string | null;
+	/** Effort level for the Create PR/MR helper. When null, falls back to
+	 *  `defaultEffort`. */
+	prEffort: string | null;
+	/** Fast-mode flag for the Create PR/MR helper. When null, falls back to
+	 *  `defaultFastMode`. */
+	prFastMode: boolean | null;
 	defaultEffort: string | null;
 	defaultFastMode: boolean;
 	/** Webview zoom factor. 1.0 = 100%. Range 0.5–2.0. */
@@ -216,6 +226,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	reviewModelId: null,
 	reviewEffort: null,
 	reviewFastMode: null,
+	prModelId: null,
+	prEffort: null,
+	prFastMode: null,
 	defaultEffort: "high",
 	defaultFastMode: false,
 	zoomLevel: 1.0,
@@ -261,6 +274,9 @@ const SETTINGS_KEY_MAP: Record<
 	reviewModelId: "app.review_model_id",
 	reviewEffort: "app.review_effort",
 	reviewFastMode: "app.review_fast_mode",
+	prModelId: "app.pr_model_id",
+	prEffort: "app.pr_effort",
+	prFastMode: "app.pr_fast_mode",
 	defaultEffort: "app.default_effort",
 	defaultFastMode: "app.default_fast_mode",
 	zoomLevel: "app.zoom_level",
@@ -576,6 +592,9 @@ export async function loadSettings(): Promise<AppSettings> {
 		const rawReviewModelId = raw[SETTINGS_KEY_MAP.reviewModelId];
 		const rawReviewEffort = raw[SETTINGS_KEY_MAP.reviewEffort];
 		const rawReviewFastMode = raw[SETTINGS_KEY_MAP.reviewFastMode];
+		const rawPrModelId = raw[SETTINGS_KEY_MAP.prModelId];
+		const rawPrEffort = raw[SETTINGS_KEY_MAP.prEffort];
+		const rawPrFastMode = raw[SETTINGS_KEY_MAP.prFastMode];
 		return {
 			fontSize: raw[SETTINGS_KEY_MAP.fontSize]
 				? Number(raw[SETTINGS_KEY_MAP.fontSize])
@@ -625,6 +644,20 @@ export async function loadSettings(): Promise<AppSettings> {
 					: rawReviewFastMode === "false"
 						? false
 						: DEFAULT_SETTINGS.reviewFastMode,
+			prModelId:
+				rawPrModelId && rawPrModelId !== "default"
+					? rawPrModelId
+					: DEFAULT_SETTINGS.prModelId,
+			prEffort:
+				rawPrEffort && rawPrEffort !== ""
+					? rawPrEffort
+					: DEFAULT_SETTINGS.prEffort,
+			prFastMode:
+				rawPrFastMode === "true"
+					? true
+					: rawPrFastMode === "false"
+						? false
+						: DEFAULT_SETTINGS.prFastMode,
 			defaultEffort:
 				raw[SETTINGS_KEY_MAP.defaultEffort] || DEFAULT_SETTINGS.defaultEffort,
 			defaultFastMode:
