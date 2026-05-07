@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{ipc::Channel, AppHandle, Manager};
@@ -238,7 +239,181 @@ pub async fn send_agent_message_stream(
 fn resolve_stream_working_directory(
     request: &AgentSendRequest,
 ) -> anyhow::Result<std::path::PathBuf> {
-    resolve_working_directory(request.working_directory.as_deref())
+    let provided = request.working_directory.as_deref();
+    if provided.is_some_and(|path| !path.trim().is_empty()) {
+        return resolve_working_directory(provided);
+    }
+
+    if let Some(session_id) = request
+        .helmor_session_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+    {
+        let workspace_dir = resolve_session_workspace_directory(session_id)?.ok_or_else(|| {
+            crate::error::coded(crate::error::ErrorCode::WorkspaceBroken).context(format!(
+                "Workspace directory is missing for session {session_id}"
+            ))
+        })?;
+        return resolve_working_directory(Some(&workspace_dir.display().to_string()));
+    }
+
+    resolve_working_directory(None)
+}
+
+fn resolve_session_workspace_directory(
+    session_id: &str,
+) -> anyhow::Result<Option<std::path::PathBuf>> {
+    let connection = crate::models::db::read_conn()?;
+    let workspace_id: Option<String> = connection
+        .query_row(
+            "SELECT workspace_id FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    drop(connection);
+
+    let Some(workspace_id) = workspace_id else {
+        return Ok(None);
+    };
+    let Some(record) = crate::models::workspaces::load_workspace_record_by_id(&workspace_id)?
+    else {
+        return Ok(None);
+    };
+
+    crate::workspace::helpers::workspace_path(&record).map(Some)
+}
+
+#[cfg(test)]
+mod working_directory_tests {
+    use super::*;
+    use rusqlite::Connection;
+    use std::fs;
+
+    struct TestDataDir {
+        root: tempfile::TempDir,
+    }
+
+    impl TestDataDir {
+        fn new() -> Self {
+            let root = tempfile::TempDir::new().unwrap();
+            std::env::set_var("HELMOR_DATA_DIR", root.path());
+            crate::data_dir::ensure_directory_structure().unwrap();
+
+            let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+            crate::schema::ensure_schema(&connection).unwrap();
+            drop(connection);
+            crate::models::db::init_pools().unwrap();
+
+            Self { root }
+        }
+    }
+
+    impl Drop for TestDataDir {
+        fn drop(&mut self) {
+            std::env::remove_var("HELMOR_DATA_DIR");
+        }
+    }
+
+    fn request_with_session(session_id: &str) -> AgentSendRequest {
+        AgentSendRequest {
+            provider: "codex".into(),
+            model_id: "gpt-5.5".into(),
+            prompt: "hi".into(),
+            prompt_prefix: None,
+            session_id: None,
+            helmor_session_id: Some(session_id.into()),
+            working_directory: None,
+            effort_level: None,
+            permission_mode: None,
+            fast_mode: None,
+            user_message_id: None,
+            files: None,
+            images: None,
+        }
+    }
+
+    #[test]
+    fn stream_working_directory_falls_back_to_session_workspace() {
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock();
+        let env = TestDataDir::new();
+        let repo_root = env.root.path().join("ashare-source");
+        fs::create_dir_all(&repo_root).unwrap();
+
+        let workspace_dir = crate::data_dir::workspace_dir("ashare", "comet").unwrap();
+        fs::create_dir_all(&workspace_dir).unwrap();
+
+        let connection = crate::models::db::write_conn().unwrap();
+        connection
+            .execute(
+                "INSERT INTO repos (id, name, root_path) VALUES ('repo-1', 'ashare', ?1)",
+                [repo_root.display().to_string()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO workspaces (id, repository_id, directory_name, state, mode) VALUES ('workspace-1', 'repo-1', 'comet', 'ready', 'worktree')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO sessions (id, workspace_id, title) VALUES ('session-1', 'workspace-1', 'Untitled')",
+                [],
+            )
+            .unwrap();
+
+        let resolved =
+            resolve_stream_working_directory(&request_with_session("session-1")).unwrap();
+        assert_eq!(resolved, workspace_dir);
+    }
+
+    #[test]
+    fn explicit_stream_working_directory_still_wins() {
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        let env = TestDataDir::new();
+        let provided = env.root.path().join("explicit");
+        fs::create_dir_all(&provided).unwrap();
+
+        let mut request = request_with_session("missing-session");
+        request.working_directory = Some(provided.display().to_string());
+
+        let resolved = resolve_stream_working_directory(&request).unwrap();
+        assert_eq!(resolved, provided);
+    }
+
+    #[test]
+    fn session_workspace_fallback_errors_when_workspace_is_missing() {
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        let env = TestDataDir::new();
+        let repo_root = env.root.path().join("ashare-source");
+        fs::create_dir_all(&repo_root).unwrap();
+
+        let connection = crate::models::db::write_conn().unwrap();
+        connection
+            .execute(
+                "INSERT INTO repos (id, name, root_path) VALUES ('repo-1', 'ashare', ?1)",
+                [repo_root.display().to_string()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO sessions (id, workspace_id, title) VALUES ('session-1', 'workspace-ghost', 'Untitled')",
+                [],
+            )
+            .unwrap();
+
+        let error =
+            resolve_stream_working_directory(&request_with_session("session-1")).unwrap_err();
+        assert_eq!(
+            crate::error::extract_code(&error),
+            crate::error::ErrorCode::WorkspaceBroken
+        );
+        assert!(
+            format!("{error:#}").contains("session-1"),
+            "error message should include session id: {error:#}"
+        );
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
