@@ -2122,11 +2122,12 @@ function AppShell({
 			handleSelectWorkspace(first.workspaceId);
 
 			setTimeout(() => {
+				// `model` + `permissionMode` are already pinned onto the
+				// session row by the backend's CLI-send path, so the composer
+				// reads them off `currentSession` when it auto-submits.
 				queuePendingPromptForSession({
 					sessionId: first.sessionId,
 					prompt: first.prompt,
-					modelId: first.modelId,
-					permissionMode: first.permissionMode,
 				});
 				handleSelectSession(first.sessionId);
 			}, 100);

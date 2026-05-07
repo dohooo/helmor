@@ -95,12 +95,14 @@ type WorkspaceConversationContainerProps = {
 	onSelectContextPreview?: () => void;
 	onCloseContextPreview?: () => void;
 	/** Prompt queued by an external caller (e.g. the inspector Git commit
-	 * button) to be auto-submitted once the displayed session matches. */
+	 *  button or a drained CLI send) to be auto-submitted once the displayed
+	 *  session matches. Per-session config (model / effort / fast-mode /
+	 *  permission mode) is pinned onto the session row at create time and
+	 *  read off `currentSession` by the composer — it intentionally does NOT
+	 *  ride along on this transient handoff. */
 	pendingPromptForSession?: {
 		sessionId: string;
 		prompt: string;
-		modelId?: string | null;
-		permissionMode?: string | null;
 		/** When true, submit must queue if a turn is already streaming,
 		 *  regardless of the user's `followUpBehavior` setting. */
 		forceQueue?: boolean;
@@ -306,26 +308,6 @@ export const WorkspaceConversationContainer = memo(
 			}
 			prevPlanReviewRef.current = hasPlanReview;
 		}, [hasPlanReview, composerContextKey]);
-
-		// Preset composer model when a pending prompt carries an explicit
-		// modelId (e.g. Review uses settings.reviewModelId). Without this
-		// the chip below the chat keeps showing the inferred default while the
-		// submit silently uses the queued modelId — mismatch the user sees.
-		useEffect(() => {
-			if (!pendingPromptForSession?.modelId) return;
-			const targetKey = getComposerContextKey(
-				displayedWorkspaceId,
-				pendingPromptForSession.sessionId,
-			);
-			setComposerModelSelections((current) =>
-				current[targetKey] === pendingPromptForSession.modelId
-					? current
-					: {
-							...current,
-							[targetKey]: pendingPromptForSession.modelId as string,
-						},
-			);
-		}, [pendingPromptForSession, displayedWorkspaceId]);
 
 		// Carry the StartPage composer config (model / effort / permission /
 		// fast) into the new workspace's session contextKey. The start surface

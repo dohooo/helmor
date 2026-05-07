@@ -185,8 +185,16 @@ describe("useWorkspaceCommitLifecycle", () => {
 			await result.current.handleInspectorCommitAction("create-pr");
 		});
 
+		// create-pr without inspector overrides forwards null model /
+		// effortLevel / fastMode — meaning "follow workspace defaults" — so
+		// the session row stays clean and the composer's normal fallback
+		// chain (settings.defaultEffort / .defaultFastMode / inferred model)
+		// kicks in.
 		expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1", {
 			actionKind: "create-pr",
+			model: null,
+			effortLevel: null,
+			fastMode: null,
 		});
 		expect(result.current.pendingPromptForSession).toMatchObject({
 			sessionId: "session-action",
@@ -737,14 +745,17 @@ describe("useWorkspaceCommitLifecycle", () => {
 			});
 		});
 
-		// Review is an action session ("auto-created", fixed title), but it
-		// opts out of auto-hide via `isAutoHideableActionKind`.
+		// Review pins the configured model on the session row at create
+		// time so the composer reads it off `currentSession`. The pending
+		// prompt itself is now just `{ sessionId, prompt }`.
 		expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1", {
 			actionKind: "review",
+			model: "review-model",
+			effortLevel: null,
+			fastMode: null,
 		});
 		expect(result.current.pendingPromptForSession).toMatchObject({
 			sessionId: "session-action",
-			modelId: "review-model",
 		});
 		// New review prompt diffs against the target ref, no PR/MR machinery.
 		expect(result.current.pendingPromptForSession?.prompt ?? "").toContain(
@@ -781,9 +792,17 @@ describe("useWorkspaceCommitLifecycle", () => {
 			await result.current.handleInspectorReviewAction({ modelId: null });
 		});
 
+		// A null modelId means "follow workspace default" — it's forwarded
+		// to createSession as null so the row stays NULL and the composer's
+		// inferDefaultModelId chain takes over.
+		expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1", {
+			actionKind: "review",
+			model: null,
+			effortLevel: null,
+			fastMode: null,
+		});
 		expect(result.current.pendingPromptForSession).toMatchObject({
 			sessionId: "session-action",
-			modelId: null,
 		});
 	});
 

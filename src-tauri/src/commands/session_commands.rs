@@ -30,9 +30,21 @@ pub async fn create_session(
     workspace_id: String,
     action_kind: Option<ActionKind>,
     permission_mode: Option<String>,
+    model: Option<String>,
+    effort_level: Option<String>,
+    fast_mode: Option<bool>,
 ) -> CmdResult<sessions::CreateSessionResponse> {
     run_blocking(move || {
-        sessions::create_session(&workspace_id, action_kind, permission_mode.as_deref())
+        sessions::create_session(
+            &workspace_id,
+            action_kind,
+            permission_mode.as_deref(),
+            sessions::CreateSessionOverrides {
+                model: model.as_deref(),
+                effort_level: effort_level.as_deref(),
+                fast_mode,
+            },
+        )
     })
     .await
 }
