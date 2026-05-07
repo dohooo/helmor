@@ -5,8 +5,9 @@ import {
 	useEffect,
 	useState,
 } from "react";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useCachedAvatar } from "@/lib/use-cached-avatar";
+import { cn } from "@/lib/utils";
 
 type AvatarRootProps = ComponentProps<typeof Avatar>;
 
@@ -14,18 +15,23 @@ type CachedAvatarProps = Omit<AvatarRootProps, "children"> & {
 	/** Remote avatar URL. Pass `null` / `""` to render only the fallback. */
 	src: string | null | undefined;
 	alt: string;
-	/** What to show when src is missing or the image fails to load. */
+	/** Bottom layer — initials, etc. Always present underneath the image. */
 	fallback: ReactNode;
 	fallbackClassName?: string;
-	/** Forwarded to the inner `<AvatarImage>`. */
+	/** Forwarded to the overlay `<img>`. */
 	imageClassName?: string;
 };
 
-/** Avatar that resolves remote URLs through the on-disk cache so page
- * navigations don't re-trigger HTTP fetch + image decode. While the
- * cache is filling on the very first ever use the Avatar is empty —
- * never flashes initials, which is the whole point. Initials show only
- * when no `src` is provided or when the underlying `<img>` errors. */
+/** Avatar with on-disk URL caching + a persistent initials underlay.
+ *
+ * Layered: `AvatarFallback` is always mounted, a plain `<img>` floats
+ * on top. We bypass Radix's `AvatarImage` on purpose — its internal
+ * `new Image()` always goes through an async "loading" state, which
+ * causes a one-frame initials flash on every remount even when the
+ * picture is already in the browser's cache. A plain `<img>` paints
+ * cached images in the first frame, so workspace switches with the
+ * same identity show the avatar instantly. On decode failure, `onError`
+ * tears down the overlay and the fallback below stays visible. */
 export const CachedAvatar = memo(function CachedAvatar({
 	src,
 	alt,
@@ -35,30 +41,25 @@ export const CachedAvatar = memo(function CachedAvatar({
 	...rootProps
 }: CachedAvatarProps) {
 	const resolvedSrc = useCachedAvatar(src);
-	const [hasImage, setHasImage] = useState(true);
+	const [errored, setErrored] = useState(false);
 
 	useEffect(() => {
-		setHasImage(true);
+		setErrored(false);
 	}, [resolvedSrc]);
-
-	const hasSrc = (src?.trim().length ?? 0) > 0;
-	const showFallback = !hasSrc || !hasImage;
 
 	return (
 		<Avatar {...rootProps}>
-			{resolvedSrc ? (
-				<AvatarImage
+			<AvatarFallback className={fallbackClassName}>{fallback}</AvatarFallback>
+			{resolvedSrc && !errored ? (
+				<img
 					src={resolvedSrc}
 					alt={alt}
-					className={imageClassName}
-					onError={() => setHasImage(false)}
-					onLoad={() => setHasImage(true)}
+					className={cn(
+						"absolute inset-0 size-full rounded-[inherit] object-cover",
+						imageClassName,
+					)}
+					onError={() => setErrored(true)}
 				/>
-			) : null}
-			{showFallback ? (
-				<AvatarFallback delayMs={0} className={fallbackClassName}>
-					{fallback}
-				</AvatarFallback>
 			) : null}
 		</Avatar>
 	);
