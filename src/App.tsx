@@ -117,6 +117,7 @@ import {
 	detectedEditorsQueryOptions,
 	helmorQueryKeys,
 	helmorQueryPersister,
+	QUERY_CACHE_BUSTER,
 	repositoriesQueryOptions,
 	sessionThreadMessagesQueryOptions,
 	workspaceChangeRequestQueryOptions,
@@ -300,7 +301,10 @@ function MainApp() {
 		<SettingsContext.Provider value={settingsContextValue}>
 			<PersistQueryClientProvider
 				client={queryClient}
-				persistOptions={{ persister: helmorQueryPersister }}
+				persistOptions={{
+					persister: helmorQueryPersister,
+					buster: QUERY_CACHE_BUSTER,
+				}}
 			>
 				{appSettings === null ? null : !appSettings.onboardingCompleted ? (
 					<>
