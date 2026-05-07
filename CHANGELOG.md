@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.19.1
+
+### Patch Changes
+
+- [#425](https://github.com/dohooo/helmor/pull/425) [`e8674cf`](https://github.com/dohooo/helmor/commit/e8674cf30ef241e0a4a09336f1fa355db06c7e63) Thanks [@natllian](https://github.com/natllian)! - Fix a multi-second UI freeze when starting a new task from the start page.
+
+- [#428](https://github.com/dohooo/helmor/pull/428) [`b6f2e95`](https://github.com/dohooo/helmor/commit/b6f2e95c02bdb1b1508e3f0b202befd1403b950b) Thanks [@natllian](https://github.com/natllian)! - Stop capping Claude session-title generation at one turn so titles no longer fail with `Reached maximum number of turns (1)`.
+
+- [#428](https://github.com/dohooo/helmor/pull/428) [`b6f2e95`](https://github.com/dohooo/helmor/commit/b6f2e95c02bdb1b1508e3f0b202befd1403b950b) Thanks [@natllian](https://github.com/natllian)! - Speed up Codex session title and branch-name generation by using a smaller model and skipping reasoning.
+
+- [#424](https://github.com/dohooo/helmor/pull/424) [`d828bde`](https://github.com/dohooo/helmor/commit/d828bde801ffee80bb2f1bd823a10f3f24898d41) Thanks [@natllian](https://github.com/natllian)! - Fix two related issues in long chat sessions:
+
+  - Stop the empty space below the last message from growing as thinking blocks pile up.
+  - Make finished thinking blocks fold up even when you switch away and come back.
+
+- [#417](https://github.com/dohooo/helmor/pull/417) [`53ff1e4`](https://github.com/dohooo/helmor/commit/53ff1e43cffaea73505cbe46c63d88aab864b0aa) Thanks [@dohooo](https://github.com/dohooo)! - Make automatic session title and branch-name generation lighter so new chats spend less time preparing a rename.
+
+- [#431](https://github.com/dohooo/helmor/pull/431) [`7643e9e`](https://github.com/dohooo/helmor/commit/7643e9e48be66a55f9579b8091f2df71f8a94d8c) Thanks [@natllian](https://github.com/natllian)! - Fix two issues with workspace working-directory handling:
+
+  - Stop the first message in a newly-created workspace from running with the wrong directory, which caused the second turn to fail with "The provider returned an empty response."
+  - Refuse to start an agent turn when the working directory is missing, instead of silently falling back to the app's process cwd.
+
+- [#421](https://github.com/dohooo/helmor/pull/421) [`55b0a9e`](https://github.com/dohooo/helmor/commit/55b0a9ec26f6ab686545add217cb9a6d6a75cd11) Thanks [@natllian](https://github.com/natllian)! - Fix Settings → PR/MR (and Review) effort: it now actually applies to the new session, and is disabled for models that don't support effort levels (e.g. Haiku).
+
+- [#430](https://github.com/dohooo/helmor/pull/430) [`c85a6cb`](https://github.com/dohooo/helmor/commit/c85a6cb7a766c776cd5710fc2b9504982847d642) Thanks [@natllian](https://github.com/natllian)! - Fix the sidebar bouncing a workspace back to in-review after you merge it: the optimistic move to Done now stays put while the merge round-trip is in flight, even if you switch to another workspace before it finishes.
+
+- [#429](https://github.com/dohooo/helmor/pull/429) [`7fb0116`](https://github.com/dohooo/helmor/commit/7fb0116fc23c37e124d232e940bed4773009c047) Thanks [@natllian](https://github.com/natllian)! - Make cold starts noticeably faster and reduce in-session pauses by shrinking the on-disk cache Helmor reads at launch and rewrites as you work.
+
+- [#427](https://github.com/dohooo/helmor/pull/427) [`2909b4a`](https://github.com/dohooo/helmor/commit/2909b4a236a672ab9345f1e309ded6cfaefff055) Thanks [@natllian](https://github.com/natllian)! - Make sidebar workspace rows feel responsive when sweeping the cursor across a long list — hover highlights and the row action buttons no longer stutter behind the cursor.
+
 ## 0.19.0
 
 ### Minor Changes
