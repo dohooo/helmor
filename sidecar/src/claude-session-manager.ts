@@ -800,7 +800,6 @@ export class ClaudeSessionManager implements SessionManager {
 				thinking: { type: "disabled" },
 				settingSources: [],
 				tools: [],
-				maxTurns: 1,
 			},
 		});
 
