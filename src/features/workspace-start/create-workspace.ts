@@ -33,10 +33,8 @@ export async function createWorkspaceFromStartComposer({
 	mode: WorkspaceMode;
 	submitMode: WorkspaceStartSubmitMode;
 	editorStateSnapshot?: SerializedEditorState;
-	/** StartPage composer picks. On `saveForLater` we persist these to the
-	 *  session row so the backlog session reflects the user's choices when
-	 *  they later open it; on `startNow` they ride along inside the submit
-	 *  payload, so this field is unused in that branch. */
+	/** StartPage composer picks. Only persisted to the session row on
+	 *  saveForLater; startNow consumes them via the submit payload. */
 	composerConfig?: {
 		modelId?: string;
 		effortLevel?: string;
