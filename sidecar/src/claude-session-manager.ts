@@ -101,6 +101,21 @@ function claudePlatformShort(): string {
 
 const CLAUDE_BIN_PATH = resolveClaudeBinPath();
 
+// SDK's `env` option REPLACES process.env when set (per its docstring:
+// "Defaults to process.env"). Without spreading process.env back in, the
+// spawned claude-code child loses HOME / PATH / cached OAuth creds and
+// reports "Not logged in". Returns undefined when no overrides are
+// supplied so the SDK keeps its default-process.env path.
+function mergeQueryEnv(
+	...overrides: (Record<string, string> | undefined)[]
+): { [key: string]: string | undefined } | undefined {
+	const present = overrides.filter(
+		(o): o is Record<string, string> => o !== undefined,
+	);
+	if (present.length === 0) return undefined;
+	return Object.assign({}, process.env, ...present);
+}
+
 interface LiveSession {
 	readonly query: Query;
 	readonly abortController: AbortController;
@@ -428,10 +443,7 @@ export class ClaudeSessionManager implements SessionManager {
 			additionalDirectories.length > 0
 				? { CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" }
 				: undefined;
-		const queryEnv =
-			claudeEnv || additionalDirectoryEnv
-				? { ...claudeEnv, ...additionalDirectoryEnv }
-				: undefined;
+		const queryEnv = mergeQueryEnv(claudeEnv, additionalDirectoryEnv);
 
 		const q = query({
 			prompt: isResumeOnly ? "" : promptSource,
@@ -810,6 +822,7 @@ export class ClaudeSessionManager implements SessionManager {
 			additionalDirectories.length > 0
 				? { CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" }
 				: undefined;
+		const queryEnv = mergeQueryEnv(additionalDirectoryEnv);
 
 		let resolveDone: () => void = () => undefined;
 		const donePromise = new Promise<void>((resolve) => {
@@ -837,7 +850,7 @@ export class ClaudeSessionManager implements SessionManager {
 				pathToClaudeCodeExecutable: CLAUDE_BIN_PATH,
 				cwd: cwd || undefined,
 				...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
-				...(additionalDirectoryEnv ? { env: additionalDirectoryEnv } : {}),
+				...(queryEnv ? { env: queryEnv } : {}),
 				permissionMode: "bypassPermissions",
 				allowDangerouslySkipPermissions: true,
 				includePartialMessages: false,

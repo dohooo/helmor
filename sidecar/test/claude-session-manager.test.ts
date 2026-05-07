@@ -755,6 +755,50 @@ describe("ClaudeSessionManager.sendMessage", () => {
 		expect(content).toContain("summarize what's in these projects");
 	});
 
+	test("preserves process.env when /add-dir adds an env override", async () => {
+		const userDir = makeTempDir("helmor-claude-env-preserve-");
+		// Sentinel set in the parent (sidecar) env that the spawned
+		// claude-code child must inherit. Without ...process.env in the
+		// merge, the SDK passes only { CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" }
+		// and the child loses HOME/credentials → "Not logged in".
+		const sentinelKey = "HELMOR_TEST_ENV_SENTINEL";
+		const sentinelValue = `sentinel-${Date.now()}`;
+		const prevSentinel = process.env[sentinelKey];
+		process.env[sentinelKey] = sentinelValue;
+
+		try {
+			mockQueryImpl = () =>
+				asyncIterableFrom([{ type: "result", result: "ok" }]);
+
+			await manager.sendMessage(
+				"REQ-ENV-PRESERVE",
+				{
+					sessionId: "s-env-preserve",
+					prompt: "ok",
+					model: "opus-1m",
+					cwd: undefined,
+					resume: undefined,
+					permissionMode: "bypassPermissions",
+					effortLevel: undefined,
+					fastMode: undefined,
+					images: [],
+					additionalDirectories: [userDir],
+				},
+				emitter,
+			);
+
+			const env = (
+				lastQueryArgs as { options?: { env?: Record<string, string> } }
+			).options?.env;
+			expect(env?.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD).toBe("1");
+			expect(env?.[sentinelKey]).toBe(sentinelValue);
+			expect(env?.HOME).toBe(process.env.HOME);
+		} finally {
+			if (prevSentinel === undefined) delete process.env[sentinelKey];
+			else process.env[sentinelKey] = prevSentinel;
+		}
+	});
+
 	test("listSlashCommands forwards additionalDirectories and env", async () => {
 		const workspaceDir = makeTempDir("helmor-claude-slash-");
 		const linkedDir = makeTempDir("helmor-claude-slash-linked-");

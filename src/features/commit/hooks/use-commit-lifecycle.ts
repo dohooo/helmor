@@ -222,7 +222,14 @@ export function useWorkspaceCommitLifecycle({
 	);
 
 	const handleInspectorCommitAction = useCallback(
-		async (mode: WorkspaceCommitButtonMode) => {
+		async (
+			mode: WorkspaceCommitButtonMode,
+			overrides?: {
+				modelId?: string | null;
+				effort?: string | null;
+				fastMode?: boolean | null;
+			},
+		) => {
 			const workspaceId = selectedWorkspaceIdRef.current;
 			if (!workspaceId) {
 				console.warn("[commitButton] action ignored: no selected workspace");
@@ -394,7 +401,13 @@ export function useWorkspaceCommitLifecycle({
 						: current,
 				);
 
-				setPendingPromptForSession({ sessionId, prompt });
+				setPendingPromptForSession({
+					sessionId,
+					prompt,
+					modelId: overrides?.modelId ?? null,
+					effort: overrides?.effort ?? null,
+					fastMode: overrides?.fastMode ?? null,
+				});
 				onSelectSession(sessionId);
 			} catch (error) {
 				console.error("[commitButton] Failed to start session:", error);
