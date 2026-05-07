@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.19.0
+
+### Minor Changes
+
+- [#415](https://github.com/dohooo/helmor/pull/415) [`da05eaf`](https://github.com/dohooo/helmor/commit/da05eaff012d9bce14f84726df8f96ed961fcadc) Thanks [@natllian](https://github.com/natllian)! - Two workspace-creation and PR/MR helper improvements:
+  - Fix `/add-dir` on the Start page so "Browse folder…" actually opens the directory picker, and apply the picks to the workspace it creates.
+  - Add a dedicated model / effort / fast-mode selector for the inspector's Create PR/MR action, so PR / MR generation can use a different setup than the default agent turn.
+
+### Patch Changes
+
+- [#416](https://github.com/dohooo/helmor/pull/416) [`d50177c`](https://github.com/dohooo/helmor/commit/d50177c653c59fed5c86e5b2edb97bd93cfb18cd) Thanks [@natllian](https://github.com/natllian)! - Fix three pause-for-user-input bugs:
+
+  - Claude `AskUserQuestion` answers now reach Claude reliably instead of intermittently failing with an API error or empty user turn.
+  - Codex MCP elicitation forms now surface in Bypass Permissions mode instead of being auto-declined.
+  - Claude now sees project-scope MCP servers registered for your repo in `~/.claude.json`.
+
+- [#415](https://github.com/dohooo/helmor/pull/415) [`da05eaf`](https://github.com/dohooo/helmor/commit/da05eaff012d9bce14f84726df8f96ed961fcadc) Thanks [@natllian](https://github.com/natllian)! - Two `/add-dir` fixes:
+
+  - Claude turns no longer fail with `Not logged in / Authentication failed` after linking extra directories.
+  - The Start page's `/add-dir` popup now lists candidate workspaces, matching the in-workspace behavior instead of only offering "Browse folder…".
+
+- [#413](https://github.com/dohooo/helmor/pull/413) [`47d0dab`](https://github.com/dohooo/helmor/commit/47d0dab90915bbf74dda16bb982f09b9254c6942) Thanks [@natllian](https://github.com/natllian)! - Carry the Start page composer picks (model, effort, plan mode, fast mode) into the new workspace so Start Now and Save for Later no longer fall back to defaults.
+
+- [#411](https://github.com/dohooo/helmor/pull/411) [`dcf009e`](https://github.com/dohooo/helmor/commit/dcf009ef17d3e72d65a54979469ce4ad70d1462b) Thanks [@natllian](https://github.com/natllian)! - Fix account avatars so they fall back to initials instead of going blank, and stop them flickering on workspace switches.
+
 ## 0.18.0
 
 ### Minor Changes
