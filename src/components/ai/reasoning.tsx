@@ -1,7 +1,14 @@
 import { useControllableState } from "@radix-ui/react-use-controllable-state";
 import { BrainIcon, ChevronRightIcon } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
-import { createContext, memo, useContext, useEffect, useState } from "react";
+import {
+	createContext,
+	memo,
+	useContext,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import {
 	Collapsible,
 	CollapsibleContent,
@@ -31,8 +38,9 @@ function useReasoning() {
 
 export type ReasoningProps = ComponentProps<typeof Collapsible> & {
 	/**
-	 * Current lifecycle phase. `"streaming"` and `"just-finished"` default
-	 * to open (active live turn); `"historical"` defaults to collapsed.
+	 * Current lifecycle phase. `"streaming"` defaults to open (active
+	 * generation); auto-collapses when transitioning to `"just-finished"`
+	 * or `"historical"`. Historical reloads also default to collapsed.
 	 */
 	lifecycle?: ReasoningLifecycle;
 	open?: boolean;
@@ -80,6 +88,17 @@ export const Reasoning = memo(
 				setStartTime(null);
 			}
 		}, [isStreaming, startTime, setDuration]);
+
+		// Auto-collapse when the reasoning block finishes streaming
+		// (streaming → just-finished or historical).
+		const prevLifecycleRef = useRef(lifecycle);
+		useEffect(() => {
+			const prev = prevLifecycleRef.current;
+			prevLifecycleRef.current = lifecycle;
+			if (prev === "streaming" && lifecycle !== "streaming") {
+				setIsOpen(false);
+			}
+		}, [lifecycle, setIsOpen]);
 
 		return (
 			<ReasoningContext.Provider

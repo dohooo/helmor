@@ -78,7 +78,16 @@ type WorkspaceToastFn = (
 
 type UseWorkspacesSidebarControllerArgs = {
 	selectedWorkspaceId: string | null;
+	autoSelectEnabled?: boolean;
 	onSelectWorkspace: (workspaceId: string | null) => void;
+	onOpenNewWorkspace?: () => void;
+	/**
+	 * Called after a successful add-repo when the backend hands us a
+	 * `selectedWorkspaceId: null` — newly added repo, or re-add with only
+	 * archived workspaces. UI lands on the start page with this repo
+	 * preselected.
+	 */
+	onAddRepositoryNeedsStart?: (repositoryId: string) => void;
 	pushWorkspaceToast: WorkspaceToastFn;
 };
 
@@ -86,7 +95,10 @@ const WORKSPACE_GROUPS_INITIAL_DATA = workspaceGroupsQueryOptions().initialData;
 
 export function useWorkspacesSidebarController({
 	selectedWorkspaceId,
+	autoSelectEnabled = true,
 	onSelectWorkspace,
+	onOpenNewWorkspace,
+	onAddRepositoryNeedsStart,
 	pushWorkspaceToast,
 }: UseWorkspacesSidebarControllerArgs) {
 	const queryClient = useQueryClient();
@@ -223,6 +235,18 @@ export function useWorkspacesSidebarController({
 		[pushWorkspaceToast],
 	);
 
+	// Forward-ref so the rollback can call into the recovery toast helper that
+	// is defined below (they form a cycle: the helper depends on
+	// `handleDeleteWorkspace`, which is defined later still).
+	const pushPermanentDeleteRecoveryToastRef = useRef<
+		(
+			workspaceId: string,
+			title: string,
+			error: unknown,
+			fallbackMessage: string,
+		) => void
+	>(() => {});
+
 	const rollbackArchivedWorkspace = useCallback(
 		(workspaceId: string, error: unknown, fallbackMessage: string) => {
 			updateArchivingWorkspaceId(workspaceId, false);
@@ -242,14 +266,18 @@ export function useWorkspacesSidebarController({
 				flushSidebarLists();
 			}
 
-			pushWorkspaceErrorToast(
+			// Always offer the permanent-delete escape hatch on archive failure —
+			// matches the restore-failure path. The user already chose to drop
+			// this workspace; if cleanup hits a snag (e.g. trash-dir collision,
+			// stale worktree) they need a way out without restarting the app.
+			pushPermanentDeleteRecoveryToastRef.current(
 				workspaceId,
 				"Archive failed",
 				error,
 				fallbackMessage,
 			);
 		},
-		[flushSidebarLists, pushWorkspaceErrorToast, updateArchivingWorkspaceId],
+		[flushSidebarLists, updateArchivingWorkspaceId],
 	);
 
 	useEffect(() => {
@@ -371,6 +399,10 @@ export function useWorkspacesSidebarController({
 	}, [baseGroups, pendingCreations]);
 
 	useEffect(() => {
+		if (!autoSelectEnabled) {
+			return;
+		}
+
 		if (
 			selectedWorkspaceId === null &&
 			groupsQuery.data === undefined &&
@@ -383,6 +415,19 @@ export function useWorkspacesSidebarController({
 			selectedWorkspaceId === null &&
 			groupsQuery.isFetching &&
 			groupsQuery.data === WORKSPACE_GROUPS_INITIAL_DATA
+		) {
+			return;
+		}
+
+		// A freshly-created workspace lands here BEFORE `groupsQuery`
+		// refetches it from the backend, so `hasWorkspaceId` returns false
+		// and the fallback below would otherwise jump us to whatever sits
+		// in `archivedSummaries[0]` — clobbering the user's brand-new
+		// workspace selection. Hold off until the refetch settles.
+		if (
+			selectedWorkspaceId &&
+			!hasWorkspaceId(selectedWorkspaceId, groups, archivedSummaries) &&
+			groupsQuery.isFetching
 		) {
 			return;
 		}
@@ -414,6 +459,7 @@ export function useWorkspacesSidebarController({
 			onSelectWorkspace(nextWorkspaceId);
 		}
 	}, [
+		autoSelectEnabled,
 		archivedQuery.data,
 		archivedSummaries,
 		groups,
@@ -962,18 +1008,33 @@ export function useWorkspacesSidebarController({
 	const applyAddRepositoryResponse = useCallback(
 		async (response: AddRepositoryResponse) => {
 			await refetchNavigation();
-			prefetchWorkspace(response.selectedWorkspaceId);
-			onSelectWorkspace(response.selectedWorkspaceId);
-
+			if (response.selectedWorkspaceId) {
+				// Re-add of an existing repo with a visible workspace —
+				// jump straight to it, same as before.
+				prefetchWorkspace(response.selectedWorkspaceId);
+				onSelectWorkspace(response.selectedWorkspaceId);
+				if (!response.createdRepository) {
+					pushWorkspaceToast(
+						"Switched to the existing workspace.",
+						"Repository already added",
+						"default",
+					);
+				}
+				return;
+			}
+			// No visible workspace to focus → land on the start page with
+			// the new repo selected so the user picks branch + mode.
+			onAddRepositoryNeedsStart?.(response.repositoryId);
 			if (!response.createdRepository) {
 				pushWorkspaceToast(
-					"Switched to the existing workspace.",
+					"Repository already added — opened the start page so you can spin up a workspace.",
 					"Repository already added",
 					"default",
 				);
 			}
 		},
 		[
+			onAddRepositoryNeedsStart,
 			onSelectWorkspace,
 			prefetchWorkspace,
 			pushWorkspaceToast,
@@ -1170,6 +1231,12 @@ export function useWorkspacesSidebarController({
 		handleDeleteWorkspaceRef.current = handleDeleteWorkspace;
 	}, [handleDeleteWorkspace]);
 
+	// Keep the forward-ref used by `rollbackArchivedWorkspace` in sync.
+	useEffect(() => {
+		pushPermanentDeleteRecoveryToastRef.current =
+			pushPermanentDeleteRecoveryToast;
+	}, [pushPermanentDeleteRecoveryToast]);
+
 	const notifyBranchRename = useCallback(
 		(rename: { original: string; actual: string }) => {
 			pushWorkspaceToast(
@@ -1287,17 +1354,21 @@ export function useWorkspacesSidebarController({
 				const shouldNavigate =
 					!selectedWorkspaceId || selectedWorkspaceId === workspaceId;
 				if (shouldNavigate) {
-					const nextWorkspaceId = findReplacementWorkspaceIdAfterRemoval({
-						currentGroups: groups,
-						currentArchivedRows: archivedRows,
-						nextGroups: optimisticGroups,
-						nextArchivedRows: optimisticArchived.archivedRows,
-						removedWorkspaceId: workspaceId,
-					});
-					if (nextWorkspaceId) {
-						prefetchWorkspace(nextWorkspaceId);
+					if (onOpenNewWorkspace) {
+						onOpenNewWorkspace();
+					} else {
+						const nextWorkspaceId = findReplacementWorkspaceIdAfterRemoval({
+							currentGroups: groups,
+							currentArchivedRows: archivedRows,
+							nextGroups: optimisticGroups,
+							nextArchivedRows: optimisticArchived.archivedRows,
+							removedWorkspaceId: workspaceId,
+						});
+						if (nextWorkspaceId) {
+							prefetchWorkspace(nextWorkspaceId);
+						}
+						onSelectWorkspace(nextWorkspaceId);
 					}
-					onSelectWorkspace(nextWorkspaceId);
 				}
 
 				void startArchiveWorkspace(workspaceId)
@@ -1318,6 +1389,7 @@ export function useWorkspacesSidebarController({
 			baseArchivedSummaries,
 			groups,
 			onSelectWorkspace,
+			onOpenNewWorkspace,
 			pendingArchives,
 			prefetchWorkspace,
 			pushWorkspaceErrorToast,

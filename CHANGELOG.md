@@ -1,5 +1,189 @@
 # Changelog
 
+## 0.18.0
+
+### Minor Changes
+
+- [#401](https://github.com/dohooo/helmor/pull/401) [`a3d91f0`](https://github.com/dohooo/helmor/commit/a3d91f0bed7f47dc2c4bf6b5546d00ce6852e942) Thanks [@natllian](https://github.com/natllian)! - Render Markdown files in the in-app editor with a Source/Preview toggle, so AI-generated specs and other `.md` files can be reviewed as formatted documents instead of raw source.
+
+- [#406](https://github.com/dohooo/helmor/pull/406) [`1cfef47`](https://github.com/dohooo/helmor/commit/1cfef47f1f22bda6b4a465f37564e0e8d6839a6b) Thanks [@natllian](https://github.com/natllian)! - Smooth out the add-repo and forge connect flows:
+
+  - Adding a repository now lands on the start page with the new repo selected, instead of auto-creating a workspace.
+  - Fix the GitHub / GitLab "Connect" button staying stuck after sign-in for accounts whose token can read the repo but doesn't expose membership in the API response.
+
+- [#405](https://github.com/dohooo/helmor/pull/405) [`7324592`](https://github.com/dohooo/helmor/commit/73245921a48ffada4c9490a3776810be3ee5224b) Thanks [@dohooo](https://github.com/dohooo)! - Add an export-as-image button to the chat panel header that opens a snapshot of the full session with a one-click copy-to-clipboard.
+
+### Patch Changes
+
+- [#394](https://github.com/dohooo/helmor/pull/394) [`b84b070`](https://github.com/dohooo/helmor/commit/b84b0705e842eb91668510e8fadc959e7725c0bb) Thanks [@daniel-mf28](https://github.com/daniel-mf28)! - Fix dragging the empty area of the workspace panel header.
+
+- [#404](https://github.com/dohooo/helmor/pull/404) [`4df8fcd`](https://github.com/dohooo/helmor/commit/4df8fcd77d8a20263c4ba33a2ba10481cb9e7fce) Thanks [@aidxun](https://github.com/aidxun)! - Fix the right inspector sidebar so its panels no longer animate from an initial zero-height state when Helmor first renders or switches back from the Context panel.
+
+- [#407](https://github.com/dohooo/helmor/pull/407) [`a8c7d46`](https://github.com/dohooo/helmor/commit/a8c7d467c873cbae98a09fa985da6ee5e6f2e863) Thanks [@natllian](https://github.com/natllian)! - Fix Claude threads occasionally returning an empty response mid-conversation and losing context on retry.
+
+## 0.17.1
+
+### Patch Changes
+
+- [#388](https://github.com/dohooo/helmor/pull/388) [`3fa1e6e`](https://github.com/dohooo/helmor/commit/3fa1e6e5d217d559f3499bf84e81273e3e6902d6) Thanks [@alantoa](https://github.com/alantoa)! - Fix the chat-view table "Download as CSV / Markdown" buttons doing nothing — the download now goes through a native Save dialog and writes the file via the Tauri host, since the webview was silently swallowing streamdown's built-in `<a download>` click.
+
+- [#400](https://github.com/dohooo/helmor/pull/400) [`212fe13`](https://github.com/dohooo/helmor/commit/212fe13f691a329bc84e10a145b9881acfbd9f5e) Thanks [@dohooo](https://github.com/dohooo)! - Fix model switching on the new workspace welcome page so the selected model stays applied before the workspace and session are created.
+
+- [#400](https://github.com/dohooo/helmor/pull/400) [`212fe13`](https://github.com/dohooo/helmor/commit/212fe13f691a329bc84e10a145b9881acfbd9f5e) Thanks [@dohooo](https://github.com/dohooo)! - Keep context previews clear of the macOS window controls when the left workspace sidebar is collapsed.
+
+- [#399](https://github.com/dohooo/helmor/pull/399) [`7db9114`](https://github.com/dohooo/helmor/commit/7db911406dd9c6c5fa725dd651f9c64d66294b73) Thanks [@natllian](https://github.com/natllian)! - Fix a few rough edges:
+
+  - Custom workspace branch prefixes no longer auto-append a trailing `/`; the prefix you set is the prefix used.
+  - Codex sub-agents now render with their real nickname throughout (spawn, wait, etc.) instead of switching names partway through, and no longer flash a no-name "Sub-agent" placeholder while spawning.
+
+- [#389](https://github.com/dohooo/helmor/pull/389) [`c3d0e7f`](https://github.com/dohooo/helmor/commit/c3d0e7fe1bf4bef8651197d5853536c3a893e3ee) Thanks [@alantoa](https://github.com/alantoa)! - Let workspaces opt out of icon auto-detection by committing a `.helmor/icon.svg` (or `.png`) — useful for monorepos where the existing heuristics pick the wrong sub-app's favicon, or none at all. Edits to the icon file are now also picked up without restarting the app, since the in-process icon cache is keyed on the file's mtime instead of being permanent.
+
+- [#400](https://github.com/dohooo/helmor/pull/400) [`212fe13`](https://github.com/dohooo/helmor/commit/212fe13f691a329bc84e10a145b9881acfbd9f5e) Thanks [@dohooo](https://github.com/dohooo)! - Load project slash commands on the start page once a repository is picked, so the `/` popup is populated before the first workspace exists.
+
+- [#400](https://github.com/dohooo/helmor/pull/400) [`212fe13`](https://github.com/dohooo/helmor/commit/212fe13f691a329bc84e10a145b9881acfbd9f5e) Thanks [@dohooo](https://github.com/dohooo)! - Keep workspace and session loading indicators, stop controls, and quit warnings in sync while agent tasks are running or waiting for workspace setup to finish.
+
+- [#400](https://github.com/dohooo/helmor/pull/400) [`212fe13`](https://github.com/dohooo/helmor/commit/212fe13f691a329bc84e10a145b9881acfbd9f5e) Thanks [@dohooo](https://github.com/dohooo)! - Keep the inspector terminal hover preview above the rest of the workspace UI so the expanded terminal is no longer covered by the composer or side panels.
+
+- [#400](https://github.com/dohooo/helmor/pull/400) [`212fe13`](https://github.com/dohooo/helmor/commit/212fe13f691a329bc84e10a145b9881acfbd9f5e) Thanks [@dohooo](https://github.com/dohooo)! - Fix Claude threads getting permanently stuck in the sending state after a sidecar crash or rapid-fire retries.
+
+## 0.17.0
+
+### Minor Changes
+
+- [#367](https://github.com/dohooo/helmor/pull/367) [`359d678`](https://github.com/dohooo/helmor/commit/359d678e57d8d2914b26628154fdaf7ba3f08ebf) Thanks [@dohooo](https://github.com/dohooo)! - Ship the GitHub inbox, redesigned workspace start page, and Local workspaces:
+  - Add a GitHub inbox that lists real issues, pull requests, and discussions per linked account, with sub-tab toggles, search and label filters, per-repo scoping, and detail previews you can drop straight into the composer.
+  - Redesign the workspace start page around a context sidebar that exposes the inbox and source-detail previews next to a mode picker, branch picker, and Create-and-checkout-new-branch dialog whose checkout is deferred until you submit.
+  - Add Local workspace mode — the agent operates directly on your source repo without a worktree — plus a right-click "Move into a new worktree" flow that relocates a Local workspace into its own worktree without touching the source repo.
+  - Fix a sidecar zombie-process bug where a closed parent pipe blocked auto title generation and branch rename after the first message.
+
+### Patch Changes
+
+- [#367](https://github.com/dohooo/helmor/pull/367) [`359d678`](https://github.com/dohooo/helmor/commit/359d678e57d8d2914b26628154fdaf7ba3f08ebf) Thanks [@dohooo](https://github.com/dohooo)! - Poll for the new login after the GitHub/GitLab connect dialog closes so a brief flush delay between `gh auth login` finishing and writing its config no longer leaves the Connect button stuck in the unconnected state.
+
+## 0.16.0
+
+### Minor Changes
+
+- [#387](https://github.com/dohooo/helmor/pull/387) [`9ea7823`](https://github.com/dohooo/helmor/commit/9ea7823a3b896a75d7ef96454e5540c5403d9953) Thanks [@natllian](https://github.com/natllian)! - Render Codex multi-agent (sub-agent spawn / wait) messages with a "Spawned N agents" group header, per-agent color-coded identities, and click-to-expand instructions — previously these events were silently dropped.
+
+### Patch Changes
+
+- [#385](https://github.com/dohooo/helmor/pull/385) [`d18414f`](https://github.com/dohooo/helmor/commit/d18414f06c60766f81f6dd490890795acc941875) Thanks [@natllian](https://github.com/natllian)! - Render image and file attachments in queued follow-up messages as hover-preview chips, matching how they appear in the composer and sent chat bubbles instead of showing the raw `@/path/...` text.
+
+## 0.15.0
+
+### Minor Changes
+
+- [#381](https://github.com/dohooo/helmor/pull/381) [`db3ea68`](https://github.com/dohooo/helmor/commit/db3ea68909e649be50433cb2b1b2587485abd699) Thanks [@alantoa](https://github.com/alantoa)! - Right-click a file in the inspector's Changes section to reveal it in Finder, copy its absolute path, copy its relative path, or copy its remote file URL on GitHub/GitLab/Bitbucket.
+
+### Patch Changes
+
+- [#384](https://github.com/dohooo/helmor/pull/384) [`1b99be2`](https://github.com/dohooo/helmor/commit/1b99be2d3521866393687c14256a420a7af5fff4) Thanks [@natllian](https://github.com/natllian)! - Fix `/goal` silently failing when Codex's experimental goals feature is disabled.
+
+## 0.14.3
+
+### Patch Changes
+
+- [#372](https://github.com/dohooo/helmor/pull/372) [`2e345c5`](https://github.com/dohooo/helmor/commit/2e345c514cc8191aa976e7d9441de2d744a642f7) Thanks [@habibyuri](https://github.com/habibyuri)! - Fix workspace header branch renames so spaces are converted to hyphens and invalid branch names show the underlying Git error.
+
+- [#375](https://github.com/dohooo/helmor/pull/375) [`be4dc73`](https://github.com/dohooo/helmor/commit/be4dc735bd5ec26810d8087ba3a4fb1320007c02) Thanks [@natllian](https://github.com/natllian)! - Show a clear "Local-only repositories are not supported." message when adding a Git repository that has no remote configured.
+
+- [#374](https://github.com/dohooo/helmor/pull/374) [`2733f60`](https://github.com/dohooo/helmor/commit/2733f6034fb04da811a54dd9b2ca967469c887c4) Thanks [@natllian](https://github.com/natllian)! - Fix a dev-mode EACCES crash on first sidecar spawn when the upstream Claude Code wrapper's postinstall stub wasn't replaced (Nix sandbox, multi-worktree setups, `--ignore-scripts` installs); release builds were unaffected.
+
+## 0.14.2
+
+### Patch Changes
+
+- [#365](https://github.com/dohooo/helmor/pull/365) [`4af2902`](https://github.com/dohooo/helmor/commit/4af29024ec1d8801e43de2fe6bd72c6dd7a6bb16) Thanks [@natllian](https://github.com/natllian)! - Show a green checkmark next to the currently selected model in the Settings default-model and review-model pickers, so the active choice is obvious even when the model name is truncated.
+
+- [#370](https://github.com/dohooo/helmor/pull/370) [`768174e`](https://github.com/dohooo/helmor/commit/768174ea636d1c350533cdded20851433bc3bfde) Thanks [@natllian](https://github.com/natllian)! - Tighten up the workspace archive flow:
+
+  - Fix archive failing with "Directory not empty" when archiving a workspace that was just restored in the same session, by giving each trash directory a unique name instead of reusing the process-id suffix.
+  - Offer "Permanently Delete" as a recovery action whenever archive fails, matching the restore-failure behavior, so a stuck cleanup never leaves the workspace unremovable until app restart.
+
+- [#363](https://github.com/dohooo/helmor/pull/363) [`119fc35`](https://github.com/dohooo/helmor/commit/119fc358718a0a227d098bff34f578158c351245) Thanks [@aidxun](https://github.com/aidxun)! - Keep existing GitHub pull requests and GitLab merge requests linked after a local branch rename by resolving the change-request status from the branch's upstream ref.
+
+- [#369](https://github.com/dohooo/helmor/pull/369) [`681212d`](https://github.com/dohooo/helmor/commit/681212d232bd9c256203e97e5fe701603985af3b) Thanks [@natllian](https://github.com/natllian)! - Rebalance the right inspector sidebar so the Changes/diff section sits at a sensible default height and toggling Actions or the scripts panel animates smoothly without the bottom strip briefly jumping out of place.
+
+## 0.14.1
+
+### Patch Changes
+
+- [#356](https://github.com/dohooo/helmor/pull/356) [`f6062d8`](https://github.com/dohooo/helmor/commit/f6062d8f60da9c0eef737f0079d2b477ddedda6a) Thanks [@natllian](https://github.com/natllian)! - Bump bundled agent CLIs and add Codex `/goal` support:
+
+  - Bump Claude Code from 2.1.111 to 2.1.126 and switch to its new platform-native binary distribution.
+  - Bump Codex from 0.124.0 to 0.128.0.
+  - Add a Codex `/goal` slash command (set, pause, resume, clear, optional `--tokens` budget) that drives the new `thread/goal/*` JSON-RPC API, plus a thread-header banner showing the active goal's status and token usage.
+
+- [#360](https://github.com/dohooo/helmor/pull/360) [`83138a3`](https://github.com/dohooo/helmor/commit/83138a34fcd1dc26c5717c3dc4ac0422abd8723a) Thanks [@aidxun](https://github.com/aidxun)! - Fix the right inspector sidebar so Actions and Terminal resize, collapse, and expand cleanly without losing their headers or leaving visual gaps.
+
+- [#362](https://github.com/dohooo/helmor/pull/362) [`0355c77`](https://github.com/dohooo/helmor/commit/0355c77841092c287bccfa8a7e91fef487039000) Thanks [@natllian](https://github.com/natllian)! - Quiet down the inspector's commit button in non-actionable PR states — while mergeability is still being computed and after a PR is merged or closed — so they all share a muted ghost look instead of a faded-out solid CTA.
+
+## 0.14.0
+
+### Minor Changes
+
+- [#326](https://github.com/dohooo/helmor/pull/326) [`f28eb7f`](https://github.com/dohooo/helmor/commit/f28eb7f134b8bb33c23b433e0a92cc57241ee53e) Thanks [@lucasbastianik](https://github.com/lucasbastianik)! - Replace the PR-only "Review PR" header button with a general "Review changes" helper in the inspector — appears whenever the workspace has uncommitted changes or local commits ahead of the target branch (works before the first push), and Review now has its own model, effort level, and fast-mode controls in Settings (each falls back to the default when unset).
+
+### Patch Changes
+
+- [#347](https://github.com/dohooo/helmor/pull/347) [`3304785`](https://github.com/dohooo/helmor/commit/3304785a2451d4ee2b47b962d395e664bb32e56c) Thanks [@MartinRybergLaude](https://github.com/MartinRybergLaude)! - Add a per-repo Exclusive toggle on the run script that makes starting a new run stop any other live run in the same repository first — useful when the script binds a fixed port.
+
+- [#355](https://github.com/dohooo/helmor/pull/355) [`95e4b89`](https://github.com/dohooo/helmor/commit/95e4b8940aa7e32015fbf5001a8fc809e60cc38b) Thanks [@aidxun](https://github.com/aidxun)! - Fix GitHub connection state so workspaces stop showing Connect GitHub after a successful authorization or restart.
+
+- [#354](https://github.com/dohooo/helmor/pull/354) [`9ca6136`](https://github.com/dohooo/helmor/commit/9ca6136176d1fa10f1701080a0d75bd47647885a) Thanks [@habibyuri](https://github.com/habibyuri)! - Fix Codex sessions so the stream ends cleanly instead of hanging when the app-server exits during an active turn.
+
+## 0.13.1
+
+### Patch Changes
+
+- [#316](https://github.com/dohooo/helmor/pull/316) [`1e1bc30`](https://github.com/dohooo/helmor/commit/1e1bc303fdc9628702378e2ebcdc30f9d84de6ab) Thanks [@davidparys](https://github.com/davidparys)! - Add a Color Theme picker in Settings with four accent palettes — Midnight, Forest, Ember, and Aurora — each tuned for both light and dark mode.
+
+- [#351](https://github.com/dohooo/helmor/pull/351) [`6812cb8`](https://github.com/dohooo/helmor/commit/6812cb889000081827938e129572596601f1b803) Thanks [@habibyuri](https://github.com/habibyuri)! - Fix a UI sync subscription leak where unmounted components left stale Tauri Channel subscribers on the backend, slowly accumulating during long sessions and dev hot-reloads.
+
+- [#352](https://github.com/dohooo/helmor/pull/352) [`8174a03`](https://github.com/dohooo/helmor/commit/8174a030ebdc958ada28dfda4f1d5a04ef588d4e) Thanks [@natllian](https://github.com/natllian)! - Small UI polish:
+  - Auto-bind existing repos when you connect a GitHub or GitLab account during onboarding.
+  - Show a spinner on the local-project onboarding card while a folder picker is open.
+  - Cleaner selected-state ring on the color theme picker so it stays visible across themes.
+  - Fix styling and behavior issues on the Terminal tab right-click menu.
+
+## 0.13.0
+
+### Minor Changes
+
+- [#342](https://github.com/dohooo/helmor/pull/342) [`939eb0e`](https://github.com/dohooo/helmor/commit/939eb0e5079159f6de1cee82115163c79365911f) Thanks [@natllian](https://github.com/natllian)! - Replace the single GitHub OAuth identity with multi-account support across both forges:
+  - Sign in with multiple GitHub and/or GitLab accounts at once via the bundled `gh` / `glab` CLIs; each repository automatically binds to whichever account has access.
+  - Remove the GitHub OAuth device-flow sign-in entirely.
+  - Workspace branch chips display the bound account's avatar so it's clear which identity is acting on each workspace.
+  - Connecting an account from the inspector or repo settings now opens an in-app terminal dialog instead of launching the system Terminal app.
+  - Branch prefix moves out of the global Git settings and into each repository's Settings panel, so different repos can use different prefixes.
+
+### Patch Changes
+
+- [#291](https://github.com/dohooo/helmor/pull/291) [`a0015b6`](https://github.com/dohooo/helmor/commit/a0015b6daa7188c8dc73df29eacaeac2f39df2f3) Thanks [@habibyuri](https://github.com/habibyuri)! - Fix in-flight Codex turns being killed by transient upstream provider hiccups (e.g. Azure OpenAI mini-outages) — Helmor now surfaces a brief reconnecting notice and lets Codex's own retry loop recover instead of terminating the turn.
+
+- [#307](https://github.com/dohooo/helmor/pull/307) [`0f9fe7a`](https://github.com/dohooo/helmor/commit/0f9fe7a478aa3994e31707c73007e3665c94d017) Thanks [@baptisteArno](https://github.com/baptisteArno)! - Fix file and image attachments whose absolute paths contain whitespace (a common case for macOS Finder drops like `Application Support/...` or CleanShot screenshots) — they now round-trip end-to-end without being truncated, and steer turns keep their image badges after a reload.
+
+- [#348](https://github.com/dohooo/helmor/pull/348) [`eeeaa81`](https://github.com/dohooo/helmor/commit/eeeaa812eb71d30dc5a73eaaca4bbe7298390687) Thanks [@alantoa](https://github.com/alantoa)! - Fix the sidebar, inspector, and inspector section dividers starting a resize on right-click or middle-click — they now only respond to a primary (left) mouse button press.
+
+- [#323](https://github.com/dohooo/helmor/pull/323) [`f953cc8`](https://github.com/dohooo/helmor/commit/f953cc895f6b48988b64d8e39b661e2afb6eb3a3) Thanks [@lucasbastianik](https://github.com/lucasbastianik)! - Hide "Open in Finder" on archived workspaces and show the real error message instead of "[object Object]" when opening Finder fails.
+
+- [#306](https://github.com/dohooo/helmor/pull/306) [`c344573`](https://github.com/dohooo/helmor/commit/c344573be7459512e103608c30bb1aeb97c89f8a) Thanks [@baptisteArno](https://github.com/baptisteArno)! - Fix the Edit tool-call diff hover popover overflowing past the viewport when the badge sits near the bottom of the chat — it now flips above the trigger or shrinks to scroll within the available space.
+
+- [#346](https://github.com/dohooo/helmor/pull/346) [`4f6ca7c`](https://github.com/dohooo/helmor/commit/4f6ca7cd17850017cb08c9c2567f95b6223de321) Thanks [@natllian](https://github.com/natllian)! - Fix PR / MR merge failing because the merge call wasn't telling the server which method to use, and surface the actual server reason in the toast instead of a generic "merge failed."
+
+  - GitHub: query the repo's allowed merge methods and pass `mergeMethod` (MERGE → SQUASH → REBASE) instead of relying on GitHub's default — fixes "Merge commits are not allowed on this repository."
+  - GitLab: read the project's `squash_option` and pass `squash=true` when it's `always` or `default_on` — fixes "Squash commits is required for this project."
+  - Toast errors from any Tauri command now include the full anyhow chain (e.g. `mergePullRequest failed: gh api graphql failed: <real reason>`), not just the outermost `.context(...)` label.
+
+- [#341](https://github.com/dohooo/helmor/pull/341) [`12e895c`](https://github.com/dohooo/helmor/commit/12e895ccb8ed71a7eb69b2aebeefa72b1647ea06) Thanks [@natllian](https://github.com/natllian)! - Pull now mechanically stashes uncommitted work, fast-forwards from the target branch, and re-applies the stash — instead of asking the agent to commit and push for you. Only an actual merge conflict (or a stash-pop conflict) hands off to the agent, with a narrower prompt that no longer prescribes commit/push.
+
+- [#302](https://github.com/dohooo/helmor/pull/302) [`f97034c`](https://github.com/dohooo/helmor/commit/f97034c267a7fb2ff67d5a26aea9d09a1b3ebe9b) Thanks [@aidxun](https://github.com/aidxun)! - Fix Quit Helmor from the macOS app menu during onboarding so the app exits normally before the main workspace shell is loaded.
+
+- [#337](https://github.com/dohooo/helmor/pull/337) [`f632d2b`](https://github.com/dohooo/helmor/commit/f632d2b59d124af47f64c0ac716e5a8170762edc) Thanks [@alantoa](https://github.com/alantoa)! - Right-click a terminal tab in the inspector to disable the hover-to-zoom enlargement or close the tab, and middle-click a terminal tab to close it.
+
+- [#315](https://github.com/dohooo/helmor/pull/315) [`cdaaefa`](https://github.com/dohooo/helmor/commit/cdaaefa0c456e2ecd16edddb6f3127fa8536b02d) Thanks [@himanshhhhuv](https://github.com/himanshhhhuv)! - Fix terminal panel collapsing during text selection — the expanded terminal now stays open while selecting text, even when the cursor moves outside the container boundary.
+
 ## 0.12.2
 
 ### Patch Changes

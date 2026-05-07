@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { basename, extname } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import {
 	type ElicitationResult,
 	type HookInput,
@@ -59,65 +59,47 @@ const SLASH_COMMANDS_TIMEOUT_MS = 20_000;
 const CONTEXT_USAGE_TIMEOUT_MS = 30_000;
 
 /**
- * Resolve the path to `@anthropic-ai/claude-code`'s `cli.js`, used as the
- * explicit `pathToClaudeCodeExecutable` for every SDK `query()` call.
- *
- * Resolution order:
- *   1. `HELMOR_CLAUDE_CODE_CLI_PATH` — set by the Tauri host process in
- *      release builds, pointing at the bundled resource copy inside
- *      `Helmor.app/Contents/Resources/vendor/claude-code/cli.js`.
- *   2. `createRequire` lookup against `node_modules` — used in dev
- *      (`bun run src/index.ts`) and in `bun test`, where `@anthropic-ai/
- *      claude-code` is a direct sidecar dep.
- *
- * We never fall back to the SDK's bundled cli.js: that version is pinned
- * to whatever `@anthropic-ai/claude-agent-sdk` shipped and can drift from
- * what we ship via `sidecar/dist/vendor/`. Failing loudly here surfaces
- * install-state problems at sidecar startup instead of mid-conversation.
+ * Resolve the Claude Code native binary for `pathToClaudeCodeExecutable`.
+ * Prefers `HELMOR_CLAUDE_CODE_BIN_PATH` (release), then the platform
+ * sub-package (dev/test); falls back to the wrapper bin for `--omit=optional`.
+ * Mirrors the codex resolver in `codex-app-server-manager.ts`.
  */
-function resolveClaudeCliPath(): string {
-	const override = process.env.HELMOR_CLAUDE_CODE_CLI_PATH;
+function resolveClaudeBinPath(): string {
+	const override = process.env.HELMOR_CLAUDE_CODE_BIN_PATH;
 	if (override) {
 		return override;
 	}
 	const require = createRequire(import.meta.url);
-	return require.resolve("@anthropic-ai/claude-code/cli.js");
+	const binName = process.platform === "win32" ? "claude.exe" : "claude";
+	const platformPkg = `@anthropic-ai/claude-code-${claudePlatformShort()}`;
+	try {
+		const pkgJson = require.resolve(`${platformPkg}/package.json`);
+		return join(dirname(pkgJson), binName);
+	} catch {
+		const pkgJson = require.resolve("@anthropic-ai/claude-code/package.json");
+		return join(dirname(pkgJson), "bin", "claude.exe");
+	}
 }
 
-const CLAUDE_CLI_PATH = resolveClaudeCliPath();
-
-/**
- * Optional absolute path to a bundled `bun` binary, used as the SDK's
- * `executable` option when set.
- *
- * Background: the Claude Agent SDK spawns `cli.js` through a JS interpreter
- * (`bun` or `node`) resolved off `PATH`. Inside a Finder-launched `.app`
- * bundle, `PATH = /usr/bin:/bin:/usr/sbin:/sbin` — neither `bun` nor `node`
- * are there, so the spawn fails with ENOENT and the SDK misreports it as
- * "Claude Code executable not found at …/cli.js". To fix this for release
- * builds, Tauri stages the host's bun binary under `vendor/bun/bun` and
- * `lib.rs` exports `HELMOR_BUN_PATH` before spawning us.
- *
- * Dev mode leaves the env unset — `bun run src/index.ts` is already running
- * under a bun instance that's on the developer's PATH, so the SDK's default
- * `"bun"` lookup succeeds.
- */
-const CLAUDE_EXECUTABLE_OVERRIDE = process.env.HELMOR_BUN_PATH || undefined;
-
-/**
- * Build the `executable` / `executableArgs` half of a query() options bag.
- * Returned as a plain object so callers can spread it inline and the SDK's
- * type narrowing still applies. The `as "bun"` cast is deliberate: at
- * runtime the SDK passes `executable` straight to `child_process.spawn`,
- * which accepts absolute paths — but the TS declaration narrows it to the
- * literal `"bun" | "deno" | "node"`. See `sdk.d.ts` line 987.
- */
-function executableOptions(): {
-	executable?: "bun" | "deno" | "node";
-} {
-	if (!CLAUDE_EXECUTABLE_OVERRIDE) return {};
-	return { executable: CLAUDE_EXECUTABLE_OVERRIDE as "bun" };
+function claudePlatformShort(): string {
+	const arch = process.arch === "x64" ? "x64" : "arm64";
+	if (process.platform === "darwin") return `darwin-${arch}`;
+	if (process.platform === "win32") return `win32-${arch}`;
+	if (process.platform === "linux") {
+		// claude-code ships separate -musl variants; glibcVersionRuntime is absent on musl.
+		const report =
+			typeof process.report?.getReport === "function"
+				? (process.report.getReport() as {
+						header?: { glibcVersionRuntime?: string };
+					})
+				: null;
+		const musl = !!report && report.header?.glibcVersionRuntime === undefined;
+		return `linux-${arch}${musl ? "-musl" : ""}`;
+	}
+	return `${process.platform}-${arch}`;
 }
+
+const CLAUDE_BIN_PATH = resolveClaudeBinPath();
 
 interface LiveSession {
 	readonly query: Query;
@@ -455,8 +437,7 @@ export class ClaudeSessionManager implements SessionManager {
 			prompt: isResumeOnly ? "" : promptSource,
 			options: {
 				abortController,
-				pathToClaudeCodeExecutable: CLAUDE_CLI_PATH,
-				...executableOptions(),
+				pathToClaudeCodeExecutable: CLAUDE_BIN_PATH,
 				cwd: cwd || undefined,
 				...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
 				...(queryEnv ? { env: queryEnv } : {}),
@@ -750,12 +731,12 @@ export class ClaudeSessionManager implements SessionManager {
 				? options.claudeEnvironment
 				: undefined;
 
+		const generateBranch = options?.generateBranch ?? true;
 		const q = query({
-			prompt: buildTitlePrompt(userMessage, branchRenamePrompt),
+			prompt: buildTitlePrompt(userMessage, branchRenamePrompt, generateBranch),
 			options: {
 				abortController,
-				pathToClaudeCodeExecutable: CLAUDE_CLI_PATH,
-				...executableOptions(),
+				pathToClaudeCodeExecutable: CLAUDE_BIN_PATH,
 				...(claudeEnv ? { env: claudeEnv } : {}),
 				model,
 				permissionMode: "plan",
@@ -853,8 +834,7 @@ export class ClaudeSessionManager implements SessionManager {
 			prompt: promptIter,
 			options: {
 				abortController,
-				pathToClaudeCodeExecutable: CLAUDE_CLI_PATH,
-				...executableOptions(),
+				pathToClaudeCodeExecutable: CLAUDE_BIN_PATH,
 				cwd: cwd || undefined,
 				...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
 				...(additionalDirectoryEnv ? { env: additionalDirectoryEnv } : {}),
@@ -1009,8 +989,7 @@ export class ClaudeSessionManager implements SessionManager {
 			prompt: promptIter,
 			options: {
 				abortController,
-				pathToClaudeCodeExecutable: CLAUDE_CLI_PATH,
-				...executableOptions(),
+				pathToClaudeCodeExecutable: CLAUDE_BIN_PATH,
 				cwd: cwd || undefined,
 				model: model || undefined,
 				...(providerSessionId ? { resume: providerSessionId } : {}),

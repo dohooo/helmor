@@ -1,4 +1,11 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -77,6 +84,15 @@ vi.mock("@/lib/monaco-runtime", () => ({
 	syncVirtualFile: runtimeMocks.syncVirtualFile,
 }));
 
+// Avoid loading the heavy streamdown bundle in jsdom — render a stub that
+// just exposes the source so we can assert preview content was passed in.
+vi.mock("@/components/streamdown-loader", () => ({
+	LazyStreamdown: ({ children }: { children?: string }) => (
+		<div data-testid="streamdown-stub">{children}</div>
+	),
+	preloadStreamdown: vi.fn(),
+}));
+
 import { WorkspaceEditorSurface } from "./index";
 
 function EditorSurfaceHarness({
@@ -152,6 +168,168 @@ describe("WorkspaceEditorSurface", () => {
 					modifiedText: "const value = 2;\n",
 				}),
 			);
+		});
+	});
+
+	it("does not show the markdown toggle for non-markdown files", async () => {
+		const onChangeSpy = vi.fn();
+
+		apiMocks.readEditorFile.mockResolvedValue({
+			path: "/tmp/helmor-workspace/src/App.tsx",
+			content: "const value = 1;\n",
+			mtimeMs: 10,
+		});
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<EditorSurfaceHarness
+					initialSession={{
+						kind: "file",
+						path: "/tmp/helmor-workspace/src/App.tsx",
+					}}
+					onChangeSpy={onChangeSpy}
+				/>
+			</TooltipProvider>,
+		);
+
+		await waitFor(() => {
+			expect(runtimeMocks.createFileEditor).toHaveBeenCalled();
+		});
+
+		expect(screen.queryByLabelText("Markdown view mode")).toBeNull();
+	});
+
+	it("shows source/preview toggle for .md files and starts in source mode by default", async () => {
+		const onChangeSpy = vi.fn();
+
+		apiMocks.readEditorFile.mockResolvedValue({
+			path: "/tmp/helmor-workspace/SPEC.md",
+			content: "# Title\n\nbody",
+			mtimeMs: 10,
+		});
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<EditorSurfaceHarness
+					initialSession={{
+						kind: "file",
+						path: "/tmp/helmor-workspace/SPEC.md",
+					}}
+					onChangeSpy={onChangeSpy}
+				/>
+			</TooltipProvider>,
+		);
+
+		await waitFor(() => {
+			expect(screen.getByLabelText("Markdown view mode")).toBeInTheDocument();
+		});
+
+		const sourceItem = screen.getByRole("tab", { name: "Source" });
+		const previewItem = screen.getByRole("tab", { name: "Preview" });
+		expect(sourceItem).toHaveAttribute("data-state", "active");
+		expect(previewItem).toHaveAttribute("data-state", "inactive");
+		expect(screen.queryByLabelText("Markdown preview")).toBeNull();
+	});
+
+	it("starts in preview mode when the session has viewMode: preview", async () => {
+		const onChangeSpy = vi.fn();
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<EditorSurfaceHarness
+					initialSession={{
+						kind: "file",
+						path: "/tmp/helmor-workspace/SPEC.md",
+						viewMode: "preview",
+						originalText: "# Hello\n",
+						modifiedText: "# Hello\n",
+					}}
+					onChangeSpy={onChangeSpy}
+				/>
+			</TooltipProvider>,
+		);
+
+		const previewRegion = await screen.findByLabelText("Markdown preview");
+		expect(previewRegion).toBeInTheDocument();
+		expect(screen.getByTestId("streamdown-stub")).toHaveTextContent("# Hello");
+
+		// Monaco host stays mounted but is hidden.
+		const canvas = screen.getByLabelText("Editor canvas");
+		expect(canvas).toHaveAttribute("aria-hidden", "true");
+	});
+
+	it("toggles between source and preview when the user clicks the buttons", async () => {
+		const onChangeSpy = vi.fn();
+		const user = userEvent.setup();
+
+		apiMocks.readEditorFile.mockResolvedValue({
+			path: "/tmp/helmor-workspace/SPEC.md",
+			content: "# Title\n",
+			mtimeMs: 10,
+		});
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<EditorSurfaceHarness
+					initialSession={{
+						kind: "file",
+						path: "/tmp/helmor-workspace/SPEC.md",
+					}}
+					onChangeSpy={onChangeSpy}
+				/>
+			</TooltipProvider>,
+		);
+
+		await waitFor(() => {
+			expect(runtimeMocks.createFileEditor).toHaveBeenCalled();
+		});
+
+		await user.click(screen.getByRole("tab", { name: "Preview" }));
+
+		await waitFor(() => {
+			expect(screen.getByLabelText("Markdown preview")).toBeInTheDocument();
+		});
+		expect(screen.getByTestId("streamdown-stub")).toHaveTextContent("# Title");
+
+		await user.click(screen.getByRole("tab", { name: "Source" }));
+
+		await waitFor(() => {
+			expect(screen.queryByLabelText("Markdown preview")).toBeNull();
+		});
+	});
+
+	it("toggles preview via ⌘⇧V keyboard shortcut", async () => {
+		const onChangeSpy = vi.fn();
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<EditorSurfaceHarness
+					initialSession={{
+						kind: "file",
+						path: "/tmp/helmor-workspace/SPEC.md",
+						viewMode: "source",
+						originalText: "# Hi",
+						modifiedText: "# Hi",
+					}}
+					onChangeSpy={onChangeSpy}
+				/>
+			</TooltipProvider>,
+		);
+
+		await waitFor(() => {
+			expect(runtimeMocks.createFileEditor).toHaveBeenCalled();
+		});
+
+		fireEvent.keyDown(window, { key: "V", metaKey: true, shiftKey: true });
+
+		await waitFor(() => {
+			expect(screen.getByLabelText("Markdown preview")).toBeInTheDocument();
+		});
+
+		fireEvent.keyDown(window, { key: "v", metaKey: true, shiftKey: true });
+
+		await waitFor(() => {
+			expect(screen.queryByLabelText("Markdown preview")).toBeNull();
 		});
 	});
 

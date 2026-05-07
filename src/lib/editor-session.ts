@@ -6,6 +6,9 @@ export type DiffOpenOptions = {
 	modifiedRef?: string;
 };
 
+/** "source" = Monaco editor; "preview" = rendered streamdown view. Only meaningful for markdown paths. */
+export type EditorViewMode = "source" | "preview";
+
 export type EditorSessionState = {
 	kind: "file" | "diff";
 	path: string;
@@ -22,7 +25,16 @@ export type EditorSessionState = {
 	originalRef?: string;
 	/** Git ref for the modified (right) side. Omit to read from working tree. */
 	modifiedRef?: string;
+	/** Markdown view mode. Ignored for non-markdown paths. */
+	viewMode?: EditorViewMode;
 };
+
+const MARKDOWN_EXTENSIONS = [".md", ".markdown", ".mdx"];
+
+export function isMarkdownPath(path: string): boolean {
+	const lower = path.toLowerCase();
+	return MARKDOWN_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
 
 export type InspectorFileItem = {
 	path: string;

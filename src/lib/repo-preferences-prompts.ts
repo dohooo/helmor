@@ -5,21 +5,26 @@ import {
 } from "@/lib/forge-dialect";
 
 const TARGET_REF_PLACEHOLDER = "$" + "{TARGET_REF}";
-const DIRTY_WORKTREE_PLACEHOLDER = "$" + "{DIRTY_WORKTREE}";
 
 export type RepoPreferenceKey =
 	| "createPr"
+	| "review"
 	| "fixErrors"
 	| "resolveConflicts"
 	| "branchRename"
 	| "general";
+
+/** Which conflict path is being prompted. `mergeConflict` is the default
+ *  (target ↔ HEAD conflict). `stashPopConflict` fires only when Helmor
+ *  successfully merged but couldn't restore the user's stashed work cleanly. */
+export type ResolveConflictsKind = "mergeConflict" | "stashPopConflict";
 
 type ResolveRepoPreferencePromptArgs = {
 	key: RepoPreferenceKey;
 	repoPreferences?: RepoPreferences | null;
 	targetBranch?: string | null;
 	targetRef?: string | null;
-	dirtyWorktree?: boolean;
+	resolveConflictsKind?: ResolveConflictsKind;
 	forge?: ForgeDetection | null;
 	/** Git remote name for this workspace (e.g. "origin"). Falls back to
 	 *  "origin" when unknown — matches the default git produces for a
@@ -63,6 +68,31 @@ Do the following, in order:
 
 Don't stop to ask for confirmation — execute each step automatically. If you hit an unrecoverable error (e.g. merge conflict, pre-push hook failure), report it clearly so I can intervene.`;
 
+const REVIEW_PREVIEW = `Review the changes on this branch relative to the target branch and report the review IN THIS CHAT ONLY.
+
+Scope — review BOTH together:
+1. Committed work past the target: \`git diff <target>...HEAD\`.
+2. Uncommitted work in the worktree: \`git status\`, \`git diff\`, and \`git diff --staged\`.
+Do not review code outside this diff. Read enough surrounding context to judge a change, but don't audit unrelated files.
+
+Look for, in priority order:
+- Correctness: logic errors, off-by-one, null/undefined access, wrong control flow, missing error handling, broken invariants.
+- Security: injection, secret leakage, missing authz, unsafe deserialization, path traversal.
+- Edge cases: empty / large input, concurrency, retry & idempotency, resource cleanup.
+- Maintainability: unclear naming, dead code, leaky abstractions, missing tests for non-trivial branches.
+- Performance: only when something is materially wrong (N+1, blocking I/O on a hot path) — not micro-optimizations.
+
+Only flag what a thoughtful human reviewer would actually fix. Skip nits, taste, and speculation.
+
+Output one chat message:
+- One-line verdict (e.g. "Looks good", "One blocking issue", "Two security concerns — needs changes").
+- One short paragraph summarising what the change does.
+- Findings as a bulleted list, ordered blocking → major → minor. Each: severity tag, exact \`path/to/file.ext:LINE\`, what's wrong, one-sentence fix.
+
+Do NOT modify files, stage, commit, push, or call any forge review API. The review lives in this chat — the user will read it and act.
+
+If the diff is empty, say so in one line and stop.`;
+
 const RESOLVE_CONFLICTS_PREVIEW = `This branch has merge conflicts with its target branch. Resolve them.
 
 Do the following, in order:
@@ -95,6 +125,39 @@ Do the following, in order:
 Don't stop to ask for confirmation — execute each step automatically. If you hit an unrecoverable error (e.g. merge conflict, pre-push hook failure), report it clearly so I can intervene.`;
 }
 
+function reviewPrompt(
+	targetBranch?: string | null,
+	remote?: string | null,
+): string {
+	const branch = requireTargetBranch("review", targetBranch);
+	const remoteName = normalizeRemote(remote);
+	const targetRef = `${remoteName}/${branch}`;
+	return `Review the changes on this branch relative to \`${targetRef}\` and report the review IN THIS CHAT ONLY.
+
+Scope — review BOTH together:
+1. Committed work past the target: \`git diff ${targetRef}...HEAD\`.
+2. Uncommitted work in the worktree: \`git status\`, \`git diff\`, and \`git diff --staged\`.
+Do not review code outside this diff. Read enough surrounding context to judge a change, but don't audit unrelated files.
+
+Look for, in priority order:
+- Correctness: logic errors, off-by-one, null/undefined access, wrong control flow, missing error handling, broken invariants.
+- Security: injection, secret leakage, missing authz, unsafe deserialization, path traversal.
+- Edge cases: empty / large input, concurrency, retry & idempotency, resource cleanup.
+- Maintainability: unclear naming, dead code, leaky abstractions, missing tests for non-trivial branches.
+- Performance: only when something is materially wrong (N+1, blocking I/O on a hot path) — not micro-optimizations.
+
+Only flag what a thoughtful human reviewer would actually fix. Skip nits, taste, and speculation.
+
+Output one chat message:
+- One-line verdict (e.g. "Looks good", "One blocking issue", "Two security concerns — needs changes").
+- One short paragraph summarising what the change does.
+- Findings as a bulleted list, ordered blocking → major → minor. Each: severity tag, exact \`path/to/file.ext:LINE\`, what's wrong, one-sentence fix.
+
+Do NOT modify files, stage, commit, push, or call any forge review API. The review lives in this chat — the user will read it and act.
+
+If the diff is empty, say so in one line and stop.`;
+}
+
 function fixErrorsPrompt(dialect: ForgePromptDialect): string {
 	return `${dialect.ciSystemName} is failing on the current branch. Diagnose and fix it.
 
@@ -109,16 +172,16 @@ Do the following, in order:
 function resolveConflictsPrompt({
 	targetBranch,
 	targetRef,
-	dirtyWorktree,
+	resolveConflictsKind,
 	remote,
 }: Pick<
 	ResolveRepoPreferencePromptArgs,
-	"targetBranch" | "targetRef" | "dirtyWorktree" | "remote"
+	"targetBranch" | "targetRef" | "resolveConflictsKind" | "remote"
 >): string {
 	if (targetRef) {
-		return dirtyWorktree
-			? `Commit uncommitted changes, then merge ${targetRef} into this branch. Then push.`
-			: `Merge ${targetRef} into this branch. Then push.`;
+		return resolveConflictsKind === "stashPopConflict"
+			? `Resolve the conflicts from restoring the stashed uncommitted work in this branch. Don't commit. Don't push.`
+			: `Bring this branch up to date with ${targetRef}. Resolve any conflicts. Preserve any uncommitted work. Don't push.`;
 	}
 
 	const branch = requireTargetBranch("resolveConflicts", targetBranch);
@@ -142,6 +205,7 @@ export const DEFAULT_REPO_PREFERENCE_PROMPTS: Record<
 	string
 > = {
 	createPr: CREATE_PR_PREVIEW,
+	review: REVIEW_PREVIEW,
 	fixErrors: fixErrorsPrompt(PREVIEW_DIALECT),
 	resolveConflicts: RESOLVE_CONFLICTS_PREVIEW,
 	branchRename: DEFAULT_BRANCH_RENAME_PROMPT,
@@ -150,6 +214,7 @@ export const DEFAULT_REPO_PREFERENCE_PROMPTS: Record<
 
 export const REPO_PREFERENCE_LABELS: Record<RepoPreferenceKey, string> = {
 	createPr: "Create PR preferences",
+	review: "Review preferences",
 	fixErrors: "Fix errors preferences",
 	resolveConflicts: "Resolve conflicts preferences",
 	branchRename: "Branch rename preferences",
@@ -159,6 +224,8 @@ export const REPO_PREFERENCE_LABELS: Record<RepoPreferenceKey, string> = {
 export const REPO_PREFERENCE_DESCRIPTIONS: Record<RepoPreferenceKey, string> = {
 	createPr:
 		"Add custom instructions sent to the agent when you click the Create PR button.",
+	review:
+		"Add custom instructions sent to the agent when you click Review in the inspector.",
 	fixErrors:
 		"Add custom instructions sent to the agent when you click the Fix errors button.",
 	resolveConflicts:
@@ -194,7 +261,7 @@ function appendUserPreferences(
 }
 
 function requireTargetBranch(
-	key: "createPr" | "resolveConflicts",
+	key: "createPr" | "review" | "resolveConflicts",
 	targetBranch?: string | null,
 ): string {
 	const branch = targetBranch?.trim();
@@ -219,7 +286,7 @@ export function resolveRepoPreferencePrompt({
 	repoPreferences,
 	targetBranch,
 	targetRef,
-	dirtyWorktree = false,
+	resolveConflictsKind = "mergeConflict",
 	forge,
 	remote,
 }: ResolveRepoPreferencePromptArgs): string {
@@ -227,12 +294,7 @@ export function resolveRepoPreferencePrompt({
 	const targetPlaceholderValue = targetRef ?? targetBranch ?? null;
 	const resolvedOverride =
 		key === "resolveConflicts" && targetPlaceholderValue && override
-			? override
-					.replaceAll(TARGET_REF_PLACEHOLDER, targetPlaceholderValue)
-					.replaceAll(
-						DIRTY_WORKTREE_PLACEHOLDER,
-						dirtyWorktree ? "true" : "false",
-					)
+			? override.replaceAll(TARGET_REF_PLACEHOLDER, targetPlaceholderValue)
 			: override;
 
 	switch (key) {
@@ -241,7 +303,7 @@ export function resolveRepoPreferencePrompt({
 				resolveConflictsPrompt({
 					targetBranch,
 					targetRef,
-					dirtyWorktree,
+					resolveConflictsKind,
 					remote,
 				}),
 				resolvedOverride,
@@ -249,6 +311,11 @@ export function resolveRepoPreferencePrompt({
 		case "createPr":
 			return appendUserPreferences(
 				createPrPrompt(forgePromptDialect(forge), targetBranch, remote),
+				resolvedOverride,
+			);
+		case "review":
+			return appendUserPreferences(
+				reviewPrompt(targetBranch, remote),
 				resolvedOverride,
 			);
 		case "fixErrors":

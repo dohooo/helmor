@@ -14,6 +14,7 @@
 use serde_json::Value;
 
 use super::blocks::parse_codex_todolist_items;
+use crate::pipeline::codex_collab::{build_collab_result_text, collab_synthetic_tool_name};
 use crate::pipeline::types::{
     ExtendedMessagePart, ImageSource, IntermediateMessage, MessagePart, MessageRole, MessageStatus,
     NoticeSeverity, PlanAllowedPrompt, ThreadMessageLike,
@@ -60,6 +61,7 @@ pub(super) fn render_item_completed(
         Some("plan") => render_plan(msg, item, result),
         Some("context_compaction") => render_context_compaction(msg, item, result),
         Some("image_generation") => render_image_generation(msg, item, result),
+        Some("collab_agent_tool_call") => render_collab_agent_tool_call(msg, item, result),
         _ => {}
     }
 }
@@ -334,6 +336,52 @@ fn render_plan(msg: &IntermediateMessage, item: &Value, result: &mut Vec<ThreadM
             plan: Some(text.to_string()),
             plan_file_path: None,
             allowed_prompts: Vec::<PlanAllowedPrompt>::new(),
+        })],
+        status: Some(MessageStatus {
+            status_type: "complete".to_string(),
+            reason: Some("stop".to_string()),
+        }),
+        streaming: None,
+    });
+}
+
+/// Render a `collabAgentToolCall` item (5 tool variants: spawnAgent /
+/// sendInput / resumeAgent / wait / closeAgent). Mirrors the live-stream
+/// shape produced by the accumulator's `handle_collab_agent_tool_call`
+/// so historical reload reuses the same `subagent_*` toolName the
+/// frontend already knows how to render.
+fn render_collab_agent_tool_call(
+    msg: &IntermediateMessage,
+    item: &Value,
+    result: &mut Vec<ThreadMessageLike>,
+) {
+    let tool = item.get("tool").and_then(Value::as_str).unwrap_or("");
+    let tool_name = collab_synthetic_tool_name(tool);
+    let status = item.get("status").and_then(Value::as_str).unwrap_or("");
+    let failed = status == "failed";
+
+    let mut args = item.clone();
+    if let Some(obj) = args.as_object_mut() {
+        obj.remove("type");
+        obj.remove("id");
+    }
+    let args_text = serde_json::to_string(&args).unwrap_or_default();
+
+    let result_text = build_collab_result_text(tool, status, item);
+
+    result.push(ThreadMessageLike {
+        role: MessageRole::Assistant,
+        id: Some(msg.id.clone()),
+        created_at: Some(msg.created_at.clone()),
+        content: vec![ExtendedMessagePart::Basic(MessagePart::ToolCall {
+            tool_call_id: format!("codex-collab-{}", msg.id),
+            tool_name: tool_name.to_string(),
+            args,
+            args_text,
+            result: Some(Value::String(result_text)),
+            is_error: if failed { Some(true) } else { None },
+            streaming_status: None,
+            children: Vec::new(),
         })],
         status: Some(MessageStatus {
             status_type: "complete".to_string(),

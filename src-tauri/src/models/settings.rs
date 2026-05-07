@@ -1,20 +1,62 @@
+use std::str::FromStr;
+
 use anyhow::{Context, Result};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use super::db;
 
-#[derive(Debug, Clone)]
-pub struct BranchPrefixSettings {
-    pub branch_prefix_type: Option<String>,
-    pub branch_prefix_custom: Option<String>,
+/// Persisted choice for how new-workspace branch names are prefixed
+/// for a repo. Stored on `repos.branch_prefix_type` as a lowercase
+/// string. NULL columns are treated as `Username` by
+/// [`crate::workspace::helpers::branch_name_for_directory`] so legacy
+/// rows behave consistently with the explicit default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BranchPrefixType {
+    /// `<forge_login>/<dir>` — use the bound gh/glab account login.
+    Username,
+    /// `<branch_prefix_custom><dir>` — user-supplied literal prefix.
+    Custom,
+    /// `<dir>` — no prefix at all.
+    None,
+}
+
+impl BranchPrefixType {
+    pub fn as_storage_str(self) -> &'static str {
+        match self {
+            BranchPrefixType::Username => "username",
+            BranchPrefixType::Custom => "custom",
+            BranchPrefixType::None => "none",
+        }
+    }
+}
+
+impl FromStr for BranchPrefixType {
+    type Err = ();
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "username" => Ok(BranchPrefixType::Username),
+            "custom" => Ok(BranchPrefixType::Custom),
+            "none" => Ok(BranchPrefixType::None),
+            _ => Err(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct EffectiveBranchPrefixSettings {
-    pub branch_prefix_type: Option<String>,
+    /// Resolved enum value parsed from `repos.branch_prefix_type`.
+    /// NULL / unrecognised columns parse to `None`, which the resolver
+    /// in [`crate::workspace::helpers::branch_name_for_directory`]
+    /// treats as `Username` (the default).
+    pub branch_prefix_type: Option<BranchPrefixType>,
     pub branch_prefix_custom: Option<String>,
     pub forge_provider: Option<String>,
     pub remote_url: Option<String>,
+    /// gh/glab account login bound to this repo. Drives the
+    /// `<login>/<dir>` shape under the `Username` mode.
+    pub forge_login: Option<String>,
 }
 
 pub fn load_setting_value(key: &str) -> Result<Option<String>> {
@@ -115,40 +157,13 @@ pub fn save_auto_close_opt_in_asked(kinds: &[crate::agents::ActionKind]) -> Resu
     upsert_setting_json(AUTO_CLOSE_OPT_IN_ASKED_KEY, &kinds)
 }
 
-pub fn load_branch_prefix_settings() -> Result<BranchPrefixSettings> {
-    let connection = db::read_conn()?;
-    let mut statement = connection
-        .prepare(
-            "SELECT key, value FROM settings WHERE key IN ('branch_prefix_type', 'branch_prefix_custom')",
-        )
-        .context("Failed to prepare branch settings query")?;
-
-    let rows = statement
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .context("Failed to query branch settings")?;
-
-    let mut settings = BranchPrefixSettings {
-        branch_prefix_type: None,
-        branch_prefix_custom: None,
-    };
-
-    for row in rows {
-        let (key, value) = row.context("Failed to read branch settings row")?;
-        match key.as_str() {
-            "branch_prefix_type" => settings.branch_prefix_type = Some(value),
-            "branch_prefix_custom" => settings.branch_prefix_custom = Some(value),
-            _ => {}
-        }
-    }
-
-    Ok(settings)
-}
-
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use rusqlite::Connection;
+
+    use super::BranchPrefixType;
 
     fn test_db() -> (Connection, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
@@ -156,6 +171,63 @@ mod tests {
         let conn = Connection::open(&db_path).unwrap();
         crate::schema::ensure_schema(&conn).unwrap();
         (conn, dir)
+    }
+
+    #[test]
+    fn branch_prefix_type_parses_canonical_variants() {
+        assert_eq!(
+            BranchPrefixType::from_str("username").unwrap(),
+            BranchPrefixType::Username
+        );
+        assert_eq!(
+            BranchPrefixType::from_str("custom").unwrap(),
+            BranchPrefixType::Custom
+        );
+        assert_eq!(
+            BranchPrefixType::from_str("none").unwrap(),
+            BranchPrefixType::None
+        );
+    }
+
+    #[test]
+    fn branch_prefix_type_is_case_insensitive_and_trims_whitespace() {
+        assert_eq!(
+            BranchPrefixType::from_str("  USERNAME  ").unwrap(),
+            BranchPrefixType::Username
+        );
+        assert_eq!(
+            BranchPrefixType::from_str("Custom").unwrap(),
+            BranchPrefixType::Custom
+        );
+        assert_eq!(
+            BranchPrefixType::from_str("\tNone\n").unwrap(),
+            BranchPrefixType::None
+        );
+    }
+
+    #[test]
+    fn branch_prefix_type_rejects_garbage() {
+        assert!(BranchPrefixType::from_str("").is_err());
+        assert!(BranchPrefixType::from_str("github").is_err());
+        assert!(BranchPrefixType::from_str("gitlab").is_err());
+        assert!(BranchPrefixType::from_str("default").is_err());
+        assert!(BranchPrefixType::from_str("user").is_err());
+    }
+
+    #[test]
+    fn branch_prefix_type_round_trips_storage_strings() {
+        for variant in [
+            BranchPrefixType::Username,
+            BranchPrefixType::Custom,
+            BranchPrefixType::None,
+        ] {
+            let stored = variant.as_storage_str();
+            assert_eq!(
+                BranchPrefixType::from_str(stored).unwrap(),
+                variant,
+                "{stored:?} did not round-trip"
+            );
+        }
     }
 
     #[test]
@@ -204,38 +276,6 @@ mod tests {
             })
             .unwrap();
         assert_eq!(value, "v2");
-    }
-
-    #[test]
-    fn branch_prefix_settings_query() {
-        let (conn, _dir) = test_db();
-        conn.execute(
-            "INSERT INTO settings (key, value) VALUES ('branch_prefix_type', 'custom')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO settings (key, value) VALUES ('branch_prefix_custom', 'feat/')",
-            [],
-        )
-        .unwrap();
-
-        let mut stmt = conn.prepare(
-            "SELECT key, value FROM settings WHERE key IN ('branch_prefix_type', 'branch_prefix_custom')"
-        ).unwrap();
-        let rows: Vec<(String, String)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .unwrap()
-            .filter_map(Result::ok)
-            .collect();
-
-        assert_eq!(rows.len(), 2);
-        assert!(rows
-            .iter()
-            .any(|(k, v)| k == "branch_prefix_type" && v == "custom"));
-        assert!(rows
-            .iter()
-            .any(|(k, v)| k == "branch_prefix_custom" && v == "feat/"));
     }
 
     #[test]

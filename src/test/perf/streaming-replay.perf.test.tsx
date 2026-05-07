@@ -100,6 +100,7 @@ function makeWorkspace(id: string): WorkspaceDetail {
 		workspaceUnread: 0,
 		unreadSessionCount: 0,
 		status: "in-progress",
+		mode: "worktree",
 		sessionCount: 1,
 		messageCount: 0,
 	};

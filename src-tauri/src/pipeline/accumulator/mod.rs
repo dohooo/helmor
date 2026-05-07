@@ -481,6 +481,8 @@ impl StreamAccumulator {
             Some("thread/status/changed")
             | Some("thread/tokenUsage/updated")
             | Some("thread/name/updated")
+            | Some("thread/goal/updated")
+            | Some("thread/goal/cleared")
             | Some("account/rateLimits/updated")
             | Some("account/updated")
             | Some("mcpServer/startupStatus/updated")

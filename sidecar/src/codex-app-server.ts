@@ -7,6 +7,8 @@
  */
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import readline from "node:readline";
 import { logger } from "./logger.js";
 
@@ -79,6 +81,28 @@ export function buildCodexAppServerArgs(): string[] {
 	return [...CODEX_APP_SERVER_ARGS];
 }
 
+/**
+ * Codex ships ripgrep next to its binary and spawns it by name on PATH for
+ * in-thread search. Two layouts to support:
+ *   - dev (node_modules):  <pkg>/vendor/<triple>/codex/codex
+ *                          <pkg>/vendor/<triple>/path/rg          ← parent's sibling
+ *   - staged (release):    dist/vendor/codex/codex
+ *                          dist/vendor/codex/path/rg              ← own sibling
+ */
+function buildCodexEnv(binaryPath: string): NodeJS.ProcessEnv {
+	const env = { ...process.env };
+	const candidates = [
+		join(dirname(binaryPath), "..", "path"),
+		join(dirname(binaryPath), "path"),
+	];
+	const pathDir = candidates.find((p) => existsSync(p));
+	if (pathDir) {
+		const sep = process.platform === "win32" ? ";" : ":";
+		env.PATH = `${pathDir}${sep}${env.PATH ?? ""}`;
+	}
+	return env;
+}
+
 export class CodexAppServer {
 	private child: ChildProcessWithoutNullStreams;
 	private output: readline.Interface;
@@ -98,6 +122,7 @@ export class CodexAppServer {
 		this.child = spawn(opts.binaryPath, buildCodexAppServerArgs(), {
 			cwd: opts.cwd,
 			stdio: ["pipe", "pipe", "pipe"],
+			env: buildCodexEnv(opts.binaryPath),
 		});
 
 		this.output = readline.createInterface({ input: this.child.stdout });

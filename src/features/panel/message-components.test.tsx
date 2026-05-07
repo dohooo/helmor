@@ -256,7 +256,7 @@ describe("MemoConversationMessage plan review", () => {
 		expect(writeTextMock).toHaveBeenCalledWith("Ship the action slot.");
 	});
 
-	it("keeps a completed reasoning block open and shows elapsed time", () => {
+	it("auto-collapses a completed reasoning block and shows elapsed time", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date("2026-04-20T12:00:00.000Z"));
 
@@ -319,9 +319,10 @@ describe("MemoConversationMessage plan review", () => {
 		);
 
 		expect(screen.getByText("Thought for 2s")).toBeInTheDocument();
+		// Content is hidden because reasoning auto-collapses on completion.
 		expect(
-			screen.getByText("Inspecting the streamed reasoning block."),
-		).toBeInTheDocument();
+			screen.queryByText("Inspecting the streamed reasoning block."),
+		).not.toBeInTheDocument();
 		expect(screen.getByText("Done.")).toBeInTheDocument();
 	});
 

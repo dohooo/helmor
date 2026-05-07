@@ -24,9 +24,9 @@ pub async fn execute_repo_script(
     .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))??;
 
     let script = match script_type.as_str() {
-        "setup" => scripts.setup_script,
-        "run" => scripts.run_script,
-        "archive" => scripts.archive_script,
+        "setup" => scripts.setup_script.clone(),
+        "run" => scripts.run_script.clone(),
+        "archive" => scripts.archive_script.clone(),
         _ => None,
     };
 
@@ -36,6 +36,13 @@ pub async fn execute_repo_script(
         });
         return Ok(());
     };
+
+    // Non-concurrent run mode: starting a run script stops any other live
+    // run script in the same repo first. Only applies to "run" — setup
+    // and archive each have their own one-off lifecycle.
+    if script_type == "run" && scripts.run_script_mode == "non-concurrent" {
+        manager.kill_others_in_repo(&repo_id, "run", workspace_id.as_deref());
+    }
 
     let (repo, workspace) = tauri::async_runtime::spawn_blocking({
         let repo_id = repo_id.clone();
@@ -56,7 +63,7 @@ pub async fn execute_repo_script(
     // Run in the workspace directory when available, otherwise repo root.
     let workspace_root = workspace
         .as_ref()
-        .and_then(|ws| crate::data_dir::workspace_dir(&ws.repo_name, &ws.directory_name).ok());
+        .and_then(|ws| crate::workspace::helpers::workspace_path(ws).ok());
     let working_dir = workspace_root
         .as_ref()
         .map(|p| p.display().to_string())

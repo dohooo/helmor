@@ -1,7 +1,15 @@
 use crate::forge::{
-    self, ChangeRequestInfo, ForgeActionStatus, ForgeCliStatus, ForgeDetection, ForgeProvider,
-    RemoteState,
+    self,
+    accounts::{self, ForgeAccount},
+    github::inbox::{
+        self as github_inbox, GithubLabelOption, InboxFilters, InboxItemDetail, InboxPage,
+        InboxSource, InboxToggles,
+    },
+    ChangeRequestInfo, ForgeActionStatus, ForgeDetection, ForgeProvider, RemoteState,
 };
+// `accounts` re-exports the dispatchers; provider-specific work
+// happens inside `forge::github::accounts` / `forge::gitlab::accounts`
+// via the `ForgeAccountBackend` trait.
 use crate::ui_sync::{self, UiMutationEvent};
 use crate::workspace::scripts::{ScriptContext, ScriptEvent, ScriptProcessManager};
 use std::collections::HashSet;
@@ -25,20 +33,133 @@ pub async fn get_workspace_forge(workspace_id: String) -> CmdResult<ForgeDetecti
     run_blocking(move || forge::get_workspace_forge(&workspace_id)).await
 }
 
+/// Enumerate all gh accounts (across every host) plus one glab account
+/// per `gitlab_hosts` entry. Used by Settings → Account to render the
+/// avatar/name/login/email roster.
 #[tauri::command]
-pub async fn get_forge_cli_status(
+pub async fn list_forge_accounts(gitlab_hosts: Vec<String>) -> CmdResult<Vec<ForgeAccount>> {
+    run_blocking(move || Ok(accounts::list_forge_accounts(&gitlab_hosts))).await
+}
+
+/// List inbox items for one GitHub account.
+///
+/// Toggles are mirrored 1:1 from `settings.inboxSourceConfig.accounts[<provider>:<login>]`.
+/// `cursor` is opaque on the JS side — pass back the previous response's
+/// `nextCursor` to fetch the next page. `limit` clamps to [1, 100].
+///
+/// Currently GitHub-only; future Linear / Slack go through their own
+/// adapters and a dispatcher here.
+#[tauri::command]
+pub async fn list_inbox_items(
     provider: ForgeProvider,
-    host: Option<String>,
-) -> CmdResult<ForgeCliStatus> {
-    run_blocking(move || forge::get_forge_cli_status(provider, host.as_deref())).await
+    login: String,
+    toggles: InboxToggles,
+    cursor: Option<String>,
+    limit: Option<u32>,
+    repo: Option<String>,
+    filters: Option<InboxFilters>,
+) -> CmdResult<InboxPage> {
+    let limit = limit.unwrap_or(20).clamp(1, 100) as usize;
+    run_blocking(move || match provider {
+        ForgeProvider::Github => github_inbox::list_inbox_items(
+            &login,
+            toggles,
+            cursor.as_deref(),
+            limit,
+            repo.as_deref(),
+            filters,
+        ),
+        ForgeProvider::Gitlab | ForgeProvider::Unknown => Ok(InboxPage {
+            items: Vec::new(),
+            next_cursor: None,
+        }),
+    })
+    .await
 }
 
 #[tauri::command]
-pub async fn open_forge_cli_auth_terminal(
+pub async fn list_github_labels(
+    login: String,
+    repos: Vec<String>,
+) -> CmdResult<Vec<GithubLabelOption>> {
+    run_blocking(move || github_inbox::list_github_labels(&login, &repos)).await
+}
+
+/// Fetch native detail data for one inbox item. The command is a shared
+/// entry point, but each provider/source owns its own response shape.
+#[tauri::command]
+pub async fn get_inbox_item_detail(
     provider: ForgeProvider,
-    host: Option<String>,
-) -> CmdResult<()> {
-    run_blocking(move || forge::open_forge_cli_auth_terminal(provider, host.as_deref())).await
+    login: String,
+    source: InboxSource,
+    external_id: String,
+) -> CmdResult<Option<InboxItemDetail>> {
+    run_blocking(move || match provider {
+        ForgeProvider::Github => github_inbox::get_inbox_item_detail(&login, source, &external_id),
+        ForgeProvider::Gitlab | ForgeProvider::Unknown => Ok(None),
+    })
+    .await
+}
+
+/// Resolve the gh/glab account bound to a workspace's parent repo and
+/// return its display profile (avatar / name / email). Powers the
+/// branch-chip avatar; reuses the per-process profile cache.
+#[tauri::command]
+pub async fn get_workspace_account_profile(
+    workspace_id: String,
+) -> CmdResult<Option<ForgeAccount>> {
+    run_blocking(move || accounts::workspace_account_profile(&workspace_id)).await
+}
+
+/// Download an avatar URL (if not already cached) and return the
+/// absolute filesystem path. The frontend wraps it with `convertFileSrc`
+/// to render via the `asset://` protocol — saves an HTTP round trip and
+/// re-decode on every page navigation.
+#[tauri::command]
+pub async fn cache_forge_avatar(url: String) -> CmdResult<String> {
+    run_blocking(move || {
+        let path = forge::avatar_cache::cached_avatar_path(&url)?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+}
+
+/// Just the login names on `(provider, host)`. Lightweight — does not
+/// fetch per-account profile data via `gh api /user`. Used by the
+/// onboarding flow's `pollUntilReady` loop: snapshot the set before
+/// the embedded auth terminal opens, then poll until the set grows
+/// (= a new account got registered).
+#[tauri::command]
+pub async fn list_forge_logins(
+    provider: ForgeProvider,
+    host: String,
+    force_refresh: Option<bool>,
+) -> CmdResult<Vec<String>> {
+    run_blocking(move || {
+        if force_refresh.unwrap_or(false) {
+            accounts::invalidate_caches_for_host(provider, &host);
+        }
+        match accounts::backend_for(provider) {
+            Some(backend) => backend.list_logins(&host),
+            None => Ok(Vec::new()),
+        }
+    })
+    .await
+}
+
+/// Re-run auto-bind for every repo whose `forge_login` is still NULL.
+/// Frontend triggers this from the Settings → Account "Add account"
+/// flow once a fresh login appears, so legacy / previously-unbindable
+/// repos pick up the new credentials without an app restart. Returns
+/// the number of repos that ended up bound on this sweep so the caller
+/// can decide whether to invalidate caches.
+#[tauri::command]
+pub async fn backfill_forge_repo_bindings(app: tauri::AppHandle) -> CmdResult<usize> {
+    let summary = run_blocking(forge::accounts::backfill_unbound_repos).await?;
+    if summary.bound > 0 {
+        ui_sync::publish(&app, UiMutationEvent::RepositoryListChanged);
+    }
+    Ok(summary.bound)
 }
 
 fn forge_cli_auth_script_type(provider: ForgeProvider, host: &str, instance_id: &str) -> String {
@@ -76,27 +197,11 @@ pub async fn spawn_forge_cli_auth_terminal(
     let script_type = forge_cli_auth_script_type(provider, &host, &instance_id);
 
     tauri::async_runtime::spawn_blocking(move || {
-        let key = (
-            FORGE_CLI_AUTH_REPO_ID.to_string(),
-            script_type.clone(),
-            None::<String>,
-        );
-        let command_to_send = format!("{command}; exit\n");
-        let stdin_manager = mgr.clone();
-        std::thread::spawn(move || {
-            for _ in 0..80 {
-                match stdin_manager.write_stdin(&key, command_to_send.as_bytes()) {
-                    Ok(true) => return,
-                    Ok(false) => std::thread::sleep(std::time::Duration::from_millis(25)),
-                    Err(error) => {
-                        tracing::debug!("Forge CLI auth terminal stdin unavailable: {error}");
-                        return;
-                    }
-                }
-            }
-            tracing::debug!("Forge CLI auth terminal was not ready for initial command");
-        });
-
+        // Auto-type the auth command via the run_terminal_session boot
+        // input — written synchronously to the PTY master right after
+        // the shell registers, so a frontend re-render-driven
+        // cleanup→respawn can't drop the bytes.
+        let boot_input = format!("{command}; exit\n");
         if let Err(error) = crate::workspace::scripts::run_terminal_session(
             &mgr,
             FORGE_CLI_AUTH_REPO_ID,
@@ -105,6 +210,7 @@ pub async fn spawn_forge_cli_auth_terminal(
             &working_dir,
             &context,
             channel.clone(),
+            Some(&boot_input),
         ) {
             let _ = channel.send(ScriptEvent::Error {
                 message: error.to_string(),
@@ -129,6 +235,23 @@ pub async fn stop_forge_cli_auth_terminal(
         None,
     );
     Ok(manager.kill(&key))
+}
+
+/// Drop the per-process forge caches (login enumeration, status pairs,
+/// profile) for `(provider, host)`. Frontend calls this immediately
+/// after the auth terminal exits so the very next `list_forge_logins`
+/// poll bypasses the rate-limiter cache and sees the new login.
+#[tauri::command]
+pub async fn invalidate_forge_caches(
+    provider: ForgeProvider,
+    host: Option<String>,
+) -> CmdResult<()> {
+    let host = host.unwrap_or_else(|| "gitlab.com".to_string());
+    run_blocking(move || {
+        accounts::invalidate_caches_for_host(provider, &host);
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]

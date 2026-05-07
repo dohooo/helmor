@@ -17,6 +17,10 @@ pub(crate) struct ActiveStreamHandle {
     pub request_id: String,
     pub sidecar_session_id: String,
     pub provider: String,
+    /// Helmor session this stream belongs to. Drives the per-session
+    /// dedup in `try_register_for_session`. `None` for streams without
+    /// one (e.g. title generation).
+    pub helmor_session_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -29,10 +33,23 @@ impl ActiveStreams {
         Self::default()
     }
 
-    pub(super) fn register(&self, handle: ActiveStreamHandle) {
-        if let Ok(mut map) = self.inner.lock() {
-            map.insert(handle.request_id.clone(), handle);
+    /// Register `handle` iff no existing entry targets the same
+    /// `helmor_session_id`. `None` ids never collide. Returns `false`
+    /// when a stream is already in flight for the session.
+    pub(super) fn try_register_for_session(&self, handle: ActiveStreamHandle) -> bool {
+        let Ok(mut map) = self.inner.lock() else {
+            return false;
+        };
+        if let Some(hsid) = handle.helmor_session_id.as_deref() {
+            let already_active = map
+                .values()
+                .any(|h| h.helmor_session_id.as_deref() == Some(hsid));
+            if already_active {
+                return false;
+            }
         }
+        map.insert(handle.request_id.clone(), handle);
+        true
     }
 
     pub(super) fn unregister(&self, request_id: &str) {

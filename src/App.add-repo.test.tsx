@@ -66,35 +66,22 @@ describe("App add repository flow", () => {
 			lastCloneDirectory: "/tmp/test-repos",
 		});
 		dialogMocks.open.mockResolvedValue("/tmp/test-repos/added-repo");
-		apiMocks.loadWorkspaceGroups.mockImplementation(async () => [
+		// Add-repo no longer auto-creates a workspace, so the workspace
+		// list stays unchanged after an add. New repos surface via
+		// `listRepositories`, not via a fresh workspace row.
+		apiMocks.loadWorkspaceGroups.mockResolvedValue([
 			{
 				id: "progress",
 				label: "In progress",
 				tone: "progress",
-				rows: addRepoRuntime.added
-					? [
-							{
-								id: "workspace-existing",
-								title: "Existing workspace",
-								repoName: "helmor-core",
-								state: "ready",
-							},
-							{
-								id: "workspace-added",
-								title: "Acamar",
-								directoryName: "acamar",
-								repoName: "added-repo",
-								state: "ready",
-							},
-						]
-					: [
-							{
-								id: "workspace-existing",
-								title: "Existing workspace",
-								repoName: "helmor-core",
-								state: "ready",
-							},
-						],
+				rows: [
+					{
+						id: "workspace-existing",
+						title: "Existing workspace",
+						repoName: "helmor-core",
+						state: "ready",
+					},
+				],
 			},
 		]);
 		apiMocks.loadArchivedWorkspaces.mockResolvedValue([]);
@@ -230,12 +217,13 @@ describe("App add repository flow", () => {
 		apiMocks.addRepositoryFromLocalPath.mockImplementation(async () => {
 			addRepoRuntime.added = true;
 
+			// New behavior: backend hands back `selectedWorkspaceId: null`
+			// for newly-added repos. UI lands on start page with this
+			// repo selected, no auto-create.
 			return {
 				repositoryId: "repo-added",
 				createdRepository: true,
-				selectedWorkspaceId: "workspace-added",
-				createdWorkspaceId: "workspace-added",
-				createdWorkspaceState: "ready",
+				selectedWorkspaceId: null,
 			};
 		});
 	});
@@ -244,7 +232,7 @@ describe("App add repository flow", () => {
 		cleanup();
 	});
 
-	it("opens the native folder picker and adds a repository", async () => {
+	it("opens the native folder picker and lands on the start page with the new repo selected", async () => {
 		const user = userEvent.setup();
 
 		render(<App />);
@@ -267,18 +255,15 @@ describe("App add repository flow", () => {
 				"/tmp/test-repos/added-repo",
 			);
 		});
+		// The new repo shows up in the sidebar's repository list.
 		await waitFor(() => {
-			expect(apiMocks.loadWorkspaceDetail).toHaveBeenCalledWith(
-				"workspace-added",
-			);
+			expect(apiMocks.listRepositories).toHaveBeenCalled();
 		});
-		await waitFor(() => {
-			expect(apiMocks.loadSessionThreadMessages).toHaveBeenCalledWith(
-				"session-added",
-			);
-		});
-
-		expect(screen.getByText("Acamar")).toBeInTheDocument();
+		// We should NOT auto-create a workspace, so no auto-load of one.
+		expect(apiMocks.loadWorkspaceDetail).not.toHaveBeenCalledWith(
+			"workspace-added",
+		);
+		expect(screen.queryByText("Acamar")).not.toBeInTheDocument();
 	});
 
 	it("treats picker cancel as a no-op", async () => {
@@ -306,8 +291,6 @@ describe("App add repository flow", () => {
 			repositoryId: "repo-existing",
 			createdRepository: false,
 			selectedWorkspaceId: "workspace-existing",
-			createdWorkspaceId: null,
-			createdWorkspaceState: "ready",
 		});
 
 		render(<App />);

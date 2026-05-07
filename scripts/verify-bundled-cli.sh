@@ -42,37 +42,31 @@ echo "Bundled CLI smoke check passed."
 # users see "bad CPU type in executable" (#293).
 EXPECTED_ARCH="$(lipo -archs "${CLI_PATH}")"
 case "${EXPECTED_ARCH}" in
-  arm64)  CC_VENDOR_ARCH="arm64-darwin" ;;
-  x86_64) CC_VENDOR_ARCH="x64-darwin" ;;
+  arm64|x86_64) ;;
   *)
     echo "Unexpected helmor-cli arch '${EXPECTED_ARCH}' (want arm64 or x86_64)"
     exit 1
     ;;
 esac
 
+# claude-code + codex are now single self-contained native binaries (ripgrep
+# / audio-capture are statically embedded), so there's nothing to verify
+# under their sub-paths anymore.
 VENDOR_ROOT="${APP_BUNDLE}/Contents/Resources/vendor"
 VENDOR_BINARIES=(
   "${VENDOR_ROOT}/gh/gh"
   "${VENDOR_ROOT}/glab/glab"
-  "${VENDOR_ROOT}/bun/bun"
   "${VENDOR_ROOT}/codex/codex"
-  "${VENDOR_ROOT}/claude-code/vendor/ripgrep/${CC_VENDOR_ARCH}/rg"
-  "${VENDOR_ROOT}/claude-code/vendor/audio-capture/${CC_VENDOR_ARCH}/audio-capture.node"
+  "${VENDOR_ROOT}/claude-code/claude"
 )
 
 echo "Verifying vendor binary archs (expect ${EXPECTED_ARCH})..."
 mismatches=0
 for bin in "${VENDOR_BINARIES[@]}"; do
   if [[ ! -e "${bin}" ]]; then
-    # ripgrep / audio-capture are optional features — skip if not staged.
-    case "${bin}" in
-      *ripgrep*|*audio-capture*) continue ;;
-      *)
-        echo "  MISSING ${bin}"
-        mismatches=$((mismatches + 1))
-        continue
-        ;;
-    esac
+    echo "  MISSING ${bin}"
+    mismatches=$((mismatches + 1))
+    continue
   fi
   actual="$(lipo -archs "${bin}" 2>/dev/null || echo "?")"
   if [[ "${actual}" != "${EXPECTED_ARCH}" ]]; then

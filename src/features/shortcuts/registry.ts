@@ -245,6 +245,14 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		editable: true,
 	},
 	{
+		id: "composer.toggleContextPanel",
+		title: "Toggle context panel",
+		group: "Composer",
+		defaultHotkey: "Mod+Alt+C",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
 		id: "composer.openModelPicker",
 		title: "Open model picker",
 		group: "Composer",

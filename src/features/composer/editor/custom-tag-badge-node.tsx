@@ -12,10 +12,17 @@ import {
 import { Tag } from "lucide-react";
 import type { ReactNode } from "react";
 import { InlineBadge } from "@/components/inline-badge";
+import { SourceIcon } from "@/features/inbox/source-icon";
+import { STATE_TONE_CLASS } from "@/features/inbox/state-tone";
 import type {
 	ComposerCustomTag,
 	ComposerPreviewPayload,
 } from "@/lib/composer-insert";
+import type {
+	ContextCardSource,
+	ContextCardStateTone,
+} from "@/lib/sources/types";
+import { cn } from "@/lib/utils";
 
 type SerializedCustomTagBadgeNode = Spread<
 	ComposerCustomTag,
@@ -30,15 +37,27 @@ function ComposerCustomTagBadge({
 	nodeKey: NodeKey;
 }) {
 	const [editor] = useLexicalComposerContext();
+	const icon = customTag.source ? (
+		<SourceIcon
+			source={customTag.source}
+			size={14}
+			className={cn(
+				"shrink-0",
+				customTag.stateTone
+					? STATE_TONE_CLASS[customTag.stateTone]
+					: "text-muted-foreground",
+			)}
+		/>
+	) : (
+		<Tag
+			className="size-3.5 shrink-0 text-muted-foreground"
+			strokeWidth={1.8}
+		/>
+	);
 
 	return (
 		<InlineBadge
-			icon={
-				<Tag
-					className="size-3.5 shrink-0 text-muted-foreground"
-					strokeWidth={1.8}
-				/>
-			}
+			icon={icon}
 			label={customTag.label}
 			preview={customTag.preview ?? null}
 			removeLabel="Remove tag"
@@ -57,6 +76,8 @@ export class CustomTagBadgeNode extends DecoratorNode<ReactNode> {
 	__label: string;
 	__submitText: string;
 	__preview: ComposerPreviewPayload | null;
+	__source: ContextCardSource | undefined;
+	__stateTone: ContextCardStateTone | undefined;
 
 	static getType(): string {
 		return "custom-tag-badge";
@@ -69,6 +90,8 @@ export class CustomTagBadgeNode extends DecoratorNode<ReactNode> {
 				label: node.__label,
 				submitText: node.__submitText,
 				preview: node.__preview,
+				source: node.__source,
+				stateTone: node.__stateTone,
 			},
 			node.__key,
 		);
@@ -82,6 +105,8 @@ export class CustomTagBadgeNode extends DecoratorNode<ReactNode> {
 			label: serializedNode.label,
 			submitText: serializedNode.submitText,
 			preview: serializedNode.preview,
+			source: serializedNode.source,
+			stateTone: serializedNode.stateTone,
 		});
 	}
 
@@ -91,6 +116,8 @@ export class CustomTagBadgeNode extends DecoratorNode<ReactNode> {
 		this.__label = customTag.label;
 		this.__submitText = customTag.submitText;
 		this.__preview = customTag.preview ?? null;
+		this.__source = customTag.source;
+		this.__stateTone = customTag.stateTone;
 	}
 
 	exportJSON(): SerializedCustomTagBadgeNode {
@@ -101,6 +128,8 @@ export class CustomTagBadgeNode extends DecoratorNode<ReactNode> {
 			label: this.__label,
 			submitText: this.__submitText,
 			...(this.__preview ? { preview: this.__preview } : {}),
+			...(this.__source ? { source: this.__source } : {}),
+			...(this.__stateTone ? { stateTone: this.__stateTone } : {}),
 		};
 	}
 
@@ -130,6 +159,8 @@ export class CustomTagBadgeNode extends DecoratorNode<ReactNode> {
 			label: this.__label,
 			submitText: this.__submitText,
 			...(this.__preview ? { preview: this.__preview } : {}),
+			...(this.__source ? { source: this.__source } : {}),
+			...(this.__stateTone ? { stateTone: this.__stateTone } : {}),
 		};
 	}
 

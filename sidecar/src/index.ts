@@ -42,6 +42,36 @@ const managers: Record<Provider, SessionManager> = {
 	codex: codexManager,
 };
 
+// `parentGone` flips to true only when stdin EOFs — that's the
+// authoritative "Rust exited" signal. EPIPE on stdout, by contrast, can
+// fire transiently from any pipe in the process (Anthropic SDK child
+// processes, internal Bun async paths, etc.); using EPIPE alone as the
+// exit trigger silently kills every in-flight query whenever any of
+// those pipes blip (issues #398/#402). Set the flag here so the EPIPE
+// handlers below can distinguish the two.
+let parentGone = false;
+
+function handleStdioError(stream: "stdout" | "stderr") {
+	return (err: NodeJS.ErrnoException) => {
+		if (err.code === "EPIPE") {
+			if (parentGone) {
+				process.exit(0);
+			}
+			// Transient EPIPE while parent is still alive — drop this
+			// write. Don't escalate.
+			return;
+		}
+		// Report through the OTHER stream to avoid recursion.
+		if (stream === "stdout") {
+			try {
+				process.stderr.write(`[helmor-sidecar] stdout error: ${err.message}\n`);
+			} catch {}
+		}
+	};
+}
+process.stdout.on("error", handleStdioError("stdout"));
+process.stderr.on("error", handleStdioError("stderr"));
+
 const emitter = createSidecarEmitter((event) => {
 	process.stdout.write(`${JSON.stringify(event)}\n`);
 });
@@ -80,22 +110,22 @@ setInterval(() => {
 // in-flight request gets notified, and keep the process alive.
 // ---------------------------------------------------------------------------
 
+// Don't `process.exit(0)` on EPIPE-coded errors here: any pipe in the
+// process (SDK child processes, internal Bun async work) can surface a
+// stray EPIPE, and exiting takes down every in-flight query with it
+// (issues #398/#402). The parent-died path is handled via stdin EOF.
 process.on("uncaughtException", (err) => {
 	logger.error("uncaughtException", errorDetails(err));
 	try {
 		emitter.error(null, "Internal sidecar error", true);
-	} catch {
-		// stdout may be broken — nothing more we can do
-	}
+	} catch {}
 });
 
 process.on("unhandledRejection", (reason) => {
 	logger.error("unhandledRejection", errorDetails(reason));
 	try {
 		emitter.error(null, "Internal sidecar error", true);
-	} catch {
-		// stdout may be broken
-	}
+	} catch {}
 });
 
 logger.info("Sidecar starting", { pid: process.pid });
@@ -156,10 +186,15 @@ async function handleGenerateTitle(
 			params,
 			"claudeEnvironment",
 		);
+		// Default true so older clients without the field keep getting both
+		// title and branch. Pass `false` to skip the branch slug entirely.
+		const generateBranch =
+			typeof params.generateBranch === "boolean" ? params.generateBranch : true;
 		logger.debug(`[${id}] generateTitle`, {
 			userMessage: userMessage.slice(0, 100),
 			claudeModel: claudeModel ?? "haiku",
 			customClaudeEnvironment: Boolean(claudeEnvironment),
+			generateBranch,
 		});
 
 		// Try the configured Claude-compatible model first when available;
@@ -171,7 +206,7 @@ async function handleGenerateTitle(
 				branchRenamePrompt,
 				emitter,
 				TITLE_GENERATION_TIMEOUT_MS,
-				{ model: claudeModel, claudeEnvironment },
+				{ model: claudeModel, claudeEnvironment, generateBranch },
 			);
 			logger.debug(`[${id}] generateTitle completed (claude)`);
 		} catch (claudeErr) {
@@ -186,6 +221,7 @@ async function handleGenerateTitle(
 						branchRenamePrompt,
 						emitter,
 						TITLE_GENERATION_TIMEOUT_MS,
+						{ generateBranch },
 					);
 					logger.debug(`[${id}] generateTitle completed (official claude)`);
 					return;
@@ -205,6 +241,7 @@ async function handleGenerateTitle(
 				branchRenamePrompt,
 				emitter,
 				TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
+				{ generateBranch },
 			);
 			logger.debug(`[${id}] generateTitle completed (codex fallback)`);
 		}
@@ -287,6 +324,26 @@ async function handleGetContextUsage(
 	} catch (err) {
 		const msg = errorMessage(err);
 		logger.error(`[${id}] getContextUsage FAILED: ${msg}`, errorDetails(err));
+		emitter.error(id, msg);
+	}
+}
+
+async function handleMutateCodexGoal(
+	id: string,
+	params: Record<string, unknown>,
+): Promise<void> {
+	try {
+		const sessionId = requireString(params, "sessionId");
+		const actionRaw = requireString(params, "action");
+		if (actionRaw !== "pause" && actionRaw !== "clear") {
+			throw new Error(`Invalid mutateCodexGoal action: ${actionRaw}`);
+		}
+		logger.debug(`[${id}] mutateCodexGoal`, { sessionId, action: actionRaw });
+		await codexManager.mutateGoal(sessionId, actionRaw);
+		emitter.pong(id);
+	} catch (err) {
+		const msg = errorMessage(err);
+		logger.error(`[${id}] mutateCodexGoal FAILED: ${msg}`, errorDetails(err));
 		emitter.error(id, msg);
 	}
 }
@@ -384,6 +441,12 @@ function trackHandler(p: Promise<void>): void {
 // ---------------------------------------------------------------------------
 
 const rl = createInterface({ input: process.stdin });
+// Authoritative "Rust exited" signal — flip the flag so any subsequent
+// EPIPE on stdout/stderr is treated as "drain to /dev/null then exit"
+// rather than "transient blip, ignore".
+rl.on("close", () => {
+	parentGone = true;
+});
 let requestCount = 0;
 
 for await (const line of rl) {
@@ -433,6 +496,9 @@ for await (const line of rl) {
 				break;
 			case "steerSession":
 				await handleSteerSession(id, params);
+				break;
+			case "mutateCodexGoal":
+				await handleMutateCodexGoal(id, params);
 				break;
 			case "shutdown":
 				await handleShutdown(id);

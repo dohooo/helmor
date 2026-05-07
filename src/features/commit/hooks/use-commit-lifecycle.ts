@@ -133,6 +133,12 @@ export type PendingPromptForSession = {
 	sessionId: string;
 	prompt: string;
 	modelId?: string | null;
+	/** Effort level override applied alongside `modelId` (e.g. Review helper
+	 *  uses settings.reviewEffort). Falls through if null. */
+	effort?: string | null;
+	/** Fast-mode override applied alongside `modelId` (Review helper uses
+	 *  settings.reviewFastMode). Falls through if null/undefined. */
+	fastMode?: boolean | null;
 	permissionMode?: string | null;
 	/** When true, submit must queue if a turn is already streaming —
 	 *  regardless of the user's `followUpBehavior` setting. Used for
@@ -155,7 +161,7 @@ export function useWorkspaceCommitLifecycle({
 	completedSessionIds,
 	abortedSessionIds,
 	interactionRequiredSessionIds,
-	sendingSessionIds,
+	busySessionIds,
 	onSelectSession,
 	pushToast,
 }: {
@@ -175,7 +181,7 @@ export function useWorkspaceCommitLifecycle({
 	completedSessionIds: Set<string>;
 	abortedSessionIds?: Set<string>;
 	interactionRequiredSessionIds: Set<string>;
-	sendingSessionIds: Set<string>;
+	busySessionIds: Set<string>;
 	onSelectSession: (sessionId: string | null) => void;
 	pushToast?: PushWorkspaceToast;
 }) {
@@ -421,6 +427,75 @@ export function useWorkspaceCommitLifecycle({
 		[],
 	);
 
+	const handleInspectorReviewAction = useCallback(
+		async ({
+			modelId,
+			effort,
+			fastMode,
+		}: {
+			modelId: string | null;
+			effort?: string | null;
+			fastMode?: boolean | null;
+		}) => {
+			const workspaceId = selectedWorkspaceIdRef.current;
+			if (!workspaceId) {
+				console.warn("[review] action ignored: no selected workspace");
+				return;
+			}
+			console.log("[review] begin", { workspaceId, modelId, effort, fastMode });
+			try {
+				// Review is auto-created (so it gets a fixed "Review" title
+				// instead of an LLM-generated one), but it's NOT auto-hideable
+				// — the review output is *for the user to read*, so the
+				// session must stay around. The auto-hide gate is enforced
+				// independently in `isAutoHideableActionKind`.
+				const { sessionId } = await createSession(workspaceId, {
+					actionKind: "review",
+				});
+				const repoPreferences = selectedRepoId
+					? await loadRepoPreferences(selectedRepoId)
+					: null;
+				const forge = await queryClient
+					.ensureQueryData(workspaceForgeQueryOptions(workspaceId))
+					.catch(() => null);
+				const prompt = buildCommitButtonPrompt(
+					"review",
+					repoPreferences,
+					selectedWorkspaceTargetBranch,
+					forge,
+					selectedWorkspaceRemote,
+				);
+				await queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+				});
+				setPendingPromptForSession({
+					sessionId,
+					prompt,
+					modelId,
+					effort: effort ?? null,
+					fastMode: fastMode ?? null,
+				});
+				onSelectSession(sessionId);
+			} catch (error) {
+				console.error("[review] failed to start session:", error);
+				pushToast?.(
+					getErrorMessage(error, "Unable to start review."),
+					"Review failed",
+					"destructive",
+				);
+			}
+		},
+		[
+			onSelectSession,
+			pushToast,
+			queryClient,
+			selectedRepoId,
+			selectedWorkspaceIdRef,
+			selectedWorkspaceTargetBranch,
+			selectedWorkspaceRemote,
+		],
+	);
+
 	const handlePendingPromptConsumed = useCallback(() => {
 		console.log("[commitButton] pending prompt consumed by composer");
 		setPendingPromptForSession(null);
@@ -439,7 +514,7 @@ export function useWorkspaceCommitLifecycle({
 	useEffect(() => {
 		const current = commitLifecycleRef.current;
 		console.log("[commitButton] action-session settlement check", {
-			sendingIds: Array.from(sendingSessionIds),
+			sendingIds: Array.from(busySessionIds),
 			completedIds: Array.from(completedSessionIds),
 			abortedIds: abortedSessionIds ? Array.from(abortedSessionIds) : [],
 			interactionRequiredIds: Array.from(interactionRequiredSessionIds),
@@ -466,7 +541,7 @@ export function useWorkspaceCommitLifecycle({
 			return;
 		}
 
-		const isSending = sendingSessionIds.has(trackedSessionId);
+		const isSending = busySessionIds.has(trackedSessionId);
 		if (isSending) {
 			console.log("[commitButton] tracked session is streaming");
 			hasObservedSendingRef.current = true;
@@ -571,7 +646,7 @@ export function useWorkspaceCommitLifecycle({
 		pushToast,
 		queryClient,
 		refreshWorkspaceRemoteStatus,
-		sendingSessionIds,
+		busySessionIds,
 	]);
 
 	useEffect(() => {
@@ -667,6 +742,7 @@ export function useWorkspaceCommitLifecycle({
 		commitButtonMode,
 		commitButtonState,
 		handleInspectorCommitAction,
+		handleInspectorReviewAction,
 		handlePendingPromptConsumed,
 		pendingPromptForSession,
 		queuePendingPromptForSession,

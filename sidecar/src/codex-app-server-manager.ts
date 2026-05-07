@@ -8,11 +8,16 @@
  */
 
 import crypto from "node:crypto";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import {
 	CodexAppServer,
 	type JsonRpcNotification,
 	type JsonRpcRequest,
 } from "./codex-app-server.js";
+import { ensureCodexGoalsFeatureEnabled } from "./codex-config.js";
+import { SubAgentTracker } from "./codex-subagent-tracker.js";
 import { buildCodexStoredMeta } from "./context-usage.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { resolveGitAccessDirectories } from "./git-access.js";
@@ -34,7 +39,123 @@ import {
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "./title.js";
 
-const CODEX_BIN_PATH = process.env.HELMOR_CODEX_BIN_PATH || "codex";
+/**
+ * Resolve the path to the Codex native binary, used as the spawn target for
+ * every `codex app-server` child process.
+ *
+ * Resolution order:
+ *   1. `HELMOR_CODEX_BIN_PATH` — set by the Tauri host in release builds,
+ *      pointing at `Helmor.app/Contents/Resources/vendor/codex/codex`.
+ *   2. `createRequire` lookup of the platform sub-package's binary inside
+ *      `node_modules`. Used in dev (`bun run src/index.ts`) and `bun test`.
+ *   3. Fall back to `"codex"` so the OS resolves it from PATH — last-resort
+ *      for unusual setups; surfaces as ENOENT if not installed.
+ */
+function resolveCodexBinPath(): string {
+	const override = process.env.HELMOR_CODEX_BIN_PATH;
+	if (override) {
+		return override;
+	}
+	const triple = codexTargetTriple();
+	if (triple) {
+		const platformPkg = `@openai/codex-${platformShort()}`;
+		try {
+			const require = createRequire(import.meta.url);
+			const pkgJson = require.resolve(`${platformPkg}/package.json`);
+			const candidate = join(
+				dirname(pkgJson),
+				"vendor",
+				triple,
+				"codex",
+				process.platform === "win32" ? "codex.exe" : "codex",
+			);
+			if (existsSync(candidate)) {
+				return candidate;
+			}
+		} catch {
+			// Platform sub-package missing (e.g. --omit=optional) — fall through.
+		}
+	}
+	return "codex";
+}
+
+function platformShort(): string {
+	const arch = process.arch === "x64" ? "x64" : "arm64";
+	if (process.platform === "darwin") return `darwin-${arch}`;
+	if (process.platform === "linux") return `linux-${arch}`;
+	if (process.platform === "win32") return `win32-${arch}`;
+	return "";
+}
+
+function codexTargetTriple(): string | null {
+	const arch = process.arch;
+	if (process.platform === "darwin") {
+		return arch === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin";
+	}
+	if (process.platform === "linux") {
+		return arch === "arm64"
+			? "aarch64-unknown-linux-musl"
+			: "x86_64-unknown-linux-musl";
+	}
+	if (process.platform === "win32") {
+		return arch === "arm64"
+			? "aarch64-pc-windows-msvc"
+			: "x86_64-pc-windows-msvc";
+	}
+	return null;
+}
+
+const CODEX_BIN_PATH = resolveCodexBinPath();
+
+/**
+ * Recognised `/goal` slash-command shapes. `set` carries the objective;
+ * `resume` exists so the user can recover an active goal after a pause
+ * by typing `/goal resume`. We deliberately route `resume` through the
+ * sendMessage path (rather than `mutateCodexGoal`) — the resulting
+ * stream subscription is what catches the goal-continuation turn that
+ * codex auto-spawns, otherwise those events fire into a dead handler.
+ *
+ * Pause / Clear are NOT here on purpose: they live on banner / Composer
+ * Stop and go through `mutateCodexGoal` so they don't show up as user
+ * messages in the chat.
+ */
+export type GoalCommand =
+	| { kind: "set"; objective: string }
+	| { kind: "resume" };
+
+export function parseGoalCommand(prompt: string): GoalCommand | null {
+	const m = prompt.trim().match(/^\/goal(?:\s+([\s\S]+))?$/);
+	if (!m) return null;
+	const arg = (m[1] ?? "").trim();
+	if (arg === "") return null;
+	if (arg === "resume") return { kind: "resume" };
+	return { kind: "set", objective: arg };
+}
+
+function dispatchGoalCommand(
+	server: CodexAppServer,
+	threadId: string,
+	cmd: GoalCommand,
+): { method: string; promise: Promise<unknown> } {
+	if (cmd.kind === "resume") {
+		return {
+			method: "thread/goal/set",
+			promise: server.sendRequest(
+				"thread/goal/set",
+				{ threadId, status: "active" },
+				20_000,
+			),
+		};
+	}
+	return {
+		method: "thread/goal/set",
+		promise: server.sendRequest(
+			"thread/goal/set",
+			{ threadId, objective: cmd.objective },
+			20_000,
+		),
+	};
+}
 
 /** How long after a "Reconnecting…" stderr line we keep emitting
  *  synthetic heartbeats while Codex owns its retry loop. */
@@ -138,6 +259,9 @@ interface AppServerContext {
 	/** Last reconnect notice forwarded to the pipeline. Dedupe stderr +
 	 *  JSON-RPC echoes so the user sees liveness without duplicate rows. */
 	lastRetryNotice: { key: string; at: number } | null;
+	/** Tracks sub-agent thread metadata (nickname, role) so we can enrich
+	 *  `collabAgentToolCall(spawnAgent)` items before forwarding them. */
+	subAgentTracker: SubAgentTracker;
 }
 
 // ---------------------------------------------------------------------------
@@ -265,10 +389,22 @@ export class CodexAppServerManager implements SessionManager {
 			promptLen: prompt.length,
 		});
 
+		// `/goal` needs `[features] goals = true` in `~/.codex/config.toml`.
+		// Codex reads its config once at startup, so the pre-flight runs
+		// before `ensureContext` and recycles any stale process.
+		const goalCommand = parseGoalCommand(prompt);
+		let effectiveResume = resume;
+		if (goalCommand) {
+			effectiveResume = await this.ensureCodexGoalsReady(
+				sessionId,
+				effectiveResume,
+			);
+		}
+
 		const ctx = await this.ensureContext(
 			sessionId,
 			workDir,
-			resume,
+			effectiveResume,
 			model,
 			permissionMode,
 			effectiveFastMode,
@@ -288,7 +424,7 @@ export class CodexAppServerManager implements SessionManager {
 			prompt,
 			resolvedAdditionalDirectories,
 		);
-		const isCompactCommand = prompt.trim() === "/compact";
+		const isCompactCommand = !goalCommand && prompt.trim() === "/compact";
 		const input = buildTurnInput(promptWithContext, images);
 		const turnStartParams: Record<string, unknown> = {
 			threadId: ctx.providerThreadId,
@@ -386,21 +522,78 @@ export class CodexAppServerManager implements SessionManager {
 					return;
 				}
 
+				// Route by threadId. Codex multiplexes parent + sub-agent on
+				// the same stdio stream; without this filter the sub-agent's
+				// turn/started would clobber `activeTurnId` and its items
+				// would pollute the parent turn's accumulator.
+				const eventThreadId = extractEventThreadId(n);
+				const isSubAgentEvent =
+					eventThreadId !== null &&
+					ctx.providerThreadId !== null &&
+					eventThreadId !== ctx.providerThreadId;
+
+				if (isSubAgentEvent) {
+					// Tracker is idempotent + caches in-flight; safe to fire
+					// for every sub-agent event so we register no matter
+					// which method (thread/started, status/changed, …) is
+					// the sub-agent's first signal.
+					void ctx.subAgentTracker.noteSpawned(eventThreadId);
+					return;
+				}
+
+				// Block briefly (≤2s) on any collab item with known receivers
+				// so nickname/role enrichment lands before the pipeline sees
+				// it. Without this, wait/sendInput/etc. render with pool
+				// fallback nicknames that don't match what spawn showed.
+				if (
+					(n.method === "item/started" || n.method === "item/completed") &&
+					shouldEnrichCollabItem(n.params)
+				) {
+					await enrichCollabItem(ctx.subAgentTracker, n);
+				}
+
 				const flat = flattenNotification(n, ctx.providerThreadId);
 				emit(flat);
 
 				if (n.method === "thread/started") {
-					const threadId = deepGet(n.params, "thread", "id");
-					if (typeof threadId === "string") {
-						ctx.providerThreadId = threadId;
+					// Only the first thread/started locks providerThreadId.
+					if (!ctx.providerThreadId) {
+						const threadId = deepGet(n.params, "thread", "id");
+						if (typeof threadId === "string") {
+							ctx.providerThreadId = threadId;
+						}
 					}
 				}
 
 				if (n.method === "turn/started") {
-					const turnId = deepGet(n.params, "turn", "id");
-					if (typeof turnId === "string") {
-						ctx.activeTurnId = turnId;
+					// Defensive: older Codex builds may omit threadId.
+					if (
+						eventThreadId === null ||
+						eventThreadId === ctx.providerThreadId
+					) {
+						const turnId = deepGet(n.params, "turn", "id");
+						if (typeof turnId === "string") {
+							ctx.activeTurnId = turnId;
+						}
 					}
+				}
+
+				// Forward Codex goal state changes so the panel header banner
+				// can render the active goal. `thread/goal/updated` carries
+				// the full ThreadGoal payload; `thread/goal/cleared` flips it
+				// off (we send a null goal in the same event type).
+				if (n.method === "thread/goal/updated") {
+					const goal = deepGet(n.params, "goal");
+					if (goal && typeof goal === "object") {
+						emitter.codexGoalUpdated(
+							requestId,
+							sessionId,
+							JSON.stringify(goal),
+						);
+					}
+				}
+				if (n.method === "thread/goal/cleared") {
+					emitter.codexGoalUpdated(requestId, sessionId, null);
 				}
 
 				// Forward Codex token usage to the context-usage ring.
@@ -508,18 +701,43 @@ export class CodexAppServerManager implements SessionManager {
 			ctx.server.setHandlers(handleNotification, handleRequest);
 			ctx.server.setActiveRequestId(requestId);
 
-			if (isCompactCommand && !ctx.providerThreadId) {
-				reject(new Error("Cannot compact before a Codex thread has started"));
+			if ((isCompactCommand || goalCommand) && !ctx.providerThreadId) {
+				reject(
+					new Error(
+						`Cannot run /${isCompactCommand ? "compact" : "goal"} before a Codex thread has started`,
+					),
+				);
 				return;
 			}
 
-			const requestPromise = isCompactCommand
-				? ctx.server.sendRequest(
-						"thread/compact/start",
-						{ threadId: ctx.providerThreadId },
-						20_000,
-					)
-				: ctx.server.sendRequest("turn/start", turnStartParams);
+			const dispatchPrompt = (): {
+				method: string;
+				promise: Promise<unknown>;
+			} => {
+				if (isCompactCommand) {
+					return {
+						method: "thread/compact/start",
+						promise: ctx.server.sendRequest(
+							"thread/compact/start",
+							{ threadId: ctx.providerThreadId },
+							20_000,
+						),
+					};
+				}
+				if (goalCommand) {
+					return dispatchGoalCommand(
+						ctx.server,
+						ctx.providerThreadId as string,
+						goalCommand,
+					);
+				}
+				return {
+					method: "turn/start",
+					promise: ctx.server.sendRequest("turn/start", turnStartParams),
+				};
+			};
+
+			const { method, promise: requestPromise } = dispatchPrompt();
 
 			requestPromise
 				.then((response) => {
@@ -529,10 +747,7 @@ export class CodexAppServerManager implements SessionManager {
 					}
 				})
 				.catch((err) => {
-					logger.error(
-						`${isCompactCommand ? "thread/compact/start" : "turn/start"} failed`,
-						errorDetails(err),
-					);
+					logger.error(`${method} failed`, errorDetails(err));
 					reject(err);
 				});
 		}).finally(() => {
@@ -540,6 +755,11 @@ export class CodexAppServerManager implements SessionManager {
 				emitter.aborted(requestId, "user_requested");
 			} else {
 				emitter.end(requestId);
+			}
+			if (ctx.activeRequestId === requestId) {
+				ctx.activeRequestId = null;
+				ctx.activeEmitter = null;
+				ctx.lastRetryNotice = null;
 			}
 		});
 	}
@@ -552,8 +772,9 @@ export class CodexAppServerManager implements SessionManager {
 		branchRenamePrompt: string | null,
 		emitter: SidecarEmitter,
 		timeoutMs = TITLE_GENERATION_TIMEOUT_MS,
-		_options?: GenerateTitleOptions,
+		options?: GenerateTitleOptions,
 	): Promise<void> {
+		const generateBranch = options?.generateBranch ?? true;
 		const cwd = process.cwd();
 		const server = new CodexAppServer({
 			binaryPath: CODEX_BIN_PATH,
@@ -606,7 +827,11 @@ export class CodexAppServerManager implements SessionManager {
 				input: [
 					{
 						type: "text",
-						text: buildTitlePrompt(userMessage, branchRenamePrompt),
+						text: buildTitlePrompt(
+							userMessage,
+							branchRenamePrompt,
+							generateBranch,
+						),
 						text_elements: [],
 					},
 				],
@@ -658,6 +883,144 @@ export class CodexAppServerManager implements SessionManager {
 
 	async listModels(): Promise<readonly ProviderModelInfo[]> {
 		return listProviderModels("codex");
+	}
+
+	// ── mutateGoal ───────────────────────────────────────────────────────
+
+	/**
+	 * Out-of-band Codex `/goal` lifecycle control. Called when the user
+	 * clicks Pause / Resume / Clear on the goal banner — these operations
+	 * shouldn't appear in chat history, so they bypass the prompt-parsing
+	 * path entirely and go straight to the right `thread/goal/*` RPC.
+	 */
+	async mutateGoal(
+		sessionId: string,
+		action: "pause" | "clear",
+	): Promise<void> {
+		const ctx = this.sessions.get(sessionId);
+		logger.info("mutateGoal request", {
+			sessionId,
+			action,
+			hasContext: !!ctx,
+			threadId: ctx?.providerThreadId ?? "(none)",
+			activeTurnId: ctx?.activeTurnId ?? "(none)",
+			knownSessions: [...this.sessions.keys()],
+		});
+		if (!ctx?.providerThreadId) {
+			// No live codex process or no thread yet — silent skip rather
+			// than throw. The Composer Stop path fires this concurrently
+			// with `stopAgentStream`, and a race where Stop kills the
+			// process first must NOT surface as a user-facing error. The
+			// Rust caller still applies the mutation to the local DB so
+			// the banner reflects the new state.
+			logger.debug("mutateGoal: no active codex context, skipping RPC", {
+				sessionId,
+				action,
+			});
+			return;
+		}
+		const threadId = ctx.providerThreadId;
+
+		// Pause-only: codex's `thread/goal/set { paused }` stops the
+		// continuation loop but doesn't abort the in-flight turn, leaving
+		// helmor's loading spinner stuck. Issue `turn/interrupt` ourselves
+		// to match the user intent ("pause = stop now"). The interrupt
+		// produces a normal turn/completed downstream, which lets the
+		// streaming pipeline transition out of the loading state.
+		//
+		// Clear deliberately does NOT interrupt — codex keeps streaming
+		// the current turn naturally; clearing just removes the goal so
+		// no further continuations spawn after the turn finishes.
+		//
+		// Contract on `ctx.activeTurnId`: it's only updated by
+		// `setHandlers` from inside an active sendMessage stream, so a
+		// goal-continuation turn that codex auto-spawns when no fresh
+		// sendMessage is in flight will NOT be tracked here. In practice
+		// `mutateGoal("pause")` is currently only fired by the Composer
+		// Stop button, which runs `stopAgentStream` immediately after —
+		// `stopSession` kills the codex child unconditionally, so any
+		// untracked turn dies with the process. If a future caller fires
+		// pause without that backup, this branch may silently no-op on
+		// the untracked turn.
+		if (action === "pause" && ctx.activeTurnId) {
+			try {
+				await ctx.server.sendRequest(
+					"turn/interrupt",
+					{ threadId, turnId: ctx.activeTurnId },
+					5_000,
+				);
+			} catch (err) {
+				// Best-effort — don't let an interrupt failure block the
+				// goal state change. Codex may have just finished naturally.
+				logger.debug("mutateGoal interrupt failed (best-effort)", {
+					...errorDetails(err),
+				});
+			}
+		}
+
+		try {
+			if (action === "clear") {
+				await ctx.server.sendRequest("thread/goal/clear", { threadId }, 20_000);
+				return;
+			}
+			// action === "pause"
+			await ctx.server.sendRequest(
+				"thread/goal/set",
+				{ threadId, status: "paused" },
+				20_000,
+			);
+		} catch (err) {
+			// The codex child may have been killed (Composer Stop's parallel
+			// stopSession path) — same idempotency rule as the no-ctx case.
+			logger.debug("mutateGoal RPC failed (best-effort)", {
+				...errorDetails(err),
+			});
+		}
+	}
+
+	// ── ensureCodexGoalsReady ────────────────────────────────────────────
+
+	// Writes `[features] goals = true` if missing, then recycles any stale
+	// codex process so the new config takes effect. Returns a resume thread
+	// id (caller's wins; otherwise the stale ctx's). Best-effort — IO
+	// failures are logged and the caller falls through to codex's own error.
+	private async ensureCodexGoalsReady(
+		sessionId: string,
+		callerResume: string | undefined,
+	): Promise<string | undefined> {
+		let result: Awaited<ReturnType<typeof ensureCodexGoalsFeatureEnabled>>;
+		try {
+			result = await ensureCodexGoalsFeatureEnabled();
+		} catch (err) {
+			logger.error("ensureCodexGoalsFeatureEnabled failed", errorDetails(err));
+			return callerResume;
+		}
+		if (result.kind !== "modified") return callerResume;
+
+		const stale = this.sessions.get(sessionId);
+		if (!stale) {
+			logger.info("Enabled codex goals feature", {
+				sessionId,
+				path: result.path,
+			});
+			return callerResume;
+		}
+
+		logger.info("Enabled codex goals feature; recycling stale session", {
+			sessionId,
+			path: result.path,
+			providerThreadId: stale.providerThreadId ?? "(none)",
+		});
+		const reuseThread = stale.providerThreadId ?? undefined;
+		stale.server.kill();
+		this.sessions.delete(sessionId);
+		for (const [id, p] of this.pendingApprovals) {
+			if (p.sessionId === sessionId) this.pendingApprovals.delete(id);
+		}
+		for (const [id, p] of this.pendingUserInputs) {
+			if (p.sessionId === sessionId) this.pendingUserInputs.delete(id);
+		}
+		return callerResume ?? reuseThread;
 	}
 
 	// ── stopSession / shutdown ───────────────────────────────────────────
@@ -828,6 +1191,45 @@ export class CodexAppServerManager implements SessionManager {
 
 	// ── Private ──────────────────────────────────────────────────────────
 
+	private settleUnexpectedExit(
+		sessionId: string,
+		ctx: AppServerContext,
+		code: number | null,
+		signal: string | null,
+	): void {
+		const hasActiveTurn =
+			ctx.turnResolve !== null ||
+			ctx.turnReject !== null ||
+			ctx.activeTurnId !== null;
+		if (!hasActiveTurn) return;
+
+		for (const [id, p] of this.pendingApprovals) {
+			if (p.sessionId === sessionId) this.pendingApprovals.delete(id);
+		}
+		for (const [id, p] of this.pendingUserInputs) {
+			if (p.sessionId === sessionId) this.pendingUserInputs.delete(id);
+		}
+
+		const requestId = ctx.activeRequestId;
+		const emitter = ctx.activeEmitter;
+		logger.error("codex app-server exited during active turn", {
+			sessionId,
+			requestId: requestId ?? "(none)",
+			turnId: ctx.activeTurnId ?? "(none)",
+			code,
+			signal,
+		});
+		ctx.activeTurnId = null;
+		const resolve = ctx.turnResolve;
+		ctx.turnResolve = null;
+		ctx.turnReject = null;
+
+		if (requestId && emitter) {
+			emitter.error(requestId, "Codex app-server exited unexpectedly");
+		}
+		resolve?.();
+	}
+
 	/**
 	 * Get an existing session context or create a new one. When `resume`
 	 * is set (provider thread ID from a previous session), attempts
@@ -856,7 +1258,11 @@ export class CodexAppServerManager implements SessionManager {
 			cwd,
 			onNotification: () => {},
 			onRequest: () => {},
-			onExit: () => {
+			onExit: (code, signal) => {
+				const ctx = ctxRef.current;
+				if (ctx) {
+					this.settleUnexpectedExit(sessionId, ctx, code, signal);
+				}
 				this.sessions.delete(sessionId);
 			},
 			onError: (err) => {
@@ -938,6 +1344,7 @@ export class CodexAppServerManager implements SessionManager {
 			lastSentModel: model ?? "",
 			lastRetryAt: null,
 			lastRetryNotice: null,
+			subAgentTracker: new SubAgentTracker(server),
 		};
 
 		this.sessions.set(sessionId, ctx);
@@ -1001,6 +1408,75 @@ function flattenNotification(
 		...params,
 		...(sessionId ? { session_id: sessionId } : {}),
 	};
+}
+
+/** params.threadId, or thread.id for thread/started. */
+function extractEventThreadId(n: JsonRpcNotification): string | null {
+	const params = n.params as Record<string, unknown> | undefined;
+	if (!params) return null;
+	const direct = params.threadId;
+	if (typeof direct === "string") return direct;
+	const fromThread = (params.thread as Record<string, unknown> | undefined)?.id;
+	return typeof fromThread === "string" ? fromThread : null;
+}
+
+/** True for any `collabAgentToolCall` whose `receiverThreadIds` are
+ *  populated. spawnAgent's `item/started` has empty receivers (new thread
+ *  not created yet) so falls through; spawnAgent completed plus
+ *  wait/sendInput/resumeAgent/closeAgent at started AND completed match. */
+function shouldEnrichCollabItem(params: unknown): boolean {
+	if (!params || typeof params !== "object") return false;
+	const item = (params as Record<string, unknown>).item as
+		| Record<string, unknown>
+		| undefined;
+	if (!item || item.type !== "collabAgentToolCall") return false;
+	const receivers = item.receiverThreadIds;
+	return Array.isArray(receivers) && receivers.length > 0;
+}
+
+/** Resolve nickname/role for each receiverThreadId via `thread/read` and
+ *  merge into `agentsStates`. Existing values win. Used for any collab
+ *  tool call (spawnAgent / sendInput / resumeAgent / wait / closeAgent). */
+async function enrichCollabItem(
+	tracker: SubAgentTracker,
+	n: JsonRpcNotification,
+): Promise<void> {
+	const params = n.params as Record<string, unknown> | undefined;
+	const item = params?.item as Record<string, unknown> | undefined;
+	if (!item) return;
+	const receivers = item.receiverThreadIds;
+	if (!Array.isArray(receivers) || receivers.length === 0) return;
+
+	// Resolve all receivers in parallel — usually it's exactly one per call.
+	const metas = await Promise.all(
+		receivers.map((tid) =>
+			typeof tid === "string"
+				? tracker.noteSpawned(tid)
+				: Promise.resolve(null),
+		),
+	);
+
+	const states = (item.agentsStates ?? {}) as Record<
+		string,
+		Record<string, unknown>
+	>;
+	for (let i = 0; i < receivers.length; i++) {
+		const tid = receivers[i];
+		const meta = metas[i];
+		if (typeof tid !== "string" || !meta) continue;
+		const state = (states[tid] as Record<string, unknown> | undefined) ?? {};
+		// Existing values win — only fill in what's missing. Guards against
+		// `noteSpawned` returning a fallback placeholder (thread/read timed
+		// out / failed) blowing away whatever the upstream item already had.
+		if (meta.agentNickname && state.agentNickname == null) {
+			state.agentNickname = meta.agentNickname;
+		}
+		if (meta.agentRole && state.agentRole == null) {
+			state.agentRole = meta.agentRole;
+		}
+		states[tid] = state;
+	}
+	item.agentsStates = states;
 }
 
 function buildTurnInput(

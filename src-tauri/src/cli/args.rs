@@ -585,28 +585,11 @@ pub enum ModelsAction {
 
 #[derive(Subcommand)]
 pub enum GithubAction {
-    /// Auth subsystem.
-    Auth {
-        #[command(subcommand)]
-        action: GithubAuthAction,
-    },
     /// Pull request operations for a workspace.
     Pr {
         #[command(subcommand)]
         action: GithubPrAction,
     },
-    /// List repositories the current GitHub identity can access.
-    Repos,
-    /// Report whether the `gh` CLI is installed and authenticated.
-    CliStatus,
-}
-
-#[derive(Subcommand)]
-pub enum GithubAuthAction {
-    /// Print the currently-connected GitHub identity, if any.
-    Status,
-    /// Log out — clears the stored tokens.
-    Logout,
 }
 
 #[derive(Subcommand)]

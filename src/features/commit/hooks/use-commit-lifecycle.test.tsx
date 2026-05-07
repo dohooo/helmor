@@ -47,6 +47,7 @@ const EMPTY_GIT_ACTION_STATUS: WorkspaceGitActionStatus = {
 	behindTargetCount: 0,
 	remoteTrackingRef: null,
 	aheadOfRemoteCount: 0,
+	aheadOfTargetCount: 0,
 	pushStatus: "unknown",
 };
 
@@ -150,11 +151,11 @@ describe("useWorkspaceCommitLifecycle", () => {
 			({
 				completedSessionIds,
 				interactionRequiredSessionIds,
-				sendingSessionIds,
+				busySessionIds,
 			}: {
 				completedSessionIds: Set<string>;
 				interactionRequiredSessionIds: Set<string>;
-				sendingSessionIds: Set<string>;
+				busySessionIds: Set<string>;
 			}) =>
 				useWorkspaceCommitLifecycle({
 					queryClient,
@@ -167,14 +168,14 @@ describe("useWorkspaceCommitLifecycle", () => {
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds,
 					interactionRequiredSessionIds,
-					sendingSessionIds,
+					busySessionIds,
 					onSelectSession,
 				}),
 			{
 				initialProps: {
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 				},
 				wrapper: createWrapper(queryClient),
 			},
@@ -199,13 +200,13 @@ describe("useWorkspaceCommitLifecycle", () => {
 		rerender({
 			completedSessionIds: new Set<string>(),
 			interactionRequiredSessionIds: new Set<string>(),
-			sendingSessionIds: new Set(["session-action"]),
+			busySessionIds: new Set(["session-action"]),
 		});
 
 		rerender({
 			completedSessionIds: new Set(["session-action"]),
 			interactionRequiredSessionIds: new Set<string>(),
-			sendingSessionIds: new Set<string>(),
+			busySessionIds: new Set<string>(),
 		});
 
 		await waitFor(() => {
@@ -272,11 +273,11 @@ describe("useWorkspaceCommitLifecycle", () => {
 			({
 				completedSessionIds,
 				abortedSessionIds,
-				sendingSessionIds,
+				busySessionIds,
 			}: {
 				completedSessionIds: Set<string>;
 				abortedSessionIds: Set<string>;
-				sendingSessionIds: Set<string>;
+				busySessionIds: Set<string>;
 			}) =>
 				useWorkspaceCommitLifecycle({
 					queryClient,
@@ -290,14 +291,14 @@ describe("useWorkspaceCommitLifecycle", () => {
 					completedSessionIds,
 					abortedSessionIds,
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds,
+					busySessionIds,
 					onSelectSession,
 				}),
 			{
 				initialProps: {
 					completedSessionIds: new Set<string>(),
 					abortedSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 				},
 				wrapper: createWrapper(queryClient),
 			},
@@ -317,15 +318,15 @@ describe("useWorkspaceCommitLifecycle", () => {
 		rerender({
 			completedSessionIds: new Set<string>(),
 			abortedSessionIds: new Set<string>(),
-			sendingSessionIds: new Set(["session-action"]),
+			busySessionIds: new Set(["session-action"]),
 		});
 
-		// User aborts: session leaves sendingSessionIds and enters
+		// User aborts: session leaves busySessionIds and enters
 		// abortedSessionIds without ever reaching completedSessionIds.
 		rerender({
 			completedSessionIds: new Set<string>(),
 			abortedSessionIds: new Set(["session-action"]),
-			sendingSessionIds: new Set<string>(),
+			busySessionIds: new Set<string>(),
 		});
 
 		await waitFor(() => {
@@ -361,7 +362,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					},
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession,
 					pushToast,
 				}),
@@ -434,7 +435,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					},
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession: vi.fn(),
 					pushToast,
 				}),
@@ -479,7 +480,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession: vi.fn(),
 					pushToast,
 				}),
@@ -571,7 +572,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession: vi.fn(),
 				}),
 			{ wrapper: createWrapper(queryClient) },
@@ -670,7 +671,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession: vi.fn(),
 					pushToast: vi.fn(),
 				}),
@@ -697,6 +698,128 @@ describe("useWorkspaceCommitLifecycle", () => {
 				helmorQueryKeys.workspaceDetail("workspace-1"),
 			)?.status,
 		).toBe("review");
+	});
+
+	it("queues a review prompt with the configured modelId when handleInspectorReviewAction runs", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onSelectSession = vi.fn();
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					selectedWorkspaceIdRef: { current: "workspace-1" },
+					selectedRepoId: "repo-1",
+					selectedWorkspaceTargetBranch: "main",
+					changeRequest: {
+						number: 99,
+						title: "Add Review PR button",
+						url: "https://github.com/example/repo/pull/99",
+						state: "OPEN",
+						isMerged: false,
+					},
+					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession,
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorReviewAction({
+				modelId: "review-model",
+			});
+		});
+
+		// Review is an action session ("auto-created", fixed title), but it
+		// opts out of auto-hide via `isAutoHideableActionKind`.
+		expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1", {
+			actionKind: "review",
+		});
+		expect(result.current.pendingPromptForSession).toMatchObject({
+			sessionId: "session-action",
+			modelId: "review-model",
+		});
+		// New review prompt diffs against the target ref, no PR/MR machinery.
+		expect(result.current.pendingPromptForSession?.prompt ?? "").toContain(
+			"Review the changes on this branch relative to `origin/main`",
+		);
+		expect(onSelectSession).toHaveBeenCalledWith("session-action");
+	});
+
+	it("forwards a null modelId untouched (composer falls back to the workspace default)", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					selectedWorkspaceIdRef: { current: "workspace-1" },
+					selectedRepoId: "repo-1",
+					selectedWorkspaceTargetBranch: "main",
+					changeRequest: null,
+					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorReviewAction({ modelId: null });
+		});
+
+		expect(result.current.pendingPromptForSession).toMatchObject({
+			sessionId: "session-action",
+			modelId: null,
+		});
+	});
+
+	it("ignores handleInspectorReviewAction when no workspace is selected", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onSelectSession = vi.fn();
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: null,
+					selectedWorkspaceIdRef: { current: null },
+					selectedRepoId: null,
+					changeRequest: null,
+					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession,
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorReviewAction({
+				modelId: "review-model",
+			});
+		});
+
+		expect(apiMocks.createSession).not.toHaveBeenCalled();
+		expect(onSelectSession).not.toHaveBeenCalled();
+		expect(result.current.pendingPromptForSession).toBeNull();
 	});
 
 	it("shows a destructive workspace toast when merge fails", async () => {
@@ -733,7 +856,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession: vi.fn(),
 					pushToast,
 				}),

@@ -78,9 +78,8 @@ struct SidecarProcess {
 
 #[derive(Debug, Default)]
 struct BundledAgentPaths {
-    claude_cli: Option<PathBuf>,
+    claude_bin: Option<PathBuf>,
     codex_bin: Option<PathBuf>,
-    bun_bin: Option<PathBuf>,
 }
 
 fn resolve_bundled_agent_paths() -> BundledAgentPaths {
@@ -94,17 +93,19 @@ fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledA
     let exe_dir = exe.parent()?;
     let contents_dir = exe_dir.parent()?;
     let resources_dir = contents_dir.join("Resources");
+    let claude_bin_name = if cfg!(windows) {
+        "claude.exe"
+    } else {
+        "claude"
+    };
     let codex_bin_name = if cfg!(windows) { "codex.exe" } else { "codex" };
-    let bun_bin_name = if cfg!(windows) { "bun.exe" } else { "bun" };
 
-    let claude_cli = resources_dir.join("vendor/claude-code/cli.js");
+    let claude_bin = resources_dir.join(format!("vendor/claude-code/{claude_bin_name}"));
     let codex_bin = resources_dir.join(format!("vendor/codex/{codex_bin_name}"));
-    let bun_bin = resources_dir.join(format!("vendor/bun/{bun_bin_name}"));
 
     Some(BundledAgentPaths {
-        claude_cli: claude_cli.is_file().then_some(claude_cli),
+        claude_bin: claude_bin.is_file().then_some(claude_bin),
         codex_bin: codex_bin.is_file().then_some(codex_bin),
-        bun_bin: bun_bin.is_file().then_some(bun_bin),
     })
 }
 
@@ -152,19 +153,15 @@ impl SidecarProcess {
             let exe = std::env::current_exe().ok();
             tracing::info!(
                 exe = ?exe,
-                claude_cli = ?bundled_paths.claude_cli,
+                claude_bin = ?bundled_paths.claude_bin,
                 codex_bin = ?bundled_paths.codex_bin,
-                bun_bin = ?bundled_paths.bun_bin,
                 "Resolved bundled agent paths"
             );
-            if let Some(path) = bundled_paths.claude_cli {
-                cmd.env("HELMOR_CLAUDE_CODE_CLI_PATH", &path);
+            if let Some(path) = bundled_paths.claude_bin {
+                cmd.env("HELMOR_CLAUDE_CODE_BIN_PATH", &path);
             }
             if let Some(path) = bundled_paths.codex_bin {
                 cmd.env("HELMOR_CODEX_BIN_PATH", &path);
-            }
-            if let Some(path) = bundled_paths.bun_bin {
-                cmd.env("HELMOR_BUN_PATH", &path);
             }
         }
 
@@ -798,27 +795,20 @@ mod tests {
         let resources = root.path().join("Helmor.app/Contents/Resources/vendor");
         std::fs::create_dir_all(resources.join("claude-code")).unwrap();
         std::fs::create_dir_all(resources.join("codex")).unwrap();
-        std::fs::create_dir_all(resources.join("bun")).unwrap();
-        std::fs::write(resources.join("claude-code/cli.js"), "").unwrap();
+        std::fs::write(resources.join("claude-code/claude"), "").unwrap();
         std::fs::write(resources.join("codex/codex"), "").unwrap();
-        std::fs::write(resources.join("bun/bun"), "").unwrap();
 
         let paths = resolve_bundled_agent_paths_for_exe(&exe).unwrap();
 
         assert_eq!(
-            paths.claude_cli.unwrap(),
+            paths.claude_bin.unwrap(),
             root.path()
-                .join("Helmor.app/Contents/Resources/vendor/claude-code/cli.js")
+                .join("Helmor.app/Contents/Resources/vendor/claude-code/claude")
         );
         assert_eq!(
             paths.codex_bin.unwrap(),
             root.path()
                 .join("Helmor.app/Contents/Resources/vendor/codex/codex")
-        );
-        assert_eq!(
-            paths.bun_bin.unwrap(),
-            root.path()
-                .join("Helmor.app/Contents/Resources/vendor/bun/bun")
         );
     }
 }
