@@ -12,7 +12,7 @@ import {
 	Split,
 	Trash2,
 } from "lucide-react";
-import { memo, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
 import { Button } from "@/components/ui/button";
 import {
@@ -130,8 +130,29 @@ export const WorkspaceRowItem = memo(
 	}: WorkspaceRowItemProps) {
 		useEffect(() => {
 			recordSidebarRowRender(row.id);
-		});
+		}, [row.id]);
 		const isRunScriptRunning = useIsRunScriptRunning(row.id);
+
+		// Hover-intent debounce: skip prefetch when the mouse just sweeps over
+		// the row. ~120ms is short enough that the data is still warm by the
+		// time HoverCard's 400ms openDelay elapses, but long enough to absorb
+		// fast cursor movement across a long sidebar.
+		const prefetchTimerRef = useRef<number | null>(null);
+		const cancelPendingPrefetch = useCallback(() => {
+			if (prefetchTimerRef.current !== null) {
+				window.clearTimeout(prefetchTimerRef.current);
+				prefetchTimerRef.current = null;
+			}
+		}, []);
+		const handlePointerEnter = useCallback(() => {
+			cancelPendingPrefetch();
+			const id = row.id;
+			prefetchTimerRef.current = window.setTimeout(() => {
+				prefetchTimerRef.current = null;
+				onPrefetch?.(id);
+			}, 120);
+		}, [cancelPendingPrefetch, onPrefetch, row.id]);
+		useEffect(() => cancelPendingPrefetch, [cancelPendingPrefetch]);
 		const [moveDialogOpen, setMoveDialogOpen] = useState(false);
 		const actionLabel =
 			row.state === "archived" ? "Restore workspace" : "Archive workspace";
@@ -198,9 +219,8 @@ export const WorkspaceRowItem = memo(
 				data-has-unread={row.hasUnread ? "true" : "false"}
 				data-busy={isBusy ? "true" : undefined}
 				style={rowFadeStyle}
-				onMouseEnter={() => {
-					onPrefetch?.(row.id);
-				}}
+				onPointerEnter={handlePointerEnter}
+				onPointerLeave={cancelPendingPrefetch}
 				onFocus={() => {
 					onPrefetch?.(row.id);
 				}}
