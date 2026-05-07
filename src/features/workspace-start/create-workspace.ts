@@ -6,6 +6,7 @@ import {
 	finalizeWorkspaceFromRepo,
 	prepareWorkspaceFromRepo,
 	setWorkspaceStatus,
+	updateSessionSettings,
 	type WorkspaceMode,
 } from "@/lib/api";
 import { getComposerContextKey } from "@/lib/workspace-helpers";
@@ -25,12 +26,23 @@ export async function createWorkspaceFromStartComposer({
 	mode,
 	submitMode,
 	editorStateSnapshot,
+	composerConfig,
 }: {
 	repoId: string;
 	sourceBranch: string;
 	mode: WorkspaceMode;
 	submitMode: WorkspaceStartSubmitMode;
 	editorStateSnapshot?: SerializedEditorState;
+	/** StartPage composer picks. On `saveForLater` we persist these to the
+	 *  session row so the backlog session reflects the user's choices when
+	 *  they later open it; on `startNow` they ride along inside the submit
+	 *  payload, so this field is unused in that branch. */
+	composerConfig?: {
+		modelId?: string;
+		effortLevel?: string;
+		permissionMode?: string;
+		fastMode?: boolean;
+	};
 }): Promise<WorkspaceStartCreateResult> {
 	const prepared = await prepareWorkspaceFromRepo(repoId, sourceBranch, mode);
 
@@ -39,6 +51,14 @@ export async function createWorkspaceFromStartComposer({
 			finalizeWorkspaceFromRepo(prepared.workspaceId),
 			editorStateSnapshot
 				? persistSessionDraft(prepared.initialSessionId, editorStateSnapshot)
+				: Promise.resolve(),
+			composerConfig
+				? updateSessionSettings(prepared.initialSessionId, {
+						model: composerConfig.modelId,
+						effortLevel: composerConfig.effortLevel,
+						permissionMode: composerConfig.permissionMode,
+						fastMode: composerConfig.fastMode,
+					})
 				: Promise.resolve(),
 		]);
 		await setWorkspaceStatus(prepared.workspaceId, "backlog");

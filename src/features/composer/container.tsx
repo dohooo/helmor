@@ -438,10 +438,18 @@ export const WorkspaceComposerContainer = memo(
 		const effectiveSelectedModelId = effectiveModel?.id ?? selectedModelId;
 		const provider =
 			effectiveModel?.provider ?? currentSession?.agentType ?? "claude";
+		// "User-configured" = the session row carries an explicit model. Fresh
+		// sessions are created with `model = NULL` and snapshot defaults for
+		// effort/permission/fast (so reading those unconditionally would
+		// override the user's *current* settings); both the streaming
+		// finalizer and the saveForLater path set `model` once the user has
+		// actually picked one, which is the right moment to start trusting
+		// the row.
+		const sessionIsConfigured =
+			!isNewSession(currentSession) || Boolean(currentSession?.model);
 		const cachedEffort = effortLevels[composerContextKey];
-		// For new sessions, use user setting; for existing sessions with history, use session's effort
 		const sessionEffort =
-			(!isNewSession(currentSession) && currentSession?.effortLevel) || null;
+			(sessionIsConfigured && currentSession?.effortLevel) || null;
 		const pendingEffort =
 			pendingOverrideActive && pendingPromptForSession?.effort
 				? pendingPromptForSession.effort
@@ -458,7 +466,7 @@ export const WorkspaceComposerContainer = memo(
 			modelSections,
 		);
 		const cachedPermissionMode = permissionModes[composerContextKey];
-		const sessionPermissionMode = !isNewSession(currentSession)
+		const sessionPermissionMode = sessionIsConfigured
 			? currentSession?.permissionMode
 			: null;
 		const permissionMode =
@@ -470,7 +478,7 @@ export const WorkspaceComposerContainer = memo(
 				: permissionMode;
 		const supportsFastMode = effectiveModel?.supportsFastMode === true;
 		const cachedFastMode = fastModes[composerContextKey];
-		const sessionFastMode = !isNewSession(currentSession)
+		const sessionFastMode = sessionIsConfigured
 			? currentSession?.fastMode
 			: undefined;
 		const pendingFastMode =

@@ -526,12 +526,13 @@ export function inferDefaultModelId(
 ): string | null {
 	const allOptions = modelSections.flatMap((section) => section.options);
 
-	// Existing session with history → respect whatever model it used
-	if (!isNewSession(session)) {
-		const sessionModel = session?.model ?? null;
-		if (sessionModel && findModelOption(modelSections, sessionModel)) {
-			return sessionModel;
-		}
+	// If the session row carries an explicit model — either from history
+	// (streaming finalizer) or from a saveForLater pre-config — respect it.
+	// Fresh sessions are created with `model = NULL` so this safely falls
+	// through to the user's current settings default below.
+	const sessionModel = session?.model ?? null;
+	if (sessionModel && findModelOption(modelSections, sessionModel)) {
+		return sessionModel;
 	}
 
 	// New session or no valid session model → user setting is the only source.

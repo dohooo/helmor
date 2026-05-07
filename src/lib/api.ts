@@ -2022,6 +2022,7 @@ export async function updateSessionSettings(
 		model?: string;
 		effortLevel?: string;
 		permissionMode?: string;
+		fastMode?: boolean;
 	},
 ): Promise<void> {
 	await invoke("update_session_settings", {
@@ -2029,6 +2030,7 @@ export async function updateSessionSettings(
 		model: settings.model ?? null,
 		effortLevel: settings.effortLevel ?? null,
 		permissionMode: settings.permissionMode ?? null,
+		fastMode: settings.fastMode ?? null,
 	});
 }
 
