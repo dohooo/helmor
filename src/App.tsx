@@ -2492,6 +2492,12 @@ function AppShell({
 						mode: startMode,
 						submitMode: options?.startSubmitMode ?? "startNow",
 						editorStateSnapshot: payload.editorStateSnapshot,
+						composerConfig: {
+							modelId: payload.model.id,
+							effortLevel: payload.effortLevel,
+							permissionMode: payload.permissionMode,
+							fastMode: payload.fastMode,
+						},
 					});
 
 				void queryClient.invalidateQueries({

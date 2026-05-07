@@ -327,6 +327,39 @@ export const WorkspaceConversationContainer = memo(
 			);
 		}, [pendingPromptForSession, displayedWorkspaceId]);
 
+		// Carry the StartPage composer config (model / effort / permission /
+		// fast) into the new workspace's session contextKey. The start surface
+		// stores these under `start:repo:<repoId>` in a *different* container
+		// instance that unmounts on the surface swap, so without this seed the
+		// chips on the new workspace fall back to settings defaults until
+		// backend persistence updates the session row at end of turn — and any
+		// follow-up sent before that catches up loses the user's choices.
+		useEffect(() => {
+			if (!pendingCreatedWorkspaceSubmit) return;
+			const { workspaceId, sessionId, payload } = pendingCreatedWorkspaceSubmit;
+			const targetKey = getComposerContextKey(workspaceId, sessionId);
+			setComposerModelSelections((current) =>
+				current[targetKey]
+					? current
+					: { ...current, [targetKey]: payload.model.id },
+			);
+			setComposerEffortLevels((current) =>
+				current[targetKey]
+					? current
+					: { ...current, [targetKey]: payload.effortLevel },
+			);
+			setComposerPermissionModes((current) =>
+				current[targetKey]
+					? current
+					: { ...current, [targetKey]: payload.permissionMode },
+			);
+			setComposerFastModes((current) =>
+				targetKey in current
+					? current
+					: { ...current, [targetKey]: payload.fastMode },
+			);
+		}, [pendingCreatedWorkspaceSubmit]);
+
 		const handleSelectModel = useCallback(
 			(contextKey: string, modelId: string) => {
 				setComposerModelSelections((current) => ({

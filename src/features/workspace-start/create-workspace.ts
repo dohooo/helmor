@@ -6,6 +6,7 @@ import {
 	finalizeWorkspaceFromRepo,
 	prepareWorkspaceFromRepo,
 	setWorkspaceStatus,
+	updateSessionSettings,
 	type WorkspaceMode,
 } from "@/lib/api";
 import { getComposerContextKey } from "@/lib/workspace-helpers";
@@ -25,12 +26,21 @@ export async function createWorkspaceFromStartComposer({
 	mode,
 	submitMode,
 	editorStateSnapshot,
+	composerConfig,
 }: {
 	repoId: string;
 	sourceBranch: string;
 	mode: WorkspaceMode;
 	submitMode: WorkspaceStartSubmitMode;
 	editorStateSnapshot?: SerializedEditorState;
+	/** StartPage composer picks. Only persisted to the session row on
+	 *  saveForLater; startNow consumes them via the submit payload. */
+	composerConfig?: {
+		modelId?: string;
+		effortLevel?: string;
+		permissionMode?: string;
+		fastMode?: boolean;
+	};
 }): Promise<WorkspaceStartCreateResult> {
 	const prepared = await prepareWorkspaceFromRepo(repoId, sourceBranch, mode);
 
@@ -39,6 +49,14 @@ export async function createWorkspaceFromStartComposer({
 			finalizeWorkspaceFromRepo(prepared.workspaceId),
 			editorStateSnapshot
 				? persistSessionDraft(prepared.initialSessionId, editorStateSnapshot)
+				: Promise.resolve(),
+			composerConfig
+				? updateSessionSettings(prepared.initialSessionId, {
+						model: composerConfig.modelId,
+						effortLevel: composerConfig.effortLevel,
+						permissionMode: composerConfig.permissionMode,
+						fastMode: composerConfig.fastMode,
+					})
 				: Promise.resolve(),
 		]);
 		await setWorkspaceStatus(prepared.workspaceId, "backlog");
