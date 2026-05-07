@@ -24,7 +24,11 @@ import { resolveGitAccessDirectories } from "./git-access.js";
 import { parseImageRefs } from "./images.js";
 import { prependLinkedDirectoriesContext } from "./linked-directories-context.js";
 import { errorDetails, logger } from "./logger.js";
-import { listProviderModels, modelSupportsFastMode } from "./model-catalog.js";
+import {
+	listProviderModels,
+	modelSupportsFastMode,
+	pickFastestCodexModel,
+} from "./model-catalog.js";
 import type {
 	GenerateTitleOptions,
 	ListSlashCommandsParams,
@@ -1024,6 +1028,8 @@ export class CodexAppServerManager implements SessionManager {
 	): Promise<void> {
 		const generateBranch = options?.generateBranch ?? true;
 		const cwd = process.cwd();
+		const model = options?.model?.trim() || pickFastestCodexModel();
+		const fastMode = modelSupportsFastMode("codex", model);
 		const server = new CodexAppServer({
 			binaryPath: CODEX_BIN_PATH,
 			cwd,
@@ -1043,9 +1049,13 @@ export class CodexAppServerManager implements SessionManager {
 			await server.sendRequest("initialize", HELMOR_CLIENT_INFO);
 			server.writeNotification("initialized");
 
+			const threadStartParams: Record<string, unknown> = {
+				model,
+				approvalPolicy: BYPASS_GRANULAR_POLICY,
+			};
 			const threadResponse = await server.sendRequest<Record<string, unknown>>(
 				"thread/start",
-				{},
+				threadStartParams,
 			);
 			const threadId = deepGet(threadResponse, "thread", "id") as
 				| string
@@ -1070,7 +1080,7 @@ export class CodexAppServerManager implements SessionManager {
 				);
 			});
 
-			await server.sendRequest("turn/start", {
+			const turnStartParams: Record<string, unknown> = {
 				threadId,
 				input: [
 					{
@@ -1083,7 +1093,12 @@ export class CodexAppServerManager implements SessionManager {
 						text_elements: [],
 					},
 				],
-			});
+				model,
+				effort: "minimal",
+				approvalPolicy: BYPASS_GRANULAR_POLICY,
+			};
+			if (fastMode) turnStartParams.serviceTier = "fast";
+			await server.sendRequest("turn/start", turnStartParams);
 
 			await done;
 			const { title, branchName } = parseTitleAndBranch(raw);
