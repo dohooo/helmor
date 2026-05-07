@@ -2550,17 +2550,13 @@ function AppShell({
 				});
 
 				if (outcome.shouldStream) {
-					// Navigate immediately so the panel mounts on the new
-					// session, then queue the optimistic user bubble before
-					// awaiting finalize. The conversation effect waits for
-					// the workspace state to flip operational before actually
-					// firing `handleComposerSubmit`, so the bubble shows up
-					// instantly while the worktree materialises in the
-					// background.
-					handleSelectWorkspace(outcome.workspaceId);
-					handleSelectSession(outcome.sessionId);
-					setWorkspaceViewMode("conversation");
-
+					// Defer the view-switch state burst to the next animation
+					// frame so the browser can paint the current frame
+					// (start page) before reconciling the heavy conversation
+					// tree. Without this, the synchronous commit pumps the
+					// WKWebView's paint/composite pipeline so hard that RAF
+					// stalls for 5–8 seconds, freezing every CSS / Lottie
+					// animation on screen even though JS itself isn't blocked.
 					const pendingId = crypto.randomUUID();
 					setPendingCreatedWorkspaceSubmit({
 						id: pendingId,
@@ -2568,6 +2564,11 @@ function AppShell({
 						sessionId: outcome.sessionId,
 						payload,
 						finalized: false,
+					});
+					requestAnimationFrame(() => {
+						handleSelectWorkspace(outcome.workspaceId);
+						handleSelectSession(outcome.sessionId);
+						setWorkspaceViewMode("conversation");
 					});
 
 					if (finalizePromise) {
