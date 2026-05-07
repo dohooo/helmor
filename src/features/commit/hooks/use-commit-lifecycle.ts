@@ -132,14 +132,6 @@ type CommitLifecycle = {
 export type PendingPromptForSession = {
 	sessionId: string;
 	prompt: string;
-	modelId?: string | null;
-	/** Effort level override applied alongside `modelId` (e.g. Review helper
-	 *  uses settings.reviewEffort). Falls through if null. */
-	effort?: string | null;
-	/** Fast-mode override applied alongside `modelId` (Review helper uses
-	 *  settings.reviewFastMode). Falls through if null/undefined. */
-	fastMode?: boolean | null;
-	permissionMode?: string | null;
 	/** When true, submit must queue if a turn is already streaming —
 	 *  regardless of the user's `followUpBehavior` setting. Used for
 	 *  host-triggered prompts (e.g. git-pull conflict resolution) that
@@ -373,8 +365,15 @@ export function useWorkspaceCommitLifecycle({
 				return;
 			}
 			try {
+				// Pin the inspector helper's configured model/effort/fast-mode
+				// onto the new session row at creation time. The composer reads
+				// these off `currentSession` via the normal fallback chain, so
+				// no transient pendingPrompt override is needed for them.
 				const { sessionId } = await createSession(workspaceId, {
 					actionKind: mode,
+					model: overrides?.modelId ?? null,
+					effortLevel: overrides?.effort ?? null,
+					fastMode: overrides?.fastMode ?? null,
 				});
 				const repoPreferences = selectedRepoId
 					? await loadRepoPreferences(selectedRepoId)
@@ -401,13 +400,7 @@ export function useWorkspaceCommitLifecycle({
 						: current,
 				);
 
-				setPendingPromptForSession({
-					sessionId,
-					prompt,
-					modelId: overrides?.modelId ?? null,
-					effort: overrides?.effort ?? null,
-					fastMode: overrides?.fastMode ?? null,
-				});
+				setPendingPromptForSession({ sessionId, prompt });
 				onSelectSession(sessionId);
 			} catch (error) {
 				console.error("[commitButton] Failed to start session:", error);
@@ -464,6 +457,9 @@ export function useWorkspaceCommitLifecycle({
 				// independently in `isAutoHideableActionKind`.
 				const { sessionId } = await createSession(workspaceId, {
 					actionKind: "review",
+					model: modelId,
+					effortLevel: effort ?? null,
+					fastMode: fastMode ?? null,
 				});
 				const repoPreferences = selectedRepoId
 					? await loadRepoPreferences(selectedRepoId)
@@ -481,13 +477,7 @@ export function useWorkspaceCommitLifecycle({
 				await queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
 				});
-				setPendingPromptForSession({
-					sessionId,
-					prompt,
-					modelId,
-					effort: effort ?? null,
-					fastMode: fastMode ?? null,
-				});
+				setPendingPromptForSession({ sessionId, prompt });
 				onSelectSession(sessionId);
 			} catch (error) {
 				console.error("[review] failed to start session:", error);

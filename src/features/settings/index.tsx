@@ -202,8 +202,16 @@ export const SettingsDialog = memo(function SettingsDialog({
 		modelSectionsQuery.data ?? [],
 		settings.defaultModelId,
 	);
-	const defaultEffortLevels =
-		selectedDefaultModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS;
+	// `supportsEffort` keys off real model metadata (no fallback) — Haiku
+	// reports `effortLevels: []`, and the wire format may also drop the
+	// field entirely when empty. Either way, `?.length ?? 0` resolves to
+	// 0 → disabled. The fallback list is only used to keep the dropdown
+	// from rendering empty while metadata is still loading.
+	const defaultModelSupportsEffort =
+		(selectedDefaultModel?.effortLevels?.length ?? 0) > 0;
+	const defaultEffortLevels = defaultModelSupportsEffort
+		? (selectedDefaultModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS)
+		: FALLBACK_EFFORT_LEVELS;
 	const defaultModelSupportsFastMode =
 		selectedDefaultModel?.supportsFastMode === true;
 	const defaultModelLabel =
@@ -224,8 +232,11 @@ export const SettingsDialog = memo(function SettingsDialog({
 	const reviewModelLabel =
 		effectiveReviewModel?.label ??
 		(modelSectionsQuery.isPending ? "Loading…" : "Select model");
-	const reviewEffortLevels =
-		effectiveReviewModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS;
+	const reviewModelSupportsEffort =
+		(effectiveReviewModel?.effortLevels?.length ?? 0) > 0;
+	const reviewEffortLevels = reviewModelSupportsEffort
+		? (effectiveReviewModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS)
+		: FALLBACK_EFFORT_LEVELS;
 	const reviewModelSupportsFastMode =
 		effectiveReviewModel?.supportsFastMode === true;
 	const effectiveReviewEffort =
@@ -241,8 +252,11 @@ export const SettingsDialog = memo(function SettingsDialog({
 	const prModelLabel =
 		effectivePrModel?.label ??
 		(modelSectionsQuery.isPending ? "Loading…" : "Select model");
-	const prEffortLevels =
-		effectivePrModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS;
+	const prModelSupportsEffort =
+		(effectivePrModel?.effortLevels?.length ?? 0) > 0;
+	const prEffortLevels = prModelSupportsEffort
+		? (effectivePrModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS)
+		: FALLBACK_EFFORT_LEVELS;
 	const prModelSupportsFastMode = effectivePrModel?.supportsFastMode === true;
 	const effectivePrEffort =
 		settings.prEffort ?? settings.defaultEffort ?? "high";
@@ -645,9 +659,13 @@ export const SettingsDialog = memo(function SettingsDialog({
 											</DropdownMenu>
 											<DropdownMenu>
 												<DropdownMenuTrigger
+													disabled={!defaultModelSupportsEffort}
 													className={cn(
-														"flex h-8 cursor-pointer items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+														"flex h-8 items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px]",
 														"shrink-0 gap-1.5",
+														defaultModelSupportsEffort
+															? "cursor-pointer text-foreground hover:bg-muted/50"
+															: "cursor-not-allowed text-muted-foreground opacity-60",
 													)}
 												>
 													<span>
@@ -762,9 +780,13 @@ export const SettingsDialog = memo(function SettingsDialog({
 											</DropdownMenu>
 											<DropdownMenu>
 												<DropdownMenuTrigger
+													disabled={!reviewModelSupportsEffort}
 													className={cn(
-														"flex h-8 cursor-pointer items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+														"flex h-8 items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px]",
 														"shrink-0 gap-1.5",
+														reviewModelSupportsEffort
+															? "cursor-pointer text-foreground hover:bg-muted/50"
+															: "cursor-not-allowed text-muted-foreground opacity-60",
 													)}
 												>
 													<span>{effortLabel(effectiveReviewEffort)}</span>
@@ -826,7 +848,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 									</SettingsRow>
 									<SettingsRow
 										title="PR / MR model"
-										description="Model used when creating PRs and MRs"
+										description="Model for PRs and MRs"
 									>
 										<div className="flex w-[360px] items-center gap-2">
 											<DropdownMenu>
@@ -884,9 +906,13 @@ export const SettingsDialog = memo(function SettingsDialog({
 											</DropdownMenu>
 											<DropdownMenu>
 												<DropdownMenuTrigger
+													disabled={!prModelSupportsEffort}
 													className={cn(
-														"flex h-8 cursor-pointer items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+														"flex h-8 items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px]",
 														"shrink-0 gap-1.5",
+														prModelSupportsEffort
+															? "cursor-pointer text-foreground hover:bg-muted/50"
+															: "cursor-not-allowed text-muted-foreground opacity-60",
 													)}
 												>
 													<span>{effortLabel(effectivePrEffort)}</span>

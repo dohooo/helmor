@@ -167,18 +167,13 @@ type WorkspaceComposerContainerProps = {
 		editorStateSnapshot?: SerializedEditorState;
 	}) => void;
 	/** Prompt queued by an external caller to auto-submit once the displayed
-	 * session matches `sessionId`. */
+	 *  session matches `sessionId`. Per-session config (model / effort /
+	 *  fast-mode / permission mode) lives on the session row by the time
+	 *  this fires — the composer reads it off `currentSession` rather than
+	 *  having it ride along here. */
 	pendingPromptForSession?: {
 		sessionId: string;
 		prompt: string;
-		modelId?: string | null;
-		/** Effort level forced for this pending submit. Takes precedence over
-		 *  cached/session/default effort. */
-		effort?: string | null;
-		/** Fast-mode forced for this pending submit. Takes precedence over
-		 *  cached/session/default fast-mode. */
-		fastMode?: boolean | null;
-		permissionMode?: string | null;
 		/** Force queue (bypass `followUpBehavior`) if a turn is streaming. */
 		forceQueue?: boolean;
 	} | null;
@@ -459,46 +454,23 @@ export const WorkspaceComposerContainer = memo(
 		]
 			? null
 			: getShortcut(settings.shortcuts, "composer.toggleContextPanel");
-		const pendingOverrideActive =
-			pendingPromptForSession?.sessionId === displayedSessionId;
-		const pendingModel = useMemo(
-			() =>
-				pendingOverrideActive && pendingPromptForSession?.modelId
-					? findModelOption(modelSections, pendingPromptForSession.modelId)
-					: null,
-			[
-				displayedSessionId,
-				modelSections,
-				pendingOverrideActive,
-				pendingPromptForSession,
-			],
-		);
-		const effectiveModel = pendingModel ?? selectedModel;
+		const effectiveModel = selectedModel;
 		const effectiveSelectedModelId = effectiveModel?.id ?? selectedModelId;
 		const provider =
 			effectiveModel?.provider ?? currentSession?.agentType ?? "claude";
 		// "User-configured" = the session row carries an explicit model. Fresh
-		// sessions are created with `model = NULL` and snapshot defaults for
-		// effort/permission/fast (so reading those unconditionally would
-		// override the user's *current* settings); both the streaming
-		// finalizer and the saveForLater path set `model` once the user has
-		// actually picked one, which is the right moment to start trusting
-		// the row.
+		// sessions get `model = NULL` *unless* an inspector helper (Create
+		// PR/MR, Review) pinned one at create time — in which case
+		// effort/fastMode/permissionMode were pinned in the same INSERT, so
+		// trusting the row here picks them up. The streaming finalizer
+		// continues to overwrite these on every turn.
 		const sessionIsConfigured =
 			!isNewSession(currentSession) || Boolean(currentSession?.model);
 		const cachedEffort = effortLevels[composerContextKey];
 		const sessionEffort =
 			(sessionIsConfigured && currentSession?.effortLevel) || null;
-		const pendingEffort =
-			pendingOverrideActive && pendingPromptForSession?.effort
-				? pendingPromptForSession.effort
-				: null;
 		const rawEffort =
-			pendingEffort ??
-			cachedEffort ??
-			sessionEffort ??
-			settings.defaultEffort ??
-			"high";
+			cachedEffort ?? sessionEffort ?? settings.defaultEffort ?? "high";
 		const effortLevel = clampEffortToModel(
 			rawEffort,
 			effectiveSelectedModelId,
@@ -508,30 +480,16 @@ export const WorkspaceComposerContainer = memo(
 		const sessionPermissionMode = sessionIsConfigured
 			? currentSession?.permissionMode
 			: null;
-		const permissionMode =
+		const effectivePermissionMode =
 			cachedPermissionMode ??
 			(sessionPermissionMode === "plan" ? "plan" : "bypassPermissions");
-		const effectivePermissionMode =
-			pendingOverrideActive && pendingPromptForSession?.permissionMode
-				? pendingPromptForSession.permissionMode
-				: permissionMode;
 		const supportsFastMode = effectiveModel?.supportsFastMode === true;
 		const cachedFastMode = fastModes[composerContextKey];
 		const sessionFastMode = sessionIsConfigured
 			? currentSession?.fastMode
 			: undefined;
-		const pendingFastMode =
-			pendingOverrideActive &&
-			pendingPromptForSession?.fastMode !== undefined &&
-			pendingPromptForSession?.fastMode !== null
-				? pendingPromptForSession.fastMode
-				: undefined;
 		const fastMode = supportsFastMode
-			? (pendingFastMode ??
-				cachedFastMode ??
-				sessionFastMode ??
-				settings.defaultFastMode ??
-				false)
+			? (cachedFastMode ?? sessionFastMode ?? settings.defaultFastMode ?? false)
 			: false;
 		const showFastModePrelude = activeFastPreludes[composerContextKey] === true;
 		const loadingConversationContext =
@@ -873,10 +831,6 @@ export const WorkspaceComposerContainer = memo(
 			if (pendingPromptForSession.sessionId !== displayedSessionId) {
 				return;
 			}
-			if (pendingPromptForSession.modelId && !pendingModel) {
-				// Wait for the model sections query to resolve the queued model.
-				return;
-			}
 			if (!effectiveModel) {
 				// Wait for the model sections query to resolve.
 				return;
@@ -885,8 +839,6 @@ export const WorkspaceComposerContainer = memo(
 			const dispatchKey = [
 				pendingPromptForSession.sessionId,
 				pendingPromptForSession.prompt,
-				pendingPromptForSession.modelId ?? "",
-				pendingPromptForSession.permissionMode ?? "",
 				pendingPromptForSession.forceQueue ? "q" : "",
 			].join("|");
 			if (dispatchedPromptKeyRef.current === dispatchKey) {
@@ -915,7 +867,6 @@ export const WorkspaceComposerContainer = memo(
 			fastMode,
 			onPendingPromptConsumed,
 			onSubmit,
-			pendingModel,
 			pendingPromptForSession,
 			supportsFastMode,
 			workingDirectory,

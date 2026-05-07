@@ -2564,12 +2564,25 @@ export async function createSession(
 	options?: {
 		actionKind?: ActionKind | null;
 		permissionMode?: string | null;
+		/** Pin the session row's `model` at creation. Inspector helpers
+		 *  (Create PR/MR, Review) push the user's configured model here so
+		 *  the composer reads it off the row instead of falling back to
+		 *  settings.defaultModelId. Leave null for the default flow. */
+		model?: string | null;
+		/** Pin `effort_level` at creation; null falls back to the user
+		 *  setting on the backend. */
+		effortLevel?: string | null;
+		/** Pin `fast_mode` at creation; null/undefined defaults to false. */
+		fastMode?: boolean | null;
 	},
 ): Promise<CreateSessionResponse> {
 	return invoke<CreateSessionResponse>("create_session", {
 		workspaceId,
 		actionKind: options?.actionKind ?? null,
 		permissionMode: options?.permissionMode ?? null,
+		model: options?.model ?? null,
+		effortLevel: options?.effortLevel ?? null,
+		fastMode: options?.fastMode ?? null,
 	});
 }
 

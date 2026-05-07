@@ -550,7 +550,7 @@ describe("WorkspaceComposerContainer", () => {
 		});
 	});
 
-	it("auto-submits queued CLI prompts with queued model and permission mode", async () => {
+	it("auto-submits queued CLI prompts using the model + permission_mode pinned on the session row", async () => {
 		const queryClient = createHelmorQueryClient();
 		queryClient.setQueryData(
 			helmorQueryKeys.agentModelSections,
@@ -560,9 +560,16 @@ describe("WorkspaceComposerContainer", () => {
 			helmorQueryKeys.workspaceDetail("workspace-1"),
 			WORKSPACE_DETAIL,
 		);
+		// CLI-send path pins the resolved model + permissionMode onto the
+		// session row before queuing the prompt; the composer reads them off
+		// `currentSession` rather than off the (now prompt-only) handoff.
 		queryClient.setQueryData(
 			helmorQueryKeys.workspaceSessions("workspace-1"),
-			WORKSPACE_SESSIONS,
+			WORKSPACE_SESSIONS.map((session) =>
+				session.id === "session-1"
+					? { ...session, model: "gpt-5.4", permissionMode: "plan" }
+					: session,
+			),
 		);
 
 		const onSubmit = vi.fn();
@@ -592,8 +599,6 @@ describe("WorkspaceComposerContainer", () => {
 					pendingPromptForSession={{
 						sessionId: "session-1",
 						prompt: "Plan the fix",
-						modelId: "gpt-5.4",
-						permissionMode: "plan",
 					}}
 					onPendingPromptConsumed={onPendingPromptConsumed}
 				/>
