@@ -66,6 +66,7 @@ function renderContainer(
 		finalized?: boolean;
 		busySessionIds?: Set<string>;
 		stoppableSessionIds?: Set<string>;
+		workspaceRootPath?: string | null;
 	} = {},
 ) {
 	const queryClient = new QueryClient({
@@ -92,7 +93,11 @@ function renderContainer(
 				onPendingCreatedWorkspaceSubmitConsumed={onConsumed}
 				busySessionIds={options.busySessionIds}
 				stoppableSessionIds={options.stoppableSessionIds}
-				workspaceRootPath="/tmp/new-workspace"
+				workspaceRootPath={
+					options.workspaceRootPath === undefined
+						? "/tmp/new-workspace"
+						: options.workspaceRootPath
+				}
 				composerOnly
 			/>
 		</QueryClientProvider>,
@@ -107,13 +112,17 @@ describe("WorkspaceConversationContainer", () => {
 
 	it("dispatches a created workspace submit through the normal send path", async () => {
 		const onConsumed = vi.fn();
+		// App.tsx is now responsible for patching `workingDirectory` onto the
+		// payload (from prepare/finalize response) before flipping
+		// `finalized=true`. This test mirrors that contract: payload arrives
+		// already populated; conversation/index.tsx must dispatch it as-is.
 		const pendingPayload: ComposerSubmitPayload = {
 			prompt: "Build this now",
 			imagePaths: [],
 			filePaths: [],
 			customTags: [],
 			model: MODEL,
-			workingDirectory: null,
+			workingDirectory: "/tmp/new-workspace",
 			effortLevel: "high",
 			permissionMode: "default",
 			fastMode: false,
@@ -123,10 +132,7 @@ describe("WorkspaceConversationContainer", () => {
 
 		await waitFor(() => {
 			expect(streamingMocks.handleComposerSubmit).toHaveBeenCalledWith(
-				{
-					...pendingPayload,
-					workingDirectory: "/tmp/new-workspace",
-				},
+				pendingPayload,
 				{
 					sessionId: "session-1",
 					workspaceId: "workspace-1",
@@ -135,6 +141,44 @@ describe("WorkspaceConversationContainer", () => {
 			);
 		});
 		expect(onConsumed).toHaveBeenCalledWith("pending-1");
+	});
+
+	it("uses payload.workingDirectory verbatim even when workspaceRootPath is null", async () => {
+		// Regression: previously, when the workspaceDetail React Query was
+		// still in-flight on first send (very common for local-mode submits
+		// where finalize is a no-op), `workspaceRootPath` was null and the
+		// container fell back to `payload.workingDirectory` — but the start
+		// composer always seeded that as null too. The result was
+		// `workingDirectory: null` reaching the agent, the CLI defaulting to
+		// process cwd `/`, and the second turn failing with
+		// `bad_resume_failure` because the transcript was written to the
+		// wrong project bucket. With the fix, App.tsx always patches the
+		// payload from prepare/finalize before flipping `finalized=true`.
+		const onConsumed = vi.fn();
+		const pendingPayload: ComposerSubmitPayload = {
+			prompt: "Build this now",
+			imagePaths: [],
+			filePaths: [],
+			customTags: [],
+			model: MODEL,
+			workingDirectory: "/Users/me/repos/foo",
+			effortLevel: "high",
+			permissionMode: "default",
+			fastMode: false,
+		};
+
+		renderContainer(pendingPayload, onConsumed, { workspaceRootPath: null });
+
+		await waitFor(() => {
+			expect(streamingMocks.handleComposerSubmit).toHaveBeenCalledWith(
+				pendingPayload,
+				{
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					contextKey: "session:session-1",
+				},
+			);
+		});
 	});
 
 	it("does not show composer stop while the session is only pending finalize", () => {

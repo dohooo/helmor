@@ -2530,21 +2530,26 @@ function AppShell({
 					);
 					setStartPendingNewBranch(null);
 				}
-				const { finalizePromise, outcome, workspaceId, sessionId } =
-					await createWorkspaceFromStartComposer({
-						repoId: startRepository.id,
-						sourceBranch: startSourceBranch,
-						mode: startMode,
-						submitMode: options?.startSubmitMode ?? "startNow",
-						editorStateSnapshot: payload.editorStateSnapshot,
-						composerConfig: {
-							modelId: payload.model.id,
-							effortLevel: payload.effortLevel,
-							permissionMode: payload.permissionMode,
-							fastMode: payload.fastMode,
-						},
-						linkedDirectories: startPendingLinkedDirectories,
-					});
+				const {
+					finalizePromise,
+					outcome,
+					workspaceId,
+					sessionId,
+					preparedWorkingDirectory,
+				} = await createWorkspaceFromStartComposer({
+					repoId: startRepository.id,
+					sourceBranch: startSourceBranch,
+					mode: startMode,
+					submitMode: options?.startSubmitMode ?? "startNow",
+					editorStateSnapshot: payload.editorStateSnapshot,
+					composerConfig: {
+						modelId: payload.model.id,
+						effortLevel: payload.effortLevel,
+						permissionMode: payload.permissionMode,
+						fastMode: payload.fastMode,
+					},
+					linkedDirectories: startPendingLinkedDirectories,
+				});
 				// Picks belonged to the in-flight create; clear regardless of
 				// outcome so the next start-page session begins clean.
 				setStartPendingLinkedDirectories(EMPTY_STRING_LIST);
@@ -2566,7 +2571,18 @@ function AppShell({
 						id: pendingId,
 						workspaceId: outcome.workspaceId,
 						sessionId: outcome.sessionId,
-						payload,
+						// Local mode already has the cwd; worktree mode patches
+						// it onto the payload below once finalize materialises
+						// the worktree dir. Either way the payload is the
+						// single source of truth — the consumer never falls
+						// back to `workspaceRootPath` (which races the
+						// workspaceDetail React Query and was producing a
+						// transient cwd=null on the first turn).
+						payload: {
+							...payload,
+							workingDirectory:
+								preparedWorkingDirectory ?? payload.workingDirectory,
+						},
 						finalized: false,
 					});
 					requestAnimationFrame(() => {
@@ -2575,9 +2591,12 @@ function AppShell({
 						setWorkspaceViewMode("conversation");
 					});
 
+					let finalizedWorkingDirectory: string | null =
+						preparedWorkingDirectory;
 					if (finalizePromise) {
 						try {
-							await finalizePromise;
+							const finalized = await finalizePromise;
+							finalizedWorkingDirectory = finalized.workingDirectory;
 						} catch (error) {
 							// Clear the optimistic bubble so the user doesn't
 							// see a message that never actually got sent.
@@ -2600,7 +2619,20 @@ function AppShell({
 					// the workspaceDetail React Query refetch round-trip.
 					setPendingCreatedWorkspaceSubmit((current) =>
 						current?.id === pendingId
-							? { ...current, finalized: true }
+							? {
+									...current,
+									payload: {
+										...current.payload,
+										// Worktree path only exists post-finalize;
+										// patch payload right before we let the
+										// effect fire so the first turn never sees
+										// a null cwd.
+										workingDirectory:
+											finalizedWorkingDirectory ??
+											current.payload.workingDirectory,
+									},
+									finalized: true,
+								}
 							: current,
 					);
 					void queryClient.invalidateQueries({

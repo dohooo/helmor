@@ -432,22 +432,18 @@ export const WorkspaceConversationContainer = memo(
 				pendingCreatedWorkspaceSubmit.id;
 
 			void (async () => {
-				await handleComposerSubmit(
-					{
-						...pendingCreatedWorkspaceSubmit.payload,
-						workingDirectory:
-							workspaceRootPath ??
-							pendingCreatedWorkspaceSubmit.payload.workingDirectory,
-					},
-					{
-						sessionId: pendingCreatedWorkspaceSubmit.sessionId,
-						workspaceId: pendingCreatedWorkspaceSubmit.workspaceId,
-						contextKey: getComposerContextKey(
-							pendingCreatedWorkspaceSubmit.workspaceId,
-							pendingCreatedWorkspaceSubmit.sessionId,
-						),
-					},
-				);
+				// `payload.workingDirectory` is patched by App.tsx with the
+				// cwd returned from prepare/finalize, so the first turn never
+				// races the workspaceDetail React Query — no need to fall
+				// back to `workspaceRootPath` here.
+				await handleComposerSubmit(pendingCreatedWorkspaceSubmit.payload, {
+					sessionId: pendingCreatedWorkspaceSubmit.sessionId,
+					workspaceId: pendingCreatedWorkspaceSubmit.workspaceId,
+					contextKey: getComposerContextKey(
+						pendingCreatedWorkspaceSubmit.workspaceId,
+						pendingCreatedWorkspaceSubmit.sessionId,
+					),
+				});
 				onPendingCreatedWorkspaceSubmitConsumed?.(
 					pendingCreatedWorkspaceSubmit.id,
 				);
@@ -458,7 +454,6 @@ export const WorkspaceConversationContainer = memo(
 			handleComposerSubmit,
 			onPendingCreatedWorkspaceSubmitConsumed,
 			pendingCreatedWorkspaceSubmit,
-			workspaceRootPath,
 		]);
 		const relevantPendingInsertRequests = pendingInsertRequests.filter(
 			(request) => {

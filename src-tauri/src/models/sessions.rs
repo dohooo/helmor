@@ -100,6 +100,24 @@ pub fn list_session_historical_records(session_id: &str) -> Result<Vec<Historica
     list_session_historical_records_with_connection(&connection, session_id)
 }
 
+/// All `provider_session_id`s belonging to a workspace's Claude sessions.
+/// Includes hidden sessions — they can be unhidden and resumed later, so
+/// migrators (e.g. local→worktree cwd change) need to cover them too.
+pub fn list_claude_provider_session_ids(workspace_id: &str) -> Result<Vec<String>> {
+    let connection = db::read_conn()?;
+    let mut statement = connection.prepare(
+        r#"
+            SELECT provider_session_id
+            FROM sessions
+            WHERE workspace_id = ?1
+              AND agent_type = 'claude'
+              AND provider_session_id IS NOT NULL
+            "#,
+    )?;
+    let rows = statement.query_map([workspace_id], |row| row.get::<_, String>(0))?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
 fn adjacent_visible_session_id(
     transaction: &Transaction<'_>,
     workspace_id: &str,

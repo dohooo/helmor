@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 #[cfg(test)]
 use serde_json::Value;
 
@@ -49,25 +49,29 @@ pub(super) fn parse_codex_output(
 }
 
 pub(super) fn resolve_working_directory(provided: Option<&str>) -> Result<PathBuf> {
-    if let Some(path) = non_empty(provided) {
-        let directory = PathBuf::from(path);
-        // Provided path MUST exist — silently falling back to the helmor
-        // process's cwd would spawn the agent CLI in `/` (or the app bundle)
-        // and pollute session_messages with nonsense output. Tag the error
-        // with `WorkspaceBroken` so the frontend can offer "Permanently
-        // Delete" instead of a generic failure toast.
-        if !directory.is_dir() {
-            return Err(
-                crate::error::coded(crate::error::ErrorCode::WorkspaceBroken).context(format!(
-                    "Workspace directory is missing: {}",
-                    directory.display()
-                )),
-            );
-        }
-        return Ok(directory);
+    // No silent fallback to `std::env::current_dir()`. macOS GUI launches
+    // start at `/`, and a missing cwd silently bound to `/` would write
+    // the agent's transcript into the wrong project bucket — the next
+    // resume can't find the conversation and returns empty (issue: first
+    // turn writes to cwd=/, second turn fails with bad_resume_failure).
+    // Every legitimate sender resolves cwd from the workspace; force
+    // anything else to error so the bug shows up immediately.
+    let Some(path) = non_empty(provided) else {
+        return Err(
+            crate::error::coded(crate::error::ErrorCode::WorkspaceBroken)
+                .context("workingDirectory is required but was not provided"),
+        );
+    };
+    let directory = PathBuf::from(path);
+    if !directory.is_dir() {
+        return Err(
+            crate::error::coded(crate::error::ErrorCode::WorkspaceBroken).context(format!(
+                "Workspace directory is missing: {}",
+                directory.display()
+            )),
+        );
     }
-
-    std::env::current_dir().context("Failed to resolve working directory")
+    Ok(directory)
 }
 
 #[cfg(test)]
@@ -109,16 +113,25 @@ mod tests {
     }
 
     #[test]
-    fn resolve_working_directory_blank_string_falls_back_to_cwd() {
-        let resolved = resolve_working_directory(Some("   ")).unwrap();
-        // Blank counts as "no path provided" — must equal current cwd.
-        assert_eq!(resolved, std::env::current_dir().unwrap());
+    fn resolve_working_directory_blank_string_is_workspace_broken() {
+        // Blank counts as "no path provided". The previous implementation
+        // silently fell back to `std::env::current_dir()` (== `/` for a
+        // packaged macOS GUI launch), which made the agent CLI write its
+        // transcript into the wrong project bucket. Now it errors loudly
+        // so the bug surfaces on the first send instead of poisoning
+        // resume on the second.
+        let err = resolve_working_directory(Some("   ")).unwrap_err();
+        let code = crate::error::extract_code(&err);
+        assert_eq!(code, crate::error::ErrorCode::WorkspaceBroken);
+        assert!(format!("{err:#}").contains("workingDirectory is required"));
     }
 
     #[test]
-    fn resolve_working_directory_none_falls_back_to_cwd() {
-        let resolved = resolve_working_directory(None).unwrap();
-        assert_eq!(resolved, std::env::current_dir().unwrap());
+    fn resolve_working_directory_none_is_workspace_broken() {
+        let err = resolve_working_directory(None).unwrap_err();
+        let code = crate::error::extract_code(&err);
+        assert_eq!(code, crate::error::ErrorCode::WorkspaceBroken);
+        assert!(format!("{err:#}").contains("workingDirectory is required"));
     }
 
     #[test]

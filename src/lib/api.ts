@@ -387,11 +387,17 @@ export type PrepareWorkspaceResponse = {
 	defaultBranch: string;
 	state: WorkspaceState;
 	repoScripts: RepoScripts;
+	/** CWD the agent CLI must run in. Local mode: filled with `repo.root_path`
+	 *  immediately. Worktree mode: null until finalize materialises the
+	 *  worktree — callers MUST then read `FinalizeWorkspaceResponse.workingDirectory`. */
+	workingDirectory: string | null;
 };
 
 export type FinalizeWorkspaceResponse = {
 	workspaceId: string;
 	finalState: WorkspaceState;
+	/** CWD the agent CLI must run in. Always populated when finalize succeeds. */
+	workingDirectory: string;
 };
 
 export type MarkWorkspaceReadResponse = undefined;
