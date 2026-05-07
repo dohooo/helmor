@@ -99,7 +99,6 @@ export function WorkspaceInspectorSidebar({
 		handleToggleActions,
 		handleToggleTabs,
 		isActionsResizing,
-		isPanelToggleAnimating,
 		isResizing,
 		isTabsResizing,
 		repoScripts,
@@ -399,8 +398,6 @@ export function WorkspaceInspectorSidebar({
 				changeRequest={changeRequest ?? null}
 				forgeIsRefreshing={forgeIsRefreshing}
 				bodyHeight={changesHeight}
-				animatePanelToggle={isPanelToggleAnimating}
-				isResizing={isResizing}
 			/>
 			{actionsOpen ? (
 				<HorizontalResizeHandle
@@ -417,7 +414,6 @@ export function WorkspaceInspectorSidebar({
 				open={actionsOpen}
 				onToggle={handleToggleActions}
 				bodyHeight={actionsHeight}
-				isResizing={isResizing}
 				onCommitAction={onCommitAction}
 				onReviewAction={onReviewAction}
 				currentSessionId={currentSessionId ?? null}
@@ -425,7 +421,6 @@ export function WorkspaceInspectorSidebar({
 				commitButtonMode={commitButtonMode}
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
-				animatePanelToggle={isPanelToggleAnimating}
 			/>
 			{tabsOpen ? (
 				<HorizontalResizeHandle
@@ -449,8 +444,6 @@ export function WorkspaceInspectorSidebar({
 				canSpawnTerminal={canSpawnTerminal}
 				canHoverExpand={canHoverExpand}
 				bodyHeight={tabsBodyHeight}
-				animatePanelToggle={isPanelToggleAnimating}
-				isResizing={isResizing}
 			>
 				<SetupTab
 					repoId={repoId ?? null}

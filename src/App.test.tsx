@@ -130,10 +130,10 @@ describe("App", () => {
 			.querySelector("svg");
 
 		expect(tabsChevron).toHaveStyle({
-			transition: "transform 0ms cubic-bezier(0.32, 0.72, 0, 1)",
+			transition: "none",
 		});
 		expect(actionsChevron).toHaveStyle({
-			transition: "transform 0ms cubic-bezier(0.32, 0.72, 0, 1)",
+			transition: "none",
 		});
 
 		// Default: tabs section collapsed; changes + actions bodies present.
@@ -149,9 +149,6 @@ describe("App", () => {
 		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Inspector tabs body")).toBeInTheDocument();
-		expect(tabsChevron).toHaveStyle({
-			transition: "transform 350ms cubic-bezier(0.32, 0.72, 0, 1)",
-		});
 
 		// Clicking again collapses it back.
 		await user.click(tabsToggle);

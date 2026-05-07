@@ -18,7 +18,7 @@ import {
 	PlusIcon,
 	Undo2Icon,
 } from "lucide-react";
-import { motion, useReducedMotion } from "motion/react";
+import { motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedShinyText } from "@/components/ui/animated-shiny-text";
@@ -57,11 +57,7 @@ import { buildRemoteFileUrl } from "@/lib/remote-file-url";
 import { cn } from "@/lib/utils";
 import { showWorkspaceBrokenToast } from "@/lib/workspace-broken-toast";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
-import {
-	INSPECTOR_SECTION_HEADER_HEIGHT,
-	TABS_ANIMATION_MS,
-	TABS_EASING_CURVE,
-} from "../layout";
+import { INSPECTOR_SECTION_HEADER_HEIGHT } from "../layout";
 import { GitSectionHeader } from "./git-section-header";
 
 const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
@@ -89,10 +85,6 @@ type ChangesSectionProps = {
 	forgeIsRefreshing?: boolean;
 	/** Height of the changes body (excluding the section header). */
 	bodyHeight: number;
-	/** Enables the height transition only for explicit panel toggles. */
-	animatePanelToggle?: boolean;
-	/** Suppresses the height transition while the user is dragging a divider. */
-	isResizing?: boolean;
 };
 
 export function ChangesSection({
@@ -112,17 +104,7 @@ export function ChangesSection({
 	changeRequest,
 	forgeIsRefreshing = false,
 	bodyHeight,
-	animatePanelToggle = false,
-	isResizing,
 }: ChangesSectionProps) {
-	const shouldReduceMotion = useReducedMotion();
-	const panelTransition = {
-		duration:
-			animatePanelToggle && !isResizing && !shouldReduceMotion
-				? TABS_ANIMATION_MS / 1000
-				: 0,
-		ease: TABS_EASING_CURVE,
-	};
 	const queryClient = useQueryClient();
 	const [changesTreeView, setChangesTreeView] = useState(true);
 	const [branchDiffTreeView, setBranchDiffTreeView] = useState(true);
@@ -381,8 +363,7 @@ export function ChangesSection({
 			className="flex min-h-0 shrink-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar"
 			initial={false}
 			animate={{ height: INSPECTOR_SECTION_HEADER_HEIGHT + bodyHeight }}
-			transition={panelTransition}
-			style={{ willChange: isResizing ? undefined : "height" }}
+			transition={{ duration: 0 }}
 		>
 			<GitSectionHeader
 				commitButtonMode={commitButtonMode}

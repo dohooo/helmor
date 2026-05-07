@@ -8,7 +8,7 @@ import {
 	LoaderCircleIcon,
 	TriangleIcon,
 } from "lucide-react";
-import { motion, useReducedMotion } from "motion/react";
+import { motion } from "motion/react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -51,9 +51,6 @@ import {
 	INSPECTOR_SECTION_HEADER_CLASS,
 	INSPECTOR_SECTION_HEADER_HEIGHT,
 	INSPECTOR_SECTION_TITLE_CLASS,
-	TABS_ANIMATION_MS,
-	TABS_EASING,
-	TABS_EASING_CURVE,
 } from "../layout";
 
 interface GitStatusItem {
@@ -112,8 +109,6 @@ type ActionsSectionProps = {
 	open: boolean;
 	onToggle: () => void;
 	bodyHeight: number;
-	animatePanelToggle?: boolean;
-	isResizing?: boolean;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
 	onReviewAction?: () => Promise<void>;
 	currentSessionId?: string | null;
@@ -166,8 +161,6 @@ export function ActionsSection({
 	open,
 	onToggle,
 	bodyHeight,
-	animatePanelToggle = false,
-	isResizing,
 	onCommitAction,
 	onReviewAction,
 	currentSessionId,
@@ -179,16 +172,6 @@ export function ActionsSection({
 	const queryClient = useQueryClient();
 	const [syncPending, setSyncPending] = useState(false);
 	const [reviewPending, setReviewPending] = useState(false);
-	const shouldReduceMotion = useReducedMotion();
-	const panelTransition = {
-		duration:
-			animatePanelToggle && !isResizing && !shouldReduceMotion
-				? TABS_ANIMATION_MS / 1000
-				: 0,
-		ease: TABS_EASING_CURVE,
-	};
-	const chevronTransitionMs =
-		animatePanelToggle && !shouldReduceMotion ? TABS_ANIMATION_MS : 0;
 	const forgeQuery = useQuery({
 		...workspaceForgeQueryOptions(workspaceId ?? "__none__"),
 		enabled: workspaceId !== null,
@@ -350,10 +333,7 @@ export function ActionsSection({
 			animate={{
 				height: INSPECTOR_SECTION_HEADER_HEIGHT + (open ? bodyHeight : 0),
 			}}
-			transition={panelTransition}
-			style={{
-				willChange: isResizing ? undefined : "height",
-			}}
+			transition={{ duration: 0 }}
 		>
 			<div
 				className={cn(
@@ -376,7 +356,7 @@ export function ActionsSection({
 						strokeWidth={1.9}
 						style={{
 							transform: open ? "rotate(0deg)" : "rotate(-90deg)",
-							transition: `transform ${chevronTransitionMs}ms ${TABS_EASING}`,
+							transition: "none",
 						}}
 					/>
 				</Button>
