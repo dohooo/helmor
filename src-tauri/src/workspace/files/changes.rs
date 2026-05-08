@@ -18,6 +18,29 @@ use crate::{
 };
 
 const MAX_PREFETCH_BYTES: u64 = 1_048_576;
+/// Cap how big an untracked file we'll read just to count lines. Keeps the
+/// inspector poll cheap when someone drops a multi-GB blob into the worktree.
+const MAX_UNTRACKED_LINECOUNT_BYTES: u64 = 4 * 1_048_576;
+
+#[derive(Default, Clone, Copy)]
+struct AreaStats {
+    insertions: u32,
+    deletions: u32,
+    is_binary: bool,
+}
+
+#[derive(Default, Clone, Copy)]
+struct FileStats {
+    committed: AreaStats,
+    staged: AreaStats,
+    unstaged: AreaStats,
+}
+
+impl FileStats {
+    fn is_binary(&self) -> bool {
+        self.committed.is_binary || self.staged.is_binary || self.unstaged.is_binary
+    }
+}
 
 pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFileListItem>> {
     let workspace_root = Path::new(workspace_root_path);
@@ -42,6 +65,12 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
     let target_ref = resolve_target_ref(workspace_root)?;
 
     // Run all git commands in parallel — they're independent reads.
+    //
+    // Each area gets its own name-status + numstat. We deliberately do NOT
+    // sum them: the inspector renders three groups (Staged / Changes /
+    // Branch Changes) and each group must show line counts for its own
+    // area. Summing would double-count any file touched in more than one
+    // area.
     let (
         committed_output,
         unstaged_output,
@@ -124,10 +153,15 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
         file_map.insert(path.clone(), status.clone());
     }
 
-    let mut stats_map = BTreeMap::<String, (u32, u32)>::new();
-    parse_numstat_into(&committed_numstat, &mut stats_map);
-    parse_numstat_into(&staged_numstat, &mut stats_map);
-    parse_numstat_into(&unstaged_numstat, &mut stats_map);
+    let mut stats_map = BTreeMap::<String, FileStats>::new();
+    parse_numstat_area(&committed_numstat, &mut stats_map, |fs: &mut FileStats| {
+        &mut fs.committed
+    });
+    parse_numstat_area(&staged_numstat, &mut stats_map, |fs| &mut fs.staged);
+    parse_numstat_area(&unstaged_numstat, &mut stats_map, |fs| &mut fs.unstaged);
+    // Untracked files aren't in any diff — count their lines directly so
+    // a brand-new file doesn't always show as +0/-0 in the Changes group.
+    fill_untracked_unstaged(&untracked_output, workspace_root, &mut stats_map);
 
     let items = file_map
         .into_iter()
@@ -137,14 +171,19 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
                 .file_name()
                 .map(|value| value.to_string_lossy().to_string())
                 .unwrap_or_else(|| relative_path.clone());
-            let (insertions, deletions) = stats_map.get(&relative_path).copied().unwrap_or((0, 0));
+            let stats = stats_map.get(&relative_path).copied().unwrap_or_default();
             EditorFileListItem {
                 path: relative_path.clone(),
                 absolute_path: absolute.display().to_string(),
                 name,
                 status,
-                insertions,
-                deletions,
+                staged_insertions: stats.staged.insertions,
+                staged_deletions: stats.staged.deletions,
+                unstaged_insertions: stats.unstaged.insertions,
+                unstaged_deletions: stats.unstaged.deletions,
+                committed_insertions: stats.committed.insertions,
+                committed_deletions: stats.committed.deletions,
+                is_binary: stats.is_binary(),
                 staged_status: staged_map.get(&relative_path).cloned(),
                 unstaged_status: unstaged_map.get(&relative_path).cloned(),
                 committed_status: committed_map.get(&relative_path).cloned(),
@@ -411,7 +450,14 @@ fn parse_name_status_into(output: &str, map: &mut BTreeMap<String, String>) {
     }
 }
 
-fn parse_numstat_into(output: &str, map: &mut BTreeMap<String, (u32, u32)>) {
+/// Parse one `git diff --numstat` output and apply the per-file numbers to
+/// the area selected by `pick`. Each numstat output covers exactly one area
+/// (committed / staged / unstaged) so within a single call we overwrite —
+/// there's no `+=` accumulation across areas.
+fn parse_numstat_area<F>(output: &str, map: &mut BTreeMap<String, FileStats>, mut pick: F)
+where
+    F: FnMut(&mut FileStats) -> &mut AreaStats,
+{
     for line in output.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -429,11 +475,18 @@ fn parse_numstat_into(output: &str, map: &mut BTreeMap<String, (u32, u32)>) {
             continue;
         };
 
-        let Ok(ins) = ins_str.parse::<u32>() else {
-            continue;
-        };
-        let Ok(del) = del_str.parse::<u32>() else {
-            continue;
+        // Binary files: numstat prints `-\t-\t<path>`. Track the binary flag
+        // but leave line counts at zero — there's no meaningful line diff.
+        let (ins, del, is_binary) = if ins_str == "-" && del_str == "-" {
+            (0u32, 0u32, true)
+        } else {
+            let Ok(ins) = ins_str.parse::<u32>() else {
+                continue;
+            };
+            let Ok(del) = del_str.parse::<u32>() else {
+                continue;
+            };
+            (ins, del, false)
         };
 
         let resolved_path = if let Some(arrow_pos) = path.find(" => ") {
@@ -454,8 +507,65 @@ fn parse_numstat_into(output: &str, map: &mut BTreeMap<String, (u32, u32)>) {
             path.to_string()
         };
 
-        let entry = map.entry(resolved_path).or_insert((0, 0));
-        entry.0 += ins;
-        entry.1 += del;
+        let area = pick(map.entry(resolved_path).or_default());
+        // One numstat output = one area. Within an area, a path appears at
+        // most once, so assignment is correct (and safer than `+=`).
+        area.insertions = ins;
+        area.deletions = del;
+        if is_binary {
+            area.is_binary = true;
+        }
+    }
+}
+
+/// Untracked files don't appear in any `git diff` output, so count their
+/// lines from the file content directly. Capped to keep inspector polls
+/// cheap. Counts are attributed to the unstaged area, which is where
+/// untracked files surface in the UI.
+fn fill_untracked_unstaged(
+    untracked_output: &str,
+    workspace_root: &Path,
+    map: &mut BTreeMap<String, FileStats>,
+) {
+    for line in untracked_output.lines() {
+        let path = line.trim();
+        if path.is_empty() {
+            continue;
+        }
+        let absolute = workspace_root.join(path);
+        let Ok(metadata) = fs::metadata(&absolute) else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+
+        let entry = map.entry(path.to_string()).or_default();
+        if metadata.len() > MAX_UNTRACKED_LINECOUNT_BYTES {
+            // Don't slurp huge blobs just to count lines; just flag as
+            // binary-ish and leave counts zero. The file still surfaces in
+            // the UI via name-status / ls-files.
+            entry.unstaged.is_binary = true;
+            continue;
+        }
+
+        let Ok(bytes) = fs::read(&absolute) else {
+            continue;
+        };
+        // Treat invalid-UTF-8 untracked files as binary — same display
+        // behavior as git's binary numstat sentinel.
+        let Ok(text) = std::str::from_utf8(&bytes) else {
+            entry.unstaged.is_binary = true;
+            continue;
+        };
+        if text.is_empty() {
+            continue;
+        }
+        // git numstat for a brand-new file = `lines().count()`: counts the
+        // last line even when the file doesn't end with a newline, and
+        // treats `\r\n` as one line break. u32::try_from caps absurd line
+        // counts; failure is harmless (count stays 0).
+        let line_count = u32::try_from(text.lines().count()).unwrap_or(u32::MAX);
+        entry.unstaged.insertions = line_count;
     }
 }

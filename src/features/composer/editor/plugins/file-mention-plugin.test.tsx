@@ -13,8 +13,12 @@ function file(path: string): InspectorFileItem {
 		absolutePath: `/abs/${path}`,
 		name,
 		status: "M",
-		insertions: 0,
-		deletions: 0,
+		stagedInsertions: 0,
+		stagedDeletions: 0,
+		unstagedInsertions: 0,
+		unstagedDeletions: 0,
+		committedInsertions: 0,
+		committedDeletions: 0,
 	};
 }
 
