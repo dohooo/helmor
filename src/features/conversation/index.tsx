@@ -74,11 +74,6 @@ type WorkspaceConversationContainerProps = {
 	sessionSelectionHistory?: string[];
 	onSelectSession: (sessionId: string | null) => void;
 	onResolveDisplayedSession: (sessionId: string | null) => void;
-	onSessionRunStateChange?: (
-		sessionId: string,
-		workspaceId: string | null,
-		sending: boolean,
-	) => void;
 	onInteractionSessionsChange?: (
 		sessionWorkspaceMap: Map<string, string>,
 		interactionCounts: Map<string, number>,
@@ -166,7 +161,6 @@ export const WorkspaceConversationContainer = memo(
 		sessionSelectionHistory = [],
 		onSelectSession,
 		onResolveDisplayedSession,
-		onSessionRunStateChange,
 		onInteractionSessionsChange,
 		busySessionIds,
 		stoppableSessionIds,
@@ -256,7 +250,6 @@ export const WorkspaceConversationContainer = memo(
 			selectionPending,
 			followUpBehavior: settings.followUpBehavior,
 			submitQueue: submitQueueApi,
-			onSessionRunStateChange,
 			onInteractionSessionsChange,
 			onSessionCompleted,
 			onSessionAborted,

@@ -40,6 +40,16 @@ const apiMocks = vi.hoisted(() => ({
 	stopAgentStream: vi.fn(),
 }));
 
+// `listActiveStreams` is intentionally NOT mocked here. The hook reads it
+// via React Query, where `activeStreamsQueryOptions` provides
+// `initialData: []`, and `src/test/setup.ts`'s default invoke mock
+// returns `undefined` for unhandled commands — both paths produce an
+// empty array, which matches "no backend-tracked streams" for these
+// unit tests. If a future test wants to assert the backend-truth abort
+// path (e.g. that `handleStopStream` picks up a `provider` published by
+// the Rust registry rather than the local optimistic fallback), mock
+// `listActiveStreams` explicitly here so the default doesn't silently
+// swallow the assertion.
 vi.mock("@/lib/api", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@/lib/api")>();
 
@@ -491,27 +501,11 @@ describe("useConversationStreaming", () => {
 		expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
 	});
 
-	it("reports sending as incremental session lifecycle events so sibling containers cannot clear it", async () => {
+	it("scopes the local sending flag to its own context key so siblings stay idle", async () => {
 		const streamCallbacks: Array<(event: unknown) => void> = [];
 		apiMocks.startAgentMessageStream.mockImplementation(
 			async (_payload: unknown, onEvent: (event: unknown) => void) => {
 				streamCallbacks.push(onEvent);
-			},
-		);
-
-		const activeSessions = new Set<string>();
-		const sessionWorkspaceMap = new Map<string, string>();
-		const onSessionRunStateChange = vi.fn(
-			(sessionId: string, workspaceId: string | null, sending: boolean) => {
-				if (sending) {
-					activeSessions.add(sessionId);
-					if (workspaceId) {
-						sessionWorkspaceMap.set(sessionId, workspaceId);
-					}
-					return;
-				}
-				activeSessions.delete(sessionId);
-				sessionWorkspaceMap.delete(sessionId);
 			},
 		);
 
@@ -526,7 +520,6 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
-					onSessionRunStateChange,
 				}),
 				emptySibling: useConversationStreaming({
 					composerContextKey: "start:repo:repo-1",
@@ -536,7 +529,6 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
-					onSessionRunStateChange,
 				}),
 			}),
 			{ wrapper: Wrapper },
@@ -556,11 +548,10 @@ describe("useConversationStreaming", () => {
 			});
 		});
 
-		expect(activeSessions).toEqual(new Set(["session-1"]));
-		expect(new Set(sessionWorkspaceMap.values())).toEqual(
-			new Set(["workspace-1"]),
-		);
+		expect(result.current.running.isSending).toBe(true);
+		expect(result.current.running.busySessionIds.has("session-1")).toBe(true);
 		expect(result.current.emptySibling.isSending).toBe(false);
+		expect(result.current.emptySibling.busySessionIds.size).toBe(0);
 
 		act(() => {
 			streamCallbacks[0]({
@@ -574,8 +565,8 @@ describe("useConversationStreaming", () => {
 			});
 		});
 
-		expect(activeSessions).toEqual(new Set());
-		expect(sessionWorkspaceMap.size).toBe(0);
+		expect(result.current.running.isSending).toBe(false);
+		expect(result.current.running.busySessionIds.size).toBe(0);
 	});
 
 	it("sends the repo general preference via promptPrefix on the first prompt only", async () => {

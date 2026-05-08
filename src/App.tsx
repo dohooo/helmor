@@ -113,6 +113,7 @@ import { ComposerInsertProvider } from "./lib/composer-insert-context";
 import type { DiffOpenOptions, EditorSessionState } from "./lib/editor-session";
 import { isMarkdownPath, isPathWithinRoot } from "./lib/editor-session";
 import {
+	activeStreamsQueryOptions,
 	archivedWorkspacesQueryOptions,
 	createHelmorQueryClient,
 	detectedEditorsQueryOptions,
@@ -130,12 +131,11 @@ import {
 	workspaceSessionsQueryOptions,
 } from "./lib/query-client";
 import {
+	buildSessionRunStates,
 	deriveBusySessionIds,
 	deriveBusyWorkspaceIds,
 	deriveStoppableSessionIds,
-	nextSessionRunStates,
 	type SessionRunState,
-	withPendingFinalizeRunState,
 } from "./lib/session-run-state";
 import { SessionRunStatesProvider } from "./lib/session-run-state-context";
 import {
@@ -481,33 +481,31 @@ function AppShell({
 	const [editorSession, setEditorSession] = useState<EditorSessionState | null>(
 		null,
 	);
-	const [sessionRunStates, setSessionRunStates] = useState<
-		Map<string, SessionRunState>
-	>(() => new Map());
-	const handleSessionRunStateChange = useCallback(
-		(sessionId: string, workspaceId: string | null, sending: boolean) => {
-			setSessionRunStates((current) =>
-				nextSessionRunStates(current, {
-					sessionId,
-					workspaceId,
-					running: sending,
-				}),
-			);
-		},
-		[],
-	);
 	const [pendingComposerInserts, setPendingComposerInserts] = useState<
 		ResolvedComposerInsertRequest[]
 	>([]);
 	const [pendingCreatedWorkspaceSubmit, setPendingCreatedWorkspaceSubmit] =
 		useState<PendingCreatedWorkspaceSubmit | null>(null);
-	const effectiveSessionRunStates = useMemo(
+	// Source of truth for "which sessions are running": the Rust
+	// `ActiveStreams` registry, mirrored here via React Query and kept
+	// fresh by `UiMutationEvent::ActiveStreamsChanged`. We layer the
+	// StartPage's optimistic "creating workspace" marker on top so the
+	// panel can show a busy spinner before the real stream registers.
+	const activeStreamsQuery = useQuery(activeStreamsQueryOptions());
+	const effectiveSessionRunStates = useMemo<
+		ReadonlyMap<string, SessionRunState>
+	>(
 		() =>
-			withPendingFinalizeRunState(
-				sessionRunStates,
-				pendingCreatedWorkspaceSubmit,
+			buildSessionRunStates(
+				activeStreamsQuery.data ?? [],
+				pendingCreatedWorkspaceSubmit
+					? {
+							sessionId: pendingCreatedWorkspaceSubmit.sessionId,
+							workspaceId: pendingCreatedWorkspaceSubmit.workspaceId,
+						}
+					: null,
 			),
-		[sessionRunStates, pendingCreatedWorkspaceSubmit],
+		[activeStreamsQuery.data, pendingCreatedWorkspaceSubmit],
 	);
 	const effectiveBusySessionIds = useMemo(
 		() => deriveBusySessionIds(effectiveSessionRunStates),
@@ -2951,9 +2949,6 @@ function AppShell({
 														onResolveDisplayedSession={
 															handleResolveDisplayedSession
 														}
-														onSessionRunStateChange={
-															handleSessionRunStateChange
-														}
 														onInteractionSessionsChange={
 															handleInteractionSessionsChange
 														}
@@ -3013,7 +3008,6 @@ function AppShell({
 													onResolveDisplayedSession={
 														handleResolveDisplayedSession
 													}
-													onSessionRunStateChange={handleSessionRunStateChange}
 													onInteractionSessionsChange={
 														handleInteractionSessionsChange
 													}

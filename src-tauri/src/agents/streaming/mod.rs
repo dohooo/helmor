@@ -24,7 +24,7 @@ mod state;
 mod event_loop_tests;
 
 pub(crate) use active_streams::ActiveStreamHandle;
-pub use active_streams::{abort_all_active_streams_blocking, ActiveStreams};
+pub use active_streams::{abort_all_active_streams_blocking, ActiveStreamSummary, ActiveStreams};
 pub use bridges::{
     bridge_aborted_event, bridge_done_event, bridge_error_event, bridge_permission_request_event,
     bridge_user_input_request_event,
@@ -72,23 +72,29 @@ pub(super) fn stream_via_sidecar(
         "stream_via_sidecar"
     );
 
-    let resume_session_id = request.session_id.clone().or_else(|| {
+    // Single read against `sessions` for both lookups we need below:
+    // resume-session matching (provider_session_id + agent_type) and the
+    // workspace_id we stamp onto the active-streams handle. Two queries
+    // would borrow the read pool twice on the hot path of every send.
+    let session_row: Option<(Option<String>, Option<String>, Option<String>)> =
         request.helmor_session_id.as_deref().and_then(|hsid| {
             let conn = crate::models::db::read_conn().ok()?;
-            let (stored_sid, stored_provider): (Option<String>, Option<String>) = conn
-                .query_row(
-                    "SELECT provider_session_id, agent_type FROM sessions WHERE id = ?1",
-                    [hsid],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .ok()?;
-            let sid = stored_sid?;
-            if stored_provider.unwrap_or_default() == model.provider {
-                Some(sid)
-            } else {
-                None
-            }
-        })
+            conn.query_row(
+                "SELECT provider_session_id, agent_type, workspace_id FROM sessions WHERE id = ?1",
+                [hsid],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .ok()
+        });
+
+    let resume_session_id = request.session_id.clone().or_else(|| {
+        let (stored_sid, stored_provider, _) = session_row.as_ref()?;
+        let sid = stored_sid.clone()?;
+        if stored_provider.clone().unwrap_or_default() == model.provider {
+            Some(sid)
+        } else {
+            None
+        }
     });
 
     tracing::debug!(
@@ -161,6 +167,13 @@ pub(super) fn stream_via_sidecar(
         params,
     };
 
+    // Workspace for the UI's "this workspace is busy" badge —
+    // pulled out of the same `session_row` we already read above so
+    // we don't borrow the read pool a second time on every send.
+    let workspace_id_for_handle = session_row
+        .as_ref()
+        .and_then(|(_, _, workspace_id)| workspace_id.clone());
+
     // Per-helmor-session lock — block overlapping sends so concurrent
     // `query()` calls can't stack against the same `resume:` id and
     // corrupt the conversation jsonl (issue #398).
@@ -169,6 +182,7 @@ pub(super) fn stream_via_sidecar(
         sidecar_session_id: sidecar_session_id.clone(),
         provider: model.provider.to_string(),
         helmor_session_id: request.helmor_session_id.clone(),
+        workspace_id: workspace_id_for_handle,
     });
     if !registered {
         tracing::warn!(
@@ -181,12 +195,19 @@ pub(super) fn stream_via_sidecar(
         )
         .into());
     }
+    // Notify the UI that the active-streams set changed. Anonymous
+    // streams (helmor_session_id == None) are filtered out of the
+    // snapshot the frontend reads, but we still publish — the
+    // frontend's invalidate is cheap and the alternative (branch on
+    // visibility here) couples this call site to UI policy.
+    crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
 
     let rx = sidecar.subscribe(&request_id);
 
     if let Err(error) = sidecar.send(&sidecar_req) {
         sidecar.unsubscribe(&request_id);
         active_streams.unregister(&request_id);
+        crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
         return Err(anyhow::anyhow!("Sidecar send failed: {error}").into());
     }
 
@@ -1098,6 +1119,7 @@ pub(super) fn stream_via_sidecar(
         );
         sidecar_state.unsubscribe(&rid);
         active_streams_state.unregister(&rid);
+        crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
     });
 
     Ok(())

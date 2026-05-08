@@ -1,3 +1,5 @@
+import type { ActiveStreamSummary } from "./api";
+
 export type SessionRunPhase = "pendingFinalize" | "streaming";
 
 export type SessionRunState = {
@@ -9,47 +11,35 @@ export type SessionRunState = {
 
 export type SessionRunStateMap = Map<string, SessionRunState>;
 
-export function nextSessionRunStates(
-	current: ReadonlyMap<string, SessionRunState>,
-	update: {
-		sessionId: string;
-		workspaceId: string | null;
-		running: boolean;
-	},
+/** Merge backend truth (`activeStreams`) with the StartPage optimistic
+ *  "this session is being created" marker (`pending`). The pending
+ *  finalize entry is busy-but-not-stoppable: the workspace doesn't exist
+ *  yet so there's no stream to abort, but the panel header should still
+ *  show a loading spinner for the optimistic user bubble.
+ *
+ *  Streaming wins over pending — once the real stream registers, the
+ *  same sessionId flips to canStop=true. */
+export function buildSessionRunStates(
+	activeStreams: readonly ActiveStreamSummary[],
+	pending: { sessionId: string; workspaceId: string } | null,
 ): SessionRunStateMap {
-	const next = new Map(current);
-	if (!update.running) {
-		next.delete(update.sessionId);
-		return next;
+	const next: SessionRunStateMap = new Map();
+	for (const stream of activeStreams) {
+		next.set(stream.sessionId, {
+			sessionId: stream.sessionId,
+			workspaceId: stream.workspaceId,
+			phase: "streaming",
+			canStop: true,
+		});
 	}
-
-	next.set(update.sessionId, {
-		sessionId: update.sessionId,
-		workspaceId: update.workspaceId,
-		phase: "streaming",
-		canStop: true,
-	});
-	return next;
-}
-
-export function withPendingFinalizeRunState(
-	current: ReadonlyMap<string, SessionRunState>,
-	pending: {
-		sessionId: string;
-		workspaceId: string;
-	} | null,
-): SessionRunStateMap {
-	const next = new Map(current);
-	if (!pending || next.has(pending.sessionId)) {
-		return next;
+	if (pending && !next.has(pending.sessionId)) {
+		next.set(pending.sessionId, {
+			sessionId: pending.sessionId,
+			workspaceId: pending.workspaceId,
+			phase: "pendingFinalize",
+			canStop: false,
+		});
 	}
-
-	next.set(pending.sessionId, {
-		sessionId: pending.sessionId,
-		workspaceId: pending.workspaceId,
-		phase: "pendingFinalize",
-		canStop: false,
-	});
 	return next;
 }
 
