@@ -7,10 +7,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WorkspaceComposerContainer } from "@/features/composer/container";
-import type {
-	DeferredToolResponseHandler,
-	DeferredToolResponseOptions,
-} from "@/features/composer/deferred-tool";
+import type { UserInputResponseHandler } from "@/features/composer/user-input";
 import { WorkspacePanelContainer } from "@/features/panel/container";
 import { FileLinkProvider } from "@/features/panel/message-components/file-link-context";
 import type { SessionCloseRequest } from "@/features/panel/use-confirm-session-close";
@@ -28,10 +25,6 @@ import {
 	type ComposerSubmitPayload,
 	useConversationStreaming,
 } from "./hooks/use-streaming";
-import {
-	adaptPermissionToDeferredTool,
-	permissionIdFromAdaptedToolUseId,
-} from "./permission-as-deferred-tool";
 
 export type { ComposerSubmitPayload } from "./hooks/use-streaming";
 
@@ -102,12 +95,14 @@ type WorkspaceConversationContainerProps = {
 	onSelectContextPreview?: () => void;
 	onCloseContextPreview?: () => void;
 	/** Prompt queued by an external caller (e.g. the inspector Git commit
-	 * button) to be auto-submitted once the displayed session matches. */
+	 *  button or a drained CLI send) to be auto-submitted once the displayed
+	 *  session matches. Per-session config (model / effort / fast-mode /
+	 *  permission mode) is pinned onto the session row at create time and
+	 *  read off `currentSession` by the composer — it intentionally does NOT
+	 *  ride along on this transient handoff. */
 	pendingPromptForSession?: {
 		sessionId: string;
 		prompt: string;
-		modelId?: string | null;
-		permissionMode?: string | null;
 		/** When true, submit must queue if a turn is already streaming,
 		 *  regardless of the user's `followUpBehavior` setting. */
 		forceQueue?: boolean;
@@ -150,6 +145,14 @@ type WorkspaceConversationContainerProps = {
 	contextPanelOpen?: boolean;
 	onToggleContextPanel?: () => void;
 	composerStartSubmitMenu?: boolean;
+	/** Pre-workspace linked-directories controller. Forwarded to the
+	 *  composer; see `WorkspaceComposerContainerProps.linkedDirectoriesController`.
+	 *  Used by the start-page composer to collect /add-dir picks before any
+	 *  workspace exists. */
+	composerLinkedDirectoriesController?: {
+		directories: readonly string[];
+		onChange: (next: readonly string[]) => void;
+	} | null;
 };
 
 export const WorkspaceConversationContainer = memo(
@@ -195,6 +198,7 @@ export const WorkspaceConversationContainer = memo(
 		contextPanelOpen = false,
 		onToggleContextPanel,
 		composerStartSubmitMenu = false,
+		composerLinkedDirectoriesController = null,
 	}: WorkspaceConversationContainerProps) {
 		const [composerModelSelections, setComposerModelSelections] = useState<
 			Record<string, string>
@@ -227,16 +231,14 @@ export const WorkspaceConversationContainer = memo(
 		const {
 			activeSendError,
 			handleComposerSubmit,
-			handleDeferredToolResponse,
-			handleElicitationResponse,
+			handleUserInputResponse,
 			handlePermissionResponse,
 			handleStopStream,
 			handleSteerQueued,
 			handleRemoveQueued,
-			elicitationResponsePending,
+			userInputResponsePending,
 			isSending,
-			pendingElicitation,
-			pendingDeferredTool,
+			pendingUserInput,
 			pendingPermissions,
 			restoreCustomTags,
 			restoreDraft,
@@ -307,25 +309,38 @@ export const WorkspaceConversationContainer = memo(
 			prevPlanReviewRef.current = hasPlanReview;
 		}, [hasPlanReview, composerContextKey]);
 
-		// Preset composer model when a pending prompt carries an explicit
-		// modelId (e.g. Review uses settings.reviewModelId). Without this
-		// the chip below the chat keeps showing the inferred default while the
-		// submit silently uses the queued modelId — mismatch the user sees.
+		// Carry the StartPage composer config (model / effort / permission /
+		// fast) into the new workspace's session contextKey. The start surface
+		// stores these under `start:repo:<repoId>` in a *different* container
+		// instance that unmounts on the surface swap, so without this seed the
+		// chips on the new workspace fall back to settings defaults until
+		// backend persistence updates the session row at end of turn — and any
+		// follow-up sent before that catches up loses the user's choices.
 		useEffect(() => {
-			if (!pendingPromptForSession?.modelId) return;
-			const targetKey = getComposerContextKey(
-				displayedWorkspaceId,
-				pendingPromptForSession.sessionId,
-			);
+			if (!pendingCreatedWorkspaceSubmit) return;
+			const { workspaceId, sessionId, payload } = pendingCreatedWorkspaceSubmit;
+			const targetKey = getComposerContextKey(workspaceId, sessionId);
 			setComposerModelSelections((current) =>
-				current[targetKey] === pendingPromptForSession.modelId
+				current[targetKey]
 					? current
-					: {
-							...current,
-							[targetKey]: pendingPromptForSession.modelId as string,
-						},
+					: { ...current, [targetKey]: payload.model.id },
 			);
-		}, [pendingPromptForSession, displayedWorkspaceId]);
+			setComposerEffortLevels((current) =>
+				current[targetKey]
+					? current
+					: { ...current, [targetKey]: payload.effortLevel },
+			);
+			setComposerPermissionModes((current) =>
+				current[targetKey]
+					? current
+					: { ...current, [targetKey]: payload.permissionMode },
+			);
+			setComposerFastModes((current) =>
+				targetKey in current
+					? current
+					: { ...current, [targetKey]: payload.fastMode },
+			);
+		}, [pendingCreatedWorkspaceSubmit]);
 
 		const handleSelectModel = useCallback(
 			(contextKey: string, modelId: string) => {
@@ -417,22 +432,18 @@ export const WorkspaceConversationContainer = memo(
 				pendingCreatedWorkspaceSubmit.id;
 
 			void (async () => {
-				await handleComposerSubmit(
-					{
-						...pendingCreatedWorkspaceSubmit.payload,
-						workingDirectory:
-							workspaceRootPath ??
-							pendingCreatedWorkspaceSubmit.payload.workingDirectory,
-					},
-					{
-						sessionId: pendingCreatedWorkspaceSubmit.sessionId,
-						workspaceId: pendingCreatedWorkspaceSubmit.workspaceId,
-						contextKey: getComposerContextKey(
-							pendingCreatedWorkspaceSubmit.workspaceId,
-							pendingCreatedWorkspaceSubmit.sessionId,
-						),
-					},
-				);
+				// `payload.workingDirectory` is patched by App.tsx with the
+				// cwd returned from prepare/finalize, so the first turn never
+				// races the workspaceDetail React Query — no need to fall
+				// back to `workspaceRootPath` here.
+				await handleComposerSubmit(pendingCreatedWorkspaceSubmit.payload, {
+					sessionId: pendingCreatedWorkspaceSubmit.sessionId,
+					workspaceId: pendingCreatedWorkspaceSubmit.workspaceId,
+					contextKey: getComposerContextKey(
+						pendingCreatedWorkspaceSubmit.workspaceId,
+						pendingCreatedWorkspaceSubmit.sessionId,
+					),
+				});
 				onPendingCreatedWorkspaceSubmitConsumed?.(
 					pendingCreatedWorkspaceSubmit.id,
 				);
@@ -443,7 +454,6 @@ export const WorkspaceConversationContainer = memo(
 			handleComposerSubmit,
 			onPendingCreatedWorkspaceSubmitConsumed,
 			pendingCreatedWorkspaceSubmit,
-			workspaceRootPath,
 		]);
 		const relevantPendingInsertRequests = pendingInsertRequests.filter(
 			(request) => {
@@ -455,40 +465,21 @@ export const WorkspaceConversationContainer = memo(
 			},
 		);
 
-		// Permission requests are rendered through the same `GenericDeferredToolPanel`
-		// as deferred-tool requests so both flows share one UI. Pick the head of the
-		// queue (one-at-a-time, same as `pendingDeferredTool`) and adapt it. The
-		// wrapped response handler routes callbacks back to the correct API.
+		// Permission requests have their own dedicated `permissionRequest`
+		// wire event + RPC and render through `PermissionPanel`; user-input
+		// requests (AskUserQuestion / MCP elicitation / Codex
+		// `requestUserInput`) ride the unified `userInputRequest` event +
+		// `respondToUserInput` RPC and render through `UserInputPanel`. Both
+		// surface as composer takeovers; the composer picks one panel at a
+		// time (user-input takes priority since it's the agent's explicit
+		// ask). We pick the head of the permission queue (one-at-a-time
+		// same as user-input), and pass both panels' state down to the
+		// composer container.
 		const headPendingPermission = pendingPermissions[0] ?? null;
-		const permissionAsDeferredTool = useMemo(
-			() =>
-				headPendingPermission
-					? adaptPermissionToDeferredTool(headPendingPermission)
-					: null,
-			[headPendingPermission],
-		);
 
-		const effectivePendingDeferredTool =
-			pendingDeferredTool ?? permissionAsDeferredTool;
-
-		const effectiveDeferredToolResponse =
-			useCallback<DeferredToolResponseHandler>(
-				(deferred, behavior, options?: DeferredToolResponseOptions) => {
-					const permissionId = permissionIdFromAdaptedToolUseId(
-						deferred.toolUseId,
-					);
-					if (permissionId !== null) {
-						handlePermissionResponse(
-							permissionId,
-							behavior,
-							options?.reason ? { message: options.reason } : undefined,
-						);
-						return;
-					}
-					handleDeferredToolResponse(deferred, behavior, options);
-				},
-				[handlePermissionResponse, handleDeferredToolResponse],
-			);
+		// Type alias for clarity at the prop boundary — the composer takes
+		// the same handler shape regardless of which panel is rendered.
+		const userInputResponse: UserInputResponseHandler = handleUserInputResponse;
 
 		return (
 			<FileLinkProvider
@@ -553,11 +544,11 @@ export const WorkspaceConversationContainer = memo(
 						restoreFiles={restoreFiles}
 						restoreCustomTags={restoreCustomTags}
 						restoreNonce={restoreNonce}
-						pendingElicitation={pendingElicitation}
-						onElicitationResponse={handleElicitationResponse}
-						elicitationResponsePending={elicitationResponsePending}
-						pendingDeferredTool={effectivePendingDeferredTool}
-						onDeferredToolResponse={effectiveDeferredToolResponse}
+						pendingUserInput={pendingUserInput}
+						onUserInputResponse={userInputResponse}
+						userInputResponsePending={userInputResponsePending}
+						pendingPermission={headPendingPermission}
+						onPermissionResponse={handlePermissionResponse}
 						hasPlanReview={hasPlanReview}
 						modelSelections={composerModelSelections}
 						effortLevels={composerEffortLevels}
@@ -581,6 +572,7 @@ export const WorkspaceConversationContainer = memo(
 						contextPanelOpen={contextPanelOpen}
 						onToggleContextPanel={onToggleContextPanel}
 						startSubmitMenu={composerStartSubmitMenu}
+						linkedDirectoriesController={composerLinkedDirectoriesController}
 					/>
 				</div>
 			</FileLinkProvider>

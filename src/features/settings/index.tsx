@@ -202,8 +202,16 @@ export const SettingsDialog = memo(function SettingsDialog({
 		modelSectionsQuery.data ?? [],
 		settings.defaultModelId,
 	);
-	const defaultEffortLevels =
-		selectedDefaultModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS;
+	// `supportsEffort` keys off real model metadata (no fallback) — Haiku
+	// reports `effortLevels: []`, and the wire format may also drop the
+	// field entirely when empty. Either way, `?.length ?? 0` resolves to
+	// 0 → disabled. The fallback list is only used to keep the dropdown
+	// from rendering empty while metadata is still loading.
+	const defaultModelSupportsEffort =
+		(selectedDefaultModel?.effortLevels?.length ?? 0) > 0;
+	const defaultEffortLevels = defaultModelSupportsEffort
+		? (selectedDefaultModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS)
+		: FALLBACK_EFFORT_LEVELS;
 	const defaultModelSupportsFastMode =
 		selectedDefaultModel?.supportsFastMode === true;
 	const defaultModelLabel =
@@ -224,14 +232,35 @@ export const SettingsDialog = memo(function SettingsDialog({
 	const reviewModelLabel =
 		effectiveReviewModel?.label ??
 		(modelSectionsQuery.isPending ? "Loading…" : "Select model");
-	const reviewEffortLevels =
-		effectiveReviewModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS;
+	const reviewModelSupportsEffort =
+		(effectiveReviewModel?.effortLevels?.length ?? 0) > 0;
+	const reviewEffortLevels = reviewModelSupportsEffort
+		? (effectiveReviewModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS)
+		: FALLBACK_EFFORT_LEVELS;
 	const reviewModelSupportsFastMode =
 		effectiveReviewModel?.supportsFastMode === true;
 	const effectiveReviewEffort =
 		settings.reviewEffort ?? settings.defaultEffort ?? "high";
 	const effectiveReviewFastMode =
 		settings.reviewFastMode ?? settings.defaultFastMode;
+	// PR/MR row mirrors the same follow-the-default convention as Review.
+	const effectivePrModelId = settings.prModelId ?? settings.defaultModelId;
+	const effectivePrModel = findModelOption(
+		modelSectionsQuery.data ?? [],
+		effectivePrModelId,
+	);
+	const prModelLabel =
+		effectivePrModel?.label ??
+		(modelSectionsQuery.isPending ? "Loading…" : "Select model");
+	const prModelSupportsEffort =
+		(effectivePrModel?.effortLevels?.length ?? 0) > 0;
+	const prEffortLevels = prModelSupportsEffort
+		? (effectivePrModel?.effortLevels ?? FALLBACK_EFFORT_LEVELS)
+		: FALLBACK_EFFORT_LEVELS;
+	const prModelSupportsFastMode = effectivePrModel?.supportsFastMode === true;
+	const effectivePrEffort =
+		settings.prEffort ?? settings.defaultEffort ?? "high";
+	const effectivePrFastMode = settings.prFastMode ?? settings.defaultFastMode;
 	// Auto-clamp effort when model changes — but only after model metadata
 	// has actually loaded, otherwise the fallback levels silently kill max/xhigh.
 	useEffect(() => {
@@ -630,9 +659,13 @@ export const SettingsDialog = memo(function SettingsDialog({
 											</DropdownMenu>
 											<DropdownMenu>
 												<DropdownMenuTrigger
+													disabled={!defaultModelSupportsEffort}
 													className={cn(
-														"flex h-8 cursor-pointer items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+														"flex h-8 items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px]",
 														"shrink-0 gap-1.5",
+														defaultModelSupportsEffort
+															? "cursor-pointer text-foreground hover:bg-muted/50"
+															: "cursor-not-allowed text-muted-foreground opacity-60",
 													)}
 												>
 													<span>
@@ -747,9 +780,13 @@ export const SettingsDialog = memo(function SettingsDialog({
 											</DropdownMenu>
 											<DropdownMenu>
 												<DropdownMenuTrigger
+													disabled={!reviewModelSupportsEffort}
 													className={cn(
-														"flex h-8 cursor-pointer items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+														"flex h-8 items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px]",
 														"shrink-0 gap-1.5",
+														reviewModelSupportsEffort
+															? "cursor-pointer text-foreground hover:bg-muted/50"
+															: "cursor-not-allowed text-muted-foreground opacity-60",
 													)}
 												>
 													<span>{effortLabel(effectiveReviewEffort)}</span>
@@ -805,6 +842,131 @@ export const SettingsDialog = memo(function SettingsDialog({
 														})
 													}
 													aria-label="Review fast mode"
+												/>
+											</div>
+										</div>
+									</SettingsRow>
+									<SettingsRow
+										title="PR / MR model"
+										description="Model for PRs and MRs"
+									>
+										<div className="flex w-[360px] items-center gap-2">
+											<DropdownMenu>
+												<DropdownMenuTrigger
+													className={cn(
+														"flex h-8 cursor-pointer items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+														"min-w-0 flex-1 gap-1.5",
+													)}
+												>
+													<span className="flex min-w-0 items-center gap-1.5">
+														<ModelIcon
+															model={effectivePrModel}
+															className="size-[13px] shrink-0"
+														/>
+														<span className="min-w-0 truncate whitespace-nowrap">
+															{prModelLabel}
+														</span>
+													</span>
+													<ChevronDown className="size-3 shrink-0 opacity-40" />
+												</DropdownMenuTrigger>
+												<DropdownMenuContent
+													align="end"
+													sideOffset={4}
+													className="min-w-[10rem]"
+												>
+													{allModels.map((m) => (
+														<DropdownMenuItem
+															key={m.id}
+															onClick={() =>
+																updateSettings({
+																	// Picking the same value as the
+																	// default snaps PR back to `null`
+																	// (still following the default).
+																	prModelId:
+																		m.id === settings.defaultModelId
+																			? null
+																			: m.id,
+																})
+															}
+															className="justify-between gap-2"
+														>
+															<span className="flex min-w-0 items-center gap-2">
+																<ModelIcon model={m} className="size-4" />
+																{m.label}
+															</span>
+															<CheckCircle2
+																className={cn(
+																	"size-3.5 shrink-0 text-emerald-500",
+																	m.id !== effectivePrModelId && "invisible",
+																)}
+															/>
+														</DropdownMenuItem>
+													))}
+												</DropdownMenuContent>
+											</DropdownMenu>
+											<DropdownMenu>
+												<DropdownMenuTrigger
+													disabled={!prModelSupportsEffort}
+													className={cn(
+														"flex h-8 items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px]",
+														"shrink-0 gap-1.5",
+														prModelSupportsEffort
+															? "cursor-pointer text-foreground hover:bg-muted/50"
+															: "cursor-not-allowed text-muted-foreground opacity-60",
+													)}
+												>
+													<span>{effortLabel(effectivePrEffort)}</span>
+													<ChevronDown className="size-3 opacity-40" />
+												</DropdownMenuTrigger>
+												<DropdownMenuContent
+													align="end"
+													sideOffset={4}
+													className="min-w-[8rem]"
+												>
+													{prEffortLevels.map((l) => (
+														<DropdownMenuItem
+															key={l}
+															onClick={() =>
+																updateSettings({
+																	prEffort:
+																		l === settings.defaultEffort ? null : l,
+																})
+															}
+														>
+															{effortLabel(l)}
+														</DropdownMenuItem>
+													))}
+												</DropdownMenuContent>
+											</DropdownMenu>
+											<div
+												className={cn(
+													"flex h-8 cursor-pointer items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+													"shrink-0 gap-2",
+												)}
+											>
+												<span
+													className={
+														prModelSupportsFastMode
+															? "text-[13px] text-foreground"
+															: "text-[13px] text-muted-foreground"
+													}
+												>
+													Fast mode
+												</span>
+												<Switch
+													checked={
+														prModelSupportsFastMode && effectivePrFastMode
+													}
+													disabled={!prModelSupportsFastMode}
+													onCheckedChange={(checked) =>
+														updateSettings({
+															prFastMode:
+																checked === settings.defaultFastMode
+																	? null
+																	: checked,
+														})
+													}
+													aria-label="PR / MR fast mode"
 												/>
 											</div>
 										</div>

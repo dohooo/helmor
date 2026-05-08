@@ -92,3 +92,26 @@ export function modelSupportsFastMode(
 		(model) => model.id === modelId && model.supportsFastMode === true,
 	);
 }
+
+// Heuristic for lightweight background tasks (e.g. title generation):
+// pick the lowest version number in the catalog; when versions tie,
+// prefer a `-mini` variant. Older/smaller variants are usually fast and
+// cheap enough for a one-shot title prompt.
+export function pickFastestCodexModel(): string {
+	let best: { cliModel: string; version: number; isMini: boolean } | undefined;
+	for (const m of MODEL_CATALOG.codex) {
+		const match = m.id.match(/(\d+(?:\.\d+)?)/);
+		const version = match?.[1]
+			? Number.parseFloat(match[1])
+			: Number.POSITIVE_INFINITY;
+		const isMini = m.id.includes("mini");
+		if (
+			!best ||
+			version < best.version ||
+			(version === best.version && isMini && !best.isMini)
+		) {
+			best = { cliModel: m.cliModel, version, isMini };
+		}
+	}
+	return best?.cliModel ?? "gpt-5.2";
+}

@@ -30,9 +30,21 @@ pub async fn create_session(
     workspace_id: String,
     action_kind: Option<ActionKind>,
     permission_mode: Option<String>,
+    model: Option<String>,
+    effort_level: Option<String>,
+    fast_mode: Option<bool>,
 ) -> CmdResult<sessions::CreateSessionResponse> {
     run_blocking(move || {
-        sessions::create_session(&workspace_id, action_kind, permission_mode.as_deref())
+        sessions::create_session(
+            &workspace_id,
+            action_kind,
+            permission_mode.as_deref(),
+            sessions::CreateSessionOverrides {
+                model: model.as_deref(),
+                effort_level: effort_level.as_deref(),
+                fast_mode,
+            },
+        )
     })
     .await
 }
@@ -213,6 +225,7 @@ pub async fn update_session_settings(
     model: Option<String>,
     effort_level: Option<String>,
     permission_mode: Option<String>,
+    fast_mode: Option<bool>,
 ) -> CmdResult<()> {
     run_blocking(move || {
         let connection = db::write_conn()?;
@@ -222,10 +235,11 @@ pub async fn update_session_settings(
                 UPDATE sessions SET
                   model = COALESCE(?2, model),
                   effort_level = COALESCE(?3, effort_level),
-                  permission_mode = COALESCE(?4, permission_mode)
+                  permission_mode = COALESCE(?4, permission_mode),
+                  fast_mode = COALESCE(?5, fast_mode)
                 WHERE id = ?1
                 "#,
-                rusqlite::params![session_id, model, effort_level, permission_mode],
+                rusqlite::params![session_id, model, effort_level, permission_mode, fast_mode],
             )
             .context("Failed to update session settings")?;
         Ok(())

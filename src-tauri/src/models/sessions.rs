@@ -100,6 +100,24 @@ pub fn list_session_historical_records(session_id: &str) -> Result<Vec<Historica
     list_session_historical_records_with_connection(&connection, session_id)
 }
 
+/// All `provider_session_id`s belonging to a workspace's Claude sessions.
+/// Includes hidden sessions — they can be unhidden and resumed later, so
+/// migrators (e.g. local→worktree cwd change) need to cover them too.
+pub fn list_claude_provider_session_ids(workspace_id: &str) -> Result<Vec<String>> {
+    let connection = db::read_conn()?;
+    let mut statement = connection.prepare(
+        r#"
+            SELECT provider_session_id
+            FROM sessions
+            WHERE workspace_id = ?1
+              AND agent_type = 'claude'
+              AND provider_session_id IS NOT NULL
+            "#,
+    )?;
+    let rows = statement.query_map([workspace_id], |row| row.get::<_, String>(0))?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
 fn adjacent_visible_session_id(
     transaction: &Transaction<'_>,
     workspace_id: &str,
@@ -346,23 +364,39 @@ fn default_session_title_for_action_kind_with_workspace(
     Ok(kind.default_title_for_change_request(change_request_name))
 }
 
+/// Optional per-session config carried at create time. Inspector helpers
+/// (Create PR/MR, Review) push the user's configured model/effort/fast-mode
+/// here so the new session row is born with the right values — the composer
+/// then reads them off the row via the normal `currentSession` chain instead
+/// of routing them through a transient pendingPromptForSession override.
+#[derive(Debug, Default, Clone)]
+pub struct CreateSessionOverrides<'a> {
+    pub model: Option<&'a str>,
+    pub effort_level: Option<&'a str>,
+    pub fast_mode: Option<bool>,
+}
+
 pub fn create_session(
     workspace_id: &str,
     action_kind: Option<ActionKind>,
     permission_mode: Option<&str>,
+    overrides: CreateSessionOverrides<'_>,
 ) -> Result<CreateSessionResponse> {
     let mut connection = db::write_conn()?;
 
-    // `model` is left NULL on create: the frontend owns model selection via
-    // `settings.defaultModelId` (kept valid by `useEnsureDefaultModel`), and
-    // the value gets persisted into `sessions.model` by the agent streaming
-    // finalizer on the first message. Reading settings here would be a
-    // redundant second source of truth.
-    let default_effort = settings::load_setting_value("app.default_effort")
-        .ok()
-        .flatten()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "high".to_string());
+    // Effort falls back to the user setting when the caller doesn't pin one
+    // (matches the historical behaviour). Callers that want to force a value
+    // — e.g. PR/MR creation using settings.prEffort — pass it via overrides.
+    let effort_level = match overrides.effort_level {
+        Some(value) if !value.is_empty() => value.to_string(),
+        _ => settings::load_setting_value("app.default_effort")
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "high".to_string()),
+    };
+    let model = overrides.model.filter(|s| !s.is_empty());
+    let fast_mode = overrides.fast_mode.unwrap_or(false);
 
     let transaction = connection
         .transaction()
@@ -392,8 +426,8 @@ pub fn create_session(
     transaction
         .execute(
             r#"
-            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind, model, effort_level)
-            VALUES (?1, ?2, 'idle', ?3, ?4, ?5, NULL, ?6)
+            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind, model, effort_level, fast_mode)
+            VALUES (?1, ?2, 'idle', ?3, ?4, ?5, ?6, ?7, ?8)
             "#,
             (
                 &session_id,
@@ -401,7 +435,9 @@ pub fn create_session(
                 &title,
                 permission_mode.unwrap_or("default"),
                 action_kind,
-                &default_effort,
+                model,
+                &effort_level,
+                fast_mode as i64,
             ),
         )
         .context("Failed to create session")?;

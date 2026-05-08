@@ -131,16 +131,14 @@ export const helmorQueryKeys = {
 		["workspaceCandidateDirectories", excludeWorkspaceId ?? ""] as const,
 };
 
-export function isVolatileForgeQueryKey(queryKey: readonly unknown[]): boolean {
-	const root = queryKey[0];
-	return (
-		root === "workspaceForge" ||
-		root === "workspaceForgeActionStatus" ||
-		root === "workspaceAccountProfile" ||
-		root === "forgeLogins" ||
-		root === "forgeAccounts"
-	);
-}
+/** Persistence is opt-in per `queryOptions` via `meta: { persist: true }`.
+ *  Bump this whenever the persist contract changes (e.g. new field shape)
+ *  so existing users drop their stale on-disk cache instead of hydrating
+ *  it. The `Register` augmentation in `react-query.d.ts` keeps the meta
+ *  shape closed so typos fail at compile time. */
+export const QUERY_CACHE_BUSTER = "v3-meta";
+
+export const PERSIST_META = { persist: true } as const;
 
 export function createHelmorQueryClient() {
 	// Replace React Query's default focus listener (browser visibilitychange)
@@ -177,6 +175,13 @@ export function createHelmorQueryClient() {
 				refetchOnReconnect: false,
 				refetchOnWindowFocus: true,
 				retry: 1,
+			},
+			dehydrate: {
+				// Opt-in persistence: keep default's `status === "success"`
+				// gate and require an explicit `meta: { persist: true }` on
+				// the query. Default = in-memory only.
+				shouldDehydrateQuery: (query) =>
+					query.state.status === "success" && query.meta?.persist === true,
 			},
 		},
 	});
@@ -283,6 +288,7 @@ export function workspaceGroupsQueryOptions() {
 		initialData: DEFAULT_WORKSPACE_GROUPS,
 		initialDataUpdatedAt: 0,
 		staleTime: 0,
+		meta: PERSIST_META,
 	});
 }
 
@@ -293,6 +299,7 @@ export function archivedWorkspacesQueryOptions() {
 		initialData: [],
 		initialDataUpdatedAt: 0,
 		staleTime: 0,
+		meta: PERSIST_META,
 	});
 }
 
@@ -303,6 +310,7 @@ export function repositoriesQueryOptions() {
 		initialData: [],
 		initialDataUpdatedAt: 0,
 		staleTime: 0,
+		meta: PERSIST_META,
 	});
 }
 
@@ -325,6 +333,7 @@ export function agentModelSectionsQueryOptions() {
 		staleTime: Infinity,
 		refetchOnWindowFocus: false,
 		retry: false,
+		meta: PERSIST_META,
 	});
 }
 
@@ -346,6 +355,7 @@ export function workspaceForgeQueryOptions(workspaceId: string) {
 		staleTime: Number.POSITIVE_INFINITY,
 		refetchOnWindowFocus: "always",
 		refetchInterval: (query) => workspaceForgeRefetchInterval(query.state.data),
+		meta: PERSIST_META,
 	});
 }
 
@@ -391,6 +401,7 @@ export function workspaceAccountProfileQueryOptions(
 		refetchOnWindowFocus: "always",
 		refetchOnReconnect: true,
 		retry: 0,
+		meta: PERSIST_META,
 	});
 }
 
@@ -403,6 +414,7 @@ export function forgeAccountsQueryOptions(gitlabHosts: string[]) {
 		// throttles the underlying CLI calls.
 		staleTime: Number.POSITIVE_INFINITY,
 		refetchOnWindowFocus: "always",
+		meta: PERSIST_META,
 	});
 }
 
@@ -596,6 +608,7 @@ export function detectedEditorsQueryOptions() {
 		initialDataUpdatedAt: 0,
 		staleTime: 60_000,
 		gcTime: PERSIST_GC_TIME,
+		meta: PERSIST_META,
 	});
 }
 
@@ -719,6 +732,7 @@ export function workspaceForgeActionStatusQueryOptions(workspaceId: string) {
 		refetchInterval: (query) =>
 			forgeActionStatusRefetchInterval(query.state.data),
 		retry: 0,
+		meta: PERSIST_META,
 	});
 }
 

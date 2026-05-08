@@ -76,6 +76,16 @@ pub struct PrepareWorkspaceResponse {
     /// may refetch to pick up any `helmor.json` overrides copied into the
     /// worktree, but for a freshly cloned workspace these match exactly.
     pub repo_scripts: repos::RepoScripts,
+    /// CWD the agent CLI should run in for the very first turn. Local mode
+    /// fills this with `repo.root_path` (on disk already); worktree mode
+    /// returns `None` here — the worktree directory doesn't exist until
+    /// Phase 2, so callers MUST wait for `FinalizeWorkspaceResponse
+    /// .working_directory`. Returning the cwd alongside the row metadata
+    /// lets the start-page submit flow skip the workspaceDetail query
+    /// round-trip that previously raced finalize and let the first turn
+    /// run with cwd=`/`, writing transcripts into the wrong Claude
+    /// project bucket and breaking subsequent resume.
+    pub working_directory: Option<String>,
 }
 
 /// Response from the slow Phase 2 (git worktree + scaffold + setup probe).
@@ -86,6 +96,11 @@ pub struct PrepareWorkspaceResponse {
 pub struct FinalizeWorkspaceResponse {
     pub workspace_id: String,
     pub final_state: WorkspaceState,
+    /// CWD the agent CLI should run in. Always populated when finalize
+    /// succeeds — local mode echoes the repo root, worktree mode returns
+    /// the freshly-materialised worktree path. The frontend writes this
+    /// onto the pending submit payload before flipping `finalized=true`.
+    pub working_directory: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -200,6 +215,8 @@ pub fn prepare_workspace_from_repo_impl(
         default_branch: base_branch,
         state: WorkspaceState::Initializing,
         repo_scripts,
+        // Worktree dir doesn't exist yet — finalize fills this in.
+        working_directory: None,
     })
 }
 
@@ -305,6 +322,10 @@ pub fn prepare_local_workspace_impl(
         default_branch: target_branch,
         state: WorkspaceState::Ready,
         repo_scripts,
+        // Local mode operates directly on the repo root — already on disk,
+        // safe to return immediately so the caller doesn't need to wait
+        // for finalize (which is a no-op for local).
+        working_directory: Some(repo_root.display().to_string()),
     })
 }
 
@@ -325,18 +346,22 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
     // path below, where a failure would route into
     // `cleanup_failed_created_workspace(repo_root, root_path, ...)`.
     if record.mode == WorkspaceMode::Local {
+        let working_directory = helpers::workspace_path(&record)?.display().to_string();
         return Ok(FinalizeWorkspaceResponse {
             workspace_id: workspace_id.to_string(),
             final_state: record.state,
+            working_directory,
         });
     }
 
     match record.state {
         WorkspaceState::Initializing => {}
         WorkspaceState::Ready | WorkspaceState::SetupPending => {
+            let working_directory = helpers::workspace_path(&record)?.display().to_string();
             return Ok(FinalizeWorkspaceResponse {
                 workspace_id: workspace_id.to_string(),
                 final_state: record.state,
+                working_directory,
             });
         }
         _ => {
@@ -423,6 +448,8 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
         Ok(FinalizeWorkspaceResponse {
             workspace_id: workspace_id.to_string(),
             final_state,
+            // Worktree dir was just materialised — safe to hand back.
+            working_directory: workspace_dir.display().to_string(),
         })
     })();
 
@@ -592,6 +619,30 @@ pub fn move_local_workspace_to_worktree_impl(
         &head_branch,
         &timestamp,
     )?;
+
+    // 7. Carry over Claude Code's per-cwd session jsonls so resume keeps
+    // working after the cwd flips from the local repo to the worktree.
+    // Best-effort: a copy failure here just degrades to a one-shot
+    // "empty resume" error on the next turn — not worth rolling back the
+    // whole worktree creation. Codex sessions are cwd-independent so
+    // they need no migration.
+    match crate::models::sessions::list_claude_provider_session_ids(workspace_id) {
+        Ok(ids) if !ids.is_empty() => {
+            crate::agents::claude_project_files::migrate_session_files(
+                &repo_root,
+                &workspace_dir,
+                &ids,
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(
+                workspace_id,
+                %error,
+                "Failed to list Claude sessions for cwd migration",
+            );
+        }
+    }
 
     Ok(MoveLocalToWorktreeResponse {
         workspace_id: workspace_id.to_string(),

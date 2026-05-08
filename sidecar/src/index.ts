@@ -17,8 +17,8 @@ import { createSidecarEmitter } from "./emitter.js";
 import { errorDetails, logger } from "./logger.js";
 import {
 	errorMessage,
+	optionalObject,
 	optionalString,
-	parseElicitationResultContent,
 	parseGetContextUsageParams,
 	parseListSlashCommandsParams,
 	parseOptionalStringRecord,
@@ -29,7 +29,11 @@ import {
 	type RawRequest,
 	requireString,
 } from "./request-parser.js";
-import type { Provider, SessionManager } from "./session-manager.js";
+import type {
+	Provider,
+	SessionManager,
+	UserInputResolution,
+} from "./session-manager.js";
 import {
 	TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
 	TITLE_GENERATION_TIMEOUT_MS,
@@ -42,13 +46,24 @@ const managers: Record<Provider, SessionManager> = {
 	codex: codexManager,
 };
 
-// EPIPE = parent closed the pipe → exit cleanly. Without this, writes to
-// a dead pipe escalate to uncaughtException → the handler writes again →
-// zombie process that silently kills every in-flight RPC.
+// `parentGone` flips to true only when stdin EOFs — that's the
+// authoritative "Rust exited" signal. EPIPE on stdout, by contrast, can
+// fire transiently from any pipe in the process (Anthropic SDK child
+// processes, internal Bun async paths, etc.); using EPIPE alone as the
+// exit trigger silently kills every in-flight query whenever any of
+// those pipes blip (issues #398/#402). Set the flag here so the EPIPE
+// handlers below can distinguish the two.
+let parentGone = false;
+
 function handleStdioError(stream: "stdout" | "stderr") {
 	return (err: NodeJS.ErrnoException) => {
 		if (err.code === "EPIPE") {
-			process.exit(0);
+			if (parentGone) {
+				process.exit(0);
+			}
+			// Transient EPIPE while parent is still alive — drop this
+			// write. Don't escalate.
+			return;
 		}
 		// Report through the OTHER stream to avoid recursion.
 		if (stream === "stdout") {
@@ -99,10 +114,11 @@ setInterval(() => {
 // in-flight request gets notified, and keep the process alive.
 // ---------------------------------------------------------------------------
 
+// Don't `process.exit(0)` on EPIPE-coded errors here: any pipe in the
+// process (SDK child processes, internal Bun async work) can surface a
+// stray EPIPE, and exiting takes down every in-flight query with it
+// (issues #398/#402). The parent-died path is handled via stdin EOF.
 process.on("uncaughtException", (err) => {
-	if ((err as NodeJS.ErrnoException).code === "EPIPE") {
-		process.exit(0);
-	}
 	logger.error("uncaughtException", errorDetails(err));
 	try {
 		emitter.error(null, "Internal sidecar error", true);
@@ -110,9 +126,6 @@ process.on("uncaughtException", (err) => {
 });
 
 process.on("unhandledRejection", (reason) => {
-	if ((reason as NodeJS.ErrnoException | undefined)?.code === "EPIPE") {
-		process.exit(0);
-	}
 	logger.error("unhandledRejection", errorDetails(reason));
 	try {
 		emitter.error(null, "Internal sidecar error", true);
@@ -375,20 +388,6 @@ async function handleSteerSession(
 	}
 }
 
-function optionalObject(
-	params: Record<string, unknown>,
-	key: string,
-): Record<string, unknown> | undefined {
-	const value = params[key];
-	if (value === undefined || value === null) {
-		return undefined;
-	}
-	if (typeof value === "object") {
-		return value as Record<string, unknown>;
-	}
-	throw new Error(`params.${key} must be an object`);
-}
-
 /**
  * Cooperative shutdown — closes every live session across all providers and
  * exits the process. The Rust side calls this before escalating to SIGTERM /
@@ -432,6 +431,12 @@ function trackHandler(p: Promise<void>): void {
 // ---------------------------------------------------------------------------
 
 const rl = createInterface({ input: process.stdin });
+// Authoritative "Rust exited" signal — flip the flag so any subsequent
+// EPIPE on stdout/stderr is treated as "drain to /dev/null then exit"
+// rather than "transient blip, ignore".
+rl.on("close", () => {
+	parentGone = true;
+});
 let requestCount = 0;
 
 for await (const line of rl) {
@@ -510,42 +515,39 @@ for await (const line of rl) {
 				}
 				break;
 			}
-			case "elicitationResponse": {
-				const elicitationId = requireString(params, "elicitationId");
+			case "userInputResponse": {
+				// Unified resolver — covers Claude AskUserQuestion (canUseTool),
+				// Claude MCP elicitation (onElicitation), and Codex
+				// `requestUserInput`. Each provider's manager silently no-ops
+				// when the userInputId isn't in its pending map, so we just
+				// fan the call out to every provider.
+				const userInputId = requireString(params, "userInputId");
 				const action = requireString(params, "action") as
-					| "accept"
+					| "submit"
 					| "decline"
 					| "cancel";
-				const content = parseElicitationResultContent(params, "content");
-				logger.debug(`[${id}] elicitationResponse`, { elicitationId, action });
-				claudeManager.resolveElicitation(elicitationId, {
-					action,
-					...(content ? { content } : {}),
-				});
-				break;
-			}
-			case "userInputResponse": {
-				const userInputId = requireString(params, "userInputId");
-				const answers = params.answers ?? null;
-				logger.debug(`[${id}] userInputResponse`, { userInputId });
-				codexManager.resolveUserInput(userInputId, answers);
-				break;
-			}
-			case "deferredToolResponse": {
-				const toolUseId = requireString(params, "toolUseId");
-				const behavior = requireString(params, "behavior") as "allow" | "deny";
-				const reason = optionalString(params, "reason");
-				const updatedInput = optionalObject(params, "updatedInput");
-				logger.debug(`[${id}] deferredToolResponse`, {
-					toolUseId,
-					behavior,
-				});
-				claudeManager.resolveDeferredTool(
-					toolUseId,
-					behavior,
-					reason,
-					updatedInput,
-				);
+				const content = optionalObject(params, "content");
+				logger.debug(`[${id}] userInputResponse`, { userInputId, action });
+				const resolution: UserInputResolution =
+					action === "submit"
+						? { action, content: content ?? {} }
+						: action === "decline"
+							? { action, ...(content ? { content } : {}) }
+							: { action: "cancel" };
+				const claimed =
+					claudeManager.resolveUserInput(userInputId, resolution) ||
+					codexManager.resolveUserInput(userInputId, resolution);
+				if (!claimed) {
+					// No live waiter — the parked promise was lost (sidecar
+					// restart, session ended, or duplicate submit). Surface
+					// it instead of silently swallowing so the UI can
+					// inform the user that the answer didn't reach the agent.
+					logger.error(`[${id}] userInputResponse dropped`, {
+						userInputId,
+						action,
+					});
+					emitter.error(id, `No active waiter for userInputId=${userInputId}`);
+				}
 				break;
 			}
 			case "ping":

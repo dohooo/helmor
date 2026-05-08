@@ -146,7 +146,6 @@ export type AgentSendRequest = {
 	 *  content keeps `prompt` only — the prefix never enters the DB or
 	 *  the chat bubble. */
 	promptPrefix?: string | null;
-	resumeOnly?: boolean | null;
 	sessionId?: string | null;
 	helmorSessionId?: string | null;
 	workingDirectory?: string | null;
@@ -268,9 +267,13 @@ export type ForgeDetection = {
 export type AddRepositoryResponse = {
 	repositoryId: string;
 	createdRepository: boolean;
-	selectedWorkspaceId: string;
-	createdWorkspaceId?: string | null;
-	createdWorkspaceState: WorkspaceState;
+	/**
+	 * `string` only when the repo was already in the DB and has a visible
+	 * workspace — UI focuses it. `null` for newly-added repos and re-adds
+	 * with only archived workspaces — UI lands on the start page with this
+	 * repo selected.
+	 */
+	selectedWorkspaceId: string | null;
 };
 
 export type WorkspaceDetail = {
@@ -384,11 +387,17 @@ export type PrepareWorkspaceResponse = {
 	defaultBranch: string;
 	state: WorkspaceState;
 	repoScripts: RepoScripts;
+	/** CWD the agent CLI must run in. Local mode: filled with `repo.root_path`
+	 *  immediately. Worktree mode: null until finalize materialises the
+	 *  worktree — callers MUST then read `FinalizeWorkspaceResponse.workingDirectory`. */
+	workingDirectory: string | null;
 };
 
 export type FinalizeWorkspaceResponse = {
 	workspaceId: string;
 	finalState: WorkspaceState;
+	/** CWD the agent CLI must run in. Always populated when finalize succeeds. */
+	workingDirectory: string;
 };
 
 export type MarkWorkspaceReadResponse = undefined;
@@ -2018,6 +2027,7 @@ export async function updateSessionSettings(
 		model?: string;
 		effortLevel?: string;
 		permissionMode?: string;
+		fastMode?: boolean;
 	},
 ): Promise<void> {
 	await invoke("update_session_settings", {
@@ -2025,6 +2035,7 @@ export async function updateSessionSettings(
 		model: settings.model ?? null,
 		effortLevel: settings.effortLevel ?? null,
 		permissionMode: settings.permissionMode ?? null,
+		fastMode: settings.fastMode ?? null,
 	});
 }
 
@@ -2333,30 +2344,22 @@ export type AgentStreamEvent =
 			description?: string | null;
 	  }
 	| {
-			kind: "deferredToolUse";
+			kind: "userInputRequest";
 			provider: AgentProvider;
 			modelId: string;
 			resolvedModel: string;
 			sessionId?: string | null;
 			workingDirectory: string;
 			permissionMode?: string | null;
-			toolUseId: string;
-			toolName: string;
-			toolInput: Record<string, unknown>;
-	  }
-	| {
-			kind: "elicitationRequest";
-			provider: AgentProvider;
-			modelId: string;
-			resolvedModel: string;
-			sessionId?: string | null;
-			workingDirectory: string;
-			elicitationId?: string | null;
-			serverName: string;
+			userInputId: string;
+			source: string;
 			message: string;
-			mode?: string | null;
-			url?: string | null;
-			requestedSchema?: Record<string, unknown> | null;
+			/** Discriminated by `payload.kind`:
+			 *  - `ask-user-question` → Claude AskUserQuestion (raw multi-question / option / preview shape)
+			 *  - `form` → JSON-Schema form (MCP form elicitation or Codex's synthesized form)
+			 *  - `url` → URL launcher (MCP url-mode elicitation)
+			 *  See `pending-user-input.ts` for the typed payload union. */
+			payload: Record<string, unknown>;
 	  }
 	| { kind: "planCaptured" }
 	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
@@ -2476,32 +2479,28 @@ export async function respondToPermissionRequest(
 	});
 }
 
-export async function respondToDeferredTool(
-	toolUseId: string,
-	behavior: "allow" | "deny",
-	options?: {
-		reason?: string | null;
-		updatedInput?: Record<string, unknown> | null;
-	},
-): Promise<void> {
-	await invoke("respond_to_deferred_tool", {
-		request: {
-			toolUseId,
-			behavior,
-			reason: options?.reason ?? null,
-			updatedInput: options?.updatedInput ?? null,
-		},
-	});
-}
-
-export async function respondToElicitationRequest(
-	elicitationId: string,
-	action: "accept" | "decline" | "cancel",
+/**
+ * Resolve a parked unified `userInputRequest`. The sidecar's pending
+ * resolver closure (`canUseTool` for AskUserQuestion, `onElicitation`
+ * for MCP, Codex's `requestUserInput` JSON-RPC handler) translates
+ * this generic resolution into the matching SDK-specific shape.
+ *
+ * - `submit` → frontend produced a content payload (matched to whatever
+ *   the matching renderer asks for: AUQ updatedInput, schema content
+ *   map, or `{}` for url-mode).
+ * - `decline` → user explicitly rejected; sidecar surfaces this as the
+ *   provider's matching "deny" signal.
+ * - `cancel` → user dismissed without answering; treated as cancel by
+ *   each provider.
+ */
+export async function respondToUserInput(
+	userInputId: string,
+	action: "submit" | "decline" | "cancel",
 	content?: Record<string, unknown> | null,
 ): Promise<void> {
-	await invoke("respond_to_elicitation_request", {
+	await invoke("respond_to_user_input", {
 		request: {
-			elicitationId,
+			userInputId,
 			action,
 			content: content ?? null,
 		},
@@ -2579,12 +2578,25 @@ export async function createSession(
 	options?: {
 		actionKind?: ActionKind | null;
 		permissionMode?: string | null;
+		/** Pin the session row's `model` at creation. Inspector helpers
+		 *  (Create PR/MR, Review) push the user's configured model here so
+		 *  the composer reads it off the row instead of falling back to
+		 *  settings.defaultModelId. Leave null for the default flow. */
+		model?: string | null;
+		/** Pin `effort_level` at creation; null falls back to the user
+		 *  setting on the backend. */
+		effortLevel?: string | null;
+		/** Pin `fast_mode` at creation; null/undefined defaults to false. */
+		fastMode?: boolean | null;
 	},
 ): Promise<CreateSessionResponse> {
 	return invoke<CreateSessionResponse>("create_session", {
 		workspaceId,
 		actionKind: options?.actionKind ?? null,
 		permissionMode: options?.permissionMode ?? null,
+		model: options?.model ?? null,
+		effortLevel: options?.effortLevel ?? null,
+		fastMode: options?.fastMode ?? null,
 	});
 }
 

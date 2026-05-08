@@ -32,6 +32,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-lifecycle";
 import { hydrateDraftCache } from "@/features/composer/draft-storage";
 import {
@@ -46,6 +47,7 @@ import { WorkspaceEditorSurface } from "@/features/editor";
 import { WorkspaceInspectorSidebar } from "@/features/inspector";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
 import { AppOnboarding } from "@/features/onboarding";
+import { ExportSessionImageButton } from "@/features/panel/export-session-image";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import { useConfirmSessionClose } from "@/features/panel/use-confirm-session-close";
 import {
@@ -108,13 +110,14 @@ import {
 } from "./lib/composer-insert";
 import { ComposerInsertProvider } from "./lib/composer-insert-context";
 import type { DiffOpenOptions, EditorSessionState } from "./lib/editor-session";
-import { isPathWithinRoot } from "./lib/editor-session";
+import { isMarkdownPath, isPathWithinRoot } from "./lib/editor-session";
 import {
 	archivedWorkspacesQueryOptions,
 	createHelmorQueryClient,
 	detectedEditorsQueryOptions,
 	helmorQueryKeys,
 	helmorQueryPersister,
+	QUERY_CACHE_BUSTER,
 	repositoriesQueryOptions,
 	sessionThreadMessagesQueryOptions,
 	workspaceChangeRequestQueryOptions,
@@ -163,11 +166,13 @@ import {
 	WorkspaceToastProvider,
 } from "./lib/workspace-toast-context";
 import { StreamingFooterOverlapScenario } from "./test/e2e-scenarios/streaming-footer-overlap";
+import { StreamingReasoningGapScenario } from "./test/e2e-scenarios/streaming-reasoning-gap";
 
 const SETTINGS_RELOAD_EVENT = "helmor:reload-settings";
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
 type WorkspaceViewMode = "conversation" | "editor" | "start";
 const EMPTY_SESSION_RUN_STATES = new Map<string, SessionRunState>();
+const EMPTY_STRING_LIST: readonly string[] = [];
 
 function App() {
 	const e2eScenario =
@@ -177,6 +182,10 @@ function App() {
 
 	if (e2eScenario === "streaming-footer-overlap") {
 		return <StreamingFooterOverlapScenario />;
+	}
+
+	if (e2eScenario === "streaming-reasoning-gap") {
+		return <StreamingReasoningGapScenario />;
 	}
 
 	return <MainApp />;
@@ -292,7 +301,10 @@ function MainApp() {
 		<SettingsContext.Provider value={settingsContextValue}>
 			<PersistQueryClientProvider
 				client={queryClient}
-				persistOptions={{ persister: helmorQueryPersister }}
+				persistOptions={{
+					persister: helmorQueryPersister,
+					buster: QUERY_CACHE_BUSTER,
+				}}
 			>
 				{appSettings === null ? null : !appSettings.onboardingCompleted ? (
 					<>
@@ -1060,6 +1072,8 @@ function AppShell({
 				fileStatus: status,
 				originalRef: options?.originalRef,
 				modifiedRef: options?.modifiedRef,
+				// Diff click is "see what changed" — default to source even for .md.
+				viewMode: isMarkdownPath(path) ? "source" : undefined,
 			});
 		},
 		[
@@ -1101,16 +1115,28 @@ function AppShell({
 			}
 
 			setWorkspaceViewMode("editor");
-			setEditorSession((current) => ({
-				kind: "file",
-				path,
-				line,
-				column,
-				dirty: current?.path === path ? current.dirty : false,
-				originalText: current?.path === path ? current.originalText : undefined,
-				modifiedText: current?.path === path ? current.modifiedText : undefined,
-				mtimeMs: current?.path === path ? current.mtimeMs : undefined,
-			}));
+			setEditorSession((current) => {
+				const samePath = current?.path === path;
+				// Chat-link open of a markdown file: default to preview (reading the
+				// rendered output). Preserve user's explicit toggle if reopening the
+				// same file. Non-markdown paths leave viewMode unset.
+				const viewMode = isMarkdownPath(path)
+					? samePath && current?.viewMode
+						? current.viewMode
+						: "preview"
+					: undefined;
+				return {
+					kind: "file",
+					path,
+					line,
+					column,
+					dirty: samePath ? current.dirty : false,
+					originalText: samePath ? current.originalText : undefined,
+					modifiedText: samePath ? current.modifiedText : undefined,
+					mtimeMs: samePath ? current.mtimeMs : undefined,
+					viewMode,
+				};
+			});
 		},
 		[
 			confirmDiscardEditorChanges,
@@ -1546,6 +1572,31 @@ function AppShell({
 		pushToast: pushWorkspaceToast,
 	});
 
+	// Wrapper that injects the configured PR/MR model overrides for the
+	// "create-pr" mode so the action runs on the user's preferred PR model
+	// (with effort + fast-mode falling back to defaults when null).
+	const handleCommitAction = useCallback(
+		(mode: WorkspaceCommitButtonMode) => {
+			if (mode === "create-pr") {
+				return handleInspectorCommitAction(mode, {
+					modelId: appSettings.prModelId ?? appSettings.defaultModelId,
+					effort: appSettings.prEffort ?? appSettings.defaultEffort,
+					fastMode: appSettings.prFastMode ?? appSettings.defaultFastMode,
+				});
+			}
+			return handleInspectorCommitAction(mode);
+		},
+		[
+			handleInspectorCommitAction,
+			appSettings.prModelId,
+			appSettings.prEffort,
+			appSettings.prFastMode,
+			appSettings.defaultModelId,
+			appSettings.defaultEffort,
+			appSettings.defaultFastMode,
+		],
+	);
+
 	const handleSessionCompleted = useCallback(
 		(sessionId: string, workspaceId: string) => {
 			setSettledSessionIds((prev) => {
@@ -1950,7 +2001,7 @@ function AppShell({
 			},
 			{
 				id: "action.createPr" as const,
-				callback: () => void handleInspectorCommitAction("create-pr"),
+				callback: () => void handleCommitAction("create-pr"),
 			},
 			{
 				id: "action.commitAndPush" as const,
@@ -2018,6 +2069,7 @@ function AppShell({
 			handleCloseSelectedSession,
 			handleCopyWorkspacePath,
 			handleCreateSession,
+			handleCommitAction,
 			handleInspectorCommitAction,
 			handleNavigateSessions,
 			handleNavigateWorkspaces,
@@ -2079,11 +2131,12 @@ function AppShell({
 			handleSelectWorkspace(first.workspaceId);
 
 			setTimeout(() => {
+				// `model` + `permissionMode` are already pinned onto the
+				// session row by the backend's CLI-send path, so the composer
+				// reads them off `currentSession` when it auto-submits.
 				queuePendingPromptForSession({
 					sessionId: first.sessionId,
 					prompt: first.prompt,
-					modelId: first.modelId,
-					permissionMode: first.permissionMode,
 				});
 				handleSelectSession(first.sessionId);
 			}, 100);
@@ -2277,10 +2330,17 @@ function AppShell({
 	const [startPendingNewBranch, setStartPendingNewBranch] = useState<
 		string | null
 	>(null);
+	// Directories the user picked via /add-dir on the start page before any
+	// workspace exists. Applied via `setWorkspaceLinkedDirectories` once the
+	// workspace is created (see `handleStartComposerPrepare`). Cleared on
+	// repo switch — the picks were intent-bound to a specific repo.
+	const [startPendingLinkedDirectories, setStartPendingLinkedDirectories] =
+		useState<readonly string[]>(EMPTY_STRING_LIST);
 	const [startMode, setStartMode] = useState<WorkspaceMode>("worktree");
 	useEffect(() => {
 		setStartSourceBranchOverride(null);
 		setStartPendingNewBranch(null);
+		setStartPendingLinkedDirectories(EMPTY_STRING_LIST);
 		setStartMode("worktree");
 	}, [startRepositoryId]);
 	// In local mode the picker should default to whatever branch the
@@ -2407,6 +2467,22 @@ function AppShell({
 		},
 		[appSettings.kanbanViewState, updateSettings],
 	);
+	// Add-repo no longer auto-creates a workspace — when the backend
+	// hands back `selectedWorkspaceId: null`, drop into the start page
+	// with the freshly added repo selected.
+	const handleAddRepositoryNeedsStart = useCallback(
+		(repositoryId: string) => {
+			setStartRepositoryId(repositoryId);
+			void updateSettings({
+				kanbanViewState: {
+					...appSettings.kanbanViewState,
+					repoId: repositoryId,
+				},
+			});
+			handleOpenWorkspaceStart();
+		},
+		[appSettings.kanbanViewState, handleOpenWorkspaceStart, updateSettings],
+	);
 	useEffect(() => {
 		setStartPreviewCard(null);
 	}, [startRepository?.id]);
@@ -2454,43 +2530,73 @@ function AppShell({
 					);
 					setStartPendingNewBranch(null);
 				}
-				const { finalizePromise, outcome, workspaceId, sessionId } =
-					await createWorkspaceFromStartComposer({
-						repoId: startRepository.id,
-						sourceBranch: startSourceBranch,
-						mode: startMode,
-						submitMode: options?.startSubmitMode ?? "startNow",
-						editorStateSnapshot: payload.editorStateSnapshot,
-					});
+				const {
+					finalizePromise,
+					outcome,
+					workspaceId,
+					sessionId,
+					preparedWorkingDirectory,
+				} = await createWorkspaceFromStartComposer({
+					repoId: startRepository.id,
+					sourceBranch: startSourceBranch,
+					mode: startMode,
+					submitMode: options?.startSubmitMode ?? "startNow",
+					editorStateSnapshot: payload.editorStateSnapshot,
+					composerConfig: {
+						modelId: payload.model.id,
+						effortLevel: payload.effortLevel,
+						permissionMode: payload.permissionMode,
+						fastMode: payload.fastMode,
+					},
+					linkedDirectories: startPendingLinkedDirectories,
+				});
+				// Picks belonged to the in-flight create; clear regardless of
+				// outcome so the next start-page session begins clean.
+				setStartPendingLinkedDirectories(EMPTY_STRING_LIST);
 
 				void queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceGroups,
 				});
 
 				if (outcome.shouldStream) {
-					// Navigate immediately so the panel mounts on the new
-					// session, then queue the optimistic user bubble before
-					// awaiting finalize. The conversation effect waits for
-					// the workspace state to flip operational before actually
-					// firing `handleComposerSubmit`, so the bubble shows up
-					// instantly while the worktree materialises in the
-					// background.
-					handleSelectWorkspace(outcome.workspaceId);
-					handleSelectSession(outcome.sessionId);
-					setWorkspaceViewMode("conversation");
-
+					// Defer the view-switch state burst to the next animation
+					// frame so the browser can paint the current frame
+					// (start page) before reconciling the heavy conversation
+					// tree. Without this, the synchronous commit pumps the
+					// WKWebView's paint/composite pipeline so hard that RAF
+					// stalls for 5–8 seconds, freezing every CSS / Lottie
+					// animation on screen even though JS itself isn't blocked.
 					const pendingId = crypto.randomUUID();
 					setPendingCreatedWorkspaceSubmit({
 						id: pendingId,
 						workspaceId: outcome.workspaceId,
 						sessionId: outcome.sessionId,
-						payload,
+						// Local mode already has the cwd; worktree mode patches
+						// it onto the payload below once finalize materialises
+						// the worktree dir. Either way the payload is the
+						// single source of truth — the consumer never falls
+						// back to `workspaceRootPath` (which races the
+						// workspaceDetail React Query and was producing a
+						// transient cwd=null on the first turn).
+						payload: {
+							...payload,
+							workingDirectory:
+								preparedWorkingDirectory ?? payload.workingDirectory,
+						},
 						finalized: false,
 					});
+					requestAnimationFrame(() => {
+						handleSelectWorkspace(outcome.workspaceId);
+						handleSelectSession(outcome.sessionId);
+						setWorkspaceViewMode("conversation");
+					});
 
+					let finalizedWorkingDirectory: string | null =
+						preparedWorkingDirectory;
 					if (finalizePromise) {
 						try {
-							await finalizePromise;
+							const finalized = await finalizePromise;
+							finalizedWorkingDirectory = finalized.workingDirectory;
 						} catch (error) {
 							// Clear the optimistic bubble so the user doesn't
 							// see a message that never actually got sent.
@@ -2513,7 +2619,20 @@ function AppShell({
 					// the workspaceDetail React Query refetch round-trip.
 					setPendingCreatedWorkspaceSubmit((current) =>
 						current?.id === pendingId
-							? { ...current, finalized: true }
+							? {
+									...current,
+									payload: {
+										...current.payload,
+										// Worktree path only exists post-finalize;
+										// patch payload right before we let the
+										// effect fire so the first turn never sees
+										// a null cwd.
+										workingDirectory:
+											finalizedWorkingDirectory ??
+											current.payload.workingDirectory,
+									},
+									finalized: true,
+								}
 							: current,
 					);
 					void queryClient.invalidateQueries({
@@ -2543,6 +2662,7 @@ function AppShell({
 			startSourceBranch,
 			startMode,
 			startPendingNewBranch,
+			startPendingLinkedDirectories,
 		],
 	);
 
@@ -2560,6 +2680,15 @@ function AppShell({
 	const startComposerInsertTarget = useMemo(
 		() => ({ contextKey: startComposerContextKey }),
 		[startComposerContextKey],
+	);
+	const startLinkedDirectoriesController = useMemo(
+		() => ({
+			directories: startPendingLinkedDirectories,
+			onChange: (next: readonly string[]) => {
+				setStartPendingLinkedDirectories(next);
+			},
+		}),
+		[startPendingLinkedDirectories],
 	);
 	const rightSidebarAvailable =
 		workspaceViewMode !== "start" || rightSidebarMode === "context";
@@ -2657,6 +2786,9 @@ function AppShell({
 														addRepositoryShortcut={addRepositoryShortcut}
 														onSelectWorkspace={handleSelectWorkspace}
 														onOpenNewWorkspace={handleOpenWorkspaceStart}
+														onAddRepositoryNeedsStart={
+															handleAddRepositoryNeedsStart
+														}
 														onMoveLocalToWorktree={handleMoveLocalToWorktree}
 														pushWorkspaceToast={pushWorkspaceToast}
 													/>
@@ -2855,6 +2987,9 @@ function AppShell({
 														contextPanelOpen={contextPanelOpen}
 														onToggleContextPanel={handleToggleContextPanel}
 														composerStartSubmitMenu
+														composerLinkedDirectoriesController={
+															startLinkedDirectoriesController
+														}
 													/>
 												</WorkspaceStartPage>
 											) : (
@@ -2963,7 +3098,7 @@ function AppShell({
 															<div className="flex items-center gap-1">
 																{installedEditors.length > 0 &&
 																preferredEditor ? (
-																	<div className="flex items-center">
+																	<div className="flex -translate-x-1 items-center gap-0">
 																		<Tooltip>
 																			<TooltipTrigger asChild>
 																				<Button
@@ -2971,7 +3106,7 @@ function AppShell({
 																					size="xs"
 																					aria-label={`Open in ${preferredEditor.name}`}
 																					onClick={handleOpenPreferredEditor}
-																					className="text-muted-foreground hover:text-foreground"
+																					className="px-0.5 text-muted-foreground hover:text-foreground"
 																				>
 																					<EditorIcon
 																						editorId={preferredEditor.id}
@@ -2998,8 +3133,8 @@ function AppShell({
 																			<DropdownMenuTrigger asChild>
 																				<Button
 																					variant="ghost"
-																					size="icon-xs"
-																					className="w-4 text-muted-foreground hover:text-foreground"
+																					size="xs"
+																					className="h-6 px-0.5 text-muted-foreground hover:text-foreground"
 																				>
 																					<ChevronDown
 																						className="size-2.5"
@@ -3070,53 +3205,58 @@ function AppShell({
 																		</DropdownMenu>
 																	</div>
 																) : null}
-																<Tooltip>
-																	<TooltipTrigger asChild>
-																		<Button
-																			aria-label={
-																				inspectorCollapsed
-																					? "Expand right sidebar"
-																					: "Collapse right sidebar"
-																			}
-																			onClick={() =>
-																				setInspectorCollapsed(
-																					(collapsed) => !collapsed,
-																				)
-																			}
-																			variant="ghost"
-																			size="icon-xs"
-																			className="text-muted-foreground hover:text-foreground"
+																<div className="flex -translate-x-px items-center gap-1">
+																	<ExportSessionImageButton
+																		sessionId={selectedSessionId}
+																	/>
+																	<Tooltip>
+																		<TooltipTrigger asChild>
+																			<Button
+																				aria-label={
+																					inspectorCollapsed
+																						? "Expand right sidebar"
+																						: "Collapse right sidebar"
+																				}
+																				onClick={() =>
+																					setInspectorCollapsed(
+																						(collapsed) => !collapsed,
+																					)
+																				}
+																				variant="ghost"
+																				size="icon-xs"
+																				className="text-muted-foreground hover:text-foreground"
+																			>
+																				{inspectorCollapsed ? (
+																					<PanelRightOpen
+																						className="size-4"
+																						strokeWidth={1.8}
+																					/>
+																				) : (
+																					<PanelRightClose
+																						className="size-4"
+																						strokeWidth={1.8}
+																					/>
+																				)}
+																			</Button>
+																		</TooltipTrigger>
+																		<TooltipContent
+																			side="bottom"
+																			className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
 																		>
-																			{inspectorCollapsed ? (
-																				<PanelRightOpen
-																					className="size-4"
-																					strokeWidth={1.8}
+																			<span>
+																				{inspectorCollapsed
+																					? "Expand right sidebar"
+																					: "Collapse right sidebar"}
+																			</span>
+																			{rightSidebarToggleShortcut ? (
+																				<InlineShortcutDisplay
+																					hotkey={rightSidebarToggleShortcut}
+																					className="text-background/60"
 																				/>
-																			) : (
-																				<PanelRightClose
-																					className="size-4"
-																					strokeWidth={1.8}
-																				/>
-																			)}
-																		</Button>
-																	</TooltipTrigger>
-																	<TooltipContent
-																		side="bottom"
-																		className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-																	>
-																		<span>
-																			{inspectorCollapsed
-																				? "Expand right sidebar"
-																				: "Collapse right sidebar"}
-																		</span>
-																		{rightSidebarToggleShortcut ? (
-																			<InlineShortcutDisplay
-																				hotkey={rightSidebarToggleShortcut}
-																				className="text-background/60"
-																			/>
-																		) : null}
-																	</TooltipContent>
-																</Tooltip>
+																			) : null}
+																		</TooltipContent>
+																	</Tooltip>
+																</div>
 															</div>
 														) : undefined
 													}
@@ -3254,7 +3394,7 @@ function AppShell({
 														editorMode={workspaceViewMode === "editor"}
 														activeEditorPath={editorSession?.path ?? null}
 														onOpenEditorFile={handleOpenEditorFile}
-														onCommitAction={handleInspectorCommitAction}
+														onCommitAction={handleCommitAction}
 														onReviewAction={() =>
 															handleInspectorReviewAction({
 																modelId:

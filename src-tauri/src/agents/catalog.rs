@@ -9,7 +9,11 @@ pub struct AgentModelOption {
     pub cli_model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_key: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Always serialized (even when empty) so the frontend can
+    /// distinguish "model doesn't support effort" (`[]`) from "model
+    /// metadata not loaded yet" (`undefined`). The settings panel uses
+    /// the empty case to disable the effort dropdown.
+    #[serde(default)]
     pub effort_levels: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub supports_fast_mode: bool,

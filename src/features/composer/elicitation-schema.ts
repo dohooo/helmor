@@ -1,10 +1,4 @@
-import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
-
-export type ElicitationResponseHandler = (
-	elicitation: PendingElicitation,
-	action: "accept" | "decline" | "cancel",
-	content?: Record<string, unknown>,
-) => void;
+import type { PendingUserInput } from "@/features/conversation/pending-user-input";
 
 type ElicitationEnumOption = {
 	value: string;
@@ -278,18 +272,30 @@ function normalizeFormField(
 	return null;
 }
 
+/**
+ * Build the elicitation view model the form / URL renderers consume,
+ * from a unified `PendingUserInput`. The `payload.kind` discriminator
+ * picks form vs URL; the on-the-wire `userInputId` / `source` /
+ * `message` map onto the view model's `elicitationId` / `serverName`
+ * / `message` fields (renaming kept internal so the existing renderer
+ * logic doesn't have to change).
+ */
 export function normalizeElicitation(
-	elicitation: PendingElicitation,
+	userInput: PendingUserInput,
 ): ElicitationViewModel {
-	if (elicitation.mode === "url") {
-		const url = elicitation.url?.trim();
+	const elicitationId = userInput.userInputId;
+	const serverName = userInput.source;
+	const message = userInput.message;
+
+	if (userInput.payload.kind === "url") {
+		const url = userInput.payload.url.trim();
 		if (!url) {
 			return {
 				kind: "unsupported",
-				elicitationId: elicitation.elicitationId,
-				serverName: elicitation.serverName,
-				message: elicitation.message,
-				reason: "Missing URL for URL-mode elicitation.",
+				elicitationId,
+				serverName,
+				message,
+				reason: "Missing URL for URL-mode user input.",
 			};
 		}
 
@@ -300,25 +306,28 @@ export function normalizeElicitation(
 			host = null;
 		}
 
+		return { kind: "url", elicitationId, serverName, message, url, host };
+	}
+
+	if (userInput.payload.kind !== "form") {
 		return {
-			kind: "url",
-			elicitationId: elicitation.elicitationId,
-			serverName: elicitation.serverName,
-			message: elicitation.message,
-			url,
-			host,
+			kind: "unsupported",
+			elicitationId,
+			serverName,
+			message,
+			reason: "Expected form or url payload.",
 		};
 	}
 
-	const schema = isRecord(elicitation.requestedSchema)
-		? elicitation.requestedSchema
+	const schema = isRecord(userInput.payload.schema)
+		? userInput.payload.schema
 		: null;
 	if (!schema || readString(schema.type) !== "object") {
 		return {
 			kind: "unsupported",
-			elicitationId: elicitation.elicitationId,
-			serverName: elicitation.serverName,
-			message: elicitation.message,
+			elicitationId,
+			serverName,
+			message,
 			reason: "Unsupported form schema.",
 		};
 	}
@@ -327,10 +336,10 @@ export function normalizeElicitation(
 	if (!properties) {
 		return {
 			kind: "unsupported",
-			elicitationId: elicitation.elicitationId,
-			serverName: elicitation.serverName,
-			message: elicitation.message,
-			reason: "Form elicitation is missing properties.",
+			elicitationId,
+			serverName,
+			message,
+			reason: "Form user-input request is missing properties.",
 		};
 	}
 
@@ -347,9 +356,9 @@ export function normalizeElicitation(
 	if (unsupportedRequiredKeys.length > 0) {
 		return {
 			kind: "unsupported",
-			elicitationId: elicitation.elicitationId,
-			serverName: elicitation.serverName,
-			message: elicitation.message,
+			elicitationId,
+			serverName,
+			message,
 			reason: "Form schema contains unsupported required fields.",
 		};
 	}
@@ -357,18 +366,18 @@ export function normalizeElicitation(
 	if (normalizedFields.length === 0) {
 		return {
 			kind: "unsupported",
-			elicitationId: elicitation.elicitationId,
-			serverName: elicitation.serverName,
-			message: elicitation.message,
+			elicitationId,
+			serverName,
+			message,
 			reason: "No supported fields were found in the form schema.",
 		};
 	}
 
 	return {
 		kind: "form",
-		elicitationId: elicitation.elicitationId,
-		serverName: elicitation.serverName,
-		message: elicitation.message,
+		elicitationId,
+		serverName,
+		message,
 		fields: normalizedFields,
 	};
 }

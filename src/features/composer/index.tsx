@@ -36,8 +36,8 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
-import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
+import type { PendingPermission } from "@/features/conversation/hooks/use-streaming";
+import type { PendingUserInput } from "@/features/conversation/pending-user-input";
 import { humanizeBranch } from "@/features/navigation/shared";
 import { normalizeShortcutEvent } from "@/features/shortcuts/format";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
@@ -56,11 +56,6 @@ import { clampEffort } from "@/lib/workspace-helpers";
 import { ComposerButton } from "./button";
 import { ContextBar } from "./context-bar";
 import { ContextUsageRing } from "./context-usage-ring";
-import type {
-	DeferredToolResponseHandler,
-	DeferredToolResponseOptions,
-} from "./deferred-tool";
-import { DeferredToolPanel } from "./deferred-tool-panel";
 import { clearPersistedDraft } from "./draft-storage";
 import { $insertAddDirTrigger } from "./editor/add-dir/insert";
 import { AddDirTriggerNode } from "./editor/add-dir/trigger-node";
@@ -84,11 +79,12 @@ import { SlashCommandPlugin } from "./editor/plugins/slash-command-plugin";
 import { SubmitPlugin } from "./editor/plugins/submit-plugin";
 import { $extractComposerContent } from "./editor/utils";
 import { $appendComposerInsertItems } from "./editor-ops";
-import type { ElicitationResponseHandler } from "./elicitation";
-import { ElicitationPanel } from "./elicitation-panel";
 import { FastModeLottieIcon } from "./fast-mode-lottie-icon";
 import { GoalReplaceConfirm } from "./goal-replace-confirm";
+import { PermissionPanel, type PermissionPanelProps } from "./permission-panel";
 import { UsageStatsIndicator } from "./usage-stats-indicator";
+import type { UserInputResponseHandler } from "./user-input";
+import { UserInputPanel } from "./user-input-panel";
 
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
 
@@ -149,14 +145,14 @@ type WorkspaceComposerProps = {
 	addDirCandidates?: readonly CandidateDirectory[];
 	/** Called when the user selects an entry from the /add-dir popup. */
 	onPickAddDir?: (entry: AddDirPickerEntry) => void;
-	pendingElicitation?: PendingElicitation | null;
-	onElicitationResponse?: ElicitationResponseHandler;
-	elicitationResponsePending?: boolean;
-	pendingDeferredTool?: PendingDeferredTool | null;
-	onDeferredToolResponse?: DeferredToolResponseHandler;
+	pendingUserInput?: PendingUserInput | null;
+	onUserInputResponse?: UserInputResponseHandler;
+	userInputResponsePending?: boolean;
+	pendingPermission?: PendingPermission | null;
+	onPermissionResponse?: PermissionPanelProps["onResponse"];
 	/** When set, the composer body is replaced with a GoalReplaceConfirm
 	 *  panel asking the user whether to overwrite the active codex goal.
-	 *  Same in-place takeover pattern as `pendingDeferredTool`. */
+	 *  Same in-place takeover pattern as `pendingUserInput`. */
 	goalReplace?: {
 		currentObjective: string;
 		newObjective: string;
@@ -196,12 +192,10 @@ const EMPTY_SLASH_COMMANDS: readonly SlashCommandEntry[] = [];
 const EMPTY_LINKED_DIRECTORIES: readonly string[] = [];
 const EMPTY_CANDIDATE_DIRECTORIES: readonly CandidateDirectory[] = [];
 const noopPickAddDir = (_entry: AddDirPickerEntry) => {};
-const noopDeferredToolResponse = (
-	_deferred: PendingDeferredTool,
-	_behavior: "allow" | "deny",
-	_options?: DeferredToolResponseOptions,
-) => {};
-const noopElicitationResponse: ElicitationResponseHandler = () => {};
+const noopUserInputResponse: UserInputResponseHandler = () => {};
+const noopPermissionResponse: NonNullable<
+	WorkspaceComposerProps["onPermissionResponse"]
+> = () => {};
 type StartSubmitMode = "startNow" | "saveForLater";
 // ---------------------------------------------------------------------------
 // Lexical editor config (stable reference — defined outside component)
@@ -254,11 +248,11 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	linkedDirectoriesDisabled = false,
 	addDirCandidates = EMPTY_CANDIDATE_DIRECTORIES,
 	onPickAddDir = noopPickAddDir,
-	pendingElicitation = null,
-	onElicitationResponse = noopElicitationResponse,
-	elicitationResponsePending = false,
-	pendingDeferredTool = null,
-	onDeferredToolResponse = noopDeferredToolResponse,
+	pendingUserInput = null,
+	onUserInputResponse = noopUserInputResponse,
+	userInputResponsePending = false,
+	pendingPermission = null,
+	onPermissionResponse = noopPermissionResponse,
 	goalReplace = null,
 	hasPlanReview = false,
 	alwaysShowContextUsage = false,
@@ -349,11 +343,11 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		effortLevel,
 		onSelectEffort,
 	]);
-	const hasPendingElicitation = pendingElicitation !== null;
-	const hasPendingDeferredTool = pendingDeferredTool !== null;
+	const hasPendingUserInput = pendingUserInput !== null;
+	const hasPendingPermission = pendingPermission !== null;
 	const hasGoalReplace = goalReplace !== null;
 	const hasPendingInteraction =
-		hasPendingElicitation || hasPendingDeferredTool || hasGoalReplace;
+		hasPendingUserInput || hasPendingPermission || hasGoalReplace;
 	const inputDisabled = disabled || hasPendingInteraction;
 	const toolbarDisabled = disabled || hasPendingInteraction;
 	useEffect(() => {
@@ -611,17 +605,17 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				Workspace input
 			</label>
 
-			{hasPendingElicitation ? (
-				<ElicitationPanel
-					elicitation={pendingElicitation!}
-					disabled={disabled || elicitationResponsePending}
-					onResponse={onElicitationResponse}
+			{hasPendingUserInput ? (
+				<UserInputPanel
+					userInput={pendingUserInput!}
+					disabled={disabled || userInputResponsePending}
+					onResponse={onUserInputResponse}
 				/>
-			) : hasPendingDeferredTool ? (
-				<DeferredToolPanel
-					deferred={pendingDeferredTool!}
+			) : hasPendingPermission ? (
+				<PermissionPanel
+					permission={pendingPermission!}
 					disabled={disabled}
-					onResponse={onDeferredToolResponse}
+					onResponse={onPermissionResponse}
 				/>
 			) : hasGoalReplace ? (
 				<GoalReplaceConfirm
@@ -1149,7 +1143,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				</>
 			)}
 
-			{sendError && hasPendingElicitation ? (
+			{sendError && hasPendingUserInput ? (
 				<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-[12px] text-muted-foreground">
 					{sendError}
 				</div>

@@ -551,12 +551,6 @@ fn delete_imported_workspace_records(workspace_id: &str) -> Result<()> {
     }
 }
 
-/// Encode a filesystem path into a Claude Code project directory name.
-/// Claude uses `path.replace('/', '-').replace('.', '-')`.
-fn encode_claude_project_dir(path: &Path) -> String {
-    path.display().to_string().replace(['/', '.'], "-")
-}
-
 /// Copy Claude Code session .jsonl files from the Conductor project dir
 /// to the Helmor project dir so that imported sessions can be resumed.
 fn copy_claude_sessions_for_workspace(
@@ -584,8 +578,12 @@ fn copy_claude_sessions_for_workspace(
         .join(repo_name)
         .join(directory_name);
 
-    let src_dir = claude_projects.join(encode_claude_project_dir(&conductor_ws_path));
-    let dst_dir = claude_projects.join(encode_claude_project_dir(&helmor_ws_path));
+    let src_dir = claude_projects.join(crate::agents::claude_project_files::encode_project_dir(
+        &conductor_ws_path,
+    ));
+    let dst_dir = claude_projects.join(crate::agents::claude_project_files::encode_project_dir(
+        &helmor_ws_path,
+    ));
 
     if !src_dir.is_dir() {
         return;
@@ -1205,17 +1203,6 @@ mod tests {
             Some("real-claude-uuid-123"),
             "claude_session_id should be mapped to provider_session_id"
         );
-    }
-
-    #[test]
-    fn encode_claude_project_dir_encodes_correctly() {
-        let path = PathBuf::from("/Users/me/conductor/workspaces/repo/ws");
-        let encoded = encode_claude_project_dir(&path);
-        assert_eq!(encoded, "-Users-me-conductor-workspaces-repo-ws");
-
-        let path2 = PathBuf::from("/Users/me/helmor-dev/workspaces/repo/ws");
-        let encoded2 = encode_claude_project_dir(&path2);
-        assert_eq!(encoded2, "-Users-me-helmor-dev-workspaces-repo-ws");
     }
 
     #[test]

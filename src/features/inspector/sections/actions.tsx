@@ -112,6 +112,7 @@ type ActionsSectionProps = {
 	open: boolean;
 	onToggle: () => void;
 	bodyHeight: number;
+	animatePanelToggle?: boolean;
 	isResizing?: boolean;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
 	onReviewAction?: () => Promise<void>;
@@ -165,6 +166,7 @@ export function ActionsSection({
 	open,
 	onToggle,
 	bodyHeight,
+	animatePanelToggle = false,
 	isResizing,
 	onCommitAction,
 	onReviewAction,
@@ -179,9 +181,14 @@ export function ActionsSection({
 	const [reviewPending, setReviewPending] = useState(false);
 	const shouldReduceMotion = useReducedMotion();
 	const panelTransition = {
-		duration: isResizing || shouldReduceMotion ? 0 : TABS_ANIMATION_MS / 1000,
+		duration:
+			animatePanelToggle && !isResizing && !shouldReduceMotion
+				? TABS_ANIMATION_MS / 1000
+				: 0,
 		ease: TABS_EASING_CURVE,
 	};
+	const chevronTransitionMs =
+		animatePanelToggle && !shouldReduceMotion ? TABS_ANIMATION_MS : 0;
 	const forgeQuery = useQuery({
 		...workspaceForgeQueryOptions(workspaceId ?? "__none__"),
 		enabled: workspaceId !== null,
@@ -369,7 +376,7 @@ export function ActionsSection({
 						strokeWidth={1.9}
 						style={{
 							transform: open ? "rotate(0deg)" : "rotate(-90deg)",
-							transition: `transform ${TABS_ANIMATION_MS}ms ${TABS_EASING}`,
+							transition: `transform ${chevronTransitionMs}ms ${TABS_EASING}`,
 						}}
 					/>
 				</Button>
