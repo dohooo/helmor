@@ -72,23 +72,29 @@ pub(super) fn stream_via_sidecar(
         "stream_via_sidecar"
     );
 
-    let resume_session_id = request.session_id.clone().or_else(|| {
+    // Single read against `sessions` for both lookups we need below:
+    // resume-session matching (provider_session_id + agent_type) and the
+    // workspace_id we stamp onto the active-streams handle. Two queries
+    // would borrow the read pool twice on the hot path of every send.
+    let session_row: Option<(Option<String>, Option<String>, Option<String>)> =
         request.helmor_session_id.as_deref().and_then(|hsid| {
             let conn = crate::models::db::read_conn().ok()?;
-            let (stored_sid, stored_provider): (Option<String>, Option<String>) = conn
-                .query_row(
-                    "SELECT provider_session_id, agent_type FROM sessions WHERE id = ?1",
-                    [hsid],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .ok()?;
-            let sid = stored_sid?;
-            if stored_provider.unwrap_or_default() == model.provider {
-                Some(sid)
-            } else {
-                None
-            }
-        })
+            conn.query_row(
+                "SELECT provider_session_id, agent_type, workspace_id FROM sessions WHERE id = ?1",
+                [hsid],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .ok()
+        });
+
+    let resume_session_id = request.session_id.clone().or_else(|| {
+        let (stored_sid, stored_provider, _) = session_row.as_ref()?;
+        let sid = stored_sid.clone()?;
+        if stored_provider.clone().unwrap_or_default() == model.provider {
+            Some(sid)
+        } else {
+            None
+        }
     });
 
     tracing::debug!(
@@ -161,19 +167,12 @@ pub(super) fn stream_via_sidecar(
         params,
     };
 
-    // Look up the owning workspace once at registration time so the UI
-    // snapshot can show "this workspace is busy" without each frontend
-    // having to thread workspace_id through the wire.
-    let workspace_id_for_handle = request.helmor_session_id.as_deref().and_then(|hsid| {
-        let conn = crate::models::db::read_conn().ok()?;
-        conn.query_row(
-            "SELECT workspace_id FROM sessions WHERE id = ?1",
-            [hsid],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .ok()
-        .flatten()
-    });
+    // Workspace for the UI's "this workspace is busy" badge —
+    // pulled out of the same `session_row` we already read above so
+    // we don't borrow the read pool a second time on every send.
+    let workspace_id_for_handle = session_row
+        .as_ref()
+        .and_then(|(_, _, workspace_id)| workspace_id.clone());
 
     // Per-helmor-session lock — block overlapping sends so concurrent
     // `query()` calls can't stack against the same `resume:` id and

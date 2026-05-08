@@ -25,9 +25,10 @@ pub(crate) struct ActiveStreamHandle {
     pub sidecar_session_id: String,
     pub provider: String,
     /// Helmor session this stream belongs to. Drives the per-session
-    /// dedup in `try_register_for_session`. `None` for streams without
-    /// one (e.g. title generation) — those do NOT surface in the UI
-    /// snapshot.
+    /// dedup in `try_register_for_session`. `Option<_>` is defensive —
+    /// today every registered handle comes from `stream_via_sidecar`
+    /// and carries a Some, but the type leaves room for an anonymous
+    /// stream path (which would NOT surface in `snapshot_for_ui`).
     pub helmor_session_id: Option<String>,
     /// Workspace owning the helmor session, looked up at registration
     /// time. `None` for streams without a helmor session, or when the
@@ -87,9 +88,10 @@ impl ActiveStreams {
             .unwrap_or_default()
     }
 
-    /// UI-facing snapshot. Filters out anonymous streams (title gen
-    /// etc.) since the frontend only needs to track turns it can
-    /// render an abort button for.
+    /// UI-facing snapshot. Drops handles without a `helmor_session_id`
+    /// — the frontend keys everything off the helmor session, so a
+    /// session-less entry would be unaddressable on the wire. Today
+    /// every registered handle has one; this is purely defensive.
     pub fn snapshot_for_ui(&self) -> Vec<ActiveStreamSummary> {
         self.inner
             .lock()

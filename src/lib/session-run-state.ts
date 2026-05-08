@@ -5,7 +5,6 @@ export type SessionRunPhase = "pendingFinalize" | "streaming";
 export type SessionRunState = {
 	sessionId: string;
 	workspaceId: string | null;
-	provider: string | null;
 	phase: SessionRunPhase;
 	canStop: boolean;
 };
@@ -29,7 +28,6 @@ export function buildSessionRunStates(
 		next.set(stream.sessionId, {
 			sessionId: stream.sessionId,
 			workspaceId: stream.workspaceId,
-			provider: stream.provider,
 			phase: "streaming",
 			canStop: true,
 		});
@@ -38,7 +36,6 @@ export function buildSessionRunStates(
 		next.set(pending.sessionId, {
 			sessionId: pending.sessionId,
 			workspaceId: pending.workspaceId,
-			provider: null,
 			phase: "pendingFinalize",
 			canStop: false,
 		});

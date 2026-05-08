@@ -40,6 +40,16 @@ const apiMocks = vi.hoisted(() => ({
 	stopAgentStream: vi.fn(),
 }));
 
+// `listActiveStreams` is intentionally NOT mocked here. The hook reads it
+// via React Query, where `activeStreamsQueryOptions` provides
+// `initialData: []`, and `src/test/setup.ts`'s default invoke mock
+// returns `undefined` for unhandled commands — both paths produce an
+// empty array, which matches "no backend-tracked streams" for these
+// unit tests. If a future test wants to assert the backend-truth abort
+// path (e.g. that `handleStopStream` picks up a `provider` published by
+// the Rust registry rather than the local optimistic fallback), mock
+// `listActiveStreams` explicitly here so the default doesn't silently
+// swallow the assertion.
 vi.mock("@/lib/api", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@/lib/api")>();
 
