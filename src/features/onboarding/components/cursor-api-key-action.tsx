@@ -20,44 +20,35 @@ import {
 
 const CURSOR_DASHBOARD_URL = "https://cursor.com/dashboard/integrations";
 
-/// Inline API-key input + dashboard link, shown in the onboarding
-/// agent-login tile for Cursor.
-///
-/// Behavior on blur:
-///   1. Save the key to settings so the Rust login-status check flips
-///      `cursor: true` and the tile turns "ready" immediately. UI is
-///      never blocked on the network.
-///   2. Kick off a SILENT background fetch via `listCursorModels()` —
-///      doubles as a "this key is real" probe. On success we also write
-///      `cachedModels` + auto-pick `enabledModelIds` so the composer's
-///      Cursor section shows the full picker the moment the user reaches
-///      it (no need to detour through Settings just to see the list).
-///   3. On fetch failure the tile stays "ready" (don't fight optimism),
-///      but we show a small inline error below the input so the user
-///      knows the key didn't validate. Editing + re-blurring retries.
-///
-/// Stale-response guard: we stamp the key being validated into a ref;
-/// onSuccess / onError only commit results when the stamp still matches
-/// the current settings value. Otherwise a fast-typing user can race
-/// the network and end up with cachedModels for an old key.
+/// API-key tile for the onboarding Cursor row. On blur: save key
+/// (tile flips ready) + silently `listCursorModels()` to validate &
+/// populate `cachedModels`. Stale-response guard via in-flight key ref.
 export function CursorApiKeyAction({ onSaved }: { onSaved?: () => void }) {
 	const { settings, updateSettings } = useSettings();
 	const cursor = settings.cursorProvider;
 	const [draft, setDraft] = useState(cursor.apiKey);
 	const [fetchError, setFetchError] = useState<string | null>(null);
 	const inflightKeyRef = useRef<string | null>(null);
+	// Refs to dodge useMutation closure staleness during key races.
+	const settingsRef = useRef(settings);
+	const updateSettingsRef = useRef(updateSettings);
+	useEffect(() => {
+		settingsRef.current = settings;
+		updateSettingsRef.current = updateSettings;
+	}, [settings, updateSettings]);
 
 	useEffect(() => {
 		setDraft(cursor.apiKey);
 	}, [cursor.apiKey]);
 
 	const fetchMutation = useMutation({
-		mutationFn: () => listCursorModels(),
-		onSuccess: async (models: CursorModelEntry[]) => {
-			// Drop stale responses — user may have already typed a new key.
-			if (inflightKeyRef.current !== cursor.apiKey || !cursor.apiKey) {
-				return;
-			}
+		// `key` arg is this call's in-flight key — compared against
+		// `inflightKeyRef.current` to drop stale results on key races.
+		mutationFn: (_key: string) => listCursorModels(),
+		onSuccess: async (models: CursorModelEntry[], key: string) => {
+			if (inflightKeyRef.current !== key || !key) return;
+			const currentCursor = settingsRef.current.cursorProvider;
+			if (currentCursor.apiKey !== key) return;
 			setFetchError(null);
 			const cached: CursorCachedModel[] = models.map((m) => ({
 				id: m.id,
@@ -65,20 +56,22 @@ export function CursorApiKeyAction({ onSaved }: { onSaved?: () => void }) {
 				...(m.parameters ? { parameters: m.parameters } : {}),
 			}));
 			const enabledModelIds =
-				cursor.enabledModelIds === null
+				currentCursor.enabledModelIds === null
 					? pickDefaultCursorModelIds(models)
-					: cursor.enabledModelIds;
+					: currentCursor.enabledModelIds;
 			const patch: Partial<CursorProviderSettings> = {
 				cachedModels: cached,
 				enabledModelIds,
 			};
 			await Promise.resolve(
-				updateSettings({ cursorProvider: { ...cursor, ...patch } }),
+				updateSettingsRef.current({
+					cursorProvider: { ...currentCursor, ...patch },
+				}),
 			);
 			onSaved?.();
 		},
-		onError: (error: unknown) => {
-			if (inflightKeyRef.current !== cursor.apiKey) return;
+		onError: (error: unknown, key: string) => {
+			if (inflightKeyRef.current !== key) return;
 			setFetchError(error instanceof Error ? error.message : String(error));
 		},
 	});
@@ -92,15 +85,12 @@ export function CursorApiKeyAction({ onSaved }: { onSaved?: () => void }) {
 				cursorProvider: { ...cursor, apiKey: next },
 			}),
 		).then(() => {
-			// Tile flips to "ready" immediately — UX never waits on the
-			// network. The fetch below validates + populates the catalog
-			// behind the user's back.
+			// Tile flips ready immediately; fetch validates async.
 			onSaved?.();
 			if (next) {
 				inflightKeyRef.current = next;
-				fetchMutation.mutate();
+				fetchMutation.mutate(next);
 			} else {
-				// Cleared the key — drop any leaked validation state.
 				inflightKeyRef.current = null;
 			}
 		});

@@ -661,8 +661,7 @@ pub async fn get_agent_login_status() -> CmdResult<AgentLoginStatus> {
     .await
 }
 
-/// Cursor uses an API key (no CLI login). Treat as ready iff the saved
-/// `app.cursor_provider` JSON has a non-empty `apiKey`.
+/// Cursor "ready" = non-empty `app.cursor_provider.apiKey`.
 fn cursor_login_ready() -> bool {
     let raw = match crate::models::settings::load_setting_value("app.cursor_provider") {
         Ok(Some(value)) => value,

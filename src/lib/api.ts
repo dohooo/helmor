@@ -930,15 +930,12 @@ export type CursorModelParameter = {
 export type CursorModelEntry = {
 	id: string;
 	label: string;
-	/** Raw `parameters[]` from `Cursor.models.list`. Persisted as-is into
-	 *  `cursorProvider.cachedModels` so the composer's effort/fast-mode
-	 *  UI can be derived synchronously without another sidecar round-trip. */
+	/** Raw `parameters[]` — persisted into `cursorProvider.cachedModels`. */
 	parameters?: CursorModelParameter[];
 };
 
-/// Hit the live `Cursor.models.list` API via the sidecar. Used by the
-/// settings panel's tag picker — composer rendering itself stays static
-/// (driven by `cursorProvider.cachedModels` + `enabledModelIds`).
+/// Live `Cursor.models.list` via sidecar (settings panel only;
+/// composer reads from `cursorProvider.cachedModels`).
 export async function listCursorModels(): Promise<CursorModelEntry[]> {
 	return await invoke<CursorModelEntry[]>("list_cursor_models");
 }

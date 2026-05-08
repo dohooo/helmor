@@ -900,18 +900,14 @@ pub struct CursorModelParameter {
 pub struct CursorModelEntry {
     pub id: String,
     pub label: String,
-    /// Raw `parameters[]` from `Cursor.models.list`. The settings panel
-    /// persists this verbatim into `cursorProvider.cachedModels` so the
-    /// composer's effort/fast-mode UI can be derived synchronously from
-    /// settings without a sidecar round-trip on every render.
+    /// Persisted into `cursorProvider.cachedModels` so toolbar UI is
+    /// derived synchronously without a sidecar round-trip per render.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parameters: Option<Vec<CursorModelParameter>>,
 }
 
-/// 30s — the sidecar's `Cursor.models.list` is a single Connect RPC to
-/// `api.cursor.com`. Cold-start can take a few seconds while the SDK
-/// builds its HTTP/2 session pool; pad the budget so transient pool
-/// warm-up doesn't surface as a UI timeout.
+/// 30s budget for `Cursor.models.list` — SDK cold-start can take a few
+/// seconds while it warms its HTTP/2 pool.
 const LIST_CURSOR_MODELS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub fn fetch_cursor_models(
@@ -995,10 +991,8 @@ pub fn fetch_cursor_models(
     Ok(models)
 }
 
-/// Parse a JSON array of Cursor `ModelParameterDefinition`s as forwarded
-/// by the sidecar (`cursorParameters` field on `modelsListed`). Best-effort
-/// — entries with the wrong shape are dropped silently so a single oddly
-/// formatted upstream value doesn't blank the entire list.
+/// Parse the sidecar's `cursorParameters` field. Best-effort: drops
+/// malformed entries instead of blanking the whole list.
 fn parse_cursor_parameters(arr: &[Value]) -> Vec<CursorModelParameter> {
     arr.iter()
         .filter_map(|entry| {

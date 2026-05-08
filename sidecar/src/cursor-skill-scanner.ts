@@ -1,22 +1,7 @@
-/**
- * Skill scanner for the Cursor provider.
- *
- * Cursor's SDK has no slash-command surface, but Cursor itself documents a
- * filesystem-based skill discovery mechanism (see
- * https://cursor.com/cn/docs/skills). At startup Cursor walks a fixed set of
- * project- and user-scoped directories looking for `SKILL.md` files; each
- * found file becomes a skill the agent can be invoked on.
- *
- * We replicate that scan here so a Cursor session in Helmor can offer the
- * same `/skill-name` entries in the composer popup that the user already
- * sees inside Cursor itself. The output shape matches `SlashCommandInfo`
- * exactly so the frontend doesn't have to branch by provider.
- *
- * Roots scanned (per Cursor docs):
- *   - Project-level: `<project>/.agents/skills/`, `<project>/.cursor/skills/`
- *   - User-level:    `~/.agents/skills/`,         `~/.cursor/skills/`
- *   - Legacy compat: `.claude/skills/` and `.codex/skills/` at both scopes
- */
+/** Filesystem scan for Cursor skills (https://cursor.com/cn/docs/skills),
+ * mirroring what Cursor itself does. Roots: `.agents/skills`,
+ * `.cursor/skills`, plus legacy `.claude/skills` / `.codex/skills`, at
+ * project + user scope. Output shape matches `SlashCommandInfo`. */
 
 import type { Dirent } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
@@ -28,17 +13,12 @@ import type {
 	SlashCommandInfo,
 } from "./session-manager.js";
 
-/// Cap how deep we descend into each skill root. The docs say roots may
-/// nest by category/team but anything beyond a few levels is almost
-/// certainly a runaway symlink loop or unrelated source tree, so we stop
-/// rather than spin.
+/// Symlink-loop cap.
 const MAX_DEPTH = 6;
 
 const SKILL_FILENAME = "SKILL.md";
 
-/// Project-relative skill root subpaths. Order matters only for
-/// deterministic dedupe ordering — earlier entries win when two roots
-/// expose a skill with the same name.
+/// Earlier entries win on duplicate skill names.
 const PROJECT_ROOTS = [
 	".agents/skills",
 	".cursor/skills",
@@ -68,10 +48,7 @@ export async function scanCursorSkills(
 	const roots = collectRoots(params, options?.homeDir ?? homedir());
 	const visited = new Set<string>();
 
-	// Walk roots in parallel but keep their priority order in `perRoot` so
-	// the dedupe pass below is deterministic. Without an index-keyed
-	// buffer the race between filesystem scans would let user-scope
-	// shadow project-scope (or vice-versa) on alternating runs.
+	// Parallel scan, but preserve root priority for deterministic dedupe.
 	const perRoot = await Promise.all(
 		roots.map(async (root) => {
 			const found: SlashCommandInfo[] = [];

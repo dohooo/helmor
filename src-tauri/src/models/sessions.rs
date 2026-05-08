@@ -474,9 +474,8 @@ pub fn get_session_model(session_id: &str) -> Result<Option<String>> {
     Ok(model.filter(|s| !s.is_empty()))
 }
 
-/// Read both the model id and the provider (`agent_type`) for a session
-/// row. Used by the CLI / historical-resume path so `resolve_model` can
-/// disambiguate ids like `"default"` that exist under multiple providers.
+/// (model, agent_type) for a session — provider hint for `resolve_model`
+/// when ids like `"default"` are ambiguous.
 pub fn get_session_model_and_provider(
     session_id: &str,
 ) -> Result<(Option<String>, Option<String>)> {

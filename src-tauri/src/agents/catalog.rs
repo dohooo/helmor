@@ -44,10 +44,8 @@ pub fn static_model_sections() -> Vec<AgentModelSection> {
     )
 }
 
-/// Build sections from explicit inputs. Lifted out of `static_model_sections`
-/// so tests can pass synthetic `custom` providers AND synthetic cursor prefs
-/// without touching the real settings DB. Production calls always come
-/// through `static_model_sections`.
+/// Inputs-driven helper used by tests; production goes through
+/// `static_model_sections`.
 fn model_sections_for_inputs(
     custom: Vec<super::custom_providers::ClaudeProviderModel>,
     cursor_prefs: Option<CursorPrefs>,
@@ -103,20 +101,10 @@ fn codex_section() -> AgentModelSection {
     }
 }
 
-/// Cursor section for the composer's model picker.
-///
-/// Driven by the user's saved settings (`app.cursor_provider`):
-///   - `enabledModelIds`: which models from the cached catalog should
-///     surface in the composer picker. `null` means "auto-fill on next
-///     fetch" — until that fires we degrade to just `Auto`.
-///   - `cachedModels`: the last successful `Cursor.models.list` response,
-///     persisted by the settings panel so we can render rich entries here
-///     synchronously without a sidecar round-trip.
-///
-/// Hard fallback when both are absent: a single `Auto` (helmor id
-/// `cursor-default`, wire id `default`) entry — that's the one selection
-/// Cursor itself guarantees will exist across SDK versions, so it's the
-/// only thing safe to hardcode.
+/// Cursor picker section, driven by `app.cursor_provider` settings:
+/// `enabledModelIds` (user picks; `null` → auto-fill on next fetch) and
+/// `cachedModels` (last `Cursor.models.list` snapshot). When both are
+/// absent, fall back to the SDK-guaranteed `Auto` entry.
 fn cursor_section_from_prefs(prefs: Option<CursorPrefs>) -> AgentModelSection {
     let options = match prefs {
         Some(prefs) => expand_cursor_options(prefs),
@@ -133,9 +121,7 @@ fn cursor_section_from_prefs(prefs: Option<CursorPrefs>) -> AgentModelSection {
 #[derive(Debug, Clone)]
 struct CursorCachedModelEntry {
     label: String,
-    /// Raw `parameters[]` from `Cursor.models.list`. `None` for entries
-    /// persisted before the parameters plumbing shipped — those degrade
-    /// to "no effort dropdown" until the user clicks Refresh.
+    /// Raw `parameters[]`. `None` on legacy entries (no toolbar UI until refresh).
     parameters: Option<Vec<CursorCachedParameter>>,
 }
 
@@ -226,15 +212,10 @@ fn expand_cursor_options(prefs: CursorPrefs) -> Vec<AgentModelOption> {
         return vec![cursor_default_auto()];
     };
     if enabled.is_empty() {
-        // User explicitly emptied the list — show nothing rather than
-        // overriding their choice with the Auto fallback.
+        // User explicitly emptied the list — respect it.
         return Vec::new();
     }
-    // `enabled` and `cache` both come from settings persisted by the
-    // Cursor settings panel. They store WIRE ids verbatim (e.g.
-    // `"default"`, `"composer-2"`, `"gpt-5.3-codex"`) — what
-    // `Cursor.models.list` returns. `cursor_model` applies the
-    // `cursor-` namespace prefix to produce the unique Helmor id.
+    // `enabled`/`cache` store wire ids verbatim; `cursor_model` namespaces.
     let cache = prefs.cached_models.unwrap_or_default();
     enabled
         .iter()
@@ -243,10 +224,6 @@ fn expand_cursor_options(prefs: CursorPrefs) -> Vec<AgentModelOption> {
             let label = entry
                 .map(|e| e.label.clone())
                 .unwrap_or_else(|| wire_id.clone());
-            // Derive effort + thinking + fast capability from the
-            // `parameters[]` snapshot the settings panel persisted.
-            // Pre-plumbing entries (no `parameters`) degrade to no
-            // toolbar UI until the user clicks Refresh.
             let caps = entry
                 .and_then(|e| e.parameters.as_deref())
                 .map(derive_capabilities)
@@ -263,10 +240,8 @@ struct CursorCapabilities {
     supports_fast_mode: bool,
 }
 
-/// Derive composer toolbar capabilities from a model's raw `parameters[]`.
-/// `effort` (Claude) wins over `reasoning` (GPT) when both are present.
-/// `thinking` is intentionally NOT surfaced as a toolbar dimension —
-/// the sidecar auto-enables it for any model that exposes it.
+/// Derive toolbar capabilities. `effort` (Claude) wins over `reasoning`
+/// (GPT). `thinking` is auto-enabled sidecar-side, not surfaced here.
 fn derive_capabilities(parameters: &[CursorCachedParameter]) -> CursorCapabilities {
     let mut caps = CursorCapabilities::default();
     let mut effort_via_reasoning: Option<Vec<String>> = None;
@@ -326,9 +301,6 @@ fn claude_model(
             .iter()
             .map(|level| level.to_string())
             .collect(),
-        // Claude Agent SDK has its own thinking-block surface; the
-        // composer's brain-button toggle is currently a Cursor-only
-        // affordance.
         supports_fast_mode,
         supports_context_usage: true,
     }
@@ -350,18 +322,9 @@ fn codex_model(id: &str, label: &str) -> AgentModelOption {
     }
 }
 
-/// Build a Cursor model entry. `wire_id` is the id Cursor's SDK uses
-/// (e.g. `"default"` for Auto, `"composer-2"`, `"gpt-5.3-codex"`,
-/// `"claude-sonnet-4-5"`). Several of these collide with Claude / Codex
-/// catalog ids — most notably `"default"` (Claude Opus 4.7 1M).
-///
-/// To keep model ids globally unique inside Helmor (used as React keys,
-/// settings persistence values, equality lookups in `findModelOption`,
-/// etc.), we namespace every Cursor entry's `id` with a `cursor-`
-/// prefix. The wire-bound `cli_model` keeps the bare value so it
-/// reaches `agent.send({ model: { id: ... } })` unchanged.
-///
-/// Example: Cursor's "Auto" → `id = "cursor-default"`, `cli_model = "default"`.
+/// Build a Cursor option. Cursor wire ids collide with claude/codex
+/// (e.g. `default` = Claude Opus), so Helmor `id` is namespaced
+/// `cursor-<wire>`; `cli_model` keeps the bare wire id for `agent.send`.
 fn cursor_model(
     wire_id: &str,
     label: &str,
@@ -379,14 +342,12 @@ fn cursor_model(
             .map(|level| level.to_string())
             .collect(),
         supports_fast_mode,
-        // Cursor SDK doesn't currently expose a context-usage endpoint;
-        // hide the ring until that surfaces.
+        // No context-usage endpoint in Cursor SDK; hide the ring.
         supports_context_usage: false,
     }
 }
 
-/// Apply the `cursor-` namespace prefix unless already present. Idempotent
-/// so callers don't need to track whether their input is wire-shaped.
+/// Idempotent `cursor-` prefix.
 fn namespaced_cursor_id(wire_id: &str) -> String {
     if wire_id.starts_with("cursor-") {
         wire_id.to_string()
@@ -413,22 +374,11 @@ pub struct ResolvedModel {
     pub claude_auth_token: Option<String>,
 }
 
-/// Resolve a Helmor model id to provider + cli_model.
-///
-/// `provider_hint` is the provider field from the inbound request — when
-/// present, it disambiguates ids whose Helmor surface is the same (CLI /
-/// historical session paths can also pass `None` and rely on prefix-based
-/// inference).
-///
-/// Cursor entries are namespaced: their Helmor id always starts with
-/// `cursor-` (see `namespaced_cursor_id`). When we see that prefix we
-/// strip it for `cli_model` so the bare wire id reaches the Cursor SDK's
-/// `agent.send({ model: { id } })` call unchanged.
-///
-/// Without `cursor-`, prefix-based inference handles non-Cursor ids:
-/// - `composer-*` → cursor (only Cursor uses these — Composer 1.5 / 2 etc.)
-/// - `gpt-*` → codex
-/// - everything else → claude
+/// Resolve a Helmor model id to provider + cli_model. `provider_hint`
+/// is the inbound request's provider field (tie-breaker for ambiguous
+/// ids); falls back to prefix inference (`cursor-`/`composer-` →
+/// cursor, `gpt-` → codex, else claude). For cursor, strips the
+/// `cursor-` namespace before handing `cli_model` to the SDK.
 pub fn resolve_model(model_id: &str, provider_hint: Option<&str>) -> ResolvedModel {
     if let Some(model) = super::custom_providers::resolve(model_id) {
         return ResolvedModel {
@@ -451,9 +401,7 @@ pub fn resolve_model(model_id: &str, provider_hint: Option<&str>) -> ResolvedMod
         _ => "claude",
     };
 
-    // For Cursor: convert the namespaced Helmor id back to the wire id
-    // the SDK expects. `composer-*` ids never had a prefix and pass
-    // through. Non-cursor providers always use `model_id` verbatim.
+    // Strip `cursor-` for SDK; `composer-*` had no prefix.
     let cli_model = if provider == "cursor" {
         model_id
             .strip_prefix("cursor-")

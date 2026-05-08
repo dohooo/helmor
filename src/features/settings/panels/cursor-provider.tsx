@@ -48,8 +48,7 @@ export function CursorProviderPanel() {
 		setKeyDraft(cursor.apiKey);
 	}, [cursor.apiKey]);
 
-	// Persist a partial cursorProvider patch and refresh the model picker
-	// query so the composer reflects the change immediately.
+	// Patch + invalidate picker so composer reflects the change.
 	const persist = useCallback(
 		async (patch: Partial<CursorProviderSettings>) => {
 			await Promise.resolve(
@@ -71,15 +70,10 @@ export function CursorProviderPanel() {
 			const cached: CursorCachedModel[] = models.map((m) => ({
 				id: m.id,
 				label: m.label,
-				// Forward `parameters[]` so the Rust catalog can derive
-				// `effortLevels` + `supportsFastMode` for the composer
-				// without needing another sidecar round-trip.
+				// Forward parameters[] so Rust catalog derives toolbar caps.
 				...(m.parameters ? { parameters: m.parameters } : {}),
 			}));
-			// Auto-pick fires exactly once — when `enabledModelIds` is
-			// still null. Any subsequent successful fetch (refresh button,
-			// re-saving the key) only refreshes `cachedModels`; the user's
-			// own picks are sacred from that point on.
+			// Auto-pick only when null (first time); user picks are sticky.
 			const shouldAutoPick = cursor.enabledModelIds === null;
 			const enabledModelIds = shouldAutoPick
 				? pickDefaultCursorModelIds(models)
@@ -91,9 +85,7 @@ export function CursorProviderPanel() {
 		},
 	});
 
-	// Save the API key on blur. If the saved key actually changed AND we
-	// don't yet have a cached catalog, kick off a fetch right away —
-	// that's what populates the picker for first-time users.
+	// Save on blur; first-time saves trigger an immediate catalog fetch.
 	const lastKickedRef = useRef<string | null>(null);
 	function commitKey() {
 		const next = keyDraft.trim();
@@ -106,10 +98,7 @@ export function CursorProviderPanel() {
 		});
 	}
 
-	// First mount with a saved key but no cached catalog yet — happens
-	// when the user enters a key in onboarding (which doesn't trigger a
-	// fetch) and only later opens this panel. Keep it idempotent so
-	// re-mounting doesn't loop.
+	// First-mount fetch when key is saved but no catalog yet (idempotent).
 	useEffect(() => {
 		if (
 			cursor.apiKey &&
@@ -239,9 +228,7 @@ function ModelMultiSelect({
 	onToggle: (id: string) => void;
 	loading: boolean;
 }) {
-	// Render the picks in user-saved order (so re-arranging in the
-	// future is straightforward), but the popup list keeps the API's
-	// returned order which roughly tracks the dashboard.
+	// Render picks in user-saved order; popup list keeps API order.
 	const enabled = enabledIds
 		.map((id) => available.find((m) => m.id === id) ?? { id, label: id })
 		.filter(Boolean);

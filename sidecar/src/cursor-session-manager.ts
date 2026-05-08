@@ -1,16 +1,6 @@
-/**
- * `SessionManager` implementation backed by `@cursor/sdk`.
- *
- * One Cursor `Agent` per Helmor session, cached in `sessions` map. Events
- * from `run.stream()` are forwarded through the sidecar emitter as
- * passthrough JSON with `type` namespaced as `cursor/<original>` so the
- * Rust accumulator can dispatch them without colliding with claude/codex
- * event types of the same name.
- *
- * The Cursor SDK runs in-process (no spawned child) and talks to
- * `api.cursor.com` via Connect RPC. It bundles a small native sandbox
- * helper (`cursorsandbox`) for shell tool execution.
- */
+/** SessionManager backed by @cursor/sdk. One Agent per Helmor session;
+ * stream events forwarded with `type` namespaced as `cursor/<original>`
+ * so Rust dispatch doesn't collide with claude/codex event types. */
 
 import {
 	Agent,
@@ -41,14 +31,13 @@ import {
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "./title.js";
 
-/// Cheapest cursor model that handles the title prompt reliably. Picked
-/// here because title generation is on the hot path of "user submits
-/// first message" — pay the smallest possible inference cost.
+/// Cheapest model on the title-gen hot path.
 const TITLE_MODEL_ID = "composer-2";
 
 interface LiveSession {
 	readonly agent: SDKAgent;
-	readonly modelId: string;
+	/// Updated per turn — composer can switch model mid-conversation.
+	modelId: string;
 	currentRun: Run | null;
 	currentRequestId: string | null;
 	aborted: boolean;
@@ -56,30 +45,27 @@ interface LiveSession {
 
 export class CursorSessionManager implements SessionManager {
 	private readonly sessions = new Map<string, LiveSession>();
-	/// Per-model `parameters[]` cache. Filled by `listModels()` (the
-	/// settings panel hits this on key save / refresh) and consulted by
-	/// `sendMessage()` to build `ModelParameterValue[]`. Keyed by Cursor
-	/// wire id (`composer-2`, `gpt-5.3-codex`, `default`, ...) — the same
-	/// id stored in `cli_model` on the Rust side and threaded through as
-	/// `params.model` on each send.
+	/// Per-wire-id parameters[] cache. Populated by listModels(), read
+	/// by sendMessage() to build ModelParameterValue[].
 	private readonly modelParameters = new Map<
 		string,
 		readonly CursorModelParameter[]
 	>();
-	/// In-memory copy of the Cursor API key, hot-pushed by the Rust host
-	/// via the `updateConfig` RPC on app startup and on every settings
-	/// change. Falling back to `process.env.CURSOR_API_KEY` keeps the dev
-	/// loop and tests usable without going through the host.
-	private apiKey: string | null = process.env.CURSOR_API_KEY ?? null;
+	/// API key pushed in via Rust's `updateConfig` RPC. `null` until the
+	/// host says something; env-var fallback only before that.
+	private apiKey: string | null = null;
+	/// True once the host has spoken (incl. explicit clear). Once set,
+	/// we never silent-fallback to CURSOR_API_KEY — a user who cleared
+	/// the key would not expect env-var auth to keep working.
+	private apiKeyHostManaged = false;
 
 	setApiKey(apiKey: string | null): void {
 		const next = apiKey?.trim() ? apiKey.trim() : null;
-		if (next === this.apiKey) return;
+		if (this.apiKeyHostManaged && next === this.apiKey) return;
 		this.apiKey = next;
-		// Old SDK agents were created with the previous key — closing
-		// them now means in-flight cursor turns abort, but that's
-		// preferable to silently keeping stale auth. Claude and Codex
-		// sessions are unaffected (different manager).
+		this.apiKeyHostManaged = true;
+		// Drop existing sessions — they were minted with the old key.
+		// In-flight cursor turns abort; claude/codex unaffected.
 		for (const [, session] of this.sessions) {
 			session.aborted = true;
 			void session.currentRun?.cancel().catch(() => {
@@ -100,6 +86,8 @@ export class CursorSessionManager implements SessionManager {
 	}
 
 	private resolveApiKey(): string | null {
+		// Host decision is authoritative once made; env var only before.
+		if (this.apiKeyHostManaged) return this.apiKey;
 		return this.apiKey ?? process.env.CURSOR_API_KEY ?? null;
 	}
 
@@ -107,8 +95,7 @@ export class CursorSessionManager implements SessionManager {
 		_userInputId: string,
 		_resolution: UserInputResolution,
 	): boolean {
-		// Cursor SDK's `request` event is reserved for permission prompts the
-		// SDK currently auto-handles. No pending waiters yet.
+		// SDK auto-handles permission prompts; no waiters to resolve.
 		return false;
 	}
 
@@ -148,8 +135,7 @@ export class CursorSessionManager implements SessionManager {
 					aborted: false,
 				};
 				this.sessions.set(params.sessionId, session);
-				// Surface the agentId so Rust persists it as `provider_session_id`
-				// for resume on next launch. Synthetic event — no SDK origin.
+				// Synthetic event — Rust persists agentId as provider_session_id.
 				emitter.passthrough(requestId, {
 					type: "cursor/agent_init",
 					session_id: agent.agentId,
@@ -166,13 +152,12 @@ export class CursorSessionManager implements SessionManager {
 			}
 		}
 
-		// Resume drops the model — pass it on every send. Build the
-		// per-turn `ModelParameterValue[]` from the cached `parameters[]`
-		// for this wire id. `thinking` is auto-enabled here for any
-		// model that exposes it (Claude lineage on Cursor); not a UI
-		// dimension, so users don't have to think about it.
+		// Use this turn's modelId, not the agent's create-time pick —
+		// composer can switch models mid-conversation. `thinking` is
+		// auto-enabled inside buildSendModelParams when present.
+		session.modelId = modelId;
 		const modelParams = await this.buildSendModelParams(
-			session.modelId,
+			modelId,
 			params.effortLevel,
 			params.fastMode,
 			apiKey,
@@ -181,7 +166,7 @@ export class CursorSessionManager implements SessionManager {
 		try {
 			run = await session.agent.send(params.prompt, {
 				model: {
-					id: session.modelId,
+					id: modelId,
 					...(modelParams.length > 0 ? { params: modelParams } : {}),
 				},
 			});
@@ -205,8 +190,7 @@ export class CursorSessionManager implements SessionManager {
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
 			if (session.aborted) {
-				// Expected — cancel triggers a Connect "canceled" error inside
-				// the streaming iterator. Treat as clean abort, not failure.
+				// run.cancel() throws inside stream() — clean abort, not failure.
 				logger.debug(`[${requestId}] Cursor stream aborted by user`);
 			} else {
 				logger.error(`[${requestId}] Cursor stream error: ${msg}`, {
@@ -247,9 +231,7 @@ export class CursorSessionManager implements SessionManager {
 		const cwd = process.cwd();
 		const timeout = timeoutMs ?? TITLE_GENERATION_TIMEOUT_MS;
 
-		// Always ephemeral — title prompts must NOT contaminate any
-		// existing user-facing session. `Agent.prompt` is the SDK's
-		// dedicated one-shot API: spin up agent, run one turn, close.
+		// One-shot — never reuses an existing user session.
 		const titleRun = Agent.prompt(prompt, {
 			apiKey,
 			model: { id: modelId },
@@ -275,12 +257,8 @@ export class CursorSessionManager implements SessionManager {
 	async listSlashCommands(
 		params: ListSlashCommandsParams,
 	): Promise<readonly SlashCommandInfo[]> {
-		// Cursor's SDK has no slash-command RPC, but Cursor itself documents
-		// a filesystem-based skill discovery scheme (see
-		// https://cursor.com/cn/docs/skills). We replicate that scan locally
-		// so Helmor's composer popup mirrors what the user already has wired
-		// into Cursor proper — including the legacy `.claude/skills/` and
-		// `.codex/skills/` paths Cursor still honours.
+		// SDK has no slash-command RPC; replicate Cursor's filesystem
+		// skill scan (https://cursor.com/cn/docs/skills) locally.
 		try {
 			return await scanCursorSkills(params);
 		} catch (err) {
@@ -300,8 +278,7 @@ export class CursorSessionManager implements SessionManager {
 		try {
 			const models = await Cursor.models.list({ apiKey });
 			const out = models.map(modelInfoToProviderInfo);
-			// Refresh the per-wire-id parameter cache so subsequent
-			// sendMessage calls can build params without a second RPC.
+			// Cache parameters[] so sendMessage avoids a second RPC.
 			this.cacheModelParameters(out);
 			return out;
 		} catch (error) {
@@ -313,9 +290,8 @@ export class CursorSessionManager implements SessionManager {
 		}
 	}
 
-	/// Look up the `parameters[]` for `wireId`, refreshing the cache from
-	/// `Cursor.models.list` when missing. `null` when the upstream call
-	/// fails or the model is unknown — caller must still tolerate.
+	/// `parameters[]` for `wireId`; lazy-refreshes from Cursor.models.list
+	/// when missing. `null` on RPC failure or unknown model.
 	private async getModelParameters(
 		wireId: string,
 		apiKey: string,
@@ -343,12 +319,8 @@ export class CursorSessionManager implements SessionManager {
 		}
 	}
 
-	/// Wrapper that resolves the wire id's cached `parameters[]` (lazy
-	/// fetching when missing) and delegates the pure mapping to
-	/// `computeModelParameterValues`. Split this way so the mapping logic
-	/// is unit-testable without an SDK round-trip. `thinking` is always
-	/// auto-enabled when present, so we resolve parameters even when
-	/// effort/fast are off.
+	/// Cache resolution + delegation to the pure mapper. We always
+	/// resolve parameters[] so `thinking` can be auto-added when present.
 	private async buildSendModelParams(
 		wireId: string,
 		effortLevel: string | undefined,
@@ -381,8 +353,7 @@ export class CursorSessionManager implements SessionManager {
 		_files: readonly string[],
 		_images: readonly string[],
 	): Promise<boolean> {
-		// Cursor SDK doesn't expose mid-turn injection. Caller falls back
-		// to queue-then-fire-as-new-turn semantics in the frontend.
+		// SDK has no mid-turn injection; caller queues as a new turn.
 		return false;
 	}
 
@@ -410,12 +381,9 @@ export class CursorSessionManager implements SessionManager {
 	}
 }
 
-/// Wrap the SDK event with a `cursor/` namespace on `type` so Rust dispatch
-/// is unambiguous — claude/codex both emit non-namespaced types like
-/// `assistant`, `status`, etc., and the accumulator's match arms must not
-/// collide. For a `tool_call`, also normalize the lifecycle marker into
-/// the new type (`cursor/tool_call_start` vs `cursor/tool_call_end`) so
-/// the accumulator can branch without inspecting the inner `status` field.
+/// Prefix `type` with `cursor/` so Rust dispatch doesn't collide with
+/// claude/codex. `tool_call` is split into `tool_call_start` /
+/// `tool_call_end` based on `status` so accumulator can branch on type.
 function namespaceEvent(event: SDKMessage): Record<string, unknown> {
 	const e = event as unknown as Record<string, unknown>;
 	if (e.type === "tool_call") {
@@ -431,22 +399,14 @@ function namespaceEvent(event: SDKMessage): Record<string, unknown> {
 	return { ...e, type: `cursor/${String(e.type)}` };
 }
 
-/// Param ids the API uses for "effort level" — Claude models expose
-/// `effort` (low/medium/high/[xhigh]/max), GPT/Codex models expose
-/// `reasoning` (low/medium/high/extra-high). Same semantic knob, different
-/// wire id depending on the model lineage. Order matters: when both are
-/// present `effort` wins (Claude exposes both `effort` AND `thinking`,
-/// and `effort` is the levels one).
+/// Effort wire ids in priority order: Claude uses `effort`, GPT/Codex
+/// uses `reasoning`. Both can carry levels; when both present, `effort`
+/// wins (Claude has effort + thinking; thinking is the boolean one).
 const CURSOR_EFFORT_PARAM_IDS = ["effort", "reasoning"] as const;
 
-/// Translate composer toolbar state into the `ModelParameterValue[]`
-/// Cursor's SDK accepts on `agent.send`. Toolbar surfaces only effort
-/// (`effort` / `reasoning`) and fast (`fast`); `thinking` (Claude
-/// extended thinking) is auto-enabled on any model that exposes it,
-/// without a UI knob. `effort` wins over `reasoning` when both present.
-///
-/// Pure — exported via `__CURSOR_INTERNAL` so unit tests can pin its
-/// behavior without spinning up an SDK agent.
+/// Build agent.send params from composer toolbar state. Toolbar surfaces
+/// effort + fast; `thinking` is auto-enabled when the model exposes it.
+/// Pure — exported via __CURSOR_INTERNAL for unit tests.
 function computeModelParameterValues(
 	parameters: readonly CursorModelParameter[],
 	effortLevel: string | undefined,
@@ -458,9 +418,7 @@ function computeModelParameterValues(
 		for (const id of CURSOR_EFFORT_PARAM_IDS) {
 			const param = parameters.find((p) => p.id === id);
 			if (!param) continue;
-			// Picker already constrains effortLevel to the model's allowed
-			// set; double-check here so an out-of-band value can't poison
-			// the whole turn (the API rejects unknown values).
+			// Reject out-of-band values — API rejects unknown values.
 			if (param.values.some((v) => v.value === effortLevel)) {
 				out.push({ id: param.id, value: effortLevel });
 			}
@@ -468,8 +426,7 @@ function computeModelParameterValues(
 		}
 	}
 
-	// Auto-enable `thinking` on any model that exposes it. Wire shape is
-	// `[{value:"false"}, {value:"true", ...}]`.
+	// Auto-enable `thinking` when present (Claude extended thinking).
 	const thinkingParam = parameters.find((p) => p.id === "thinking");
 	if (thinkingParam?.values.some((v) => v.value === "true")) {
 		out.push({ id: "thinking", value: "true" });
@@ -519,13 +476,12 @@ function modelInfoToProviderInfo(model: ModelListItem): ProviderModelInfo {
 	};
 }
 
-// Re-export for unit tests so internals can be exercised without
-// spinning up an actual SDK agent.
+// Test-only export.
 export const __CURSOR_INTERNAL = {
 	namespaceEvent,
 	modelInfoToProviderInfo,
 	computeModelParameterValues,
 };
 
-// Touch the `Agent` class import so TS doesn't drop it under `verbatimModuleSyntax`.
+// Keep `Agent` import live under verbatimModuleSyntax.
 void Agent;

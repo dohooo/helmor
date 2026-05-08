@@ -200,8 +200,7 @@ pub async fn list_agent_model_sections() -> CmdResult<Vec<AgentModelSection>> {
 pub async fn list_cursor_models(
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
 ) -> CmdResult<Vec<queries::CursorModelEntry>> {
-    // Inline blocking for now — same pattern as `list_slash_commands`.
-    // The sidecar RPC budget is bounded by `LIST_CURSOR_MODELS_TIMEOUT`.
+    // Inline blocking — same pattern as `list_slash_commands`.
     queries::fetch_cursor_models(sidecar.inner())
 }
 

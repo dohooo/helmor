@@ -58,9 +58,7 @@ pub async fn update_app_settings(
     })
     .await?;
 
-    // Hot-push the new Cursor API key to the running sidecar. Avoids a
-    // full sidecar restart that would interrupt any concurrent Claude or
-    // Codex turn — the sidecar is shared across all three providers.
+    // Hot-push the key — restart would interrupt other providers.
     if touched_cursor_key {
         sidecar.push_cursor_api_key(crate::sidecar::load_cursor_api_key());
     }

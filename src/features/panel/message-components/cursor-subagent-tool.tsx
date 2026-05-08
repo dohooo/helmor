@@ -1,32 +1,6 @@
-/**
- * Renders Cursor's subagent invocation tool calls.
- *
- * Cursor's wire shape (after `cursor.rs::translate_cursor_tool` renames
- * `task` → `cursor_task`):
- *
- *   args: {
- *     agentId:      string,    // subagent runtime id (used for color identity)
- *     subagentType: string,    // role label, e.g. "code-reviewer"
- *     description:  string,    // one-line summary
- *     prompt:       string,    // full instructions sent to the subagent
- *     model:        string,    // e.g. "composer-2"
- *     mode:         string,    // collab mode, e.g. "auto"
- *   }
- *   result?: string | object   // subagent's final output, present on completion
- *
- * Visual model intentionally diverges from claude/codex because cursor
- * subagents have different lifecycle:
- *   - claude `Task` folds child tool calls under the parent (we'd render
- *     a step list). Cursor doesn't expose child events — there's nothing
- *     to fold.
- *   - codex `subagent_*` covers spawn/wait/send/resume/close — separate
- *     events. Cursor packages everything in one `task` tool call: args
- *     in, result out.
- *
- * So this renderer is single-row + expandable (prompt + result), styled
- * with the same tokens (`Bot` icon, `bg-accent/35` body, agent-color
- * accent) so it reads as part of the same visual family.
- */
+/** Renders Cursor `cursor_task` (subagent) tool calls. Single-row +
+ *  expandable; cursor packages spawn+result in one tool call (no child
+ *  events to fold like claude `Task` or codex `subagent_*`). */
 
 import {
 	AlertCircle,
@@ -79,9 +53,7 @@ function statusGlyph(streamingStatus: string | undefined, isError: boolean) {
 	return null;
 }
 
-/// Cursor's tool result is `{status, value}` for shell, or for `task`
-/// usually a free-form string in `value` (the subagent's final output).
-/// Fallback to JSON.stringify for unexpected shapes.
+/// Result is `{status, value}` for shell or a string in `value` for task.
 function formatResult(result: unknown): string | null {
 	if (result == null) return null;
 	if (typeof result === "string") return result.trim() || null;

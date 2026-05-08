@@ -525,6 +525,7 @@ pub(super) fn stream_via_sidecar(
 
                         if is_aborted {
                             pipeline_state.accumulator.flush_codex_in_progress();
+                            pipeline_state.accumulator.flush_cursor_in_progress();
                             pipeline_state.materialize_partial();
                             pipeline_state.accumulator.append_aborted_notice();
                         }

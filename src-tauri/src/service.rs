@@ -163,12 +163,8 @@ pub fn send_message(
         },
     };
 
-    // 3. Resolve model — explicit param > session row > "default"
-    //    Read the persisted (model, agent_type) pair together so a session
-    //    that ran under e.g. `cursor` keeps using cursor on resume even
-    //    when `params.model` is omitted. Without the provider hint,
-    //    `"default"` would route to Claude (the prefix-inference fallback)
-    //    even for cursor sessions, since cursor's Auto also uses that id.
+    // 3. Resolve model — param > session row > "default". Provider hint
+    //    is required so cursor's `default` doesn't infer to claude.
     let (session_model, session_provider) =
         crate::models::sessions::get_session_model_and_provider(&session_id)
             .unwrap_or((None, None));

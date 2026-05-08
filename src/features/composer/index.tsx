@@ -326,12 +326,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const supportsEffort = availableEffortLevels.length > 0;
 	const supportsFastMode = selectedModel?.supportsFastMode === true;
 	const supportsContextUsage = selectedModel?.supportsContextUsage !== false;
-	// Cursor SDK 1.0.x exposes neither a `permissionMode` option nor any
-	// callback to accept/reject a plan; the agent runs `CreatePlanToolCall`
-	// internally and self-handles the result. Surfacing a Plan toggle for
-	// cursor sessions would imply a control we don't actually have. Hide
-	// it until upstream ships an interactive surface (or we route cursor
-	// through ACP, where plan IS interactive).
+	// Cursor SDK auto-handles plans internally — no toggle to expose.
 	const supportsPlanMode = selectedModel?.provider !== "cursor";
 	const effectiveEffort = useMemo(
 		() => clampEffort(effortLevel, availableEffortLevels),

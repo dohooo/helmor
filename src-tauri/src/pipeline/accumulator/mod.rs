@@ -148,9 +148,7 @@ pub struct StreamAccumulator {
     pub(super) codex_turn_started_at: Option<f64>,
 
     // ── Cursor state ─────────────────────────────────────────────────
-    /// Per-run accumulation for Cursor SDK streams. Reset on each
-    /// `cursor/status RUNNING`; finalized into `collected[]` on
-    /// `cursor/status FINISHED`. See `cursor.rs`.
+    /// Per-run cursor state; see `cursor.rs`.
     cursor_state: cursor::CursorRunState,
 
     // ── Coverage guard ───────────────────────────────────────────────
@@ -486,10 +484,7 @@ impl StreamAccumulator {
             }
 
             // ── Cursor SDK events (namespaced by sidecar manager) ─────
-            // `cursor/agent_init` is synthetic and only carries the SDK's
-            // `agentId` as `session_id` for persistence; the top-level
-            // extractor at the start of `push_event` already lifts that
-            // field, so this arm just NoOps.
+            // Synthetic — session_id already lifted by push_event extractor.
             Some("cursor/agent_init") => PushOutcome::NoOp,
             Some("cursor/status") => cursor::handle_status(self, value),
             Some("cursor/thinking") => cursor::handle_thinking(self, value),
@@ -733,6 +728,12 @@ impl StreamAccumulator {
     /// on abort. No-op when no items are in flight.
     pub fn flush_codex_in_progress(&mut self) {
         codex::flush_in_progress(self);
+    }
+
+    /// Drain in-flight cursor state on abort (no FINISHED will arrive).
+    /// Idempotent.
+    pub fn flush_cursor_in_progress(&mut self) {
+        cursor::flush_in_progress(self);
     }
 
     /// Convert any active streaming partial into a finalized assistant

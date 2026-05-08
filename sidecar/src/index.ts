@@ -117,26 +117,18 @@ setInterval(() => {
 // in-flight request gets notified, and keep the process alive.
 // ---------------------------------------------------------------------------
 
-// Both handlers below: log only, never broadcast a null-id error. The
-// real "sidecar crashed" path is handled by Rust's reader-thread
-// cleanup on stdout EOF. unhandledRejection / uncaughtException don't
-// actually exit the process here, so emitting a global error would
-// just kill every in-flight stream because of a transient SDK side-
-// channel hiccup (issues #398/#402 and the Cursor NGHTTP2/TLS family).
+// Log-only handlers. Real sidecar crash is detected by Rust on EOF;
+// broadcasting a null-id error here would tear down every in-flight
+// stream over a transient Cursor NGHTTP2/TLS hiccup (#398/#402).
 process.on("uncaughtException", (err) => {
 	logger.error("uncaughtException", errorDetails(err));
 });
 
 process.on("unhandledRejection", (reason) => {
-	// Cursor SDK 1.0.x opens multiple HTTP/2 sessions on cold start
-	// (statsig telemetry, run-event tailer, etc.). They land on
-	// backends that periodically trip transport-level errors —
-	// `ERR_TLS_CERT_ALTNAME_INVALID`, `NGHTTP2_FRAME_SIZE_ERROR` /
-	// `ERR_HTTP2_STREAM_ERROR`, `ECONNRESET`, etc. The user-facing
-	// prompt stream is awaited inside the manager's try/catch, so
-	// any ConnectError reaching this handler is by construction NOT
-	// from the active turn. Demote those to info so the logs aren't
-	// noisy with red ERRORs for every cold start.
+	// Cursor SDK opens background HTTP/2 sessions (statsig, run-event
+	// tailer) that periodically trip transport-level errors. The
+	// user-facing turn is awaited inside the manager's try/catch, so
+	// these are by construction off-path — demote to info.
 	if (isCursorSdkBackgroundChannelError(reason)) {
 		logger.info(
 			"Suppressed Cursor SDK background-channel transient error",
@@ -148,17 +140,13 @@ process.on("unhandledRejection", (reason) => {
 });
 
 const TRANSIENT_NODE_ERROR_CODES = new Set([
-	// TLS — Cursor SDK side channels occasionally hit hostnames
-	// whose cert SAN list doesn't match.
+	// TLS SAN mismatch (Cursor side channels).
 	"ERR_TLS_CERT_ALTNAME_INVALID",
-	// HTTP/2 stream-level RST_STREAM with a non-zero error code
-	// (FRAME_SIZE_ERROR, REFUSED_STREAM, …) — Node wraps these as
-	// `ERR_HTTP2_STREAM_ERROR`. Adjacent codes cover other framing
-	// edge cases the SDK doesn't catch.
+	// HTTP/2 stream-level resets (FRAME_SIZE_ERROR, REFUSED_STREAM, ...).
 	"ERR_HTTP2_STREAM_ERROR",
 	"ERR_HTTP2_INVALID_STREAM",
 	"ERR_HTTP2_GOAWAY_SESSION",
-	// Plain socket-level transient failures.
+	// Socket-level.
 	"ECONNRESET",
 	"ECONNREFUSED",
 	"ETIMEDOUT",
@@ -173,9 +161,7 @@ function isCursorSdkBackgroundChannelError(reason: unknown): boolean {
 	for (const code of collectErrorChainCodes(reason)) {
 		if (TRANSIENT_NODE_ERROR_CODES.has(code)) return true;
 	}
-	// Safety net: HTTP/2 stream errors sometimes lose the original
-	// `.code` by the time they surface — match the canonical message
-	// shape connect-rpc / Node emit.
+	// Fallback: HTTP/2 errors sometimes lose `.code`; match by message.
 	const msg = reason.message;
 	return /NGHTTP2_/.test(msg) || /Stream closed with error code/i.test(msg);
 }
@@ -412,11 +398,8 @@ async function handleGetContextUsage(
 	}
 }
 
-/// Hot-update sidecar runtime config without restarting. Used by the
-/// Rust host to push the saved Cursor API key on app boot and again on
-/// every settings save — restarting the sidecar would interrupt any
-/// in-flight Claude/Codex session, which we don't want for a key-only
-/// change in an unrelated provider.
+/// Hot-push runtime config (Cursor API key). Restarting the sidecar
+/// would interrupt unrelated in-flight Claude/Codex turns.
 function handleUpdateConfig(id: string, params: Record<string, unknown>): void {
 	try {
 		if ("cursorApiKey" in params) {

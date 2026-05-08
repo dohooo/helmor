@@ -89,9 +89,7 @@ fn resolve_bundled_agent_paths() -> BundledAgentPaths {
         .unwrap_or_default()
 }
 
-/// Pull the Cursor API key out of the saved `app.cursor_provider` JSON
-/// (written by the settings panel + onboarding tile). Returns `None`
-/// when the setting is missing, malformed, or empty.
+/// Read Cursor API key from `app.cursor_provider`. None on missing/empty.
 pub fn load_cursor_api_key() -> Option<String> {
     let raw = crate::models::settings::load_setting_value("app.cursor_provider")
         .ok()
@@ -176,13 +174,9 @@ impl SidecarProcess {
                 cmd.env("HELMOR_CODEX_BIN_PATH", &path);
             }
         }
-        // The Cursor API key is NOT passed via env. The sidecar is shared
-        // across claude / codex / cursor sessions, and bouncing it on a
-        // key change would interrupt every in-flight Claude or Codex
-        // turn. Instead the key is pushed at runtime via the
-        // `updateConfig` RPC — see `push_cursor_api_key` below and the
-        // call sites in `lib.rs` (boot) + `settings_commands.rs` (live
-        // edit).
+        // Cursor key is NOT env-passed — pushed via `updateConfig` RPC
+        // (see `push_cursor_api_key`) so key changes don't restart the
+        // shared sidecar and interrupt other providers' turns.
 
         tracing::debug!(
             cmd = if is_dev {
@@ -389,11 +383,8 @@ impl ManagedSidecar {
                 return Err(error);
             }
 
-            // Hand the freshly spawned sidecar the saved Cursor API key
-            // up-front so the very first cursor request finds it
-            // already configured. Best-effort — a missing key (or send
-            // failure here) just means the next cursor request returns
-            // the "API key not configured" error, which is the right UX.
+            // Push saved key so the first cursor request finds it set.
+            // Best-effort: failures fall through to the "not configured" error.
             if let Some(key) = load_cursor_api_key() {
                 let init = SidecarRequest {
                     id: Uuid::new_v4().to_string(),
@@ -409,14 +400,8 @@ impl ManagedSidecar {
         guard.as_ref().unwrap().send(request)
     }
 
-    /// Push the current Cursor API key into a running sidecar via the
-    /// `updateConfig` RPC. The sidecar's `CursorSessionManager` keeps it
-    /// in memory and uses it for the next `Agent.create` / `models.list`
-    /// call without disturbing any in-flight Claude or Codex turn.
-    ///
-    /// Sends `null` when no key is configured (so a clear-then-rebind
-    /// also propagates). Best-effort: no-op when the sidecar isn't yet
-    /// running — the next request will spawn it and we'll push then.
+    /// Hot-push Cursor API key (or null) via `updateConfig`. Best-effort;
+    /// no-op when sidecar isn't running — next spawn will pick it up.
     pub fn push_cursor_api_key(&self, key: Option<String>) {
         let mut guard = match self.process.lock() {
             Ok(g) => g,
@@ -515,6 +500,11 @@ impl ManagedSidecar {
     /// events to the correct per-request channel. On exit (EOF / error), the
     /// thread clears `reader_running` and drops all listener senders so that
     /// blocked `rx.iter()` calls in `stream_via_sidecar` unblock immediately.
+    #[cfg(test)]
+    pub(crate) fn dispatch_for_test(&self, event: SidecarEvent, raw: &str) -> bool {
+        dispatch_event(&self.listeners, event, raw)
+    }
+
     fn start_reader_thread(&self, reader: BufReader<std::process::ChildStdout>) -> Result<()> {
         // Reset flag — previous reader (if any) already exited or we killed its process.
         if let Ok(mut running) = self.reader_running.lock() {
@@ -555,42 +545,8 @@ impl ManagedSidecar {
                                 continue;
                             };
                             let event = SidecarEvent { raw };
-
-                            if let Some(request_id) = event.id() {
-                                let event_type = event.event_type().to_string();
-                                let map = listeners.lock().unwrap_or_else(|e| e.into_inner());
-                                if let Some(tx) = map.get(request_id) {
-                                    tracing::debug!(request_id, event_type = %event_type, "← stdout");
-                                    let _ = tx.send(event);
-                                    event_count += 1;
-                                } else {
-                                    tracing::debug!(request_id, event_type = %event_type, "← stdout (no listener, dropped)");
-                                }
-                            } else {
-                                // No-id event — historically these were
-                                // fan-out broadcast to every listener for
-                                // "fatal" sidecar errors. That was too
-                                // aggressive: a single SDK side-channel hiccup
-                                // (e.g. Cursor's NGHTTP2/TLS noise) can land
-                                // here as `unhandledRejection` without
-                                // actually crashing the sidecar, and
-                                // broadcasting tears down every in-flight
-                                // turn. The real "sidecar process died" path
-                                // is handled by the cleanup block on EOF
-                                // below; this branch now just logs.
-                                if event.event_type() == "error" {
-                                    let message = event
-                                        .raw
-                                        .get("message")
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("(no message)");
-                                    tracing::warn!(
-                                        message,
-                                        "sidecar emitted no-id error — logged, not broadcast"
-                                    );
-                                } else {
-                                    tracing::debug!(raw = trimmed, "← stdout [no-id]");
-                                }
+                            if dispatch_event(&listeners, event, trimmed) {
+                                event_count += 1;
                             }
                         }
                         Err(e) => {
@@ -622,7 +578,10 @@ impl ManagedSidecar {
                         };
                         for (rid, tx) in map.iter() {
                             let mut evt = crash_event.clone();
-                            evt.raw.as_object_mut().unwrap().insert("id".to_string(), Value::String(rid.clone()));
+                            evt.raw
+                                .as_object_mut()
+                                .unwrap()
+                                .insert("id".to_string(), Value::String(rid.clone()));
                             let _ = tx.send(evt);
                         }
                     }
@@ -638,6 +597,36 @@ impl ManagedSidecar {
                 anyhow::anyhow!("Failed to spawn sidecar reader thread: {error}")
             })
     }
+}
+
+/// Dispatch one event. `true` when delivered to a listener; no-id
+/// branches log only (broadcasting tore down in-flight turns).
+fn dispatch_event(listeners: &Listeners, event: SidecarEvent, raw: &str) -> bool {
+    if let Some(request_id) = event.id() {
+        let event_type = event.event_type().to_string();
+        let map = listeners.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(tx) = map.get(request_id) {
+            tracing::debug!(request_id, event_type = %event_type, "← stdout");
+            let _ = tx.send(event);
+            return true;
+        }
+        tracing::debug!(request_id, event_type = %event_type, "← stdout (no listener, dropped)");
+        return false;
+    }
+    if event.event_type() == "error" {
+        let message = event
+            .raw
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("(no message)");
+        tracing::warn!(
+            message,
+            "sidecar emitted no-id error — logged, not broadcast"
+        );
+    } else {
+        tracing::debug!(raw, "← stdout [no-id]");
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -828,26 +817,36 @@ mod tests {
         assert!(!*flag, "Flag should be cleared, allowing restart");
     }
 
-    /// Regression: no-id errors emitted by the sidecar (e.g. transient
-    /// `unhandledRejection` from a Cursor SDK background channel) must
-    /// NOT be fanned out to active stream listeners. The actual
-    /// "sidecar process died" notification still flows through the
-    /// reader cleanup block, which is exercised by
-    /// `reader_cleanup_unblocks_receivers`.
+    /// Regression: no-id error events must not fan out to listeners.
     #[test]
     fn no_id_error_event_does_not_reach_active_listeners() {
         let sidecar = ManagedSidecar::new();
         let rx1 = sidecar.subscribe("req-1");
         let rx2 = sidecar.subscribe("req-2");
 
-        // The reader thread's no-id branch only logs — there's no
-        // public hook to invoke it directly, so we just assert the
-        // listener channels stay empty for a short window. If the old
-        // broadcast behaviour ever sneaks back, this would receive an
-        // error event and the assertion would fail.
+        // Feed the dispatch entrypoint directly. Old broadcast would
+        // have leaked the event below to both rx channels.
+        let raw = serde_json::json!({ "type": "error", "message": "boom" });
+        let consumed =
+            sidecar.dispatch_for_test(SidecarEvent { raw }, r#"{"type":"error","message":"boom"}"#);
+        assert!(!consumed, "no-id event should not count as delivered");
         assert!(rx1
             .recv_timeout(std::time::Duration::from_millis(50))
             .is_err());
+        assert!(rx2
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .is_err());
+
+        // Sanity: an event WITH a matching id still reaches its listener.
+        let raw_with_id = serde_json::json!({ "id": "req-1", "type": "end" });
+        let consumed_id = sidecar.dispatch_for_test(
+            SidecarEvent { raw: raw_with_id },
+            r#"{"id":"req-1","type":"end"}"#,
+        );
+        assert!(consumed_id);
+        assert!(rx1
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .is_ok());
         assert!(rx2
             .recv_timeout(std::time::Duration::from_millis(50))
             .is_err());

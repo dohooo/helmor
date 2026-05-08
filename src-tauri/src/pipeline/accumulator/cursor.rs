@@ -1,29 +1,14 @@
-//! Cursor SDK event handling.
+//! Cursor event handling — `cursor/`-namespaced events from the sidecar.
 //!
-//! Wire format (post sidecar `cursor/`-namespacing in
-//! `cursor-session-manager.ts`):
+//! Events:
+//!   - `agent_init` (synthetic, carries session_id) — NoOp here
+//!   - `status` RUNNING/FINISHED — turn boundary / finalize trigger
+//!   - `thinking` (delta + duration close), `assistant` (text delta)
+//!   - `tool_call_start` / `tool_call_end`
 //!
-//! - `cursor/agent_init` — synthetic, carries `session_id` (the SDK's
-//!   `agentId`). The top-level `push_event` extractor already lifts the
-//!   `session_id` field; this handler is just a NoOp.
-//! - `cursor/status` with `status: "RUNNING"` — turn boundary marker.
-//! - `cursor/status` with `status: "FINISHED"` — finalize the in-flight
-//!   assistant message (and any tool_result follow-ups) into `collected`.
-//! - `cursor/thinking` with `text` — reasoning delta. The closing event
-//!   carries `thinking_duration_ms` with empty text.
-//! - `cursor/assistant` with `message.content[].text` — text delta.
-//! - `cursor/tool_call_start` — opens a tool_use block with `args`.
-//! - `cursor/tool_call_end` — closes the tool with `result`.
-//!
-//! Output shape: synthesized Claude-format `assistant` messages (and
-//! `user` tool_result follow-ups) so the existing adapter handles them
-//! with no per-provider branching. Same approach as `codex.rs`.
-//!
-//! Cancel doesn't surface as a distinct wire event — Cursor still emits
-//! `status FINISHED` after `run.cancel()`, and the manager-level abort
-//! state is reflected via the typed `aborted` control event the
-//! accumulator already handles in `mod.rs`. So the FINISHED finalize
-//! works the same in both clean and aborted runs.
+//! Output: synthesized Claude-format messages so the adapter is shared.
+//! Cancel goes through the same FINISHED path; manager-level abort is
+//! signalled via the typed `aborted` control event in `mod.rs`.
 
 use std::collections::HashMap;
 
@@ -40,12 +25,9 @@ pub(super) struct CursorRunState {
     pub assistant_text: String,
     pub thinking_text: String,
     pub thinking_duration_ms: Option<u64>,
-    /// Insertion-ordered list of tool calls in this run. Each maps to one
-    /// `tool_use` block on the synthesized assistant message and one
-    /// follow-up `tool_result` user message.
+    /// Insertion-ordered tool calls. Each → one tool_use + tool_result.
     pub tools: Vec<CursorToolCall>,
-    /// `call_id` → index into `tools`, so `tool_call_end` can find the
-    /// matching `tool_call_start` entry in O(1).
+    /// O(1) lookup `call_id` → index into `tools`.
     pub tool_index: HashMap<String, usize>,
     pub started_at: Option<f64>,
 }
@@ -177,19 +159,24 @@ pub(super) fn handle_tool_call_end(acc: &mut StreamAccumulator, value: &Value) -
             entry.is_error = is_error;
         }
     } else {
-        // Late `tool_call_end` without a matching `tool_call_start` —
-        // ignore rather than synthesize a half-formed tool block.
+        // No matching tool_call_start — ignore.
         return PushOutcome::NoOp;
     }
     PushOutcome::StreamingDelta
 }
 
-/// Build the assistant message + tool_result follow-ups and push them
-/// onto `collected`. Called on `cursor/status FINISHED`.
+/// Drain in-flight cursor state on abort (no `status FINISHED` will
+/// arrive). Same emission as the happy path — pending tools render as
+/// tool_use without tool_result, matching reality.
+pub(super) fn flush_in_progress(acc: &mut StreamAccumulator) {
+    finalize(acc);
+}
+
+/// Push assistant message + tool_result follow-ups on `status FINISHED`.
 fn finalize(acc: &mut StreamAccumulator) -> PushOutcome {
     let state = std::mem::take(&mut acc.cursor_state);
 
-    // Skip empty runs (shouldn't normally happen, but be defensive).
+    // Defensive: skip empty runs.
     let has_text = !state.assistant_text.is_empty();
     let has_thinking = !state.thinking_text.is_empty();
     let has_tools = !state.tools.is_empty();
@@ -264,8 +251,7 @@ fn finalize(acc: &mut StreamAccumulator) -> PushOutcome {
         content_json: raw_json,
     });
 
-    // One synthetic user message per tool with a result, mirroring how
-    // Claude's `tool_result` blocks come back through the SDK.
+    // One synthetic user/tool_result per tool that completed.
     for tool in &state.tools {
         let Some(result) = &tool.result else { continue };
         let result_text = format_tool_result(result);
@@ -299,8 +285,7 @@ fn finalize(acc: &mut StreamAccumulator) -> PushOutcome {
         });
     }
 
-    // Capture the assistant text into the persistence-finalization fields
-    // so `parsed_output()` reports the full turn text downstream.
+    // Roll into persistence fields for parsed_output().
     if has_text {
         if !acc.assistant_text.is_empty() {
             acc.assistant_text.push('\n');

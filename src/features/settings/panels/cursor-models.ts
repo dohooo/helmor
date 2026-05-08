@@ -1,19 +1,10 @@
-/**
- * Helpers for the Cursor models settings panel — version parsing and the
- * "auto-pick" logic that runs once when the user first saves an API key
- * (or any time `enabledModelIds` is `null` and a fetch succeeds).
- *
- * Defaults: Auto (id="default") + latest GPT + latest Claude. "Latest" is
- * highest version number parsed out of the model id; ties broken by
- * shortest id (prefers the base variant over `*-mini`/`*-max`).
- */
+/** Auto-pick defaults for the Cursor models picker: Auto + latest GPT
+ *  + latest Claude. "Latest" = highest parsed version, ties broken by
+ *  shortest id (prefers base variants over `*-mini`/`*-max`). */
 
 import type { CursorModelEntry } from "@/lib/api";
 
-/// Compute the default `enabledModelIds` from a freshly fetched cursor
-/// model list. Called once when the user saves an API key with
-/// `enabledModelIds === null`. Subsequent saves never auto-fill; the
-/// user is in charge.
+/// Defaults for first-time `enabledModelIds === null`; never re-fires.
 export function pickDefaultCursorModelIds(
 	models: readonly CursorModelEntry[],
 ): string[] {
@@ -30,9 +21,7 @@ export function pickDefaultCursorModelIds(
 	const claude = pickLatest(models, /^claude-/);
 	if (claude) out.push(claude.id);
 
-	// Hard fallback: never return an empty list when at least one model
-	// matched anywhere. If the entire upstream catalog is empty (very
-	// unusual) the caller decides what to do.
+	// Never empty when catalog isn't.
 	if (out.length === 0 && models.length > 0) {
 		out.push(models[0]!.id);
 	}
@@ -50,22 +39,20 @@ function pickLatest(
 	if (matches.length === 0) return null;
 	const top = matches[0]!.version;
 	const tied = matches.filter((m) => compareVersions(m.version, top) === 0);
-	// Tie-break: shortest id wins. Prefers `gpt-5.3-codex` over
-	// `gpt-5.3-codex-mini` and `claude-sonnet-4-5` over any longer suffix.
+	// Tie-break: shortest id wins (prefers base over `*-mini`/`*-max`).
 	tied.sort((a, b) => a.model.id.length - b.model.id.length);
 	return tied[0]!.model;
 }
 
-/// Pull the first digit-dot-or-dash-separated number sequence out of a
-/// model id. e.g. `gpt-5.3-codex → [5, 3]`, `claude-sonnet-4-5 → [4, 5]`,
-/// `composer-2 → [2]`. Returns `[0]` when no digit run exists.
+/// First digit run as version array. `[0]` if none. e.g.
+/// `gpt-5.3-codex → [5,3]`, `claude-sonnet-4-5 → [4,5]`.
 export function extractVersion(id: string): number[] {
 	const m = id.match(/\d+(?:[-.]\d+)*/);
 	if (!m) return [0];
 	return m[0].split(/[-.]/).map((s) => Number.parseInt(s, 10) || 0);
 }
 
-/// Compare two version arrays component-wise, missing slots zero-padded.
+/// Component-wise compare, zero-padded missing slots.
 export function compareVersions(a: number[], b: number[]): number {
 	const len = Math.max(a.length, b.length);
 	for (let i = 0; i < len; i++) {

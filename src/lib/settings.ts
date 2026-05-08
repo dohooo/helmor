@@ -57,46 +57,32 @@ export type ClaudeCustomProviderSettings = {
 	customModels: string;
 };
 
-/** One value option for a Cursor model parameter (e.g. `{ value: "high",
- *  displayName: "High" }`). Mirrors the SDK's `ModelParameterDefinition`. */
+/** Mirrors SDK `ModelParameterDefinition` shape. */
 export type CursorCachedModelParameterValue = {
 	value: string;
 	displayName?: string;
 };
 
-/** One Cursor model parameter as returned by `Cursor.models.list`.
- *  Persisted verbatim so the Rust catalog can derive `effortLevels` /
- *  `supportsFastMode` from the same source the SDK uses on `agent.send`. */
 export type CursorCachedModelParameter = {
 	id: string;
 	displayName?: string;
 	values: CursorCachedModelParameterValue[];
 };
 
-/** Snapshot of one model from the last successful `Cursor.models.list`
- *  call. Persisted alongside the user's picks so the Rust catalog can
- *  expand `enabledModelIds` into rich `AgentModelOption` entries without
- *  another sidecar round-trip every time the composer renders. */
+/** `Cursor.models.list` snapshot. `parameters` may be absent on legacy
+ *  entries — Rust catalog degrades until next Refresh writes them back. */
 export type CursorCachedModel = {
 	id: string;
 	label: string;
-	/** May be absent on entries persisted before the parameters plumbing
-	 *  shipped — the catalog falls back to "no effort dropdown" until the
-	 *  user clicks Refresh, which writes back the full shape. */
 	parameters?: CursorCachedModelParameter[];
 };
 
 export type CursorProviderSettings = {
 	apiKey: string;
-	/** User's chosen models for the composer picker. `null` means
-	 *  auto-selection has not yet been applied — the next successful
-	 *  fetch will fill in defaults (Auto + latest GPT + latest Claude).
-	 *  An empty array means the user explicitly cleared all picks; we
-	 *  respect that and never auto-fill again. */
+	/** `null` = first fetch auto-fills defaults; `[]` = user cleared,
+	 *  never auto-fill again. */
 	enabledModelIds: string[] | null;
-	/** Last successful fetch of the available model catalog, kept so the
-	 *  Rust composer-picker query can render rich entries synchronously.
-	 *  Refreshed whenever the user clicks "Refresh" or saves a new key. */
+	/** Last fetched catalog; lets the Rust picker render synchronously. */
 	cachedModels: CursorCachedModel[] | null;
 };
 

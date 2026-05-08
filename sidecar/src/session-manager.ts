@@ -97,11 +97,8 @@ export type UserInputResolution =
 	| { action: "decline"; content?: Record<string, unknown> }
 	| { action: "cancel" };
 
-/** One Cursor model parameter, mirroring `ModelParameterDefinition` from
- *  `@cursor/sdk`. Carried through the wire as the single source of truth
- *  for what the model supports — Rust catalog derives `effortLevels` /
- *  `supportsFastMode` from it, and the sidecar uses it on send to build
- *  the right `ModelParameterValue[]` for `agent.send`. */
+/** Mirrors `ModelParameterDefinition` from @cursor/sdk. Single source of
+ *  truth for derived `effortLevels`/`supportsFastMode` + send-time params. */
 export interface CursorModelParameter {
 	readonly id: string;
 	readonly displayName?: string;
@@ -118,9 +115,7 @@ export interface ProviderModelInfo {
 	readonly cliModel: string;
 	readonly effortLevels?: readonly string[];
 	readonly supportsFastMode?: boolean;
-	/** Cursor-only. Raw `parameters[]` from `ModelListItem` so the catalog
-	 *  + send paths share the same source of truth (no parallel hardcoded
-	 *  effort tables). Other providers omit this. */
+	/** Cursor-only — raw `parameters[]` from `ModelListItem`. */
 	readonly cursorParameters?: readonly CursorModelParameter[];
 }
 
