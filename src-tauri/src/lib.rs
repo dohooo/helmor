@@ -435,6 +435,8 @@ pub fn run() {
             commands::settings_commands::save_auto_close_action_kinds,
             commands::settings_commands::load_auto_close_opt_in_asked,
             commands::settings_commands::save_auto_close_opt_in_asked,
+            commands::settings_commands::load_global_preferences,
+            commands::settings_commands::update_global_preferences,
             global_hotkey::sync_global_hotkey,
             ui_sync::subscribe_ui_mutations,
             ui_sync::unsubscribe_ui_mutations,

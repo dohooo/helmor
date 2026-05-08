@@ -123,6 +123,20 @@ pub fn upsert_setting_json<T: Serialize>(key: &str, value: &T) -> Result<()> {
 const AUTO_CLOSE_ACTION_KINDS_KEY: &str = "auto_close_action_kinds";
 const AUTO_CLOSE_OPT_IN_ASKED_KEY: &str = "auto_close_opt_in_asked";
 
+const GLOBAL_REPO_PREFERENCES_KEY: &str = "global_repo_preferences";
+
+/// Load the account-wide repo preferences template. Returns a default
+/// (all-`None`) value when no global template has been saved yet.
+pub fn load_global_repo_preferences() -> Result<crate::models::repos::RepoPreferences> {
+    load_setting_json::<crate::models::repos::RepoPreferences>(GLOBAL_REPO_PREFERENCES_KEY)
+        .map(|opt| opt.unwrap_or_default())
+}
+
+/// Persist the account-wide repo preferences template.
+pub fn save_global_repo_preferences(prefs: &crate::models::repos::RepoPreferences) -> Result<()> {
+    upsert_setting_json(GLOBAL_REPO_PREFERENCES_KEY, prefs)
+}
+
 /// Account-global rate-limit snapshots: the raw upstream response body
 /// is stored verbatim (no shape mapping) by the corresponding
 /// `get_*_rate_limits` Tauri command after a live OAuth fetch, and read

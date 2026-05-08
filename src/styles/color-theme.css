@@ -252,6 +252,13 @@
    sidebar looks identical to today. */
 html[data-os="macos"] {
 	--app-shell-bg: transparent;
+	/* Light themes: veil the vibrancy with a translucent white so dark
+	   sidebar text keeps contrast across varying wallpapers. */
+	--sidebar-tint: oklch(1 0 0 / 0.55);
+}
+
+html[data-os="macos"].dark {
+	/* Dark vibrancy material already contrasts white text — no veil. */
 	--sidebar-tint: transparent;
 }
 

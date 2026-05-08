@@ -182,7 +182,19 @@ describe("useConversationStreaming", () => {
 		apiMocks.startAgentMessageStream.mockReset();
 		apiMocks.steerAgentStream.mockReset();
 		apiMocks.stopAgentStream.mockReset();
-		apiMocks.loadRepoPreferences.mockResolvedValue({});
+		apiMocks.loadRepoPreferences.mockResolvedValue({
+			overrides: {},
+			inherit: {
+				createPr: false,
+				review: false,
+				fixErrors: false,
+				resolveConflicts: false,
+				branchRename: false,
+				general: false,
+			},
+			global: {},
+			effective: {},
+		});
 
 		apiMocks.generateSessionTitle.mockResolvedValue(null);
 		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
@@ -571,7 +583,17 @@ describe("useConversationStreaming", () => {
 
 	it("sends the repo general preference via promptPrefix on the first prompt only", async () => {
 		apiMocks.loadRepoPreferences.mockResolvedValue({
-			general: "Always summarize the repo conventions first.",
+			overrides: { general: "Always summarize the repo conventions first." },
+			inherit: {
+				createPr: false,
+				review: false,
+				fixErrors: false,
+				resolveConflicts: false,
+				branchRename: false,
+				general: false,
+			},
+			global: {},
+			effective: { general: "Always summarize the repo conventions first." },
 		});
 		apiMocks.startAgentMessageStream.mockImplementation(async () => {});
 

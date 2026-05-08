@@ -11,8 +11,11 @@ import {
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import {
+	EMPTY_INHERIT_FLAGS,
+	type InheritFlags,
 	loadRepoPreferences,
 	type RepoPreferences,
+	type RepoPreferencesResolved,
 	updateRepoPreferences,
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
@@ -32,6 +35,28 @@ const PREFERENCE_KEYS: RepoPreferenceKey[] = [
 	"general",
 ];
 
+const EMPTY_RESOLVED: RepoPreferencesResolved = {
+	overrides: {},
+	inherit: { ...EMPTY_INHERIT_FLAGS },
+	global: {},
+	effective: {},
+};
+
+function placeholderFor(
+	key: RepoPreferenceKey,
+	globalText: string | null | undefined,
+): string {
+	if (globalText?.trim()) {
+		const truncated =
+			globalText.length > 140 ? `${globalText.slice(0, 140)}…` : globalText;
+		return `Following global: ${truncated}`;
+	}
+	if (key === "general") {
+		return "Add custom instructions for all agents working in this repo.";
+	}
+	return "Add your preferences here. The agent will be told to prioritize these instructions over its default instructions.";
+}
+
 export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 	const queryClient = useQueryClient();
 	const preferencesQuery = useQuery({
@@ -39,22 +64,32 @@ export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 		queryFn: () => loadRepoPreferences(repoId),
 		staleTime: 0,
 	});
-	const preferences = preferencesQuery.data ?? {};
-	const [drafts, setDrafts] = useState<RepoPreferences>({});
+	const resolved: RepoPreferencesResolved =
+		preferencesQuery.data ?? EMPTY_RESOLVED;
+
+	const [draftOverrides, setDraftOverrides] = useState<RepoPreferences>({});
+	const [draftInherit, setDraftInherit] =
+		useState<InheritFlags>(EMPTY_INHERIT_FLAGS);
 	const [openKey, setOpenKey] = useState<RepoPreferenceKey | null>(null);
 	const [savingKey, setSavingKey] = useState<RepoPreferenceKey | null>(null);
 	const [previewKey, setPreviewKey] = useState<RepoPreferenceKey | null>(null);
 
 	useEffect(() => {
-		setDrafts(preferences);
-	}, [preferences]);
+		setDraftOverrides(resolved.overrides);
+		setDraftInherit(resolved.inherit);
+	}, [resolved]);
 
 	const previewMarkdown = useMemo(() => {
-		if (!previewKey) {
-			return "";
+		if (!previewKey) return "";
+		// Preview the value the agent would actually see.
+		const previewSource: RepoPreferences = { ...draftOverrides };
+		for (const k of PREFERENCE_KEYS) {
+			if (draftInherit[k]) {
+				previewSource[k] = resolved.global[k] ?? null;
+			}
 		}
-		return resolveRepoPreferencePreview(previewKey, drafts);
-	}, [drafts, previewKey]);
+		return resolveRepoPreferencePreview(previewKey, previewSource);
+	}, [draftOverrides, draftInherit, resolved.global, previewKey]);
 
 	return (
 		<>
@@ -63,12 +98,15 @@ export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 					Preferences
 				</div>
 				<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
-					Repo-level built-in prompts used by Helmor actions and new chats.
+					Repo-level prompts. Each field can follow the global template or be
+					overridden per repo.
 				</div>
 				<div className="mt-4 divide-y divide-app-border/20">
 					{PREFERENCE_KEYS.map((key) => {
 						const isOpen = openKey === key;
-						const value = drafts[key] ?? "";
+						const isInherit = draftInherit[key];
+						const editorValue = isInherit ? "" : (draftOverrides[key] ?? "");
+						const placeholder = placeholderFor(key, resolved.global[key]);
 						return (
 							<Collapsible
 								key={key}
@@ -81,9 +119,20 @@ export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 											type="button"
 											className="flex w-full cursor-pointer items-start justify-between gap-4 text-left"
 										>
-											<div>
-												<div className="text-[13px] font-medium text-app-foreground">
-													{REPO_PREFERENCE_LABELS[key]}
+											<div className="flex-1">
+												<div className="flex items-center gap-2">
+													<div className="text-[13px] font-medium text-app-foreground">
+														{REPO_PREFERENCE_LABELS[key]}
+													</div>
+													<span
+														className={
+															isInherit
+																? "rounded-full bg-app-base/40 px-2 py-[2px] text-[10px] font-medium uppercase tracking-wide text-app-muted"
+																: "rounded-full bg-accent/15 px-2 py-[2px] text-[10px] font-medium uppercase tracking-wide text-accent-foreground"
+														}
+													>
+														{isInherit ? "Following global" : "Overridden"}
+													</span>
 												</div>
 												<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
 													{REPO_PREFERENCE_DESCRIPTIONS[key]}
@@ -100,37 +149,56 @@ export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 									<CollapsibleContent className="pt-4">
 										<Textarea
 											className="min-h-[140px] resize-y bg-app-base/30 font-mono text-[12px] placeholder:text-[12px]"
-											placeholder={
-												key === "general"
-													? "Add custom instructions for all agents working in this repo."
-													: "Add your preferences here. The agent will be told to prioritize these instructions over its default instructions."
-											}
-											value={value}
-											onChange={(event) =>
-												setDrafts((current) => ({
+											placeholder={placeholder}
+											value={editorValue}
+											onChange={(event) => {
+												const next = event.target.value;
+												setDraftOverrides((current) => ({
 													...current,
-													[key]: event.target.value,
-												}))
-											}
+													[key]: next,
+												}));
+												// Auto-detach on edit.
+												setDraftInherit((current) => ({
+													...current,
+													[key]: false,
+												}));
+											}}
 										/>
 										<div className="mt-3 flex items-center justify-between gap-3">
-											<button
-												type="button"
-												className="inline-flex cursor-pointer items-center gap-2 text-[12px] text-app-muted transition-colors hover:text-app-foreground"
-												onClick={() => setPreviewKey(key)}
-											>
-												<Eye className="size-3.5" strokeWidth={1.8} />
-												<span>Preview</span>
-											</button>
+											<div className="flex items-center gap-3">
+												<button
+													type="button"
+													className="inline-flex cursor-pointer items-center gap-2 text-[12px] text-app-muted transition-colors hover:text-app-foreground"
+													onClick={() => setPreviewKey(key)}
+												>
+													<Eye className="size-3.5" strokeWidth={1.8} />
+													<span>Preview</span>
+												</button>
+												{!isInherit && (
+													<button
+														type="button"
+														className="cursor-pointer text-[12px] text-app-muted underline-offset-4 hover:text-app-foreground hover:underline"
+														onClick={() =>
+															setDraftInherit((current) => ({
+																...current,
+																[key]: true,
+															}))
+														}
+													>
+														Reset to global
+													</button>
+												)}
+											</div>
 											<Button
 												size="sm"
 												disabled={savingKey === key}
 												onClick={() => {
 													setSavingKey(key);
-													void updateRepoPreferences(repoId, {
-														...preferences,
-														[key]: value,
-													})
+													void updateRepoPreferences(
+														repoId,
+														draftOverrides,
+														draftInherit,
+													)
 														.then(async () => {
 															await queryClient.invalidateQueries({
 																queryKey:

@@ -931,7 +931,9 @@ export function useConversationStreaming({
 			const isFirstUserMessage =
 				(currentThread ?? []).every((message) => message.role !== "user") &&
 				(currentTitle == null || currentTitle === "Untitled");
-			const repoPreferences = repoId ? await loadRepoPreferences(repoId) : null;
+			const repoPreferences = repoId
+				? (await loadRepoPreferences(repoId)).effective
+				: null;
 			// The general-preference preamble is prepended ONLY on the wire
 			// to the agent (Rust side stitches it onto `prompt_prefix`).
 			// `trimmedPrompt` is what the user typed — that's what we

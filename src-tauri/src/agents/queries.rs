@@ -137,7 +137,7 @@ pub async fn generate_session_title(
     let branch_rename_prompt = workspace_info
         .as_ref()
         .and_then(|(_, repo_id, _, _, _)| crate::repos::load_repo_preferences(repo_id).ok())
-        .and_then(|preferences| preferences.branch_rename)
+        .and_then(|resolved| resolved.effective.branch_rename)
         .filter(|value| !value.trim().is_empty());
 
     if !should_generate_title && !should_generate_branch {

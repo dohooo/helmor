@@ -346,6 +346,24 @@ pub(crate) fn insert_repository(repository: &ResolvedRepositoryInput) -> Result<
         )
         .with_context(|| format!("Failed to insert repository {}", repository.name))?;
 
+    // Set all inherit flags to 1 on the same connection before releasing it,
+    // so the helper doesn't need to re-acquire the single-writer slot.
+    connection
+        .execute(
+            r#"
+            UPDATE repos SET
+              inherit_global_create_pr = 1,
+              inherit_global_review = 1,
+              inherit_global_fix_errors = 1,
+              inherit_global_resolve_conflicts = 1,
+              inherit_global_rename_branch = 1,
+              inherit_global_general = 1
+            WHERE id = ?1
+            "#,
+            [repo_id.as_str()],
+        )
+        .with_context(|| format!("Failed to default inherit flags for {}", repository.name))?;
+
     Ok(repo_id)
 }
 
@@ -648,6 +666,79 @@ pub struct RepoPreferences {
     pub general: Option<String>,
 }
 
+impl RepoPreferences {
+    /// Merge `global` and `override_` according to `inherit` flags.
+    ///
+    /// For each field: when the corresponding `inherit` flag is `true` the
+    /// global value is used; otherwise the per-repo override is used.
+    pub fn pick(
+        global: &RepoPreferences,
+        override_: &RepoPreferences,
+        inherit: &InheritFlags,
+    ) -> RepoPreferences {
+        RepoPreferences {
+            create_pr: if inherit.create_pr {
+                global.create_pr.clone()
+            } else {
+                override_.create_pr.clone()
+            },
+            review: if inherit.review {
+                global.review.clone()
+            } else {
+                override_.review.clone()
+            },
+            fix_errors: if inherit.fix_errors {
+                global.fix_errors.clone()
+            } else {
+                override_.fix_errors.clone()
+            },
+            resolve_conflicts: if inherit.resolve_conflicts {
+                global.resolve_conflicts.clone()
+            } else {
+                override_.resolve_conflicts.clone()
+            },
+            branch_rename: if inherit.branch_rename {
+                global.branch_rename.clone()
+            } else {
+                override_.branch_rename.clone()
+            },
+            general: if inherit.general {
+                global.general.clone()
+            } else {
+                override_.general.clone()
+            },
+        }
+    }
+}
+
+/// Per-field flags controlling whether each prompt slot inherits the global
+/// template value (`true`) or uses the per-repo override (`false`).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InheritFlags {
+    pub create_pr: bool,
+    pub review: bool,
+    pub fix_errors: bool,
+    pub resolve_conflicts: bool,
+    pub branch_rename: bool,
+    pub general: bool,
+}
+
+/// Full resolved view of a repo's preferences, returned by
+/// [`load_repo_preferences`].
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoPreferencesResolved {
+    /// The raw per-repo override prompts stored in the DB.
+    pub overrides: RepoPreferences,
+    /// Which fields inherit from the global template.
+    pub inherit: InheritFlags,
+    /// The current global template at query time.
+    pub global: RepoPreferences,
+    /// The effective value after applying inherit flags (what agents use).
+    pub effective: RepoPreferences,
+}
+
 /// Resolve repo scripts using a fixed priority:
 ///
 ///   1. The workspace's worktree `helmor.json` — highest priority, only
@@ -840,7 +931,7 @@ pub fn update_repo_run_script_mode(repo_id: &str, mode: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn load_repo_preferences(repo_id: &str) -> Result<RepoPreferences> {
+pub fn load_repo_preferences(repo_id: &str) -> Result<RepoPreferencesResolved> {
     let connection = db::read_conn()?;
     let mut statement = connection
         .prepare(
@@ -851,28 +942,57 @@ pub fn load_repo_preferences(repo_id: &str) -> Result<RepoPreferences> {
               custom_prompt_fix_errors,
               custom_prompt_resolve_merge_conflicts,
               custom_prompt_rename_branch,
-              custom_prompt_general
+              custom_prompt_general,
+              inherit_global_create_pr,
+              inherit_global_review,
+              inherit_global_fix_errors,
+              inherit_global_resolve_conflicts,
+              inherit_global_rename_branch,
+              inherit_global_general
             FROM repos
             WHERE id = ?1
             "#,
         )
         .with_context(|| format!("Failed to prepare preferences lookup for {repo_id}"))?;
 
-    statement
+    let (overrides, inherit) = statement
         .query_row([repo_id], |row| {
-            Ok(RepoPreferences {
+            let overrides = RepoPreferences {
                 create_pr: row.get(0)?,
                 review: row.get(1)?,
                 fix_errors: row.get(2)?,
                 resolve_conflicts: row.get(3)?,
                 branch_rename: row.get(4)?,
                 general: row.get(5)?,
-            })
+            };
+            let inherit = InheritFlags {
+                create_pr: row.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0,
+                review: row.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0,
+                fix_errors: row.get::<_, Option<i64>>(8)?.unwrap_or(0) != 0,
+                resolve_conflicts: row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
+                branch_rename: row.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0,
+                general: row.get::<_, Option<i64>>(11)?.unwrap_or(0) != 0,
+            };
+            Ok((overrides, inherit))
         })
-        .with_context(|| format!("Repository not found: {repo_id}"))
+        .with_context(|| format!("Repository not found: {repo_id}"))?;
+
+    let global = crate::models::settings::load_global_repo_preferences()?;
+    let effective = RepoPreferences::pick(&global, &overrides, &inherit);
+
+    Ok(RepoPreferencesResolved {
+        overrides,
+        inherit,
+        global,
+        effective,
+    })
 }
 
-pub fn update_repo_preferences(repo_id: &str, preferences: &RepoPreferences) -> Result<()> {
+pub fn update_repo_preferences(
+    repo_id: &str,
+    overrides: &RepoPreferences,
+    inherit: &InheritFlags,
+) -> Result<()> {
     let connection = db::write_conn()?;
     let updated = connection
         .execute(
@@ -885,16 +1005,28 @@ pub fn update_repo_preferences(repo_id: &str, preferences: &RepoPreferences) -> 
               custom_prompt_resolve_merge_conflicts = ?4,
               custom_prompt_rename_branch = ?5,
               custom_prompt_general = ?6,
+              inherit_global_create_pr = ?7,
+              inherit_global_review = ?8,
+              inherit_global_fix_errors = ?9,
+              inherit_global_resolve_conflicts = ?10,
+              inherit_global_rename_branch = ?11,
+              inherit_global_general = ?12,
               updated_at = datetime('now')
-            WHERE id = ?7
+            WHERE id = ?13
             "#,
             rusqlite::params![
-                normalize_repo_preference(preferences.create_pr.as_deref()),
-                normalize_repo_preference(preferences.review.as_deref()),
-                normalize_repo_preference(preferences.fix_errors.as_deref()),
-                normalize_repo_preference(preferences.resolve_conflicts.as_deref()),
-                normalize_repo_preference(preferences.branch_rename.as_deref()),
-                normalize_repo_preference(preferences.general.as_deref()),
+                normalize_repo_preference(overrides.create_pr.as_deref()),
+                normalize_repo_preference(overrides.review.as_deref()),
+                normalize_repo_preference(overrides.fix_errors.as_deref()),
+                normalize_repo_preference(overrides.resolve_conflicts.as_deref()),
+                normalize_repo_preference(overrides.branch_rename.as_deref()),
+                normalize_repo_preference(overrides.general.as_deref()),
+                inherit.create_pr as i64,
+                inherit.review as i64,
+                inherit.fix_errors as i64,
+                inherit.resolve_conflicts as i64,
+                inherit.branch_rename as i64,
+                inherit.general as i64,
                 repo_id
             ],
         )
@@ -905,6 +1037,83 @@ pub fn update_repo_preferences(repo_id: &str, preferences: &RepoPreferences) -> 
     }
 
     Ok(())
+}
+
+/// Set all six inherit_global_* flags to 1 for a freshly-inserted repo
+/// so it picks up the global template by default. New columns default
+/// to 0; this helper bumps them to 1 for repos that come through the
+/// canonical insert path.
+#[allow(dead_code)]
+pub(crate) fn set_default_inherit_flags_on_insert(repo_id: &str) -> Result<()> {
+    let connection = db::write_conn()?;
+    connection
+        .execute(
+            r#"
+            UPDATE repos SET
+              inherit_global_create_pr = 1,
+              inherit_global_review = 1,
+              inherit_global_fix_errors = 1,
+              inherit_global_resolve_conflicts = 1,
+              inherit_global_rename_branch = 1,
+              inherit_global_general = 1
+            WHERE id = ?1
+            "#,
+            [repo_id],
+        )
+        .with_context(|| format!("Failed to default inherit flags for {repo_id}"))?;
+    Ok(())
+}
+
+/// Count repos that follow (`inherit_global_<field> = 1`) at least one
+/// field whose value differs between `previous` and `next`.
+///
+/// Returns the number of **distinct repos** that will be affected by
+/// switching the global template from `previous` to `next`. Returns 0
+/// when no fields changed.
+pub fn count_repos_following_changed_global_fields(
+    previous: &RepoPreferences,
+    next: &RepoPreferences,
+) -> Result<u32> {
+    // Collect the column names for fields that changed.
+    let mut changed_cols: Vec<&'static str> = Vec::new();
+    if previous.create_pr != next.create_pr {
+        changed_cols.push("inherit_global_create_pr");
+    }
+    if previous.review != next.review {
+        changed_cols.push("inherit_global_review");
+    }
+    if previous.fix_errors != next.fix_errors {
+        changed_cols.push("inherit_global_fix_errors");
+    }
+    if previous.resolve_conflicts != next.resolve_conflicts {
+        changed_cols.push("inherit_global_resolve_conflicts");
+    }
+    if previous.branch_rename != next.branch_rename {
+        changed_cols.push("inherit_global_rename_branch");
+    }
+    if previous.general != next.general {
+        changed_cols.push("inherit_global_general");
+    }
+
+    if changed_cols.is_empty() {
+        return Ok(0);
+    }
+
+    // Build: WHERE inherit_global_col1 = 1 OR inherit_global_col2 = 1 ...
+    let where_clause = changed_cols
+        .iter()
+        .map(|col| format!("{col} = 1"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+
+    let sql = format!("SELECT COUNT(DISTINCT id) FROM repos WHERE {where_clause}");
+
+    let connection = db::read_conn()?;
+    let count: u32 = connection
+        .query_row(&sql, [], |row| row.get(0))
+        .context("Failed to count repos following changed global fields")?;
+
+    Ok(count)
 }
 
 fn normalize_repo_preference(value: Option<&str>) -> Option<String> {
@@ -1411,31 +1620,225 @@ mod tests {
 
         // Default load returns None for the new field.
         let initial = load_repo_preferences(&repo_id).unwrap();
-        assert_eq!(initial.review, None);
+        assert_eq!(initial.overrides.review, None);
 
         // Round-trip a non-empty review prompt.
         let prefs = RepoPreferences {
             review: Some("Focus on SQL injections and missing tests.".to_string()),
             ..RepoPreferences::default()
         };
-        update_repo_preferences(&repo_id, &prefs).unwrap();
+        update_repo_preferences(&repo_id, &prefs, &InheritFlags::default()).unwrap();
 
         let loaded = load_repo_preferences(&repo_id).unwrap();
         assert_eq!(
-            loaded.review.as_deref(),
+            loaded.overrides.review.as_deref(),
             Some("Focus on SQL injections and missing tests.")
         );
         // Other prompt slots remain untouched.
-        assert_eq!(loaded.create_pr, None);
-        assert_eq!(loaded.fix_errors, None);
+        assert_eq!(loaded.overrides.create_pr, None);
+        assert_eq!(loaded.overrides.fix_errors, None);
 
         // Whitespace-only override is normalized back to None.
         let blanked = RepoPreferences {
             review: Some("   ".to_string()),
             ..RepoPreferences::default()
         };
-        update_repo_preferences(&repo_id, &blanked).unwrap();
+        update_repo_preferences(&repo_id, &blanked, &InheritFlags::default()).unwrap();
         let cleared = load_repo_preferences(&repo_id).unwrap();
-        assert_eq!(cleared.review, None);
+        assert_eq!(cleared.overrides.review, None);
+    }
+}
+
+#[cfg(test)]
+mod global_prefs_tests {
+    use super::*;
+
+    fn make_repo(env: &crate::testkit::TestEnv, suffix: &str) -> String {
+        let repo = ResolvedRepositoryInput {
+            name: format!("test-repo-{suffix}"),
+            normalized_root_path: env.root.join(suffix).display().to_string(),
+            remote: None,
+            remote_url: None,
+            default_branch: "main".to_string(),
+            forge_provider: None,
+        };
+        insert_repository(&repo).unwrap()
+    }
+
+    #[test]
+    fn inherit_all_uses_global() {
+        let _env = crate::testkit::TestEnv::new("gp-inherit-all");
+
+        // Set a global template.
+        let global = RepoPreferences {
+            review: Some("Global review prompt".to_string()),
+            ..RepoPreferences::default()
+        };
+        crate::models::settings::save_global_repo_preferences(&global).unwrap();
+
+        // Insert repo with inherit.review = true and no per-repo override.
+        let repo_id = make_repo(&_env, "repo1");
+        let inherit = InheritFlags {
+            review: true,
+            ..InheritFlags::default()
+        };
+        update_repo_preferences(&repo_id, &RepoPreferences::default(), &inherit).unwrap();
+
+        let resolved = load_repo_preferences(&repo_id).unwrap();
+        assert_eq!(
+            resolved.effective.review.as_deref(),
+            Some("Global review prompt"),
+            "inherit=true should use global value"
+        );
+        // The override slot itself is still empty.
+        assert_eq!(resolved.overrides.review, None);
+    }
+
+    #[test]
+    fn override_wins_when_inherit_false() {
+        let _env = crate::testkit::TestEnv::new("gp-override-wins");
+
+        let global = RepoPreferences {
+            review: Some("Global review".to_string()),
+            ..RepoPreferences::default()
+        };
+        crate::models::settings::save_global_repo_preferences(&global).unwrap();
+
+        let repo_id = make_repo(&_env, "repo1");
+        let override_ = RepoPreferences {
+            review: Some("Per-repo review".to_string()),
+            ..RepoPreferences::default()
+        };
+        // inherit.review = false (default)
+        update_repo_preferences(&repo_id, &override_, &InheritFlags::default()).unwrap();
+
+        let resolved = load_repo_preferences(&repo_id).unwrap();
+        assert_eq!(
+            resolved.effective.review.as_deref(),
+            Some("Per-repo review"),
+            "inherit=false should use the per-repo override"
+        );
+    }
+
+    #[test]
+    fn override_text_preserved_when_toggling_inherit_back() {
+        let _env = crate::testkit::TestEnv::new("gp-toggle-inherit");
+
+        let global = RepoPreferences {
+            review: Some("Global review".to_string()),
+            ..RepoPreferences::default()
+        };
+        crate::models::settings::save_global_repo_preferences(&global).unwrap();
+
+        let repo_id = make_repo(&_env, "repo1");
+
+        // First save: store the per-repo override text with inherit=false.
+        let override_ = RepoPreferences {
+            review: Some("My custom review".to_string()),
+            ..RepoPreferences::default()
+        };
+        update_repo_preferences(&repo_id, &override_, &InheritFlags::default()).unwrap();
+
+        // Second save: same override text, but flip inherit=true.
+        let inherit_on = InheritFlags {
+            review: true,
+            ..InheritFlags::default()
+        };
+        update_repo_preferences(&repo_id, &override_, &inherit_on).unwrap();
+
+        let resolved = load_repo_preferences(&repo_id).unwrap();
+
+        // The override text is preserved in the `overrides` slot.
+        assert_eq!(
+            resolved.overrides.review.as_deref(),
+            Some("My custom review"),
+            "override text should be preserved in storage even when inherit=true"
+        );
+        // But effective resolves to the global value.
+        assert_eq!(
+            resolved.effective.review.as_deref(),
+            Some("Global review"),
+            "effective should use global when inherit=true"
+        );
+    }
+
+    #[test]
+    fn count_repos_following_changed_global_fields_basic() {
+        let _env = crate::testkit::TestEnv::new("gp-count-following");
+
+        // Repo A: inherits review only.
+        let repo_a = make_repo(&_env, "repo-a");
+        update_repo_preferences(
+            &repo_a,
+            &RepoPreferences::default(),
+            &InheritFlags {
+                review: true,
+                ..InheritFlags::default()
+            },
+        )
+        .unwrap();
+
+        // Repo B: inherits review + general.
+        let repo_b = make_repo(&_env, "repo-b");
+        update_repo_preferences(
+            &repo_b,
+            &RepoPreferences::default(),
+            &InheritFlags {
+                review: true,
+                general: true,
+                ..InheritFlags::default()
+            },
+        )
+        .unwrap();
+
+        // Repo C: inherits nothing (all false).
+        let repo_c = make_repo(&_env, "repo-c");
+        update_repo_preferences(
+            &repo_c,
+            &RepoPreferences::default(),
+            &InheritFlags::default(),
+        )
+        .unwrap();
+
+        let previous = RepoPreferences {
+            review: Some("Old review".to_string()),
+            general: Some("Old general".to_string()),
+            ..RepoPreferences::default()
+        };
+        let next = RepoPreferences {
+            review: Some("New review".to_string()),   // changed
+            general: Some("Old general".to_string()), // unchanged
+            ..RepoPreferences::default()
+        };
+
+        // Only `review` changed — repo_a and repo_b both inherit review → count = 2.
+        let count = count_repos_following_changed_global_fields(&previous, &next).unwrap();
+        assert_eq!(count, 2, "repos A and B inherit review which changed");
+
+        // No fields changed → 0.
+        let count_no_change =
+            count_repos_following_changed_global_fields(&previous, &previous).unwrap();
+        assert_eq!(count_no_change, 0, "no fields changed should return 0");
+    }
+
+    #[test]
+    fn newly_inserted_repo_inherits_all_fields() {
+        let _env = crate::testkit::TestEnv::new("gp-new-repo-inherits");
+        let conn = db::write_conn().unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name, root_path) VALUES ('new', 'new', '/tmp')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        set_default_inherit_flags_on_insert("new").unwrap();
+
+        let resolved = load_repo_preferences("new").unwrap();
+        assert!(resolved.inherit.create_pr);
+        assert!(resolved.inherit.review);
+        assert!(resolved.inherit.fix_errors);
+        assert!(resolved.inherit.resolve_conflicts);
+        assert!(resolved.inherit.branch_rename);
+        assert!(resolved.inherit.general);
     }
 }

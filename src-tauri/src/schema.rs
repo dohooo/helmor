@@ -563,6 +563,57 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add workspaces.mode column")?;
     }
 
+    // Migration: add inherit_global_* flags to repos.
+    //
+    // Rule B backfill: a flag is set to 1 (inherit from global) when the
+    // corresponding custom_prompt_* column is NULL or empty, meaning the user
+    // hasn't configured a per-repo override. Non-empty overrides stay at 0.
+    //
+    // The mapping is:
+    //   inherit_global_create_pr         ↔ custom_prompt_create_pr
+    //   inherit_global_review            ↔ custom_prompt_review
+    //   inherit_global_fix_errors        ↔ custom_prompt_fix_errors
+    //   inherit_global_resolve_conflicts ↔ custom_prompt_resolve_merge_conflicts
+    //   inherit_global_rename_branch     ↔ custom_prompt_rename_branch
+    //   inherit_global_general           ↔ custom_prompt_general
+    const INHERIT_FIELDS: &[(&str, &str)] = &[
+        ("inherit_global_create_pr", "custom_prompt_create_pr"),
+        ("inherit_global_review", "custom_prompt_review"),
+        ("inherit_global_fix_errors", "custom_prompt_fix_errors"),
+        (
+            "inherit_global_resolve_conflicts",
+            "custom_prompt_resolve_merge_conflicts",
+        ),
+        (
+            "inherit_global_rename_branch",
+            "custom_prompt_rename_branch",
+        ),
+        ("inherit_global_general", "custom_prompt_general"),
+    ];
+
+    if has_table(connection, "repos") {
+        for &(flag_col, prompt_col) in INHERIT_FIELDS {
+            assert_safe_identifier(flag_col);
+            assert_safe_identifier(prompt_col);
+            if !has_column(connection, "repos", flag_col) {
+                connection
+                    .execute_batch(&format!(
+                        "ALTER TABLE repos ADD COLUMN {flag_col} INTEGER DEFAULT 0"
+                    ))
+                    .with_context(|| format!("Failed to add repos.{flag_col} column"))?;
+                // Rule B backfill: set flag=1 where the override is absent.
+                // Guard on the prompt column existing — legacy schemas may not have it yet.
+                if has_column(connection, "repos", prompt_col) {
+                    connection
+                        .execute_batch(&format!(
+                            "UPDATE repos SET {flag_col} = 1 WHERE {prompt_col} IS NULL OR {prompt_col} = ''"
+                        ))
+                        .with_context(|| format!("Failed to backfill repos.{flag_col}"))?;
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -585,6 +636,12 @@ CREATE TABLE IF NOT EXISTS repos (
     hidden INTEGER DEFAULT 0,
     custom_prompt_fix_errors TEXT,
     custom_prompt_resolve_merge_conflicts TEXT,
+    inherit_global_create_pr INTEGER DEFAULT 0,
+    inherit_global_review INTEGER DEFAULT 0,
+    inherit_global_fix_errors INTEGER DEFAULT 0,
+    inherit_global_resolve_conflicts INTEGER DEFAULT 0,
+    inherit_global_rename_branch INTEGER DEFAULT 0,
+    inherit_global_general INTEGER DEFAULT 0,
     auto_run_setup INTEGER DEFAULT 1,
     forge_provider TEXT,
     forge_login TEXT,
@@ -1287,6 +1344,193 @@ mod tests {
             )
             .unwrap();
         assert_eq!(mode, "non-concurrent");
+    }
+
+    // -------------------------------------------------------------------------
+    // inherit_global_* column tests
+    // -------------------------------------------------------------------------
+
+    /// Build a legacy repos table (without the new inherit_global_* columns)
+    /// and seed 4 rows with varying custom_prompt_review / custom_prompt_general values.
+    /// Also creates minimal sessions + session_messages tables so run_migrations() is happy.
+    fn create_legacy_repos_for_inherit(connection: &Connection) {
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE repos (
+                    id TEXT PRIMARY KEY,
+                    name TEXT,
+                    root_path TEXT,
+                    custom_prompt_create_pr TEXT,
+                    custom_prompt_review TEXT,
+                    custom_prompt_fix_errors TEXT,
+                    custom_prompt_resolve_merge_conflicts TEXT,
+                    custom_prompt_rename_branch TEXT,
+                    custom_prompt_general TEXT,
+                    run_script_mode TEXT DEFAULT 'concurrent',
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now'))
+                );
+                CREATE TABLE session_messages (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    role TEXT,
+                    content TEXT,
+                    sent_at TEXT,
+                    created_at TEXT DEFAULT (datetime('now'))
+                );
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    effort_level TEXT
+                );
+                CREATE TABLE workspaces (
+                    id TEXT PRIMARY KEY,
+                    repository_id TEXT
+                );
+                -- row 1: both review and general are NULL → flags should be 1
+                INSERT INTO repos (id, name, root_path, custom_prompt_review, custom_prompt_general)
+                VALUES ('r1', 'repo1', '/repos/repo1', NULL, NULL);
+                -- row 2: both review and general are empty string → flags should be 1
+                INSERT INTO repos (id, name, root_path, custom_prompt_review, custom_prompt_general)
+                VALUES ('r2', 'repo2', '/repos/repo2', '', '');
+                -- row 3: review is non-empty, general is NULL → inherit_review=0, inherit_general=1
+                INSERT INTO repos (id, name, root_path, custom_prompt_review, custom_prompt_general)
+                VALUES ('r3', 'repo3', '/repos/repo3', 'custom review prompt', NULL);
+                -- row 4: both review and general are non-empty → flags should be 0
+                INSERT INTO repos (id, name, root_path, custom_prompt_review, custom_prompt_general)
+                VALUES ('r4', 'repo4', '/repos/repo4', 'my review', 'my general');
+                "#,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn inherit_global_columns_backfill_rule_b() {
+        let (connection, _dir) = open_test_db();
+        create_legacy_repos_for_inherit(&connection);
+
+        // Columns must NOT exist before migration
+        assert!(!column_exists(
+            &connection,
+            "repos",
+            "inherit_global_review"
+        ));
+        assert!(!column_exists(
+            &connection,
+            "repos",
+            "inherit_global_general"
+        ));
+
+        // Run migration (use run_migrations since tables already exist)
+        run_migrations(&connection).unwrap();
+
+        // Columns must exist after migration
+        assert!(column_exists(&connection, "repos", "inherit_global_review"));
+        assert!(column_exists(
+            &connection,
+            "repos",
+            "inherit_global_general"
+        ));
+        assert!(column_exists(
+            &connection,
+            "repos",
+            "inherit_global_create_pr"
+        ));
+        assert!(column_exists(
+            &connection,
+            "repos",
+            "inherit_global_fix_errors"
+        ));
+        assert!(column_exists(
+            &connection,
+            "repos",
+            "inherit_global_resolve_conflicts"
+        ));
+        assert!(column_exists(
+            &connection,
+            "repos",
+            "inherit_global_rename_branch"
+        ));
+
+        let flag = |id: &str, col: &str| -> i64 {
+            connection
+                .query_row(
+                    &format!("SELECT {col} FROM repos WHERE id = ?1"),
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+
+        // row 1: NULL → flag = 1
+        assert_eq!(flag("r1", "inherit_global_review"), 1, "r1 review NULL → 1");
+        assert_eq!(
+            flag("r1", "inherit_global_general"),
+            1,
+            "r1 general NULL → 1"
+        );
+
+        // row 2: empty string → flag = 1
+        assert_eq!(flag("r2", "inherit_global_review"), 1, "r2 review '' → 1");
+        assert_eq!(flag("r2", "inherit_global_general"), 1, "r2 general '' → 1");
+
+        // row 3: review non-empty → 0; general NULL → 1
+        assert_eq!(
+            flag("r3", "inherit_global_review"),
+            0,
+            "r3 review non-empty → 0"
+        );
+        assert_eq!(
+            flag("r3", "inherit_global_general"),
+            1,
+            "r3 general NULL → 1"
+        );
+
+        // row 4: both non-empty → 0
+        assert_eq!(
+            flag("r4", "inherit_global_review"),
+            0,
+            "r4 review non-empty → 0"
+        );
+        assert_eq!(
+            flag("r4", "inherit_global_general"),
+            0,
+            "r4 general non-empty → 0"
+        );
+    }
+
+    #[test]
+    fn inherit_global_columns_idempotent() {
+        let (connection, _dir) = open_test_db();
+        create_legacy_repos_for_inherit(&connection);
+
+        // Run twice — second run must not fail and column count must be exactly 1
+        run_migrations(&connection).unwrap();
+        run_migrations(&connection).unwrap();
+
+        // Each column must appear exactly once in pragma_table_info
+        let count_col = |col: &str| -> i64 {
+            connection
+                .query_row(
+                    &format!(
+                        "SELECT COUNT(*) FROM pragma_table_info('repos') WHERE name = '{col}'"
+                    ),
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+
+        for col in &[
+            "inherit_global_create_pr",
+            "inherit_global_review",
+            "inherit_global_fix_errors",
+            "inherit_global_resolve_conflicts",
+            "inherit_global_rename_branch",
+            "inherit_global_general",
+        ] {
+            assert_eq!(count_col(col), 1, "column {col} should appear exactly once");
+        }
     }
 
     #[test]
