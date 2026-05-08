@@ -8,6 +8,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import type { StartSubmitMode } from "@/features/composer/start-submit-mode";
 import {
 	buildPendingUserInput,
 	type PendingUserInput,
@@ -112,7 +113,7 @@ type SubmitPayload = {
 	 *  "send with opposite follow-up" shortcut. Ignored when `forceQueue`
 	 *  is set. */
 	followUpBehaviorOverride?: FollowUpBehavior;
-	startSubmitMode?: "startNow" | "saveForLater";
+	startSubmitMode?: StartSubmitMode;
 	/** Snapshot of the editor's full Lexical state at submit time. Captured
 	 *  synchronously inside the composer so callers that need to round-trip
 	 *  chips/text/images (e.g. the kanban "backlog" handler that copies the

@@ -56,6 +56,7 @@ import { CodexGoalBanner } from "../panel/codex-goal-banner";
 import type { AddDirPickerEntry } from "./editor/add-dir/typeahead-plugin";
 import { WorkspaceComposer } from "./index";
 import type { PermissionPanelProps } from "./permission-panel";
+import type { StartSubmitMode } from "./start-submit-mode";
 import { SubmitQueueList } from "./submit-queue-list";
 import type { UserInputResponseHandler } from "./user-input";
 
@@ -64,7 +65,6 @@ const EMPTY_SLASH_COMMANDS: SlashCommandEntry[] = [];
 const EMPTY_LINKED_DIRECTORIES: readonly string[] = [];
 const EMPTY_CANDIDATE_DIRECTORIES: readonly CandidateDirectory[] = [];
 const EMPTY_QUEUE_ITEMS: readonly QueuedSubmit[] = [];
-type StartSubmitMode = "startNow" | "saveForLater";
 
 /**
  * Host-app slash commands. Prepended to the agent-supplied list so they
@@ -158,7 +158,7 @@ type WorkspaceComposerContainerProps = {
 		 *  one submit (queue ↔ steer). Used by the "send with opposite
 		 *  follow-up" composer shortcut. Ignored when `forceQueue` is true. */
 		followUpBehaviorOverride?: "queue" | "steer";
-		startSubmitMode?: "startNow" | "saveForLater";
+		startSubmitMode?: StartSubmitMode;
 		/** Snapshot of the editor's full Lexical state at submit time, so
 		 *  callers that need to round-trip chips/text/images (e.g. the kanban
 		 *  "backlog" handler that copies the draft into a freshly-created
@@ -698,7 +698,7 @@ export const WorkspaceComposerContainer = memo(
 				options?: {
 					permissionModeOverride?: string;
 					oppositeFollowUp?: boolean;
-					startSubmitMode?: "startNow" | "saveForLater";
+					startSubmitMode?: StartSubmitMode;
 					editorStateSnapshot?: SerializedEditorState;
 				},
 			) => {

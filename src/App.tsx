@@ -35,6 +35,7 @@ import {
 import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-lifecycle";
 import { hydrateDraftCache } from "@/features/composer/draft-storage";
+import type { StartSubmitMode } from "@/features/composer/start-submit-mode";
 import {
 	type ComposerCreateContext,
 	type ComposerCreatePrepareOutcome,
@@ -2507,7 +2508,7 @@ function AppShell({
 	const handleStartComposerPrepare = useCallback(
 		async (
 			payload: ComposerSubmitPayload,
-			options?: { startSubmitMode?: "startNow" | "saveForLater" },
+			options?: { startSubmitMode?: StartSubmitMode },
 		): Promise<ComposerCreatePrepareOutcome> => {
 			if (!startRepository?.id) {
 				pushWorkspaceToast(

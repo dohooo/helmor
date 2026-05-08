@@ -323,6 +323,53 @@ describe("WorkspaceComposer", () => {
 		);
 	});
 
+	it("allows an empty start composer submit as a create-only workspace", async () => {
+		const queryClient = createHelmorQueryClient();
+		const handleSubmit = vi.fn();
+
+		render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="start:repo:repo-1"
+					onSubmit={handleSubmit}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="claude"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="acceptEdits"
+					onChangePermissionMode={vi.fn()}
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+					startSubmitMenu
+				/>
+			</QueryClientProvider>,
+		);
+
+		const button = screen.getByRole("button", { name: "New Workspace" });
+		expect(button).toBeEnabled();
+
+		await userEvent.click(button);
+
+		expect(handleSubmit).toHaveBeenCalledWith(
+			"",
+			[],
+			[],
+			[],
+			expect.objectContaining({
+				startSubmitMode: "createOnly",
+				editorStateSnapshot: expect.objectContaining({
+					root: expect.any(Object),
+				}),
+			}),
+		);
+	});
+
 	it("persists drafts to the in-memory cache and restores them after remount", async () => {
 		const queryClient = createHelmorQueryClient();
 		const handleSubmit = vi.fn();

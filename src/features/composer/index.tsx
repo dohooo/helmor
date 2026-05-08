@@ -82,6 +82,7 @@ import { $appendComposerInsertItems } from "./editor-ops";
 import { FastModeLottieIcon } from "./fast-mode-lottie-icon";
 import { GoalReplaceConfirm } from "./goal-replace-confirm";
 import { PermissionPanel, type PermissionPanelProps } from "./permission-panel";
+import type { StartSubmitMode } from "./start-submit-mode";
 import { UsageStatsIndicator } from "./usage-stats-indicator";
 import type { UserInputResponseHandler } from "./user-input";
 import { UserInputPanel } from "./user-input-panel";
@@ -196,7 +197,6 @@ const noopUserInputResponse: UserInputResponseHandler = () => {};
 const noopPermissionResponse: NonNullable<
 	WorkspaceComposerProps["onPermissionResponse"]
 > = () => {};
-type StartSubmitMode = "startNow" | "saveForLater";
 // ---------------------------------------------------------------------------
 // Lexical editor config (stable reference — defined outside component)
 // ---------------------------------------------------------------------------
@@ -381,7 +381,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		!submitDisabled &&
 		!hasPendingInteraction &&
 		Boolean(selectedModel) &&
-		hasContent;
+		(hasContent || startSubmitMenu);
 	const sendDisabled = !submitEnabled || sending;
 	const steerDisabled = !submitEnabled || !sending;
 	const submitDisabledForPlugin = !submitEnabled;
@@ -492,7 +492,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				files.length === 0 &&
 				customTags.length === 0
 			)
-				return;
+				if (!startSubmitMenu) return;
 			// Snapshot the editor's full Lexical state BEFORE the clear below
 			// wipes it. Synchronous capture is critical because callers that
 			// want to round-trip the draft (e.g. kanban "backlog" submit
@@ -504,7 +504,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				.toJSON() as SerializedEditorState;
 			onSubmit(prompt, images, files, customTags, {
 				oppositeFollowUp: options?.oppositeFollowUp,
-				startSubmitMode: options?.startSubmitMode,
+				startSubmitMode:
+					prompt ||
+					images.length > 0 ||
+					files.length > 0 ||
+					customTags.length > 0
+						? options?.startSubmitMode
+						: "createOnly",
 				editorStateSnapshot,
 			});
 			editor.update(() => {
@@ -513,7 +519,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			clearPersistedDraft(contextKey);
 			setHasContent(false);
 		},
-		[onSubmit, contextKey],
+		[onSubmit, contextKey, startSubmitMenu],
 	);
 
 	const handleSubmit = useCallback(() => {
@@ -540,8 +546,11 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	);
 	const alternateStartSubmitMode: StartSubmitMode =
 		startSubmitMode === "saveForLater" ? "startNow" : "saveForLater";
-	const preferredStartSubmitLabel =
-		startSubmitMode === "saveForLater" ? "Save for later" : "Start now";
+	const preferredStartSubmitLabel = !hasContent
+		? "New Workspace"
+		: startSubmitMode === "saveForLater"
+			? "Save for later"
+			: "Start now";
 	const alternateStartSubmitLabel =
 		alternateStartSubmitMode === "saveForLater"
 			? "Save for later"

@@ -129,6 +129,35 @@ describe("createWorkspaceFromStartComposer", () => {
 		});
 	});
 
+	it("creates a workspace without streaming or moving it to backlog", async () => {
+		resetMocks();
+
+		const result = await createWorkspaceFromStartComposer({
+			repoId: "repo-1",
+			sourceBranch: "origin/dev",
+			mode: "worktree",
+			submitMode: "createOnly",
+			editorStateSnapshot,
+		});
+
+		expect(apiMocks.prepareWorkspaceFromRepo).toHaveBeenCalledWith(
+			"repo-1",
+			"origin/dev",
+			"worktree",
+		);
+		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
+			"workspace-1",
+		);
+		expect(draftMocks.persistSessionDraft).not.toHaveBeenCalled();
+		expect(apiMocks.setWorkspaceStatus).not.toHaveBeenCalled();
+		expect(result).toEqual({
+			outcome: { shouldStream: false },
+			workspaceId: "workspace-1",
+			sessionId: "session-1",
+			preparedWorkingDirectory: null,
+		});
+	});
+
 	it("returns local mode cwd from prepare without waiting for finalize", async () => {
 		// Local mode: backend hands cwd back from prepare immediately
 		// (it's just `repo.root_path` — already on disk). The caller pins

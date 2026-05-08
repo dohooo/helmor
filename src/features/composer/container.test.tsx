@@ -26,7 +26,6 @@ vi.mock("@/lib/api", async () => {
 
 type PickHandler = (entry: unknown) => void;
 type RemoveHandler = (path: string) => void;
-type StartSubmitMode = "startNow" | "saveForLater";
 
 type ComposerSubmitHandler = (
 	prompt: string,
@@ -135,6 +134,7 @@ vi.mock("./index", async () => {
 });
 
 import { WorkspaceComposerContainer } from "./container";
+import type { StartSubmitMode } from "./start-submit-mode";
 
 const MODEL_SECTIONS = [
 	{

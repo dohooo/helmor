@@ -1,5 +1,6 @@
 import type { SerializedEditorState } from "lexical";
 import { persistSessionDraft } from "@/features/composer/draft-storage";
+import type { StartSubmitMode } from "@/features/composer/start-submit-mode";
 import type { ComposerCreatePrepareOutcome } from "@/features/conversation";
 import {
 	type FinalizeWorkspaceResponse,
@@ -11,8 +12,6 @@ import {
 	type WorkspaceMode,
 } from "@/lib/api";
 import { getComposerContextKey } from "@/lib/workspace-helpers";
-
-export type WorkspaceStartSubmitMode = "startNow" | "saveForLater";
 
 export type WorkspaceStartCreateResult = {
 	outcome: ComposerCreatePrepareOutcome;
@@ -38,7 +37,7 @@ export async function createWorkspaceFromStartComposer({
 	repoId: string;
 	sourceBranch: string;
 	mode: WorkspaceMode;
-	submitMode: WorkspaceStartSubmitMode;
+	submitMode: StartSubmitMode;
 	editorStateSnapshot?: SerializedEditorState;
 	/** StartPage composer picks. Only persisted to the session row on
 	 *  saveForLater; startNow consumes them via the submit payload. */
@@ -80,6 +79,16 @@ export async function createWorkspaceFromStartComposer({
 				: Promise.resolve(),
 		]);
 		await setWorkspaceStatus(prepared.workspaceId, "backlog");
+		return {
+			outcome: { shouldStream: false },
+			workspaceId: prepared.workspaceId,
+			sessionId: prepared.initialSessionId,
+			preparedWorkingDirectory: prepared.workingDirectory,
+		};
+	}
+
+	if (submitMode === "createOnly") {
+		await finalizeWorkspaceFromRepo(prepared.workspaceId);
 		return {
 			outcome: { shouldStream: false },
 			workspaceId: prepared.workspaceId,
