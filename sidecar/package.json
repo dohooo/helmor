@@ -27,6 +27,7 @@
 		"sqlite3"
 	],
 	"patchedDependencies": {
-		"sqlite3@5.1.7": "patches/sqlite3@5.1.7.patch"
+		"sqlite3@5.1.7": "patches/sqlite3@5.1.7.patch",
+		"@cursor/sdk@1.0.12": "patches/@cursor%2Fsdk@1.0.12.patch"
 	}
 }
