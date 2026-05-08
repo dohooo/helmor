@@ -243,8 +243,7 @@ class Database extends EventEmitter {
 			: undefined;
 		try {
 			const stmt = new Statement(this._db.prepare(sql));
-			if (isFn(callback))
-				queueMicrotask(() => callback.call(stmt, null));
+			if (isFn(callback)) queueMicrotask(() => callback.call(stmt, null));
 			return stmt;
 		} catch (e) {
 			const err = toError(e);
