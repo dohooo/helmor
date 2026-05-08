@@ -24,10 +24,11 @@ use super::types::{
     GithubCheckRunDetail,
 };
 
+// `first: 10` leaves room for the cross-repo filter (see pull_request.rs).
 const ACTION_STATUS_QUERY: &str = r#"
 query($owner: String!, $name: String!, $head: String!) {
   repository(owner: $owner, name: $name) {
-    pullRequests(headRefName: $head, states: [OPEN, MERGED, CLOSED], first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    pullRequests(headRefName: $head, states: [OPEN, MERGED, CLOSED], first: 10, orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes {
         url
         number
@@ -36,6 +37,7 @@ query($owner: String!, $name: String!, $head: String!) {
         merged
         reviewDecision
         mergeable
+        isCrossRepository
         commits(last: 1) {
           nodes {
             commit {
@@ -137,11 +139,16 @@ pub(super) fn query_workspace_pr_action_status(
             "GitHub repository was not returned",
         ));
     };
-    let Some(pr) = repository.pull_requests.nodes.into_iter().next() else {
+    let Some(pr) = pick_in_repo_action_pr(repository.pull_requests.nodes) else {
         return Ok(ForgeActionStatus::no_change_request());
     };
 
     Ok(build_action_status(pr))
+}
+
+/// Action-status counterpart to `pull_request::pick_in_repo_pr`.
+fn pick_in_repo_action_pr(nodes: Vec<ActionPullRequestNode>) -> Option<ActionPullRequestNode> {
+    nodes.into_iter().find(|node| !node.is_cross_repository)
 }
 
 /// REST-side companion: fetch the human-readable detail blob for a
@@ -670,6 +677,33 @@ mod tests {
         assert_eq!(format_duration(None, Some("2026-04-10T00:00:00Z")), None);
     }
 
+    fn make_action_node(number: i64, cross: bool) -> ActionPullRequestNode {
+        ActionPullRequestNode {
+            url: format!("https://github.com/octocat/hello-world/pull/{number}"),
+            number,
+            state: "OPEN".to_string(),
+            title: "Update".to_string(),
+            merged: false,
+            review_decision: None,
+            mergeable: None,
+            is_cross_repository: cross,
+            commits: ActionCommitConnection { nodes: vec![] },
+        }
+    }
+
+    #[test]
+    fn pick_in_repo_action_pr_skips_cross_repository_nodes() {
+        let nodes = vec![make_action_node(433, true), make_action_node(100, false)];
+        let picked = pick_in_repo_action_pr(nodes).expect("expected an in-repo PR");
+        assert_eq!(picked.number, 100);
+    }
+
+    #[test]
+    fn pick_in_repo_action_pr_returns_none_when_only_cross_repo_matches() {
+        let nodes = vec![make_action_node(433, true)];
+        assert!(pick_in_repo_action_pr(nodes).is_none());
+    }
+
     #[test]
     fn builds_action_status_with_review_and_mergeable_fields() {
         let status = build_action_status(ActionPullRequestNode {
@@ -680,6 +714,7 @@ mod tests {
             merged: false,
             review_decision: Some("CHANGES_REQUESTED".to_string()),
             mergeable: Some("CONFLICTING".to_string()),
+            is_cross_repository: false,
             commits: ActionCommitConnection {
                 nodes: vec![ActionPullRequestCommitNode {
                     commit: ActionCommitNode {
@@ -741,6 +776,7 @@ mod tests {
             merged: false,
             review_decision: None,
             mergeable: Some("MERGEABLE".to_string()),
+            is_cross_repository: false,
             commits: ActionCommitConnection {
                 nodes: vec![ActionPullRequestCommitNode {
                     commit: ActionCommitNode {
