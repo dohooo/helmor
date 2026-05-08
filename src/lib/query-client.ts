@@ -24,6 +24,7 @@ import {
 	listSlashCommands,
 	listWorkspaceCandidateDirectories,
 	listWorkspaceChangesWithContent,
+	listWorkspaceDirectory,
 	listWorkspaceFiles,
 	listWorkspaceLinkedDirectories,
 	loadAgentModelSections,
@@ -38,6 +39,7 @@ import {
 	loadWorkspaceSessions,
 	type PrSyncState,
 	refreshWorkspaceChangeRequest,
+	searchWorkspacePaths,
 } from "./api";
 import { parsePrUrl } from "./pr-url";
 
@@ -81,6 +83,10 @@ export const helmorQueryKeys = {
 		["workspaceChanges", workspaceRootPath] as const,
 	workspaceFiles: (workspaceRootPath: string) =>
 		["workspaceFiles", workspaceRootPath] as const,
+	workspaceDirectory: (workspaceRootPath: string, relativePath: string) =>
+		["workspaceDirectory", workspaceRootPath, relativePath] as const,
+	workspacePathSearch: (workspaceRootPath: string, query: string) =>
+		["workspacePathSearch", workspaceRootPath, query] as const,
 	workspaceChangeRequest: (workspaceId: string) =>
 		["workspaceChangeRequest", workspaceId] as const,
 	workspaceForge: (workspaceId: string) =>
@@ -769,5 +775,44 @@ export function workspaceFilesQueryOptions(workspaceRootPath: string) {
 		staleTime: 60_000,
 		gcTime: DEFAULT_GC_TIME,
 		retry: 0,
+	});
+}
+
+/**
+ * Lazy-loaded directory listing for the file browser tree. Each expanded
+ * folder gets its own cache entry keyed by `(workspaceRootPath, relativePath)`.
+ * `staleTime` is short so the browser reflects on-disk changes quickly without
+ * the backend having to be authoritative; `WorkspaceFilesChanged` events
+ * invalidate the whole namespace anyway.
+ */
+export function workspaceDirectoryQueryOptions(
+	workspaceRootPath: string,
+	relativePath: string,
+) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.workspaceDirectory(
+			workspaceRootPath,
+			relativePath,
+		),
+		queryFn: () => listWorkspaceDirectory(workspaceRootPath, relativePath),
+		staleTime: 5_000,
+	});
+}
+
+/**
+ * Fuzzy path search for the file browser quick-open picker. Disabled when
+ * the query is empty so we don't fire a no-op IPC. `staleTime` is short
+ * because the result set tracks the user's query; identity of `query`
+ * already gates refetches.
+ */
+export function workspacePathSearchQueryOptions(
+	workspaceRootPath: string,
+	query: string,
+) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.workspacePathSearch(workspaceRootPath, query),
+		queryFn: () => searchWorkspacePaths(workspaceRootPath, query),
+		enabled: query.trim().length > 0,
+		staleTime: 1_000,
 	});
 }

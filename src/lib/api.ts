@@ -410,10 +410,25 @@ export type EditorFileReadResponse = {
 	mtimeMs: number;
 };
 
-export type EditorFileWriteResponse = {
+export type EditorFileWriteOutcome =
+	| { kind: "written"; path: string; mtimeMs: number }
+	| { kind: "conflict"; path: string; currentMtimeMs: number };
+
+export type DirEntryKind = "file" | "directory";
+
+export interface DirEntry {
+	kind: DirEntryKind;
+	name: string;
 	path: string;
-	mtimeMs: number;
-};
+	absolutePath: string;
+}
+
+export interface PathSearchHit {
+	kind: DirEntryKind;
+	name: string;
+	path: string;
+	absolutePath: string;
+}
 
 export type EditorFileStatResponse = {
 	path: string;
@@ -1597,11 +1612,14 @@ export async function readFileAtRef(
 export async function writeEditorFile(
 	path: string,
 	content: string,
-): Promise<EditorFileWriteResponse> {
+	options?: { expectedMtimeMs?: number; overwrite?: boolean },
+): Promise<EditorFileWriteOutcome> {
 	try {
-		return await invoke<EditorFileWriteResponse>("write_editor_file", {
+		return await invoke<EditorFileWriteOutcome>("write_editor_file", {
 			path,
 			content,
+			expectedMtimeMs: options?.expectedMtimeMs ?? null,
+			overwrite: options?.overwrite ?? false,
 		});
 	} catch (error) {
 		throw new Error(
@@ -1652,6 +1670,36 @@ export async function listWorkspaceFiles(
 			describeInvokeError(error, "Unable to list workspace files."),
 		);
 	}
+}
+
+/**
+ * Lists the immediate children of a directory inside a workspace. Used by the
+ * file browser tree to lazy-load nested directories on expand. The relative
+ * path is resolved against the workspace root and rejects any traversal.
+ */
+export async function listWorkspaceDirectory(
+	workspaceRootPath: string,
+	relativePath: string,
+): Promise<DirEntry[]> {
+	return invoke<DirEntry[]>("list_workspace_directory", {
+		workspaceRootPath,
+		relativePath,
+	});
+}
+
+/**
+ * Fuzzy path search across the workspace tree, scoped to whatever the
+ * backend's walker considers in-bounds (same skip rules as `listWorkspaceFiles`).
+ * Used by the file browser's quick-open / Cmd-P style picker.
+ */
+export async function searchWorkspacePaths(
+	workspaceRootPath: string,
+	query: string,
+): Promise<PathSearchHit[]> {
+	return invoke<PathSearchHit[]>("search_workspace_paths", {
+		workspaceRootPath,
+		query,
+	});
 }
 
 export async function listEditorFilesWithContent(
