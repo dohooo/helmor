@@ -53,6 +53,11 @@ pub enum UiMutationEvent {
         model_id: Option<String>,
         permission_mode: Option<String>,
     },
+    /// The set of in-flight agent streams changed (a turn started or
+    /// ended). Carries no payload — frontends invalidate and re-fetch
+    /// `list_active_streams`. See `agents::streaming::active_streams` for
+    /// the source of truth this notification mirrors.
+    ActiveStreamsChanged,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,6 +131,7 @@ mod tests {
                 model_id: None,
                 permission_mode: None,
             },
+            UiMutationEvent::ActiveStreamsChanged,
         ];
         for event in cases {
             let s = serde_json::to_string(&event).unwrap();
@@ -154,6 +160,10 @@ mod tests {
             (
                 UiMutationEvent::RepositoryListChanged,
                 "repositoryListChanged",
+            ),
+            (
+                UiMutationEvent::ActiveStreamsChanged,
+                "activeStreamsChanged",
             ),
         ];
         for (event, expected) in cases {

@@ -336,6 +336,21 @@ describe("App create workspace flow", () => {
 
 	it("opens the start composer from the new workspace button", async () => {
 		const user = userEvent.setup({ pointerEventsCheck: 0 });
+		apiMocks.loadAgentModelSections.mockResolvedValue([
+			{
+				id: "claude",
+				label: "Claude",
+				options: [
+					{
+						id: "opus-1m",
+						provider: "claude",
+						label: "Opus 4.7 1M",
+						cliModel: "opus-1m",
+						effortLevels: ["low", "medium", "high"],
+					},
+				],
+			},
+		]);
 
 		render(<App />);
 		await screen.findByRole("main", { name: "Application shell" });
@@ -343,8 +358,63 @@ describe("App create workspace flow", () => {
 		await user.click(screen.getByRole("button", { name: "New workspace" }));
 
 		expect(await screen.findByLabelText("Workspace input")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Start now" })).toBeDisabled();
+		await waitFor(() => {
+			expect(
+				screen.getByRole("button", { name: "New Workspace" }),
+			).toBeEnabled();
+		});
 		expect(apiMocks.prepareWorkspaceFromRepo).not.toHaveBeenCalled();
+	});
+
+	it("creates a workspace from an empty start composer without streaming", async () => {
+		const user = userEvent.setup({ pointerEventsCheck: 0 });
+		apiMocks.loadAgentModelSections.mockResolvedValue([
+			{
+				id: "claude",
+				label: "Claude",
+				options: [
+					{
+						id: "opus-1m",
+						provider: "claude",
+						label: "Opus 4.7 1M",
+						cliModel: "opus-1m",
+						effortLevels: ["low", "medium", "high"],
+					},
+				],
+			},
+		]);
+
+		render(<App />);
+		await screen.findByRole("main", { name: "Application shell" });
+
+		await user.click(screen.getByRole("button", { name: "New workspace" }));
+		const createButton = await screen.findByRole("button", {
+			name: "New Workspace",
+		});
+		await waitFor(() => {
+			expect(createButton).toBeEnabled();
+		});
+
+		await user.click(createButton);
+
+		await waitFor(() => {
+			expect(apiMocks.prepareWorkspaceFromRepo).toHaveBeenCalledWith(
+				"repo-1",
+				"main",
+				"worktree",
+			);
+		});
+		await waitFor(() => {
+			expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
+				createRuntime.workspaceId,
+			);
+		});
+		await waitFor(() => {
+			expect(
+				screen.getByLabelText("Workspace panel drag region"),
+			).toBeInTheDocument();
+		});
+		expect(streamingMocks.handleComposerSubmit).not.toHaveBeenCalled();
 	});
 
 	it("creates from the start composer and stays on the created workspace", async () => {

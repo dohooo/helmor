@@ -35,6 +35,7 @@ import {
 import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-lifecycle";
 import { hydrateDraftCache } from "@/features/composer/draft-storage";
+import type { StartSubmitMode } from "@/features/composer/start-submit-mode";
 import {
 	type ComposerCreateContext,
 	type ComposerCreatePrepareOutcome,
@@ -112,11 +113,13 @@ import { ComposerInsertProvider } from "./lib/composer-insert-context";
 import type { DiffOpenOptions, EditorSessionState } from "./lib/editor-session";
 import { isMarkdownPath, isPathWithinRoot } from "./lib/editor-session";
 import {
+	activeStreamsQueryOptions,
 	archivedWorkspacesQueryOptions,
 	createHelmorQueryClient,
 	detectedEditorsQueryOptions,
 	helmorQueryKeys,
 	helmorQueryPersister,
+	QUERY_CACHE_BUSTER,
 	repositoriesQueryOptions,
 	sessionThreadMessagesQueryOptions,
 	workspaceChangeRequestQueryOptions,
@@ -128,12 +131,11 @@ import {
 	workspaceSessionsQueryOptions,
 } from "./lib/query-client";
 import {
+	buildSessionRunStates,
 	deriveBusySessionIds,
 	deriveBusyWorkspaceIds,
 	deriveStoppableSessionIds,
-	nextSessionRunStates,
 	type SessionRunState,
-	withPendingFinalizeRunState,
 } from "./lib/session-run-state";
 import { SessionRunStatesProvider } from "./lib/session-run-state-context";
 import {
@@ -165,6 +167,7 @@ import {
 	WorkspaceToastProvider,
 } from "./lib/workspace-toast-context";
 import { StreamingFooterOverlapScenario } from "./test/e2e-scenarios/streaming-footer-overlap";
+import { StreamingReasoningGapScenario } from "./test/e2e-scenarios/streaming-reasoning-gap";
 
 const SETTINGS_RELOAD_EVENT = "helmor:reload-settings";
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
@@ -180,6 +183,10 @@ function App() {
 
 	if (e2eScenario === "streaming-footer-overlap") {
 		return <StreamingFooterOverlapScenario />;
+	}
+
+	if (e2eScenario === "streaming-reasoning-gap") {
+		return <StreamingReasoningGapScenario />;
 	}
 
 	return <MainApp />;
@@ -295,7 +302,10 @@ function MainApp() {
 		<SettingsContext.Provider value={settingsContextValue}>
 			<PersistQueryClientProvider
 				client={queryClient}
-				persistOptions={{ persister: helmorQueryPersister }}
+				persistOptions={{
+					persister: helmorQueryPersister,
+					buster: QUERY_CACHE_BUSTER,
+				}}
 			>
 				{appSettings === null ? null : !appSettings.onboardingCompleted ? (
 					<>
@@ -471,33 +481,31 @@ function AppShell({
 	const [editorSession, setEditorSession] = useState<EditorSessionState | null>(
 		null,
 	);
-	const [sessionRunStates, setSessionRunStates] = useState<
-		Map<string, SessionRunState>
-	>(() => new Map());
-	const handleSessionRunStateChange = useCallback(
-		(sessionId: string, workspaceId: string | null, sending: boolean) => {
-			setSessionRunStates((current) =>
-				nextSessionRunStates(current, {
-					sessionId,
-					workspaceId,
-					running: sending,
-				}),
-			);
-		},
-		[],
-	);
 	const [pendingComposerInserts, setPendingComposerInserts] = useState<
 		ResolvedComposerInsertRequest[]
 	>([]);
 	const [pendingCreatedWorkspaceSubmit, setPendingCreatedWorkspaceSubmit] =
 		useState<PendingCreatedWorkspaceSubmit | null>(null);
-	const effectiveSessionRunStates = useMemo(
+	// Source of truth for "which sessions are running": the Rust
+	// `ActiveStreams` registry, mirrored here via React Query and kept
+	// fresh by `UiMutationEvent::ActiveStreamsChanged`. We layer the
+	// StartPage's optimistic "creating workspace" marker on top so the
+	// panel can show a busy spinner before the real stream registers.
+	const activeStreamsQuery = useQuery(activeStreamsQueryOptions());
+	const effectiveSessionRunStates = useMemo<
+		ReadonlyMap<string, SessionRunState>
+	>(
 		() =>
-			withPendingFinalizeRunState(
-				sessionRunStates,
-				pendingCreatedWorkspaceSubmit,
+			buildSessionRunStates(
+				activeStreamsQuery.data ?? [],
+				pendingCreatedWorkspaceSubmit
+					? {
+							sessionId: pendingCreatedWorkspaceSubmit.sessionId,
+							workspaceId: pendingCreatedWorkspaceSubmit.workspaceId,
+						}
+					: null,
 			),
-		[sessionRunStates, pendingCreatedWorkspaceSubmit],
+		[activeStreamsQuery.data, pendingCreatedWorkspaceSubmit],
 	);
 	const effectiveBusySessionIds = useMemo(
 		() => deriveBusySessionIds(effectiveSessionRunStates),
@@ -2122,11 +2130,12 @@ function AppShell({
 			handleSelectWorkspace(first.workspaceId);
 
 			setTimeout(() => {
+				// `model` + `permissionMode` are already pinned onto the
+				// session row by the backend's CLI-send path, so the composer
+				// reads them off `currentSession` when it auto-submits.
 				queuePendingPromptForSession({
 					sessionId: first.sessionId,
 					prompt: first.prompt,
-					modelId: first.modelId,
-					permissionMode: first.permissionMode,
 				});
 				handleSelectSession(first.sessionId);
 			}, 100);
@@ -2497,7 +2506,7 @@ function AppShell({
 	const handleStartComposerPrepare = useCallback(
 		async (
 			payload: ComposerSubmitPayload,
-			options?: { startSubmitMode?: "startNow" | "saveForLater" },
+			options?: { startSubmitMode?: StartSubmitMode },
 		): Promise<ComposerCreatePrepareOutcome> => {
 			if (!startRepository?.id) {
 				pushWorkspaceToast(
@@ -2520,21 +2529,26 @@ function AppShell({
 					);
 					setStartPendingNewBranch(null);
 				}
-				const { finalizePromise, outcome, workspaceId, sessionId } =
-					await createWorkspaceFromStartComposer({
-						repoId: startRepository.id,
-						sourceBranch: startSourceBranch,
-						mode: startMode,
-						submitMode: options?.startSubmitMode ?? "startNow",
-						editorStateSnapshot: payload.editorStateSnapshot,
-						composerConfig: {
-							modelId: payload.model.id,
-							effortLevel: payload.effortLevel,
-							permissionMode: payload.permissionMode,
-							fastMode: payload.fastMode,
-						},
-						linkedDirectories: startPendingLinkedDirectories,
-					});
+				const {
+					finalizePromise,
+					outcome,
+					workspaceId,
+					sessionId,
+					preparedWorkingDirectory,
+				} = await createWorkspaceFromStartComposer({
+					repoId: startRepository.id,
+					sourceBranch: startSourceBranch,
+					mode: startMode,
+					submitMode: options?.startSubmitMode ?? "startNow",
+					editorStateSnapshot: payload.editorStateSnapshot,
+					composerConfig: {
+						modelId: payload.model.id,
+						effortLevel: payload.effortLevel,
+						permissionMode: payload.permissionMode,
+						fastMode: payload.fastMode,
+					},
+					linkedDirectories: startPendingLinkedDirectories,
+				});
 				// Picks belonged to the in-flight create; clear regardless of
 				// outcome so the next start-page session begins clean.
 				setStartPendingLinkedDirectories(EMPTY_STRING_LIST);
@@ -2544,29 +2558,44 @@ function AppShell({
 				});
 
 				if (outcome.shouldStream) {
-					// Navigate immediately so the panel mounts on the new
-					// session, then queue the optimistic user bubble before
-					// awaiting finalize. The conversation effect waits for
-					// the workspace state to flip operational before actually
-					// firing `handleComposerSubmit`, so the bubble shows up
-					// instantly while the worktree materialises in the
-					// background.
-					handleSelectWorkspace(outcome.workspaceId);
-					handleSelectSession(outcome.sessionId);
-					setWorkspaceViewMode("conversation");
-
+					// Defer the view-switch state burst to the next animation
+					// frame so the browser can paint the current frame
+					// (start page) before reconciling the heavy conversation
+					// tree. Without this, the synchronous commit pumps the
+					// WKWebView's paint/composite pipeline so hard that RAF
+					// stalls for 5–8 seconds, freezing every CSS / Lottie
+					// animation on screen even though JS itself isn't blocked.
 					const pendingId = crypto.randomUUID();
 					setPendingCreatedWorkspaceSubmit({
 						id: pendingId,
 						workspaceId: outcome.workspaceId,
 						sessionId: outcome.sessionId,
-						payload,
+						// Local mode already has the cwd; worktree mode patches
+						// it onto the payload below once finalize materialises
+						// the worktree dir. Either way the payload is the
+						// single source of truth — the consumer never falls
+						// back to `workspaceRootPath` (which races the
+						// workspaceDetail React Query and was producing a
+						// transient cwd=null on the first turn).
+						payload: {
+							...payload,
+							workingDirectory:
+								preparedWorkingDirectory ?? payload.workingDirectory,
+						},
 						finalized: false,
 					});
+					requestAnimationFrame(() => {
+						handleSelectWorkspace(outcome.workspaceId);
+						handleSelectSession(outcome.sessionId);
+						setWorkspaceViewMode("conversation");
+					});
 
+					let finalizedWorkingDirectory: string | null =
+						preparedWorkingDirectory;
 					if (finalizePromise) {
 						try {
-							await finalizePromise;
+							const finalized = await finalizePromise;
+							finalizedWorkingDirectory = finalized.workingDirectory;
 						} catch (error) {
 							// Clear the optimistic bubble so the user doesn't
 							// see a message that never actually got sent.
@@ -2589,7 +2618,20 @@ function AppShell({
 					// the workspaceDetail React Query refetch round-trip.
 					setPendingCreatedWorkspaceSubmit((current) =>
 						current?.id === pendingId
-							? { ...current, finalized: true }
+							? {
+									...current,
+									payload: {
+										...current.payload,
+										// Worktree path only exists post-finalize;
+										// patch payload right before we let the
+										// effect fire so the first turn never sees
+										// a null cwd.
+										workingDirectory:
+											finalizedWorkingDirectory ??
+											current.payload.workingDirectory,
+									},
+									finalized: true,
+								}
 							: current,
 					);
 					void queryClient.invalidateQueries({
@@ -2907,9 +2949,6 @@ function AppShell({
 														onResolveDisplayedSession={
 															handleResolveDisplayedSession
 														}
-														onSessionRunStateChange={
-															handleSessionRunStateChange
-														}
 														onInteractionSessionsChange={
 															handleInteractionSessionsChange
 														}
@@ -2969,7 +3008,6 @@ function AppShell({
 													onResolveDisplayedSession={
 														handleResolveDisplayedSession
 													}
-													onSessionRunStateChange={handleSessionRunStateChange}
 													onInteractionSessionsChange={
 														handleInteractionSessionsChange
 													}

@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.20.0
+
+### Minor Changes
+
+- [#432](https://github.com/dohooo/helmor/pull/432) [`32b3324`](https://github.com/dohooo/helmor/commit/32b3324504100d465d24e2f1edc7539f76402e24) Thanks [@natllian](https://github.com/natllian)! - Add Cursor as a third agent provider.
+
+### Patch Changes
+
+- [#437](https://github.com/dohooo/helmor/pull/437) [`fe40e26`](https://github.com/dohooo/helmor/commit/fe40e261eed15cb1b45bede4afef7a92a66c8424) Thanks [@dohooo](https://github.com/dohooo)! - Allow creating a new workspace from the start page without typing a prompt, with the empty composer button shown as New Workspace.
+
+- [#436](https://github.com/dohooo/helmor/pull/436) [`2e2c58f`](https://github.com/dohooo/helmor/commit/2e2c58f8a10cd29789d2f15349bab94d1c3f34f4) Thanks [@natllian](https://github.com/natllian)! - Remove the open/close animation on the sidebar workspace hover card so it appears and disappears instantly instead of fading and zooming.
+
+- [#440](https://github.com/dohooo/helmor/pull/440) [`f1669e0`](https://github.com/dohooo/helmor/commit/f1669e0e84f164f57ed22962f533eb427beb205c) Thanks [@natllian](https://github.com/natllian)! - Fix a bug where the composer's abort button would sometimes do nothing after navigating away from a running session and back.
+
+- [#439](https://github.com/dohooo/helmor/pull/439) [`0042c58`](https://github.com/dohooo/helmor/commit/0042c5852a6fc5e09516417a246d8ea1632c07df) Thanks [@natllian](https://github.com/natllian)! - Fix inflated +/- line counts in the inspector for files touched across multiple git stages.
+
+- [#434](https://github.com/dohooo/helmor/pull/434) [`aa03494`](https://github.com/dohooo/helmor/commit/aa034942e28b7aa670adc8bd6633fcfef0af9c54) Thanks [@natllian](https://github.com/natllian)! - Fix a bug where a workspace on a shared branch like `main` could be mis-associated with — and auto-canceled by — an unrelated fork pull request that happened to use the same branch name.
+
+- [#438](https://github.com/dohooo/helmor/pull/438) [`6ba4da5`](https://github.com/dohooo/helmor/commit/6ba4da5842ea40dd2928c1ebc13d6346fe58757a) Thanks [@dohooo](https://github.com/dohooo)! - Replace the Helmor loading logo with a smoother theme-matched SVG animation that keeps the indicator crisp while reducing runtime overhead.
+
+## 0.19.1
+
+### Patch Changes
+
+- [#425](https://github.com/dohooo/helmor/pull/425) [`e8674cf`](https://github.com/dohooo/helmor/commit/e8674cf30ef241e0a4a09336f1fa355db06c7e63) Thanks [@natllian](https://github.com/natllian)! - Fix a multi-second UI freeze when starting a new task from the start page.
+
+- [#428](https://github.com/dohooo/helmor/pull/428) [`b6f2e95`](https://github.com/dohooo/helmor/commit/b6f2e95c02bdb1b1508e3f0b202befd1403b950b) Thanks [@natllian](https://github.com/natllian)! - Stop capping Claude session-title generation at one turn so titles no longer fail with `Reached maximum number of turns (1)`.
+
+- [#428](https://github.com/dohooo/helmor/pull/428) [`b6f2e95`](https://github.com/dohooo/helmor/commit/b6f2e95c02bdb1b1508e3f0b202befd1403b950b) Thanks [@natllian](https://github.com/natllian)! - Speed up Codex session title and branch-name generation by using a smaller model and skipping reasoning.
+
+- [#424](https://github.com/dohooo/helmor/pull/424) [`d828bde`](https://github.com/dohooo/helmor/commit/d828bde801ffee80bb2f1bd823a10f3f24898d41) Thanks [@natllian](https://github.com/natllian)! - Fix two related issues in long chat sessions:
+
+  - Stop the empty space below the last message from growing as thinking blocks pile up.
+  - Make finished thinking blocks fold up even when you switch away and come back.
+
+- [#417](https://github.com/dohooo/helmor/pull/417) [`53ff1e4`](https://github.com/dohooo/helmor/commit/53ff1e43cffaea73505cbe46c63d88aab864b0aa) Thanks [@dohooo](https://github.com/dohooo)! - Make automatic session title and branch-name generation lighter so new chats spend less time preparing a rename.
+
+- [#431](https://github.com/dohooo/helmor/pull/431) [`7643e9e`](https://github.com/dohooo/helmor/commit/7643e9e48be66a55f9579b8091f2df71f8a94d8c) Thanks [@natllian](https://github.com/natllian)! - Fix two issues with workspace working-directory handling:
+
+  - Stop the first message in a newly-created workspace from running with the wrong directory, which caused the second turn to fail with "The provider returned an empty response."
+  - Refuse to start an agent turn when the working directory is missing, instead of silently falling back to the app's process cwd.
+
+- [#421](https://github.com/dohooo/helmor/pull/421) [`55b0a9e`](https://github.com/dohooo/helmor/commit/55b0a9ec26f6ab686545add217cb9a6d6a75cd11) Thanks [@natllian](https://github.com/natllian)! - Fix Settings → PR/MR (and Review) effort: it now actually applies to the new session, and is disabled for models that don't support effort levels (e.g. Haiku).
+
+- [#430](https://github.com/dohooo/helmor/pull/430) [`c85a6cb`](https://github.com/dohooo/helmor/commit/c85a6cb7a766c776cd5710fc2b9504982847d642) Thanks [@natllian](https://github.com/natllian)! - Fix the sidebar bouncing a workspace back to in-review after you merge it: the optimistic move to Done now stays put while the merge round-trip is in flight, even if you switch to another workspace before it finishes.
+
+- [#429](https://github.com/dohooo/helmor/pull/429) [`7fb0116`](https://github.com/dohooo/helmor/commit/7fb0116fc23c37e124d232e940bed4773009c047) Thanks [@natllian](https://github.com/natllian)! - Make cold starts noticeably faster and reduce in-session pauses by shrinking the on-disk cache Helmor reads at launch and rewrites as you work.
+
+- [#427](https://github.com/dohooo/helmor/pull/427) [`2909b4a`](https://github.com/dohooo/helmor/commit/2909b4a236a672ab9345f1e309ded6cfaefff055) Thanks [@natllian](https://github.com/natllian)! - Make sidebar workspace rows feel responsive when sweeping the cursor across a long list — hover highlights and the row action buttons no longer stutter behind the cursor.
+
+## 0.19.0
+
+### Minor Changes
+
+- [#415](https://github.com/dohooo/helmor/pull/415) [`da05eaf`](https://github.com/dohooo/helmor/commit/da05eaff012d9bce14f84726df8f96ed961fcadc) Thanks [@natllian](https://github.com/natllian)! - Two workspace-creation and PR/MR helper improvements:
+  - Fix `/add-dir` on the Start page so "Browse folder…" actually opens the directory picker, and apply the picks to the workspace it creates.
+  - Add a dedicated model / effort / fast-mode selector for the inspector's Create PR/MR action, so PR / MR generation can use a different setup than the default agent turn.
+
+### Patch Changes
+
+- [#416](https://github.com/dohooo/helmor/pull/416) [`d50177c`](https://github.com/dohooo/helmor/commit/d50177c653c59fed5c86e5b2edb97bd93cfb18cd) Thanks [@natllian](https://github.com/natllian)! - Fix three pause-for-user-input bugs:
+
+  - Claude `AskUserQuestion` answers now reach Claude reliably instead of intermittently failing with an API error or empty user turn.
+  - Codex MCP elicitation forms now surface in Bypass Permissions mode instead of being auto-declined.
+  - Claude now sees project-scope MCP servers registered for your repo in `~/.claude.json`.
+
+- [#415](https://github.com/dohooo/helmor/pull/415) [`da05eaf`](https://github.com/dohooo/helmor/commit/da05eaff012d9bce14f84726df8f96ed961fcadc) Thanks [@natllian](https://github.com/natllian)! - Two `/add-dir` fixes:
+
+  - Claude turns no longer fail with `Not logged in / Authentication failed` after linking extra directories.
+  - The Start page's `/add-dir` popup now lists candidate workspaces, matching the in-workspace behavior instead of only offering "Browse folder…".
+
+- [#413](https://github.com/dohooo/helmor/pull/413) [`47d0dab`](https://github.com/dohooo/helmor/commit/47d0dab90915bbf74dda16bb982f09b9254c6942) Thanks [@natllian](https://github.com/natllian)! - Carry the Start page composer picks (model, effort, plan mode, fast mode) into the new workspace so Start Now and Save for Later no longer fall back to defaults.
+
+- [#411](https://github.com/dohooo/helmor/pull/411) [`dcf009e`](https://github.com/dohooo/helmor/commit/dcf009ef17d3e72d65a54979469ce4ad70d1462b) Thanks [@natllian](https://github.com/natllian)! - Fix account avatars so they fall back to initials instead of going blank, and stop them flickering on workspace switches.
+
 ## 0.18.0
 
 ### Minor Changes

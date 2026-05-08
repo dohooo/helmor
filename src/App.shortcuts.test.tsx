@@ -668,7 +668,9 @@ describe("App global navigation shortcuts", () => {
 		});
 
 		expect(await screen.findByLabelText("Workspace input")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Start now" })).toBeDisabled();
+		expect(
+			screen.getByRole("button", { name: "New Workspace" }),
+		).toBeDisabled();
 	});
 
 	it("focuses the start composer on Command+L", async () => {

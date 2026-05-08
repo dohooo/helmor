@@ -211,12 +211,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             agents::list_agent_model_sections,
+            agents::list_cursor_models,
             agents::send_agent_message_stream,
             agents::stop_agent_stream,
+            agents::list_active_streams,
             agents::steer_agent_stream,
             agents::respond_to_permission_request,
-            agents::respond_to_deferred_tool,
-            agents::respond_to_elicitation_request,
+            agents::respond_to_user_input,
             agents::generate_session_title,
             agents::list_slash_commands,
             agents::prewarm_slash_commands_for_workspace,

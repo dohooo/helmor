@@ -24,11 +24,10 @@ mod state;
 mod event_loop_tests;
 
 pub(crate) use active_streams::ActiveStreamHandle;
-pub use active_streams::{abort_all_active_streams_blocking, ActiveStreams};
+pub use active_streams::{abort_all_active_streams_blocking, ActiveStreamSummary, ActiveStreams};
 pub use bridges::{
-    bridge_aborted_event, bridge_deferred_tool_use_event, bridge_done_event,
-    bridge_elicitation_request_event, bridge_error_event, bridge_permission_request_event,
-    bridge_user_input_request_event, convert_elicitation_content_to_codex_answers,
+    bridge_aborted_event, bridge_done_event, bridge_error_event, bridge_permission_request_event,
+    bridge_user_input_request_event,
 };
 pub(crate) use cleanup::cleanup_abnormal_stream_exit;
 pub use params::{
@@ -73,23 +72,29 @@ pub(super) fn stream_via_sidecar(
         "stream_via_sidecar"
     );
 
-    let resume_session_id = request.session_id.clone().or_else(|| {
+    // Single read against `sessions` for both lookups we need below:
+    // resume-session matching (provider_session_id + agent_type) and the
+    // workspace_id we stamp onto the active-streams handle. Two queries
+    // would borrow the read pool twice on the hot path of every send.
+    let session_row: Option<(Option<String>, Option<String>, Option<String>)> =
         request.helmor_session_id.as_deref().and_then(|hsid| {
             let conn = crate::models::db::read_conn().ok()?;
-            let (stored_sid, stored_provider): (Option<String>, Option<String>) = conn
-                .query_row(
-                    "SELECT provider_session_id, agent_type FROM sessions WHERE id = ?1",
-                    [hsid],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .ok()?;
-            let sid = stored_sid?;
-            if stored_provider.unwrap_or_default() == model.provider {
-                Some(sid)
-            } else {
-                None
-            }
-        })
+            conn.query_row(
+                "SELECT provider_session_id, agent_type, workspace_id FROM sessions WHERE id = ?1",
+                [hsid],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .ok()
+        });
+
+    let resume_session_id = request.session_id.clone().or_else(|| {
+        let (stored_sid, stored_provider, _) = session_row.as_ref()?;
+        let sid = stored_sid.clone()?;
+        if stored_provider.clone().unwrap_or_default() == model.provider {
+            Some(sid)
+        } else {
+            None
+        }
     });
 
     tracing::debug!(
@@ -162,6 +167,13 @@ pub(super) fn stream_via_sidecar(
         params,
     };
 
+    // Workspace for the UI's "this workspace is busy" badge —
+    // pulled out of the same `session_row` we already read above so
+    // we don't borrow the read pool a second time on every send.
+    let workspace_id_for_handle = session_row
+        .as_ref()
+        .and_then(|(_, _, workspace_id)| workspace_id.clone());
+
     // Per-helmor-session lock — block overlapping sends so concurrent
     // `query()` calls can't stack against the same `resume:` id and
     // corrupt the conversation jsonl (issue #398).
@@ -170,6 +182,7 @@ pub(super) fn stream_via_sidecar(
         sidecar_session_id: sidecar_session_id.clone(),
         provider: model.provider.to_string(),
         helmor_session_id: request.helmor_session_id.clone(),
+        workspace_id: workspace_id_for_handle,
     });
     if !registered {
         tracing::warn!(
@@ -182,12 +195,19 @@ pub(super) fn stream_via_sidecar(
         )
         .into());
     }
+    // Notify the UI that the active-streams set changed. Anonymous
+    // streams (helmor_session_id == None) are filtered out of the
+    // snapshot the frontend reads, but we still publish — the
+    // frontend's invalidate is cheap and the alternative (branch on
+    // visibility here) couples this call site to UI policy.
+    crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
 
     let rx = sidecar.subscribe(&request_id);
 
     if let Err(error) = sidecar.send(&sidecar_req) {
         sidecar.unsubscribe(&request_id);
         active_streams.unregister(&request_id);
+        crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
         return Err(anyhow::anyhow!("Sidecar send failed: {error}").into());
     }
 
@@ -203,7 +223,6 @@ pub(super) fn stream_via_sidecar(
     let user_message_id_copy = request.user_message_id.clone();
     let files_copy = request.files.clone().unwrap_or_default();
     let images_copy = request.images.clone().unwrap_or_default();
-    let resume_only = request.resume_only;
     let sidecar_session_id_copy = sidecar_session_id.clone();
     let rid = request_id.clone();
 
@@ -215,7 +234,6 @@ pub(super) fn stream_via_sidecar(
             sidecar_session_id = %sidecar_session_id_copy,
             provider = %provider,
             model = %model_copy.cli_model,
-            resume_only,
             "stream: event loop starting"
         );
 
@@ -265,23 +283,14 @@ pub(super) fn stream_via_sidecar(
                         tracing::error!(rid = %rid, "Failed to update fast_mode: {e}");
                     }
 
-                    if resume_only {
-                        exchange_ctx = Some(ctx);
-                    } else {
-                        match persist_user_message(
-                            &conn,
-                            &ctx,
-                            &prompt_copy,
-                            &files_copy,
-                            &images_copy,
-                        ) {
-                            Ok(()) => {
-                                tracing::debug!(rid = %rid, "User message persisted to DB");
-                                exchange_ctx = Some(ctx);
-                            }
-                            Err(error) => {
-                                tracing::error!(rid = %rid, "Failed to persist user message: {error}");
-                            }
+                    match persist_user_message(&conn, &ctx, &prompt_copy, &files_copy, &images_copy)
+                    {
+                        Ok(()) => {
+                            tracing::debug!(rid = %rid, "User message persisted to DB");
+                            exchange_ctx = Some(ctx);
+                        }
+                        Err(error) => {
+                            tracing::error!(rid = %rid, "Failed to persist user message: {error}");
                         }
                     }
                 }
@@ -470,13 +479,7 @@ pub(super) fn stream_via_sidecar(
                         hsid_copy.as_deref(),
                     ) {
                         resolved_session_id = Some(sid.to_string());
-                        if resume_only {
-                            tracing::debug!(
-                                rid = %rid,
-                                provider_session_id = sid,
-                                "Skipping provider session persistence for resume-only stream"
-                            );
-                        } else if let (Some(ctx), Some(conn)) =
+                        if let (Some(ctx), Some(conn)) =
                             (&exchange_ctx, &crate::models::db::write_conn().ok())
                         {
                             if let Err(error) = conn.execute(
@@ -543,6 +546,7 @@ pub(super) fn stream_via_sidecar(
 
                         if is_aborted {
                             pipeline_state.accumulator.flush_codex_in_progress();
+                            pipeline_state.accumulator.flush_cursor_in_progress();
                             pipeline_state.materialize_partial();
                             pipeline_state.accumulator.append_aborted_notice();
                         }
@@ -586,11 +590,9 @@ pub(super) fn stream_via_sidecar(
                         }
 
                         // Empty result on a `resume:` stream → surface as
-                        // Error. Skip `resume_only` (deferred-tool answers
-                        // can legitimately be empty) and the no-resume
-                        // case.
+                        // Error. Skipped on the no-resume case (a brand-new
+                        // turn returning empty is a different kind of bug).
                         let is_empty_resume = !is_aborted
-                            && !resume_only
                             && resume_session_id.is_some()
                             && persisted_turn_count == 0
                             && output.assistant_text.trim().is_empty();
@@ -866,25 +868,29 @@ pub(super) fn stream_via_sidecar(
                         let _ = on_event.send(AgentStreamEvent::PlanCaptured {});
                     }
                 }
-                "deferredToolUse" => {
-                    // Infrastructure-side prep stays inline (DB writes +
-                    // pipeline ownership). The state machine owns the
-                    // terminal transition + the Update + DeferredToolUse
-                    // emit pair.
+                "userInputRequest" => {
+                    // Unified user-input pause. Sources: Claude
+                    // AskUserQuestion (canUseTool), Claude MCP elicitation
+                    // (onElicitation), Codex `requestUserInput`. The
+                    // sidecar has the live SDK callback parked on a
+                    // promise; the SDK process keeps running and the
+                    // pipeline keeps accumulating. We persist any
+                    // complete turns up to this point (crash-safe) and
+                    // emit a snapshot Update + the UserInputRequest
+                    // marker so the frontend overlay shows up at the
+                    // right position. Subsequent stream events flow
+                    // normally once the user submits via
+                    // `respondToUserInput`.
                     let mut resolved_model = model_copy.cli_model.to_string();
                     let mut final_messages: Vec<ThreadMessageLike> = Vec::new();
 
-                    if let Some(mut pipeline_state) = pipeline.take() {
+                    if let Some(pipeline_state) = pipeline.as_mut() {
                         pipeline_state.accumulator.flush_pending();
 
-                        // Borrow writer once for both turn persist and the
-                        // deferred-finalize. The pipeline_state.finish()
-                        // between them is purely in-memory.
-                        let writer = exchange_ctx
-                            .as_ref()
-                            .and_then(|_| crate::models::db::write_conn().ok());
-
-                        if let (Some(ctx), Some(conn)) = (exchange_ctx.as_ref(), writer.as_ref()) {
+                        if let (Some(ctx), Some(conn)) = (
+                            exchange_ctx.as_ref(),
+                            crate::models::db::write_conn().ok().as_ref(),
+                        ) {
                             let model_str = pipeline_state.accumulator.resolved_model().to_string();
                             while persisted_turn_count < pipeline_state.accumulator.turns_len() {
                                 match persist_turn_message(
@@ -905,31 +911,14 @@ pub(super) fn stream_via_sidecar(
                             }
                         }
 
-                        // Deferred pause is terminal for this stream from the
-                        // frontend's perspective. IDs are already stable by
-                        // construction (same UUID in `collected[]` and
-                        // `CollectedTurn`), so no post-hoc sync is needed.
                         resolved_model = pipeline_state.accumulator.resolved_model().to_string();
+                        // `finish()` is non-destructive (a pure render),
+                        // so we keep the pipeline live for the events
+                        // that arrive after the user submits.
                         final_messages = pipeline_state.finish();
-
-                        if let (Some(ctx), Some(conn)) = (exchange_ctx.as_ref(), writer.as_ref()) {
-                            if let Err(error) = finalize_session_metadata(
-                                conn,
-                                ctx,
-                                "idle",
-                                effort_copy.as_deref(),
-                                turn_session.ctx.permission_mode.as_deref(),
-                            ) {
-                                tracing::error!(
-                                    rid = %rid,
-                                    "Failed to finalize deferred exchange: {error}"
-                                );
-                            }
-                        }
-                        drop(writer);
                     }
 
-                    match turn_session.handle_deferred_tool_use(
+                    match turn_session.handle_user_input_request(
                         &event.raw,
                         &resolved_model,
                         final_messages,
@@ -943,11 +932,10 @@ pub(super) fn stream_via_sidecar(
                             tracing::error!(
                                 rid = %rid,
                                 error = ?err,
-                                "deferredToolUse transition rejected",
+                                "userInputRequest transition rejected",
                             );
                         }
                     }
-                    break;
                 }
                 "permissionModeChanged" => {
                     match turn_session.handle_permission_mode_changed(&event.raw) {
@@ -995,46 +983,6 @@ pub(super) fn stream_via_sidecar(
                         );
                     }
                 },
-                "elicitationRequest" => {
-                    let resolved_model = pipeline
-                        .as_ref()
-                        .map(|state| state.accumulator.resolved_model().to_string())
-                        .unwrap_or_else(|| model_copy.cli_model.to_string());
-                    match turn_session.handle_elicitation_request(&event.raw, &resolved_model) {
-                        Ok(actions) => {
-                            for action in actions {
-                                actions::apply_action(action, &apply_ctx);
-                            }
-                        }
-                        Err(err) => {
-                            tracing::error!(
-                                rid = %rid,
-                                error = ?err,
-                                "elicitationRequest transition rejected",
-                            );
-                        }
-                    }
-                }
-                "userInputRequest" => {
-                    let resolved_model = pipeline
-                        .as_ref()
-                        .map(|state| state.accumulator.resolved_model().to_string())
-                        .unwrap_or_else(|| model_copy.cli_model.to_string());
-                    match turn_session.handle_user_input_request(&event.raw, &resolved_model) {
-                        Ok(actions) => {
-                            for action in actions {
-                                actions::apply_action(action, &apply_ctx);
-                            }
-                        }
-                        Err(err) => {
-                            tracing::error!(
-                                rid = %rid,
-                                error = ?err,
-                                "userInputRequest transition rejected",
-                            );
-                        }
-                    }
-                }
                 "error" => {
                     // Pre-compute (message, internal) for tracing and DB
                     // writes. Final emit goes through the state machine
@@ -1171,6 +1119,7 @@ pub(super) fn stream_via_sidecar(
         );
         sidecar_state.unsubscribe(&rid);
         active_streams_state.unregister(&rid);
+        crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
     });
 
     Ok(())

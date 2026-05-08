@@ -46,6 +46,7 @@ pub struct DataInfo {
 pub struct AgentLoginStatus {
     pub claude: bool,
     pub codex: bool,
+    pub cursor: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -388,6 +389,7 @@ fn helmor_skills_status() -> anyhow::Result<HelmorSkillsStatus> {
         &AgentLoginStatus {
             claude: claude_login_ready(),
             codex: codex_login_ready(),
+            cursor: cursor_login_ready(),
         },
     )))
 }
@@ -525,6 +527,7 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
         let login = AgentLoginStatus {
             claude: claude_login_ready(),
             codex: codex_login_ready(),
+            cursor: cursor_login_ready(),
         };
         let agents = ready_skill_agents(&login);
         let command = helmor_skills_install_command(&agents);
@@ -652,9 +655,31 @@ pub async fn get_agent_login_status() -> CmdResult<AgentLoginStatus> {
         Ok(AgentLoginStatus {
             claude: claude_login_ready(),
             codex: codex_login_ready(),
+            cursor: cursor_login_ready(),
         })
     })
     .await
+}
+
+/// Cursor "ready" = non-empty `app.cursor_provider.apiKey`.
+fn cursor_login_ready() -> bool {
+    let raw = match crate::models::settings::load_setting_value("app.cursor_provider") {
+        Ok(Some(value)) => value,
+        Ok(None) => return false,
+        Err(error) => {
+            tracing::debug!("Failed to read app.cursor_provider: {error}");
+            return false;
+        }
+    };
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("apiKey")
+                .and_then(serde_json::Value::as_str)
+                .map(|key| !key.trim().is_empty())
+        })
+        .unwrap_or(false)
 }
 
 fn claude_login_ready() -> bool {

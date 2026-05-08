@@ -1,18 +1,18 @@
 /**
  * In-place confirm panel rendered when the user types a fresh
  * `/goal <objective>` while an active goal already exists. The composer
- * outer shell takes over the body just like `DeferredToolPanel` /
- * `ElicitationPanel` do — same `DeferredToolCard` wrapper, same header /
- * option row / footer primitives as `AskUserQuestionPanel`.
+ * outer shell takes over the body just like `UserInputPanel` /
+ * `PermissionPanel` do — same `UserInputCard` wrapper, same header /
+ * option row / footer primitives as `AskUserQuestionRenderer`.
  */
 
 import { Check, Goal, X } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { DeferredToolCard } from "./deferred-tool-panel/shared";
 import { InteractionFooter } from "./interaction/footer";
 import { InteractionHeader } from "./interaction/header";
 import { InteractionOptionRow } from "./interaction/option-row";
+import { UserInputCard } from "./user-input-panel/shared";
 
 type Choice = "replace" | "cancel";
 
@@ -40,7 +40,7 @@ export function GoalReplaceConfirm({
 	};
 
 	return (
-		<DeferredToolCard>
+		<UserInputCard>
 			<InteractionHeader
 				icon={Goal}
 				title="Replace goal?"
@@ -90,6 +90,6 @@ export function GoalReplaceConfirm({
 					<span>Confirm</span>
 				</Button>
 			</InteractionFooter>
-		</DeferredToolCard>
+		</UserInputCard>
 	);
 }

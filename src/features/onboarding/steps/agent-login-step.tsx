@@ -3,7 +3,9 @@ import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { AgentLoginProvider } from "@/lib/api";
 import { AgentStatusAction } from "../components/agent-status-action";
+import { CursorApiKeyAction } from "../components/cursor-api-key-action";
 import { LoginTerminalPreview } from "../components/login-terminal-preview";
+import { ReadyStatus } from "../components/ready-status";
 import type { AgentLoginItem, OnboardingStep } from "../types";
 
 export function AgentLoginStep({
@@ -26,10 +28,13 @@ export function AgentLoginStep({
 	const [loginInstanceId, setLoginInstanceId] = useState<string | null>(null);
 	const [waitingProvider, setWaitingProvider] =
 		useState<AgentLoginProvider | null>(null);
+	const [cursorKeyError, setCursorKeyError] = useState<string | null>(null);
 	const terminalProvider = activeLoginProvider ?? primedLoginProvider;
 	const terminalActive = activeLoginProvider !== null;
 
 	const startLogin = useCallback((provider: AgentLoginProvider) => {
+		// Cursor uses an API key, not a CLI login terminal.
+		if (provider === "cursor") return;
 		setPrimedLoginProvider(provider);
 		setActiveLoginProvider(provider);
 		setWaitingProvider(provider);
@@ -89,43 +94,68 @@ export function AgentLoginStep({
 						log in now, or continue and log in later.
 					</p>
 
-					<div className="mt-7 flex w-full flex-col gap-3">
+					{/* h-13 (~52px) keeps three tiles + Back/Next inside the
+					    step container at ~720–820px laptop viewports. */}
+					<div className="mt-6 flex w-full flex-col gap-2">
 						{loginItems.map(
-							({ icon: Icon, provider, label, description, status }) => (
-								<div
-									key={label}
-									className="flex min-h-20 items-center gap-3 rounded-lg border border-border/55 bg-card px-4 py-3"
-								>
-									<div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border/50 bg-background text-foreground">
-										<Icon className="size-5" />
-									</div>
-									<div className="min-w-0 flex-1">
-										<div className="text-sm font-medium text-foreground">
-											{label}
+							({ icon: Icon, provider, label, description, status }) => {
+								const subLabel =
+									provider === "cursor" && cursorKeyError
+										? `Couldn't validate key: ${cursorKeyError}`
+										: description;
+								const subLabelTone =
+									provider === "cursor" && cursorKeyError
+										? "text-destructive/90"
+										: "text-muted-foreground/85";
+								return (
+									<div
+										key={label}
+										className="flex h-13 items-center gap-3 rounded-lg border border-border/45 bg-card/80 px-3"
+									>
+										<div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border/40 bg-background text-foreground">
+											<Icon className="size-4" />
 										</div>
-										<p className="mt-0.5 text-xs leading-5 text-muted-foreground">
-											{description}
-										</p>
+										<div className="flex min-w-0 flex-1 items-baseline gap-2">
+											<span className="truncate text-[13px] font-medium leading-none text-foreground">
+												{label}
+											</span>
+											<span
+												className={`truncate text-[11px] leading-none ${subLabelTone}`}
+											>
+												{subLabel}
+											</span>
+										</div>
+										{provider === "cursor" ? (
+											status === "ready" ? (
+												<ReadyStatus />
+											) : (
+												<CursorApiKeyAction
+													onSaved={onRefreshLoginItems}
+													onError={setCursorKeyError}
+												/>
+											)
+										) : (
+											<AgentStatusAction
+												provider={provider}
+												status={status}
+												waiting={waitingProvider === provider}
+												onPrimeLogin={setPrimedLoginProvider}
+												onStartLogin={startLogin}
+											/>
+										)}
 									</div>
-									<AgentStatusAction
-										provider={provider}
-										status={status}
-										waiting={waitingProvider === provider}
-										onPrimeLogin={setPrimedLoginProvider}
-										onStartLogin={startLogin}
-									/>
-								</div>
-							),
+								);
+							},
 						)}
 					</div>
 
-					<div className="mt-7 flex items-center gap-3">
+					<div className="mt-6 flex items-center gap-3">
 						<Button
 							type="button"
 							variant="ghost"
 							size="lg"
 							onClick={onBack}
-							className="h-11 gap-2 px-4 text-[0.95rem]"
+							className="h-10 gap-2 px-4 text-[0.95rem]"
 						>
 							<ArrowLeft data-icon="inline-start" className="size-4" />
 							Back
@@ -134,7 +164,7 @@ export function AgentLoginStep({
 							type="button"
 							size="lg"
 							onClick={onNext}
-							className="h-11 gap-2 px-4 text-[0.95rem]"
+							className="h-10 gap-2 px-4 text-[0.95rem]"
 						>
 							Next
 							<ArrowRight data-icon="inline-end" className="size-4" />

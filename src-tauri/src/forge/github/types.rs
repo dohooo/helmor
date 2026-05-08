@@ -29,6 +29,7 @@ pub(super) struct PullRequestConnection {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct PullRequestNode {
     /// GraphQL node ID (e.g. "PR_kwDO..."). Only populated when the
     /// query explicitly selects `id`; the lookup query omits it so this
@@ -39,6 +40,9 @@ pub(super) struct PullRequestNode {
     pub state: String,
     pub title: String,
     pub merged: bool,
+    /// True when head is in a fork. `pullRequests(headRefName:)` matches
+    /// branch name only, so we drop these to avoid mis-association.
+    pub is_cross_repository: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -80,6 +84,7 @@ pub(super) struct ActionPullRequestNode {
     pub merged: bool,
     pub review_decision: Option<String>,
     pub mergeable: Option<String>,
+    pub is_cross_repository: bool,
     pub commits: ActionCommitConnection,
 }
 

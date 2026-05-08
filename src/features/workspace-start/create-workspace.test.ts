@@ -35,7 +35,12 @@ describe("createWorkspaceFromStartComposer", () => {
 		},
 	} as unknown as SerializedEditorState;
 
-	function resetMocks() {
+	function resetMocks(
+		preparedWorkingDirectory: string | null = null,
+		finalizedWorkingDirectory:
+			| string
+			| undefined = "/Users/me/helmor/workspaces/foo/bar",
+	) {
 		apiMocks.prepareWorkspaceFromRepo.mockReset();
 		apiMocks.finalizeWorkspaceFromRepo.mockReset();
 		apiMocks.setWorkspaceStatus.mockReset();
@@ -44,10 +49,12 @@ describe("createWorkspaceFromStartComposer", () => {
 		apiMocks.prepareWorkspaceFromRepo.mockResolvedValue({
 			workspaceId: "workspace-1",
 			initialSessionId: "session-1",
+			workingDirectory: preparedWorkingDirectory,
 		});
 		apiMocks.finalizeWorkspaceFromRepo.mockResolvedValue({
 			workspaceId: "workspace-1",
 			finalState: "ready",
+			workingDirectory: finalizedWorkingDirectory,
 		});
 		apiMocks.setWorkspaceStatus.mockResolvedValue(undefined);
 		draftMocks.persistSessionDraft.mockResolvedValue(undefined);
@@ -83,6 +90,8 @@ describe("createWorkspaceFromStartComposer", () => {
 		expect(result.workspaceId).toBe("workspace-1");
 		expect(result.sessionId).toBe("session-1");
 		expect(result.finalizePromise).toBeInstanceOf(Promise);
+		// Worktree mode: prepare cwd is null, only finalize knows the path.
+		expect(result.preparedWorkingDirectory).toBeNull();
 	});
 
 	it("saves the new workspace to backlog with the composer draft", async () => {
@@ -116,6 +125,55 @@ describe("createWorkspaceFromStartComposer", () => {
 			outcome: { shouldStream: false },
 			workspaceId: "workspace-1",
 			sessionId: "session-1",
+			preparedWorkingDirectory: null,
 		});
+	});
+
+	it("creates a workspace without streaming or moving it to backlog", async () => {
+		resetMocks();
+
+		const result = await createWorkspaceFromStartComposer({
+			repoId: "repo-1",
+			sourceBranch: "origin/dev",
+			mode: "worktree",
+			submitMode: "createOnly",
+			editorStateSnapshot,
+		});
+
+		expect(apiMocks.prepareWorkspaceFromRepo).toHaveBeenCalledWith(
+			"repo-1",
+			"origin/dev",
+			"worktree",
+		);
+		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
+			"workspace-1",
+		);
+		expect(draftMocks.persistSessionDraft).not.toHaveBeenCalled();
+		expect(apiMocks.setWorkspaceStatus).not.toHaveBeenCalled();
+		expect(result).toEqual({
+			outcome: { shouldStream: false },
+			workspaceId: "workspace-1",
+			sessionId: "session-1",
+			preparedWorkingDirectory: null,
+		});
+	});
+
+	it("returns local mode cwd from prepare without waiting for finalize", async () => {
+		// Local mode: backend hands cwd back from prepare immediately
+		// (it's just `repo.root_path` — already on disk). The caller pins
+		// this onto the pending submit payload before flipping
+		// `finalized=true`, eliminating the workspaceDetail React Query
+		// race that previously left the first turn with cwd=null.
+		resetMocks("/Users/me/repos/local-only");
+
+		const result = await createWorkspaceFromStartComposer({
+			repoId: "repo-1",
+			sourceBranch: "main",
+			mode: "local",
+			submitMode: "startNow",
+			editorStateSnapshot,
+		});
+
+		expect(result.preparedWorkingDirectory).toBe("/Users/me/repos/local-only");
 	});
 });

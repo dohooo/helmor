@@ -66,6 +66,14 @@ const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
 	D: "text-red-500",
 };
 
+/** A change item already projected into a single area's line counts.
+ * `insertions`/`deletions` are derived from the corresponding area
+ * (staged / unstaged / committed) — never used elsewhere. */
+type ChangeRow = InspectorFileItem & {
+	insertions: number;
+	deletions: number;
+};
+
 type ChangesSectionProps = {
 	workspaceId: string | null;
 	workspaceRootPath: string | null;
@@ -156,33 +164,43 @@ export function ChangesSection({
 		return () => window.clearTimeout(id);
 	}, [branchSwitching, changes]);
 
-	const stagedChanges = useMemo(
+	// Each area has its own insertions/deletions. Project the area's stats
+	// onto a flat `insertions`/`deletions` pair so downstream components
+	// (LineStats etc.) read the correct numbers without knowing which group
+	// they're in.
+	const stagedChanges = useMemo<ChangeRow[]>(
 		() =>
 			changes
 				.filter((change) => change.stagedStatus != null)
 				.map((change) => ({
 					...change,
 					status: change.stagedStatus ?? change.status,
+					insertions: change.stagedInsertions,
+					deletions: change.stagedDeletions,
 				})),
 		[changes],
 	);
-	const unstagedChanges = useMemo(
+	const unstagedChanges = useMemo<ChangeRow[]>(
 		() =>
 			changes
 				.filter((change) => change.unstagedStatus != null)
 				.map((change) => ({
 					...change,
 					status: change.unstagedStatus ?? change.status,
+					insertions: change.unstagedInsertions,
+					deletions: change.unstagedDeletions,
 				})),
 		[changes],
 	);
-	const committedChanges = useMemo(
+	const committedChanges = useMemo<ChangeRow[]>(
 		() =>
 			changes
 				.filter((change) => change.committedStatus != null)
 				.map((change) => ({
 					...change,
 					status: change.committedStatus ?? change.status,
+					insertions: change.committedInsertions,
+					deletions: change.committedDeletions,
 				})),
 		[changes],
 	);
@@ -495,7 +513,7 @@ function ChangesGroup({
 	count: number;
 	open: boolean;
 	onToggle: () => void;
-	changes: InspectorFileItem[];
+	changes: ChangeRow[];
 	treeView: boolean;
 	onToggleTreeView: () => void;
 	action: StageActionKind;
@@ -610,7 +628,7 @@ function BranchDiffSection({
 	loading: boolean;
 	open: boolean;
 	onToggle: () => void;
-	changes: InspectorFileItem[];
+	changes: ChangeRow[];
 	treeView: boolean;
 	onToggleTreeView: () => void;
 	editorMode: boolean;
@@ -706,12 +724,12 @@ function BranchDiffSection({
 	);
 }
 
-function buildTree(changes: InspectorFileItem[]) {
+function buildTree(changes: ChangeRow[]) {
 	type TreeNode = {
 		name: string;
 		path: string;
 		children: Map<string, TreeNode>;
-		file?: InspectorFileItem;
+		file?: ChangeRow;
 	};
 
 	const root: TreeNode = { name: "", path: "", children: new Map() };
@@ -753,7 +771,7 @@ function ChangesTreeView({
 	workspaceBranch,
 	workspaceRemoteUrl,
 }: {
-	changes: InspectorFileItem[];
+	changes: ChangeRow[];
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
@@ -988,7 +1006,7 @@ function ChangesFlatView({
 	workspaceBranch,
 	workspaceRemoteUrl,
 }: {
-	changes: InspectorFileItem[];
+	changes: ChangeRow[];
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
@@ -1096,7 +1114,7 @@ function StageActionSlot({
 	onStageAction,
 	onDiscard,
 }: {
-	file: InspectorFileItem;
+	file: ChangeRow;
 	action?: StageActionKind;
 	onStageAction?: (path: string) => void;
 	onDiscard?: (path: string) => void;
@@ -1246,7 +1264,7 @@ function FileRowContextMenu({
 	workspaceRemoteUrl,
 	children,
 }: {
-	file: InspectorFileItem;
+	file: ChangeRow;
 	workspaceBranch: string | null;
 	workspaceRemoteUrl: string | null;
 	children: React.ReactNode;

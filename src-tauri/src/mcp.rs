@@ -198,7 +198,12 @@ fn dispatch_tool(name: &str, args: &Value) -> Result<String> {
                 .as_bool()
                 .and_then(|enabled| enabled.then_some("plan"));
             let ws_id = service::resolve_workspace_ref(ws_ref)?;
-            let resp = service::create_session(&ws_id, None, permission_mode)?;
+            let resp = service::create_session(
+                &ws_id,
+                None,
+                permission_mode,
+                crate::models::sessions::CreateSessionOverrides::default(),
+            )?;
             Ok(serde_json::to_string_pretty(&resp)?)
         }
         "helmor_send" => {

@@ -115,7 +115,7 @@ export type DataInfo = {
 	archiveRoot: string;
 };
 
-export type AgentProvider = "claude" | "codex";
+export type AgentProvider = "claude" | "codex" | "cursor";
 
 export type AgentModelOption = {
 	id: string;
@@ -146,7 +146,6 @@ export type AgentSendRequest = {
 	 *  content keeps `prompt` only — the prefix never enters the DB or
 	 *  the chat bubble. */
 	promptPrefix?: string | null;
-	resumeOnly?: boolean | null;
 	sessionId?: string | null;
 	helmorSessionId?: string | null;
 	workingDirectory?: string | null;
@@ -388,11 +387,17 @@ export type PrepareWorkspaceResponse = {
 	defaultBranch: string;
 	state: WorkspaceState;
 	repoScripts: RepoScripts;
+	/** CWD the agent CLI must run in. Local mode: filled with `repo.root_path`
+	 *  immediately. Worktree mode: null until finalize materialises the
+	 *  worktree — callers MUST then read `FinalizeWorkspaceResponse.workingDirectory`. */
+	workingDirectory: string | null;
 };
 
 export type FinalizeWorkspaceResponse = {
 	workspaceId: string;
 	finalState: WorkspaceState;
+	/** CWD the agent CLI must run in. Always populated when finalize succeeds. */
+	workingDirectory: string;
 };
 
 export type MarkWorkspaceReadResponse = undefined;
@@ -745,11 +750,12 @@ export async function exitOnboardingWindowMode(): Promise<void> {
 	await invoke("exit_onboarding_window_mode");
 }
 
-export type AgentLoginProvider = "claude" | "codex";
+export type AgentLoginProvider = "claude" | "codex" | "cursor";
 
 export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
+	cursor: boolean;
 };
 
 export async function getAgentLoginStatus(): Promise<AgentLoginStatusResult> {
@@ -907,6 +913,40 @@ export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 		return await invoke<AgentModelSection[]>("list_agent_model_sections");
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to load agent models."));
+	}
+}
+
+export type CursorModelParameterValue = {
+	value: string;
+	displayName?: string;
+};
+
+export type CursorModelParameter = {
+	id: string;
+	displayName?: string;
+	values: CursorModelParameterValue[];
+};
+
+export type CursorModelEntry = {
+	id: string;
+	label: string;
+	/** Raw `parameters[]` — persisted into `cursorProvider.cachedModels`. */
+	parameters?: CursorModelParameter[];
+};
+
+/// Live `Cursor.models.list` via sidecar. Optional `apiKey` overrides
+/// the stored key for one-off probes (e.g. onboarding validation).
+export async function listCursorModels(
+	apiKey?: string,
+): Promise<CursorModelEntry[]> {
+	try {
+		return await invoke<CursorModelEntry[]>("list_cursor_models", {
+			apiKey: apiKey ?? null,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to list Cursor models."),
+		);
 	}
 }
 
@@ -1388,7 +1428,8 @@ export type UiMutationEvent =
 			prompt: string;
 			modelId: string | null;
 			permissionMode: string | null;
-	  };
+	  }
+	| { type: "activeStreamsChanged" };
 
 export async function listenGitBranchChanged(
 	callback: (payload: GitBranchChangedPayload) => void,
@@ -2331,30 +2372,22 @@ export type AgentStreamEvent =
 			description?: string | null;
 	  }
 	| {
-			kind: "deferredToolUse";
+			kind: "userInputRequest";
 			provider: AgentProvider;
 			modelId: string;
 			resolvedModel: string;
 			sessionId?: string | null;
 			workingDirectory: string;
 			permissionMode?: string | null;
-			toolUseId: string;
-			toolName: string;
-			toolInput: Record<string, unknown>;
-	  }
-	| {
-			kind: "elicitationRequest";
-			provider: AgentProvider;
-			modelId: string;
-			resolvedModel: string;
-			sessionId?: string | null;
-			workingDirectory: string;
-			elicitationId?: string | null;
-			serverName: string;
+			userInputId: string;
+			source: string;
 			message: string;
-			mode?: string | null;
-			url?: string | null;
-			requestedSchema?: Record<string, unknown> | null;
+			/** Discriminated by `payload.kind`:
+			 *  - `ask-user-question` → Claude AskUserQuestion (raw multi-question / option / preview shape)
+			 *  - `form` → JSON-Schema form (MCP form elicitation or Codex's synthesized form)
+			 *  - `url` → URL launcher (MCP url-mode elicitation)
+			 *  See `pending-user-input.ts` for the typed payload union. */
+			payload: Record<string, unknown>;
 	  }
 	| { kind: "planCaptured" }
 	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
@@ -2423,6 +2456,22 @@ export async function stopAgentStream(
 	});
 }
 
+/** UI projection of a registered, in-flight agent stream. Mirror of
+ *  `agents::streaming::ActiveStreamSummary` on the Rust side. */
+export type ActiveStreamSummary = {
+	sessionId: string;
+	workspaceId: string | null;
+	provider: string;
+};
+
+/** Snapshot of currently in-flight agent streams. The frontend derives
+ *  `busy / stoppable / busy-workspace` Sets from this list. Refetched
+ *  whenever a `UiMutationEvent::ActiveStreamsChanged` lands via the
+ *  ui-sync bridge. */
+export async function listActiveStreams(): Promise<ActiveStreamSummary[]> {
+	return await invoke<ActiveStreamSummary[]>("list_active_streams");
+}
+
 export type AgentSteerRequest = {
 	sessionId: string;
 	provider?: string;
@@ -2474,32 +2523,28 @@ export async function respondToPermissionRequest(
 	});
 }
 
-export async function respondToDeferredTool(
-	toolUseId: string,
-	behavior: "allow" | "deny",
-	options?: {
-		reason?: string | null;
-		updatedInput?: Record<string, unknown> | null;
-	},
-): Promise<void> {
-	await invoke("respond_to_deferred_tool", {
-		request: {
-			toolUseId,
-			behavior,
-			reason: options?.reason ?? null,
-			updatedInput: options?.updatedInput ?? null,
-		},
-	});
-}
-
-export async function respondToElicitationRequest(
-	elicitationId: string,
-	action: "accept" | "decline" | "cancel",
+/**
+ * Resolve a parked unified `userInputRequest`. The sidecar's pending
+ * resolver closure (`canUseTool` for AskUserQuestion, `onElicitation`
+ * for MCP, Codex's `requestUserInput` JSON-RPC handler) translates
+ * this generic resolution into the matching SDK-specific shape.
+ *
+ * - `submit` → frontend produced a content payload (matched to whatever
+ *   the matching renderer asks for: AUQ updatedInput, schema content
+ *   map, or `{}` for url-mode).
+ * - `decline` → user explicitly rejected; sidecar surfaces this as the
+ *   provider's matching "deny" signal.
+ * - `cancel` → user dismissed without answering; treated as cancel by
+ *   each provider.
+ */
+export async function respondToUserInput(
+	userInputId: string,
+	action: "submit" | "decline" | "cancel",
 	content?: Record<string, unknown> | null,
 ): Promise<void> {
-	await invoke("respond_to_elicitation_request", {
+	await invoke("respond_to_user_input", {
 		request: {
-			elicitationId,
+			userInputId,
 			action,
 			content: content ?? null,
 		},
@@ -2577,12 +2622,25 @@ export async function createSession(
 	options?: {
 		actionKind?: ActionKind | null;
 		permissionMode?: string | null;
+		/** Pin the session row's `model` at creation. Inspector helpers
+		 *  (Create PR/MR, Review) push the user's configured model here so
+		 *  the composer reads it off the row instead of falling back to
+		 *  settings.defaultModelId. Leave null for the default flow. */
+		model?: string | null;
+		/** Pin `effort_level` at creation; null falls back to the user
+		 *  setting on the backend. */
+		effortLevel?: string | null;
+		/** Pin `fast_mode` at creation; null/undefined defaults to false. */
+		fastMode?: boolean | null;
 	},
 ): Promise<CreateSessionResponse> {
 	return invoke<CreateSessionResponse>("create_session", {
 		workspaceId,
 		actionKind: options?.actionKind ?? null,
 		permissionMode: options?.permissionMode ?? null,
+		model: options?.model ?? null,
+		effortLevel: options?.effortLevel ?? null,
+		fastMode: options?.fastMode ?? null,
 	});
 }
 

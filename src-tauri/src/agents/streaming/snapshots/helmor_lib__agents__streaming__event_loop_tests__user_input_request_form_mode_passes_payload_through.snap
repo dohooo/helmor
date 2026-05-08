@@ -1,0 +1,26 @@
+---
+source: src/agents/streaming/event_loop_tests.rs
+expression: entries
+---
+- event_type: system
+  emitted:
+    - kind: Update
+      messages: []
+  side_effects: []
+- event_type: userInputRequest
+  emitted:
+    - kind: Update
+      messages: []
+    - kind: UserInputRequest
+      user_input_id: elic-1
+      source: design-server
+      permission_mode: ~
+      payload_kind: form
+  side_effects: []
+- event_type: end
+  emitted:
+    - kind: Update
+      messages: []
+    - kind: Done
+      persisted: true
+  side_effects: []

@@ -11,16 +11,18 @@ use super::api::{run_graphql, run_graphql_raw, GraphqlOutcome};
 use super::context::GithubContext;
 use super::types::{GraphqlEnvelope, PullRequestNode};
 
+// `first: 10` leaves room for the cross-repo filter to find the in-repo match.
 const PR_LOOKUP_QUERY: &str = r#"
 query($owner: String!, $name: String!, $head: String!) {
   repository(owner: $owner, name: $name) {
-    pullRequests(headRefName: $head, states: [OPEN, MERGED, CLOSED], first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    pullRequests(headRefName: $head, states: [OPEN, MERGED, CLOSED], first: 10, orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes {
         url
         number
         state
         title
         merged
+        isCrossRepository
       }
     }
   }
@@ -30,8 +32,8 @@ query($owner: String!, $name: String!, $head: String!) {
 const PR_NODE_ID_QUERY: &str = r#"
 query($owner: String!, $name: String!, $head: String!) {
   repository(owner: $owner, name: $name) {
-    pullRequests(headRefName: $head, states: [OPEN], first: 1) {
-      nodes { id, url, number, state, title, merged }
+    pullRequests(headRefName: $head, states: [OPEN], first: 5) {
+      nodes { id, url, number, state, title, merged, isCrossRepository }
     }
   }
 }
@@ -147,8 +149,13 @@ pub(super) fn find_workspace_pr(context: &GithubContext) -> Result<Option<Change
     Ok(parsed
         .data
         .and_then(|d| d.repository)
-        .and_then(|r| r.pull_requests.nodes.into_iter().next())
+        .and_then(|r| pick_in_repo_pr(r.pull_requests.nodes))
         .map(pr_info))
+}
+
+/// Drop fork PRs; `headRefName:` alone matches across forks.
+fn pick_in_repo_pr(nodes: Vec<PullRequestNode>) -> Option<PullRequestNode> {
+    nodes.into_iter().find(|node| !node.is_cross_repository)
 }
 
 /// Convert a GraphQL pull-request node into the public
@@ -182,7 +189,7 @@ pub(super) fn fetch_open_pr_node_id(context: &GithubContext) -> Result<Option<St
     Ok(parsed
         .data
         .and_then(|d| d.repository)
-        .and_then(|r| r.pull_requests.nodes.into_iter().next())
+        .and_then(|r| pick_in_repo_pr(r.pull_requests.nodes))
         .and_then(|n| n.id))
 }
 
@@ -289,6 +296,19 @@ mod tests {
             state: state.to_string(),
             title: "Update".to_string(),
             merged,
+            is_cross_repository: false,
+        }
+    }
+
+    fn make_node_with_cross_repo(state: &str, number: i64, cross: bool) -> PullRequestNode {
+        PullRequestNode {
+            id: None,
+            url: format!("https://github.com/octocat/hello-world/pull/{number}"),
+            number,
+            state: state.to_string(),
+            title: "Update".to_string(),
+            merged: false,
+            is_cross_repository: cross,
         }
     }
 
@@ -357,6 +377,33 @@ mod tests {
     #[test]
     fn pick_returns_none_when_all_disabled() {
         assert_eq!(AllowedMergeMethods::default().pick(), None);
+    }
+
+    // Regression: workspace on `main` got auto-canceled by a fork's closed `main` PR.
+    #[test]
+    fn pick_in_repo_pr_skips_cross_repository_nodes() {
+        let nodes = vec![
+            make_node_with_cross_repo("CLOSED", 433, true),
+            make_node_with_cross_repo("OPEN", 100, false),
+        ];
+        let picked = pick_in_repo_pr(nodes).expect("expected an in-repo PR");
+        assert_eq!(picked.number, 100);
+    }
+
+    #[test]
+    fn pick_in_repo_pr_returns_none_when_only_cross_repo_matches() {
+        let nodes = vec![make_node_with_cross_repo("CLOSED", 433, true)];
+        assert!(pick_in_repo_pr(nodes).is_none());
+    }
+
+    #[test]
+    fn pick_in_repo_pr_preserves_order_when_first_node_is_in_repo() {
+        let nodes = vec![
+            make_node_with_cross_repo("OPEN", 100, false),
+            make_node_with_cross_repo("CLOSED", 99, false),
+        ];
+        let picked = pick_in_repo_pr(nodes).expect("expected first in-repo PR");
+        assert_eq!(picked.number, 100);
     }
 
     #[test]

@@ -95,6 +95,13 @@ fn prepare_local_workspace_keeps_current_branch_when_source_is_none() {
     assert_eq!(response.state, WorkspaceState::Ready);
     assert_eq!(response.branch, "main");
     assert_eq!(response.directory_name, "");
+    // Local mode: prepare returns the cwd immediately so the start-page
+    // submit flow can pin it onto the pending payload without waiting for
+    // the workspaceDetail React Query to settle.
+    assert_eq!(
+        response.working_directory.as_deref(),
+        Some(harness.source_repo_root.display().to_string()).as_deref(),
+    );
 
     let connection = Connection::open(harness.db_path()).unwrap();
     let (mode_str, state_str, branch, init_parent, target_branch): (
@@ -289,6 +296,13 @@ fn finalize_workspace_from_repo_no_ops_for_local_workspace() {
     let finalized = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
 
     assert_eq!(finalized.final_state, WorkspaceState::Ready);
+    // Local short-circuit still returns the cwd (== repo root). Without
+    // this, the frontend submit flow couldn't reuse the same payload-patch
+    // path for both modes.
+    assert_eq!(
+        finalized.working_directory,
+        harness.source_repo_root.display().to_string(),
+    );
     let _ = WorkspaceMode::Worktree; // sanity: enum is in scope
 }
 
@@ -473,11 +487,17 @@ fn prepare_workspace_inserts_initializing_row_without_creating_worktree() {
         .unwrap();
     assert_eq!(session_workspace_id, prepared.workspace_id);
 
-    // Worktree has NOT been created yet — that's Phase 2's job.
+    // Worktree has NOT been created yet — that's Phase 2's job. The cwd
+    // field is therefore None at prepare time; the caller MUST wait for
+    // finalize before reading the path.
     let workspace_dir = harness.workspace_dir(&prepared.directory_name);
     assert!(
         !workspace_dir.exists(),
         "Phase 1 must not create the worktree"
+    );
+    assert!(
+        prepared.working_directory.is_none(),
+        "worktree mode prepare must not return a cwd before finalize",
     );
 
     // Repo scripts came from the source repo root's helmor.json (worktree
@@ -510,6 +530,13 @@ fn finalize_workspace_transitions_initializing_to_ready_and_creates_worktree() {
 
     assert_eq!(finalized.workspace_id, prepared.workspace_id);
     assert_eq!(finalized.final_state, WorkspaceState::Ready);
+    // After finalize, the worktree dir is materialised — backend hands the
+    // path back so the frontend can submit the first turn against the
+    // correct cwd, no React Query refetch round-trip required.
+    assert_eq!(
+        finalized.working_directory,
+        workspace_dir.display().to_string()
+    );
 
     // Worktree exists after Phase 2.
     assert!(workspace_dir.join(".git").exists());

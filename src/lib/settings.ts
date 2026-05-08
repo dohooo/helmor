@@ -57,6 +57,35 @@ export type ClaudeCustomProviderSettings = {
 	customModels: string;
 };
 
+/** Mirrors SDK `ModelParameterDefinition` shape. */
+export type CursorCachedModelParameterValue = {
+	value: string;
+	displayName?: string;
+};
+
+export type CursorCachedModelParameter = {
+	id: string;
+	displayName?: string;
+	values: CursorCachedModelParameterValue[];
+};
+
+/** `Cursor.models.list` snapshot. `parameters` may be absent on legacy
+ *  entries — Rust catalog degrades until next Refresh writes them back. */
+export type CursorCachedModel = {
+	id: string;
+	label: string;
+	parameters?: CursorCachedModelParameter[];
+};
+
+export type CursorProviderSettings = {
+	apiKey: string;
+	/** `null` = first fetch auto-fills defaults; `[]` = user cleared,
+	 *  never auto-fill again. */
+	enabledModelIds: string[] | null;
+	/** Last fetched catalog; lets the Rust picker render synchronously. */
+	cachedModels: CursorCachedModel[] | null;
+};
+
 /** Per-account toggles for which item kinds the inbox should pull from
  * a given forge login. Keyed externally by `<provider>:<login>` (e.g.
  * `github:octocat`). Missing keys default to all `true` — newly added
@@ -191,6 +220,7 @@ export type AppSettings = {
 	onboardingCompleted: boolean;
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
+	cursorProvider: CursorProviderSettings;
 	inboxSourceConfig: InboxSourceConfig;
 	kanbanViewState: KanbanViewState;
 };
@@ -243,6 +273,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		customApiKey: "",
 		customModels: "",
 	},
+	cursorProvider: {
+		apiKey: "",
+		enabledModelIds: null,
+		cachedModels: null,
+	},
 	inboxSourceConfig: { accounts: {} },
 	kanbanViewState: DEFAULT_KANBAN_VIEW_STATE,
 };
@@ -286,6 +321,7 @@ const SETTINGS_KEY_MAP: Record<
 	onboardingCompleted: "app.onboarding_completed",
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
+	cursorProvider: "app.cursor_provider",
 	inboxSourceConfig: "app.inbox_source_config",
 	kanbanViewState: "app.kanban_view_state",
 };
@@ -555,6 +591,80 @@ function parseKanbanViewState(raw: string | undefined): KanbanViewState {
 	}
 }
 
+function parseCursorProviderSettings(
+	raw: string | undefined,
+): CursorProviderSettings {
+	if (!raw) return DEFAULT_SETTINGS.cursorProvider;
+	try {
+		const parsed = JSON.parse(raw) as Record<string, unknown>;
+		return {
+			apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey : "",
+			enabledModelIds: parseEnabledModelIds(parsed.enabledModelIds),
+			cachedModels: parseCachedModels(parsed.cachedModels),
+		};
+	} catch {
+		return DEFAULT_SETTINGS.cursorProvider;
+	}
+}
+
+function parseEnabledModelIds(value: unknown): string[] | null {
+	if (value === null) return null;
+	if (!Array.isArray(value)) return null;
+	const ids = value.filter((item): item is string => typeof item === "string");
+	return ids;
+}
+
+function parseCachedModels(value: unknown): CursorCachedModel[] | null {
+	if (!Array.isArray(value)) return null;
+	const models: CursorCachedModel[] = [];
+	for (const entry of value) {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+		const obj = entry as Record<string, unknown>;
+		if (typeof obj.id !== "string" || typeof obj.label !== "string") continue;
+		const parameters = parseCachedModelParameters(obj.parameters);
+		models.push({
+			id: obj.id,
+			label: obj.label,
+			...(parameters ? { parameters } : {}),
+		});
+	}
+	return models;
+}
+
+function parseCachedModelParameters(
+	value: unknown,
+): CursorCachedModelParameter[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const out: CursorCachedModelParameter[] = [];
+	for (const entry of value) {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+		const obj = entry as Record<string, unknown>;
+		if (typeof obj.id !== "string") continue;
+		const values: CursorCachedModelParameterValue[] = [];
+		if (Array.isArray(obj.values)) {
+			for (const v of obj.values) {
+				if (!v || typeof v !== "object" || Array.isArray(v)) continue;
+				const vobj = v as Record<string, unknown>;
+				if (typeof vobj.value !== "string") continue;
+				values.push({
+					value: vobj.value,
+					...(typeof vobj.displayName === "string"
+						? { displayName: vobj.displayName }
+						: {}),
+				});
+			}
+		}
+		out.push({
+			id: obj.id,
+			...(typeof obj.displayName === "string"
+				? { displayName: obj.displayName }
+				: {}),
+			values,
+		});
+	}
+	return out;
+}
+
 function parseClaudeCustomProviderSettings(
 	raw: string | undefined,
 ): ClaudeCustomProviderSettings {
@@ -689,6 +799,9 @@ export async function loadSettings(): Promise<AppSettings> {
 			claudeCustomProviders: parseClaudeCustomProviderSettings(
 				raw[SETTINGS_KEY_MAP.claudeCustomProviders],
 			),
+			cursorProvider: parseCursorProviderSettings(
+				raw[SETTINGS_KEY_MAP.cursorProvider],
+			),
 			inboxSourceConfig: parseInboxSourceConfig(
 				raw[SETTINGS_KEY_MAP.inboxSourceConfig],
 			),
@@ -731,6 +844,7 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 			settings[dbKey] =
 				key === "shortcuts" ||
 				key === "claudeCustomProviders" ||
+				key === "cursorProvider" ||
 				key === "inboxSourceConfig" ||
 				key === "kanbanViewState"
 					? JSON.stringify(value)

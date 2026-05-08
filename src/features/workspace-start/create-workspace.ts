@@ -1,5 +1,6 @@
 import type { SerializedEditorState } from "lexical";
 import { persistSessionDraft } from "@/features/composer/draft-storage";
+import type { StartSubmitMode } from "@/features/composer/start-submit-mode";
 import type { ComposerCreatePrepareOutcome } from "@/features/conversation";
 import {
 	type FinalizeWorkspaceResponse,
@@ -12,13 +13,16 @@ import {
 } from "@/lib/api";
 import { getComposerContextKey } from "@/lib/workspace-helpers";
 
-export type WorkspaceStartSubmitMode = "startNow" | "saveForLater";
-
 export type WorkspaceStartCreateResult = {
 	outcome: ComposerCreatePrepareOutcome;
 	workspaceId: string;
 	sessionId: string;
 	finalizePromise?: Promise<FinalizeWorkspaceResponse>;
+	/** CWD already known after Phase 1 (local mode populates it from repo
+	 *  root_path; worktree mode is null until finalize completes). The
+	 *  caller pins this onto the pending-submit payload so the very first
+	 *  agent turn never races the workspaceDetail React Query. */
+	preparedWorkingDirectory: string | null;
 };
 
 export async function createWorkspaceFromStartComposer({
@@ -33,7 +37,7 @@ export async function createWorkspaceFromStartComposer({
 	repoId: string;
 	sourceBranch: string;
 	mode: WorkspaceMode;
-	submitMode: WorkspaceStartSubmitMode;
+	submitMode: StartSubmitMode;
 	editorStateSnapshot?: SerializedEditorState;
 	/** StartPage composer picks. Only persisted to the session row on
 	 *  saveForLater; startNow consumes them via the submit payload. */
@@ -79,6 +83,17 @@ export async function createWorkspaceFromStartComposer({
 			outcome: { shouldStream: false },
 			workspaceId: prepared.workspaceId,
 			sessionId: prepared.initialSessionId,
+			preparedWorkingDirectory: prepared.workingDirectory,
+		};
+	}
+
+	if (submitMode === "createOnly") {
+		await finalizeWorkspaceFromRepo(prepared.workspaceId);
+		return {
+			outcome: { shouldStream: false },
+			workspaceId: prepared.workspaceId,
+			sessionId: prepared.initialSessionId,
+			preparedWorkingDirectory: prepared.workingDirectory,
 		};
 	}
 
@@ -86,6 +101,7 @@ export async function createWorkspaceFromStartComposer({
 		finalizePromise: finalizeWorkspaceFromRepo(prepared.workspaceId),
 		workspaceId: prepared.workspaceId,
 		sessionId: prepared.initialSessionId,
+		preparedWorkingDirectory: prepared.workingDirectory,
 		outcome: {
 			shouldStream: true,
 			workspaceId: prepared.workspaceId,

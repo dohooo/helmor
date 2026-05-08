@@ -2,8 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
-import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
+import type { PendingUserInput } from "@/features/conversation/pending-user-input";
 import type {
 	AgentModelOption,
 	ThreadMessageLike,
@@ -34,14 +33,23 @@ const apiMocks = vi.hoisted(() => ({
 	loadRepoPreferences: vi.fn(),
 	loadSessionThreadMessages: vi.fn(),
 	renameSession: vi.fn(),
-	respondToDeferredTool: vi.fn(),
-	respondToElicitationRequest: vi.fn(),
+	respondToUserInput: vi.fn(),
 	respondToPermissionRequest: vi.fn(),
 	startAgentMessageStream: vi.fn(),
 	steerAgentStream: vi.fn(),
 	stopAgentStream: vi.fn(),
 }));
 
+// `listActiveStreams` is intentionally NOT mocked here. The hook reads it
+// via React Query, where `activeStreamsQueryOptions` provides
+// `initialData: []`, and `src/test/setup.ts`'s default invoke mock
+// returns `undefined` for unhandled commands — both paths produce an
+// empty array, which matches "no backend-tracked streams" for these
+// unit tests. If a future test wants to assert the backend-truth abort
+// path (e.g. that `handleStopStream` picks up a `provider` published by
+// the Rust registry rather than the local optimistic fallback), mock
+// `listActiveStreams` explicitly here so the default doesn't silently
+// swallow the assertion.
 vi.mock("@/lib/api", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@/lib/api")>();
 
@@ -51,8 +59,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		loadRepoPreferences: apiMocks.loadRepoPreferences,
 		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 		renameSession: apiMocks.renameSession,
-		respondToDeferredTool: apiMocks.respondToDeferredTool,
-		respondToElicitationRequest: apiMocks.respondToElicitationRequest,
+		respondToUserInput: apiMocks.respondToUserInput,
 		respondToPermissionRequest: apiMocks.respondToPermissionRequest,
 		startAgentMessageStream: apiMocks.startAgentMessageStream,
 		steerAgentStream: apiMocks.steerAgentStream,
@@ -67,7 +74,7 @@ const MODEL: AgentModelOption = {
 	cliModel: "gpt-5.4",
 };
 
-function createDeferredTool(): PendingDeferredTool {
+function createAskUserQuestionInput(): PendingUserInput {
 	return {
 		provider: "claude",
 		modelId: "opus-1m",
@@ -75,34 +82,34 @@ function createDeferredTool(): PendingDeferredTool {
 		providerSessionId: "provider-session-1",
 		workingDirectory: "/tmp/helmor",
 		permissionMode: "default",
-		toolUseId: "tool-1",
-		toolName: "AskUserQuestion",
-		toolInput: {
-			question: "Pick one",
+		userInputId: "tool-1",
+		source: "Claude",
+		message: "Claude is asking for your input.",
+		payload: {
+			kind: "ask-user-question",
+			questions: [{ question: "Pick one", options: [] }],
 		},
 	};
 }
 
-function createPendingElicitation(): PendingElicitation {
+function createFormUserInput(): PendingUserInput {
 	return {
 		provider: "claude",
 		modelId: "opus-1m",
 		resolvedModel: "opus-1m",
 		providerSessionId: "provider-session-1",
 		workingDirectory: "/tmp/helmor",
-		elicitationId: "elicitation-1",
-		serverName: "design-server",
+		permissionMode: null,
+		userInputId: "elicitation-1",
+		source: "design-server",
 		message: "Need structured input",
-		mode: "form",
-		requestedSchema: {
-			type: "object",
-			properties: {
-				name: {
-					type: "string",
-					title: "Name",
-				},
+		payload: {
+			kind: "form",
+			schema: {
+				type: "object",
+				properties: { name: { type: "string", title: "Name" } },
+				required: ["name"],
 			},
-			required: ["name"],
 		},
 	};
 }
@@ -170,7 +177,7 @@ describe("useConversationStreaming", () => {
 		apiMocks.loadRepoPreferences.mockReset();
 		apiMocks.loadSessionThreadMessages.mockReset();
 		apiMocks.renameSession.mockReset();
-		apiMocks.respondToDeferredTool.mockReset();
+		apiMocks.respondToUserInput.mockReset();
 		apiMocks.respondToPermissionRequest.mockReset();
 		apiMocks.startAgentMessageStream.mockReset();
 		apiMocks.steerAgentStream.mockReset();
@@ -180,8 +187,7 @@ describe("useConversationStreaming", () => {
 		apiMocks.generateSessionTitle.mockResolvedValue(null);
 		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
 		apiMocks.renameSession.mockResolvedValue(undefined);
-		apiMocks.respondToDeferredTool.mockResolvedValue(undefined);
-		apiMocks.respondToElicitationRequest.mockResolvedValue(undefined);
+		apiMocks.respondToUserInput.mockResolvedValue(undefined);
 		apiMocks.respondToPermissionRequest.mockResolvedValue(undefined);
 		// Default: steer claims the turn ended so tests that don't opt in to
 		// steer semantics fall through to the normal send path. Individual
@@ -292,13 +298,12 @@ describe("useConversationStreaming", () => {
 		expect(getLastInteractionSnapshot(interactionSnapshots)).toEqual(new Map());
 	});
 
-	it("uses the Helmor session id when stopping a resumed deferred stream", async () => {
-		apiMocks.startAgentMessageStream.mockImplementation(
-			async (_payload: unknown, _onEvent: (event: unknown) => void) => {
-				return undefined;
-			},
-		);
-
+	it("delivers the deferred-tool answer over the live stream RPC and never starts a new stream", async () => {
+		// AskUserQuestion now pauses inside the sidecar's `canUseTool`
+		// callback on the same live `query()`. Submitting answers is just
+		// a `respondToUserInput` RPC — no new `startAgentMessageStream`
+		// (and definitely no `resumeOnly`/empty-prompt resume — see
+		// issue #397).
 		const { Wrapper } = createWrapper();
 		const { result } = renderHook(
 			() =>
@@ -315,35 +320,19 @@ describe("useConversationStreaming", () => {
 		);
 
 		await act(async () => {
-			await result.current.handleDeferredToolResponse(
-				createDeferredTool(),
-				"allow",
+			await result.current.handleUserInputResponse(
+				createAskUserQuestionInput(),
+				"submit",
+				{ content: { questions: [], answers: { Q: "A" } } },
 			);
 		});
 
-		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
-			expect.objectContaining({
-				provider: "claude",
-				modelId: "opus-1m",
-				resumeOnly: true,
-				sessionId: "provider-session-1",
-				helmorSessionId: "session-1",
-			}),
-			expect.any(Function),
+		expect(apiMocks.respondToUserInput).toHaveBeenCalledWith(
+			"tool-1",
+			"submit",
+			{ questions: [], answers: { Q: "A" } },
 		);
-
-		act(() => {
-			result.current.handleStopStream();
-		});
-
-		expect(apiMocks.stopAgentStream).toHaveBeenCalledWith(
-			"session-1",
-			"claude",
-		);
-		expect(apiMocks.stopAgentStream).not.toHaveBeenCalledWith(
-			"provider-session-1",
-			"claude",
-		);
+		expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
 	});
 
 	it("sets hasPlanReview when planCaptured event is received", async () => {
@@ -512,27 +501,11 @@ describe("useConversationStreaming", () => {
 		expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
 	});
 
-	it("reports sending as incremental session lifecycle events so sibling containers cannot clear it", async () => {
+	it("scopes the local sending flag to its own context key so siblings stay idle", async () => {
 		const streamCallbacks: Array<(event: unknown) => void> = [];
 		apiMocks.startAgentMessageStream.mockImplementation(
 			async (_payload: unknown, onEvent: (event: unknown) => void) => {
 				streamCallbacks.push(onEvent);
-			},
-		);
-
-		const activeSessions = new Set<string>();
-		const sessionWorkspaceMap = new Map<string, string>();
-		const onSessionRunStateChange = vi.fn(
-			(sessionId: string, workspaceId: string | null, sending: boolean) => {
-				if (sending) {
-					activeSessions.add(sessionId);
-					if (workspaceId) {
-						sessionWorkspaceMap.set(sessionId, workspaceId);
-					}
-					return;
-				}
-				activeSessions.delete(sessionId);
-				sessionWorkspaceMap.delete(sessionId);
 			},
 		);
 
@@ -547,7 +520,6 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
-					onSessionRunStateChange,
 				}),
 				emptySibling: useConversationStreaming({
 					composerContextKey: "start:repo:repo-1",
@@ -557,7 +529,6 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
-					onSessionRunStateChange,
 				}),
 			}),
 			{ wrapper: Wrapper },
@@ -577,11 +548,10 @@ describe("useConversationStreaming", () => {
 			});
 		});
 
-		expect(activeSessions).toEqual(new Set(["session-1"]));
-		expect(new Set(sessionWorkspaceMap.values())).toEqual(
-			new Set(["workspace-1"]),
-		);
+		expect(result.current.running.isSending).toBe(true);
+		expect(result.current.running.busySessionIds.has("session-1")).toBe(true);
 		expect(result.current.emptySibling.isSending).toBe(false);
+		expect(result.current.emptySibling.busySessionIds.size).toBe(0);
 
 		act(() => {
 			streamCallbacks[0]({
@@ -595,8 +565,8 @@ describe("useConversationStreaming", () => {
 			});
 		});
 
-		expect(activeSessions).toEqual(new Set());
-		expect(sessionWorkspaceMap.size).toBe(0);
+		expect(result.current.running.isSending).toBe(false);
+		expect(result.current.running.busySessionIds.size).toBe(0);
 	});
 
 	it("sends the repo general preference via promptPrefix on the first prompt only", async () => {
@@ -901,32 +871,31 @@ describe("useConversationStreaming", () => {
 
 		act(() => {
 			streamCallbacks[0]({
-				kind: "elicitationRequest",
+				kind: "userInputRequest",
 				provider: "claude",
 				modelId: "",
 				resolvedModel: "opus-1m",
 				sessionId: "provider-session-1",
 				workingDirectory: "/tmp/helmor",
-				elicitationId: "elicitation-1",
-				serverName: "design-server",
+				userInputId: "elicitation-1",
+				source: "design-server",
 				message: "Need structured input",
-				mode: "form",
-				requestedSchema: {
-					type: "object",
-					properties: {
-						name: { type: "string", title: "Name" },
+				payload: {
+					kind: "form",
+					schema: {
+						type: "object",
+						properties: { name: { type: "string", title: "Name" } },
+						required: ["name"],
 					},
-					required: ["name"],
 				},
 			});
 		});
 
-		expect(result.current.pendingDeferredTool).toBeNull();
-		expect(result.current.pendingElicitation).toEqual(
+		expect(result.current.pendingUserInput).toEqual(
 			expect.objectContaining({
-				elicitationId: "elicitation-1",
+				userInputId: "elicitation-1",
 				modelId: MODEL.id,
-				serverName: "design-server",
+				source: "design-server",
 			}),
 		);
 		expect(getLastInteractionSnapshot(interactionSnapshots)).toEqual(
@@ -1484,19 +1453,19 @@ describe("useConversationStreaming", () => {
 		);
 
 		await act(async () => {
-			await result.current.handleElicitationResponse(
-				createPendingElicitation(),
-				"accept",
-				{ name: "Helmor" },
+			await result.current.handleUserInputResponse(
+				createFormUserInput(),
+				"submit",
+				{ content: { name: "Helmor" } },
 			);
 		});
 
-		expect(apiMocks.respondToElicitationRequest).toHaveBeenCalledWith(
+		expect(apiMocks.respondToUserInput).toHaveBeenCalledWith(
 			"elicitation-1",
-			"accept",
+			"submit",
 			{ name: "Helmor" },
 		);
-		expect(result.current.pendingElicitation).toBeNull();
+		expect(result.current.pendingUserInput).toBeNull();
 		expect(result.current.isSending).toBe(true);
 	});
 

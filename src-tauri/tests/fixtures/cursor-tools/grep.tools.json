@@ -1,0 +1,40 @@
+[
+	{
+		"call_id": "tool_3700e58e-d32d-40c2-a620-dfd9669d278",
+		"name": "grep",
+		"status": "running",
+		"args": {
+			"pattern": "TODO",
+			"path": "/tmp/cursor-tools-probe/probe-workspace",
+			"offset": 0
+		}
+	},
+	{
+		"call_id": "tool_3700e58e-d32d-40c2-a620-dfd9669d278",
+		"name": "grep",
+		"status": "completed",
+		"args": {
+			"pattern": "TODO",
+			"path": "/tmp/cursor-tools-probe/probe-workspace",
+			"offset": 0
+		},
+		"result": {
+			"status": "success",
+			"value": {
+				"workspaceResults": {
+					"/tmp/cursor-tools-probe/probe-workspace": {
+						"type": "content",
+						"output": {
+							"matches": [
+								{
+									"file": "./notes.txt"
+								}
+							],
+							"totalMatches": 0
+						}
+					}
+				}
+			}
+		}
+	}
+]

@@ -8,15 +8,11 @@ import {
 	useRef,
 	useState,
 } from "react";
+import type { StartSubmitMode } from "@/features/composer/start-submit-mode";
 import {
-	buildPendingDeferredTool,
-	getDeferredToolResumeModelId,
-	type PendingDeferredTool,
-} from "@/features/conversation/pending-deferred-tool";
-import {
-	buildPendingElicitation,
-	type PendingElicitation,
-} from "@/features/conversation/pending-elicitation";
+	buildPendingUserInput,
+	type PendingUserInput,
+} from "@/features/conversation/pending-user-input";
 import { stabilizeStreamingMessages } from "@/features/conversation/streaming-tail-collapse";
 import type {
 	AgentModelOption,
@@ -28,9 +24,8 @@ import {
 	loadRepoPreferences,
 	mutateCodexGoal,
 	renameSession,
-	respondToDeferredTool,
-	respondToElicitationRequest,
 	respondToPermissionRequest,
+	respondToUserInput,
 	startAgentMessageStream,
 	steerAgentStream,
 	stopAgentStream,
@@ -38,6 +33,7 @@ import {
 import type { ComposerCustomTag } from "@/lib/composer-insert";
 import { extractError, isRecoverableByPurge } from "@/lib/errors";
 import {
+	activeStreamsQueryOptions,
 	agentModelSectionsQueryOptions,
 	helmorQueryKeys,
 	sessionThreadMessagesQueryOptions,
@@ -49,8 +45,6 @@ import {
 	replaceStreamingTail,
 	restoreSnapshot,
 	type SessionThreadSnapshot,
-	sessionThreadCacheKey,
-	shareMessages,
 } from "@/lib/session-thread-cache";
 import type { FollowUpBehavior } from "@/lib/settings";
 import type { SubmitQueueApi } from "@/lib/use-submit-queue";
@@ -120,7 +114,7 @@ type SubmitPayload = {
 	 *  "send with opposite follow-up" shortcut. Ignored when `forceQueue`
 	 *  is set. */
 	followUpBehaviorOverride?: FollowUpBehavior;
-	startSubmitMode?: "startNow" | "saveForLater";
+	startSubmitMode?: StartSubmitMode;
 	/** Snapshot of the editor's full Lexical state at submit time. Captured
 	 *  synchronously inside the composer so callers that need to round-trip
 	 *  chips/text/images (e.g. the kanban "backlog" handler that copies the
@@ -146,11 +140,6 @@ type UseConversationStreamingArgs = {
 	/** App-level queue handle (read + mutate). Shared across session /
 	 *  workspace switches so the queue survives navigation. */
 	submitQueue: SubmitQueueApi;
-	onSessionRunStateChange?: (
-		sessionId: string,
-		workspaceId: string | null,
-		sending: boolean,
-	) => void;
 	onInteractionSessionsChange?: (
 		sessionWorkspaceMap: Map<string, string>,
 		interactionCounts: Map<string, number>,
@@ -168,7 +157,6 @@ export function useConversationStreaming({
 	selectionPending,
 	followUpBehavior,
 	submitQueue,
-	onSessionRunStateChange,
 	onInteractionSessionsChange,
 	onSessionCompleted,
 	onSessionAborted,
@@ -192,14 +180,12 @@ export function useConversationStreaming({
 	const sendingContextKeysRef = useRef<Set<string>>(new Set());
 	const [pendingPermissionsByContext, setPendingPermissionsByContext] =
 		useState<Record<string, PendingPermission[]>>({});
-	const [pendingDeferredByContext, setPendingDeferredByContext] = useState<
-		Record<string, PendingDeferredTool | null>
+	const [pendingUserInputByContext, setPendingUserInputByContext] = useState<
+		Record<string, PendingUserInput | null>
 	>({});
-	const [pendingElicitationByContext, setPendingElicitationByContext] =
-		useState<Record<string, PendingElicitation | null>>({});
 	const [
-		elicitationResponsePendingByContext,
-		setElicitationResponsePendingByContext,
+		userInputResponsePendingByContext,
+		setUserInputResponsePendingByContext,
 	] = useState<Record<string, boolean>>({});
 	const [interactionWorkspaceByContext, setInteractionWorkspaceByContext] =
 		useState<Record<string, string | null>>({});
@@ -215,10 +201,10 @@ export function useConversationStreaming({
 	const pendingPermissions =
 		pendingPermissionsByContext[composerContextKey] ??
 		EMPTY_PENDING_PERMISSIONS;
-	const pendingElicitation =
-		pendingElicitationByContext[composerContextKey] ?? null;
-	const elicitationResponsePending =
-		elicitationResponsePendingByContext[composerContextKey] ?? false;
+	const pendingUserInput =
+		pendingUserInputByContext[composerContextKey] ?? null;
+	const userInputResponsePending =
+		userInputResponsePendingByContext[composerContextKey] ?? false;
 	const hasPlanReview = planReviewByContext[composerContextKey] ?? false;
 
 	const seedSessionTitle = useCallback(
@@ -266,6 +252,13 @@ export function useConversationStreaming({
 	);
 
 	const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
+	// Backend-truth list of in-flight streams. Used by `handleStopStream`
+	// so abort works even after the conversation container unmount/remount
+	// race that would clear `activeSessionByContext`. Stays in sync via
+	// `UiMutationEvent::ActiveStreamsChanged` → `helmorQueryKeys.activeStreams`
+	// invalidation in the ui-sync bridge.
+	const activeStreamsQuery = useQuery(activeStreamsQueryOptions());
+	const activeStreams = activeStreamsQuery.data ?? [];
 	const selectedProvider = useMemo(() => {
 		if (!displayedSelectedModelId) return null;
 		const sections = modelSectionsQuery.data ?? [];
@@ -284,8 +277,6 @@ export function useConversationStreaming({
 		return ids;
 	}, [sendingContextKeys]);
 
-	const onSessionRunStateChangeRef = useRef(onSessionRunStateChange);
-	onSessionRunStateChangeRef.current = onSessionRunStateChange;
 	const onInteractionSessionsChangeRef = useRef(onInteractionSessionsChange);
 	onInteractionSessionsChangeRef.current = onInteractionSessionsChange;
 	const onSessionCompletedRef = useRef(onSessionCompleted);
@@ -317,26 +308,10 @@ export function useConversationStreaming({
 			);
 		}
 
-		for (const [contextKey, deferred] of Object.entries(
-			pendingDeferredByContext,
+		for (const [contextKey, userInput] of Object.entries(
+			pendingUserInputByContext,
 		)) {
-			if (!deferred || !contextKey.startsWith("session:")) {
-				continue;
-			}
-			const workspaceId = resolveWorkspace(contextKey);
-			if (!workspaceId) continue;
-			const sessionId = contextKey.slice(8);
-			interactionSessions.set(sessionId, workspaceId);
-			interactionCounts.set(
-				sessionId,
-				(interactionCounts.get(sessionId) ?? 0) + 1,
-			);
-		}
-
-		for (const [contextKey, elicitation] of Object.entries(
-			pendingElicitationByContext,
-		)) {
-			if (!elicitation || !contextKey.startsWith("session:")) {
+			if (!userInput || !contextKey.startsWith("session:")) {
 				continue;
 			}
 			const workspaceId = resolveWorkspace(contextKey);
@@ -369,8 +344,7 @@ export function useConversationStreaming({
 		);
 	}, [
 		interactionWorkspaceByContext,
-		pendingElicitationByContext,
-		pendingDeferredByContext,
+		pendingUserInputByContext,
 		pendingPermissionsByContext,
 		planReviewByContext,
 	]);
@@ -408,8 +382,8 @@ export function useConversationStreaming({
 		});
 	}, []);
 
-	const clearPendingElicitation = useCallback((contextKey: string) => {
-		setPendingElicitationByContext((current) => {
+	const clearPendingUserInput = useCallback((contextKey: string) => {
+		setPendingUserInputByContext((current) => {
 			if (!(contextKey in current)) {
 				return current;
 			}
@@ -418,7 +392,7 @@ export function useConversationStreaming({
 			delete next[contextKey];
 			return next;
 		});
-		setElicitationResponsePendingByContext((current) => {
+		setUserInputResponsePendingByContext((current) => {
 			if (!(contextKey in current)) {
 				return current;
 			}
@@ -472,17 +446,31 @@ export function useConversationStreaming({
 	);
 
 	const handleStopStream = useCallback(async () => {
-		const activeSession = activeSessionByContext[composerContextKey];
-		if (!activeSession) {
+		// Source of truth: the backend's active-streams registry,
+		// mirrored via React Query. Looking up by displayed session id
+		// (rather than `activeSessionByContext`) keeps abort working
+		// after a conversation-container unmount/remount, which used to
+		// silently drop the click.
+		const sessionId = composerContextKey.startsWith("session:")
+			? composerContextKey.slice("session:".length)
+			: null;
+		if (!sessionId) {
 			return;
 		}
-		const sessionId = activeSession.stopSessionId;
-		const goal =
-			activeSession.provider === "codex"
-				? queryClient.getQueryData<CodexGoalState | null>(
-						helmorQueryKeys.sessionCodexGoal(sessionId),
-					)
-				: null;
+		const activeStream = activeStreams.find(
+			(stream) => stream.sessionId === sessionId,
+		);
+		// Fall back to the local registry only when the backend hasn't
+		// surfaced the stream yet (e.g. the optimistic phase of a
+		// freshly-started turn). This is purely belt-and-suspenders —
+		// the active-streams event lands on the same tick as registration.
+		const provider =
+			activeStream?.provider ??
+			activeSessionByContext[composerContextKey]?.provider ??
+			null;
+		if (!provider) {
+			return;
+		}
 
 		// For codex sessions with an active goal, flip the goal to paused
 		// FIRST so codex doesn't auto-spawn a fresh continuation turn the
@@ -491,16 +479,21 @@ export function useConversationStreaming({
 		// (mutateCodexGoal is best-effort on the sidecar side too — if a
 		// race somehow kills the child first it just no-ops.) The user
 		// resumes by typing `/goal resume`.
-		if (goal && goal.status === "active") {
-			try {
-				await mutateCodexGoal(sessionId, "pause");
-			} catch {
-				// Surfaced via toast inside mutateCodexGoal already; don't
-				// block the abort.
+		if (provider === "codex") {
+			const goal = queryClient.getQueryData<CodexGoalState | null>(
+				helmorQueryKeys.sessionCodexGoal(sessionId),
+			);
+			if (goal && goal.status === "active") {
+				try {
+					await mutateCodexGoal(sessionId, "pause");
+				} catch {
+					// Surfaced via toast inside mutateCodexGoal already; don't
+					// block the abort.
+				}
 			}
 		}
-		await stopAgentStream(sessionId, activeSession.provider);
-	}, [activeSessionByContext, composerContextKey, queryClient]);
+		await stopAgentStream(sessionId, provider);
+	}, [activeSessionByContext, activeStreams, composerContextKey, queryClient]);
 
 	const handlePermissionResponse = useCallback(
 		(
@@ -533,64 +526,36 @@ export function useConversationStreaming({
 		[composerContextKey],
 	);
 
-	const publishSendingState = useCallback(
-		(
-			contextKey: string,
-			workspaceId: string | null | undefined,
-			sending: boolean,
-		) => {
-			if (!contextKey.startsWith("session:")) {
-				return;
-			}
-			onSessionRunStateChangeRef.current?.(
-				contextKey.slice(8),
-				workspaceId ?? null,
-				sending,
-			);
-		},
-		[],
-	);
-
+	// `sendingContextKeys` is the local "this context is mid-send" flag —
+	// drives the composer's send-vs-steer routing and the queue-drain
+	// effect. Cross-container truth (busy/stoppable badges) lives in the
+	// `activeStreams` React Query feed instead, sourced from Rust.
 	const markSendingState = useCallback(
 		(contextKey: string, workspaceId: string | null | undefined) => {
-			const previousWorkspaceId =
-				sendingWorkspaceMapRef.current.get(contextKey) ?? null;
 			if (workspaceId) {
 				sendingWorkspaceMapRef.current.set(contextKey, workspaceId);
 			}
-			const nextWorkspaceId =
-				sendingWorkspaceMapRef.current.get(contextKey) ?? workspaceId ?? null;
 			if (sendingContextKeysRef.current.has(contextKey)) {
-				if (nextWorkspaceId !== previousWorkspaceId) {
-					publishSendingState(contextKey, nextWorkspaceId, true);
-				}
 				return;
 			}
 
 			sendingContextKeysRef.current = new Set(sendingContextKeysRef.current);
 			sendingContextKeysRef.current.add(contextKey);
-			publishSendingState(contextKey, nextWorkspaceId, true);
 			setSendingContextKeys(sendingContextKeysRef.current);
 		},
-		[publishSendingState],
+		[],
 	);
 
-	const pauseSendingState = useCallback(
-		(contextKey: string) => {
-			const workspaceId =
-				sendingWorkspaceMapRef.current.get(contextKey) ?? null;
-			sendingWorkspaceMapRef.current.delete(contextKey);
-			if (!sendingContextKeysRef.current.has(contextKey)) {
-				return;
-			}
+	const pauseSendingState = useCallback((contextKey: string) => {
+		sendingWorkspaceMapRef.current.delete(contextKey);
+		if (!sendingContextKeysRef.current.has(contextKey)) {
+			return;
+		}
 
-			sendingContextKeysRef.current = new Set(sendingContextKeysRef.current);
-			sendingContextKeysRef.current.delete(contextKey);
-			publishSendingState(contextKey, workspaceId, false);
-			setSendingContextKeys(sendingContextKeysRef.current);
-		},
-		[publishSendingState],
-	);
+		sendingContextKeysRef.current = new Set(sendingContextKeysRef.current);
+		sendingContextKeysRef.current.delete(contextKey);
+		setSendingContextKeys(sendingContextKeysRef.current);
+	}, []);
 
 	const clearSendingState = useCallback(
 		(contextKey: string) => {
@@ -658,13 +623,16 @@ export function useConversationStreaming({
 		[queryClient],
 	);
 
-	const applyDeferredToolEvent = useCallback(
-		(contextKey: string, event: PendingDeferredTool) => {
+	const applyUserInputEvent = useCallback(
+		(contextKey: string, event: PendingUserInput) => {
 			clearPendingPermissions(contextKey);
-			clearPendingElicitation(contextKey);
-			setPendingDeferredByContext((current) => ({
+			setPendingUserInputByContext((current) => ({
 				...current,
 				[contextKey]: event,
+			}));
+			setUserInputResponsePendingByContext((current) => ({
+				...current,
+				[contextKey]: false,
 			}));
 			setLiveSessionsByContext((current) => ({
 				...current,
@@ -676,350 +644,61 @@ export function useConversationStreaming({
 						null,
 				},
 			}));
-			clearSendingState(contextKey);
-		},
-		[clearPendingElicitation, clearPendingPermissions, clearSendingState],
-	);
-
-	const applyElicitationEvent = useCallback(
-		(contextKey: string, event: PendingElicitation) => {
-			setPendingDeferredByContext((current) => ({
-				...current,
-				[contextKey]: null,
-			}));
-			setPendingElicitationByContext((current) => ({
-				...current,
-				[contextKey]: event,
-			}));
-			setElicitationResponsePendingByContext((current) => ({
-				...current,
-				[contextKey]: false,
-			}));
 			pauseSendingState(contextKey);
 		},
-		[pauseSendingState],
+		[clearPendingPermissions, pauseSendingState],
 	);
 
-	const handleElicitationResponse = useCallback(
+	/**
+	 * Unified user-input response. The sidecar's parked SDK callback
+	 * (canUseTool for AskUserQuestion, onElicitation for MCP, Codex's
+	 * `requestUserInput` JSON-RPC handler) resolves over the same live
+	 * stream — no new query() / no new process. The original
+	 * `startAgentMessageStream` event callback set up in
+	 * `handleComposerSubmit` stays wired and receives the follow-on
+	 * `update` / `streamingPartial` / next `userInputRequest` / `done`
+	 * events on the same channel.
+	 */
+	const handleUserInputResponse = useCallback(
 		async (
-			elicitation: PendingElicitation,
-			action: "accept" | "decline" | "cancel",
-			content?: Record<string, unknown>,
-		) => {
-			const contextKey = composerContextKey;
-			setSendErrorsByContext((current) => ({
-				...current,
-				[contextKey]: null,
-			}));
-			setElicitationResponsePendingByContext((current) => ({
-				...current,
-				[contextKey]: true,
-			}));
-
-			try {
-				await respondToElicitationRequest(
-					elicitation.elicitationId,
-					action,
-					content,
-				);
-				clearPendingElicitation(contextKey);
-				rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
-				markSendingState(contextKey, displayedWorkspaceId);
-			} catch (error) {
-				console.error("[conversation] elicitation response:", error);
-				const errorMsg = error instanceof Error ? error.message : String(error);
-				setElicitationResponsePendingByContext((current) => ({
-					...current,
-					[contextKey]: false,
-				}));
-				setSendErrorsByContext((current) => ({
-					...current,
-					[contextKey]: errorMsg,
-				}));
-				pushToast(errorMsg, "Unable to answer request", "destructive");
-			}
-		},
-		[
-			clearPendingElicitation,
-			composerContextKey,
-			displayedWorkspaceId,
-			markSendingState,
-			pushToast,
-			rememberInteractionWorkspace,
-		],
-	);
-
-	const handleDeferredToolResponse = useCallback(
-		async (
-			deferred: PendingDeferredTool,
-			behavior: "allow" | "deny",
-			options?: {
-				reason?: string;
-				updatedInput?: Record<string, unknown>;
-			},
+			userInput: PendingUserInput,
+			action: "submit" | "decline" | "cancel",
+			options?: { content?: Record<string, unknown> },
 		) => {
 			if (!displayedSessionId) return;
-			const fallbackModelId =
-				selectedProvider === deferred.provider
-					? displayedSelectedModelId
-					: null;
-			const resumeModelId = getDeferredToolResumeModelId(
-				deferred,
-				fallbackModelId,
-			);
-			if (!resumeModelId) {
-				setSendErrorsByContext((current) => ({
-					...current,
-					[composerContextKey]:
-						"Unable to resume deferred tool: missing modelId.",
-				}));
-				return;
-			}
 			const contextKey = composerContextKey;
-			const cacheSessionId = displayedSessionId;
-			const resumeBaseSnapshot =
-				readSessionThread(queryClient, cacheSessionId) ?? [];
 
-			setPendingDeferredByContext((current) => ({
+			setPendingUserInputByContext((current) => ({
 				...current,
 				[contextKey]: null,
 			}));
-			clearPendingElicitation(contextKey);
 			clearPendingPermissions(contextKey);
 			setSendErrorsByContext((current) => ({
 				...current,
 				[contextKey]: null,
 			}));
+			setUserInputResponsePendingByContext((current) => ({
+				...current,
+				[contextKey]: true,
+			}));
 			rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
 			markSendingState(contextKey, displayedWorkspaceId);
 
 			try {
-				await respondToDeferredTool(deferred.toolUseId, behavior, {
-					reason: options?.reason,
-					updatedInput: options?.updatedInput,
-				});
-
-				const stopSessionId = displayedSessionId;
-				setActiveSessionByContext((current) => ({
-					...current,
-					[contextKey]: {
-						stopSessionId,
-						provider: deferred.provider,
-					},
-				}));
-
-				let frameId: number | null = null;
-				let baseMessages: ThreadMessageLike[] = [];
-				let pendingPartial: ThreadMessageLike | null = null;
-				let needsFlush = false;
-
-				const changesRefreshInterval = window.setInterval(() => {
-					void queryClient.invalidateQueries({
-						queryKey: ["workspaceChanges"],
-					});
-				}, 3_000);
-
-				const flushStreamMessages = () => {
-					frameId = null;
-					if (!needsFlush) return;
-					needsFlush = false;
-
-					const rendered = pendingPartial
-						? stabilizeStreamingMessages([...baseMessages, pendingPartial])
-						: baseMessages;
-					const nextMessages = [...resumeBaseSnapshot, ...rendered];
-					queryClient.setQueryData<ThreadMessageLike[]>(
-						sessionThreadCacheKey(cacheSessionId),
-						(prev) => shareMessages(prev ?? [], nextMessages),
-					);
-				};
-
-				const scheduleFlush = () => {
-					needsFlush = true;
-					if (frameId !== null) return;
-					frameId = window.requestAnimationFrame(() => flushStreamMessages());
-				};
-
-				const cleanup = () => {
-					window.clearInterval(changesRefreshInterval);
-					if (frameId !== null) {
-						window.cancelAnimationFrame(frameId);
-						frameId = null;
-					}
-				};
-
-				await startAgentMessageStream(
-					{
-						provider: deferred.provider,
-						modelId: resumeModelId,
-						prompt: "",
-						resumeOnly: true,
-						sessionId: deferred.providerSessionId,
-						helmorSessionId: displayedSessionId,
-						workingDirectory: deferred.workingDirectory,
-						permissionMode: deferred.permissionMode,
-					},
-					(event) => {
-						if (event.kind === "update") {
-							baseMessages = event.messages;
-							pendingPartial = null;
-							scheduleFlush();
-							return;
-						}
-
-						if (event.kind === "streamingPartial") {
-							pendingPartial = event.message;
-							scheduleFlush();
-							return;
-						}
-
-						if (event.kind === "permissionRequest") {
-							rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
-							appendPendingPermission(contextKey, {
-								permissionId: event.permissionId,
-								toolName: event.toolName,
-								toolInput: event.toolInput,
-								title: event.title,
-								description: event.description,
-							});
-							return;
-						}
-
-						if (event.kind === "planCaptured") {
-							rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
-							setPlanReviewActive(contextKey);
-							return;
-						}
-
-						if (event.kind === "elicitationRequest") {
-							rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
-							const nextElicitation = buildPendingElicitation(
-								event,
-								deferred.modelId,
-							);
-							if (!nextElicitation) {
-								setSendErrorsByContext((current) => ({
-									...current,
-									[contextKey]:
-										"Unable to continue elicitation: missing elicitationId or modelId.",
-								}));
-								return;
-							}
-							applyElicitationEvent(contextKey, nextElicitation);
-							return;
-						}
-
-						if (event.kind === "deferredToolUse") {
-							rememberInteractionWorkspace(contextKey, displayedWorkspaceId);
-							const nextDeferred = buildPendingDeferredTool(
-								event,
-								deferred.modelId,
-							);
-							if (frameId !== null) {
-								window.cancelAnimationFrame(frameId);
-								frameId = null;
-							}
-							flushStreamMessages();
-							cleanup();
-							refreshSessionThreadFromDb(cacheSessionId);
-							if (!nextDeferred) {
-								setPendingDeferredByContext((current) => ({
-									...current,
-									[contextKey]: deferred,
-								}));
-								setSendErrorsByContext((current) => ({
-									...current,
-									[contextKey]:
-										"Unable to continue deferred tool: missing modelId.",
-								}));
-								clearSendingState(contextKey);
-								return;
-							}
-							applyDeferredToolEvent(contextKey, nextDeferred);
-							return;
-						}
-
-						if (event.kind === "done" || event.kind === "aborted") {
-							if (frameId !== null) {
-								window.cancelAnimationFrame(frameId);
-								frameId = null;
-							}
-							flushStreamMessages();
-							cleanup();
-							clearPendingPermissions(contextKey);
-							clearPendingElicitation(contextKey);
-							clearFastPrelude(contextKey);
-
-							if (event.kind === "done") {
-								const sid = event.sessionId ?? displayedSessionId;
-								if (sid && displayedWorkspaceId) {
-									onSessionCompletedRef.current?.(sid, displayedWorkspaceId);
-								}
-							} else if (event.kind === "aborted") {
-								const sid = event.sessionId ?? displayedSessionId;
-								if (sid && displayedWorkspaceId) {
-									onSessionAbortedRef.current?.(sid, displayedWorkspaceId);
-								}
-							}
-
-							void queryClient.invalidateQueries({
-								queryKey: ["workspaceChanges"],
-							});
-
-							setLiveSessionsByContext((current) => ({
-								...current,
-								[contextKey]: {
-									provider: event.provider,
-									providerSessionId:
-										event.sessionId ??
-										current[contextKey]?.providerSessionId ??
-										null,
-								},
-							}));
-							clearSendingState(contextKey);
-
-							if (event.persisted) {
-								void invalidateConversationQueries(displayedWorkspaceId, null);
-							}
-							return;
-						}
-
-						if (event.kind === "error") {
-							cleanup();
-							clearPendingPermissions(contextKey);
-							clearPendingElicitation(contextKey);
-							setPendingDeferredByContext((current) => ({
-								...current,
-								[contextKey]: deferred,
-							}));
-							if (event.internal) {
-								pushToast(
-									"Something went wrong. Please try again.",
-									"Error",
-									"destructive",
-								);
-							}
-							setSendErrorsByContext((current) => ({
-								...current,
-								[contextKey]:
-									event.internal || event.persisted ? null : event.message,
-							}));
-							clearSendingState(contextKey);
-
-							if (event.persisted) {
-								void invalidateConversationQueries(
-									displayedWorkspaceId,
-									displayedSessionId,
-								);
-							}
-						}
-					},
+				await respondToUserInput(
+					userInput.userInputId,
+					action,
+					options?.content,
 				);
+				setUserInputResponsePendingByContext((current) => ({
+					...current,
+					[contextKey]: false,
+				}));
 			} catch (error) {
-				console.error("[conversation] deferred tool response:", error);
+				console.error("[conversation] user-input response:", error);
 				const { code, message: errorMsg } = extractError(
 					error,
-					"Failed to resume agent stream.",
+					"Failed to deliver user-input response.",
 				);
 				if (isRecoverableByPurge(code) && displayedWorkspaceId) {
 					showWorkspaceBrokenToast({
@@ -1028,9 +707,13 @@ export function useConversationStreaming({
 						queryClient,
 					});
 				}
-				setPendingDeferredByContext((current) => ({
+				setPendingUserInputByContext((current) => ({
 					...current,
-					[contextKey]: deferred,
+					[contextKey]: userInput,
+				}));
+				setUserInputResponsePendingByContext((current) => ({
+					...current,
+					[contextKey]: false,
 				}));
 				setSendErrorsByContext((current) => ({
 					...current,
@@ -1040,22 +723,15 @@ export function useConversationStreaming({
 			}
 		},
 		[
-			applyDeferredToolEvent,
-			applyElicitationEvent,
-			appendPendingPermission,
 			clearSendingState,
-			clearPendingElicitation,
 			clearPendingPermissions,
 			composerContextKey,
-			displayedSelectedModelId,
 			displayedSessionId,
 			displayedWorkspaceId,
-			invalidateConversationQueries,
 			markSendingState,
 			pushToast,
 			queryClient,
 			rememberInteractionWorkspace,
-			selectedProvider,
 		],
 	);
 
@@ -1297,11 +973,11 @@ export function useConversationStreaming({
 			}));
 			clearPendingPermissions(contextKey);
 			clearPlanReview(contextKey);
-			setPendingDeferredByContext((current) => ({
+			setPendingUserInputByContext((current) => ({
 				...current,
 				[contextKey]: null,
 			}));
-			clearPendingElicitation(contextKey);
+			clearPendingUserInput(contextKey);
 			rememberInteractionWorkspace(contextKey, targetWorkspaceId);
 			markSendingState(contextKey, targetWorkspaceId);
 			if (fastMode) {
@@ -1435,41 +1111,32 @@ export function useConversationStreaming({
 							return;
 						}
 
-						if (event.kind === "elicitationRequest") {
+						if (event.kind === "userInputRequest") {
+							// Non-terminal pause — the sidecar's parked SDK
+							// callback (canUseTool / onElicitation / Codex
+							// `requestUserInput` JSON-RPC handler) keeps the
+							// SDK process alive and the same stream channel
+							// open. Flush the pre-pause snapshot so the
+							// panel overlays on top of an up-to-date thread,
+							// refresh from DB to pick up turn rows persisted
+							// at this checkpoint, then surface the panel.
+							// We do NOT call `cleanup()` here — the
+							// changes-refresh interval keeps running because
+							// the stream isn't done.
 							rememberInteractionWorkspace(contextKey, targetWorkspaceId);
-							const nextElicitation = buildPendingElicitation(event, model.id);
-							if (!nextElicitation) {
-								setSendErrorsByContext((current) => ({
-									...current,
-									[contextKey]:
-										"Unable to continue elicitation: missing elicitationId or modelId.",
-								}));
-								return;
-							}
-							applyElicitationEvent(contextKey, nextElicitation);
-							return;
-						}
-
-						if (event.kind === "deferredToolUse") {
-							rememberInteractionWorkspace(contextKey, targetWorkspaceId);
-							const nextDeferred = buildPendingDeferredTool(event, model.id);
-							if (frameId !== null) {
-								window.cancelAnimationFrame(frameId);
-								frameId = null;
-							}
+							const nextUserInput = buildPendingUserInput(event, model.id);
 							flushStreamMessages();
-							cleanup();
 							refreshSessionThreadFromDb(cacheSessionId);
-							if (!nextDeferred) {
+							if (!nextUserInput) {
 								setSendErrorsByContext((current) => ({
 									...current,
 									[contextKey]:
-										"Unable to continue deferred tool: missing modelId.",
+										"Unable to render user-input request: missing userInputId or modelId.",
 								}));
 								clearSendingState(contextKey);
 								return;
 							}
-							applyDeferredToolEvent(contextKey, nextDeferred);
+							applyUserInputEvent(contextKey, nextUserInput);
 							return;
 						}
 
@@ -1481,7 +1148,7 @@ export function useConversationStreaming({
 							flushStreamMessages();
 							cleanup();
 							clearPendingPermissions(contextKey);
-							clearPendingElicitation(contextKey);
+							clearPendingUserInput(contextKey);
 							clearFastPrelude(contextKey);
 
 							if (event.kind === "done") {
@@ -1525,7 +1192,7 @@ export function useConversationStreaming({
 						if (event.kind === "error") {
 							cleanup();
 							clearPendingPermissions(contextKey);
-							clearPendingElicitation(contextKey);
+							clearPendingUserInput(contextKey);
 							clearFastPrelude(contextKey);
 							if (event.internal) {
 								pushToast(
@@ -1598,11 +1265,10 @@ export function useConversationStreaming({
 			}
 		},
 		[
-			applyDeferredToolEvent,
-			applyElicitationEvent,
+			applyUserInputEvent,
 			appendPendingPermission,
 			clearSendingState,
-			clearPendingElicitation,
+			clearPendingUserInput,
 			clearPendingPermissions,
 			clearFastPrelude,
 			composerContextKey,
@@ -1720,24 +1386,20 @@ export function useConversationStreaming({
 	);
 
 	const restoreActive = composerRestoreState?.contextKey === composerContextKey;
-	const pendingDeferredTool =
-		pendingDeferredByContext[composerContextKey] ?? null;
 
 	return {
 		activeSendError,
 		activeFastPreludes,
-		elicitationResponsePending,
+		userInputResponsePending,
 		handleComposerSubmit,
-		handleDeferredToolResponse,
-		handleElicitationResponse,
+		handleUserInputResponse,
 		handlePermissionResponse,
 		handleStopStream,
 		handleSteerQueued,
 		handleRemoveQueued,
 		hasPlanReview,
 		isSending,
-		pendingElicitation,
-		pendingDeferredTool,
+		pendingUserInput,
 		pendingPermissions,
 		restoreCustomTags: restoreActive ? composerRestoreState.customTags : [],
 		restoreDraft: restoreActive ? composerRestoreState.draft : null,
