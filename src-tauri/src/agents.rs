@@ -199,9 +199,10 @@ pub async fn list_agent_model_sections() -> CmdResult<Vec<AgentModelSection>> {
 #[tauri::command]
 pub async fn list_cursor_models(
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    api_key: Option<String>,
 ) -> CmdResult<Vec<queries::CursorModelEntry>> {
     // Inline blocking — same pattern as `list_slash_commands`.
-    queries::fetch_cursor_models(sidecar.inner())
+    queries::fetch_cursor_models(sidecar.inner(), api_key)
 }
 
 #[tauri::command]

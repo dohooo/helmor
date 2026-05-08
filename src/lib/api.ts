@@ -934,10 +934,20 @@ export type CursorModelEntry = {
 	parameters?: CursorModelParameter[];
 };
 
-/// Live `Cursor.models.list` via sidecar (settings panel only;
-/// composer reads from `cursorProvider.cachedModels`).
-export async function listCursorModels(): Promise<CursorModelEntry[]> {
-	return await invoke<CursorModelEntry[]>("list_cursor_models");
+/// Live `Cursor.models.list` via sidecar. Optional `apiKey` overrides
+/// the stored key for one-off probes (e.g. onboarding validation).
+export async function listCursorModels(
+	apiKey?: string,
+): Promise<CursorModelEntry[]> {
+	try {
+		return await invoke<CursorModelEntry[]>("list_cursor_models", {
+			apiKey: apiKey ?? null,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to list Cursor models."),
+		);
+	}
 }
 
 // ---------------------------------------------------------------------------

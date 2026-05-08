@@ -912,12 +912,19 @@ const LIST_CURSOR_MODELS_TIMEOUT: std::time::Duration = std::time::Duration::fro
 
 pub fn fetch_cursor_models(
     sidecar: &crate::sidecar::ManagedSidecar,
+    api_key_override: Option<String>,
 ) -> CmdResult<Vec<CursorModelEntry>> {
     let request_id = Uuid::new_v4().to_string();
+    let mut params = serde_json::json!({ "provider": "cursor" });
+    if let Some(key) = api_key_override.filter(|k| !k.is_empty()) {
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("apiKey".to_string(), serde_json::Value::String(key));
+        }
+    }
     let sidecar_req = crate::sidecar::SidecarRequest {
         id: request_id.clone(),
         method: "listModels".to_string(),
-        params: serde_json::json!({ "provider": "cursor" }),
+        params,
     };
 
     let rx = sidecar.subscribe(&request_id);

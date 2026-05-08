@@ -270,24 +270,25 @@ export class CursorSessionManager implements SessionManager {
 		}
 	}
 
-	async listModels(): Promise<readonly ProviderModelInfo[]> {
-		const apiKey = this.resolveApiKey();
+	async listModels(opts?: {
+		apiKey?: string;
+	}): Promise<readonly ProviderModelInfo[]> {
+		// Override key (onboarding validation) bypasses the stored key
+		// and never updates internal state — caller decides what to do
+		// with success/failure. No-key path still returns the static
+		// fallback so the picker has something to show.
+		const overrideKey = opts?.apiKey?.trim();
+		const apiKey = overrideKey ?? this.resolveApiKey();
 		if (!apiKey) {
 			return listProviderModels("cursor");
 		}
-		try {
-			const models = await Cursor.models.list({ apiKey });
-			const out = models.map(modelInfoToProviderInfo);
-			// Cache parameters[] so sendMessage avoids a second RPC.
-			this.cacheModelParameters(out);
-			return out;
-		} catch (error) {
-			logger.info(
-				`Cursor.models.list failed; using static fallback: ${error instanceof Error ? error.message : String(error)}`,
-				errorDetails(error),
-			);
-			return listProviderModels("cursor");
-		}
+		// On override mode we propagate errors so the caller can probe
+		// key validity. On stored-key mode we also propagate now (the
+		// older silent-fallback path masked "key invalid" failures).
+		const models = await Cursor.models.list({ apiKey });
+		const out = models.map(modelInfoToProviderInfo);
+		if (!overrideKey) this.cacheModelParameters(out);
+		return out;
 	}
 
 	/// `parameters[]` for `wireId`; lazy-refreshes from Cursor.models.list

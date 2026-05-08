@@ -28,6 +28,7 @@ export function AgentLoginStep({
 	const [loginInstanceId, setLoginInstanceId] = useState<string | null>(null);
 	const [waitingProvider, setWaitingProvider] =
 		useState<AgentLoginProvider | null>(null);
+	const [cursorKeyError, setCursorKeyError] = useState<string | null>(null);
 	const terminalProvider = activeLoginProvider ?? primedLoginProvider;
 	const terminalActive = activeLoginProvider !== null;
 
@@ -97,39 +98,54 @@ export function AgentLoginStep({
 					    step container at ~720–820px laptop viewports. */}
 					<div className="mt-6 flex w-full flex-col gap-2">
 						{loginItems.map(
-							({ icon: Icon, provider, label, description, status }) => (
-								<div
-									key={label}
-									className="flex h-13 items-center gap-3 rounded-lg border border-border/45 bg-card/80 px-3"
-								>
-									<div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border/40 bg-background text-foreground">
-										<Icon className="size-4" />
-									</div>
-									<div className="flex min-w-0 flex-1 items-baseline gap-2">
-										<span className="truncate text-[13px] font-medium leading-none text-foreground">
-											{label}
-										</span>
-										<span className="truncate text-[11px] leading-none text-muted-foreground/85">
-											{description}
-										</span>
-									</div>
-									{provider === "cursor" ? (
-										status === "ready" ? (
-											<ReadyStatus />
+							({ icon: Icon, provider, label, description, status }) => {
+								const subLabel =
+									provider === "cursor" && cursorKeyError
+										? `Couldn't validate key: ${cursorKeyError}`
+										: description;
+								const subLabelTone =
+									provider === "cursor" && cursorKeyError
+										? "text-destructive/90"
+										: "text-muted-foreground/85";
+								return (
+									<div
+										key={label}
+										className="flex h-13 items-center gap-3 rounded-lg border border-border/45 bg-card/80 px-3"
+									>
+										<div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border/40 bg-background text-foreground">
+											<Icon className="size-4" />
+										</div>
+										<div className="flex min-w-0 flex-1 items-baseline gap-2">
+											<span className="truncate text-[13px] font-medium leading-none text-foreground">
+												{label}
+											</span>
+											<span
+												className={`truncate text-[11px] leading-none ${subLabelTone}`}
+											>
+												{subLabel}
+											</span>
+										</div>
+										{provider === "cursor" ? (
+											status === "ready" ? (
+												<ReadyStatus />
+											) : (
+												<CursorApiKeyAction
+													onSaved={onRefreshLoginItems}
+													onError={setCursorKeyError}
+												/>
+											)
 										) : (
-											<CursorApiKeyAction onSaved={onRefreshLoginItems} />
-										)
-									) : (
-										<AgentStatusAction
-											provider={provider}
-											status={status}
-											waiting={waitingProvider === provider}
-											onPrimeLogin={setPrimedLoginProvider}
-											onStartLogin={startLogin}
-										/>
-									)}
-								</div>
-							),
+											<AgentStatusAction
+												provider={provider}
+												status={status}
+												waiting={waitingProvider === provider}
+												onPrimeLogin={setPrimedLoginProvider}
+												onStartLogin={startLogin}
+											/>
+										)}
+									</div>
+								);
+							},
 						)}
 					</div>
 

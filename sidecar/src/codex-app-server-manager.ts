@@ -1144,7 +1144,9 @@ export class CodexAppServerManager implements SessionManager {
 
 	// ── listModels ───────────────────────────────────────────────────────
 
-	async listModels(): Promise<readonly ProviderModelInfo[]> {
+	async listModels(_opts?: {
+		apiKey?: string;
+	}): Promise<readonly ProviderModelInfo[]> {
 		return listProviderModels("codex");
 	}
 

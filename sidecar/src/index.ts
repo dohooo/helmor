@@ -328,8 +328,16 @@ async function handleListModels(
 ): Promise<void> {
 	try {
 		const provider = parseProvider(params.provider);
-		logger.debug(`[${id}] listModels`, { provider });
-		const models = await managers[provider].listModels();
+		// Optional override key — onboarding uses this to validate a key
+		// before persisting it to settings.
+		const apiKey =
+			typeof params.apiKey === "string" && params.apiKey.length > 0
+				? params.apiKey
+				: undefined;
+		logger.debug(`[${id}] listModels`, { provider, override: Boolean(apiKey) });
+		const models = await managers[provider].listModels(
+			apiKey ? { apiKey } : undefined,
+		);
 		emitter.modelsListed(id, provider, models);
 		logger.debug(`[${id}] listModels → ${models.length} entries (${provider})`);
 	} catch (err) {

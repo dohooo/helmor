@@ -171,8 +171,10 @@ export interface SessionManager {
 		params: ListSlashCommandsParams,
 	): Promise<readonly SlashCommandInfo[]>;
 
-	/** List available models from the provider. */
-	listModels(): Promise<readonly ProviderModelInfo[]>;
+	/** List available models. `apiKey` overrides the manager's stored key
+	 *  for one-off probes (e.g. onboarding validation); when omitted the
+	 *  manager uses whatever it has configured. */
+	listModels(opts?: { apiKey?: string }): Promise<readonly ProviderModelInfo[]>;
 
 	/**
 	 * Abort an in-flight session by id. No-op if the session is not active.
