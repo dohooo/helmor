@@ -112,6 +112,7 @@ export const helmorQueryKeys = {
 	repoScripts: (repoId: string, workspaceId: string | null) =>
 		["repoScripts", repoId, workspaceId ?? ""] as const,
 	repoPreferences: (repoId: string) => ["repoPreferences", repoId] as const,
+	globalPreferences: () => ["global-preferences"] as const,
 	autoCloseActionKinds: ["autoCloseActionKinds"] as const,
 	autoCloseOptInAsked: ["autoCloseOptInAsked"] as const,
 	detectedEditors: ["detectedEditors"] as const,

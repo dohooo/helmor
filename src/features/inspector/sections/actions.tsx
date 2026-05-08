@@ -241,7 +241,9 @@ export function ActionsSection({
 			if (!currentSessionId || !onQueuePendingPromptForSession) {
 				return false;
 			}
-			const repoPreferences = repoId ? await loadRepoPreferences(repoId) : null;
+			const repoPreferences = repoId
+				? (await loadRepoPreferences(repoId)).effective
+				: null;
 			// `forceQueue: true` — if a turn is already streaming, the
 			// prompt MUST queue (never steer), regardless of the user's
 			// followUpBehavior setting. The merge task is a fresh task,

@@ -389,7 +389,7 @@ export function useWorkspaceCommitLifecycle({
 					fastMode: overrides?.fastMode ?? null,
 				});
 				const repoPreferences = selectedRepoId
-					? await loadRepoPreferences(selectedRepoId)
+					? (await loadRepoPreferences(selectedRepoId)).effective
 					: null;
 				const forge = await queryClient
 					.ensureQueryData(workspaceForgeQueryOptions(workspaceId))
@@ -475,7 +475,7 @@ export function useWorkspaceCommitLifecycle({
 					fastMode: fastMode ?? null,
 				});
 				const repoPreferences = selectedRepoId
-					? await loadRepoPreferences(selectedRepoId)
+					? (await loadRepoPreferences(selectedRepoId)).effective
 					: null;
 				const forge = await queryClient
 					.ensureQueryData(workspaceForgeQueryOptions(workspaceId))

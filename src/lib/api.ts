@@ -2854,6 +2854,35 @@ export type RepoPreferences = {
 	general?: string | null;
 };
 
+export type InheritFlags = {
+	createPr: boolean;
+	review: boolean;
+	fixErrors: boolean;
+	resolveConflicts: boolean;
+	branchRename: boolean;
+	general: boolean;
+};
+
+export type RepoPreferencesResolved = {
+	overrides: RepoPreferences;
+	inherit: InheritFlags;
+	global: RepoPreferences;
+	effective: RepoPreferences;
+};
+
+export type GlobalPreferencesUpdateSummary = {
+	reposAffected: number;
+};
+
+export const EMPTY_INHERIT_FLAGS: InheritFlags = {
+	createPr: false,
+	review: false,
+	fixErrors: false,
+	resolveConflicts: false,
+	branchRename: false,
+	general: false,
+};
+
 export type ScriptEvent =
 	| { type: "started"; pid: number; command: string }
 	| { type: "stdout"; data: string }
@@ -2914,18 +2943,32 @@ export async function updateRepoRunScriptMode(
 
 export async function loadRepoPreferences(
 	repoId: string,
-): Promise<RepoPreferences> {
-	return invoke<RepoPreferences>("load_repo_preferences", {
+): Promise<RepoPreferencesResolved> {
+	return invoke<RepoPreferencesResolved>("load_repo_preferences", {
 		repoId,
 	});
 }
 
 export async function updateRepoPreferences(
 	repoId: string,
-	preferences: RepoPreferences,
+	overrides: RepoPreferences,
+	inherit: InheritFlags,
 ): Promise<void> {
 	await invoke("update_repo_preferences", {
 		repoId,
+		overrides,
+		inherit,
+	});
+}
+
+export async function loadGlobalPreferences(): Promise<RepoPreferences> {
+	return invoke<RepoPreferences>("load_global_preferences");
+}
+
+export async function updateGlobalPreferences(
+	preferences: RepoPreferences,
+): Promise<GlobalPreferencesUpdateSummary> {
+	return invoke<GlobalPreferencesUpdateSummary>("update_global_preferences", {
 		preferences,
 	});
 }
