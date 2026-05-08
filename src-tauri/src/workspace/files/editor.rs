@@ -1,7 +1,6 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::SystemTime,
 };
 
 use anyhow::{bail, Context, Result};
@@ -111,33 +110,58 @@ pub fn write_editor_file(
     content: &str,
     options: EditorFileWriteOptions,
 ) -> Result<EditorFileWriteOutcome> {
-    let target = Path::new(path);
+    let resolved_path = resolve_allowed_path(Path::new(path), false)?;
+
+    let existing_metadata = match fs::metadata(&resolved_path) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("Failed to stat editor file {}", resolved_path.display())
+            });
+        }
+    };
+
+    if let Some(metadata) = existing_metadata.as_ref() {
+        if !metadata.is_file() {
+            bail!("Editor target is not a file: {}", resolved_path.display());
+        }
+    }
 
     if let Some(expected) = options.expected_mtime_ms {
-        if !options.overwrite && target.exists() {
-            let current = read_mtime_ms(target).context("read current mtime")?;
-            if current != expected {
+        if !options.overwrite {
+            if let Some(metadata) = existing_metadata.as_ref() {
+                let current = metadata_mtime_ms(metadata)?;
+                if current != expected {
+                    return Ok(EditorFileWriteOutcome::Conflict {
+                        path: resolved_path.display().to_string(),
+                        current_mtime_ms: current,
+                    });
+                }
+            } else {
+                // File didn't exist when we read mtime expectations.
+                // Treat as conflict so the user is asked to confirm a fresh write.
                 return Ok(EditorFileWriteOutcome::Conflict {
-                    path: path.to_string(),
-                    current_mtime_ms: current,
+                    path: resolved_path.display().to_string(),
+                    current_mtime_ms: 0,
                 });
             }
         }
     }
 
-    atomic_write_file(target, content.as_bytes()).context("atomic write")?;
-    let mtime_ms = read_mtime_ms(target).context("read post-write mtime")?;
-    Ok(EditorFileWriteOutcome::Written {
-        path: path.to_string(),
-        mtime_ms,
-    })
-}
+    atomic_write_file(&resolved_path, content.as_bytes()).context("atomic write")?;
 
-fn read_mtime_ms(path: &Path) -> Result<i64> {
-    let metadata = fs::metadata(path)?;
-    let modified = metadata.modified()?;
-    let dur = modified.duration_since(SystemTime::UNIX_EPOCH)?;
-    Ok(dur.as_millis() as i64)
+    let updated_metadata = fs::metadata(&resolved_path).with_context(|| {
+        format!(
+            "Failed to stat editor file after save {}",
+            resolved_path.display()
+        )
+    })?;
+
+    Ok(EditorFileWriteOutcome::Written {
+        path: resolved_path.display().to_string(),
+        mtime_ms: metadata_mtime_ms(&updated_metadata)?,
+    })
 }
 
 pub fn stat_editor_file(path: &str) -> Result<EditorFileStatResponse> {
