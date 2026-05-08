@@ -10,13 +10,6 @@ pub struct EditorFileReadResponse {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EditorFileWriteResponse {
-    pub path: String,
-    pub mtime_ms: i64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct EditorFileStatResponse {
     pub path: String,
     pub exists: bool,
@@ -86,7 +79,6 @@ pub struct PathSearchHit {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", tag = "kind")]
-#[allow(dead_code)]
 pub enum EditorFileWriteOutcome {
     Written { path: String, mtime_ms: i64 },
     Conflict { path: String, current_mtime_ms: i64 },

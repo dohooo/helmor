@@ -127,9 +127,19 @@ fn write(workspace_ref: &str, path: &str, cli: &Cli) -> Result<()> {
     std::io::stdin()
         .read_to_string(&mut content)
         .context("Failed to read new file content from stdin")?;
-    let response = editor_files::write_editor_file(&absolute.display().to_string(), &content)?;
+    let outcome = editor_files::write_editor_file(
+        &absolute.display().to_string(),
+        &content,
+        editor_files::EditorFileWriteOptions::default(),
+    )?;
+    let written_path = match &outcome {
+        editor_files::EditorFileWriteOutcome::Written { path, .. } => path.clone(),
+        editor_files::EditorFileWriteOutcome::Conflict { path, .. } => {
+            anyhow::bail!("Save conflict at {path}: file changed on disk");
+        }
+    };
     notify_ui_event(UiMutationEvent::WorkspaceFilesChanged { workspace_id });
-    output::print(cli, &response, |r| format!("Wrote {}", r.path))
+    output::print(cli, &outcome, |_| format!("Wrote {written_path}"))
 }
 
 fn stage(workspace_ref: &str, path: &str, cli: &Cli) -> Result<()> {

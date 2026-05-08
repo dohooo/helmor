@@ -1,6 +1,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 use anyhow::{bail, Context, Result};
@@ -12,13 +13,22 @@ use super::{
     },
     types::{
         EditorFileListItem, EditorFilePrefetchItem, EditorFileReadResponse, EditorFileStatResponse,
-        EditorFileWriteResponse, EditorFilesWithContentResponse,
+        EditorFileWriteOutcome, EditorFilesWithContentResponse,
     },
 };
-use crate::{
-    bail_coded,
-    error::{AnyhowCodedExt, ErrorCode},
-};
+use crate::error::{AnyhowCodedExt, ErrorCode};
+
+/// Options controlling how `write_editor_file` saves a file.
+///
+/// `expected_mtime_ms` is the mtime the editor saw when it last read the
+/// file. When set, the writer compares it against the on-disk mtime to
+/// detect external modifications. `overwrite` skips the conflict check
+/// (used when the user explicitly chooses "save anyway").
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EditorFileWriteOptions {
+    pub expected_mtime_ms: Option<i64>,
+    pub overwrite: bool,
+}
 
 const MAX_EDITOR_FILE_ITEMS: usize = 24;
 const MAX_PREFETCH_BYTES: u64 = 1_048_576;
@@ -96,43 +106,38 @@ pub fn read_editor_file(path: &str) -> Result<EditorFileReadResponse> {
     })
 }
 
-pub fn write_editor_file(path: &str, content: &str) -> Result<EditorFileWriteResponse> {
-    let resolved_path = resolve_allowed_path(Path::new(path), false)?;
-    let metadata = match fs::metadata(&resolved_path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            // Target file or parent dir vanished between open and save.
-            // Bail with a recoverable code; the editor should prompt to
-            // reload / save elsewhere rather than surface a plain error.
-            bail_coded!(
-                ErrorCode::WorkspaceBroken,
-                "Cannot save: {} no longer exists on disk",
-                resolved_path.display()
-            );
-        }
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("Failed to stat editor file {}", resolved_path.display()))
-        }
-    };
+pub fn write_editor_file(
+    path: &str,
+    content: &str,
+    options: EditorFileWriteOptions,
+) -> Result<EditorFileWriteOutcome> {
+    let target = Path::new(path);
 
-    if !metadata.is_file() {
-        bail!("Editor target is not a file: {}", resolved_path.display());
+    if let Some(expected) = options.expected_mtime_ms {
+        if !options.overwrite && target.exists() {
+            let current = read_mtime_ms(target).context("read current mtime")?;
+            if current != expected {
+                return Ok(EditorFileWriteOutcome::Conflict {
+                    path: path.to_string(),
+                    current_mtime_ms: current,
+                });
+            }
+        }
     }
 
-    atomic_write_file(&resolved_path, content.as_bytes())?;
-
-    let updated_metadata = fs::metadata(&resolved_path).with_context(|| {
-        format!(
-            "Failed to stat editor file after save {}",
-            resolved_path.display()
-        )
-    })?;
-
-    Ok(EditorFileWriteResponse {
-        path: resolved_path.display().to_string(),
-        mtime_ms: metadata_mtime_ms(&updated_metadata)?,
+    atomic_write_file(target, content.as_bytes()).context("atomic write")?;
+    let mtime_ms = read_mtime_ms(target).context("read post-write mtime")?;
+    Ok(EditorFileWriteOutcome::Written {
+        path: path.to_string(),
+        mtime_ms,
     })
+}
+
+fn read_mtime_ms(path: &Path) -> Result<i64> {
+    let metadata = fs::metadata(path)?;
+    let modified = metadata.modified()?;
+    let dur = modified.duration_since(SystemTime::UNIX_EPOCH)?;
+    Ok(dur.as_millis() as i64)
 }
 
 pub fn stat_editor_file(path: &str) -> Result<EditorFileStatResponse> {

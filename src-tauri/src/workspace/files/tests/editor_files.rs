@@ -9,8 +9,9 @@ use crate::error::{extract_code, ErrorCode};
 
 use super::{
     canonicalize_missing_path, list_editor_files, list_workspace_files, read_editor_file,
-    stat_editor_file, support::EditorFilesHarness, write_editor_file,
+    stat_editor_file, support::EditorFilesHarness, write_editor_file, EditorFileWriteOutcome,
 };
+use crate::workspace::files::EditorFileWriteOptions;
 
 #[test]
 fn read_editor_file_rejects_paths_outside_workspace_roots() {
@@ -35,14 +36,21 @@ fn write_editor_file_replaces_existing_file_contents() {
     fs::create_dir_all(allowed_file.parent().unwrap()).unwrap();
     fs::write(&allowed_file, "const before = true;\n").unwrap();
 
-    let response =
-        write_editor_file(allowed_file.to_str().unwrap(), "const after = true;\n").unwrap();
+    let outcome = write_editor_file(
+        allowed_file.to_str().unwrap(),
+        "const after = true;\n",
+        EditorFileWriteOptions::default(),
+    )
+    .unwrap();
 
     assert_eq!(
         fs::read_to_string(&allowed_file).unwrap(),
         "const after = true;\n"
     );
-    assert!(response.mtime_ms > 0);
+    match outcome {
+        EditorFileWriteOutcome::Written { mtime_ms, .. } => assert!(mtime_ms > 0),
+        EditorFileWriteOutcome::Conflict { .. } => panic!("expected Written outcome"),
+    }
 }
 
 #[test]

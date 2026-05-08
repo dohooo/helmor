@@ -141,8 +141,14 @@ pub async fn get_workspace_git_action_status(
 pub async fn write_editor_file(
     path: String,
     content: String,
-) -> CmdResult<editor_files::EditorFileWriteResponse> {
-    run_blocking(move || editor_files::write_editor_file(&path, &content)).await
+    expected_mtime_ms: Option<i64>,
+    overwrite: Option<bool>,
+) -> CmdResult<editor_files::EditorFileWriteOutcome> {
+    let options = editor_files::EditorFileWriteOptions {
+        expected_mtime_ms,
+        overwrite: overwrite.unwrap_or(false),
+    };
+    run_blocking(move || editor_files::write_editor_file(&path, &content, options)).await
 }
 
 #[tauri::command]
