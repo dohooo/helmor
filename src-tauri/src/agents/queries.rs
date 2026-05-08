@@ -875,6 +875,168 @@ pub fn fetch_agent_model_sections() -> Vec<super::catalog::AgentModelSection> {
 }
 
 // ---------------------------------------------------------------------------
+// Cursor model list — proxied to the sidecar's `Cursor.models.list`
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorModelParameterValue {
+    pub value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorModelParameter {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub values: Vec<CursorModelParameterValue>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorModelEntry {
+    pub id: String,
+    pub label: String,
+    /// Raw `parameters[]` from `Cursor.models.list`. The settings panel
+    /// persists this verbatim into `cursorProvider.cachedModels` so the
+    /// composer's effort/fast-mode UI can be derived synchronously from
+    /// settings without a sidecar round-trip on every render.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<Vec<CursorModelParameter>>,
+}
+
+/// 30s — the sidecar's `Cursor.models.list` is a single Connect RPC to
+/// `api.cursor.com`. Cold-start can take a few seconds while the SDK
+/// builds its HTTP/2 session pool; pad the budget so transient pool
+/// warm-up doesn't surface as a UI timeout.
+const LIST_CURSOR_MODELS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+pub fn fetch_cursor_models(
+    sidecar: &crate::sidecar::ManagedSidecar,
+) -> CmdResult<Vec<CursorModelEntry>> {
+    let request_id = Uuid::new_v4().to_string();
+    let sidecar_req = crate::sidecar::SidecarRequest {
+        id: request_id.clone(),
+        method: "listModels".to_string(),
+        params: serde_json::json!({ "provider": "cursor" }),
+    };
+
+    let rx = sidecar.subscribe(&request_id);
+    if let Err(e) = sidecar.send(&sidecar_req) {
+        sidecar.unsubscribe(&request_id);
+        return Err(anyhow::anyhow!("Sidecar send failed: {e}").into());
+    }
+
+    let mut models: Vec<CursorModelEntry> = Vec::new();
+    let mut error: Option<String> = None;
+
+    loop {
+        match rx.recv_timeout(LIST_CURSOR_MODELS_TIMEOUT) {
+            Ok(event) => match event.event_type() {
+                "modelsListed" => {
+                    if let Some(entries) = event.raw.get("models").and_then(Value::as_array) {
+                        for entry in entries {
+                            let Some(id) = entry.get("id").and_then(Value::as_str) else {
+                                continue;
+                            };
+                            let label = entry
+                                .get("label")
+                                .and_then(Value::as_str)
+                                .unwrap_or(id)
+                                .to_string();
+                            let parameters = entry
+                                .get("cursorParameters")
+                                .and_then(Value::as_array)
+                                .map(|values| parse_cursor_parameters(values.as_slice()));
+                            models.push(CursorModelEntry {
+                                id: id.to_string(),
+                                label,
+                                parameters,
+                            });
+                        }
+                    }
+                    break;
+                }
+                "error" => {
+                    error = Some(
+                        event
+                            .raw
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Unknown error")
+                            .to_string(),
+                    );
+                    break;
+                }
+                _ => {}
+            },
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                error = Some(format!(
+                    "Cursor model list timed out after {}s",
+                    LIST_CURSOR_MODELS_TIMEOUT.as_secs()
+                ));
+                break;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                error = Some("Sidecar disconnected during Cursor model list".to_string());
+                break;
+            }
+        }
+    }
+
+    sidecar.unsubscribe(&request_id);
+
+    if let Some(message) = error {
+        return Err(anyhow::anyhow!(message).into());
+    }
+    Ok(models)
+}
+
+/// Parse a JSON array of Cursor `ModelParameterDefinition`s as forwarded
+/// by the sidecar (`cursorParameters` field on `modelsListed`). Best-effort
+/// — entries with the wrong shape are dropped silently so a single oddly
+/// formatted upstream value doesn't blank the entire list.
+fn parse_cursor_parameters(arr: &[Value]) -> Vec<CursorModelParameter> {
+    arr.iter()
+        .filter_map(|entry| {
+            let id = entry.get("id").and_then(Value::as_str)?.to_string();
+            let display_name = entry
+                .get("displayName")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let values = entry
+                .get("values")
+                .and_then(Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|v| {
+                            let value = v.get("value").and_then(Value::as_str)?.to_string();
+                            let display_name = v
+                                .get("displayName")
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
+                            Some(CursorModelParameterValue {
+                                value,
+                                display_name,
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some(CursorModelParameter {
+                id,
+                display_name,
+                values,
+            })
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Live context-usage (hover popover, Claude only)
 // ---------------------------------------------------------------------------
 

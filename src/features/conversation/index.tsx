@@ -212,7 +212,6 @@ export const WorkspaceConversationContainer = memo(
 		const [composerFastModes, setComposerFastModes] = useState<
 			Record<string, boolean>
 		>({});
-
 		const composerContextKey =
 			composerContextKeyOverride ??
 			getComposerContextKey(displayedWorkspaceId, displayedSessionId);

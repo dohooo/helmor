@@ -115,7 +115,7 @@ export type DataInfo = {
 	archiveRoot: string;
 };
 
-export type AgentProvider = "claude" | "codex";
+export type AgentProvider = "claude" | "codex" | "cursor";
 
 export type AgentModelOption = {
 	id: string;
@@ -750,11 +750,12 @@ export async function exitOnboardingWindowMode(): Promise<void> {
 	await invoke("exit_onboarding_window_mode");
 }
 
-export type AgentLoginProvider = "claude" | "codex";
+export type AgentLoginProvider = "claude" | "codex" | "cursor";
 
 export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
+	cursor: boolean;
 };
 
 export async function getAgentLoginStatus(): Promise<AgentLoginStatusResult> {
@@ -913,6 +914,33 @@ export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to load agent models."));
 	}
+}
+
+export type CursorModelParameterValue = {
+	value: string;
+	displayName?: string;
+};
+
+export type CursorModelParameter = {
+	id: string;
+	displayName?: string;
+	values: CursorModelParameterValue[];
+};
+
+export type CursorModelEntry = {
+	id: string;
+	label: string;
+	/** Raw `parameters[]` from `Cursor.models.list`. Persisted as-is into
+	 *  `cursorProvider.cachedModels` so the composer's effort/fast-mode
+	 *  UI can be derived synchronously without another sidecar round-trip. */
+	parameters?: CursorModelParameter[];
+};
+
+/// Hit the live `Cursor.models.list` API via the sidecar. Used by the
+/// settings panel's tag picker — composer rendering itself stays static
+/// (driven by `cursorProvider.cachedModels` + `enabledModelIds`).
+export async function listCursorModels(): Promise<CursorModelEntry[]> {
+	return await invoke<CursorModelEntry[]>("list_cursor_models");
 }
 
 // ---------------------------------------------------------------------------

@@ -110,7 +110,9 @@ export function useConfirmSessionClose({
 			return "Claude";
 		}
 		const provider = pending.provider ?? pending.session.agentType;
-		return provider === "codex" ? "Codex" : "Claude";
+		if (provider === "codex") return "Codex";
+		if (provider === "cursor") return "Cursor";
+		return "Claude";
 	}, [pending]);
 
 	const dialogNode = (

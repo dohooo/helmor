@@ -15,6 +15,7 @@
 	"dependencies": {
 		"@anthropic-ai/claude-agent-sdk": "0.2.126",
 		"@anthropic-ai/claude-code": "2.1.126",
+		"@cursor/sdk": "^1.0.12",
 		"@openai/codex": "0.128.0"
 	},
 	"devDependencies": {
@@ -22,6 +23,7 @@
 		"@types/node": "^25.5.2"
 	},
 	"trustedDependencies": [
-		"@anthropic-ai/claude-code"
+		"@anthropic-ai/claude-code",
+		"sqlite3"
 	]
 }

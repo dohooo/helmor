@@ -1,0 +1,32 @@
+---
+source: tests/pipeline_streams.rs
+expression: snapshot
+input_file: tests/fixtures/streams/cursor/plain.jsonl
+---
+line_count: 6
+checkpoint_count: 1
+checkpoints:
+  - line_index: 5
+    event_type: cursor/status
+    roles:
+      - assistant
+    last_part_types:
+      - text
+final_state:
+  message_count: 1
+  roles:
+    - assistant
+  total_parts: 1
+persisted_turns:
+  turn_count: 1
+  total_blocks: 1
+  turns:
+    - role: assistant
+      block_types:
+        - text
+historical_render:
+  message_count: 1
+  messages:
+    - role: assistant
+      part_types:
+        - text

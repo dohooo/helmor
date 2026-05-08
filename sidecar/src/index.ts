@@ -13,6 +13,7 @@ import type { PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
 import { isAbortError } from "./abort.js";
 import { ClaudeSessionManager } from "./claude-session-manager.js";
 import { CodexAppServerManager } from "./codex-app-server-manager.js";
+import { CursorSessionManager } from "./cursor-session-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
 import { errorDetails, logger } from "./logger.js";
 import {
@@ -41,9 +42,11 @@ import {
 
 const claudeManager = new ClaudeSessionManager();
 const codexManager = new CodexAppServerManager();
+const cursorManager = new CursorSessionManager();
 const managers: Record<Provider, SessionManager> = {
 	claude: claudeManager,
 	codex: codexManager,
+	cursor: cursorManager,
 };
 
 // `parentGone` flips to true only when stdin EOFs — that's the
@@ -114,23 +117,81 @@ setInterval(() => {
 // in-flight request gets notified, and keep the process alive.
 // ---------------------------------------------------------------------------
 
-// Don't `process.exit(0)` on EPIPE-coded errors here: any pipe in the
-// process (SDK child processes, internal Bun async work) can surface a
-// stray EPIPE, and exiting takes down every in-flight query with it
-// (issues #398/#402). The parent-died path is handled via stdin EOF.
+// Both handlers below: log only, never broadcast a null-id error. The
+// real "sidecar crashed" path is handled by Rust's reader-thread
+// cleanup on stdout EOF. unhandledRejection / uncaughtException don't
+// actually exit the process here, so emitting a global error would
+// just kill every in-flight stream because of a transient SDK side-
+// channel hiccup (issues #398/#402 and the Cursor NGHTTP2/TLS family).
 process.on("uncaughtException", (err) => {
 	logger.error("uncaughtException", errorDetails(err));
-	try {
-		emitter.error(null, "Internal sidecar error", true);
-	} catch {}
 });
 
 process.on("unhandledRejection", (reason) => {
+	// Cursor SDK 1.0.x opens multiple HTTP/2 sessions on cold start
+	// (statsig telemetry, run-event tailer, etc.). They land on
+	// backends that periodically trip transport-level errors —
+	// `ERR_TLS_CERT_ALTNAME_INVALID`, `NGHTTP2_FRAME_SIZE_ERROR` /
+	// `ERR_HTTP2_STREAM_ERROR`, `ECONNRESET`, etc. The user-facing
+	// prompt stream is awaited inside the manager's try/catch, so
+	// any ConnectError reaching this handler is by construction NOT
+	// from the active turn. Demote those to info so the logs aren't
+	// noisy with red ERRORs for every cold start.
+	if (isCursorSdkBackgroundChannelError(reason)) {
+		logger.info(
+			"Suppressed Cursor SDK background-channel transient error",
+			errorDetails(reason),
+		);
+		return;
+	}
 	logger.error("unhandledRejection", errorDetails(reason));
-	try {
-		emitter.error(null, "Internal sidecar error", true);
-	} catch {}
 });
+
+const TRANSIENT_NODE_ERROR_CODES = new Set([
+	// TLS — Cursor SDK side channels occasionally hit hostnames
+	// whose cert SAN list doesn't match.
+	"ERR_TLS_CERT_ALTNAME_INVALID",
+	// HTTP/2 stream-level RST_STREAM with a non-zero error code
+	// (FRAME_SIZE_ERROR, REFUSED_STREAM, …) — Node wraps these as
+	// `ERR_HTTP2_STREAM_ERROR`. Adjacent codes cover other framing
+	// edge cases the SDK doesn't catch.
+	"ERR_HTTP2_STREAM_ERROR",
+	"ERR_HTTP2_INVALID_STREAM",
+	"ERR_HTTP2_GOAWAY_SESSION",
+	// Plain socket-level transient failures.
+	"ECONNRESET",
+	"ECONNREFUSED",
+	"ETIMEDOUT",
+	"ENOTFOUND",
+	"EAI_AGAIN",
+	"EPIPE",
+]);
+
+function isCursorSdkBackgroundChannelError(reason: unknown): boolean {
+	if (!(reason instanceof Error)) return false;
+	if (reason.name !== "ConnectError") return false;
+	for (const code of collectErrorChainCodes(reason)) {
+		if (TRANSIENT_NODE_ERROR_CODES.has(code)) return true;
+	}
+	// Safety net: HTTP/2 stream errors sometimes lose the original
+	// `.code` by the time they surface — match the canonical message
+	// shape connect-rpc / Node emit.
+	const msg = reason.message;
+	return /NGHTTP2_/.test(msg) || /Stream closed with error code/i.test(msg);
+}
+
+function collectErrorChainCodes(err: Error): string[] {
+	const codes: string[] = [];
+	const seen = new Set<unknown>();
+	let curr: unknown = err;
+	while (curr && !seen.has(curr)) {
+		seen.add(curr);
+		const c = (curr as { code?: unknown }).code;
+		if (typeof c === "string") codes.push(c);
+		curr = (curr as { cause?: unknown }).cause;
+	}
+	return codes;
+}
 
 logger.info("Sidecar starting", { pid: process.pid });
 emitter.ready(1);
@@ -202,7 +263,11 @@ async function handleGenerateTitle(
 		});
 
 		// Try the configured Claude-compatible model first when available;
-		// otherwise use official Claude, then fall back to Codex.
+		// otherwise use official Claude, then fall back to Codex, then
+		// fall back to Cursor. The chain order is by ascending cost-of-
+		// last-resort: Claude/Codex pay nothing per-call (their CLI
+		// auth covers it), Cursor inference is metered against the
+		// user's plan, so it stays at the end.
 		try {
 			await managers.claude.generateTitle(
 				id,
@@ -239,15 +304,30 @@ async function handleGenerateTitle(
 					`[${id}] generateTitle claude failed, trying codex: ${errorMessage(claudeErr)}`,
 				);
 			}
-			await managers.codex.generateTitle(
-				id,
-				userMessage,
-				branchRenamePrompt,
-				emitter,
-				TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
-				{ generateBranch },
-			);
-			logger.debug(`[${id}] generateTitle completed (codex fallback)`);
+			try {
+				await managers.codex.generateTitle(
+					id,
+					userMessage,
+					branchRenamePrompt,
+					emitter,
+					TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
+					{ generateBranch },
+				);
+				logger.debug(`[${id}] generateTitle completed (codex fallback)`);
+			} catch (codexErr) {
+				logger.debug(
+					`[${id}] generateTitle codex failed, trying cursor: ${errorMessage(codexErr)}`,
+				);
+				await managers.cursor.generateTitle(
+					id,
+					userMessage,
+					branchRenamePrompt,
+					emitter,
+					TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
+					{ generateBranch },
+				);
+				logger.debug(`[${id}] generateTitle completed (cursor fallback)`);
+			}
 		}
 	} catch (err) {
 		const msg = errorMessage(err);
@@ -328,6 +408,26 @@ async function handleGetContextUsage(
 	} catch (err) {
 		const msg = errorMessage(err);
 		logger.error(`[${id}] getContextUsage FAILED: ${msg}`, errorDetails(err));
+		emitter.error(id, msg);
+	}
+}
+
+/// Hot-update sidecar runtime config without restarting. Used by the
+/// Rust host to push the saved Cursor API key on app boot and again on
+/// every settings save — restarting the sidecar would interrupt any
+/// in-flight Claude/Codex session, which we don't want for a key-only
+/// change in an unrelated provider.
+function handleUpdateConfig(id: string, params: Record<string, unknown>): void {
+	try {
+		if ("cursorApiKey" in params) {
+			const raw = params.cursorApiKey;
+			const next = typeof raw === "string" ? raw : null;
+			cursorManager.setApiKey(next);
+		}
+		emitter.pong(id);
+	} catch (err) {
+		const msg = errorMessage(err);
+		logger.error(`[${id}] updateConfig FAILED: ${msg}`, errorDetails(err));
 		emitter.error(id, msg);
 	}
 }
@@ -489,6 +589,9 @@ for await (const line of rl) {
 				break;
 			case "mutateCodexGoal":
 				await handleMutateCodexGoal(id, params);
+				break;
+			case "updateConfig":
+				handleUpdateConfig(id, params);
 				break;
 			case "shutdown":
 				await handleShutdown(id);

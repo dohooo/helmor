@@ -7,7 +7,7 @@
 
 import type { SidecarEmitter } from "./emitter.js";
 
-export type Provider = "claude" | "codex";
+export type Provider = "claude" | "codex" | "cursor";
 
 export interface SendMessageParams {
 	readonly sessionId: string;
@@ -97,6 +97,20 @@ export type UserInputResolution =
 	| { action: "decline"; content?: Record<string, unknown> }
 	| { action: "cancel" };
 
+/** One Cursor model parameter, mirroring `ModelParameterDefinition` from
+ *  `@cursor/sdk`. Carried through the wire as the single source of truth
+ *  for what the model supports — Rust catalog derives `effortLevels` /
+ *  `supportsFastMode` from it, and the sidecar uses it on send to build
+ *  the right `ModelParameterValue[]` for `agent.send`. */
+export interface CursorModelParameter {
+	readonly id: string;
+	readonly displayName?: string;
+	readonly values: ReadonlyArray<{
+		readonly value: string;
+		readonly displayName?: string;
+	}>;
+}
+
 /** A model entry returned by listModels. Provider is implicit. */
 export interface ProviderModelInfo {
 	readonly id: string;
@@ -104,6 +118,10 @@ export interface ProviderModelInfo {
 	readonly cliModel: string;
 	readonly effortLevels?: readonly string[];
 	readonly supportsFastMode?: boolean;
+	/** Cursor-only. Raw `parameters[]` from `ModelListItem` so the catalog
+	 *  + send paths share the same source of truth (no parallel hardcoded
+	 *  effort tables). Other providers omit this. */
+	readonly cursorParameters?: readonly CursorModelParameter[];
 }
 
 export interface SessionManager {

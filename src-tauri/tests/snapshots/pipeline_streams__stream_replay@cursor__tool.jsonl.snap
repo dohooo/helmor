@@ -1,0 +1,38 @@
+---
+source: tests/pipeline_streams.rs
+expression: snapshot
+input_file: tests/fixtures/streams/cursor/tool.jsonl
+---
+line_count: 74
+checkpoint_count: 1
+checkpoints:
+  - line_index: 73
+    event_type: cursor/status
+    roles:
+      - assistant
+    last_part_types:
+      - tool-call
+      - text
+final_state:
+  message_count: 1
+  roles:
+    - assistant
+  total_parts: 2
+persisted_turns:
+  turn_count: 2
+  total_blocks: 3
+  turns:
+    - role: assistant
+      block_types:
+        - tool_use
+        - text
+    - role: user
+      block_types:
+        - tool_result
+historical_render:
+  message_count: 1
+  messages:
+    - role: assistant
+      part_types:
+        - tool-call
+        - text

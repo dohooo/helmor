@@ -57,6 +57,49 @@ export type ClaudeCustomProviderSettings = {
 	customModels: string;
 };
 
+/** One value option for a Cursor model parameter (e.g. `{ value: "high",
+ *  displayName: "High" }`). Mirrors the SDK's `ModelParameterDefinition`. */
+export type CursorCachedModelParameterValue = {
+	value: string;
+	displayName?: string;
+};
+
+/** One Cursor model parameter as returned by `Cursor.models.list`.
+ *  Persisted verbatim so the Rust catalog can derive `effortLevels` /
+ *  `supportsFastMode` from the same source the SDK uses on `agent.send`. */
+export type CursorCachedModelParameter = {
+	id: string;
+	displayName?: string;
+	values: CursorCachedModelParameterValue[];
+};
+
+/** Snapshot of one model from the last successful `Cursor.models.list`
+ *  call. Persisted alongside the user's picks so the Rust catalog can
+ *  expand `enabledModelIds` into rich `AgentModelOption` entries without
+ *  another sidecar round-trip every time the composer renders. */
+export type CursorCachedModel = {
+	id: string;
+	label: string;
+	/** May be absent on entries persisted before the parameters plumbing
+	 *  shipped — the catalog falls back to "no effort dropdown" until the
+	 *  user clicks Refresh, which writes back the full shape. */
+	parameters?: CursorCachedModelParameter[];
+};
+
+export type CursorProviderSettings = {
+	apiKey: string;
+	/** User's chosen models for the composer picker. `null` means
+	 *  auto-selection has not yet been applied — the next successful
+	 *  fetch will fill in defaults (Auto + latest GPT + latest Claude).
+	 *  An empty array means the user explicitly cleared all picks; we
+	 *  respect that and never auto-fill again. */
+	enabledModelIds: string[] | null;
+	/** Last successful fetch of the available model catalog, kept so the
+	 *  Rust composer-picker query can render rich entries synchronously.
+	 *  Refreshed whenever the user clicks "Refresh" or saves a new key. */
+	cachedModels: CursorCachedModel[] | null;
+};
+
 /** Per-account toggles for which item kinds the inbox should pull from
  * a given forge login. Keyed externally by `<provider>:<login>` (e.g.
  * `github:octocat`). Missing keys default to all `true` — newly added
@@ -191,6 +234,7 @@ export type AppSettings = {
 	onboardingCompleted: boolean;
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
+	cursorProvider: CursorProviderSettings;
 	inboxSourceConfig: InboxSourceConfig;
 	kanbanViewState: KanbanViewState;
 };
@@ -243,6 +287,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		customApiKey: "",
 		customModels: "",
 	},
+	cursorProvider: {
+		apiKey: "",
+		enabledModelIds: null,
+		cachedModels: null,
+	},
 	inboxSourceConfig: { accounts: {} },
 	kanbanViewState: DEFAULT_KANBAN_VIEW_STATE,
 };
@@ -286,6 +335,7 @@ const SETTINGS_KEY_MAP: Record<
 	onboardingCompleted: "app.onboarding_completed",
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
+	cursorProvider: "app.cursor_provider",
 	inboxSourceConfig: "app.inbox_source_config",
 	kanbanViewState: "app.kanban_view_state",
 };
@@ -555,6 +605,80 @@ function parseKanbanViewState(raw: string | undefined): KanbanViewState {
 	}
 }
 
+function parseCursorProviderSettings(
+	raw: string | undefined,
+): CursorProviderSettings {
+	if (!raw) return DEFAULT_SETTINGS.cursorProvider;
+	try {
+		const parsed = JSON.parse(raw) as Record<string, unknown>;
+		return {
+			apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey : "",
+			enabledModelIds: parseEnabledModelIds(parsed.enabledModelIds),
+			cachedModels: parseCachedModels(parsed.cachedModels),
+		};
+	} catch {
+		return DEFAULT_SETTINGS.cursorProvider;
+	}
+}
+
+function parseEnabledModelIds(value: unknown): string[] | null {
+	if (value === null) return null;
+	if (!Array.isArray(value)) return null;
+	const ids = value.filter((item): item is string => typeof item === "string");
+	return ids;
+}
+
+function parseCachedModels(value: unknown): CursorCachedModel[] | null {
+	if (!Array.isArray(value)) return null;
+	const models: CursorCachedModel[] = [];
+	for (const entry of value) {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+		const obj = entry as Record<string, unknown>;
+		if (typeof obj.id !== "string" || typeof obj.label !== "string") continue;
+		const parameters = parseCachedModelParameters(obj.parameters);
+		models.push({
+			id: obj.id,
+			label: obj.label,
+			...(parameters ? { parameters } : {}),
+		});
+	}
+	return models;
+}
+
+function parseCachedModelParameters(
+	value: unknown,
+): CursorCachedModelParameter[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const out: CursorCachedModelParameter[] = [];
+	for (const entry of value) {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+		const obj = entry as Record<string, unknown>;
+		if (typeof obj.id !== "string") continue;
+		const values: CursorCachedModelParameterValue[] = [];
+		if (Array.isArray(obj.values)) {
+			for (const v of obj.values) {
+				if (!v || typeof v !== "object" || Array.isArray(v)) continue;
+				const vobj = v as Record<string, unknown>;
+				if (typeof vobj.value !== "string") continue;
+				values.push({
+					value: vobj.value,
+					...(typeof vobj.displayName === "string"
+						? { displayName: vobj.displayName }
+						: {}),
+				});
+			}
+		}
+		out.push({
+			id: obj.id,
+			...(typeof obj.displayName === "string"
+				? { displayName: obj.displayName }
+				: {}),
+			values,
+		});
+	}
+	return out;
+}
+
 function parseClaudeCustomProviderSettings(
 	raw: string | undefined,
 ): ClaudeCustomProviderSettings {
@@ -689,6 +813,9 @@ export async function loadSettings(): Promise<AppSettings> {
 			claudeCustomProviders: parseClaudeCustomProviderSettings(
 				raw[SETTINGS_KEY_MAP.claudeCustomProviders],
 			),
+			cursorProvider: parseCursorProviderSettings(
+				raw[SETTINGS_KEY_MAP.cursorProvider],
+			),
 			inboxSourceConfig: parseInboxSourceConfig(
 				raw[SETTINGS_KEY_MAP.inboxSourceConfig],
 			),
@@ -731,6 +858,7 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 			settings[dbKey] =
 				key === "shortcuts" ||
 				key === "claudeCustomProviders" ||
+				key === "cursorProvider" ||
 				key === "inboxSourceConfig" ||
 				key === "kanbanViewState"
 					? JSON.stringify(value)

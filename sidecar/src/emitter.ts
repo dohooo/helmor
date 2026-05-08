@@ -153,6 +153,16 @@ export type ModelsListedEvent = {
 		readonly label: string;
 		readonly cliModel: string;
 		readonly effortLevels?: readonly string[];
+		readonly supportsFastMode?: boolean;
+		/** Cursor only — raw `parameters[]` from `Cursor.models.list`. */
+		readonly cursorParameters?: ReadonlyArray<{
+			readonly id: string;
+			readonly displayName?: string;
+			readonly values: ReadonlyArray<{
+				readonly value: string;
+				readonly displayName?: string;
+			}>;
+		}>;
 	}>;
 };
 
@@ -267,6 +277,15 @@ export interface SidecarEmitter {
 			label: string;
 			cliModel: string;
 			effortLevels?: readonly string[];
+			supportsFastMode?: boolean;
+			cursorParameters?: ReadonlyArray<{
+				id: string;
+				displayName?: string;
+				values: ReadonlyArray<{
+					value: string;
+					displayName?: string;
+				}>;
+			}>;
 		}>,
 	): void;
 	contextUsageUpdated(
