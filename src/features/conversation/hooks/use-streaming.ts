@@ -33,6 +33,7 @@ import {
 import type { ComposerCustomTag } from "@/lib/composer-insert";
 import { extractError, isRecoverableByPurge } from "@/lib/errors";
 import {
+	activeStreamsQueryOptions,
 	agentModelSectionsQueryOptions,
 	helmorQueryKeys,
 	sessionThreadMessagesQueryOptions,
@@ -139,11 +140,6 @@ type UseConversationStreamingArgs = {
 	/** App-level queue handle (read + mutate). Shared across session /
 	 *  workspace switches so the queue survives navigation. */
 	submitQueue: SubmitQueueApi;
-	onSessionRunStateChange?: (
-		sessionId: string,
-		workspaceId: string | null,
-		sending: boolean,
-	) => void;
 	onInteractionSessionsChange?: (
 		sessionWorkspaceMap: Map<string, string>,
 		interactionCounts: Map<string, number>,
@@ -161,7 +157,6 @@ export function useConversationStreaming({
 	selectionPending,
 	followUpBehavior,
 	submitQueue,
-	onSessionRunStateChange,
 	onInteractionSessionsChange,
 	onSessionCompleted,
 	onSessionAborted,
@@ -257,6 +252,13 @@ export function useConversationStreaming({
 	);
 
 	const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
+	// Backend-truth list of in-flight streams. Used by `handleStopStream`
+	// so abort works even after the conversation container unmount/remount
+	// race that would clear `activeSessionByContext`. Stays in sync via
+	// `UiMutationEvent::ActiveStreamsChanged` → `helmorQueryKeys.activeStreams`
+	// invalidation in the ui-sync bridge.
+	const activeStreamsQuery = useQuery(activeStreamsQueryOptions());
+	const activeStreams = activeStreamsQuery.data ?? [];
 	const selectedProvider = useMemo(() => {
 		if (!displayedSelectedModelId) return null;
 		const sections = modelSectionsQuery.data ?? [];
@@ -275,8 +277,6 @@ export function useConversationStreaming({
 		return ids;
 	}, [sendingContextKeys]);
 
-	const onSessionRunStateChangeRef = useRef(onSessionRunStateChange);
-	onSessionRunStateChangeRef.current = onSessionRunStateChange;
 	const onInteractionSessionsChangeRef = useRef(onInteractionSessionsChange);
 	onInteractionSessionsChangeRef.current = onInteractionSessionsChange;
 	const onSessionCompletedRef = useRef(onSessionCompleted);
@@ -446,17 +446,31 @@ export function useConversationStreaming({
 	);
 
 	const handleStopStream = useCallback(async () => {
-		const activeSession = activeSessionByContext[composerContextKey];
-		if (!activeSession) {
+		// Source of truth: the backend's active-streams registry,
+		// mirrored via React Query. Looking up by displayed session id
+		// (rather than `activeSessionByContext`) keeps abort working
+		// after a conversation-container unmount/remount, which used to
+		// silently drop the click.
+		const sessionId = composerContextKey.startsWith("session:")
+			? composerContextKey.slice("session:".length)
+			: null;
+		if (!sessionId) {
 			return;
 		}
-		const sessionId = activeSession.stopSessionId;
-		const goal =
-			activeSession.provider === "codex"
-				? queryClient.getQueryData<CodexGoalState | null>(
-						helmorQueryKeys.sessionCodexGoal(sessionId),
-					)
-				: null;
+		const activeStream = activeStreams.find(
+			(stream) => stream.sessionId === sessionId,
+		);
+		// Fall back to the local registry only when the backend hasn't
+		// surfaced the stream yet (e.g. the optimistic phase of a
+		// freshly-started turn). This is purely belt-and-suspenders —
+		// the active-streams event lands on the same tick as registration.
+		const provider =
+			activeStream?.provider ??
+			activeSessionByContext[composerContextKey]?.provider ??
+			null;
+		if (!provider) {
+			return;
+		}
 
 		// For codex sessions with an active goal, flip the goal to paused
 		// FIRST so codex doesn't auto-spawn a fresh continuation turn the
@@ -465,16 +479,21 @@ export function useConversationStreaming({
 		// (mutateCodexGoal is best-effort on the sidecar side too — if a
 		// race somehow kills the child first it just no-ops.) The user
 		// resumes by typing `/goal resume`.
-		if (goal && goal.status === "active") {
-			try {
-				await mutateCodexGoal(sessionId, "pause");
-			} catch {
-				// Surfaced via toast inside mutateCodexGoal already; don't
-				// block the abort.
+		if (provider === "codex") {
+			const goal = queryClient.getQueryData<CodexGoalState | null>(
+				helmorQueryKeys.sessionCodexGoal(sessionId),
+			);
+			if (goal && goal.status === "active") {
+				try {
+					await mutateCodexGoal(sessionId, "pause");
+				} catch {
+					// Surfaced via toast inside mutateCodexGoal already; don't
+					// block the abort.
+				}
 			}
 		}
-		await stopAgentStream(sessionId, activeSession.provider);
-	}, [activeSessionByContext, composerContextKey, queryClient]);
+		await stopAgentStream(sessionId, provider);
+	}, [activeSessionByContext, activeStreams, composerContextKey, queryClient]);
 
 	const handlePermissionResponse = useCallback(
 		(
@@ -507,64 +526,36 @@ export function useConversationStreaming({
 		[composerContextKey],
 	);
 
-	const publishSendingState = useCallback(
-		(
-			contextKey: string,
-			workspaceId: string | null | undefined,
-			sending: boolean,
-		) => {
-			if (!contextKey.startsWith("session:")) {
-				return;
-			}
-			onSessionRunStateChangeRef.current?.(
-				contextKey.slice(8),
-				workspaceId ?? null,
-				sending,
-			);
-		},
-		[],
-	);
-
+	// `sendingContextKeys` is the local "this context is mid-send" flag —
+	// drives the composer's send-vs-steer routing and the queue-drain
+	// effect. Cross-container truth (busy/stoppable badges) lives in the
+	// `activeStreams` React Query feed instead, sourced from Rust.
 	const markSendingState = useCallback(
 		(contextKey: string, workspaceId: string | null | undefined) => {
-			const previousWorkspaceId =
-				sendingWorkspaceMapRef.current.get(contextKey) ?? null;
 			if (workspaceId) {
 				sendingWorkspaceMapRef.current.set(contextKey, workspaceId);
 			}
-			const nextWorkspaceId =
-				sendingWorkspaceMapRef.current.get(contextKey) ?? workspaceId ?? null;
 			if (sendingContextKeysRef.current.has(contextKey)) {
-				if (nextWorkspaceId !== previousWorkspaceId) {
-					publishSendingState(contextKey, nextWorkspaceId, true);
-				}
 				return;
 			}
 
 			sendingContextKeysRef.current = new Set(sendingContextKeysRef.current);
 			sendingContextKeysRef.current.add(contextKey);
-			publishSendingState(contextKey, nextWorkspaceId, true);
 			setSendingContextKeys(sendingContextKeysRef.current);
 		},
-		[publishSendingState],
+		[],
 	);
 
-	const pauseSendingState = useCallback(
-		(contextKey: string) => {
-			const workspaceId =
-				sendingWorkspaceMapRef.current.get(contextKey) ?? null;
-			sendingWorkspaceMapRef.current.delete(contextKey);
-			if (!sendingContextKeysRef.current.has(contextKey)) {
-				return;
-			}
+	const pauseSendingState = useCallback((contextKey: string) => {
+		sendingWorkspaceMapRef.current.delete(contextKey);
+		if (!sendingContextKeysRef.current.has(contextKey)) {
+			return;
+		}
 
-			sendingContextKeysRef.current = new Set(sendingContextKeysRef.current);
-			sendingContextKeysRef.current.delete(contextKey);
-			publishSendingState(contextKey, workspaceId, false);
-			setSendingContextKeys(sendingContextKeysRef.current);
-		},
-		[publishSendingState],
-	);
+		sendingContextKeysRef.current = new Set(sendingContextKeysRef.current);
+		sendingContextKeysRef.current.delete(contextKey);
+		setSendingContextKeys(sendingContextKeysRef.current);
+	}, []);
 
 	const clearSendingState = useCallback(
 		(contextKey: string) => {

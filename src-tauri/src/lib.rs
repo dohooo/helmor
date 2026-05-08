@@ -213,6 +213,7 @@ pub fn run() {
             agents::list_agent_model_sections,
             agents::send_agent_message_stream,
             agents::stop_agent_stream,
+            agents::list_active_streams,
             agents::steer_agent_stream,
             agents::respond_to_permission_request,
             agents::respond_to_user_input,

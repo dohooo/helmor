@@ -1393,7 +1393,8 @@ export type UiMutationEvent =
 			prompt: string;
 			modelId: string | null;
 			permissionMode: string | null;
-	  };
+	  }
+	| { type: "activeStreamsChanged" };
 
 export async function listenGitBranchChanged(
 	callback: (payload: GitBranchChangedPayload) => void,
@@ -2418,6 +2419,22 @@ export async function stopAgentStream(
 	await invoke("stop_agent_stream", {
 		request: { sessionId, provider: provider ?? null },
 	});
+}
+
+/** UI projection of a registered, in-flight agent stream. Mirror of
+ *  `agents::streaming::ActiveStreamSummary` on the Rust side. */
+export type ActiveStreamSummary = {
+	sessionId: string;
+	workspaceId: string | null;
+	provider: string;
+};
+
+/** Snapshot of currently in-flight agent streams. The frontend derives
+ *  `busy / stoppable / busy-workspace` Sets from this list. Refetched
+ *  whenever a `UiMutationEvent::ActiveStreamsChanged` lands via the
+ *  ui-sync bridge. */
+export async function listActiveStreams(): Promise<ActiveStreamSummary[]> {
+	return await invoke<ActiveStreamSummary[]>("list_active_streams");
 }
 
 export type AgentSteerRequest = {

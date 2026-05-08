@@ -24,7 +24,7 @@ mod state;
 mod event_loop_tests;
 
 pub(crate) use active_streams::ActiveStreamHandle;
-pub use active_streams::{abort_all_active_streams_blocking, ActiveStreams};
+pub use active_streams::{abort_all_active_streams_blocking, ActiveStreamSummary, ActiveStreams};
 pub use bridges::{
     bridge_aborted_event, bridge_done_event, bridge_error_event, bridge_permission_request_event,
     bridge_user_input_request_event,
@@ -161,6 +161,20 @@ pub(super) fn stream_via_sidecar(
         params,
     };
 
+    // Look up the owning workspace once at registration time so the UI
+    // snapshot can show "this workspace is busy" without each frontend
+    // having to thread workspace_id through the wire.
+    let workspace_id_for_handle = request.helmor_session_id.as_deref().and_then(|hsid| {
+        let conn = crate::models::db::read_conn().ok()?;
+        conn.query_row(
+            "SELECT workspace_id FROM sessions WHERE id = ?1",
+            [hsid],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+    });
+
     // Per-helmor-session lock — block overlapping sends so concurrent
     // `query()` calls can't stack against the same `resume:` id and
     // corrupt the conversation jsonl (issue #398).
@@ -169,6 +183,7 @@ pub(super) fn stream_via_sidecar(
         sidecar_session_id: sidecar_session_id.clone(),
         provider: model.provider.to_string(),
         helmor_session_id: request.helmor_session_id.clone(),
+        workspace_id: workspace_id_for_handle,
     });
     if !registered {
         tracing::warn!(
@@ -181,12 +196,19 @@ pub(super) fn stream_via_sidecar(
         )
         .into());
     }
+    // Notify the UI that the active-streams set changed. Anonymous
+    // streams (helmor_session_id == None) are filtered out of the
+    // snapshot the frontend reads, but we still publish — the
+    // frontend's invalidate is cheap and the alternative (branch on
+    // visibility here) couples this call site to UI policy.
+    crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
 
     let rx = sidecar.subscribe(&request_id);
 
     if let Err(error) = sidecar.send(&sidecar_req) {
         sidecar.unsubscribe(&request_id);
         active_streams.unregister(&request_id);
+        crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
         return Err(anyhow::anyhow!("Sidecar send failed: {error}").into());
     }
 
@@ -1097,6 +1119,7 @@ pub(super) fn stream_via_sidecar(
         );
         sidecar_state.unsubscribe(&rid);
         active_streams_state.unregister(&rid);
+        crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
     });
 
     Ok(())

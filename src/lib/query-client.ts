@@ -18,6 +18,7 @@ import {
 	getSessionContextUsage,
 	getWorkspaceAccountProfile,
 	getWorkspaceForge,
+	listActiveStreams,
 	listForgeAccounts,
 	listGithubLabels,
 	listRepositories,
@@ -129,6 +130,7 @@ export const helmorQueryKeys = {
 		["workspaceLinkedDirectories", workspaceId] as const,
 	workspaceCandidateDirectories: (excludeWorkspaceId: string | null) =>
 		["workspaceCandidateDirectories", excludeWorkspaceId ?? ""] as const,
+	activeStreams: ["activeStreams"] as const,
 };
 
 /** Persistence is opt-in per `queryOptions` via `meta: { persist: true }`.
@@ -311,6 +313,21 @@ export function repositoriesQueryOptions() {
 		initialDataUpdatedAt: 0,
 		staleTime: 0,
 		meta: PERSIST_META,
+	});
+}
+
+/** Snapshot of in-flight agent streams (source of truth = Rust
+ *  `ActiveStreams`). Drives abort-button visibility + busy badges; the
+ *  ui-sync bridge invalidates this on `activeStreamsChanged`. NOT
+ *  persisted — running streams are by definition tied to this app run,
+ *  rehydrating stale state across restarts would mislead the UI. */
+export function activeStreamsQueryOptions() {
+	return queryOptions({
+		queryKey: helmorQueryKeys.activeStreams,
+		queryFn: listActiveStreams,
+		initialData: [],
+		initialDataUpdatedAt: 0,
+		staleTime: 0,
 	});
 }
 

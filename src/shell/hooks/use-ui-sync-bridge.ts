@@ -188,6 +188,11 @@ function handleUiMutation(
 		case "pendingCliSendQueued":
 			void options.processPendingCliSends();
 			return;
+		case "activeStreamsChanged":
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.activeStreams,
+			});
+			return;
 	}
 }
 
