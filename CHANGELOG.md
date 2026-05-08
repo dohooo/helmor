@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.1
+
+### Patch Changes
+
+- [#443](https://github.com/dohooo/helmor/pull/443) [`97d845f`](https://github.com/dohooo/helmor/commit/97d845f62689a397a7bd534cb24bf7c64b3d208d) Thanks [@natllian](https://github.com/natllian)! - Fix Cursor model list failing with "Cannot find module ./642.index.js" in the compiled sidecar binary.
+
+- [#441](https://github.com/dohooo/helmor/pull/441) [`e53c4ff`](https://github.com/dohooo/helmor/commit/e53c4ffe925c0fd617b6c7e213a806c9d7950880) Thanks [@natllian](https://github.com/natllian)! - Fix sidecar startup crash introduced in v0.20.0 where adding the Cursor provider caused the sidecar to exit immediately with "Invalid sidecar ready signal" due to a native sqlite3 addon that cannot load inside a compiled Bun binary.
+
 ## 0.20.0
 
 ### Minor Changes
