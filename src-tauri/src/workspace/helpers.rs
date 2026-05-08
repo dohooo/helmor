@@ -147,23 +147,40 @@ const REPO_ICON_CANDIDATES: &[&str] = &[
     // (or any repo where automatic detection picks the wrong icon).
     ".helmor/icon.svg",
     ".helmor/icon.png",
-    // Single-package conventions.
+    // apple-touch-icon — high-resolution, often the best avatar source.
     "public/apple-touch-icon.png",
+    "public/apple-touch-icon-precomposed.png",
     "apple-touch-icon.png",
+    // SVG favicons / logos in single-package conventions (Vite, CRA, Astro).
     "public/favicon.svg",
     "favicon.svg",
     "public/logo.svg",
     "logo.svg",
+    "public/icon.svg",
+    // PNG favicons / logos in single-package conventions.
     "public/favicon.png",
     "public/icon.png",
     "public/logo.png",
     "favicon.png",
+    // Next.js App Router conventions — both root `app/` and `src/app/` layouts.
+    "app/icon.svg",
     "app/icon.png",
+    "app/apple-icon.svg",
+    "app/apple-icon.png",
+    "src/app/icon.svg",
     "src/app/icon.png",
+    "src/app/apple-icon.svg",
+    "src/app/apple-icon.png",
+    // SvelteKit / Astro `static/` directory.
+    "static/favicon.svg",
+    "static/favicon.png",
+    // .ico fallbacks (legacy, usually low-resolution).
     "public/favicon.ico",
     "favicon.ico",
     "app/favicon.ico",
+    "src/app/favicon.ico",
     "static/favicon.ico",
+    // Native / Tauri asset folders.
     "src-tauri/icons/icon.png",
     "assets/icon.png",
     "src/assets/icon.png",
@@ -1062,6 +1079,26 @@ mod tests {
         assert!(
             resolved.ends_with(".helmor/icon.svg"),
             "expected `.helmor/icon.svg` to win, got {resolved}"
+        );
+    }
+
+    #[test]
+    fn repo_icon_path_resolves_nextjs_src_app_favicon() {
+        // Next.js App Router projects scaffolded with the `src/` directory
+        // layout drop their favicon at `src/app/favicon.ico`. Real repos in
+        // the wild (e.g. eleito-app) fell back to initials before this entry
+        // existed.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        fs::create_dir_all(root.join("src/app")).unwrap();
+        fs::write(root.join("src/app/favicon.ico"), b"\0\0").unwrap();
+
+        let resolved = repo_icon_path_for_root_path(Some(root.to_str().unwrap()))
+            .expect("expected `src/app/favicon.ico` to resolve");
+        assert!(
+            resolved.ends_with("src/app/favicon.ico"),
+            "expected `src/app/favicon.ico` match, got {resolved}"
         );
     }
 
