@@ -42,7 +42,8 @@ fn repos_branch_prefix_override_migration_is_idempotent() {
                 name TEXT,
                 default_branch TEXT,
                 root_path TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             "#,
         )
@@ -69,7 +70,8 @@ fn repos_review_migration_adds_column_when_missing() {
                 name TEXT,
                 default_branch TEXT,
                 root_path TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             "#,
         )
@@ -101,7 +103,8 @@ fn repos_review_migration_renames_legacy_column() {
                 default_branch TEXT,
                 root_path TEXT,
                 custom_prompt_review_pr TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             INSERT INTO repos (id, name, custom_prompt_review_pr)
             VALUES ('r1', 'demo', 'keep me');
