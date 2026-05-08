@@ -137,6 +137,220 @@ body {
 	animation: conversation-fade-in 70ms ease-out;
 }
 
+.helmor-logo-css-piece {
+	fill: currentColor;
+	transform-box: fill-box;
+	transform-origin: center;
+	animation-duration: 2100ms;
+	animation-iteration-count: infinite;
+	animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.helmor-logo-css-piece-tl {
+	animation-name: helmor-logo-css-tl;
+}
+
+.helmor-logo-css-piece-ml {
+	animation-name: helmor-logo-css-ml;
+}
+
+.helmor-logo-css-piece-bl {
+	animation-name: helmor-logo-css-bl;
+}
+
+.helmor-logo-css-piece-bridge {
+	animation-name: helmor-logo-css-bridge;
+}
+
+.helmor-logo-css-piece-br {
+	animation-name: helmor-logo-css-br;
+}
+
+.helmor-logo-css-piece-mr {
+	animation-name: helmor-logo-css-mr;
+}
+
+.helmor-logo-css-piece-tr {
+	animation-name: helmor-logo-css-tr;
+}
+
+@keyframes helmor-logo-css-tl {
+	0%,
+	14.2857%,
+	100% {
+		transform: scaleX(1);
+		opacity: 1;
+	}
+	3.5714% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+	7.1429% {
+		transform: scaleX(-1);
+		opacity: 0.03;
+	}
+	10.7143% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+}
+
+@keyframes helmor-logo-css-ml {
+	0%,
+	7.1429%,
+	21.4286%,
+	85.7143%,
+	100% {
+		transform: scaleX(1);
+		opacity: 1;
+	}
+	10.7143%,
+	96.4286% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+	14.2857%,
+	92.8571% {
+		transform: scaleX(-1);
+		opacity: 0.03;
+	}
+	17.8571%,
+	89.2857% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+}
+
+@keyframes helmor-logo-css-bl {
+	0%,
+	14.2857%,
+	28.5714%,
+	78.5714%,
+	92.8571%,
+	100% {
+		transform: scaleX(1);
+		opacity: 1;
+	}
+	17.8571%,
+	89.2857% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+	21.4286%,
+	85.7143% {
+		transform: scaleX(-1);
+		opacity: 0.03;
+	}
+	25%,
+	82.1429% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+}
+
+@keyframes helmor-logo-css-bridge {
+	0%,
+	21.4286%,
+	35.7143%,
+	71.4286%,
+	85.7143%,
+	100% {
+		transform: scaleX(1);
+		opacity: 1;
+	}
+	25%,
+	82.1429% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+	28.5714%,
+	78.5714% {
+		transform: scaleX(-1);
+		opacity: 0.03;
+	}
+	32.1429%,
+	75% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+}
+
+@keyframes helmor-logo-css-br {
+	0%,
+	42.8571%,
+	57.1429%,
+	100% {
+		transform: scaleX(1);
+		opacity: 1;
+	}
+	46.4286% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+	50% {
+		transform: scaleX(-1);
+		opacity: 0.03;
+	}
+	53.5714% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+}
+
+@keyframes helmor-logo-css-mr {
+	0%,
+	35.7143%,
+	50%,
+	57.1429%,
+	71.4286%,
+	100% {
+		transform: scaleX(1);
+		opacity: 1;
+	}
+	39.2857%,
+	67.8571% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+	42.8571%,
+	64.2857% {
+		transform: scaleX(-1);
+		opacity: 0.03;
+	}
+	46.4286%,
+	60.7143% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+}
+
+@keyframes helmor-logo-css-tr {
+	0%,
+	28.5714%,
+	42.8571%,
+	64.2857%,
+	78.5714%,
+	100% {
+		transform: scaleX(1);
+		opacity: 1;
+	}
+	32.1429%,
+	75% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+	35.7143%,
+	71.4286% {
+		transform: scaleX(-1);
+		opacity: 0.03;
+	}
+	39.2857%,
+	67.8571% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+}
+
 .shortcut-recording-pulse::after {
 	position: absolute;
 	inset: -2px;
