@@ -1,7 +1,17 @@
 import "@testing-library/jest-dom/vitest";
-import { configure } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { createElement, type SVGProps } from "react";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
+
+// `vitest` does not enable `globals` (so the `afterEach` symbol that
+// `@testing-library/react` looks for at import time is undefined and its
+// auto-cleanup hook never registers). Without cleanup, mounted trees from
+// earlier tests stay attached to `document.body`, double-rendering anything
+// that subscribes to module-level state. Register the cleanup once globally
+// so individual tests don't have to remember.
+afterEach(() => {
+	cleanup();
+});
 
 // Default 1000ms is too tight for GitHub Actions runners where a 55-test
 // file can take ~55s of transform+import time; waitFor checks bump into the
