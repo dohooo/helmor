@@ -14,9 +14,10 @@ import type { ReactNode } from "react";
 import { InlineBadge } from "@/components/inline-badge";
 import { SourceIcon } from "@/features/inbox/source-icon";
 import { STATE_TONE_CLASS } from "@/features/inbox/state-tone";
-import type {
-	ComposerCustomTag,
-	ComposerPreviewPayload,
+import {
+	buildComposerPreviewLabel,
+	type ComposerCustomTag,
+	type ComposerPreviewPayload,
 } from "@/lib/composer-insert";
 import type {
 	ContextCardSource,
@@ -55,6 +56,8 @@ function ComposerCustomTagBadge({
 		/>
 	);
 
+	const isEditableText = customTag.preview?.kind === "text";
+
 	return (
 		<InlineBadge
 			icon={icon}
@@ -67,6 +70,16 @@ function ComposerCustomTagBadge({
 					if ($isCustomTagBadgeNode(node)) node.remove();
 				});
 			}}
+			onEdit={
+				isEditableText
+					? (nextText) => {
+							editor.update(() => {
+								const node = $getNodeByKey(nodeKey);
+								if ($isCustomTagBadgeNode(node)) node.setText(nextText);
+							});
+						}
+					: undefined
+			}
 		/>
 	);
 }
@@ -161,6 +174,22 @@ export class CustomTagBadgeNode extends DecoratorNode<ReactNode> {
 			...(this.__preview ? { preview: this.__preview } : {}),
 			...(this.__source ? { source: this.__source } : {}),
 			...(this.__stateTone ? { stateTone: this.__stateTone } : {}),
+		};
+	}
+
+	// 仅支持 text 类型预览的就地编辑：同步刷新 submitText / label / preview.text
+	setText(nextText: string): void {
+		const current = this.__preview;
+		if (!current || current.kind !== "text") return;
+		if (nextText === this.__submitText) return;
+		const writable = this.getWritable();
+		const nextLabel = buildComposerPreviewLabel(nextText, "text");
+		writable.__submitText = nextText;
+		writable.__label = nextLabel;
+		writable.__preview = {
+			kind: "text",
+			title: nextLabel,
+			text: nextText,
 		};
 	}
 
