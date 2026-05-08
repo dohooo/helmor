@@ -25,5 +25,8 @@
 	"trustedDependencies": [
 		"@anthropic-ai/claude-code",
 		"sqlite3"
-	]
+	],
+	"patchedDependencies": {
+		"sqlite3@5.1.7": "patches/sqlite3@5.1.7.patch"
+	}
 }
