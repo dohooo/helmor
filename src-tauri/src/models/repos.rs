@@ -346,6 +346,24 @@ pub(crate) fn insert_repository(repository: &ResolvedRepositoryInput) -> Result<
         )
         .with_context(|| format!("Failed to insert repository {}", repository.name))?;
 
+    // Set all inherit flags to 1 on the same connection before releasing it,
+    // so the helper doesn't need to re-acquire the single-writer slot.
+    connection
+        .execute(
+            r#"
+            UPDATE repos SET
+              inherit_global_create_pr = 1,
+              inherit_global_review = 1,
+              inherit_global_fix_errors = 1,
+              inherit_global_resolve_conflicts = 1,
+              inherit_global_rename_branch = 1,
+              inherit_global_general = 1
+            WHERE id = ?1
+            "#,
+            [repo_id.as_str()],
+        )
+        .with_context(|| format!("Failed to default inherit flags for {}", repository.name))?;
+
     Ok(repo_id)
 }
 
@@ -1018,6 +1036,31 @@ pub fn update_repo_preferences(
         bail!("Repository not found: {repo_id}");
     }
 
+    Ok(())
+}
+
+/// Set all six inherit_global_* flags to 1 for a freshly-inserted repo
+/// so it picks up the global template by default. New columns default
+/// to 0; this helper bumps them to 1 for repos that come through the
+/// canonical insert path.
+#[allow(dead_code)]
+pub(crate) fn set_default_inherit_flags_on_insert(repo_id: &str) -> Result<()> {
+    let connection = db::write_conn()?;
+    connection
+        .execute(
+            r#"
+            UPDATE repos SET
+              inherit_global_create_pr = 1,
+              inherit_global_review = 1,
+              inherit_global_fix_errors = 1,
+              inherit_global_resolve_conflicts = 1,
+              inherit_global_rename_branch = 1,
+              inherit_global_general = 1
+            WHERE id = ?1
+            "#,
+            [repo_id],
+        )
+        .with_context(|| format!("Failed to default inherit flags for {repo_id}"))?;
     Ok(())
 }
 
@@ -1776,5 +1819,26 @@ mod global_prefs_tests {
         let count_no_change =
             count_repos_following_changed_global_fields(&previous, &previous).unwrap();
         assert_eq!(count_no_change, 0, "no fields changed should return 0");
+    }
+
+    #[test]
+    fn newly_inserted_repo_inherits_all_fields() {
+        let _env = crate::testkit::TestEnv::new("gp-new-repo-inherits");
+        let conn = db::write_conn().unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name, root_path) VALUES ('new', 'new', '/tmp')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        set_default_inherit_flags_on_insert("new").unwrap();
+
+        let resolved = load_repo_preferences("new").unwrap();
+        assert!(resolved.inherit.create_pr);
+        assert!(resolved.inherit.review);
+        assert!(resolved.inherit.fix_errors);
+        assert!(resolved.inherit.resolve_conflicts);
+        assert!(resolved.inherit.branch_rename);
+        assert!(resolved.inherit.general);
     }
 }
