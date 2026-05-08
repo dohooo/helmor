@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.20.0
+
+### Minor Changes
+
+- [#432](https://github.com/dohooo/helmor/pull/432) [`32b3324`](https://github.com/dohooo/helmor/commit/32b3324504100d465d24e2f1edc7539f76402e24) Thanks [@natllian](https://github.com/natllian)! - Add Cursor as a third agent provider.
+
+### Patch Changes
+
+- [#437](https://github.com/dohooo/helmor/pull/437) [`fe40e26`](https://github.com/dohooo/helmor/commit/fe40e261eed15cb1b45bede4afef7a92a66c8424) Thanks [@dohooo](https://github.com/dohooo)! - Allow creating a new workspace from the start page without typing a prompt, with the empty composer button shown as New Workspace.
+
+- [#436](https://github.com/dohooo/helmor/pull/436) [`2e2c58f`](https://github.com/dohooo/helmor/commit/2e2c58f8a10cd29789d2f15349bab94d1c3f34f4) Thanks [@natllian](https://github.com/natllian)! - Remove the open/close animation on the sidebar workspace hover card so it appears and disappears instantly instead of fading and zooming.
+
+- [#440](https://github.com/dohooo/helmor/pull/440) [`f1669e0`](https://github.com/dohooo/helmor/commit/f1669e0e84f164f57ed22962f533eb427beb205c) Thanks [@natllian](https://github.com/natllian)! - Fix a bug where the composer's abort button would sometimes do nothing after navigating away from a running session and back.
+
+- [#439](https://github.com/dohooo/helmor/pull/439) [`0042c58`](https://github.com/dohooo/helmor/commit/0042c5852a6fc5e09516417a246d8ea1632c07df) Thanks [@natllian](https://github.com/natllian)! - Fix inflated +/- line counts in the inspector for files touched across multiple git stages.
+
+- [#434](https://github.com/dohooo/helmor/pull/434) [`aa03494`](https://github.com/dohooo/helmor/commit/aa034942e28b7aa670adc8bd6633fcfef0af9c54) Thanks [@natllian](https://github.com/natllian)! - Fix a bug where a workspace on a shared branch like `main` could be mis-associated with — and auto-canceled by — an unrelated fork pull request that happened to use the same branch name.
+
+- [#438](https://github.com/dohooo/helmor/pull/438) [`6ba4da5`](https://github.com/dohooo/helmor/commit/6ba4da5842ea40dd2928c1ebc13d6346fe58757a) Thanks [@dohooo](https://github.com/dohooo)! - Replace the Helmor loading logo with a smoother theme-matched SVG animation that keeps the indicator crisp while reducing runtime overhead.
+
 ## 0.19.1
 
 ### Patch Changes
