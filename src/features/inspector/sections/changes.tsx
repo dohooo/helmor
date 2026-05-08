@@ -22,11 +22,6 @@ import {
 } from "@/components/ui/context-menu";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-	Tooltip,
-	TooltipContent,
-	TooltipTrigger,
-} from "@/components/ui/tooltip";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
@@ -292,42 +287,6 @@ export function ChangesSection({
 		},
 		[invalidateChanges, surfaceChangeError, workspaceRootPath],
 	);
-	const stageAll = useCallback(async () => {
-		if (!workspaceRootPath) {
-			return;
-		}
-		const paths = unstagedChanges.map((change) => change.path);
-		try {
-			for (const path of paths) {
-				await stageWorkspaceFile(workspaceRootPath, path);
-			}
-		} catch (error) {
-			surfaceChangeError("stage files", error);
-		} finally {
-			invalidateChanges();
-		}
-	}, [
-		invalidateChanges,
-		surfaceChangeError,
-		unstagedChanges,
-		workspaceRootPath,
-	]);
-	const unstageAll = useCallback(async () => {
-		if (!workspaceRootPath) {
-			return;
-		}
-		const paths = stagedChanges.map((change) => change.path);
-		try {
-			for (const path of paths) {
-				await unstageWorkspaceFile(workspaceRootPath, path);
-			}
-		} catch (error) {
-			surfaceChangeError("unstage files", error);
-		} finally {
-			invalidateChanges();
-		}
-	}, [invalidateChanges, stagedChanges, surfaceChangeError, workspaceRootPath]);
-
 	const discardFile = useCallback(
 		async (relativePath: string) => {
 			if (!workspaceRootPath) {
@@ -506,6 +465,7 @@ export function ChangesSection({
 				forgeDetection={forgeDetection}
 				workspaceId={workspaceId}
 				hasChanges={hasChanges}
+				changeCount={entries.length}
 				isRefreshing={isForgeRefreshing}
 				isContinuingWorkspace={isContinuingWorkspace}
 				onChangeRequestClick={
@@ -519,16 +479,6 @@ export function ChangesSection({
 				aria-label="Changes panel body"
 				className="min-h-0 flex-1 bg-muted/20 font-mono text-[11.5px]"
 			>
-				{hasChanges && (
-					<ChangesListHeader
-						count={entries.length}
-						hasUnstaged={unstagedChanges.length > 0}
-						hasStaged={stagedChanges.length > 0}
-						onStageAll={stageAll}
-						onUnstageAll={unstageAll}
-					/>
-				)}
-
 				{branchSwitching && entries.length === 0 ? (
 					<div className="px-2 py-2 text-[10.5px] text-muted-foreground">
 						Switching target branch…
@@ -552,66 +502,6 @@ export function ChangesSection({
 				)}
 			</ScrollArea>
 		</motion.section>
-	);
-}
-
-function ChangesListHeader({
-	count,
-	hasUnstaged,
-	hasStaged,
-	onStageAll,
-	onUnstageAll,
-}: {
-	count: number;
-	hasUnstaged: boolean;
-	hasStaged: boolean;
-	onStageAll: () => void;
-	onUnstageAll: () => void;
-}) {
-	return (
-		<div className="sticky top-0 z-10 flex h-6 items-center justify-end gap-1.5 bg-muted/20 px-2 backdrop-blur-sm">
-			{hasUnstaged && (
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon-xs"
-							aria-label="Stage all"
-							onClick={() => void onStageAll()}
-							className="size-4 rounded-sm text-muted-foreground hover:bg-accent/60 hover:text-foreground"
-						>
-							<PlusIcon className="size-3.5" strokeWidth={2} />
-						</Button>
-					</TooltipTrigger>
-					<TooltipContent side="bottom" sideOffset={4}>
-						Stage all
-					</TooltipContent>
-				</Tooltip>
-			)}
-			{hasStaged && (
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon-xs"
-							aria-label="Unstage all"
-							onClick={() => void onUnstageAll()}
-							className="size-4 rounded-sm text-muted-foreground hover:bg-accent/60 hover:text-foreground"
-						>
-							<MinusIcon className="size-3.5" strokeWidth={2} />
-						</Button>
-					</TooltipTrigger>
-					<TooltipContent side="bottom" sideOffset={4}>
-						Unstage all
-					</TooltipContent>
-				</Tooltip>
-			)}
-			<span className="text-[10.5px] tabular-nums text-muted-foreground">
-				{count} change{count === 1 ? "" : "s"}
-			</span>
-		</div>
 	);
 }
 

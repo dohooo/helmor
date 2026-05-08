@@ -71,6 +71,11 @@ export type GitSectionHeaderProps = {
 	changeRequest: ChangeRequestInfo | null;
 	hasChanges?: boolean;
 	/**
+	 * Total number of change rows currently displayed in the section. Rendered
+	 * in place of the "Git" label when no PR is shown.
+	 */
+	changeCount?: number;
+	/**
 	 * Whether change request data is currently being (re)fetched. Drives the
 	 * bottom shimmer bar (combined with `commitButtonState === "disabled"`).
 	 * Gated by a min display duration so fast responses don't flicker.
@@ -99,6 +104,7 @@ export function GitSectionHeader({
 	commitButtonState,
 	changeRequest,
 	hasChanges = false,
+	changeCount = 0,
 	isRefreshing = false,
 	changeRequestName = "PR",
 	forgeRemoteState = null,
@@ -275,7 +281,7 @@ export function GitSectionHeader({
 			>
 				{!showChangeRequest ? (
 					<span className={cn(INSPECTOR_SECTION_TITLE_CLASS, "translate-y-px")}>
-						Git
+						{changeCount} change{changeCount === 1 ? "" : "s"}
 					</span>
 				) : (
 					(() => {

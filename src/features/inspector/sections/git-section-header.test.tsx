@@ -79,13 +79,14 @@ describe("GitSectionHeader forge onboarding", () => {
 				commitButtonState="idle"
 				changeRequest={changeRequest}
 				changeRequestName="MR"
+				changeCount={3}
 				forgeDetection={gitlabDetection()}
 				forgeRemoteState="unauthenticated"
 				workspaceId="workspace-1"
 			/>,
 		);
 
-		const title = screen.getByText("Git");
+		const title = screen.getByText("3 changes");
 		const connectTrigger = screen.getByTestId("forge-connect-trigger");
 
 		expect(title).toBeInTheDocument();
