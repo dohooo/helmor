@@ -320,9 +320,11 @@ export function useWorkspaceInspectorSidebar({
 	const nextChangesSnapshot = useMemo(() => {
 		const snapshot = new Map<string, string>();
 		for (const item of changes) {
+			// Flashing key includes all three areas — any line-count change
+			// in any area should trigger the flash.
 			snapshot.set(
 				item.path,
-				`${item.insertions}:${item.deletions}:${item.status}`,
+				`${item.stagedInsertions}:${item.stagedDeletions}:${item.unstagedInsertions}:${item.unstagedDeletions}:${item.committedInsertions}:${item.committedDeletions}:${item.status}`,
 			);
 		}
 		return snapshot;

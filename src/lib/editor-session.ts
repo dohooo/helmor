@@ -41,8 +41,18 @@ export type InspectorFileItem = {
 	absolutePath: string;
 	name: string;
 	status: "M" | "A" | "D";
-	insertions: number;
-	deletions: number;
+	/** Lines added/removed in the staged area (HEAD vs index). */
+	stagedInsertions: number;
+	stagedDeletions: number;
+	/** Lines added/removed in the unstaged area (index vs working tree).
+	 * Includes line counts for untracked files. */
+	unstagedInsertions: number;
+	unstagedDeletions: number;
+	/** Lines added/removed in the committed area (target_ref vs HEAD). */
+	committedInsertions: number;
+	committedDeletions: number;
+	/** True when the file is binary (no meaningful line diff). */
+	isBinary?: boolean;
 	/** Set when the file has staged changes (HEAD vs index). */
 	stagedStatus?: "M" | "A" | "D" | null;
 	/** Set when the file has unstaged changes (index vs working tree, or
@@ -85,8 +95,12 @@ export function buildFallbackInspectorFileItems(
 		absolutePath: joinPath(normalizedRoot, file.path),
 		name: getBaseName(file.path),
 		status: file.status,
-		insertions: 0,
-		deletions: 0,
+		stagedInsertions: 0,
+		stagedDeletions: 0,
+		unstagedInsertions: 0,
+		unstagedDeletions: 0,
+		committedInsertions: 0,
+		committedDeletions: 0,
 	}));
 }
 
