@@ -1,6 +1,7 @@
 mod changes;
 mod editor;
 pub mod listing;
+pub mod search;
 mod support;
 mod types;
 
