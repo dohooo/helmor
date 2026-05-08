@@ -229,8 +229,9 @@ fn update_scripts(
 
 fn show_prefs(repo_ref: &str, cli: &Cli) -> Result<()> {
     let id = service::resolve_repo_ref(repo_ref)?;
-    let prefs = repos::load_repo_preferences(&id)?;
-    output::print(cli, &prefs, |p| {
+    let resolved = repos::load_repo_preferences(&id)?;
+    let p = &resolved.effective;
+    output::print(cli, &resolved, |_| {
         format!(
             "create-pr:          {}\nfix-errors:         {}\nresolve-conflicts:  {}\nbranch-rename:      {}\ngeneral:            {}",
             p.create_pr.as_deref().unwrap_or("-"),
@@ -252,23 +253,24 @@ fn update_prefs(
     cli: &Cli,
 ) -> Result<()> {
     let id = service::resolve_repo_ref(repo_ref)?;
-    let mut prefs = repos::load_repo_preferences(&id)?;
+    let resolved = repos::load_repo_preferences(&id)?;
+    let mut overrides = resolved.overrides;
     if let Some(v) = create_pr {
-        prefs.create_pr = Some(v.to_string());
+        overrides.create_pr = Some(v.to_string());
     }
     if let Some(v) = fix_errors {
-        prefs.fix_errors = Some(v.to_string());
+        overrides.fix_errors = Some(v.to_string());
     }
     if let Some(v) = resolve_conflicts {
-        prefs.resolve_conflicts = Some(v.to_string());
+        overrides.resolve_conflicts = Some(v.to_string());
     }
     if let Some(v) = branch_rename {
-        prefs.branch_rename = Some(v.to_string());
+        overrides.branch_rename = Some(v.to_string());
     }
     if let Some(v) = general {
-        prefs.general = Some(v.to_string());
+        overrides.general = Some(v.to_string());
     }
-    repos::update_repo_preferences(&id, &prefs)?;
+    repos::update_repo_preferences(&id, &overrides, &resolved.inherit)?;
     notify_ui_event(UiMutationEvent::RepositoryChanged { repo_id: id });
     output::print_ok(cli, "Preferences updated");
     Ok(())
