@@ -44,8 +44,8 @@
 	--sidebar-accent-foreground: oklch(0.205 0 0);
 	--workspace-sidebar-selected-bg: color-mix(
 		in oklch,
-		var(--sidebar-accent) 98.5%,
-		var(--sidebar-foreground) 1.5%
+		var(--sidebar-foreground) 8%,
+		transparent
 	);
 	--sidebar-border: oklch(0.922 0 0);
 	--sidebar-ring: oklch(0.708 0 0);
@@ -169,8 +169,8 @@
 	--sidebar-accent-foreground: oklch(0.985 0 0);
 	--workspace-sidebar-selected-bg: color-mix(
 		in oklch,
-		var(--sidebar-accent) 98.5%,
-		var(--sidebar-foreground) 1.5%
+		var(--sidebar-foreground) 12%,
+		transparent
 	);
 	--sidebar-border: oklch(1 0 0 / 10%);
 	--sidebar-ring: oklch(0.556 0 0);

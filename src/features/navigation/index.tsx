@@ -511,10 +511,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 						{item.repo.rows.length > 0 ? (
 							<span className="relative flex h-5 min-w-5 items-center justify-center">
-								<Badge
-									variant="secondary"
-									className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none transition-opacity group-hover/trigger:opacity-0"
-								>
+								<Badge className="h-4 min-w-[16px] justify-center rounded-full border-transparent bg-sidebar-foreground/10 px-1 text-[9.5px] font-medium leading-none text-sidebar-foreground/70 transition-opacity group-hover/trigger:opacity-0">
 									{item.repo.rows.length}
 								</Badge>
 								<ChevronRight
@@ -568,10 +565,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 						{item.group.rows.length > 0 ? (
 							<span className="relative flex h-5 min-w-5 items-center justify-center">
-								<Badge
-									variant="secondary"
-									className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none transition-opacity group-hover/trigger:opacity-0"
-								>
+								<Badge className="h-4 min-w-[16px] justify-center rounded-full border-transparent bg-sidebar-foreground/10 px-1 text-[9.5px] font-medium leading-none text-sidebar-foreground/70 transition-opacity group-hover/trigger:opacity-0">
 									{item.group.rows.length}
 								</Badge>
 								<ChevronRight
