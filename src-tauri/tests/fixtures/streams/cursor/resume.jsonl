@@ -1,0 +1,12 @@
+{"type":"cursor/agent_init","session_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","model":"composer-2","id":"test-request"}
+{"type":"cursor/status","agent_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","run_id":"run-3665b532-3769-4bb1-b943-d2076dce1b98","status":"RUNNING","id":"test-request"}
+{"type":"cursor/thinking","agent_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","run_id":"run-3665b532-3769-4bb1-b943-d2076dce1b98","text":"The user is continuing","id":"test-request"}
+{"type":"cursor/thinking","agent_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","run_id":"run-3665b532-3769-4bb1-b943-d2076dce1b98","text":" from the previous context.","id":"test-request"}
+{"type":"cursor/thinking","agent_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","run_id":"run-3665b532-3769-4bb1-b943-d2076dce1b98","text":"","thinking_duration_ms":11,"id":"test-request"}
+{"type":"cursor/assistant","agent_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","run_id":"run-3665b532-3769-4bb1-b943-d2076dce1b98","message":{"role":"assistant","content":[{"type":"text","text":"4"}]},"id":"test-request"}
+{"type":"cursor/assistant","agent_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","run_id":"run-3665b532-3769-4bb1-b943-d2076dce1b98","message":{"role":"assistant","content":[{"type":"text","text":" 乘 3"}]},"id":"test-request"}
+{"type":"cursor/assistant","agent_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","run_id":"run-3665b532-3769-4bb1-b943-d2076dce1b98","message":{"role":"assistant","content":[{"type":"text","text":" 等于"}]},"id":"test-request"}
+{"type":"cursor/assistant","agent_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","run_id":"run-3665b532-3769-4bb1-b943-d2076dce1b98","message":{"role":"assistant","content":[{"type":"text","text":" "}]},"id":"test-request"}
+{"type":"cursor/assistant","agent_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","run_id":"run-3665b532-3769-4bb1-b943-d2076dce1b98","message":{"role":"assistant","content":[{"type":"text","text":"12"}]},"id":"test-request"}
+{"type":"cursor/assistant","agent_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","run_id":"run-3665b532-3769-4bb1-b943-d2076dce1b98","message":{"role":"assistant","content":[{"type":"text","text":"。"}]},"id":"test-request"}
+{"type":"cursor/status","agent_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","run_id":"run-3665b532-3769-4bb1-b943-d2076dce1b98","status":"FINISHED","id":"test-request"}

@@ -7,7 +7,7 @@
 
 import type { SidecarEmitter } from "./emitter.js";
 
-export type Provider = "claude" | "codex";
+export type Provider = "claude" | "codex" | "cursor";
 
 export interface SendMessageParams {
 	readonly sessionId: string;
@@ -97,6 +97,17 @@ export type UserInputResolution =
 	| { action: "decline"; content?: Record<string, unknown> }
 	| { action: "cancel" };
 
+/** Mirrors `ModelParameterDefinition` from @cursor/sdk. Single source of
+ *  truth for derived `effortLevels`/`supportsFastMode` + send-time params. */
+export interface CursorModelParameter {
+	readonly id: string;
+	readonly displayName?: string;
+	readonly values: ReadonlyArray<{
+		readonly value: string;
+		readonly displayName?: string;
+	}>;
+}
+
 /** A model entry returned by listModels. Provider is implicit. */
 export interface ProviderModelInfo {
 	readonly id: string;
@@ -104,6 +115,8 @@ export interface ProviderModelInfo {
 	readonly cliModel: string;
 	readonly effortLevels?: readonly string[];
 	readonly supportsFastMode?: boolean;
+	/** Cursor-only — raw `parameters[]` from `ModelListItem`. */
+	readonly cursorParameters?: readonly CursorModelParameter[];
 }
 
 export interface SessionManager {
@@ -158,8 +171,10 @@ export interface SessionManager {
 		params: ListSlashCommandsParams,
 	): Promise<readonly SlashCommandInfo[]>;
 
-	/** List available models from the provider. */
-	listModels(): Promise<readonly ProviderModelInfo[]>;
+	/** List available models. `apiKey` overrides the manager's stored key
+	 *  for one-off probes (e.g. onboarding validation); when omitted the
+	 *  manager uses whatever it has configured. */
+	listModels(opts?: { apiKey?: string }): Promise<readonly ProviderModelInfo[]>;
 
 	/**
 	 * Abort an in-flight session by id. No-op if the session is not active.

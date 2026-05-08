@@ -10,6 +10,7 @@
 //!   collection helpers used by both submodules.
 
 mod codex;
+mod cursor;
 mod streaming;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -145,6 +146,10 @@ pub struct StreamAccumulator {
     /// Timestamp (ms since epoch) when the current Codex turn started.
     /// Used to compute turn duration since the App Server doesn't provide it.
     pub(super) codex_turn_started_at: Option<f64>,
+
+    // ── Cursor state ─────────────────────────────────────────────────
+    /// Per-run cursor state; see `cursor.rs`.
+    cursor_state: cursor::CursorRunState,
 
     // ── Coverage guard ───────────────────────────────────────────────
     /// Top-level event types that fell through `push_event`'s match
@@ -304,6 +309,7 @@ impl StreamAccumulator {
             codex_items: codex::new_item_states(),
             codex_partial_idx: None,
             codex_turn_started_at: None,
+            cursor_state: cursor::new_run_state(),
             dropped_event_types: Vec::new(),
         }
     }
@@ -476,6 +482,15 @@ impl StreamAccumulator {
                 }
                 PushOutcome::NoOp
             }
+
+            // ── Cursor SDK events (namespaced by sidecar manager) ─────
+            // Synthetic — session_id already lifted by push_event extractor.
+            Some("cursor/agent_init") => PushOutcome::NoOp,
+            Some("cursor/status") => cursor::handle_status(self, value),
+            Some("cursor/thinking") => cursor::handle_thinking(self, value),
+            Some("cursor/assistant") => cursor::handle_assistant_delta(self, value),
+            Some("cursor/tool_call_start") => cursor::handle_tool_call_start(self, value),
+            Some("cursor/tool_call_end") => cursor::handle_tool_call_end(self, value),
 
             // ── Codex informational notifications (no render) ────────
             Some("thread/status/changed")
@@ -713,6 +728,12 @@ impl StreamAccumulator {
     /// on abort. No-op when no items are in flight.
     pub fn flush_codex_in_progress(&mut self) {
         codex::flush_in_progress(self);
+    }
+
+    /// Drain in-flight cursor state on abort (no FINISHED will arrive).
+    /// Idempotent.
+    pub fn flush_cursor_in_progress(&mut self) {
+        cursor::flush_in_progress(self);
     }
 
     /// Convert any active streaming partial into a finalized assistant

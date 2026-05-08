@@ -170,8 +170,11 @@ type WorkspaceComposerProps = {
 	/** Provider's own session id (Claude Code UUID). Threaded into the
 	 *  context-usage ring for its hover-triggered live fetch. */
 	providerSessionId?: string | null;
-	/** Agent provider for this session — gates the Claude-only rich fetch. */
-	agentType?: "claude" | "codex" | null;
+	/** Agent provider for this session — gates the Claude-only rich fetch
+	 *  and selects which rate-limits API to query. `"cursor"` exists but
+	 *  Cursor's SDK doesn't expose rate-limit / context-usage endpoints
+	 *  yet, so the indicators just hide for cursor sessions. */
+	agentType?: "claude" | "codex" | "cursor" | null;
 	focusShortcut?: string | null;
 	togglePlanShortcut?: string | null;
 	/** Hotkey that submits the current draft with the opposite follow-up
@@ -323,6 +326,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const supportsEffort = availableEffortLevels.length > 0;
 	const supportsFastMode = selectedModel?.supportsFastMode === true;
 	const supportsContextUsage = selectedModel?.supportsContextUsage !== false;
+	// Cursor SDK auto-handles plans internally — no toggle to expose.
+	const supportsPlanMode = selectedModel?.provider !== "cursor";
 	const effectiveEffort = useMemo(
 		() => clampEffort(effortLevel, availableEffortLevels),
 		[effortLevel, availableEffortLevels],
@@ -576,7 +581,11 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				return;
 			}
 
-			if (togglePlanShortcut && hotkey === togglePlanShortcut) {
+			if (
+				togglePlanShortcut &&
+				hotkey === togglePlanShortcut &&
+				supportsPlanMode
+			) {
 				event.preventDefault();
 				event.stopPropagation();
 				onChangePermissionMode(permissionMode === "plan" ? "default" : "plan");
@@ -586,6 +595,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			inputDisabled,
 			onChangePermissionMode,
 			permissionMode,
+			supportsPlanMode,
 			togglePlanShortcut,
 			toggleFollowUpShortcut,
 			handleSubmitOpposite,
@@ -894,14 +904,21 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										<DropdownMenu>
 											<DropdownMenuTrigger
 												disabled={toolbarDisabled}
+												// Always-on muted baseline: `effort-max-text`
+												// paints via `-webkit-text-fill-color: transparent`
+												// without setting `color`, so without this
+												// removing the gradient class would briefly expose
+												// `text-foreground` and `transition-colors`
+												// animates the flash. Hover stays muted to avoid
+												// a second flash on dropdown close.
 												className={cn(
 													`flex items-center gap-0.5 ${composerToolbarTriggerClassName}`,
-													effectiveEffort === "max" ||
-														effectiveEffort === "xhigh"
-														? "effort-max-text"
-														: "text-muted-foreground",
+													"text-muted-foreground hover:text-muted-foreground",
+													(effectiveEffort === "max" ||
+														effectiveEffort === "xhigh") &&
+														"effort-max-text",
 													toolbarDisabled
-														? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
+														? "cursor-not-allowed opacity-45 hover:bg-transparent"
 														: null,
 												)}
 											>
@@ -947,26 +964,31 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											</DropdownMenuContent>
 										</DropdownMenu>
 									)}
-									<ComposerButton
-										aria-label="Plan mode"
-										disabled={toolbarDisabled}
-										className={cn(
-											`gap-1 px-1.5 text-[11px] ${composerToolbarTriggerClassName}`,
-											permissionMode === "plan"
-												? "text-plan hover:text-plan"
-												: "text-muted-foreground/70 hover:text-muted-foreground/70",
-										)}
-										onClick={() =>
-											onChangePermissionMode(
+									{supportsPlanMode ? (
+										<ComposerButton
+											aria-label="Plan mode"
+											disabled={toolbarDisabled}
+											className={cn(
+												`gap-1 px-1.5 text-[11px] ${composerToolbarTriggerClassName}`,
 												permissionMode === "plan"
-													? "bypassPermissions"
-													: "plan",
-											)
-										}
-									>
-										<ClipboardList className="size-[13px]" strokeWidth={1.8} />
-										<span>Plan</span>
-									</ComposerButton>
+													? "text-plan hover:text-plan"
+													: "text-muted-foreground/70 hover:text-muted-foreground/70",
+											)}
+											onClick={() =>
+												onChangePermissionMode(
+													permissionMode === "plan"
+														? "bypassPermissions"
+														: "plan",
+												)
+											}
+										>
+											<ClipboardList
+												className="size-[13px]"
+												strokeWidth={1.8}
+											/>
+											<span>Plan</span>
+										</ComposerButton>
+									) : null}
 									{onToggleContextPanel ? (
 										<Tooltip>
 											<TooltipTrigger asChild>

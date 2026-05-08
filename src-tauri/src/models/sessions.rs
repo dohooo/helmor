@@ -474,6 +474,25 @@ pub fn get_session_model(session_id: &str) -> Result<Option<String>> {
     Ok(model.filter(|s| !s.is_empty()))
 }
 
+/// (model, agent_type) for a session — provider hint for `resolve_model`
+/// when ids like `"default"` are ambiguous.
+pub fn get_session_model_and_provider(
+    session_id: &str,
+) -> Result<(Option<String>, Option<String>)> {
+    let conn = db::read_conn()?;
+    let row: (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT model, agent_type FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .with_context(|| format!("Failed to read model+provider for session {session_id}"))?;
+    Ok((
+        row.0.filter(|s| !s.is_empty()),
+        row.1.filter(|s| !s.is_empty()),
+    ))
+}
+
 /// Read the opaque `context_usage_meta` JSON for the composer's
 /// context-usage ring. Returns `Ok(None)` for missing rows OR empty meta —
 /// the ring renders a placeholder either way and the frontend RPC contract

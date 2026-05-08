@@ -197,6 +197,15 @@ pub async fn list_agent_model_sections() -> CmdResult<Vec<AgentModelSection>> {
 }
 
 #[tauri::command]
+pub async fn list_cursor_models(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    api_key: Option<String>,
+) -> CmdResult<Vec<queries::CursorModelEntry>> {
+    // Inline blocking — same pattern as `list_slash_commands`.
+    queries::fetch_cursor_models(sidecar.inner(), api_key)
+}
+
+#[tauri::command]
 pub async fn send_agent_message_stream(
     app: AppHandle,
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
@@ -208,7 +217,7 @@ pub async fn send_agent_message_stream(
         return Err(anyhow::anyhow!("Prompt cannot be empty.").into());
     }
 
-    let model = resolve_model(&request.model_id);
+    let model = resolve_model(&request.model_id, Some(request.provider.as_str()));
 
     if request.provider != model.provider {
         return Err(anyhow::anyhow!(
@@ -648,14 +657,14 @@ mod tests {
 
     #[test]
     fn resolve_model_infers_provider() {
-        let claude = resolve_model("default");
+        let claude = resolve_model("default", None);
         assert_eq!(claude.provider, "claude");
         assert_eq!(claude.cli_model, "default");
 
-        let codex = resolve_model("gpt-5.4");
+        let codex = resolve_model("gpt-5.4", None);
         assert_eq!(codex.provider, "codex");
 
-        let unknown_claude = resolve_model("sonnet[1m]");
+        let unknown_claude = resolve_model("sonnet[1m]", None);
         assert_eq!(unknown_claude.provider, "claude");
     }
 

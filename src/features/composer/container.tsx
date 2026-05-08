@@ -624,9 +624,13 @@ export const WorkspaceComposerContainer = memo(
 
 		// Narrow `provider` (which can be the loosely-typed agentType from a
 		// historical session) to a real AgentProvider before keying the
-		// query — anything else degrades to claude so we never miss the popup.
+		// query. Anything outside the known set degrades to claude so we
+		// never miss the popup. NOTE: the prior version of this branch
+		// collapsed everything except codex into claude, which masked
+		// cursor sessions as claude — the Rust cache then served cached
+		// claude skills back to the cursor popup. Keep cursor explicit.
 		const slashProvider: AgentProvider =
-			provider === "codex" ? "codex" : "claude";
+			provider === "codex" || provider === "cursor" ? provider : "claude";
 		// Prefer the repoId from a real workspace; on the start page there's no
 		// workspace yet, so fall back to the caller-supplied repoId hint.
 		const effectiveRepoId =
@@ -996,7 +1000,11 @@ export const WorkspaceComposerContainer = memo(
 						placeholder={placeholder}
 						providerSessionId={currentSession?.providerSessionId ?? null}
 						agentType={
-							effectiveModel?.provider === "codex" ? "codex" : "claude"
+							effectiveModel?.provider === "codex"
+								? "codex"
+								: effectiveModel?.provider === "cursor"
+									? "cursor"
+									: "claude"
 						}
 						focusShortcut={focusShortcut}
 						togglePlanShortcut={togglePlanShortcut}

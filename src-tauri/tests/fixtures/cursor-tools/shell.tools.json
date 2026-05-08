@@ -1,0 +1,32 @@
+[
+	{
+		"call_id": "tool_3504c73c-86a3-41e9-94cb-c60bcb7e828",
+		"name": "shell",
+		"status": "running",
+		"args": {
+			"command": "pwd",
+			"workingDirectory": "/tmp/cursor-tools-probe/probe-workspace",
+			"timeout": 30000
+		}
+	},
+	{
+		"call_id": "tool_3504c73c-86a3-41e9-94cb-c60bcb7e828",
+		"name": "shell",
+		"status": "completed",
+		"args": {
+			"command": "pwd",
+			"workingDirectory": "/tmp/cursor-tools-probe/probe-workspace",
+			"timeout": 30000
+		},
+		"result": {
+			"status": "success",
+			"value": {
+				"exitCode": 0,
+				"signal": "",
+				"stdout": "/private/tmp/cursor-tools-probe/probe-workspace\n",
+				"stderr": "",
+				"executionTime": 2035
+			}
+		}
+	}
+]

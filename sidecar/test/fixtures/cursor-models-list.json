@@ -1,0 +1,769 @@
+[
+	{
+		"id": "default",
+		"label": "Auto"
+	},
+	{
+		"id": "composer-2",
+		"label": "Composer 2",
+		"parameters": [
+			{
+				"id": "fast",
+				"displayName": "Fast",
+				"values": [
+					{
+						"value": "false"
+					},
+					{
+						"value": "true",
+						"displayName": "Fast"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "composer-1.5",
+		"label": "Composer 1.5"
+	},
+	{
+		"id": "gpt-5.3-codex",
+		"label": "Codex 5.3",
+		"parameters": [
+			{
+				"id": "reasoning",
+				"displayName": "Reasoning",
+				"values": [
+					{
+						"value": "low",
+						"displayName": "Low"
+					},
+					{
+						"value": "medium",
+						"displayName": "Medium"
+					},
+					{
+						"value": "high",
+						"displayName": "High"
+					},
+					{
+						"value": "extra-high",
+						"displayName": "Extra High"
+					}
+				]
+			},
+			{
+				"id": "fast",
+				"displayName": "Fast",
+				"values": [
+					{
+						"value": "false"
+					},
+					{
+						"value": "true",
+						"displayName": "Fast"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "claude-sonnet-4-6",
+		"label": "Sonnet 4.6",
+		"parameters": [
+			{
+				"id": "thinking",
+				"displayName": "Thinking",
+				"values": [
+					{
+						"value": "false"
+					},
+					{
+						"value": "true",
+						"displayName": ":icon-brain:"
+					}
+				]
+			},
+			{
+				"id": "context",
+				"displayName": "Context",
+				"values": [
+					{
+						"value": "200k",
+						"displayName": "200K"
+					},
+					{
+						"value": "1m",
+						"displayName": "1M"
+					}
+				]
+			},
+			{
+				"id": "effort",
+				"displayName": "Effort",
+				"values": [
+					{
+						"value": "low",
+						"displayName": "Low"
+					},
+					{
+						"value": "medium",
+						"displayName": "Medium"
+					},
+					{
+						"value": "high",
+						"displayName": "High"
+					},
+					{
+						"value": "max",
+						"displayName": "Max"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "gpt-5.5",
+		"label": "GPT-5.5",
+		"parameters": [
+			{
+				"id": "context",
+				"displayName": "Context",
+				"values": [
+					{
+						"value": "272k",
+						"displayName": "272K"
+					},
+					{
+						"value": "1m",
+						"displayName": "1M"
+					}
+				]
+			},
+			{
+				"id": "reasoning",
+				"displayName": "Reasoning",
+				"values": [
+					{
+						"value": "none",
+						"displayName": "None"
+					},
+					{
+						"value": "low",
+						"displayName": "Low"
+					},
+					{
+						"value": "medium",
+						"displayName": "Medium"
+					},
+					{
+						"value": "high",
+						"displayName": "High"
+					},
+					{
+						"value": "extra-high",
+						"displayName": "Extra High"
+					}
+				]
+			},
+			{
+				"id": "fast",
+				"displayName": "Fast",
+				"values": [
+					{
+						"value": "false"
+					},
+					{
+						"value": "true",
+						"displayName": "Fast"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "claude-opus-4-7",
+		"label": "Opus 4.7",
+		"parameters": [
+			{
+				"id": "thinking",
+				"displayName": "Thinking",
+				"values": [
+					{
+						"value": "false"
+					},
+					{
+						"value": "true",
+						"displayName": ":icon-brain:"
+					}
+				]
+			},
+			{
+				"id": "context",
+				"displayName": "Context",
+				"values": [
+					{
+						"value": "300k",
+						"displayName": "300K"
+					},
+					{
+						"value": "1m",
+						"displayName": "1M"
+					}
+				]
+			},
+			{
+				"id": "effort",
+				"displayName": "Effort",
+				"values": [
+					{
+						"value": "low",
+						"displayName": "Low"
+					},
+					{
+						"value": "medium",
+						"displayName": "Medium"
+					},
+					{
+						"value": "high",
+						"displayName": "High"
+					},
+					{
+						"value": "xhigh",
+						"displayName": "Extra High"
+					},
+					{
+						"value": "max",
+						"displayName": "Max"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "gpt-5.4",
+		"label": "GPT-5.4",
+		"parameters": [
+			{
+				"id": "context",
+				"displayName": "Context",
+				"values": [
+					{
+						"value": "272k",
+						"displayName": "272K"
+					},
+					{
+						"value": "1m",
+						"displayName": "1M"
+					}
+				]
+			},
+			{
+				"id": "reasoning",
+				"displayName": "Reasoning",
+				"values": [
+					{
+						"value": "none",
+						"displayName": "None"
+					},
+					{
+						"value": "low",
+						"displayName": "Low"
+					},
+					{
+						"value": "medium",
+						"displayName": "Medium"
+					},
+					{
+						"value": "high",
+						"displayName": "High"
+					},
+					{
+						"value": "extra-high",
+						"displayName": "Extra High"
+					}
+				]
+			},
+			{
+				"id": "fast",
+				"displayName": "Fast",
+				"values": [
+					{
+						"value": "false"
+					},
+					{
+						"value": "true",
+						"displayName": "Fast"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "claude-opus-4-6",
+		"label": "Opus 4.6",
+		"parameters": [
+			{
+				"id": "thinking",
+				"displayName": "Thinking",
+				"values": [
+					{
+						"value": "false"
+					},
+					{
+						"value": "true",
+						"displayName": ":icon-brain:"
+					}
+				]
+			},
+			{
+				"id": "context",
+				"displayName": "Context",
+				"values": [
+					{
+						"value": "200k",
+						"displayName": "200K"
+					},
+					{
+						"value": "1m",
+						"displayName": "1M"
+					}
+				]
+			},
+			{
+				"id": "effort",
+				"displayName": "Effort",
+				"values": [
+					{
+						"value": "low",
+						"displayName": "Low"
+					},
+					{
+						"value": "medium",
+						"displayName": "Medium"
+					},
+					{
+						"value": "high",
+						"displayName": "High"
+					},
+					{
+						"value": "max",
+						"displayName": "Max"
+					}
+				]
+			},
+			{
+				"id": "fast",
+				"displayName": "Fast",
+				"values": [
+					{
+						"value": "false"
+					},
+					{
+						"value": "true",
+						"displayName": "Fast"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "claude-opus-4-5",
+		"label": "Opus 4.5",
+		"parameters": [
+			{
+				"id": "thinking",
+				"displayName": "Thinking",
+				"values": [
+					{
+						"value": "false"
+					},
+					{
+						"value": "true",
+						"displayName": ":icon-brain:"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "gpt-5.2",
+		"label": "GPT-5.2",
+		"parameters": [
+			{
+				"id": "reasoning",
+				"displayName": "Reasoning",
+				"values": [
+					{
+						"value": "low",
+						"displayName": "Low"
+					},
+					{
+						"value": "medium",
+						"displayName": "Medium"
+					},
+					{
+						"value": "high",
+						"displayName": "High"
+					},
+					{
+						"value": "extra-high",
+						"displayName": "Extra High"
+					}
+				]
+			},
+			{
+				"id": "fast",
+				"displayName": "Fast",
+				"values": [
+					{
+						"value": "false"
+					},
+					{
+						"value": "true",
+						"displayName": "Fast"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "gemini-3.1-pro",
+		"label": "Gemini 3.1 Pro"
+	},
+	{
+		"id": "gpt-5.4-mini",
+		"label": "GPT-5.4 Mini",
+		"parameters": [
+			{
+				"id": "reasoning",
+				"displayName": "Reasoning",
+				"values": [
+					{
+						"value": "none",
+						"displayName": "None"
+					},
+					{
+						"value": "low",
+						"displayName": "Low"
+					},
+					{
+						"value": "medium",
+						"displayName": "Medium"
+					},
+					{
+						"value": "high",
+						"displayName": "High"
+					},
+					{
+						"value": "xhigh",
+						"displayName": "Extra High"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "gpt-5.4-nano",
+		"label": "GPT-5.4 Nano",
+		"parameters": [
+			{
+				"id": "reasoning",
+				"displayName": "Reasoning",
+				"values": [
+					{
+						"value": "none",
+						"displayName": "None"
+					},
+					{
+						"value": "low",
+						"displayName": "Low"
+					},
+					{
+						"value": "medium",
+						"displayName": "Medium"
+					},
+					{
+						"value": "high",
+						"displayName": "High"
+					},
+					{
+						"value": "xhigh",
+						"displayName": "Extra High"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "claude-haiku-4-5",
+		"label": "Haiku 4.5",
+		"parameters": [
+			{
+				"id": "thinking",
+				"displayName": "Thinking",
+				"values": [
+					{
+						"value": "false"
+					},
+					{
+						"value": "true",
+						"displayName": ":icon-brain:"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "gpt-5.3-codex-spark",
+		"label": "Codex 5.3 Spark",
+		"parameters": [
+			{
+				"id": "reasoning",
+				"displayName": "Reasoning",
+				"values": [
+					{
+						"value": "low",
+						"displayName": "Low"
+					},
+					{
+						"value": "medium",
+						"displayName": "Medium"
+					},
+					{
+						"value": "high",
+						"displayName": "High"
+					},
+					{
+						"value": "extra-high",
+						"displayName": "Extra High"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "grok-4.3",
+		"label": "Grok 4.3",
+		"parameters": [
+			{
+				"id": "context",
+				"displayName": "Context",
+				"values": [
+					{
+						"value": "200k",
+						"displayName": "200K"
+					},
+					{
+						"value": "1m",
+						"displayName": "1M"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "claude-sonnet-4-5",
+		"label": "Sonnet 4.5",
+		"parameters": [
+			{
+				"id": "thinking",
+				"displayName": "Thinking",
+				"values": [
+					{
+						"value": "false"
+					},
+					{
+						"value": "true",
+						"displayName": ":icon-brain:"
+					}
+				]
+			},
+			{
+				"id": "context",
+				"displayName": "Context",
+				"values": [
+					{
+						"value": "200k",
+						"displayName": "200K"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "gpt-5.2-codex",
+		"label": "Codex 5.2",
+		"parameters": [
+			{
+				"id": "reasoning",
+				"displayName": "Reasoning",
+				"values": [
+					{
+						"value": "low",
+						"displayName": "Low"
+					},
+					{
+						"value": "medium",
+						"displayName": "Medium"
+					},
+					{
+						"value": "high",
+						"displayName": "High"
+					},
+					{
+						"value": "extra-high",
+						"displayName": "Extra High"
+					}
+				]
+			},
+			{
+				"id": "fast",
+				"displayName": "Fast",
+				"values": [
+					{
+						"value": "false"
+					},
+					{
+						"value": "true",
+						"displayName": "Fast"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "gpt-5.1-codex-max",
+		"label": "Codex 5.1 Max",
+		"parameters": [
+			{
+				"id": "reasoning",
+				"displayName": "Reasoning",
+				"values": [
+					{
+						"value": "low",
+						"displayName": "Low"
+					},
+					{
+						"value": "medium",
+						"displayName": "Medium"
+					},
+					{
+						"value": "high",
+						"displayName": "High"
+					},
+					{
+						"value": "extra-high",
+						"displayName": "Extra High"
+					}
+				]
+			},
+			{
+				"id": "fast",
+				"displayName": "Fast",
+				"values": [
+					{
+						"value": "false"
+					},
+					{
+						"value": "true",
+						"displayName": "Fast"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "gpt-5.1",
+		"label": "GPT-5.1",
+		"parameters": [
+			{
+				"id": "reasoning",
+				"displayName": "Reasoning",
+				"values": [
+					{
+						"value": "low",
+						"displayName": "Low"
+					},
+					{
+						"value": "medium",
+						"displayName": "Medium"
+					},
+					{
+						"value": "high",
+						"displayName": "High"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "gemini-3-flash",
+		"label": "Gemini 3 Flash"
+	},
+	{
+		"id": "gpt-5.1-codex-mini",
+		"label": "Codex 5.1 Mini",
+		"parameters": [
+			{
+				"id": "reasoning",
+				"displayName": "Reasoning",
+				"values": [
+					{
+						"value": "low",
+						"displayName": "Low"
+					},
+					{
+						"value": "medium",
+						"displayName": "Medium"
+					},
+					{
+						"value": "high",
+						"displayName": "High"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "claude-sonnet-4",
+		"label": "Sonnet 4",
+		"parameters": [
+			{
+				"id": "thinking",
+				"displayName": "Thinking",
+				"values": [
+					{
+						"value": "false"
+					},
+					{
+						"value": "true",
+						"displayName": ":icon-brain:"
+					}
+				]
+			},
+			{
+				"id": "context",
+				"displayName": "Context",
+				"values": [
+					{
+						"value": "200k",
+						"displayName": "200K"
+					}
+				]
+			}
+		]
+	},
+	{
+		"id": "gpt-5-mini",
+		"label": "GPT-5 Mini"
+	},
+	{
+		"id": "gemini-2.5-flash",
+		"label": "Gemini 2.5 Flash"
+	},
+	{
+		"id": "kimi-k2.5",
+		"label": "Kimi K2.5"
+	}
+]

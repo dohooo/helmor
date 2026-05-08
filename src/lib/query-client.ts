@@ -330,7 +330,15 @@ export function agentModelSectionsQueryOptions() {
 	return queryOptions({
 		queryKey: helmorQueryKeys.agentModelSections,
 		queryFn: loadAgentModelSections,
-		staleTime: Infinity,
+		// Catalog is cheap (synchronous Rust read of static + settings).
+		// `staleTime: 0` means every mount re-fetches; the persisted disk
+		// cache still gives an instant first paint on app boot, but ANY
+		// remount validates against the live catalog. This matters because
+		// the catalog SHAPE can change across releases (e.g. cursor model
+		// id namespacing) — a long staleTime + on-disk persistence
+		// previously stuck users on a pre-upgrade shape until they
+		// happened to invalidate the query manually.
+		staleTime: 0,
 		refetchOnWindowFocus: false,
 		retry: false,
 		meta: PERSIST_META,

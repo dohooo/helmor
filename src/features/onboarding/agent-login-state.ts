@@ -1,4 +1,4 @@
-import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
+import { ClaudeIcon, CursorIcon, OpenAIIcon } from "@/components/icons";
 import type { AgentLoginStatusResult } from "@/lib/api";
 import type { AgentLoginItem } from "./types";
 
@@ -23,6 +23,15 @@ export function buildAgentLoginItems(
 				? "Signed in and ready to run OpenAI models in Helmor."
 				: "Sign in to Codex to use OpenAI models in Helmor.",
 			status: status?.codex ? "ready" : "needsSetup",
+		},
+		{
+			icon: CursorIcon,
+			provider: "cursor",
+			label: "Cursor",
+			description: status?.cursor
+				? "API key saved and ready to run Cursor models in Helmor."
+				: "Add a Cursor API key to use Cursor models in Helmor.",
+			status: status?.cursor ? "ready" : "needsSetup",
 		},
 	];
 }

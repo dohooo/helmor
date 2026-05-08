@@ -116,7 +116,7 @@ export type DataInfo = {
 	archiveRoot: string;
 };
 
-export type AgentProvider = "claude" | "codex";
+export type AgentProvider = "claude" | "codex" | "cursor";
 
 export type AgentModelOption = {
 	id: string;
@@ -752,11 +752,12 @@ export async function exitOnboardingWindowMode(): Promise<void> {
 	await invoke("exit_onboarding_window_mode");
 }
 
-export type AgentLoginProvider = "claude" | "codex";
+export type AgentLoginProvider = "claude" | "codex" | "cursor";
 
 export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
+	cursor: boolean;
 };
 
 export async function getAgentLoginStatus(): Promise<AgentLoginStatusResult> {
@@ -914,6 +915,40 @@ export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 		return await invoke<AgentModelSection[]>("list_agent_model_sections");
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to load agent models."));
+	}
+}
+
+export type CursorModelParameterValue = {
+	value: string;
+	displayName?: string;
+};
+
+export type CursorModelParameter = {
+	id: string;
+	displayName?: string;
+	values: CursorModelParameterValue[];
+};
+
+export type CursorModelEntry = {
+	id: string;
+	label: string;
+	/** Raw `parameters[]` — persisted into `cursorProvider.cachedModels`. */
+	parameters?: CursorModelParameter[];
+};
+
+/// Live `Cursor.models.list` via sidecar. Optional `apiKey` overrides
+/// the stored key for one-off probes (e.g. onboarding validation).
+export async function listCursorModels(
+	apiKey?: string,
+): Promise<CursorModelEntry[]> {
+	try {
+		return await invoke<CursorModelEntry[]>("list_cursor_models", {
+			apiKey: apiKey ?? null,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to list Cursor models."),
+		);
 	}
 }
 

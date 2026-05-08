@@ -1,6 +1,7 @@
 import { Box } from "lucide-react";
 import {
 	ClaudeColorIcon,
+	CursorIcon,
 	DeepSeekIcon,
 	KimiIcon,
 	MinimaxIcon,
@@ -18,6 +19,7 @@ export function ModelIcon({
 	model?: AgentModelOption | null;
 	className?: string;
 }) {
+	if (model?.provider === "cursor") return <CursorIcon className={className} />;
 	if (model?.provider === "codex")
 		return <OpenAIColorIcon className={className} />;
 	if (model?.providerKey === "custom")
