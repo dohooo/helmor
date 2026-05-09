@@ -734,22 +734,13 @@ export function workspaceForgeActionStatusQueryOptions(workspaceId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
 		queryFn: () => loadWorkspaceForgeActionStatus(workspaceId),
-		// Same `staleTime: Infinity` + `refetchOnWindowFocus: "always"`
-		// baseline as the other three identity-info queries.
-		//
-		// Unique to this query: `refetchOnMount: "always"`. Inspector's
-		// `Connect` CTA reads `remoteState` from here, so the moment the
-		// user switches workspaces we MUST re-probe the new workspace's
-		// remote — otherwise the previously-visited workspace's stale
-		// cache (with the same `staleTime: Infinity` rule) would render
-		// the wrong CTA state until the next focus event. The cached
-		// value still shows immediately (no loading flicker), only
-		// `isFetching` flips while the background refetch lands.
-		//
-		// The other three queries intentionally don't get this: their
-		// data either rarely changes (chip avatar, GitHub-vs-GitLab
-		// label) or isn't workspace-scoped (Settings roster), so the
-		// extra mount-time IPC isn't worth the cost.
+		// `staleTime: Infinity` + focus/mount `"always"` baseline shared
+		// with the other identity-info queries. CI-progress refetch on
+		// workspace switch is nudged by `useRefreshForgeOnWorkspaceSwitch`
+		// — a queryKey change goes through `setOptions` →
+		// `shouldFetchOptionally`, which gates on `isStale` (Infinity
+		// blocks it) and ignores `refetchOnMount` (that only fires on
+		// cold-start `onSubscribe`).
 		staleTime: Number.POSITIVE_INFINITY,
 		gcTime: DEFAULT_GC_TIME,
 		refetchOnWindowFocus: "always",

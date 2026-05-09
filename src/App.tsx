@@ -46,6 +46,7 @@ import {
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
 import { WorkspaceInspectorSidebar } from "@/features/inspector";
+import { useRefreshForgeOnWorkspaceSwitch } from "@/features/inspector/hooks/use-refresh-forge-on-switch";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
 import { AppOnboarding } from "@/features/onboarding";
 import { ExportSessionImageButton } from "@/features/panel/export-session-image";
@@ -926,6 +927,10 @@ function AppShell({
 			selectedWorkspaceDetail?.state !== "archived",
 	});
 	const workspaceGitActionStatus = workspaceGitActionStatusQuery.data ?? null;
+
+	// Nudge CI-progress refetch on workspace switch — `refetchOnMount: "always"`
+	// doesn't fire on queryKey changes.
+	useRefreshForgeOnWorkspaceSwitch(selectedWorkspaceId);
 
 	useEffect(() => {
 		selectedWorkspaceIdRef.current = selectedWorkspaceId;
