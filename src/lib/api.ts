@@ -2702,6 +2702,17 @@ export async function getSessionContextUsage(
 	});
 }
 
+/** Frontend-driven write of `context_usage_meta`. Used after a
+ *  trustworthy Claude hover-time live fetch so the persisted baseline
+ *  catches up without waiting for the next turn end. The backend
+ *  broadcasts `ContextUsageChanged`, so other observers refresh too. */
+export async function setSessionContextUsage(
+	sessionId: string,
+	meta: string,
+): Promise<void> {
+	await invoke<void>("set_session_context_usage", { sessionId, meta });
+}
+
 /** Active Codex `/goal` payload as JSON. Null when no goal is set. */
 export type CodexGoalState = {
 	threadId: string;

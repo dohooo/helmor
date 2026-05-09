@@ -36,18 +36,6 @@ export function UsageHeader({
 	);
 }
 
-/** Header for token counts without a trusted window size. */
-export function TokensOnlyHeader({ usedTokens }: { usedTokens: number }) {
-	return (
-		<div className="flex items-center justify-between">
-			<div className="text-[14px] font-semibold text-foreground">Context</div>
-			<div className="text-[12px] tabular-nums text-muted-foreground">
-				Used <span className="text-foreground">{formatTokens(usedTokens)}</span>
-			</div>
-		</div>
-	);
-}
-
 /** Compact percentage: 1 decimal under 10%, integer above. Strips ".0". */
 function formatPercentage(value: number): string {
 	if (!Number.isFinite(value) || value <= 0) return "0%";

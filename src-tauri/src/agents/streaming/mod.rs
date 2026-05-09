@@ -15,7 +15,7 @@ mod active_streams;
 mod bridges;
 mod cleanup;
 pub(crate) mod codex_goal;
-mod context_usage;
+pub(crate) mod context_usage;
 mod params;
 mod session_id;
 mod state;

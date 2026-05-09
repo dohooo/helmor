@@ -109,13 +109,13 @@ describe("resolveContextUsageDisplay", () => {
 	};
 
 	it("returns `empty` when baseline + rich are both null", () => {
-		expect(resolveContextUsageDisplay(null, null, CLAUDE_MODEL)).toEqual({
+		expect(resolveContextUsageDisplay(null, null)).toEqual({
 			kind: "empty",
 		});
 	});
 
-	it("returns `full` when baseline model matches composer", () => {
-		const res = resolveContextUsageDisplay(baselineClaude, null, CLAUDE_MODEL);
+	it("returns `full` from the baseline record", () => {
+		const res = resolveContextUsageDisplay(baselineClaude, null);
 		expect(res).toEqual({
 			kind: "full",
 			modelId: CLAUDE_MODEL,
@@ -127,40 +127,16 @@ describe("resolveContextUsageDisplay", () => {
 		});
 	});
 
-	it("returns `tokensOnly` when composer switched to a different model", () => {
-		const res = resolveContextUsageDisplay(
-			baselineClaude,
-			null,
-			"claude-sonnet-4-5",
-		);
-		expect(res).toEqual({
-			kind: "tokensOnly",
-			recordedModelId: CLAUDE_MODEL,
-			usedTokens: 50_000,
-		});
-	});
-
-	it("treats null composerModelId as match (avoids flash of tokensOnly during mount)", () => {
-		const res = resolveContextUsageDisplay(baselineClaude, null, null);
+	it("keeps showing the recorded usage even after the composer switched models", () => {
+		// Composer model ≠ recorded model is no longer treated as a mismatch:
+		// the ring keeps the last-known % until the next turn refreshes it.
+		const res = resolveContextUsageDisplay(baselineClaude, null);
 		expect(res.kind).toBe("full");
+		if (res.kind !== "full") throw new Error("unreachable");
+		expect(res.percentage).toBe(25);
 	});
 
-	it("legacy baseline (empty modelId) degrades to tokensOnly when composer has a model", () => {
-		const legacy: StoredContextUsageMeta = {
-			modelId: "",
-			usedTokens: 10_000,
-			maxTokens: 200_000,
-			percentage: 5,
-		};
-		const res = resolveContextUsageDisplay(legacy, null, CLAUDE_MODEL);
-		expect(res).toEqual({
-			kind: "tokensOnly",
-			recordedModelId: "",
-			usedTokens: 10_000,
-		});
-	});
-
-	it("rich overrides baseline values when both present and model matches", () => {
+	it("trusted rich (non-zero used/max) drives the ring", () => {
 		const rich: ClaudeRichContextUsage = {
 			modelId: CLAUDE_MODEL,
 			usedTokens: 60_000,
@@ -169,7 +145,7 @@ describe("resolveContextUsageDisplay", () => {
 			isAutoCompactEnabled: true,
 			categories: [{ name: "Messages", tokens: 60_000 }],
 		};
-		const res = resolveContextUsageDisplay(baselineClaude, rich, CLAUDE_MODEL);
+		const res = resolveContextUsageDisplay(baselineClaude, rich);
 		expect(res.kind).toBe("full");
 		if (res.kind !== "full") throw new Error("unreachable");
 		expect(res.usedTokens).toBe(60_000);
@@ -177,12 +153,61 @@ describe("resolveContextUsageDisplay", () => {
 		expect(res.rich).toBe(rich);
 	});
 
+	it("zeroed rich is rejected; baseline keeps the ring intact", () => {
+		// Hover-time live fetch can come back with zeroed totals (e.g.
+		// resume against a stale provider session id after a model
+		// switch). Letting it through would visually blank the ring.
+		const rich: ClaudeRichContextUsage = {
+			modelId: "claude-sonnet-4-5",
+			usedTokens: 0,
+			maxTokens: 0,
+			percentage: 0,
+			isAutoCompactEnabled: false,
+			categories: [],
+		};
+		const res = resolveContextUsageDisplay(baselineClaude, rich);
+		expect(res.kind).toBe("full");
+		if (res.kind !== "full") throw new Error("unreachable");
+		expect(res.usedTokens).toBe(50_000);
+		expect(res.percentage).toBe(25);
+		// Rich is still attached so the popover can render whatever
+		// non-zero categories it carried (here: none).
+		expect(res.rich).toBe(rich);
+	});
+
+	it("trusted rich is enough on its own when baseline is missing", () => {
+		const rich: ClaudeRichContextUsage = {
+			modelId: CLAUDE_MODEL,
+			usedTokens: 60_000,
+			maxTokens: 200_000,
+			percentage: 30,
+			isAutoCompactEnabled: true,
+			categories: [{ name: "Messages", tokens: 60_000 }],
+		};
+		const res = resolveContextUsageDisplay(null, rich);
+		expect(res.kind).toBe("full");
+		if (res.kind !== "full") throw new Error("unreachable");
+		expect(res.percentage).toBe(30);
+	});
+
+	it("returns `empty` when baseline is null and rich is zeroed", () => {
+		const rich: ClaudeRichContextUsage = {
+			modelId: CLAUDE_MODEL,
+			usedTokens: 0,
+			maxTokens: 0,
+			percentage: 0,
+			isAutoCompactEnabled: false,
+			categories: [],
+		};
+		expect(resolveContextUsageDisplay(null, rich)).toEqual({ kind: "empty" });
+	});
+
 	it("computes ring tier from percentage", () => {
 		const near: StoredContextUsageMeta = {
 			...baselineClaude,
 			percentage: 85,
 		};
-		const res = resolveContextUsageDisplay(near, null, CLAUDE_MODEL);
+		const res = resolveContextUsageDisplay(near, null);
 		if (res.kind !== "full") throw new Error("unreachable");
 		expect(res.tier).toBe("danger");
 	});
